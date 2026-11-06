@@ -316,6 +316,14 @@ const UNITS: &str = "($ millions, except per ounce information)";
 fn assurance_projection_preserves_source_claims_and_emits_named_differences() {
     let r = report(&[], UNITS, false);
     let json = assure_report::consolidation_json(&r);
+    assert!(json.contains(&format!(
+        "\"interpretation\":\"{}\"",
+        consolidation::NO_CLAIM
+    )));
+    assert!(
+        !json.contains("\"no_claim\":"),
+        "no_claim belongs to the outer envelope"
+    );
     assert!(
         json.contains("\"status\":\"printed_arithmetic_closed\""),
         "{json}"

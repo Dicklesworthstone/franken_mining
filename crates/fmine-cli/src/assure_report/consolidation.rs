@@ -617,7 +617,7 @@ impl Report {
             .collect::<Vec<_>>()
             .join(",");
         let body = format!(
-            "\"schema\":\"fmine.aisc_component_comparisons.v1\",\"no_claim\":{},\"membership_scope\":\"Explicit retained region and subtotal policies only; no inferred company membership\",\"rows\":[{rows}]",
+            "\"schema\":\"fmine.aisc_component_comparisons.v1\",\"interpretation\":{},\"membership_scope\":\"Explicit retained region and subtotal policies only; no inferred company membership\",\"rows\":[{rows}]",
             js(kernel::NO_CLAIM)
         );
         format!(
