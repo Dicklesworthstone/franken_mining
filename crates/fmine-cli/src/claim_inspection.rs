@@ -12,11 +12,7 @@ use fmine_metrics::recovery::{
 use fmine_numerics::exact_feas::Rat;
 use fmine_public::{PublicAssuranceReport, recovery::RecoveryReport, sources::IssuerProfile};
 
-use crate::{ClaimView, Envelope, NextAction, claim_actions, escape_json};
-
-fn js(s: &str) -> String {
-    format!("\"{}\"", escape_json(s))
-}
+use crate::{ClaimView, Envelope, NextAction, claim_actions, escape_json, json_string as js};
 fn ids(values: impl IntoIterator<Item = ClaimId>) -> String {
     values
         .into_iter()

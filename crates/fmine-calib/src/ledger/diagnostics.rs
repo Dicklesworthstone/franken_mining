@@ -511,7 +511,10 @@ mod tests {
     fn non_empirical_diagnostics_match_the_prior_v1_wire_layout() {
         for (payload, probability) in [
             (gaussian(), None),
-            (ForecastPayload::Bernoulli { probability: 0.25 }, Some(0.25_f64)),
+            (
+                ForecastPayload::Bernoulli { probability: 0.25 },
+                Some(0.25_f64),
+            ),
         ] {
             let (mut ledger, ids, cohort) = build_ledger(vec![payload]);
             let parent = ledger
@@ -750,11 +753,7 @@ mod tests {
 
     #[test]
     fn empirical_sample_permutations_preserve_ranks_but_keep_distinct_frozen_identities() {
-        let reports = [
-            vec![-2.0, 0.0, 0.0, 4.0],
-            vec![0.0, 4.0, -2.0, 0.0],
-        ]
-        .map(|samples| {
+        let reports = [vec![-2.0, 0.0, 0.0, 4.0], vec![0.0, 4.0, -2.0, 0.0]].map(|samples| {
             let (mut ledger, ids, cohort) =
                 build_ledger(vec![ForecastPayload::Empirical { samples }]);
             publish(&mut ledger, ids[0], 0.0);

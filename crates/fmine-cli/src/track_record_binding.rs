@@ -28,13 +28,11 @@ use fmine_public::key::{
 };
 use fmine_public::transcribe::{TranscriptionReport, load_guidance_transcription_report};
 
+use crate::json_string as js;
+
 pub const NO_CLAIM: &str = "Descriptive comparison of stated guidance with separately identified published outcomes; no forecast, calibration verdict, site ranking or external time proof. From public filings; no affiliation implied.";
 const VERSION: &str = "guidance.track_record/2";
 type Result<T> = std::result::Result<T, Refusal>;
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", crate::escape_json(value))
-}
 
 #[derive(Debug, Clone)]
 pub struct OutcomeAssessment {

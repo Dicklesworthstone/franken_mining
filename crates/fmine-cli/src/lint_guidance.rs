@@ -16,6 +16,7 @@ use fmine_numerics::exact_feas::{Interval, Rat};
 use fmine_public::sources::IssuerProfile;
 use fmine_public::transcribe::{TranscriptionReport, load_transcription_quantities_as_of};
 
+use crate::json_string as js;
 use crate::track_record_binding::{self, TrackRecordInput, TrackRecordRow};
 
 pub(super) const NO_CLAIM: &str = "Compares explicitly marked forecast/guidance sentences with the latest dated registered issuer guidance on the stated ownership and metric basis. Stated draft bounds are compared exactly; no probability, forecast verification, completeness of the public record or disclosure permission is inferred.";
@@ -48,10 +49,6 @@ pub(super) struct GuidanceReport {
     as_of: String,
     draft_digest: Digest32,
     findings: Vec<Finding>,
-}
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", crate::escape_json(value))
 }
 
 fn erase(text: &mut String, span: Span) {

@@ -466,13 +466,7 @@ fn key_json(key: &DeckKey) -> String {
     )
 }
 fn scope_json(scope: &Scope) -> String {
-    let ownership = match scope.ownership {
-        Ownership::Full => "{\"kind\":\"full\"}".into(),
-        Ownership::Attributable { share } => format!(
-            "{{\"kind\":\"attributable\",\"share\":{}}}",
-            js(&qty(share))
-        ),
-    };
+    let ownership = super::declared::ownership_json(scope.ownership);
     format!(
         "{{\"issuer\":{},\"subject\":{},\"period\":{{\"year\":{},\"first_month\":{},\"last_month\":{}}},\"ownership\":{ownership},\"basis\":{},\"population\":{},\"currency\":{}}}",
         js(&scope.issuer),
@@ -606,11 +600,7 @@ impl GeoReceipt {
             s.scope.currency,
             text(&s.reference.id),
             text(&s.reference.version),
-            s.excluded_metals
-                .iter()
-                .map(|m| m.name())
-                .collect::<Vec<_>>()
-                .join(","),
+            join_json(&s.excluded_metals, |m| m.name().to_owned()),
             self.claim.evidence,
             self.claim.confidentiality
         );

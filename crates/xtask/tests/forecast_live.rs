@@ -335,8 +335,14 @@ fn empirical_diagnostics_reopen_tied_missing_and_mixed_assessments_without_resel
     let old_digest = assessment_digest(&saved);
     let diagnostics = saved.split_once("\"diagnostics\":").unwrap().1;
     assert!(diagnostics.contains("\"schema\":\"fmine.forecast-diagnostics.v2\""));
-    assert!(diagnostics.contains("\"gaussian_pit\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"));
-    assert!(diagnostics.contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"));
+    assert!(
+        diagnostics
+            .contains("\"gaussian_pit\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,")
+    );
+    assert!(
+        diagnostics
+            .contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,")
+    );
     assert!(diagnostics.contains(concat!(
         "\"cdf_bounds\":{\"lower\":{\"num\":1,\"den\":4},",
         "\"upper\":{\"num\":3,\"den\":4}}"
@@ -364,8 +370,14 @@ fn empirical_diagnostics_reopen_tied_missing_and_mixed_assessments_without_resel
         ns("2031-01-13T00:00:00Z"),
     );
     let latest_diagnostics = latest.split_once("\"diagnostics\":").unwrap().1;
-    assert_ne!(string_field(latest_diagnostics, "digest"), old_diagnostic_digest);
-    assert!(latest_diagnostics.contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":2,\"n_unresolved\":0,"));
+    assert_ne!(
+        string_field(latest_diagnostics, "digest"),
+        old_diagnostic_digest
+    );
+    assert!(
+        latest_diagnostics
+            .contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":2,\"n_unresolved\":0,")
+    );
     assert!(latest_diagnostics.contains(concat!(
         "\"cdf_bounds\":{\"lower\":{\"num\":3,\"den\":4},",
         "\"upper\":{\"num\":4,\"den\":4}}"
@@ -384,7 +396,10 @@ fn empirical_diagnostics_reopen_tied_missing_and_mixed_assessments_without_resel
     );
     assert_eq!(reopened.exit_code, 0, "{}", reopened.to_json());
     assert_eq!(assessment(&reopened.payload_json), assessment(&saved));
-    assert_eq!(fs::read(&journal.path).expect("journal after replay"), bytes);
+    assert_eq!(
+        fs::read(&journal.path).expect("journal after replay"),
+        bytes
+    );
     let markdown = reopened.rendered_markdown.as_deref().unwrap();
     assert!(markdown.contains("### Empirical CDF rank intervals"));
     assert!(markdown.contains("[1/4, 3/4] (below 1; equal 2; above 1)"));

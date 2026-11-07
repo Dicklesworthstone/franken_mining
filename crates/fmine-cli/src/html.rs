@@ -14,7 +14,7 @@ use fmine_registry::sources::{HtmlSourceRow, is_date};
 
 use crate::claim_inspection::canonical_claim_json;
 use crate::guidance::text;
-use crate::{Envelope, NextAction, escape_json};
+use crate::{Envelope, NextAction, json_string as js};
 
 pub const USAGE: &str =
     "html claims --issuer <id> --definitions <mapping.toml> [--as-of YYYY-MM-DD]";
@@ -101,10 +101,6 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         }
         Err(refusal) => Envelope::refused("html claims", refusal, actions),
     }
-}
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", escape_json(value))
 }
 
 fn anchor(source: &SourceAnchor) -> String {

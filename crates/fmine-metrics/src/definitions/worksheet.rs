@@ -292,13 +292,7 @@ pub fn evaluate(
 }
 
 fn scope_json(scope: &Scope) -> String {
-    let ownership = match scope.ownership {
-        Ownership::Full => "{\"kind\":\"full\"}".into(),
-        Ownership::Attributable { share } => format!(
-            "{{\"kind\":\"attributable\",\"share\":{}}}",
-            js(&qty(share))
-        ),
-    };
+    let ownership = super::declared::ownership_json(scope.ownership);
     format!(
         "{{\"issuer\":{},\"subject\":{},\"period\":{{\"year\":{},\"first_month\":{},\"last_month\":{}}},\"ownership\":{ownership},\"basis\":{}}}",
         js(&scope.issuer),

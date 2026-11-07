@@ -2430,6 +2430,10 @@ fn inspect_public_claim(id: &str, root: &Path, view: ClaimView) -> Envelope {
     )
 }
 
+fn json_string(s: &str) -> String {
+    format!("\"{}\"", escape_json(s))
+}
+
 fn escape_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {

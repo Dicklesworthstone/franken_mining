@@ -30,6 +30,8 @@ use fmine_public::mine_ledger::{self, Component, Instance, State};
 use fmine_public::sources::SourceKind;
 use fmine_public::{Lane, PublicAssuranceReport};
 
+use crate::json_string as js;
+
 pub const NO_AFFILIATION: &str =
     "From public filings; no affiliation with or endorsement by the issuer is implied.";
 pub const SYNTHETIC_NO_AFFILIATION: &str = "From invented synthetic workbooks; no affiliation with or endorsement by any issuer is implied.";
@@ -525,10 +527,6 @@ struct GroupKey {
 
 fn optional(value: &Option<String>) -> String {
     value.as_deref().map_or_else(|| "null".to_string(), js)
-}
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", crate::escape_json(value))
 }
 
 fn input_refusal(what: impl Into<String>) -> Refusal {

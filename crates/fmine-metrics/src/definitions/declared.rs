@@ -1,5 +1,5 @@
 //! Common admission, exact parsing and JSON primitives for declared metric worksheets.
-//! Determinism: Exact. Callers retain their domain rules, refusal prefixes and receipt schemas.
+//! Determinism: Exact (callers retain their domain rules, refusal prefixes and receipt schemas).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -11,7 +11,7 @@ use fmine_evidence::{Color, KnowledgeState, Refusal, RefusalCode};
 use fmine_registry::toml_subset::{TomlField, TomlValue};
 use fmine_units::ExactQty;
 
-use crate::guidance::Period;
+use crate::guidance::{Ownership, Period};
 
 pub(super) fn admit<T>(
     claim: &Claim<T>,
@@ -166,6 +166,16 @@ pub(super) fn qty(value: ExactQty) -> String {
     }
 }
 
+pub(super) fn ownership_json(ownership: Ownership) -> String {
+    match ownership {
+        Ownership::Full => "{\"kind\":\"full\"}".into(),
+        Ownership::Attributable { share } => format!(
+            "{{\"kind\":\"attributable\",\"share\":{}}}",
+            js(&qty(share))
+        ),
+    }
+}
+
 /// The same canonical bytes, source anchors and ordered parents under each receipt's existing keys.
 pub(super) fn json_parts<T>(claim: &Claim<T>) -> (String, String, String) {
     let mut body = String::new();
@@ -205,19 +215,14 @@ pub(super) fn color_json(color: Result<Color, Refusal>, include_status: bool) ->
             hi.to_bits()
         ),
         Ok(Color::Validated { regime, dataset }) => {
-            let bounds = regime
-                .bounds()
-                .iter()
-                .map(|(axis, (lo, hi))| {
-                    format!(
-                        "{{\"axis\":{},\"lo_bits\":\"{:016x}\",\"hi_bits\":\"{:016x}\"}}",
-                        js(axis),
-                        lo.to_bits(),
-                        hi.to_bits()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
+            let bounds = join_json(regime.bounds(), |(axis, (lo, hi))| {
+                format!(
+                    "{{\"axis\":{},\"lo_bits\":\"{:016x}\",\"hi_bits\":\"{:016x}\"}}",
+                    js(axis),
+                    lo.to_bits(),
+                    hi.to_bits()
+                )
+            });
             format!(
                 "{{{status}\"kind\":\"validated\",\"dataset\":{},\"bounds\":[{bounds}]}}",
                 js(&dataset)
@@ -276,6 +281,9 @@ pub(super) fn fields<'a>(
     Ok(out)
 }
 
-pub(super) fn join_json<T>(values: &[T], render: impl Fn(&T) -> String) -> String {
-    values.iter().map(render).collect::<Vec<_>>().join(",")
+pub(super) fn join_json<T>(
+    values: impl IntoIterator<Item = T>,
+    render: impl FnMut(T) -> String,
+) -> String {
+    values.into_iter().map(render).collect::<Vec<_>>().join(",")
 }

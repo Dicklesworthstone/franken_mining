@@ -17,16 +17,12 @@ use fmine_registry::sources::is_date;
 use fmine_registry::table_identities::parse_table_identities;
 
 use crate::guidance::{number, text};
-use crate::{Envelope, NextAction, escape_json};
+use crate::{Envelope, NextAction, json_string as js};
 
 const NO_CLAIM: &str = "Checks arithmetic under explicitly declared identities, membership and rounding rules. \
     Source values remain issuer assertions. A conflict does not select a corrected value or establish physical \
     truth, a reserve classification, regulatory compliance or issuer affiliation. An evidence cut uses registered \
     publication dates, not independently authenticated publication timestamps or historical transcription records.";
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", escape_json(value))
-}
 
 fn actions() -> Vec<NextAction> {
     vec![NextAction::new(

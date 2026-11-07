@@ -28,6 +28,7 @@ use fmine_public::transcribe::{CheckedDocument, TranscriptionReport};
 use fmine_registry::sources::{is_date, is_quarter};
 use fmine_registry::transcriptions::{Accepted, Decimal, Token, parse_token};
 
+use crate::json_string as js;
 use crate::track_record_data::{OutcomeBinding, TrackRecordRow, cell_basis, limits, specification};
 
 const POPULATION: [&str; 10] = [
@@ -58,9 +59,6 @@ pub(crate) struct PriceAssessment {
     transcripts: Vec<TranscriptEvidence>,
 }
 
-fn js(value: &str) -> String {
-    format!("\"{}\"", crate::escape_json(value))
-}
 fn strings(values: &[String]) -> String {
     values.iter().map(|v| js(v)).collect::<Vec<_>>().join(",")
 }

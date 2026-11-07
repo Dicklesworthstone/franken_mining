@@ -12,7 +12,7 @@ use fmine_public::Lane;
 use fmine_public::sources::{is_issuer_name, is_through_bound, registry_path};
 
 use crate::reliance_explicit::{MutationAuth, parse_digest, parse_time, resolve};
-use crate::{Envelope, NextAction, escape_json, reliance_binding};
+use crate::{Envelope, NextAction, json_string as js, reliance_binding};
 
 const NO_CLAIM: &str = "Records issuance or retrieves an existing issued copy through the local reliance gate. Caller-supplied clock and head pins are trust inputs, not external time proofs or signatures. Retrieval does not register another recipient or grant regulatory, reserve, safety or execution authority.";
 
@@ -169,10 +169,6 @@ pub fn parse(args: &[String], workspace: &Path) -> Result<Command, String> {
         recipient_role,
         purpose: purpose.into(),
     })
-}
-
-fn js(text: &str) -> String {
-    format!("\"{}\"", escape_json(text))
 }
 
 #[cfg(target_os = "linux")]

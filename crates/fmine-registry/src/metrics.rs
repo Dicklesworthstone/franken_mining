@@ -654,19 +654,43 @@ mod tests {
         assert_eq!(reg.definition(aisc).unwrap().unit, "USD/lb");
         let lines = reg.lines_of(c1);
         assert_eq!(lines.len(), 6);
-        assert_eq!(lines["depreciation_amortization_removed"].kind, LineKind::Deduction);
-        assert_eq!(lines["royalties_removed_from_cost_of_sales"].kind, LineKind::Deduction);
-        assert_eq!(lines["costs_allocated_to_by_products"].kind, LineKind::Credit);
-        assert!(reg.excluded_of(c1).contains("minesite_sustaining_capital_expenditures"));
-        assert!(reg.lines_of(aisc).contains_key("minesite_sustaining_capital_expenditures"));
-        assert!(!reg.excluded_of(aisc).contains("minesite_sustaining_capital_expenditures"));
-        assert!(!reg.lines_of(aisc).contains_key("inventory_write_down_added"));
+        assert_eq!(
+            lines["depreciation_amortization_removed"].kind,
+            LineKind::Deduction
+        );
+        assert_eq!(
+            lines["royalties_removed_from_cost_of_sales"].kind,
+            LineKind::Deduction
+        );
+        assert_eq!(
+            lines["costs_allocated_to_by_products"].kind,
+            LineKind::Credit
+        );
+        assert!(
+            reg.excluded_of(c1)
+                .contains("minesite_sustaining_capital_expenditures")
+        );
+        assert!(
+            reg.lines_of(aisc)
+                .contains_key("minesite_sustaining_capital_expenditures")
+        );
+        assert!(
+            !reg.excluded_of(aisc)
+                .contains("minesite_sustaining_capital_expenditures")
+        );
+        assert!(
+            !reg.lines_of(aisc)
+                .contains_key("inventory_write_down_added")
+        );
         let mismatched = format!(
             "\n[[definition]]\nid = \"mixed@1\"\nfamily = \"all_in_cost\"\nunit = \"USD/oz\"\n\
              formula = \"invented\"\nsource = \"invented\"\nevidence = \"E107\"\nextends = \"{c1}\"\n"
         );
         violation(with(&mismatched), "different unit or family");
-        violation(with(&mismatched.replace("USD/oz", "USD/tonne")), "cost unit");
+        violation(
+            with(&mismatched.replace("USD/oz", "USD/tonne")),
+            "cost unit",
+        );
     }
 
     fn with(extra: &str) -> Result<MetricRegistry, RegistryError> {

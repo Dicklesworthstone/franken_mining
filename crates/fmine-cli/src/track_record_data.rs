@@ -25,9 +25,7 @@ use fmine_public::sources::{IssuerProfile, SourceKind, load_issuer_profile};
 use fmine_public::transcribe::{CheckedDocument, TranscriptionReport};
 use fmine_registry::transcriptions::{Accepted, Agreement, Decimal, Locator, Token, parse_token};
 
-fn js(text: &str) -> String {
-    format!("\"{}\"", crate::escape_json(text))
-}
+use crate::json_string as js;
 
 pub const NO_CLAIM: &str = "Retrospective description of cited issuer guidance and reported outcomes. Any price sensitivity remains paired with its unconditional score. No forecast registration, calibration verdict, ranking, inferred probability or causal attribution.";
 type Result<T> = std::result::Result<T, Refusal>;

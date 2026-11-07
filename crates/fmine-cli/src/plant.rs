@@ -24,7 +24,7 @@ use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
 use fmine_time::ValidTime;
 use fmine_units::ExactQty;
 
-use crate::{Envelope, NextAction, escape_json, worksheet_input};
+use crate::{Envelope, NextAction, json_string as quoted, worksheet_input};
 
 pub const BALANCE_USAGE: &str = "plant balance --input <worksheet.toml>";
 pub const RECONCILE_USAGE: &str = "plant reconcile --input <worksheet.toml>";
@@ -459,9 +459,6 @@ fn parse_worksheet(text: &str, source: &SourceAnchor, mode: Mode) -> Result<Work
     })
 }
 
-fn quoted(value: &str) -> String {
-    format!("\"{}\"", escape_json(value))
-}
 fn exact(value: ExactQty) -> String {
     format!(
         "{{\"numerator\":\"{}\",\"denominator\":\"{}\"}}",

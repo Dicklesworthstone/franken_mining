@@ -13,13 +13,9 @@ use fmine_public::lint::{LintFinding, LintReport};
 use fmine_public::sources::is_issuer_name;
 use fmine_registry::sources::is_date;
 
-use crate::{Envelope, NextAction, escape_json};
+use crate::{Envelope, NextAction, json_string as js};
 
 pub(super) const NO_CLAIM: &str = "Checks supported equalities against the selected registered HTML Claims. Source publication dates come from the current registry; historical availability of the mapping and registry is not established. Credit treatment is not inferred from AISC/TCC labels. This does not establish the truth of issuer assertions, verify other prose, authenticate a historical information set or authorize disclosure.";
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", escape_json(value))
-}
 
 fn optional(value: Option<&str>) -> String {
     value.map_or_else(|| "null".into(), js)

@@ -20,7 +20,7 @@ use fmine_registry::sources::{DocumentRow, is_date};
 use fmine_registry::transcriptions::{Accepted, Locator};
 
 use crate::guidance::{number, text};
-use crate::{Envelope, NextAction, OutputFormat, escape_json};
+use crate::{Envelope, NextAction, OutputFormat, json_string as js};
 
 const VERB: &str = "reserve replacement";
 const NO_CLAIM: &str = "Recomputes the declared reserve-replacement definitions from registered issuer assertions. \
@@ -98,10 +98,6 @@ pub(crate) fn parse(
         format,
         workspace,
     ))
-}
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", escape_json(value))
 }
 
 fn actions() -> Vec<NextAction> {

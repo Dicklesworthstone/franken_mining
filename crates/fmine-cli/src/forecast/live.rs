@@ -19,8 +19,8 @@ use fmine_runtime::{HostWallClock, WallClock};
 
 use super::{
     Assessment, AssessmentFailure, MemberOutcome, Replay, Row, absent, cohort_json, display_or,
-    invalid, js, missing, missing_name, parse_subset, payload_json, selection, selector_name,
-    time, utc,
+    invalid, js, missing, missing_name, parse_subset, payload_json, selection, selector_name, time,
+    utc,
 };
 use crate::{DOCTOR_WHY, Envelope, NextAction};
 

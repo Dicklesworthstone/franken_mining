@@ -18,7 +18,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::reliance::{Journal, MAX_ARTIFACT_BYTES, ReissueRequest, ReleaseKey, read_artifact};
 use fmine_runtime::{HostWallClock, WallClock};
 
-use crate::{Envelope, OutputFormat, escape_json, reliance_binding};
+use crate::{Envelope, OutputFormat, json_string as text, reliance_binding};
 
 pub(crate) const VERBS_JSON: &str = concat!(
     r#""assure public --synthetic|--issuer <issuer> --output <new-path> --journal <path> --head <hex> --release-key <path> --trust-host-clock --recipient-role <role> --purpose review --code-revision <git-sha>","#,
@@ -195,7 +195,13 @@ fn parse_operation(
 ) -> Result<(Command, OutputFormat, PathBuf), String> {
     let (mut fields, words) = crate::journal_arguments(
         args,
-        &["--synthetic", "--trust-host-clock", "--all-claims", "--json", "--require-current"],
+        &[
+            "--synthetic",
+            "--trust-host-clock",
+            "--all-claims",
+            "--json",
+            "--require-current",
+        ],
     )?;
     let verb = match words.as_slice() {
         ["reliance", verb] if !assurance_export => *verb,
@@ -417,10 +423,6 @@ fn trusted_time(access: &Access, header: &Header, now: i64) -> Option<TrustedTim
         now_ns: now,
         uncertainty_ns: header.max_clock_skew_ns,
     })
-}
-
-fn text(value: &str) -> String {
-    format!("\"{}\"", escape_json(value))
 }
 
 fn unconfirmed_artifact(mut refusal: Refusal) -> Refusal {

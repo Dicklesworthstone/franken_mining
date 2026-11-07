@@ -19,6 +19,8 @@ use fmine_core::id::ObjectId;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 
+use crate::json_string as js;
+
 mod diagnostics;
 pub mod live;
 mod provenance;
@@ -866,9 +868,6 @@ fn missing_name(s: MissingReason) -> &'static str {
         MissingReason::Divested => "divested",
         MissingReason::Overdue => "overdue",
     }
-}
-fn js(s: &str) -> String {
-    format!("\"{}\"", crate::escape_json(s))
 }
 fn utc(ns: i64) -> String {
     let text = format_utc(ns.div_euclid(1_000_000_000));

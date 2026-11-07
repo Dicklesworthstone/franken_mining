@@ -24,7 +24,7 @@ use fmine_registry::transcriptions::{Accepted, Locator, parse_token};
 use fmine_time::{CivilDate, days_in_month};
 
 use crate::guidance_capacity::{interval, rational as rat};
-use crate::{Envelope, NextAction};
+use crate::{Envelope, NextAction, json_string as j};
 
 pub const NO_CLAIM: &str = "Conditional compatibility of selected public assertions under their stated ownership and common dated perimeter. Agreement does not establish physical truth or select a correct reporter. No cost bridge, valuation, disclosure permission or partner affiliation is implied.";
 const SCHEMA: &str = "fmine.jv_mirror.v1";
@@ -549,9 +549,6 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
     }
 }
 
-fn j(s: &str) -> String {
-    format!("\"{}\"", crate::escape_json(s))
-}
 fn source_anchor(a: &SourceAnchor) -> String {
     format!(
         "{{\"artifact\":{},\"sha256\":{},\"locator\":{}}}",

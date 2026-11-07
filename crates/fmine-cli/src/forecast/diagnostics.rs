@@ -45,7 +45,10 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
                 }
                 DiagnosticValue::EmpiricalRank { n_samples, counts } => {
                     let fields = counts.map_or_else(
-                        || "\"below\":null,\"equal\":null,\"above\":null,\"cdf_bounds\":null".into(),
+                        || {
+                            "\"below\":null,\"equal\":null,\"above\":null,\"cdf_bounds\":null"
+                                .into()
+                        },
                         |counts| {
                             format!(
                                 "\"below\":{},\"equal\":{},\"above\":{},\"cdf_bounds\":{}",
@@ -99,7 +102,11 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
         )).collect::<Vec<_>>().join(",");
         format!(",\"empirical_rank\":{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"method\":{},\"bins\":[{bins}]}}", ranks.n_members, ranks.n_resolved, ranks.n_unresolved, js(EMPIRICAL_METHOD))
     });
-    let version = if diagnostics.empirical_rank.is_some() { 2 } else { 1 };
+    let version = if diagnostics.empirical_rank.is_some() {
+        2
+    } else {
+        1
+    };
     Ok(format!(
         ",\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v{version}\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli}{empirical},\"members\":[{members}]}}",
         js(&diagnostics.assessment_digest.to_hex()),
@@ -325,15 +332,29 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000001""#
             "synthetic:whole",
             &[
                 ("tied", 1, "kind = \"empirical\"\nsamples = \"8,10,10,12\""),
-                ("missing", 1, "kind = \"empirical\"\nsamples = \"10,10,10,10\""),
-                ("normal", 1, "kind = \"gaussian\"\nmean = \"10\"\nstd_dev = \"2\""),
+                (
+                    "missing",
+                    1,
+                    "kind = \"empirical\"\nsamples = \"10,10,10,10\"",
+                ),
+                (
+                    "normal",
+                    1,
+                    "kind = \"gaussian\"\nmean = \"10\"\nstd_dev = \"2\"",
+                ),
             ],
             &[("tied", "10"), ("normal", "10")],
         );
         let (json, markdown) = render(&state, &report);
         assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v2\""));
-        assert!(json.contains("\"gaussian_pit\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"));
-        assert!(json.contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"));
+        assert!(
+            json.contains("\"gaussian_pit\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,")
+        );
+        assert!(
+            json.contains(
+                "\"empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"
+            )
+        );
         assert!(json.contains("\"n_samples\":4,\"below\":1,\"equal\":2,\"above\":1,"));
         assert!(json.contains(concat!(
             "\"cdf_bounds\":{\"lower\":{\"num\":1,\"den\":4},",

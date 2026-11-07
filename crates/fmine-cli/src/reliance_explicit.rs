@@ -15,7 +15,7 @@ use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::reliance::{Journal, ReleaseKey, read_artifact};
 
-use crate::{Envelope, NextAction, escape_json};
+use crate::{Envelope, NextAction, json_string as js};
 
 const NO_CLAIM: &str = "Reports only this local issuance journal. A supplied head pin and bounded time are caller trust inputs, not a signature or an external time proof. Recall lists known issued copies; it does not contact recipients or establish that every copy was recalled.";
 
@@ -361,10 +361,6 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         }
         _ => Err(format!("unknown reliance action {action:?}")),
     }
-}
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", escape_json(value))
 }
 
 fn optional_digest(value: Option<Digest32>) -> String {

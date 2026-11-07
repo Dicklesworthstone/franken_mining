@@ -19,6 +19,8 @@ use fmine_public::lint::{LintFinding, LintMode, LintReport, Verdict, equality_ta
 use fmine_public::sources::{IssuerProfile, RegisteredSource};
 use fmine_registry::sources::{PUBLISHED_AT_BASES, is_date};
 
+use crate::json_string as js;
+
 mod sums;
 
 pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences and complete quarter sums against dated, registered public sources at the requested cut. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
@@ -70,10 +72,6 @@ pub(super) struct PublicnessReport {
 }
 
 type Family = (String, String, Period, Scope, String, String, u32);
-
-fn js(s: &str) -> String {
-    format!("\"{}\"", crate::escape_json(s))
-}
 
 fn optional(s: Option<&str>) -> String {
     s.map_or_else(|| "null".to_string(), js)

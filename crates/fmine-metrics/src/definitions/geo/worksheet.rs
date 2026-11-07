@@ -202,7 +202,13 @@ pub fn evaluate(text: &str, source: SourceAnchor) -> Result<GeoReceipt, Refusal>
     for row in &doc.rows {
         let value = match row.table.as_str() {
             "quantity" => {
-                let f = fields(&row.fields, &["metal", "unit", "amount"], &[], row.line, bad)?;
+                let f = fields(
+                    &row.fields,
+                    &["metal", "unit", "amount"],
+                    &[],
+                    row.line,
+                    bad,
+                )?;
                 let (name, line) = get(&f, "metal")?;
                 GeoValue::Quantity {
                     metal: metal(name, line)?,

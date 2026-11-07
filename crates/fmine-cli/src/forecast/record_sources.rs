@@ -24,6 +24,8 @@ use fmine_registry::transcriptions::{
     Decimal, EntryRow, Token, TranscriptionRegistry, agree, load_transcriptions, parse_token,
 };
 
+use crate::json_string as js;
+
 type Result<T> = std::result::Result<T, Refusal>;
 
 pub(super) struct Resolved {
@@ -45,10 +47,6 @@ fn invalid(detail: impl Into<String>) -> Refusal {
 
 fn exact<T, E: std::fmt::Display>(value: std::result::Result<T, E>) -> Result<T> {
     value.map_err(|e| refusal(RefusalCode::NumericalCertificateFailed207, e.to_string()))
-}
-
-fn js(value: &str) -> String {
-    format!("\"{}\"", crate::escape_json(value))
 }
 
 fn optional(value: Option<&str>) -> String {

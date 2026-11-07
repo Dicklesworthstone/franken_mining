@@ -67,7 +67,10 @@ impl fmt::Display for MetricFailure {
             Self::UnknownDefinition(id) => write!(f, "unregistered metric definition {id}"),
             Self::NotACostDefinition(id) => write!(f, "{id} is not a registered unit cost"),
             Self::UnregisteredItem { definition, item } => {
-                write!(f, "{definition} neither counts nor excludes the line {item}")
+                write!(
+                    f,
+                    "{definition} neither counts nor excludes the line {item}"
+                )
             }
             Self::NonPositiveOunces => write!(f, "ounces sold must be positive"),
             Self::NonPositiveSoldQuantity => write!(f, "sold quantity must be positive"),
