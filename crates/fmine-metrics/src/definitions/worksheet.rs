@@ -13,6 +13,7 @@ use fmine_registry::metrics::MetricRegistry;
 use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
 use fmine_units::{Currency, ExactQty, Money};
 
+use super::CostUnit;
 use super::claims::{self, CostInput, CostReceipt, CostValue, Scope};
 use crate::guidance::{Ownership, Period};
 
@@ -207,9 +208,14 @@ pub fn evaluate(
             "basis",
             "currency",
             "complete",
-            "ounces_sold",
         ],
-        &["ownership_share", "gold_share"],
+        &[
+            "ownership_share",
+            "ounces_sold",
+            "pounds_sold",
+            "gold_share",
+            "copper_share",
+        ],
         1,
     )?;
     if get(&top, "schema")?.0 != SCHEMA {
@@ -246,10 +252,25 @@ pub fn evaluate(
         basis: get(&top, "basis")?.0.into(),
     };
     let mut values = Vec::new();
-    let (sold, line) = get(&top, "ounces_sold")?;
-    values.push((CostValue::SoldOunces(quantity(sold, line)?), line));
+    match (top.get("ounces_sold"), top.get("pounds_sold")) {
+        (Some((sold, line)), None) => {
+            values.push((CostValue::SoldOunces(quantity(sold, *line)?), *line));
+        }
+        (None, Some((sold, line))) => {
+            values.push((CostValue::SoldPounds(quantity(sold, *line)?), *line));
+        }
+        _ => {
+            return Err(bad(
+                1,
+                "declare exactly one of ounces_sold (gold) or pounds_sold (copper)",
+            ));
+        }
+    }
     if let Some((share, line)) = top.get("gold_share") {
         values.push((CostValue::GoldShare(quantity(share, *line)?), *line));
+    }
+    if let Some((share, line)) = top.get("copper_share") {
+        values.push((CostValue::CopperShare(quantity(share, *line)?), *line));
     }
     let mut unknowns = BTreeMap::new();
     for row in &doc.rows {
@@ -414,6 +435,12 @@ fn input_json(input: &CostInput) -> String {
         CostValue::GoldShare(q) => {
             format!("{{\"kind\":\"gold_share\",\"value\":{}}}", js(&qty(*q)))
         }
+        CostValue::SoldPounds(q) => {
+            format!("{{\"kind\":\"pounds_sold\",\"value\":{}}}", js(&qty(*q)))
+        }
+        CostValue::CopperShare(q) => {
+            format!("{{\"kind\":\"copper_share\",\"value\":{}}}", js(&qty(*q)))
+        }
         CostValue::Rule {
             definition,
             definition_tag,
@@ -527,8 +554,12 @@ impl CostReceipt {
         let contributions = s.contributions.iter().map(|c| format!("{{\"item\":{},\"input_claim_id\":{},\"amount_minor\":{},\"treatment\":{},\"numerator_usd\":{}}}",
             js(&c.item), js(&c.input_claim_id.to_string()), js(&c.amount.minor.to_string()), js(c.treatment.as_str()), js(&qty(c.numerator_usd))))
             .collect::<Vec<_>>().join(",");
+        let (quantity_key, share_key, rate_key) = match s.unit {
+            CostUnit::GoldOunceSold => ("ounces_sold", "gold_share", "usd_per_oz"),
+            CostUnit::CopperPoundSold => ("pounds_sold", "copper_share", "usd_per_lb"),
+        };
         let summary = format!(
-            "{{\"scope\":{},\"definition\":{},\"definition_tag\":{},\"superseded_by\":{},\"declared_complete\":{},\"currency\":\"USD\",\"numerator_usd\":{},\"ounces_sold\":{},\"gold_share\":{},\"usd_per_oz\":{},\"contributions\":[{contributions}]}}",
+            "{{\"scope\":{},\"definition\":{},\"definition_tag\":{},\"superseded_by\":{},\"declared_complete\":{},\"currency\":\"USD\",\"numerator_usd\":{},\"{quantity_key}\":{},\"{share_key}\":{},\"{rate_key}\":{},\"contributions\":[{contributions}]}}",
             scope_json(&s.scope),
             js(&s.definition),
             js(&s.definition_tag),
@@ -537,9 +568,10 @@ impl CostReceipt {
                 .map_or_else(|| "null".into(), |id| js(id)),
             s.declared_complete,
             js(&qty(s.numerator_usd)),
-            js(&qty(s.ounces_sold)),
-            s.gold_share.map_or_else(|| "null".into(), |q| js(&qty(q))),
-            js(&qty(s.usd_per_oz))
+            js(&qty(s.quantity_sold)),
+            s.primary_metal_share
+                .map_or_else(|| "null".into(), |q| js(&qty(q))),
+            js(&qty(s.usd_per_unit))
         );
         format!(
             "{{\"digest\":{},\"summary\":{summary},\"claim\":{},\"inputs\":[{}]}}",
@@ -569,7 +601,7 @@ impl CostReceipt {
             Ownership::Attributable { share } => format!("attributable {}", qty(share)),
         };
         let mut out = format!(
-            "# Declared cost worksheet\n\n{} / {} — {} months {}–{}, {}.\n\nBasis: {}.\n\n**{} USD/oz sold**, under `{}`.\n\nNumerator: {} USD; denominator: {} gold ounces sold.\n\n",
+            "# Declared cost worksheet\n\n{} / {} — {} months {}–{}, {}.\n\nBasis: {}.\n\n**{} {} sold**, under `{}`.\n\nNumerator: {} USD; denominator: {} {}.\n\n",
             text(&s.scope.issuer),
             text(&s.scope.subject),
             s.scope.period.year,
@@ -577,15 +609,21 @@ impl CostReceipt {
             s.scope.period.last_month,
             ownership,
             text(&s.scope.basis),
-            qty(s.usd_per_oz),
+            qty(s.usd_per_unit),
+            s.unit.rate_unit(),
             text(&s.definition),
             qty(s.numerator_usd),
-            qty(s.ounces_sold)
+            qty(s.quantity_sold),
+            s.unit.quantity_label()
         );
-        if let Some(share) = s.gold_share {
+        if let Some(share) = s.primary_metal_share {
             let _ = writeln!(
                 out,
-                "Declared co-product gold allocation: {}.\n",
+                "Declared co-product {} allocation: {}.\n",
+                match s.unit {
+                    CostUnit::GoldOunceSold => "gold",
+                    CostUnit::CopperPoundSold => "copper",
+                },
                 qty(share)
             );
         }

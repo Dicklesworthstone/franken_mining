@@ -1,4 +1,4 @@
-//! Claim-bound exact AISC/AIC worksheets (BD-061).
+//! Claim-bound exact gold and copper cost worksheets (BD-061).
 //! Determinism: Exact (inherited UU and colour metadata are bound by their exact floating-point bits).
 //!
 //! The rule Claim explicitly declares that supplied lines form the complete cost population for one
@@ -14,7 +14,7 @@ use fmine_evidence::{Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refu
 use fmine_registry::metrics::{CreditBasis, LineKind, MetricFamily, MetricRegistry};
 use fmine_units::{Currency, ExactQty, Money, UnitsError};
 
-use super::{CostLine, MetricFailure, all_in_cost_per_oz};
+use super::{CostLine, CostUnit, MetricFailure, cost_per_sold_unit};
 use crate::guidance::{Ownership, Period};
 
 type Result<T> = std::result::Result<T, Refusal>;
@@ -42,8 +42,11 @@ pub enum CostValue {
     },
     /// Gold ounces sold, not produced ounces or thousands of ounces.
     SoldOunces(ExactQty),
+    /// Copper pounds sold, not produced copper, metric tonnes or millions of pounds.
+    SoldPounds(ExactQty),
     /// The issuer's separately stated co-product gold allocation; not the ownership share.
     GoldShare(ExactQty),
+    CopperShare(ExactQty),
     Rule {
         definition: String,
         definition_tag: String,
@@ -82,8 +85,8 @@ impl CostInput {
     fn key(&self) -> (u8, &str) {
         match &self.value {
             CostValue::Rule { .. } => (0, ""),
-            CostValue::SoldOunces(_) => (1, ""),
-            CostValue::GoldShare(_) => (2, ""),
+            CostValue::SoldOunces(_) | CostValue::SoldPounds(_) => (1, ""),
+            CostValue::GoldShare(_) | CostValue::CopperShare(_) => (2, ""),
             CostValue::Line { item, .. } => (3, item),
         }
     }
@@ -91,8 +94,12 @@ impl CostInput {
     #[must_use]
     pub const fn additivity(&self) -> AdditivityClass {
         match self.value {
-            CostValue::Line { .. } | CostValue::SoldOunces(_) => AdditivityClass::ExtensiveAdditive,
-            CostValue::GoldShare(_) | CostValue::Rule { .. } => AdditivityClass::NonAdditive,
+            CostValue::Line { .. } | CostValue::SoldOunces(_) | CostValue::SoldPounds(_) => {
+                AdditivityClass::ExtensiveAdditive
+            }
+            CostValue::GoldShare(_) | CostValue::CopperShare(_) | CostValue::Rule { .. } => {
+                AdditivityClass::NonAdditive
+            }
         }
     }
 
@@ -100,14 +107,22 @@ impl CostInput {
     pub fn canonical_tag(&self) -> String {
         let mut enc = Encoder::new_frame(*b"CSTI", 1);
         put_scope(&mut enc, &self.scope);
-        enc.put_u8(self.key().0);
+        // Existing gold input tags remain unchanged; the metal is bound independently of sort order.
+        enc.put_u8(match self.value {
+            CostValue::SoldPounds(_) => 4,
+            CostValue::CopperShare(_) => 5,
+            _ => self.key().0,
+        });
         match &self.value {
             CostValue::Line { item, amount } => {
                 enc.put_str(item);
                 enc.put_str(&format!("{:?}", amount.ccy));
                 enc.put_i128(amount.minor);
             }
-            CostValue::SoldOunces(value) | CostValue::GoldShare(value) => put_qty(&mut enc, *value),
+            CostValue::SoldOunces(value)
+            | CostValue::SoldPounds(value)
+            | CostValue::GoldShare(value)
+            | CostValue::CopperShare(value) => put_qty(&mut enc, *value),
             CostValue::Rule {
                 definition,
                 definition_tag,
@@ -131,10 +146,14 @@ pub fn definition_tag(registry: &MetricRegistry, id: &str) -> Result<String> {
             "unregistered cost definition",
         )
     })?;
-    if selected.family != MetricFamily::AllInCost || selected.unit != "USD/oz" {
+    if !matches!(
+        selected.family,
+        MetricFamily::AllInCost | MetricFamily::CashCost
+    ) || !matches!(selected.unit.as_str(), "USD/oz" | "USD/lb")
+    {
         return Err(bad(
             RefusalCode::BasisMismatch105,
-            "definition must calculate USD per gold ounce sold",
+            "definition must calculate USD per gold ounce or copper pound sold",
         ));
     }
     let mut definitions = BTreeMap::new();
@@ -149,6 +168,16 @@ pub fn definition_tag(registry: &MetricRegistry, id: &str) -> Result<String> {
                 "missing inherited cost definition",
             )
         })?;
+        if !matches!(
+            definition.family,
+            MetricFamily::AllInCost | MetricFamily::CashCost
+        ) || definition.unit != selected.unit
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "inherited cost definitions must use the same explicit metal denominator",
+            ));
+        }
         if registry.definitions.iter().filter(|d| d.id == at).count() != 1 {
             return Err(bad(
                 RefusalCode::BasisMismatch105,
@@ -175,6 +204,7 @@ pub fn definition_tag(registry: &MetricRegistry, id: &str) -> Result<String> {
             MetricFamily::AllInCost => 0,
             MetricFamily::Geo => 1,
             MetricFamily::ReserveReplacement => 2,
+            MetricFamily::CashCost => 3,
         });
         enc.put_u8(u8::from(definition.credit_basis == CreditBasis::CoProduct));
         enc.put_u64(definition.extends.len() as u64);
@@ -188,7 +218,11 @@ pub fn definition_tag(registry: &MetricRegistry, id: &str) -> Result<String> {
     for (item, line) in lines {
         enc.put_str(item);
         enc.put_str(&line.letter);
-        enc.put_u8(u8::from(line.kind == LineKind::Credit));
+        enc.put_u8(match line.kind {
+            LineKind::Cost => 0,
+            LineKind::Credit => 1,
+            LineKind::Deduction => 2,
+        });
     }
     let excluded = registry.excluded_of(id);
     enc.put_u64(excluded.len() as u64);
@@ -203,6 +237,7 @@ pub fn definition_tag(registry: &MetricRegistry, id: &str) -> Result<String> {
 pub enum Treatment {
     Cost,
     Credit,
+    Deduction,
     Excluded,
 }
 impl Treatment {
@@ -211,6 +246,7 @@ impl Treatment {
         match self {
             Self::Cost => "cost",
             Self::Credit => "credit",
+            Self::Deduction => "deduction",
             Self::Excluded => "excluded",
         }
     }
@@ -234,9 +270,10 @@ pub struct CostSummary {
     pub superseded_by: Option<String>,
     pub declared_complete: bool,
     pub numerator_usd: ExactQty,
-    pub ounces_sold: ExactQty,
-    pub gold_share: Option<ExactQty>,
-    pub usd_per_oz: ExactQty,
+    pub unit: CostUnit,
+    pub quantity_sold: ExactQty,
+    pub primary_metal_share: Option<ExactQty>,
+    pub usd_per_unit: ExactQty,
     pub contributions: Vec<Contribution>,
 }
 
@@ -310,7 +347,7 @@ fn admit(claim: &Claim<CostInput>) -> Result<()> {
     if claim.additivity != claim.value.additivity() {
         return Err(bad(
             RefusalCode::NonAdditiveAverage103,
-            "costs and sold ounces must be extensive; rule and allocation are non-additive",
+            "costs and sold quantities must be extensive; rule and allocation are non-additive",
         ));
     }
     if claim.anchors.is_empty()
@@ -465,17 +502,31 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
             "registered definition differs from the bound rule Claim",
         ));
     }
-    let sold = inputs
+    let (unit, sold) = inputs
         .iter()
         .find_map(|c| match c.value.value {
-            CostValue::SoldOunces(q) => Some(q),
+            CostValue::SoldOunces(q) => Some((CostUnit::GoldOunceSold, q)),
+            CostValue::SoldPounds(q) => Some((CostUnit::CopperPoundSold, q)),
             _ => None,
         })
-        .ok_or_else(|| bad(RefusalCode::NoClaimInDomain201, "sold ounces are required"))?;
-    let share = inputs.iter().find_map(|c| match c.value.value {
-        CostValue::GoldShare(q) => Some(q),
+        .ok_or_else(|| {
+            bad(
+                RefusalCode::NoClaimInDomain201,
+                "an explicit sold quantity is required",
+            )
+        })?;
+    let allocation = inputs.iter().find_map(|c| match c.value.value {
+        CostValue::GoldShare(q) => Some((CostUnit::GoldOunceSold, q)),
+        CostValue::CopperShare(q) => Some((CostUnit::CopperPoundSold, q)),
         _ => None,
     });
+    if allocation.is_some_and(|(metal, _)| metal != unit) {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "allocation metal differs from the sold denominator",
+        ));
+    }
+    let share = allocation.map(|(_, q)| q);
     let mut lines = Vec::new();
     for input in &inputs {
         if let CostValue::Line { item, amount } = &input.value.value {
@@ -498,11 +549,13 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         ));
     }
     let calculated =
-        all_in_cost_per_oz(registry, definition, &lines, sold, share).map_err(|failure| {
+        cost_per_sold_unit(registry, definition, &lines, unit, sold, share).map_err(|failure| {
             Refusal::new(
                 match failure {
                     MetricFailure::Exact(_) => RefusalCode::NumericalCertificateFailed207,
-                    MetricFailure::NonPositiveOunces => RefusalCode::OutsidePhysicalDomain109,
+                    MetricFailure::NonPositiveOunces
+                    | MetricFailure::NonPositiveSoldQuantity
+                    | MetricFailure::NegativeDeduction(_) => RefusalCode::OutsidePhysicalDomain109,
                     _ => RefusalCode::BasisMismatch105,
                 },
                 failure.to_string(),
@@ -514,23 +567,25 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
     for input in &inputs {
         if let CostValue::Line { item, amount } = &input.value.value {
             let kind = registered.get(item.as_str()).map(|line| line.kind);
-            if kind == Some(LineKind::Credit) && amount.minor < 0 {
+            if matches!(kind, Some(LineKind::Credit | LineKind::Deduction)) && amount.minor < 0 {
                 return Err(bad(
                     RefusalCode::OutsidePhysicalDomain109,
-                    "credits must be nonnegative amounts before subtraction",
+                    "credits and reconciliation deductions must be nonnegative amounts before subtraction",
                 ));
             }
             let treatment = if calculated.left_out.contains(item) {
                 Treatment::Excluded
             } else if kind == Some(LineKind::Credit) {
                 Treatment::Credit
+            } else if kind == Some(LineKind::Deduction) {
+                Treatment::Deduction
             } else {
                 Treatment::Cost
             };
             let amount_usd = exact(ExactQty::new(amount.minor, Money::SCALE))?;
             let signed = match treatment {
                 Treatment::Excluded => ZERO,
-                Treatment::Credit => exact(amount_usd.checked_neg())?,
+                Treatment::Credit | Treatment::Deduction => exact(amount_usd.checked_neg())?,
                 Treatment::Cost => amount_usd,
             };
             let contribution = exact(signed.checked_mul(share.unwrap_or(ONE)))?;
@@ -544,7 +599,7 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
             });
         }
     }
-    if exact(numerator.checked_div(sold))? != calculated.usd_per_oz {
+    if exact(numerator.checked_div(sold))? != calculated.usd_per_unit {
         return Err(bad(
             RefusalCode::NumericalCertificateFailed207,
             "contributions do not reconcile to the registered calculation",
@@ -557,9 +612,10 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         superseded_by: calculated.superseded_by,
         declared_complete: true,
         numerator_usd: numerator,
-        ounces_sold: sold,
-        gold_share: share,
-        usd_per_oz: calculated.usd_per_oz,
+        unit,
+        quantity_sold: sold,
+        primary_metal_share: share,
+        usd_per_unit: calculated.usd_per_unit,
         contributions,
     };
     let mut enc = Encoder::new_frame(*b"CSTR", 1);
@@ -591,7 +647,7 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         }
     }
     put_qty(&mut enc, summary.numerator_usd);
-    put_qty(&mut enc, summary.usd_per_oz);
+    put_qty(&mut enc, summary.usd_per_unit);
     enc.put_str(summary.superseded_by.as_deref().unwrap_or(""));
     for contribution in &summary.contributions {
         enc.put_str(&contribution.item);

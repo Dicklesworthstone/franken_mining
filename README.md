@@ -266,6 +266,24 @@ The worksheet's cost classification and completeness remain **Assumed, Internal 
 a complete population is not independent evidence that omitted costs are zero. This command calculates the
 chosen rule; it does not verify issuer filings or close the broader metric-reproduction work.
 
+The same command accepts explicit copper pounds sold under issuer-specific C1 and AISC table rules:
+
+```bash
+cargo run -p fmine-cli -- metrics cost --input tests/costs/declared_copper.toml --definition c1.copper@barrick-q2-2026 --format markdown
+cargo run -p fmine-cli -- metrics cost --input tests/costs/declared_copper.toml --definition aisc.copper@barrick-q2-2026 --json
+```
+
+The invented copper example uses 400 pounds sold and produces a C1 numerator of USD 980
+(USD 2.45/lb) and an AISC numerator of USD 1,200 (USD 3/lb). Depreciation and the C1 royalty removal
+are reconciliation deductions, distinct from by-product credits; the AISC royalty add-back remains
+its own named input. Both calculations retain every excluded cost. These versioned rules describe
+the disclosed table's lines; unlisted inventory or nonroutine adjustments refuse.
+
+Specify exactly one of `ounces_sold` (gold) or `pounds_sold` (copper), in actual sold units.
+The engine refuses an ounce/pound mismatch, a produced-unit substitution, ambiguous denominators
+and an allocation for another metal. Values and labels remain declared assumptions; the example
+does not reproduce a rounded issuer rate or establish an audited accounting population.
+
 ### Compare production GEO across named price decks
 
 `metrics geo` applies each versioned price deck to the same declared production quantities, showing each

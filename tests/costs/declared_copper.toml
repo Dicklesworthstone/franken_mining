@@ -1,0 +1,61 @@
+# Invented declared costs, not issuer amounts or a source-verified reconciliation.
+# C1: (1000 - 200 + 100 + 150 - 50 - 20) / 400 = 2.45 USD/lb sold.
+# AISC: (980 + 40 + 10 + 50 + 20 + 95 + 5) / 400 = 3 USD/lb sold.
+# Run: fmine metrics cost --input tests/costs/declared_copper.toml --definition c1.copper@barrick-q2-2026
+schema = "fmine.cost-worksheet.v1"
+issuer = "invented"
+subject = "Example Copper Mine"
+period = "2030FY"
+ownership = "full"
+basis = "Invented nominal USD costs on a complete copper sold-pound population"
+currency = "USD"
+complete = "true"
+pounds_sold = "400"
+
+[[cost]]
+item = "cost_of_sales"
+usd = "1000"
+
+[[cost]]
+item = "depreciation_amortization_removed"
+usd = "200"
+
+[[cost]]
+item = "treatment_refining_charges"
+usd = "100"
+
+[[cost]]
+item = "equity_method_c1_cash_costs"
+usd = "150"
+
+[[cost]]
+item = "royalties_removed_from_cost_of_sales"
+usd = "50"
+
+[[cost]]
+item = "costs_allocated_to_by_products"
+usd = "20"
+
+[[cost]]
+item = "corporate_general_and_administrative"
+usd = "40"
+
+[[cost]]
+item = "reclamation_accretion_and_amortisation_operating_sites"
+usd = "10"
+
+[[cost]]
+item = "royalties_added"
+usd = "50"
+
+[[cost]]
+item = "exploration_and_evaluation_sustaining"
+usd = "20"
+
+[[cost]]
+item = "minesite_sustaining_capital_expenditures"
+usd = "95"
+
+[[cost]]
+item = "sustaining_leases"
+usd = "5"

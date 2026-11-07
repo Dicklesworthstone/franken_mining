@@ -14,6 +14,10 @@ Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budg
 Serves as the schema and registry catalog authority for `fmine doctor` and `xtask`.
 
 ## 4. Public API Surface
+- DESIGN (BD-060/BD-061): `metrics` admits cash-cost definitions alongside all-in cost and distinguishes
+  by-product credits from mandatory reconciliation deductions. Cost definitions require USD/oz or USD/lb
+  on an explicit sold basis; inherited cost definitions must use the same unit. The bundled copper C1/AISC
+  rules name the Q2 2026 issuer reconciliation lines, without embedding issuer amounts.
 - `sources::HtmlSourceRow`, `SourcesRegistry::html_sources` (BD-057/BD-059): optional `[[html]]` rows
   register HTML filings separately from workbook and PDF sources. Required fields are a bare `.html` or
   `.htm` `file`, `release` (`YYYYQn`), HTTPS `url`, registered `url_basis`, calendar `published_at`, cited

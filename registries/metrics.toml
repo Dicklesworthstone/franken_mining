@@ -288,3 +288,116 @@ item = "lease_payments"
 [[excluded]]
 definition = "aisc@wgc-2018"
 item = "discontinued_operations"
+
+
+# FACT: issuer-specific copper reconciliation, Q2 2026 results, published 2026-08-10;
+# https://www.barrick.com/English/news/news-details/2026/q2-2026-results/default.aspx
+# section "C1 cash costs per pound and All-in sustaining costs per pound" and its following table,
+# read 2026-11-07. E107 locates the filed reconciliations; C1 corpus section 3.2 records Endnote A8.
+# DESIGN: these are table-line rules, not WGC gold rules. Inputs already share their stated ownership
+# basis. The two royalty rows are separate assertions: the C1 deduction and the AISC add-back.
+# Unlisted nonroutine charges and inventory adjustments refuse: no addition to cost of sales is inferred.
+[[definition]]
+id = "c1.copper@barrick-q2-2026"
+family = "cash_cost"
+unit = "USD/lb"
+formula = "cost of sales less depreciation and royalties, plus treatment/refining and equity-method C1, less by-product allocations, per attributable copper pound sold"
+source = "Barrick Q2 2026 results, Copper Cost of Sales to C1/AISC reconciliation; https://www.barrick.com/English/news/news-details/2026/q2-2026-results/default.aspx"
+evidence = "E107"
+
+[[definition]]
+id = "aisc.copper@barrick-q2-2026"
+family = "all_in_cost"
+unit = "USD/lb"
+formula = "C1 plus the table's sustaining capital/leases, G&A, reclamation, exploration and royalties, per attributable copper pound sold"
+source = "Barrick Q2 2026 results, disclosed Copper Cost of Sales to C1/AISC reconciliation lines; https://www.barrick.com/English/news/news-details/2026/q2-2026-results/default.aspx"
+evidence = "E107"
+extends = "c1.copper@barrick-q2-2026"
+
+[[line]]
+definition = "c1.copper@barrick-q2-2026"
+letter = "Cost of sales"
+item = "cost_of_sales"
+
+[[line]]
+definition = "c1.copper@barrick-q2-2026"
+letter = "Depreciation/amortization"
+item = "depreciation_amortization_removed"
+kind = "deduction"
+
+[[line]]
+definition = "c1.copper@barrick-q2-2026"
+letter = "Treatment and refinement charges"
+item = "treatment_refining_charges"
+
+[[line]]
+definition = "c1.copper@barrick-q2-2026"
+letter = "C1 cash costs applicable to equity method investments"
+item = "equity_method_c1_cash_costs"
+
+[[line]]
+definition = "c1.copper@barrick-q2-2026"
+letter = "Less: royalties"
+item = "royalties_removed_from_cost_of_sales"
+kind = "deduction"
+
+[[line]]
+definition = "c1.copper@barrick-q2-2026"
+letter = "Costs allocated to by-products"
+item = "costs_allocated_to_by_products"
+kind = "credit"
+
+[[line]]
+definition = "aisc.copper@barrick-q2-2026"
+letter = "General & administrative costs"
+item = "corporate_general_and_administrative"
+
+[[line]]
+definition = "aisc.copper@barrick-q2-2026"
+letter = "Rehabilitation - accretion and amortization"
+item = "reclamation_accretion_and_amortisation_operating_sites"
+
+[[line]]
+definition = "aisc.copper@barrick-q2-2026"
+letter = "Royalties"
+item = "royalties_added"
+
+[[line]]
+definition = "aisc.copper@barrick-q2-2026"
+letter = "Minesite exploration and evaluation costs"
+item = "exploration_and_evaluation_sustaining"
+
+[[line]]
+definition = "aisc.copper@barrick-q2-2026"
+letter = "Minesite sustaining capital expenditures"
+item = "minesite_sustaining_capital_expenditures"
+
+[[line]]
+definition = "aisc.copper@barrick-q2-2026"
+letter = "Sustaining leases"
+item = "sustaining_leases"
+
+# C1 excludes these additions; the child AISC rule explicitly includes them.
+[[excluded]]
+definition = "c1.copper@barrick-q2-2026"
+item = "corporate_general_and_administrative"
+
+[[excluded]]
+definition = "c1.copper@barrick-q2-2026"
+item = "reclamation_accretion_and_amortisation_operating_sites"
+
+[[excluded]]
+definition = "c1.copper@barrick-q2-2026"
+item = "royalties_added"
+
+[[excluded]]
+definition = "c1.copper@barrick-q2-2026"
+item = "exploration_and_evaluation_sustaining"
+
+[[excluded]]
+definition = "c1.copper@barrick-q2-2026"
+item = "minesite_sustaining_capital_expenditures"
+
+[[excluded]]
+definition = "c1.copper@barrick-q2-2026"
+item = "sustaining_leases"

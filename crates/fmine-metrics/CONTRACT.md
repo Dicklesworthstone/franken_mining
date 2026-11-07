@@ -249,6 +249,13 @@ The other modules have local errors with no refusal code:
 - **No fixture** under `fixtures/`.
 
 ## 10. Known gaps
+- DESIGN (BD-060/BD-061): the exact cost worksheet also admits copper pounds sold under the
+  issuer-specific Q2 2026 C1 and copper AISC table definitions. Reconciliation deductions remain
+  separate from by-product credits; co-product allocation removes only by-product credits.
+  Explicit sold quantity and allocation metals must match the definition. Gold input tags and
+  JSON field names remain unchanged; copper reports pounds and USD/lb. Source authentication,
+  account classification, completeness and reproduction of rounded issuer rates remain separate.
+  The invented example at `tests/costs/declared_copper.toml` gives C1 49/20 and AISC 3 USD/lb.
 - **The old contract had the wrong registry lines.** It said Subsystem Enterprise and 16k/18k. The registry says Bullion and 18,000/21,000.
 - **The old dependency list was wrong.** It omitted `fmine-registry`, which `cutoff` and `definitions` use. It listed `fmine-time`, which `Cargo.toml` declares but no source file uses.
 - **The old contract named PO-MET-1 to PO-MET-8**, with PO-MET-6 used twice. The plan has none of them. The plan's rows are in Proof obligations.
@@ -269,7 +276,9 @@ The other modules have local errors with no refusal code:
   - reserve replacement is BD-063, not BD-064 (BD-064 is the LMDI waterfall);
   - cut-off reproduction is BD-274, not BD-275 (BD-275 is the discrepancy fixtures).
 - **Two GEO paths and two reserve-replacement paths.** The root `PriceDeck` and `compute_geo` are float and unchecked beside the exact `definitions::geo`. `ReserveReplacementBridge` is float beside `reserve_replacement` and `assess_with_metrics`.
-- **Most of plan §21.6 is absent.** There is no C1 and no ROCE, though the registry charter lists both. There is no single `aisc(rules_version, inputs)` function for plan and actual. There are no definition flags (by-product credit location, inventory adjustments, per-ounce denominator) and no `CostDriverCard`.
+- **Much of plan §21.6 remains open.** The copper C1 table rule and the shared exact cost calculation
+  accept supplied plans or actuals, but do not fit cost drivers or authenticate accounting inputs.
+  ROCE, broader definition flags (credit location and inventory adjustments) and `CostDriverCard` remain absent.
 - **Code with no caller outside this crate's tests:**
   - `AiscConsolidationBridge`, `PriceDeck`, `compute_geo` and `ReserveReplacementBridge`;
   - `is_non_sustaining` (`all_in_cost_per_oz` is reached through `definitions::claims` and `fmine metrics cost`);
@@ -284,6 +293,9 @@ The other modules have local errors with no refusal code:
 ## 11. Public API
 - **Root:** `SiteAiscRow`, `AiscConsolidationBridge::verify_rollup`, `PriceDeck` with `barrick_reserve(year)`, `GeoBreakdown`, `compute_geo`, `ReserveReplacementBridge::compute`, `CUTOFF_MAX_ITER`, `CUTOFF_TOL`, `CutoffSolution`, `CutoffError` and `solve_cutoff_grade`. The root re-exports `LmdiState`, `LmdiWaterfall`, `decompose_aisc_lmdi` and `logarithmic_mean`.
 - **`definitions`:** `bundled_registry`, `CostLine`, `MetricFailure`, `AllInCost`, `all_in_cost_per_oz`, `Project` and `is_non_sustaining`.
+  - `CostUnit`, `UnitCost` and `cost_per_sold_unit` use explicitly typed gold-ounce or copper-pound
+    sold denominators; negative credits/deductions and incompatible registered units refuse.
+    `claims::CostSummary` retains `unit`, `quantity_sold`, `primary_metal_share` and `usd_per_unit`.
   - `claims`: `INPUT_METRIC`, `OUTPUT_METRIC`, `NO_CLAIM`, `Scope`, `CostValue`, `CostInput`, `Treatment`, `Contribution`, `CostSummary`, `CostReceipt`, `definition_tag` and `evaluate` (BD-061).
   - `worksheet`: `SCHEMA` (`fmine.cost-worksheet.v1`) and `evaluate`, with JSON and Markdown rendering (BD-061).
   - `geo`: `INPUT_METRIC`, `OUTPUT_METRIC`, `NO_CLAIM`, `MAX_DECKS`, `Metal`, `Scope`, `DeckKey`, `PriceDeck`, `GeoValue`, `GeoInput`, `Contribution`, `DeckResult`, `GeoSummary`, `GeoReceipt` and `evaluate`; `geo::worksheet`: `SCHEMA` (`fmine.geo-worksheet.v1`) and `evaluate` (BD-062, GB-27).

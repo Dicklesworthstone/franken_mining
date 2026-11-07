@@ -84,7 +84,7 @@ mod tests {
             ExactQty::new(100001, 100).unwrap()
         );
         assert_eq!(
-            receipt.summary().usd_per_oz,
+            receipt.summary().usd_per_unit,
             ExactQty::new(100001, 10000).unwrap()
         );
         assert_eq!(receipt.claim().parents.len(), 6);
@@ -114,12 +114,12 @@ mod tests {
             100,
         );
         assert_eq!(
-            evaluate(&reg, &altered).unwrap().summary().usd_per_oz,
+            evaluate(&reg, &altered).unwrap().summary().usd_per_unit,
             ExactQty::from_integer(-2)
         );
         altered[2] = line("on_site_mining_costs", -1_000_000);
         assert_eq!(
-            evaluate(&reg, &altered).unwrap().summary().usd_per_oz,
+            evaluate(&reg, &altered).unwrap().summary().usd_per_unit,
             ExactQty::from_integer(-11)
         );
     }
@@ -140,7 +140,7 @@ mod tests {
             );
             let receipt = evaluate(&reg, &inputs).unwrap();
             assert_eq!(
-                receipt.summary().usd_per_oz,
+                receipt.summary().usd_per_unit,
                 ExactQty::from_integer(expected)
             );
             assert_eq!(receipt.summary().superseded_by.as_deref(), successor);
@@ -156,7 +156,7 @@ mod tests {
         inputs.push(leaf(CostValue::GoldShare(ExactQty::new(3, 4).unwrap())));
         let receipt = evaluate(&reg, &inputs).unwrap();
         assert_eq!(receipt.summary().numerator_usd, ExactQty::from_integer(750));
-        assert_eq!(receipt.summary().usd_per_oz, ExactQty::new(15, 2).unwrap());
+        assert_eq!(receipt.summary().usd_per_unit, ExactQty::new(15, 2).unwrap());
         assert_eq!(
             receipt.summary().contributions[0].treatment,
             Treatment::Excluded
@@ -180,8 +180,8 @@ mod tests {
             let got = evaluate(&reg, &changed).unwrap();
             assert_eq!(
                 got.summary()
-                    .usd_per_oz
-                    .checked_sub(base.summary().usd_per_oz)
+                    .usd_per_unit
+                    .checked_sub(base.summary().usd_per_unit)
                     .unwrap(),
                 ExactQty::new(increment, 30000).unwrap()
             );
@@ -190,7 +190,7 @@ mod tests {
         let mut changed_exclusion = original;
         changed_exclusion[3] = line("income_tax", 124);
         let got = evaluate(&reg, &changed_exclusion).unwrap();
-        assert_eq!(got.summary().usd_per_oz, base.summary().usd_per_oz);
+        assert_eq!(got.summary().usd_per_unit, base.summary().usd_per_unit);
         assert_ne!(
             got.digest(),
             base.digest(),
@@ -278,10 +278,173 @@ mod tests {
             );
         }
         let mut altered_rules = reg.clone();
-        altered_rules.definitions[0].source.push_str(" changed");
+        altered_rules
+            .definitions
+            .iter_mut()
+            .find(|definition| definition.id == "aisc@wgc-2013")
+            .unwrap()
+            .source
+            .push_str(" changed");
         assert_eq!(
             evaluate(&altered_rules, &base).unwrap_err().code,
             "FMINE-REF-507"
+        );
+    }
+
+    fn copper_worksheet(id: &str) -> (MetricRegistry, Vec<Claim<CostInput>>) {
+        let (reg, mut inputs) = worksheet(id, &[], 400);
+        inputs[1] = leaf(CostValue::SoldPounds(ExactQty::from_integer(400)));
+        for (item, usd) in [
+            ("cost_of_sales", 1000),
+            ("depreciation_amortization_removed", 200),
+            ("treatment_refining_charges", 100),
+            ("equity_method_c1_cash_costs", 150),
+            ("royalties_removed_from_cost_of_sales", 50),
+            ("costs_allocated_to_by_products", 20),
+            ("corporate_general_and_administrative", 40),
+            ("reclamation_accretion_and_amortisation_operating_sites", 10),
+            ("royalties_added", 50),
+            ("exploration_and_evaluation_sustaining", 20),
+            ("minesite_sustaining_capital_expenditures", 95),
+            ("sustaining_leases", 5),
+        ] {
+            inputs.push(line(item, usd * Money::SCALE));
+        }
+        (reg, inputs)
+    }
+
+    #[test]
+    fn copper_c1_and_aisc_share_one_population_with_explicit_deductions_and_sold_pounds() {
+        // Independent invented arithmetic: C1 = 1000-200+100+150-50-20 = 980;
+        // AISC adds 40+10+50+20+95+5 = 220. Divide each by 400 copper lb sold.
+        for (id, numerator, rate) in [
+            (
+                "c1.copper@barrick-q2-2026",
+                980,
+                ExactQty::new(49, 20).unwrap(),
+            ),
+            (
+                "aisc.copper@barrick-q2-2026",
+                1200,
+                ExactQty::from_integer(3),
+            ),
+        ] {
+            let (reg, mut inputs) = copper_worksheet(id);
+            let receipt = evaluate(&reg, &inputs).unwrap();
+            assert_eq!(receipt.summary().unit, CostUnit::CopperPoundSold);
+            assert_eq!(receipt.summary().quantity_sold, ExactQty::from_integer(400));
+            assert_eq!(
+                receipt.summary().numerator_usd,
+                ExactQty::from_integer(numerator)
+            );
+            assert_eq!(receipt.summary().usd_per_unit, rate);
+            assert_eq!(receipt.inputs().len(), 14);
+            assert_eq!(receipt.claim().parents.len(), 14);
+            let depreciation = receipt
+                .summary()
+                .contributions
+                .iter()
+                .find(|c| c.item == "depreciation_amortization_removed")
+                .unwrap();
+            assert_eq!(depreciation.treatment, Treatment::Deduction);
+            assert_eq!(depreciation.numerator_usd, ExactQty::from_integer(-200));
+            inputs.reverse();
+            assert_eq!(evaluate(&reg, &inputs).unwrap(), receipt);
+            let json = receipt.to_json();
+            assert!(json.contains("\"pounds_sold\":\"400\""));
+            assert!(!json.contains("ounces_sold"));
+            assert!(!json.contains("usd_per_oz"));
+            assert!(receipt.to_markdown().contains("copper pounds sold"));
+        }
+    }
+
+    #[test]
+    fn copper_units_allocation_and_deductions_cannot_be_silently_reinterpreted() {
+        let id = "c1.copper@barrick-q2-2026";
+        let (reg, original) = copper_worksheet(id);
+        let pounds_id = original[1].claim_id;
+        let ounces = leaf(CostValue::SoldOunces(ExactQty::from_integer(400)));
+        assert_ne!(pounds_id, ounces.claim_id);
+        let mut wrong_unit = original.clone();
+        wrong_unit[1] = ounces.clone();
+        assert_eq!(evaluate(&reg, &wrong_unit).unwrap_err().code, "FMINE-REF-105");
+        let mut ambiguous = original.clone();
+        ambiguous.push(ounces);
+        assert_eq!(evaluate(&reg, &ambiguous).unwrap_err().code, "FMINE-REF-105");
+        let mut wrong_share = original.clone();
+        wrong_share.push(leaf(CostValue::GoldShare(ONE)));
+        assert_eq!(evaluate(&reg, &wrong_share).unwrap_err().code, "FMINE-REF-105");
+        for item in [
+            "depreciation_amortization_removed",
+            "royalties_removed_from_cost_of_sales",
+            "costs_allocated_to_by_products",
+        ] {
+            let mut negative = original.clone();
+            let position = negative
+                .iter()
+                .position(|c| {
+                    matches!(&c.value.value, CostValue::Line { item: found, .. } if found == item)
+                })
+                .unwrap();
+            negative[position] = line(item, -Money::SCALE);
+            assert_eq!(evaluate(&reg, &negative).unwrap_err().code, "FMINE-REF-109");
+            let raw = [CostLine {
+                item: item.into(),
+                usd: ExactQty::from_integer(-1),
+            }];
+            assert!(matches!(
+                cost_per_sold_unit(&reg, id, &raw, CostUnit::CopperPoundSold, ONE, None),
+                Err(MetricFailure::NegativeDeduction(_))
+            ));
+        }
+        let raw = [CostLine {
+            item: "cost_of_sales".into(),
+            usd: ONE,
+        }];
+        assert!(matches!(
+            super::super::all_in_cost_per_oz(&reg, id, &raw, ONE, None),
+            Err(MetricFailure::UnitMismatch { .. })
+        ));
+        // Unlisted inventory adjustments may already be in CoS and cannot be added a second time.
+        let mut undeclared = original.clone();
+        undeclared.push(line("inventory_write_down_added", Money::SCALE));
+        assert_eq!(evaluate(&reg, &undeclared).unwrap_err().code, "FMINE-REF-105");
+    }
+
+    #[test]
+    fn coproduct_allocation_retains_non_byproduct_reconciliation_deductions() {
+        let id = "c1.copper@barrick-q2-2026";
+        let (mut reg, mut inputs) = copper_worksheet(id);
+        let mut definition = reg.definition(id).unwrap().clone();
+        definition.id = "copper.allocated@invented".into();
+        definition.credit_basis = CreditBasis::CoProduct;
+        definition.extends = vec![id.into()];
+        reg.definitions.push(definition);
+        inputs[0] = leaf(CostValue::Rule {
+            definition: "copper.allocated@invented".into(),
+            definition_tag: definition_tag(&reg, "copper.allocated@invented").unwrap(),
+            complete: true,
+        });
+        inputs.push(leaf(CostValue::CopperShare(ExactQty::new(1, 2).unwrap())));
+        let receipt = evaluate(&reg, &inputs).unwrap();
+        // (1000-200+100+150-50) * 1/2 / 400 = 1.25. Only the 20 by-product credit is excluded.
+        assert_eq!(receipt.summary().usd_per_unit, ExactQty::new(5, 4).unwrap());
+        let contributions = &receipt.summary().contributions;
+        assert_eq!(
+            contributions
+                .iter()
+                .find(|c| c.item == "depreciation_amortization_removed")
+                .unwrap()
+                .numerator_usd,
+            ExactQty::from_integer(-100)
+        );
+        assert_eq!(
+            contributions
+                .iter()
+                .find(|c| c.item == "costs_allocated_to_by_products")
+                .unwrap()
+                .treatment,
+            Treatment::Excluded
         );
     }
 
@@ -307,7 +470,7 @@ mod tests {
         let assumed = evaluate(&reg, &inputs).unwrap();
         assert_eq!(assumed.claim().evidence, EvidenceClass::Assumed);
         assert_eq!(assumed.claim().uu_terms, vec![unknown(1.0)]);
-        assert_eq!(assumed.summary().usd_per_oz, base.summary().usd_per_oz);
+        assert_eq!(assumed.summary().usd_per_unit, base.summary().usd_per_unit);
         let same_input_id = inputs[3].claim_id;
         inputs[3].uu_terms[0].downside_exposure_usd_m = 1.0f64.next_up();
         assert_eq!(same_input_id, inputs[3].claim_id);

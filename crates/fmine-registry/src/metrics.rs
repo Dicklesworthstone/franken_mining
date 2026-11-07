@@ -19,6 +19,7 @@ const NAME: &str = "metrics";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricFamily {
     AllInCost,
+    CashCost,
     Geo,
     ReserveReplacement,
 }
@@ -36,6 +37,8 @@ pub enum CreditBasis {
 pub enum LineKind {
     Cost,
     Credit,
+    /// A nonnegative reconciliation deduction, retained under co-product allocation.
+    Deduction,
 }
 
 /// One line a cost definition counts. `letter` is its label in the source's table.
@@ -168,6 +171,7 @@ fn definition_from(row: &TomlRow) -> Result<MetricDefinition, RegistryError> {
     }
     let family = match text(row, "family")? {
         "all_in_cost" => MetricFamily::AllInCost,
+        "cash_cost" => MetricFamily::CashCost,
         "geo" => MetricFamily::Geo,
         "reserve_replacement" => MetricFamily::ReserveReplacement,
         other => return Err(schema_err(format!("{id}: unknown family {other}"))),
@@ -340,6 +344,7 @@ impl MetricRegistry {
                 Some(_) => match text(row, "kind")? {
                     "cost" => LineKind::Cost,
                     "credit" => LineKind::Credit,
+                    "deduction" => LineKind::Deduction,
                     other => {
                         return Err(schema_err(format!(
                             "line {}: unknown kind {other}",
@@ -432,11 +437,34 @@ impl MetricRegistry {
                     )));
                 }
             }
-            if def.family == MetricFamily::AllInCost && self.lines_of(&def.id).is_empty() {
+            if matches!(def.family, MetricFamily::AllInCost | MetricFamily::CashCost)
+                && self.lines_of(&def.id).is_empty()
+            {
                 return Err(schema_err(format!(
                     "{}: a cost definition with no lines",
                     def.id
                 )));
+            }
+            if matches!(def.family, MetricFamily::AllInCost | MetricFamily::CashCost) {
+                if !matches!(def.unit.as_str(), "USD/oz" | "USD/lb") {
+                    return Err(schema_err(format!(
+                        "{}: cost unit must be USD/oz or USD/lb on the sold basis",
+                        def.id
+                    )));
+                }
+                for parent_id in &def.extends {
+                    if let Some(parent) = self.definition(parent_id)
+                        && (!matches!(
+                            parent.family,
+                            MetricFamily::AllInCost | MetricFamily::CashCost
+                        ) || parent.unit != def.unit)
+                    {
+                        return Err(schema_err(format!(
+                            "{}: inherited cost definition {parent_id} has a different unit or family",
+                            def.id
+                        )));
+                    }
+                }
             }
         }
         Ok(())
@@ -614,6 +642,31 @@ mod tests {
         }
         assert!(reg.reserve_replacement(AISC_2018).is_none());
         assert!(reg.reserve_replacement("missing@1").is_none());
+    }
+
+    #[test]
+    fn copper_rules_keep_deductions_credits_sold_units_and_additions_distinct() {
+        let reg = registry();
+        let c1 = "c1.copper@barrick-q2-2026";
+        let aisc = "aisc.copper@barrick-q2-2026";
+        assert_eq!(reg.definition(c1).unwrap().family, MetricFamily::CashCost);
+        assert_eq!(reg.definition(c1).unwrap().unit, "USD/lb");
+        assert_eq!(reg.definition(aisc).unwrap().unit, "USD/lb");
+        let lines = reg.lines_of(c1);
+        assert_eq!(lines.len(), 6);
+        assert_eq!(lines["depreciation_amortization_removed"].kind, LineKind::Deduction);
+        assert_eq!(lines["royalties_removed_from_cost_of_sales"].kind, LineKind::Deduction);
+        assert_eq!(lines["costs_allocated_to_by_products"].kind, LineKind::Credit);
+        assert!(reg.excluded_of(c1).contains("minesite_sustaining_capital_expenditures"));
+        assert!(reg.lines_of(aisc).contains_key("minesite_sustaining_capital_expenditures"));
+        assert!(!reg.excluded_of(aisc).contains("minesite_sustaining_capital_expenditures"));
+        assert!(!reg.lines_of(aisc).contains_key("inventory_write_down_added"));
+        let mismatched = format!(
+            "\n[[definition]]\nid = \"mixed@1\"\nfamily = \"all_in_cost\"\nunit = \"USD/oz\"\n\
+             formula = \"invented\"\nsource = \"invented\"\nevidence = \"E107\"\nextends = \"{c1}\"\n"
+        );
+        violation(with(&mismatched), "different unit or family");
+        violation(with(&mismatched.replace("USD/oz", "USD/tonne")), "cost unit");
     }
 
     fn with(extra: &str) -> Result<MetricRegistry, RegistryError> {

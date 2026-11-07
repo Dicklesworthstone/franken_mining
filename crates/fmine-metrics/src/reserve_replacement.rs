@@ -813,6 +813,7 @@ fn reading_json(r: &Reading) -> String {
 fn definition_json(d: &MetricDefinition) -> String {
     let family = match d.family {
         MetricFamily::AllInCost => "all_in_cost",
+        MetricFamily::CashCost => "cash_cost",
         MetricFamily::Geo => "geo",
         MetricFamily::ReserveReplacement => "reserve_replacement",
     };

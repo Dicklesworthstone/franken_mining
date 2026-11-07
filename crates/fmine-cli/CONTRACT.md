@@ -28,6 +28,14 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Their per-site, cross-year summaries keep guidance ordinals and comparative populations separate.
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
+- DESIGN (BD-061): `metrics cost` also accepts `pounds_sold` for copper and explicitly selected
+  `c1.copper@barrick-q2-2026` / `aisc.copper@barrick-q2-2026` definitions. Exactly one sold
+  denominator is required; `gold_share` and `copper_share` must match that metal and require a
+  co-product rule. Copper receipts expose `pounds_sold` and `usd_per_lb`; existing gold fields
+  retain their names. A reconciliation deduction is subtracted once and survives co-product allocation.
+  No tonne/pound, ownership or FX conversion is implicit. The invented copper worksheet and independent
+  Python Fraction oracle exercise C1/AISC arithmetic, source binding and the refusal matrix; this does
+  not establish authentic issuer-rate parity or complete the broader BD-061 gate.
 - DESIGN (BD-048/049): forecast assessment JSON and saved-journal Markdown include the calibration
   kernel's immutable Gaussian PIT and Bernoulli reliability diagnostics. The separate DGN1 digest binds
   the saved assessment, selected events, source evidence and diagnostic values. Missing members remain in

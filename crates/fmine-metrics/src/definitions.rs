@@ -1,4 +1,4 @@
-//! Cost per ounce and project classification read from the metric registry (`BD-060`, plan §21.6).
+//! Cost per explicitly typed sold unit and project classification (BD-060/BD-061, plan §21.6).
 //! Determinism: DeterministicPerIsa (exact rationals throughout; `PriceDeck` hands floats on to `compute_geo`).
 //!
 //! `registries/metrics.toml` decides what counts: a line it does not name is refused, so a new kind of cost cannot
@@ -34,7 +34,7 @@ pub struct CostLine {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetricFailure {
     UnknownDefinition(String),
-    /// The definition exists and is not a cost per ounce.
+    /// The definition exists and is not a registered cash or all-in cost.
     NotACostDefinition(String),
     /// The line is neither counted nor excluded by this definition.
     UnregisteredItem {
@@ -42,7 +42,14 @@ pub enum MetricFailure {
         item: String,
     },
     NonPositiveOunces,
-    /// A co-product definition needs the issuer's stated gold share, in (0, 1].
+    NonPositiveSoldQuantity,
+    NegativeDeduction(String),
+    UnitMismatch {
+        definition: String,
+        expected: String,
+        supplied: String,
+    },
+    /// A co-product definition needs the issuer's stated primary-metal allocation, in (0, 1].
     AllocationRequired {
         definition: String,
     },
@@ -57,18 +64,24 @@ impl fmt::Display for MetricFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownDefinition(id) => write!(f, "unregistered metric definition {id}"),
-            Self::NotACostDefinition(id) => write!(f, "{id} is not a cost per ounce"),
+            Self::NotACostDefinition(id) => write!(f, "{id} is not a registered unit cost"),
             Self::UnregisteredItem { definition, item } => {
-                write!(
-                    f,
-                    "{definition} neither counts nor excludes the line {item}"
-                )
+                write!(f, "{definition} neither counts nor excludes the line {item}")
             }
             Self::NonPositiveOunces => write!(f, "ounces sold must be positive"),
+            Self::NonPositiveSoldQuantity => write!(f, "sold quantity must be positive"),
+            Self::NegativeDeduction(item) => {
+                write!(f, "{item}: credits and deductions must be nonnegative")
+            }
+            Self::UnitMismatch {
+                definition,
+                expected,
+                supplied,
+            } => write!(f, "{definition} requires {expected}, supplied {supplied}"),
             Self::AllocationRequired { definition } => {
                 write!(
                     f,
-                    "{definition} needs the issuer's stated gold share, in (0, 1]"
+                    "{definition} needs the issuer's stated primary-metal allocation, in (0, 1]"
                 )
             }
             Self::AllocationNotApplicable { definition } => {
@@ -100,7 +113,43 @@ pub struct AllInCost {
     pub left_out: Vec<String>,
 }
 
-/// `Σ registered lines / ounces sold` under one registered definition.
+/// A cost denominator names both the metal and the sold basis. No conversion is implicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostUnit {
+    GoldOunceSold,
+    CopperPoundSold,
+}
+
+impl CostUnit {
+    #[must_use]
+    pub const fn rate_unit(self) -> &'static str {
+        match self {
+            Self::GoldOunceSold => "USD/oz",
+            Self::CopperPoundSold => "USD/lb",
+        }
+    }
+
+    #[must_use]
+    pub const fn quantity_label(self) -> &'static str {
+        match self {
+            Self::GoldOunceSold => "gold ounces sold",
+            Self::CopperPoundSold => "copper pounds sold",
+        }
+    }
+}
+
+/// Exact cost arithmetic on one explicitly selected denominator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitCost {
+    pub definition: String,
+    pub superseded_by: Option<String>,
+    pub unit: CostUnit,
+    pub usd_per_unit: ExactQty,
+    pub counted: Vec<String>,
+    pub left_out: Vec<String>,
+}
+
+/// Sum of registered lines divided by gold ounces sold, under one registered definition.
 ///
 /// `gold_share` is the issuer's stated allocation, and only a co-product definition takes it: there the credit lines
 /// are left out and the total is multiplied by the share (WGC FAQ 13).
@@ -111,17 +160,56 @@ pub fn all_in_cost_per_oz(
     ounces_sold: ExactQty,
     gold_share: Option<ExactQty>,
 ) -> Result<AllInCost, MetricFailure> {
+    let cost = cost_per_sold_unit(
+        reg,
+        id,
+        lines,
+        CostUnit::GoldOunceSold,
+        ounces_sold,
+        gold_share,
+    )
+    .map_err(|e| match e {
+        MetricFailure::NonPositiveSoldQuantity => MetricFailure::NonPositiveOunces,
+        other => other,
+    })?;
+    Ok(AllInCost {
+        definition: cost.definition,
+        superseded_by: cost.superseded_by,
+        usd_per_oz: cost.usd_per_unit,
+        counted: cost.counted,
+        left_out: cost.left_out,
+    })
+}
+
+/// The same registered-line calculation for gold and copper, plans and actuals.
+/// Amounts and completeness are supplied evidence; the kernel neither classifies accounts nor
+/// rescales an attributable amount. The optional allocation is for the named primary metal.
+pub fn cost_per_sold_unit(
+    reg: &MetricRegistry,
+    id: &str,
+    lines: &[CostLine],
+    unit: CostUnit,
+    quantity_sold: ExactQty,
+    primary_metal_share: Option<ExactQty>,
+) -> Result<UnitCost, MetricFailure> {
     let def = reg
         .definition(id)
         .ok_or_else(|| MetricFailure::UnknownDefinition(id.to_string()))?;
-    if def.family != MetricFamily::AllInCost {
+    if !matches!(def.family, MetricFamily::AllInCost | MetricFamily::CashCost) {
         return Err(MetricFailure::NotACostDefinition(id.to_string()));
     }
-    if ounces_sold.signum() <= 0 {
-        return Err(MetricFailure::NonPositiveOunces);
+    if def.unit != unit.rate_unit() {
+        return Err(MetricFailure::UnitMismatch {
+            definition: id.to_string(),
+            expected: def.unit.clone(),
+            supplied: unit.rate_unit().into(),
+        });
+    }
+    if quantity_sold.signum() <= 0 {
+        return Err(MetricFailure::NonPositiveSoldQuantity);
     }
     let co_product = def.credit_basis == CreditBasis::CoProduct;
-    let share = match (co_product, gold_share) {
+    let share = match (co_product, primary_metal_share) {
         (true, Some(s)) if s.signum() > 0 && s.checked_cmp(ExactQty::from_integer(1))?.is_le() => s,
         (true, _) => {
             return Err(MetricFailure::AllocationRequired {
@@ -139,13 +227,17 @@ pub fn all_in_cost_per_oz(
     let mut total = ExactQty::from_integer(0);
     let (mut counted, mut left_out) = (Vec::new(), Vec::new());
     for line in lines {
-        match registered.get(line.item.as_str()).map(|l| l.kind) {
+        let kind = registered.get(line.item.as_str()).map(|l| l.kind);
+        if matches!(kind, Some(LineKind::Credit | LineKind::Deduction)) && line.usd.signum() < 0 {
+            return Err(MetricFailure::NegativeDeduction(line.item.clone()));
+        }
+        match kind {
             Some(LineKind::Cost) => {
                 total = total.checked_add(line.usd)?;
                 counted.push(line.item.clone());
             }
             Some(LineKind::Credit) if co_product => left_out.push(line.item.clone()),
-            Some(LineKind::Credit) => {
+            Some(LineKind::Credit | LineKind::Deduction) => {
                 total = total.checked_sub(line.usd)?;
                 counted.push(line.item.clone());
             }
@@ -158,10 +250,11 @@ pub fn all_in_cost_per_oz(
             }
         }
     }
-    Ok(AllInCost {
+    Ok(UnitCost {
         definition: id.to_string(),
         superseded_by: reg.superseded_by(id).map(str::to_string),
-        usd_per_oz: total.checked_mul(share)?.checked_div(ounces_sold)?,
+        unit,
+        usd_per_unit: total.checked_mul(share)?.checked_div(quantity_sold)?,
         counted,
         left_out,
     })
