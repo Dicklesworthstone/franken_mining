@@ -21,6 +21,13 @@ const HTML: &str = "<html><body><table>\n\
 <tr><th>Gold-equivalent production</th><td>321.00</td><td>1,234.50</td><th>koz</th></tr>\n\
 <tr><th>Head grade</th><td>1.20</td><td>4.50</td><th>g/t</th></tr>\n\
 <tr><th>Recovery</th><td></td><td>0</td><th>%</th></tr>\n\
+<tr><th>Gold production</th><td>123.40</td><td>125.50</td><th>koz</th></tr>\n\
+<tr><th>Gold sales</th><td>120.20</td><td>127.80</td><th>koz</th></tr>\n\
+<tr><th>Copper production</th><td>12.340</td><td>13.560</td><th>kt</th></tr>\n\
+<tr><th>Copper C1 cash costs</th><td>1.75</td><td>1.80</td><th>USD/lb sold</th></tr>\n\
+<tr><th>Copper AISC</th><td>2.10</td><td>2.25</td><th>USD/lb sold</th></tr>\n\
+<tr><th>Gold cost of sales</th><td>8.75</td><td>9.10</td><th>USD/oz sold</th></tr>\n\
+<tr><th>Copper cost of sales</th><td>1.25</td><td>1.35</td><th>USD/lb sold</th></tr>\n\
 </table></body></html>";
 
 struct Fixture {
@@ -84,6 +91,13 @@ fn mapping_rows() -> String {
         (6, "Gold-equivalent production", "koz"),
         (7, "Head grade", "g/t"),
         (8, "Recovery", "%"),
+        (9, "Gold production", "koz"),
+        (10, "Gold sales", "koz"),
+        (11, "Copper production", "kt"),
+        (12, "Copper C1 cash costs", "USD/lb sold"),
+        (13, "Copper AISC", "USD/lb sold"),
+        (14, "Gold cost of sales", "USD/oz sold"),
+        (15, "Copper cost of sales", "USD/lb sold"),
     ] {
         for (column, period) in [("B", "2025Q1"), ("C", "2025Q2")] {
             text.push_str(&format!("\n[[claim]]\nid = \"r{row}_{column}\"\nfile = \"filing.html\"\ntable = 1\ncell = \"{column}{row}\"\n\
@@ -96,10 +110,10 @@ fn mapping_rows() -> String {
 }
 
 #[test]
-fn all_five_metrics_become_exact_cited_claims_with_distinct_placeholders() {
+fn physical_and_cost_metrics_become_exact_cited_claims_with_distinct_placeholders() {
     let fixture = Fixture::new();
     let report = fixture.run();
-    assert_eq!(report.claims.len(), 10);
+    assert_eq!(report.claims.len(), 24);
     assert_eq!(report.claims_digest, fixture.run().claims_digest);
     let claim = |id: &str| {
         report
@@ -170,6 +184,77 @@ fn all_five_metrics_become_exact_cited_claims_with_distinct_placeholders() {
         "html:gold_equivalent_production_koz"
     );
     assert_eq!(claim("r7_B").cell.key.unit, "g_per_t");
+    for (id, metric, unit, mantissa, scale) in [
+        ("r9_B", "html:gold_production_koz", "koz", 12340, 2),
+        ("r10_B", "html:gold_sales_koz", "koz", 12020, 2),
+        ("r11_B", "html:copper_production_kt", "kt", 12340, 3),
+        ("r12_B", "html:c1_usd_per_lb_sold", "usd_per_lb", 175, 2),
+        ("r13_B", "html:aisc_usd_per_lb_sold", "usd_per_lb", 210, 2),
+        ("r14_B", "html:cos_usd_per_oz_sold", "usd_per_oz", 875, 2),
+        ("r15_B", "html:cos_usd_per_lb_sold", "usd_per_lb", 125, 2),
+    ] {
+        let value = claim(id);
+        assert_eq!(
+            (
+                value.cell.key.line.label.as_str(),
+                value.cell.key.unit.as_str()
+            ),
+            (metric, unit)
+        );
+        let exact = value.exact_number.as_ref().unwrap();
+        assert_eq!((exact.value.mantissa, exact.value.scale), (mantissa, scale));
+        assert_eq!((exact.step.mantissa, exact.step.scale), (1, scale));
+        assert!(value.cell.claim.check_id().is_ok());
+        assert!(
+            value
+                .cell
+                .claim
+                .anchors
+                .contains(&value.value_source.anchor)
+        );
+        assert!(value.cell.claim.anchors.contains(&value.mapping_source));
+        let (start, end) = value.value_source.byte_range;
+        assert_eq!(&HTML[start..end], exact.raw);
+    }
+}
+
+#[test]
+fn metric_labels_cannot_swap_metals_scales_or_sold_denominators() {
+    let fixture = Fixture::new();
+    for (old, new) in [
+        ("Gold production", "Copper production"),
+        ("Gold sales", "Copper sales"),
+        ("Gold production", "Production"),
+        ("Gold sales", "Sales"),
+        ("Copper production", "Gold production"),
+        ("Copper AISC", "Gold AISC"),
+        ("Copper C1 cash costs", "Gold C1 cash costs"),
+        ("Gold cost of sales", "Copper cost of sales"),
+        ("Copper cost of sales", "Gold cost of sales"),
+        ("USD/lb sold", "USD/lb produced"),
+        ("USD/lb sold", "USD/lb"),
+        ("kt", "tonnes"),
+        ("koz", "ounces"),
+    ] {
+        fixture.write_source(&HTML.replace(old, new), "");
+        fs::write(
+            fixture.root.join("mappings.toml"),
+            mapping_rows().replace(old, new),
+        )
+        .unwrap();
+        let refusal = run(
+            &fixture.root,
+            "html_example",
+            std::path::Path::new("mappings.toml"),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            refusal.what.contains("unsupported metric/unit labels"),
+            "{old} -> {new}: {}",
+            refusal.what
+        );
+    }
 }
 
 #[test]

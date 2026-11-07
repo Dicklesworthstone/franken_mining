@@ -357,10 +357,7 @@ fn copper_cost_claims(release: &str, site_table: bool) -> Vec<KeyedCell> {
 fn copper_aisc_and_cost_of_sales_follow_registered_pound_denominators() {
     for site_table in [false, true] {
         let claims = copper_cost_claims("2030Q1", site_table);
-        for (index, metric, amount, discoverable) in [
-            (1, "AISC", "$3.75/lb", true),
-            (2, "cost of sales", "$3.90/lb", false),
-        ] {
+        for (index, metric, amount) in [(1, "AISC", "$3.75/lb"), (2, "cost of sales", "$3.90/lb")] {
             let text = format!(
                 "Site A Q1 2030 ownership basis unprinted {metric} per pound sold is {amount}."
             );
@@ -407,34 +404,27 @@ fn copper_aisc_and_cost_of_sales_follow_registered_pound_denominators() {
                 verdict(&cited.replace(amount, "$4.50/lb"), &claims),
                 Verdict::ValueMismatch
             );
-            if discoverable {
-                let report = lint_discover(&text, &claims);
-                assert_eq!(report.findings.len(), 1, "{}", report.to_json());
+            let report = lint_discover(&text, &claims);
+            assert_eq!(report.findings.len(), 1, "{}", report.to_json());
+            assert_eq!(
+                report.findings[0].verdict,
+                Verdict::Verified,
+                "{}",
+                report.to_json()
+            );
+            assert_eq!(
+                report.findings[0].source.as_ref().map(KeyedCell::to_json),
+                Some(source.to_json())
+            );
+            for changed in [
+                text.replace("per pound sold", "per ounce sold"),
+                text.replace("/lb", "/oz"),
+                text.replace("per pound sold", "per pound produced"),
+            ] {
                 assert_eq!(
-                    report.findings[0].verdict,
-                    Verdict::Verified,
-                    "{}",
-                    report.to_json()
-                );
-                assert_eq!(
-                    report.findings[0].source.as_ref().map(KeyedCell::to_json),
-                    Some(source.to_json())
-                );
-                for changed in [
-                    text.replace("per pound sold", "per ounce sold"),
-                    text.replace("/lb", "/oz"),
-                    text.replace("per pound sold", "per pound produced"),
-                ] {
-                    assert_eq!(
-                        lint_discover(&changed, &claims).findings[0].verdict,
-                        Verdict::Uncited,
-                        "{changed}"
-                    );
-                }
-            } else {
-                assert_eq!(
-                    lint_discover(&text, &claims).findings[0].verdict,
-                    Verdict::Unchecked
+                    lint_discover(&changed, &claims).findings[0].verdict,
+                    Verdict::Uncited,
+                    "{changed}"
                 );
             }
         }
@@ -1475,8 +1465,8 @@ fn discovery_requires_every_semantic_key_and_never_repairs_explicit_citations() 
         ("Site A", "Unregistered Mine", Verdict::Unchecked),
         ("AISC", "AISC TCC", Verdict::Unchecked),
         ("AISC", "recovery", Verdict::Uncited),
-        ("AISC", "cost of sales", Verdict::Unchecked),
-        ("AISC", "sales", Verdict::Unchecked),
+        ("AISC", "cost of sales", Verdict::Uncited),
+        ("AISC", "sales", Verdict::Uncited),
         ("Q1 2030", "Q2 2030", Verdict::Uncited),
         ("Q1 2030", "", Verdict::Ambiguous),
         ("ownership basis unprinted", "", Verdict::Ambiguous),

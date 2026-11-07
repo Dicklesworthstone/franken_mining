@@ -14,8 +14,9 @@ The public lane of M0 (`fmine assure public`).
   table cells into canonical public Claims. It parses the exact captured source registry and mapping
   bytes, verifies selected source lengths and SHA-256 digests, and uses `HtmlDocument`'s exact numeric
   tokens, decimal values and printed steps. The floating compatibility projection is never an input.
-  A mapping has no amount field. AISC, TCC, gold-equivalent production, processed/head grade and recovery
-  use bounded explicit metric/unit labels, exact source-label equality and a registered non-region site.
+  A mapping has no amount field. Gold/copper AISC and cost of sales, gold TCC, copper C1, gold production
+  and sales, copper production, gold-equivalent production, processed/head grade and recovery use bounded
+  explicit metric/unit labels, exact source-label equality and a registered non-region site.
   Ownership must be printed as `100%` / `100% basis` or `Attributable (<percentage>%)`; percentages are
   reduced exactly. Periods come from canonical period codes or the existing explicit sheet-period forms,
   never table position. Source registration supplies the issuer and release; original and comparative
@@ -41,8 +42,11 @@ The public lane of M0 (`fmine assure public`).
     `id`, registered HTML `file`, 1-based `table`, A1 `cell`, and the five pairs `subject_cell`/`subject_label`,
     `period_cell`/`period_label`, `metric_cell`/`metric_label`, `unit_cell`/`unit_label`,
     `ownership_cell`/`ownership_label`. Labels must match decoded source text exactly before their bounded
-    grammar is interpreted. Cost units explicitly name USD per ounce sold; GEO uses koz; grade uses g/t or
-    percentage points; recovery uses percentage points. All supported aliases are checked by the adapter.
+    grammar is interpreted. Cost units explicitly name USD per ounce sold or per pound sold; named gold
+    and copper cost labels cannot cross those denominators. Production/sales labels name the metal:
+    gold and GEO use koz, copper production uses kt; no ounces/pounds/tonnes rescaling is performed.
+    Grade uses g/t or percentage points; recovery uses percentage points. All supported aliases are
+    checked by the adapter. Generic production/sales, copper sales and produced-denominator costs refuse.
     Synthetic source fixtures cover the executable path; real issuer corpus coverage is not asserted.
 
 - DESIGN (BD-345): `lint::lint_cited(draft, claims)` checks a bounded equality grammar against canonical
@@ -54,8 +58,10 @@ The public lane of M0 (`fmine assure public`).
   AISC, total cash costs, copper C1, cost of sales, gold/copper production, gold sales, processed/head grade
   and whole-site recovery are supported. AISC and cost of sales include canonical copper summary/site
   rows with explicit pound-sold denominators and `usd_per_lb` units; their rounding, source identity and
-  ownership checks are the same as for gold, with no ounce/pound conversion. Cost-of-sales discovery
-  remains outside the supported grammar. Co-product TCC stays distinct from by-product TCC. Canonical copper
+  ownership checks are the same as for gold, with no ounce/pound conversion. The HTML source keys join
+  these same checks for gold/copper costs and production, and gold sales. Printed HTML AISC/TCC/C1 labels
+  never establish by-/co-product treatment: an explicit credit-basis assertion remains unchecked.
+  Co-product TCC stays distinct from by-product TCC. Canonical copper
   C1 summary/site rows require explicit `$/lb` or `US$/lb` and per-pound-sold denominators; by/co-product,
   gold-ounce and produced-denominator assertions are not inferred from C1. Copper production requires an
   explicit copper metric and canonical `kt`; historical millions-of-pounds site rows stay unchecked.
@@ -72,7 +78,8 @@ The public lane of M0 (`fmine assure public`).
   Claims without copying entire draft sentences. It does not decide publication availability, disclosure
   permission, qualitative truth or calibration of source numbers.
 - DESIGN (BD-345.S3): `lint::lint_discover(draft, claims)` accepts the same bounded equality grammar for
-  AISC, gold TCC, copper C1, gold/copper production, processed/head grade and whole-site recovery. Exact subject, dated period,
+  AISC, gold TCC, copper C1, cost of sales, gold/copper production, gold sales, processed/head grade and
+  whole-site recovery. Exact subject, dated period,
   ownership, denominator, definition and unit select candidates before any numeric comparison. One candidate
   receives the cited-mode checks; multiple
   candidates, including repeated vintages or conflicting source assertions, stay ambiguous and are listed.

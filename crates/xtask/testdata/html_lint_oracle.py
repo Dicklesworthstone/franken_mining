@@ -22,13 +22,31 @@ class Fixture(FIXTURES.Fixture):
         later = self.documents["Later.html"].replace("<td>—</td>".encode(), b"<td>8.50</td>")
         later = later.replace(b"<th>Recovery</th><td></td>", b"<th>Recovery</th><td>91.5</td>")
         later = later.replace(b"</tbody>", b"""<tr><th>Head grade</th><td>2.50</td><td>2.40</td><td>g/t</td></tr>
-<tr><th>Gold-equivalent production</th><td>100.0</td><td>99.0</td><td>koz</td></tr></tbody>""")
+<tr><th>Gold-equivalent production</th><td>100.0</td><td>99.0</td><td>koz</td></tr>
+<tr><th>Gold production</th><td>120.50</td><td>119.00</td><td>koz</td></tr>
+<tr><th>Gold sales</th><td>118.75</td><td>116.25</td><td>koz</td></tr>
+<tr><th>Copper production</th><td>12.340</td><td>11.125</td><td>kt</td></tr>
+<tr><th>Copper C1 cash costs</th><td>1.75</td><td>1.70</td><td>US$/lb sold</td></tr>
+<tr><th>Copper AISC</th><td>2.25</td><td>2.20</td><td>US$/lb sold</td></tr>
+<tr><th>Gold cost of sales</th><td>890.25</td><td>875.20</td><td>US$/oz sold</td></tr>
+<tr><th>Copper cost of sales</th><td>2.05</td><td>1.95</td><td>US$/lb sold</td></tr></tbody>""")
         self.documents["Later.html"] = later
         self.mapping = self.mapping.replace('id = "nil"', 'id = "tcc"')
         self.add("grade", "Later.html", "B6", "A2", "B2", "2025Q2",
                  "A6", "Head grade", "D6", "g/t", "C1")
         self.add("geo", "Later.html", "B7", "A2", "B2", "2025Q2",
                  "A7", "Gold-equivalent production", "D7", "koz", "C1")
+        for row, identity, metric, unit in (
+            (8, "gold_production", "Gold production", "koz"),
+            (9, "gold_sales", "Gold sales", "koz"),
+            (10, "copper_production", "Copper production", "kt"),
+            (11, "c1", "Copper C1 cash costs", "US$/lb sold"),
+            (12, "copper_aisc", "Copper AISC", "US$/lb sold"),
+            (13, "gold_cos", "Gold cost of sales", "US$/oz sold"),
+            (14, "copper_cos", "Copper cost of sales", "US$/lb sold"),
+        ):
+            self.add(identity, "Later.html", f"B{row}", "A2", "B2", "2025Q2",
+                     f"A{row}", metric, f"D{row}", unit, "C1")
 
     def projection(self, cut=None):
         report = self.invoke(extra=() if cut is None else ("--as-of", cut))
@@ -83,7 +101,7 @@ class HtmlLint(unittest.TestCase):
         envelope = fixture.lint(draft)
         payload = success(envelope)
         self.assertEqual([f["verdict"] for f in findings(payload)], ["verified"] * 3)
-        self.assertEqual(payload["lint"]["rules_version"], "cited-equality/6")
+        self.assertEqual(payload["lint"]["rules_version"], "cited-equality/7")
         self.assertEqual(payload["html_projection"], projection)
         self.assertEqual(payload["lint"]["claims_digest"], projection["claims_digest"])
         self.assertEqual(findings(payload)[0]["source_claim"]["claim_id"], claim_id(rows["large"]))
@@ -109,6 +127,52 @@ class HtmlLint(unittest.TestCase):
         self.assertEqual([f["verdict"] for f in findings(payload)],
                          ["value_mismatch", "rounding_beyond_tolerance", "verified"])
 
+    def test_gold_and_copper_production_sales_and_costs_use_exact_source_claims_in_both_modes(self):
+        fixture = self.fixture()
+        projection = fixture.projection()
+        rows = by_id(projection)
+        cases = (
+            ("gold_production", "120.50 koz", "gold production", "html:gold_production_koz"),
+            ("gold_sales", "118.75 koz", "gold sales", "html:gold_sales_koz"),
+            ("copper_production", "12.340 kt", "copper production", "html:copper_production_kt"),
+            ("c1", "US$1.75/lb", "C1 per pound sold", "html:c1_usd_per_lb_sold"),
+            ("copper_aisc", "US$2.25/lb", "AISC per pound sold", "html:aisc_usd_per_lb_sold"),
+            ("gold_cos", "US$890.25/oz", "cost of sales per ounce sold", "html:cos_usd_per_oz_sold"),
+            ("copper_cos", "US$2.05/lb", "cost of sales per pound sold", "html:cos_usd_per_lb_sold"),
+        )
+        for cited in (True, False):
+            draft = "".join(sentence(rows[identity], amount, metric, cited=cited)
+                            for identity, amount, metric, _ in cases)
+            payload = success(fixture.lint(draft, () if cited else ("--discover",)))
+            self.assertEqual([f["verdict"] for f in findings(payload)], ["verified"] * len(cases))
+            self.assertEqual(payload["html_projection"], projection)
+            for finding, (identity, _, _, key) in zip(findings(payload), cases):
+                expected = rows[identity]
+                self.assertEqual(finding["mode"], "cited" if cited else "discovered")
+                self.assertEqual(finding["source_claim"]["claim_id"], claim_id(expected))
+                self.assertEqual(finding["source_claim"]["line"], key)
+                self.assertIn(expected["value_source"]["anchor"], expected["claim"]["anchors"])
+                self.assertIn(expected["mapping_source"], expected["claim"]["anchors"])
+
+    def test_new_families_keep_metal_denominator_ownership_and_precision_errors_visible(self):
+        fixture = self.fixture()
+        rows = by_id(fixture.projection())
+        cases = (
+            ("gold_production", "120.50 koz", "copper production", "basis_mismatch"),
+            ("copper_production", "12.340 kt", "gold production", "basis_mismatch"),
+            ("c1", "US$1.75/lb", "C1 per ounce sold", "basis_mismatch"),
+            ("copper_aisc", "US$2.25/oz", "AISC per ounce sold", "basis_mismatch"),
+            ("gold_cos", "US$890.25/oz", "cost of sales per ounce produced", "basis_mismatch"),
+            ("gold_sales", "118.750 koz", "gold sales", "rounding_beyond_tolerance"),
+            ("copper_production", "12.3400 kt", "copper production", "rounding_beyond_tolerance"),
+            ("copper_cos", "US$2.15/lb", "cost of sales per pound sold", "value_mismatch"),
+        )
+        draft = "".join(sentence(rows[identity], amount, metric) for identity, amount, metric, _ in cases)
+        payload = success(fixture.lint(draft))
+        self.assertEqual([f["verdict"] for f in findings(payload)], [case[3] for case in cases])
+        draft = sentence(rows["gold_sales"], "118.75 koz", "gold sales").replace("100% basis", "attributable")
+        self.assertEqual(findings(success(fixture.lint(draft)))[0]["verdict"], "basis_mismatch")
+
     def test_credit_treatment_is_never_inferred_in_cited_or_discovery_modes(self):
         fixture = self.fixture()
         rows = by_id(fixture.projection())
@@ -127,6 +191,19 @@ class HtmlLint(unittest.TestCase):
                 self.assertIsNotNone(finding["source_claim"])
         no_credit = success(fixture.lint(sentence(rows["tcc"], "US$8.50/oz", "TCC per ounce sold")))
         self.assertEqual(findings(no_credit)[0]["verdict"], "ambiguous")
+        for cited in (True, False):
+            draft = "".join(
+                sentence(rows[identity], amount, metric + " per pound sold", credit=credit, cited=cited)
+                for identity, amount, metric in (("copper_aisc", "US$2.25/lb", "AISC"),
+                                                 ("c1", "US$1.75/lb", "C1"))
+                for credit in ("by-product ", "co-product ")
+            )
+            payload = success(fixture.lint(draft, () if cited else ("--discover",)))
+            self.assertEqual(len(findings(payload)), 4)
+            for finding in findings(payload):
+                self.assertEqual((finding["verdict"], finding["reason"]),
+                                 ("unchecked", "source_credit_basis_unstated"))
+                self.assertIsNotNone(finding["source_claim"])
 
     def test_geo_remains_outside_the_supported_equality_population(self):
         fixture = self.fixture()
@@ -140,9 +217,11 @@ class HtmlLint(unittest.TestCase):
         rows = by_id(reference.projection())
         fixture = self.fixture(omit=("Later.html",))
         draft = (sentence(rows["original"], "US$10.00/oz", "AISC per ounce sold", "Q1 2025")
-                 + sentence(rows["large"], "US$9007199254740993.25/oz", "AISC per ounce sold"))
+                 + sentence(rows["large"], "US$9007199254740993.25/oz", "AISC per ounce sold")
+                 + sentence(rows["copper_production"], "12.340 kt", "copper production")
+                 + sentence(rows["c1"], "US$1.75/lb", "C1 per pound sold"))
         payload = success(fixture.lint(draft, ("--as-of", "2025-05-01")))
-        self.assertEqual([f["verdict"] for f in findings(payload)], ["verified", "ambiguous"])
+        self.assertEqual([f["verdict"] for f in findings(payload)], ["verified"] + ["ambiguous"] * 3)
         self.assertEqual(findings(payload)[1]["reason"], "claim_not_unique_in_snapshot")
         self.assertEqual([s["file"] for s in payload["html_projection"]["excluded_sources"]], ["Later.html"])
         dates = payload["source_publication"]

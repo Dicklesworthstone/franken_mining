@@ -291,11 +291,46 @@ fn ownership(label: &str) -> Result<OwnershipBasis, Refusal> {
 fn metric_unit(metric: &str, unit: &str) -> Result<(&'static str, &'static str), Refusal> {
     let metric = metric.to_ascii_lowercase();
     let unit = unit.to_ascii_lowercase();
-    let cost = matches!(unit.as_str(), "us$/oz sold" | "usd/oz sold");
+    let gold_cost = matches!(unit.as_str(), "us$/oz sold" | "usd/oz sold");
+    let copper_cost = matches!(unit.as_str(), "us$/lb sold" | "usd/lb sold");
+    let gold_quantity = matches!(
+        unit.as_str(),
+        "koz" | "thousand gold ounces" | "thousand ounces"
+    );
     let percent = matches!(unit.as_str(), "%" | "percent");
     Ok(match metric.as_str() {
-        "aisc" | "all-in sustaining costs" if cost => ("html:aisc_usd_per_oz_sold", "usd_per_oz"),
-        "tcc" | "total cash costs" if cost => ("html:tcc_usd_per_oz_sold", "usd_per_oz"),
+        "aisc" | "all-in sustaining costs" | "gold aisc" | "gold all-in sustaining costs"
+            if gold_cost =>
+        {
+            ("html:aisc_usd_per_oz_sold", "usd_per_oz")
+        }
+        "aisc" | "all-in sustaining costs" | "copper aisc" | "copper all-in sustaining costs"
+            if copper_cost =>
+        {
+            ("html:aisc_usd_per_lb_sold", "usd_per_lb")
+        }
+        "tcc" | "total cash costs" | "gold tcc" | "gold total cash costs" if gold_cost => {
+            ("html:tcc_usd_per_oz_sold", "usd_per_oz")
+        }
+        "c1" | "c1 cash costs" | "copper c1" | "copper c1 cash costs" if copper_cost => {
+            ("html:c1_usd_per_lb_sold", "usd_per_lb")
+        }
+        "cost of sales" | "gold cost of sales" if gold_cost => {
+            ("html:cos_usd_per_oz_sold", "usd_per_oz")
+        }
+        "cost of sales" | "copper cost of sales" if copper_cost => {
+            ("html:cos_usd_per_lb_sold", "usd_per_lb")
+        }
+        "gold production" | "gold produced" if gold_quantity => ("html:gold_production_koz", "koz"),
+        "gold sales" | "gold sold" if gold_quantity => ("html:gold_sales_koz", "koz"),
+        "copper production" | "copper produced"
+            if matches!(
+                unit.as_str(),
+                "kt" | "thousand tonnes" | "thousands of tonnes" | "thousand copper tonnes"
+            ) =>
+        {
+            ("html:copper_production_kt", "kt")
+        }
         "gold-equivalent production" | "gold equivalent production"
             if matches!(unit.as_str(), "koz" | "thousand gold-equivalent ounces") =>
         {

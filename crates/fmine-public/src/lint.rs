@@ -18,7 +18,7 @@ use crate::key::{
     SeriesOwnershipBasis, canonical_value_tag, claims_digest,
 };
 
-pub const RULES_VERSION: &str = "cited-equality/6";
+pub const RULES_VERSION: &str = "cited-equality/7";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
 pub const DISCOVERY_NO_CLAIM: &str = "Matches supported numeric equalities to public Claims in the selected source snapshot only when their stated semantic keys identify exactly one candidate. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure. General-prose discovery precision has not been measured.";
 
@@ -307,6 +307,7 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         | "site:costs per ounce:all-in sustaining costs"
         | "site:costs per ounce ($/oz):all-in sustaining costs"
         | "summary:aisc_usd_per_lb"
+        | "html:aisc_usd_per_lb_sold"
         | "site:costs per pound:all-in sustaining costs"
         | "site:costs per pound ($/lb):all-in sustaining costs" => Metric::Aisc,
         "summary:tcc_usd_per_oz"
@@ -316,20 +317,26 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         | "site:costs per ounce:total cash costs"
         | "site:costs per ounce ($/oz):total cash costs" => Metric::Tcc,
         "summary:c1_usd_per_lb"
+        | "html:c1_usd_per_lb_sold"
         | "site:costs per pound:c1 cash costs"
         | "site:costs per pound ($/lb):c1 cash costs" => Metric::C1,
         "summary:cos_usd_per_oz"
+        | "html:cos_usd_per_oz_sold"
         | "cost of sales per ounce"
         | "site:costs per ounce:cost of sales"
         | "site:costs per ounce ($/oz):cost of sales"
         | "summary:cos_usd_per_lb"
+        | "html:cos_usd_per_lb_sold"
         | "site:costs per pound:cost of sales"
         | "site:costs per pound ($/lb):cost of sales" => Metric::CostOfSales,
-        "summary:au_prod_100_koz" | "summary:au_prod_attr_koz" => Metric::Production,
+        "summary:au_prod_100_koz" | "summary:au_prod_attr_koz" | "html:gold_production_koz" => {
+            Metric::Production
+        }
         "summary:cu_prod_100_kt"
         | "summary:cu_prod_attr_kt"
+        | "html:copper_production_kt"
         | "site::production (thousands of tonnes)" => Metric::CopperProduction,
-        "summary:au_sold_attr_koz" | "ounces sold" => Metric::Sales,
+        "summary:au_sold_attr_koz" | "ounces sold" | "html:gold_sales_koz" => Metric::Sales,
         "site:average grade (grams per tonne):processed"
         | "html:processed_grade_g_per_t"
         | "html:processed_grade_percent"
@@ -651,7 +658,10 @@ fn basis_findings(c: &Context, claim: &KeyedCell, metric: Metric) -> Vec<(Verdic
     // HTML labels establish the printed rate, not the issuer's by-/co-product definition.
     let unstated_credit = matches!(
         claim.key.line.label.as_str(),
-        "html:aisc_usd_per_oz_sold" | "html:tcc_usd_per_oz_sold"
+        "html:aisc_usd_per_oz_sold"
+            | "html:tcc_usd_per_oz_sold"
+            | "html:aisc_usd_per_lb_sold"
+            | "html:c1_usd_per_lb_sold"
     );
     if unstated_credit && c.bases.iter().any(|basis| basis.is_credit()) {
         failures.push((Verdict::Unchecked, "source_credit_basis_unstated"));
@@ -902,8 +912,10 @@ fn discover(
             [Metric::Aisc
                 | Metric::Tcc
                 | Metric::C1
+                | Metric::CostOfSales
                 | Metric::Production
                 | Metric::CopperProduction
+                | Metric::Sales
                 | Metric::ProcessedGrade
                 | Metric::Recovery]
         )
@@ -980,8 +992,8 @@ pub fn lint_cited(draft: &str, claims: &[KeyedCell]) -> LintReport {
     lint(draft, claims, LintMode::Cited)
 }
 
-/// Discovers AISC, TCC, copper C1, gold/copper production, grade and recovery using the explicit
-/// equality grammar of [`lint_cited`]. Other discovery is unchecked. All matching assertions remain
+/// Discovers AISC, TCC, copper C1, cost of sales, gold/copper production, gold sales, grade and recovery
+/// using the explicit equality grammar of [`lint_cited`]. Other discovery is unchecked. All matching assertions remain
 /// candidates, including repeated vintages; numeric agreement never breaks a tie. Explicit citations
 /// retain cited-mode checks and are never silently repaired.
 #[must_use]
