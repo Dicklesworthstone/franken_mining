@@ -233,8 +233,7 @@ class CostWorksheet(unittest.TestCase):
         self.assertIsNone(envelope["anchor_id"])
         self.assertIsNone(envelope["certificate"])
         self.assertTrue(all(flag is False for flag in envelope["flags"].values()))
-        for key in ("receipt", "usd_per_lb", "usd_per_oz"):
-            self.assertNotIn(key, envelope["payload"])
+        self.assertIsNone(envelope["payload"])
         self.assertEqual(path.read_text(encoding="utf-8"), text)
 
     def test_sold_units_and_allocation_are_explicit_and_never_mixed(self):

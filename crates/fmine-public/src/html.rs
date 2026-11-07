@@ -87,9 +87,9 @@ fn invalid(detail: impl Into<String>) -> Refusal {
     )
 }
 
-fn only(fields: &[TomlField], allowed: &[&str]) -> Result<(), Refusal> {
+fn only(fields: &[TomlField], allowed: impl Fn(&str) -> bool) -> Result<(), Refusal> {
     for field in fields {
-        if !allowed.contains(&field.key.as_str()) {
+        if !allowed(&field.key) {
             return Err(invalid(format!(
                 "line {}: unknown field {}",
                 field.line, field.key
@@ -135,7 +135,7 @@ fn coordinates(cell: &str) -> Result<(usize, usize), Refusal> {
 
 fn mappings(text: &str, issuer: &str, profile: &IssuerProfile) -> Result<Vec<Mapping>, Refusal> {
     let doc = parse_subset(text).map_err(|error| invalid(error.to_string()))?;
-    only(&doc.top, &["schema", "issuer"])?;
+    only(&doc.top, |key| ["schema", "issuer"].contains(&key))?;
     if string(&doc.top, "schema")? != SCHEMA || string(&doc.top, "issuer")? != issuer {
         return Err(invalid(
             "mapping schema or issuer does not match the requested HTML Claims",
@@ -150,25 +150,12 @@ fn mappings(text: &str, issuer: &str, profile: &IssuerProfile) -> Result<Vec<Map
         if row.table != "claim" {
             return Err(invalid(format!("line {}: expected [[claim]]", row.line)));
         }
-        only(
-            &row.fields,
-            &[
-                "id",
-                "file",
-                "table",
-                "cell",
-                "subject_cell",
-                "subject_label",
-                "period_cell",
-                "period_label",
-                "metric_cell",
-                "metric_label",
-                "unit_cell",
-                "unit_label",
-                "ownership_cell",
-                "ownership_label",
-            ],
-        )?;
+        only(&row.fields, |key| {
+            ["id", "file", "table", "cell"].contains(&key)
+                || key.rsplit_once('_').is_some_and(|(role, suffix)| {
+                    ROLES.contains(&role) && matches!(suffix, "cell" | "label")
+                })
+        })?;
         let id = string(&row.fields, "id")?;
         if id.len() > 128
             || !id

@@ -85,6 +85,11 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`mirror::compare`** gives a `MirrorReport` with a `MirrorVerdict`. `Consistent` carries a checked source-basis witness and a common full-basis Claim. `Conflict` carries the checked certificate/digest, blame status and inclusion-minimal source sets. `Indeterminate` has no common quantity. **`compare_capex`** gives a `CapexReport`: independent single-line checks in `lines`, and the separate `ComponentSum` assessment in `joint`. `fmine-cli`'s `mirror.rs` calls both.
 
 ## 4. Invariants
+- DESIGN: cost and GEO declared worksheets share strict quoted-field, exact-quantity and calendar-period
+  parsing, input-envelope admission and JSON primitives in the private `definitions::declared` module.
+  Each metric keeps its own population, ownership, unit and allocation rules. Successful receipt schemas,
+  field ordering and canonical identities are preserved, including their distinct colour/UU representations.
+  Every source anchor, parent, exact metadata bit and typed refusal guard remains present.
 - **Refuse, never clamp.**
   - `solve_cutoff_grade`: `test_cutoff_refuses_out_of_domain_inputs` and `test_cutoff_refuses_non_convergence`.
   - Cut-off reproduction: `test_no_positive_net_is_refused_not_clamped`.

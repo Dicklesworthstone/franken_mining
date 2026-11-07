@@ -131,6 +131,10 @@ pub struct LintFinding {
     pub candidates: Vec<KeyedCell>,
 }
 
+fn join_json<T>(values: impl IntoIterator<Item = T>, render: impl FnMut(T) -> String) -> String {
+    values.into_iter().map(render).collect::<Vec<_>>().join(",")
+}
+
 impl LintFinding {
     fn to_json(&self) -> String {
         format!(
@@ -141,26 +145,14 @@ impl LintFinding {
             self.step.as_deref().map_or_else(|| "null".into(), js),
             self.claim_id.as_deref().map_or_else(|| "null".into(), js),
             js(self.verdict.as_str()),
-            self.also
-                .iter()
-                .map(|v| js(v.as_str()))
-                .collect::<Vec<_>>()
-                .join(","),
+            join_json(&self.also, |v| js(v.as_str())),
             js(self.reason),
             js(self.verdict.fix()),
             self.source
                 .as_ref()
                 .map_or_else(|| "null".into(), KeyedCell::to_json),
-            self.later
-                .iter()
-                .map(KeyedCell::to_json)
-                .collect::<Vec<_>>()
-                .join(","),
-            self.candidates
-                .iter()
-                .map(KeyedCell::to_json)
-                .collect::<Vec<_>>()
-                .join(","),
+            join_json(&self.later, KeyedCell::to_json),
+            join_json(&self.candidates, KeyedCell::to_json),
         )
     }
 }
@@ -193,22 +185,9 @@ impl LintReport {
             js(&self.claims_digest.to_hex()),
             js(self.mode.no_claim()),
             self.findings.len(),
-            counts
-                .iter()
-                .map(|(v, n)| format!("{}:\"{n}\"", js(v.as_str())))
-                .collect::<Vec<_>>()
-                .join(","),
-            self.unchecked_spans
-                .iter()
-                .copied()
-                .map(span_json)
-                .collect::<Vec<_>>()
-                .join(","),
-            self.findings
-                .iter()
-                .map(LintFinding::to_json)
-                .collect::<Vec<_>>()
-                .join(","),
+            join_json(&counts, |(v, n)| format!("{}:\"{n}\"", js(v.as_str()))),
+            join_json(&self.unchecked_spans, |&span| span_json(span)),
+            join_json(&self.findings, LintFinding::to_json),
         )
     }
 
@@ -361,6 +340,7 @@ fn attribution_key(c: &KeyedCell) -> Option<AttributionKey> {
     ))
 }
 
+#[derive(Default)]
 struct Index<'a> {
     ids: BTreeMap<String, Vec<&'a KeyedCell>>,
     latest: BTreeMap<SeriesKey, Vec<&'a KeyedCell>>,
@@ -372,14 +352,7 @@ struct Index<'a> {
 
 impl<'a> Index<'a> {
     fn new(claims: &'a [KeyedCell]) -> Self {
-        let mut index = Self {
-            ids: BTreeMap::new(),
-            latest: BTreeMap::new(),
-            shares: BTreeMap::new(),
-            superseded: BTreeSet::new(),
-            subjects: Vec::new(),
-            discovery: BTreeMap::new(),
-        };
+        let mut index = Self::default();
         let mut subjects = BTreeSet::new();
         for c in claims {
             index
@@ -553,6 +526,13 @@ fn unit_matches(unit: UnitTok, key: &str, metric: Metric) -> bool {
                 "percent" | "wt_pct" | "mass_fraction"
             )
     )
+}
+
+fn units_match(ctx: &Context, n: &NumberToken, c: &KeyedCell, m: Metric) -> bool {
+    ctx.units.iter().all(|u| unit_matches(*u, &c.key.unit, m))
+        && !n.currency.is_some_and(|currency| {
+            !matches!(currency, Currency::Usd | Currency::Dollar) || !m.rate()
+        })
 }
 
 fn decimal(d: Dec) -> Option<Rat> {
@@ -730,13 +710,7 @@ pub fn equality_target(draft: &str, span: Span, prototype: &KeyedCell) -> Option
         || ctx.metrics.as_slice() != [metric]
         || ctx.periods.len() != 1
         || ctx.units.is_empty()
-        || !ctx
-            .units
-            .iter()
-            .all(|u| unit_matches(*u, &prototype.key.unit, metric))
-        || amount
-            .currency
-            .is_some_and(|c| !matches!(c, Currency::Usd | Currency::Dollar) || !metric.rate())
+        || !units_match(&ctx, amount, prototype, metric)
         || !basis_findings(&ctx, prototype, metric).is_empty()
     {
         return None;
@@ -853,13 +827,7 @@ fn finding(
     }
     if ctx.units.is_empty() {
         failures.push((Verdict::Ambiguous, "explicit_unit_required"));
-    } else if !ctx
-        .units
-        .iter()
-        .all(|u| unit_matches(*u, &claim.key.unit, m))
-        || n.currency
-            .is_some_and(|c| !matches!(c, Currency::Usd | Currency::Dollar) || !m.rate())
-    {
+    } else if !units_match(&ctx, n, claim, m) {
         failures.push((Verdict::BasisMismatch, "unit_or_currency"));
     }
     if let Some(latest) = index.latest.get(&claim.key.series_key()) {
@@ -949,10 +917,7 @@ fn discover(
         .flatten()
         .copied()
         .filter(|c| {
-            ctx.units.iter().all(|u| unit_matches(*u, &c.key.unit, m))
-                && !n.currency.is_some_and(|currency| {
-                    !matches!(currency, Currency::Usd | Currency::Dollar) || !m.rate()
-                })
+            units_match(&ctx, n, c, m)
                 && basis_findings(&ctx, c, m).iter().all(|(_, reason)| {
                     matches!(
                         *reason,

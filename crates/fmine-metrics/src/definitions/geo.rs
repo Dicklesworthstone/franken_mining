@@ -6,10 +6,10 @@ use std::fmt::Write as _;
 
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::{Encoder, ObjectId, blake3_hash};
-use fmine_evidence::color::validate_color_payload;
-use fmine_evidence::{Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
+use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_units::{Currency, ExactQty, UnitsError};
 
+use super::declared::{color_json, join_json, js, qty};
 use crate::guidance::{Ownership, Period};
 
 pub mod worksheet;
@@ -210,72 +210,6 @@ fn named(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-fn admit(input: &Claim<GeoInput>) -> Result<()> {
-    input.check_id()?;
-    if input.metric_key != INPUT_METRIC || input.value_tag() != input.value.canonical_tag() {
-        return Err(bad(
-            RefusalCode::FrozenRecordMutation507,
-            "input differs from its canonical value",
-        ));
-    }
-    if input.stale || input.state == KnowledgeState::Stale {
-        return Err(bad(RefusalCode::StaleAnchor502, "stale input"));
-    }
-    if !matches!(
-        input.state,
-        KnowledgeState::Known | KnowledgeState::Estimated
-    ) || input.calibration_failed
-    {
-        return Err(bad(RefusalCode::NotObservable202, "unusable input state"));
-    }
-    if input.representation != Representation::Deterministic
-        || input.support != SpatialSupport::PeriodAggregate
-    {
-        return Err(bad(
-            RefusalCode::SupportMismatch102,
-            "explicit deterministic period aggregates required",
-        ));
-    }
-    if input.additivity != input.value.additivity() {
-        return Err(bad(
-            RefusalCode::NonAdditiveAverage103,
-            "quantities are extensive; decks and population declarations are non-additive",
-        ));
-    }
-    if input.anchors.is_empty()
-        || input
-            .anchors
-            .iter()
-            .any(|a| !named(&a.artifact_path) || !named(&a.locator) || a.artifact_sha256 == [0; 32])
-    {
-        return Err(bad(
-            RefusalCode::NoClaimInDomain201,
-            "every input requires a source hash and locator",
-        ));
-    }
-    if input.uu_terms.iter().any(|u| {
-        !named(&u.scenario_id)
-            || !named(&u.description)
-            || !named(&u.trigger_indicator)
-            || !u.downside_exposure_usd_m.is_finite()
-            || u.downside_exposure_usd_m < 0.0
-    }) {
-        return Err(bad(
-            RefusalCode::UnbudgetedUnknowns204,
-            "invalid UU metadata",
-        ));
-    }
-    if let Ok(color) = input.color() {
-        validate_color_payload(&color).map_err(|_| {
-            bad(
-                RefusalCode::CalibrationRequired205,
-                "invalid colour metadata",
-            )
-        })?;
-    }
-    Ok(())
-}
-
 /// Evaluate every declared deck against identical produced quantities. Ownership is a shared label;
 /// amounts are already on that basis and are never rescaled. Inputs may be supplied in any order.
 pub fn evaluate(inputs: &[Claim<GeoInput>]) -> Result<GeoReceipt> {
@@ -318,7 +252,14 @@ pub fn evaluate(inputs: &[Claim<GeoInput>]) -> Result<GeoReceipt> {
         ));
     }
     for input in &inputs {
-        admit(input)?;
+        super::declared::admit(
+            input,
+            INPUT_METRIC,
+            &input.value.canonical_tag(),
+            input.value.additivity(),
+            named,
+            bad,
+        )?;
         if input.value.scope != *scope {
             return Err(bad(
                 RefusalCode::BasisMismatch105,
@@ -514,38 +455,8 @@ pub fn evaluate(inputs: &[Claim<GeoInput>]) -> Result<GeoReceipt> {
     })
 }
 
-fn js(value: &str) -> String {
-    let mut out = String::from("\"");
-    for c in value.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn qty(value: ExactQty) -> String {
-    if value.den() == 1 {
-        value.num().to_string()
-    } else {
-        format!("{}/{}", value.num(), value.den())
-    }
-}
 fn names(metals: &[Metal]) -> String {
-    metals
-        .iter()
-        .map(|m| js(m.name()))
-        .collect::<Vec<_>>()
-        .join(",")
+    join_json(metals, |m| js(m.name()))
 }
 fn key_json(key: &DeckKey) -> String {
     format!(
@@ -617,68 +528,9 @@ fn input_json(input: &GeoInput) -> String {
         value_json(&input.value)
     )
 }
-fn color_json(color: std::result::Result<Color, Refusal>) -> String {
-    match color {
-        Err(r) => format!("{{\"status\":\"refused\",\"code\":{}}}", js(r.code)),
-        Ok(Color::Verified { lo, hi }) => format!(
-            "{{\"kind\":\"verified\",\"lo_bits\":\"{:016x}\",\"hi_bits\":\"{:016x}\"}}",
-            lo.to_bits(),
-            hi.to_bits()
-        ),
-        Ok(Color::Estimated {
-            estimator,
-            dispersion,
-        }) => format!(
-            "{{\"kind\":\"estimated\",\"estimator\":{},\"dispersion_bits\":\"{:016x}\"}}",
-            js(&estimator),
-            dispersion.to_bits()
-        ),
-        Ok(Color::Validated { regime, dataset }) => {
-            let axes = regime
-                .bounds()
-                .iter()
-                .map(|(axis, (lo, hi))| {
-                    format!(
-                        "{{\"axis\":{},\"lo_bits\":\"{:016x}\",\"hi_bits\":\"{:016x}\"}}",
-                        js(axis),
-                        lo.to_bits(),
-                        hi.to_bits()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!(
-                "{{\"kind\":\"validated\",\"dataset\":{},\"bounds\":[{axes}]}}",
-                js(&dataset)
-            )
-        }
-    }
-}
 fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
-    let mut body = String::new();
-    for byte in claim.canonical_body() {
-        let _ = write!(body, "{byte:02x}");
-    }
-    let anchors = claim
-        .anchors
-        .iter()
-        .map(|a| {
-            format!(
-                "{{\"artifact_path\":{},\"sha256\":{},\"locator\":{}}}",
-                js(&a.artifact_path),
-                js(&fmine_core::Digest32(a.artifact_sha256).to_hex()),
-                js(&a.locator)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
+    let (body, anchors, parents) = super::declared::json_parts(claim);
     let uu = claim.uu_terms.iter().map(|u| format!("{{\"id\":{},\"description\":{},\"downside_usd_m_bits\":\"{:016x}\",\"trigger\":{}}}", js(&u.scenario_id), js(&u.description), u.downside_exposure_usd_m.to_bits(), js(&u.trigger_indicator))).collect::<Vec<_>>().join(",");
-    let parents = claim
-        .parents
-        .iter()
-        .map(|id| js(&id.to_string()))
-        .collect::<Vec<_>>()
-        .join(",");
     format!(
         "{{\"claim_id\":{},\"metric_key\":{},\"value_tag\":{},\"canonical_body_hex\":{},\"value\":{value},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"representation\":{},\"support\":{},\"additivity\":{},\"confidentiality\":{},\"stale\":{},\"calibration_failed\":{},\"supersedes\":{},\"parents\":[{parents}],\"anchors\":[{anchors}],\"uu_terms\":[{uu}],\"color\":{}}}",
         js(&claim.claim_id.to_string()),
@@ -697,7 +549,7 @@ fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
         claim
             .supersedes
             .map_or_else(|| "null".into(), |id| js(&id.to_string())),
-        color_json(claim.color())
+        color_json(claim.color(), false)
     )
 }
 fn summary_json(summary: &GeoSummary) -> String {
@@ -718,12 +570,7 @@ impl GeoReceipt {
     #[must_use]
     pub fn to_json(&self) -> String {
         let summary = summary_json(self.summary());
-        let inputs = self
-            .inputs
-            .iter()
-            .map(|c| claim_json(c, &input_json(&c.value)))
-            .collect::<Vec<_>>()
-            .join(",");
+        let inputs = join_json(&self.inputs, |c| claim_json(c, &input_json(&c.value)));
         format!(
             "{{\"schema\":{},\"digest\":{},\"summary\":{summary},\"claim\":{},\"inputs\":[{inputs}],\"no_claim\":{}}}",
             js(worksheet::SCHEMA),

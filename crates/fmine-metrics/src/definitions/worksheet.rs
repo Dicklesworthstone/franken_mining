@@ -7,60 +7,25 @@ use std::fmt::Write as _;
 use fmine_claim::{Claim, Confidentiality, Representation, SpatialSupport, UuTerm};
 use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{
-    Color, EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
+    EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
 use fmine_registry::metrics::MetricRegistry;
-use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
+use fmine_registry::toml_subset::parse_subset;
 use fmine_units::{Currency, ExactQty, Money};
 
 use super::CostUnit;
 use super::claims::{self, CostInput, CostReceipt, CostValue, Scope};
+use super::declared::{Fields, color_json, decimal_parts, fields, join_json, js, qty};
 use crate::guidance::{Ownership, Period};
 
 pub const SCHEMA: &str = "fmine.cost-worksheet.v1";
 const MAX_ROWS: usize = 4096;
-const MAX_FIELD_BYTES: usize = 4096;
-type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
 
 fn bad(line: usize, message: impl AsRef<str>) -> Refusal {
     Refusal::new(
         RefusalCode::InputMissingOrUnreadable506,
         format!("cost worksheet line {line}: {}", message.as_ref()),
     )
-}
-
-fn fields<'a>(
-    fields: &'a [TomlField],
-    required: &[&str],
-    optional: &[&str],
-    line: usize,
-) -> Result<Fields<'a>, Refusal> {
-    let mut out = BTreeMap::new();
-    for field in fields {
-        if !required.contains(&field.key.as_str()) && !optional.contains(&field.key.as_str()) {
-            return Err(bad(field.line, format!("unsupported field {}", field.key)));
-        }
-        let TomlValue::Str(value) = &field.value else {
-            return Err(bad(field.line, "values must be quoted strings"));
-        };
-        if value.len() > MAX_FIELD_BYTES
-            || value.trim().is_empty()
-            || value.trim() != value
-            || value.chars().any(char::is_control)
-        {
-            return Err(bad(
-                field.line,
-                "values must be nonempty trimmed text of at most 4096 bytes",
-            ));
-        }
-        out.insert(field.key.as_str(), (value.as_str(), field.line));
-    }
-    for name in required {
-        if !out.contains_key(name) {
-            return Err(bad(line, format!("missing {name}")));
-        }
-    }
-    Ok(out)
 }
 
 fn get<'a>(fields: &Fields<'a>, key: &str) -> Result<(&'a str, usize), Refusal> {
@@ -70,41 +35,13 @@ fn get<'a>(fields: &Fields<'a>, key: &str) -> Result<(&'a str, usize), Refusal> 
         .ok_or_else(|| bad(1, format!("missing {key}")))
 }
 
-fn decimal_parts(value: &str) -> Option<(bool, &str, &str)> {
-    let (negative, digits) = value
-        .strip_prefix('-')
-        .map_or((false, value), |s| (true, s));
-    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
-    if whole.is_empty()
-        || !whole
-            .bytes()
-            .chain(fraction.bytes())
-            .all(|b| b.is_ascii_digit())
-        || (digits.contains('.') && fraction.is_empty())
-    {
-        return None;
-    }
-    Some((negative, whole, fraction))
-}
-
 fn quantity(value: &str, line: usize) -> Result<ExactQty, Refusal> {
-    let fail = || {
+    super::declared::quantity(value).ok_or_else(|| {
         bad(
             line,
             "expected an exact decimal or n/d with a positive denominator",
         )
-    };
-    if let Some((n, d)) = value.split_once('/') {
-        let n = n.parse::<i128>().map_err(|_| fail())?;
-        let d = d.parse::<i128>().map_err(|_| fail())?;
-        if d <= 0 {
-            return Err(fail());
-        }
-        ExactQty::new(n, d).map_err(|_| fail())
-    } else {
-        decimal_parts(value).ok_or_else(fail)?;
-        ExactQty::from_decimal_str(value).map_err(|_| fail())
-    }
+    })
 }
 
 fn money(value: &str, line: usize) -> Result<Money, Refusal> {
@@ -140,32 +77,8 @@ fn money(value: &str, line: usize) -> Result<Money, Refusal> {
 }
 
 fn period(value: &str, line: usize) -> Result<Period, Refusal> {
-    let fail = || bad(line, "period must be YYYYFY, YYYYQ1..Q4 or YYYYH1..H2");
-    if !value.is_ascii()
-        || value.len() != 6
-        || !value.as_bytes()[..4].iter().all(u8::is_ascii_digit)
-    {
-        return Err(fail());
-    }
-    let year = value[..4].parse::<u16>().map_err(|_| fail())?;
-    let (first_month, last_month) = match &value[4..] {
-        "FY" => (1, 12),
-        "Q1" => (1, 3),
-        "Q2" => (4, 6),
-        "Q3" => (7, 9),
-        "Q4" => (10, 12),
-        "H1" => (1, 6),
-        "H2" => (7, 12),
-        _ => return Err(fail()),
-    };
-    if year == 0 {
-        return Err(fail());
-    }
-    Ok(Period {
-        year,
-        first_month,
-        last_month,
-    })
+    super::declared::period(value)
+        .ok_or_else(|| bad(line, "period must be YYYYFY, YYYYQ1..Q4 or YYYYH1..H2"))
 }
 
 fn anchored(source: &SourceAnchor, locator: impl Into<String>) -> SourceAnchor {
@@ -217,6 +130,7 @@ pub fn evaluate(
             "copper_share",
         ],
         1,
+        bad,
     )?;
     if get(&top, "schema")?.0 != SCHEMA {
         return Err(bad(1, format!("schema must be {SCHEMA}")));
@@ -276,7 +190,7 @@ pub fn evaluate(
     for row in &doc.rows {
         match row.table.as_str() {
             "cost" => {
-                let f = fields(&row.fields, &["item", "usd"], &[], row.line)?;
+                let f = fields(&row.fields, &["item", "usd"], &[], row.line, bad)?;
                 let (usd, line) = get(&f, "usd")?;
                 values.push((
                     CostValue::Line {
@@ -292,6 +206,7 @@ pub fn evaluate(
                     &["id", "description", "trigger", "downside_usd_m"],
                     &[],
                     row.line,
+                    bad,
                 )?;
                 let (exposure, line) = get(&f, "downside_usd_m")?;
                 decimal_parts(exposure).ok_or_else(|| {
@@ -376,33 +291,6 @@ pub fn evaluate(
     claims::evaluate(&registry, &inputs)
 }
 
-fn js(value: &str) -> String {
-    let mut out = String::from("\"");
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                let _ = write!(out, "\\u{:04x}", u32::from(c));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn qty(value: ExactQty) -> String {
-    if value.den() == 1 {
-        value.num().to_string()
-    } else {
-        format!("{}/{}", value.num(), value.den())
-    }
-}
-
 fn scope_json(scope: &Scope) -> String {
     let ownership = match scope.ownership {
         Ownership::Full => "{\"kind\":\"full\"}".into(),
@@ -457,65 +345,8 @@ fn input_json(input: &CostInput) -> String {
     )
 }
 
-fn color_json(color: Result<Color, Refusal>) -> String {
-    match color {
-        Err(refusal) => format!(
-            "{{\"status\":\"refused\",\"refusal_code\":{}}}",
-            js(refusal.code)
-        ),
-        Ok(Color::Verified { lo, hi }) => format!(
-            "{{\"status\":\"available\",\"kind\":\"verified\",\"lo_bits\":\"{:016x}\",\"hi_bits\":\"{:016x}\"}}",
-            lo.to_bits(),
-            hi.to_bits()
-        ),
-        Ok(Color::Validated { regime, dataset }) => {
-            let bounds = regime
-                .bounds()
-                .iter()
-                .map(|(axis, (lo, hi))| {
-                    format!(
-                        "{{\"axis\":{},\"lo_bits\":\"{:016x}\",\"hi_bits\":\"{:016x}\"}}",
-                        js(axis),
-                        lo.to_bits(),
-                        hi.to_bits()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!(
-                "{{\"status\":\"available\",\"kind\":\"validated\",\"dataset\":{},\"bounds\":[{bounds}]}}",
-                js(&dataset)
-            )
-        }
-        Ok(Color::Estimated {
-            estimator,
-            dispersion,
-        }) => format!(
-            "{{\"status\":\"available\",\"kind\":\"estimated\",\"estimator\":{},\"dispersion_bits\":\"{:016x}\"}}",
-            js(&estimator),
-            dispersion.to_bits()
-        ),
-    }
-}
-
 fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
-    let mut body = String::new();
-    for byte in claim.canonical_body() {
-        let _ = write!(body, "{byte:02x}");
-    }
-    let anchors = claim
-        .anchors
-        .iter()
-        .map(|a| {
-            format!(
-                "{{\"artifact_path\":{},\"sha256\":{},\"locator\":{}}}",
-                js(&a.artifact_path),
-                js(&Digest32(a.artifact_sha256).to_hex()),
-                js(&a.locator)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
+    let (body, anchors, parents) = super::declared::json_parts(claim);
     let uu = claim.uu_terms.iter().map(|u| format!("{{\"scenario_id\":{},\"description\":{},\"downside_exposure_usd_m\":{},\"downside_bits\":\"{:016x}\",\"trigger_indicator\":{}}}",
         js(&u.scenario_id), js(&u.description), u.downside_exposure_usd_m, u.downside_exposure_usd_m.to_bits(), js(&u.trigger_indicator))).collect::<Vec<_>>().join(",");
     format!(
@@ -531,18 +362,13 @@ fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
         js(&format!("{:?}", claim.support)),
         js(&format!("{:?}", claim.additivity)),
         js(&claim.confidentiality.to_string()),
-        claim
-            .parents
-            .iter()
-            .map(|id| js(&id.to_string()))
-            .collect::<Vec<_>>()
-            .join(","),
+        parents,
         claim
             .supersedes
             .map_or_else(|| "null".into(), |id| js(&id.to_string())),
         claim.stale,
         claim.calibration_failed,
-        color_json(claim.color())
+        color_json(claim.color(), true)
     )
 }
 
@@ -577,11 +403,7 @@ impl CostReceipt {
             "{{\"digest\":{},\"summary\":{summary},\"claim\":{},\"inputs\":[{}]}}",
             js(self.digest()),
             claim_json(self.claim(), &summary),
-            self.inputs()
-                .iter()
-                .map(|c| claim_json(c, &input_json(&c.value)))
-                .collect::<Vec<_>>()
-                .join(",")
+            join_json(self.inputs(), |c| claim_json(c, &input_json(&c.value)))
         )
     }
 

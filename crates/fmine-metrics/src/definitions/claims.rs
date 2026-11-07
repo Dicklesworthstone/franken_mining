@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::{Encoder, ObjectId, blake3_hash};
-use fmine_evidence::color::validate_color_payload;
 use fmine_evidence::{Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_registry::metrics::{CreditBasis, LineKind, MetricFamily, MetricRegistry};
 use fmine_units::{Currency, ExactQty, Money, UnitsError};
@@ -318,72 +317,6 @@ fn named(text: &str) -> bool {
     !text.is_empty() && text.trim() == text && !text.chars().any(char::is_control)
 }
 
-fn admit(claim: &Claim<CostInput>) -> Result<()> {
-    claim.check_id()?;
-    if claim.metric_key != INPUT_METRIC || claim.value_tag() != claim.value.canonical_tag() {
-        return Err(bad(
-            RefusalCode::FrozenRecordMutation507,
-            "input value differs from its bound identity",
-        ));
-    }
-    if claim.stale || claim.state == KnowledgeState::Stale {
-        return Err(bad(RefusalCode::StaleAnchor502, "stale input"));
-    }
-    if !matches!(
-        claim.state,
-        KnowledgeState::Known | KnowledgeState::Estimated
-    ) || claim.calibration_failed
-    {
-        return Err(bad(RefusalCode::NotObservable202, "unusable input state"));
-    }
-    if claim.representation != Representation::Deterministic
-        || claim.support != SpatialSupport::PeriodAggregate
-    {
-        return Err(bad(
-            RefusalCode::SupportMismatch102,
-            "inputs require explicit deterministic period aggregates",
-        ));
-    }
-    if claim.additivity != claim.value.additivity() {
-        return Err(bad(
-            RefusalCode::NonAdditiveAverage103,
-            "costs and sold quantities must be extensive; rule and allocation are non-additive",
-        ));
-    }
-    if claim.anchors.is_empty()
-        || claim
-            .anchors
-            .iter()
-            .any(|a| !named(&a.artifact_path) || !named(&a.locator) || a.artifact_sha256 == [0; 32])
-    {
-        return Err(bad(
-            RefusalCode::NoClaimInDomain201,
-            "every input needs source anchors with a digest and locator",
-        ));
-    }
-    if claim.uu_terms.iter().any(|u| {
-        !named(&u.scenario_id)
-            || !named(&u.description)
-            || !named(&u.trigger_indicator)
-            || !u.downside_exposure_usd_m.is_finite()
-            || u.downside_exposure_usd_m < 0.0
-    }) {
-        return Err(bad(
-            RefusalCode::UnbudgetedUnknowns204,
-            "invalid supplied UU metadata",
-        ));
-    }
-    if let Ok(color) = claim.color() {
-        validate_color_payload(&color).map_err(|_| {
-            bad(
-                RefusalCode::CalibrationRequired205,
-                "invalid input colour metadata",
-            )
-        })?;
-    }
-    Ok(())
-}
-
 fn put_envelope(enc: &mut Encoder, claim: &Claim<CostInput>) {
     enc.put_bytes(&claim.canonical_body());
     // These fields are not all present in generic Claim canonical bodies; bind them explicitly.
@@ -467,7 +400,14 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         ));
     }
     for input in &inputs {
-        admit(input)?;
+        super::declared::admit(
+            input,
+            INPUT_METRIC,
+            &input.value.canonical_tag(),
+            input.value.additivity(),
+            named,
+            bad,
+        )?;
         if input.value.scope != *scope {
             return Err(bad(
                 RefusalCode::BasisMismatch105,
