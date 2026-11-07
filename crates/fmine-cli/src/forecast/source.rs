@@ -516,6 +516,54 @@ pub(super) fn receipt_value_tag(
     )
 }
 
+fn receipt_ownership(ownership: PublicOwnership, source: &str) -> Result<OwnershipBasis> {
+    Ok(match (ownership, source) {
+        (PublicOwnership::Full, "full")
+        | (PublicOwnership::Attributable { num: 1, den: 1 }, "full") => {
+            OwnershipBasis::Consolidated100
+        }
+        (PublicOwnership::Attributable { num, den }, "printed" | "registry") => {
+            let share = Rat::new(i128::from(num), i128::from(den))
+                .map_err(|error| refusal(RefusalCode::BasisMismatch105, error.to_string()))?;
+            OwnershipBasis::Attributable {
+                num: share.num() as i64,
+                den: share.den() as i64,
+                source: if source == "printed" {
+                    ShareSource::Printed
+                } else {
+                    ShareSource::Registry
+                },
+            }
+        }
+        _ => {
+            return Err(refusal(
+                RefusalCode::BasisMismatch105,
+                "receipt ownership provenance differs from its frozen basis",
+            ));
+        }
+    })
+}
+
+fn receipt_locator<'a>(citation: &'a OutcomeCitation, anchor_path: &str) -> Result<&'a str> {
+    let (file, locator) = citation.locator.split_once(':').ok_or_else(|| {
+        refusal(
+            RefusalCode::SourceCellUnusable208,
+            "receipt has no workbook cell locator",
+        )
+    })?;
+    if file.is_empty()
+        || locator.is_empty()
+        || Path::new(anchor_path).file_name().and_then(|s| s.to_str()) != Some(file)
+        || citation.sha256 == [0; 32]
+    {
+        return Err(refusal(
+            RefusalCode::DigestMismatch505,
+            "receipt anchor differs from its source citation",
+        ));
+    }
+    Ok(locator)
+}
+
 fn receipt_value_tag_at_vintage(
     policy: &PublicResolutionPolicy,
     forecast_id: ObjectId,
@@ -538,31 +586,7 @@ fn receipt_value_tag_at_vintage(
             "receipt issuer differs from the frozen policy",
         ));
     }
-    let ownership_basis = match (policy.ownership, ownership_source) {
-        (PublicOwnership::Full, "full")
-        | (PublicOwnership::Attributable { num: 1, den: 1 }, "full") => {
-            OwnershipBasis::Consolidated100
-        }
-        (PublicOwnership::Attributable { num, den }, "printed" | "registry") => {
-            let share = Rat::new(i128::from(num), i128::from(den))
-                .map_err(|error| refusal(RefusalCode::BasisMismatch105, error.to_string()))?;
-            OwnershipBasis::Attributable {
-                num: share.num() as i64,
-                den: share.den() as i64,
-                source: if ownership_source == "printed" {
-                    ShareSource::Printed
-                } else {
-                    ShareSource::Registry
-                },
-            }
-        }
-        _ => {
-            return Err(refusal(
-                RefusalCode::BasisMismatch105,
-                "receipt ownership provenance differs from its frozen basis",
-            ));
-        }
-    };
+    let ownership_basis = receipt_ownership(policy.ownership, ownership_source)?;
     let key = PublicKey {
         issuer: policy.issuer.clone(),
         subject: subject.clone(),
@@ -630,22 +654,7 @@ pub(super) fn receipt_claim_body_at_vintage(
     ownership_source: &str,
     anchor_path: &str,
 ) -> Result<Vec<u8>> {
-    let (file, locator) = citation.locator.split_once(':').ok_or_else(|| {
-        refusal(
-            RefusalCode::SourceCellUnusable208,
-            "receipt has no workbook cell locator",
-        )
-    })?;
-    if file.is_empty()
-        || locator.is_empty()
-        || Path::new(anchor_path).file_name().and_then(|s| s.to_str()) != Some(file)
-        || citation.sha256 == [0; 32]
-    {
-        return Err(refusal(
-            RefusalCode::DigestMismatch505,
-            "receipt anchor differs from its source citation",
-        ));
-    }
+    let locator = receipt_locator(citation, anchor_path)?;
     let tag = receipt_value_tag_at_vintage(
         policy,
         forecast_id,
@@ -712,31 +721,7 @@ pub(super) fn receipt_missing_claim_body(
             "receipt issuer differs from the frozen policy",
         ));
     }
-    let ownership_basis = match (policy.ownership, ownership_source) {
-        (PublicOwnership::Full, "full")
-        | (PublicOwnership::Attributable { num: 1, den: 1 }, "full") => {
-            OwnershipBasis::Consolidated100
-        }
-        (PublicOwnership::Attributable { num, den }, "printed" | "registry") => {
-            let share = Rat::new(i128::from(num), i128::from(den))
-                .map_err(|error| refusal(RefusalCode::BasisMismatch105, error.to_string()))?;
-            OwnershipBasis::Attributable {
-                num: share.num() as i64,
-                den: share.den() as i64,
-                source: if ownership_source == "printed" {
-                    ShareSource::Printed
-                } else {
-                    ShareSource::Registry
-                },
-            }
-        }
-        _ => {
-            return Err(refusal(
-                RefusalCode::BasisMismatch105,
-                "receipt ownership provenance differs from its frozen basis",
-            ));
-        }
-    };
+    let ownership_basis = receipt_ownership(policy.ownership, ownership_source)?;
     if value_kind != "nil_unknown" {
         return Err(refusal(
             RefusalCode::SourceCellUnusable208,
@@ -747,22 +732,7 @@ pub(super) fn receipt_missing_claim_body(
         token: token.to_string(),
         reason: NilReason::Unknown,
     };
-    let (file, locator) = citation.locator.split_once(':').ok_or_else(|| {
-        refusal(
-            RefusalCode::SourceCellUnusable208,
-            "receipt has no workbook cell locator",
-        )
-    })?;
-    if file.is_empty()
-        || locator.is_empty()
-        || Path::new(anchor_path).file_name().and_then(|s| s.to_str()) != Some(file)
-        || citation.sha256 == [0; 32]
-    {
-        return Err(refusal(
-            RefusalCode::DigestMismatch505,
-            "receipt anchor differs from its source citation",
-        ));
-    }
+    let locator = receipt_locator(citation, anchor_path)?;
     let key = PublicKey {
         issuer: policy.issuer.clone(),
         subject: subject.clone(),

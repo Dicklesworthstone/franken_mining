@@ -11,8 +11,8 @@ use fmine_calib::ledger::binding::{
 use fmine_calib::record::{format_utc, parse_hex32, parse_utc};
 use fmine_calib::{
     Assessment, AssessmentPolicy, CalibrationFlag, Cohort, CohortSpec, CoverageMonitorAssessment,
-    CoverageMonitorPolicy, ForecastLedger, ForecastPayload, MemberAssessment, MemberOutcome,
-    MissingReason, OutcomeCitation, OutcomeKind, OutcomeSelector, ScoreSummary,
+    CoverageMonitorPolicy, CoverageSummary, ForecastLedger, ForecastPayload, MemberAssessment,
+    MemberOutcome, MissingReason, OutcomeCitation, OutcomeKind, OutcomeSelector, ScoreSummary,
 };
 use fmine_core::hash::{Digest32, sha256};
 use fmine_core::id::ObjectId;
@@ -102,6 +102,10 @@ struct Replay {
 }
 
 impl Replay {
+    fn alias(&self, id: ObjectId) -> &str {
+        self.aliases.get(&id).map_or("unknown", String::as_str)
+    }
+
     fn parse(text: &str) -> Result<Self, Refusal> {
         let doc = parse_subset(text).map_err(|e| invalid(e.to_string()))?;
         if doc.top.len() != 2
@@ -875,11 +879,37 @@ fn utc(ns: i64) -> String {
         js(&format!("{}.{nanos:09}Z", text.trim_end_matches('Z')))
     }
 }
+fn display_or<T: ToString>(value: Option<T>, missing: &str) -> String {
+    value.map_or_else(|| missing.to_string(), |value| value.to_string())
+}
+
 fn optional_number(n: Option<f64>) -> String {
-    n.map_or_else(|| "null".to_string(), |v| v.to_string())
+    display_or(n, "null")
 }
 fn pair((lo, hi): (f64, f64)) -> String {
     format!("[{lo},{hi}]")
+}
+
+fn coverage_json(coverage: Option<CoverageSummary>) -> String {
+    coverage.map_or_else(
+        || "null".into(),
+        |coverage| {
+            format!(
+                "{{\"inside\":{},\"observed_fraction\":{},\"whole_cohort\":{}}}",
+                coverage.inside,
+                optional_number(coverage.observed_fraction),
+                pair(coverage.whole_cohort),
+            )
+        },
+    )
+}
+
+fn unresolved_json(reasons: &BTreeMap<MissingReason, usize>) -> String {
+    reasons
+        .iter()
+        .map(|(reason, n)| format!("{}:{n}", js(missing_name(*reason))))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn cohort_json(cohort: &Cohort) -> String {
@@ -995,23 +1025,8 @@ fn summary_json(report: &Assessment) -> String {
         CalibrationFlag::Unscored => "unscored",
         CalibrationFlag::Descriptive => "descriptive",
     };
-    let coverage = s.coverage.map_or_else(
-        || "null".to_string(),
-        |c| {
-            format!(
-                "{{\"inside\":{},\"observed_fraction\":{},\"whole_cohort\":{}}}",
-                c.inside,
-                optional_number(c.observed_fraction),
-                pair(c.whole_cohort)
-            )
-        },
-    );
-    let reasons = s
-        .unresolved_by_reason
-        .iter()
-        .map(|(reason, n)| format!("{}:{n}", js(missing_name(*reason))))
-        .collect::<Vec<_>>()
-        .join(",");
+    let coverage = coverage_json(s.coverage);
+    let reasons = unresolved_json(&s.unresolved_by_reason);
     format!(
         "{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"unresolved_by_reason\":{{{reasons}}},\"bounds_kind\":\"whole_cohort_completion_bounds_not_confidence_intervals\",\"coverage\":{coverage},\"crps\":{},\"interval_score\":{},\"brier\":{}{event_log},\"effective_n\":{{\"lower\":{},\"upper\":{},\"correlation_range\":{}}},\"mean_standardized_bias\":{},\"calibration_flag\":{}}}",
         s.n_members,

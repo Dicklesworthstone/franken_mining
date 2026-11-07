@@ -9,7 +9,10 @@ use fmine_calib::{Assessment, ScoreSummary};
 use fmine_core::ObjectId;
 use fmine_evidence::Refusal;
 
-use super::{Replay, Row, js, missing_name, optional_number, pair, score_json, selector_name, utc};
+use super::{
+    Replay, Row, coverage_json, display_or, js, missing_name, optional_number, score_json,
+    selector_name, unresolved_json, utc,
+};
 
 pub(super) const FIELDS: [&str; 7] = [
     "family",
@@ -77,23 +80,8 @@ fn ids(members: &[ObjectId]) -> String {
 }
 
 fn summary_json(summary: &DescriptiveSummary) -> String {
-    let reasons = summary
-        .unresolved_by_reason
-        .iter()
-        .map(|(reason, n)| format!("{}:{n}", js(missing_name(*reason))))
-        .collect::<Vec<_>>()
-        .join(",");
-    let coverage = summary.coverage.map_or_else(
-        || "null".into(),
-        |coverage| {
-            format!(
-                "{{\"inside\":{},\"observed_fraction\":{},\"whole_cohort\":{}}}",
-                coverage.inside,
-                optional_number(coverage.observed_fraction),
-                pair(coverage.whole_cohort),
-            )
-        },
-    );
+    let reasons = unresolved_json(&summary.unresolved_by_reason);
+    let coverage = coverage_json(summary.coverage);
     let event_log = summary.event_log.map_or_else(|| "null".into(), |log| format!(
         "{{\"probability_floor\":{},\"units\":\"nats\",\"strictly_proper\":false,\"score\":{}}}",
         log.probability_floor, score_json(Some(log.score)),
@@ -147,14 +135,9 @@ fn score_markdown(out: &mut String, name: &str, score: Option<ScoreSummary>, uni
             out,
             "| {name} | {} | {} | {} | {} | {} |",
             score.n_scored,
-            score
-                .observed_mean
-                .map_or_else(|| "unscored".into(), |value| value.to_string()),
+            display_or(score.observed_mean, "unscored"),
             score.whole_cohort.lower,
-            score
-                .whole_cohort
-                .upper
-                .map_or_else(|| "unbounded".into(), |value| value.to_string()),
+            display_or(score.whole_cohort.upper, "unbounded"),
             crate::guidance::text(unit),
         );
     }
@@ -206,9 +189,7 @@ pub(super) fn assessment_markdown(
                 out,
                 "Interval hits: {}. Observed fraction: {}. Full-segment coverage completion bounds: [{}, {}].\n",
                 coverage.inside,
-                coverage
-                    .observed_fraction
-                    .map_or_else(|| "unscored".into(), |value| value.to_string()),
+                display_or(coverage.observed_fraction, "unscored"),
                 coverage.whole_cohort.0,
                 coverage.whole_cohort.1,
             );

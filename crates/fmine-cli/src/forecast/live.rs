@@ -18,8 +18,9 @@ use fmine_registry::toml_subset::{TomlDoc, TomlValue};
 use fmine_runtime::{HostWallClock, WallClock};
 
 use super::{
-    Assessment, AssessmentFailure, MemberOutcome, Replay, Row, absent, cohort_json, invalid, js,
-    missing, missing_name, parse_subset, payload_json, selection, selector_name, time, utc,
+    Assessment, AssessmentFailure, MemberOutcome, Replay, Row, absent, cohort_json, display_or,
+    invalid, js, missing, missing_name, parse_subset, payload_json, selection, selector_name,
+    time, utc,
 };
 use crate::{DOCTOR_WHY, Envelope, NextAction};
 
@@ -45,44 +46,31 @@ pub struct TimestampProof {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationVersion {
-    LegacyV1,
-    V2,
-    V3,
-    V4,
-    V5,
-    V6,
-    V7,
+    LegacyV1 = 0,
+    V2 = 1,
+    V3 = 2,
+    V4 = 3,
+    V5 = 4,
+    V6 = 5,
+    V7 = 6,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
     if doc.top.is_empty() {
-        Ok(OperationVersion::LegacyV1)
-    } else if doc.top.len() == 1
-        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V2_SCHEMA)
-    {
-        Ok(OperationVersion::V2)
-    } else if doc.top.len() == 1
-        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V3_SCHEMA)
-    {
-        Ok(OperationVersion::V3)
-    } else if doc.top.len() == 1
-        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V4_SCHEMA)
-    {
-        Ok(OperationVersion::V4)
-    } else if doc.top.len() == 1
-        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V5_SCHEMA)
-    {
-        Ok(OperationVersion::V5)
-    } else if doc.top.len() == 1
-        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V6_SCHEMA)
-    {
-        Ok(OperationVersion::V6)
-    } else if doc.top.len() == 1
-        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V7_SCHEMA)
-    {
-        Ok(OperationVersion::V7)
-    } else {
-        Err(invalid("unknown stored forecast operation schema"))
+        return Ok(OperationVersion::LegacyV1);
+    }
+    let schema = doc.top_get("schema").filter(|_| doc.top.len() == 1);
+    match schema.map(|field| &field.value) {
+        Some(TomlValue::Str(schema)) => match schema.as_str() {
+            V2_SCHEMA => Ok(OperationVersion::V2),
+            V3_SCHEMA => Ok(OperationVersion::V3),
+            V4_SCHEMA => Ok(OperationVersion::V4),
+            V5_SCHEMA => Ok(OperationVersion::V5),
+            V6_SCHEMA => Ok(OperationVersion::V6),
+            V7_SCHEMA => Ok(OperationVersion::V7),
+            _ => Err(invalid("unknown stored forecast operation schema")),
+        },
+        _ => Err(invalid("unknown stored forecast operation schema")),
     }
 }
 
@@ -388,15 +376,7 @@ fn perform(
         let assessment = apply(&mut state, record, header, Some(table))?;
         // New opt-in policies retain distinct versions; older operation meanings stay frozen.
         let mut versions = previous.versions;
-        match version {
-            OperationVersion::LegacyV1 => versions.legacy_v1 += 1,
-            OperationVersion::V2 => versions.v2 += 1,
-            OperationVersion::V3 => versions.v3 += 1,
-            OperationVersion::V4 => versions.v4 += 1,
-            OperationVersion::V5 => versions.v5 += 1,
-            OperationVersion::V6 => versions.v6 += 1,
-            OperationVersion::V7 => versions.v7 += 1,
-        }
+        versions.record(version);
         let report_origin = match (previous.report_origin, assessment.as_ref()) {
             (Some(origin), _) => Some(origin),
             (None, Some(_)) => Some(ReportOrigin {
@@ -724,6 +704,32 @@ fn source_missing_request(
     Ok(request)
 }
 
+fn publication_metadata(row: &Row<'_>) -> Result<(String, String, i64), Refusal> {
+    let published_at = row.string("published_at")?.to_string();
+    if !fmine_registry::sources::is_date(&published_at) {
+        return Err(invalid("source publication date must be YYYY-MM-DD"));
+    }
+    let publication_start = time(&format!("{published_at}T00:00:00Z"))?;
+    let published_at_basis = row.string("published_at_basis")?;
+    if !fmine_registry::sources::PUBLISHED_AT_BASES
+        .iter()
+        .any(|prefix| {
+            published_at_basis
+                .strip_prefix(prefix)
+                .is_some_and(|detail| !detail.trim().is_empty())
+        })
+    {
+        return Err(invalid(
+            "publication basis needs FACT: or INFERENCE: followed by its evidence",
+        ));
+    }
+    Ok((
+        published_at,
+        published_at_basis.to_string(),
+        publication_start,
+    ))
+}
+
 fn apply_source(
     state: &mut Replay,
     row: Row<'_>,
@@ -800,24 +806,7 @@ fn apply_source(
             "printed source value differs from its exact rational",
         ));
     }
-    let published_at = row.string("published_at")?.to_string();
-    if !fmine_registry::sources::is_date(&published_at) {
-        return Err(invalid("source publication date must be YYYY-MM-DD"));
-    }
-    let publication_start = time(&format!("{published_at}T00:00:00Z"))?;
-    let published_at_basis = row.string("published_at_basis")?;
-    if !fmine_registry::sources::PUBLISHED_AT_BASES
-        .iter()
-        .any(|prefix| {
-            published_at_basis
-                .strip_prefix(prefix)
-                .is_some_and(|detail| !detail.trim().is_empty())
-        })
-    {
-        return Err(invalid(
-            "publication basis needs FACT: or INFERENCE: followed by its evidence",
-        ));
-    }
+    let (published_at, published_at_basis, publication_start) = publication_metadata(&row)?;
     if policy.metric.is_production() && exact.num() < 0 {
         return Err(invalid("production cannot be negative"));
     }
@@ -888,7 +877,7 @@ fn apply_source(
             claim,
             value: SourceAdmissionValue::Numeric { exact, displayed },
             published_at,
-            published_at_basis: published_at_basis.to_string(),
+            published_at_basis,
         },
     );
     Ok(())
@@ -945,24 +934,7 @@ fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> R
             "registered source dashes map only to not_published",
         ));
     }
-    let published_at = row.string("published_at")?.to_string();
-    if !fmine_registry::sources::is_date(&published_at) {
-        return Err(invalid("source publication date must be YYYY-MM-DD"));
-    }
-    let publication_start = time(&format!("{published_at}T00:00:00Z"))?;
-    let published_at_basis = row.string("published_at_basis")?;
-    if !fmine_registry::sources::PUBLISHED_AT_BASES
-        .iter()
-        .any(|prefix| {
-            published_at_basis
-                .strip_prefix(prefix)
-                .is_some_and(|detail| !detail.trim().is_empty())
-        })
-    {
-        return Err(invalid(
-            "publication basis needs FACT: or INFERENCE: followed by its evidence",
-        ));
-    }
+    let (published_at, published_at_basis, publication_start) = publication_metadata(&row)?;
     let available_ns = publication_start
         .checked_add(86_400_000_000_000)
         .ok_or_else(|| invalid("publication availability overflows"))?;
@@ -1020,7 +992,7 @@ fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> R
                 reason,
             },
             published_at,
-            published_at_basis: published_at_basis.to_string(),
+            published_at_basis,
         },
     );
     Ok(())
@@ -1248,22 +1220,15 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts {
-    legacy_v1: usize,
-    v2: usize,
-    v3: usize,
-    v4: usize,
-    v5: usize,
-    v6: usize,
-    v7: usize,
-}
+struct VersionCounts([usize; 7]);
 
 impl VersionCounts {
+    fn record(&mut self, version: OperationVersion) {
+        self.0[version as usize] += 1;
+    }
+
     fn policy(self) -> &'static str {
-        match (
-            self.legacy_v1,
-            self.v2 + self.v3 + self.v4 + self.v5 + self.v6 + self.v7,
-        ) {
+        match (self.0[0], self.0[1..].iter().sum::<usize>()) {
             (0, 0) => "none",
             (_, 0) => "legacy_observed",
             (0, _) => "clock_upper_bound",
@@ -1281,35 +1246,14 @@ impl VersionCounts {
     }
 
     fn fields(self) -> String {
-        let v3 = if self.v3 == 0 {
-            String::new()
-        } else {
-            format!(",\"v3\":{}", self.v3)
-        };
-        let v4 = if self.v4 == 0 {
-            String::new()
-        } else {
-            format!(",\"v4\":{}", self.v4)
-        };
-        let v5 = if self.v5 == 0 {
-            String::new()
-        } else {
-            format!(",\"v5\":{}", self.v5)
-        };
-        let v6 = if self.v6 == 0 {
-            String::new()
-        } else {
-            format!(",\"v6\":{}", self.v6)
-        };
-        let v7 = if self.v7 == 0 {
-            String::new()
-        } else {
-            format!(",\"v7\":{}", self.v7)
-        };
+        let mut counts = format!("\"legacy_v1\":{},\"v2\":{}", self.0[0], self.0[1]);
+        for (index, count) in self.0.iter().enumerate().skip(2) {
+            if *count != 0 {
+                let _ = write!(counts, ",\"v{}\":{count}", index + 1);
+            }
+        }
         format!(
-            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}{v4}{v5}{v6}{v7}}},\"record_time_policy\":{}",
-            self.legacy_v1,
-            self.v2,
+            "\"operation_version_counts\":{{{counts}}},\"record_time_policy\":{}",
             js(self.policy())
         )
     }
@@ -1343,15 +1287,7 @@ fn version_counts(
             continue;
         };
         let doc = parse_subset(request).map_err(|e| invalid(e.to_string()))?;
-        match operation_version(&doc)? {
-            OperationVersion::LegacyV1 => counts.legacy_v1 += 1,
-            OperationVersion::V2 => counts.v2 += 1,
-            OperationVersion::V3 => counts.v3 += 1,
-            OperationVersion::V4 => counts.v4 += 1,
-            OperationVersion::V5 => counts.v5 += 1,
-            OperationVersion::V6 => counts.v6 += 1,
-            OperationVersion::V7 => counts.v7 += 1,
-        }
+        counts.record(operation_version(&doc)?);
         if doc
             .rows
             .first()
@@ -1593,7 +1529,7 @@ fn markdown(
             }) {
                 continue;
             }
-            let alias = state.aliases.get(id).map_or("unknown", String::as_str);
+            let alias = state.alias(*id);
             let value = match &source.value {
                 SourceAdmissionValue::Numeric { exact, .. } => {
                     format!("{}/{}", exact.num(), exact.den())
@@ -1646,10 +1582,7 @@ fn markdown(
             report.digest.to_hex(),
         );
         for member in &report.per_member {
-            let alias = state
-                .aliases
-                .get(&member.forecast_id)
-                .map_or("unknown", String::as_str);
+            let alias = state.alias(member.forecast_id);
             let outcome = match &member.outcome {
                 MemberOutcome::Resolved {
                     value, citation, ..
@@ -1682,14 +1615,9 @@ fn markdown(
                 log.probability_floor,
                 score.n_scored,
                 report.summary.n_members,
-                score
-                    .observed_mean
-                    .map_or_else(|| "unscored".into(), |value| value.to_string()),
+                display_or(score.observed_mean, "unscored"),
                 score.whole_cohort.lower,
-                score
-                    .whole_cohort
-                    .upper
-                    .map_or_else(|| "unbounded".into(), |value| value.to_string()),
+                display_or(score.whole_cohort.upper, "unbounded"),
             );
         }
         if let Some(monitor) = &report.coverage_monitor {
@@ -1706,17 +1634,12 @@ fn markdown(
                 snapshot.log_e_value,
                 snapshot.max_log_e_value,
                 snapshot.log_threshold,
-                snapshot
-                    .first_crossing
-                    .map_or_else(|| "none".into(), |n| n.to_string()),
+                display_or(snapshot.first_crossing, "none"),
                 snapshot.alarmed(),
             );
             for (index, observation) in monitor.observations.iter().enumerate() {
                 let member = &observation.member;
-                let alias = state
-                    .aliases
-                    .get(&member.forecast_id)
-                    .map_or("unknown", String::as_str);
+                let alias = state.alias(member.forecast_id);
                 if let MemberOutcome::Resolved {
                     value, citation, ..
                 } = &member.outcome
@@ -1749,10 +1672,7 @@ fn markdown(
                 }
             }
             if let Some(blocker) = &monitor.blocked_by {
-                let alias = state
-                    .aliases
-                    .get(&blocker.forecast_id)
-                    .map_or("unknown", String::as_str);
+                let alias = state.alias(blocker.forecast_id);
                 let event = blocker
                     .selected_event
                     .map_or_else(|| "none".into(), |(_, digest)| digest.to_hex());

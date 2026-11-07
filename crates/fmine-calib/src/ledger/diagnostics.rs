@@ -489,6 +489,24 @@ mod tests {
         }
     }
 
+    fn diagnostics(
+        ledger: &mut ForecastLedger,
+        cohort: Digest32,
+        as_of_ns: i64,
+        selector: OutcomeSelector,
+    ) -> AssessmentDiagnostics {
+        let parent = ledger.assess(cohort, as_of_ns, selector).unwrap().digest;
+        ledger.assessment_diagnostics(parent).unwrap()
+    }
+
+    fn member(report: &AssessmentDiagnostics, id: ObjectId) -> &DiagnosticMember {
+        report
+            .members
+            .iter()
+            .find(|item| item.member.forecast_id == id)
+            .unwrap()
+    }
+
     #[test]
     fn non_empirical_diagnostics_match_the_prior_v1_wire_layout() {
         for (payload, probability) in [
@@ -624,11 +642,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let item = report
-                .members
-                .iter()
-                .find(|m| m.member.forecast_id == ids[index])
-                .unwrap();
+            let item = member(&report, ids[index]);
             assert_eq!(
                 item.value,
                 DiagnosticValue::EmpiricalRank {
@@ -642,11 +656,7 @@ mod tests {
             );
         }
         for (index, selected_event) in [(6, true), (7, false)] {
-            let item = report
-                .members
-                .iter()
-                .find(|m| m.member.forecast_id == ids[index])
-                .unwrap();
+            let item = member(&report, ids[index]);
             assert_eq!(
                 item.value,
                 DiagnosticValue::EmpiricalRank {
@@ -716,11 +726,7 @@ mod tests {
             let (mut ledger, ids, cohort) =
                 build_ledger(vec![ForecastPayload::Empirical { samples }]);
             publish(&mut ledger, ids[0], 7.0);
-            let parent = ledger
-                .assess(cohort, 101, OutcomeSelector::FirstPublished)
-                .unwrap()
-                .digest;
-            let report = ledger.assessment_diagnostics(parent).unwrap();
+            let report = diagnostics(&mut ledger, cohort, 101, OutcomeSelector::FirstPublished);
             assert_eq!(
                 report.members[0].value,
                 DiagnosticValue::EmpiricalRank {
@@ -752,11 +758,7 @@ mod tests {
             let (mut ledger, ids, cohort) =
                 build_ledger(vec![ForecastPayload::Empirical { samples }]);
             publish(&mut ledger, ids[0], 0.0);
-            let parent = ledger
-                .assess(cohort, 101, OutcomeSelector::FirstPublished)
-                .unwrap()
-                .digest;
-            ledger.assessment_diagnostics(parent).unwrap()
+            diagnostics(&mut ledger, cohort, 101, OutcomeSelector::FirstPublished)
         });
         assert_eq!(reports[0].empirical_rank, reports[1].empirical_rank);
         assert_eq!(reports[0].members[0].value, reports[1].members[0].value);
@@ -804,23 +806,11 @@ mod tests {
                 },
             )
             .unwrap();
-        let latest = ledger
-            .assess(cohort, 103, OutcomeSelector::LatestAsOf)
-            .unwrap()
-            .digest;
-        let changed = ledger.assessment_diagnostics(latest).unwrap();
+        let changed = diagnostics(&mut ledger, cohort, 103, OutcomeSelector::LatestAsOf);
         assert_ne!(changed.digest, saved.digest);
         assert_eq!(changed.empirical_rank.as_ref().unwrap().n_unresolved, 0);
-        let original = saved
-            .members
-            .iter()
-            .find(|m| m.member.forecast_id == ids[0])
-            .unwrap();
-        let revised = changed
-            .members
-            .iter()
-            .find(|m| m.member.forecast_id == ids[0])
-            .unwrap();
+        let original = member(&saved, ids[0]);
+        let revised = member(&changed, ids[0]);
         assert!(
             matches!(&original.member.outcome, MemberOutcome::Resolved { citation, .. } if citation.vintage == "original")
         );
@@ -835,16 +825,8 @@ mod tests {
                 .canonical_bytes(),
             old_bytes
         );
-        let first = ledger
-            .assess(cohort, 103, OutcomeSelector::FirstPublished)
-            .unwrap()
-            .digest;
-        let first = ledger.assessment_diagnostics(first).unwrap();
-        let item = first
-            .members
-            .iter()
-            .find(|m| m.member.forecast_id == ids[0])
-            .unwrap();
+        let first = diagnostics(&mut ledger, cohort, 103, OutcomeSelector::FirstPublished);
+        let item = member(&first, ids[0]);
         assert_eq!(item.value, original.value);
         assert_eq!(item.member.selected_event, original.member.selected_event);
     }
@@ -883,21 +865,13 @@ mod tests {
             ids.iter()
                 .zip([0.158_655_253_931_457_07, 0.5, 0.841_344_746_068_542_9])
         {
-            let item = report
-                .members
-                .iter()
-                .find(|item| item.member.forecast_id == *id)
-                .unwrap();
+            let item = member(&report, *id);
             let DiagnosticValue::GaussianPit(Some(actual)) = item.value else {
                 panic!("resolved Gaussian");
             };
             assert!((actual - expected).abs() < 7.5e-8);
         }
-        let pending = report
-            .members
-            .iter()
-            .find(|item| item.member.forecast_id == ids[3])
-            .unwrap();
+        let pending = member(&report, ids[3]);
         assert_eq!(pending.value, DiagnosticValue::GaussianPit(None));
         assert!(pending.member.selected_event.is_some());
         assert!(report.bernoulli_reliability.is_none());
@@ -921,11 +895,7 @@ mod tests {
         for (index, value) in [(0, 1.0), (1, 0.0), (3, 0.0), (4, 1.0)] {
             publish(&mut ledger, ids[index], value);
         }
-        let parent = ledger
-            .assess(cohort, 101, OutcomeSelector::FirstPublished)
-            .unwrap()
-            .digest;
-        let report = ledger.assessment_diagnostics(parent).unwrap();
+        let report = diagnostics(&mut ledger, cohort, 101, OutcomeSelector::FirstPublished);
         let diagram = report.bernoulli_reliability.unwrap();
         assert_eq!(
             (diagram.n_members, diagram.n_resolved, diagram.n_unresolved),
@@ -964,11 +934,7 @@ mod tests {
         let (mut ledger, ids, cohort) = build_ledger(vec![gaussian(); 2]);
         publish(&mut ledger, ids[0], -90.0);
         publish(&mut ledger, ids[1], 110.0);
-        let parent = ledger
-            .assess(cohort, 101, OutcomeSelector::FirstPublished)
-            .unwrap()
-            .digest;
-        let report = ledger.assessment_diagnostics(parent).unwrap();
+        let report = diagnostics(&mut ledger, cohort, 101, OutcomeSelector::FirstPublished);
         let pit = report.gaussian_pit.unwrap();
         assert_eq!(pit.bins[0].count, 1);
         assert_eq!(pit.bins[9].count, 1);
@@ -978,11 +944,8 @@ mod tests {
     fn newer_outcomes_and_restatements_cannot_rewrite_saved_diagnostics() {
         let (mut ledger, ids, cohort) = build_ledger(vec![gaussian(); 2]);
         publish(&mut ledger, ids[0], 10.0);
-        let old = ledger
-            .assess(cohort, 101, OutcomeSelector::LatestAsOf)
-            .unwrap()
-            .digest;
-        let original = ledger.assessment_diagnostics(old).unwrap();
+        let original = diagnostics(&mut ledger, cohort, 101, OutcomeSelector::LatestAsOf);
+        let old = original.assessment_digest;
         ledger
             .append_outcome(
                 ids[0],
@@ -1006,11 +969,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let new = ledger
-            .assess(cohort, 103, OutcomeSelector::LatestAsOf)
-            .unwrap()
-            .digest;
-        let latest = ledger.assessment_diagnostics(new).unwrap();
+        let latest = diagnostics(&mut ledger, cohort, 103, OutcomeSelector::LatestAsOf);
         assert_ne!(latest.digest, original.digest);
         assert_eq!(ledger.assessment_diagnostics(old).unwrap(), original);
         assert_eq!(latest.gaussian_pit.unwrap().n_unresolved, 0);
@@ -1031,20 +990,11 @@ mod tests {
         ]);
         publish(&mut ledger, ids[0], 10.0);
         publish(&mut ledger, ids[1], 10.0);
-        let parent = ledger
-            .assess(cohort, 101, OutcomeSelector::FirstPublished)
-            .unwrap()
-            .digest;
-        let report = ledger.assessment_diagnostics(parent).unwrap();
+        let report = diagnostics(&mut ledger, cohort, 101, OutcomeSelector::FirstPublished);
         assert_eq!(report.members.len(), 2);
-        assert_eq!(report.gaussian_pit.unwrap().n_members, 1);
+        assert_eq!(report.gaussian_pit.as_ref().unwrap().n_members, 1);
         assert_eq!(
-            report
-                .members
-                .iter()
-                .find(|item| item.member.forecast_id == ids[1])
-                .unwrap()
-                .value,
+            member(&report, ids[1]).value,
             DiagnosticValue::EmpiricalRank {
                 n_samples: 3,
                 counts: Some(EmpiricalRankCounts {
@@ -1060,11 +1010,7 @@ mod tests {
             levels: vec![0.1, 0.9],
             values: vec![0.0, 1.0],
         }]);
-        let parent = ledger
-            .assess(cohort, 3, OutcomeSelector::FirstPublished)
-            .unwrap()
-            .digest;
-        let report = ledger.assessment_diagnostics(parent).unwrap();
+        let report = diagnostics(&mut ledger, cohort, 3, OutcomeSelector::FirstPublished);
         assert!(report.gaussian_pit.is_none());
         assert!(report.bernoulli_reliability.is_none());
         assert_eq!(

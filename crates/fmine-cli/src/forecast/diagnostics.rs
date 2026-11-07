@@ -9,7 +9,7 @@ use fmine_calib::ledger::diagnostics::{
 };
 use fmine_evidence::Refusal;
 
-use super::{Replay, js, optional_number, pair, selector_name, utc};
+use super::{Replay, display_or, js, optional_number, pair, selector_name, utc};
 
 pub(super) const ROBOT_DOCS_JSON: &str = r#"{"scope":"Read-only descriptive projection of a saved assessment; no new outcomes or authority time","gaussian":"Per-member PIT and fixed-decile histogram via the existing normal CDF, retaining approximate values and tail saturation","bernoulli":"Fixed probability bins with full and resolved mean probabilities, observed event frequencies and unresolved-outcome completion bounds","empirical":"Exact below/equal/above sample counts and closed CDF bounds [below/n,(below+equal)/n]; separate definite/possible decile counts retain ties and missing outcomes without randomized PIT or a uniformity claim","bins":"[lower,upper), with 1 included in the final bin; exact edges go right; empirical fractions and bin tests use integers","missing":"Every unresolved and unsupported member remains explicit; empty-bin averages are null, never zero","identity":"Separate DGN1/v2 when empirical members exist, otherwise unchanged DGN1/v1; binds the exact parent assessment and diagnostic results without changing prior journal/cohort/assessment bytes","interpretation":"Descriptive only; no calibration verdict, independence estimate, confidence interval or predictive-skill claim"}"#;
 
@@ -113,10 +113,6 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
     ))
 }
 
-fn value(number: Option<f64>) -> String {
-    number.map_or_else(|| "unavailable".into(), |value| value.to_string())
-}
-
 pub(super) fn assessment_markdown(
     out: &mut String,
     state: &Replay,
@@ -168,9 +164,9 @@ pub(super) fn assessment_markdown(
                 bin.n_resolved,
                 bin.n_members,
                 bin.n_events,
-                value(bin.mean_probability),
-                value(bin.mean_resolved_probability),
-                value(bin.observed_frequency),
+                display_or(bin.mean_probability, "unavailable"),
+                display_or(bin.mean_resolved_probability, "unavailable"),
+                display_or(bin.observed_frequency, "unavailable"),
                 bounds
             );
         }
@@ -200,7 +196,9 @@ pub(super) fn assessment_markdown(
     out.push_str("\n### Diagnostic membership\n\nEach forecast retains the exact selected outcome and source shown in the parent assessment. Unsupported distributions are not dropped or assigned an invented CDF.\n\n| Forecast | Diagnostic | Value |\n|---|---|---|\n");
     for item in &diagnostics.members {
         let (kind, value) = match &item.value {
-            DiagnosticValue::GaussianPit(pit) => ("Gaussian PIT".into(), value(*pit)),
+            DiagnosticValue::GaussianPit(pit) => {
+                ("Gaussian PIT".into(), display_or(*pit, "unavailable"))
+            }
             DiagnosticValue::EventProbability(probability) => {
                 ("Bernoulli probability".into(), probability.to_string())
             }
@@ -224,10 +222,7 @@ pub(super) fn assessment_markdown(
                 (format!("unsupported ({kind})"), "unavailable".into())
             }
         };
-        let alias = state
-            .aliases
-            .get(&item.member.forecast_id)
-            .map_or("unknown", String::as_str);
+        let alias = state.alias(item.member.forecast_id);
         let _ = writeln!(
             out,
             "| {} (`{}`) | {} | {} |",
@@ -247,71 +242,95 @@ mod tests {
     use fmine_calib::OutcomeSelector;
     use fmine_core::hash::Digest32;
 
-    #[test]
-    fn empirical_renderers_keep_exact_ties_missing_counts_and_separate_gaussian_population() {
-        let mut state = Replay::parse(
-            r#"
-schema = "fmine.forecast-ledger.v1"
-lane = "synthetic"
-[[forecast]]
-id = "tied"
+    fn fixture(
+        name: &str,
+        rule: &str,
+        locator: &str,
+        forecasts: &[(&str, u8, &str)],
+        outcomes: &[(&str, &str)],
+    ) -> (Replay, Assessment) {
+        let mut ledger =
+            String::from("schema = \"fmine.forecast-ledger.v1\"\nlane = \"synthetic\"\n");
+        for (id, due_day, payload) in forecasts {
+            let _ = writeln!(
+                ledger,
+                r#"[[forecast]]
+id = "{id}"
 model_key = "synthetic-model"
 registered_at = "2026-01-01T00:00:00Z"
-outcome_due = "2026-02-01T00:00:00Z"
-kind = "empirical"
-samples = "8,10,10,12"
-[[forecast]]
-id = "missing"
-model_key = "synthetic-model"
-registered_at = "2026-01-01T00:00:00Z"
-outcome_due = "2026-02-01T00:00:00Z"
-kind = "empirical"
-samples = "10,10,10,10"
-[[forecast]]
-id = "normal"
-model_key = "synthetic-model"
-registered_at = "2026-01-01T00:00:00Z"
-outcome_due = "2026-02-01T00:00:00Z"
-kind = "gaussian"
-mean = "10"
-std_dev = "2"
-[[cohort]]
-name = "mixed"
+outcome_due = "2026-02-{due_day:02}T00:00:00Z"
+{payload}"#
+            );
+        }
+        let members = forecasts
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect::<Vec<_>>()
+            .join(",");
+        let _ = writeln!(
+            ledger,
+            r#"[[cohort]]
+name = "{name}"
 frozen_at = "2026-01-02T00:00:00Z"
-members = "tied,missing,normal"
-resolution_rule = "synthetic continuous outcome"
-eligible_sources = "synthetic"
-[[outcome]]
-forecast = "tied"
+members = "{members}"
+resolution_rule = "{rule}"
+eligible_sources = "synthetic""#
+        );
+        for (forecast, value) in outcomes {
+            let _ = writeln!(
+                ledger,
+                r#"[[outcome]]
+forecast = "{forecast}"
 available_at = "2026-02-01T00:00:01Z"
 recorded_at = "2026-02-01T00:00:01Z"
 kind = "published"
-value = "10"
+value = "{value}"
 source = "synthetic"
 vintage = "first"
-locator = "synthetic:whole"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
-[[outcome]]
-forecast = "normal"
-available_at = "2026-02-01T00:00:01Z"
-recorded_at = "2026-02-01T00:00:01Z"
-kind = "published"
-value = "10"
-source = "synthetic"
-vintage = "first"
-locator = "synthetic:whole"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
-"#,
-        )
-        .unwrap();
+locator = "{locator}"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000001""#
+            );
+        }
+        let mut state = Replay::parse(&ledger).unwrap();
         let report = state
             .assessment(
-                "mixed",
+                name,
                 time("2026-02-01T00:00:02Z").unwrap(),
                 OutcomeSelector::FirstPublished,
             )
             .unwrap();
-        let json = assessment_json(&state, &report).unwrap();
+        (state, report)
+    }
+
+    fn render(state: &Replay, report: &Assessment) -> (String, String) {
+        let json = assessment_json(state, report).unwrap();
+        let mut markdown = String::new();
+        assessment_markdown(&mut markdown, state, report).unwrap();
+        assert!(json.contains("\"selected_event\":{\"seq\":1,"));
+        assert!(!json.contains("\"calibration_flag\""));
+        assert!(
+            state
+                .render(report, Digest32::default())
+                .unwrap()
+                .contains(&json)
+        );
+        (json, markdown)
+    }
+
+    #[test]
+    fn empirical_renderers_keep_exact_ties_missing_counts_and_separate_gaussian_population() {
+        let (state, report) = fixture(
+            "mixed",
+            "synthetic continuous outcome",
+            "synthetic:whole",
+            &[
+                ("tied", 1, "kind = \"empirical\"\nsamples = \"8,10,10,12\""),
+                ("missing", 1, "kind = \"empirical\"\nsamples = \"10,10,10,10\""),
+                ("normal", 1, "kind = \"gaussian\"\nmean = \"10\"\nstd_dev = \"2\""),
+            ],
+            &[("tied", "10"), ("normal", "10")],
+        );
+        let (json, markdown) = render(&state, &report);
         assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v2\""));
         assert!(json.contains("\"gaussian_pit\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"));
         assert!(json.contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"));
@@ -328,71 +347,27 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
             "\"whole_population_fraction\":{\"lower\":{\"num\":0,\"den\":2},",
             "\"upper\":{\"num\":2,\"den\":2}}"
         )));
-        assert!(json.contains("\"selected_event\":{\"seq\":1,"));
         assert!(json.contains("synthetic:whole"));
-        assert!(!json.contains("\"calibration_flag\""));
-        let mut markdown = String::new();
-        assessment_markdown(&mut markdown, &state, &report).unwrap();
         assert!(markdown.contains("### Empirical CDF rank intervals"));
         assert!(markdown.contains("Empirical population: 2; resolved: 1; unresolved: 1."));
         assert!(markdown.contains("[1/4, 3/4] (below 1; equal 2; above 1)"));
         assert!(markdown.contains("unavailable (n=4)"));
         assert!(markdown.contains("no randomized PIT, uniformity or calibration"));
-        assert!(
-            state
-                .render(&report, Digest32::default())
-                .unwrap()
-                .contains(&json)
-        );
     }
 
     #[test]
     fn renderers_retain_sources_missing_members_and_descriptive_boundaries() {
-        let mut state = Replay::parse(
-            r#"
-schema = "fmine.forecast-ledger.v1"
-lane = "synthetic"
-[[forecast]]
-id = "hit"
-model_key = "synthetic-model"
-registered_at = "2026-01-01T00:00:00Z"
-outcome_due = "2026-02-01T00:00:00Z"
-kind = "bernoulli"
-probability = "0.15"
-[[forecast]]
-id = "pending"
-model_key = "synthetic-model"
-registered_at = "2026-01-01T00:00:00Z"
-outcome_due = "2026-02-02T00:00:00Z"
-kind = "bernoulli"
-probability = "0.19"
-[[cohort]]
-name = "events"
-frozen_at = "2026-01-02T00:00:00Z"
-members = "hit,pending"
-resolution_rule = "synthetic binary event"
-eligible_sources = "synthetic"
-[[outcome]]
-forecast = "hit"
-available_at = "2026-02-01T00:00:01Z"
-recorded_at = "2026-02-01T00:00:01Z"
-kind = "published"
-value = "1"
-source = "synthetic"
-vintage = "first"
-locator = "synthetic:whole-event"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
-"#,
-        )
-        .unwrap();
-        let report = state
-            .assessment(
-                "events",
-                time("2026-02-01T00:00:02Z").unwrap(),
-                OutcomeSelector::FirstPublished,
-            )
-            .unwrap();
-        let json = assessment_json(&state, &report).unwrap();
+        let (state, report) = fixture(
+            "events",
+            "synthetic binary event",
+            "synthetic:whole-event",
+            &[
+                ("hit", 1, "kind = \"bernoulli\"\nprobability = \"0.15\""),
+                ("pending", 2, "kind = \"bernoulli\"\nprobability = \"0.19\""),
+            ],
+            &[("hit", "1")],
+        );
+        let (json, markdown) = render(&state, &report);
         assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v1\""));
         assert!(json.contains("\"gaussian_pit\":null"));
         assert!(!json.contains("\"empirical_rank\""));
@@ -400,15 +375,9 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
         assert!(json.contains("\"whole_bin_frequency\":[0.5,1]"));
         assert!(json.contains("synthetic:whole-event"));
         assert!(json.contains("\"reason\":\"pending\""));
-        assert!(json.contains("\"selected_event\":{\"seq\":1,"));
-        assert!(!json.contains("\"calibration_flag\""));
-        let mut markdown = String::new();
-        assessment_markdown(&mut markdown, &state, &report).unwrap();
         assert!(markdown.contains("Bernoulli reliability bins"));
         assert!(markdown.contains("not calibration verdicts"));
         assert!(markdown.contains("pending (`"));
         assert!(markdown.contains(&report.digest.to_hex()));
-        let rendered = state.render(&report, Digest32::default()).unwrap();
-        assert!(rendered.contains(&json));
     }
 }

@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use fmine_calib::record::parse_utc;
+use fmine_calib::record::{parse_hex32, parse_utc};
 use fmine_claim::ClaimId;
 use fmine_claim::reliance::{
     DefectClass, Entry, Header, IssuanceLane, IssuanceRecord, RelianceCheck, RelianceStatus,
@@ -105,18 +105,9 @@ enum Operation {
 }
 
 fn digest(text: &str) -> Result<Digest32, String> {
-    if text.len() != 64
-        || !text
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err("digest must be exactly 64 lowercase hexadecimal characters".to_string());
-    }
-    let mut bytes = [0; 32];
-    for (i, byte) in bytes.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())?;
-    }
-    Ok(Digest32(bytes))
+    parse_hex32(text)
+        .map(Digest32)
+        .ok_or_else(|| "digest must be exactly 64 lowercase hexadecimal characters".to_string())
 }
 
 fn claim(text: &str) -> Result<ClaimId, String> {
@@ -202,38 +193,10 @@ fn parse_operation(
     root: &Path,
     assurance_export: bool,
 ) -> Result<(Command, OutputFormat, PathBuf), String> {
-    let mut fields = BTreeMap::new();
-    let mut words = Vec::new();
-    let mut i = 0;
-    while let Some(arg) = args.get(i) {
-        if arg.starts_with("--") {
-            let value = if matches!(
-                arg.as_str(),
-                "--synthetic"
-                    | "--trust-host-clock"
-                    | "--all-claims"
-                    | "--json"
-                    | "--require-current"
-            ) {
-                String::new()
-            } else {
-                i += 1;
-                let value = args
-                    .get(i)
-                    .ok_or_else(|| format!("missing value for {arg}"))?;
-                if value.starts_with("--") {
-                    return Err(format!("missing value for {arg}"));
-                }
-                value.clone()
-            };
-            if fields.insert(arg.clone(), value).is_some() {
-                return Err(format!("duplicate option {arg}"));
-            }
-        } else {
-            words.push(arg.as_str());
-        }
-        i += 1;
-    }
+    let (mut fields, words) = crate::journal_arguments(
+        args,
+        &["--synthetic", "--trust-host-clock", "--all-claims", "--json", "--require-current"],
+    )?;
     let verb = match words.as_slice() {
         ["reliance", verb] if !assurance_export => *verb,
         ["assure", "public"] if assurance_export => "issue",

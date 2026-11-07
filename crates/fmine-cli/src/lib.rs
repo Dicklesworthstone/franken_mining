@@ -571,6 +571,36 @@ fn verb_hint(args: &[String]) -> &'static str {
     "unknown"
 }
 
+/// Tokenize journal options without interpreting authority, time, or operation-specific values.
+fn journal_arguments<'a>(
+    args: &'a [String],
+    switches: &[&str],
+) -> Result<(std::collections::BTreeMap<String, String>, Vec<&'a str>), String> {
+    let mut fields = std::collections::BTreeMap::new();
+    let mut words = Vec::new();
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if argument.starts_with("--") {
+            let value = if switches.contains(&argument.as_str()) {
+                String::new()
+            } else {
+                index += 1;
+                args.get(index)
+                    .filter(|value| !value.starts_with("--"))
+                    .ok_or_else(|| format!("missing value for {argument}"))?
+                    .clone()
+            };
+            if fields.insert(argument.clone(), value).is_some() {
+                return Err(format!("duplicate option {argument}"));
+            }
+        } else {
+            words.push(argument.as_str());
+        }
+        index += 1;
+    }
+    Ok((fields, words))
+}
+
 fn parse_forecast_journal(
     args: &[String],
     default_root: &Path,
@@ -588,44 +618,12 @@ fn parse_forecast_journal(
     }
 
     fn digest(value: &str) -> Result<Digest32, String> {
-        if value.len() != 64
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err("digest requires 64 lowercase hexadecimal characters".to_string());
-        }
-        let mut bytes = [0; 32];
-        for (i, byte) in bytes.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16)
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(Digest32(bytes))
+        fmine_calib::record::parse_hex32(value)
+            .map(Digest32)
+            .ok_or_else(|| "digest requires 64 lowercase hexadecimal characters".to_string())
     }
 
-    let mut fields = BTreeMap::new();
-    let mut words = Vec::new();
-    let mut index = 0;
-    while let Some(argument) = args.get(index) {
-        if argument.starts_with("--") {
-            let value = if matches!(argument.as_str(), "--json" | "--trust-host-clock") {
-                String::new()
-            } else {
-                index += 1;
-                let value = args
-                    .get(index)
-                    .filter(|value| !value.starts_with("--"))
-                    .ok_or_else(|| format!("missing value for {argument}"))?;
-                value.clone()
-            };
-            if fields.insert(argument.clone(), value).is_some() {
-                return Err(format!("duplicate option {argument}"));
-            }
-        } else {
-            words.push(argument.as_str());
-        }
-        index += 1;
-    }
+    let (mut fields, words) = journal_arguments(args, &["--json", "--trust-host-clock"])?;
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
             "expected forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report"

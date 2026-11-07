@@ -91,11 +91,9 @@ fn monitor_v5_freeze_binds_policy_without_reinterpreting_older_operations() {
         vec![state.forecast_id("one").expect("one")]
     );
     assert!(cohort_json(cohort).contains("\"coverage_monitor\":{\"alarm_alpha\":0.05"));
-    let counts = VersionCounts {
-        v2: 1,
-        v5: 1,
-        ..VersionCounts::default()
-    };
+    let mut counts = VersionCounts::default();
+    counts.record(OperationVersion::V2);
+    counts.record(OperationVersion::V5);
     assert_eq!(counts.policy(), "clock_upper_bound");
     assert!(counts.fields().contains("\"v5\":1"));
 
@@ -331,10 +329,7 @@ fn monitor_markdown_displays_original_intervals_and_the_missing_reason() {
         "assess",
         Some(&assessment),
         4,
-        VersionCounts {
-            v5: 1,
-            ..VersionCounts::default()
-        },
+        VersionCounts([0, 0, 0, 0, 1, 0, 0]),
     )
     .expect("readable saved assessment");
     let monitor = rendered
