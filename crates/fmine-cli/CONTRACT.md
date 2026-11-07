@@ -37,12 +37,17 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Python Fraction oracle exercise C1/AISC arithmetic, source binding and the refusal matrix; this does
   not establish authentic issuer-rate parity or complete the broader BD-061 gate.
 - DESIGN (BD-048/049): forecast assessment JSON and saved-journal Markdown include the calibration
-  kernel's immutable Gaussian PIT and Bernoulli reliability diagnostics. The separate DGN1 digest binds
-  the saved assessment, selected events, source evidence and diagnostic values. Missing members remain in
-  full-population completion bounds; resolved and full probability averages are separate. Empty bins have
-  absent averages, and unsupported distributions remain explicit. `robot-docs.forecast_diagnostics`
-  documents the fixed bin rules and descriptive scope; no calibration verdict or new outcome selection
-  is performed by the surface.
+  kernel's immutable Gaussian PIT, Bernoulli reliability and empirical CDF rank diagnostics. The separate
+  DGN1 digest binds the saved assessment, selected events, source evidence and diagnostic values. Empirical
+  members retain exact below/equal/above counts and closed CDF fractions; unresolved counts remain null.
+  Their decile bins show definite/possible counts and complete-population fraction bounds separately from
+  Gaussian PIT. JSON fractions carry integer numerator/denominator pairs and Markdown prints those ratios.
+  Reports containing empirical members use `fmine.forecast-diagnostics.v2` and DGN1/v2; other diagnostic
+  reports retain their v1 bytes and shape. Parent forecast/cohort/assessment identities remain unchanged.
+  Missing members remain in full-population completion bounds; resolved and full probability averages are
+  separate. Empty bins have absent averages, and unsupported distributions remain explicit.
+  `robot-docs.forecast_diagnostics` documents exact edges, ties and descriptive scope; the surface performs
+  no outcome selection, randomized PIT, uniformity inference or calibration verdict.
 - **Verbs:**
   - DESIGN (BD-176/287): `plant recovery --input <worksheet.toml>` reads the bounded, byte-bound
     `fmine.plant-recovery.v1` worksheet and delegates to `fmine-plant::cards::RecoveryModel`.

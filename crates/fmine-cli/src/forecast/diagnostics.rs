@@ -5,16 +5,28 @@ use std::fmt::Write as _;
 
 use fmine_calib::Assessment;
 use fmine_calib::ledger::diagnostics::{
-    AssessmentDiagnostics, BIN_RULE, DiagnosticValue, PIT_METHOD, SCOPE,
+    AssessmentDiagnostics, BIN_RULE, DiagnosticValue, EMPIRICAL_METHOD, PIT_METHOD, SCOPE,
 };
 use fmine_evidence::Refusal;
 
 use super::{Replay, js, optional_number, pair, selector_name, utc};
 
-pub(super) const ROBOT_DOCS_JSON: &str = r#"{"scope":"Read-only descriptive projection of a saved assessment; no new outcomes or authority time","gaussian":"Per-member PIT and fixed-decile histogram via the existing normal CDF, retaining approximate values and tail saturation","bernoulli":"Fixed probability bins with full and resolved mean probabilities, observed event frequencies and unresolved-outcome completion bounds","bins":"[lower,upper), with 1 included in the final bin; exact edges go right","missing":"Every unresolved and unsupported member remains explicit; empty-bin averages are null, never zero","identity":"Separate DGN1/v1 digest binds the exact parent assessment and all diagnostic results; prior journal/cohort/assessment bytes remain unchanged","interpretation":"Descriptive only; no calibration verdict, independence estimate, confidence interval or predictive-skill claim"}"#;
+pub(super) const ROBOT_DOCS_JSON: &str = r#"{"scope":"Read-only descriptive projection of a saved assessment; no new outcomes or authority time","gaussian":"Per-member PIT and fixed-decile histogram via the existing normal CDF, retaining approximate values and tail saturation","bernoulli":"Fixed probability bins with full and resolved mean probabilities, observed event frequencies and unresolved-outcome completion bounds","empirical":"Exact below/equal/above sample counts and closed CDF bounds [below/n,(below+equal)/n]; separate definite/possible decile counts retain ties and missing outcomes without randomized PIT or a uniformity claim","bins":"[lower,upper), with 1 included in the final bin; exact edges go right; empirical fractions and bin tests use integers","missing":"Every unresolved and unsupported member remains explicit; empty-bin averages are null, never zero","identity":"Separate DGN1/v2 when empirical members exist, otherwise unchanged DGN1/v1; binds the exact parent assessment and diagnostic results without changing prior journal/cohort/assessment bytes","interpretation":"Descriptive only; no calibration verdict, independence estimate, confidence interval or predictive-skill claim"}"#;
 
 fn selected(state: &Replay, report: &Assessment) -> Result<AssessmentDiagnostics, Refusal> {
     state.ledger.assessment_diagnostics(report.digest)
+}
+
+fn fraction(numerator: usize, denominator: usize) -> String {
+    format!("{{\"num\":{numerator},\"den\":{denominator}}}")
+}
+
+fn fraction_bounds(lower: usize, upper: usize, denominator: usize) -> String {
+    format!(
+        "{{\"lower\":{},\"upper\":{}}}",
+        fraction(lower, denominator),
+        fraction(upper, denominator)
+    )
 }
 
 pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<String, Refusal> {
@@ -30,6 +42,25 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
                 ),
                 DiagnosticValue::EventProbability(probability) => {
                     format!("{{\"kind\":\"event_probability\",\"value\":{probability}}}")
+                }
+                DiagnosticValue::EmpiricalRank { n_samples, counts } => {
+                    let fields = counts.map_or_else(
+                        || "\"below\":null,\"equal\":null,\"above\":null,\"cdf_bounds\":null".into(),
+                        |counts| {
+                            format!(
+                                "\"below\":{},\"equal\":{},\"above\":{},\"cdf_bounds\":{}",
+                                counts.below,
+                                counts.equal,
+                                counts.above,
+                                fraction_bounds(
+                                    counts.below,
+                                    counts.below + counts.equal,
+                                    n_samples,
+                                ),
+                            )
+                        },
+                    );
+                    format!("{{\"kind\":\"empirical_rank\",\"n_samples\":{n_samples},{fields}}}")
                 }
                 DiagnosticValue::Unsupported(kind) => format!(
                     "{{\"kind\":\"unsupported\",\"distribution\":{},\"value\":null}}",
@@ -59,8 +90,18 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
         )).collect::<Vec<_>>().join(",");
         format!("{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"bins\":[{bins}]}}", reliability.n_members, reliability.n_resolved, reliability.n_unresolved)
     });
+    let empirical = diagnostics.empirical_rank.as_ref().map_or_else(String::new, |ranks| {
+        let bins = ranks.bins.iter().map(|bin| format!(
+            "{{\"lower\":{},\"upper\":{},\"upper_inclusive\":{},\"resolved_definite_count\":{},\"resolved_possible_count\":{},\"whole_population_fraction\":{}}}",
+            fraction(usize::from(bin.lower_decile), 10), fraction(usize::from(bin.upper_decile), 10),
+            bin.upper_decile == 10, bin.definite_count, bin.possible_count,
+            fraction_bounds(bin.definite_count, bin.possible_count + ranks.n_unresolved, ranks.n_members),
+        )).collect::<Vec<_>>().join(",");
+        format!(",\"empirical_rank\":{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"method\":{},\"bins\":[{bins}]}}", ranks.n_members, ranks.n_resolved, ranks.n_unresolved, js(EMPIRICAL_METHOD))
+    });
+    let version = if diagnostics.empirical_rank.is_some() { 2 } else { 1 };
     Ok(format!(
-        ",\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v1\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli},\"members\":[{members}]}}",
+        ",\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v{version}\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli}{empirical},\"members\":[{members}]}}",
         js(&diagnostics.assessment_digest.to_hex()),
         js(&diagnostics.cohort.to_hex()),
         js(&diagnostics.digest.to_hex()),
@@ -134,6 +175,28 @@ pub(super) fn assessment_markdown(
             );
         }
     }
+    if let Some(ranks) = &diagnostics.empirical_rank {
+        let _ = writeln!(
+            out,
+            "\n### Empirical CDF rank intervals\n\n{EMPIRICAL_METHOD}\n\nEmpirical population: {}; resolved: {}; unresolved: {}. This population is separate from the Gaussian PIT histogram. Fractions retain their exact count denominators.\n\n| Rank bin | Definite resolved | Possible resolved | Whole-population completion bounds |\n|---|---:|---:|---|",
+            ranks.n_members, ranks.n_resolved, ranks.n_unresolved
+        );
+        for bin in &ranks.bins {
+            let _ = writeln!(
+                out,
+                "| [{}/10, {}/10{} | {} | {} | [{}/{}, {}/{}] |",
+                bin.lower_decile,
+                bin.upper_decile,
+                if bin.upper_decile == 10 { "]" } else { ")" },
+                bin.definite_count,
+                bin.possible_count,
+                bin.definite_count,
+                ranks.n_members,
+                bin.possible_count + ranks.n_unresolved,
+                ranks.n_members
+            );
+        }
+    }
     out.push_str("\n### Diagnostic membership\n\nEach forecast retains the exact selected outcome and source shown in the parent assessment. Unsupported distributions are not dropped or assigned an invented CDF.\n\n| Forecast | Diagnostic | Value |\n|---|---|---|\n");
     for item in &diagnostics.members {
         let (kind, value) = match &item.value {
@@ -141,6 +204,22 @@ pub(super) fn assessment_markdown(
             DiagnosticValue::EventProbability(probability) => {
                 ("Bernoulli probability".into(), probability.to_string())
             }
+            DiagnosticValue::EmpiricalRank { n_samples, counts } => (
+                "Empirical CDF bounds".into(),
+                counts.map_or_else(
+                    || format!("unavailable (n={n_samples})"),
+                    |counts| {
+                        format!(
+                            "[{}/{n_samples}, {}/{n_samples}] (below {}; equal {}; above {})",
+                            counts.below,
+                            counts.below + counts.equal,
+                            counts.below,
+                            counts.equal,
+                            counts.above,
+                        )
+                    },
+                ),
+            ),
             DiagnosticValue::Unsupported(kind) => {
                 (format!("unsupported ({kind})"), "unavailable".into())
             }
@@ -167,6 +246,105 @@ mod tests {
     use crate::forecast::{Replay, time};
     use fmine_calib::OutcomeSelector;
     use fmine_core::hash::Digest32;
+
+    #[test]
+    fn empirical_renderers_keep_exact_ties_missing_counts_and_separate_gaussian_population() {
+        let mut state = Replay::parse(
+            r#"
+schema = "fmine.forecast-ledger.v1"
+lane = "synthetic"
+[[forecast]]
+id = "tied"
+model_key = "synthetic-model"
+registered_at = "2026-01-01T00:00:00Z"
+outcome_due = "2026-02-01T00:00:00Z"
+kind = "empirical"
+samples = "8,10,10,12"
+[[forecast]]
+id = "missing"
+model_key = "synthetic-model"
+registered_at = "2026-01-01T00:00:00Z"
+outcome_due = "2026-02-01T00:00:00Z"
+kind = "empirical"
+samples = "10,10,10,10"
+[[forecast]]
+id = "normal"
+model_key = "synthetic-model"
+registered_at = "2026-01-01T00:00:00Z"
+outcome_due = "2026-02-01T00:00:00Z"
+kind = "gaussian"
+mean = "10"
+std_dev = "2"
+[[cohort]]
+name = "mixed"
+frozen_at = "2026-01-02T00:00:00Z"
+members = "tied,missing,normal"
+resolution_rule = "synthetic continuous outcome"
+eligible_sources = "synthetic"
+[[outcome]]
+forecast = "tied"
+available_at = "2026-02-01T00:00:01Z"
+recorded_at = "2026-02-01T00:00:01Z"
+kind = "published"
+value = "10"
+source = "synthetic"
+vintage = "first"
+locator = "synthetic:whole"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
+[[outcome]]
+forecast = "normal"
+available_at = "2026-02-01T00:00:01Z"
+recorded_at = "2026-02-01T00:00:01Z"
+kind = "published"
+value = "10"
+source = "synthetic"
+vintage = "first"
+locator = "synthetic:whole"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
+"#,
+        )
+        .unwrap();
+        let report = state
+            .assessment(
+                "mixed",
+                time("2026-02-01T00:00:02Z").unwrap(),
+                OutcomeSelector::FirstPublished,
+            )
+            .unwrap();
+        let json = assessment_json(&state, &report).unwrap();
+        assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v2\""));
+        assert!(json.contains("\"gaussian_pit\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"));
+        assert!(json.contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"));
+        assert!(json.contains("\"n_samples\":4,\"below\":1,\"equal\":2,\"above\":1,"));
+        assert!(json.contains(concat!(
+            "\"cdf_bounds\":{\"lower\":{\"num\":1,\"den\":4},",
+            "\"upper\":{\"num\":3,\"den\":4}}"
+        )));
+        assert!(json.contains(concat!(
+            "\"n_samples\":4,\"below\":null,\"equal\":null,",
+            "\"above\":null,\"cdf_bounds\":null"
+        )));
+        assert!(json.contains(concat!(
+            "\"whole_population_fraction\":{\"lower\":{\"num\":0,\"den\":2},",
+            "\"upper\":{\"num\":2,\"den\":2}}"
+        )));
+        assert!(json.contains("\"selected_event\":{\"seq\":1,"));
+        assert!(json.contains("synthetic:whole"));
+        assert!(!json.contains("\"calibration_flag\""));
+        let mut markdown = String::new();
+        assessment_markdown(&mut markdown, &state, &report).unwrap();
+        assert!(markdown.contains("### Empirical CDF rank intervals"));
+        assert!(markdown.contains("Empirical population: 2; resolved: 1; unresolved: 1."));
+        assert!(markdown.contains("[1/4, 3/4] (below 1; equal 2; above 1)"));
+        assert!(markdown.contains("unavailable (n=4)"));
+        assert!(markdown.contains("no randomized PIT, uniformity or calibration"));
+        assert!(
+            state
+                .render(&report, Digest32::default())
+                .unwrap()
+                .contains(&json)
+        );
+    }
 
     #[test]
     fn renderers_retain_sources_missing_members_and_descriptive_boundaries() {
@@ -217,6 +395,7 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
         let json = assessment_json(&state, &report).unwrap();
         assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v1\""));
         assert!(json.contains("\"gaussian_pit\":null"));
+        assert!(!json.contains("\"empirical_rank\""));
         assert!(json.contains("\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1"));
         assert!(json.contains("\"whole_bin_frequency\":[0.5,1]"));
         assert!(json.contains("synthetic:whole-event"));

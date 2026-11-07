@@ -62,15 +62,22 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   later outcomes and restatements cannot rewrite an earlier report. These groups are neither confidence
   intervals nor an author ranking, and they do not establish independent observations or predictive skill.
 - DESIGN (BD-048/049, plan §10.2): `assessment_diagnostics(saved_digest)` derives Gaussian PIT values and
-  fixed-decile histograms, plus Bernoulli reliability bins, from the selected outcomes in an immutable
-  saved assessment. Every member and event/source identity is retained. Missing Gaussian outcomes widen
-  each bin's whole-population completion bounds; missing event outcomes stay in their original probability
-  bins. Full-population and resolved-only mean probabilities are separate, and empty-bin averages remain
-  absent. The normal CDF uses the existing numerical owner, retaining its approximate tail saturation.
-  Empirical distributions, sparse quantiles and standalone intervals remain unsupported for this diagnostic
-  projection. DGN1/v1 binds the parent assessment and exact diagnostic values without changing old durable
-  forecast/cohort/assessment bytes. The projection supplies no calibration verdict, independence estimate,
-  confidence interval or retrospective outcome selection.
+  fixed-decile histograms, Bernoulli reliability bins, and exact empirical CDF rank intervals from the
+  selected outcomes in an immutable saved assessment. Every member and event/source identity is retained.
+  Missing Gaussian outcomes widen each bin's whole-population completion bounds; missing event outcomes
+  stay in their original probability bins. Full-population and resolved-only mean probabilities are separate,
+  and empty-bin averages remain absent. The normal CDF retains its existing approximate tail saturation.
+  Empirical forecasts yield exact counts below, equal to and above the selected outcome, with closed bounds
+  `[F(y-), F(y)] = [below/n, (below+equal)/n]`. One linear scan uses comparisons without sorting or subtraction;
+  signed zeros are equal and ties remain intervals. Separate empirical decile bins count resolved intervals
+  wholly contained (definite) or intersecting (possible). Edges are exact integer fractions `i/10`, left-inclusive
+  and right-exclusive except at 1; exact edge points go right. Whole-population bounds use definite counts as
+  lower numerators and possible plus unresolved counts as upper numerators over every empirical member.
+  No randomized PIT, continuous interpolation, uniformity claim or pooling with Gaussian PIT is introduced.
+  Sparse quantiles and standalone intervals remain unsupported for this diagnostic projection. DGN1/v2 binds
+  empirical counts, bounds and rules when empirical members exist; all other reports retain DGN1/v1 bytes.
+  Forecast, cohort and assessment identities are unchanged. The projection supplies no calibration verdict,
+  independence estimate, confidence interval or retrospective outcome selection.
 - BD-343: `freeze_cohort(CohortSpec)` freezes sorted membership, the resolution rule, eligible sources and
   `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
   Payloads are Gaussian, a uniform empirical distribution, an interval with a stated or explicitly absent

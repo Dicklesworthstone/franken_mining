@@ -313,6 +313,86 @@ fn prospective_segments_keep_missing_members_and_replay_saved_scores() {
 }
 
 #[test]
+fn empirical_diagnostics_reopen_tied_missing_and_mixed_assessments_without_reselecting_sources() {
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    for alias in ["f1", "f2"] {
+        journal.append(
+            &format!(
+                "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{alias}\"\noutcome_due = \"{DUE}\"\nkind = \"empirical\"\nsamples = \"1,3,3,9\"\n"
+            ),
+            ns("2030-01-02T00:00:00Z"),
+        );
+    }
+    journal.append(&gaussian_forecast("f3", DUE), ns("2030-01-02T00:00:00Z"));
+    journal.append(&cohort("f3,f2,f1"), ns("2030-01-03T00:00:00Z"));
+    for (alias, value) in [("f1", 3), ("f3", 0)] {
+        journal.append(
+            &outcome(alias, value, "2031-01-01T00:00:00Z", false),
+            ns("2031-01-02T00:00:00Z"),
+        );
+    }
+    let saved = journal.assess(CUT, "latest-as-of", None, ns(CUT));
+    let old_digest = assessment_digest(&saved);
+    let diagnostics = saved.split_once("\"diagnostics\":").unwrap().1;
+    assert!(diagnostics.contains("\"schema\":\"fmine.forecast-diagnostics.v2\""));
+    assert!(diagnostics.contains("\"gaussian_pit\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"));
+    assert!(diagnostics.contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"));
+    assert!(diagnostics.contains(concat!(
+        "\"cdf_bounds\":{\"lower\":{\"num\":1,\"den\":4},",
+        "\"upper\":{\"num\":3,\"den\":4}}"
+    )));
+    assert!(diagnostics.contains(concat!(
+        "\"n_samples\":4,\"below\":null,\"equal\":null,",
+        "\"above\":null,\"cdf_bounds\":null"
+    )));
+    assert!(diagnostics.contains("Invented!A1"));
+    assert!(diagnostics.contains(&"11".repeat(32)));
+    let old_diagnostic_digest = string_field(diagnostics, "digest").to_string();
+
+    journal.append(
+        &outcome("f1", 9, "2031-01-11T00:00:00Z", true),
+        ns("2031-01-12T00:00:00Z"),
+    );
+    journal.append(
+        &outcome("f2", 4, "2031-01-11T00:00:00Z", false),
+        ns("2031-01-12T00:00:00Z"),
+    );
+    let latest = journal.assess(
+        "2031-01-13T00:00:00Z",
+        "latest-as-of",
+        None,
+        ns("2031-01-13T00:00:00Z"),
+    );
+    let latest_diagnostics = latest.split_once("\"diagnostics\":").unwrap().1;
+    assert_ne!(string_field(latest_diagnostics, "digest"), old_diagnostic_digest);
+    assert!(latest_diagnostics.contains("\"empirical_rank\":{\"n_members\":2,\"n_resolved\":2,\"n_unresolved\":0,"));
+    assert!(latest_diagnostics.contains(concat!(
+        "\"cdf_bounds\":{\"lower\":{\"num\":3,\"den\":4},",
+        "\"upper\":{\"num\":4,\"den\":4}}"
+    )));
+
+    let bytes = fs::read(&journal.path).expect("journal before read-only replay");
+    let reopened = journal.run(
+        &Command::Report {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            assessment: old_digest,
+            provenance: None,
+            timestamp: None,
+        },
+        0,
+    );
+    assert_eq!(reopened.exit_code, 0, "{}", reopened.to_json());
+    assert_eq!(assessment(&reopened.payload_json), assessment(&saved));
+    assert_eq!(fs::read(&journal.path).expect("journal after replay"), bytes);
+    let markdown = reopened.rendered_markdown.as_deref().unwrap();
+    assert!(markdown.contains("### Empirical CDF rank intervals"));
+    assert!(markdown.contains("[1/4, 3/4] (below 1; equal 2; above 1)"));
+    assert!(markdown.contains("unavailable (n=4)"));
+    assert!(markdown.contains("not calibration verdicts"));
+}
+
+#[test]
 fn metadata_admission_refuses_partial_and_mixed_quantities_without_appending() {
     let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
     let valid = metadata_forecast("f1", "agent:planner@v1", "synthetic-north");
