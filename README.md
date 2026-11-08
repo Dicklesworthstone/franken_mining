@@ -127,6 +127,25 @@ The synthetic example gives 0.8 from the formula, 0.7752 after its two operation
 correction and 0.79 after the explicitly declared cap. These are conditional nominal calculations with assumed,
 uncalibrated inputs; they do not qualify a model for an actual plant or authorize an operating change.
 
+Optional `[[scenario]]` rows add complete **joint alternatives** with named IDs and exact positive weights
+that sum to one. Corresponding `[[input]]` rows use `scenario = "<id>"`; ordinary input rows continue to
+define the nominal comparison. Each alternative must supply every coordinate on the same simultaneous
+processing support and interval. The engine compiles the formula once, evaluates every alternative through
+all layers and the explicit cap, and retains each result and source-bound receipt. The added ensemble
+reports its weighted mean, population variance, exact cap probability and inverse-CDF p10/p50/p90;
+quantiles use exact cumulative weights without interpolation. It refuses an invalid member rather than
+dropping it or normalizing the remaining population.
+
+```bash
+cargo run -p fmine-cli -- plant recovery --input tests/plant/recovery_scenarios.toml
+```
+
+In this synthetic nonlinear example, `R(Au)=Au²/4`, nominal grade **1** gives recovery **0.25**, while
+equally weighted grades **0 and 2** give mean recovery **0.5** and variance **0.25**. Joint scenarios preserve
+declared coordinate dependence; the engine does not substitute marginal means or draw independent values.
+These are conditional calculations under supplied scenarios, with no fitted distribution, model-error
+estimate, empirical probability calibration or forecast registration.
+
 ### Run the public lane
 
 With the pinned Rust toolchain, fetch the registered public workbooks and run:

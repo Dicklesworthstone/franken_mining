@@ -72,10 +72,14 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     optional explicit cap and route retain their source Claims. Processing support, scope, validity and
     matching input units/measurands are explicit. Original numeric tokens and every intermediate fraction
     remain visible; parsed kernel refusals retain the model and inputs with no admitted result. All
-    declarations remain Assumed, Internal and uncalibrated. No source qualification, uncertainty propagation,
-    sample-to-blend conversion, forecast calibration or operating authorization is inferred. The schema is
+    declarations remain Assumed, Internal and uncalibrated. Optional complete joint scenarios retain their
+    exact weights and paired inputs, share the compiled model, and emit weighted moments, inverse-CDF
+    quantiles, exact cap probability and every member receipt. A rejected member refuses the whole output;
+    nominal-only worksheets retain their previous result shape and identities. No source qualification,
+    inferred distribution, sample-to-blend conversion, forecast calibration or operating authorization is inferred. The schema is
     documented in `robot-docs.plant_recovery`; `tests/plant/recovery_card.toml` is synthetic, with real-binary
-    checks in `crates/xtask/testdata/plant_recovery_contract.rs`.
+    checks in `crates/xtask/testdata/plant_recovery_contract.rs`, including nonlinear joint scenarios from
+    `tests/plant/recovery_scenarios.toml` and independently authored correlation/cap cases.
   - DESIGN (BD-177): `plant transfer --input <worksheet.toml>` reads a source-bound
     `fmine.plant-transfer.v1` worksheet and invokes the raw-lot projection owner. It requires explicit
     complete/nonoverlapping whole-lot support, matched moisture/assay dry bases, wet mass in kg,

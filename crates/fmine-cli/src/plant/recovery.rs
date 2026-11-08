@@ -1,4 +1,4 @@
-//! DESIGN: source-bound nominal recovery worksheets over the existing card owner (BD-176/287).
+//! DESIGN: source-bound recovery worksheets over the existing card owner (BD-176/287).
 //! Every layer and processing-support declaration remains Assumed, Internal and uncalibrated.
 //! Determinism: DeterministicPerIsa
 
@@ -12,19 +12,20 @@ use fmine_plant::cards::{
     self, CardVersion, InputRequirement, InputUnit, InputValue, OperationalFactor, OutputScale,
     RecoveryCorrection, RecoveryInputs, RecoveryModel, RecoveryScope, RouteAssumption,
     TestWorkCard,
+    ensemble::{self, RecoveryPopulation, RecoveryScenario},
 };
 use fmine_registry::toml_subset::{TomlDoc, TomlRow, parse_subset};
 use fmine_time::ValidTime;
 
 use super::{
-    Fields, bad, claim_json, declared, exact, fields, get, integer, number, numbers, quantity,
-    quoted,
+    Fields, bad, claim_json, declared, exact, fields, get, integer, quantity, quoted,
 };
 use crate::{Envelope, NextAction, worksheet_input};
 
 const SCHEMA: &str = "fmine.plant-recovery.v1";
 const MAX_BYTES: u64 = 1024 * 1024;
 const NO_CLAIM: &str = "Nominal recovery conditional on the submitted formula, validity box, versioned layers, route and processing-support inputs. All declarations remain Assumed, Internal and uncalibrated. No source qualification, sample-to-blend transfer, uncertainty propagation, forecast registration, empirical calibration, P754 compliance or operating authorization is supplied.";
+const ENSEMBLE_NO_CLAIM: &str = "Nominal recovery and optional joint-scenario propagation conditional on the submitted formula, validity box, versioned layers, route and processing-support inputs. All declarations, scenario membership and weights remain Assumed, Internal and uncalibrated. No source qualification, sample-to-blend transfer, inferred distribution or independence, forecast registration, empirical calibration, P754 compliance or operating authorization is supplied.";
 
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.plant-recovery.v1\",",
@@ -38,6 +39,10 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "\"formula\":\"ASCII arithmetic, parentheses, exp/EXP, ln/LN and integer powers from -16 to 16; at most 4096 bytes, 512 operations and 32 nesting levels; coordinates are used in their declared units\",",
     "\"requirement_rows\":[\"name\",\"measurand\",\"unit\",\"lower\",\"upper\",\"lower_inclusive\",\"upper_inclusive\"],",
     "\"input_rows\":[\"name\",\"measurand\",\"unit\",\"value\"],",
+    "\"optional_input_fields\":[\"scenario\"],",
+    "\"optional_scenario_rows\":[\"id\",\"weight\"],",
+    "\"scenarios\":\"At most 256 named joint scenarios; strictly positive exact weights must sum to one. Each scenario supplies every coordinate through input rows with its scenario id, on the same scope and interval as nominal inputs. Missing, duplicate, undeclared or out-of-domain members refuse the entire calculation; no dropping, normalization or independent resampling\",",
+    "\"ensemble\":\"Evaluate the full versioned formula separately for each member; emit weighted mean, population variance, inverse-CDF p10/p50/p90 without interpolation, exact cap probability and every member receipt. Scenario probabilities are declared and uncalibrated\",",
     "\"units\":[\"g_per_dry_t\",\"oz_per_dry_st\",\"dry_mass_percent\",\"dry_mass_fraction\",\"ppm_dry_mass\",\"spike_test_percent\",\"micrometres\",\"hours\"],",
     "\"coordinates\":\"At most 32 unique requirements and exactly their matching inputs; each input repeats the exact unit and measurand; no implicit conversions or extrapolation\",",
     "\"operation_rows\":[\"id\",\"revision\",\"multiplier\"],",
@@ -59,6 +64,7 @@ struct Worksheet {
     correction: Claim<RecoveryCorrection>,
     route: Claim<RouteAssumption>,
     inputs: Claim<RecoveryInputs>,
+    population: Option<(Claim<RecoveryPopulation>, String)>,
     model_json: String,
     inputs_json: String,
 }
@@ -143,13 +149,22 @@ fn source_claim<T>(
 
 fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
     let document = parse_subset(text).map_err(|error| bad(error.line, error.reason))?;
-    if document.rows.len() > 2 * cards::MAX_INPUTS + cards::MAX_OPERATIONAL_FACTORS + 3 {
+    if document.rows.len()
+        > (ensemble::MAX_SCENARIOS + 2) * cards::MAX_INPUTS
+            + ensemble::MAX_SCENARIOS + cards::MAX_OPERATIONAL_FACTORS + 3
+    {
         return Err(bad(1, "recovery worksheet exceeds the bounded row count"));
     }
     for row in &document.rows {
         if !matches!(
             row.table.as_str(),
-            "test_work" | "requirement" | "input" | "operation" | "correction" | "route"
+            "test_work"
+                | "requirement"
+                | "input"
+                | "scenario"
+                | "operation"
+                | "correction"
+                | "route"
         ) {
             return Err(bad(row.line, format!("unsupported table {}", row.table)));
         }
@@ -363,15 +378,19 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         quoted(&route.value.route),
         claim_json(&route),
     );
-    let mut inputs = BTreeMap::new();
-    let mut input_json = BTreeMap::new();
+    let mut groups = BTreeMap::<_, (BTreeMap<String, InputValue>, BTreeMap<String, String>)>::new();
     for row in document.rows_of("input") {
         let values = fields(
             &row.fields,
             &["name", "measurand", "unit", "value"],
-            &[],
+            &["scenario"],
             row.line,
         )?;
+        let scenario = values.get("scenario").map_or("", |value| value.0);
+        if values.contains_key("scenario") && scenario.trim().is_empty() {
+            return Err(bad(row.line, "input scenario id must be nonempty"));
+        }
+        let (inputs, input_json) = groups.entry(scenario).or_default();
         let name = get(&values, "name")?.0;
         let input = InputValue {
             measurand: get(&values, "measurand")?.0.into(),
@@ -393,32 +412,93 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
             return Err(bad(row.line, format!("duplicate input {name}")));
         }
     }
-    let inputs = RecoveryInputs {
-        scope,
-        interval: interval(&top, "start_ns", "end_ns")?,
-        values: inputs,
+    let interval = interval(&top, "start_ns", "end_ns")?;
+    let mut input_set = |id: &str, locator: String| {
+        let (values, input_json) = groups.remove(id).unwrap_or_default();
+        let inputs = RecoveryInputs {
+            scope: scope.clone(),
+            interval,
+            values,
+        };
+        let tag = inputs.canonical_tag();
+        let inputs = source_claim(inputs, &tag, cards::INPUT_METRIC, source, locator);
+        let json = format!(
+            "{{\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"values\":[{}],\"claim\":{}}}",
+            interval.start_ns,
+            interval.end_ns,
+            input_json.into_values().collect::<Vec<_>>().join(","),
+            claim_json(&inputs),
+        );
+        (inputs, json)
     };
-    let tag = inputs.canonical_tag();
-    let inputs = source_claim(
-        inputs,
-        &tag,
-        cards::INPUT_METRIC,
-        source,
+    let (inputs, inputs_json) = input_set(
+        "",
         "top-level scope, processing_support and processing interval; all input rows".into(),
     );
-    let inputs_json = format!(
-        "{{\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"values\":[{}],\"claim\":{}}}",
-        inputs.value.interval.start_ns,
-        inputs.value.interval.end_ns,
-        input_json.into_values().collect::<Vec<_>>().join(","),
-        claim_json(&inputs),
-    );
+    let mut scenarios = BTreeMap::new();
+    let mut scenario_json = BTreeMap::new();
+    for row in document.rows_of("scenario") {
+        let values = fields(&row.fields, &["id", "weight"], &[], row.line)?;
+        let id = get(&values, "id")?.0;
+        if id.trim().is_empty() || scenarios.contains_key(id) {
+            return Err(bad(row.line, "scenario id must be nonempty and unique"));
+        }
+        let weight = quantity(get(&values, "weight")?)?;
+        let (inputs, json) = input_set(
+            id,
+            format!(
+                "scenario {id}; all matching input rows; top-level processing scope and interval"
+            ),
+        );
+        scenario_json.insert(
+            id,
+            format!(
+                "{{\"id\":{},\"raw_weight\":{},\"weight\":{},\"inputs\":{json}}}",
+                quoted(id),
+                quoted(get(&values, "weight")?.0),
+                exact(weight),
+            ),
+        );
+        scenarios.insert(
+            id,
+            RecoveryScenario {
+                id: id.into(),
+                weight,
+                inputs,
+            },
+        );
+    }
+    if !groups.is_empty() {
+        return Err(bad(1, "input refers to an undeclared scenario"));
+    }
+    let population = if scenarios.is_empty() {
+        None
+    } else {
+        let population = RecoveryPopulation {
+            scenarios: scenarios.into_values().collect(),
+        };
+        let tag = population.canonical_tag();
+        let population = source_claim(
+            population,
+            &tag,
+            ensemble::INPUT_METRIC,
+            source,
+            "all scenario rows and their joint inputs; exact declared weights".into(),
+        );
+        let json = format!(
+            "{{\"claim\":{},\"scenarios\":[{}]}}",
+            claim_json(&population),
+            scenario_json.into_values().collect::<Vec<_>>().join(",")
+        );
+        Some((population, json))
+    };
     Ok(Worksheet {
         test_work,
         operations,
         correction,
         route,
         inputs,
+        population,
         model_json: format!(
             "{{\"test_work\":{test_work_json},\"operations\":[{}],\"correction\":{correction_json},\"route\":{route_json}}}",
             operation_json.join(","),
@@ -445,40 +525,40 @@ pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
             &worksheet.correction,
             &worksheet.route,
         )
-        .and_then(|model| model.evaluate(&worksheet.inputs));
-        let (mut envelope, admitted, digest, result) = match evaluation {
-            Ok(receipt) => {
-                let result = &receipt.claim().value;
-                (
-                    Envelope::ok("plant recovery", String::new(), vec![]),
-                    claim_json(receipt.claim()),
-                    quoted(receipt.digest()),
-                    format!(
-                        "{{\"test_work_fraction\":{},\"operational_fractions\":{},\"corrected_before_cap\":{},\"cap_applied\":{},\"recovery_fraction\":{},\"route\":{}}}",
-                        number(result.test_work_fraction.value()),
-                        numbers(
-                            result
-                                .operational_fractions
-                                .iter()
-                                .map(|value| value.value())
-                        ),
-                        number(result.corrected_before_cap.value()),
-                        result.cap_applied,
-                        number(result.recovery_fraction.value()),
-                        quoted(&result.route),
-                    ),
-                )
-            }
+        .and_then(|model| {
+            let nominal = model.evaluate(&worksheet.inputs)?;
+            let ensemble = worksheet
+                .population
+                .as_ref()
+                .map(|(population, _)| model.evaluate_ensemble(population))
+                .transpose()?;
+            Ok((nominal, ensemble))
+        });
+        let (mut envelope, admitted, digest, result, ensemble) = match evaluation {
+            Ok((receipt, ensemble)) => (
+                Envelope::ok("plant recovery", String::new(), vec![]),
+                claim_json(receipt.claim()),
+                quoted(receipt.digest()),
+                receipt.result_json(),
+                ensemble.map_or_else(|| "null".into(), |receipt| receipt.to_json()),
+            ),
             Err(refusal) => (
                 Envelope::refused("plant recovery", refusal, actions()),
+                "null".into(),
                 "null".into(),
                 "null".into(),
                 "null".into(),
             ),
         };
         let scope = &worksheet.test_work.value.scope;
+        let population = worksheet
+            .population
+            .as_ref()
+            .map_or_else(String::new, |(_, declarations)| {
+                format!(",\"population\":{declarations},\"ensemble\":{ensemble}")
+            });
         envelope.payload_json = format!(
-            "{{\"schema\":\"fmine.plant-recovery-result.v1\",\"mode\":\"nominal_recovery_card\",\"source\":{{\"path\":{},\"sha256\":{},\"bytes\":{}}},\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{},\"processing_support\":true}},\"model\":{},\"inputs\":{},\"admitted_claim\":{admitted},\"receipt_digest\":{digest},\"result\":{result}}}",
+            "{{\"schema\":\"fmine.plant-recovery-result.v1\",\"mode\":\"nominal_recovery_card\",\"source\":{{\"path\":{},\"sha256\":{},\"bytes\":{}}},\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{},\"processing_support\":true}},\"model\":{},\"inputs\":{},\"admitted_claim\":{admitted},\"receipt_digest\":{digest},\"result\":{result}{population}}}",
             quoted(&source.artifact_path),
             quoted(&Digest32(source.artifact_sha256).to_hex()),
             text.len(),
@@ -489,11 +569,16 @@ pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
             worksheet.model_json,
             worksheet.inputs_json,
         );
+        envelope.no_claim = Some(if worksheet.population.is_some() {
+            ENSEMBLE_NO_CLAIM
+        } else {
+            NO_CLAIM
+        });
         Ok(envelope)
     };
     let mut envelope =
         run().unwrap_or_else(|refusal| Envelope::refused("plant recovery", refusal, actions()));
-    envelope.no_claim = Some(NO_CLAIM);
+    envelope.no_claim.get_or_insert(NO_CLAIM);
     envelope.warnings.push("Formula, applicability bounds, versioned layers, route and processing-support inputs are Assumed, Internal and uncalibrated; source-byte binding does not establish plant applicability or measurement accuracy.".into());
     envelope
 }

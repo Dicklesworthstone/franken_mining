@@ -1,0 +1,66 @@
+# SYNTHETIC joint-scenario propagation, not measured or calibrated plant behavior.
+# R(Au)=Au^2/4. Nominal Au=1 gives1/4; alternatives Au={0,2} give{0,1}.
+# Equal scenario weights give mean1/2, population variance1/4, p10=p50=0,p90=1.
+schema = "fmine.plant-recovery.v1"
+circuit = "synthetic-circuit/v1"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+processing_support = "true"
+valid_start_ns = "0"
+valid_end_ns = "100"
+start_ns = "10"
+end_ns = "20"
+
+[[test_work]]
+id = "invented-nonlinear-test-work"
+revision = "v1"
+formula = "Au^2 / 4"
+output_scale = "fraction"
+
+[[requirement]]
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+lower = "0"
+upper = "2"
+lower_inclusive = "true"
+upper_inclusive = "true"
+
+[[correction]]
+id = "invented-zero-correction"
+revision = "v1"
+additive_fraction = "0"
+
+[[route]]
+id = "invented-route-assumption"
+revision = "v1"
+route = "synthetic-leach"
+
+[[input]]
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "1.000"
+
+[[scenario]]
+id = "low"
+weight = "0.500"
+
+[[input]]
+scenario = "low"
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "0.000"
+
+[[scenario]]
+id = "high"
+weight = "1/2"
+
+[[input]]
+scenario = "high"
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "2.000"

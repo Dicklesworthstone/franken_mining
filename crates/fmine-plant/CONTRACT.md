@@ -144,8 +144,9 @@ reconciliation of fully measured carrier and elemental totals, plus identifiable
 streams with measured endpoint stocks (§17), including cross-element and cross-stream covariance.
 Nonlinear uncertainty propagation, missing-stock inference, sensor bias estimation, plant error-model
 calibration and full P754 reconciliation remain.
-BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18); report ingestion,
-source-box qualification, fitting and calibration remain. BD-313 now has source-bound forward RTD
+BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18), with declared joint
+input populations propagated per realization (§20); report ingestion, source-box qualification,
+fitting and calibration remain. BD-313 now has source-bound forward RTD
 transport and conditional lag alignment (§19); kernel fitting and noisy inverse deconvolution remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
 worksheets expose nominal material conversion, elemental inventory accounting/reconciliation and joint flowsheet reconciliation;
@@ -517,3 +518,56 @@ passes 111 tests and all-target Clippy with warnings denied.
 This is known-kernel forward transport and conditional lag alignment. RTD fitting, noisy inverse
 deconvolution, mixed residence/reaction kinetics, empirical kernel qualification and recovery-card
 calibration remain unimplemented. BD-313 remains open.
+
+## 20. Joint recovery populations (DESIGN; plan §17.4, bounded BD-176/182)
+
+`cards::RecoveryModel::evaluate_ensemble` propagates a `Claim<RecoveryPopulation>` through the
+same compiled four-layer recovery model used by nominal evaluation. Each of 1–256 named scenarios
+contains an exact positive probability and its original `Claim<RecoveryInputs>`. Every scenario
+must supply the complete simultaneous processing-blend coordinates, units and measurands. All
+scenarios share the same physical interval and the card's circuit, domain, dry basis and element.
+The probabilities sum to one exactly; they are probabilities of alternative states, not weights
+for physically blending lots or periods. Their source declaration remains distinct from each
+scenario's input source. IDs preserve joint realization identity for downstream joins.
+
+Every member passes the existing exact domain, source, time, version, physical and numerical
+admission before any ensemble receipt is returned. One failed member refuses the whole population;
+no probability mass is discarded, normalized or replaced with the nominal blend. No independent
+coordinate draws, Gaussian approximation or stochastic sampling is inferred. Ordered operational
+factors, corrections and explicit caps are applied separately in every realization before moments
+are computed; a cap on the mean is not substituted for the mean of capped recoveries.
+
+The immutable `RecoveryEnsembleReceipt` retains the compiled model, original population Claim,
+canonical ID-ordered member receipts, result Claim and digest. Every member retains its complete
+original inputs, source/version layers, intermediates and cap status through `RecoveryReceipt`.
+The typed summary reports the weighted mean, population variance in squared recovery fractions,
+minimum, maximum, P10/P50/P90 and exact probability of explicit cap application. Quantiles use the
+inverse empirical CDF with exact cumulative probabilities, including exact boundary ties; there is
+no interpolation. A nonnegative shifted compensated mean and a centered compensated second pass
+avoid cancellation for constant populations and small spreads. Lost numerical range refuses.
+
+The output uses `Representation::EnsembleSummary`, with evidence met across the population and
+all member evaluations, confidentiality joined, compatible UU terms retained and knowledge capped
+at `Estimated`. Sources and parents remain traceable through every member. Input envelopes and
+typed values participate in canonical population identity; declaration permutation preserves
+the result Claim and receipt digest. Fixed reduction order makes evaluation `DeterministicPerIsa`.
+`to_json()` and `to_markdown()` expose the complete weighted results without printing; the nominal
+`RecoveryReceipt::result_json()` is shared by individual and ensemble adapters.
+
+The existing `plant recovery` worksheet accepts optional named scenario probabilities and complete
+scenario input sets alongside its nominal processing inputs. Without scenarios its nominal schema
+and output remain unchanged. Submitted numeric tokens and exact source bytes remain the CLI
+adapter's responsibility; kernel rendering retains exact normalized probabilities and inputs.
+
+Known-answer tests use authored finite populations, not plant measurements. For `R(g)=g²/4` at
+`g={0,2}` with equal probabilities, mean recovery is 1/2 and variance is 1/4, while the card at
+mean input returns 1/4. For `R(x,y)=xy`, paired `{(0,0),(1,1)}` gives mean 1/2 and anti-paired
+`{(0,1),(1,0)}` gives zero despite identical coordinate marginals. With recoveries `{0.6,1.2}`
+and an explicit cap of 0.8, mean recovery is 0.7 and cap-event probability is 1/2. Tests additionally
+exercise exact weighted-quantile boundaries, very rare states, small nonzero variance, canonical
+identity, source metadata, malformed weights and refusal of any incompatible member.
+
+These are conditional probabilities under a user-supplied finite population, explicitly marked
+uncalibrated. Neither population completeness in reality nor uncertain card parameters, fitted
+likelihoods, empirical recovery calibration, sample-to-blend transfer, forecast registration or
+operating permission is established. Authentic source and prospective outcome gates remain open.

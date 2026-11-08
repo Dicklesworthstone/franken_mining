@@ -2,8 +2,9 @@
 //! Empirical formulas consume numeric coordinates in declared source units.
 //! Four source/version layers remain separate: test work, ordered operational
 //! factors, explicit correction/cap, and the assumed processing route.
-//! This evaluates a declared card; it does not fit parameters, transfer sample
-//! support, infer uncertainty, calibrate a forecast or authorize plant control.
+//! This evaluates a declared card and optional declared joint input population;
+//! it does not fit parameters, transfer sample support, manufacture uncertainty,
+//! calibrate a forecast or authorize plant control.
 //! Determinism: DeterministicPerIsa
 
 use crate::{inventory, reconciliation::Metadata};
@@ -14,6 +15,7 @@ use fmine_time::ValidTime;
 use fmine_units::{ExactQty, Qty};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod ensemble;
 mod formula;
 #[cfg(test)]
 mod tests;

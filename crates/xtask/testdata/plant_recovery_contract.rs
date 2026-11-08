@@ -5,6 +5,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const WORKSHEET: &str = include_str!("../../../tests/plant/recovery_card.toml");
+const SCENARIOS: &str = include_str!("../../../tests/plant/recovery_scenarios.toml");
 const GOLD_INPUT: &str = "[[input]]\nname = \"Au\"\nmeasurand = \"total-Au/dry\"\nunit = \"g_per_dry_t\"\nvalue = \"5.500\"";
 const OPERATION: &str = "[[operation]]\nid = \"invented-availability-factor\"\nrevision = \"v1\"\nmultiplier = \"0.950\"";
 static SERIAL: AtomicUsize = AtomicUsize::new(0);
@@ -236,6 +237,97 @@ fn source_bytes_and_version_revisions_change_receipts_without_altering_numbers()
             at(&original, &["payload", "result"]),
             at(&updated, &["payload", "result"])
         );
+    }
+}
+
+#[test]
+fn joint_scenarios_propagate_nonlinearity_with_exact_weights_and_complete_receipts() {
+    let path = scratch(SCENARIOS);
+    let (status, value, first) = run(&path);
+    assert_eq!(status, 0, "{value:?}");
+    assert_eq!(run(&path).2, first);
+    close(at(&value, &["payload", "result", "recovery_fraction"]), 0.25);
+    let ensemble = at(&value, &["payload", "ensemble"]);
+    assert_eq!(at(ensemble, &["calibration"]).as_str(), Some("uncalibrated"));
+    let summary = at(ensemble, &["summary"]);
+    for (field, expected) in [("mean", 0.5), ("variance", 0.25), ("minimum", 0.0),
+        ("p10", 0.0), ("p50", 0.0), ("p90", 1.0), ("maximum", 1.0)] {
+        close(at(summary, &[field]), expected);
+    }
+    assert_eq!(exact(at(summary, &["probability_capped"])), (0, 1));
+    let members = at(ensemble, &["members"]).as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    let hash = fmine_core::hash::sha256(SCENARIOS.as_bytes()).to_hex();
+    for (member, id, recovery) in [(&members[0], "high", 1.0), (&members[1], "low", 0.0)] {
+        assert_eq!(at(member, &["id"]).as_str(), Some(id));
+        assert_eq!(exact(at(member, &["weight"])), (1, 2));
+        close(at(member, &["result", "recovery_fraction"]), recovery);
+        for claim in [at(member, &["admitted_claim"]), at(member, &["inputs", "claim"])] {
+            assert_eq!(at(claim, &["evidence"]).as_str(), Some("Assumed"));
+            assert_eq!(at(claim, &["confidentiality"]).as_str(), Some("Internal"));
+            assert_eq!(at(claim, &["calibration"]).as_str(), Some("uncalibrated"));
+            for source in at(claim, &["sources"]).as_array().unwrap() {
+                assert_eq!(at(source, &["sha256"]).as_str(), Some(hash.as_str()));
+            }
+        }
+    }
+    let declarations = at(&value, &["payload", "population", "scenarios"]).as_array().unwrap();
+    assert_eq!(at(&declarations[1], &["raw_weight"]).as_str(), Some("0.500"));
+    assert_eq!(at(&declarations[0], &["inputs", "values"]).as_array().unwrap()[0]
+        .get("raw_value").unwrap().as_str(), Some("2.000"));
+    let (_, nominal, _) = run(&scratch(WORKSHEET));
+    assert!(at(&nominal, &["payload"]).get("ensemble").is_none());
+    assert!(at(&nominal, &["payload"]).get("population").is_none());
+    std::fs::write(&path, format!("{SCENARIOS}\n# new source bytes\n")).unwrap();
+    let (_, revised, _) = run(&path);
+    assert_eq!(at(&revised, &["payload", "ensemble", "summary"]), summary);
+    assert_ne!(at(&revised, &["payload", "ensemble", "receipt_digest"]), at(ensemble, &["receipt_digest"]));
+}
+
+#[test]
+fn joint_pairing_and_per_member_caps_change_recovery_without_inventing_independence() {
+    let requirement = "\n[[requirement]]\nname = \"S\"\nmeasurand = \"total-S/dry\"\nunit = \"dry_mass_fraction\"\nlower = \"0\"\nupper = \"1\"\nlower_inclusive = \"true\"\nupper_inclusive = \"true\"\n";
+    let input = |scenario: &str, value: &str| format!(
+        "\n[[input]]\n{scenario}name = \"S\"\nmeasurand = \"total-S/dry\"\nunit = \"dry_mass_fraction\"\nvalue = \"{value}\"\n");
+    let shared = SCENARIOS.replace("Au^2 / 4", "Au * S / 2")
+        + requirement + &input("", "1/2");
+    for (low, high, expected) in [("0", "1", 0.5), ("1", "0", 0.0)] {
+        let paired = shared.clone() + &input("scenario = \"low\"\n", low)
+            + &input("scenario = \"high\"\n", high);
+        let (status, value, _) = run(&scratch(&paired));
+        assert_eq!(status, 0, "{value:?}");
+        close(at(&value, &["payload", "ensemble", "summary", "mean"]), expected);
+        close(at(&value, &["payload", "result", "recovery_fraction"]), 0.25);
+    }
+    let capped = SCENARIOS.replace("Au^2 / 4", "0.6 + 0.3 * Au")
+        .replace("additive_fraction = \"0\"", "additive_fraction = \"0\"\nupper_cap_fraction = \"0.8\"");
+    let (status, value, _) = run(&scratch(&capped));
+    assert_eq!(status, 0, "{value:?}");
+    close(at(&value, &["payload", "ensemble", "summary", "mean"]), 0.7);
+    close(at(&value, &["payload", "ensemble", "summary", "variance"]), 0.01);
+    assert_eq!(exact(at(&value, &["payload", "ensemble", "summary", "probability_capped"])), (1, 2));
+    close(at(&value, &["payload", "result", "recovery_fraction"]), 0.8);
+}
+
+#[test]
+fn invalid_joint_members_refuse_atomically_without_dropping_or_renormalizing() {
+    for text in [
+        SCENARIOS.replace("weight = \"0.500\"", "weight = \"0\""),
+        SCENARIOS.replace("weight = \"0.500\"", "weight = \"1/3\""),
+        SCENARIOS.replace("value = \"2.000\"", "value = \"2.001\""),
+        SCENARIOS.replace("scenario = \"high\"", "scenario = \"unlisted\""),
+        SCENARIOS.replace("id = \"high\"", "id = \"low\""),
+        SCENARIOS.replace("scenario = \"high\"\nname = \"Au\"", "scenario = \"high\"\nname = \"wrong\""),
+    ] {
+        let (status, value, _) = run(&scratch(&text));
+        assert_ne!(status, 0, "{value:?}");
+        let payload = at(&value, &["payload"]);
+        if payload != &Json::Null {
+            for field in ["result", "admitted_claim", "receipt_digest", "ensemble"] {
+                assert_eq!(at(payload, &[field]), &Json::Null);
+            }
+            assert_eq!(at(payload, &["population", "scenarios"]).as_array().unwrap().len(), 2);
+        }
     }
 }
 
