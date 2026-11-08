@@ -7,10 +7,11 @@
 
 use fmine_evidence::Refusal;
 
-use super::{PcpspImprovement, PcpspModel, candidate, greedy, improve, lp};
+use super::{PcpspImprovement, PcpspModel, candidate, fractional, greedy, improve, lp};
 use crate::toposort::{cpit::RATE_SCALE, lp::Lagrangian, search};
 
-/// Bounded work requested by the caller. Zero search rounds preserves the checked starting schedule.
+/// Bounded work requested by the caller. Zero rounds skips whole-block local
+/// search; the bounded fractional destination pass still runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     pub rounds: usize,
@@ -58,8 +59,10 @@ fn overflow() -> Refusal {
     refuse("pcpsp plan: exact objective or bound overflows i128")
 }
 
-/// Generate and improve a whole-block schedule, check an optional outside schedule, keep the best feasible
-/// incumbent (including the empty plan), then independently replay the best Lagrangian prices.
+/// Generate and improve a whole-block schedule, polish both initial and improved
+/// mining periods with exact fractional destinations, check an optional outside
+/// schedule, keep the best feasible incumbent (including the empty plan), then
+/// independently replay the best Lagrangian prices.
 ///
 /// The result optimizes only the supplied, rounded integer model and the explicit integer discount factors.
 /// A nonzero bound gap is not a proof of suboptimality; the bound may be loose. Input calibration and sampling
@@ -131,12 +134,37 @@ pub fn solve(
             .ok_or_else(overflow)?;
         origin = "heuristic";
     }
+    // The initial greedy plan may retain a block whose whole dump destination
+    // loses money; local search can drop it before a profitable split is tried.
+    // Preserve both mining sets, but price identical starts only once.
+    let same_start = heuristic.schedule == start && heuristic.destination == destinations;
+    for (periods, chosen, source) in [
+        (&start, &destinations, "fractional_greedy"),
+        (
+            &heuristic.schedule,
+            &heuristic.destination,
+            "fractional_improved",
+        ),
+    ] {
+        if source == "fractional_improved" && same_start {
+            continue;
+        }
+        let refined = fractional::polish(model, periods, chosen, &factors, options.share_decimals)?;
+        if refined.after > value {
+            selected = refined.schedule;
+            value = refined.after;
+            origin = source;
+        }
+    }
     let mut assessment = None;
     if let Some(external) = outside {
         let checked = candidate::check(model, external)?;
         let external_value = checked.discounted_value(&factors)?;
         if checked.feasible() {
-            if external_value > value {
+            let preserve_split = external_value == value
+                && matches!(origin, "fractional_greedy" | "fractional_improved")
+                && external.assignments().iter().any(|a| a.fraction != scale);
+            if external_value > value || preserve_split {
                 selected = external.clone();
                 value = external_value;
                 origin = "external_candidate";
@@ -144,12 +172,18 @@ pub fn solve(
             // A whole-block candidate is a useful warm start. Genuine splits retain their original policy.
             if external.assignments().iter().all(|a| a.fraction == scale) {
                 let mut periods = vec![None; model.blocks()];
-                let mut destinations = destination.clone();
+                let mut outside_destinations = destination.clone();
                 for a in external.assignments() {
                     periods[a.block as usize] = Some(a.period);
-                    destinations[a.block as usize] = a.destination;
+                    outside_destinations[a.block as usize] = a.destination;
                 }
-                let improved = improve(model, &periods, &destinations, &factors, options.rounds)?;
+                let improved = improve(
+                    model,
+                    &periods,
+                    &outside_destinations,
+                    &factors,
+                    options.rounds,
+                )?;
                 let improved_value = improved
                     .after
                     .checked_mul(i128::from(scale))
@@ -163,6 +197,34 @@ pub fn solve(
                     )?;
                     value = improved_value;
                     origin = "improved_candidate";
+                }
+                // An admitted mining set can be unreachable from Kahn's start
+                // (for example a same-period precedence cycle). Preserve it
+                // for fractional routing before whole local search drops any
+                // temporarily loss-making material, and price each seed once.
+                let same_outside = improved.schedule == periods
+                    && improved.destination == outside_destinations;
+                for (seed, chosen, source) in [
+                    (&periods, &outside_destinations, "fractional_candidate"),
+                    (
+                        &improved.schedule,
+                        &improved.destination,
+                        "fractional_improved_candidate",
+                    ),
+                ] {
+                    if (source == "fractional_improved_candidate" && same_outside)
+                        || (*seed == start && *chosen == destinations)
+                        || (*seed == heuristic.schedule && *chosen == heuristic.destination)
+                    {
+                        continue;
+                    }
+                    let refined =
+                        fractional::polish(model, seed, chosen, &factors, options.share_decimals)?;
+                    if refined.after > value {
+                        selected = refined.schedule;
+                        value = refined.after;
+                        origin = source;
+                    }
                 }
             }
         }

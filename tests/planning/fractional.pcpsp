@@ -1,0 +1,17 @@
+% SYNTHETIC: whole dump earns 0; whole mill uses 2 against capacity 1.
+% A half-dump/half-mill allocation earns 5 and exactly fills capacity.
+NAME: automatic-fractional-example
+TYPE: PCPSP
+NBLOCKS: 1
+NPERIODS: 1
+NDESTINATIONS: 2
+NRESOURCE_SIDE_CONSTRAINTS: 1
+NGENERAL_SIDE_CONSTRAINTS: 0
+DISCOUNT_RATE: 0
+RESOURCE_CONSTRAINT_LIMITS:
+0 0 L 1
+OBJECTIVE_FUNCTION:
+0 0 10
+RESOURCE_CONSTRAINT_COEFFICIENTS:
+0 1 0 2
+EOF

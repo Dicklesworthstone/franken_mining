@@ -62,6 +62,7 @@ use crate::pitflow::ClosureProblem;
 use crate::pitflow::minelib::{MAX_DECIMALS, Rounding, bad, lines, number, parse_prec, scaled};
 
 pub mod candidate;
+pub mod fractional;
 pub mod lp;
 pub mod planning;
 pub mod price;

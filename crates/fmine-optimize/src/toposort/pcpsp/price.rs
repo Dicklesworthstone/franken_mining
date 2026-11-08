@@ -314,15 +314,18 @@ fn repair(model: &PcpspModel, blocks: &[usize], pick: &mut [usize], caps: &[i128
     None
 }
 
-/// The **Price** move on one period (see the module notes): `blocks` are the period's mined blocks, `destination`
-/// every block's current destination, and `caps` the period's limits. Returns the new destination of each of `blocks`,
-/// in order, when the new assignment keeps every limit and is worth strictly more; otherwise `None`.
-pub(super) fn reprice(
+/// Deterministic pre-repair proposals: the last priced assignment, the mixture's
+/// modal assignment, then its active columns in basis order. At most resources
+/// plus three assignments are retained. Whole repair and exact fractional
+/// interpolation share this pricing pass; neither treats its floats as a
+/// feasibility certificate. A tied final argmax may be unprofitable while an
+/// active column still provides a profitable fractional direction.
+pub(super) fn proposals(
     model: &PcpspModel,
     blocks: &[usize],
     destination: &[u32],
     caps: &[i128],
-) -> Option<Vec<usize>> {
+) -> Option<Vec<Vec<usize>>> {
     let current: Vec<usize> = blocks.iter().map(|&b| destination[b] as usize).collect();
     let (now, used) = column(model, blocks, &current);
     if blocks.is_empty() || used.iter().zip(caps).any(|(u, c)| u > c) {
@@ -389,6 +392,21 @@ pub(super) fn reprice(
             .collect(),
     );
     candidates.extend(columns);
+    Some(candidates)
+}
+
+/// The **Price** move on one period (see the module notes): `blocks` are the period's mined blocks, `destination`
+/// every block's current destination, and `caps` the period's limits. Returns the new destination of each of `blocks`,
+/// in order, when the new assignment keeps every limit and is worth strictly more; otherwise `None`.
+pub(super) fn reprice(
+    model: &PcpspModel,
+    blocks: &[usize],
+    destination: &[u32],
+    caps: &[i128],
+) -> Option<Vec<usize>> {
+    let candidates = proposals(model, blocks, destination, caps)?;
+    let current: Vec<usize> = blocks.iter().map(|&b| destination[b] as usize).collect();
+    let (now, _) = column(model, blocks, &current);
     let mut best: Option<(i128, Vec<usize>)> = None;
     for mut pick in candidates {
         if repair(model, blocks, &mut pick, caps).is_none() {

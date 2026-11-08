@@ -156,8 +156,51 @@ def generated_models():
         (ROOT / "candidate.sol").write_text("".join(f"{b} {d} {t} " + ("0.5" if part == Q(1,2) else "1") + "\n" for b,d,t,part in best_rows))
         p = verify(command(["--candidate", "candidate.sol", "--bound-steps", "16"]), values, uses, requires, caps, best)
         assert [int(x) for x in p["discount_factors"]] == factors
+        automatic = verify(command(["--bound-steps", "16"]), values, uses, requires, caps)
+        assert fraction(automatic["selected"]["discounted_value"]) >= 0
+
+
+def automatic_fractional():
+    for suffix in ("pcpsp", "prec"):
+        (ROOT / ("model." + suffix)).write_bytes((REPO / "tests/planning" / ("fractional." + suffix)).read_bytes())
+    values, uses, requires, caps = [[0, 10]], [[[0], [2]]], [[]], [[1]]
+    original = (ROOT / "model.pcpsp").read_text()
+    report = command()
+    p = verify(report, values, uses, requires, caps, Q(5))
+    assert p["candidate"] is None
+    assert p["selected"]["origin"] in ("fractional_greedy", "fractional_improved")
+    assert fraction(p["selected"]["discounted_value"]) == 5
+    assert rows(p["selected"]["solution"]) == [(0, 0, 0, Q(1, 2)), (0, 1, 0, Q(1, 2))]
+    assert command() == report
+    whole = verify(command(["--share-decimals", "0"]), values, uses, requires, caps)
+    assert fraction(whole["selected"]["discounted_value"]) == 0
+    # Exact integer step must floor 1/3 at each requested decimal scale.
+    (ROOT / "model.pcpsp").write_text(original.replace("0 1 0 2", "0 1 0 3"))
+    uses = [[[0], [3]]]
+    for digits in (1, 2, 9):
+        part = Q(10**digits // 3, 10**digits)
+        p = verify(command(["--share-decimals", str(digits)]), values, uses, requires, caps)
+        assert fraction(p["selected"]["discounted_value"]) == 10 * part
+        assert rows(p["selected"]["solution"])[1][3] == part
+    # Local whole search drops the negative dump, but its fractional seed remains profitable.
+    (ROOT / "model.pcpsp").write_text(original.replace("0 0 10", "0 -2 10"))
+    p = verify(command(), [[-2, 10]], [[[0], [2]]], requires, caps, Q(4))
+    assert fraction(p["selected"]["discounted_value"]) == 4
+    # A same-period precedence cycle has a feasible external whole mining set
+    # that Kahn's internal start cannot construct. Its fractional improvement
+    # remains available even when whole local-search rounds are explicitly zero.
+    cyclic = original.replace("NBLOCKS: 1", "NBLOCKS: 2")
+    cyclic = cyclic.replace("0 0 10\n", "0 0 10\n1 0 0\n")
+    (ROOT / "model.pcpsp").write_text(cyclic)
+    (ROOT / "model.prec").write_text("0 1 1\n1 1 0\n")
+    (ROOT / "candidate.sol").write_text("0 0 0 1\n1 0 0 1\n")
+    p = verify(command(["--candidate", "candidate.sol", "--rounds", "0"]),
+               [[0, 10], [0, 0]], [[[0], [2]], [[0], [0]]], [[1], [0]], caps, Q(5))
+    assert fraction(p["selected"]["discounted_value"]) == 5
+    assert p["selected"]["origin"] == "fractional_candidate"
 
 
 known_split()
+automatic_fractional()
 generated_models()
-print("PASS: split known answer, exact refusal/feasibility cases, and 16 enumerated models with independently replayed global bounds")
+print("PASS: external and automatic split known answers, exact decimal-grid floors, negative seed retention, and 16 enumerated models with independently replayed global bounds")

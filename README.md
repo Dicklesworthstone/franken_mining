@@ -375,8 +375,9 @@ with block 0 removed it is `not_closed`, because eight pit blocks require block 
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.
 It reads MineLib block/destination values, precedence arcs and per-period resource limits, constructs
-a whole-block schedule, improves its periods and destinations, and independently checks the selected
-schedule. A global Lagrangian upper bound is recomputed from the returned prices over **every model
+a whole-block schedule, improves its periods and destinations, then tries profitable fractional
+destination allocations at fixed mining periods. Every selected schedule is independently checked.
+A global Lagrangian upper bound is recomputed from the returned prices over **every model
 block**, including negative-value material that can enable a blend.
 
 ```bash
@@ -391,6 +392,24 @@ total **33**, while satisfying a signed blending row exactly. An outside candida
 each mined block must total exactly one, and every predecessor must be completely mined in the same
 or an earlier period. Whole-block candidates can seed further search. A better feasible split candidate
 is retained exactly; the solver does not silently round its destinations.
+
+Fractional allocations can also be generated without an outside candidate:
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/fractional.pcpsp --prec tests/planning/fractional.prec \
+  --list-schedule --format markdown
+```
+
+This synthetic model earns **5** by processing half a block where the best whole-block choice earns **0**.
+The bounded pricing pass proposes destination columns; exact integer interpolation takes the largest
+feasible step at the declared share precision and admits only strict value improvements. It checks
+every signed resource row, so fractional rounding never buys an infeasible increment. Both the initial
+and improved whole schedules are considered, retaining fractional opportunities in material that
+whole-block search would otherwise discard. Admitted external whole schedules and their improved
+versions can also seed fractional allocations, including mining sets the internal start cannot construct.
+This is a heuristic over bounded pricing directions;
+it does not claim an optimal fractional destination assignment or alter mining periods during polishing.
 
 The JSON reports the input hashes, decimal scales, rounding counts, exact rational discounted value,
 resource usage, candidate infeasibility witnesses, bound prices and gap. `--list-schedule` includes
@@ -1162,6 +1181,38 @@ signal actions (including the existing resolution of posterior ties), and both c
 It does not choose a new policy after seeing the stressed law or treat conditional state means as realized
 test outcomes. Existing nominal VOI, tail-risk and act-now regret results remain visible. All extra policy
 transport solves count toward the declared work bound.
+
+### Screen choices against an explicit downside limit
+
+The optional source-bound limit specifies a monetary floor in the model's currency and valuation basis,
+and an exact maximum probability of realized net payoff strictly below that floor:
+
+```toml
+[[downside_limit]]
+floor = "0.0000"
+max_breach_probability = "3/20"
+```
+
+Every act-now action and displayed fixed information policy retains its conditional breach probability
+by original state, nominal probability and eligibility. With declared Wasserstein robustness, each
+choice also has its worst-case breach probability, eligibility and an exact transport certificate.
+Both eligibility screens rank the surviving choices by **nominal expected value**; the probability
+constraint does not silently replace that objective with a worst-mean objective. All exact ties and
+rejected choices remain visible. If every choice fails, the result explicitly says `no_eligible_choice`
+with no fallback, winner or fabricated value.
+
+```bash
+cargo run -p fmine-cli -- decide card tests/decisions/downside_limit.toml --format markdown
+```
+
+In this synthetic example the test policy has nominal loss probability **1/8** and stressed loss
+probability **3/16**. A limit of **3/20** therefore admits it nominally and rejects it under stress.
+The nominal screen selects its **$67.5M** expected value; the stressed screen selects the **$30M**
+fixed-return alternative, with **$37.5M** of nominal expected value forgone. Equality with the probability
+limit passes, and payoff exactly at the floor is not a breach. Test and delay costs are charged once
+in each realized signal outcome; a conditional mean is never substituted for that outcome's loss event.
+The screen neither recalibrates probabilities nor reoptimizes policies, measures loss severity,
+certifies physical feasibility or authorizes execution. Omitting the limit preserves existing card output.
 
 ### Evaluate whether testwork is worth buying
 

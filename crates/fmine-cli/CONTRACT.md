@@ -61,7 +61,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     exact destination splits; infeasibility is diagnostic and never admits an incumbent. Structural errors
     refuse. Selected value and feasibility are recomputed, final Lagrangian prices replayed over every
     model block, and JSON emits exact rational value/gap plus the price witness. `--list-schedule` emits
-    canonical reusable MineLib rows. No external claimed bound, calibration, sampling confidence, reserve
+    canonical reusable MineLib rows. Bounded price columns propose exact decimal-grid destination splits
+    at fixed mining periods from internal and admitted external whole starts; only checked strict gains
+    are retained, with genuine external splits preferred on equal value. No external claimed bound, calibration, sampling confidence, reserve
     status or execution permission is inferred. `xtask/tests/plan_schedule.rs` invokes a Python Fraction
     oracle against the actual binary, including independent exhaustive primal and dual-price checks.
   - DESIGN (BD-176/287): `plant recovery --input <worksheet.toml>` reads the bounded, byte-bound

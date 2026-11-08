@@ -170,14 +170,51 @@ fn exact_split_beats_every_whole_destination_and_is_retained_without_rounding() 
 }
 
 #[test]
+fn generates_a_profitable_split_without_an_external_candidate() {
+    let m = model(&[[0, 10]], &[[0, 2]], &[1], "0", &[vec![]]);
+    let p = solve(&m, options(8), None).unwrap();
+    assert_eq!(p.origin, "fractional_greedy");
+    assert_eq!(p.discounted_numerator, 5_000 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(p.gap_numerator, 0);
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n"
+    );
+    assert!(p.candidate.is_none());
+    assert_certificate(&m, &p);
+}
+
+#[test]
+fn initial_greedy_mining_set_is_polished_before_local_search_discards_a_loss_making_dump() {
+    let m = model(&[[-2, 10]], &[[0, 2]], &[1], "0", &[vec![]]);
+    let p = solve(&m, options(8), None).unwrap();
+    assert_eq!(p.heuristic.after, 0);
+    assert_eq!(p.heuristic.schedule, [None]);
+    assert_eq!(p.origin, "fractional_greedy");
+    assert_eq!(p.discounted_numerator, 4_000 * i128::from(DISCOUNT_SCALE));
+    // The full-block split earns 4. The scheduling LP can mine only half the
+    // block entirely to the mill and earn 5, avoiding the other half's dump
+    // cost. Therefore this bound has a real relaxation gap, even at optimal
+    // prices: mu=5*F makes the mill's reduced value zero and prices capacity at5.
+    let hand = lp::lagrangian_value(&m, &[0], &p.factors, &[vec![5 * DISCOUNT_SCALE]]).unwrap();
+    assert_eq!(hand.bound, 5 * i128::from(DISCOUNT_SCALE));
+    assert!(p.bound.bound >= hand.bound);
+    assert!(p.gap_numerator >= 1_000 * i128::from(DISCOUNT_SCALE));
+    assert_certificate(&m, &p);
+}
+
+#[test]
 fn infeasible_outside_candidate_is_reported_and_cannot_replace_the_incumbent() {
     let m = model(&[[0, 10]], &[[0, 2]], &[1], "0", &[vec![]]);
     for text in ["0 1 0 1\n", "0 0 0 0.499\n0 1 0 0.5\n"] {
         let external = candidate::parse_solution(text, &m, 3).unwrap();
         let p = solve(&m, options(4), Some(&external)).unwrap();
-        assert_eq!(p.origin, "empty");
-        assert_eq!(p.discounted_numerator, 0);
-        assert!(p.schedule.assignments().is_empty());
+        assert_eq!(p.origin, "fractional_greedy");
+        assert_eq!(p.discounted_numerator, 5_000 * i128::from(DISCOUNT_SCALE));
+        assert_eq!(
+            candidate::write_solution(&p.schedule),
+            "0 0 0 0.5\n0 1 0 0.5\n"
+        );
         let assessment = p.candidate.as_ref().unwrap();
         assert!(!assessment.checked.feasible());
         assert!(assessment.discounted_numerator > 0);
@@ -198,12 +235,11 @@ fn whole_candidate_seeds_destination_search_that_the_greedy_start_cannot_reach()
         &[vec![1], vec![0]],
     );
     let external = candidate::parse_solution("0 0 0 1\n1 0 0 1\n", &m, 3).unwrap();
-    let frozen = solve(&m, options(0), Some(&external)).unwrap();
-    assert_eq!(frozen.origin, "external_candidate");
-    assert_eq!(frozen.schedule, external);
+    let without_whole_search = solve(&m, options(0), Some(&external)).unwrap();
+    assert_eq!(without_whole_search.origin, "fractional_candidate");
     assert_eq!(
-        frozen.discounted_numerator,
-        2_000 * i128::from(DISCOUNT_SCALE)
+        without_whole_search.discounted_numerator,
+        10_000 * i128::from(DISCOUNT_SCALE)
     );
     let p = solve(&m, options(8), Some(&external)).unwrap();
     assert_eq!(p.origin, "improved_candidate");
@@ -214,6 +250,29 @@ fn whole_candidate_seeds_destination_search_that_the_greedy_start_cannot_reach()
         2_000 * i128::from(DISCOUNT_SCALE)
     );
     assert_eq!(candidate::write_solution(&p.schedule), "0 1 0 1\n1 1 0 1\n");
+    assert_certificate(&m, &p);
+}
+
+#[test]
+fn an_admitted_whole_mining_cycle_can_seed_a_fraction_the_internal_start_cannot_reach() {
+    let m = model(
+        &[[0, 10], [0, 0]],
+        &[[0, 2], [0, 0]],
+        &[1],
+        "0",
+        &[vec![1], vec![0]],
+    );
+    let external = candidate::parse_solution("0 0 0 1\n1 0 0 1\n", &m, 3).unwrap();
+    let p = solve(&m, options(8), Some(&external)).unwrap();
+    assert_eq!(p.heuristic.schedule, [None, None]);
+    assert_eq!(p.origin, "fractional_candidate");
+    assert_eq!(p.discounted_numerator, 5_000 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(p.candidate.as_ref().unwrap().discounted_numerator, 0);
+    assert_eq!(p.gap_numerator, 0);
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n"
+    );
     assert_certificate(&m, &p);
 }
 
@@ -278,9 +337,21 @@ fn every_price_iterate_bounds_an_independent_exhaustive_oracle_on_signed_tiny_mo
         )
         .unwrap();
         assert_certificate(&m, &p);
-        // The selected plan is whole when there is no external candidate.
+        // Whole selected plans remain bounded by the integer oracle. An
+        // internally generated fractional plan may legitimately exceed it.
         let oracle = exhaustive_whole(&m, &p.factors);
-        assert!(p.discounted_numerator <= oracle * 100, "seed {seed}");
+        if p.schedule
+            .assignments()
+            .iter()
+            .all(|a| a.fraction == p.schedule.scale())
+        {
+            assert!(p.discounted_numerator <= oracle * 100, "seed {seed}");
+        } else {
+            assert!(matches!(
+                p.origin,
+                "fractional_greedy" | "fractional_improved"
+            ));
+        }
     }
 }
 
