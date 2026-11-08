@@ -1801,11 +1801,22 @@ Gaussian forecasts retain each selected outcome's probability integral transform
 histogram. Bernoulli forecasts retain their original probability bins, complete and resolved-only mean
 probabilities, observed event frequencies and completion bounds for pending outcomes. Compare the resolved
 mean probability with the observed event frequency; those two quantities use the same population. Empty-bin
-averages remain absent, and pending forecasts never disappear from the denominators. Empirical distributions,
-sparse quantiles and standalone intervals remain explicitly unsupported for these diagnostics. JSON and saved
-journal Markdown reports preserve the selected sources and parent assessment digest, so later outcomes or
-restatements cannot rewrite the earlier diagnostic report. These are descriptive diagnostics, not calibration
-verdicts, confidence intervals or claims of independent observations.
+averages remain absent, and pending forecasts never disappear from the denominators. Empirical distributions
+retain exact counts below, equal to and above the selected outcome, with CDF bounds
+`[below/n, (below+equal)/n]`. Separate decile bins preserve ties through definite/possible counts and missing
+outcome completion bounds; they do not invent a randomized PIT or pool empirical ranks with Gaussian PIT.
+Sparse quantiles and standalone intervals remain unsupported for that CDF projection. JSON and saved-journal
+Markdown preserve the selected sources and parent assessment digest, so later outcomes or restatements cannot
+rewrite an earlier diagnostic report. These are descriptive diagnostics, not calibration verdicts, confidence
+intervals or claims of independent observations.
+
+DESIGN (BD-048/049): the sibling `interval_coverage` projection reports central **50%, 80% and 95%** coverage.
+Gaussian and empirical distributions supply their central quantiles; explicit intervals and quantile tables
+contribute only exactly declared levels. Each level shows its supported population, unresolved and unsupported
+counts, hits, lower misses and upper misses. Completion bounds retain every supported unresolved forecast;
+an empty denominator is unavailable. Every member remains visible with its inclusive interval or unavailable
+reason. Empirical ties may give more than the nominal mass. The separate CVG1/v1 digest binds the original
+assessment and selection without changing existing forecast, cohort, assessment or DGN1 diagnostic identities.
 
 The synthetic example below keeps an unresolved northern forecast in its two-member group: the observed
 interval score is 10, while the final group mean can range from 10 to 260 under its declared outcome domain.

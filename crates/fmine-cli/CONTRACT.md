@@ -46,6 +46,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   reports retain their v1 bytes and shape. Parent forecast/cohort/assessment identities remain unchanged.
   Missing members remain in full-population completion bounds; resolved and full probability averages are
   separate. Empty bins have absent averages, and unsupported distributions remain explicit.
+  A sibling `interval_coverage` object (`fmine.forecast-coverage.v1`, CVG1/v1) adds central 50/80/95%
+  coverage with per-member bounds, hits, miss sides and explicit unsupported-level reasons. Fractions use
+  the complete supported population; unresolved and unsupported counts remain separate, and empty
+  denominators are null. Explicit intervals/quantiles require exact declared levels; empirical ties may
+  exceed nominal mass. JSON and Markdown delegate to the same kernel projection without changing DGN1.
   `robot-docs.forecast_diagnostics` documents exact edges, ties and descriptive scope; the surface performs
   no outcome selection, randomized PIT, uniformity inference or calibration verdict.
 - **Verbs:**

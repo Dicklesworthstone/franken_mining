@@ -5,17 +5,13 @@ use std::fmt::Write as _;
 
 use fmine_calib::Assessment;
 use fmine_calib::ledger::diagnostics::{
-    AssessmentDiagnostics, BIN_RULE, DiagnosticValue, EMPIRICAL_METHOD, PIT_METHOD, SCOPE,
+    BIN_RULE, DiagnosticValue, EMPIRICAL_METHOD, PIT_METHOD, SCOPE,
 };
 use fmine_evidence::Refusal;
 
 use super::{Replay, display_or, js, optional_number, pair, selector_name, utc};
 
-pub(super) const ROBOT_DOCS_JSON: &str = r#"{"scope":"Read-only descriptive projection of a saved assessment; no new outcomes or authority time","gaussian":"Per-member PIT and fixed-decile histogram via the existing normal CDF, retaining approximate values and tail saturation","bernoulli":"Fixed probability bins with full and resolved mean probabilities, observed event frequencies and unresolved-outcome completion bounds","empirical":"Exact below/equal/above sample counts and closed CDF bounds [below/n,(below+equal)/n]; separate definite/possible decile counts retain ties and missing outcomes without randomized PIT or a uniformity claim","bins":"[lower,upper), with 1 included in the final bin; exact edges go right; empirical fractions and bin tests use integers","missing":"Every unresolved and unsupported member remains explicit; empty-bin averages are null, never zero","identity":"Separate DGN1/v2 when empirical members exist, otherwise unchanged DGN1/v1; binds the exact parent assessment and diagnostic results without changing prior journal/cohort/assessment bytes","interpretation":"Descriptive only; no calibration verdict, independence estimate, confidence interval or predictive-skill claim"}"#;
-
-fn selected(state: &Replay, report: &Assessment) -> Result<AssessmentDiagnostics, Refusal> {
-    state.ledger.assessment_diagnostics(report.digest)
-}
+pub(super) const ROBOT_DOCS_JSON: &str = r#"{"scope":"Read-only descriptive projection of a saved assessment; no new outcomes or authority time","gaussian":"Per-member PIT and fixed-decile histogram via the existing normal CDF, retaining approximate values and tail saturation","bernoulli":"Fixed probability bins with full and resolved mean probabilities, observed event frequencies and unresolved-outcome completion bounds","empirical":"Exact below/equal/above sample counts and closed CDF bounds [below/n,(below+equal)/n]; separate definite/possible decile counts retain ties and missing outcomes without randomized PIT or a uniformity claim","coverage":"Separate CVG1/v1 projection of central 50/80/95 percent interval coverage; exact declared levels, per-member bounds and miss sides, supported/unresolved/unsupported populations and count-fraction completion bounds","bins":"[lower,upper), with 1 included in the final bin; exact edges go right; empirical fractions and bin tests use integers","missing":"Every unresolved and unsupported member remains explicit; empty-bin averages are null, never zero","identity":"Separate DGN1/v2 when empirical members exist, otherwise unchanged DGN1/v1; binds the exact parent assessment and diagnostic results without changing prior journal/cohort/assessment bytes","interpretation":"Descriptive only; no calibration verdict, independence estimate, confidence interval or predictive-skill claim"}"#;
 
 fn fraction(numerator: usize, denominator: usize) -> String {
     format!("{{\"num\":{numerator},\"den\":{denominator}}}")
@@ -30,7 +26,8 @@ fn fraction_bounds(lower: usize, upper: usize, denominator: usize) -> String {
 }
 
 pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<String, Refusal> {
-    let diagnostics = selected(state, report)?;
+    let diagnostics = state.ledger.assessment_diagnostics(report.digest)?;
+    let coverage = state.ledger.coverage_diagnostics(report.digest)?.to_json();
     let members = diagnostics
         .members
         .iter()
@@ -102,13 +99,9 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
         )).collect::<Vec<_>>().join(",");
         format!(",\"empirical_rank\":{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"method\":{},\"bins\":[{bins}]}}", ranks.n_members, ranks.n_resolved, ranks.n_unresolved, js(EMPIRICAL_METHOD))
     });
-    let version = if diagnostics.empirical_rank.is_some() {
-        2
-    } else {
-        1
-    };
+    let version = diagnostics.version();
     Ok(format!(
-        ",\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v{version}\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli}{empirical},\"members\":[{members}]}}",
+        ",\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v{version}\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli}{empirical},\"members\":[{members}]}},\"interval_coverage\":{coverage}",
         js(&diagnostics.assessment_digest.to_hex()),
         js(&diagnostics.cohort.to_hex()),
         js(&diagnostics.digest.to_hex()),
@@ -126,7 +119,7 @@ pub(super) fn assessment_markdown(
     report: &Assessment,
 ) -> Result<(), Refusal> {
     use crate::guidance::text;
-    let diagnostics = selected(state, report)?;
+    let diagnostics = state.ledger.assessment_diagnostics(report.digest)?;
     let _ = writeln!(
         out,
         "\n## Predictive diagnostics\n\n{SCOPE}\n\n{BIN_RULE}\n\nParent assessment: `{}`. Diagnostic report: `{}`.\n",
@@ -239,6 +232,12 @@ pub(super) fn assessment_markdown(
             value
         );
     }
+    out.push_str(
+        &state
+            .ledger
+            .coverage_diagnostics(report.digest)?
+            .to_markdown(),
+    );
     Ok(())
 }
 

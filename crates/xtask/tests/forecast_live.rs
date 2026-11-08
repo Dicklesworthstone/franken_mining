@@ -354,6 +354,14 @@ fn empirical_diagnostics_reopen_tied_missing_and_mixed_assessments_without_resel
     assert!(diagnostics.contains("Invented!A1"));
     assert!(diagnostics.contains(&"11".repeat(32)));
     let old_diagnostic_digest = string_field(diagnostics, "digest").to_string();
+    let coverage = saved.split_once("\"interval_coverage\":").unwrap().1;
+    assert!(coverage.contains("\"schema\":\"fmine.forecast-coverage.v1\""));
+    for level in [50, 80, 95] {
+        assert!(coverage.contains(&format!("\"percent\":{level},\"n_supported\":3,\"n_unsupported\":0,\"n_resolved\":2,\"n_unresolved\":1,\"inside\":2,\"below\":0,\"above\":0")));
+    }
+    assert!(coverage.contains("\"whole_supported_fraction\":{\"lower\":{\"num\":2,\"den\":3},\"upper\":{\"num\":3,\"den\":3}}"));
+    assert!(coverage.contains("\"percent\":50,\"bounds\":[1,3],\"status\":\"unresolved\""));
+    let old_coverage_digest = string_field(coverage, "digest").to_string();
 
     journal.append(
         &outcome("f1", 9, "2031-01-11T00:00:00Z", true),
@@ -382,6 +390,9 @@ fn empirical_diagnostics_reopen_tied_missing_and_mixed_assessments_without_resel
         "\"cdf_bounds\":{\"lower\":{\"num\":3,\"den\":4},",
         "\"upper\":{\"num\":4,\"den\":4}}"
     )));
+    let latest_coverage = latest.split_once("\"interval_coverage\":").unwrap().1;
+    assert_ne!(string_field(latest_coverage, "digest"), old_coverage_digest);
+    assert!(latest_coverage.contains("\"percent\":50,\"n_supported\":3,\"n_unsupported\":0,\"n_resolved\":3,\"n_unresolved\":0,\"inside\":1,\"below\":0,\"above\":2"));
 
     let bytes = fs::read(&journal.path).expect("journal before read-only replay");
     let reopened = journal.run(
@@ -405,6 +416,9 @@ fn empirical_diagnostics_reopen_tied_missing_and_mixed_assessments_without_resel
     assert!(markdown.contains("[1/4, 3/4] (below 1; equal 2; above 1)"));
     assert!(markdown.contains("unavailable (n=4)"));
     assert!(markdown.contains("not calibration verdicts"));
+    assert!(markdown.contains("### Central interval coverage"));
+    assert!(markdown.contains("| 50% | 3 / 3 | 2 | 2 | 0 | 0 | 1 | [2/3, 3/3] |"));
+    assert!(markdown.contains(&old_coverage_digest));
 }
 
 #[test]
@@ -698,6 +712,17 @@ fn restarted_journal_scores_original_and_restatement_without_losing_missing_memb
     journal.append("[[outcome]]\nforecast = \"f3\"\nkind = \"missing\"\navailable_at = \"2031-01-02T00:00:00Z\"\nreason = \"divested\"\n", ns("2031-01-05T00:00:00Z"));
     let early = journal.assess(CUT, "first-published", None, ns(CUT));
     let early_digest = assessment_digest(&early);
+    let coverage = early.split_once("\"interval_coverage\":").unwrap().1;
+    for percent in [50, 95] {
+        assert!(coverage.contains(&format!(
+            "\"percent\":{percent},\"n_supported\":0,\"n_unsupported\":3,"
+        )));
+    }
+    assert!(coverage.contains(
+        "\"observed_fraction\":null,\"whole_supported_fraction\":{\"lower\":null,\"upper\":null}"
+    ));
+    assert!(coverage.contains("\"percent\":80,\"n_supported\":3,\"n_unsupported\":0,\"n_resolved\":2,\"n_unresolved\":1,\"inside\":1,\"below\":0,\"above\":1"));
+    assert!(coverage.contains("\"bounds\":null,\"status\":\"level_not_supplied\""));
     // Independent Winkler answers: f1 = 10 + (2 / .2) * 2 = 30; f2 = 4; mean = 17.
     for expected in [
         "\"n_members\":3,\"n_resolved\":2,\"n_unresolved\":1,",

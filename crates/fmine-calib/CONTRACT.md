@@ -78,6 +78,17 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   empirical counts, bounds and rules when empirical members exist; all other reports retain DGN1/v1 bytes.
   Forecast, cohort and assessment identities are unchanged. The projection supplies no calibration verdict,
   independence estimate, confidence interval or retrospective outcome selection.
+- DESIGN (BD-048/049): `coverage_diagnostics(saved_digest)` separately reports central 50%, 80% and 95%
+  interval coverage from that same saved selection. Gaussian and empirical distributions supply their
+  central quantiles; explicit intervals and quantile tables require exactly matching declared levels,
+  without interpolation or tolerance-based substitution. Bounds are inclusive; empirical ties may produce
+  more than the nominal mass. Each level retains supported, unsupported, resolved and unresolved counts,
+  hits and both miss sides. Completion fractions use all supported members, including unresolved outcomes;
+  empty denominators remain absent. Every member retains its bounds or explicit unavailable reason.
+  CVG1/v1 binds the parent, selected-event/source evidence and these results without changing DGN1 or earlier
+  forecast/cohort/assessment identities. Pure JSON and Markdown renderers expose this descriptive projection;
+  no calibration, independence or confidence claim follows. Public-API acceptance tests live in
+  `xtask/tests/forecast_diagnostics.rs`; private bin/count edge tests remain beside the kernel.
 - BD-343: `freeze_cohort(CohortSpec)` freezes sorted membership, the resolution rule, eligible sources and
   `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
   Payloads are Gaussian, a uniform empirical distribution, an interval with a stated or explicitly absent
@@ -195,7 +206,11 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   pure, with failed freezes/assessments leaving authority times, sealed cuts and caches unchanged. Arithmetic
   uses finite log evidence and is `DeterministicPerIsa`; exponentiated displays may be absent when they cannot
   represent a finite positive value. The numerical kernel caps monitoring at 1,000,000 observations.
-- `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs, non-positive std_dev, alpha outside (0, 1) and inverted intervals refuse; nothing is clamped, bd-8wrk)
+- `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs,
+  non-positive std_dev, alpha outside (0, 1), inverted intervals and unrepresentable results refuse; nothing
+  is clamped, BD-048/bd-8wrk). Opposite-sign Gaussian endpoints are scaled before an overflowing subtraction;
+  CRPS retains representable absolute-error limits at tiny forecast scales. Winkler penalties divide the miss
+  before multiplying when the reciprocal level overflows. Ordinary finite paths retain their pinned digests.
 - DESIGN (BD-047/BD-048): `ForecastPayload::Empirical { samples }` freezes a uniform univariate predictive
   distribution with 1–4,096 finite samples. Repeated values retain their probability mass; supplied sample
   order and exact bits participate in the forecast and cohort identities. The new payload tag is 4; existing

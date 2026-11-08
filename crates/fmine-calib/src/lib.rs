@@ -82,11 +82,19 @@ pub fn apply_calibration_gate<T: Clone>(claim: &mut Claim<T>, flag: CalibrationF
 /// $\text{CRPS}(\mathcal{N}(\mu, \sigma^2), y) = \sigma \left[ z (2 \Phi(z) - 1) + 2 \phi(z) - \frac{1}{\sqrt{\pi}} \right]$.
 pub fn gaussian_crps(mean: f64, std_dev: f64, y: f64) -> Result<f64, ScoreError> {
     check_gaussian(mean, std_dev, y)?;
-    let z = (y - mean) / std_dev;
+    let z = standardized_residual(mean, std_dev, y);
+    let inv_sqrt_pi = 1.0 / std::f64::consts::PI.sqrt();
+    if !z.is_finite() {
+        // DESIGN: an overflowing standardized residual has Gaussian tail terms below f64 precision.
+        // The absolute error may still be representable when the forecast scale is subnormal.
+        return finite_score((y - mean).abs() - std_dev * inv_sqrt_pi, "Gaussian CRPS");
+    }
     let phi_cdf = norm_cdf(z);
     let phi_pdf = det::exp(-0.5 * z * z) / (2.0 * std::f64::consts::PI).sqrt();
-    let inv_sqrt_pi = 1.0 / std::f64::consts::PI.sqrt();
-    Ok(std_dev * (z * (2.0 * phi_cdf - 1.0) + 2.0 * phi_pdf - inv_sqrt_pi))
+    finite_score(
+        std_dev * (z * (2.0 * phi_cdf - 1.0) + 2.0 * phi_pdf - inv_sqrt_pi),
+        "Gaussian CRPS",
+    )
 }
 
 /// $\ln 2\pi$ as the literal `det::ln(2π)` returns (`test_ln_2pi_literal_matches_det` pins the bits). It is 0.525
@@ -96,8 +104,29 @@ const LN_2PI: f64 = 1.837_877_066_409_345_6;
 /// Negative log predictive density (`NLL`) for $\mathcal{N}(\mu, \sigma^2)$ at $y$.
 pub fn gaussian_log_score(mean: f64, std_dev: f64, y: f64) -> Result<f64, ScoreError> {
     check_gaussian(mean, std_dev, y)?;
-    let z = (y - mean) / std_dev;
-    Ok(0.5 * LN_2PI + det::ln(std_dev) + 0.5 * z * z)
+    let z = standardized_residual(mean, std_dev, y);
+    finite_score(
+        0.5 * LN_2PI + det::ln(std_dev) + 0.5 * z * z,
+        "Gaussian log score",
+    )
+}
+
+fn standardized_residual(mean: f64, std_dev: f64, y: f64) -> f64 {
+    let difference = y - mean;
+    if difference.is_finite() {
+        difference / std_dev
+    } else {
+        // Opposite-sign finite endpoints can overflow subtraction even when their scaled gap fits.
+        y / std_dev - mean / std_dev
+    }
+}
+
+fn finite_score(value: f64, quantity: &'static str) -> Result<f64, ScoreError> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(ScoreError::Arithmetic { quantity })
+    }
 }
 
 /// The Philox key of the scoring-rule golden digests (bd-hp2j.3).
@@ -248,7 +277,7 @@ pub fn golden_digest_gaussian_log_score_10k() -> String {
 
 /// Winkler interval score for the central $(1 - \alpha)$ interval $[l, u]$ at realization $y$.
 ///
-/// Refuses `alpha` outside `(0, 1)`, an inverted interval and non-finite inputs; nothing is clamped.
+/// Refuses `alpha` outside `(0, 1)`, an inverted interval, non-finite inputs and unrepresentable scores.
 pub fn winkler_interval_score(lo: f64, hi: f64, alpha: f64, y: f64) -> Result<f64, ScoreError> {
     if !(lo.is_finite() && hi.is_finite() && alpha.is_finite() && y.is_finite()) {
         return Err(ScoreError::NonFinite);
@@ -260,13 +289,23 @@ pub fn winkler_interval_score(lo: f64, hi: f64, alpha: f64, y: f64) -> Result<f6
         return Err(ScoreError::InvertedInterval { lo, hi });
     }
     let width = hi - lo;
-    Ok(if y < lo {
-        width + (2.0 / alpha) * (lo - y)
+    let penalty = |distance| {
+        let multiplier = 2.0 / alpha;
+        if multiplier.is_finite() {
+            multiplier * distance
+        } else {
+            // Divide the miss first: tiny alpha and a proportionally tiny miss can have a finite score.
+            (distance / alpha) * 2.0
+        }
+    };
+    let score = if y < lo {
+        width + penalty(lo - y)
     } else if y > hi {
-        width + (2.0 / alpha) * (y - hi)
+        width + penalty(y - hi)
     } else {
         width
-    })
+    };
+    finite_score(score, "Winkler interval score")
 }
 
 /// Why a proper score refused (`bd-8wrk`): out-of-domain inputs are never floored or clamped (AGENTS rule 5).
@@ -902,6 +941,48 @@ mod tests {
         );
         // A degenerate interval (lo == hi) is valid and scores its miss penalty only.
         assert_eq!(winkler_interval_score(2.0, 2.0, 0.5, 3.0), Ok(4.0));
+    }
+
+    /// BD-048: independent limiting answers; no candidate-generated oracle or clamped input.
+    #[test]
+    fn test_scores_preserve_representable_extreme_values() {
+        let tiny = f64::from_bits(1);
+        // The interval has zero width and the miss is alpha, so the penalty is exactly two.
+        for alpha in [tiny, 1e-310] {
+            assert_eq!(winkler_interval_score(0.0, 0.0, alpha, alpha), Ok(2.0));
+            assert_eq!(winkler_interval_score(0.0, 0.0, alpha, -alpha), Ok(2.0));
+            assert_eq!(winkler_interval_score(0.0, 0.0, alpha, 0.0), Ok(0.0));
+        }
+        // At these scales the CRPS differs from absolute error by less than one ulp.
+        for sd in [tiny, 1e-310] {
+            for y in [-1.0, 1.0, f64::MAX] {
+                assert_eq!(gaussian_crps(0.0, sd, y), Ok(y.abs()));
+            }
+        }
+        // FACT: CPython math.erfc/log at standardized residual two give these independent answers.
+        // The unscaled endpoint subtraction overflows, but both proper scores are representable.
+        for (mean, y) in [(-1e308, 1e308), (1e308, -1e308)] {
+            let crps = gaussian_crps(mean, 1e308, y).unwrap() / 1e308;
+            assert!((crps - 1.452_791_821_685_903_3).abs() < 1e-12);
+            let log = gaussian_log_score(mean, 1e308, y).unwrap();
+            assert!((log - 712.115_147_175_370_8).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_scores_refuse_unrepresentable_arithmetic() {
+        for result in [
+            gaussian_crps(-f64::MAX, 1.0, f64::MAX),
+            gaussian_log_score(-f64::MAX, 1.0, f64::MAX),
+            gaussian_log_score(0.0, f64::from_bits(1), 1.0),
+            winkler_interval_score(-f64::MAX, f64::MAX, 0.2, 0.0),
+            winkler_interval_score(0.0, 0.0, f64::from_bits(1), 1.0),
+        ] {
+            assert!(
+                matches!(result, Err(ScoreError::Arithmetic { .. })),
+                "{result:?}"
+            );
+        }
     }
 
     /// `evaluate_model` had no test. Known answer over three resolved forecasts, plus the entry refusals that keep
