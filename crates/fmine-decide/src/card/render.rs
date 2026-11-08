@@ -360,6 +360,10 @@ fn information_input_json(o: &InformationOption) -> String {
 }
 
 pub(super) fn summary_json(s: &DecisionSummary) -> String {
+    let downside = s
+        .downside
+        .as_ref()
+        .map_or_else(String::new, |d| format!(",\"downside\":{}", d.to_json()));
     let robustness = s
         .robustness
         .as_ref()
@@ -369,7 +373,7 @@ pub(super) fn summary_json(s: &DecisionSummary) -> String {
         format!("{{\"action_id\":{},\"label\":{},\"role\":{},\"mean\":{},\"p10_p50_p90\":[{},{},{}],\"cvar95_loss\":{},\"mean_regret\":{},\"max_regret\":{},\"states\":[{states}]}}", js(&a.action_id), js(&a.label), js(a.role.as_str()), rq(a.mean.major), rq(a.p10_p50_p90[0].major), rq(a.p10_p50_p90[1].major), rq(a.p10_p50_p90[2].major), rq(a.cvar95_loss.major), rq(a.mean_regret.major), rq(a.max_regret.major))
     }).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"valuation_basis\":{},\"monetary_scale\":\"major_currency_units\",\"expected_value_order\":{},\"expected_value_winners\":{},\"expected_value_primary\":{},\"runner_up\":{},\"minimax_regret_order\":{},\"minimax_regret_winners\":{},\"minimax_regret_primary\":{},\"alternatives\":[{alternatives}],\"information\":{},\"sensitivity\":{}{robustness}}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"valuation_basis\":{},\"monetary_scale\":\"major_currency_units\",\"expected_value_order\":{},\"expected_value_winners\":{},\"expected_value_primary\":{},\"runner_up\":{},\"minimax_regret_order\":{},\"minimax_regret_winners\":{},\"minimax_regret_primary\":{},\"alternatives\":[{alternatives}],\"information\":{},\"sensitivity\":{}{robustness}{downside}}}",
         js(&s.model_key),
         js(&s.question),
         js(currency_name(s.currency)),
@@ -436,6 +440,12 @@ fn color_name(rank: ColorRank) -> &'static str {
 }
 
 pub(super) fn inputs_json(inputs: &DecisionInputs) -> String {
+    let downside = inputs
+        .downside_limit
+        .as_ref()
+        .map_or_else(String::new, |d| {
+            format!(",\"downside_limit\":{}", claim_json(d, &d.value.to_json()))
+        });
     let robustness = inputs.robustness.as_ref().map_or_else(String::new, |r| {
         format!(",\"robustness\":{}", claim_json(r, &r.value.to_json()))
     });
@@ -452,7 +462,7 @@ pub(super) fn inputs_json(inputs: &DecisionInputs) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"weights\":{},\"actions\":[{actions}],\"information_options\":[{options}]{robustness}}}",
+        "{{\"weights\":{},\"actions\":[{actions}],\"information_options\":[{options}]{robustness}{downside}}}",
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value))
     )
 }
@@ -527,6 +537,9 @@ impl EvaluatedCard {
         if let Some(robustness) = &s.robustness {
             out.push_str(&robustness.to_markdown());
         }
+        if let Some(downside) = &s.downside {
+            out.push_str(&downside.to_markdown());
+        }
         out.push_str("\n## Same-state payoff and regret\n\n| Action | State | Weight | Payoff | Best in hindsight | Regret |\n|---|---|---:|---:|---:|---:|\n");
         for a in &s.alternatives {
             for r in &a.states {
@@ -566,6 +579,9 @@ impl EvaluatedCard {
         }
         if let Some(configuration) = &self.inputs.robustness {
             source_markdown(&mut out, configuration);
+        }
+        if let Some(limit) = &self.inputs.downside_limit {
+            source_markdown(&mut out, limit);
         }
         let _ = write!(
             out,

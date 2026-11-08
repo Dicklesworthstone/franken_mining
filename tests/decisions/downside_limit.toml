@@ -1,0 +1,140 @@
+# Invented downside-budget exercise. All input monetary amounts are USD.
+# The test costs $10M and follows the same fixed 75%-accurate signal policy as
+# wasserstein_information.toml. It loses money only on the low/good outcome.
+# Nominal breach probability is 1/8; stressed breach probability is 3/16.
+# With a zero floor and limit 3/20, nominal screening chooses the $67.5M test policy,
+# while stressed screening rejects it and chooses the $30M fixed-return alternative.
+# Both screens rank eligible choices by nominal expected value. No fallback is invented.
+schema = "fmine.decision-model.v1"
+model_key = "invented-downside-limit"
+question = "Which declared action or fixed test policy passes a 15% probability-of-loss limit?"
+currency = "USD"
+valuation_basis = "Invented incremental NPV at 2026-01-01; real 2026 USD; 100% ownership; all payoffs already discounted"
+
+[[state]]
+id = "high"
+weight = "1/2"
+
+[[state]]
+id = "low"
+weight = "1/2"
+
+[[action]]
+id = "build"
+label = "Build the expansion"
+role = "action"
+
+[[action]]
+id = "safe"
+label = "Choose the fixed-return alternative"
+role = "action"
+
+[[action]]
+id = "hold"
+label = "Do nothing"
+role = "do_nothing"
+
+[[payoff]]
+action = "build"
+state = "high"
+value = "200000000"
+
+[[payoff]]
+action = "build"
+state = "low"
+value = "-100000000"
+
+[[payoff]]
+action = "safe"
+state = "high"
+value = "30000000"
+
+[[payoff]]
+action = "safe"
+state = "low"
+value = "30000000"
+
+[[payoff]]
+action = "hold"
+state = "high"
+value = "0"
+
+[[payoff]]
+action = "hold"
+state = "low"
+value = "0"
+
+[[information_option]]
+id = "probe"
+label = "Buy the invented test and follow its signal"
+test_cost = "6000000"
+delay_cost = "4000000"
+delay_days = 180
+
+[[signal]]
+option = "probe"
+id = "bad"
+
+[[signal]]
+option = "probe"
+id = "good"
+
+[[likelihood]]
+option = "probe"
+state = "high"
+signal = "bad"
+probability = "1/4"
+
+[[likelihood]]
+option = "probe"
+state = "high"
+signal = "good"
+probability = "3/4"
+
+[[likelihood]]
+option = "probe"
+state = "low"
+signal = "bad"
+probability = "3/4"
+
+[[likelihood]]
+option = "probe"
+state = "low"
+signal = "good"
+probability = "1/4"
+
+[[downside_limit]]
+floor = "0.0000"
+max_breach_probability = "3/20"
+
+[[robustness]]
+method = "wasserstein_1"
+radius = "1/4"
+metric_basis = "Invented unit dimensionless distance between high and low regimes"
+radius_basis = "Declared sensitivity permits transport of one quarter of unit-distance probability mass; not calibrated"
+
+[[transport_distance]]
+from = "high"
+to = "high"
+value = "0/1"
+
+[[transport_distance]]
+from = "high"
+to = "low"
+value = "1/1"
+
+[[transport_distance]]
+from = "low"
+to = "high"
+value = "1/1"
+
+[[transport_distance]]
+from = "low"
+to = "low"
+value = "0/1"
+
+[[uu]]
+id = "UU-omitted-operating-regime"
+description = "An unmodelled operating regime could change payoffs or test accuracy"
+trigger = "Independent evidence contradicts the declared state or signal model"
+downside_usd_m = "20.0"

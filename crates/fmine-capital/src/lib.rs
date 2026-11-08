@@ -1807,6 +1807,7 @@ fn populate_statistics(
             actions: actions.to_vec(),
             information_options: vec![],
             robustness: None,
+            downside_limit: None,
         })?
         .summary()
         .alternatives

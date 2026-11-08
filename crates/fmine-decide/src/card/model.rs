@@ -15,7 +15,9 @@ use fmine_numerics::exact_feas::Rat;
 use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 use fmine_units::{Currency, Money};
 
-use super::{ActionPayoffs, ActionRole, DecisionInputs, InformationOption, Likelihood, WeightSet};
+use super::{
+    ActionPayoffs, ActionRole, DecisionInputs, InformationOption, Likelihood, WeightSet, downside,
+};
 
 mod robustness;
 #[cfg(test)]
@@ -90,6 +92,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
     let mut unknowns = BTreeMap::new();
     let mut information = InformationRows::default();
     let mut robustness = robustness::Rows::default();
+    let mut downside_limit = None;
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -144,6 +147,30 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
             "likelihood" => information.likelihood(row)?,
             "robustness" => robustness.declaration(row, model_key)?,
             "transport_distance" => robustness.distance(row)?,
+            "downside_limit" => {
+                if downside_limit.is_some() {
+                    return Err(bad(INPUT, row.line, "only one downside_limit is permitted"));
+                }
+                let [floor, maximum] = strings(
+                    &row.fields,
+                    ["floor", "max_breach_probability"],
+                    row.line,
+                    INPUT,
+                )?;
+                let value = downside::DownsideLimit {
+                    model_key: model_key.into(),
+                    valuation_basis: valuation_basis.into(),
+                    floor: decimal_money(floor, currency, row.line)?,
+                    max_breach_probability: fraction(maximum, row.line, true).map_err(|_| {
+                        bad(
+                            DOMAIN,
+                            row.line,
+                            "max_breach_probability must be an exact integer fraction in [0,1]",
+                        )
+                    })?,
+                };
+                downside_limit = Some((value, row.line));
+            }
             "uu" => {
                 let [id, description, trigger, exposure] = strings(
                     &row.fields,
@@ -228,6 +255,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
         &states,
         actions.len(),
         information.options.len(),
+        downside_limit.is_some(),
         &unknowns,
         &source,
     )?;
@@ -260,6 +288,20 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
         ));
     }
     let information_options = information.finish(&states, &unknowns, &source)?;
+    let downside_limit = downside_limit.map(|(value, line)| {
+        let tag = value.canonical_tag();
+        assumed(
+            format!("decision.{model_key}.downside_limit"),
+            value,
+            &tag,
+            AdditivityClass::NonAdditive,
+            &unknowns,
+            located(
+                &source,
+                &format!("downside_limit floor and maximum breach probability, line {line}"),
+            ),
+        )
+    });
     let weights = WeightSet {
         model_key: model_key.to_string(),
         question: question.to_string(),
@@ -278,6 +320,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
         actions: claims,
         information_options,
         robustness,
+        downside_limit,
     })
 }
 

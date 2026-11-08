@@ -227,6 +227,35 @@ The projection is an internal versioned replay input (version 2), not a new dura
   conditional models, retain fixed posterior ties and impossible signals, distinguish equal action
   and option identifiers, and exercise the additional transport work cap before Claim admission.
 
+- DESIGN (BD-225/227, plan §22.4–5): `card::downside::{DownsideLimit, DownsideSummary}` adds an optional
+  common downside screen through `DecisionInputs::downside_limit` and the existing `decide card` command.
+  One `[[downside_limit]]` has exact monetary `floor` and rational `max_breach_probability` in [0,1].
+  The parser binds both controls, model, currency and valuation basis in an Assumed/Internal Claim with
+  the original row anchor. Normal canonical identity, evidence, staleness, UU and support admission apply
+  before information or transport evaluation. No default threshold, normalization or currency change occurs.
+
+  A breach is realized net payoff strictly below the floor; equality is not a breach and equality to the
+  probability cap passes. For act-now actions each state contributes its event indicator. For fixed
+  information policies each state contributes Σ_z P(z|s) 1[v(π(z),s) − test_cost − delay_cost < floor].
+  Conditional expected payoffs are never thresholded. The existing source-admitted policy reconstruction
+  retains nominal selected actions, posterior tie choices and unreachable signals, and costs apply once.
+  Nominal probabilities average this vector under original weights. If a robustness declaration exists,
+  the same already validated transport plan maximizes it and returns a complete probability-valued
+  primal/dual certificate. A further objective per original action and information policy is counted in
+  both parser and library work limits before solving. Geometry and cost ordering are reused.
+
+  `DownsideSummary` retains every kind-qualified choice, each state's conditional breach probability,
+  nominal/stressed probabilities and eligibility, and separate nominal/stressed eligible rankings.
+  Both rankings maximize nominal expected value, preserve every exact co-winner and report the loss
+  relative to the unconstrained maximum nominal value. An empty eligible set is `NoEligibleChoice`, with
+  empty ranks and null best-value/cost fields; doing nothing is never inserted as a fallback. Ordinary
+  action statistics, nominal information results and the separate maximin-value view remain unchanged.
+  Omitting the limit preserves prior output bytes and Claim identities. This does not reoptimize policies,
+  supply calibrated probabilities, bound loss severity/CVaR, certify physical feasibility or authorize action.
+  Known answers include the synthetic 1/8 nominal and 3/16 stressed test-policy loss probabilities, the
+  inclusive 3/16 limit, exact floor-neighbor changes, no eligible choice, zero/full-radius limits, source
+  mutations, early work bounds and an independent original-TOML state/signal plus primal-vertex oracle.
+
 ## 5. Guards & Typed Refusals
 `rank_voi_campaigns` validates the shared problem once, even for an empty campaign list. Every campaign must
 have a distinct nonempty identifier, a well-formed likelihood matrix and a valid cost. Any failure returns a

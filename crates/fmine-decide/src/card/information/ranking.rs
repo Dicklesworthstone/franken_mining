@@ -257,6 +257,7 @@ mod tests {
             minimax_regret_primary: "a".into(),
             information: None,
             robustness: None,
+            downside: None,
         };
         summary.alternatives.push(crate::card::AlternativeStats {
             action_id: "a".into(),

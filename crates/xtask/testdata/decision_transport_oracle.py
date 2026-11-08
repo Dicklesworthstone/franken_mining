@@ -25,6 +25,7 @@ spec.loader.exec_module(base)
 
 EXAMPLE = Path(__file__).resolve().parents[3] / "tests/decisions/wasserstein.toml"
 POLICY_EXAMPLE = EXAMPLE.with_name("wasserstein_information.toml")
+DOWNSIDE_EXAMPLE = EXAMPLE.with_name("downside_limit.toml")
 STATES = [("adverse", F(1, 4)), ("favorable", F(3, 4))]
 VALUES = {
     "build": {"adverse": F(-12), "favorable": F(12)},
@@ -155,6 +156,16 @@ def fixed_policy_values(states, values, signals, likelihoods, cost):
     return selected, ties, conditional
 
 
+def fixed_policy_breaches(states, values, selected, likelihoods, cost, floor):
+    """Evaluate the event on original realized outcomes before averaging signal likelihoods."""
+    return {
+        state: sum(likelihoods[state, signal]
+                   for signal, action in selected.items()
+                   if action is not None and values[action][state] - cost < floor)
+        for state, _ in states
+    }
+
+
 class PrimalOracleKnownAnswers(unittest.TestCase):
     def test_two_state_split_and_saturation_have_hand_answers(self):
         weights = (F(1, 4), F(3, 4))
@@ -196,6 +207,15 @@ class PrimalOracleKnownAnswers(unittest.TestCase):
         self.assertEqual(sum(weight * conditional[state] for state, weight in states), F(135, 2))
         self.assertEqual(-worst_value((F(1, 2), F(1, 2)), DISTANCES, F(1, 4),
                                      (-conditional["high"], -conditional["low"])), F(55, 2))
+        breaches = fixed_policy_breaches(states, values, selected, likelihoods, F(10), F(0))
+        self.assertEqual(breaches, {"high": 0, "low": F(1, 4)})
+        self.assertEqual(sum(weight * breaches[state] for state, weight in states), F(1, 8))
+        self.assertEqual(worst_value((F(1, 2), F(1, 2)), DISTANCES, F(1, 4),
+                                    (breaches["high"], breaches["low"])), F(3, 16))
+        self.assertEqual(fixed_policy_breaches(states, values, selected, likelihoods, F(10), F(20)),
+                         breaches, "A realized outcome equal to the floor is not a breach")
+        self.assertEqual(fixed_policy_breaches(states, values, selected, likelihoods, F(10), F(200001, 10000)),
+                         {"high": F(1, 4), "low": 1})
 
 
 class TransportScenarios(unittest.TestCase):
@@ -321,6 +341,8 @@ class TransportScenarios(unittest.TestCase):
                           for anchor in claim["anchors"]}, source_lines)
         inputs = [card["input_claims"]["weights"], *card["input_claims"]["actions"],
                   *card["input_claims"]["information_options"], claim]
+        if "downside_limit" in card["input_claims"]:
+            inputs.append(card["input_claims"]["downside_limit"])
         self.assertEqual(set(card["output_claim"]["parents"]), {item["id"] for item in inputs})
         source_hash = base.hashlib.sha256((root / base.FILE).read_bytes()).hexdigest()
         for item in [*inputs, card["output_claim"]]:
@@ -406,6 +428,168 @@ class TransportScenarios(unittest.TestCase):
         self.assertEqual(fixed["nominal_winner_survives_maximin"],
                          bool(set(nominal_winners) & set(adverse_winners)))
         return root, card
+
+    def checked_downside(self, text):
+        declared = tomllib.loads(text)
+        states = [(row["id"], F(row["weight"])) for row in declared["state"]]
+        values = {row["id"]: {} for row in declared["action"]}
+        for row in declared["payoff"]:
+            values[row["action"]][row["state"]] = F(row["value"])
+        names = sorted(state for state, _ in states)
+        weights = [dict(states)[state] for state in names]
+        radius, metric = None, None
+        if "robustness" in declared:
+            distances = {(row["from"], row["to"]): F(row["value"])
+                         for row in declared["transport_distance"]}
+            radius = F(declared["robustness"][0]["radius"])
+            metric = [[distances[source, target] for target in names] for source in names]
+            if "information_option" in declared:
+                root, card = self.checked_information(text)
+            else:
+                matrix = [[distances[source, target] for target, _ in states] for source, _ in states]
+                root, card = self.checked(text, states, values, matrix, radius)
+        else:
+            root = base.fixture(text)
+            card = self.card(root)
+        limit = declared["downside_limit"][0]
+        floor, maximum = F(limit["floor"]), F(limit["max_breach_probability"])
+        result = card["summary"]["downside"]
+        self.assertEqual(result["event"], "realized_net_payoff_strictly_below_floor")
+        self.assertEqual(result["certificate_objective_unit"], "probability")
+        self.assertEqual(result["state_ids"], names)
+        self.assertEqual(list(map(self.exact, result["nominal_weights"])), weights)
+        claim = card["input_claims"]["downside_limit"]
+        self.assertEqual(claim["value"], result["limit"])
+        self.assertEqual(claim["value"]["floor"]["currency"], declared["currency"])
+        self.assertEqual(F(claim["value"]["floor"]["minor"]) / 10000, floor)
+        self.assertEqual(self.exact(claim["value"]["max_breach_probability"]), maximum)
+        self.assertEqual(claim["value"]["model_key"], declared["model_key"])
+        self.assertEqual(claim["value"]["valuation_basis"], declared["valuation_basis"])
+        self.assertIn(claim["id"], card["output_claim"]["parents"])
+        self.assertEqual(claim["evidence"], "assumed")
+        self.assertEqual(claim["confidentiality"], "Internal")
+        self.assertTrue(claim["uu_terms"])
+        self.assertEqual(len(claim["anchors"]), 1)
+        row_line = next(i for i, row in enumerate(text.splitlines(), 1) if row == "[[downside_limit]]")
+        self.assertTrue(claim["anchors"][0]["locator"].endswith(f"line {row_line}"))
+        self.assertEqual(claim["anchors"][0]["sha256"], base.hashlib.sha256(text.encode()).hexdigest())
+        expected = {}
+        for action, payoffs in values.items():
+            conditional = {state: F(payoffs[state] < floor) for state, _ in states}
+            mean = sum(weight * payoffs[state] for state, weight in states)
+            expected["act_now", action] = mean, conditional
+        for option in declared.get("information_option", []):
+            identifier = option["id"]
+            signals = [row["id"] for row in declared["signal"] if row["option"] == identifier]
+            likelihoods = {(row["state"], row["signal"]): F(row["probability"])
+                           for row in declared["likelihood"] if row["option"] == identifier}
+            cost = F(option["test_cost"]) + F(option["delay_cost"])
+            selected, _, means = fixed_policy_values(states, values, signals, likelihoods, cost)
+            conditional = fixed_policy_breaches(states, values, selected, likelihoods, cost, floor)
+            expected["information_option", identifier] = (
+                sum(weight * means[state] for state, weight in states), conditional)
+        self.assertEqual([(row["kind"], row["id"]) for row in result["choices"]], sorted(expected))
+        eligible, robust_eligible = {}, {}
+        for row in result["choices"]:
+            key = row["kind"], row["id"]
+            mean, conditional = expected[key]
+            self.assertEqual(self.exact(row["nominal_mean"]), mean)
+            self.assertEqual(list(map(self.exact, row["conditional_breach_probabilities"])),
+                             [conditional[state] for state in names])
+            probability = sum(weight * conditional[state] for state, weight in states)
+            self.assertEqual(self.exact(row["nominal_breach_probability"]), probability)
+            self.assertEqual(row["nominal_eligible"], probability <= maximum)
+            if probability <= maximum:
+                eligible[key] = mean
+            if radius is None:
+                self.assertIsNone(row["worst_case_breach_probability"])
+                self.assertIsNone(row["robust_eligible"])
+                self.assertIsNone(row["breach_certificate"])
+            else:
+                worst = self.certificate(row["breach_certificate"], weights, metric, radius,
+                                         [conditional[state] for state in names])
+                self.assertEqual(self.exact(row["worst_case_breach_probability"]), worst)
+                self.assertEqual(row["robust_eligible"], worst <= maximum)
+                if worst <= maximum:
+                    robust_eligible[key] = mean
+
+        def ranking(actual, admissible):
+            self.assertEqual(actual["objective"], "nominal_expected_value")
+            keys = sorted(admissible, key=lambda key: (-admissible[key], key))
+            record = lambda key: {"kind": key[0], "id": key[1]}
+            self.assertEqual(actual["eligible_order"], list(map(record, keys)))
+            if not keys:
+                self.assertEqual(actual["status"], "no_eligible_choice")
+                self.assertEqual(actual["winners"], [])
+                self.assertIsNone(actual["best_expected_value"])
+                self.assertIsNone(actual["expected_value_cost_of_limit"])
+            else:
+                best = admissible[keys[0]]
+                self.assertEqual(actual["status"], "eligible_choices")
+                self.assertEqual(actual["winners"], [record(key) for key in keys if admissible[key] == best])
+                self.assertEqual(self.exact(actual["best_expected_value"]), best)
+                self.assertEqual(self.exact(actual["expected_value_cost_of_limit"]),
+                                 max(mean for mean, _ in expected.values()) - best)
+
+        ranking(result["nominal"], eligible)
+        if radius is None:
+            self.assertIsNone(result["robust"])
+        else:
+            ranking(result["robust"], robust_eligible)
+        return root, card
+
+    def test_runnable_downside_example_uses_realized_signal_events_and_retains_all_choices(self):
+        root, card = self.checked_downside(DOWNSIDE_EXAMPLE.read_text(encoding="utf-8"))
+        result = card["summary"]["downside"]
+        policy = next(row for row in result["choices"] if row["kind"] == "information_option")
+        self.assertEqual(F(policy["nominal_breach_probability"]), F(1, 8))
+        self.assertEqual(F(policy["worst_case_breach_probability"]), F(3, 16))
+        self.assertEqual(result["nominal"]["winners"], [{"kind": "information_option", "id": "probe"}])
+        self.assertEqual(result["robust"]["winners"], [{"kind": "act_now", "id": "safe"}])
+        self.assertEqual(F(result["robust"]["expected_value_cost_of_limit"]), 37_500_000)
+        self.assertEqual(len(result["choices"]), 4)
+        markdown = base.invoke(root, "markdown")
+        self.assertEqual(markdown.returncode, 0, markdown.stderr)
+        for fragment in ("Downside probability limit", "probability per metric unit",
+                         "| information_option | probe | 67500000/1 | 1/8 | eligible | 3/16 | rejected |"):
+            self.assertIn(fragment, markdown.stdout)
+
+    def test_downside_limit_equality_floor_neighbors_empty_sets_and_radius_extremes(self):
+        original = DOWNSIDE_EXAMPLE.read_text(encoding="utf-8")
+        for floor, maximum, radius in [
+            ("0.0000", "3/16", "1/4"), ("20000000", "1/1", "1/4"),
+            ("20000000.0001", "1/1", "1/4"), ("30000000.0001", "0/1", "1/4"),
+            ("-110000000", "0/1", "1/4"), ("0.0000", "3/20", "0/1"),
+            ("0.0000", "3/20", "1/1"),
+        ]:
+            with self.subTest(floor=floor, maximum=maximum, radius=radius):
+                text = original.replace('floor = "0.0000"', f'floor = "{floor}"')
+                text = text.replace('max_breach_probability = "3/20"', f'max_breach_probability = "{maximum}"')
+                text = text.replace('radius = "1/4"', f'radius = "{radius}"')
+                root, card = self.checked_downside(text)
+                if maximum == "3/16":
+                    self.assertEqual(card["summary"]["downside"]["robust"]["winners"],
+                                     [{"kind": "information_option", "id": "probe"}])
+                if floor == "30000000.0001":
+                    markdown = base.invoke(root, "markdown")
+                    self.assertEqual(markdown.returncode, 0, markdown.stderr)
+                    self.assertIn("**No eligible choice.**", markdown.stdout)
+                    self.assertIn("no fallback is selected", markdown.stdout)
+
+    def test_nominal_only_downside_supports_zero_one_caps_ties_and_kind_qualified_ids(self):
+        states = [("high", F(1, 2)), ("low", F(1, 2))]
+        values = {"build": {"high": F(200), "low": F(-100)},
+                  "hold": {"high": F(0), "low": F(0)}}
+        signals = [(state, signal, "1/2") for state, _ in states for signal in ("good", "bad")]
+        text = model(states, values, include_robustness=False)
+        text += base.information("build", signals, test_cost="0", delay_cost="0")
+        for cap in ("0/1", "1/1"):
+            limited = text + base.block("downside_limit", [("floor", "0"), ("max_breach_probability", cap)])
+            _, card = self.checked_downside(limited)
+            if cap == "1/1":
+                self.assertEqual(card["summary"]["downside"]["nominal"]["winners"],
+                                 [{"kind": "act_now", "id": "build"},
+                                  {"kind": "information_option", "id": "build"}])
 
     def test_runnable_information_example_reverses_the_joint_choice_with_certified_policy_value(self):
         root, card = self.checked_information(POLICY_EXAMPLE.read_text(encoding="utf-8"))

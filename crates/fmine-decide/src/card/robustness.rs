@@ -10,9 +10,11 @@ mod render;
 #[cfg(test)]
 mod tests;
 
+pub(in crate::card) use policies::conditional_breach_probabilities;
 pub use policies::{
     FIXED_POLICY_SCOPE, FixedPolicyChoice, FixedPolicyComparison, RobustInformationPolicy,
 };
+pub(in crate::card) use render::{append_certificate, certificate_json};
 
 pub const METHOD: &str = "wasserstein_1";
 pub const MAX_TRANSPORT_STATES: usize = 64;
@@ -122,18 +124,18 @@ pub(super) fn check_work(inputs: &DecisionInputs) -> Result<()> {
     let design = &claim.value;
     let states = inputs.weights.value.states.len();
     let cells = states.checked_mul(states);
-    let objectives = inputs
-        .actions
-        .len()
-        .checked_mul(2)
-        .and_then(|n| n.checked_add(inputs.information_options.len()));
+    let objectives = objective_count(
+        inputs.actions.len(),
+        inputs.information_options.len(),
+        inputs.downside_limit.is_some(),
+    );
     let work = cells.and_then(|n| objectives.and_then(|m| n.checked_mul(m)));
     if !(1..=MAX_TRANSPORT_STATES).contains(&states)
         || cells != Some(design.distances.len())
         || work.is_none_or(|n| n > MAX_TRANSPORT_WORK)
     {
         return Err(bad(
-            "Wasserstein robustness requires 1..=64 states, every ordered distance pair and at most 2097152 objective/state-pair evaluations (two per action and one per information policy)",
+            "Wasserstein robustness requires 1..=64 states, every ordered distance pair and at most 2097152 objective/state-pair evaluations (two per action and one per information policy, plus one per choice with a downside limit)",
         ));
     }
     if design.method != METHOD
@@ -161,6 +163,23 @@ pub(super) fn check_work(inputs: &DecisionInputs) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+pub(in crate::card) fn objective_count(
+    actions: usize,
+    policies: usize,
+    downside: bool,
+) -> Option<usize> {
+    actions
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(policies))
+        .and_then(|n| {
+            if downside {
+                n.checked_add(actions)?.checked_add(policies)
+            } else {
+                Some(n)
+            }
+        })
 }
 
 fn rankings(rows: &[RobustAlternative], regret: bool) -> (Vec<String>, Vec<String>) {
@@ -196,9 +215,9 @@ pub(super) fn assess(
     configuration: &mut Option<Claim<RobustnessDesign>>,
     information_options: &[Claim<information::InformationOption>],
     summary: &DecisionSummary,
-) -> Result<(Option<RobustnessSummary>, ColorRank)> {
+) -> Result<(Option<RobustnessSummary>, ColorRank, Option<TransportPlan>)> {
     let Some(claim) = configuration else {
-        return Ok((None, ColorRank::Verified));
+        return Ok((None, ColorRank::Verified, None));
     };
     let color = admit(
         claim,
@@ -316,5 +335,6 @@ pub(super) fn assess(
             fixed_policy_comparison,
         }),
         color,
+        Some(plan),
     ))
 }

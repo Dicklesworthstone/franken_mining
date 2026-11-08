@@ -17,6 +17,7 @@ use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, Re
 use fmine_numerics::exact_feas::Rat;
 use fmine_units::{Currency, Money, UnitsError};
 
+pub mod downside;
 pub mod information;
 pub mod model;
 mod render;
@@ -77,6 +78,7 @@ pub struct DecisionInputs {
     pub actions: Vec<Claim<ActionPayoffs>>,
     pub information_options: Vec<Claim<InformationOption>>,
     pub robustness: Option<Claim<robustness::RobustnessDesign>>,
+    pub downside_limit: Option<Claim<downside::DownsideLimit>>,
 }
 
 fn put_rat(enc: &mut Encoder, value: Rat) {
@@ -183,6 +185,7 @@ pub struct DecisionSummary {
     /// Expected-value comparisons for buying at most one test. The base risk/regret matrix stays separate.
     pub information: Option<InformationSummary>,
     pub robustness: Option<robustness::RobustnessSummary>,
+    pub downside: Option<downside::DownsideSummary>,
 }
 
 /// Sealed computed comparison; input and output snapshots have no mutable accessors.
@@ -625,18 +628,26 @@ fn evaluate_impl(inputs: &DecisionInputs, require_do_nothing: bool) -> Result<Ev
         minimax_regret_winners,
         information: None,
         robustness: None,
+        downside: None,
     };
+    weakest = weakest.min(downside::admit_limit(&mut inputs.downside_limit, &summary)?);
     let (information, information_color) =
         information::assess(&mut inputs.information_options, &summary)?;
     summary.information = information;
     weakest = weakest.min(information_color);
-    let (robustness, robustness_color) = robustness::assess(
+    let (robustness, robustness_color, transport) = robustness::assess(
         &mut inputs.robustness,
         &inputs.information_options,
         &summary,
     )?;
     summary.robustness = robustness;
     weakest = weakest.min(robustness_color);
+    summary.downside = downside::assess(
+        inputs.downside_limit.as_ref(),
+        &inputs.information_options,
+        &summary,
+        transport.as_ref(),
+    )?;
     let mut binding = Encoder::new_frame(*b"DCCL", 1);
     binding.put_str(&render::summary_json(&summary));
     binding.put_str(&render::inputs_json(&inputs));
@@ -651,6 +662,9 @@ fn evaluate_impl(inputs: &DecisionInputs, require_do_nothing: bool) -> Result<Ev
     }
     if let Some(configuration) = &inputs.robustness {
         metadata.include(configuration)?;
+    }
+    if let Some(limit) = &inputs.downside_limit {
+        metadata.include(limit)?;
     }
     let claim = Claim::new(
         "decision.finite-scenario/1",
@@ -835,6 +849,7 @@ mod tests {
             actions,
             information_options: Vec::new(),
             robustness: None,
+            downside_limit: None,
         }
     }
 

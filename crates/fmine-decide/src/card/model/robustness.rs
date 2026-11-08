@@ -96,6 +96,7 @@ impl Rows {
         states: &BTreeMap<String, Rat>,
         action_count: usize,
         information_count: usize,
+        downside: bool,
         unknowns: &[UuTerm],
         source: &SourceAnchor,
     ) -> Result<Option<Claim<RobustnessDesign>>, Refusal> {
@@ -109,9 +110,8 @@ impl Rows {
             }
             return Ok(None);
         };
-        let objectives = action_count
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(information_count));
+        let objectives =
+            crate::card::robustness::objective_count(action_count, information_count, downside);
         let work = states
             .len()
             .checked_mul(states.len())
@@ -124,7 +124,7 @@ impl Rows {
             return Err(bad(
                 DOMAIN,
                 line,
-                "robustness requires at most 64 states, 256 actions and 2097152 objective/state-pair evaluations (two per action and one per information policy)",
+                "robustness requires at most 64 states, 256 actions and 2097152 objective/state-pair evaluations (two per action and one per information policy, plus one per choice with a downside limit)",
             ));
         }
         for ((from, to), (_, distance_line)) in &self.distances {

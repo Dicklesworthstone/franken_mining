@@ -40,7 +40,7 @@ impl RobustnessDesign {
     }
 }
 
-fn certificate_json(c: &TransportCertificate) -> String {
+pub(in crate::card) fn certificate_json(c: &TransportCertificate) -> String {
     let arcs = c
         .arcs
         .iter()
@@ -168,22 +168,24 @@ impl FixedPolicyComparison {
                 &p.loss_certificate,
                 state_ids,
                 nominal_weights,
+                "major currency units",
             );
         }
     }
 }
 
-fn append_certificate(
+pub(in crate::card) fn append_certificate(
     out: &mut String,
     id: &str,
     kind: &str,
     c: &TransportCertificate,
     state_ids: &[String],
     nominal_weights: &[Rat],
+    objective_unit: &str,
 ) {
     let _ = writeln!(
         out,
-        "\n### Transport witness: {} / {}\n\nMaximum expected {}: **{}**. Transport cost: **{}** of radius **{}**. Dual multiplier: **{}** major currency units per metric unit. Dual objective: **{}**; exact duality gap: **{}**.\n\n| State | Nominal mass | Adversarial mass | Dual potential |\n|---|---:|---:|---:|",
+        "\n### Transport witness: {} / {}\n\nMaximum expected {}: **{}**. Transport cost: **{}** of radius **{}**. Dual multiplier: **{}** {} per metric unit. Dual objective: **{}**; exact duality gap: **{}**.\n\n| State | Nominal mass | Adversarial mass | Dual potential |\n|---|---:|---:|---:|",
         md(id),
         kind,
         kind,
@@ -191,6 +193,7 @@ fn append_certificate(
         ratio(c.transport_cost),
         ratio(c.radius),
         ratio(c.dual_lambda),
+        objective_unit,
         ratio(c.dual_value),
         ratio(c.duality_gap)
     );
@@ -296,6 +299,7 @@ impl RobustnessSummary {
                     c,
                     &self.state_ids,
                     &self.nominal_weights,
+                    "major currency units",
                 );
             }
         }

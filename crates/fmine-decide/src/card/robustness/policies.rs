@@ -53,6 +53,25 @@ fn conditional_payoffs(
     policy: &InformationStats,
     summary: &DecisionSummary,
 ) -> Result<Vec<Rat>> {
+    conditional_values(option, policy, summary, None).map(|(values, _)| values)
+}
+
+/// Breaches refer to realized net signal outcomes, never a state's conditional expected payoff.
+pub(in crate::card) fn conditional_breach_probabilities(
+    option: &InformationOption,
+    policy: &InformationStats,
+    summary: &DecisionSummary,
+    floor: Rat,
+) -> Result<Vec<Rat>> {
+    conditional_values(option, policy, summary, Some(floor)).map(|(_, breaches)| breaches)
+}
+
+fn conditional_values(
+    option: &InformationOption,
+    policy: &InformationStats,
+    summary: &DecisionSummary,
+    floor: Option<Rat>,
+) -> Result<(Vec<Rat>, Vec<Rat>)> {
     let states = &summary
         .alternatives
         .first()
@@ -84,6 +103,11 @@ fn conditional_payoffs(
         .map(|l| ((l.state_id.as_str(), l.signal_id.as_str()), l.probability))
         .collect();
     let mut values = vec![arithmetic(cost.checked_neg())?; states.len()];
+    let mut breaches = if floor.is_some() {
+        vec![ZERO; states.len()]
+    } else {
+        Vec::new()
+    };
     let mut totals = vec![ZERO; states.len()];
     let mut signals = BTreeSet::new();
     for signal in &policy.signals {
@@ -134,6 +158,11 @@ fn conditional_payoffs(
                 .major;
             values[index] =
                 arithmetic(values[index].checked_add(arithmetic(likelihood.checked_mul(payoff))?))?;
+            if let Some(floor) = floor
+                && compare(arithmetic(payoff.checked_sub(cost))?, floor).is_lt()
+            {
+                breaches[index] = arithmetic(breaches[index].checked_add(likelihood))?;
+            }
         }
         if probability != signal.probability {
             return Err(failed(
@@ -155,7 +184,7 @@ fn conditional_payoffs(
             "fixed-policy state means disagree with the admitted nominal value",
         ));
     }
-    Ok(values)
+    Ok((values, breaches))
 }
 
 pub(super) fn assess(

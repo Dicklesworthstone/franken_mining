@@ -324,6 +324,7 @@ fn transport_input_bounds_precede_metric_evaluation_and_invalid_metrics_refuse()
             &states,
             2,
             0,
+            false,
             &declared(MODEL).weights.uu_terms,
             &source(&text),
         )
