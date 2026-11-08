@@ -23,6 +23,7 @@ pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
 pub mod reserve;
+pub mod schedule;
 mod tables;
 mod track_record;
 mod track_record_as_of;
@@ -61,6 +62,8 @@ pub enum CliCommand {
     MetricsGeo(geo::Command),
     /// The certified ultimate pit of a MineLib UPIT pair (bd-ip99).
     PlanPit(pit::Command),
+    /// Checked PCPSP production schedule, external destination splits and a verified global bound.
+    PlanSchedule(schedule::Command),
     /// Account or reconcile declared elemental inventory with original observations retained.
     Plant(plant::Command),
     /// Project exact registered HTML cells with source-verified semantic labels into canonical Claims.
@@ -520,7 +523,18 @@ fn verb_hint(args: &[String]) -> &'static str {
                 }
                 return "metrics cost";
             }
-            "plan" => return "plan pit",
+            "plan" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--format" | "--workspace" => next += 2,
+                        "--json" => next += 1,
+                        "schedule" => return "plan schedule",
+                        _ => return "plan pit",
+                    }
+                }
+                return "plan pit";
+            }
             "plant" => return "plant",
             "html" => return "html claims",
             "mirror" => return "mirror",
@@ -858,13 +872,14 @@ pub fn parse_args(
     let verb = verb_hint(args);
     if matches!(
         verb,
-        "metrics cost" | "metrics geo" | "plan pit" | "html claims" | "plant"
+        "metrics cost" | "metrics geo" | "plan pit" | "plan schedule" | "html claims" | "plant"
     ) {
         let (words, format, root) = common_options(args, default_root)?;
         let command = match verb {
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
             "plan pit" => CliCommand::PlanPit(pit::parse(&words)?),
+            "plan schedule" => CliCommand::PlanSchedule(schedule::parse(&words)?),
             "plant" => CliCommand::Plant(plant::parse(&words)?),
             _ => CliCommand::HtmlClaims(html::parse(&words)?),
         };
@@ -1745,6 +1760,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
+        CliCommand::PlanSchedule(command) => schedule::execute(command, workspace_root),
         CliCommand::Plant(command) => plant::execute(command, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
@@ -2129,6 +2145,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 cost::USAGE,
                 geo::USAGE,
                 pit::USAGE,
+                schedule::USAGE,
                 plant::BALANCE_USAGE,
                 plant::RECONCILE_USAGE,
                 plant::PROJECT_USAGE,
@@ -2233,6 +2250,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(geo::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_pit\":");
             payload.push_str(pit::ROBOT_DOCS_JSON);
+            payload.push_str(",\"plan_schedule\":");
+            payload.push_str(schedule::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_inventory\":");
             payload.push_str(plant::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_material\":");

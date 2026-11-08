@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -54,6 +54,16 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   `robot-docs.forecast_diagnostics` documents exact edges, ties and descriptive scope; the surface performs
   no outcome selection, randomized PIT, uniformity inference or calibration verdict.
 - **Verbs:**
+  - DESIGN (plan §15.4, `UntrustedCandidate`): `plan schedule --pcpsp <file> --prec <file>`
+    runs `fmine-optimize::toposort::pcpsp::planning` with bounded rounds and bound steps. Inputs are
+    regular UTF-8 files of at most 1 GiB, SHA-256 bound. Exact value/resource/share scales are explicit;
+    resource rounding is conservative and all counts are emitted. An optional external solution retains
+    exact destination splits; infeasibility is diagnostic and never admits an incumbent. Structural errors
+    refuse. Selected value and feasibility are recomputed, final Lagrangian prices replayed over every
+    model block, and JSON emits exact rational value/gap plus the price witness. `--list-schedule` emits
+    canonical reusable MineLib rows. No external claimed bound, calibration, sampling confidence, reserve
+    status or execution permission is inferred. `xtask/tests/plan_schedule.rs` invokes a Python Fraction
+    oracle against the actual binary, including independent exhaustive primal and dual-price checks.
   - DESIGN (BD-176/287): `plant recovery --input <worksheet.toml>` reads the bounded, byte-bound
     `fmine.plant-recovery.v1` worksheet and delegates to `fmine-plant::cards::RecoveryModel`.
     One versioned test-work formula, exact input requirements, ordered operational factors, a correction,

@@ -1231,3 +1231,162 @@ fn pinned_heads_detect_stale_writers_tampering_and_rollback_without_rewriting_ev
             .contains("\"n_forecasts\":1,\"n_cohorts\":1,")
     );
 }
+
+// Renderer acceptance goes through durable public commands and reopens the saved assessment.
+mod diagnostic_rendering {
+    use super::*;
+
+    fn fixture(
+        name: &str,
+        rule: &str,
+        locator: &str,
+        forecasts: &[(&str, u8, &str)],
+        outcomes: &[(&str, &str)],
+    ) -> ((String, Envelope), Digest32) {
+        let mut journal = Journal::new(ns("2025-12-31T00:00:00Z"), 0);
+        for (id, due_day, payload) in forecasts {
+            journal.append(
+                &format!("[[forecast]]\nid = \"{id}\"\nmodel_key = \"synthetic-model\"\noutcome_due = \"2026-02-{due_day:02}T00:00:00Z\"\n{payload}\n"),
+                ns("2026-01-01T00:00:00Z"),
+            );
+        }
+        let members = forecasts
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect::<Vec<_>>()
+            .join(",");
+        journal.append(
+            &format!("[[cohort]]\nname = \"{name}\"\nmembers = \"{members}\"\nresolution_rule = \"{rule}\"\neligible_sources = \"synthetic\"\n"),
+            ns("2026-01-02T00:00:00Z"),
+        );
+        for (forecast, value) in outcomes {
+            journal.append(
+                &format!("[[outcome]]\nforecast = \"{forecast}\"\navailable_at = \"2026-02-01T00:00:01Z\"\nkind = \"published\"\nvalue = \"{value}\"\nsource = \"synthetic\"\nvintage = \"first\"\nlocator = \"{locator}\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000001\"\n"),
+                ns("2026-02-01T00:00:01Z"),
+            );
+        }
+        let saved = journal.ok(
+            Command::Assess {
+                journal: journal.path.clone(),
+                head: journal.head,
+                cohort: name.into(),
+                as_of: "2026-02-01T00:00:02Z".into(),
+                selector: "first-published".into(),
+                expected_digest: None,
+            },
+            ns("2026-02-01T00:00:02Z"),
+        );
+        let digest = assessment_digest(&saved);
+        let reopened = journal.run(
+            &Command::Report {
+                journal: journal.path.clone(),
+                head: Some(journal.head),
+                assessment: digest,
+                provenance: None,
+                timestamp: None,
+            },
+            0,
+        );
+        assert_eq!(reopened.exit_code, 0, "{}", reopened.to_json());
+        assert_eq!(assessment(&saved), assessment(&reopened.payload_json));
+        ((saved, reopened), digest)
+    }
+
+    fn render(state: &(String, Envelope), _: &Digest32) -> (String, String) {
+        let diagnostic = assessment(&state.1.payload_json)
+            .split_once(",\"diagnostics\":")
+            .expect("saved diagnostics")
+            .1
+            .split_once(",\"interval_coverage\":")
+            .expect("separate coverage projection")
+            .0;
+        let json = format!(",\"diagnostics\":{diagnostic}");
+        let markdown = state
+            .1
+            .rendered_markdown
+            .clone()
+            .expect("saved report Markdown");
+        assert!(json.contains("\"selected_event\":{\"seq\":1,"));
+        assert!(!json.contains("\"calibration_flag\""));
+        assert!(state.0.contains(&json));
+        (json, markdown)
+    }
+
+    #[test]
+    fn empirical_renderers_keep_exact_ties_missing_counts_and_separate_gaussian_population() {
+        let (state, report) = fixture(
+            "mixed",
+            "synthetic continuous outcome",
+            "synthetic:whole",
+            &[
+                ("tied", 1, "kind = \"empirical\"\nsamples = \"8,10,10,12\""),
+                (
+                    "missing",
+                    1,
+                    "kind = \"empirical\"\nsamples = \"10,10,10,10\"",
+                ),
+                (
+                    "normal",
+                    1,
+                    "kind = \"gaussian\"\nmean = \"10\"\nstd_dev = \"2\"",
+                ),
+            ],
+            &[("tied", "10"), ("normal", "10")],
+        );
+        let (json, markdown) = render(&state, &report);
+        assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v2\""));
+        assert!(
+            json.contains("\"gaussian_pit\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,")
+        );
+        assert!(
+            json.contains(
+                "\"empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"
+            )
+        );
+        assert!(json.contains("\"n_samples\":4,\"below\":1,\"equal\":2,\"above\":1,"));
+        assert!(json.contains(concat!(
+            "\"cdf_bounds\":{\"lower\":{\"num\":1,\"den\":4},",
+            "\"upper\":{\"num\":3,\"den\":4}}"
+        )));
+        assert!(json.contains(concat!(
+            "\"n_samples\":4,\"below\":null,\"equal\":null,",
+            "\"above\":null,\"cdf_bounds\":null"
+        )));
+        assert!(json.contains(concat!(
+            "\"whole_population_fraction\":{\"lower\":{\"num\":0,\"den\":2},",
+            "\"upper\":{\"num\":2,\"den\":2}}"
+        )));
+        assert!(json.contains("synthetic:whole"));
+        assert!(markdown.contains("### Empirical CDF rank intervals"));
+        assert!(markdown.contains("Empirical population: 2; resolved: 1; unresolved: 1."));
+        assert!(markdown.contains("[1/4, 3/4] (below 1; equal 2; above 1)"));
+        assert!(markdown.contains("unavailable (n=4)"));
+        assert!(markdown.contains("no randomized PIT, uniformity or calibration"));
+    }
+
+    #[test]
+    fn renderers_retain_sources_missing_members_and_descriptive_boundaries() {
+        let (state, report) = fixture(
+            "events",
+            "synthetic binary event",
+            "synthetic:whole-event",
+            &[
+                ("hit", 1, "kind = \"bernoulli\"\nprobability = \"0.15\""),
+                ("pending", 2, "kind = \"bernoulli\"\nprobability = \"0.19\""),
+            ],
+            &[("hit", "1")],
+        );
+        let (json, markdown) = render(&state, &report);
+        assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v1\""));
+        assert!(json.contains("\"gaussian_pit\":null"));
+        assert!(!json.contains("\"empirical_rank\""));
+        assert!(json.contains("\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1"));
+        assert!(json.contains("\"whole_bin_frequency\":[0.5,1]"));
+        assert!(json.contains("synthetic:whole-event"));
+        assert!(json.contains("\"reason\":\"pending\""));
+        assert!(markdown.contains("Bernoulli reliability bins"));
+        assert!(markdown.contains("not calibration verdicts"));
+        assert!(markdown.contains("pending (`"));
+        assert!(markdown.contains(&report.to_hex()));
+    }
+}

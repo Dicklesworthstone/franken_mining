@@ -1,5 +1,7 @@
 //! Independent state/signal expectations, adverse laws and fixed-policy boundaries.
 
+//! Determinism: Exact
+
 use super::*;
 use fmine_core::anchor::SourceAnchor;
 

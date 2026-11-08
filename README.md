@@ -371,6 +371,45 @@ with a verdict: `not_closed`, `optimal` or `suboptimal`. Nothing the candidate s
 MineLib's kd, for example, the optimal pit without its highest-numbered block is `suboptimal` by 132,781.5934, and
 with block 0 removed it is `not_closed`, because eight pit blocks require block 0.
 
+### Generate and check production schedules with destination splits
+
+`plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.
+It reads MineLib block/destination values, precedence arcs and per-period resource limits, constructs
+a whole-block schedule, improves its periods and destinations, and independently checks the selected
+schedule. A global Lagrangian upper bound is recomputed from the returned prices over **every model
+block**, including negative-value material that can enable a blend.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/split.pcpsp --prec tests/planning/split.prec \
+  --candidate tests/planning/split.sol --list-schedule --format markdown
+```
+
+The example is invented arithmetic: a half-dump/half-mill allocation gives period values **12 and 21**,
+total **33**, while satisfying a signed blending row exactly. An outside candidate uses four columns:
+`block destination period fraction`, with zero-based indices and `%` comments. Fractions never round;
+each mined block must total exactly one, and every predecessor must be completely mined in the same
+or an earlier period. Whole-block candidates can seed further search. A better feasible split candidate
+is retained exactly; the solver does not silently round its destinations.
+
+The JSON reports the input hashes, decimal scales, rounding counts, exact rational discounted value,
+resource usage, candidate infeasibility witnesses, bound prices and gap. `--list-schedule` includes
+canonical solution text that the same reader accepts. Structural candidate errors refuse. A structurally
+valid but infeasible candidate remains a reported finding and cannot become the selected schedule.
+
+Value and resource scales default to six decimal places; `--decimals`, `--use-decimals` and
+`--share-decimals` accept 0–9. Shares default to nine places. Values with excess precision refuse unless
+`--round` is requested; resource uses round up and limits down. `--rounds` defaults to 20 and
+`--bound-steps` to 64. Period-zero discount is `2^40`, and later integer factors follow the disclosed
+floor recurrence. All reported monetary comparisons use those same factors.
+
+The certificate covers the supplied deterministic model and rounding convention. A positive gap is
+distance to an upper bound, not proof that the incumbent can be improved by that amount. General side
+constraints, lower/equality resource limits, stochastic sampling error and empirical input calibration
+remain outside this slice. The independent Python Fraction oracle checks the actual binary against the
+example and 16 generated models, including exhaustive feasible schedules and independent dual-price
+replay; these are known answers, not operating-mine validation.
+
 ### Turn registered HTML tables into cited Claims
 
 `html claims` reads local, registered HTML filings and explicit label mappings into canonical public Claims:
@@ -1102,6 +1141,27 @@ The metric and radius define a conditional sensitivity analysis. They supply no 
 coverage or protection from omitted regimes. Nominal tail statistics and information-option values remain
 unchanged; this view does not reoptimize information policies or claim robust CVaR or physical feasibility.
 Models without the declaration keep their existing output bytes.
+
+With information options in the same model, the card also compares each **fixed signal policy** with
+acting now under the same state-weight stress. Run the complete synthetic example:
+
+```bash
+cargo run -p fmine-cli -- decide card tests/decisions/wasserstein_information.toml --format markdown
+cargo run -p fmine-cli -- decide card tests/decisions/wasserstein_information.toml --json
+```
+
+Its 75%-accurate test chooses the fixed-return alternative on a bad signal and expansion on a good signal.
+After its $6M test cost and $4M delay cost, the policy has a nominal expected value of **$67.5M**. Under the
+declared radius of 1/4, its worst expected value falls to **$27.5M**, while acting on the fixed-return
+alternative retains **$30M**. The new `fixed_policy_comparison` reports that change, the policy's conditional
+net value in every original state, its selected signal actions, and an independently checkable exact
+transport certificate. Action and information-option identifiers remain distinct even when their names match.
+
+This comparison varies only the scenario weights. It preserves the original test likelihoods, the displayed
+signal actions (including the existing resolution of posterior ties), and both costs charged exactly once.
+It does not choose a new policy after seeing the stressed law or treat conditional state means as realized
+test outcomes. Existing nominal VOI, tail-risk and act-now regret results remain visible. All extra policy
+transport solves count toward the declared work bound.
 
 ### Evaluate whether testwork is worth buying
 

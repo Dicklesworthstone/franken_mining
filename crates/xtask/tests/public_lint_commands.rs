@@ -260,4 +260,141 @@ mod tests {
             "FMINE-REF-505"
         );
     }
+
+    // Source-adapter acceptance checks run through the public CLI router.
+    fn root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    #[test]
+    fn missing_draft_is_a_named_refusal_and_is_never_created() {
+        let path = root().join("corpus_of_input_docs/lint-does-not-exist.md");
+        assert!(!path.exists());
+        let envelope = fmine_cli::invoke(
+            &args(&["lint", path.to_str().expect("UTF-8 path"), "--synthetic"]),
+            &root(),
+        )
+        .0;
+        assert_eq!(envelope.status, "refused");
+        assert!(
+            envelope
+                .refusal
+                .expect("missing draft")
+                .what
+                .contains("lint-does-not-exist.md")
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn lint_names_missing_registered_inputs_and_rejects_invalid_draft_bytes() {
+        let workspace = temporary_workspace("missing");
+        let registry = workspace.join("registries/sources");
+        std::fs::create_dir_all(&registry).expect("registry directory");
+        std::fs::copy(
+            root().join("registries/sources/barrick.toml"),
+            registry.join("barrick.toml"),
+        )
+        .expect("public registry");
+        std::fs::write(workspace.join("draft.md"), "A local draft with no numbers.")
+            .expect("draft");
+        let envelope = fmine_cli::invoke(
+            &args(&[
+                "lint",
+                "draft.md",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026Q2",
+            ]),
+            &workspace,
+        )
+        .0;
+        let refusal = envelope.refusal.expect("missing corpus");
+        assert_eq!(refusal.code, "FMINE-REF-506");
+        assert!(refusal.what.contains("Barrick_Q2_2026_Mine_Stats.xlsx"));
+        let invalid = workspace.join("invalid.md");
+        std::fs::write(&invalid, [0xff, 0xfe]).expect("invalid text fixture");
+        let rejected = fmine_cli::invoke(
+            &args(&["lint", invalid.to_str().expect("UTF-8 path"), "--synthetic"]),
+            &workspace,
+        )
+        .0;
+        assert_eq!(rejected.status, "refused");
+        assert!(
+            rejected
+                .refusal
+                .expect("invalid UTF-8")
+                .what
+                .contains("invalid.md")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the registered Barrick workbooks through 2026Q2"]
+    fn real_draft_verifies_north_mara_and_flags_e474_as_stale() {
+        let workspace = temporary_workspace("real-draft");
+        let draft = workspace.join("draft.md");
+        std::fs::write(&draft, concat!(
+            "North Mara Q2 2026 attributable AISC per ounce sold is [$2,577/oz](fmine:clm_f6e6c9b2ea703557f2a3b2f49b22b1aa).\n",
+            "Total Gold Q1 2024 ownership basis unprinted AISC per ounce sold is [$1,479/oz](fmine:clm_4750828f283992dd0a3fbf0db5febf70).\n",
+        )).expect("local real-reference draft");
+        let envelope = fmine_cli::invoke(
+            &args(&[
+                "lint",
+                draft.to_str().expect("UTF-8 path"),
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026Q2",
+            ]),
+            &root(),
+        )
+        .0;
+        assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+        assert_eq!(
+            envelope
+                .payload_json
+                .matches("\"verdict\":\"verified\"")
+                .count(),
+            1
+        );
+        assert_eq!(
+            envelope
+                .payload_json
+                .matches("\"verdict\":\"stale\"")
+                .count(),
+            1
+        );
+        assert!(
+            envelope
+                .payload_json
+                .contains("Barrick_Q2_2026_Mine_Stats.xlsx:QTD!G19")
+        );
+        let historical = fmine_cli::invoke(
+            &args(&[
+                "lint",
+                draft.to_str().expect("UTF-8 path"),
+                "--issuer",
+                "barrick",
+                "--through",
+                "2024Q1",
+            ]),
+            &root(),
+        )
+        .0;
+        assert_eq!(historical.exit_code, 0);
+        assert_eq!(
+            historical
+                .payload_json
+                .matches("\"verdict\":\"verified\"")
+                .count(),
+            1
+        );
+        assert!(!historical.payload_json.contains("\"verdict\":\"stale\""));
+    }
 }

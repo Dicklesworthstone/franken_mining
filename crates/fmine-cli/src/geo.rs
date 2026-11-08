@@ -3,11 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
-use fmine_core::Digest32;
 use fmine_evidence::Refusal;
 use fmine_metrics::definitions::geo::{self, worksheet};
 
-use crate::{Envelope, NextAction, escape_json, worksheet_input};
+use crate::{Envelope, NextAction, worksheet_input};
 
 const MAX_BYTES: u64 = 1024 * 1024;
 pub const USAGE: &str = "metrics geo --input <worksheet.toml>";
@@ -55,11 +54,9 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             worksheet_input::read(&root.join(&command.input), "GEO worksheet", MAX_BYTES)?;
         let receipt = worksheet::evaluate(&text, source.clone())?;
         let payload = format!(
-            "{{\"schema\":\"{}\",\"mode\":\"declared_production_geo\",\"source\":{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{}}},\"receipt\":{}}}",
+            "{{\"schema\":\"{}\",\"mode\":\"declared_production_geo\",\"source\":{},\"receipt\":{}}}",
             worksheet::SCHEMA,
-            escape_json(&source.artifact_path),
-            Digest32(source.artifact_sha256),
-            text.len(),
+            worksheet_input::source_json(&source, text.len()),
             receipt.to_json()
         );
         let mut envelope = Envelope::ok("metrics geo", payload, Vec::new());

@@ -3,7 +3,7 @@
 use std::io::Read as _;
 use std::path::Path;
 
-use fmine_core::{anchor::SourceAnchor, hash::sha256};
+use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 
 pub(super) fn read(
@@ -11,10 +11,33 @@ pub(super) fn read(
     kind: &str,
     max_bytes: u64,
 ) -> Result<(String, SourceAnchor), Refusal> {
+    read_source(path, kind, max_bytes, None)
+}
+
+/// Decision and capital models retain their established source locators and input-error text.
+pub(super) fn read_model(
+    path: &Path,
+    kind: &str,
+    locator: &str,
+) -> Result<(String, SourceAnchor), Refusal> {
+    read_source(path, kind, 4 * 1024 * 1024, Some(locator))
+}
+
+fn read_source(
+    path: &Path,
+    kind: &str,
+    max_bytes: u64,
+    model_locator: Option<&str>,
+) -> Result<(String, SourceAnchor), Refusal> {
+    let (input, path_error, encoding, noun) = if model_locator.is_some() {
+        ("", "source path must be UTF-8", "", "model")
+    } else {
+        (" input", "path must be UTF-8", " UTF-8", "input")
+    };
     let fail = |why: String| {
         Refusal::new(
             RefusalCode::InputMissingOrUnreadable506,
-            format!("{kind} input {}: {why}", path.display()),
+            format!("{kind}{input} {}: {why}", path.display()),
         )
     };
     let limit = if max_bytes.is_multiple_of(1024 * 1024) {
@@ -22,13 +45,11 @@ pub(super) fn read(
     } else {
         format!("{max_bytes} bytes")
     };
-    let name = path
-        .to_str()
-        .ok_or_else(|| fail("path must be UTF-8".into()))?;
+    let name = path.to_str().ok_or_else(|| fail(path_error.into()))?;
     let metadata = std::fs::metadata(path).map_err(|e| fail(e.to_string()))?;
     if !metadata.is_file() || metadata.len() > max_bytes {
         return Err(fail(format!(
-            "expected a regular UTF-8 file of at most {limit}"
+            "expected a regular{encoding} file of at most {limit}"
         )));
     }
     let read_limit = max_bytes
@@ -41,12 +62,24 @@ pub(super) fn read(
         .read_to_end(&mut bytes)
         .map_err(|e| fail(e.to_string()))?;
     if bytes.len() as u64 > max_bytes {
-        return Err(fail(format!("input exceeds {limit}")));
+        return Err(fail(format!("{noun} exceeds {limit}")));
     }
     let digest = sha256(&bytes);
     let text = String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?;
     Ok((
         text,
-        SourceAnchor::new(name, digest.0, format!("declared {kind} source")),
+        SourceAnchor::new(
+            name,
+            digest.0,
+            model_locator.map_or_else(|| format!("declared {kind} source"), str::to_string),
+        ),
     ))
+}
+
+pub(super) fn source_json(source: &SourceAnchor, bytes: usize) -> String {
+    format!(
+        "{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{bytes}}}",
+        crate::escape_json(&source.artifact_path),
+        Digest32(source.artifact_sha256)
+    )
 }

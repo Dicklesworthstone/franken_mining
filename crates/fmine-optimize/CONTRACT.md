@@ -54,7 +54,7 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
     - `lagrangian_bound` moves the prices by Polyak subgradient steps toward a target, such as the incumbent's value, and halves the step after `STALL` steps without a better bound. It keeps the least bound and every step's.
     - At its minimum over the prices the bound is the LP relaxation's optimum, since the closure polytope is integral. The step rule is not proved to get there.
 
-`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. `fmine-io`'s `omf::pit::PitModel` (bd-joiv) calls `slope::slope_arcs`, `solve` and `shells::nested_shells` on OMF block models. It also calls `toposort::greedy`, `toposort::search::discount_factors` and `toposort::search::improve` (bd-fr8x) to schedule OMF block models under capacities, and `toposort::lp`'s `relaxation`, `Shares`, `starts` and `incumbent` (bd-djb7), solving the relaxation with fmine-lp's PDLP in between. `toposort::pcpsp` has no caller outside tests. The MineLib harnesses in `crates/xtask/tests/` call `toposort::lp` and `toposort::pcpsp::lp`, and `cpit_schedule.rs` reads MineLib's schedules through `cpit::parse_solution` and writes its own with `write_solution` (bd-3l5o). `cpit_schedule.rs` also runs `toposort::lp::lagrangian_bound` when asked (bd-oq7d). Bienstock–Zuckerberg, a Lagrangian bound for PCPSP, and the stochastic layer are later slices.
+`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. `fmine-io`'s `omf::pit::PitModel` (bd-joiv) calls `slope::slope_arcs`, `solve` and `shells::nested_shells` on OMF block models. It also calls `toposort::greedy`, `toposort::search::discount_factors` and `toposort::search::improve` (bd-fr8x) to schedule OMF block models under capacities, and `toposort::lp`'s `relaxation`, `Shares`, `starts` and `incumbent` (bd-djb7), solving the relaxation with fmine-lp's PDLP in between. `fmine plan schedule` now calls `toposort::pcpsp::planning` for checked incumbents, exact external destination splits and replayed global Lagrangian bounds. The MineLib harnesses in `crates/xtask/tests/` call `toposort::lp` and `toposort::pcpsp::lp`, and `cpit_schedule.rs` reads MineLib's schedules through `cpit::parse_solution` and writes its own with `write_solution` (bd-3l5o). `cpit_schedule.rs` also runs `toposort::lp::lagrangian_bound` when asked (bd-oq7d). Bienstock–Zuckerberg and the stochastic layer remain later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
@@ -63,6 +63,16 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - **Allowed Module Families:** `["pitflow", "toposort"]`
 
 ## 2. Inputs
+- `toposort::pcpsp::planning::solve`: a parsed PCPSP model, bounded `Options` (0–1,000 search rounds,
+  1–4,096 bound steps, 0–9 share decimals), and an optional exact `candidate::SplitSchedule` at that
+  scale. It builds a deterministic TopoSort start, improves periods/destinations, compares the empty
+  schedule and the exact external candidate, and searches from a feasible whole-block external candidate.
+  Fractional candidates are retained without rounding. Selected feasibility and value are recomputed;
+  the best Lagrangian prices are independently replayed over **every model block**. The result retains
+  the original candidate's findings, selected source, integer discount factors, bound prices/history and
+  exact nonnegative gap numerator. The certificate covers deterministic integer model arithmetic only.
+  `planning/tests.rs` checks positive splits, whole-candidate warm starts, signed blending helpers,
+  overflow refusals and 24 enumerated models. The CLI `plan schedule` uses this production path.
 - One `i64` value per block, in a caller-chosen integer money unit; the caller scales and rounds, never this crate. The one exception is `pitflow::minelib`, which scales a UPIT file's decimals at the places the caller declares and rounds only when the caller asks.
 - For `pitflow::minelib`: the two files' text, the number of decimal places and a `Rounding`.
 - Precedence arcs `u → v`, read "taking `u` requires taking `v`", either as CSR (`ClosureProblem::new(weights, offsets, targets)`) or as one list per block (`from_requirements`). Duplicate arcs and self-loops are accepted. Cycles are accepted too: a cycle's blocks are taken together or not at all.
@@ -487,22 +497,40 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - MineLib's nine schedules, valued by the test and by the oracle, come to their published values within 9 units; marvin's is 885,968,061.5 against 885,968,070. Their fractions are printed to six places. Some single fractions read 1.000001, a block's fractions sum to 1 within 10⁻⁴, and limits are exceeded by at most 1.1×10⁻⁸ of the limit. Those are the only problems the exact oracle finds (none on newman1, 2 to 518 elsewhere), so they are infeasible by rounding only: no precedence is unmet and no block is in two periods. `check`, which takes whole blocks, does not read them.
 
 ## 10. Known gaps
+- Split-destination candidate admission now has a production path in
+  `toposort::pcpsp::candidate` (plan §15.4 `UntrustedCandidate`, §15.6 destination
+  splitting). The four-column MineLib format is read without trusting objective
+  comments. Fractions use a caller-declared decimal scale of at most nine places;
+  unrepresentable values refuse instead of rounding. Positive fractions of each
+  mined block must share one period, and the exact checker requires their sum to
+  be one. A required block must be completely mined in the same or an earlier
+  period. Signed resource rows are accumulated exactly in `i128`, including
+  negative blending credits. Incomplete blocks, unmet arcs and exceeded limits
+  retain deterministic diagnostics; structural errors and overflow refuse.
+  Candidate and whole-block schedules share a canonical exact writer. The
+  checker recomputes per-period value, resource use and an optional integer-factor
+  discounted objective; it supplies no optimality bound and never treats a
+  rounding-sized constraint violation as feasible. Eight focused tests exercise
+  exact split values, binding signed blends, one-unit decimal perturbations,
+  precedence, malformed files, canonical ordering, bounded witnesses, whole-block
+  parity and checked overflow. Authentic MineLib split schedules remain an
+  external-corpus check, not evidence supplied by these synthetic cases.
 - `bd-nzwd` and `bd-t75z` have one caller, `fmine-io`'s `omf::pit::PitModel` (bd-joiv). It feeds `slope_arcs`, `solve` and `nested_shells` a regular OMF block model whose values are attributes, tested so far only on synthetic files. `BD-250`'s other caller is `fmine plan pit`, on MineLib UPIT pairs only. No price deck feeds any of them, and no `fmine` verb reads OMF (fmine-cli is over its LOC budget).
 - PCPSP (`toposort::pcpsp`):
-  - Blocks are not split between destinations, so a schedule can be worth less than PCPSP's best. The LP relaxation splits them.
+  - The incumbent search does not split blocks between destinations, so its schedule can be worth less than PCPSP's best. The LP relaxation and imported split candidates support multiple destinations.
   - General side constraints and lower limits are not read.
   - w23's schedule is 4.41% below its certified bound (§9). At its own mining periods, the destination LP is worth only 0.014% more, so what remains is in the mining periods or in the LP relaxation's gap. No move changes a block's period with the destination LP in view.
   - Price (`bd-rbxh`) solves each period's destination LP approximately, in `f64`: there is no anti-cycling rule, and at most `PRICE_COLUMNS` (256) columns, `MASTER_STEPS` (1,024) simplex steps per solve and `REPAIR_MOVES` (256) repair moves. A weak solve costs value, never feasibility. It runs at most once per period per `destinations` call, and only after switches and exchanges stop. On MineLib, w23's six searches went from 4.1 s to 11.4 s and mclaughlin's from 51.3 s to 73.5 s (§9).
   - Destination moves stay within a period; a block never changes period and destination in one move.
-  - MineLib's own split schedules are valued only in `f64` (the xtask test) and by the exact oracle script; nothing in this crate reads a split schedule.
+  - MineLib's own split schedules can now be admitted through the exact candidate checker. The older corpus harness still also values them in `f64` and by the independent oracle script; the new checker does not forgive rounded infeasibility.
 - Schedules:
   - `search::improve` moves one block or trades two at a time, and its cone (`bd-ynoj`) moves a block with what it requires, but only within one period. The cone goes one period earlier at a time and holds at most 64 blocks. Cones wait for the other moves to stop. On PCPSP that costs zuck_medium the 1.9% that earlier cones found, which is the price of not losing w23's 9.9% (§9). It has no "repair" of infeasible schedules; it only takes feasible ones. Its moves are monotone, so it stops at the first local optimum, with no perturbation or restart.
   - The discount factors are rounded down period by period, so `improve`'s value can differ from the exact NPV in the last of about 12 significant digits. Every move it makes also raises the exact NPV, since each one's sign is that of a difference of factors.
   - `check` lives in this crate beside `greedy`, not in the separate `fmine-verify` crate plan §15.4 names. It shares no code with `greedy` beyond the problem type.
   - The LP bridge (`bd-ubzs`) formulates the relaxation and reads its solution back, but does not solve it: `fmine-lp` is in the same layer as this crate, and the topology allows no edge between them. The caller solves it; today only `crates/xtask/tests/cpit_schedule.rs` and `pcpsp_schedule.rs` do, with PDLP.
-  - No `fmine` verb schedules: `fmine-cli` is at its planned LOC budget, and BUDGET-AMEND-002 awaits the owner.
+  - `fmine plan schedule` exposes PCPSP scheduling and exact external candidate checks. Its cold-start search uses whole destinations; fractional improvements require an imported candidate. It does not expose an LP-guided or stochastic search mode.
   - The Lagrangian bound (`bd-oq7d`) uses plain Polyak subgradient steps, not a bundle method. It stalls near the LP optimum once its step has halved enough: on kd, 1,000 steps lowered the bound by 8.9, or 2×10⁻⁸ of it, below the 200-step bound, in 499 s against 79 s. It bounds CPIT only. PCPSP's destinations and blend rows are not relaxed this way. Each step solves a closure on `n · T` nodes from scratch, with no warm start between steps. It bounds the integer-factor objective, so comparing it with PDLP's `f64`-factor bounds is approximate (factors differ by under 2⁻⁴⁰ relative).
-- `candidate` reads a plain id list only, and `cpit::parse_solution` only MineLib's CPIT solution format (no destinations, no part blocks; no PCPSP reader). Which vendor formats (Whittle, Deswik, COMET) should be read is OPEN-PUSH-4. An OMF schedule comes in through `fmine-io`'s `PitModel::periods` and `candidate_schedule` instead (bd-jfg4), which call `check` and `improve`. The candidate check was built ahead of the owner's answer to OPEN-PUSH-1, on its recommended answer (data files only, no linked code); it is removed if the owner rules otherwise.
+- `pitflow::candidate` reads a plain id list, `cpit::parse_solution` reads MineLib's whole-block CPIT format, and `pcpsp::candidate::parse_solution` reads exact split-destination PCPSP rows. Which vendor formats (Whittle, Deswik, COMET) should be read is OPEN-PUSH-4. An OMF schedule comes in through `fmine-io`'s `PitModel::periods` and `candidate_schedule` instead (bd-jfg4), which call `check` and `improve`. The candidate check was built ahead of the owner's answer to OPEN-PUSH-1, on its recommended answer (data files only, no linked code); it is removed if the owner rules otherwise.
 - Slope arcs have no external gate. MineLib's UPIT files come with their arcs already made, and the workspace holds no geotechnical slope data. The slopes in the tests are invented.
 - Slope arcs cover regular grids only: no sub-blocks, rotated grids, or slopes that vary with depth inside a domain.
 - With more than one domain, the prefix sums cost 4 bytes per block on top of the arcs.
@@ -541,6 +569,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `toposort::cpit::parse_solution`, `toposort::cpit::write_solution` (`bd-3l5o`)
 - `toposort::cpit::parse`, `toposort::cpit::CpitModel` (`name`, `problem`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`), `toposort::cpit::MAX_RESOURCES`, `toposort::cpit::RATE_SCALE`
 - `toposort::pcpsp::parse`, `toposort::pcpsp::PcpspModel` (`name`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`, `blocks`, `periods`, `destinations`, `resources`, `value`, `uses`, `limits`, `requires`, `with_destinations`), `toposort::pcpsp::greedy`, `toposort::pcpsp::greedy_from`, `toposort::pcpsp::destinations`, `toposort::pcpsp::DestinationMoves` (`switches`, `exchanges`, `priced`, `unmined`), `toposort::pcpsp::improve`, `toposort::pcpsp::PcpspImprovement` (`schedule`, `destination`, `before`, `after`, `cycles`, `moves`, `destination_moves`), `toposort::pcpsp::MAX_DESTINATIONS`, `toposort::pcpsp::price::PRICE_COLUMNS`, `toposort::pcpsp::price::MASTER_STEPS`, `toposort::pcpsp::price::REPAIR_MOVES`
+- `toposort::pcpsp::candidate::{parse_solution, write_solution, from_whole, check}`, `DestinationShare` (`block`, `destination`, `period`, `fraction`), `SplitSchedule` (`new`, `share_decimals`, `scale`, `assignments`), `SplitCheck` (`scale`, `mined`, `period_values`, `used`, `incomplete`, `first_incomplete`, `unmet`, `first_unmet`, `over_limit`, `feasible`, `value`, `discounted_value`).
 - `toposort::lp::relaxation`, `toposort::lp::Relaxation` (`cost`, `matrix`, `row_lo`, `row_hi`, `col_lo`, `col_hi`), `toposort::lp::Shares` (`new`, `blocks`, `periods`, `share`, `expected`, `medians`), `toposort::lp::starts`, `toposort::lp::Start` (`threshold`, `released`, `schedule`), `toposort::lp::incumbent`, `toposort::lp::Incumbent` (`searched`, `best`, `schedule`), `toposort::lp::THRESHOLDS`. `Shares::ranks` is crate-only: `starts` takes its thresholds from `THRESHOLDS`, and a public bare-`f64` threshold would need an L-6 exception.
 - `toposort::lp::lagrangian_value`, `toposort::lp::LagrangianValue` (`bound`, `shift`, `schedule`, `used`), `toposort::lp::lagrangian_bound`, `toposort::lp::Lagrangian` (`bound`, `prices`, `history`), `toposort::lp::STALL` (`bd-oq7d`). Prices and target are integers; no public parameter is a bare `f64` (L-6).
 - `toposort::pcpsp::lp::scope`, `toposort::pcpsp::lp::Scope` (`blocks`, `pit_blocks`, `pit_value`, `whole`), `toposort::pcpsp::lp::relaxation`, `toposort::pcpsp::lp::Solution` (`new`, `shares`, `destinations`), `toposort::pcpsp::lp::starts`, `toposort::pcpsp::lp::Start` (`threshold`, `released`, `schedule`, `destination`), `toposort::pcpsp::lp::incumbent`, `toposort::pcpsp::lp::Incumbent` (`searched`, `best`, `chosen`)

@@ -4,8 +4,6 @@
 
 use std::path::{Path, PathBuf};
 
-use fmine_core::Digest32;
-use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_optimize::pitflow::{self, candidate, minelib};
 
@@ -105,14 +103,6 @@ fn decimal(units: i128, places: u32) -> String {
     }
 }
 
-fn source_json(source: &SourceAnchor, bytes: usize) -> String {
-    format!(
-        "{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{bytes}}}",
-        escape_json(&source.artifact_path),
-        Digest32(source.artifact_sha256)
-    )
-}
-
 pub fn execute(command: &Command, root: &Path) -> Envelope {
     let run = || -> Result<Envelope, Refusal> {
         let (upit, upit_source) =
@@ -148,8 +138,8 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         let mut payload = format!(
             "{{\"schema\":\"fmine.plan-pit.v1\",\"model\":{{\"format\":\"minelib_upit\",\"name\":\"{}\",\"upit\":{},\"prec\":{}}},\"blocks\":{},\"arcs\":{},\"decimals\":{d},\"rounding\":\"{}\",\"rounded_values\":{},\"value_bound\":\"{}\",\"value\":\"{}\",\"pit_blocks\":{},\"certificate\":{{\"verified\":true,\"method\":\"pseudoflow final arc flows; pit closed, no flow enters it, excess non-negative inside and non-positive outside\"}},\"solver\":{{\"mergers\":{},\"splits\":{},\"relabels\":{},\"max_label\":{}}}",
             escape_json(&model.name),
-            source_json(&upit_source, upit.len()),
-            source_json(&prec_source, prec.len()),
+            worksheet_input::source_json(&upit_source, upit.len()),
+            worksheet_input::source_json(&prec_source, prec.len()),
             model.problem.node_count(),
             model.problem.arc_count(),
             if command.round {
@@ -208,7 +198,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                 .collect();
             payload.push_str(&format!(
                 ",\"candidate\":{{\"source\":{},\"blocks\":{},\"value\":\"{}\",\"unmet_requirements\":{},\"first_unmet\":[{}],\"gap_to_optimum\":{gap_text},\"verdict\":\"{verdict}\"}}",
-                source_json(&source, text.len()),
+                worksheet_input::source_json(&source, text.len()),
                 c.blocks,
                 decimal(i128::from(c.value), d),
                 c.unmet,

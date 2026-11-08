@@ -1,17 +1,12 @@
 //! Draft monetary comparisons and information options from explicit scenario assumptions (BD-225/227).
 //! Determinism: Exact (bounded model bytes and the exact finite-scenario evaluator).
 
-use std::io::Read as _;
 use std::path::Path;
 
-use fmine_core::anchor::SourceAnchor;
-use fmine_core::hash::sha256;
 use fmine_decide::card;
-use fmine_evidence::{Refusal, RefusalCode};
+use fmine_evidence::Refusal;
 
-use crate::{Envelope, NextAction, escape_json};
-
-const MAX_MODEL_BYTES: u64 = 4 * 1024 * 1024;
+use crate::{Envelope, NextAction, worksheet_input};
 
 pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.decision-model.v1\",\"mode\":\"declared_model_comparison\",",
@@ -28,49 +23,23 @@ pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "\"output\":\"Exact weighted mean, P10/P50/P90, signed-loss CVaR95, same-state regret and all co-winners\",",
     "\"information\":\"Optional single-test policies; exact EVPI, EVSI and net value after explicit nonnegative test/delay costs in model currency; delay_days is an integer duration, not a discount rule\",",
     "\"likelihoods\":\"Quoted P(signal|state) in [0,1]; explicit complete state-by-signal matrix including zeros; each state sums exactly to one\",",
-    "\"method\":\"Exact finite enumeration; Monte Carlo standard error not applicable; assumed probabilities remain uncalibrated\",\"robustness\":\"Optional single wasserstein_1 declaration: quoted nonnegative rational radius and dimensionless distances, explicit metric/radius bases, complete proper metric including zero diagonal, at most 64 states and 256 actions. Reports worst mean and worst expected regret of original act-now actions with exact transport certificates; no robust CVaR, information-policy optimization or calibrated confidence claim\",",
+    "\"method\":\"Exact finite enumeration; Monte Carlo standard error not applicable; assumed probabilities remain uncalibrated\",\"robustness\":\"Optional single wasserstein_1 declaration: quoted nonnegative rational radius and dimensionless distances, explicit metric/radius bases, complete proper metric including zero diagonal, at most 64 states and 256 actions. Reports worst mean and worst expected regret of original act-now actions with exact transport certificates. With information options, also compares fixed displayed signal policies by worst mean: only state weights vary, likelihoods and posterior tie choices remain fixed, and test/delay costs are paid once. Conditional state means are not signal outcomes; no policy reoptimization, test-accuracy stress, cross-test regret, robust CVaR or calibrated confidence claim\",",
     "\"evidence\":\"Assumed, Internal, uncalibrated; no execution authority or decision-ledger append\",",
     "\"example\":\"tests/decisions/expansion.toml\",\"information_example\":\"tests/decisions/metallurgical_test.toml\",\"robustness_example\":\"tests/decisions/wasserstein.toml\"}"
 );
 
 pub(crate) fn execute(model: &Path, root: &Path) -> Envelope {
-    let path = root.join(model);
-    let unreadable = |why: String| {
-        Refusal::new(
-            RefusalCode::InputMissingOrUnreadable506,
-            format!("decision model {}: {why}", path.display()),
-        )
-    };
     let run = || -> Result<Envelope, Refusal> {
-        let source_path = path
-            .to_str()
-            .ok_or_else(|| unreadable("source path must be UTF-8".into()))?;
-        let metadata = std::fs::metadata(&path).map_err(|e| unreadable(e.to_string()))?;
-        if !metadata.is_file() || metadata.len() > MAX_MODEL_BYTES {
-            return Err(unreadable(
-                "expected a regular file of at most 4 MiB".into(),
-            ));
-        }
-        let file = std::fs::File::open(&path).map_err(|e| unreadable(e.to_string()))?;
-        let mut bytes = Vec::new();
-        file.take(MAX_MODEL_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| unreadable(e.to_string()))?;
-        if bytes.len() as u64 > MAX_MODEL_BYTES {
-            return Err(unreadable("model exceeds 4 MiB".into()));
-        }
-        let text = std::str::from_utf8(&bytes).map_err(|e| unreadable(e.to_string()))?;
-        let digest = sha256(&bytes);
-        let inputs = card::model::parse(
-            text,
-            SourceAnchor::new(source_path, digest.0, "declared decision model"),
+        let (text, source) = worksheet_input::read_model(
+            &root.join(model),
+            "decision model",
+            "declared decision model",
         )?;
+        let inputs = card::model::parse(&text, source.clone())?;
         let evaluated = card::evaluate(&inputs)?;
         let payload = format!(
-            "{{\"mode\":\"declared_model_comparison\",\"source\":{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{}}},\"card\":{}}}",
-            escape_json(source_path),
-            digest.to_hex(),
-            bytes.len(),
+            "{{\"mode\":\"declared_model_comparison\",\"source\":{},\"card\":{}}}",
+            worksheet_input::source_json(&source, text.len()),
             evaluated.to_json(),
         );
         let mut envelope = Envelope::ok("decide card", payload, Vec::new());

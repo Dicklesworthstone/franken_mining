@@ -1,15 +1,12 @@
 //! Source-bound static and two-stage capital comparison over shared scenarios (BD-229).
 //! Determinism: Exact (bounded model input and checked rational portfolio calculations).
 
-use std::io::Read as _;
 use std::path::Path;
 
-use fmine_core::{anchor::SourceAnchor, hash::sha256};
-use fmine_evidence::{Refusal, RefusalCode};
+use fmine_evidence::Refusal;
 
-use crate::{Envelope, NextAction, escape_json};
+use crate::{Envelope, NextAction, worksheet_input};
 
-const MAX_MODEL_BYTES: u64 = 4 * 1024 * 1024;
 pub(super) const USAGE: &str = "decide program <model-file>";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
@@ -30,43 +27,17 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
 );
 
 pub(super) fn execute(model: &Path, root: &Path) -> Envelope {
-    let path = root.join(model);
-    let unreadable = |why: String| {
-        Refusal::new(
-            RefusalCode::InputMissingOrUnreadable506,
-            format!("capital program {}: {why}", path.display()),
-        )
-    };
     let run = || -> Result<Envelope, Refusal> {
-        let source_path = path
-            .to_str()
-            .ok_or_else(|| unreadable("source path must be UTF-8".into()))?;
-        let metadata = std::fs::metadata(&path).map_err(|e| unreadable(e.to_string()))?;
-        if !metadata.is_file() || metadata.len() > MAX_MODEL_BYTES {
-            return Err(unreadable(
-                "expected a regular file of at most 4 MiB".into(),
-            ));
-        }
-        let file = std::fs::File::open(&path).map_err(|e| unreadable(e.to_string()))?;
-        let mut bytes = Vec::new();
-        file.take(MAX_MODEL_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| unreadable(e.to_string()))?;
-        if bytes.len() as u64 > MAX_MODEL_BYTES {
-            return Err(unreadable("model exceeds 4 MiB".into()));
-        }
-        let text = std::str::from_utf8(&bytes).map_err(|e| unreadable(e.to_string()))?;
-        let digest = sha256(&bytes);
-        let evaluated = fmine_capital::model::evaluate(
-            text,
-            SourceAnchor::new(source_path, digest.0, "declared static capital program"),
+        let (text, source) = worksheet_input::read_model(
+            &root.join(model),
+            "capital program",
+            "declared static capital program",
         )?;
+        let evaluated = fmine_capital::model::evaluate(&text, source.clone())?;
         let payload = format!(
-            "{{\"mode\":\"{}\",\"source\":{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{}}},\"program\":{}}}",
+            "{{\"mode\":\"{}\",\"source\":{},\"program\":{}}}",
             evaluated.mode(),
-            escape_json(source_path),
-            digest.to_hex(),
-            bytes.len(),
+            worksheet_input::source_json(&source, text.len()),
             evaluated.to_json(),
         );
         let mut envelope = Envelope::ok("decide program", payload, Vec::new());

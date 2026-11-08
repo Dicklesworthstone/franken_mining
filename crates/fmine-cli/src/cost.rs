@@ -8,7 +8,7 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::Refusal;
 use fmine_metrics::definitions::{claims, worksheet};
 
-use crate::{Envelope, NextAction, escape_json, worksheet_input};
+use crate::{Envelope, NextAction, worksheet_input};
 
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 pub const USAGE: &str = "metrics cost --input <worksheet.toml> --definition <registered-id>";
@@ -72,18 +72,11 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             registry.clone(),
             &command.definition,
         )?;
-        let source_json = |anchor: &SourceAnchor, bytes: usize| {
-            format!(
-                "{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{bytes}}}",
-                escape_json(&anchor.artifact_path),
-                fmine_core::Digest32(anchor.artifact_sha256).to_hex()
-            )
-        };
         let payload = format!(
             "{{\"schema\":\"{}\",\"mode\":\"declared_cost_worksheet\",\"source\":{},\"registry\":{},\"receipt\":{}}}",
             worksheet::SCHEMA,
-            source_json(&source, text.len()),
-            source_json(&registry, metrics.len()),
+            worksheet_input::source_json(&source, text.len()),
+            worksheet_input::source_json(&registry, metrics.len()),
             receipt.to_json()
         );
         let mut envelope = Envelope::ok("metrics cost", payload, Vec::new());

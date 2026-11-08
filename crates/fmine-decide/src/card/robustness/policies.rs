@@ -1,5 +1,6 @@
 //! Exact state-weight stress of the already selected information policies (BD-225/227, §22.5).
-//! Determinism: Exact. Signal likelihoods, selected actions and costs never change under stress.
+//! Determinism: Exact
+//! Signal likelihoods, selected actions and costs never change under stress.
 
 use super::*;
 use crate::card::information::{ChoiceKind, InformationOption, InformationStats};

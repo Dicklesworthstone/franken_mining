@@ -17,10 +17,11 @@
 //!   makes room at the mill for one above it. Limits must not be negative, so mining nothing stays feasible.
 //! - **Not read.** Each of these is refused with its reason, since [`ScheduleProblem`] holds none of them: general
 //!   side constraints (a count other than 0), and `G` and `I` limits.
-//! - **Whole blocks.** PCPSP lets a mined block be split between destinations. Here each mined block goes whole to one
-//!   destination, so a schedule is feasible for PCPSP but can be worth less than the best split one.
+//! - **Whole-block search.** PCPSP lets a mined block be split between destinations. The incumbent search sends each
+//!   mined block whole to one destination, so its schedule can be worth less than the best split one.
 //!   [`PcpspModel::with_destinations`] turns one destination per block into a [`ScheduleProblem`], so [`check`],
 //!   [`super::greedy`] and [`super::search::improve`] apply unchanged.
+//!   [`candidate`] separately imports, checks and writes exact split-destination schedules from other planners.
 //!
 //! [`greedy`] is TopoSort with a fallback. A ranked block that fits at its destination in no period from its required
 //! blocks' latest on goes to another destination, the most valuable first (the lowest of equals), in the earliest
@@ -60,7 +61,9 @@ use super::{MAX_PERIODS, ScheduleProblem, check, refuse};
 use crate::pitflow::ClosureProblem;
 use crate::pitflow::minelib::{MAX_DECIMALS, Rounding, bad, lines, number, parse_prec, scaled};
 
+pub mod candidate;
 pub mod lp;
+pub mod planning;
 pub mod price;
 
 /// The most destinations a PCPSP file may declare.
