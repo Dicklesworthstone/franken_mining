@@ -5,11 +5,11 @@
 //! scope. That declaration is evidence, not an inferred zero for every omitted registered component.
 //! Source authentication and classification of an issuer's accounts belong to the caller.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Claim};
 use fmine_core::{Encoder, ObjectId, blake3_hash};
-use fmine_evidence::{Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
+use fmine_evidence::{Color, Refusal, RefusalCode};
 use fmine_registry::metrics::{CreditBasis, LineKind, MetricFamily, MetricRegistry};
 use fmine_units::{Currency, ExactQty, Money, UnitsError};
 
@@ -39,6 +39,11 @@ pub enum CostValue {
         item: String,
         amount: Money,
     },
+    /// Declared fixed plus variable cost; the rate is USD per exactly the stated driver unit.
+    DriverLine {
+        item: String,
+        driver: DeclaredDriver,
+    },
     /// Gold ounces sold, not produced ounces or thousands of ounces.
     SoldOunces(ExactQty),
     /// Copper pounds sold, not produced copper, metric tonnes or millions of pounds.
@@ -51,6 +56,15 @@ pub enum CostValue {
         definition_tag: String,
         complete: bool,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredDriver {
+    pub kind: String,
+    pub unit: String,
+    pub quantity: ExactQty,
+    pub usd_per_unit: ExactQty,
+    pub fixed_usd: Money,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,16 +100,17 @@ impl CostInput {
             CostValue::Rule { .. } => (0, ""),
             CostValue::SoldOunces(_) | CostValue::SoldPounds(_) => (1, ""),
             CostValue::GoldShare(_) | CostValue::CopperShare(_) => (2, ""),
-            CostValue::Line { item, .. } => (3, item),
+            CostValue::Line { item, .. } | CostValue::DriverLine { item, .. } => (3, item),
         }
     }
 
     #[must_use]
     pub const fn additivity(&self) -> AdditivityClass {
         match self.value {
-            CostValue::Line { .. } | CostValue::SoldOunces(_) | CostValue::SoldPounds(_) => {
-                AdditivityClass::ExtensiveAdditive
-            }
+            CostValue::Line { .. }
+            | CostValue::DriverLine { .. }
+            | CostValue::SoldOunces(_)
+            | CostValue::SoldPounds(_) => AdditivityClass::ExtensiveAdditive,
             CostValue::GoldShare(_) | CostValue::CopperShare(_) | CostValue::Rule { .. } => {
                 AdditivityClass::NonAdditive
             }
@@ -110,6 +125,7 @@ impl CostInput {
         enc.put_u8(match self.value {
             CostValue::SoldPounds(_) => 4,
             CostValue::CopperShare(_) => 5,
+            CostValue::DriverLine { .. } => 6,
             _ => self.key().0,
         });
         match &self.value {
@@ -117,6 +133,10 @@ impl CostInput {
                 enc.put_str(item);
                 enc.put_str(&format!("{:?}", amount.ccy));
                 enc.put_i128(amount.minor);
+            }
+            CostValue::DriverLine { item, driver } => {
+                enc.put_str(item);
+                enc.put_str(&driver.json_fields());
             }
             CostValue::SoldOunces(value)
             | CostValue::SoldPounds(value)
@@ -277,30 +297,7 @@ pub struct CostSummary {
 }
 
 /// Immutable admitted inputs and result. Cloning a returned Claim cannot alter this receipt.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CostReceipt {
-    inputs: Vec<Claim<CostInput>>,
-    claim: Claim<CostSummary>,
-    digest: String,
-}
-impl CostReceipt {
-    #[must_use]
-    pub fn inputs(&self) -> &[Claim<CostInput>] {
-        &self.inputs
-    }
-    #[must_use]
-    pub fn summary(&self) -> &CostSummary {
-        &self.claim.value
-    }
-    #[must_use]
-    pub fn claim(&self) -> &Claim<CostSummary> {
-        &self.claim
-    }
-    #[must_use]
-    pub fn digest(&self) -> &str {
-        &self.digest
-    }
-}
+pub type CostReceipt = super::declared::Receipt<CostInput, CostSummary>;
 
 fn bad(code: RefusalCode, text: &str) -> Refusal {
     Refusal::new(code, format!("cost worksheet: {text}"))
@@ -315,6 +312,64 @@ fn exact<T>(value: std::result::Result<T, UnitsError>) -> Result<T> {
 }
 fn named(text: &str) -> bool {
     !text.is_empty() && text.trim() == text && !text.chars().any(char::is_control)
+}
+
+impl CostValue {
+    fn cost_line(&self) -> Result<Option<(&str, Money)>> {
+        Ok(match self {
+            Self::Line { item, amount } => Some((item, *amount)),
+            Self::DriverLine { item, driver } => Some((item, driver.amount()?)),
+            _ => None,
+        })
+    }
+}
+
+impl DeclaredDriver {
+    pub(super) fn json_fields(&self) -> String {
+        use super::declared::{js, qty};
+        format!(
+            "\"driver\":{},\"unit\":{},\"quantity\":{},\"usd_per_unit\":{},\"currency\":\"{:?}\",\"fixed_minor\":{},\"scale\":10000",
+            js(&self.kind),
+            js(&self.unit),
+            js(&qty(self.quantity)),
+            js(&qty(self.usd_per_unit)),
+            self.fixed_usd.ccy,
+            js(&self.fixed_usd.minor.to_string())
+        )
+    }
+
+    fn amount(&self) -> Result<Money> {
+        if !matches!(
+            (self.kind.as_str(), self.unit.as_str()),
+            ("tonnes_mined" | "tonnes_milled", "dry_t" | "wet_t")
+                | ("haulage", "dry_t_km" | "wet_t_km")
+                | ("electricity", "kWh")
+                | ("reagent", "kg")
+                | ("labour", "hour")
+        ) || self.fixed_usd.ccy != Currency::USD
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "driver/unit pair or currency is unsupported; no implicit unit, mass-basis or FX conversion",
+            ));
+        }
+        if self.quantity.signum() < 0 || self.usd_per_unit.signum() < 0 || self.fixed_usd.minor < 0
+        {
+            return Err(bad(
+                RefusalCode::OutsidePhysicalDomain109,
+                "driver quantity, USD rate and fixed cost must be nonnegative; signed adjustments require a direct cost row",
+            ));
+        }
+        let variable = exact(self.quantity.checked_mul(self.usd_per_unit))?;
+        let minor = exact(variable.checked_mul(ExactQty::from_integer(Money::SCALE)))?;
+        if minor.den() != 1 {
+            return Err(bad(
+                RefusalCode::NumericalCertificateFailed207,
+                "driver cost is not exactly representable in USD 0.0001 units; no rounding is inferred",
+            ));
+        }
+        exact(Money::from_minor(Currency::USD, minor.num()).checked_add(self.fixed_usd))
+    }
 }
 
 fn put_envelope(enc: &mut Encoder, claim: &Claim<CostInput>) {
@@ -468,8 +523,9 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
     }
     let share = allocation.map(|(_, q)| q);
     let mut lines = Vec::new();
+    let mut amounts = Vec::new();
     for input in &inputs {
-        if let CostValue::Line { item, amount } = &input.value.value {
+        if let Some((item, amount)) = input.value.value.cost_line()? {
             if !named(item) || amount.ccy != Currency::USD {
                 return Err(bad(
                     RefusalCode::BasisMismatch105,
@@ -477,9 +533,10 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
                 ));
             }
             lines.push(CostLine {
-                item: item.clone(),
+                item: item.into(),
                 usd: exact(ExactQty::new(amount.minor, Money::SCALE))?,
             });
+            amounts.push((input, item, amount));
         }
     }
     if lines.is_empty() {
@@ -504,40 +561,38 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
     let registered = registry.lines_of(definition);
     let mut contributions = Vec::new();
     let mut numerator = ZERO;
-    for input in &inputs {
-        if let CostValue::Line { item, amount } = &input.value.value {
-            let kind = registered.get(item.as_str()).map(|line| line.kind);
-            if matches!(kind, Some(LineKind::Credit | LineKind::Deduction)) && amount.minor < 0 {
-                return Err(bad(
-                    RefusalCode::OutsidePhysicalDomain109,
-                    "credits and reconciliation deductions must be nonnegative amounts before subtraction",
-                ));
-            }
-            let treatment = if calculated.left_out.contains(item) {
-                Treatment::Excluded
-            } else if kind == Some(LineKind::Credit) {
-                Treatment::Credit
-            } else if kind == Some(LineKind::Deduction) {
-                Treatment::Deduction
-            } else {
-                Treatment::Cost
-            };
-            let amount_usd = exact(ExactQty::new(amount.minor, Money::SCALE))?;
-            let signed = match treatment {
-                Treatment::Excluded => ZERO,
-                Treatment::Credit | Treatment::Deduction => exact(amount_usd.checked_neg())?,
-                Treatment::Cost => amount_usd,
-            };
-            let contribution = exact(signed.checked_mul(share.unwrap_or(ONE)))?;
-            numerator = exact(numerator.checked_add(contribution))?;
-            contributions.push(Contribution {
-                item: item.clone(),
-                input_claim_id: input.claim_id,
-                amount: *amount,
-                treatment,
-                numerator_usd: contribution,
-            });
+    for (input, item, amount) in amounts {
+        let kind = registered.get(item).map(|line| line.kind);
+        if matches!(kind, Some(LineKind::Credit | LineKind::Deduction)) && amount.minor < 0 {
+            return Err(bad(
+                RefusalCode::OutsidePhysicalDomain109,
+                "credits and reconciliation deductions must be nonnegative amounts before subtraction",
+            ));
         }
+        let treatment = if calculated.left_out.iter().any(|excluded| excluded == item) {
+            Treatment::Excluded
+        } else if kind == Some(LineKind::Credit) {
+            Treatment::Credit
+        } else if kind == Some(LineKind::Deduction) {
+            Treatment::Deduction
+        } else {
+            Treatment::Cost
+        };
+        let amount_usd = exact(ExactQty::new(amount.minor, Money::SCALE))?;
+        let signed = match treatment {
+            Treatment::Excluded => ZERO,
+            Treatment::Credit | Treatment::Deduction => exact(amount_usd.checked_neg())?,
+            Treatment::Cost => amount_usd,
+        };
+        let contribution = exact(signed.checked_mul(share.unwrap_or(ONE)))?;
+        numerator = exact(numerator.checked_add(contribution))?;
+        contributions.push(Contribution {
+            item: item.into(),
+            input_claim_id: input.claim_id,
+            amount,
+            treatment,
+            numerator_usd: contribution,
+        });
     }
     if exact(numerator.checked_div(sold))? != calculated.usd_per_unit {
         return Err(bad(
@@ -560,31 +615,8 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
     };
     let mut enc = Encoder::new_frame(*b"CSTR", 1);
     enc.put_u64(inputs.len() as u64);
-    let mut evidence = EvidenceClass::Derived;
-    let mut epistemic = EpistemicStatus::KnownKnown;
-    let mut state = KnowledgeState::Known;
-    let mut confidentiality = Confidentiality::public();
-    let mut uu = BTreeMap::new();
-    let mut parents = BTreeSet::new();
-    let mut anchors = BTreeSet::new();
     for input in &inputs {
         put_envelope(&mut enc, input);
-        evidence = evidence.meet(input.evidence);
-        epistemic = epistemic.and(input.epistemic);
-        state = state.and(input.state);
-        confidentiality = confidentiality.join(&input.confidentiality);
-        parents.insert(input.claim_id);
-        anchors.extend(input.anchors.iter().cloned());
-        for term in &input.uu_terms {
-            if let Some(prior) = uu.insert(term.scenario_id.clone(), term.clone())
-                && prior != *term
-            {
-                return Err(bad(
-                    RefusalCode::UnbudgetedUnknowns204,
-                    "conflicting definitions for a shared UU scenario",
-                ));
-            }
-        }
     }
     put_qty(&mut enc, summary.numerator_usd);
     put_qty(&mut enc, summary.usd_per_unit);
@@ -594,27 +626,14 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         enc.put_str(contribution.treatment.as_str());
         put_qty(&mut enc, contribution.numerator_usd);
     }
-    let digest = blake3_hash(&enc.finish()).to_hex();
-    let claim = Claim::new(
+    CostReceipt::from_admitted(
+        inputs,
         OUTPUT_METRIC,
         summary,
-        &digest,
-        Representation::Deterministic,
-        SpatialSupport::PeriodAggregate,
+        blake3_hash(&enc.finish()).to_hex(),
         AdditivityClass::IntensiveWeighted,
-        evidence,
-        epistemic,
-        state,
-        confidentiality,
-        uu.into_values().collect(),
-        parents.into_iter().collect(),
-        anchors.into_iter().collect(),
-    );
-    Ok(CostReceipt {
-        inputs,
-        claim,
-        digest,
-    })
+        bad,
+    )
 }
 
 include!("../../../xtask/testdata/cost_claims_unit_tests.rs");

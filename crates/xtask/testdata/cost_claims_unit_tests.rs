@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fmine_claim::UuTerm;
+    use fmine_claim::{Confidentiality, Representation, SpatialSupport, UuTerm};
     use fmine_core::anchor::SourceAnchor;
+    use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
 
     fn leaf(value: CostValue) -> Claim<CostInput> {
         let input = CostInput {
@@ -156,7 +157,10 @@ mod tests {
         inputs.push(leaf(CostValue::GoldShare(ExactQty::new(3, 4).unwrap())));
         let receipt = evaluate(&reg, &inputs).unwrap();
         assert_eq!(receipt.summary().numerator_usd, ExactQty::from_integer(750));
-        assert_eq!(receipt.summary().usd_per_unit, ExactQty::new(15, 2).unwrap());
+        assert_eq!(
+            receipt.summary().usd_per_unit,
+            ExactQty::new(15, 2).unwrap()
+        );
         assert_eq!(
             receipt.summary().contributions[0].treatment,
             Treatment::Excluded
@@ -367,13 +371,22 @@ mod tests {
         assert_ne!(pounds_id, ounces.claim_id);
         let mut wrong_unit = original.clone();
         wrong_unit[1] = ounces.clone();
-        assert_eq!(evaluate(&reg, &wrong_unit).unwrap_err().code, "FMINE-REF-105");
+        assert_eq!(
+            evaluate(&reg, &wrong_unit).unwrap_err().code,
+            "FMINE-REF-105"
+        );
         let mut ambiguous = original.clone();
         ambiguous.push(ounces);
-        assert_eq!(evaluate(&reg, &ambiguous).unwrap_err().code, "FMINE-REF-105");
+        assert_eq!(
+            evaluate(&reg, &ambiguous).unwrap_err().code,
+            "FMINE-REF-105"
+        );
         let mut wrong_share = original.clone();
         wrong_share.push(leaf(CostValue::GoldShare(ONE)));
-        assert_eq!(evaluate(&reg, &wrong_share).unwrap_err().code, "FMINE-REF-105");
+        assert_eq!(
+            evaluate(&reg, &wrong_share).unwrap_err().code,
+            "FMINE-REF-105"
+        );
         for item in [
             "depreciation_amortization_removed",
             "royalties_removed_from_cost_of_sales",
@@ -408,7 +421,10 @@ mod tests {
         // Unlisted inventory adjustments may already be in CoS and cannot be added a second time.
         let mut undeclared = original.clone();
         undeclared.push(line("inventory_write_down_added", Money::SCALE));
-        assert_eq!(evaluate(&reg, &undeclared).unwrap_err().code, "FMINE-REF-105");
+        assert_eq!(
+            evaluate(&reg, &undeclared).unwrap_err().code,
+            "FMINE-REF-105"
+        );
     }
 
     #[test]
@@ -479,5 +495,186 @@ mod tests {
         assert_ne!(changed.digest(), assumed.digest());
         inputs[2].uu_terms.push(unknown(2.0));
         assert_eq!(evaluate(&reg, &inputs).unwrap_err().code, "FMINE-REF-204");
+    }
+
+    fn driver(item: &str, quantity: ExactQty, rate: ExactQty, fixed_minor: i128) -> CostValue {
+        CostValue::DriverLine {
+            item: item.into(),
+            driver: DeclaredDriver {
+                kind: "tonnes_mined".into(),
+                unit: "dry_t".into(),
+                quantity,
+                usd_per_unit: rate,
+                fixed_usd: Money::from_minor(Currency::USD, fixed_minor),
+            },
+        }
+    }
+
+    #[test]
+    fn declared_driver_costs_preserve_exact_fixed_variable_and_credit_components() {
+        // Independent invented answer: 100.01 t * 7.5 USD/t + 49.935 USD = 800.01 USD.
+        // (800.01 mining + 300 overhead + 100 leases - 40 * 5 credits) / 100 oz = 10.0001.
+        let (reg, mut inputs) = worksheet(
+            "aisc@wgc-2018",
+            &[
+                ("corporate_general_and_administrative", 3_000_000),
+                ("lease_payments", 1_000_000),
+            ],
+            100,
+        );
+        inputs.push(
+            leaf(driver(
+                "on_site_mining_costs",
+                ExactQty::new(10001, 100).unwrap(),
+                ExactQty::new(15, 2).unwrap(),
+                499350,
+            ))
+            .downgraded(EvidenceClass::Assumed),
+        );
+        inputs.push(leaf(driver(
+            "by_product_credits",
+            ExactQty::from_integer(40),
+            ExactQty::from_integer(5),
+            0,
+        )));
+        inputs.push(leaf(driver("income_tax", ZERO, ZERO, 9_990_000)));
+        let receipt = evaluate(&reg, &inputs).unwrap();
+        assert_eq!(
+            receipt.summary().numerator_usd,
+            ExactQty::new(100001, 100).unwrap()
+        );
+        assert_eq!(
+            receipt.summary().usd_per_unit,
+            ExactQty::new(100001, 10000).unwrap()
+        );
+        assert_eq!(receipt.claim().evidence, EvidenceClass::Assumed);
+        assert_eq!(receipt.inputs().len(), inputs.len());
+        assert_eq!(receipt.claim().parents.len(), inputs.len());
+        let credit = receipt
+            .summary()
+            .contributions
+            .iter()
+            .find(|c| c.item == "by_product_credits")
+            .unwrap();
+        assert_eq!(credit.amount.minor, 2_000_000);
+        assert_eq!(credit.numerator_usd, ExactQty::from_integer(-200));
+        assert_eq!(credit.treatment, Treatment::Credit);
+        let tax = receipt
+            .summary()
+            .contributions
+            .iter()
+            .find(|c| c.item == "income_tax")
+            .unwrap();
+        assert_eq!(
+            (tax.treatment, tax.numerator_usd),
+            (Treatment::Excluded, ZERO)
+        );
+        let json = receipt.to_json();
+        for operand in [
+            "\"kind\":\"driver_cost\"",
+            "\"quantity\":\"10001/100\"",
+            "\"usd_per_unit\":\"15/2\"",
+            "\"fixed_minor\":\"499350\"",
+        ] {
+            assert!(json.contains(operand), "{operand}: {json}");
+        }
+        assert!(receipt.to_markdown().contains("## Declared cost drivers"));
+        inputs.reverse();
+        assert_eq!(evaluate(&reg, &inputs).unwrap(), receipt);
+    }
+
+    #[test]
+    fn driver_costs_refuse_ambiguous_units_nonphysical_values_and_inexact_money() {
+        let (reg, mut inputs) = worksheet("aisc@wgc-2018", &[], 100);
+        let base = driver("on_site_mining_costs", ONE, ONE, 0);
+        for (name, unit) in [
+            ("tonnes_mined", "dry_t"),
+            ("tonnes_mined", "wet_t"),
+            ("tonnes_milled", "dry_t"),
+            ("tonnes_milled", "wet_t"),
+            ("haulage", "dry_t_km"),
+            ("haulage", "wet_t_km"),
+            ("electricity", "kWh"),
+            ("reagent", "kg"),
+            ("labour", "hour"),
+        ] {
+            let mut value = base.clone();
+            if let CostValue::DriverLine { driver, .. } = &mut value {
+                driver.kind = name.into();
+                driver.unit = unit.into();
+                driver.quantity = ZERO;
+                driver.fixed_usd.minor = 100_000;
+            }
+            inputs.truncate(2);
+            inputs.push(leaf(value));
+            assert_eq!(
+                evaluate(&reg, &inputs).unwrap().summary().usd_per_unit,
+                ExactQty::new(1, 10).unwrap()
+            );
+        }
+        for (edit, code) in [
+            ("unit", "FMINE-REF-105"),
+            ("driver", "FMINE-REF-105"),
+            ("currency", "FMINE-REF-105"),
+            ("quantity", "FMINE-REF-109"),
+            ("rate", "FMINE-REF-109"),
+            ("fixed", "FMINE-REF-109"),
+            ("precision", "FMINE-REF-207"),
+            ("overflow", "FMINE-REF-207"),
+        ] {
+            let mut value = base.clone();
+            if let CostValue::DriverLine { driver, .. } = &mut value {
+                match edit {
+                    "unit" => driver.unit = "t".into(),
+                    "driver" => driver.kind = "invented-driver".into(),
+                    "currency" => driver.fixed_usd.ccy = Currency::CAD,
+                    "quantity" => driver.quantity = ExactQty::from_integer(-1),
+                    "rate" => driver.usd_per_unit = ExactQty::from_integer(-1),
+                    "fixed" => driver.fixed_usd.minor = -1,
+                    "precision" => driver.usd_per_unit = ExactQty::new(1, 3).unwrap(),
+                    "overflow" => driver.quantity = ExactQty::from_integer(i128::MAX),
+                    _ => unreachable!(),
+                }
+            }
+            inputs.truncate(2);
+            inputs.push(leaf(value));
+            assert_eq!(evaluate(&reg, &inputs).unwrap_err().code, code, "{edit}");
+        }
+        inputs.truncate(2);
+        inputs.extend([leaf(base), line("on_site_mining_costs", 1)]);
+        assert_eq!(evaluate(&reg, &inputs).unwrap_err().code, "FMINE-REF-105");
+    }
+
+    #[test]
+    fn driver_operand_changes_bind_the_receipt_even_when_the_cost_stays_equal() {
+        let (reg, mut inputs) = worksheet("aisc@wgc-2018", &[], 100);
+        inputs.push(leaf(driver(
+            "on_site_mining_costs",
+            ExactQty::from_integer(10),
+            ExactQty::from_integer(20),
+            50_000,
+        )));
+        let original = evaluate(&reg, &inputs).unwrap();
+        inputs[2] = leaf(driver(
+            "on_site_mining_costs",
+            ExactQty::from_integer(20),
+            ExactQty::from_integer(10),
+            50_000,
+        ));
+        let changed = evaluate(&reg, &inputs).unwrap();
+        assert_eq!(
+            original.summary().numerator_usd,
+            ExactQty::from_integer(205)
+        );
+        assert_eq!(
+            original.summary().usd_per_unit,
+            changed.summary().usd_per_unit
+        );
+        assert_ne!(original.digest(), changed.digest());
+        assert_ne!(original.claim().claim_id, changed.claim().claim_id);
+        if let CostValue::DriverLine { driver, .. } = &mut inputs[2].value.value {
+            driver.quantity = ExactQty::from_integer(10);
+        }
+        assert_eq!(evaluate(&reg, &inputs).unwrap_err().code, "FMINE-REF-507");
     }
 }

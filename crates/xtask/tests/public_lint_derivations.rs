@@ -1452,3 +1452,325 @@ fn regional_subtraction_requires_the_same_registered_membership_at_both_releases
         );
     }
 }
+
+#[cfg(test)]
+mod derived_amount_claims {
+    use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+    use fmine_core::anchor::SourceAnchor;
+    use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
+    use fmine_metrics::guidance::{Ownership, Period};
+    use fmine_metrics::public_derivation::{Amount, AmountKind, INPUT_METRIC, Rule, derive};
+    use fmine_numerics::exact_feas::{Interval, Rat};
+
+    fn amount(first: u8, last: u8, printed: i128) -> Claim<Amount> {
+        let value = Amount {
+            issuer: "invented".into(),
+            subject: "Site A".into(),
+            scope: "site".into(),
+            kind: AmountKind::GoldProductionKoz,
+            ownership: Ownership::Full,
+            period: Period {
+                year: 2030,
+                first_month: first,
+                last_month: last,
+            },
+            interval: Interval {
+                lo: Rat::new(2 * printed - 1, 2).unwrap(),
+                hi: Rat::new(2 * printed + 1, 2).unwrap(),
+                lo_strict: false,
+                hi_strict: false,
+            },
+        };
+        let tag = value.canonical_tag();
+        Claim::new(
+            INPUT_METRIC,
+            value,
+            &tag,
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            EvidenceClass::ISSUER,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
+            Confidentiality::public(),
+            vec![],
+            vec![],
+            vec![SourceAnchor::new(
+                "invented.xlsx",
+                [first + last; 32],
+                format!("Q{last}!B1"),
+            )],
+        )
+    }
+
+    fn reseal(source: Claim<Amount>) -> Claim<Amount> {
+        let mut result = Claim::new(
+            &source.metric_key,
+            source.value.clone(),
+            &source.value.canonical_tag(),
+            source.representation,
+            source.support,
+            source.additivity,
+            source.evidence,
+            source.epistemic,
+            source.state,
+            source.confidentiality,
+            source.uu_terms,
+            source.parents,
+            source.anchors,
+        );
+        result.stale = source.stale;
+        result.calibration_failed = source.calibration_failed;
+        result
+    }
+
+    #[test]
+    fn exact_sum_overflow_refuses_in_both_directions_without_partial_output() {
+        for (limit, increment) in [(i128::MAX, 1), (i128::MIN, -1)] {
+            let mut q1 = amount(1, 3, 0);
+            q1.value.interval.lo = Rat::from_integer(limit);
+            q1.value.interval.hi = Rat::from_integer(limit);
+            let mut q2 = amount(4, 6, 0);
+            q2.value.interval.lo = Rat::from_integer(increment);
+            q2.value.interval.hi = Rat::from_integer(increment);
+            let sources = [reseal(q1), reseal(q2)];
+            assert!(sources.iter().all(|source| source.check_id().is_ok()));
+            assert_eq!(
+                derive(Rule::QuarterSum, &sources).unwrap_err().code,
+                "FMINE-REF-207"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_but_unusable_and_placeholder_inputs_never_become_summed_amounts() {
+        for state in [
+            KnowledgeState::Unknown,
+            KnowledgeState::NotApplicable,
+            KnowledgeState::NotObservable,
+            KnowledgeState::Conflicted,
+            KnowledgeState::Indeterminate,
+            KnowledgeState::Redacted,
+            KnowledgeState::Stale,
+        ] {
+            let mut bad = amount(1, 3, 100);
+            bad.state = state;
+            let bad = reseal(bad);
+            assert!(bad.check_id().is_ok());
+            assert!(derive(Rule::QuarterSum, &[bad, amount(4, 6, 100)]).is_err());
+        }
+        for change in 0..9 {
+            let mut bad = amount(1, 3, 100);
+            match change {
+                0 => {
+                    bad.representation = Representation::Placeholder {
+                        token: "—".into()
+                    }
+                }
+                1 => bad.anchors.clear(),
+                2 => bad.anchors[0].artifact_sha256 = [0; 32],
+                3 => bad.anchors[0].locator.clear(),
+                4 => bad.anchors[0].artifact_path.clear(),
+                5 => bad.confidentiality = Confidentiality::internal(),
+                6 => bad.calibration_failed = true,
+                7 => bad.support = SpatialSupport::PointCore,
+                _ => bad.value.interval.lo_strict = true,
+            }
+            let bad = reseal(bad);
+            assert!(bad.check_id().is_ok());
+            assert!(
+                derive(Rule::QuarterSum, &[bad, amount(4, 6, 100)]).is_err(),
+                "admission control {change}"
+            );
+        }
+    }
+
+    #[test]
+    fn summation_preserves_source_identity_weaker_metadata_and_unknown_terms() {
+        let mut q1 = amount(1, 3, 100);
+        q1.evidence = EvidenceClass::Measured;
+        let q1 = reseal(q1);
+        let mut q2 = amount(4, 6, 100);
+        q2.state = KnowledgeState::Estimated;
+        q2.epistemic = EpistemicStatus::KnownUnknown(fmine_evidence::KuKind::Parametric);
+        q2.uu_terms.push(fmine_claim::UuTerm {
+            scenario_id: "invented-period-reclassification".into(),
+            description: "Synthetic unknown accounting allocation".into(),
+            downside_exposure_usd_m: 1.0,
+            trigger_indicator: "later issuer correction".into(),
+        });
+        let q2 = reseal(q2);
+        let output = derive(Rule::QuarterSum, &[q2.clone(), q1.clone()]).unwrap();
+        assert!(output.check_id().is_ok());
+        assert_eq!(output.evidence, EvidenceClass::ISSUER);
+        assert!(output.evidence.no_stronger_than(q1.evidence));
+        assert!(output.evidence.no_stronger_than(q2.evidence));
+        assert_eq!(output.state, q2.state);
+        assert_eq!(output.epistemic, q2.epistemic);
+        assert_eq!(output.uu_terms, q2.uu_terms);
+        let mut parents = vec![q1.claim_id, q2.claim_id];
+        parents.sort();
+        assert_eq!(output.parents, parents);
+        let mut anchors = [q1.anchors.clone(), q2.anchors.clone()].concat();
+        anchors.sort();
+        assert_eq!(output.anchors, anchors);
+        assert_eq!(output.value_tag(), output.value.canonical_tag());
+        assert_eq!(
+            output.claim_id,
+            derive(Rule::QuarterSum, &[q1, q2]).unwrap().claim_id
+        );
+    }
+
+    #[test]
+    fn addition_propagates_rounding_and_keeps_zero_as_a_real_observation() {
+        let q1 = amount(1, 3, 100);
+        let q2 = amount(4, 6, 150);
+        let result = derive(Rule::QuarterSum, &[q2.clone(), q1.clone()]).unwrap();
+        assert_eq!(result.value.interval.lo, Rat::from_integer(249));
+        assert_eq!(result.value.interval.hi, Rat::from_integer(251));
+        assert_eq!(
+            result.value.period,
+            Period {
+                year: 2030,
+                first_month: 1,
+                last_month: 6
+            }
+        );
+        assert_eq!(result.parents.len(), 2);
+        assert_ne!(result.evidence, EvidenceClass::Measured);
+        assert_eq!(
+            result.claim_id,
+            derive(Rule::QuarterSum, &[q1, q2]).unwrap().claim_id
+        );
+        let zero = derive(Rule::QuarterSum, &[amount(1, 3, 0), amount(4, 6, 0)]).unwrap();
+        assert_eq!(zero.value.interval.lo, Rat::from_integer(-1));
+        assert_eq!(zero.value.interval.hi, Rat::from_integer(1));
+    }
+
+    #[test]
+    fn quarter_sums_require_complete_disjoint_half_or_full_year() {
+        let qs: Vec<_> = (0..4).map(|q| amount(q * 3 + 1, q * 3 + 3, 100)).collect();
+        assert_eq!(
+            derive(Rule::QuarterSum, &qs[..2])
+                .unwrap()
+                .value
+                .interval
+                .lo,
+            Rat::from_integer(199)
+        );
+        let fy = derive(Rule::QuarterSum, &qs).unwrap();
+        assert_eq!(
+            fy.value.interval,
+            Interval {
+                lo: Rat::from_integer(398),
+                hi: Rat::from_integer(402),
+                lo_strict: false,
+                hi_strict: false
+            }
+        );
+        let mut reverse = qs.clone();
+        reverse.reverse();
+        assert_eq!(
+            fy.claim_id,
+            derive(Rule::QuarterSum, &reverse).unwrap().claim_id
+        );
+        let nine = derive(Rule::QuarterSum, &qs[..3]).unwrap();
+        assert_eq!(nine.value.period.first_month, 1);
+        assert_eq!(nine.value.period.last_month, 9);
+        assert_eq!(nine.value.interval.lo, Rat::new(597, 2).unwrap());
+        assert_eq!(nine.value.interval.hi, Rat::new(603, 2).unwrap());
+        assert_eq!(nine.parents.len(), 3);
+        assert_ne!(nine.claim_id, fy.claim_id);
+        assert_eq!(
+            nine.claim_id,
+            derive(Rule::QuarterSum, &reverse[1..]).unwrap().claim_id
+        );
+        for invalid in [&qs[..1], &qs[1..], &qs[1..3]] {
+            assert!(derive(Rule::QuarterSum, invalid).is_err());
+        }
+        assert!(derive(Rule::QuarterSum, &[qs[0].clone(), qs[0].clone()]).is_err());
+        for invalid in [
+            vec![qs[0].clone(), qs[0].clone(), qs[2].clone()],
+            vec![qs[0].clone(), qs[1].clone(), qs[3].clone()],
+        ] {
+            assert!(derive(Rule::QuarterSum, &invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn altered_source_and_nonadditive_or_unknown_evidence_refuse() {
+        let q1 = amount(1, 3, 100);
+        let q2 = amount(4, 6, 250);
+        let mut altered = q1.clone();
+        altered.value.subject = "Another site".into();
+        assert_eq!(
+            derive(Rule::QuarterSum, &[altered, q2.clone()])
+                .unwrap_err()
+                .code,
+            "FMINE-REF-507"
+        );
+        for change in [0, 1, 2] {
+            let mut bad = q1.clone();
+            match change {
+                0 => bad.additivity = AdditivityClass::IntensiveWeighted,
+                1 => bad.state = KnowledgeState::Unknown,
+                _ => bad.stale = true,
+            }
+            // Rebuild identity: refusal must check admission, not merely detect an old Claim id.
+            bad = Claim::new(
+                INPUT_METRIC,
+                bad.value.clone(),
+                &bad.value.canonical_tag(),
+                bad.representation,
+                bad.support,
+                bad.additivity,
+                bad.evidence,
+                bad.epistemic,
+                bad.state,
+                bad.confidentiality,
+                bad.uu_terms,
+                bad.parents,
+                bad.anchors,
+            );
+            if change == 2 {
+                bad.stale = true;
+            }
+            assert!(derive(Rule::QuarterSum, &[bad, q2.clone()]).is_err());
+        }
+    }
+
+    #[test]
+    fn different_basis_unit_scope_and_year_do_not_mix() {
+        let q1 = amount(1, 3, 100);
+        for change in 0..5 {
+            let mut h1 = amount(4, 6, 250);
+            match change {
+                0 => {
+                    h1.value.ownership = Ownership::Attributable {
+                        share: Rat::new(4, 5).unwrap(),
+                    }
+                }
+                1 => h1.value.kind = AmountKind::CopperProductionKt,
+                2 => h1.value.scope = "region-version-2".into(),
+                3 => h1.value.period.year = 2031,
+                _ => h1.value.subject = "Site B".into(),
+            }
+            h1 = Claim::new(
+                INPUT_METRIC,
+                h1.value.clone(),
+                &h1.value.canonical_tag(),
+                h1.representation,
+                h1.support,
+                h1.additivity,
+                h1.evidence,
+                h1.epistemic,
+                h1.state,
+                h1.confidentiality,
+                h1.uu_terms,
+                h1.parents,
+                h1.anchors,
+            );
+            assert!(derive(Rule::QuarterSum, &[q1.clone(), h1]).is_err());
+        }
+    }
+}

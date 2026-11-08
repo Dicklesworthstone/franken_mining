@@ -262,6 +262,31 @@ inputs use major USD units with at most four decimal places. Quantities and shar
 fractions. The calculation does not pass through floating point, and JSON retains exact rational results
 and complete canonical input/output Claims, bound to the actual worksheet and metric-registry hashes.
 
+Planned costs can instead declare physical quantities and USD rates in `[[driver_cost]]` rows. Each row
+computes **quantity × rate + fixed cost**, then enters the same definition and allocation calculation as a
+direct cost. The [planned-driver example](tests/costs/planned_drivers.toml) replaces the USD 800.01 mining
+line above with:
+
+```toml
+[[driver_cost]]
+item = "on_site_mining_costs"
+driver = "tonnes_mined"
+unit = "dry_t"
+quantity = "100.01"
+usd_per_unit = "7.5"
+fixed_usd = "49.935"
+```
+
+Run it with `fmine metrics cost --input tests/costs/planned_drivers.toml --definition aisc@wgc-2018`.
+The result is the same USD 10.0001 per sold ounce, with the declared operands retained in the receipt.
+Supported driver/unit pairs are `tonnes_mined` or `tonnes_milled` with `dry_t` or `wet_t`, `haulage` with
+`dry_t_km` or `wet_t_km`, `electricity` with `kWh`, `reagent` with `kg`, and `labour` with `hour`.
+Quantities and rates must be nonnegative exact decimals or fractions; `fixed_usd` is nonnegative and defaults
+explicitly to zero. A computed amount that cannot be represented exactly in USD 0.0001 units refuses.
+There is no implicit unit conversion or rounding. Direct and driver rows cannot repeat the same registered
+item. These are supplied planning assumptions, with source locators for every operand; no rate is fitted from
+historical accounts or promoted to calibrated evidence.
+
 The worksheet's cost classification and completeness remain **Assumed, Internal and uncalibrated**. Declaring
 a complete population is not independent evidence that omitted costs are zero. This command calculates the
 chosen rule; it does not verify issuer filings or close the broader metric-reproduction work.

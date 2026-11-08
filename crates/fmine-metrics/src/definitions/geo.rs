@@ -4,12 +4,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Claim};
 use fmine_core::{Encoder, ObjectId, blake3_hash};
-use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_units::{Currency, ExactQty, UnitsError};
 
-use super::declared::{color_json, join_json, js, qty};
+use super::declared::{claim_json, join_json, js, qty};
 use crate::guidance::{Ownership, Period};
 
 pub mod worksheet;
@@ -164,31 +164,7 @@ pub struct GeoSummary {
 }
 
 /// The receipt owns immutable admitted inputs and a derived comparison Claim.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GeoReceipt {
-    inputs: Vec<Claim<GeoInput>>,
-    claim: Claim<GeoSummary>,
-    digest: String,
-}
-
-impl GeoReceipt {
-    #[must_use]
-    pub fn inputs(&self) -> &[Claim<GeoInput>] {
-        &self.inputs
-    }
-    #[must_use]
-    pub fn summary(&self) -> &GeoSummary {
-        &self.claim.value
-    }
-    #[must_use]
-    pub fn claim(&self) -> &Claim<GeoSummary> {
-        &self.claim
-    }
-    #[must_use]
-    pub fn digest(&self) -> &str {
-        &self.digest
-    }
-}
+pub type GeoReceipt = super::declared::Receipt<GeoInput, GeoSummary>;
 
 fn bad(code: RefusalCode, message: &str) -> Refusal {
     Refusal::new(code, format!("production GEO: {message}"))
@@ -405,54 +381,18 @@ pub fn evaluate(inputs: &[Claim<GeoInput>]) -> Result<GeoReceipt> {
     };
     let mut enc = Encoder::new_frame(*b"GEOR", 1);
     enc.put_u64(inputs.len() as u64);
-    let mut evidence = EvidenceClass::Derived;
-    let mut epistemic = EpistemicStatus::KnownKnown;
-    let mut state = KnowledgeState::Known;
-    let mut confidentiality = Confidentiality::public();
-    let mut uu = BTreeMap::new();
-    let mut parents = BTreeSet::new();
-    let mut anchors = BTreeSet::new();
     for input in &inputs {
-        enc.put_str(&claim_json(input, &input_json(&input.value)));
-        evidence = evidence.meet(input.evidence);
-        epistemic = epistemic.and(input.epistemic);
-        state = state.and(input.state);
-        confidentiality = confidentiality.join(&input.confidentiality);
-        parents.insert(input.claim_id);
-        anchors.extend(input.anchors.iter().cloned());
-        for term in &input.uu_terms {
-            if let Some(prior) = uu.insert(term.scenario_id.clone(), term.clone())
-                && prior != *term
-            {
-                return Err(bad(
-                    RefusalCode::UnbudgetedUnknowns204,
-                    "conflicting definitions for a shared UU scenario",
-                ));
-            }
-        }
+        enc.put_str(&claim_json(input, &input_json(&input.value), false));
     }
     enc.put_str(&summary_json(&summary));
-    let digest = blake3_hash(&enc.finish()).to_hex();
-    let claim = Claim::new(
+    GeoReceipt::from_admitted(
+        inputs,
         OUTPUT_METRIC,
         summary,
-        &digest,
-        Representation::Deterministic,
-        SpatialSupport::PeriodAggregate,
+        blake3_hash(&enc.finish()).to_hex(),
         AdditivityClass::NonAdditive,
-        evidence,
-        epistemic,
-        state,
-        confidentiality,
-        uu.into_values().collect(),
-        parents.into_iter().collect(),
-        anchors.into_iter().collect(),
-    );
-    Ok(GeoReceipt {
-        inputs,
-        claim,
-        digest,
-    })
+        bad,
+    )
 }
 
 fn names(metals: &[Metal]) -> String {
@@ -522,30 +462,6 @@ fn input_json(input: &GeoInput) -> String {
         value_json(&input.value)
     )
 }
-fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
-    let (body, anchors, parents) = super::declared::json_parts(claim);
-    let uu = claim.uu_terms.iter().map(|u| format!("{{\"id\":{},\"description\":{},\"downside_usd_m_bits\":\"{:016x}\",\"trigger\":{}}}", js(&u.scenario_id), js(&u.description), u.downside_exposure_usd_m.to_bits(), js(&u.trigger_indicator))).collect::<Vec<_>>().join(",");
-    format!(
-        "{{\"claim_id\":{},\"metric_key\":{},\"value_tag\":{},\"canonical_body_hex\":{},\"value\":{value},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"representation\":{},\"support\":{},\"additivity\":{},\"confidentiality\":{},\"stale\":{},\"calibration_failed\":{},\"supersedes\":{},\"parents\":[{parents}],\"anchors\":[{anchors}],\"uu_terms\":[{uu}],\"color\":{}}}",
-        js(&claim.claim_id.to_string()),
-        js(&claim.metric_key),
-        js(claim.value_tag()),
-        js(&body),
-        js(&format!("{:?}", claim.evidence)),
-        js(&format!("{:?}", claim.epistemic)),
-        js(&format!("{:?}", claim.state)),
-        js(&format!("{:?}", claim.representation)),
-        js(&format!("{:?}", claim.support)),
-        js(&format!("{:?}", claim.additivity)),
-        js(&claim.confidentiality.to_string()),
-        claim.stale,
-        claim.calibration_failed,
-        claim
-            .supersedes
-            .map_or_else(|| "null".into(), |id| js(&id.to_string())),
-        color_json(claim.color(), false)
-    )
-}
 fn summary_json(summary: &GeoSummary) -> String {
     let decks = summary.decks.iter().map(|d| {
         let contributions = d.contributions.iter().map(|c| format!("{{\"metal\":{},\"quantity_claim_id\":{},\"amount\":{},\"unit\":{},\"price_per_unit\":{},\"gold_oz_per_unit\":{},\"geo_oz\":{}}}", js(c.metal.name()), js(&c.quantity_claim_id.to_string()), js(&qty(c.amount)), js(c.metal.unit()), js(&qty(c.price_per_unit)), js(&qty(c.gold_oz_per_unit)), js(&qty(c.geo_oz)))).collect::<Vec<_>>().join(",");
@@ -564,12 +480,14 @@ impl GeoReceipt {
     #[must_use]
     pub fn to_json(&self) -> String {
         let summary = summary_json(self.summary());
-        let inputs = join_json(&self.inputs, |c| claim_json(c, &input_json(&c.value)));
+        let inputs = join_json(self.inputs(), |c| {
+            claim_json(c, &input_json(&c.value), false)
+        });
         format!(
             "{{\"schema\":{},\"digest\":{},\"summary\":{summary},\"claim\":{},\"inputs\":[{inputs}],\"no_claim\":{}}}",
             js(worksheet::SCHEMA),
-            js(&self.digest),
-            claim_json(&self.claim, &summary),
+            js(self.digest()),
+            claim_json(self.claim(), &summary, false),
             js(NO_CLAIM)
         )
     }
@@ -601,8 +519,8 @@ impl GeoReceipt {
             text(&s.reference.id),
             text(&s.reference.version),
             join_json(&s.excluded_metals, |m| m.name().to_owned()),
-            self.claim.evidence,
-            self.claim.confidentiality
+            self.claim().evidence,
+            self.claim().confidentiality
         );
         for d in &s.decks {
             let _ = writeln!(
@@ -633,7 +551,7 @@ impl GeoReceipt {
             }
         }
         out.push_str("\n## Source Claims\n\n");
-        for input in &self.inputs {
+        for input in self.inputs() {
             let _ = writeln!(out, "- {} ({:?}):", input.claim_id, input.evidence);
             for a in &input.anchors {
                 let _ = writeln!(
@@ -648,7 +566,8 @@ impl GeoReceipt {
         let _ = writeln!(
             out,
             "\nOutput Claim: {}. Digest: {}.",
-            self.claim.claim_id, self.digest
+            self.claim().claim_id,
+            self.digest()
         );
         out
     }

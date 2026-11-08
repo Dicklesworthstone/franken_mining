@@ -1,17 +1,103 @@
 //! Common admission, exact parsing and JSON primitives for declared metric worksheets.
 //! Determinism: Exact (callers retain their domain rules, refusal prefixes and receipt schemas).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use fmine_claim::{AdditivityClass, Claim, Representation, SpatialSupport};
-use fmine_core::Digest32;
+use fmine_claim::{
+    AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
+};
+use fmine_core::{Digest32, anchor::SourceAnchor};
 use fmine_evidence::color::validate_color_payload;
-use fmine_evidence::{Color, KnowledgeState, Refusal, RefusalCode};
+use fmine_evidence::{
+    Color, EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
+};
 use fmine_registry::toml_subset::{TomlField, TomlValue};
 use fmine_units::ExactQty;
 
 use crate::guidance::{Ownership, Period};
+
+/// Immutable admitted worksheet inputs and their exact derived result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Receipt<I, O> {
+    inputs: Vec<Claim<I>>,
+    claim: Claim<O>,
+    digest: String,
+}
+
+impl<I, O> Receipt<I, O> {
+    #[must_use]
+    pub fn inputs(&self) -> &[Claim<I>] {
+        &self.inputs
+    }
+    #[must_use]
+    pub fn summary(&self) -> &O {
+        &self.claim.value
+    }
+    #[must_use]
+    pub fn claim(&self) -> &Claim<O> {
+        &self.claim
+    }
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    pub(super) fn from_admitted(
+        inputs: Vec<Claim<I>>,
+        metric: &str,
+        value: O,
+        digest: String,
+        additivity: AdditivityClass,
+        bad: fn(RefusalCode, &str) -> Refusal,
+    ) -> Result<Self, Refusal> {
+        let mut evidence = EvidenceClass::Derived;
+        let mut epistemic = EpistemicStatus::KnownKnown;
+        let mut state = KnowledgeState::Known;
+        let mut confidentiality = Confidentiality::public();
+        let mut uu = BTreeMap::new();
+        let mut parents = BTreeSet::new();
+        let mut anchors = BTreeSet::new();
+        for input in &inputs {
+            evidence = evidence.meet(input.evidence);
+            epistemic = epistemic.and(input.epistemic);
+            state = state.and(input.state);
+            confidentiality = confidentiality.join(&input.confidentiality);
+            parents.insert(input.claim_id);
+            anchors.extend(input.anchors.iter().cloned());
+            for term in &input.uu_terms {
+                if let Some(prior) = uu.insert(term.scenario_id.clone(), term.clone())
+                    && prior != *term
+                {
+                    return Err(bad(
+                        RefusalCode::UnbudgetedUnknowns204,
+                        "conflicting definitions for a shared UU scenario",
+                    ));
+                }
+            }
+        }
+        let claim = Claim::new(
+            metric,
+            value,
+            &digest,
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            additivity,
+            evidence,
+            epistemic,
+            state,
+            confidentiality,
+            uu.into_values().collect(),
+            parents.into_iter().collect(),
+            anchors.into_iter().collect(),
+        );
+        Ok(Self {
+            inputs,
+            claim,
+            digest,
+        })
+    }
+}
 
 pub(super) fn admit<T>(
     claim: &Claim<T>,
@@ -84,6 +170,32 @@ pub(super) fn admit<T>(
         })?;
     }
     Ok(())
+}
+
+/// Declared worksheet bytes establish provenance, not observation or calibration.
+pub(super) fn source_claim<T>(
+    metric: &str,
+    value: T,
+    tag: &str,
+    additivity: AdditivityClass,
+    uu: Vec<UuTerm>,
+    anchors: Vec<SourceAnchor>,
+) -> Claim<T> {
+    Claim::new(
+        metric,
+        value,
+        tag,
+        Representation::Deterministic,
+        SpatialSupport::PeriodAggregate,
+        additivity,
+        EvidenceClass::Assumed,
+        EpistemicStatus::KnownUnknown(KuKind::Parametric),
+        KnowledgeState::Known,
+        Confidentiality::internal(),
+        uu,
+        Vec::new(),
+        anchors,
+    )
 }
 
 pub(super) fn decimal_parts(value: &str) -> Option<(bool, &str, &str)> {
@@ -176,6 +288,23 @@ pub(super) fn ownership_json(ownership: Ownership) -> String {
     }
 }
 
+pub(super) fn field_anchors(
+    source: &SourceAnchor,
+    fields: &[TomlField],
+    table: &str,
+) -> Vec<SourceAnchor> {
+    fields
+        .iter()
+        .map(|field| {
+            SourceAnchor::new(
+                &source.artifact_path,
+                source.artifact_sha256,
+                format!("line {}: {table}.{}", field.line, field.key),
+            )
+        })
+        .collect()
+}
+
 /// The same canonical bytes, source anchors and ordered parents under each receipt's existing keys.
 pub(super) fn json_parts<T>(claim: &Claim<T>) -> (String, String, String) {
     let mut body = String::new();
@@ -192,6 +321,64 @@ pub(super) fn json_parts<T>(claim: &Claim<T>) -> (String, String, String) {
     });
     let parents = join_json(&claim.parents, |id| js(&id.to_string()));
     (body, anchors, parents)
+}
+
+/// Keeps each existing receipt's field order and UU spelling, while sharing its complete Claim envelope.
+pub(super) fn claim_json<T>(claim: &Claim<T>, value: &str, cost_schema: bool) -> String {
+    let (body, anchors, parents) = json_parts(claim);
+    let uu = join_json(&claim.uu_terms, |u| {
+        if cost_schema {
+            format!(
+                "{{\"scenario_id\":{},\"description\":{},\"downside_exposure_usd_m\":{},\"downside_bits\":\"{:016x}\",\"trigger_indicator\":{}}}",
+                js(&u.scenario_id),
+                js(&u.description),
+                u.downside_exposure_usd_m,
+                u.downside_exposure_usd_m.to_bits(),
+                js(&u.trigger_indicator)
+            )
+        } else {
+            format!(
+                "{{\"id\":{},\"description\":{},\"downside_usd_m_bits\":\"{:016x}\",\"trigger\":{}}}",
+                js(&u.scenario_id),
+                js(&u.description),
+                u.downside_exposure_usd_m.to_bits(),
+                js(&u.trigger_indicator)
+            )
+        }
+    });
+    let head = format!(
+        "\"claim_id\":{},\"metric_key\":{},\"value_tag\":{},\"canonical_body_hex\":{},\"value\":{value},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"representation\":{},\"support\":{},\"additivity\":{},\"confidentiality\":{}",
+        js(&claim.claim_id.to_string()),
+        js(&claim.metric_key),
+        js(claim.value_tag()),
+        js(&body),
+        js(&format!("{:?}", claim.evidence)),
+        js(&format!("{:?}", claim.epistemic)),
+        js(&format!("{:?}", claim.state)),
+        js(&format!("{:?}", claim.representation)),
+        js(&format!("{:?}", claim.support)),
+        js(&format!("{:?}", claim.additivity)),
+        js(&claim.confidentiality.to_string())
+    );
+    let supersedes = claim
+        .supersedes
+        .map_or_else(|| "null".into(), |id| js(&id.to_string()));
+    let lineage = format!("\"parents\":[{parents}],\"anchors\":[{anchors}],\"uu_terms\":[{uu}]");
+    let tail = if cost_schema {
+        format!(
+            "{lineage},\"supersedes\":{supersedes},\"stale\":{},\"calibration_failed\":{}",
+            claim.stale, claim.calibration_failed
+        )
+    } else {
+        format!(
+            "\"stale\":{},\"calibration_failed\":{},\"supersedes\":{supersedes},{lineage}",
+            claim.stale, claim.calibration_failed
+        )
+    };
+    format!(
+        "{{{head},{tail},\"color\":{}}}",
+        color_json(claim.color(), cost_schema)
+    )
 }
 
 pub(super) fn color_json(color: Result<Color, Refusal>, include_status: bool) -> String {

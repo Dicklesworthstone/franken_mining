@@ -2,16 +2,14 @@
 //! Every imported Claim remains Assumed, Internal and uncalibrated.
 //! Determinism: Exact
 
-use fmine_claim::{Claim, Confidentiality, Representation, SpatialSupport};
+use fmine_claim::Claim;
 use fmine_core::{anchor::SourceAnchor, hash::sha256};
-use fmine_evidence::{
-    EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
-};
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::toml_subset::{TomlField, parse_subset};
 use fmine_units::{Currency, ExactQty};
 
 use super::{DeckKey, GeoInput, GeoReceipt, GeoValue, Metal, PriceDeck, Scope};
-use crate::definitions::declared::{Fields, fields};
+use crate::definitions::declared::{Fields, field_anchors, fields, source_claim};
 use crate::guidance::{Ownership, Period};
 
 pub const SCHEMA: &str = "fmine.geo-worksheet.v1";
@@ -92,30 +90,13 @@ fn declared(
     };
     let tag = value.canonical_tag();
     let additivity = value.additivity();
-    let anchors = fields
-        .iter()
-        .map(|field| {
-            SourceAnchor::new(
-                &source.artifact_path,
-                source.artifact_sha256,
-                format!("line {}: {table}.{}", field.line, field.key),
-            )
-        })
-        .collect();
-    Claim::new(
+    source_claim(
         super::INPUT_METRIC,
         value,
         &tag,
-        Representation::Deterministic,
-        SpatialSupport::PeriodAggregate,
         additivity,
-        EvidenceClass::Assumed,
-        EpistemicStatus::KnownUnknown(KuKind::Parametric),
-        KnowledgeState::Known,
-        Confidentiality::internal(),
         Vec::new(),
-        Vec::new(),
-        anchors,
+        field_anchors(source, fields, table),
     )
 }
 

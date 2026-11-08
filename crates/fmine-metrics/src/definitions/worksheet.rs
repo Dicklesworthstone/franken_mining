@@ -4,18 +4,18 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use fmine_claim::{Claim, Confidentiality, Representation, SpatialSupport, UuTerm};
+use fmine_claim::UuTerm;
 use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
-use fmine_evidence::{
-    EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
-};
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::metrics::MetricRegistry;
 use fmine_registry::toml_subset::parse_subset;
 use fmine_units::{Currency, ExactQty, Money};
 
 use super::CostUnit;
-use super::claims::{self, CostInput, CostReceipt, CostValue, Scope};
-use super::declared::{Fields, color_json, decimal_parts, fields, join_json, js, qty};
+use super::claims::{self, CostInput, CostReceipt, CostValue, DeclaredDriver, Scope};
+use super::declared::{
+    Fields, claim_json, decimal_parts, fields, join_json, js, qty, source_claim,
+};
 use crate::guidance::{Ownership, Period};
 
 pub const SCHEMA: &str = "fmine.cost-worksheet.v1";
@@ -108,7 +108,7 @@ pub fn evaluate(
     let definition_tag = claims::definition_tag(&registry, definition)?;
     let doc = parse_subset(text).map_err(|e| bad(e.line, e.reason))?;
     if doc.rows.len() > MAX_ROWS {
-        return Err(bad(1, "worksheet permits at most 4096 cost/UU rows"));
+        return Err(bad(1, "worksheet permits at most 4096 cost/driver/UU rows"));
     }
     let top = fields(
         &doc.top,
@@ -187,6 +187,7 @@ pub fn evaluate(
         values.push((CostValue::CopperShare(quantity(share, *line)?), *line));
     }
     let mut unknowns = BTreeMap::new();
+    let mut driver_anchors = BTreeMap::new();
     for row in &doc.rows {
         match row.table.as_str() {
             "cost" => {
@@ -199,6 +200,49 @@ pub fn evaluate(
                     },
                     row.line,
                 ));
+            }
+            "driver_cost" => {
+                let f = fields(
+                    &row.fields,
+                    &["item", "driver", "unit", "quantity", "usd_per_unit"],
+                    &["fixed_usd"],
+                    row.line,
+                    bad,
+                )?;
+                let fixed_usd = f.get("fixed_usd").map_or_else(
+                    || Ok(Money::from_minor(Currency::USD, 0)),
+                    |(value, line)| money(value, *line),
+                )?;
+                let parse_quantity = |key| {
+                    let (value, line) = get(&f, key)?;
+                    quantity(value, line)
+                };
+                values.push((
+                    CostValue::DriverLine {
+                        item: get(&f, "item")?.0.into(),
+                        driver: DeclaredDriver {
+                            kind: get(&f, "driver")?.0.into(),
+                            unit: get(&f, "unit")?.0.into(),
+                            quantity: parse_quantity("quantity")?,
+                            usd_per_unit: parse_quantity("usd_per_unit")?,
+                            fixed_usd,
+                        },
+                    },
+                    row.line,
+                ));
+                let mut anchors: Vec<_> = f
+                    .iter()
+                    .map(|(key, (_, line))| {
+                        anchored(&source, format!("line {line}: driver_cost.{key}"))
+                    })
+                    .collect();
+                if !f.contains_key("fixed_usd") {
+                    anchors.push(anchored(
+                        &source,
+                        format!("line {}: driver_cost.fixed_usd defaults to 0 USD", row.line),
+                    ));
+                }
+                driver_anchors.insert(row.line, anchors);
             }
             "uu" => {
                 let f = fields(
@@ -256,6 +300,7 @@ pub fn evaluate(
                 &source,
                 format!("line {line}: declared cost worksheet input"),
             )];
+            anchors.extend(driver_anchors.remove(&line).unwrap_or_default());
             let rule = matches!(value, CostValue::Rule { .. });
             if rule {
                 anchors.push(anchored(
@@ -269,21 +314,14 @@ pub fn evaluate(
             };
             let tag = input.canonical_tag();
             let additivity = input.additivity();
-            Claim::new(
+            source_claim(
                 claims::INPUT_METRIC,
                 input,
                 &tag,
-                Representation::Deterministic,
-                SpatialSupport::PeriodAggregate,
                 additivity,
-                EvidenceClass::Assumed,
-                EpistemicStatus::KnownUnknown(KuKind::Parametric),
-                KnowledgeState::Known,
-                Confidentiality::internal(),
                 // Scope-wide unknowns belong to the completeness declaration and propagate once.
                 // Copying the whole budget onto each line would multiply input/output size quadratically.
                 if rule { uu.clone() } else { Vec::new() },
-                Vec::new(),
                 anchors,
             )
         })
@@ -311,6 +349,11 @@ fn input_json(input: &CostInput) -> String {
             js(item),
             js(&amount.minor.to_string())
         ),
+        CostValue::DriverLine { item, driver } => format!(
+            "{{\"kind\":\"driver_cost\",\"item\":{},{}}}",
+            js(item),
+            driver.json_fields()
+        ),
         CostValue::SoldOunces(q) => {
             format!("{{\"kind\":\"ounces_sold\",\"value\":{}}}", js(&qty(*q)))
         }
@@ -336,33 +379,6 @@ fn input_json(input: &CostInput) -> String {
     format!(
         "{{\"scope\":{},\"value\":{value}}}",
         scope_json(&input.scope)
-    )
-}
-
-fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
-    let (body, anchors, parents) = super::declared::json_parts(claim);
-    let uu = claim.uu_terms.iter().map(|u| format!("{{\"scenario_id\":{},\"description\":{},\"downside_exposure_usd_m\":{},\"downside_bits\":\"{:016x}\",\"trigger_indicator\":{}}}",
-        js(&u.scenario_id), js(&u.description), u.downside_exposure_usd_m, u.downside_exposure_usd_m.to_bits(), js(&u.trigger_indicator))).collect::<Vec<_>>().join(",");
-    format!(
-        "{{\"claim_id\":{},\"metric_key\":{},\"value_tag\":{},\"canonical_body_hex\":{},\"value\":{value},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"representation\":{},\"support\":{},\"additivity\":{},\"confidentiality\":{},\"parents\":[{}],\"anchors\":[{anchors}],\"uu_terms\":[{uu}],\"supersedes\":{},\"stale\":{},\"calibration_failed\":{},\"color\":{}}}",
-        js(&claim.claim_id.to_string()),
-        js(&claim.metric_key),
-        js(claim.value_tag()),
-        js(&body),
-        js(&format!("{:?}", claim.evidence)),
-        js(&format!("{:?}", claim.epistemic)),
-        js(&format!("{:?}", claim.state)),
-        js(&format!("{:?}", claim.representation)),
-        js(&format!("{:?}", claim.support)),
-        js(&format!("{:?}", claim.additivity)),
-        js(&claim.confidentiality.to_string()),
-        parents,
-        claim
-            .supersedes
-            .map_or_else(|| "null".into(), |id| js(&id.to_string())),
-        claim.stale,
-        claim.calibration_failed,
-        color_json(claim.color(), true)
     )
 }
 
@@ -396,8 +412,12 @@ impl CostReceipt {
         format!(
             "{{\"digest\":{},\"summary\":{summary},\"claim\":{},\"inputs\":[{}]}}",
             js(self.digest()),
-            claim_json(self.claim(), &summary),
-            join_json(self.inputs(), |c| claim_json(c, &input_json(&c.value)))
+            claim_json(self.claim(), &summary, true),
+            join_json(self.inputs(), |c| claim_json(
+                c,
+                &input_json(&c.value),
+                true
+            ))
         )
     }
 
@@ -463,6 +483,30 @@ impl CostReceipt {
                 qty(c.numerator_usd),
                 c.input_claim_id
             );
+        }
+        let drivers: Vec<_> = self
+            .inputs()
+            .iter()
+            .filter_map(|input| {
+                if let CostValue::DriverLine { item, driver } = &input.value.value {
+                    Some(format!(
+                        "| {} | {} | {} {} | {} | {}/10000 |",
+                        text(item),
+                        text(&driver.kind),
+                        qty(driver.quantity),
+                        text(&driver.unit),
+                        qty(driver.usd_per_unit),
+                        driver.fixed_usd.minor
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !drivers.is_empty() {
+            out.push_str("\n## Declared cost drivers\n\nCost = quantity × USD per stated unit + fixed USD; no fitted rates or unit conversion.\n\n| Cost item | Driver | Quantity and unit | USD per unit | Fixed USD |\n|---|---|---:|---:|---:|\n");
+            out.push_str(&drivers.join("\n"));
+            out.push('\n');
         }
         let _ = write!(
             out,

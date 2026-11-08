@@ -177,6 +177,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     values, cost classifications and completeness stay Assumed, Internal and uncalibrated. The adapter
     creates no ledger anchor or issuance certificate. The supplied `tests/costs/declared_aisc.toml` is an
     invented worksheet, not an issuer filing or independently verified complete cost population.
+    Optional `[[driver_cost]]` rows supply a named physical driver, unit, exact quantity and USD rate, plus
+    an optional fixed USD amount. The metrics kernel computes and validates those costs under the same
+    selected definition; JSON and Markdown retain the operands and source locators. The runnable example
+    `tests/costs/planned_drivers.toml` gives USD 10.0001/oz from invented assumptions, with no fitted rates.
   - `html claims --issuer <registered> --definitions <mapping.toml> [--as-of YYYY-MM-DD]` (BD-057/BD-059):
     delegates to `fmine-public::html::run` to load registered HTML bytes and strict, value-free label mappings.
     The `fmine.html_claims.v1` payload returns full canonical Claim bodies and their semantic keys, exact

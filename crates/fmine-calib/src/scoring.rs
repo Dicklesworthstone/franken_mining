@@ -326,8 +326,13 @@ mod tests {
         ] {
             assert!(gaussian_crps_bounds(mean, sd, (-1.0, 2.0)).is_err());
         }
+        // The tiny-scale tail has representable losses even though standardized residuals overflow.
+        assert_eq!(
+            gaussian_crps_bounds(0.0, 1e-308, (2.0, 3.0)).unwrap(),
+            (2.0, 3.0)
+        );
         assert!(matches!(
-            gaussian_crps_bounds(0.0, 1e-308, (2.0, 3.0)),
+            gaussian_crps_bounds(f64::MAX, 1.0, (-f64::MAX, 0.0)),
             Err(ScoreError::Arithmetic { .. })
         ));
     }

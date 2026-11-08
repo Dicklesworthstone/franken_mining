@@ -2436,6 +2436,27 @@ mod tests {
                 ..AssessmentPolicy::default()
             },
         );
+        let bounded = ledger
+            .assess(cohort, 50, OutcomeSelector::FirstPublished)
+            .unwrap();
+        assert_eq!(
+            bounded.summary.crps.unwrap().whole_cohort,
+            ScoreBounds {
+                lower: 2.0,
+                upper: Some(3.0)
+            }
+        );
+        let (mut ledger, cohort, _) = make_cohort(
+            vec![ForecastPayload::Gaussian {
+                mean: f64::MAX,
+                std_dev: 1.0,
+            }],
+            AssessmentPolicy {
+                outcome_bounds: Some((-f64::MAX, 0.0)),
+                gaussian_crps_bounds: true,
+                ..AssessmentPolicy::default()
+            },
+        );
         assert!(
             ledger
                 .assess(cohort, 50, OutcomeSelector::FirstPublished)

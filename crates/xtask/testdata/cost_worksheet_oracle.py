@@ -236,6 +236,89 @@ class CostWorksheet(unittest.TestCase):
         self.assertIsNone(envelope["payload"])
         self.assertEqual(path.read_text(encoding="utf-8"), text)
 
+    def test_declared_drivers_compute_gold_and_copper_costs_and_keep_operand_sources(self):
+        designs = (
+            ("100.01", "7.5", "49.935"),  # 800.01, including explicit fixed cost
+            ("8000.2", "0.125", None),   # 1000.025, fixed defaults explicitly to zero
+            ("2400", "1/3", "200"),     # 1000, exact rational rate and co-product allocation
+            ("1000", "1", None),
+            ("1000", "1", None),
+        )
+        for case, (quantity, rate, fixed) in zip(CASES, designs, strict=True):
+            definition, units, sold, share, _, _, total, lines = case
+            root = fixture(case)
+            path = root / FILE
+            original = path.read_text(encoding="utf-8")
+            item, amount, treatment, contribution = lines[0]
+            declared = {"item": item, "driver": "tonnes_mined", "unit": "dry_t",
+                        "quantity": quantity, "usd_per_unit": rate}
+            if fixed is not None:
+                declared["fixed_usd"] = fixed
+            replacement = "\n[[driver_cost]]\n" + fields(declared)
+            text = original.replace("\n[[cost]]\n" + fields({"item": item, "usd": amount}),
+                                    replacement, 1)
+            self.assertNotEqual(text, original)
+            path.write_text(text, encoding="utf-8")
+            with self.subTest(definition=definition):
+                output = subprocess.run(
+                    [str(self.binary), *arguments(definition), "--workspace", str(root)],
+                    capture_output=True, text=True, encoding="utf-8", check=False, timeout=30,
+                )
+                self.assertEqual(output.returncode, 0, output.stdout + output.stderr)
+                receipt = json.loads(output.stdout)["payload"]["receipt"]
+                summary = receipt["summary"]
+                self.assertEqual(Fraction(summary["numerator_usd"]), Fraction(total))
+                self.assertEqual(Fraction(summary[units[2]]), Fraction(total) / Fraction(sold))
+                driver = next(c for c in receipt["inputs"]
+                              if c["value"]["value"]["kind"] == "driver_cost")
+                value = driver["value"]["value"]
+                self.assertEqual(value["driver"], "tonnes_mined")
+                self.assertEqual(value["unit"], "dry_t")
+                self.assertEqual(Fraction(value["quantity"]), Fraction(quantity))
+                self.assertEqual(Fraction(value["usd_per_unit"]), Fraction(rate))
+                self.assertEqual(Fraction(value["fixed_minor"]) / value["scale"],
+                                 Fraction(fixed or "0"))
+                calculated = Fraction(quantity) * Fraction(rate) + Fraction(fixed or "0")
+                self.assertEqual(calculated, Fraction(amount))
+                row = next(c for c in summary["contributions"] if c["item"] == item)
+                self.assertEqual(Fraction(row["amount_minor"]) / 10000, calculated)
+                self.assertEqual(Fraction(row["numerator_usd"]), Fraction(contribution))
+                self.assertEqual(row["treatment"], treatment)
+                self.assertEqual(row["input_claim_id"], driver["claim_id"])
+                self.assertIn(driver["claim_id"], receipt["claim"]["parents"])
+                self.assertEqual(driver["evidence"], "Assumed")
+                self.assertEqual(receipt["claim"]["evidence"], "Assumed")
+                self.assertEqual(driver["confidentiality"], "Internal")
+                for field in ("quantity", "usd_per_unit", "fixed_usd", "unit", "driver"):
+                    self.assertTrue(any(f"driver_cost.{field}" in a["locator"]
+                                        for a in driver["anchors"]), field)
+                self.assertTrue(all(a["sha256"] == hashlib.sha256(text.encode()).hexdigest()
+                                    for a in driver["anchors"]))
+
+    def test_driver_worksheet_refuses_missing_ambiguous_and_nonphysical_operands(self):
+        root = fixture()
+        original = (root / FILE).read_text(encoding="utf-8")
+        first = "\n[[cost]]\n" + fields({"item": "on_site_mining_costs", "usd": "800.01"})
+        operands = {"item": "on_site_mining_costs", "driver": "tonnes_mined", "unit": "dry_t",
+                    "quantity": "100.01", "usd_per_unit": "7.5", "fixed_usd": "49.935"}
+        for field, value, code in (
+            ("unit", "t", "FMINE-REF-105"), ("unit", "kWh", "FMINE-REF-105"),
+            ("quantity", "-1", "FMINE-REF-109"), ("usd_per_unit", "-1", "FMINE-REF-109"),
+            ("fixed_usd", "-1", "FMINE-REF-109"), ("quantity", None, "FMINE-REF-506"),
+            ("usd_per_unit", "nan", "FMINE-REF-506"),
+            ("usd_per_unit", "1/3", "FMINE-REF-207"),
+        ):
+            changed = dict(operands)
+            if value is None:
+                del changed[field]
+            else:
+                changed[field] = value
+            text = original.replace(first, "\n[[driver_cost]]\n" + fields(changed), 1)
+            with self.subTest(field=field, value=value):
+                self.assert_refused_worksheet(root, CASES[0][0], text, code)
+        self.assert_refused_worksheet(root, CASES[0][0],
+            original + "\n[[driver_cost]]\n" + fields(operands), "FMINE-REF-105")
+
     def test_sold_units_and_allocation_are_explicit_and_never_mixed(self):
         for definition, other_sold, other_share in (
             ("aisc@wgc-2018", "pounds_sold", "copper_share"),
