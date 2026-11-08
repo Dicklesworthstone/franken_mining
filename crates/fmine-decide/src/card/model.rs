@@ -224,7 +224,13 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
         }
     }
     let unknowns: Vec<_> = unknowns.into_values().collect();
-    let robustness = robustness.finish(&states, actions.len(), &unknowns, &source)?;
+    let robustness = robustness.finish(
+        &states,
+        actions.len(),
+        information.options.len(),
+        &unknowns,
+        &source,
+    )?;
     let mut claims = Vec::new();
     for (id, action) in actions {
         let mut values = Vec::new();

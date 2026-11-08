@@ -323,6 +323,7 @@ fn transport_input_bounds_precede_metric_evaluation_and_invalid_metrics_refuse()
         .finish(
             &states,
             2,
+            0,
             &declared(MODEL).weights.uu_terms,
             &source(&text),
         )

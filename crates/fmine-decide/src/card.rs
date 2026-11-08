@@ -630,7 +630,11 @@ fn evaluate_impl(inputs: &DecisionInputs, require_do_nothing: bool) -> Result<Ev
         information::assess(&mut inputs.information_options, &summary)?;
     summary.information = information;
     weakest = weakest.min(information_color);
-    let (robustness, robustness_color) = robustness::assess(&mut inputs.robustness, &summary)?;
+    let (robustness, robustness_color) = robustness::assess(
+        &mut inputs.robustness,
+        &inputs.information_options,
+        &summary,
+    )?;
     summary.robustness = robustness;
     weakest = weakest.min(robustness_color);
     let mut binding = Encoder::new_frame(*b"DCCL", 1);

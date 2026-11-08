@@ -192,18 +192,40 @@ The projection is an internal versioned replay input (version 2), not a new dura
   adversarial distributions. Every certificate retains all destination weights (including zeros),
   all positive transport arcs, transport cost, dual multiplier/potentials, objective and exact zero
   primal/dual gap. Nominal choices, regrets, tail statistics and information-option assessments stay
-  unchanged and visible. The robust scope is **act-now actions**: it neither optimizes information
-  policies nor certifies robust CVaR, hard constraints, missing regimes or empirical uncertainty.
+  unchanged and visible. The original robust mean/regret fields retain their **act-now action** scope.
+
+  When information options are present, `FixedPolicyComparison` adds a joint maximin-mean ranking of
+  act-now actions and the already selected one-test policies. For original state s and fixed nominal
+  signal policy π, its conditional net value is gπ(s) = Σ_z P(z|s) v(π(z),s) − test_cost − delay_cost.
+  The input likelihood matrix and original action payoffs supply this value; posterior means and
+  aggregated marginal risk laws do not. Every signal, including impossible signals, retains its
+  nominal selected action. Strictly positive original state weights ensure an impossible signal has
+  zero likelihood in every original state and cannot become reachable by reweighting that support.
+  The existing transport plan maximizes −gπ with the same state metric and radius. Nominal expectation
+  must agree exactly with both the information option's net value and its policy-risk mean.
+  Each `RobustInformationPolicy` retains the signal actions, posterior-tied signals, conditional state
+  values and complete primal/dual certificate. `FixedPolicyChoice` qualifies identifiers by kind so
+  an action and an information option with the same name remain distinct, and every co-winner stays
+  visible. The fixed posterior tie resolution is not reconsidered under the stressed distribution.
+  Conditional state means are not realized signal outcomes. This view does not optimize signal
+  policies, alter test accuracy, infer cross-test regret or joint signals, or certify robust CVaR,
+  hard constraints, missing regimes or empirical uncertainty.
 
   Work is bounded before cloning or hashing: 1–64 states, at most 256 actions, a complete distance
-  matrix and at most 2,097,152 action/state-pair objective evaluations. Identifiers are at most 128
-  ASCII identifier bytes and the declared bases at most 4,096 bytes. Metric validation and cost
-  ordering are reused across both objectives and all actions. Each numerical solve uses exact
+  matrix and at most 2,097,152 objective/state-pair evaluations: two objectives per act-now action
+  and one per information policy. The existing information work bounds also apply. State and action
+  identifiers are at most 128 ASCII identifier bytes and the declared bases at most 4,096 bytes.
+  Metric validation and cost ordering are reused across all actions and policies. Each solve uses exact
   concave hull segments and returns at most n+1 positive arcs, without convergence tolerances.
   Configuration metadata joins output ancestry, confidentiality, UU and weakest evidence/colour.
   When the declaration is absent, the prior card fields, scope, Claim identity and report bytes remain
-  unchanged. Tests include independent primal-vertex enumeration, direct source-admission mutations,
+  unchanged. With no information options, the original robust JSON/Markdown bytes remain unchanged.
+  Tests include independent primal-vertex enumeration, direct source-admission mutations,
   zero/full-radius limits, distinct robust criteria and actual CLI/library JSON/Markdown parity.
+  Fixed-policy tests independently enumerate state/signal outcomes and the feasible two-state laws,
+  reproduce a nominal 67.5 versus robust 27.5 test value that loses to a safe 30 action, reject changed
+  conditional models, retain fixed posterior ties and impossible signals, distinguish equal action
+  and option identifiers, and exercise the additional transport work cap before Claim admission.
 
 ## 5. Guards & Typed Refusals
 `rank_voi_campaigns` validates the shared problem once, even for an empty campaign list. Every campaign must

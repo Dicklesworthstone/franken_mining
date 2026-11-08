@@ -5,9 +5,14 @@ use super::*;
 use fmine_numerics::risk::exact::compare;
 use fmine_numerics::risk::transport::{TransportCertificate, TransportPlan};
 
+mod policies;
 mod render;
 #[cfg(test)]
 mod tests;
+
+pub use policies::{
+    FIXED_POLICY_SCOPE, FixedPolicyChoice, FixedPolicyComparison, RobustInformationPolicy,
+};
 
 pub const METHOD: &str = "wasserstein_1";
 pub const MAX_TRANSPORT_STATES: usize = 64;
@@ -89,6 +94,8 @@ pub struct RobustnessSummary {
     pub nominal_winner_survives_maximin: bool,
     pub nominal_winner_survives_minimax_regret: bool,
     pub alternatives: Vec<RobustAlternative>,
+    /// Present only with information options; the act-now regret comparison remains separate.
+    pub fixed_policy_comparison: Option<FixedPolicyComparison>,
 }
 
 fn bad(why: &str) -> Refusal {
@@ -115,15 +122,18 @@ pub(super) fn check_work(inputs: &DecisionInputs) -> Result<()> {
     let design = &claim.value;
     let states = inputs.weights.value.states.len();
     let cells = states.checked_mul(states);
-    let work = cells
-        .and_then(|n| n.checked_mul(inputs.actions.len()))
-        .and_then(|n| n.checked_mul(2));
+    let objectives = inputs
+        .actions
+        .len()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(inputs.information_options.len()));
+    let work = cells.and_then(|n| objectives.and_then(|m| n.checked_mul(m)));
     if !(1..=MAX_TRANSPORT_STATES).contains(&states)
         || cells != Some(design.distances.len())
         || work.is_none_or(|n| n > MAX_TRANSPORT_WORK)
     {
         return Err(bad(
-            "Wasserstein robustness requires 1..=64 states, every ordered distance pair and at most 2097152 action/state-pair evaluations",
+            "Wasserstein robustness requires 1..=64 states, every ordered distance pair and at most 2097152 objective/state-pair evaluations (two per action and one per information policy)",
         ));
     }
     if design.method != METHOD
@@ -184,6 +194,7 @@ fn rankings(rows: &[RobustAlternative], regret: bool) -> (Vec<String>, Vec<Strin
 /// Called only after the complete original action/state population has passed normal card admission.
 pub(super) fn assess(
     configuration: &mut Option<Claim<RobustnessDesign>>,
+    information_options: &[Claim<information::InformationOption>],
     summary: &DecisionSummary,
 ) -> Result<(Option<RobustnessSummary>, ColorRank)> {
     let Some(claim) = configuration else {
@@ -274,6 +285,13 @@ pub(super) fn assess(
         });
     }
     let (maximin_mean_order, maximin_mean_winners) = rankings(&alternatives, false);
+    let fixed_policy_comparison = policies::assess(
+        information_options,
+        summary,
+        &alternatives,
+        &plan,
+        claim.value.radius,
+    )?;
     let (minimax_expected_regret_order, minimax_expected_regret_winners) =
         rankings(&alternatives, true);
     let survives = |winners: &[String]| {
@@ -295,6 +313,7 @@ pub(super) fn assess(
             minimax_expected_regret_order,
             minimax_expected_regret_winners,
             alternatives,
+            fixed_policy_comparison,
         }),
         color,
     ))

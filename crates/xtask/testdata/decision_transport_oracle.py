@@ -13,6 +13,7 @@ from functools import lru_cache
 import importlib.util
 from itertools import combinations, product
 from pathlib import Path
+import tomllib
 import unittest
 
 
@@ -23,6 +24,7 @@ base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 
 EXAMPLE = Path(__file__).resolve().parents[3] / "tests/decisions/wasserstein.toml"
+POLICY_EXAMPLE = EXAMPLE.with_name("wasserstein_information.toml")
 STATES = [("adverse", F(1, 4)), ("favorable", F(3, 4))]
 VALUES = {
     "build": {"adverse": F(-12), "favorable": F(12)},
@@ -125,6 +127,34 @@ def worst_value(weights, distances, radius, losses):
                for law in destination_vertices(tuple(weights), tuple(map(tuple, distances)), F(radius)))
 
 
+def fixed_policy_values(states, values, signals, likelihoods, cost):
+    """Choose a nominal policy from source joint masses, then integrate within each state.
+
+    This oracle never reads production posterior means, selected actions or policy outcomes.
+    """
+    selected, ties = {}, []
+    for signal in sorted(signals):
+        probability = sum(weight * likelihoods[state, signal] for state, weight in states)
+        if probability == 0:
+            assert all(likelihoods[state, signal] == 0 for state, _ in states)
+            selected[signal] = None
+            continue
+        joint_values = {action: sum(weight * likelihoods[state, signal] * payoffs[state]
+                                    for state, weight in states)
+                        for action, payoffs in values.items()}
+        best = max(joint_values.values())
+        winners = sorted(action for action, value in joint_values.items() if value == best)
+        selected[signal] = winners[0]
+        if len(winners) > 1:
+            ties.append(signal)
+    conditional = {
+        state: sum(likelihoods[state, signal] * values[action][state]
+                   for signal, action in selected.items() if action is not None) - cost
+        for state, _ in states
+    }
+    return selected, ties, conditional
+
+
 class PrimalOracleKnownAnswers(unittest.TestCase):
     def test_two_state_split_and_saturation_have_hand_answers(self):
         weights = (F(1, 4), F(3, 4))
@@ -150,6 +180,22 @@ class PrimalOracleKnownAnswers(unittest.TestCase):
         scaled = tuple(tuple(7 * value for value in row) for row in distances)
         self.assertEqual(worst_value(weights, distances, F(2, 7), losses),
                          worst_value(weights, scaled, F(2), losses))
+
+    def test_fixed_test_policy_has_independent_nominal_and_adverse_hand_answers(self):
+        states = [("high", F(1, 2)), ("low", F(1, 2))]
+        values = {"build": {"high": F(200), "low": F(-100)},
+                  "safe": {"high": F(30), "low": F(30)},
+                  "hold": {"high": F(0), "low": F(0)}}
+        likelihoods = {("high", "good"): F(3, 4), ("high", "bad"): F(1, 4),
+                       ("low", "good"): F(1, 4), ("low", "bad"): F(3, 4)}
+        selected, ties, conditional = fixed_policy_values(
+            states, values, ("bad", "good"), likelihoods, F(10))
+        self.assertEqual(selected, {"bad": "safe", "good": "build"})
+        self.assertEqual(ties, [])
+        self.assertEqual(conditional, {"high": F(295, 2), "low": F(-25, 2)})
+        self.assertEqual(sum(weight * conditional[state] for state, weight in states), F(135, 2))
+        self.assertEqual(-worst_value((F(1, 2), F(1, 2)), DISTANCES, F(1, 4),
+                                     (-conditional["high"], -conditional["low"])), F(55, 2))
 
 
 class TransportScenarios(unittest.TestCase):
@@ -292,6 +338,129 @@ class TransportScenarios(unittest.TestCase):
     @staticmethod
     def alternatives(card):
         return {row["action_id"]: row for row in card["summary"]["robustness"]["alternatives"]}
+
+    def checked_information(self, text):
+        declared = tomllib.loads(text)
+        states = [(row["id"], F(row["weight"])) for row in declared["state"]]
+        values = {row["id"]: {} for row in declared["action"]}
+        for row in declared["payoff"]:
+            values[row["action"]][row["state"]] = F(row["value"])
+        distances = {(row["from"], row["to"]): F(row["value"])
+                     for row in declared["transport_distance"]}
+        matrix = tuple(tuple(distances[source, target] for target, _ in states)
+                       for source, _ in states)
+        radius = F(declared["robustness"][0]["radius"])
+        root, card = self.checked(text, states, values, matrix, radius, declared["currency"])
+        report = card["summary"]["robustness"]
+        fixed = report["fixed_policy_comparison"]
+        self.assertEqual(fixed["scope"], "act_now_and_fixed_information_policies")
+        self.assertIn("remain fixed", fixed["no_claim"])
+        names = report["state_ids"]
+        weights = [dict(states)[state] for state in names]
+        metric = [[distances[source, target] for target in names] for source in names]
+        options = {row["id"]: row for row in declared["information_option"]}
+        self.assertEqual([row["option_id"] for row in fixed["policies"]], sorted(options))
+        nominal_info = {row["option_id"]: row for row in card["summary"]["information"]["options"]}
+        choices = {}
+        for action, payoffs in values.items():
+            choices["act_now", action] = (
+                sum(weight * payoffs[state] for state, weight in states),
+                -worst_value(weights, metric, radius, [-payoffs[state] for state in names]),
+            )
+        for policy in fixed["policies"]:
+            identifier = policy["option_id"]
+            option = options[identifier]
+            signals = [row["id"] for row in declared["signal"] if row["option"] == identifier]
+            likelihoods = {(row["state"], row["signal"]): F(row["probability"])
+                           for row in declared["likelihood"] if row["option"] == identifier}
+            cost = F(option["test_cost"]) + F(option["delay_cost"])
+            selected, ties, conditional = fixed_policy_values(states, values, signals, likelihoods, cost)
+            self.assertEqual(policy["signal_actions"], [
+                {"signal_id": signal, "selected_action": action}
+                for signal, action in sorted(selected.items())
+            ])
+            self.assertEqual(policy["posterior_tie_signals"], ties)
+            self.assertEqual(list(map(self.exact, policy["state_net_payoffs"])),
+                             [conditional[state] for state in names])
+            nominal = sum(weight * conditional[state] for state, weight in states)
+            self.assertEqual(self.exact(policy["nominal_mean"]), nominal)
+            self.assertEqual(self.exact(nominal_info[identifier]["net_value"]), nominal)
+            adverse = -self.certificate(policy["loss_certificate"], weights, metric, radius,
+                                        [-conditional[state] for state in names])
+            self.assertEqual(self.exact(policy["worst_case_mean"]), adverse)
+            choices["information_option", identifier] = nominal, adverse
+
+        def record(key):
+            nominal, adverse = choices[key]
+            return {"kind": key[0], "id": key[1], "nominal_mean": rational(nominal),
+                    "worst_case_mean": rational(adverse)}
+
+        nominal_best = max(value[0] for value in choices.values())
+        adverse_best = max(value[1] for value in choices.values())
+        nominal_winners = sorted(key for key, value in choices.items() if value[0] == nominal_best)
+        adverse_winners = sorted(key for key, value in choices.items() if value[1] == adverse_best)
+        self.assertEqual(fixed["nominal_expected_value_winners"], list(map(record, nominal_winners)))
+        self.assertEqual(fixed["maximin_mean_winners"], list(map(record, adverse_winners)))
+        self.assertEqual(fixed["maximin_mean_order"],
+                         [record(key) for key in sorted(choices, key=lambda k: (-choices[k][1], k))])
+        self.assertEqual(fixed["nominal_winner_survives_maximin"],
+                         bool(set(nominal_winners) & set(adverse_winners)))
+        return root, card
+
+    def test_runnable_information_example_reverses_the_joint_choice_with_certified_policy_value(self):
+        root, card = self.checked_information(POLICY_EXAMPLE.read_text(encoding="utf-8"))
+        fixed = card["summary"]["robustness"]["fixed_policy_comparison"]
+        policy = fixed["policies"][0]
+        self.assertEqual(F(policy["nominal_mean"]), 67_500_000)
+        self.assertEqual(F(policy["worst_case_mean"]), 27_500_000)
+        self.assertEqual([(row["kind"], row["id"]) for row in fixed["maximin_mean_winners"]],
+                         [("act_now", "safe")])
+        markdown = base.invoke(root, "markdown")
+        self.assertEqual(markdown.returncode, 0, markdown.stderr)
+        for fragment in ("Fixed information-policy robustness", "67500000/1", "27500000/1",
+                         "| information_option | probe |", "negative conditional net payoff"):
+            self.assertIn(fragment, markdown.stdout)
+
+    def test_policy_extreme_radii_fixed_posterior_ties_and_impossible_signals_match_source_oracle(self):
+        states = [("high", F(1, 2)), ("low", F(1, 2))]
+        values = {"build": {"high": F(200), "low": F(-100)},
+                  "safe": {"high": F(30), "low": F(30)},
+                  "hold": {"high": F(0), "low": F(0)}}
+        for accuracy in (F(1, 2), F(17, 30), F(3, 4), F(1)):
+            likelihoods = [("high", "good", rational(accuracy)),
+                           ("high", "bad", rational(1 - accuracy)),
+                           ("low", "good", rational(1 - accuracy)),
+                           ("low", "bad", rational(accuracy)),
+                           ("high", "impossible", "0/1"), ("low", "impossible", "0/1")]
+            for radius in (F(0), F(1, 4), F(1)):
+                with self.subTest(accuracy=accuracy, radius=radius):
+                    text = model(states, values, DISTANCES, radius)
+                    text += base.information("probe", likelihoods, ("good", "bad", "impossible"),
+                                             test_cost="6", delay_cost="4")
+                    _, card = self.checked_information(text)
+                    policy = card["summary"]["robustness"]["fixed_policy_comparison"]["policies"][0]
+                    if accuracy == F(17, 30) and radius == F(1, 4):
+                        self.assertEqual(policy["posterior_tie_signals"], ["bad"])
+                        self.assertEqual(F(policy["worst_case_mean"]), -35)
+                        self.assertNotEqual(F(policy["worst_case_mean"]), 20,
+                                            "A robustly reoptimized safe policy must not replace the nominal policy")
+
+    def test_three_state_information_and_overlapping_action_option_names_retain_every_choice(self):
+        states = [("a", F(1, 5)), ("b", F(3, 10)), ("c", F(1, 2))]
+        values = {"build": dict(zip(("a", "b", "c"), (F(-12), F(7), F(15)))),
+                  "safe": dict.fromkeys(("a", "b", "c"), F(4)),
+                  "hold": dict.fromkeys(("a", "b", "c"), F(0))}
+        informative = [(state, signal, rational(chance if signal == "good" else 1 - chance))
+                       for state, chance in (("a", F(1, 5)), ("b", F(1, 2)), ("c", F(4, 5)))
+                       for signal in ("good", "bad")]
+        uninformative = [(state, signal, "1/2") for state, _ in states for signal in ("good", "bad")]
+        text = model(states, values, line_metric((0, 1, 3)), F(2, 5))
+        text += base.information("probe", informative, test_cost="0.2", delay_cost="0.1")
+        text += base.information("build", uninformative, test_cost="0", delay_cost="0")
+        _, card = self.checked_information(text)
+        choices = card["summary"]["robustness"]["fixed_policy_comparison"]["maximin_mean_order"]
+        self.assertEqual({(row["kind"], row["id"]) for row in choices if row["id"] == "build"},
+                         {("act_now", "build"), ("information_option", "build")})
 
     def test_runnable_example_changes_both_robust_choices_with_hand_answers(self):
         scaled = {action: {state: 1000000 * value for state, value in payoffs.items()}

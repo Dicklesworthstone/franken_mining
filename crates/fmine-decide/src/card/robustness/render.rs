@@ -67,6 +67,155 @@ fn certificate_json(c: &TransportCertificate) -> String {
     )
 }
 
+fn choice_json(c: &FixedPolicyChoice) -> String {
+    format!(
+        "{{\"kind\":{},\"id\":{},\"nominal_mean\":{},\"worst_case_mean\":{}}}",
+        js(c.kind.as_str()),
+        js(&c.id),
+        rq(c.nominal_mean),
+        rq(c.worst_case_mean)
+    )
+}
+
+fn choices_json(choices: &[FixedPolicyChoice]) -> String {
+    format!(
+        "[{}]",
+        choices
+            .iter()
+            .map(choice_json)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+impl FixedPolicyComparison {
+    fn to_json(&self) -> String {
+        let policies = self.policies.iter().map(|p| {
+            let signals = p.signal_actions.iter().map(|(id, action)| format!(
+                "{{\"signal_id\":{},\"selected_action\":{}}}",
+                js(id), action.as_ref().map_or_else(|| "null".into(), |id| js(id))
+            )).collect::<Vec<_>>().join(",");
+            format!(
+                "{{\"option_id\":{},\"signal_actions\":[{signals}],\"posterior_tie_signals\":{},\"state_net_payoffs\":{},\"nominal_mean\":{},\"worst_case_mean\":{},\"loss_certificate\":{}}}",
+                js(&p.option_id), ids(&p.posterior_tie_signals), rationals(&p.state_net_payoffs),
+                rq(p.nominal_mean), rq(p.worst_case_mean), certificate_json(&p.loss_certificate)
+            )
+        }).collect::<Vec<_>>().join(",");
+        format!(
+            "{{\"scope\":\"act_now_and_fixed_information_policies\",\"policies\":[{policies}],\"nominal_expected_value_winners\":{},\"maximin_mean_order\":{},\"maximin_mean_winners\":{},\"nominal_winner_survives_maximin\":{},\"no_claim\":{}}}",
+            choices_json(&self.nominal_expected_value_winners),
+            choices_json(&self.maximin_mean_order),
+            choices_json(&self.maximin_mean_winners),
+            self.nominal_winner_survives_maximin,
+            js(FIXED_POLICY_SCOPE)
+        )
+    }
+
+    fn append_markdown(&self, out: &mut String, state_ids: &[String], nominal_weights: &[Rat]) {
+        let names = |choices: &[FixedPolicyChoice]| {
+            choices
+                .iter()
+                .map(|c| format!("{} / {}", c.kind.as_str(), c.id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let _ = writeln!(
+            out,
+            "\n## Fixed information-policy robustness\n\n{FIXED_POLICY_SCOPE}\n\n**Nominal expected-value co-winners:** {}. **Joint maximin-mean co-winners:** {}.\n\nA nominal expected-value co-winner survives maximin: **{}**. Every exact tie is retained; kind and identifier order only choose presentation order.\n\n| Choice kind | Choice | Nominal mean | Worst-case mean |\n|---|---|---:|---:|",
+            md(&names(&self.nominal_expected_value_winners)),
+            md(&names(&self.maximin_mean_winners)),
+            self.nominal_winner_survives_maximin
+        );
+        for c in &self.maximin_mean_order {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} |",
+                c.kind.as_str(),
+                md(&c.id),
+                ratio(c.nominal_mean),
+                ratio(c.worst_case_mean)
+            );
+        }
+        for p in &self.policies {
+            let _ = writeln!(
+                out,
+                "\n### Fixed signal policy: {}\n\nPosterior-tied signals, whose displayed selected action stays fixed: {}.\n\n| Signal | Selected action |\n|---|---|",
+                md(&p.option_id),
+                if p.posterior_tie_signals.is_empty() {
+                    "none".into()
+                } else {
+                    md(&p.posterior_tie_signals.join(", "))
+                }
+            );
+            for (signal, action) in &p.signal_actions {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} |",
+                    md(signal),
+                    action
+                        .as_ref()
+                        .map_or_else(|| "unreachable".into(), |id| md(id))
+                );
+            }
+            out.push_str("\nConditional net means integrate the fixed signal law within each state and charge test and delay costs once. They are not realized signal outcomes.\n\n| State | Conditional net mean |\n|---|---:|\n");
+            for (state, value) in state_ids.iter().zip(&p.state_net_payoffs) {
+                let _ = writeln!(out, "| {} | {} |", md(state), ratio(*value));
+            }
+            append_certificate(
+                out,
+                &format!("information_option / {}", p.option_id),
+                "negative conditional net payoff",
+                &p.loss_certificate,
+                state_ids,
+                nominal_weights,
+            );
+        }
+    }
+}
+
+fn append_certificate(
+    out: &mut String,
+    id: &str,
+    kind: &str,
+    c: &TransportCertificate,
+    state_ids: &[String],
+    nominal_weights: &[Rat],
+) {
+    let _ = writeln!(
+        out,
+        "\n### Transport witness: {} / {}\n\nMaximum expected {}: **{}**. Transport cost: **{}** of radius **{}**. Dual multiplier: **{}** major currency units per metric unit. Dual objective: **{}**; exact duality gap: **{}**.\n\n| State | Nominal mass | Adversarial mass | Dual potential |\n|---|---:|---:|---:|",
+        md(id),
+        kind,
+        kind,
+        ratio(c.worst_case_value),
+        ratio(c.transport_cost),
+        ratio(c.radius),
+        ratio(c.dual_lambda),
+        ratio(c.dual_value),
+        ratio(c.duality_gap)
+    );
+    for (i, state) in state_ids.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} |",
+            md(state),
+            ratio(nominal_weights[i]),
+            ratio(c.destination_weights[i]),
+            ratio(c.dual_potentials[i])
+        );
+    }
+    out.push_str("\nEvery positive transport arc follows. Unlisted arcs have zero mass.\n\n| From state | To state | Transported mass |\n|---|---|---:|\n");
+    for arc in &c.arcs {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            md(&state_ids[arc.source]),
+            md(&state_ids[arc.target]),
+            ratio(arc.mass)
+        );
+    }
+}
+
 impl RobustnessSummary {
     #[must_use]
     pub fn to_json(&self) -> String {
@@ -75,8 +224,14 @@ impl RobustnessSummary {
             js(&a.action_id), rq(a.nominal_mean), rq(a.worst_case_mean), rq(a.nominal_mean_regret),
             rq(a.worst_case_expected_regret), certificate_json(&a.loss_certificate), certificate_json(&a.regret_certificate),
         )).collect::<Vec<_>>().join(",");
+        let fixed = self
+            .fixed_policy_comparison
+            .as_ref()
+            .map_or_else(String::new, |p| {
+                format!(",\"fixed_policy_comparison\":{}", p.to_json())
+            });
         format!(
-            "{{\"design\":{},\"scope\":\"act_now_actions\",\"distance_unit\":\"dimensionless\",\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"state_ids\":{},\"nominal_weights\":{},\"nominal_expected_value_winners\":{},\"maximin_mean_order\":{},\"maximin_mean_winners\":{},\"minimax_expected_regret_order\":{},\"minimax_expected_regret_winners\":{},\"nominal_winner_survives_maximin\":{},\"nominal_winner_survives_minimax_regret\":{},\"alternatives\":[{alternatives}],\"no_claim\":{}}}",
+            "{{\"design\":{},\"scope\":\"act_now_actions\",\"distance_unit\":\"dimensionless\",\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"state_ids\":{},\"nominal_weights\":{},\"nominal_expected_value_winners\":{},\"maximin_mean_order\":{},\"maximin_mean_winners\":{},\"minimax_expected_regret_order\":{},\"minimax_expected_regret_winners\":{},\"nominal_winner_survives_maximin\":{},\"nominal_winner_survives_minimax_regret\":{},\"alternatives\":[{alternatives}],\"no_claim\":{}{fixed}}}",
             self.design.to_json(),
             js(currency_name(self.currency)),
             ids(&self.state_ids),
@@ -134,40 +289,18 @@ impl RobustnessSummary {
                 ("signed loss (negative payoff)", &a.loss_certificate),
                 ("same-state regret", &a.regret_certificate),
             ] {
-                let _ = writeln!(
-                    out,
-                    "\n### Transport witness: {} / {}\n\nMaximum expected {}: **{}**. Transport cost: **{}** of radius **{}**. Dual multiplier: **{}** major currency units per metric unit. Dual objective: **{}**; exact duality gap: **{}**.\n\n| State | Nominal mass | Adversarial mass | Dual potential |\n|---|---:|---:|---:|",
-                    md(&a.action_id),
+                append_certificate(
+                    &mut out,
+                    &a.action_id,
                     kind,
-                    kind,
-                    ratio(c.worst_case_value),
-                    ratio(c.transport_cost),
-                    ratio(c.radius),
-                    ratio(c.dual_lambda),
-                    ratio(c.dual_value),
-                    ratio(c.duality_gap)
+                    c,
+                    &self.state_ids,
+                    &self.nominal_weights,
                 );
-                for (i, state) in self.state_ids.iter().enumerate() {
-                    let _ = writeln!(
-                        out,
-                        "| {} | {} | {} | {} |",
-                        md(state),
-                        ratio(self.nominal_weights[i]),
-                        ratio(c.destination_weights[i]),
-                        ratio(c.dual_potentials[i])
-                    );
-                }
-                out.push_str("\nEvery positive transport arc follows. Unlisted arcs have zero mass.\n\n| From state | To state | Transported mass |\n|---|---|---:|\n");
-                for arc in &c.arcs {
-                    let _ = writeln!(
-                        out,
-                        "| {} | {} | {} |",
-                        md(&self.state_ids[arc.source]),
-                        md(&self.state_ids[arc.target]),
-                        ratio(arc.mass)
-                    );
-                }
             }
+        }
+        if let Some(fixed) = &self.fixed_policy_comparison {
+            fixed.append_markdown(&mut out, &self.state_ids, &self.nominal_weights);
         }
         out
     }
