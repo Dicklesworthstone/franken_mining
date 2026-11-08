@@ -298,58 +298,63 @@ pub fn read_mine_stats(
 }
 
 fn read_summary(sheet: &Sheet, fq: u8, read: &mut MineStatsRead) {
-    let max_row = max_row(sheet);
-    let mut r = 1;
-    while r <= max_row.min(60) {
+    let cells = &sheet.cells_by_coord;
+    for &(r, _) in cells.keys().filter(|(_, c)| *c == 1) {
         let Some((period_label, months)) = block_header(sheet, r, read) else {
-            r += 1;
             continue;
         };
         read.blocks += 1;
-        // Field ids from the header row; the current year in columns B–G, the prior year in I–N.
+        let Some(mut rr) = r.checked_add(2) else {
+            refuse(
+                read,
+                sheet,
+                r,
+                1,
+                "summary block exceeds worksheet coordinates".into(),
+            );
+            continue;
+        };
+        let header_row = rr - 1;
         let mut fields = Vec::new();
-        for (first, last, year_col) in [(2, 7, 2), (9, 14, 9)] {
-            let mapped: Vec<(u32, String, String)> = (first..=last)
-                .filter_map(|c| {
-                    let header = py_str(sheet, r + 1, c)?;
-                    match summary_field(&header) {
-                        Ok(Some(id)) => Some((c, id, header)),
-                        // A renamed field must not drop its column silently.
-                        Ok(None) => {
-                            let reason = format!("summary header {header:?} names no known field");
-                            refuse(read, sheet, r + 1, c, reason);
-                            None
-                        }
-                        Err(reason) => {
-                            refuse(read, sheet, r + 1, c, reason);
-                            None
-                        }
-                    }
-                })
-                .collect();
-            if mapped.is_empty() {
-                continue;
+        let mut year = None;
+        let mut previous: u32 = 0;
+        // A year supports only its contiguous header group. A gap or a new, malformed year cannot borrow
+        // the previous group's year; explicit adjacent year anchors need no separator column.
+        for (&(_, c), _) in cells.range((header_row, 2)..=(header_row, u32::MAX)) {
+            if previous.checked_add(1) != Some(c)
+                || py_str(sheet, r, c).is_some_and(|s| !py_strip(&s).is_empty())
+            {
+                year = integer_text(sheet, r, c)
+                    .filter(|y| y.len() == 4 && y.bytes().all(|b| b.is_ascii_digit()));
             }
-            match integer_text(sheet, r, year_col) {
-                Some(year) => fields.extend(
-                    mapped
-                        .into_iter()
-                        .map(|(c, id, h)| (c, id, h, year.clone())),
-                ),
-                None => refuse(
-                    read,
-                    sheet,
-                    r,
-                    year_col,
-                    "summary block year header is not an integer".to_string(),
-                ),
+            previous = c;
+            let Some(header) = py_str(sheet, header_row, c).filter(|s| !py_strip(s).is_empty())
+            else {
+                year = None;
+                continue;
+            };
+            let field = summary_field(&header)
+                .and_then(|id| {
+                    id.ok_or_else(|| format!("summary header {header:?} names no known field"))
+                })
+                .and_then(|id| {
+                    if fields
+                        .iter()
+                        .any(|(_, seen, _, y)| seen == &id && Some(y) == year.as_ref())
+                    {
+                        year = None;
+                    }
+                    let y = year
+                        .clone()
+                        .ok_or("summary field lacks an unambiguous four-digit year")?;
+                    Ok((c, id, header, y))
+                });
+            match field {
+                Ok(field) => fields.push(field),
+                Err(reason) => refuse(read, sheet, header_row, c, reason),
             }
         }
-        let mut rr = r + 2;
-        while rr <= max_row {
-            let Some(site_cell) = py_str(sheet, rr, 1) else {
-                break;
-            };
+        while let Some(site_cell) = py_str(sheet, rr, 1) {
             if footnote_line(&site_cell) || site_cell.starts_with("For the") {
                 break;
             }
@@ -364,9 +369,9 @@ fn read_summary(sheet: &Sheet, fq: u8, read: &mut MineStatsRead) {
                     (id.clone(), header.clone(), None, None),
                 );
             }
-            rr += 1;
+            let Some(next) = rr.checked_add(1) else { break };
+            rr = next;
         }
-        r = rr;
     }
 }
 
@@ -386,7 +391,8 @@ fn read_minestats(
             .collect(),
         None => CHILD_ROWS.iter().map(|s| (*s).to_string()).collect(),
     };
-    let max_row = max_row(sheet);
+    let cells = &sheet.cells_by_coord;
+    let max_row = cells.keys().next_back().map_or(0, |(r, _)| *r);
     let mut r = 1;
     while r <= max_row {
         let Some((period_label, months)) = block_header(sheet, r, read) else {
@@ -407,7 +413,7 @@ fn read_minestats(
         read.blocks += 1;
         let site_row = r - 1;
         let mut columns = Vec::new();
-        for c in 2..=15 {
+        for (&(_, c), _) in cells.range((r, 2)..=(r, u32::MAX)) {
             let Some(year) = integer_text(sheet, r, c) else {
                 continue;
             };
@@ -828,15 +834,6 @@ pub fn site_name(raw: &str) -> String {
         "Copper - Total" => "Total Copper".to_string(),
         other => other.to_string(),
     }
-}
-
-fn max_row(sheet: &Sheet) -> u32 {
-    sheet
-        .cells_by_coord
-        .keys()
-        .map(|(r, _)| *r)
-        .max()
-        .unwrap_or(0)
 }
 
 /// Sites the M0 target-cell census excludes: region and metal totals, and the Nevada Gold Mines aggregate.

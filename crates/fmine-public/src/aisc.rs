@@ -708,7 +708,7 @@ pub fn find_share_footnote(sheet: &Sheet) -> Option<String> {
 const QUARTER_END_MONTHS: [&str; 4] = ["march", "june", "september", "december"];
 
 /// Finds the quarter-to-date "Summary of Operations" sheet of a Mine Stats workbook for `quarter` (`YYYYQn`) by
-/// content: A1 reads "Summary of Operations", and a column-A period line in rows 1–10 reads "For the three
+/// content: A1 reads "Summary of Operations", and a populated column-A period line reads "For the three
 /// months ended <last month of the quarter>" with the year as the first number on that row. Exactly one sheet
 /// must match.
 ///
@@ -723,8 +723,9 @@ pub fn find_qtd_sheet<'a>(sheets: &'a [Sheet], quarter: &str) -> Result<&'a Shee
     let period = format!("for the three months ended {}", QUARTER_END_MONTHS[q - 1]);
     let qualifies = |s: &&Sheet| {
         cell_text(s, 1, 1).is_some_and(|t| t.to_lowercase() == "summary of operations")
-            && (1..=10).any(|row| {
-                cell_text(s, row, 1).is_some_and(|t| t.to_lowercase().starts_with(&period))
+            && s.cells_by_coord.keys().any(|&(row, col)| {
+                col == 1
+                    && cell_text(s, row, 1).is_some_and(|t| t.to_lowercase().starts_with(&period))
                     && s.row_cells(row)
                         .iter()
                         .filter(|c| c.col >= 2)

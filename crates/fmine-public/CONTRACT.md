@@ -140,7 +140,11 @@ The public lane of M0 (`fmine assure public`).
 - `mine_stats` (bd-gwf1.1): a label-anchored reader for the quarterly Mine Statistics workbooks (W1 §3, §4, §13).
   It finds blocks by `For the (three|six|nine|twelve) months`, takes site names from the row above (carried left
   across merged blanks), and strips trailing footnote numbers from labels. The `QTD`/`YTD` summary columns are
-  mapped to field ids. Each data cell becomes a typed value (`Number` with its stored text, `Nil`,
+  mapped to field ids from populated header groups and their explicit year anchors, without fixed column
+  ranges or a first-sixty-rows limit. Site-sheet year headers likewise have no fifteen-column cutoff.
+  Blank year cells preserve merged-header support; missing or ambiguous year support and unknown fields
+  produce cited refusals rather than inheriting a neighboring year's meaning. Each data cell becomes a
+  typed value (`Number` with its stored text, `Nil`,
   `NotApplicable`, `Missing`) with locator `<quarter>:<sheet>!<cell>`, period, site, printed ownership share,
   label and section. Numeric zero stays `Number`. Cells outside the token set, unknown periods and labels
   repeated within a block are refused by locator; the first row of a repeated label is listed

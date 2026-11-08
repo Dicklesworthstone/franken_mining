@@ -28,20 +28,20 @@ mod aisc_headers {
     #[test]
     fn test_qtd_sheet_found_by_content() {
         use fmine_io::xlsx::MinimalCell;
-        let qtd = |name: &str, period: &str, year: f64| {
+        let qtd = |name: &str, period: &str, year: f64, row: u32| {
             sheet_of(
                 name,
                 vec![
                     text("A1", "Summary of Operations"),
-                    text("A3", period),
-                    ("B3".to_string(), MinimalCell::Number(year)),
+                    text(&format!("A{row}"), period),
+                    (format!("B{row}"), MinimalCell::Number(year)),
                 ],
             )
         };
         let sheets = vec![
-            qtd("YTD", "For the six months ended June 30,", 2026.0),
-            qtd("Q", "For the three months ended June 30,", 2026.0),
-            qtd("Prior", "For the three months ended June 30,", 2025.0),
+            qtd("YTD", "For the six months ended June 30,", 2026.0, 3),
+            qtd("Q", "For the three months ended June 30,", 2026.0, 75),
+            qtd("Prior", "For the three months ended June 30,", 2025.0, 150),
         ];
         assert_eq!(
             find_qtd_sheet(&sheets, "2026Q2").map(|s| s.name.as_str()),
@@ -53,6 +53,18 @@ mod aisc_headers {
         );
         assert!(find_qtd_sheet(&sheets, "2026Q1").is_err());
         assert!(find_qtd_sheet(&sheets, "2026Q5").is_err());
+        let mut duplicate = sheets;
+        duplicate.push(qtd(
+            "Second",
+            "For the three months ended June 30,",
+            2026.0,
+            700,
+        ));
+        assert!(
+            find_qtd_sheet(&duplicate, "2026Q2")
+                .expect_err("ambiguous summaries")
+                .contains("2 sheets qualify")
+        );
     }
 }
 
@@ -1444,7 +1456,7 @@ mod mine_stats {
     use std::collections::{BTreeMap, BTreeSet};
 
     use fmine_io::xlsx::{
-        MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx, col_index_to_letters,
+        MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx, col_index_to_letters, parse_a1_ref,
     };
     use fmine_public::mine_stats::{
         LabelVocabulary, MineStatsCell, MineStatsRead, MineStatsValue, View, is_m0_target,
@@ -1794,6 +1806,224 @@ mod mine_stats {
             drift.digest(),
             "the locators moved, so the canonical lines differ"
         );
+    }
+
+    #[test]
+    fn summary_groups_follow_populated_headers_beyond_old_row_and_column_limits() {
+        let (ms, qtd) = fixture(false);
+        let base = read_mine_stats(&workbook((ms.clone(), qtd.clone())), "2030Q2", None)
+            .expect("base summary");
+        let shifted = qtd
+            .into_iter()
+            .map(|(at, cell)| {
+                let (row, col) = parse_a1_ref(&at).expect("fixture coordinate");
+                let col = if col == 1 { col } else { col + 20 };
+                (
+                    format!("{}{row}", col_index_to_letters(col), row = row + 70),
+                    cell,
+                )
+            })
+            .collect();
+        let moved =
+            read_mine_stats(&workbook((ms, shifted)), "2030Q2", None).expect("shifted summary");
+        assert!(moved.refusals.is_empty(), "{:?}", moved.refusals);
+        assert_eq!(moved.blocks, base.blocks);
+        let original: Vec<_> = base
+            .values
+            .iter()
+            .filter(|v| v.view == View::Summary)
+            .collect();
+        let relocated: Vec<_> = moved
+            .values
+            .iter()
+            .filter(|v| v.view == View::Summary)
+            .collect();
+        assert_eq!(relocated.len(), 12);
+        for (old, new) in original.into_iter().zip(relocated) {
+            assert_eq!(
+                (&new.period, &new.site, &new.label, &new.value),
+                (&old.period, &old.site, &old.label, &old.value),
+                "semantic values and reading order survive layout drift"
+            );
+            let (row, col) = parse_a1_ref(&old.cell).expect("source coordinate");
+            assert_eq!(
+                new.locator,
+                format!(
+                    "2030Q2:QTD!{}{row}",
+                    col_index_to_letters(col + 20),
+                    row = row + 70
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn site_columns_follow_year_headers_beyond_column_o() {
+        let (ms, qtd) = fixture(false);
+        let base = read_mine_stats(&workbook((ms.clone(), qtd.clone())), "2030Q2", None)
+            .expect("base site columns");
+        let shifted = ms
+            .into_iter()
+            .map(|(at, cell)| {
+                let (row, col) = parse_a1_ref(&at).expect("fixture coordinate");
+                let col = if col == 1 { col } else { col + 20 };
+                (format!("{}{row}", col_index_to_letters(col)), cell)
+            })
+            .collect();
+        let moved = read_mine_stats(&workbook((shifted, qtd)), "2030Q2", None)
+            .expect("shifted site columns");
+        assert!(moved.refusals.is_empty(), "{:?}", moved.refusals);
+        assert_eq!(
+            (moved.blocks, moved.values.len()),
+            (base.blocks, base.values.len())
+        );
+        for (old, new) in base.values.iter().zip(&moved.values) {
+            assert_eq!(
+                (&new.view, &new.period, &new.site, &new.label, &new.value),
+                (&old.view, &old.period, &old.site, &old.label, &old.value)
+            );
+            let (row, col) = parse_a1_ref(&old.cell).expect("source coordinate");
+            let col = if old.view == View::Minestats {
+                col + 20
+            } else {
+                col
+            };
+            assert_eq!(new.cell, format!("{}{row}", col_index_to_letters(col)));
+        }
+    }
+
+    #[test]
+    fn summary_reads_extended_adjacent_and_additional_year_groups() {
+        let headers = [
+            "Gold produced (000s oz 100%)",
+            "Gold produced (000s oz attributable)",
+            "Gold sold (000s oz attributable)",
+            "Cost of sales ($/oz)",
+            "Total cash costs ($/oz)",
+            "All-in sustaining costs ($/oz)",
+            "Copper sold (kt attributable)",
+        ];
+        let mut cells = vec![
+            ("A3".into(), t("For the three months ended September 30,")),
+            ("A5".into(), t("Synthetic Site")),
+            ("A1000000".into(), t("Notes below a sparse worksheet")),
+        ];
+        for (start, year, base) in [(2, 2030, 10), (9, 2029, 20), (27, 2028, 30)] {
+            put(&mut cells, start, 3, MinimalCell::Number(f64::from(year)));
+            for (offset, header) in headers.into_iter().enumerate() {
+                let col = start + offset as u32;
+                put(&mut cells, col, 4, t(header));
+                put(
+                    &mut cells,
+                    col,
+                    5,
+                    MinimalCell::Number(f64::from(base + offset as u32)),
+                );
+            }
+        }
+        let read = read_mine_stats(&workbook((Vec::new(), cells.clone())), "2030Q3", None)
+            .expect("extended summary");
+        assert!(read.refusals.is_empty(), "{:?}", read.refusals);
+        assert_eq!((read.blocks, read.values.len()), (1, 21));
+        for (col, year, token, numeric) in [
+            (8, "2030Q3", "16", 16.0),
+            (15, "2029Q3", "26", 26.0),
+            (33, "2028Q3", "36", 36.0),
+        ] {
+            let cell = value(&read, &format!("2030Q3:QTD!{}5", col_index_to_letters(col)));
+            assert_eq!(cell.period, year);
+            assert_eq!(cell.label, "cu_sold_attr_kt");
+            assert_eq!(
+                cell.value,
+                MineStatsCell::Number {
+                    raw_text: token.into(),
+                    value: numeric,
+                }
+            );
+        }
+        cells.retain(|(at, _)| at != "I3");
+        let missing = read_mine_stats(&workbook((Vec::new(), cells)), "2030Q3", None)
+            .expect("adjacent group without a year anchor");
+        assert_eq!((missing.values.len(), missing.refusals.len()), (14, 7));
+        assert!(
+            missing
+                .refusals
+                .iter()
+                .all(|r| r.reason.contains("unambiguous four-digit year"))
+        );
+        assert!(missing.values.iter().all(|v| v.period != "2029Q3"));
+        assert_eq!(missing.refusals[0].locator, "2030Q3:QTD!I4");
+        assert_eq!(missing.refusals[6].locator, "2030Q3:QTD!O4");
+    }
+
+    #[test]
+    fn summary_blank_year_cells_preserve_merged_header_support() {
+        let (ms, mut qtd) = fixture(false);
+        let base = read_mine_stats(&workbook((ms.clone(), qtd.clone())), "2030Q2", None)
+            .expect("merged header");
+        for (col, blank) in [(3, ""), (4, " \t"), (10, ""), (11, " ")] {
+            put(&mut qtd, col, 3, t(blank));
+        }
+        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2", None)
+            .expect("explicit blank year cells");
+        assert!(read.refusals.is_empty(), "{:?}", read.refusals);
+        assert_eq!(read.values, base.values);
+    }
+
+    #[test]
+    fn summary_missing_or_ambiguous_year_never_inherits_the_previous_group() {
+        for year in [
+            None,
+            Some(t("2028 or 2029")),
+            Some(MinimalCell::Number(2029.5)),
+            Some(MinimalCell::Number(29.0)),
+        ] {
+            let (ms, mut qtd) = fixture(false);
+            qtd.retain(|(at, _)| at != "I3");
+            if let Some(year) = year {
+                put(&mut qtd, 9, 3, year);
+            }
+            let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2", None)
+                .expect("unsupported comparative year");
+            assert_eq!(
+                read.refusals
+                    .iter()
+                    .map(|r| r.locator.as_str())
+                    .collect::<Vec<_>>(),
+                ["2030Q2:QTD!I4", "2030Q2:QTD!J4", "2030Q2:QTD!K4"]
+            );
+            assert!(
+                read.refusals
+                    .iter()
+                    .all(|r| r.reason.contains("unambiguous four-digit year"))
+            );
+            let summary: Vec<_> = read
+                .values
+                .iter()
+                .filter(|v| v.view == View::Summary)
+                .collect();
+            assert_eq!(summary.len(), 6);
+            assert!(summary.iter().all(|v| v.period == "2030Q2"));
+        }
+    }
+
+    #[test]
+    fn summary_unknown_extended_headers_are_refused_by_locator() {
+        for (header, reason) in [
+            ("Gold output (000s oz attributable)", "names no known field"),
+            ("Gold produced (oz attributable)", "not its unit"),
+        ] {
+            let (ms, mut qtd) = fixture(false);
+            put(&mut qtd, 15, 3, MinimalCell::Number(2028.0));
+            put(&mut qtd, 15, 4, t(header));
+            put(&mut qtd, 15, 5, MinimalCell::Number(100.0));
+            let read =
+                read_mine_stats(&workbook((ms, qtd)), "2030Q2", None).expect("unknown column");
+            assert_eq!(read.refusals.len(), 1);
+            assert_eq!(read.refusals[0].locator, "2030Q2:QTD!O4");
+            assert!(read.refusals[0].reason.contains(reason));
+            assert!(read.values.iter().all(|v| v.locator != "2030Q2:QTD!O5"));
+        }
     }
 
     /// A block is found by its period word, not its month: W1's `Q4_2025:Minestats1!A64` prints "Decemer".
