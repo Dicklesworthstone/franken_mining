@@ -1,4 +1,5 @@
 //! Exact, decision-support-only recovery bounds with all admitted source metadata retained.
+//! Determinism: Exact
 
 use std::fmt::Write as _;
 

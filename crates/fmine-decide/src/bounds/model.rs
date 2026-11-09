@@ -1,5 +1,6 @@
 //! Strict, source-bound declarations for two-stratum recovery decisions (BD-351.S1).
 //! All imported values are internal assumptions; exact arithmetic does not qualify their evidence.
+//! Determinism: Exact
 
 use std::collections::BTreeSet;
 

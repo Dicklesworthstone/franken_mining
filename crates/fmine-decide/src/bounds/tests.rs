@@ -1,3 +1,6 @@
+//! Exact recovery-bound oracles, source controls and deterministic sampled enclosures.
+//! Determinism: Exact
+
 use super::*;
 use fmine_claim::{ClaimDag, Confidentiality, UuTerm};
 use fmine_core::{anchor::SourceAnchor, philox4x32_10};
