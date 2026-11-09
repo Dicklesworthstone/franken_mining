@@ -31,6 +31,7 @@ use fmine_calib::record::{
 use fmine_core::hash::Digest32;
 pub use fmine_io::forecast::timestamp::proof_times_from_text;
 use fmine_io::forecast::timestamp::verify_rfc3161_with_intermediates;
+use fmine_io::xlsx::{Workbook, parse_a1_ref};
 use fmine_public::mine_stats::{
     LabelVocabulary, MineStatsCell, MineStatsValue, View, read_mine_stats,
 };
@@ -211,8 +212,10 @@ fn exact_text(x: Rat) -> String {
 /// The value a persistence series takes for `site` in quarter `q`: the summary field's three-month value as first
 /// published, i.e. from the quarter's own release (its current-year block, period `q`). `None` when it is not a
 /// positive printed number: a placeholder, a blank, a zero or no row. Two candidate cells refuse. Messages carry
-/// locators, never values (RISK-31).
+/// locators, never values (RISK-31). Numeric operands use the source cell's exact displayed precision,
+/// including a format's zero placeholder; hidden stored digits never enter the historical pool or point.
 fn series_value(
+    workbook: &Workbook,
     values: &[MineStatsValue],
     q: Quarter,
     site: &str,
@@ -235,12 +238,26 @@ fn series_value(
     }
     match first {
         Some(MineStatsValue {
-            value: MineStatsCell::Number { raw_text, .. },
+            value: MineStatsCell::Number { .. },
             locator,
+            sheet,
+            cell,
             ..
         }) => {
-            let x = Rat::from_decimal_str(raw_text)
-                .map_err(|_| format!("{locator}: the stored number is not an exact decimal"))?;
+            let source = workbook
+                .sheet(sheet)
+                .and_then(|s| parse_a1_ref(cell).and_then(|(row, col)| s.cell(row, col)))
+                .ok_or_else(|| format!("{locator}: the original numeric source cell is absent"))?;
+            let display = source
+                .displayed()
+                .ok_or_else(|| format!("{locator}: the source cell is not numeric"))?
+                .map_err(|e| format!("{locator}: displayed value refused: {}", e.code))?;
+            let text = display.text();
+            if matches!(text.trim(), "" | "-" | "–" | "—" | "n/a" | "N/A") {
+                return Ok(None);
+            }
+            let x = Rat::from_decimal_str(&text)
+                .map_err(|_| format!("{locator}: the displayed number is not an exact decimal"))?;
             Ok((x.signum() > 0).then_some(x))
         }
         _ => Ok(None),
@@ -284,7 +301,7 @@ pub fn persistence_baselines(root: &Path) -> Res<Vec<PersistenceBaseline>> {
     let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
     let sources =
         fmine_public::load_registered_sources(&profile, root).map_err(|e| vec![e.to_string()])?;
-    let mut reads: BTreeMap<Quarter, Vec<MineStatsValue>> = BTreeMap::new();
+    let mut reads: BTreeMap<Quarter, (&Workbook, Vec<MineStatsValue>)> = BTreeMap::new();
     for src in sources
         .iter()
         .filter(|s| s.kind == fmine_public::sources::SourceKind::MineStats)
@@ -300,7 +317,7 @@ pub fn persistence_baselines(root: &Path) -> Res<Vec<PersistenceBaseline>> {
                 read.refusals.len()
             ));
         }
-        reads.insert(q, read.values);
+        reads.insert(q, (&src.workbook, read.values));
     }
     let live: Vec<&str> = rules
         .sites
@@ -325,12 +342,14 @@ pub fn persistence_baselines(root: &Path) -> Res<Vec<PersistenceBaseline>> {
         for site in &live {
             let mut s = Vec::new();
             for q in pool_from.through(pool_through) {
-                let values = reads.get(&q).ok_or_else(|| {
+                let (workbook, values) = reads.get(&q).ok_or_else(|| {
                     vec![format!(
                         "{q} is in the pool, but no Mine Stats workbook is registered for it"
                     )]
                 })?;
-                s.push(series_value(values, q, site, &target.field).map_err(|e| vec![e])?);
+                s.push(
+                    series_value(workbook, values, q, site, &target.field).map_err(|e| vec![e])?,
+                );
             }
             series.push(s);
         }
@@ -340,10 +359,10 @@ pub fn persistence_baselines(root: &Path) -> Res<Vec<PersistenceBaseline>> {
             .map_err(|e| vec![format!("{}: {e}", b.target)])?;
         let intervals = match reads.get(&point) {
             None => None,
-            Some(values) => {
+            Some((workbook, values)) => {
                 let mut rows = Vec::with_capacity(live.len());
                 for site in &live {
-                    let iv = match series_value(values, point, site, &target.field)
+                    let iv = match series_value(workbook, values, point, site, &target.field)
                         .map_err(|e| vec![e])?
                     {
                         None => None,
@@ -634,6 +653,7 @@ pub fn record_verify(root: &Path, dir: &Path) -> Res<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
 
     const REPLY: &str = "Status info:\nStatus: Granted.\n\nTST info:\nVersion: 1\nSerial number: 0x02\n\
                          Time stamp: Oct 30 14:04:42 2026 GMT\n\
@@ -733,13 +753,54 @@ mod tests {
         }
     }
 
+    fn displayed_workbook(cells: Vec<(String, MinimalCell)>) -> Workbook {
+        let bytes = build_minimal_xlsx_styled(
+            &[MinimalSheet {
+                name: "QTD".into(),
+                hidden: false,
+                cells,
+            }],
+            Some(&MinimalStyles {
+                num_fmts: vec![(164, "0.0".into()), (165, "0;[Red](0);\"-\"".into())],
+                xfs: vec![0, 1, 2, 164, 165],
+            }),
+        );
+        Workbook::from_bytes("synthetic-forecast-baseline.xlsx", &bytes).expect("workbook")
+    }
+
+    fn printed_series_value(quarter: &str, raw: &str, xf: u32) -> Result<Option<Rat>, String> {
+        let q = Quarter::parse(quarter).expect("quarter");
+        let field = "au_prod_100_koz";
+        let workbook = displayed_workbook(vec![(
+            "B5".into(),
+            MinimalCell::Styled {
+                raw: raw.into(),
+                xf,
+            },
+        )]);
+        series_value(
+            &workbook,
+            &[cell(
+                View::Summary,
+                3,
+                quarter,
+                "Synthetic Site",
+                field,
+                number(raw),
+            )],
+            q,
+            "Synthetic Site",
+            field,
+        )
+    }
+
     /// The series value is the quarter's own three-month summary cell: not a comparative year, a longer period,
     /// a Minestats row or another field. Placeholders, zero and no row are `None`; two candidates refuse.
     #[test]
     fn test_series_value_takes_the_first_published_quarter() {
         let f = "au_prod_100_koz";
         let q = Quarter::parse("2026Q2").expect("quarter");
-        let values = vec![
+        let mut values = vec![
             cell(View::Summary, 3, "2025Q2", "Carlin", f, number("300")),
             cell(View::Summary, 6, "2026H1", "Carlin", f, number("700")),
             cell(View::Minestats, 3, "2026Q2", "Carlin", f, number("1")),
@@ -766,7 +827,18 @@ mod tests {
             cell(View::Summary, 3, "2026Q2", "Kibali", f, number("1")),
             cell(View::Summary, 3, "2026Q2", "Kibali", f, number("2")),
         ];
-        let at = |site| series_value(&values, q, site, f);
+        values[6].cell = "B6".into();
+        let workbook = displayed_workbook(vec![
+            (
+                "B5".into(),
+                MinimalCell::Styled {
+                    raw: "4.105E2".into(),
+                    xf: 2,
+                },
+            ),
+            ("B6".into(), MinimalCell::Number(0.0)),
+        ]);
+        let at = |site| series_value(&workbook, &values, q, site, f);
         assert_eq!(at("Carlin"), Ok(Some(Rat::new(821, 2).expect("rat"))));
         assert_eq!(at("Hemlo"), Ok(None));
         assert_eq!(at("Tongon"), Ok(None));
@@ -774,6 +846,44 @@ mod tests {
         assert!(at("Kibali").expect_err("two cells").contains("two cells"));
         assert_eq!(exact_text(Rat::new(821, 2).expect("rat")), "821/2");
         assert_eq!(exact_text(Rat::from_integer(7)), "7");
+    }
+
+    #[test]
+    fn test_series_value_uses_displayed_precision_for_pool_and_point() {
+        // Independently calculated published decimals: 12.3 -> 24.7, then a point of 10.0.
+        // Hidden Excel digits 12.345, 24.699 and 10.04 must not affect these operands.
+        let before = printed_series_value("2030Q1", "12.345", 3).unwrap();
+        let after = printed_series_value("2030Q2", "24.699", 3).unwrap();
+        let point = printed_series_value("2030Q3", "10.04", 3).unwrap().unwrap();
+        assert_eq!(before, Some(Rat::new(123, 10).unwrap()));
+        assert_eq!(after, Some(Rat::new(247, 10).unwrap()));
+        assert_eq!(point, Rat::from_integer(10));
+        let (ratios, excluded) = record::pooled_ratios(&[vec![before, after]]).unwrap();
+        assert_eq!(excluded, 0);
+        assert_eq!(ratios, [Rat::new(247, 123).unwrap()]);
+        assert_eq!(
+            record::persistence_interval(
+                &ratios,
+                point,
+                Rat::new(1, 5).unwrap(),
+                record::Estimator::InverseEcdf,
+            )
+            .unwrap(),
+            (Rat::new(2470, 123).unwrap(), Rat::new(2470, 123).unwrap()),
+        );
+    }
+
+    #[test]
+    fn test_series_value_preserves_displayed_zero_placeholders_and_refusals() {
+        assert_eq!(printed_series_value("2030Q1", "0", 4), Ok(None));
+        assert_eq!(printed_series_value("2030Q1", "0.04", 3), Ok(None));
+        for (raw, style, code) in [
+            ("1.25", 0, "general_non_integer"),
+            ("1", 99, "bad_style_index"),
+        ] {
+            let error = printed_series_value("2030Q1", raw, style).unwrap_err();
+            assert!(error.contains(code), "{error}");
+        }
     }
 
     /// The FY2026 persistence baselines on the ten registered workbooks (local corpus): both targets pool the 11
