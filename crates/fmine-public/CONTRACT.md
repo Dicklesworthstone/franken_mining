@@ -5,10 +5,33 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance", "waterfall", "recovery", "lint", "html"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "forecast", "guidance", "waterfall", "recovery", "lint", "html"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
+
+- DESIGN (BD-067/BD-334): `forecast::build(workspace, rules_bytes, as_of, decimal_places)` produces an
+  unissued quarterly-ratio candidate through `fmine_calib::record::candidate`. It reads only the original
+  Mine Stats releases required by the declared historical pools and their common Q3 point. The supported
+  target meanings are 100%-basis gold production in koz (`fy_minus_9m`) and printed AISC per ounce sold
+  (`q4_qtd`); the latter is never differenced across cumulative periods. Every input uses the exact displayed
+  decimal and the canonical source Claim. A missing original release, ambiguous cell, unreadable or changed
+  source, unsupported target, unprinted or changing cost ownership, or nonzero observation overlapping a
+  registered site status refuses. No source value is rescaled or filled from a later comparative.
+  Historical placeholders, absent rows and nonpositive printed values remain named observations; excluded
+  ratio pairs and every `not_published` site remain visible. Every live point must be positive and usable.
+  The receipt binds the exact rules bytes and FMRUL1 digest, raw source-registry bytes, declared information
+  cut, source digests, source Claims, model version and exported candidate. Registry retrieval intervals use
+  their upper endpoint; date-only publication claims are admitted only through the end of that day. Required
+  quarters must have ended by retrieval, and all availability bounds must precede the declared cut. Synthetic
+  source registrations retain a synthetic report label. This checks a declared information cut against the
+  captured registry; it supplies no independent proof of the registry's historical existence, author access,
+  attestation, pre-registration, calibration or forecast skill. It does not freeze or issue the candidate.
+  Known-answer and negative controls: `forecast::tests::exact_displayed_observations_produce_complete_source_bound_candidate`,
+  `missing_rows_placeholders_and_nonpositive_history_are_audited_without_imputation`,
+  `availability_is_conservative_and_completed_quarters_cannot_look_ahead`,
+  `incompatible_targets_ownership_changes_and_status_conflicts_refuse`, and
+  `receipt_binds_rules_registry_information_cut_and_source_values`.
 
 - DESIGN (BD-057/BD-059): `html::run(workspace, issuer, definitions, as_of)` turns registered HTML
   table cells into canonical public Claims. It parses the exact captured source registry and mapping

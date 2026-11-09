@@ -10,6 +10,7 @@
 pub mod aisc;
 pub mod citation;
 pub mod consistency;
+pub mod forecast;
 pub mod guidance;
 pub mod html;
 pub mod key;
