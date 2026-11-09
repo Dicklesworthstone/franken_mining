@@ -1,19 +1,20 @@
-//! DESIGN: infer explicitly unmeasured extensive flows from observed stocks and
-//! other flows (plan §§20.2–20.3 R1, BD-149/177). All channels of a named stream
-//! are unmeasured; both endpoint stocktakes for EVERY unit remain observations.
+//! DESIGN: infer explicitly unmeasured extensive quantities from observed stocks
+//! and flows (plan §§20.2–20.3 R1, BD-149/154/177). The original flow-only API
+//! retains both stocktakes; `quantities` also admits one unknown endpoint per unit.
 //! The shared numerical owner solves measured/latent GLS and refuses deficient
 //! observability. No observation, variance, prior, balancing plug or zero is
-//! invented for a missing flow. This is not a temporal/bias R2 model.
+//! invented for a missing quantity. This is not a temporal/bias R2 model.
 //! Determinism: DeterministicPerIsa
 
 use super::{
-    BoundaryKey, Coordinates, MaterialChannel, ObservationKey, constraints, coordinates, fail,
-    numerical, offset, physical_rejection, positive, project_group_covariance, put_channel,
-    put_key, put_optional, role_rows, sum,
+    BoundaryKey, BoundaryRole, Coordinates, MaterialChannel, ObservationKey, ObservationLocation,
+    constraints, coordinates, fail, numerical, offset, physical_rejection, positive,
+    project_group_covariance, put_channel, put_key, put_optional, role_rows, sum,
 };
 use crate::flowsheet::{
-    AdmittedFlowsheet, FlowsheetInput, FlowsheetScope, FlowsheetValue, MaterialAmounts, StreamId,
-    StreamRoute, UnitId, admit_flowsheet_with_unmeasured, put_qty, put_time, validate_amounts,
+    AdmittedFlowsheet, FlowsheetInput, FlowsheetScope, FlowsheetValue, MaterialAmounts,
+    StocktakeKind, StreamId, StreamRoute, UnitId, admit_flowsheet_with_unmeasured,
+    admit_flowsheet_with_unmeasured_quantities, put_qty, put_time, validate_amounts,
 };
 use crate::{
     inventory,
@@ -27,6 +28,9 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::reconciliation::{MAX_OBSERVATIONS, partial::reconcile_with_unmeasured};
 use fmine_units::ExactQty;
 use std::collections::{BTreeMap, BTreeSet};
+
+pub mod quantities;
+use quantities::UnmeasuredQuantityKey;
 
 type Result<T> = std::result::Result<T, Refusal>;
 pub const ERROR_MODEL_METRIC: &str = "plant.flowsheet.unmeasured_error_model/1";
@@ -84,7 +88,7 @@ impl UnmeasuredFlowModel {
     }
 }
 
-/// Inferred flows may be unique without any redundant measurement check.
+/// Inferred quantities may be unique without any redundant measurement check.
 /// `NoRedundancy` is not a passed gross-error test and supplies no statistic.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GrossErrorDiagnostic {
@@ -111,7 +115,7 @@ pub struct UnitConservation {
 pub struct InferredBoundary {
     pub keys: Vec<BoundaryKey>,
     pub observed_contributions_exact_kg: Vec<ExactQty>,
-    /// None wherever a role includes an unmeasured external stream.
+    /// None wherever a role includes an unmeasured external stream or endpoint stock.
     pub observed_totals_kg: Vec<Option<Kilograms>>,
     pub estimates_kg: Vec<Kilograms>,
     pub posterior_covariance: Vec<KilogramsSquared>,
@@ -120,10 +124,10 @@ pub struct InferredBoundary {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct InferredFlowsheet {
+pub struct InferredFlowsheet<K = UnmeasuredFlowKey> {
     pub scope: FlowsheetScope,
     pub observations: Vec<ObservationKey>,
-    pub unmeasured: Vec<UnmeasuredFlowKey>,
+    pub unmeasured: Vec<K>,
     pub observed_kg: Vec<Kilograms>,
     /// Canonical measured coordinates first, then canonical unmeasured keys.
     pub estimates_kg: Vec<Kilograms>,
@@ -138,20 +142,20 @@ pub struct InferredFlowsheet {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct InferredFlowsheetReceipt {
+pub struct InferredFlowsheetReceipt<M = UnmeasuredFlowModel, K = UnmeasuredFlowKey> {
     inputs: Vec<Claim<FlowsheetInput>>,
-    error_model: Claim<UnmeasuredFlowModel>,
-    claim: Claim<InferredFlowsheet>,
+    error_model: Claim<M>,
+    claim: Claim<InferredFlowsheet<K>>,
     digest: String,
 }
-impl InferredFlowsheetReceipt {
+impl<M, K> InferredFlowsheetReceipt<M, K> {
     pub fn inputs(&self) -> &[Claim<FlowsheetInput>] {
         &self.inputs
     }
-    pub fn error_model(&self) -> &Claim<UnmeasuredFlowModel> {
+    pub fn error_model(&self) -> &Claim<M> {
         &self.error_model
     }
-    pub fn claim(&self) -> &Claim<InferredFlowsheet> {
+    pub fn claim(&self) -> &Claim<InferredFlowsheet<K>> {
         &self.claim
     }
     pub fn digest(&self) -> &str {
@@ -160,21 +164,21 @@ impl InferredFlowsheetReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct RejectedInference {
+pub struct RejectedInference<M = UnmeasuredFlowModel, K = UnmeasuredFlowKey> {
     inputs: Vec<Claim<FlowsheetInput>>,
-    error_model: Claim<UnmeasuredFlowModel>,
-    diagnostics: InferredFlowsheet,
+    error_model: Claim<M>,
+    diagnostics: InferredFlowsheet<K>,
     refusal: Refusal,
     digest: String,
 }
-impl RejectedInference {
+impl<M, K> RejectedInference<M, K> {
     pub fn inputs(&self) -> &[Claim<FlowsheetInput>] {
         &self.inputs
     }
-    pub fn error_model(&self) -> &Claim<UnmeasuredFlowModel> {
+    pub fn error_model(&self) -> &Claim<M> {
         &self.error_model
     }
-    pub fn diagnostics(&self) -> &InferredFlowsheet {
+    pub fn diagnostics(&self) -> &InferredFlowsheet<K> {
         &self.diagnostics
     }
     pub fn refusal(&self) -> &Refusal {
@@ -186,18 +190,18 @@ impl RejectedInference {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum UnmeasuredFlowOutcome {
-    Admitted(Box<InferredFlowsheetReceipt>),
-    Rejected(Box<RejectedInference>),
+pub enum UnmeasuredFlowOutcome<M = UnmeasuredFlowModel, K = UnmeasuredFlowKey> {
+    Admitted(Box<InferredFlowsheetReceipt<M, K>>),
+    Rejected(Box<RejectedInference<M, K>>),
 }
-impl UnmeasuredFlowOutcome {
-    pub fn diagnostics(&self) -> &InferredFlowsheet {
+impl<M, K> UnmeasuredFlowOutcome<M, K> {
+    pub fn diagnostics(&self) -> &InferredFlowsheet<K> {
         match self {
             Self::Admitted(r) => &r.claim.value,
             Self::Rejected(r) => &r.diagnostics,
         }
     }
-    pub fn admitted_claim(&self) -> Result<&Claim<InferredFlowsheet>> {
+    pub fn admitted_claim(&self) -> Result<&Claim<InferredFlowsheet<K>>> {
         match self {
             Self::Admitted(r) => Ok(&r.claim),
             Self::Rejected(r) => Err(r.refusal.clone()),
@@ -214,15 +218,19 @@ pub fn observation_order(
     Ok(coordinates(&admit_flowsheet_with_unmeasured(inputs, unmeasured)?)?.keys)
 }
 
+struct LatentGroup {
+    location: ObservationLocation,
+    boundary_role: Option<BoundaryRole>,
+}
 struct LatentLayout {
-    keys: Vec<UnmeasuredFlowKey>,
-    routes: BTreeMap<StreamId, StreamRoute>,
+    keys: Vec<UnmeasuredQuantityKey>,
+    groups: Vec<LatentGroup>,
     matrix: Vec<f64>,
 }
 fn latent_layout(
     graph: &AdmittedFlowsheet<'_>,
     data: &Coordinates,
-    unknown: &BTreeSet<StreamId>,
+    unknown: &BTreeSet<ObservationLocation>,
 ) -> Result<LatentLayout> {
     if unknown.is_empty() {
         return Err(fail(
@@ -250,11 +258,7 @@ fn latent_layout(
     let FlowsheetValue::Declaration { streams, .. } = &graph.declaration.value.value else {
         return Err(numerical("missing admitted topology"));
     };
-    let routes: BTreeMap<_, _> = streams
-        .iter()
-        .filter(|s| unknown.contains(&s.id))
-        .map(|s| (s.id.clone(), s.route.clone()))
-        .collect();
+    let routes: BTreeMap<_, _> = streams.iter().map(|s| (&s.id, &s.route)).collect();
     let units: BTreeMap<_, _> = graph
         .per_unit
         .keys()
@@ -263,17 +267,34 @@ fn latent_layout(
         .collect();
     let mut matrix = vec![0.0; m * p];
     let mut keys = Vec::with_capacity(p);
-    for (j, (stream, route)) in routes.iter().enumerate() {
-        let endpoints = match route {
-            StreamRoute::Feed { to } => vec![(to, 1.0)],
-            StreamRoute::Internal { from, to, .. } => vec![(from, -1.0), (to, 1.0)],
-            StreamRoute::Product { from } | StreamRoute::OtherOutflow { from } => {
-                vec![(from, -1.0)]
+    let mut groups = Vec::with_capacity(unknown.len());
+    for (j, location) in unknown.iter().enumerate() {
+        let (endpoints, boundary_role) = match location {
+            ObservationLocation::Transfer(stream) => {
+                match routes
+                    .get(stream)
+                    .ok_or_else(|| numerical("missing admitted stream"))?
+                {
+                    StreamRoute::Feed { to } => (vec![(to, 1.0)], Some(BoundaryRole::Feed)),
+                    StreamRoute::Internal { from, to, .. } => (vec![(from, -1.0), (to, 1.0)], None),
+                    StreamRoute::Product { from } => {
+                        (vec![(from, -1.0)], Some(BoundaryRole::Product))
+                    }
+                    StreamRoute::OtherOutflow { from } => {
+                        (vec![(from, -1.0)], Some(BoundaryRole::OtherOutflow))
+                    }
+                }
             }
+            ObservationLocation::Stocktake { unit, kind } => match kind {
+                StocktakeKind::Opening => (vec![(unit, 1.0)], Some(BoundaryRole::OpeningInventory)),
+                StocktakeKind::Closing => {
+                    (vec![(unit, -1.0)], Some(BoundaryRole::ClosingInventory))
+                }
+            },
         };
         for (c, channel) in data.channels.iter().enumerate() {
-            keys.push(UnmeasuredFlowKey {
-                stream: stream.clone(),
+            keys.push(UnmeasuredQuantityKey {
+                location: location.clone(),
                 channel: channel.clone(),
             });
             for (unit, sign) in &endpoints {
@@ -285,10 +306,14 @@ fn latent_layout(
                 matrix[row * p + j * channel_count + c] = *sign;
             }
         }
+        groups.push(LatentGroup {
+            location: location.clone(),
+            boundary_role,
+        });
     }
     Ok(LatentLayout {
         keys,
-        routes,
+        groups,
         matrix,
     })
 }
@@ -303,16 +328,23 @@ fn latent_physical_rejection(
     if let Some(refusal) = physical_rejection(graph, data, &estimates[..n])? {
         return Ok(Some(refusal));
     }
-    for (j, stream) in layout.routes.keys().enumerate() {
+    for (j, group) in layout.groups.iter().enumerate() {
         let start = n + j * data.channels.len();
         let values = &estimates[start..start + data.channels.len()];
+        let (label, composition_label) = match &group.location {
+            ObservationLocation::Transfer(stream) => (
+                format!("stream {}", stream.as_str()),
+                stream.as_str().to_owned(),
+            ),
+            ObservationLocation::Stocktake { unit, kind } => {
+                let label = format!("{:?} stocktake at {}", kind, unit.as_str());
+                (label.clone(), label)
+            }
+        };
         if values.iter().any(|v| *v < 0.0) {
             return Ok(Some(fail(
                 RefusalCode::OutsidePhysicalDomain109,
-                format!(
-                    "inferred stream {} has negative mass; no clipping",
-                    stream.as_str()
-                ),
+                format!("inferred {label} has negative mass; no clipping"),
             )));
         }
         let mut amounts = MaterialAmounts {
@@ -330,8 +362,7 @@ fn latent_physical_rejection(
         if let Err(mut refusal) = validate_amounts(&amounts, &graph.schema) {
             refusal.what = format!(
                 "inferred composition at {}: {}",
-                stream.as_str(),
-                refusal.what
+                composition_label, refusal.what
             );
             return Ok(Some(refusal));
         }
@@ -374,14 +405,9 @@ fn boundary_projection(
             groups.push(group);
         }
     }
-    for (j, route) in layout.routes.values().enumerate() {
-        let role = match route {
-            StreamRoute::Feed { .. } => Some(1),
-            StreamRoute::Product { .. } => Some(2),
-            StreamRoute::OtherOutflow { .. } => Some(3),
-            StreamRoute::Internal { .. } => None,
-        };
-        if let Some(role) = role {
+    for (j, group) in layout.groups.iter().enumerate() {
+        if let Some(role) = group.boundary_role {
+            let role = role as usize;
             for c in 0..k {
                 groups[role * k + c].push(n + j * k + c);
                 observed[role * k + c] = false;
@@ -465,18 +491,95 @@ pub fn reconcile_unmeasured_flowsheet(
         &model.canonical_tag(),
         AdditivityClass::NonAdditive,
     )?;
-    let graph = admit_flowsheet_with_unmeasured(inputs, &model.unmeasured_streams)?;
+    let unknown = model
+        .unmeasured_streams
+        .iter()
+        .cloned()
+        .map(ObservationLocation::Transfer)
+        .collect();
+    reconcile_selected(
+        inputs,
+        ModelView {
+            source: error_model,
+            scope: &model.scope,
+            declaration_id: model.declaration_id,
+            observations: &model.observations,
+            covariance: &model.covariance,
+            unbiased_gaussian_errors: model.unbiased_gaussian_errors,
+            global_chi_square_limit: model.global_chi_square_limit,
+            normalized_adjustment_limit: model.normalized_adjustment_limit,
+            closure_tolerances_kg: &model.closure_tolerances_kg,
+        },
+        &unknown,
+        InferenceEncoding {
+            frame: *b"UGRR",
+            metric: OUTPUT_METRIC,
+            model_name: "unmeasured-flow",
+            diagnostic_name: "partial-flow",
+            key: |key| match key.location {
+                ObservationLocation::Transfer(stream) => Ok(UnmeasuredFlowKey {
+                    stream,
+                    channel: key.channel,
+                }),
+                ObservationLocation::Stocktake { .. } => {
+                    Err(numerical("stocktake in flow-only inference"))
+                }
+            },
+            put_key: |enc, key| {
+                enc.put_str(key.stream.as_str());
+                put_channel(enc, &key.channel);
+            },
+        },
+    )
+}
+
+/// Borrowed numerical policy, independent of each public source-model schema.
+/// The wrappers admit the original model Claim before constructing this view.
+struct ModelView<'a, M> {
+    source: &'a Claim<M>,
+    scope: &'a FlowsheetScope,
+    declaration_id: ClaimId,
+    observations: &'a [ObservationKey],
+    covariance: &'a [KilogramsSquared],
+    unbiased_gaussian_errors: bool,
+    global_chi_square_limit: f64,
+    normalized_adjustment_limit: Option<f64>,
+    closure_tolerances_kg: &'a BTreeMap<MaterialChannel, Kilograms>,
+}
+
+/// The flow-only wire format remains unchanged; generalized quantities have
+/// their own metric/frame and bind typed endpoint identities in every key.
+struct InferenceEncoding<K> {
+    frame: [u8; 4],
+    metric: &'static str,
+    model_name: &'static str,
+    diagnostic_name: &'static str,
+    key: fn(UnmeasuredQuantityKey) -> Result<K>,
+    put_key: fn(&mut Encoder, &K),
+}
+
+fn reconcile_selected<M: Clone, K>(
+    inputs: &[Claim<FlowsheetInput>],
+    model: ModelView<'_, M>,
+    unknown: &BTreeSet<ObservationLocation>,
+    encoding: InferenceEncoding<K>,
+) -> Result<UnmeasuredFlowOutcome<M, K>> {
+    let error_model = model.source;
+    let graph = admit_flowsheet_with_unmeasured_quantities(inputs, unknown)?;
     let data = coordinates(&graph)?;
-    let layout = latent_layout(&graph, &data, &model.unmeasured_streams)?;
+    let layout = latent_layout(&graph, &data, unknown)?;
     let n = data.keys.len();
     let p = layout.keys.len();
-    if model.scope != graph.declaration.value.scope
+    if model.scope != &graph.declaration.value.scope
         || model.declaration_id != graph.declaration.claim_id
-        || model.observations != data.keys
+        || model.observations != data.keys.as_slice()
     {
         return Err(fail(
             RefusalCode::SupportMismatch102,
-            "unmeasured-flow model must bind the exact topology, scope and genuine observations",
+            format!(
+                "{} model must bind the exact topology, scope and genuine observations",
+                encoding.model_name
+            ),
         ));
     }
     if model.covariance.len() != n * n
@@ -577,8 +680,8 @@ pub fn reconcile_unmeasured_flowsheet(
             rejection = Some(fail(
                 RefusalCode::Conservation101,
                 format!(
-                    "partial-flow global chi-square {} exceeds declared limit {}; all observations retained",
-                    result.chi_square, model.global_chi_square_limit
+                    "{} global chi-square {} exceeds declared limit {}; all observations retained",
+                    encoding.diagnostic_name, result.chi_square, model.global_chi_square_limit
                 ),
             ));
         }
@@ -606,7 +709,7 @@ pub fn reconcile_unmeasured_flowsheet(
         &layout,
         &fitted,
         &result.posterior_covariance,
-        &model.closure_tolerances_kg,
+        model.closure_tolerances_kg,
     )?;
     if rejection.is_none()
         && boundary
@@ -622,7 +725,7 @@ pub fn reconcile_unmeasured_flowsheet(
         ));
     }
     let mut meta = Metadata::new();
-    let mut enc = Encoder::new_frame(*b"UGRR", 1);
+    let mut enc = Encoder::new_frame(encoding.frame, 1);
     enc.put_u64(graph.inputs.len() as u64);
     for source in &graph.inputs {
         inventory::put_source_envelope(&mut enc, *source, source.value.value.key().0);
@@ -633,7 +736,11 @@ pub fn reconcile_unmeasured_flowsheet(
     let diagnostics = InferredFlowsheet {
         scope: model.scope.clone(),
         observations: data.keys,
-        unmeasured: layout.keys,
+        unmeasured: layout
+            .keys
+            .into_iter()
+            .map(encoding.key)
+            .collect::<Result<Vec<_>>>()?,
         observed_kg: observed.into_iter().map(Kilograms::new).collect(),
         estimates_kg: fitted.into_iter().map(Kilograms::new).collect(),
         measured_adjustments_kg: result
@@ -656,7 +763,7 @@ pub fn reconcile_unmeasured_flowsheet(
         boundary,
         gross_error,
     };
-    put_diagnostics(&mut enc, &diagnostics);
+    put_diagnostics(&mut enc, &diagnostics, encoding.put_key);
     enc.put_u8(u8::from(rejection.is_some()));
     if let Some(refusal) = &rejection {
         enc.put_str(refusal.code);
@@ -675,7 +782,7 @@ pub fn reconcile_unmeasured_flowsheet(
             },
         )));
     }
-    let claim = meta.into_claim(OUTPUT_METRIC, diagnostics, &digest);
+    let claim = meta.into_claim(encoding.metric, diagnostics, &digest);
     Ok(UnmeasuredFlowOutcome::Admitted(Box::new(
         InferredFlowsheetReceipt {
             inputs,
@@ -686,15 +793,18 @@ pub fn reconcile_unmeasured_flowsheet(
     )))
 }
 
-fn put_diagnostics(enc: &mut Encoder, d: &InferredFlowsheet) {
+fn put_diagnostics<K>(
+    enc: &mut Encoder,
+    d: &InferredFlowsheet<K>,
+    put_unmeasured: fn(&mut Encoder, &K),
+) {
     enc.put_u64(d.observations.len() as u64);
     for key in &d.observations {
         put_key(enc, key);
     }
     enc.put_u64(d.unmeasured.len() as u64);
     for key in &d.unmeasured {
-        enc.put_str(key.stream.as_str());
-        put_channel(enc, &key.channel);
+        put_unmeasured(enc, key);
     }
     for values in [&d.observed_kg, &d.estimates_kg, &d.measured_adjustments_kg] {
         for value in values {

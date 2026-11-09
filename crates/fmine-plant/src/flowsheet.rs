@@ -15,6 +15,7 @@ use fmine_time::ValidTime;
 use fmine_units::{ExactQty, UnitsError};
 
 use crate::inventory::{self, BalanceScope, BalanceValue, MetalBalanceInput, MetalBalanceReceipt};
+use reconciliation::ObservationLocation;
 
 pub mod reconciliation;
 
@@ -137,8 +138,9 @@ pub enum StocktakeKind {
     Closing,
 }
 
-/// One source declaration or observation. Every declared edge has exactly one
-/// Transfer, and every declared unit has both stocktakes, even when zero.
+/// One source declaration or genuine observation. Complete nominal accounting
+/// requires a Transfer per edge and both stocktakes per unit, including zeros.
+/// Partial reconciliation separately declares each unmeasured location.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlowsheetValue {
     Declaration {
@@ -706,12 +708,25 @@ pub(crate) fn admit_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<Admitt
     admit_flowsheet_with_unmeasured(inputs, &BTreeSet::new())
 }
 
-/// Shared source/topology admission. Only the partial reconciliation owner may
-/// omit explicitly named stream observations; stocktakes remain measured.
-/// Rows then contain measured contributions, not complete nominal balances.
+/// Flow-only compatibility path: endpoint stocktakes remain measured.
 pub(crate) fn admit_flowsheet_with_unmeasured<'a>(
     inputs: &'a [Claim<FlowsheetInput>],
     unmeasured: &BTreeSet<StreamId>,
+) -> Result<AdmittedFlowsheet<'a>> {
+    let locations = unmeasured
+        .iter()
+        .cloned()
+        .map(ObservationLocation::Transfer)
+        .collect();
+    admit_flowsheet_with_unmeasured_quantities(inputs, &locations)
+}
+
+/// Shared source/topology admission. Partial reconciliation may omit only
+/// explicitly named transfers or endpoint stocks. Rows retain observations
+/// alone, never zero substitutes for the declared unmeasured quantities.
+pub(crate) fn admit_flowsheet_with_unmeasured_quantities<'a>(
+    inputs: &'a [Claim<FlowsheetInput>],
+    unmeasured: &BTreeSet<ObservationLocation>,
 ) -> Result<AdmittedFlowsheet<'a>> {
     let mut inputs: Vec<_> = inputs.iter().collect();
     inputs.sort_by(|a, b| a.value.value.key().cmp(&b.value.value.key()));
@@ -811,11 +826,25 @@ pub(crate) fn admit_flowsheet_with_unmeasured<'a>(
             ));
         }
     }
-    if unmeasured.iter().any(|stream| !routes.contains_key(stream)) {
-        return Err(bad(
-            RefusalCode::BasisMismatch105,
-            "an explicitly unmeasured stream is absent from the declared topology",
-        ));
+    for location in unmeasured {
+        match location {
+            ObservationLocation::Transfer(stream) if !routes.contains_key(stream) => {
+                return Err(bad(
+                    RefusalCode::BasisMismatch105,
+                    "an explicitly unmeasured stream is absent from the declared topology",
+                ));
+            }
+            ObservationLocation::Stocktake { unit, .. } if !unit_ids.contains(unit) => {
+                return Err(bad(
+                    RefusalCode::BasisMismatch105,
+                    format!(
+                        "unmeasured stocktake names undeclared unit {}",
+                        unit.as_str()
+                    ),
+                ));
+            }
+            _ => {}
+        }
     }
     let mut observations = BTreeMap::new();
     let mut stocks = BTreeMap::new();
@@ -826,7 +855,7 @@ pub(crate) fn admit_flowsheet_with_unmeasured<'a>(
         match &source.value.value {
             FlowsheetValue::Declaration { .. } => {}
             FlowsheetValue::Transfer { stream, .. } => {
-                if unmeasured.contains(stream) {
+                if unmeasured.contains(&ObservationLocation::Transfer(stream.clone())) {
                     return Err(bad(
                         RefusalCode::BasisMismatch105,
                         "a stream cannot be both measured and explicitly unmeasured",
@@ -841,6 +870,19 @@ pub(crate) fn admit_flowsheet_with_unmeasured<'a>(
                 observations.insert(stream.clone(), source);
             }
             FlowsheetValue::Stocktake { unit, kind, .. } => {
+                if unmeasured.contains(&ObservationLocation::Stocktake {
+                    unit: unit.clone(),
+                    kind: *kind,
+                }) {
+                    return Err(bad(
+                        RefusalCode::BasisMismatch105,
+                        format!(
+                            "{} {:?} stocktake cannot be both measured and explicitly unmeasured",
+                            unit.as_str(),
+                            kind
+                        ),
+                    ));
+                }
                 if !unit_ids.contains(unit) {
                     return Err(bad(
                         RefusalCode::NoClaimInDomain201,
@@ -854,36 +896,49 @@ pub(crate) fn admit_flowsheet_with_unmeasured<'a>(
     let mut per_unit: BTreeMap<UnitId, Rows<'_>> = BTreeMap::new();
     let mut outer = Rows::default();
     for unit in &unit_ids {
-        let opening = *stocks
-            .get(&(unit.clone(), StocktakeKind::Opening))
-            .ok_or_else(|| {
+        let missing = |kind| {
+            unmeasured.contains(&ObservationLocation::Stocktake {
+                unit: unit.clone(),
+                kind,
+            })
+        };
+        if missing(StocktakeKind::Opening) && missing(StocktakeKind::Closing) {
+            return Err(bad(
+                RefusalCode::NonIdentifiableAttribution104,
+                format!(
+                    "{} has both endpoint inventories unmeasured; one window constrains their change, not both levels",
+                    unit.as_str()
+                ),
+            ));
+        }
+        let observed = |kind, name| -> Result<Vec<Source<'_>>> {
+            if missing(kind) {
+                return Ok(Vec::new());
+            }
+            let source = *stocks.get(&(unit.clone(), kind)).ok_or_else(|| {
                 bad(
                     RefusalCode::NoClaimInDomain201,
-                    format!("{} missing opening stocktake", unit.as_str()),
+                    format!("{} missing {name} stocktake", unit.as_str()),
                 )
             })?;
-        let closing = *stocks
-            .get(&(unit.clone(), StocktakeKind::Closing))
-            .ok_or_else(|| {
-                bad(
-                    RefusalCode::NoClaimInDomain201,
-                    format!("{} missing closing stocktake", unit.as_str()),
-                )
-            })?;
+            Ok(vec![source])
+        };
+        let opening = observed(StocktakeKind::Opening, "opening")?;
+        let closing = observed(StocktakeKind::Closing, "closing")?;
+        outer.opening.extend(opening.iter().copied());
+        outer.closing.extend(closing.iter().copied());
         per_unit.insert(
             unit.clone(),
             Rows {
-                opening: vec![opening],
-                closing: vec![closing],
+                opening,
+                closing,
                 ..Rows::default()
             },
         );
-        outer.opening.push(opening);
-        outer.closing.push(closing);
     }
     let mut internal_streams = Vec::new();
     for (stream, route) in &routes {
-        if unmeasured.contains(stream) {
+        if unmeasured.contains(&ObservationLocation::Transfer(stream.clone())) {
             if matches!(route, StreamRoute::Internal { .. }) {
                 internal_streams.push(stream.clone());
             }

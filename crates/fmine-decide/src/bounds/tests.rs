@@ -356,7 +356,7 @@ fn interactions_invalid_physical_domains_and_unrepresentable_arithmetic_refuse()
         m.interactions.push(interaction.into());
         assert_eq!(
             evaluate(&input(m)).unwrap_err().code,
-            RefusalCode::NonAdditiveAverage103
+            RefusalCode::NonAdditiveAverage103.as_str()
         );
     }
     for bad_interval in [range(-1, 1, 2), range(2, 1, 2), range(0, 2, 1)] {
@@ -364,7 +364,7 @@ fn interactions_invalid_physical_domains_and_unrepresentable_arithmetic_refuse()
         m.untested_recovery = bad_interval;
         assert_eq!(
             evaluate(&input(m)).unwrap_err().code,
-            RefusalCode::OutsidePhysicalDomain109
+            RefusalCode::OutsidePhysicalDomain109.as_str()
         );
     }
     for tonnes in [range(0, 0, 1), range(0, 1, 1), range(-1, 1, 1)] {
@@ -379,7 +379,7 @@ fn interactions_invalid_physical_domains_and_unrepresentable_arithmetic_refuse()
         };
         assert_eq!(
             evaluate(&input(m)).unwrap_err().code,
-            RefusalCode::OutsidePhysicalDomain109
+            RefusalCode::OutsidePhysicalDomain109.as_str()
         );
     }
     let m = RecoveryBoundModel {
@@ -393,7 +393,7 @@ fn interactions_invalid_physical_domains_and_unrepresentable_arithmetic_refuse()
     };
     assert_eq!(
         evaluate(&input(m)).unwrap_err().code,
-        RefusalCode::NumericalCertificateFailed207
+        RefusalCode::NumericalCertificateFailed207.as_str()
     );
 }
 
@@ -427,25 +427,25 @@ fn claim_metadata_is_bound_and_result_cannot_be_disclosed_as_measured() {
     forged.value.threshold = q(1, 2);
     assert_eq!(
         evaluate(&forged).unwrap_err().code,
-        RefusalCode::FrozenRecordMutation507
+        RefusalCode::FrozenRecordMutation507.as_str()
     );
     let mut stale = original.clone();
     stale.stale = true;
     assert_eq!(
         evaluate(&stale).unwrap_err().code,
-        RefusalCode::StaleAnchor502
+        RefusalCode::StaleAnchor502.as_str()
     );
     let mut support = original.clone();
     support.support = SpatialSupport::PointCore;
     assert_eq!(
         evaluate(&support).unwrap_err().code,
-        RefusalCode::SupportMismatch102
+        RefusalCode::SupportMismatch102.as_str()
     );
     let mut uu = original.clone();
     uu.uu_terms.clear();
     assert_eq!(
         evaluate(&uu).unwrap_err().code,
-        RefusalCode::UnbudgetedUnknowns204
+        RefusalCode::UnbudgetedUnknowns204.as_str()
     );
     let mut graph = ClaimDag::new();
     graph.insert(&original).unwrap();

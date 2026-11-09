@@ -1,8 +1,8 @@
 //! DESIGN: conditional linear reconciliation with observable unmeasured flows.
 //! Minimize (xm-y)' V^-1 (xm-y), subject to Am*xm + Au*xu = b.
 //! This bounded owner requires independent measured balance rows (Am V Am' SPD).
-//! The plant adapter guarantees that condition by retaining both stocktakes for
-//! every unit. Unmeasured columns must be independently observable; no prior,
+//! The plant adapter guarantees that condition by retaining at least one measured
+//! stocktake per unit. Unmeasured columns must be independently observable; no prior,
 //! placeholder observation, variance floor or discarded constraint is supplied.
 //!
 //! With C=Am V Am', S=Au' C^-1 Au and r=Am y-b:
