@@ -315,6 +315,12 @@ mutates_authority = false
 description = "Propagate declared tank-train inventories and feed histories, retaining conservation and optional lag-aligned versus same-interval recovery"
 
 [[verb]]
+path = "plant grinding"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Calculate source-bound Bond grinding energy and dry-metric-tonne throughput over explicitly declared complete joint scenarios and validity domains"
+
+[[verb]]
 path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false

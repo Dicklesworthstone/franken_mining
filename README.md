@@ -171,6 +171,34 @@ These are assumed inputs and a known forward kernel. No residence-time fitting, 
 reactive-stock inference or plant calibration is supplied. Invalid optional recovery observations refuse
 the whole operation without a successful transport receipt.
 
+### Calculate grinding energy and throughput across joint scenarios
+
+`plant grinding` evaluates a declared Bond model at processing-blend support:
+
+```sh
+cargo run -p fmine-cli -- plant grinding --input tests/plant/grinding_bond.toml --json
+cargo run -p fmine-cli -- plant grinding --input tests/plant/grinding_joint.toml --format markdown
+```
+
+The worksheet declares the circuit, blend, interval, model version, work-index test basis and closed
+validity bounds for every input. Work index and specific energy use **kWh per dry metric tonne**;
+F80/P80 use microns, power uses kW and utilization is a fraction. The calculation is
+`E = 10 Wi (1/sqrt(P80) - 1/sqrt(F80))`, followed by `Q = power × utilization / E`.
+The single-state synthetic example gives **5 kWh/dry tonne** and **160 dry tonnes/hour**.
+
+For uncertainty, supply complete joint scenario rows with positive exact weights summing to one.
+Each row keeps its paired hardness, sizes, power and utilization. The report retains every row result,
+weighted means, inverse-CDF P10/P50/P90, source Claims and the original worksheet bytes. The equal-weight
+Wi=5/Wi=20 example gives throughputs 320 and 80, hence a mean of **200 dry tonnes/hour**;
+plugging mean hardness into the formula would instead give 128. These scenarios describe alternative
+states of the blend, not a physical ore-blending rule.
+
+Zero power or utilization produces explicit zero-throughput shutdown. Invalid units, incomplete weights,
+nonfinite values, nonpositive energy or any coordinate outside the declared validity domain refuse the
+complete calculation. The inputs, domain and scenario probabilities remain assumed and uncalibrated.
+The model supplies conditional power-limited throughput, without qualifying circuit efficiency, other
+plant bottlenecks, measured capacity or operational authority.
+
 ### Run the public lane
 
 With the pinned Rust toolchain, fetch the registered public workbooks and run:

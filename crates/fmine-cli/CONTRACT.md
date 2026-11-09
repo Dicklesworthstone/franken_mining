@@ -10,6 +10,14 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-176/181, plan §17.3): `plant grinding --input <worksheet.toml>` delegates bounded,
+  source-bound `fmine.plant-grinding.v1` declarations to `fmine_plant::grinding::worksheet`. Explicit
+  metric dry-tonne, kWh, micron and kW bases, processing support, test basis and validity limits accompany
+  every complete joint scenario. JSON and Markdown preserve original source bytes, Claims, row energy
+  and throughput, weighted distributions and shutdown probability. Invalid members refuse the entire
+  result. Inputs and probabilities remain Assumed, Internal and uncalibrated; no circuit qualification,
+  other-bottleneck model, registered forecast or operating authority is inferred. Known answers and
+  command integration checks live in `tests/plant/grinding_*.toml` and `xtask/tests/plant_grinding.rs`.
 - DESIGN (BD-351.S1): `decide recovery-bounds <model-file>` reads bounded source bytes and invokes
   `fmine_decide::bounds` for exact conditional two-stratum recovery bounds. JSON and Markdown retain
   source identity, witnesses, stability, decisive test conditions and Claim/UU metadata. Interactions and

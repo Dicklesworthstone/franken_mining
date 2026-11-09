@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 56
+[verbs] 57
 decide card
 decide recovery-bounds
 decide program
@@ -126,6 +126,7 @@ plant transfer
 plant infer
 plant recovery
 plant rtd
+plant grinding
 robot schema
 assure issue
 reliance export

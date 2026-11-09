@@ -13,7 +13,7 @@ K0 numerical owner, preserving the original observations and a separately declar
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory", "flowsheet", "reconciliation", "measurements", "raw_measurements", "cards", "rtd"]`
+- **Allowed Module Families:** `["inventory", "flowsheet", "grinding", "reconciliation", "measurements", "raw_measurements", "cards", "rtd"]`
 
 ## 2. Inputs
 
@@ -589,3 +589,60 @@ These are conditional probabilities under a user-supplied finite population, exp
 uncalibrated. Neither population completeness in reality nor uncertain card parameters, fitted
 likelihoods, empirical recovery calibration, sample-to-blend transfer, forecast registration or
 operating permission is established. Authentic source and prospective outcome gates remain open.
+
+## 21. Bond grinding energy and throughput (DESIGN; plan §17.3, PO-CRUC-4; BD-176/181)
+
+`grinding::evaluate` evaluates a versioned `Claim<BondModel>` and 1–4096 complete simultaneous
+`Claim<GrindingScenario>` rows at one named boundary, circuit, processing blend and positive interval.
+Wi and specific energy use kWh per **dry metric tonne**, F80/P80 use micrometres, installed circuit
+power uses kW, utilization is a fraction, and throughput uses dry metric tonnes/hour. Physical public
+values use `Qty` dimension/basis types. The card records its work-index test basis, including the
+declared closing-screen/feed-preparation basis, and a separately declared validity basis. No
+sample-to-blend transfer, metric/short-ton conversion or implicit unit conversion occurs.
+
+The conditional equations are `E = 10 Wi (1/sqrt(P80) - 1/sqrt(F80))` and
+`Q = installed_power * utilization / E`. A cancellation-resistant equivalent evaluates the size
+term for nearby positive sizes. Wi and sizes must be positive and finite, F80 must exceed P80,
+power is nonnegative and utilization lies in [0,1]. All five inputs must also lie in their explicitly
+declared closed validity ranges. Zero power and/or zero utilization retain positive specific energy
+and return zero throughput with an explicit shutdown reason. Physical failures refuse with
+`FMINE-REF-109`, extrapolation with `FMINE-REF-203`, and numerical overflow or lost nonzero values
+with `FMINE-REF-207`. There is no numerical clamp or inferred circuit-efficiency factor.
+
+Scenario IDs are unique; exact positive probabilities sum to one without normalization. Each row
+contains every simultaneous input of the same processing support, preserving dependence between
+hardness, size, power and utilization. These are probabilities over alternative states, not physical
+blending weights. Every row must be admitted before a receipt exists. Weighted means are computed
+**after** evaluating each row; inverse-CDF P10/P50/P90 use exact cumulative probabilities and no
+interpolation. Both specific-energy and throughput distributions retain their extrema; shutdown
+probability is exact. Statistics describe the declared population, not confidence intervals.
+
+The immutable `GrindingReceipt` retains the model, canonically ordered source scenarios, every
+point result, and the derived summary Claim. Canonical value checks and the shared plant admission
+guard reject mutated, stale, failed-calibration or incompatible-support sources. Receipt identity
+also binds the input envelope fields omitted from generic Claim hashes, including UU terms and
+supersession. Evidence is capped by `ModelledUncalibrated` and met with all inputs, knowledge is at
+most `Estimated`, confidentiality joins monotonically, and ancestry/anchors remain available.
+The summary's scalar `EnsembleSummary` representation describes throughput; specific energy has
+separately typed distribution fields. Evaluation and rendering are `DeterministicPerIsa`.
+
+`grinding::worksheet::evaluate(text, source)` supplies a strict pure adapter for
+`fmine.plant-grinding.v1`, exposed by `fmine plant grinding --input <worksheet.toml>`.
+It checks the actual UTF-8 source bytes against the supplied SHA-256, enforces a 1 MiB bound,
+requires every field and unit declaration, and rejects unknown fields/tables or missing scenarios.
+Quoted finite numerical coordinates retain their original tokens in `submitted_worksheet`; exact
+weights admit plain decimals or rational strings. Model and row Claims carry the original artifact
+and source locator. Inputs remain Assumed and Internal. JSON and Markdown retain every input,
+declared domain, source Claim, result, probability, units and digest. No failed member is dropped.
+
+Synthetic examples `tests/plant/grinding_bond.toml` and `tests/plant/grinding_joint.toml` have authored
+analytic answers: Wi10/F80400/P80100/power1000/utilization0.8 gives E5 and Q160. Equal states with
+Wi5 and Wi20 give mean energy6.25 and mean throughput200; evaluating mean Wi12.5 gives128 instead.
+Unit tests also cover joint dependence with unchanged marginals, weighted-quantile ties, shutdown,
+near-equal size precision against an independently evaluated Decimal result, size scaling, source
+mutation, taint, envelope binding, malformed populations, numerical failure and strict source parsing.
+
+This is a conditional energy-limited estimate. It establishes no actual plant throughput, empirical
+validity, grinding-circuit correction, other bottleneck, calibration, frozen forecast, ledger authority
+or operating permission. BD-181 still needs actual prospective registration and outcomes; this slice
+does not assert that the broader process-card or uncertainty-propagation gates have passed.

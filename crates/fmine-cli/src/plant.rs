@@ -2,6 +2,7 @@
 //! Exact nominal accounting and conditional Gaussian reconciliation remain separate modes.
 //! Determinism: Exact for balance; DeterministicPerIsa for reconciliation.
 
+mod grinding;
 mod network;
 mod project;
 mod recovery;
@@ -41,6 +42,8 @@ pub const RECOVERY_USAGE: &str = "plant recovery --input <worksheet.toml>";
 pub const RECOVERY_DOCS_JSON: &str = recovery::ROBOT_DOCS_JSON;
 pub const RTD_USAGE: &str = "plant rtd --input <worksheet.toml>";
 pub const RTD_DOCS_JSON: &str = fmine_plant::rtd::worksheet::ROBOT_DOCS_JSON;
+pub const GRINDING_USAGE: &str = "plant grinding --input <worksheet.toml>";
+pub const GRINDING_DOCS_JSON: &str = fmine_plant::grinding::worksheet::ROBOT_DOCS_JSON;
 pub const SCHEMA: &str = "fmine.plant-inventory.v1";
 const MAX_BYTES: u64 = 1024 * 1024;
 const ROLES: [&str; 5] = ["opening", "feed", "product", "other_outflow", "closing"];
@@ -87,6 +90,7 @@ pub enum Command {
     Infer { input: PathBuf },
     Recovery { input: PathBuf },
     Rtd { input: PathBuf },
+    Grinding { input: PathBuf },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -97,7 +101,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         || args[3].starts_with("--")
     {
         return Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {GRINDING_USAGE}"
         ));
     }
     let input = PathBuf::from(&args[3]);
@@ -116,8 +120,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "infer" => Ok(Command::Infer { input }),
         "recovery" => Ok(Command::Recovery { input }),
         "rtd" => Ok(Command::Rtd { input }),
+        "grinding" => Ok(Command::Grinding { input }),
         _ => Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {GRINDING_USAGE}"
         )),
     }
 }
@@ -572,6 +577,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         Command::Infer { input } => return network::execute_unmeasured(input, root),
         Command::Recovery { input } => return recovery::execute(input, root),
         Command::Rtd { input } => return rtd::execute(input, root),
+        Command::Grinding { input } => return grinding::execute(input, root),
     };
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) =

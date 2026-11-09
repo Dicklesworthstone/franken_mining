@@ -2183,6 +2183,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::INFER_USAGE,
                 plant::RECOVERY_USAGE,
                 plant::RTD_USAGE,
+                plant::GRINDING_USAGE,
                 html::USAGE,
                 "decide card <model-file>",
                 "decide recovery-bounds <model-file>",
@@ -2302,6 +2303,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(plant::RECOVERY_DOCS_JSON);
             payload.push_str(",\"plant_rtd\":");
             payload.push_str(plant::RTD_DOCS_JSON);
+            payload.push_str(",\"plant_grinding\":");
+            payload.push_str(plant::GRINDING_DOCS_JSON);
             payload.push_str(",\"html_claims\":");
             payload.push_str(html::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_distributions\":");
