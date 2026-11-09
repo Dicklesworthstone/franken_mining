@@ -6,6 +6,7 @@ use super::*;
 mod capital_call;
 mod debt;
 mod entity_valuation;
+mod robustness;
 mod stability;
 
 const STAGED: &str = include_str!("../../../../tests/capital/recourse.toml");

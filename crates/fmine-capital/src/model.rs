@@ -14,6 +14,7 @@ use crate::recourse::{
 
 mod entity;
 mod entity_valuation;
+mod robustness;
 mod stability;
 #[cfg(test)]
 mod tests;
@@ -369,10 +370,12 @@ fn parse_model(
     let mut observations = BTreeMap::new();
     let mut information_anchors = Vec::new();
     let mut stability_row = None;
+    let mut robustness_rows = robustness::Rows::default();
     let mut entity_rows = entity::EntityRows::default();
     let mut valuation_rows = entity_valuation::ValuationRows::default();
     for row in &doc.rows {
         match row.table.as_str() {
+            "robustness" | "transport_distance" => robustness_rows.push(row, model_key)?,
             "selection_stability" => {
                 if stability_row.is_some() {
                     return Err(input(
@@ -1061,6 +1064,13 @@ fn parse_model(
     };
     let selection_stability =
         stability::finish(stability_row, &source, &doc.top, &unknowns, &uu_anchors);
+    let robustness = robustness_rows.finish(&states, &source, &doc.top, &unknowns, &uu_anchors)?;
+    if information.is_some() && robustness.is_some() {
+        return Err(bad(
+            RefusalCode::NoClaimInDomain201,
+            "capital Wasserstein stress supports static bundles only; adaptive policies are outside this comparison",
+        ));
+    }
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()
@@ -1117,6 +1127,7 @@ fn parse_model(
         equity,
         entity_valuations,
         selection_stability,
+        robustness,
     };
     validate(&inputs)?;
     Ok((inputs, information))

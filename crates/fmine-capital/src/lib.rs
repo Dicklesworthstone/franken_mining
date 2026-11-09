@@ -20,12 +20,14 @@ use fmine_evidence::color::validate_color_payload;
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_numerics::exact_feas::Rat;
 use fmine_numerics::risk::exact::{ExactDistribution, compare as exact_compare};
+use fmine_numerics::risk::transport::TransportPlan;
 use fmine_units::{Currency, Money, UnitsError};
 
 pub mod entity;
 pub mod model;
 pub mod recourse;
 mod render;
+pub mod robustness;
 pub mod stability;
 
 use entity::valuation::{EntityValuation, EntityValuationAssessment};
@@ -262,6 +264,7 @@ pub struct ProgramInputs {
     pub equity: Option<Claim<EquityBasis>>,
     pub entity_valuations: Vec<Claim<EntityValuation>>,
     pub selection_stability: Option<Claim<stability::SelectionStabilityDesign>>,
+    pub robustness: Option<Claim<robustness::RobustnessDesign>>,
 }
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
@@ -434,6 +437,7 @@ pub struct ProgramSummary {
     pub expected_value_cost_of_risk_limit: Option<ExactMoney>,
     pub expected_per_share_cost_of_risk_limit: Option<ExactPerShare>,
     pub selection_stability: Option<stability::SelectionStabilitySummary>,
+    pub robustness: Option<robustness::RobustnessSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -998,7 +1002,7 @@ fn validate_equity_values(
     Ok(())
 }
 
-fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
+fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>)> {
     if !(1..=MAX_CANDIDATES).contains(&inputs.candidates.len())
         || !(1..=MAX_STATES).contains(&inputs.weights.value.states.len())
     {
@@ -1009,6 +1013,7 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     }
     entity::valuation::check_work_bound(inputs, 1_usize << inputs.candidates.len())?;
     stability::check_work(inputs, 1_usize << inputs.candidates.len())?;
+    robustness::check_work(inputs)?;
     if !inputs.entity_valuations.is_empty() && inputs.equity.is_none() {
         return Err(bad(
             RefusalCode::BasisMismatch105,
@@ -1111,6 +1116,21 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     let mut metadata = Metadata::new();
     metadata.include(&inputs.policy)?;
     metadata.include(&inputs.weights)?;
+    if let Some(claim) = &inputs.robustness {
+        admit(
+            claim,
+            &claim.value.canonical_tag(),
+            AdditivityClass::NonAdditive,
+        )?;
+        if claim.value.model_key != policy.model_key {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "capital robustness must use the program's model key",
+            ));
+        }
+        metadata.include(claim)?;
+    }
+
     if let Some(claim) = &inputs.selection_stability {
         admit(
             claim,
@@ -1256,7 +1276,7 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
             metadata.include(claim)?;
         }
     }
-    Ok(metadata)
+    Ok((metadata, robustness::prepare(inputs)?))
 }
 
 struct FundingIndex<'a> {
@@ -1854,7 +1874,7 @@ fn populate_statistics(
 
 /// Enumerates all declared binary subsets; infeasibility remains in the returned population.
 pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
-    let metadata = validate(inputs)?;
+    let (metadata, transport) = validate(inputs)?;
     let mut inputs = inputs.clone();
     inputs
         .candidates
@@ -2158,6 +2178,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
     };
     let selection_stability =
         stability::assess(&inputs, &choices, None, &metadata, &feasible_winners)?;
+    let robustness = robustness::assess(&inputs, &choices, &feasible_winners, transport.as_ref())?;
     let summary = ProgramSummary {
         model_key: policy.model_key.clone(),
         question: inputs.weights.value.question.clone(),
@@ -2183,6 +2204,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         expected_value_cost_of_risk_limit: risk_cost,
         expected_per_share_cost_of_risk_limit: per_share_risk_cost,
         selection_stability,
+        robustness,
     };
     let mut binding = Encoder::new_frame(*b"CAPP", 1);
     binding.put_str(&render::inputs_json(&inputs));

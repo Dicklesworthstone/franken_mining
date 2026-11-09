@@ -207,6 +207,12 @@ struct Admission {
 /// Work is bounded before either the information tag or any static catalog is constructed.
 fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
     let program = &inputs.program;
+    if program.robustness.is_some() {
+        return Err(bad(
+            RefusalCode::NoClaimInDomain201,
+            "capital Wasserstein stress supports static bundles only; adaptive policies are outside this comparison",
+        ));
+    }
     let basis = &inputs.information.value;
     let candidate_count = program.candidates.len();
     let state_count = program.weights.value.states.len();
@@ -333,7 +339,7 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
     }
     entity::valuation::check_work_bound(program, (1_usize << candidate_count) + policy_count)?;
     stability::check_work(program, (1_usize << candidate_count) + policy_count)?;
-    let mut metadata = super::validate(program)?;
+    let (mut metadata, _) = super::validate(program)?;
     if basis.model_key != program.policy.value.model_key
         || basis.currency != program.policy.value.currency
         || basis.valuation_basis != program.policy.value.valuation_basis

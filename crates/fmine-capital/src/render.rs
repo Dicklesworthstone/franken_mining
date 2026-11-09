@@ -489,8 +489,17 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
                 claim_json(claim, &claim.value.to_json())
             )
         });
+    let robustness = inputs
+        .robustness
+        .as_ref()
+        .map_or_else(String::new, |claim| {
+            format!(
+                ",\"robustness\":{}",
+                claim_json(claim, &claim.value.to_json())
+            )
+        });
     format!(
-        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}{valuations}{stability}}}",
+        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}{valuations}{stability}{robustness}}}",
         claim_json(&inputs.policy, &policy_json(&inputs.policy.value)),
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value)),
         inputs.funding.as_ref().map_or_else(
@@ -717,13 +726,16 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
         || "null".into(),
         stability::SelectionStabilitySummary::to_json,
     );
+    let robustness = s.robustness.as_ref().map_or_else(String::new, |summary| {
+        format!(",\"robustness\":{}", summary.to_json())
+    });
     let stability_status = if s.selection_stability.is_some() {
         "conditional_weighted_bootstrap"
     } else {
         "unavailable_static_declared_model"
     };
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"{robustness}}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
@@ -1024,6 +1036,12 @@ impl EvaluatedProgram {
             out.push_str(&stability.to_markdown());
         }
         if let Some(claim) = &self.inputs.selection_stability {
+            claim_markdown(&mut out, claim);
+        }
+        if let Some(robustness) = &s.robustness {
+            out.push_str(&robustness.to_markdown());
+        }
+        if let Some(claim) = &self.inputs.robustness {
             claim_markdown(&mut out, claim);
         }
         out.push_str("\n## Declared unknown unknowns\n\n");

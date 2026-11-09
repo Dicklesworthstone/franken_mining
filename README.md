@@ -662,6 +662,49 @@ from summed payoffs within each shared state, including fractional tail-boundary
 in the calculation. Full input/output Claims, source bytes, constraints and adjustment bases bind the receipt,
 including candidates that never win.
 
+#### Stress capital choices under declared scenario-weight shifts
+
+DESIGN (BD-229, plan sections 22.5 and 23.3): an optional `[[robustness]]` declaration compares every
+**nominally feasible static bundle** over a finite-support Wasserstein-1 ball. It reports worst-case mean
+value and worst-case expected same-state regret, preserving every tied winner and a separate exact
+primal/dual transport certificate for each objective. The nominal capital selection remains visible.
+
+Run the entirely synthetic, two-state example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/wasserstein.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/wasserstein.toml --json
+```
+
+INFERENCE from the example's declared payoffs, weights and quarter-unit transport radius, in USD millions:
+
+| Bundle | Nominal mean | Worst-case mean | Worst-case expected regret |
+|---|---:|---:|---:|
+| Hold cash | 0 | 0 | 20 |
+| Risky project | 12 | 4 | 10 |
+| Safe project | 8 | 8 | 12 |
+
+The risky project wins on nominal mean and minimax expected regret; the safe project wins on maximin mean.
+The joint bundle exceeds the budget and stays in the exclusions. These are synthetic known-answer
+comparisons, not investment recommendations or empirically calibrated probability estimates.
+
+The declaration supplies `method = "wasserstein_1"`, an exact rational `radius`, `metric_basis` and
+`radius_basis`. Each `[[transport_distance]]` supplies `from`, `to` and rational `value`; all ordered pairs,
+including zero diagonals, must be explicit and form a proper metric. No geometry or radius is inferred
+from state names or payoff values. Input bytes and source-bound Claims retain those assumptions.
+
+Structural, cash, debt, contractual and share-count constraints apply over the original complete state
+support. The original nominal primary and secondary tail-loss screens determine the comparison population.
+**The stress diagnostic does not certify tail-loss feasibility under the stressed weights.** Regret uses
+only the same nominally feasible alternatives. Models with a per-share objective stress each state's exact
+whole-bundle NAV per actual share, rather than dividing a mean total value by a mean share count.
+
+The report exposes both adversarial distributions, transported mass, transport cost, dual multipliers,
+dual potentials and exact zero duality gaps. It retains empty eligible populations, rejected bundle IDs
+and all co-winners. Geometry is limited to 64 states and bounded work over the complete subset population;
+adaptive recourse policies require a separate ambiguity model and are refused here. The option can coexist
+with the separate bootstrap diagnostic below, and an absent declaration preserves the prior report shape.
+
 #### Measure whether the selected program changes under scenario resampling
 
 DESIGN (BD-229, plan sections 22.5 and 23.9): an optional `[[selection_stability]]` declaration adds

@@ -1,0 +1,85 @@
+# Invented finite-support stress exercise; not a real capital recommendation.
+# Net delta-NAV values are already net of investment costs. Costs constrain the budget only.
+# Nominal: risky wins at USD 12M. Worst-case mean: safe wins at USD 8M.
+# Worst-case expected regret: risky wins at USD 10M versus safe at USD 12M.
+schema = "fmine.capital-program.v1"
+model_key = "synthetic-capital-wasserstein"
+question = "Which affordable bundle is preferred under an explicitly declared probability stress?"
+currency = "USD"
+valuation_basis = "Invented common-date net delta-NAV in nominal USD, fixed share count and common economic ownership"
+budget = "10000000"
+tail_mass = "1/4"
+payoff_convention = "additive_net_delta_nav"
+reference_class_basis = "Synthetic scenario assumptions, with no fitted risk or overrun adjustment"
+
+[[state]]
+id = "good"
+weight = "3/4"
+
+[[state]]
+id = "bad"
+weight = "1/4"
+
+[[candidate]]
+id = "risky"
+label = "Invented state-sensitive package"
+cost = "10000000"
+reference_class_basis = "Synthetic two-state net payoff"
+
+[[candidate]]
+id = "safe"
+label = "Invented constant-payoff package"
+cost = "10000000"
+reference_class_basis = "Synthetic constant net payoff within the declared states only"
+
+[[payoff]]
+candidate = "risky"
+state = "good"
+value = "20000000"
+
+[[payoff]]
+candidate = "risky"
+state = "bad"
+value = "-12000000"
+
+[[payoff]]
+candidate = "safe"
+state = "good"
+value = "8000000"
+
+[[payoff]]
+candidate = "safe"
+state = "bad"
+value = "8000000"
+
+[[robustness]]
+method = "wasserstein_1"
+radius = "1/4"
+metric_basis = "Two distinct declared states at unit dimensionless distance; zero self-distance"
+radius_basis = "Illustrative ambiguity budget permitting one quarter of total probability mass to move; no confidence claim"
+
+[[transport_distance]]
+from = "good"
+to = "good"
+value = "0/1"
+
+[[transport_distance]]
+from = "good"
+to = "bad"
+value = "1/1"
+
+[[transport_distance]]
+from = "bad"
+to = "good"
+value = "1/1"
+
+[[transport_distance]]
+from = "bad"
+to = "bad"
+value = "0/1"
+
+[[uu]]
+id = "UU-omitted-regime"
+description = "An omitted common shock could invalidate every declared scenario payoff"
+trigger = "Observed joint outcomes do not fit either declared state"
+downside_usd_m = "25"

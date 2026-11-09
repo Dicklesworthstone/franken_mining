@@ -2,9 +2,9 @@
 
 ## 1. Charter & Layer
 
-E-layer Helm capital-program comparison, within the planned 20k/23k LOC budget. These bounded BD-229/BD-314 slices
+E-layer Helm capital-program comparison, with a planned 20k LOC budget and hard 23k LOC ceiling. These bounded BD-229/BD-314 slices
 enumerate declared static subsets and two-stage policies, using the permitted `fmine-capital -> fmine-decide` edge.
-- **Allowed Module Families:** `["model", "render", "recourse", "entity", "stability"]`
+- **Allowed Module Families:** `["model", "render", "recourse", "entity", "stability", "robustness"]`
 The static kernel lives in the crate root; `recourse` composes its state-level results into complete policies.
 `entity` supplies separately conserved cash ledgers and declared ownership distributions as feasibility constraints.
 
@@ -226,6 +226,25 @@ co-winner set. Static selection, initial policy commitments and each original st
 reported separately; state-specific inclusion is not an occurrence probability. All count vectors and
 winners remain in JSON and Markdown, including empty feasible sets.
 
+Opt-in static Wasserstein comparison (§§22.5, 23.3) retains exactly those complete bundles which pass
+the original structural and nominal tail-loss screens, including every secondary entity constraint.
+For each eligible bundle, the primary objective vector is the same-state net NAV in USD, or the exact
+whole-bundle change in NAV per actual share in USD/share. The original nominal winner is retained.
+The declared complete dimensionless state metric and a single nonnegative radius define a finite-support
+Wasserstein-1 ambiguity set. The shared exact transport kernel separately maximizes signed loss and
+same-state regret, returning worst-case mean, worst-case expected regret and independent primal/dual
+witnesses. Regret is recomputed against the same nominally feasible bundle population; the existing
+nominal statistics still use all structurally feasible bundles before risk. Every exact maximin/minimax
+co-winner survives. A nonempty population containing only negative survivors keeps signed negative means;
+an empty population retains its geometry and excluded identifiers, with empty comparisons and winners.
+
+This diagnostic changes only state weights. It neither rechecks nor certifies the nominal tail-loss
+screens under those weights and never relabels a winner as stress-feasible. Original cash, contractual,
+share-count and structural obligations remain binding across all original states, including states which
+receive zero adversarial mass. Each criterion has its own adversary. No confidence level, fitted radius,
+unseen regime or adaptive policy is inferred. Bootstrap selection stability may coexist: both consume
+already assessed outcome vectors, and transport is not repeated within bootstrap resamples.
+
 ## 3. Authority, Epistemics & Representation
 
 All imported values remain Assumed, Internal, Estimated and parametrically uncertain. A complete input
@@ -415,6 +434,25 @@ remain unchanged.
   without stripping staged tables or manufacturing another file hash. Unknown, duplicate and orphan rows
   refuse. Static models retain their existing report bytes. Staged output uses `fmine.capital-recourse.v1`.
 
+Static inputs may additionally carry
+`robustness: Option<Claim<robustness::RobustnessDesign>>`, reusing the source-bound decision geometry
+type and its canonical design serializer. The corresponding optional summary retains objective units,
+canonical state IDs and nominal weights, structural and nominal-risk exclusion IDs, every eligible bundle,
+nominal/maximin/minimax co-winners and both complete transport certificates. Each certificate retains radius,
+transport cost, adversarial destination weights, every positive arc, dual multiplier/potentials/value and gap.
+The source design is admitted as a Claim and contributes all parents, anchors, epistemics, confidentiality,
+UU and non-hashed metadata to the capital result. Both JSON and Markdown disclose the nominal-feasible
+regret population and lack of stressed tail-risk certification. Absent stress preserves prior report bytes
+and digest binding; no new optional key is emitted.
+
+The existing capital model schema accepts one `[[robustness]]` row with quoted fields
+`method = "wasserstein_1"`, `radius = "n/d"`, `metric_basis` and `radius_basis`.
+Every ordered state pair, including every diagonal, has a `[[transport_distance]]` row with
+`from`, `to` and `value = "n/d"`. Radius and distances are exact nonnegative fractions.
+Unknown/duplicate declarations, orphan distances, incomplete or foreign pairs, nonzero diagonals,
+nonpositive off-diagonal costs, asymmetry and triangle violations refuse. Exact source bytes and all
+geometry locators remain bound. The existing CLI capital-program command reaches this path unchanged.
+
 ## 5. Guards & Typed Refusals
 
 Every candidate is admitted before enumeration, including candidates that cannot be selected. Missing or
@@ -454,6 +492,13 @@ Conflicting UU definitions refuse. Exact arithmetic overflow returns `FMINE-REF-
 dropped to obtain a plausible result. Input/source errors use the existing refusal catalog, including
 `FMINE-REF-505` for source SHA mismatch and `FMINE-REF-507` for altered typed Claims.
 
+- Static stress admits at most 64 original states and 2,097,152 objective/state-pair evaluations
+  (`2 * all_declared_subsets * state_count^2`), counting rejected subsets in the bound before hashing
+  or enumeration. The existing eight-candidate bound remains. Metric validation has its independently
+  bounded cubic check; no partial or truncated stress population is returned.
+- Both direct recourse evaluation and model dispatch refuse a stress declaration on adaptive policies with
+  `FMINE-REF-201`. This bounded diagnostic does not turn a static bundle ranking into a policy ranking.
+
 ## 6. Proof Obligations
 
 - Exhaustive output contains exactly `2^n` subsets; constraint rejection never edits the input population.
@@ -491,6 +536,15 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
   outgoing ownership edge. Mandatory service/floor failures remain after subsequent child receipts.
 - Entity floor failures and their phases remain on the realized policy state; another state's failure
   cannot reject an otherwise feasible adaptive continuation.
+
+- Stress support is canonicalized by state identifier before preparing the transport plan; every primary
+  payoff vector is aligned by named state after complete original admission.
+- Each certificate conserves every nominal source mass, has nonnegative arcs, stays within the radius and
+  satisfies its exact dual constraints with zero gap. Worst-case mean negates the signed-loss objective.
+- Radius zero restores each nominal expected objective and the nominal expected-value winner set.
+  Metric/radius changes can expose ties, and rejected bundles cannot contaminate the stress regret benchmark.
+- Existing nominal choices, risk outcomes and bootstrap resamples remain unchanged by enabling stress;
+  the declared design and both diagnostic results still affect the final identity.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 
@@ -597,6 +651,12 @@ CLI/library JSON/Markdown parity tests accompany the independent oracle.
 This bounded slice does not claim full GATE-CAP-01/03/04 scale or historical evidence. Selection stability
 is explicit and optional; no gate claiming its presence on every capital card is closed here.
 
+The static stress slice has independent two-state exhaustive transport controls, exact primal/dual witness
+checks, radius-zero and saturation cases, distinct mean/regret winners, ties, post-risk regret recomputation,
+whole-bundle NAV/share, source binding, permutation invariance, empty and negative-survivor populations,
+work-limit refusal and bootstrap coexistence tests. It does not close BD-229, claim an empirical stress
+radius, provide robust-CVaR feasibility or establish a production-scale portfolio gate.
+
 ## 9. Lifted Code & Foundation Dependencies
 
 No new external dependencies. Reuses the exact units/rational arithmetic, strict registry TOML parser,
@@ -613,5 +673,6 @@ reference-class fitting, inferred JV dilution penalties or loan agreements,
 blended or simultaneous optimization objectives, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Conditional selection frequency requires
-the explicit bootstrap declaration; absent declarations remain unavailable. Wasserstein robustness and
-empirical model-uncertainty calibration are not supplied. Broad BD-229 and production-scale gates remain open.
+the explicit bootstrap declaration; absent declarations remain unavailable. Conditional static Wasserstein
+comparisons require the explicit geometry and radius declaration. Adaptive-policy stress, stressed tail-risk
+feasibility and empirical model-uncertainty calibration are not supplied. Broad BD-229 and production-scale gates remain open.
