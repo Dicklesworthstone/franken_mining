@@ -5,6 +5,7 @@
 use fmine_core::det;
 
 pub mod coverage;
+pub mod cusum;
 
 /// Why a [`BettingEProcess`] or [`ScoreBettingEProcess`] refused (bd-a482). Nothing is clamped into range.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -287,7 +287,19 @@ variances 1e20 and 1e-20 in either coordinate order.
   may reject. This is not an undercoverage-only or "at least p" test. Callers must freeze the policy and
   order before outcomes and justify the conditional assumption at their chosen support. A marginal
   probability, effective sample size or correlation range is not that justification. This kernel neither
-  creates a calibration claim nor establishes BD-051's control-mine gate, CUSUM or investigation workflow.
+  creates a calibration claim nor establishes BD-051's control-mine gate or investigation workflow.
+- **`eproc::cusum::{TwoSidedCusum, CusumSnapshot, CusumError, MAX_OBSERVATIONS}`** (DESIGN, BD-051).
+  `new(reference_value, threshold)` requires explicit finite positive k/h; `observe(z)` updates
+  `upper = max(0, upper + z - k)` and `lower = max(0, lower - z - k)` from zero. `snapshot()` retains
+  both sums, running maxima and first directional crossings at `sum >= h`; `first_crossing()` returns
+  the earliest crossing and `alarmed()` stays true after recovery. No head start or automatic rearm is
+  supplied. Each update is O(1), with a 1,000,000-observation bound. Nonfinite input, arithmetic overflow
+  or exceeding the bound refuses without changing either direction. Independent integer suffix-sum
+  controls verify the recurrence at every prefix; exact threshold and recovery controls retain alarms.
+  The caller owns standardization, support, order and reference/tuning evidence. This diagnostic is
+  not an e-process and makes no inferred ARL, false-alarm or calibration claim. The two standardized
+  recurrences follow [NIST Dataplot](https://itl.nist.gov/div898/software/dataplot/refman1/auxillar/cusum.htm);
+  the inclusive operational threshold is explicit. Arithmetic is `DeterministicPerIsa`.
 - **`voi::{VoiProblem { state_probs, payoffs }, VoiExperiment { likelihood, cost }, ValidatedVoiProblem, VoiAnalysis, VoiSignalPolicy, VoiSummary, VoiError, PROBABILITY_MASS_TOLERANCE}`**.
   - `VoiProblem`: `validate() -> Result<ValidatedVoiProblem, VoiError>`, `compute_evpi() -> Result<(best_action, prior_ev, evpi), VoiError>`, `compute_evsi(likelihood, cost) -> Result<VoiSummary, VoiError>`, `evaluate(experiment) -> Result<VoiAnalysis, VoiError>` and `estimate_evsi_mc(likelihood, cost, n_samples, key) -> Result<McEvsi, VoiError>`.
   - `ValidatedVoiProblem` borrows the problem immutably and checks it once for many experiments: `evaluate(experiment)` and `estimate_evsi_mc(experiment, n_samples, key)`.

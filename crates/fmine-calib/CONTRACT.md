@@ -222,6 +222,25 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   pure, with failed freezes/assessments leaving authority times, sealed cuts and caches unchanged. Arithmetic
   uses finite log evidence and is `DeterministicPerIsa`; exponentiated displays may be absent when they cannot
   represent a finite positive value. The numerical kernel caps monitoring at 1,000,000 observations.
+- DESIGN (BD-051): `AssessmentPolicy.cusum_monitor` optionally freezes a two-sided Gaussian residual
+  change diagnostic. `CusumMonitorPolicy` requires positive finite `reference_value` k and `threshold` h,
+  explicit support, reference assumptions, tuning basis and a complete prospective member order.
+  Each first-published residual is standardized with that member's frozen mean and standard deviation.
+  Page's recurrences are `upper = max(0, upper + z - k)` and `lower = max(0, lower - z - k)`;
+  reaching h records the first directional crossing. Later recovery cannot erase directional maxima or
+  first crossings; no automatic reset, rearming or retraining occurs. Only Gaussian members are admitted.
+  Coverage monitoring and finite-domain CRPS may coexist; event-log policies require a different cohort.
+- DESIGN: `Assessment.cusum_monitor` retains original source/event evidence, the per-member reference
+  mean/scale, residual and snapshot, the first unresolved blocker and deferred counts. It consumes only
+  the contiguous first-published prefix at the same bitemporal cut, even under latest-as-of scoring.
+  An alarm can suppress an otherwise positive `Calibrated` label but cannot itself establish bias,
+  overconfidence, a false-alarm probability, average run length or a calibration verdict. The declared
+  tuning basis is not verification of KILL-PLUMB-6. The control-mine and investigation workflow remain open.
+  CUSUM uses `COH1`/v6 and `ASM1`/v5; both bind the previous optional policy layout and all new evidence.
+  Omitting CUSUM preserves every prior frame. Invalid freezes and failed numerical assessments leave
+  authority times and caches unchanged. Direct controls in `ledger::cusum::tests` cover standardization,
+  ordered missingness, restatements, aggregate recovery, metadata/coverage/CRPS composition, identity and
+  transactional numerical refusal. Arithmetic is `DeterministicPerIsa`, not an exact certificate.
 - `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs,
   non-positive std_dev, alpha outside (0, 1), inverted intervals and unrepresentable results refuse; nothing
   is clamped, BD-048/bd-8wrk). Opposite-sign Gaussian endpoints are scaled before an overflowing subtraction;

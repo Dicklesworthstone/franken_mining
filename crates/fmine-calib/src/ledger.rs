@@ -23,9 +23,11 @@ use crate::{
 
 pub mod binding;
 pub mod coverage;
+pub mod cusum;
 pub mod diagnostics;
 pub mod segments;
 pub use coverage::{CoverageMonitorAssessment, CoverageMonitorPolicy, CoverageObservation};
+pub use cusum::{CusumMonitorAssessment, CusumMonitorPolicy, CusumObservation};
 pub use segments::{
     DescriptiveSummary, ForecastMetadata, ForecastSegment, SegmentAssessment, SegmentedAssessment,
 };
@@ -212,6 +214,8 @@ pub struct AssessmentPolicy {
     pub gaussian_crps_bounds: bool,
     /// Optional exact conditional coverage test. Its support and sequence are frozen before outcomes.
     pub coverage_monitor: Option<CoverageMonitorPolicy>,
+    /// Optional prospectively tuned Gaussian residual change diagnostic; no implied false-alarm bound.
+    pub cusum_monitor: Option<CusumMonitorPolicy>,
     /// Optional event log-loss floor in `(0, 0.5)`, frozen before outcomes. Bernoulli cohorts only.
     pub event_log_floor: Option<f64>,
 }
@@ -225,6 +229,7 @@ impl Default for AssessmentPolicy {
             outcome_bounds: None,
             gaussian_crps_bounds: false,
             coverage_monitor: None,
+            cusum_monitor: None,
             event_log_floor: None,
         }
     }
@@ -260,11 +265,19 @@ impl AssessmentPolicy {
         if let Some(monitor) = &self.coverage_monitor {
             monitor.validate(self.alpha)?;
         }
+        if let Some(monitor) = &self.cusum_monitor {
+            monitor.validate()?;
+        }
         if let Some(floor) = self.event_log_floor {
             bernoulli_log_score(0.5, true, floor).map_err(score_refusal)?;
             if self.coverage_monitor.is_some() {
                 return Err(domain(
                     "event log scoring and continuous interval monitoring need separate cohorts",
+                ));
+            }
+            if self.cusum_monitor.is_some() {
+                return Err(domain(
+                    "event log scoring and Gaussian residual monitoring need separate cohorts",
                 ));
             }
         }
@@ -298,6 +311,10 @@ impl AssessmentPolicy {
         // DESIGN: only the opt-in v3 frame binds this floor; v1/v2 policy bytes stay unchanged.
         if let Some(floor) = self.event_log_floor {
             floats(enc, &[floor]);
+        }
+        // DESIGN: only the opt-in COH1/v6 frame appends CUSUM; all older policy bytes stay unchanged.
+        if let Some(monitor) = &self.cusum_monitor {
+            monitor.encode(enc);
         }
     }
 }
@@ -537,6 +554,8 @@ pub struct Assessment {
     pub summary: AssessmentSummary,
     /// Evidence from original publications in the frozen sequence, independently of `selector`.
     pub coverage_monitor: Option<CoverageMonitorAssessment>,
+    /// Original Gaussian residuals in the predeclared order, independently of `selector`.
+    pub cusum_monitor: Option<CusumMonitorAssessment>,
     pub digest: Digest32,
 }
 
@@ -710,6 +729,9 @@ impl ForecastLedger {
         if let Some(monitor) = &spec.policy.coverage_monitor {
             monitor.validate_members(&spec.members)?;
         }
+        if let Some(monitor) = &spec.policy.cusum_monitor {
+            monitor.validate_members(&spec.members)?;
+        }
         if self.cohort_names.contains_key(&spec.name) {
             return Err(frozen("cohort name already frozen; create a new cohort"));
         }
@@ -751,12 +773,22 @@ impl ForecastLedger {
         } else {
             1
         };
-        let version = if has_metadata { 5 } else { policy_version };
+        let version = if spec.policy.cusum_monitor.is_some() {
+            6
+        } else if has_metadata {
+            5
+        } else {
+            policy_version
+        };
         let mut enc = Encoder::new_frame(*b"COH1", version);
         enc.put_str(&spec.name);
         enc.put_i64(spec.frozen_at_ns);
         enc.put_str(&spec.resolution_rule);
-        if has_metadata {
+        if spec.policy.cusum_monitor.is_some() {
+            // v6 binds metadata presence and the complete prior policy layout before its new extension.
+            enc.put_u8(u8::from(has_metadata));
+            enc.put_u8(policy_version as u8);
+        } else if has_metadata {
             // The older envelope version distinguished policy layouts; v5 must retain that discriminator.
             enc.put_u8(policy_version as u8);
         }
@@ -822,6 +854,9 @@ impl ForecastLedger {
                 .map_err(score_refusal)?;
             if spec.policy.coverage_monitor.is_some() {
                 coverage::monitor_interval(&rec.payload, spec.policy.alpha)?;
+            }
+            if spec.policy.cusum_monitor.is_some() {
+                cusum::gaussian_reference(&rec.payload)?;
             }
             rec.encode(&mut enc);
             if has_metadata && let Some(metadata) = &rec.metadata {
@@ -1071,12 +1106,24 @@ impl ForecastLedger {
                     coverage::assess(policy, frozen.spec.policy.alpha, &records, &originals)
                 })
                 .transpose()?;
-            // DESIGN: a persistent rejection of the declared conditional null precludes a positive
-            // calibration label. The two-sided test cannot by itself classify overconfidence or bias.
+            let cusum_monitor = frozen
+                .spec
+                .policy
+                .cusum_monitor
+                .as_ref()
+                .map(|policy| {
+                    let originals =
+                        self.select_members(&records, as_of_ns, OutcomeSelector::FirstPublished);
+                    cusum::assess(policy, &records, &originals)
+                })
+                .transpose()?;
+            // DESIGN: persistent coverage or change alarms preclude a positive calibration label.
+            // Neither diagnostic by itself classifies overconfidence or bias; CUSUM is not an e-test.
             if summary.flag == CalibrationFlag::Calibrated
-                && coverage_monitor
+                && (coverage_monitor
                     .as_ref()
                     .is_some_and(|m| m.snapshot.alarmed())
+                    || cusum_monitor.as_ref().is_some_and(|m| m.snapshot.alarmed()))
             {
                 summary.flag = CalibrationFlag::Descriptive;
             }
@@ -1087,6 +1134,7 @@ impl ForecastLedger {
                 per_member,
                 summary,
                 coverage_monitor,
+                cusum_monitor,
                 digest: Digest32::default(),
             };
             assessment.digest = blake3_hash(&assessment.canonical_bytes());
@@ -1432,7 +1480,7 @@ impl Assessment {
     /// selected event hashes, all unresolved reasons, every score and the complete denominator.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        let version = if self.summary.gaussian_crps_bounds {
+        let prior_version = if self.summary.gaussian_crps_bounds {
             4
         } else if self.summary.event_log.is_some() {
             3
@@ -1441,7 +1489,15 @@ impl Assessment {
         } else {
             1
         };
+        let version = if self.cusum_monitor.is_some() {
+            5
+        } else {
+            prior_version
+        };
         let mut enc = Encoder::new_frame(*b"ASM1", version);
+        if self.cusum_monitor.is_some() {
+            enc.put_u8(prior_version as u8);
+        }
         enc.put_fixed(&self.cohort.0);
         enc.put_i64(self.as_of_ns);
         enc.put_u8(match self.selector {
@@ -1507,6 +1563,9 @@ impl Assessment {
             optional_float(&mut enc, log.score.observed_mean);
             floats(&mut enc, &[log.score.whole_cohort.lower]);
             optional_float(&mut enc, log.score.whole_cohort.upper);
+        }
+        if let Some(monitor) = &self.cusum_monitor {
+            monitor.encode(&mut enc);
         }
         enc.finish()
     }
