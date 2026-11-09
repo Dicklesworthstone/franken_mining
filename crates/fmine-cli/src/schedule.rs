@@ -14,9 +14,11 @@ use fmine_optimize::{
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub const USAGE: &str = "plan schedule --pcpsp <file.pcpsp> --prec <file.prec> [--candidate <file.sol>] [--decimals N] [--use-decimals N] [--share-decimals N] [--round] [--rounds N] [--bound-steps N] [--list-schedule]";
+mod guidance;
+
+pub const USAGE: &str = "plan schedule --pcpsp <file.pcpsp> --prec <file.prec> [--candidate <file.sol>] [--decimals N] [--use-decimals N] [--share-decimals N] [--round] [--rounds N] [--bound-steps N] [--lp-guidance [--lp-iterations N]] [--list-schedule]";
 const NO_CLAIM: &str = "A checked schedule and upper bound for the supplied deterministic PCPSP model and explicit integer discount factors. Values, capacities and precedence are declarations; sampling error and input calibration are not measured. A positive gap may reflect a loose bound. No reserve, execution authority or operational feasibility beyond the declared rows is established.";
-pub const ROBOT_DOCS_JSON: &str = r#"{"input":"MineLib PCPSP and PREC text; optional four-column block/destination/period/fraction solution; each input at most 1 GiB and SHA-256 bound","scales":"--decimals and --use-decimals default6; --share-decimals default9; all 0..9. Values refuse excess precision unless --round; resource uses round up and limits down; fractions never round","method":"TopoSort, period/destination local search, exact fractional polishing of initial and improved whole schedules using bounded pricing directions, exact candidate check, and a global Lagrangian upper bound replayed from its prices. Fractional polishing preserves mining periods and is a heuristic, not a destination-LP optimum. Whole-block candidates can warm-start search; split candidates retain their exact fractions","work":"--rounds 0..1000 default20; --bound-steps 1..4096 default64; fractional pricing at most256 columns and1024 master steps per period/seed","discount":"period0 factor2^40; each subsequent factor=floor(previous*rate_scale/(rate_scale+rate)); factors emitted","output":"Exact rational discounted values and bound gap; model rounding counts, resource uses, candidate infeasibility witnesses, certificate prices; --list-schedule emits canonical MineLib solution text","scope":"Only upper resource limits and no general side constraints; signed blend coefficients accepted. Structural candidate errors refuse; numerical infeasibility is reported and never admitted as an incumbent. No tolerance or claimed external bound is trusted","example":"tests/planning/fractional.pcpsp"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"input":"MineLib PCPSP and PREC text; optional four-column block/destination/period/fraction solution; each input at most 1 GiB and SHA-256 bound","scales":"--decimals and --use-decimals default6; --share-decimals default9; all 0..9. Values refuse excess precision unless --round; resource uses round up and limits down; fractions never round","method":"TopoSort, period/destination local search, exact fractional polishing of initial and improved whole schedules using bounded pricing directions, exact candidate check, and a global Lagrangian upper bound replayed from its prices. Fractional polishing preserves mining periods and is a heuristic, not a destination-LP optimum. Whole-block candidates can warm-start search; split candidates retain their exact fractions","lp_guidance":"Opt-in --lp-guidance solves the relaxation with PDLP, fixed tolerance1e-6 and one worker. --lp-iterations1..1000000 default100000 requires --lp-guidance. Six threshold/release starts are searched and fractionally polished; duplicate starts/seeds are reused. Only a strict exact improvement replaces the baseline or external split. Iteration-limit shares are admitted as guidance after finite[0,1] checks; row feasibility and the LP objective are never trusted. Status optimal describes the LP stopping rule, not plan optimality. An empty LP scope skips the solver. Numerical infeasibility refuses because the empty schedule is feasible","work":"--rounds0..1000 default20; --bound-steps1..4096 default64; fractional pricing at most256 columns and1024 master steps per period/seed. LP guidance adds at most6 whole searches and12 fractional passes, with preallocation limits1000000 columns/full-model block-period cells,2000000 rows and8000000 sparse entries","discount":"period0 factor2^40; each subsequent factor=floor(previous*rate_scale/(rate_scale+rate)); factors emitted","output":"Exact rational discounted values and bound gap; model rounding counts, resource uses, candidate infeasibility witnesses, certificate prices; --list-schedule emits canonical MineLib solution text. With guidance, lp_guidance reports termination, iterations, dimensions, start counts and best exact guided value; selected.origin identifies the winning path. The numerical certificate remains the full-model integer Lagrangian replay","scope":"Only upper resource limits and no general side constraints; signed blend coefficients accepted. Structural candidate errors refuse; numerical infeasibility is reported and never admitted as an incumbent. No tolerance or claimed external bound is trusted","example":"tests/planning/fractional.pcpsp"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -28,6 +30,7 @@ pub struct Command {
     pub options: planning::Options,
     pub round: bool,
     pub list_schedule: bool,
+    pub lp_iterations: Option<usize>,
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -52,10 +55,12 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 | "--bound-steps"
                 | "--round"
                 | "--list-schedule"
+                | "--lp-guidance"
+                | "--lp-iterations"
         ) {
             return Err(format!("plan schedule: unsupported option {flag}; {USAGE}"));
         }
-        let value = if matches!(flag, "--round" | "--list-schedule") {
+        let value = if matches!(flag, "--round" | "--list-schedule" | "--lp-guidance") {
             "true"
         } else {
             i += 1;
@@ -83,6 +88,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             .map(PathBuf::from)
             .ok_or_else(|| format!("plan schedule requires {flag}"))
     };
+    if fields.contains_key("--lp-iterations") && !fields.contains_key("--lp-guidance") {
+        return Err("plan schedule: --lp-iterations requires --lp-guidance".into());
+    }
     Ok(Command {
         pcpsp: path("--pcpsp")?,
         prec: path("--prec")?,
@@ -96,6 +104,17 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         },
         round: fields.contains_key("--round"),
         list_schedule: fields.contains_key("--list-schedule"),
+        lp_iterations: fields
+            .contains_key("--lp-guidance")
+            .then(|| {
+                count(
+                    "--lp-iterations",
+                    guidance::DEFAULT_ITERATIONS,
+                    1,
+                    guidance::MAX_ITERATIONS,
+                )
+            })
+            .transpose()?,
     })
 }
 
@@ -175,7 +194,20 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                 ))
             })
             .transpose()?;
-        let plan = planning::solve(&model, command.options, outside.as_ref().map(|(s, _)| s))?;
+        let guided = command
+            .lp_iterations
+            .map(|iterations| guidance::solve(&model, command.decimals, iterations))
+            .transpose()?;
+        let external_schedule = outside.as_ref().map(|(s, _)| s);
+        let plan = match &guided {
+            Some(g) => planning::solve_with_guidance(
+                &model,
+                command.options,
+                external_schedule,
+                &g.solution,
+            )?,
+            None => planning::solve(&model, command.options, external_schedule)?,
+        };
         let denominator = 10_i128.pow(command.decimals)
             * i128::from(DISCOUNT_SCALE)
             * i128::from(plan.schedule.scale());
@@ -191,8 +223,12 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         let solution = command
             .list_schedule
             .then(|| candidate::write_solution(&plan.schedule));
+        let (lp_json, lp_markdown) = guided.as_ref().zip(plan.guidance.as_ref()).map_or_else(
+            || (String::new(), String::new()),
+            |(g, s)| (g.json(s, denominator), g.markdown(s)),
+        );
         let payload = format!(
-            "{{\"schema\":\"fmine.plan-schedule.v1\",\"model\":{{\"format\":\"minelib_pcpsp\",\"name\":\"{}\",\"pcpsp\":{},\"prec\":{},\"blocks\":{},\"periods\":{},\"destinations\":{},\"resources\":{}}},\"value_decimals\":{},\"use_decimals\":{},\"share_decimals\":{},\"rounding\":{{\"values\":{},\"uses_up\":{},\"limits_down\":{}}},\"discount_factors\":{},\"discount_scale\":\"{DISCOUNT_SCALE}\",\"selected\":{{\"origin\":\"{}\",\"check\":{},\"discounted_value\":{},\"solution\":{}}},\"candidate\":{external},\"bound\":{{\"method\":\"lagrangian_full_model\",\"verified\":true,\"value\":{},\"prices\":{},\"steps\":{},\"gap\":{}}},\"search\":{{\"cycles\":{},\"round_limit\":{},\"bound_step_limit\":{}}}}}",
+            "{{\"schema\":\"fmine.plan-schedule.v1\",\"model\":{{\"format\":\"minelib_pcpsp\",\"name\":\"{}\",\"pcpsp\":{},\"prec\":{},\"blocks\":{},\"periods\":{},\"destinations\":{},\"resources\":{}}},\"value_decimals\":{},\"use_decimals\":{},\"share_decimals\":{},\"rounding\":{{\"values\":{},\"uses_up\":{},\"limits_down\":{}}},\"discount_factors\":{},\"discount_scale\":\"{DISCOUNT_SCALE}\",\"selected\":{{\"origin\":\"{}\",\"check\":{},\"discounted_value\":{},\"solution\":{}}},\"candidate\":{external},\"bound\":{{\"method\":\"lagrangian_full_model\",\"verified\":true,\"value\":{},\"prices\":{},\"steps\":{},\"gap\":{}}},\"search\":{{\"cycles\":{},\"round_limit\":{},\"bound_step_limit\":{}}}{lp_json}}}",
             escape_json(&model.name),
             worksheet_input::source_json(&source, text.len()),
             worksheet_input::source_json(&prec_source, prec.len()),
@@ -228,7 +264,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         }
         let candidate_line = plan.candidate.as_ref().map_or_else(String::new, |c| format!("\nExternal candidate: feasible={}, incomplete blocks={}, unmet requirements={}, exceeded limits={}.\n", c.checked.feasible(), c.checked.incomplete, c.checked.unmet, c.checked.over_limit.len()));
         envelope.rendered_markdown = Some(format!(
-            "# Production schedule: {}\n\nSelected `{}`: {} mined blocks. Feasibility and discounted value checked.\n\n| Discounted value | Verified upper bound | Gap to bound |\n|---|---|---|\n| {}/{} | {}/{} | {}/{} |\n\nValues are exact fractions in the input model's currency units.\n{candidate_line}\n{}\n\n{NO_CLAIM}\n",
+            "# Production schedule: {}\n\nSelected `{}`: {} mined blocks. Feasibility and discounted value checked.\n\n| Discounted value | Verified upper bound | Gap to bound |\n|---|---|---|\n| {}/{} | {}/{} | {}/{} |\n\nValues are exact fractions in the input model's currency units.\n{candidate_line}{lp_markdown}\n{}\n\n{NO_CLAIM}\n",
             crate::guidance::text(&model.name),
             plan.origin,
             plan.checked.mined,

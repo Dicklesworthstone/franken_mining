@@ -200,7 +200,80 @@ def automatic_fractional():
     assert p["selected"]["origin"] == "fractional_candidate"
 
 
+def lp_guidance():
+    def write_model(values, uses, requires, caps):
+        n, periods = len(values), len(caps[0])
+        text = f"NAME: lp-guidance\nTYPE: PCPSP\nNBLOCKS: {n}\nNPERIODS: {periods}\nNDESTINATIONS: 2\nNRESOURCE_SIDE_CONSTRAINTS: {len(caps)}\nNGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\nRESOURCE_CONSTRAINT_LIMITS:\n"
+        text += "".join(f"{r} {t} L {cap}\n" for r, row in enumerate(caps) for t, cap in enumerate(row))
+        text += "OBJECTIVE_FUNCTION:\n" + "".join(f"{b} {v[0]} {v[1]}\n" for b, v in enumerate(values))
+        text += "RESOURCE_CONSTRAINT_COEFFICIENTS:\n" + "".join(f"{b} {d} {r} {u}\n" for b in range(n) for d in range(2) for r, u in enumerate(uses[b][d])) + "EOF\n"
+        (ROOT / "model.pcpsp").write_text(text)
+        (ROOT / "model.prec").write_text("".join(f"{b} {len(req)}" + "".join(f" {q}" for q in req) + "\n" for b, req in enumerate(requires)))
+
+    values, uses, requires, caps = [[10, 10], [9, 9], [9, 9]], [[[10], [10]], [[5], [5]], [[5], [5]]], [[], [], []], [[10]]
+    write_model(values, uses, requires, caps)
+    baseline = command()
+    assert "lp_guidance" not in baseline["payload"]
+    assert fraction(verify(baseline, values, uses, requires, caps)["selected"]["discounted_value"]) == 10
+    guided = command(["--lp-guidance"])
+    p = verify(guided, values, uses, requires, caps, Q(18))
+    assert fraction(p["selected"]["discounted_value"]) == 18
+    assert p["selected"]["origin"] == "lp_guided"
+    g = p["lp_guidance"]
+    assert g["status"] == "optimal" and 0 < g["iterations"] <= g["iteration_limit"] == 100000
+    assert g["columns"] == 9 and g["rows"] == 4 and g["scoped_blocks"] == 3
+    assert g["starts"] == 6 and 1 <= g["searched_starts"] <= 6 and 1 <= g["polished_seeds"] <= 12
+    assert fraction(g["best_guided_value"]) == 18
+    assert g["lp_objective_used_as_certificate"] is False
+    assert "lp_objective" not in g and p["bound"]["method"] == "lagrangian_full_model"
+    assert command(["--lp-guidance"]) == guided and command() == baseline
+
+    # One PDHG step cannot solve this instance. Its tentative point remains
+    # advisory and cannot displace the established feasible lower bound.
+    short = verify(command(["--lp-guidance", "--lp-iterations", "1"]), values, uses, requires, caps, Q(10))
+    assert short["lp_guidance"]["status"] == "iteration_limit"
+    assert short["lp_guidance"]["iterations"] == 1
+    markdown = subprocess.run([str(BINARY), "plan", "schedule", "--pcpsp", "model.pcpsp", "--prec", "model.prec", "--lp-guidance", "--format", "markdown", "--workspace", str(ROOT)], capture_output=True, text=True, check=False)
+    assert markdown.returncode == 0 and "LP guidance:" in markdown.stdout
+    assert "advisory" in markdown.stdout and "Lagrangian replay" in markdown.stdout
+
+    for options in [["--lp-iterations", "1"], ["--lp-guidance", "--lp-guidance"], ["--lp-guidance", "--lp-iterations", "0"], ["--lp-guidance", "--lp-iterations", "1000001"], ["--lp-guidance", "--lp-iterations"], ["--lp-guidance", "--lp-iterations", "2", "--lp-iterations", "3"]]:
+        assert command(options, success=False)["status"] == "usage_error"
+
+    # Negative-value material with a signed blending credit must stay in scope.
+    values, uses, requires, caps = [[-2, -2], [10, 10]], [[[-1], [-1]], [[1], [1]]], [[], []], [[0]]
+    write_model(values, uses, requires, caps)
+    p = verify(command(["--lp-guidance"]), values, uses, requires, caps, Q(8))
+    assert p["lp_guidance"]["all_blocks_for_signed_resources"] and p["lp_guidance"]["scoped_blocks"] == 2
+    assert p["selected"]["check"]["mined_blocks"] == 2
+
+    # A complete feasible external mining set on a precedence cycle beats every
+    # Kahn start; its exact half-mill split survives LP guidance unchanged.
+    values, uses, requires, caps = [[0, 10], [0, 0]], [[[0], [2]], [[0], [0]]], [[1], [0]], [[1]]
+    write_model(values, uses, requires, caps)
+    supplied = "0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n"
+    (ROOT / "candidate.sol").write_text(supplied)
+    p = verify(command(["--lp-guidance", "--candidate", "candidate.sol"]), values, uses, requires, caps, Q(5))
+    assert p["selected"]["origin"] == "external_candidate" and p["selected"]["solution"] == supplied
+    assert fraction(p["lp_guidance"]["best_guided_value"]) == 0
+
+    # No profitable closed set is a successful empty result, without invoking PDLP.
+    values, uses, requires, caps = [[-2, -1]], [[[0], [0]]], [[]], [[1]]
+    write_model(values, uses, requires, caps)
+    p = verify(command(["--lp-guidance"]), values, uses, requires, caps, Q(0))
+    assert p["lp_guidance"]["status"] == "empty_scope" and p["lp_guidance"]["iterations"] == 0
+
+    # Small source text with an excessive time expansion is rejected before allocation.
+    text = "NAME: oversized\nTYPE: PCPSP\nNBLOCKS: 1\nNPERIODS: 65536\nNDESTINATIONS: 16\nNRESOURCE_SIDE_CONSTRAINTS: 0\nNGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\nRESOURCE_CONSTRAINT_LIMITS:\nOBJECTIVE_FUNCTION:\n0 " + " ".join(["1"] * 16) + "\nRESOURCE_CONSTRAINT_COEFFICIENTS:\nEOF\n"
+    (ROOT / "model.pcpsp").write_text(text)
+    (ROOT / "model.prec").write_text("0 0\n")
+    refused = command(["--lp-guidance"], success=False)
+    assert refused["payload"] is None and refused["refusal"]["code"] == "FMINE-REF-207"
+    assert "work budget exceeded" in refused["refusal"]["what"]
+
+
 known_split()
 automatic_fractional()
 generated_models()
-print("PASS: external and automatic split known answers, exact decimal-grid floors, negative seed retention, and 16 enumerated models with independently replayed global bounds")
+lp_guidance()
+print("PASS: exact split oracles, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")

@@ -7,6 +7,8 @@ use super::*;
 use crate::pitflow::minelib::Rounding;
 use crate::toposort::search::DISCOUNT_SCALE;
 
+mod guidance;
+
 fn model(
     values: &[[i64; 2]],
     uses: &[[i64; 2]],

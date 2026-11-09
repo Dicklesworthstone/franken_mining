@@ -85,6 +85,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     are retained, with genuine external splits preferred on equal value. No external claimed bound, calibration, sampling confidence, reserve
     status or execution permission is inferred. `xtask/tests/plan_schedule.rs` invokes a Python Fraction
     oracle against the actual binary, including independent exhaustive primal and dual-price checks.
+    Optional `--lp-guidance` solves the PCPSP relaxation in this upper layer with `fmine-lp` PDLP,
+    then calls `planning::solve_with_guidance` for six threshold/release starts. Explicit iterations
+    default to 100,000 and are bounded by 1,000,000; tolerance is 1e-6 with one worker. Preallocation
+    limits bound columns/full-model block-period cells, rows and sparse entries. Finite `[0,1]` shares
+    are advisory even at the iteration limit; no LP objective or tolerance becomes an exact certificate.
+    The baseline and better or equal external splits survive unless a checked strict gain is found.
+    Optional JSON/Markdown diagnostics retain solver termination and start/polishing counts; no-guidance
+    output remains unchanged. The Fraction oracle checks actual LP-guided value 10→18, limit handling,
+    signed-resource scope, external dominance, deterministic reruns and preallocation refusals.
   - DESIGN (BD-176/287): `plant recovery --input <worksheet.toml>` reads the bounded, byte-bound
     `fmine.plant-recovery.v1` worksheet and delegates to `fmine-plant::cards::RecoveryModel`.
     One versioned test-work formula, exact input requirements, ordered operational factors, a correction,

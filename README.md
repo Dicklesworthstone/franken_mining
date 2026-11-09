@@ -465,6 +465,27 @@ each mined block must total exactly one, and every predecessor must be completel
 or an earlier period. Whole-block candidates can seed further search. A better feasible split candidate
 is retained exactly; the solver does not silently round its destinations.
 
+LP guidance can generate additional mining sets before local search and fractional polishing:
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/lp_guided.pcpsp --prec tests/planning/lp_guided.prec \
+  --lp-guidance --list-schedule --format markdown
+```
+
+In this synthetic capacity trap, the default greedy start chooses a block worth **10** that uses all
+capacity. LP-guided starts find two blocks worth **18** together. The relaxation supplies six bounded
+threshold/release starts, reusing duplicates. Every retained schedule passes exact feasibility and
+value checks, and only a strict improvement replaces the existing baseline or external split.
+The final upper bound still comes from the full-model integer Lagrangian replay.
+
+`--lp-iterations` requires `--lp-guidance`, defaults to 100,000 and accepts 1–1,000,000. The PDLP solve
+uses one worker and tolerance `1e-6`. An iteration-limited point may guide search only after finite
+`[0,1]` share admission; its row residuals or floating objective never certify a schedule. JSON records
+termination, iterations, problem size, generated/searched starts, polished seeds and exact guided value;
+the selected schedule records its origin. Explicit size limits refuse excessive LP expansion before
+allocation. Omitting `--lp-guidance` retains the existing command behavior and output shape.
+
 Fractional allocations can also be generated without an outside candidate:
 
 ```bash

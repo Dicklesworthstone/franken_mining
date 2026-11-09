@@ -57,6 +57,7 @@ dependencies = [
  "fmine-decide",
  "fmine-evidence",
  "fmine-io",
+ "fmine-lp",
  "fmine-metrics",
  "fmine-numerics",
  "fmine-optimize",

@@ -37,6 +37,18 @@ pub struct CandidateAssessment {
     pub discounted_numerator: i128,
 }
 
+/// Work and the best exact value obtained from advisory LP shares. Shares need
+/// not satisfy the relaxation's rows: only independently checked schedules enter
+/// the comparison. The best value includes the empty plan and uses the selected
+/// plan's `share_scale * DISCOUNT_SCALE` denominator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuidanceSearch {
+    pub starts: usize,
+    pub searched: usize,
+    pub polished: usize,
+    pub best_numerator: i128,
+}
+
 /// Positive capability: a feasible schedule, its independently recomputed value, and a global upper bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
@@ -47,6 +59,7 @@ pub struct Plan {
     pub factors: Vec<i64>,
     pub heuristic: PcpspImprovement,
     pub candidate: Option<CandidateAssessment>,
+    pub guidance: Option<GuidanceSearch>,
     pub bound: Lagrangian,
     /// `(bound * share_scale) - discounted_numerator`; same denominator as the selected value.
     pub gap_numerator: i128,
@@ -76,6 +89,39 @@ pub fn solve(
     model: &PcpspModel,
     options: Options,
     outside: Option<&candidate::SplitSchedule>,
+) -> Result<Plan, Refusal> {
+    solve_inner(model, options, outside, None)
+}
+
+/// Add six deterministic starts from advisory LP shares to [`solve`]'s existing
+/// baseline and external candidate. Each distinct start is searched, and both
+/// its original and improved mining sets are fractionally polished. Repeated
+/// seeds are priced once. At most six additional whole searches and twelve
+/// fractional passes run, under the same work settings as the baseline.
+///
+/// A guided candidate replaces the baseline or external candidate only on a
+/// strict exact improvement. An equal-value external split remains unchanged.
+/// No LP objective, row tolerance or dual bound is admitted: the selected plan
+/// passes the same independent exact check and full-model Lagrangian replay.
+///
+/// # Errors
+/// Those of [`solve`] and [`lp::starts`], including mismatched model dimensions.
+/// The caller admits finite shares in `[0, 1]` through [`lp::Solution::new`];
+/// iteration-limited or row-infeasible LP points are valid advisory inputs.
+pub fn solve_with_guidance(
+    model: &PcpspModel,
+    options: Options,
+    outside: Option<&candidate::SplitSchedule>,
+    solution: &lp::Solution,
+) -> Result<Plan, Refusal> {
+    solve_inner(model, options, outside, Some(solution))
+}
+
+fn solve_inner(
+    model: &PcpspModel,
+    options: Options,
+    outside: Option<&candidate::SplitSchedule>,
+    solution: Option<&lp::Solution>,
 ) -> Result<Plan, Refusal> {
     if options.rounds > 1_000
         || !(1..=4_096).contains(&options.bound_steps)
@@ -202,8 +248,8 @@ pub fn solve(
                 // (for example a same-period precedence cycle). Preserve it
                 // for fractional routing before whole local search drops any
                 // temporarily loss-making material, and price each seed once.
-                let same_outside = improved.schedule == periods
-                    && improved.destination == outside_destinations;
+                let same_outside =
+                    improved.schedule == periods && improved.destination == outside_destinations;
                 for (seed, chosen, source) in [
                     (&periods, &outside_destinations, "fractional_candidate"),
                     (
@@ -233,6 +279,19 @@ pub fn solve(
             discounted_numerator: external_value,
         });
     }
+    let guidance = if let Some(solution) = solution {
+        let (best, report) = guided(model, options, &factors, solution)?;
+        if let Some((schedule, numerator, source)) = best
+            && numerator > value
+        {
+            selected = schedule;
+            value = numerator;
+            origin = source;
+        }
+        Some(report)
+    } else {
+        None
+    };
     let checked = candidate::check(model, &selected)?;
     if !checked.feasible() || checked.discounted_value(&factors)? != value {
         return Err(refuse(
@@ -272,9 +331,91 @@ pub fn solve(
         factors,
         heuristic,
         candidate: assessment,
+        guidance,
         bound,
         gap_numerator: gap,
     })
+}
+
+type GuidedCandidate = (candidate::SplitSchedule, i128, &'static str);
+
+fn guided(
+    model: &PcpspModel,
+    options: Options,
+    factors: &[i64],
+    solution: &lp::Solution,
+) -> Result<(Option<GuidedCandidate>, GuidanceSearch), Refusal> {
+    let starts = lp::starts(model, solution)?;
+    let mut report = GuidanceSearch {
+        starts: starts.len(),
+        searched: 0,
+        polished: 0,
+        best_numerator: 0,
+    };
+    let mut best = None;
+    let mut polished = Vec::new();
+    for (i, start) in starts.iter().enumerate() {
+        if starts[..i]
+            .iter()
+            .any(|s| s.schedule == start.schedule && s.destination == start.destination)
+        {
+            continue;
+        }
+        let improved = improve(
+            model,
+            &start.schedule,
+            &start.destination,
+            factors,
+            options.rounds,
+        )?;
+        report.searched += 1;
+        let value = improved
+            .after
+            .checked_mul(10_i128.pow(options.share_decimals))
+            .ok_or_else(overflow)?;
+        if value > report.best_numerator {
+            best = Some((
+                candidate::from_whole(
+                    model,
+                    &improved.schedule,
+                    &improved.destination,
+                    options.share_decimals,
+                )?,
+                value,
+                "lp_guided",
+            ));
+            report.best_numerator = value;
+        }
+        for (periods, destinations, origin) in [
+            (&start.schedule, &start.destination, "fractional_lp_guided"),
+            (
+                &improved.schedule,
+                &improved.destination,
+                "fractional_improved_lp_guided",
+            ),
+        ] {
+            if polished
+                .iter()
+                .any(|(p, d)| p == periods && d == destinations)
+            {
+                continue;
+            }
+            let refined = fractional::polish(
+                model,
+                periods,
+                destinations,
+                factors,
+                options.share_decimals,
+            )?;
+            polished.push((periods.clone(), destinations.clone()));
+            report.polished += 1;
+            if refined.after > report.best_numerator {
+                report.best_numerator = refined.after;
+                best = Some((refined.schedule, refined.after, origin));
+            }
+        }
+    }
+    Ok((best, report))
 }
 
 #[cfg(test)]
