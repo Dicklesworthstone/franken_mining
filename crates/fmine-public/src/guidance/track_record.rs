@@ -18,7 +18,9 @@ use fmine_registry::sources::is_date;
 use fmine_registry::transcriptions::{Accepted, Token, parse_token};
 
 use crate::key::{self, KeyedCell, PeriodKind, PublicValue, Scope};
-use crate::sources::{IssuerProfile, SourceKind, load_issuer_profile};
+use crate::sources::{
+    IssuerProfile, PublicationCut, RegisteredSource, SourceKind, load_issuer_profile,
+};
 use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_prefixes};
 use crate::{js, mine_ledger::rat_text};
 
@@ -71,7 +73,7 @@ pub struct TrackRecordReport {
     pub issuer: String,
     pub synthetic: bool,
     pub as_of: String,
-    pub workbooks_available_by: String,
+    pub availability: PublicationCut,
     pub rows: Vec<TrackRecordRow>,
     pub summaries: Vec<TrackRecordSummary>,
     /// Unknown metric keys remain explicitly listed; they are outside this version's score population.
@@ -221,12 +223,12 @@ fn stated_guidance(row: &Accepted) -> Result<Guidance> {
     })
 }
 
-fn score_source(
-    profile: &IssuerProfile,
+fn checked_source<'a>(
+    profile: &'a IssuerProfile,
     row: &Accepted,
     metric: &str,
     source: &KeyedCell,
-) -> Result<(GuidanceScore, PrintedOutcome)> {
+) -> Result<&'a RegisteredSource> {
     source.claim.check_id()?;
     if source.claim.value_tag() != key::canonical_value_tag(&source.key, &source.claim.value) {
         return Err(refuse(
@@ -282,23 +284,41 @@ fn score_source(
         ));
     }
     let digest = super::sha_bytes(&source.key.reporting_vintage.file_sha256)?;
+    let unbound = || {
+        refuse(
+            RefusalCode::DigestMismatch505,
+            "outcome lacks its registered source binding",
+        )
+    };
+    let registered = profile
+        .sources
+        .iter()
+        .find(|s| {
+            s.kind == SourceKind::MineStats
+                && s.quarter == source.key.reporting_vintage.release
+                && s.sha256_hex == source.key.reporting_vintage.file_sha256
+                && source.locator.starts_with(&format!("{}:", s.file_name))
+        })
+        .ok_or_else(unbound)?;
     if !source.claim.anchors.iter().any(|a| {
         a.artifact_sha256 == digest
             && Path::new(&a.artifact_path)
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|file| source.locator == format!("{file}:{}", a.locator))
-    }) || !profile.sources.iter().any(|s| {
-        s.kind == SourceKind::MineStats
-            && s.quarter == source.key.reporting_vintage.release
-            && s.sha256_hex == source.key.reporting_vintage.file_sha256
-            && source.locator.starts_with(&format!("{}:", s.file_name))
     }) {
-        return Err(refuse(
-            RefusalCode::DigestMismatch505,
-            "outcome lacks its registered source binding",
-        ));
+        return Err(unbound());
     }
+    Ok(registered)
+}
+
+fn score_source(
+    profile: &IssuerProfile,
+    row: &Accepted,
+    metric: &str,
+    source: &KeyedCell,
+) -> Result<(GuidanceScore, PrintedOutcome)> {
+    checked_source(profile, row, metric, source)?;
     let PublicValue::Number {
         displayed: Ok(text),
         under_status: None,
@@ -342,6 +362,7 @@ fn outcome(
     cells: &[KeyedCell],
     latest: bool,
     as_of: &str,
+    availability: &PublicationCut,
 ) -> OutcomeAssessment {
     let failure = |status, sources, error| OutcomeAssessment {
         status,
@@ -367,6 +388,8 @@ fn outcome(
                 && c.key.reporting_vintage.release >= original_release
                 && release_end(&c.key.reporting_vintage.release)
                     .is_some_and(|end| end.as_str() <= as_of)
+                && checked_source(profile, row, metric, c)
+                    .map_or(true, |s| availability.includes(&s.file_name))
         })
         .collect();
     let selected = if latest {
@@ -481,13 +504,7 @@ pub fn assess(
     site: Option<&str>,
     as_of: &str,
 ) -> Result<TrackRecordReport> {
-    if !is_date(as_of) {
-        return Err(refuse(
-            RefusalCode::UndeclaredUnitBasisOrTz107,
-            "as-of must be YYYY-MM-DD",
-        ));
-    }
-    let availability = super::available_by(profile, as_of)?;
+    let availability = profile.mine_stats_as_of(as_of)?;
     if !transcripts.agreement.is_complete_for_prefix("guidance_") {
         return Err(refuse(
             RefusalCode::NotObservable202,
@@ -527,8 +544,28 @@ pub fn assess(
                     format!("{}: guidance needs a full calendar year", a.locator),
                 )
             })?;
-        let mut first = outcome(profile, a, &site, metric, period.year, cells, false, as_of);
-        let mut latest = outcome(profile, a, &site, metric, period.year, cells, true, as_of);
+        let mut first = outcome(
+            profile,
+            a,
+            &site,
+            metric,
+            period.year,
+            cells,
+            false,
+            as_of,
+            &availability,
+        );
+        let mut latest = outcome(
+            profile,
+            a,
+            &site,
+            metric,
+            period.year,
+            cells,
+            true,
+            as_of,
+            &availability,
+        );
         if let Some((status, error)) = target_status(profile, &site, period.year) {
             for outcome in [&mut first, &mut latest] {
                 outcome.score = None;
@@ -663,7 +700,7 @@ pub fn assess(
         issuer: profile.issuer.clone(),
         synthetic: profile.issuer == crate::synthetic::SYNTHETIC_ISSUER,
         as_of: as_of.into(),
-        workbooks_available_by: availability,
+        availability,
         rows,
         summaries,
         unsupported,
@@ -681,8 +718,7 @@ pub fn run(
     as_of: &str,
 ) -> Result<TrackRecordReport> {
     let profile = load_issuer_profile(workspace, issuer)?;
-    super::available_by(&profile, as_of)?;
-    let cells = key::mine_stats::load_claims(&profile, workspace)?;
+    let (cells, _) = key::mine_stats::load_claims_as_of(&profile, workspace, as_of)?;
     let transcripts = load_transcription_prefixes(&profile, workspace, &["guidance_"], Some(as_of))?.ok_or_else(||
         refuse(RefusalCode::NoClaimInDomain201, format!("registries/transcriptions/{issuer}.toml is absent; register two independent readings of the guidance")))?;
     assess(&profile, &transcripts, &cells.claims, site, as_of)
@@ -770,7 +806,7 @@ impl TrackRecordReport {
             optional_rat(s.observed_hit_rate),interval(s.whole_cohort_hit_bounds),interval(s.rounding_aware_hit_bounds),interval(s.iid_reference_interval_90_exact),optional_rat(s.mean_z),interval(s.mean_z_rounding_interval),optional_rat(s.above_midpoint_share),js(if s.n_resolved==0{"unscored"}else{"descriptive"})) }).collect::<Vec<_>>().join(",");
         let unsupported=self.unsupported.iter().map(|a|format!("{{\"at\":{},\"sha256\":{},\"quantity\":{},\"reason\":\"unsupported guidance metric\"}}",js(&a.locator.to_string()),js(&a.doc_sha256),js(&a.quantity))).collect::<Vec<_>>().join(",");
         format!(
-            "\"schema\":\"fmine.guidance.track-record.as-of.v1\",\"issuer\":{},\"lane\":{},\"gate_eligible\":false,\"as_of\":{},\"workbooks_available_by\":{},\"population\":\"supported agreed guidance rows in the supplied registry; historical completeness unassessed\",\"guidance_selector\":\"earliest registered document per site, fiscal year, metric and basis; later vintages shown separately\",\"time_proof\":\"not supplied; source dates and conservative exact-byte availability are reported, no retrospective forecast registration\",\"rows\":[{rows}],\"summaries\":[{summaries}],\"unsupported_guidance\":[{unsupported}],\"warnings\":[\"Clopper-Pearson bounds are an IID Bernoulli reference for resolved printed-value hits only; they do not account for selective missingness or outcome rounding. Cross-site and year dependence is unmodelled. Effective sample size is not estimated.\",\"Mean-z bounds propagate printed rounding only, not sampling uncertainty or a confidence interval for bias.\",\"Missing original annual releases remain unresolved in the first-published denominator; later comparatives are separate assessments.\",\"Cost scores are unconditional in this base comparison. Separately reported price sensitivities sit alongside them; a miss does not identify controllable operating causes.\"],\"no_claim\":{}",
+            "\"schema\":\"fmine.guidance.track-record.as-of.v1\",\"issuer\":{},\"lane\":{},\"gate_eligible\":false,\"as_of\":{},\"workbooks_available_by\":{},\"source_availability\":{},\"population\":\"supported agreed guidance rows in the supplied registry; historical completeness unassessed\",\"guidance_selector\":\"earliest registered document per site, fiscal year, metric and basis; later vintages shown separately\",\"time_proof\":\"not supplied; declared publication or retrieval bounds are reported; no historical registry proof and no retrospective forecast registration\",\"rows\":[{rows}],\"summaries\":[{summaries}],\"unsupported_guidance\":[{unsupported}],\"warnings\":[\"Clopper-Pearson bounds are an IID Bernoulli reference for resolved printed-value hits only; they do not account for selective missingness or outcome rounding. Cross-site and year dependence is unmodelled. Effective sample size is not estimated.\",\"Mean-z bounds propagate printed rounding only, not sampling uncertainty or a confidence interval for bias.\",\"Missing original annual releases remain unresolved in the first-published denominator; later comparatives are separate assessments.\",\"Cost scores are unconditional in this base comparison. Separately reported price sensitivities sit alongside them; a miss does not identify controllable operating causes.\"],\"no_claim\":{}",
             js(&self.issuer),
             js(if self.synthetic {
                 "synthetic"
@@ -778,7 +814,11 @@ impl TrackRecordReport {
                 "public"
             }),
             js(&self.as_of),
-            js(&self.workbooks_available_by),
+            self.availability
+                .available_by
+                .as_deref()
+                .map_or_else(|| "null".into(), js),
+            crate::sources::availability_json(&self.availability.sources),
             js(NO_CLAIM)
         )
     }
@@ -794,7 +834,7 @@ impl TrackRecordReport {
     pub fn to_markdown(&self) -> String {
         let clean = |s: &str| s.replace('|', "\\|").replace(['\r', '\n'], " ");
         let mut out = format!(
-            "# Guidance track record — {}\n\nAs of {}. {}\n\nPopulation: supported agreed rows in the supplied registry; historical completeness unassessed. Workbook bytes available by {}. {}\n\n| Site | Year | Metric and basis | Guidance vintage | Guidance | Original outcome | Latest outcome |\n|---|---|---|---|---|---|---|\n",
+            "# Guidance track record — {}\n\nAs of {}. {}\n\nPopulation: supported agreed rows in the supplied registry; historical completeness unassessed. Declared workbook availability through {}; cited publication or retrieval fallback, without historical registry proof. {}\n\n| Site | Year | Metric and basis | Guidance vintage | Guidance | Original outcome | Latest outcome |\n|---|---|---|---|---|---|---|\n",
             clean(&self.issuer),
             self.as_of,
             if self.synthetic {
@@ -802,7 +842,10 @@ impl TrackRecordReport {
             } else {
                 "From public filings; no affiliation implied."
             },
-            self.workbooks_available_by,
+            self.availability
+                .available_by
+                .as_deref()
+                .unwrap_or("no eligible workbook"),
             NO_CLAIM
         );
         for r in &self.rows {
@@ -992,6 +1035,8 @@ pub fn synthetic() -> Result<TrackRecordReport> {
             )],
         );
         profile.sources.push(RegisteredSource {
+            published_at: None,
+            published_at_basis: None,
             file_name: file,
             kind: SourceKind::MineStats,
             quarter: release.into(),

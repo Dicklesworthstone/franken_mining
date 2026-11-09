@@ -54,6 +54,8 @@ fn fixture() -> (IssuerProfile, TranscriptionReport, Vec<KeyedCell>) {
     let cells = report.quarters[0].inputs.clone();
     let first = &cells[0];
     profile.sources = vec![RegisteredSource {
+        published_at: None,
+        published_at_basis: None,
         file_name: first.locator.split_once(':').expect("file:cell").0.into(),
         kind: SourceKind::MineStats,
         quarter: first.key.reporting_vintage.release.clone(),

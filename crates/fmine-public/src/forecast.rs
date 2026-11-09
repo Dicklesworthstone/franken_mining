@@ -14,7 +14,7 @@ use fmine_calib::record::{
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_registry::sources::parse_sources_registry;
+use fmine_registry::sources::{day_end, parse_sources_registry, retrieval_upper};
 
 use crate::key::{
     self, KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesOwnershipBasis,
@@ -103,39 +103,6 @@ fn read_registry(path: &Path) -> Result<Vec<u8>> {
         })?;
     utf8(&bytes)?;
     Ok(bytes)
-}
-
-fn day_end(text: &str) -> Result<i64> {
-    record::parse_date(text)
-        .and_then(|d| d.checked_mul(86_400)?.checked_add(86_399))
-        .ok_or_else(|| invalid(format!("invalid availability date {text:?}")))
-}
-
-/// The registry also permits same-day retrieval intervals such as `dateT03:35:00Z/03:36:24Z`.
-fn retrieval_upper(text: &str) -> Result<i64> {
-    let mut previous = None;
-    let mut day = None;
-    for part in text.split('/') {
-        let full = if part.len() == 9 && part.ends_with('Z') {
-            format!(
-                "{}T{part}",
-                day.as_deref()
-                    .ok_or_else(|| invalid("retrieval interval lacks its date"))?
-            )
-        } else {
-            part.to_string()
-        };
-        let time = match record::parse_utc(&full) {
-            Some(t) => t,
-            None => day_end(&full)?,
-        };
-        if previous.is_some_and(|p| time < p) {
-            return Err(invalid("retrieval interval is reversed"));
-        }
-        day = full.get(..10).map(str::to_string);
-        previous = Some(time);
-    }
-    previous.ok_or_else(|| invalid("the source registry lacks retrieval evidence"))
 }
 
 fn after_quarter(q: Quarter) -> Result<i64> {

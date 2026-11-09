@@ -913,6 +913,8 @@ fn synthetic_evidence() -> Result<(IssuerProfile, TranscriptionReport, Vec<Keyed
     profile
         .sources
         .push(fmine_public::sources::RegisteredSource {
+            published_at: None,
+            published_at_basis: None,
             file_name: "production.txt".into(),
             kind: SourceKind::MineStats,
             quarter: "2030Q4".into(),

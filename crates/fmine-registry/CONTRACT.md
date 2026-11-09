@@ -118,6 +118,13 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   together. The date must be a calendar date and the basis must cite a source after `FACT: ` or
   `INFERENCE: `. Both remain absent for older registries; neither quarter labels nor retrieval dates
   manufacture a publication date. These fields support dated public-record checks and do not authorize disclosure.
+- DESIGN (BD-341/BD-342): `sources::{RegisteredSource, SourceKind, PublicationCut}` preserves typed workbook
+  identity and publication citations across public projections. `publication_cut` admits a cited date on or
+  before the requested calendar cut, using strict retrieval evidence only for undated workbooks. Exact UTC,
+  date-only retrieval and monotone slash intervals (including same-day shortened endpoints) share one parser.
+  Every source keeps its actual basis and eligibility; no eligible source yields a null aggregate bound.
+  This does not establish historical registry existence. Forecast candidates continue to require the later
+  of verified retrieval and publication-day end; the historical descriptive cut does not relax that rule.
 - `sources::{DocumentRow, DOCUMENT_KINDS, PUBLISHED_AT_BASES}`, `SourcesRegistry::documents`, `sources::is_date`
   (bd-plx1): optional `[[document]]` rows, one PDF each: a bare `file` and a sha256 unique across workbooks and
   documents, optional `dir` (a plain relative path; default `corpus_dir`), `kind` (`mda`, `aif`,

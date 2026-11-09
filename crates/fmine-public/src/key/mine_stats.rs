@@ -130,6 +130,25 @@ pub fn load_claims(
     Ok(build_claims(profile, &sources, &reads))
 }
 
+/// Only eligible Mine Stats bytes are read; an empty historical cut still has an empty projection.
+pub fn load_claims_as_of(
+    profile: &IssuerProfile,
+    root: &std::path::Path,
+    as_of: &str,
+) -> Result<(KeyedClaims, crate::sources::PublicationCut), fmine_evidence::Refusal> {
+    let cut = profile.mine_stats_as_of(as_of)?;
+    let claims = if cut.available_by.is_none() {
+        build_claims(profile, &[], &[])
+    } else {
+        let mut selected = profile.clone();
+        selected
+            .sources
+            .retain(|s| s.kind == SourceKind::MineStats && cut.includes(&s.file_name));
+        load_claims(&selected, root)?
+    };
+    Ok((claims, cut))
+}
+
 #[must_use]
 pub const fn value_kind(v: &PublicValue) -> &'static str {
     match v {

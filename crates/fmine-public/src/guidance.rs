@@ -35,7 +35,7 @@ use fmine_units::UnitsError;
 
 use crate::js;
 use crate::key::{KeyedCell, OwnershipBasis, PublicValue, Scope};
-use crate::sources::{IssuerProfile, load_issuer_profile};
+use crate::sources::load_issuer_profile;
 use crate::transcribe::{
     CheckedDocument, TranscriptionReport, load_transcription_quantities_as_of,
 };
@@ -189,30 +189,6 @@ fn request(through: &str, as_of: &str) -> Result<(u16, u8)> {
         ));
     }
     Ok((year, quarter * 3))
-}
-
-fn available_by(profile: &IssuerProfile, as_of: &str) -> Result<String> {
-    let date = profile
-        .retrieved_utc
-        .split('/')
-        .filter_map(|s| s.get(..10))
-        .filter(|s| is_date(s))
-        .max()
-        .ok_or_else(|| {
-            refuse(
-                RefusalCode::AssayLookahead108,
-                "workbook registry has no dated availability evidence",
-            )
-        })?;
-    if date > as_of {
-        return Err(refuse(
-            RefusalCode::AssayLookahead108,
-            format!(
-                "workbook publication dates are unregistered; verified retrieval {date} does not support an as-of cut of {as_of}"
-            ),
-        ));
-    }
-    Ok(date.to_string())
 }
 
 fn site_key(subject: &str) -> String {
@@ -603,7 +579,7 @@ fn assemble(
     site: &str,
     through: &str,
     as_of: &str,
-    availability: &str,
+    availability: &crate::sources::PublicationCut,
     transcripts: &TranscriptionReport,
     cells: &[KeyedCell],
     technical_source: Result<Option<&TranscriptionReport>>,
@@ -747,13 +723,17 @@ fn assemble(
         .collect::<Vec<_>>()
         .join(",");
     let body = format!(
-        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"availability_basis\":\"verified registry retrieval; workbook publication dates unregistered\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":\"ASSUMPTION: repeat preceding-year FY-minus-YTD sold ounces, using that year's corresponding registered releases; not a forecast\",\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_rate\":{},\"remaining_aisc_spend\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"technical\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical joint tests and technical production comparisons retain separate tiers and assumptions; no technical input supplies a joint production-cost witness.\"],\"no_claim\":{}",
+        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"source_availability\":{},\"availability_basis\":\"declared publication where cited; retrieval upper bound otherwise; no proof of historical registry existence\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":\"ASSUMPTION: repeat preceding-year FY-minus-YTD sold ounces, using that year's corresponding registered releases; not a forecast\",\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_rate\":{},\"remaining_aisc_spend\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"technical\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical joint tests and technical production comparisons retain separate tiers and assumptions; no technical input supplies a joint production-cost witness.\"],\"no_claim\":{}",
         js(if synthetic { "synthetic" } else { "public" }),
         js(issuer),
         js(site),
         js(through),
         js(as_of),
-        js(availability),
+        availability
+            .available_by
+            .as_deref()
+            .map_or_else(|| "null".into(), js),
+        crate::sources::availability_json(&availability.sources),
         js(&doc.published_at),
         js(&doc.published_at_basis),
         js(history::tier(&historical.comparison)),
@@ -874,7 +854,7 @@ pub fn run_public(
         ));
     }
     let profile = load_issuer_profile(root, issuer)?.through(through)?;
-    let availability = available_by(&profile, as_of)?;
+    let (claims, availability) = crate::key::mine_stats::load_claims_as_of(&profile, root, as_of)?;
     let transcripts = load_transcription_quantities_as_of(&profile, root, as_of, &guidance_quantities(site), None)?.ok_or_else(|| refuse(RefusalCode::NoClaimInDomain201, format!("registries/transcriptions/{issuer}.toml is absent; two readers must transcribe the guidance with registered document hashes and publication dates")))?;
     let technical = load_transcription_quantities_as_of(
         &profile,
@@ -883,7 +863,6 @@ pub fn run_public(
         &capacity::quantities(site),
         None,
     );
-    let claims = crate::key::mine_stats::load_claims(&profile, root)?;
     assemble(
         issuer,
         site,
@@ -906,7 +885,10 @@ pub fn run_synthetic() -> Result<GuidanceCompletionReport> {
         "example-mine",
         "2030Q2",
         "2030-07-31",
-        "2030-07-31",
+        &crate::sources::PublicationCut {
+            available_by: Some("2030-07-31".into()),
+            sources: Vec::new(),
+        },
         &transcripts,
         &cells,
         Ok(Some(&technical)),

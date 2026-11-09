@@ -108,7 +108,7 @@ pub fn assess_snapshot(
         site,
         through: profile.through.as_deref(),
         as_of: "9999-12-31",
-        available_by: "9999-12-31",
+        available_by: Some("9999-12-31"),
         transcriptions,
         claims,
         statuses: &profile.subject_statuses,
@@ -134,7 +134,7 @@ pub struct TrackRecordInput<'a> {
     pub site: Option<&'a str>,
     pub through: Option<&'a str>,
     pub as_of: &'a str,
-    pub available_by: &'a str,
+    pub available_by: Option<&'a str>,
     pub transcriptions: &'a TranscriptionReport,
     pub claims: &'a [KeyedCell],
     pub statuses: &'a [SubjectStatus],
@@ -571,8 +571,9 @@ pub fn assess(input: TrackRecordInput<'_>) -> Result<TrackRecordReport> {
         ));
     }
     if !is_date(input.as_of)
-        || !is_date(input.available_by)
-        || input.available_by > input.as_of
+        || input.available_by.map_or(!input.claims.is_empty(), |date| {
+            !is_date(date) || date > input.as_of
+        })
         || input.through.is_some_and(|q| !is_quarter(q))
     {
         return Err(refusal(
@@ -890,7 +891,7 @@ pub fn assess(input: TrackRecordInput<'_>) -> Result<TrackRecordReport> {
         source_claims_digest: fmine_public::key::claims_digest(input.claims),
         body: String::new(),
     };
-    report.body = report_body(&report, input.available_by);
+    report.body = report_body(&report, input.available_by, &[]);
     report.digest = blake3_hash(report.body.as_bytes());
     Ok(report)
 }
@@ -909,36 +910,12 @@ pub fn run(
             "use the explicit synthetic lane",
         ));
     }
-    if !is_date(as_of) {
-        return Err(refusal(
-            RefusalCode::AssayLookahead108,
-            "as-of must be YYYY-MM-DD",
-        ));
-    }
     let mut profile = fmine_public::sources::load_issuer_profile(root, issuer)?;
     if let Some(q) = through {
         profile = profile.through(q)?;
     }
-    let available_by = profile
-        .retrieved_utc
-        .split('/')
-        .filter_map(|s| s.get(..10))
-        .filter(|s| is_date(s))
-        .max()
-        .ok_or_else(|| {
-            refusal(
-                RefusalCode::AssayLookahead108,
-                "workbook availability evidence is absent",
-            )
-        })?
-        .to_string();
-    if available_by.as_str() > as_of {
-        return Err(refusal(
-            RefusalCode::AssayLookahead108,
-            format!("verified retrieval {available_by} cannot support earlier as-of {as_of}"),
-        ));
-    }
-    let claims = fmine_public::key::mine_stats::load_claims(&profile, root)?;
+    let (claims, availability) =
+        fmine_public::key::mine_stats::load_claims_as_of(&profile, root, as_of)?;
     let transcripts = load_guidance_transcription_report(&profile,root,Some(as_of))?.ok_or_else(|| refusal(RefusalCode::NoClaimInDomain201,format!("registries/transcriptions/{issuer}.toml is absent; supply two independent readings of dated guidance")))?;
     if !transcripts.agreement.is_complete_for_prefix("guidance_") {
         return Err(refusal(
@@ -951,14 +928,18 @@ pub fn run(
         site,
         through,
         as_of,
-        available_by: &available_by,
+        available_by: availability.available_by.as_deref(),
         transcriptions: &transcripts,
         claims: &claims.claims,
         statuses: &profile.subject_statuses,
         synthetic: false,
     })?;
     report.source_refusals = claims.refusals;
-    report.body = report_body(&report, &available_by);
+    report.body = report_body(
+        &report,
+        availability.available_by.as_deref(),
+        &availability.sources,
+    );
     report.digest = blake3_hash(report.body.as_bytes());
     Ok(report)
 }
@@ -1135,7 +1116,11 @@ impl TrackRecordRow {
     }
 }
 
-fn report_body(r: &TrackRecordReport, available_by: &str) -> String {
+fn report_body(
+    r: &TrackRecordReport,
+    available_by: Option<&str>,
+    sources: &[fmine_registry::sources::SourceAvailability],
+) -> String {
     let source_refusals = r
         .source_refusals
         .iter()
@@ -1173,13 +1158,14 @@ fn report_body(r: &TrackRecordReport, available_by: &str) -> String {
         .join(",");
     let unsupported = r.unsupported_guidance.iter().map(|a|format!("{{\"at\":{},\"sha256\":{},\"quantity\":{},\"token\":{},\"reason\":\"unsupported_metric\"}}",js(&a.locator.to_string()),js(&a.doc_sha256),js(&a.quantity),js(&a.token))).collect::<Vec<_>>().join(",");
     format!(
-        "\"schema\":\"fmine.guidance.track_record.v1\",\"rules_version\":{},\"issuer\":{},\"as_of\":{},\"through\":{},\"lane\":{},\"gate_eligible\":false,\"available_by\":{},\"availability_basis\":\"verified workbook retrieval; guidance before annual close; workbook publication dates unregistered\",\"data_gate\":{{\"fired\":{},\"resolved_years\":{},\"minimum_sites_per_year\":{},\"delivery_scope\":{}}},\"rows\":[{}],\"summaries\":[{}],\"pending_transcriptions\":[{}],\"unsupported_guidance\":[{}],\"warnings\":[\"Every registered guidance vintage is retained; summary groups never pool revisions.\",\"Later comparative scores do not fill missing original outcomes or enter the first-published summary.\",\"Effective sample size and bias confidence intervals are not estimated; shared shocks may invalidate binomial intervals.\",\"This report does not freeze an authoritative cohort or externally timestamp any forecast.\"],\"limitations\":{}",
+        "\"schema\":\"fmine.guidance.track_record.v1\",\"rules_version\":{},\"issuer\":{},\"as_of\":{},\"through\":{},\"lane\":{},\"gate_eligible\":false,\"available_by\":{},\"source_availability\":{},\"availability_basis\":\"declared source availability; supplied projections rely on caller admission; no proof of historical registry existence\",\"data_gate\":{{\"fired\":{},\"resolved_years\":{},\"minimum_sites_per_year\":{},\"delivery_scope\":{}}},\"rows\":[{}],\"summaries\":[{}],\"pending_transcriptions\":[{}],\"unsupported_guidance\":[{}],\"warnings\":[\"Every registered guidance vintage is retained; summary groups never pool revisions.\",\"Later comparative scores do not fill missing original outcomes or enter the first-published summary.\",\"Effective sample size and bias confidence intervals are not estimated; shared shocks may invalidate binomial intervals.\",\"This report does not freeze an authoritative cohort or externally timestamp any forecast.\"],\"limitations\":{}",
         version_and_sources,
         js(&r.issuer),
         js(&r.as_of),
         r.through.as_deref().map_or_else(|| "null".into(), js),
         js(if r.synthetic { "synthetic" } else { "public" }),
-        js(available_by),
+        available_by.map_or_else(|| "null".into(), js),
+        fmine_public::sources::availability_json(sources),
         r.gate_fired,
         r.resolved_years,
         r.minimum_sites_per_year,
@@ -1209,7 +1195,7 @@ pub fn synthetic_as_of(as_of: &str) -> Result<TrackRecordReport> {
         site: None,
         through: None,
         as_of,
-        available_by: "2030-01-15",
+        available_by: Some("2030-01-15"),
         transcriptions: &transcripts,
         claims: &cells,
         statuses: &[],

@@ -14,48 +14,13 @@ use fmine_registry::sources::{
     BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
 };
 pub use fmine_registry::sources::{
-    DocumentRow, HtmlSourceRow, MineStatsLabelAlias, PrintedShareCorrection, RegionMemberRow,
-    RestatementNoteRow, RestatementScopeRow, SubtotalMemberRow,
+    DocumentRow, HtmlSourceRow, MineStatsLabelAlias, PrintedShareCorrection, PublicationCut,
+    RegionMemberRow, RegisteredSource, RestatementNoteRow, RestatementScopeRow, SourceAvailability,
+    SourceKind, SubtotalMemberRow,
 };
 
 use crate::aisc::{ExplanationBasis, IdentityFamily};
 use crate::key::{StatusKind, SubjectStatus};
-
-/// What a registered workbook is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum SourceKind {
-    /// Quarterly "Mine Stats" operating workbook.
-    MineStats,
-    /// Quarterly reconciliation of cost of sales to total cash costs and AISC, per site and region.
-    AiscReconciliation,
-}
-
-impl SourceKind {
-    pub const ALL: [Self; 2] = [Self::MineStats, Self::AiscReconciliation];
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::MineStats => "mine_stats",
-            Self::AiscReconciliation => "aisc_reconciliation",
-        }
-    }
-}
-
-/// One registered public workbook.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RegisteredSource {
-    pub file_name: String,
-    pub kind: SourceKind,
-    /// Reporting quarter of the release, `YYYYQn`.
-    pub quarter: String,
-    pub url: String,
-    /// `"W1 table"` (FACT), `"W1 naming rule"` (INFERENCE) or `"fetched and verified YYYY-MM-DD"` (FACT: the
-    /// URL served the registered bytes on that date).
-    pub url_basis: String,
-    pub bytes: u64,
-    pub sha256_hex: String,
-}
 
 /// A registered explanation for one identity instance whose printed numbers close only when a component
 /// published elsewhere is added (plan §21.6 state (ii)). `basis` says whether an issuer note states the rule.
@@ -149,30 +114,17 @@ impl IssuerProfile {
     /// Converts a checked registry into a profile. Fails only if the registry's kind or family names drift
     /// from this crate's enums (a test pins the two lists together).
     pub fn from_registry(reg: SourcesRegistry) -> Result<Self, String> {
-        let kind = |name: &str| {
-            SourceKind::ALL
-                .into_iter()
-                .find(|k| k.as_str() == name)
-                .ok_or_else(|| format!("source kind {name:?} has no SourceKind"))
-        };
         let family = |name: &str| {
             IdentityFamily::ALL
                 .into_iter()
                 .find(|f| f.as_str() == name)
                 .ok_or_else(|| format!("family {name:?} has no IdentityFamily"))
         };
-        let mut sources = Vec::with_capacity(reg.sources.len());
-        for s in reg.sources {
-            sources.push(RegisteredSource {
-                kind: kind(&s.kind)?,
-                file_name: s.file,
-                quarter: s.quarter,
-                url: s.url,
-                url_basis: s.url_basis,
-                bytes: s.bytes,
-                sha256_hex: s.sha256,
-            });
-        }
+        let sources = reg
+            .sources
+            .into_iter()
+            .map(RegisteredSource::try_from)
+            .collect::<Result<_, _>>()?;
         let mut reconstructions = Vec::with_capacity(reg.reconstructions.len());
         for r in reg.reconstructions {
             reconstructions.push(RegisteredReconstruction {
@@ -268,6 +220,25 @@ impl IssuerProfile {
             .collect()
     }
 
+    /// Declared publication availability, with retrieval as the fallback for undated workbooks.
+    /// No historical registry existence or independently authenticated timestamp is asserted.
+    pub fn mine_stats_as_of(&self, as_of: &str) -> Result<PublicationCut, Refusal> {
+        fmine_registry::sources::publication_cut(
+            self.sources
+                .iter()
+                .filter(|s| s.kind == SourceKind::MineStats)
+                .map(|s| {
+                    (
+                        s.file_name.as_str(),
+                        s.published_at.as_deref(),
+                        s.published_at_basis.as_deref(),
+                    )
+                }),
+            &self.retrieved_utc,
+            as_of,
+        )
+    }
+
     /// Keeps only the sources whose quarter is at or before `bound` (`YYYYQn`, already validated), so a later
     /// registry reproduces an earlier run. Refuses when no source remains (`FMINE-REF-201`: no registered
     /// workbook covers the requested periods).
@@ -294,6 +265,12 @@ impl IssuerProfile {
         self.through = Some(bound.to_string());
         Ok(self)
     }
+}
+
+/// Exact source-by-source declarations, including excluded future evidence, for dated public reports.
+#[must_use]
+pub fn availability_json(sources: &[SourceAvailability]) -> String {
+    format!("[{}]", sources.iter().map(|s| format!("{{\"file\":{},\"available_by\":{},\"basis_kind\":{},\"basis\":{},\"eligible\":{}}}", crate::js(&s.file), crate::js(&s.available_by), crate::js(s.basis_kind), crate::js(&s.basis), s.eligible)).collect::<Vec<_>>().join(","))
 }
 
 /// Converts a checked `[[subject_status]]` row: a disposal covers the months after its closing date; any other

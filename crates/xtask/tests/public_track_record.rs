@@ -43,6 +43,8 @@ fn fixture() -> (IssuerProfile, TranscriptionReport, Vec<KeyedCell>) {
             sources.insert(
                 name.clone(),
                 RegisteredSource {
+                    published_at: None,
+                    published_at_basis: None,
                     file_name: name,
                     kind: SourceKind::MineStats,
                     quarter: c.key.reporting_vintage.release.clone(),
@@ -86,6 +88,116 @@ fn fixture() -> (IssuerProfile, TranscriptionReport, Vec<KeyedCell>) {
 
 fn run(p: &IssuerProfile, t: &TranscriptionReport, c: &[KeyedCell]) -> TrackRecordReport {
     track_record::assess(p, t, c, None, CUT).expect("evidence selection")
+}
+
+#[test]
+fn declared_publication_cut_preserves_originals_without_future_comparative_leakage() {
+    let (mut profile, transcripts, cells) = fixture();
+    profile.retrieved_utc = "2033-01-01T00:00:00Z".into();
+    for source in &mut profile.sources {
+        source.published_at = Some(
+            if source.quarter == "2030Q4" {
+                "2031-01-15"
+            } else {
+                "2032-03-01"
+            }
+            .into(),
+        );
+        source.published_at_basis = Some("FACT: invented source release".into());
+    }
+    let report = run(&profile, &transcripts, &cells);
+    assert_eq!(
+        report.rows[0].latest_registered.status,
+        "original_annual_release"
+    );
+    assert_eq!(
+        report.rows[0].first_published.score,
+        report.rows[0].latest_registered.score
+    );
+    assert!(report.rows[0].first_published.score.is_some());
+    assert_eq!(report.summaries[0].scores.n_members, 2);
+    assert_eq!(
+        report.availability.available_by.as_deref(),
+        Some("2031-01-15")
+    );
+    assert!(report.to_json().contains("registered_publication"));
+    assert!(report.to_json().contains("\"eligible\":false"));
+    let mut reordered = profile.clone();
+    reordered.sources.reverse();
+    assert_eq!(
+        report.to_json(),
+        run(&reordered, &transcripts, &cells).to_json()
+    );
+    profile.sources[0].published_at_basis = Some("FACT: another invented citation".into());
+    assert_ne!(report.digest, run(&profile, &transcripts, &cells).digest);
+}
+
+#[test]
+fn future_registration_does_not_conceal_forged_or_unregistered_outcome_claims() {
+    let (mut profile, transcripts, cells) = fixture();
+    for source in &mut profile.sources {
+        source.published_at = Some(
+            if source.quarter == "2030Q4" {
+                "2031-01-15"
+            } else {
+                "2032-03-01"
+            }
+            .into(),
+        );
+        source.published_at_basis = Some("FACT: invented source release".into());
+    }
+    let later = cells
+        .iter()
+        .position(|c| c.key.reporting_vintage.release != "2030Q4")
+        .unwrap();
+    let mut altered = cells.clone();
+    altered[later].key.unit = "kt".into();
+    let report = run(&profile, &transcripts, &altered);
+    assert_eq!(report.rows[0].latest_registered.status, "unusable_outcome");
+    assert_eq!(
+        report.rows[0]
+            .latest_registered
+            .refusal
+            .as_ref()
+            .unwrap()
+            .code,
+        RefusalCode::FrozenRecordMutation507.as_str()
+    );
+    profile.sources.retain(|s| s.quarter == "2030Q4");
+    let report = run(&profile, &transcripts, &cells);
+    assert_eq!(report.rows[0].latest_registered.status, "unusable_outcome");
+    assert_eq!(
+        report.rows[0]
+            .latest_registered
+            .refusal
+            .as_ref()
+            .unwrap()
+            .code,
+        RefusalCode::DigestMismatch505.as_str()
+    );
+}
+
+#[test]
+fn undated_workbooks_use_retrieval_and_an_empty_cut_keeps_every_guidance_member() {
+    let (mut profile, transcripts, cells) = fixture();
+    profile.retrieved_utc = "2032-02-02T00:00:00Z".into();
+    let report = run(&profile, &transcripts, &cells);
+    assert!(report.availability.available_by.is_none());
+    assert_eq!(report.rows.len(), 2);
+    for summary in &report.summaries {
+        assert_eq!(summary.scores.n_members, 2);
+        assert_eq!(summary.scores.n_resolved, 0);
+        assert_eq!(summary.scores.n_unresolved, 2);
+    }
+    assert!(report.to_json().contains("\"workbooks_available_by\":null"));
+    assert!(report.to_json().contains("verified_retrieval_upper_bound"));
+    profile.retrieved_utc = format!("{CUT}T23:59:59Z");
+    assert!(
+        run(&profile, &transcripts, &cells).rows[0]
+            .latest_registered
+            .score
+            .is_some()
+    );
 }
 
 #[test]
@@ -755,6 +867,101 @@ fn registered_file_path_verifies_bytes_and_retains_placeholder_outcome() {
     .unwrap();
     assert_eq!(
         track_record::run(&root, "synthetic", None, "2031-02-02")
+            .unwrap_err()
+            .code,
+        RefusalCode::DigestMismatch505.as_str()
+    );
+}
+
+#[test]
+fn registered_historical_run_reads_only_eligible_mine_stats_and_keeps_an_empty_denominator() {
+    // Invented bytes use a separate test issuer to exercise the same positive registered path as a filing.
+    let root = workspace();
+    let mut registry = std::fs::read_to_string(root.join("registries/sources/synthetic.toml")).unwrap()
+        .replace("issuer = \"synthetic\"", "issuer = \"invented\"")
+        .replace("2031-02-01T00:00:00Z", "2033-01-01T00:00:00Z")
+        .replace("\n[[document]]", "\npublished_at = \"2031-01-15\"\npublished_at_basis = \"FACT: invented original release\"\n\n[[document]]");
+    for (file, kind, hash, publication) in [
+        ("Unrelated.xlsx", "aisc_reconciliation", "b", ""),
+        (
+            "Future.xlsx",
+            "mine_stats",
+            "c",
+            "published_at = \"2031-03-01\"\npublished_at_basis = \"FACT: invented future release\"\n",
+        ),
+    ] {
+        writeln!(registry, "\n[[source]]\nfile = \"{file}\"\nkind = \"{kind}\"\nquarter = \"2030Q4\"\npath = \"{file}\"\nurl_basis = \"W1 table\"\nbytes = 1\nsha256 = \"{}\"\n{publication}", hash.repeat(64)).unwrap();
+    }
+    std::fs::write(root.join("registries/sources/invented.toml"), registry).unwrap();
+    let readings = std::fs::read_to_string(root.join("registries/transcriptions/synthetic.toml"))
+        .unwrap()
+        .replace("issuer = \"synthetic\"", "issuer = \"invented\"");
+    std::fs::write(
+        root.join("registries/transcriptions/invented.toml"),
+        readings,
+    )
+    .unwrap();
+
+    let report = track_record::run(&root, "invented", None, "2031-01-31").unwrap();
+    assert_eq!(
+        report.rows[0].first_published.score.unwrap().z,
+        Some(Rat::new(3, 2).unwrap())
+    );
+    assert_eq!(report.summaries[0].scores.n_members, 2);
+    assert_eq!(report.summaries[0].scores.n_unresolved, 1);
+    assert_eq!(report.availability.sources.len(), 2); // The unrelated AISC workbook is outside this read.
+    assert_eq!(
+        report.availability.available_by.as_deref(),
+        Some("2031-01-15")
+    );
+    let cli =
+        fmine_cli::track_record_binding::run(&root, "invented", None, None, "2031-01-31").unwrap();
+    assert_eq!(cli.rows.len(), 2);
+    assert!(cli.rows[0].original.score.is_some());
+    assert!(cli.to_json().contains("FACT: invented original release"));
+    let args: Vec<String> = [
+        "track-record",
+        "--issuer",
+        "invented",
+        "--cohort-as-of",
+        "2031-01-31",
+        "--json",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let (rendered, status) = fmine_cli::run(&args, &root);
+    assert_eq!(status, 0, "{rendered}");
+    assert!(rendered.contains("\"source_availability\""));
+
+    std::fs::write(
+        root.join("corpus/Original.xlsx"),
+        b"altered invented fixture",
+    )
+    .unwrap();
+    let empty = track_record::run(&root, "invented", None, "2031-01-14").unwrap();
+    assert!(empty.availability.available_by.is_none());
+    assert_eq!(empty.summaries[0].scores.n_members, 2);
+    assert_eq!(empty.summaries[0].scores.n_unresolved, 2);
+    assert!(
+        empty
+            .rows
+            .iter()
+            .all(|r| r.first_published.sources.is_empty())
+    );
+    let cli =
+        fmine_cli::track_record_binding::run(&root, "invented", None, None, "2031-01-14").unwrap();
+    assert_eq!(cli.rows.len(), 2);
+    assert!(cli.rows.iter().all(|r| r.original.score.is_none()));
+    assert!(cli.to_json().contains("\"available_by\":null"));
+    assert_eq!(
+        track_record::run(&root, "invented", None, "2031-01-31")
+            .unwrap_err()
+            .code,
+        RefusalCode::DigestMismatch505.as_str()
+    );
+    assert_eq!(
+        fmine_cli::track_record_binding::run(&root, "invented", None, None, "2031-01-31")
             .unwrap_err()
             .code,
         RefusalCode::DigestMismatch505.as_str()

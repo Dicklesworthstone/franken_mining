@@ -47,6 +47,8 @@ mod tests {
         assert_eq!(read.values.len(), 1);
         let mut profile = fmine_public::synthetic::synthetic_profile();
         profile.sources.push(RegisteredSource {
+            published_at: None,
+            published_at_basis: None,
             file_name: "synthetic.xlsx".into(),
             kind: SourceKind::MineStats,
             quarter: "2030Q1".into(),

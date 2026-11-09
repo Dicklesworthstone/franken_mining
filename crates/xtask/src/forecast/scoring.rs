@@ -636,6 +636,8 @@ mod tests {
         let read = read_mine_stats(&workbook, release, None).unwrap();
         assert!(read.refusals.is_empty(), "{:?}", read.refusals);
         profile.sources.push(RegisteredSource {
+            published_at: None,
+            published_at_basis: None,
             file_name: file.into(),
             kind: SourceKind::MineStats,
             quarter: release.into(),
@@ -1150,6 +1152,8 @@ mod tests {
                 .is_empty()
         );
         d.profile.sources.push(RegisteredSource {
+            published_at: None,
+            published_at_basis: None,
             file_name: "missing_original_2030Q4.xlsx".into(),
             kind: SourceKind::MineStats,
             quarter: "2030Q4".into(),

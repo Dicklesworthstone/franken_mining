@@ -8,7 +8,10 @@ mod tests {
             "example-mine",
             "2030Q2",
             "2030-07-31",
-            "2030-07-31",
+            &crate::sources::PublicationCut {
+                available_by: Some("2030-07-31".into()),
+                sources: Vec::new(),
+            },
             t,
             cells,
             Ok(None),
@@ -148,10 +151,13 @@ mod tests {
         assert!(request("2030Q4", "2031-01-31").is_err());
         let mut profile = crate::synthetic::synthetic_profile();
         profile.retrieved_utc = "2030-07-31T00:00:00Z".into();
-        assert_eq!(
-            available_by(&profile, "2030-07-30").unwrap_err().code,
-            "FMINE-REF-108"
+        assert!(
+            profile
+                .mine_stats_as_of("2030-07-30")
+                .unwrap()
+                .available_by
+                .is_none()
         );
-        assert_eq!(available_by(&profile, "2030-07-31").unwrap(), "2030-07-31");
+        assert!(profile.mine_stats_as_of("2030-02-30").is_err());
     }
 }

@@ -243,8 +243,9 @@ The public lane of M0 (`fmine assure public`).
   Claims. Units, period, ownership and the issuer-reported per-sold-ounce AISC definition must agree. A pending
   row in an equally recent or later eligible document prevents silent fallback to an older agreed pair.
   Remaining sales explicitly assume the preceding year's same remaining-month sales, derived from its original
-  FY and YTD releases. Production is never substituted for sales. Workbook availability uses the verified
-  retrieval date conservatively because those registry rows have no publication timestamp.
+  FY and YTD releases. Production is never substituted for sales. Dated completion selects Mine Stats by
+  cited workbook publication date, falling back to the verified retrieval upper bound only for undated rows.
+  The cut precedes byte access; unrelated AISC inputs and positively future workbooks are not opened.
   `guidance::history` forms every complete contiguous original-vintage window of the remaining duration,
   including cross-year windows, strictly before the guidance year. A later comparative never fills an absent
   original release. Missing, unusable or incompatible windows are listed with their source refusal; same-season
@@ -288,8 +289,11 @@ The public lane of M0 (`fmine assure public`).
     without the original remains `comparative_only_original_missing`; it never fills the first-published
     denominator. Missing, unreadable, withheld, disposed, stale and incompatible outcomes remain unresolved,
     retaining every selected source. Guidance whose registered exact-byte availability is after the target
-    year cannot acquire a historical score. An explicit as-of cut and conservative workbook retrieval dates
-    prevent invented historical availability.
+    year cannot acquire a historical score. The explicit date-level cut uses each workbook's cited publication
+    date or, when absent, its retrieval upper bound. Reports bind the actual per-source basis and exclusions;
+    they do not prove historical registry existence. An empty eligible workbook projection preserves every
+    guidance member unresolved and reports a null workbook availability bound. Supplied forged or unregistered
+    future Claims remain unusable evidence; only authenticated source bindings can be excluded by the cut.
     Registered disposal or withholding overlapping any part of the target year also prevents scoring an
     unflagged annual stub. Disposal's closing month is recovered from the profile's first-full-month rule,
     including a December closure; the registered evidence remains in the refusal. Maintenance alone does

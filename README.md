@@ -1931,10 +1931,15 @@ cargo run -p fmine-cli -- track-record --synthetic --cohort-as-of 2032-12-31 --f
 ```
 
 The optional `--cohort-as-of` selects a dated projection through the same checked source binder. It uses registered
-document publication dates and conservative workbook-retrieval availability. The retrospective command above
-does not claim an information-availability date. Neither mode authenticates an external timestamp or registers
-a forecast. Units, ownership bases, canonical Claim identities, and metric definitions are checked in both.
-An unprinted ownership basis is never inferred to mean full ownership.
+document publication dates and each workbook's cited publication date. A workbook without a publication date
+uses the strict upper end of its registered retrieval interval as a fallback availability bound. Later
+workbooks are excluded before their files are opened, and unrelated AISC workbooks do not block Mine Stats
+outcomes. A cut with no eligible outcome workbook still retains the guidance cohort and its unresolved members.
+The report identifies the selected sources' availability evidence; a wholly unavailable workbook population
+has no invented availability date. The retrospective command above does not claim an information-availability
+date. Neither mode proves that today's registry existed at the historical cut, authenticates an external
+timestamp or registers a forecast. Units, ownership bases, canonical Claim identities and metric definitions
+are checked in both. An unprinted ownership basis is never inferred to mean full ownership.
 
 Dated summaries group sites by metric, annual period, canonical basis and guidance publication date. They retain every admitted
 member, including missing original outcomes. Later comparative appearances have separate scores and never fill
@@ -2913,8 +2918,10 @@ witness. Missing, altered, disputed or inapplicable optional technical evidence 
 result** while preserving the arithmetic requirements and historical comparison. Newer incomplete inputs
 cannot silently fall back to an older complete report. The synthetic command exercises the positive T2 path.
 
-The report includes the guidance vintage, as-of selection and all source hashes. Workbook availability uses its
-verified retrieval date conservatively where no publication date is registered. JSON preserves exact Claims,
+The report includes the guidance vintage, as-of selection and all source hashes. Each workbook uses its cited
+publication date, with the registered retrieval upper date as a fallback where publication is unstated. Later
+files are filtered before reading; missing eligible YTD inputs still prevent a completion calculation.
+JSON preserves exact Claims,
 source-quarter witnesses and certificates; Markdown presents requirements, comparison results and citations.
 Its content digest creates no forecast registration or ledger certificate, and neither comparison gives a
 probability or physical-impossibility conclusion. A real issuer's T2 result still needs applicable registered

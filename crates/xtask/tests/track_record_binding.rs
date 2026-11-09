@@ -22,7 +22,7 @@ fn assess(
         site: None,
         through: None,
         as_of: "2032-02-29",
-        available_by: "2032-02-29",
+        available_by: Some("2032-02-29"),
         transcriptions: t,
         claims: cells,
         statuses,
@@ -86,7 +86,7 @@ fn synthetic_label_must_match_the_reserved_issuer_in_both_directions() {
             site: None,
             through: None,
             as_of: "2032-02-29",
-            available_by: "2032-02-29",
+            available_by: Some("2032-02-29"),
             transcriptions: &t,
             claims: &[],
             statuses: &[],
@@ -117,7 +117,7 @@ fn even_unselected_non_public_evidence_refuses_before_a_report_can_retain_it() {
         site: Some("Example Mine"),
         through: Some("2030Q4"),
         as_of: "2032-02-29",
-        available_by: "2032-02-29",
+        available_by: Some("2032-02-29"),
         transcriptions: &t,
         claims: &cells,
         statuses: &[],
@@ -169,7 +169,7 @@ fn synthetic_unknown_source_is_preserved_in_its_interpretation_and_score() {
         site: None,
         through: None,
         as_of: "2032-02-29",
-        available_by: "2032-02-29",
+        available_by: Some("2032-02-29"),
         transcriptions: &t,
         claims: &cells,
         statuses: &[],
@@ -475,7 +475,7 @@ fn chronology_and_source_bound_changes_affect_admissibility_and_digest() {
         site: None,
         through: Some("2030Q4"),
         as_of: "2032-02-29",
-        available_by: "2032-02-29",
+        available_by: Some("2032-02-29"),
         transcriptions: &t,
         claims: &cells,
         statuses: &[],
@@ -490,7 +490,7 @@ fn chronology_and_source_bound_changes_affect_admissibility_and_digest() {
             site: None,
             through: None,
             as_of: "2030-01-01",
-            available_by: "2032-02-29",
+            available_by: Some("2032-02-29"),
             transcriptions: &t,
             claims: &cells,
             statuses: &[],
@@ -510,6 +510,35 @@ fn input_order_does_not_change_the_projection() {
     assert_eq!(
         original.to_json(),
         assess(&t, &cells, &[]).unwrap().to_json()
+    );
+}
+
+#[test]
+fn no_eligible_workbook_bound_is_allowed_only_for_an_empty_source_projection() {
+    let (transcriptions, cells) = track_record::synthetic_evidence().unwrap();
+    let input = |claims| TrackRecordInput {
+        issuer: "synthetic",
+        site: None,
+        through: None,
+        as_of: "2032-02-29",
+        available_by: None,
+        transcriptions: &transcriptions,
+        claims,
+        statuses: &[],
+        synthetic: true,
+    };
+    let report = track_record::assess(input(&[])).unwrap();
+    assert!(!report.rows.is_empty());
+    assert!(
+        report
+            .summaries
+            .iter()
+            .all(|s| s.summary.value.resolved == 0)
+    );
+    assert!(report.to_json().contains("\"available_by\":null"));
+    assert_eq!(
+        track_record::assess(input(&cells)).unwrap_err().code,
+        "FMINE-REF-108"
     );
 }
 
@@ -637,7 +666,7 @@ fn real_annual_bindings_keep_originals_comparatives_copper_units_and_disposals_d
         site: None,
         through: Some("2026Q2"),
         as_of: "2026-11-01",
-        available_by: "2026-11-01",
+        available_by: Some("2026-11-01"),
         transcriptions: &t,
         claims: &synthetic_cells,
         statuses: &profile.subject_statuses,

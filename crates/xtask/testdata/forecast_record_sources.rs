@@ -284,6 +284,8 @@ fn manifest_checks_reject_unused_hash_mismatch_and_premature_quarter_actuals() {
     let bytes = b"synthetic registered source";
     let mut profile = fmine_public::synthetic::synthetic_profile();
     profile.sources = vec![RegisteredSource {
+        published_at: None,
+        published_at_basis: None,
         file_name: "q3.xlsx".into(),
         kind: SourceKind::MineStats,
         quarter: "2030Q3".into(),

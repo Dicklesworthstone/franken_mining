@@ -12,10 +12,19 @@ use std::path::Path;
 
 use crate::toml_subset::{SubsetError, TomlDoc, TomlField, TomlRow, TomlValue, parse_subset};
 
+mod availability;
+pub use availability::{
+    PublicationCut, RegisteredSource, SourceAvailability, SourceKind, available_date, day_end,
+    publication_cut, publication_date, retrieval_upper,
+};
+
 /// Schema id a sources registry must declare.
 pub const SOURCES_SCHEMA: &str = "fmine.sources.v1";
-/// Registered source kinds (`fmine_public::sources::SourceKind::as_str`).
-pub const SOURCE_KINDS: [&str; 2] = ["mine_stats", "aisc_reconciliation"];
+/// Registered workbook kinds, shared with typed public projections.
+pub const SOURCE_KINDS: [&str; 2] = [
+    SourceKind::MineStats.as_str(),
+    SourceKind::AiscReconciliation.as_str(),
+];
 /// Registered URL bases: `"W1 table"` is FACT (the URL was read from the issuer's page), `"W1 naming rule"` is
 /// INFERENCE (the URL follows the issuer's stated naming pattern). A URL fetched and found to serve the
 /// registered bytes may instead carry [`URL_BASIS_FETCHED`] followed by the fetch date (`is_url_basis`).
@@ -860,30 +869,9 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         }
         let published_at = f.optional_string("published_at")?;
         let published_at_basis = f.optional_string("published_at_basis")?;
-        match (&published_at, &published_at_basis) {
-            (None, None) => {}
-            (Some(date), Some(basis)) => {
-                if !is_date(date) {
-                    return fail(row.line, format!("published_at {date:?} is not YYYY-MM-DD"));
-                }
-                if !PUBLISHED_AT_BASES.iter().any(|prefix| {
-                    basis
-                        .strip_prefix(prefix)
-                        .is_some_and(|citation| !citation.trim().is_empty())
-                }) || basis.chars().any(char::is_control)
-                {
-                    return fail(
-                        row.line,
-                        "published_at_basis must start with FACT: or INFERENCE: and cite its source without control characters",
-                    );
-                }
-            }
-            _ => {
-                return fail(
-                    row.line,
-                    "published_at and published_at_basis must be supplied together",
-                );
-            }
+        if let Err(error) = publication_date(published_at.as_deref(), published_at_basis.as_deref())
+        {
+            return fail(row.line, error.what);
         }
         sources.push(SourceRow {
             file,

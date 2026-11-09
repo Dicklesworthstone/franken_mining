@@ -68,6 +68,8 @@ fn fixture() -> (IssuerProfile, LoadedSource, KeyedCell) {
     };
     let mut profile = synthetic_profile();
     profile.sources = vec![RegisteredSource {
+        published_at: None,
+        published_at_basis: None,
         file_name: loaded.file_name.clone(),
         kind: loaded.kind,
         quarter: loaded.quarter.clone(),

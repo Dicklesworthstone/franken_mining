@@ -338,7 +338,7 @@ fn bind(
         site: None,
         through: None,
         as_of,
-        available_by,
+        available_by: Some(available_by),
         transcriptions: &transcriptions,
         claims: &[],
         statuses: &[],

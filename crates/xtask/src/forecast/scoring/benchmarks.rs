@@ -807,6 +807,8 @@ mod tests {
         let read = fmine_public::mine_stats::read_mine_stats(&workbook, release, None).unwrap();
         assert!(read.refusals.is_empty());
         profile.sources.push(RegisteredSource {
+            published_at: None,
+            published_at_basis: None,
             file_name: file.clone(),
             kind: SourceKind::MineStats,
             quarter: release.into(),
@@ -919,6 +921,8 @@ mod tests {
         assert!(absent.contains("\"mean_difference_bounds\":null"));
         for quarter in ["2024Q1", "2024Q2"] {
             profile.sources.push(RegisteredSource {
+                published_at: None,
+                published_at_basis: None,
                 file_name: format!("invented_missing_{quarter}.xlsx"),
                 kind: SourceKind::MineStats,
                 quarter: quarter.into(),
