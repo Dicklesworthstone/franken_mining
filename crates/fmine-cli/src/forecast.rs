@@ -24,6 +24,7 @@ use crate::json_string as js;
 mod diagnostics;
 pub mod live;
 mod provenance;
+pub mod record_build;
 pub mod record_score;
 mod record_sources;
 mod segments;

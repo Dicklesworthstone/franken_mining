@@ -17,9 +17,7 @@ use fmine_plant::cards::{
 use fmine_registry::toml_subset::{TomlDoc, TomlRow, parse_subset};
 use fmine_time::ValidTime;
 
-use super::{
-    Fields, bad, claim_json, declared, exact, fields, get, integer, quantity, quoted,
-};
+use super::{Fields, bad, claim_json, declared, exact, fields, get, integer, quantity, quoted};
 use crate::{Envelope, NextAction, worksheet_input};
 
 const SCHEMA: &str = "fmine.plant-recovery.v1";
@@ -151,7 +149,9 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
     let document = parse_subset(text).map_err(|error| bad(error.line, error.reason))?;
     if document.rows.len()
         > (ensemble::MAX_SCENARIOS + 2) * cards::MAX_INPUTS
-            + ensemble::MAX_SCENARIOS + cards::MAX_OPERATIONAL_FACTORS + 3
+            + ensemble::MAX_SCENARIOS
+            + cards::MAX_OPERATIONAL_FACTORS
+            + 3
     {
         return Err(bad(1, "recovery worksheet exceeds the bounded row count"));
     }

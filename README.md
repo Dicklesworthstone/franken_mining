@@ -2043,6 +2043,54 @@ DecisionCard API requires this replay certificate and checks that it binds the a
 cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
 Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
 
+### Build a source-bound draft forecast
+
+DESIGN (BD-067/BD-334): `forecast record build` constructs a complete candidate from the registered original
+Mine Stats releases at an explicit information cut. The model is selected by name:
+
+```bash
+cargo run -p fmine-cli -- forecast record build \
+  --rules forecasts/fy2026/rules.toml \
+  --model pooled-quarterly-ratio-empirical-v1 \
+  --as-of 2026-11-10T23:59:59Z --decimal-places 6 > candidate.json
+```
+
+The FY2026 rules require the original Q3 2026 workbook to be registered, available by the supplied cut, and
+present with its registered hash. A missing release or live site's latest observation refuses the whole
+candidate. Each live site and target remains required; the rules' `not_published` sites remain named in the
+report. Historical missing or nonpositive observations exclude their adjacent transitions and retain both
+endpoints in the report. A missing quarter never creates a ratio across the gap.
+
+The `pooled-quarterly-ratio-empirical-v1` model uses the historical pool fixed by each persistence rule. For
+each target it multiplies a site's latest positive Q3 observation by the pool's lower, median and upper
+inverse-ECDF ratios. Gold production is a Q4 quantity on the 100% basis; AISC is the Q4 printed rate per sold
+ounce. The model assumes the pooled changes apply to the future site-quarter. Its exact interval bounds
+equal the persistence comparator's bounds on the same inputs, so the different median point does not improve
+its interval score or establish independent forecasting skill.
+
+Every operand uses the published display value and retains its source Claim, cell, source hash, period,
+vintage, unit and ownership basis. Later comparative releases cannot replace originals. Availability uses
+the later of the registry's retrieval upper bound and the end of any declared publication day, without
+inventing a publication date. The receipt binds the exact rules, registry, information cut and source
+observations. This is a check against supplied registry evidence, not external proof of a historical run.
+
+The JSON envelope includes `payload.exact_forecasts`, `serialized_forecasts`, `forecasts_csv`, `pools`,
+`input_manifest`, `observations` and `receipt_digest`. The complete CSV is accepted by the existing frozen-record
+parser. Lower bounds round down, upper bounds up, and points to nearest with ties upward at the requested
+precision (0–12 decimal places, default 6). Exact and serialized values remain separate because export rounding
+can change the later score. `--format markdown` renders the forecasts, CSV, source manifest and receipt.
+
+Output remains an **uncalibrated draft**. The command writes no files and supplies no author attestation,
+forecast registration or timestamp proof. Its source manifest is review evidence; it does not replace the
+complete issuance manifest. After reviewing a successful envelope, extract the CSV without adding a newline:
+
+```bash
+jq -ej '.payload.forecasts_csv' candidate.json > forecasts.csv
+```
+
+The existing record-hash, external timestamp and record-score workflow remains responsible for freezing and
+scoring a reviewed forecast. Synthetic source fixtures are explicitly labelled in JSON and Markdown.
+
 ### Compute the frozen issuer-guidance baseline
 
 DESIGN (BD-334): the forecast record fixes two comparators. The existing `forecast-baseline` command computes
