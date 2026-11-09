@@ -300,7 +300,7 @@ description = "Aggregate declared wet masses, moisture and dry assays across lot
 path = "plant infer"
 subsystem = "Crucible"
 mutates_authority = false
-description = "Infer explicitly unmeasured identifiable streams from observed flows and stocks, retaining joint covariance and unavailable gross-error diagnostics"
+description = "Infer explicitly unmeasured identifiable streams and endpoint inventories from genuine observations, retaining joint covariance and unavailable gross-error diagnostics"
 
 [[verb]]
 path = "plant recovery"

@@ -1,50 +1,76 @@
-//! DESIGN: render explicitly unmeasured-flow inference without presenting an
+//! DESIGN: render explicitly unmeasured material inference without presenting an
 //! inferred coordinate as an observation or no redundancy as a passed test.
 //! All numerical work belongs to the existing plant and numerical owners.
 //! Determinism: DeterministicPerIsa
 
 use fmine_plant::flowsheet::reconciliation::unmeasured::{
-    GrossErrorDiagnostic, InferredFlowsheet, UnmeasuredFlowOutcome, reconcile_unmeasured_flowsheet,
+    GrossErrorDiagnostic, InferredFlowsheet, UnmeasuredFlowOutcome,
+    quantities::reconcile_unmeasured_quantities, reconcile_unmeasured_flowsheet,
 };
 
 use super::{
-    Claim, Envelope, FlowsheetInput, RunOutput, UnmeasuredFlowModel, actions, boundary_role,
-    channel_name, claim_json, coordinate_name, exact, location_name, number, numbers, policy_json,
-    quoted,
+    BTreeMap, Claim, Envelope, FlowsheetInput, Kilograms, MaterialChannel, ObservationKey,
+    ObservationLocation, Refusal, RunOutput, UnmeasuredFlowModel, UnmeasuredQuantityModel, actions,
+    boundary_role, channel_name, claim_json, coordinate_name, exact, location_name, number,
+    numbers, policy_json, quoted,
 };
 
-pub(super) const NO_CLAIM: &str = "Conditional Gaussian inference of explicitly unmeasured extensive streams from the declared conservative graph and genuine observations. Inferred coordinates are estimates, not measurements. Sources and error policy remain Assumed, Internal and uncalibrated. NoRedundancy supplies no gross-error test; unique inference is not a passed measurement check. No invented observation, sensor-bias identification, missing-stock estimate, assay-error propagation, recovery, P754 compliance, ledger commit or operating authorization is supplied.";
+pub(super) const NO_CLAIM: &str = "Conditional Gaussian inference of explicitly unmeasured extensive streams and endpoint inventories from the declared conservative graph and genuine observations for one window. Inferred coordinates are estimates, not measurements. Sources and error policy remain Assumed, Internal and uncalibrated. NoRedundancy supplies no gross-error test; unique inference is not a passed measurement check. No invented observation, temporal inventory smoothing, sensor-bias identification, assay-error propagation, recovery, P754 compliance, ledger commit or operating authorization is supplied.";
 
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
-    "{\"schema\":\"fmine.plant-unmeasured.v1\",\"command\":\"plant infer --input <worksheet.toml>\",",
+    "{\"schema\":\"fmine.plant-unmeasured.v2\",\"supported_schemas\":[\"fmine.plant-unmeasured.v1\",\"fmine.plant-unmeasured.v2\"],\"command\":\"plant infer --input <worksheet.toml>\",",
     "\"input\":\"Regular UTF-8 TOML at most 1 MiB; all values quoted; exact submitted bytes are SHA-256 bound\",",
     "\"fields\":[\"schema\",\"boundary\",\"basis\",\"start_ns\",\"end_ns\",\"complete\",\"unbiased_gaussian_errors\",\"global_chi_square_limit\",\"error_model_basis\"],",
     "\"optional_fields\":[\"normalized_adjustment_limit\"],",
     "\"basis\":\"kg/dry-matter+water/total-elements/all-phases/full-boundary\",",
     "\"shared_rows\":\"unit, stream, element, coordinate, covariance and tolerance have the same strict fields as plant_flowsheet\",",
-    "\"unmeasured\":\"[[unmeasured]] stream; at least one unique declared stream required; ALL its dry, water and elemental coordinates must be absent, with no covariance entries for those coordinates\",",
-    "\"population\":\"Complete topology and every measured stream plus both endpoint stocktakes of every unit remain explicit; only named unmeasured streams may omit observations\",",
-    "\"covariance\":\"ALL unordered pairs of genuine observed coordinates, including explicit zeros; full positive-definite kg2 covariance; no priors, fabricated observations or variance floors for unmeasured streams\",",
+    "\"unmeasured\":\"[[unmeasured]] stream; v2 also accepts [[unmeasured_stocktake]] unit,kind with kind=opening|closing; at least one unique unknown location required; ALL its dry, water and elemental coordinates must be absent, with no covariance entries for those coordinates\",",
+    "\"population\":\"Complete topology and every undeclared-unknown stream and endpoint stocktake remain explicit; v1 requires both stocktakes, v2 permits one explicitly unknown endpoint per unit; both endpoints unknown refuse as unidentifiable\",",
+    "\"covariance\":\"ALL unordered pairs of genuine observed coordinates, including explicit zeros; full positive-definite kg2 covariance; no priors, fabricated observations or variance floors for unmeasured quantities\",",
     "\"limits\":\"128 total measured and inferred coordinates, 64 unit/channel rows; ambiguous cycles, parallel missing outlets and non-identifiable graphs refuse\",",
     "\"output\":\"Coordinate order is measured then inferred; every coordinate states its kind and inferred source_claim_id is null; full joint covariance follows this order, while adjustments and adjustment covariance cover only genuine observations\",",
-    "\"boundary\":\"Observed contributions are not complete residuals where unmeasured terms exist; observed_totals_kg is null for boundary roles containing missing external flows, with fitted totals and full covariance retained\",",
+    "\"boundary\":\"Observed contributions are not complete residuals where unmeasured terms exist; observed_totals_kg is null for boundary roles containing missing external flows or inventories, with fitted totals and full covariance retained\",",
     "\"gross_error\":\"status=available carries chi-square and degrees of freedom; status=no_redundancy carries null chi-square and zero degrees of freedom, never a passed gross-error test\",",
     "\"rejected\":\"Nonzero exit, null admitted_claim; a rejected candidate retains original observations, model, fitted quantities, covariance, diagnostics and receipt identity\",",
     "\"evidence\":\"Assumed, Internal and uncalibrated; no P754 qualification or empirical accuracy claim\",",
-    "\"example\":\"tests/plant/flowsheet_infer.toml\"}"
+    "\"examples\":[\"tests/plant/flowsheet_infer.toml\",\"tests/plant/inventory_infer.toml\"]}"
 );
 
 pub(super) fn order_json(model: &UnmeasuredFlowModel) -> String {
-    let measured = model.observations.iter().map(|key| {
+    coordinate_order(
+        &model.observations,
+        model
+            .unmeasured_streams
+            .iter()
+            .cloned()
+            .map(ObservationLocation::Transfer),
+        &model.closure_tolerances_kg,
+    )
+}
+
+pub(super) fn quantity_order_json(model: &UnmeasuredQuantityModel) -> String {
+    coordinate_order(
+        &model.observations,
+        model.unmeasured.iter().cloned(),
+        &model.closure_tolerances_kg,
+    )
+}
+
+fn coordinate_order(
+    observations: &[ObservationKey],
+    unmeasured: impl Iterator<Item = ObservationLocation>,
+    channels: &BTreeMap<MaterialChannel, Kilograms>,
+) -> String {
+    let measured = observations.iter().map(|key| {
         format!(
             "{{\"key\":{},\"observation\":{},\"channel\":{},\"kind\":\"measured\",\"source_claim_id\":{}}}",
             quoted(&coordinate_name(key)), quoted(&location_name(&key.location)),
             quoted(channel_name(&key.channel)), quoted(&key.source.to_string())
         )
     });
-    let inferred = model.unmeasured_streams.iter().flat_map(|stream| {
-        model.closure_tolerances_kg.keys().map(move |channel| {
-            let observation = format!("transfer:{}", stream.as_str());
+    let inferred = unmeasured.flat_map(|location| {
+        channels.keys().map(move |channel| {
+            let observation = location_name(&location);
             format!(
                 "{{\"key\":{},\"observation\":{},\"channel\":{},\"kind\":\"inferred\",\"source_claim_id\":null}}",
                 quoted(&format!("{observation}/{}", channel_name(channel))),
@@ -81,7 +107,30 @@ pub(super) fn model_json(model: &Claim<UnmeasuredFlowModel>, basis: &str) -> Str
     )
 }
 
-fn diagnostics(value: &InferredFlowsheet) -> String {
+pub(super) fn quantity_model_json(model: &Claim<UnmeasuredQuantityModel>, basis: &str) -> String {
+    let value = &model.value;
+    let locations = value
+        .unmeasured
+        .iter()
+        .map(|location| quoted(&location_name(location)))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"claim\":{},\"basis\":{},\"declaration_id\":{},\"unmeasured_quantities\":[{}],\"covariance_order\":\"measured_coordinates_only\",{}}}",
+        claim_json(model),
+        quoted(basis),
+        quoted(&value.declaration_id.to_string()),
+        locations,
+        policy_json(
+            &value.covariance,
+            value.global_chi_square_limit,
+            value.normalized_adjustment_limit,
+            &value.closure_tolerances_kg
+        )
+    )
+}
+
+fn diagnostics<K>(value: &InferredFlowsheet<K>) -> String {
     let units = value.conservation.iter().map(|row| {
         format!(
             "{{\"unit\":{},\"channel\":{},\"has_unmeasured_terms\":{},\"observed_contribution_exact_kg\":{},\"observed_contribution_kg\":{},\"reconciled_residual_kg\":{}}}",
@@ -178,8 +227,19 @@ pub(super) fn run(
     inputs: &[Claim<FlowsheetInput>],
     model: &Claim<UnmeasuredFlowModel>,
 ) -> RunOutput {
+    render(reconcile_unmeasured_flowsheet(inputs, model))
+}
+
+pub(super) fn run_quantities(
+    inputs: &[Claim<FlowsheetInput>],
+    model: &Claim<UnmeasuredQuantityModel>,
+) -> RunOutput {
+    render(reconcile_unmeasured_quantities(inputs, model))
+}
+
+fn render<M, K>(outcome: Result<UnmeasuredFlowOutcome<M, K>, Refusal>) -> RunOutput {
     let verb = "plant infer";
-    let (envelope, admitted, digest, result) = match reconcile_unmeasured_flowsheet(inputs, model) {
+    let (envelope, admitted, digest, result) = match outcome {
         Ok(UnmeasuredFlowOutcome::Admitted(receipt)) => (
             Envelope::ok(verb, String::new(), vec![]),
             claim_json(receipt.claim()),

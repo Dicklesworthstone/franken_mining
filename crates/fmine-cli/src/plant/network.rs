@@ -1,7 +1,7 @@
 //! DESIGN: source-bound plant networks over the joint R1 owners.
 //! The worksheet declares extensive kg, complete topology and every covariance
-//! pair. Only the inference command may explicitly declare unmeasured streams.
-//! No independence, missing channel or stocktake is inferred.
+//! pair. Only inference may explicitly declare unmeasured streams or endpoint
+//! inventories. No independence, missing channel or omission is inferred.
 //! Determinism: DeterministicPerIsa
 
 mod inference;
@@ -21,11 +21,14 @@ use fmine_plant::flowsheet::{
     reconciliation::{
         self, BoundaryRole, FlowsheetErrorModel, FlowsheetReconciliation,
         FlowsheetReconciliationOutcome, MaterialChannel, ObservationKey, ObservationLocation,
-        unmeasured::{self, UnmeasuredFlowModel},
+        unmeasured::{
+            self, UnmeasuredFlowModel,
+            quantities::{self, UnmeasuredQuantityModel},
+        },
     },
 };
 use fmine_plant::reconciliation::{Kilograms, KilogramsSquared};
-use fmine_registry::toml_subset::{TomlRow, parse_subset};
+use fmine_registry::toml_subset::{TomlRow, TomlValue, parse_subset};
 use fmine_time::ValidTime;
 use fmine_units::ExactQty;
 
@@ -45,30 +48,33 @@ pub(super) const INFERENCE_ROBOT_DOCS_JSON: &str = inference::ROBOT_DOCS_JSON;
 enum Mode {
     Measured,
     Unmeasured,
+    Quantities,
 }
 impl Mode {
     fn schema(self) -> &'static str {
         match self {
             Self::Measured => SCHEMA,
             Self::Unmeasured => "fmine.plant-unmeasured.v1",
+            Self::Quantities => "fmine.plant-unmeasured.v2",
         }
     }
     fn result_schema(self) -> &'static str {
         match self {
             Self::Measured => "fmine.plant-flowsheet-result.v1",
             Self::Unmeasured => "fmine.plant-unmeasured-result.v1",
+            Self::Quantities => "fmine.plant-unmeasured-result.v2",
         }
     }
     fn verb(self) -> &'static str {
         match self {
             Self::Measured => VERB,
-            Self::Unmeasured => "plant infer",
+            Self::Unmeasured | Self::Quantities => "plant infer",
         }
     }
     fn calculation(self) -> &'static str {
         match self {
             Self::Measured => "conditional_gaussian_reconciliation",
-            Self::Unmeasured => "conditional_gaussian_inference",
+            Self::Unmeasured | Self::Quantities => "conditional_gaussian_inference",
         }
     }
 }
@@ -117,6 +123,7 @@ struct Worksheet {
 enum ErrorModel {
     Measured(Claim<FlowsheetErrorModel>),
     Unmeasured(Claim<UnmeasuredFlowModel>),
+    Quantities(Claim<UnmeasuredQuantityModel>),
 }
 
 struct RunOutput {
@@ -245,8 +252,20 @@ fn stream_row(row: &TomlRow) -> Result<StreamSpec, Refusal> {
     })
 }
 
-fn parse(text: &str, source: &SourceAnchor, mode: Mode) -> Result<Worksheet, Refusal> {
+fn parse(
+    text: &str,
+    source: &SourceAnchor,
+    requested_mode: &mut Mode,
+) -> Result<Worksheet, Refusal> {
     let document = parse_subset(text).map_err(|e| bad(e.line, e.reason))?;
+    if *requested_mode == Mode::Unmeasured
+        && document.top_get("schema").is_some_and(|field| {
+            matches!(&field.value, TomlValue::Str(schema) if schema == Mode::Quantities.schema())
+        })
+    {
+        *requested_mode = Mode::Quantities;
+    }
+    let mode = *requested_mode;
     if document.rows.len() > MAX_OBSERVATIONS * (MAX_OBSERVATIONS + 1) / 2 + 5 * MAX_OBSERVATIONS {
         return Err(bad(
             1,
@@ -269,7 +288,8 @@ fn parse(text: &str, source: &SourceAnchor, mode: Mode) -> Result<Worksheet, Ref
         &["normalized_adjustment_limit"],
         1,
     )?;
-    if get(&top, "schema")?.0 != mode.schema() {
+    let schema = get(&top, "schema")?.0;
+    if schema != mode.schema() {
         return Err(bad(1, format!("schema must be {}", mode.schema())));
     }
     if get(&top, "basis")?.0 != BASIS {
@@ -295,6 +315,7 @@ fn parse(text: &str, source: &SourceAnchor, mode: Mode) -> Result<Worksheet, Ref
     let mut streams = BTreeMap::new();
     let mut elements = BTreeMap::new();
     let mut unmeasured = BTreeSet::new();
+    let mut unmeasured_quantities = BTreeSet::new();
     for row in &document.rows {
         match row.table.as_str() {
             "unit" => {
@@ -324,19 +345,45 @@ fn parse(text: &str, source: &SourceAnchor, mode: Mode) -> Result<Worksheet, Ref
                 }
             }
             "coordinate" | "covariance" | "tolerance" => {}
-            "unmeasured" if mode == Mode::Unmeasured => {
+            "unmeasured" if mode != Mode::Measured => {
                 let f = fields(&row.fields, &["stream"], &[], row.line)?;
                 if !unmeasured.insert(StreamId::new(get(&f, "stream")?.0)?) {
                     return Err(bad(row.line, "duplicate unmeasured stream declaration"));
                 }
             }
+            "unmeasured_stocktake" if mode == Mode::Quantities => {
+                let f = fields(&row.fields, &["unit", "kind"], &[], row.line)?;
+                let kind = match get(&f, "kind")?.0 {
+                    "opening" => StocktakeKind::Opening,
+                    "closing" => StocktakeKind::Closing,
+                    _ => {
+                        return Err(bad(
+                            row.line,
+                            "unmeasured stocktake kind must be opening or closing",
+                        ));
+                    }
+                };
+                let location = ObservationLocation::Stocktake {
+                    unit: UnitId::new(get(&f, "unit")?.0)?,
+                    kind,
+                };
+                if !unmeasured_quantities.insert(location) {
+                    return Err(bad(row.line, "duplicate unmeasured stocktake declaration"));
+                }
+            }
             _ => return Err(bad(row.line, format!("unsupported table {}", row.table))),
         }
     }
-    if mode == Mode::Unmeasured && unmeasured.is_empty() {
+    unmeasured_quantities.extend(
+        unmeasured
+            .iter()
+            .cloned()
+            .map(ObservationLocation::Transfer),
+    );
+    if mode != Mode::Measured && unmeasured_quantities.is_empty() {
         return Err(Refusal::new(
             RefusalCode::NoClaimInDomain201,
-            "plant infer requires at least one explicitly unmeasured stream",
+            "plant infer requires at least one explicitly unmeasured stream or endpoint stocktake (stocktakes require v2)",
         ));
     }
     let width = elements.len() + 2;
@@ -484,6 +531,9 @@ fn parse(text: &str, source: &SourceAnchor, mode: Mode) -> Result<Worksheet, Ref
     let order = match mode {
         Mode::Measured => reconciliation::observation_order(&inputs)?,
         Mode::Unmeasured => unmeasured::observation_order(&inputs, &unmeasured)?,
+        Mode::Quantities => {
+            quantities::observation_order_for_quantities(&inputs, &unmeasured_quantities)?
+        }
     };
     let n = order.len();
     let positions: BTreeMap<_, _> = order
@@ -584,6 +634,28 @@ fn parse(text: &str, source: &SourceAnchor, mode: Mode) -> Result<Worksheet, Ref
                 value,
                 &tag,
                 unmeasured::ERROR_MODEL_METRIC,
+                AdditivityClass::NonAdditive,
+                source,
+                locator,
+            ))
+        }
+        Mode::Quantities => {
+            let value = UnmeasuredQuantityModel {
+                scope,
+                declaration_id: inputs[0].claim_id,
+                observations: order,
+                covariance,
+                unmeasured: unmeasured_quantities,
+                unbiased_gaussian_errors: true,
+                global_chi_square_limit,
+                normalized_adjustment_limit,
+                closure_tolerances_kg: tolerances,
+            };
+            let tag = value.canonical_tag();
+            ErrorModel::Quantities(declared(
+                value,
+                &tag,
+                quantities::ERROR_MODEL_METRIC,
                 AdditivityClass::NonAdditive,
                 source,
                 locator,
@@ -805,7 +877,7 @@ fn actions() -> Vec<NextAction> {
 fn finish(mut envelope: Envelope, mode: Mode) -> Envelope {
     envelope.no_claim = Some(match mode {
         Mode::Measured => NO_CLAIM,
-        Mode::Unmeasured => inference::NO_CLAIM,
+        Mode::Unmeasured | Mode::Quantities => inference::NO_CLAIM,
     });
     envelope
 }
@@ -877,7 +949,7 @@ pub(super) fn execute_unmeasured(input: &Path, root: &Path) -> Envelope {
     execute_mode(input, root, Mode::Unmeasured)
 }
 
-fn execute_mode(input: &Path, root: &Path, mode: Mode) -> Envelope {
+fn execute_mode(input: &Path, root: &Path, mut mode: Mode) -> Envelope {
     let schema = quoted(mode.result_schema());
     let (text, source) = match worksheet_input::read(
         &root.join(input),
@@ -899,7 +971,9 @@ fn execute_mode(input: &Path, root: &Path, mode: Mode) -> Envelope {
         quoted(&Digest32(source.artifact_sha256).to_hex()),
         text.len()
     );
-    let worksheet = match parse(&text, &source, mode) {
+    let worksheet = parse(&text, &source, &mut mode);
+    let schema = quoted(mode.result_schema());
+    let worksheet = match worksheet {
         Ok(value) => value,
         Err(refusal) => {
             let mut envelope = Envelope::refused(mode.verb(), refusal, actions());
@@ -934,6 +1008,11 @@ fn execute_mode(input: &Path, root: &Path, mode: Mode) -> Envelope {
             inference::run(&worksheet.inputs, model),
             inference::model_json(model, &worksheet.model_basis),
             inference::order_json(&model.value),
+        ),
+        ErrorModel::Quantities(model) => (
+            inference::run_quantities(&worksheet.inputs, model),
+            inference::quantity_model_json(model, &worksheet.model_basis),
+            inference::quantity_order_json(&model.value),
         ),
     };
     let RunOutput {

@@ -141,8 +141,9 @@ impossible metal-in-water composition, identity order and internal confidentiali
 BD-175 now has a nominal conservative plant-flow graph and a joint conditional reconciliation adapter;
 process-model prediction and shared cross-domain flow adapters remain. BD-177 now has covariance-aware
 reconciliation of fully measured carrier and elemental totals, plus identifiable explicitly unmeasured
-streams with measured endpoint stocks (§17), including cross-element and cross-stream covariance.
-Nonlinear uncertainty propagation, missing-stock inference, sensor bias estimation, plant error-model
+streams with measured endpoint stocks (§17), and identifiable unmeasured endpoint stocks (§22),
+including cross-element, cross-stream and inventory covariance. Nonlinear uncertainty propagation,
+temporal inventory smoothing, sensor bias estimation, plant error-model
 calibration and full P754 reconciliation remain.
 BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18), with declared joint
 input populations propagated per realization (§20); report ingestion, source-box qualification,
@@ -646,3 +647,40 @@ This is a conditional energy-limited estimate. It establishes no actual plant th
 validity, grinding-circuit correction, other bottleneck, calibration, frozen forecast, ledger authority
 or operating permission. BD-181 still needs actual prospective registration and outcomes; this slice
 does not assert that the broader process-card or uncertainty-propagation gates have passed.
+
+## 22. Unmeasured endpoint inventories (DESIGN; bounded BD-154/177, plan §20.2–20.8)
+
+`flowsheet::reconciliation::unmeasured::quantities::reconcile_unmeasured_quantities` extends the
+same partial GLS owner to explicitly unmeasured opening or closing inventories. Its separate
+`Claim<UnmeasuredQuantityModel>` names unknown `ObservationLocation`s: transfers, or a unit and
+endpoint kind. `observation_order_for_quantities` admits only genuine observed coordinates.
+There is no observation Claim, observation timestamp, covariance row or prior for an unknown stock.
+The model binds the reporting interval, complete topology, unknown locations, source order and
+error policy. Separate metrics and canonical frames preserve the existing flow-only receipt format.
+
+All dry matter, H2O and declared elemental masses of an unknown stock are inferred together.
+Opening inventory has coefficient +1 in its unit balance; closing inventory has coefficient −1.
+At least one endpoint must remain observed for every unit. Both endpoints unknown have dependent
+columns, so the balance cannot identify their levels and refuses `FMINE-REF-104`. An unknown stock
+and an unresolved unknown discharge also refuse; the owner never supplies a balancing plug.
+Missing undeclared stocks still refuse, as do contradictory measured/unknown locations, unknown
+units, wrong measured endpoint times and covariance coordinates that pretend an unknown was observed.
+The exact-accounting, fully measured and original stream-only owners keep their existing admission.
+
+The result retains joint covariance among measured streams, inferred streams and inventories.
+Shared transfers can therefore induce negative covariance between inferred stocks at adjacent units;
+their two contributions cancel at the outer boundary. An outer opening or closing total containing
+an inferred stock has `observed_totals_kg = None`, with genuine observed contributions, fitted totals
+and full covariance retained separately. Negative or impossible inferred compositions return rejected
+diagnostics without clipping or an admitted Claim. `NoRedundancy` remains an unavailable gross-error
+test. All original source Claims and the error model participate in receipt identity and evidence meets.
+
+`plant infer` accepts `fmine.plant-unmeasured.v2` worksheets with explicit
+`[[unmeasured_stocktake]] unit,kind` rows, where kind is `opening` or `closing`. Existing
+`[[unmeasured]] stream` rows can be combined with them. Covariance still covers observed coordinates
+only. Results use `fmine.plant-unmeasured-result.v2`; inferred coordinates identify their actual
+endpoint and have null `source_claim_id`. Existing v1 worksheets retain their streams-only contract.
+
+This single-window conditional estimator supplies no across-period smoothing, latent sensor bias,
+stockpile mixing, voxel provenance, leach dynamics or empirical P754 qualification. BD-154 and BD-177
+remain open for those broader capabilities and their evidence gates.

@@ -7,7 +7,9 @@ use fmine_plant::rtd::worksheet;
 pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) = worksheet_input::read(
-            &root.join(input), "plant RTD worksheet", worksheet::MAX_BYTES,
+            &root.join(input),
+            "plant RTD worksheet",
+            worksheet::MAX_BYTES,
         )?;
         let (mut envelope, result) = match worksheet::evaluate(&text, &source) {
             Ok(result) => {
@@ -31,9 +33,8 @@ pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
         );
         Ok(envelope)
     };
-    let mut envelope = run().unwrap_or_else(|refusal| {
-        Envelope::refused("plant rtd", refusal, actions())
-    });
+    let mut envelope =
+        run().unwrap_or_else(|refusal| Envelope::refused("plant rtd", refusal, actions()));
     envelope.no_claim = Some(worksheet::NO_CLAIM);
     envelope.warnings.push(
         "Submitted RTD, inventories, feeds and any recovery assumptions are Assumed, Internal and uncalibrated; source-byte binding does not establish plant applicability.".into(),

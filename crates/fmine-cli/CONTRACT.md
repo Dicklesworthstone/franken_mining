@@ -142,6 +142,18 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     Claim. Inputs remain Assumed, Internal and uncalibrated. `robot-docs.plant_inference` documents the
     schema; `tests/plant/flowsheet_infer.toml` is a constructed runnable example. Actual-binary checks
     live in `crates/xtask/testdata/plant_inference_contract.rs`.
+  - DESIGN (bounded BD-154/177): `plant infer` also accepts `fmine.plant-unmeasured.v2` with
+    `[[unmeasured_stocktake]] unit,kind` rows naming an opening or closing inventory. One endpoint
+    per unit may be inferred jointly with identifiable streams through the existing partial GLS
+    owner; both endpoints unknown or an unresolved discharge/inventory split refuse. Covariance
+    contains genuine observations only. The v2 result retains full joint inventory covariance,
+    typed endpoint coordinate names, null inferred source Claim IDs and null observed boundary
+    totals where stocks are unknown. Missing undeclared stocks and impossible compositions refuse.
+    V1 remains streams-only; `plant flowsheet` still requires complete observations. The synthetic
+    `tests/plant/inventory_infer.toml` and `inventory_infer_transfer.toml` demonstrate endpoint
+    inference and shared-transfer covariance. Actual-binary checks live in
+    `crates/xtask/tests/plant_inventory_inference.rs`. No temporal state smoothing or calibrated
+    inventory accuracy is supplied.
   - DESIGN (BD-149/175/177): `plant flowsheet --input <worksheet.toml>` reads a byte-bound
     `fmine.plant-flowsheet.v1` worksheet and invokes the joint flowsheet reconciliation owner.
     The worksheet declares units, directed streams, total elemental measurands, explicit dry-matter/H2O/

@@ -81,6 +81,7 @@ cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.
 cargo run -p fmine-cli -- plant transfer --input tests/plant/raw_transfer.toml
 cargo run -p fmine-cli -- plant flowsheet --input tests/plant/flowsheet_reconcile.toml
 cargo run -p fmine-cli -- plant infer --input tests/plant/flowsheet_infer.toml
+cargo run -p fmine-cli -- plant infer --input tests/plant/inventory_infer.toml
 cargo run -p fmine-cli -- plant recovery --input tests/plant/recovery_card.toml
 ```
 
@@ -112,11 +113,13 @@ example with `cargo run -p fmine-plant --example reconcile_flowsheet`; adding `-
 rejection. This fully measured conditional model preserves source evidence and does not infer missing
 measurements, sensor calibration or process performance.
 
-`plant infer` admits explicitly declared unmeasured streams while retaining measured opening and closing
-stocks for every unit. It uses the existing partial reconciliation owner to infer only uniquely identifiable
-flows, retaining full measured/inferred covariance and distinguishing observed contributions from complete
-totals. Ambiguous splits or unmeasured cycles refuse. A uniquely inferred flow with no redundant observations
-is labelled `no_redundancy`, with no gross-error statistic or claim that a consistency test passed.
+`plant infer` admits explicitly declared unmeasured streams and, with the v2 worksheet schema, an unmeasured
+opening or closing stocktake per unit. It uses the existing partial reconciliation owner to infer uniquely
+identifiable flows and inventories, retaining full measured/inferred covariance and distinguishing observed
+contributions from complete totals. A shared transfer's uncertainty can correlate stocks across units.
+Ambiguous splits, unmeasured cycles or both endpoint stocks unknown refuse. A unique inference with no
+redundant observations is labelled `no_redundancy`, with no gross-error statistic or claim that a consistency
+test passed. Existing v1 worksheets retain their stream-only behavior.
 
 `plant recovery` evaluates an explicitly declared recovery formula through the existing versioned model-card
 engine. Its worksheet names the circuit, material domain, dry basis, element, validity bounds and processing

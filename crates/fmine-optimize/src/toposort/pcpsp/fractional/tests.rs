@@ -59,22 +59,12 @@ fn active_master_column_supplies_the_profitable_half_that_whole_repair_loses() {
 fn all_signed_rows_bound_the_step_and_preserve_the_mining_periods() {
     let mut m = model(
         &[[-4, 12], [-2, 8], [-3, 21]],
-        &[
-            vec![[1, 1], [1, 1], [1, 1]],
-            vec![[0, 2], [0, -1], [0, 0]],
-        ],
+        &[vec![[1, 1], [1, 1], [1, 1]], vec![[0, 2], [0, -1], [0, 0]]],
         &[vec![2, 2], vec![0, 0]],
         2,
     );
     m.requires[2] = vec![0];
-    let p = polish(
-        &m,
-        &[Some(0), Some(0), Some(1)],
-        &[0, 1, 1],
-        &[1, 1],
-        3,
-    )
-    .unwrap();
+    let p = polish(&m, &[Some(0), Some(0), Some(1)], &[0, 1, 1], &[1, 1], 3).unwrap();
     assert_eq!((p.before, p.after), (25_000, 33_000));
     assert_eq!(p.checked.period_values, [12_000, 21_000]);
     assert_eq!(p.checked.used, [vec![2_000, 1_000], vec![0, 0]]);
@@ -133,16 +123,17 @@ fn blocked_nonprofitable_empty_and_zero_discount_cases_keep_the_checked_start() 
     assert_eq!((empty.after, empty.proposals), (0, 0));
     assert!(empty.schedule.assignments().is_empty());
     let zero = polish(&m, &[Some(0)], &[1], &[0], 3).unwrap();
-    assert_eq!((zero.after, zero.proposals, zero.improved_periods), (0, 0, 0));
+    assert_eq!(
+        (zero.after, zero.proposals, zero.improved_periods),
+        (0, 0, 0)
+    );
     assert_eq!(candidate::write_solution(&zero.schedule), "0 1 0 1\n");
 }
 
 #[test]
 fn every_generated_split_is_monotone_feasible_and_below_an_exact_decimal_grid_oracle() {
     for seed in 0..24_i64 {
-        let values: Vec<_> = (0..3)
-            .map(|b| [0, (seed * 7 + b * 3) % 11 - 2])
-            .collect();
+        let values: Vec<_> = (0..3).map(|b| [0, (seed * 7 + b * 3) % 11 - 2]).collect();
         let uses: Vec<Vec<_>> = (0..2)
             .map(|r| {
                 (0..3)
@@ -164,9 +155,7 @@ fn every_generated_split_is_monotone_feasible_and_below_an_exact_decimal_grid_or
                         row.iter().zip(q).map(|(u, x)| u[1] * x).sum::<i64>() <= cap[0] * 10
                     });
                     if feasible {
-                        best = best.max(
-                            values.iter().zip(q).map(|(v, x)| v[1] * x).sum::<i64>(),
-                        );
+                        best = best.max(values.iter().zip(q).map(|(v, x)| v[1] * x).sum::<i64>());
                     }
                 }
             }

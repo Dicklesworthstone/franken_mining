@@ -640,7 +640,17 @@ fn inference_is_explicit_in_robot_docs_command_schema_and_file_refusals() {
     let docs = json::parse(&output.stdout).unwrap();
     assert_eq!(
         at(&docs, &["payload", "plant_inference", "schema"]).as_str(),
-        Some("fmine.plant-unmeasured.v1")
+        Some("fmine.plant-unmeasured.v2")
+    );
+    let supported = at(&docs, &["payload", "plant_inference", "supported_schemas"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|schema| schema.as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        supported,
+        ["fmine.plant-unmeasured.v1", "fmine.plant-unmeasured.v2"]
     );
     assert!(
         at(&docs, &["payload", "plant_inference", "gross_error"])

@@ -1,0 +1,341 @@
+# ASSUMPTION: synthetic two-store transfer; no operating data or calibration.
+# Closing a = opening a - transfer; closing b = opening b + transfer.
+# Both inferred closings are [70 dry, 35 water, 0.7 Au] kg.
+# Their cross-covariance is -Var(transfer) = [-1, -0.25, -0.0001] kg2.
+# The shared transfer cancels from the boundary total and its variance.
+schema = "fmine.plant-unmeasured.v2"
+boundary = "synthetic-shared-transfer-inventory/v1"
+basis = "kg/dry-matter+water/total-elements/all-phases/full-boundary"
+start_ns = "0"
+end_ns = "10"
+complete = "true"
+unbiased_gaussian_errors = "true"
+global_chi_square_limit = "9"
+error_model_basis = "Synthetic independent Gaussian observations; no priors or measurements of closing stock"
+
+[[unit]]
+id = "a"
+kind = "storage"
+
+[[unit]]
+id = "b"
+kind = "storage"
+
+[[stream]]
+id = "shared"
+kind = "internal"
+from = "a"
+to = "b"
+source_role = "product"
+
+[[unmeasured_stocktake]]
+unit = "a"
+kind = "closing"
+
+[[unmeasured_stocktake]]
+unit = "b"
+kind = "closing"
+
+[[element]]
+symbol = "Au"
+measurand = "total-Au/all-phases"
+
+[[coordinate]]
+observation = "opening:a"
+channel = "dry"
+kg = "100"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:a"
+channel = "water"
+kg = "50"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:a"
+channel = "Au"
+kg = "1"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:b"
+channel = "dry"
+kg = "40"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:b"
+channel = "water"
+kg = "20"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:b"
+channel = "Au"
+kg = "0.4"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "transfer:shared"
+channel = "dry"
+kg = "30"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:shared"
+channel = "water"
+kg = "15"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:shared"
+channel = "Au"
+kg = "0.3"
+start_ns = "0"
+end_ns = "10"
+
+[[tolerance]]
+channel = "dry"
+kg = "1e-9"
+
+[[tolerance]]
+channel = "water"
+kg = "1e-9"
+
+[[tolerance]]
+channel = "Au"
+kg = "1e-10"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:a/dry"
+kg2 = "4"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:a/water"
+kg2 = "1"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "opening:a/Au"
+kg2 = "0.0004"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "opening:b/dry"
+kg2 = "9"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/water"
+right = "opening:b/water"
+kg2 = "2.25"
+
+[[covariance]]
+left = "opening:b/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/water"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/water"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/water"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/Au"
+right = "opening:b/Au"
+kg2 = "0.0009"
+
+[[covariance]]
+left = "opening:b/Au"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/Au"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/Au"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:shared/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:shared/water"
+kg2 = "0.25"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "transfer:shared/Au"
+kg2 = "0.0001"

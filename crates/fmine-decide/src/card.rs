@@ -232,7 +232,11 @@ fn named(value: &str) -> bool {
     !value.is_empty() && value.trim() == value && !value.chars().any(char::is_control)
 }
 
-pub(crate) fn admit<T>(claim: &Claim<T>, tag: &str, additivity: AdditivityClass) -> Result<ColorRank> {
+pub(crate) fn admit<T>(
+    claim: &Claim<T>,
+    tag: &str,
+    additivity: AdditivityClass,
+) -> Result<ColorRank> {
     claim.check_id()?;
     if claim.value_tag() != tag {
         return Err(refusal(
