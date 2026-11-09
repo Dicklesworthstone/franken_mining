@@ -13,6 +13,7 @@
 //!   is scored separately (§21.6, R7-C119);
 //! - `contact = "pre-contact" | "post-contact"`: any revision after first issuer contact is flagged.
 
+pub mod candidate;
 pub mod scoring;
 
 use std::cmp::Ordering;

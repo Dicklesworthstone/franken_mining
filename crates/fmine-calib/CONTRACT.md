@@ -40,6 +40,22 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 ## 4. Public API Surface
 - `FrozenForecast`, `ForecastPayload`, `ForecastLedger`
+- DESIGN (BD-067/BD-334): `record::candidate::build_candidate` generates a complete draft live-site × target
+  record from already selected quarterly observations. The named `pooled-quarterly-ratio-empirical-v1` model
+  uses each target's frozen persistence pool and inverse empirical CDF: the latest positive observation times
+  the pooled lower, median and upper ratios. Its exact interval equals that comparator's interval on identical
+  inputs, so it has the same interval score before export rounding; the changed point estimate is no evidence
+  of independent forecasting skill. Historical missing or nonpositive observations omit only their adjacent
+  pairs, with both endpoints retained in an exclusion audit. Missing live members or point observations,
+  duplicate/foreign members, malformed pool dates, empty ratio pools and exact overflow refuse the entire
+  candidate. Named not-published sites remain explicit. Output is deterministic in frozen rules order.
+  The exact rational rows and actual serialized decimal rows are separate: at a declared 0–12 decimal places,
+  lower bounds round down, upper bounds round up and points round to nearest with ties upward. Every CSV row
+  says `uncalibrated=true` and passes the existing complete-record parser. Export rounding can change scores;
+  it never silently replaces the exact calculation. Limits are 4,096 live members and 65,536 history values.
+  The pure kernel authenticates no source, availability time, author attestation or external time proof and
+  does not create an issued or registered forecast. Its adapter must bind every history and point value to
+  the original-release cell, source digest, unit, ownership basis and information cut before publication.
 - DESIGN (BD-047/BD-049, plan §10.1): `register_payload_with_metadata` freezes a complete
   `ForecastMetadata` beside the predictive distribution: family, author role, domain, horizon, site,
   quantity and unit. Every label is nonempty, trimmed, at most 256 bytes and free of control characters.
