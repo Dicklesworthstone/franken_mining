@@ -1335,6 +1335,48 @@ in each realized signal outcome; a conditional mean is never substituted for tha
 The screen neither recalibrates probabilities nor reoptimizes policies, measures loss severity,
 certifies physical feasibility or authorizes execution. Omitting the limit preserves existing card output.
 
+### Optimize test responses within a downside limit
+
+The fixed expected-value policy can fail a risk limit even when a different response to the same test
+would be feasible and valuable. To search the complete finite set of deterministic responses, add:
+
+```toml
+[[policy_optimization]]
+method = "exact_deterministic"
+screen = "nominal"
+max_policies = 4096
+max_work = 1000000
+```
+
+This requires the existing `[[downside_limit]]` and at least one information option. Choose
+`screen = "wasserstein"` to enforce the worst-case breach probability under the declared transport
+geometry; the optimization objective remains **nominal expected net payoff** in either mode.
+
+```bash
+cargo run -p fmine-cli -- decide card tests/decisions/constrained_testwork.toml --format markdown
+```
+
+The synthetic example sets a floor of −10 and a maximum breach probability of 1/20:
+
+| Response | Expected net value | Breach probability | Eligibility |
+|---|---:|---:|---|
+| Fixed EV policy: act after strong or medium signals | 34 | 1/10 | Rejected |
+| Optimized policy: act only after a strong signal | **57/2 = 28.5** | **1/100** | Eligible |
+| Best eligible act-now choice: hold | 0 | 0 | Eligible |
+
+The optimizer selects one common action per observed signal, never an action chosen with knowledge of the
+true state. Test and delay costs are charged once on every branch, including hold. Reports retain the
+original fixed-policy comparison, the selected mapping, its exact realized payoff law and risk measures,
+the exact number of co-optimal mappings, and the comparison with eligible act-now alternatives.
+Canonical signal/action ordering chooses one reproducible representative when multiple mappings tie.
+Unreachable signals select no action and do not inflate the policy count.
+
+The complete population is bounded before enumeration: at most 65,536 mappings and 4,000,000 declared
+work units across all options. Exhausted budgets refuse without a partial optimum. Infeasible options
+have no fabricated winner or value. This is exact optimization over the supplied finite deterministic
+policies; it does not optimize randomized or sequential policies, impose a CVaR limit, calibrate the
+probabilities or authorize action. Omitting the opt-in preserves existing cards and their identities.
+
 ### Evaluate whether testwork is worth buying
 
 DESIGN (BD-227, plan §22.4): the same command evaluates an optional information-gathering step before choosing

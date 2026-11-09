@@ -6,6 +6,10 @@ use crate::card::information::{POLICY_RULE, PolicyRisk, RISK_SCOPE};
 use super::{currency_name, ids, js, rq};
 
 pub(super) fn json(risk: &PolicyRisk) -> String {
+    json_with_rule(risk, POLICY_RULE)
+}
+
+pub(in crate::card) fn json_with_rule(risk: &PolicyRisk, policy_rule: &str) -> String {
     let distribution = risk
         .distribution
         .iter()
@@ -29,7 +33,7 @@ pub(super) fn json(risk: &PolicyRisk) -> String {
         rq(risk.cvar95_loss.major),
         rq(risk.loss_probability),
         ids(&risk.reachable_tie_signals),
-        js(POLICY_RULE),
+        js(policy_rule),
         js(RISK_SCOPE)
     )
 }

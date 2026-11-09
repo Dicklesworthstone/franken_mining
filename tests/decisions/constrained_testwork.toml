@@ -1,0 +1,120 @@
+# Invented finite model: every amount is in USD; no issuer or plant data.
+# The unconstrained EV policy acts after strong or medium signals: mean 34,
+# breach probability 1/10. At a -10 floor and 1/20 cap it is rejected.
+# The best feasible deterministic policy acts only after a strong signal:
+# mean 57/2, breach probability 1/100, versus eligible act-now hold at zero.
+# Its nominal signed-loss CVaR95 is 11; the probability constraint is not a CVaR limit.
+schema = "fmine.decision-model.v1"
+model_key = "invented-constrained-testwork"
+question = "Which response to an invented test maximizes expected value within the declared downside probability limit?"
+currency = "USD"
+valuation_basis = "Invented incremental NPV at 2026-01-01; real USD; 100% ownership; already discounted"
+
+[[state]]
+id = "high"
+weight = "1/2"
+
+[[state]]
+id = "low"
+weight = "1/2"
+
+[[action]]
+id = "act"
+label = "Take the invented risky action"
+role = "action"
+
+[[action]]
+id = "hold"
+label = "Do nothing"
+role = "do_nothing"
+
+[[payoff]]
+action = "act"
+state = "high"
+value = "100"
+
+[[payoff]]
+action = "act"
+state = "low"
+value = "-50"
+
+[[payoff]]
+action = "hold"
+state = "high"
+value = "0"
+
+[[payoff]]
+action = "hold"
+state = "low"
+value = "0"
+
+[[information_option]]
+id = "testwork"
+label = "Buy the invented three-signal test"
+test_cost = "1"
+delay_cost = "0"
+delay_days = 0
+
+[[signal]]
+option = "testwork"
+id = "strong"
+
+[[signal]]
+option = "testwork"
+id = "medium"
+
+[[signal]]
+option = "testwork"
+id = "low"
+
+[[likelihood]]
+option = "testwork"
+state = "high"
+signal = "strong"
+probability = "3/5"
+
+[[likelihood]]
+option = "testwork"
+state = "low"
+signal = "strong"
+probability = "1/50"
+
+[[likelihood]]
+option = "testwork"
+state = "high"
+signal = "medium"
+probability = "1/5"
+
+[[likelihood]]
+option = "testwork"
+state = "low"
+signal = "medium"
+probability = "9/50"
+
+[[likelihood]]
+option = "testwork"
+state = "high"
+signal = "low"
+probability = "1/5"
+
+[[likelihood]]
+option = "testwork"
+state = "low"
+signal = "low"
+probability = "4/5"
+
+[[downside_limit]]
+floor = "-10"
+max_breach_probability = "1/20"
+
+[[policy_optimization]]
+method = "exact_deterministic"
+screen = "nominal"
+max_policies = 4096
+max_work = 1000000
+
+[[uu]]
+id = "UU-omitted-operating-regime"
+description = "Invented omitted regimes may change both action payoffs and the signal model"
+trigger = "Independent evidence contradicts the declared state or signal model"
+downside_usd_m = "1.0"

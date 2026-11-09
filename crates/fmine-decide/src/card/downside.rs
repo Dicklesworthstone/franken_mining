@@ -7,9 +7,12 @@ use fmine_numerics::risk::exact::compare;
 use fmine_numerics::risk::transport::{TransportCertificate, TransportPlan};
 use information::ChoiceKind;
 
+pub mod policies;
 mod render;
 #[cfg(test)]
 mod tests;
+
+pub use policies::{PolicyOptimization, PolicyOptimizationSummary, PolicyScreen};
 
 pub const SCOPE: &str = "Conditional downside screening over the complete declared act-now actions and displayed fixed one-test policies. A breach means realized net payoff strictly below the monetary floor; equality is not a breach. Information-policy probabilities integrate the original signal likelihoods and charge test and delay costs once in every outcome, including do nothing. Nominal and, when declared, Wasserstein worst-case breach probabilities have separate eligibility results. Both eligible rankings maximize nominal expected value; the stressed probability screen does not change that objective. Every rejected choice remains visible, all ties survive, and an empty eligible set has no fallback. This does not reoptimize signal policies, infer test accuracy or calibrated probabilities, bound loss severity or CVaR, certify physical feasibility, or authorize execution.";
 
@@ -19,6 +22,8 @@ pub struct DownsideLimit {
     pub valuation_basis: String,
     pub floor: Money,
     pub max_breach_probability: Rat,
+    /// Explicit opt-in; absent means the original fixed-policy screen only.
+    pub policy_optimization: Option<PolicyOptimization>,
 }
 
 impl DownsideLimit {
@@ -30,6 +35,9 @@ impl DownsideLimit {
         enc.put_str(currency_name(self.floor.ccy));
         enc.put_fixed(&self.floor.minor.to_le_bytes());
         put_rat(&mut enc, self.max_breach_probability);
+        if let Some(configuration) = &self.policy_optimization {
+            configuration.encode(&mut enc);
+        }
         format!("decision-downside-limit/v1:{}", sha256(&enc.finish()))
     }
 }
@@ -88,6 +96,7 @@ pub struct DownsideSummary {
     pub choices: Vec<DownsideChoice>,
     pub nominal: DownsideRanking,
     pub robust: Option<DownsideRanking>,
+    pub policy_optimization: Option<PolicyOptimizationSummary>,
 }
 
 pub(super) fn admit_limit(
@@ -119,6 +128,9 @@ pub(super) fn admit_limit(
             RefusalCode::OutsidePhysicalDomain109,
             "maximum downside breach probability must lie in [0,1]",
         ));
+    }
+    if let Some(configuration) = &limit.policy_optimization {
+        configuration.validate()?;
     }
     Ok(color)
 }
@@ -250,6 +262,21 @@ pub(super) fn assess(
     }
     let nominal = ranking(&choices, false)?;
     let robust = plan.map(|_| ranking(&choices, true)).transpose()?;
+    let policy_optimization = claim
+        .value
+        .policy_optimization
+        .as_ref()
+        .map(|configuration| {
+            policies::optimize(
+                configuration,
+                options,
+                summary,
+                &claim.value,
+                &choices,
+                plan,
+            )
+        })
+        .transpose()?;
     Ok(Some(DownsideSummary {
         limit: claim.value.clone(),
         state_ids: states.iter().map(|s| s.state_id.clone()).collect(),
@@ -257,6 +284,7 @@ pub(super) fn assess(
         choices,
         nominal,
         robust,
+        policy_optimization,
     }))
 }
 

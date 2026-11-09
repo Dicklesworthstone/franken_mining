@@ -9,6 +9,7 @@ use super::*;
 
 mod policy_risk;
 pub(super) mod ranking;
+pub(in crate::card) use policy_risk::summarize as summarize_policy_risk;
 pub use policy_risk::{POLICY_RULE, PolicyPayoffMass, PolicyRisk, RISK_SCOPE};
 pub use ranking::{RiskChoice, RiskComparison};
 

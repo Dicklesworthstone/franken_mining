@@ -250,11 +250,50 @@ The projection is an internal versioned replay input (version 2), not a new dura
   relative to the unconstrained maximum nominal value. An empty eligible set is `NoEligibleChoice`, with
   empty ranks and null best-value/cost fields; doing nothing is never inserted as a fallback. Ordinary
   action statistics, nominal information results and the separate maximin-value view remain unchanged.
-  Omitting the limit preserves prior output bytes and Claim identities. This does not reoptimize policies,
+  Omitting the limit preserves prior output bytes and Claim identities. This fixed-policy screen does not reoptimize policies,
   supply calibrated probabilities, bound loss severity/CVaR, certify physical feasibility or authorize action.
   Known answers include the synthetic 1/8 nominal and 3/16 stressed test-policy loss probabilities, the
   inclusive 3/16 limit, exact floor-neighbor changes, no eligible choice, zero/full-radius limits, source
   mutations, early work bounds and an independent original-TOML state/signal plus primal-vertex oracle.
+
+- DESIGN (BD-225/227, plan §22.4–5): `card::downside::policies` optionally optimizes deterministic
+  signal-to-action mappings for each one-test option. Add one `[[policy_optimization]]` row with
+  `method = "exact_deterministic"`, `screen = "nominal"` or `"wasserstein"`, and explicit integer
+  `max_policies` and `max_work` budgets. An existing `[[downside_limit]]` and at least one information
+  option are required. The Wasserstein screen additionally requires the existing complete declared
+  transport geometry. The configuration belongs to the limit Claim, including its original row
+  locator, canonical identity, assumed evidence and confidentiality; no new authority is introduced.
+
+  Every policy chooses one original action per reachable signal, before learning the true state.
+  Its exact nominal expected net payoff is maximized subject to the original strict-floor event and
+  inclusive probability cap. Nominal screening averages the realized event over state/signal pairs.
+  Wasserstein screening maximizes the conditional breach vector over state weights, with the original
+  signal likelihoods fixed, and retains the winning policy's exact transport certificate. Costs are
+  paid once in every outcome, including do nothing. CVaR is reported for the representative's nominal
+  realized law but is neither the optimized objective nor a constraint. Randomized and sequential
+  policies are outside this slice.
+
+  Before any policy enumeration, checked multiplication counts the complete population across every
+  option. The limits are 65,536 total mappings and 4,000,000 conservative work cells. Work reserves
+  each policy's reachable-signal/state cells, state-weight cells and, for the stressed screen,
+  transport-objective state pairs, plus source-matrix and representative-risk cells. Exceeding either
+  declared budget refuses the whole request with FMINE-REF-203; no partial optimum is emitted. The
+  search streams action-index tuples instead of allocating the exponential population. Unreachable
+  signals select no action and do not multiply the count. Exact co-optimal mappings are counted,
+  with the lexicographically first action tuple in sorted reachable-signal order as representative.
+
+  The optional `downside.policy_optimization` output retains per-option feasible/optimal counts,
+  the complete representative mapping, exact objective and probabilities, realized payoff law,
+  original fixed EV-policy comparison, and the gain over the best eligible act-now alternative.
+  It separately ranks original act-now choices and optimized options. All-infeasible results have
+  no fabricated mapping, winner or improvement. Existing fixed-policy statistics remain unchanged;
+  omitting the opt-in preserves their prior output bytes and Claim identities. The invented
+  `tests/decisions/constrained_testwork.toml` case gives an unconstrained mean 34 at breach 1/10,
+  versus the feasible optimum 57/2 at breach 1/100 under a 1/20 cap, with act-now hold worth zero.
+  Tests also cover strict floors, once-only costs, robust equality, unreachable signals, exact ties,
+  no feasible choice, source identity and budget limits, plus independent twenty-atom exhaustive
+  oracles over 24 distinct finite models. These conditional calculations do not establish calibration,
+  physical feasibility, operational authority or completion of GATE-HELM-02.
 
 ## 5. Guards & Typed Refusals
 `rank_voi_campaigns` validates the shared problem once, even for an empty campaign list. Every campaign must

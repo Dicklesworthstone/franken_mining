@@ -13,6 +13,8 @@ use super::*;
 mod policy_risk;
 mod sensitivity;
 
+pub(in crate::card) use policy_risk::json_with_rule as policy_risk_json_with_rule;
+
 pub(crate) fn js(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {

@@ -10,6 +10,14 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-225/227, plan §22.4–22.5): `decide card` admits an optional source-bound
+  `[[policy_optimization]]` declaration with `exact_deterministic` method, nominal or Wasserstein
+  probability screen, and explicit policy/work limits. The decision owner streams complete one-test
+  mappings and maximizes nominal expected net payoff subject to the existing downside limit. Original
+  fixed-policy results remain visible; the new section carries a canonical optimum, exact tie count,
+  realized law, eligibility and act-now comparisons. Budgets refuse before enumeration; no feasible
+  mapping means no optimum. The CLI supplies no new authority. The actual-binary Fraction oracle in
+  `xtask/testdata/decision_policy_oracle.py` checks 29 nominal/two-state transport cases and work refusals.
 - DESIGN (BD-176/181, plan §17.3): `plant grinding --input <worksheet.toml>` delegates bounded,
   source-bound `fmine.plant-grinding.v1` declarations to `fmine_plant::grinding::worksheet`. Explicit
   metric dry-tonne, kWh, micron and kW bases, processing support, test basis and validity limits accompany

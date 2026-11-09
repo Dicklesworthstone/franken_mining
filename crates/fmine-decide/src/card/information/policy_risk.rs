@@ -129,7 +129,7 @@ pub(super) fn evaluate(
     summarize(masses, base.currency, total_cost, expected_gross, tied)
 }
 
-fn summarize(
+pub(in crate::card) fn summarize(
     masses: BTreeMap<i128, Rat>,
     currency: Currency,
     cost: Rat,

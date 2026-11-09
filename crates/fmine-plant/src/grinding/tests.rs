@@ -297,7 +297,7 @@ fn every_joint_member_must_be_complete_compatible_and_positive_weight() {
     let row = scenario("a", 10.0, 1000.0, 0.8, half());
     assert_eq!(evaluate(&m, &[]).unwrap_err().code, "FMINE-REF-201");
     assert_eq!(
-        evaluate(&m, &[row.clone()]).unwrap_err().code,
+        evaluate(&m, std::slice::from_ref(&row)).unwrap_err().code,
         "FMINE-REF-109"
     );
     assert_eq!(

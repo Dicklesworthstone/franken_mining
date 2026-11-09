@@ -40,8 +40,14 @@ fn money_text(value: Money) -> String {
 impl DownsideLimit {
     #[must_use]
     pub fn to_json(&self) -> String {
+        let optimization = self
+            .policy_optimization
+            .as_ref()
+            .map_or_else(String::new, |c| {
+                format!(",\"policy_optimization\":{}", c.to_json())
+            });
         format!(
-            "{{\"model_key\":{},\"valuation_basis\":{},\"floor\":{{\"currency\":{},\"minor\":{}}},\"max_breach_probability\":{}}}",
+            "{{\"model_key\":{},\"valuation_basis\":{},\"floor\":{{\"currency\":{},\"minor\":{}}},\"max_breach_probability\":{}{optimization}}}",
             js(&self.model_key),
             js(&self.valuation_basis),
             js(currency_name(self.floor.ccy)),
@@ -52,7 +58,7 @@ impl DownsideLimit {
 }
 
 impl DownsideRanking {
-    fn to_json(&self) -> String {
+    pub(in crate::card::downside) fn to_json(&self) -> String {
         format!(
             "{{\"status\":{},\"objective\":\"nominal_expected_value\",\"eligible_order\":{},\"winners\":{},\"best_expected_value\":{},\"expected_value_cost_of_limit\":{}}}",
             js(self.status.as_str()),
@@ -63,7 +69,7 @@ impl DownsideRanking {
         )
     }
 
-    fn append_markdown(&self, out: &mut String, title: &str) {
+    pub(in crate::card::downside) fn append_markdown(&self, out: &mut String, title: &str) {
         let _ = writeln!(out, "\n### {title}\n");
         if self.status == DownsideStatus::NoEligibleChoice {
             out.push_str("**No eligible choice.** Every declared choice fails this probability limit; no fallback is selected.\n");
@@ -100,8 +106,14 @@ impl DownsideSummary {
             c.robust_eligible.map_or_else(|| "null".into(), |v| v.to_string()),
             c.breach_certificate.as_ref().map_or_else(|| "null".into(), robustness::certificate_json)
         )).collect::<Vec<_>>().join(",");
+        let optimization = self
+            .policy_optimization
+            .as_ref()
+            .map_or_else(String::new, |o| {
+                format!(",\"policy_optimization\":{}", o.to_json())
+            });
         format!(
-            "{{\"limit\":{},\"event\":\"realized_net_payoff_strictly_below_floor\",\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"certificate_objective_unit\":\"probability\",\"state_ids\":{},\"nominal_weights\":{},\"choices\":[{choices}],\"nominal\":{},\"robust\":{},\"scope\":{}}}",
+            "{{\"limit\":{},\"event\":\"realized_net_payoff_strictly_below_floor\",\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"certificate_objective_unit\":\"probability\",\"state_ids\":{},\"nominal_weights\":{},\"choices\":[{choices}],\"nominal\":{},\"robust\":{},\"scope\":{}{optimization}}}",
             self.limit.to_json(),
             js(currency_name(self.limit.floor.ccy)),
             ids(&self.state_ids),
@@ -172,6 +184,9 @@ impl DownsideSummary {
                     "probability",
                 );
             }
+        }
+        if let Some(optimization) = &self.policy_optimization {
+            out.push_str(&optimization.to_markdown());
         }
         out
     }

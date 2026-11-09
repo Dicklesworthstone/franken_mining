@@ -50,6 +50,9 @@ struct DeclaredAction {
 /// Optional `robustness { method, radius, metric_basis, radius_basis }` declares a finite-support
 /// Wasserstein comparison. `transport_distance { from, to, value }` explicitly supplies every ordered state
 /// pair, including diagonal zeros. Radius and distance are quoted nonnegative fractions in the declared metric.
+/// Optional `policy_optimization { method = "exact_deterministic", screen = "nominal" | "wasserstein",
+/// max_policies, max_work }` explicitly searches one-test policies under the required `downside_limit`.
+/// Both budgets are positive integers; a Wasserstein screen additionally requires the declared geometry.
 ///
 /// The source names these assumptions; its hash does not establish that they are measured or calibrated.
 /// No evidence-upgrade, retrospective, confidentiality-downgrade or authority fields are accepted.
@@ -93,6 +96,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
     let mut information = InformationRows::default();
     let mut robustness = robustness::Rows::default();
     let mut downside_limit = None;
+    let mut policy_optimization = None;
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -147,6 +151,16 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
             "likelihood" => information.likelihood(row)?,
             "robustness" => robustness.declaration(row, model_key)?,
             "transport_distance" => robustness.distance(row)?,
+            "policy_optimization" => {
+                if policy_optimization.is_some() {
+                    return Err(bad(
+                        INPUT,
+                        row.line,
+                        "only one policy_optimization is permitted",
+                    ));
+                }
+                policy_optimization = Some((parse_policy_optimization(row)?, row.line));
+            }
             "downside_limit" => {
                 if downside_limit.is_some() {
                     return Err(bad(INPUT, row.line, "only one downside_limit is permitted"));
@@ -168,6 +182,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
                             "max_breach_probability must be an exact integer fraction in [0,1]",
                         )
                     })?,
+                    policy_optimization: None,
                 };
                 downside_limit = Some((value, row.line));
             }
@@ -250,6 +265,24 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
             ));
         }
     }
+    let optimization_line = policy_optimization.as_ref().map(|(_, line)| *line);
+    if let Some((configuration, line)) = policy_optimization {
+        let Some((limit, _)) = downside_limit.as_mut() else {
+            return Err(bad(
+                INPUT,
+                line,
+                "policy_optimization requires a downside_limit",
+            ));
+        };
+        if information.options.is_empty() {
+            return Err(bad(
+                INPUT,
+                line,
+                "policy_optimization requires an information option",
+            ));
+        }
+        limit.policy_optimization = Some(configuration);
+    }
     let unknowns: Vec<_> = unknowns.into_values().collect();
     let robustness = robustness.finish(
         &states,
@@ -290,16 +323,18 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
     let information_options = information.finish(&states, &unknowns, &source)?;
     let downside_limit = downside_limit.map(|(value, line)| {
         let tag = value.canonical_tag();
+        let locator = format!("downside_limit floor and maximum breach probability, line {line}");
+        let locator = optimization_line.map_or_else(
+            || locator.clone(),
+            |line| format!("{locator}; policy_optimization declaration, line {line}"),
+        );
         assumed(
             format!("decision.{model_key}.downside_limit"),
             value,
             &tag,
             AdditivityClass::NonAdditive,
             &unknowns,
-            located(
-                &source,
-                &format!("downside_limit floor and maximum breach probability, line {line}"),
-            ),
+            located(&source, &locator),
         )
     });
     let weights = WeightSet {
@@ -322,6 +357,56 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
         robustness,
         downside_limit,
     })
+}
+
+fn parse_policy_optimization(row: &TomlRow) -> Result<downside::PolicyOptimization, Refusal> {
+    let budget = |name| {
+        let field = row
+            .get(name)
+            .ok_or_else(|| bad(INPUT, row.line, &format!("missing field {name}")))?;
+        match &field.value {
+            TomlValue::Int(value) if *value > 0 => Ok(*value as u64),
+            _ => Err(bad(
+                INPUT,
+                field.line,
+                &format!("{name} must be a positive integer"),
+            )),
+        }
+    };
+    let max_policies = budget("max_policies")?;
+    let max_work = budget("max_work")?;
+    let fields: Vec<_> = row
+        .fields
+        .iter()
+        .filter(|f| !matches!(f.key.as_str(), "max_policies" | "max_work"))
+        .cloned()
+        .collect();
+    let [method, screen] = strings(&fields, ["method", "screen"], row.line, INPUT)?;
+    if method != downside::policies::METHOD {
+        return Err(bad(
+            INPUT,
+            row.line,
+            "policy optimization method must be exact_deterministic",
+        ));
+    }
+    let screen = match screen {
+        "nominal" => downside::PolicyScreen::Nominal,
+        "wasserstein" => downside::PolicyScreen::Wasserstein,
+        _ => {
+            return Err(bad(
+                INPUT,
+                row.line,
+                "policy optimization screen must be nominal or wasserstein",
+            ));
+        }
+    };
+    let configuration = downside::PolicyOptimization {
+        screen,
+        max_policies,
+        max_work,
+    };
+    configuration.validate()?;
+    Ok(configuration)
 }
 
 #[derive(Default)]
