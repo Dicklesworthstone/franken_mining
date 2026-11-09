@@ -73,8 +73,9 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 53
+[verbs] 56
 decide card
+decide recovery-bounds
 decide program
 assure public
 assure challenges
@@ -90,6 +91,7 @@ track-record
 recovery gap
 lint
 forecast assess
+forecast record build
 forecast record score
 forecast journal init
 forecast journal register
@@ -123,6 +125,7 @@ plant flowsheet
 plant transfer
 plant infer
 plant recovery
+plant rtd
 robot schema
 assure issue
 reliance export

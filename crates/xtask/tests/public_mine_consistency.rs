@@ -51,7 +51,7 @@ fn sheet(
                     "For the three months ended March 31,"
                 }),
             ),
-            ("B3".into(), MinimalCell::Number(2024.0)),
+            (format!("{first}3"), MinimalCell::Number(2024.0)),
             (format!("{first}4"), text("Gold produced (000s oz 100%)")),
             (
                 format!("{second}4"),
