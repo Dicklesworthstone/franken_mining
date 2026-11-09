@@ -1,0 +1,39 @@
+# Synthetic tonne trap. Grades must convert dry tonnes to contained-metal shares.
+schema = "fmine.recovery-bounds.v1"
+model_key = "untested_ore_tonnes"
+question = "Does the 85% recovery threshold hold after weighting contained gold?"
+route = "synthetic_additive_route"
+metal = "Au"
+additivity_basis = "Synthetic illustration: additive parcel recovery, with no blending or throughput interaction."
+untested_bound_basis = "Assumed 40-90% recovery for the untested stratum; no site measurement is supplied."
+
+[[weights]]
+basis = "dry_tonnes_and_grade"
+tested_tonnes_lower = "80"
+tested_tonnes_upper = "80"
+tested_grade_g_per_t_lower = "1"
+tested_grade_g_per_t_upper = "1"
+untested_tonnes_lower = "20"
+untested_tonnes_upper = "20"
+untested_grade_g_per_t_lower = "3"
+untested_grade_g_per_t_upper = "3"
+
+[[recovery]]
+role = "tested"
+lower = "0.90"
+upper = "0.90"
+
+[[recovery]]
+role = "untested"
+lower = "0.40"
+upper = "0.90"
+
+[[decision]]
+rule = "proceed_if_at_least"
+threshold = "0.85"
+
+[[uu]]
+id = "untested_bound_failure"
+description = "Untested material may violate the assumed recovery or grade bounds."
+trigger = "Representative testwork or grade reconciliation contradicts an admitted bound."
+downside_usd_m = "10"

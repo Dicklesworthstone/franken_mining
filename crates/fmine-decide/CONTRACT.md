@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Helm`
 - **LOC Budget:** `20k planned / 23k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["card", "voi_rank", "one_pager"]`
+- **Allowed Module Families:** `["bounds", "card", "voi_rank", "one_pager"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `DecisionCard` (`FMT-CARD-1`), `FlipMargin`, `rank_voi_campaigns` (`GATE-HELM-02`), and the
@@ -329,3 +329,32 @@ The local outline names these tests for the properties above: `test_decision_car
 The merge ec60a12 dropped two test families from this list; bd-coro restores them. `PolicyRisk` is tested in `card/information/policy_risk.rs` (5): `actual_gb29_policy_has_more_tail_loss_despite_positive_net_information_value`, `fractional_tail_boundary_and_inverse_cdf_endpoints_are_exact`, `all_gain_signed_losses_and_uniform_cost_translation_are_preserved`, `incomplete_mass_wrong_mean_and_unrepresentable_net_outcomes_refuse` and `full_model_retains_unreachable_signals_and_exposes_risk_relevant_posterior_ties`. `risk_comparison` is tested in `card/information/ranking.rs` (4): `frontier_keeps_expected_value_tail_tradeoffs_and_drops_dominated_choices`, `tail_ranking_retains_exact_ties_and_uses_value_only_for_presentation`, `equal_expected_value_with_strictly_lower_tail_loss_dominates` and `exact_loss_probability_distinguishes_zero_from_negative_payoff`. The other counts are `card.rs` 15, `card/model.rs` 10, `card/render/sensitivity.rs` 5 and `lib.rs` 12.
 
 `registries/l6_allow.toml` in this tree has two `fmine-decide` rows, for `from_linear_sensitivity` and for `build` (`cvar95_loss_usd_m`).
+
+## 12. Untested-ore recovery bounds (DESIGN; BD-351.S1, plan §17.4)
+
+`bounds::evaluate` accepts one source-bound `Claim<RecoveryBoundModel>`. Tested and untested strata
+have explicit closed recovery intervals, a named route and metal, an additivity basis, an untested-bound
+basis, and one positive named UU scenario. Weights are either a contained-metal fraction interval or
+explicit independent dry-tonne and grade intervals in grams per dry metric tonne. Tonnes alone are not
+metal weights. A box admitting zero combined contained metal refuses.
+
+Exact rational arithmetic enumerates all eight endpoint vertices and checks the closed-form extrema of
+`R = (1-w) * R_tested + w * R_untested`. The card retains witnesses and reports stable proceed, stable
+stop or unstable. Proceed means recovery is at least the declared threshold; stop is strictly below it.
+Decisive test conditions narrow only the admitted untested-recovery interval. Zero untested weight is
+handled without division, and unattainable tests are reported explicitly. The uncertain-weight example
+has bounds [19/25, 917/1000], a decisive proceed lower bound >=19/25 and a decisive stop upper bound
+strictly <34/75. Equality at 34/75 cannot guarantee stop. Declared interactions refuse additive averaging.
+
+`bounds::model::parse` reads strict `fmine.recovery-bounds.v1` worksheets with exact quoted quantities,
+no implicit physical-range defaults, verified source bytes and original-token anchors. JSON and Markdown
+retain inputs, results, weights, threshold, witnesses, sources, UU and an immutable digest binding the
+full Claim metadata. Outputs inherit confidentiality and UU; evidence meets ModelledUncalibrated.
+Parsed declarations remain Assumed and Internal. Bounds are not probabilities or measured recovery;
+no calibration, disclosure, reserve classification, VOI price or execution authority is supplied.
+
+Tests cover independent known answers, the tonne-weight trap, threshold equality, interval narrowing,
+zero-weight and impossible-test cases, enclosure over 10,000 Philox completions, source/metadata binding
+and refusal of invalid inputs. The synthetic examples are `tests/decisions/untested_ore.toml` and
+`tests/decisions/untested_ore_tonnes.toml`. Evidence-qualified testwork ingestion, BD-351.S2 coverage
+wiring and the real metallurgical commitment/testwork choice remain open.

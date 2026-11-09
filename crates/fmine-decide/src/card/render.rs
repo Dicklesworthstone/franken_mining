@@ -13,7 +13,7 @@ use super::*;
 mod policy_risk;
 mod sensitivity;
 
-pub(super) fn js(value: &str) -> String {
+pub(crate) fn js(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
         match ch {
@@ -35,7 +35,7 @@ pub(super) fn js(value: &str) -> String {
 pub(super) fn ratio(value: Rat) -> String {
     format!("{}/{}", value.num(), value.den())
 }
-pub(super) fn rq(value: Rat) -> String {
+pub(crate) fn rq(value: Rat) -> String {
     js(&ratio(value))
 }
 pub(super) fn ids(values: &[String]) -> String {
@@ -119,7 +119,7 @@ fn color_json(color: Color) -> String {
 
 /// Includes metadata omitted by generic Claim identity: support, representation, UU, current flags,
 /// supersession and the computed colour. The actual typed value is separately emitted by each caller.
-pub(super) fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
+pub(crate) fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
     let anchors = claim
         .anchors
         .iter()

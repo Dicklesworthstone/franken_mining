@@ -1,0 +1,33 @@
+# Synthetic declared decision model. These values are assumptions, not site testwork.
+schema = "fmine.recovery-bounds.v1"
+model_key = "untested_ore"
+question = "Does aggregate recovery remain at least 85% for every admitted completion?"
+route = "synthetic_additive_route"
+metal = "Au"
+additivity_basis = "Synthetic illustration: recoveries combine linearly on contained gold with no blending or throughput interaction."
+untested_bound_basis = "Explicit assumed range for untested ore; a targeted test must justify any narrower range."
+
+[[weights]]
+basis = "contained_metal"
+lower = "0.15"
+upper = "0.25"
+
+[[recovery]]
+role = "tested"
+lower = "0.88"
+upper = "0.92"
+
+[[recovery]]
+role = "untested"
+lower = "0.40"
+upper = "0.90"
+
+[[decision]]
+rule = "proceed_if_at_least"
+threshold = "0.85"
+
+[[uu]]
+id = "untested_bound_failure"
+description = "Untested ore may violate the declared recovery bound or additive route assumptions."
+trigger = "Targeted metallurgical test falls outside the declared range or identifies an interaction."
+downside_usd_m = "10"

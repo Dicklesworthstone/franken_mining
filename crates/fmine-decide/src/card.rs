@@ -20,7 +20,7 @@ use fmine_units::{Currency, Money, UnitsError};
 pub mod downside;
 pub mod information;
 pub mod model;
-mod render;
+pub(crate) mod render;
 pub mod robustness;
 pub mod stability;
 
@@ -232,7 +232,7 @@ fn named(value: &str) -> bool {
     !value.is_empty() && value.trim() == value && !value.chars().any(char::is_control)
 }
 
-fn admit<T>(claim: &Claim<T>, tag: &str, additivity: AdditivityClass) -> Result<ColorRank> {
+pub(crate) fn admit<T>(claim: &Claim<T>, tag: &str, additivity: AdditivityClass) -> Result<ColorRank> {
     claim.check_id()?;
     if claim.value_tag() != tag {
         return Err(refusal(

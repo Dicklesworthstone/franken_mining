@@ -12,6 +12,7 @@ use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Color, Refusal, RefusalCode};
 use fmine_numerics::voi::{VoiAnalysis, VoiError, VoiExperiment, VoiProblem, VoiSummary};
 
+pub mod bounds;
 pub mod card;
 
 /// Parameter perturbation threshold that flips the optimal action (`BD-227`).
