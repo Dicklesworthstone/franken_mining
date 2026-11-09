@@ -22,6 +22,7 @@ use kernel::{Sum, product, quotient, sum};
 
 mod kernel;
 pub mod recovery;
+pub mod worksheet;
 
 type Result<T> = std::result::Result<T, Refusal>;
 pub const MODEL_METRIC: &str = "plant.rtd.model/1";

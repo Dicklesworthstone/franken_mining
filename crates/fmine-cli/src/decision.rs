@@ -1,9 +1,9 @@
-//! Draft monetary comparisons and information options from explicit scenario assumptions (BD-225/227).
+//! Declared monetary decisions, information options and recovery bounds (BD-225/227/351.S1).
 //! Determinism: Exact (bounded model bytes and the exact finite-scenario evaluator).
 
 use std::path::Path;
 
-use fmine_decide::card;
+use fmine_decide::{bounds, card};
 use fmine_evidence::Refusal;
 
 use crate::{Envelope, NextAction, worksheet_input};
@@ -28,31 +28,49 @@ pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "\"example\":\"tests/decisions/expansion.toml\",\"information_example\":\"tests/decisions/metallurgical_test.toml\",\"robustness_example\":\"tests/decisions/wasserstein.toml\"}"
 );
 
-pub(crate) fn execute(model: &Path, root: &Path) -> Envelope {
+pub(crate) fn execute(model: &Path, root: &Path, recovery_bounds: bool) -> Envelope {
+    let (verb, mode, no_claim) = if recovery_bounds {
+        (
+            "decide recovery-bounds",
+            "declared_recovery_bounds",
+            bounds::NO_CLAIM,
+        )
+    } else {
+        ("decide card", "declared_model_comparison", card::NO_CLAIM)
+    };
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) = worksheet_input::read_model(
             &root.join(model),
             "decision model",
             "declared decision model",
         )?;
-        let inputs = card::model::parse(&text, source.clone())?;
-        let evaluated = card::evaluate(&inputs)?;
+        let (json, markdown) = if recovery_bounds {
+            let inputs = bounds::model::parse(&text, source.clone())?;
+            let evaluated = bounds::evaluate(&inputs)?;
+            (evaluated.to_json(), evaluated.to_markdown())
+        } else {
+            let inputs = card::model::parse(&text, source.clone())?;
+            let evaluated = card::evaluate(&inputs)?;
+            (evaluated.to_json(), evaluated.to_markdown())
+        };
         let payload = format!(
-            "{{\"mode\":\"declared_model_comparison\",\"source\":{},\"card\":{}}}",
+            "{{\"mode\":\"{mode}\",\"source\":{},\"card\":{}}}",
             worksheet_input::source_json(&source, text.len()),
-            evaluated.to_json(),
+            json,
         );
-        let mut envelope = Envelope::ok("decide card", payload, Vec::new());
-        envelope.no_claim = Some(card::NO_CLAIM);
-        envelope.warnings.push(
-            "Declared-model inputs are Assumed; state probabilities and test likelihoods are uncalibrated.".into(),
-        );
-        envelope.rendered_markdown = Some(evaluated.to_markdown());
+        let mut envelope = Envelope::ok(verb, payload, Vec::new());
+        envelope.no_claim = Some(no_claim);
+        envelope.warnings.push(if recovery_bounds {
+            "Declared recovery inputs remain Assumed, Internal and uncalibrated.".into()
+        } else {
+            "Declared-model inputs are Assumed; state probabilities and test likelihoods are uncalibrated.".into()
+        });
+        envelope.rendered_markdown = Some(markdown);
         Ok(envelope)
     };
     run().unwrap_or_else(|refusal| {
         Envelope::refused(
-            "decide card",
+            verb,
             refusal,
             vec![NextAction::new(
                 "fmine robot-docs",

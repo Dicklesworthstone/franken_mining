@@ -358,3 +358,7 @@ zero-weight and impossible-test cases, enclosure over 10,000 Philox completions,
 and refusal of invalid inputs. The synthetic examples are `tests/decisions/untested_ore.toml` and
 `tests/decisions/untested_ore_tonnes.toml`. Evidence-qualified testwork ingestion, BD-351.S2 coverage
 wiring and the real metallurgical commitment/testwork choice remain open.
+
+The CLI entry point is `fmine decide recovery-bounds <model-file> [--json|--format markdown]`.
+`crates/xtask/tests/recovery_bounds.rs` independently checks endpoint arithmetic with Python Fraction,
+strict threshold ties, source and UU identity, refusals and real-binary/library output agreement.

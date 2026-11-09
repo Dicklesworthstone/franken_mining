@@ -519,6 +519,24 @@ This is known-kernel forward transport and conditional lag alignment. RTD fittin
 deconvolution, mixed residence/reaction kinetics, empirical kernel qualification and recovery-card
 calibration remain unimplemented. BD-313 remains open.
 
+### Declared residence-time worksheet (DESIGN; BD-313)
+
+`rtd::worksheet::evaluate` exposes §19's forward transport and optional separate recovery comparison
+through strict `fmine.plant-rtd.v1` declarations. It is a pure parser/evaluator/renderer; the CLI owns
+bounded file reads. `fmine plant rtd --input <worksheet.toml>` accepts one total elemental measurand plus
+dry matter and water. Model dimensions, units, flow validity, work limits, every opening tank and dead
+inventory, and complete contiguous feed intervals are explicit. Source bytes, their SHA-256, original
+numeric tokens and admitted Claims remain in the receipt. A complete optional tail population must bind
+the same intervals and declare all delay-then-separation assumptions; any recovery failure refuses the
+entire operation without a successful transport receipt. Zero recovery denominators remain undefined.
+
+Inputs remain Assumed, Internal and uncalibrated. JSON retains all three conservation channels, interval
+and whole-window residuals, final inventories and both ordinary and lag-aligned recovery. The adapter
+introduces no RTD fitting, inverse deconvolution, reactive-stock inference or plant qualification.
+`xtask/tests/plant_rtd.rs` supplies independent one-tank and eight-tank pulse checks, bypass and
+dead stocks, shutdown, changed clock durations at fixed throughput, atomic refusal and source identity.
+The synthetic examples are `tests/plant/rtd_one_tank.toml` and `tests/plant/rtd_shift_pulse.toml`.
+
 ## 20. Joint recovery populations (DESIGN; plan §17.4, bounded BD-176/182)
 
 `cards::RecoveryModel::evaluate_ensemble` propagates a `Claim<RecoveryPopulation>` through the

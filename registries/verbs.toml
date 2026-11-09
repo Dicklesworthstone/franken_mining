@@ -9,6 +9,12 @@ mutates_authority = false
 description = "Compare explicit monetary alternatives on shared declared scenarios, retaining exact risk, regret, assumptions and source evidence"
 
 [[verb]]
+path = "decide recovery-bounds"
+subsystem = "Helm"
+mutates_authority = false
+description = "Bound additive recovery of tested and untested ore exactly, retaining metal weights, stable threshold decisions and decisive test conditions"
+
+[[verb]]
 path = "decide program"
 subsystem = "Helm"
 mutates_authority = false
@@ -301,6 +307,12 @@ path = "plant recovery"
 subsystem = "Crucible"
 mutates_authority = false
 description = "Evaluate explicitly declared versioned recovery cards, preserving source units, operational factors, corrections, caps and route assumptions"
+
+[[verb]]
+path = "plant rtd"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Propagate declared tank-train inventories and feed histories, retaining conservation and optional lag-aligned versus same-interval recovery"
 
 [[verb]]
 path = "robot schema"

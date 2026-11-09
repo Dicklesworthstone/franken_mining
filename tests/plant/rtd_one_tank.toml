@@ -1,0 +1,54 @@
+# SYNTHETIC known-answer example; these are not plant observations.
+# One well-mixed unit tank, one second, one m3 of integrated feed:
+# closing Au = 2 - exp(-1); outlet Au = 1 + exp(-1).
+# Tail = 0.1 * outlet; aligned recovery = 0.9.
+schema = "fmine.plant-rtd.v1"
+boundary = "synthetic-one-tank/v1"
+element = "Au"
+measurand = "total-Au/all-phases"
+mass_basis = "kg-total/all-phases/full-physical-boundary"
+start_ns = "0"
+end_ns = "1000000000"
+opening_ns = "0"
+tanks = "1"
+volume_m3 = "1"
+bypass_fraction = "0"
+dead_fraction = "0"
+min_flow_m3_per_s = "0"
+max_flow_m3_per_s = "2"
+common_conservative_transport = "true"
+piecewise_constant_feed_per_volume = "true"
+dry_tolerance_kg = "0.00000001"
+water_tolerance_kg = "0.00000001"
+element_tolerance_kg = "0.000000000001"
+max_kernel_steps = "64"
+
+[[opening]]
+tank = "1"
+dry_kg = "10.000"
+water_kg = "20"
+element_kg = "1"
+
+[[opening]]
+tank = "dead"
+dry_kg = "0"
+water_kg = "0"
+element_kg = "0"
+
+[[feed]]
+start_ns = "0"
+end_ns = "1000000000"
+slurry_volume_m3 = "1"
+dry_kg = "10"
+water_kg = "20"
+element_kg = "2"
+
+[[recovery]]
+delay_then_separation = "true"
+complete_tail_population = "true"
+all_non_tail_element_is_recovered = "true"
+
+[[tail]]
+start_ns = "0"
+end_ns = "1000000000"
+element_kg = "0.136787944117144232"

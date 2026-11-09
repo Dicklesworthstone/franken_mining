@@ -1,0 +1,137 @@
+# SYNTHETIC GB-41 eight-tank pulse, not fitted or observed plant behaviour.
+# Independent 75-digit Decimal Erlang integral, rounded to exact tail literals:
+# G(x) = x - 8 + exp(-x)*sum(j=0..7, (8-j)*x^j/j!); G(x <= 0) = 0.
+# mean grade(k) = 3 + 6*[G(4k+4)-2G(4k)+G(4k-4)]/4.
+# Tail kg = 0.12 * mean grade / 1000; declared recovery after delay is 88%.
+# Reference construction: crates/fmine-plant/examples/rtd_shift_pulse.rs.
+schema = "fmine.plant-rtd.v1"
+boundary = "synthetic-GB41-passive-delay/v1"
+element = "Au"
+measurand = "total-Au/all-phases"
+mass_basis = "kg-total/all-phases/full-physical-boundary"
+start_ns = "0"
+end_ns = "172800000000000"
+opening_ns = "0"
+tanks = "8"
+volume_m3 = "24"
+bypass_fraction = "0"
+dead_fraction = "0"
+min_flow_m3_per_s = "0"
+max_flow_m3_per_s = "0.0004"
+common_conservative_transport = "true"
+piecewise_constant_feed_per_volume = "true"
+dry_tolerance_kg = "0.00000001"
+water_tolerance_kg = "0.00000001"
+element_tolerance_kg = "0.000000000001"
+max_kernel_steps = "64"
+
+[[opening]]
+tank = "1"
+dry_kg = "250"
+water_kg = "500"
+element_kg = "0.00075"
+
+[[opening]]
+tank = "2"
+dry_kg = "250"
+water_kg = "500"
+element_kg = "0.00075"
+
+[[opening]]
+tank = "3"
+dry_kg = "250"
+water_kg = "500"
+element_kg = "0.00075"
+
+[[opening]]
+tank = "4"
+dry_kg = "250"
+water_kg = "500"
+element_kg = "0.00075"
+
+[[opening]]
+tank = "5"
+dry_kg = "250"
+water_kg = "500"
+element_kg = "0.00075"
+
+[[opening]]
+tank = "6"
+dry_kg = "250"
+water_kg = "500"
+element_kg = "0.00075"
+
+[[opening]]
+tank = "7"
+dry_kg = "250"
+water_kg = "500"
+element_kg = "0.00075"
+
+[[opening]]
+tank = "8"
+dry_kg = "250"
+water_kg = "500"
+element_kg = "0.00075"
+
+[[opening]]
+tank = "dead"
+dry_kg = "0"
+water_kg = "0"
+element_kg = "0"
+
+[[feed]]
+start_ns = "0"
+end_ns = "43200000000000"
+slurry_volume_m3 = "12"
+dry_kg = "1000"
+water_kg = "2000"
+element_kg = "0.009"
+
+[[feed]]
+start_ns = "43200000000000"
+end_ns = "86400000000000"
+slurry_volume_m3 = "12"
+dry_kg = "1000"
+water_kg = "2000"
+element_kg = "0.003"
+
+[[feed]]
+start_ns = "86400000000000"
+end_ns = "129600000000000"
+slurry_volume_m3 = "12"
+dry_kg = "1000"
+water_kg = "2000"
+element_kg = "0.003"
+
+[[feed]]
+start_ns = "129600000000000"
+end_ns = "172800000000000"
+slurry_volume_m3 = "12"
+dry_kg = "1000"
+water_kg = "2000"
+element_kg = "0.003"
+
+[[recovery]]
+delay_then_separation = "true"
+complete_tail_population = "true"
+all_non_tail_element_is_recovered = "true"
+
+[[tail]]
+start_ns = "0"
+end_ns = "43200000000000"
+element_kg = "0.000366052857708152889"
+
+[[tail]]
+start_ns = "43200000000000"
+end_ns = "86400000000000"
+element_kg = "0.000548898890592553796"
+
+[[tail]]
+start_ns = "86400000000000"
+end_ns = "129600000000000"
+element_kg = "0.000713953938260800525"
+
+[[tail]]
+start_ns = "129600000000000"
+end_ns = "172800000000000"
+element_kg = "0.000504046296833828816"

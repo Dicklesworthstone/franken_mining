@@ -10,6 +10,17 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-351.S1): `decide recovery-bounds <model-file>` reads bounded source bytes and invokes
+  `fmine_decide::bounds` for exact conditional two-stratum recovery bounds. JSON and Markdown retain
+  source identity, witnesses, stability, decisive test conditions and Claim/UU metadata. Interactions and
+  inadmissible inputs refuse. Examples and independent Fraction/real-binary checks live in
+  `tests/decisions/untested_ore*.toml` and `xtask/tests/recovery_bounds.rs`.
+- DESIGN (BD-313): `plant rtd --input <worksheet.toml>` reads strict `fmine.plant-rtd.v1` declarations
+  and calls the pure `fmine_plant::rtd::worksheet` adapter. Reports preserve conservation, stocks and
+  optional ordinary versus lag-aligned recovery. Any recovery failure refuses the complete result.
+  Inputs remain Assumed and Internal; synthetic fixtures and direct CLI-library checks are in
+  `tests/plant/rtd_*.toml` and `xtask/tests/plant_rtd.rs`.
+
 - DESIGN (BD-341): `track_record_binding` composes agreed, dated guidance transcriptions with annual
   Mine Stats Claims loaded by `fmine-public`. Supported quantity suffixes are `production_koz`,
   `production_kt`, `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`, under

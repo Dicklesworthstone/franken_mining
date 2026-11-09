@@ -146,6 +146,31 @@ declared coordinate dependence; the engine does not substitute marginal means or
 These are conditional calculations under supplied scenarios, with no fitted distribution, model-error
 estimate, empirical probability calibration or forecast registration.
 
+### Compare transient feed and tail observations
+
+A declared residence-time model can now be run from a worksheet:
+
+```sh
+cargo run -p fmine-cli -- plant rtd --input tests/plant/rtd_one_tank.toml --json
+cargo run -p fmine-cli -- plant rtd --input tests/plant/rtd_shift_pulse.toml --format markdown
+```
+
+The strict `fmine.plant-rtd.v1` input names the tank train, bypass and dead volume, flow validity,
+numerical work limit, every opening inventory and the complete feed intervals. Transport follows
+integrated slurry volume. The report retains source bytes and their SHA-256, admitted Claims, dry-matter,
+water and elemental conservation, residuals and final inventories.
+
+An optional complete tail population permits a conditional recovery comparison when all
+delay-then-separation assumptions are declared. The report keeps ordinary same-interval recovery
+separate from lag-aligned recovery; a zero denominator stays undefined. The eight-tank synthetic example
+constructs 88% lag-aligned recovery in each interval even though the ordinary ratios differ. Changed
+clock durations with the same integrated throughput preserve the transport result within the declared
+flow-validity domain.
+
+These are assumed inputs and a known forward kernel. No residence-time fitting, inverse deconvolution,
+reactive-stock inference or plant calibration is supplied. Invalid optional recovery observations refuse
+the whole operation without a successful transport receipt.
+
 ### Run the public lane
 
 With the pinned Rust toolchain, fetch the registered public workbooks and run:
@@ -1097,6 +1122,34 @@ These are conditional comparisons of declared assumptions. The examples apply no
 correction, and the output supplies no calibrated signal probabilities, empirical selection frequency,
 additional decision stages, inferred JV agreement terms, project feasibility approval or execution authority.
 The wider CapitalProgram and its M4 gates remain open.
+
+### Bound a recovery decision with untested ore
+
+```sh
+cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_ore.toml --json
+cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_ore_tonnes.toml --format markdown
+```
+
+The strict `fmine.recovery-bounds.v1` worksheet declares tested and untested recovery intervals,
+a contained-metal weight interval or explicit dry tonnes and grades, a decision threshold, an additivity
+basis, the basis for the untested bound and one named positive UU exposure. All physical quantities use
+quoted exact decimals or fractions. The card reports exact recovery bounds, all eight endpoint witnesses,
+decision stability and the attainable test conditions that would settle the choice.
+
+For the first synthetic worksheet, uncertain weights and tested recovery give an aggregate interval
+of **[19/25, 917/1000]**. At an 85% threshold the choice is unstable: a valid test raising the untested
+lower bound to at least **19/25** guarantees proceed; lowering its upper bound to strictly below
+**34/75** guarantees stop. The strict inequality matters because equality with the decision threshold
+counts as proceed.
+
+The tonne example supplies 80 dry tonnes at 1 g/t and 20 dry tonnes at 3 g/t. Untested ore therefore
+contains **3/7** of the metal, and the aggregate lower bound is **24/35**. A 20% tonne fraction would
+produce the wrong recovery bound.
+
+JSON and Markdown preserve the source, input/output Claims, evidence, confidentiality and UU. The
+receipt binds that metadata as well as the numerical result. These are conditional identification
+bounds over declared assumptions, without probabilities, calibrated predictions, measured recovery,
+reserve classification or execution authority. Declared blending interactions refuse additive averaging.
 
 ### Compare explicit decision alternatives
 

@@ -73,6 +73,8 @@ pub enum CliCommand {
     ReserveReplacement(reserve::Command),
     /// Compare explicit monetary alternatives on one declared finite scenario set (BD-225).
     DecideCard { model: PathBuf },
+    /// Bound recovery for explicit tested and untested strata on one additive route (BD-351.S1).
+    RecoveryBounds { model: PathBuf },
     /// Construct affordable static project bundles on shared declared scenarios (BD-229).
     CapitalProgram { model: PathBuf },
     /// Compare explicitly selected public JV production/sales assertions on a common dated perimeter.
@@ -509,6 +511,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--format" | "--workspace" => next += 2,
                         "--json" => next += 1,
                         "program" => return "decide program",
+                        "recovery-bounds" => return "decide recovery-bounds",
                         _ => return "decide card",
                     }
                 }
@@ -1136,20 +1139,24 @@ pub fn parse_args(
 
     let cmd = match positional[0].as_str() {
         "decide" => {
+            let usage = "expected 'fmine decide card|program|recovery-bounds <model-file>'";
             let [_, subcommand, model] = positional.as_slice() else {
-                return Err("expected 'fmine decide card|program <model-file>'".into());
+                return Err(usage.into());
             };
             if model.trim().is_empty() {
-                return Err("expected 'fmine decide card|program <model-file>'".into());
+                return Err(usage.into());
             }
             match subcommand.as_str() {
                 "card" => CliCommand::DecideCard {
                     model: PathBuf::from(model),
                 },
+                "recovery-bounds" => CliCommand::RecoveryBounds {
+                    model: PathBuf::from(model),
+                },
                 "program" => CliCommand::CapitalProgram {
                     model: PathBuf::from(model),
                 },
-                _ => return Err("expected 'fmine decide card|program <model-file>'".into()),
+                _ => return Err(usage.into()),
             }
         }
         "check" => {
@@ -1782,7 +1789,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::Plant(command) => plant::execute(command, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
-        CliCommand::DecideCard { model } => decision::execute(model, workspace_root),
+        CliCommand::DecideCard { model } => decision::execute(model, workspace_root, false),
+        CliCommand::RecoveryBounds { model } => decision::execute(model, workspace_root, true),
         CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {
@@ -2174,8 +2182,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::NETWORK_USAGE,
                 plant::INFER_USAGE,
                 plant::RECOVERY_USAGE,
+                plant::RTD_USAGE,
                 html::USAGE,
                 "decide card <model-file>",
+                "decide recovery-bounds <model-file>",
                 capital::USAGE,
                 "assure public --issuer <issuer> [--through YYYYQn]",
                 "assure public --synthetic",
@@ -2250,6 +2260,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.pop();
             payload.push_str(",\"decision\":");
             payload.push_str(decision::ROBOT_DOCS_JSON);
+            payload.push_str(",\"recovery_bounds\":");
+            payload.push_str(fmine_decide::bounds::model::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_candidate\":");
             payload.push_str(forecast_candidate::ROBOT_DOCS_JSON);
             payload.push_str(concat!(
@@ -2288,6 +2300,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(plant::INFERENCE_DOCS_JSON);
             payload.push_str(",\"plant_recovery\":");
             payload.push_str(plant::RECOVERY_DOCS_JSON);
+            payload.push_str(",\"plant_rtd\":");
+            payload.push_str(plant::RTD_DOCS_JSON);
             payload.push_str(",\"html_claims\":");
             payload.push_str(html::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_distributions\":");
