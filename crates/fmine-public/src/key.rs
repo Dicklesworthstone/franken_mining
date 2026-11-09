@@ -190,20 +190,32 @@ const fn gcd(mut a: i64, mut b: i64) -> i64 {
 
 /// The ownership basis printed in a header label such as `Porgera (24.5%)1`.
 ///
-/// `100%` anywhere in the label is [`OwnershipBasis::Consolidated100`], checked before anything is stripped.
+/// A standalone `100%` in the label is [`OwnershipBasis::Consolidated100`], checked before anything is stripped.
 /// Otherwise a trailing footnote run of one or two digits is stripped, and a final `(x%)` with x in (0, 100) is
 /// the printed share. A label with no `%` is [`OwnershipBasis::Unprinted`]; a `%` that does not read that way
 /// refuses.
 pub fn parse_ownership(label: &str) -> Result<OwnershipBasis, KeyRefusal> {
-    if label.contains("100%") {
-        return Ok(OwnershipBasis::Consolidated100);
-    }
     if !label.contains('%') {
         return Ok(OwnershipBasis::Unprinted);
     }
     let refuse = || KeyRefusal::PrintedShare {
         label: label.to_string(),
     };
+    if label.matches('%').count() != 1 {
+        return Err(refuse());
+    }
+    if label.match_indices("100%").any(|(at, token)| {
+        label[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || c == '(')
+            && label[at + token.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_whitespace() || c == ')')
+    }) {
+        return Ok(OwnershipBasis::Consolidated100);
+    }
     let trimmed = label.trim_end();
     let digits = trimmed.len() - trimmed.trim_end_matches(|c: char| c.is_ascii_digit()).len();
     let body = if (1..=2).contains(&digits) {
@@ -214,19 +226,22 @@ pub fn parse_ownership(label: &str) -> Result<OwnershipBasis, KeyRefusal> {
     let pct = body
         .strip_suffix("%)")
         .and_then(|b| b.rsplit_once('('))
-        .map(|(_, p)| p)
+        .map(|(_, p)| p.trim())
         .ok_or_else(refuse)?;
     let (int, frac) = pct.split_once('.').unwrap_or((pct, ""));
     let all_digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
-    if int.is_empty() || int.len() > 2 || frac.len() > 3 || !all_digits(int) || !all_digits(frac) {
+    if int.is_empty() || int.len() > 3 || frac.len() > 3 || !all_digits(int) || !all_digits(frac) {
         return Err(refuse());
     }
     // x% = digits / (100 · 10^places).
     let scale = 10_i64.pow(frac.len() as u32);
     let num: i64 = format!("{int}{frac}").parse().map_err(|_| refuse())?;
     let den = 100 * scale;
-    if num <= 0 || num >= den {
+    if num <= 0 || num > den {
         return Err(refuse());
+    }
+    if num == den {
+        return Ok(OwnershipBasis::Consolidated100);
     }
     let g = gcd(num, den);
     Ok(OwnershipBasis::Attributable {

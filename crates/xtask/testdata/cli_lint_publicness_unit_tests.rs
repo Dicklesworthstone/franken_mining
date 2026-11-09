@@ -105,6 +105,81 @@ mod tests {
     }
 
     #[test]
+    fn ownership_scaling_never_discards_conflicting_metadata_with_the_same_source_id() {
+        let (profile, mut cells, dates) = fixture(&["100"]);
+        cells.push(cells[0].clone());
+        for (i, c) in cells.iter_mut().enumerate() {
+            c.key.unit = "koz".into();
+            c.key.line.label = if i == 0 {
+                "summary:au_prod_100_koz"
+            } else {
+                "summary:au_sold_attr_koz"
+            }
+            .into();
+            c.key.ownership_basis = if i == 0 {
+                OwnershipBasis::Consolidated100
+            } else {
+                OwnershipBasis::Attributable {
+                    num: 3,
+                    den: 5,
+                    source: fmine_public::key::ShareSource::Printed,
+                }
+            };
+            c.printed_basis = c.key.ownership_basis;
+            c.locator = format!("Quarter1.xlsx:QTD!{}5", if i == 0 { "D" } else { "E" });
+            let mut anchor = c.claim.anchors[0].clone();
+            anchor.locator = if i == 0 { "QTD!D5" } else { "QTD!E5" }.into();
+            c.claim = Claim::new(
+                &c.key.line.label,
+                c.claim.value.clone(),
+                &canonical_value_tag(&c.key, &c.claim.value),
+                Representation::Deterministic,
+                SpatialSupport::PeriodAggregate,
+                AdditivityClass::ExtensiveAdditive,
+                c.claim.evidence,
+                c.claim.epistemic,
+                c.claim.state,
+                c.claim.confidentiality.clone(),
+                vec![],
+                vec![],
+                vec![anchor],
+            );
+        }
+        let text = "Site A Q1 2030 attributable gold production is 60 koz.";
+        let positive = evaluate(text, &cells, &profile, &dates, "2030-05-01");
+        assert_eq!(
+            positive.findings[0].ownership.as_ref().unwrap().status,
+            "derived"
+        );
+        let mut conflicting = cells[1].clone();
+        conflicting.claim.uu_terms.push(fmine_claim::UuTerm {
+            scenario_id: "same-id-distinct-exposure".into(),
+            description: "Evidence requiring separate treatment".into(),
+            downside_exposure_usd_m: 5.0,
+            trigger_indicator: "Ownership disclosure correction".into(),
+        });
+        conflicting.claim.check_id().unwrap();
+        assert_eq!(conflicting.claim.claim_id, cells[1].claim.claim_id);
+        cells.push(conflicting);
+        let first = evaluate(text, &cells, &profile, &dates, "2030-05-01");
+        cells.reverse();
+        let reversed = evaluate(text, &cells, &profile, &dates, "2030-05-01");
+        for report in [&first, &reversed] {
+            assert_eq!(
+                report.findings[0].ownership.as_ref().unwrap().status,
+                "ambiguous"
+            );
+            assert_ne!(report.findings[0].status, "derivable");
+            assert!(
+                report
+                    .to_json()
+                    .contains("same_source_identity_has_conflicting_claim_metadata")
+            );
+        }
+        assert_eq!(first.to_json(), reversed.to_json());
+    }
+
+    #[test]
     fn quarter_sum_unverifiable_competitors_block_unless_positively_after_cut() {
         let (profile, mut cells, mut dates) = fixture(&["100.0", "200.0", "100.0"]);
         for (i, c) in cells.iter_mut().enumerate() {

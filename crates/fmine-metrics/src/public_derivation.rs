@@ -2,8 +2,8 @@
 //! Determinism: Exact
 //!
 //! DESIGN: closed rational intervals propagate the printed precision of source assertions. They are
-//! neither forecasts nor confidence intervals. Only Q1 + Q2 = H1, Q1 + Q2 + Q3 = 9M and Q1 + Q2 + Q3 + Q4 = FY
-//! are admitted here. Publication admission belongs to the source adapter; cumulative differences
+//! neither forecasts nor confidence intervals. Complete quarter sums and full-mine amounts scaled by
+//! explicitly evidenced ownership are admitted here. Publication admission belongs to the source adapter; cumulative differences
 //! use the existing `roll_forward::quarter` identity.
 
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
@@ -15,6 +15,8 @@ use crate::guidance::{Ownership, Period};
 
 type Result<T> = std::result::Result<T, Refusal>;
 pub const INPUT_METRIC: &str = "public_disclosure.period_amount";
+pub const SHARE_METRIC: &str = "public_disclosure.ownership_share";
+pub const OWNERSHIP_SCALE_RULE: &str = "public-disclosure.ownership-scale/1";
 pub const WARNING: &str = "Arithmetic over dated public assertions does not make the derived figure an issuer disclosure. A non-obvious derived figure can itself be new information; obtain appropriate disclosure review.";
 
 /// Extensive quantities only: rates, grades, recovery and per-unit costs cannot enter these identities.
@@ -97,9 +99,9 @@ fn checked<T>(result: std::result::Result<T, fmine_units::UnitsError>) -> Result
     })
 }
 
-fn validate(claim: &Claim<Amount>) -> Result<()> {
+fn validate_source<T>(claim: &Claim<T>, metric: &str, tag: &str) -> Result<()> {
     claim.check_id()?;
-    if claim.metric_key != INPUT_METRIC || claim.value_tag() != claim.value.canonical_tag() {
+    if claim.metric_key != metric || claim.value_tag() != tag {
         return Err(refusal(
             RefusalCode::FrozenRecordMutation507,
             "source interpretation differs from its canonical identity",
@@ -127,6 +129,11 @@ fn validate(claim: &Claim<Amount>) -> Result<()> {
             "operand lacks an admissible deterministic source interpretation",
         ));
     }
+    Ok(())
+}
+
+fn validate(claim: &Claim<Amount>) -> Result<()> {
+    validate_source(claim, INPUT_METRIC, &claim.value.canonical_tag())?;
     if claim.additivity != AdditivityClass::ExtensiveAdditive {
         return Err(refusal(
             RefusalCode::NonAdditiveAverage103,
@@ -159,6 +166,132 @@ fn validate(claim: &Claim<Amount>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Exact, explicitly sourced ownership for one subject, perimeter and physical period. A registry
+/// correction or an ownership fraction from another period is not a printed share assertion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnershipShare {
+    pub issuer: String,
+    pub subject: String,
+    pub scope: String,
+    pub period: Period,
+    pub fraction: Rat,
+}
+
+impl OwnershipShare {
+    #[must_use]
+    pub fn canonical_tag(&self) -> String {
+        let mut enc = Encoder::new_frame(*b"PDSH", 1);
+        enc.put_str(&self.issuer);
+        enc.put_str(&self.subject);
+        enc.put_str(&self.scope);
+        enc.put_u16(self.period.year);
+        enc.put_u8(self.period.first_month);
+        enc.put_u8(self.period.last_month);
+        enc.put_i128(self.fraction.num());
+        enc.put_i128(self.fraction.den());
+        blake3_hash(&enc.finish()).to_hex()
+    }
+}
+
+/// Full-mine to attributable production/sales only. Every independent share witness is retained;
+/// differing shares refuse instead of choosing the fraction that agrees with a draft amount.
+pub fn ownership_scale(
+    amount: &Claim<Amount>,
+    shares: &[Claim<OwnershipShare>],
+) -> Result<Claim<Amount>> {
+    validate(amount)?;
+    if amount.value.ownership != Ownership::Full {
+        return Err(refusal(
+            RefusalCode::BasisMismatch105,
+            "ownership scaling requires a full-mine source amount",
+        ));
+    }
+    let Some(first) = shares.first() else {
+        return Err(refusal(
+            RefusalCode::NoClaimInDomain201,
+            "missing ownership evidence",
+        ));
+    };
+    let a = &amount.value;
+    let fraction = first.value.fraction;
+    for share in shares {
+        validate_source(share, SHARE_METRIC, &share.value.canonical_tag())?;
+        let s = &share.value;
+        if share.additivity != AdditivityClass::NonAdditive
+            || (&s.issuer, &s.subject, &s.scope, s.period)
+                != (&a.issuer, &a.subject, &a.scope, a.period)
+            || s.fraction != fraction
+        {
+            return Err(refusal(
+                RefusalCode::BasisMismatch105,
+                "ownership witnesses differ in fraction, subject, period or perimeter",
+            ));
+        }
+        if s.fraction.signum() <= 0
+            || checked(s.fraction.checked_cmp(Rat::from_integer(1)))?.is_gt()
+        {
+            return Err(refusal(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                "ownership fraction must lie in (0, 1]",
+            ));
+        }
+    }
+    let mut ordered: Vec<_> = shares.iter().collect();
+    ordered.sort_by_key(|c| c.claim_id);
+    if ordered
+        .windows(2)
+        .any(|pair| pair[0].claim_id == pair[1].claim_id && pair[0] != pair[1])
+    {
+        return Err(refusal(
+            RefusalCode::BasisMismatch105,
+            "ownership witnesses share an identity but differ in Claim metadata",
+        ));
+    }
+    ordered.dedup_by_key(|c| c.claim_id);
+    let mut value = a.clone();
+    value.ownership = Ownership::Attributable { share: fraction };
+    value.interval.lo = checked(value.interval.lo.checked_mul(fraction))?;
+    value.interval.hi = checked(value.interval.hi.checked_mul(fraction))?;
+    let mut evidence = amount.evidence.meet(EvidenceClass::Derived);
+    let mut epistemic = amount.epistemic;
+    let mut state = amount.state;
+    let mut terms = amount.uu_terms.clone();
+    let mut parents = vec![amount.claim_id];
+    let mut anchors = amount.anchors.clone();
+    for c in ordered {
+        evidence = evidence.meet(c.evidence);
+        epistemic = epistemic.and(c.epistemic);
+        state = state.and(c.state);
+        for term in &c.uu_terms {
+            if !terms.contains(term) {
+                terms.push(term.clone());
+            }
+        }
+        parents.push(c.claim_id);
+        anchors.extend(c.anchors.iter().cloned());
+    }
+    parents.sort();
+    parents.dedup();
+    anchors.sort();
+    anchors.dedup();
+    let tag = value.canonical_tag();
+    Ok(Claim::new(
+        OWNERSHIP_SCALE_RULE,
+        value,
+        &tag,
+        Representation::Deterministic,
+        SpatialSupport::PeriodAggregate,
+        AdditivityClass::ExtensiveAdditive,
+        evidence,
+        epistemic,
+        state,
+        amount.confidentiality.clone(),
+        terms,
+        parents,
+        anchors,
+    ))
 }
 
 /// Applies a named identity without choosing inputs by their numerical agreement with a draft.

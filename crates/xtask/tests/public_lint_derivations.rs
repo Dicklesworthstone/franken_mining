@@ -1453,6 +1453,447 @@ fn regional_subtraction_requires_the_same_registered_membership_at_both_releases
     }
 }
 
+fn ownership_source(
+    root: &Path,
+    file: &str,
+    release: &str,
+    date: Option<&str>,
+    label: &str,
+    include_share: bool,
+) {
+    let mut sheet = summary("Q1", label, PRODUCTION, number("100"));
+    if include_share {
+        sheet
+            .cells
+            .push(("C2".into(), MinimalCell::Text(SALES.into())));
+        sheet.cells.push(("C3".into(), number("50")));
+    }
+    // Distinct publications can repeat the same observations but must have distinct registered bytes.
+    let note = MinimalSheet {
+        name: "Publication note".into(),
+        hidden: false,
+        cells: vec![(
+            "A1".into(),
+            MinimalCell::Text(format!("Invented publication {file} ({release})")),
+        )],
+    };
+    source(root, file, release, date, "0", &[sheet, note]);
+}
+
+fn ownership_report(report: &Envelope) -> &str {
+    report
+        .payload_json
+        .split_once("\"ownership_scaling\":")
+        .expect("ownership assessment")
+        .1
+}
+
+const OWNERSHIP_DRAFT: &str = "Example Mine Q1 2030 attributable gold production is 60 koz.";
+
+#[test]
+fn ownership_scaling_uses_same_source_printed_share_and_exact_rounding() {
+    let root = derivation_workspace();
+    ownership_source(
+        &root,
+        "Ownership.xlsx",
+        "2030Q1",
+        Some("2030-05-01"),
+        "Example Mine (60%)",
+        true,
+    );
+    let report = assess(&root, OWNERSHIP_DRAFT, "2030-05-01");
+    let ownership = ownership_report(&report);
+    assert_eq!(
+        string_field(ownership, "status"),
+        "derived",
+        "{}",
+        report.to_json()
+    );
+    assert!(report.payload_json.contains("\"status\":\"derivable\""));
+    assert!(!report.payload_json.contains("\"status\":\"disclosed\""));
+    assert!(ownership.contains("\"fraction\":{\"num\":\"3\",\"den\":\"5\"}"));
+    let derived = ownership.split_once("\"derived_claim\":").unwrap().1;
+    // Independently: (100 +/- 0.5) * 0.6 = [59.7, 60.3].
+    assert!(derived.contains("\"lo\":{\"num\":\"597\",\"den\":\"10\"}"));
+    assert!(derived.contains("\"hi\":{\"num\":\"603\",\"den\":\"10\"}"));
+    let profile = load_issuer_profile(&root, DERIVATION_ISSUER).unwrap();
+    let snapshot = fmine_public::run_public_assurance(&profile, &root).unwrap();
+    for at in ["Ownership.xlsx:QTD!B3", "Ownership.xlsx:QTD!C3"] {
+        let c = &snapshot.public_claims.cells[at];
+        assert!(ownership.contains(&format!("\"parents\":[\"{}\"]", c.claim.claim_id)));
+        assert!(ownership.contains(&c.key.reporting_vintage.file_sha256));
+    }
+    assert_eq!(report, assess(&root, OWNERSHIP_DRAFT, "2030-05-01"));
+    let precise = assess(
+        &root,
+        &OWNERSHIP_DRAFT.replace("60 koz", "60.0 koz"),
+        "2030-05-01",
+    );
+    assert_eq!(
+        string_field(ownership_report(&precise), "status"),
+        "precision_not_established"
+    );
+    assert!(!precise.payload_json.contains("\"status\":\"derivable\""));
+    let mismatch = assess(
+        &root,
+        &OWNERSHIP_DRAFT.replace("60 koz", "80 koz"),
+        "2030-05-01",
+    );
+    assert_eq!(
+        string_field(ownership_report(&mismatch), "status"),
+        "contradicted"
+    );
+    let (markdown, code) = run(
+        &args(&[
+            "lint",
+            "derived.md",
+            "--issuer",
+            DERIVATION_ISSUER,
+            "--discover",
+            "--as-of",
+            "2030-05-01",
+            "--format",
+            "markdown",
+        ]),
+        &root,
+    );
+    assert_eq!(code, 0);
+    for text in [
+        "Ownership scaling",
+        "Ownership Claim",
+        "Ownership.xlsx:QTD!C3",
+        "non-obvious derived figure",
+    ] {
+        assert!(markdown.contains(text), "{markdown}");
+    }
+}
+
+#[test]
+fn ownership_scaling_keeps_undated_future_and_missing_evidence_unavailable() {
+    for (date, share, cut) in [
+        (None, true, "2030-05-01"),
+        (Some("2030-05-02"), true, "2030-05-01"),
+        (Some("2030-05-01"), false, "2030-05-01"),
+    ] {
+        let root = derivation_workspace();
+        ownership_source(
+            &root,
+            "Ownership.xlsx",
+            "2030Q1",
+            date,
+            "Example Mine (60%)",
+            share,
+        );
+        let report = assess(&root, OWNERSHIP_DRAFT, cut);
+        assert_eq!(
+            string_field(ownership_report(&report), "status"),
+            "not_available",
+            "{}",
+            report.to_json()
+        );
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+    let root = derivation_workspace();
+    ownership_source(
+        &root,
+        "Original.xlsx",
+        "2030Q1",
+        Some("2030-05-01"),
+        "Example Mine (60%)",
+        false,
+    );
+    source(
+        &root,
+        "Later.xlsx",
+        "2031Q1",
+        Some("2031-05-01"),
+        "0",
+        &[summary("Q1", "Example Mine (60%)", SALES, number("50"))],
+    );
+    let report = assess(&root, OWNERSHIP_DRAFT, "2031-05-01");
+    assert_eq!(
+        string_field(ownership_report(&report), "status"),
+        "not_available"
+    );
+    assert!(ownership_report(&report).contains("other_source_ownership_not_transferred"));
+}
+
+#[test]
+fn ownership_scaling_never_selects_repeated_or_conflicting_source_evidence() {
+    let root = derivation_workspace();
+    ownership_source(
+        &root,
+        "Original.xlsx",
+        "2030Q1",
+        Some("2030-05-01"),
+        "Example Mine (60%)",
+        true,
+    );
+    ownership_source(
+        &root,
+        "Repeated.xlsx",
+        "2031Q1",
+        Some("2031-05-01"),
+        "Example Mine (60%)",
+        true,
+    );
+    let before = assess(&root, OWNERSHIP_DRAFT, "2030-05-01");
+    assert_eq!(string_field(ownership_report(&before), "status"), "derived");
+    let after = assess(&root, OWNERSHIP_DRAFT, "2031-05-01");
+    assert_eq!(
+        string_field(ownership_report(&after), "status"),
+        "ambiguous"
+    );
+    assert!(ownership_report(&after).contains("competing_full_mine_assertions"));
+    for label in ["Example Mine (80%)", "Example Mine"] {
+        let root = derivation_workspace();
+        ownership_source(
+            &root,
+            "Original.xlsx",
+            "2030Q1",
+            Some("2030-05-01"),
+            label,
+            true,
+        );
+        let report = assess(&root, OWNERSHIP_DRAFT, "2030-05-01");
+        assert_ne!(string_field(ownership_report(&report), "status"), "derived");
+    }
+    let root = derivation_workspace();
+    ownership_source(
+        &root,
+        "Original.xlsx",
+        "2030Q1",
+        Some("2030-05-01"),
+        "Example Mine (60%)",
+        true,
+    );
+    source(
+        &root,
+        "Restated.xlsx",
+        "2031Q1",
+        Some("2031-05-01"),
+        "0",
+        &[summary("Q1", "Example Mine (80%)", SALES, number("80"))],
+    );
+    let report = assess(&root, OWNERSHIP_DRAFT, "2031-05-01");
+    assert_eq!(
+        string_field(ownership_report(&report), "status"),
+        "ambiguous"
+    );
+    assert!(ownership_report(&report).contains("conflicting_printed_ownership_shares"));
+}
+
+#[test]
+fn ownership_scaling_does_not_scale_intensive_costs_or_hide_direct_conflicts() {
+    let root = derivation_workspace();
+    let mut sheet = summary("Q1", "Example Mine (60%)", PRODUCTION, number("100"));
+    sheet.cells.extend([
+        ("C2".into(), MinimalCell::Text(ATTRIBUTABLE.into())),
+        ("C3".into(), number("80")),
+        (
+            "D2".into(),
+            MinimalCell::Text("All-in sustaining costs ($/oz)".into()),
+        ),
+        ("D3".into(), number("100")),
+    ]);
+    source(
+        &root,
+        "Ownership.xlsx",
+        "2030Q1",
+        Some("2030-05-01"),
+        "0",
+        &[sheet],
+    );
+    let report = assess(&root, OWNERSHIP_DRAFT, "2030-05-01");
+    assert_eq!(string_field(ownership_report(&report), "status"), "derived");
+    assert!(
+        report
+            .payload_json
+            .contains("\"status\":\"contradicts_disclosed\"")
+    );
+    assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    let cost = assess(
+        &root,
+        "Example Mine Q1 2030 attributable AISC per ounce sold is $60/oz.",
+        "2030-05-01",
+    );
+    assert!(ownership_report(&cost).starts_with("null"));
+    assert!(!cost.payload_json.contains("\"status\":\"derivable\""));
+}
+
+#[test]
+fn exact_ownership_kernel_preserves_witnesses_and_refuses_mutation_invalid_shares_and_intensive_inputs()
+ {
+    use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+    use fmine_core::anchor::SourceAnchor;
+    use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
+    use fmine_metrics::guidance::{Ownership, Period};
+    use fmine_metrics::public_derivation::{self as kernel, Amount, AmountKind, OwnershipShare};
+    use fmine_numerics::exact_feas::Interval;
+    let period = Period {
+        year: 2030,
+        first_month: 1,
+        last_month: 3,
+    };
+    let amount = Amount {
+        issuer: "invented".into(),
+        subject: "mine".into(),
+        scope: "site".into(),
+        kind: AmountKind::GoldProductionKoz,
+        ownership: Ownership::Full,
+        period,
+        interval: Interval {
+            lo: Rat::new(199, 2).unwrap(),
+            hi: Rat::new(201, 2).unwrap(),
+            lo_strict: false,
+            hi_strict: false,
+        },
+    };
+    let input = Claim::new(
+        kernel::INPUT_METRIC,
+        amount.clone(),
+        &amount.canonical_tag(),
+        Representation::Deterministic,
+        SpatialSupport::PeriodAggregate,
+        AdditivityClass::ExtensiveAdditive,
+        EvidenceClass::ISSUER,
+        EpistemicStatus::KnownKnown,
+        KnowledgeState::Known,
+        Confidentiality::public(),
+        vec![],
+        vec![],
+        vec![SourceAnchor::new(
+            "invented.xlsx",
+            sha256(b"independent fixture").0,
+            "Q1!B3",
+        )],
+    );
+    let share = |fraction, locator: &str| {
+        let value = OwnershipShare {
+            issuer: "invented".into(),
+            subject: "mine".into(),
+            scope: "site".into(),
+            period,
+            fraction,
+        };
+        let tag = value.canonical_tag();
+        Claim::new(
+            kernel::SHARE_METRIC,
+            value,
+            &tag,
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::NonAdditive,
+            EvidenceClass::ISSUER,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
+            Confidentiality::public(),
+            vec![],
+            vec![],
+            vec![SourceAnchor::new(
+                "invented.xlsx",
+                sha256(b"independent fixture").0,
+                locator,
+            )],
+        )
+    };
+    let a = share(Rat::new(3, 5).unwrap(), "Q1!A3");
+    let b = share(Rat::new(3, 5).unwrap(), "Q1!A4");
+    for change in 0..4 {
+        let mut divergent = a.clone();
+        match change {
+            0 => divergent.uu_terms.push(fmine_claim::UuTerm {
+                scenario_id: "unshared-tail".into(),
+                description: "Independent unquantified exposure".into(),
+                downside_exposure_usd_m: 10.0,
+                trigger_indicator: "Review the cited ownership terms".into(),
+            }),
+            1 => divergent.supersedes = Some(input.claim_id),
+            2 => {
+                divergent.representation = Representation::Gaussian {
+                    mean: 0.6,
+                    std_dev: 0.1,
+                }
+            }
+            _ => {
+                divergent = divergent.with_regime(
+                    fmine_evidence::color::ValidityDomain::unconstrained(),
+                    "independent-ownership-assessment",
+                )
+            }
+        }
+        divergent.check_id().unwrap();
+        assert_eq!(divergent.claim_id, a.claim_id);
+        for witnesses in [[a.clone(), divergent.clone()], [divergent, a.clone()]] {
+            assert_eq!(
+                kernel::ownership_scale(&input, &witnesses)
+                    .unwrap_err()
+                    .code,
+                if change == 2 {
+                    "FMINE-REF-208"
+                } else {
+                    "FMINE-REF-105"
+                }
+            );
+        }
+    }
+    let result = kernel::ownership_scale(&input, &[a.clone(), b.clone()]).unwrap();
+    assert_eq!(result.value.interval.lo, Rat::new(597, 10).unwrap());
+    assert_eq!(result.value.interval.hi, Rat::new(603, 10).unwrap());
+    assert_eq!(result.parents.len(), 3);
+    assert!(result.parents.contains(&input.claim_id));
+    assert!(result.parents.contains(&a.claim_id));
+    assert!(result.parents.contains(&b.claim_id));
+    assert_eq!(
+        result,
+        kernel::ownership_scale(&input, &[b, a.clone()]).unwrap()
+    );
+    for fraction in [Rat::from_integer(0), Rat::new(3, 2).unwrap()] {
+        assert_eq!(
+            kernel::ownership_scale(&input, &[share(fraction, "Q1!A3")])
+                .unwrap_err()
+                .code,
+            "FMINE-REF-107"
+        );
+    }
+    let mut mutated = a.clone();
+    mutated.value.fraction = Rat::new(1, 2).unwrap();
+    assert_eq!(
+        kernel::ownership_scale(&input, &[mutated])
+            .unwrap_err()
+            .code,
+        "FMINE-REF-507"
+    );
+    assert!(kernel::ownership_scale(&input, &[]).is_err());
+    assert!(
+        kernel::ownership_scale(
+            &input,
+            &[a.clone(), share(Rat::new(4, 5).unwrap(), "Q1!A4")]
+        )
+        .is_err()
+    );
+    let old = input;
+    let intensive = Claim::new(
+        kernel::INPUT_METRIC,
+        old.value.clone(),
+        old.value_tag(),
+        old.representation.clone(),
+        old.support,
+        AdditivityClass::IntensiveWeighted,
+        old.evidence,
+        old.epistemic,
+        old.state,
+        old.confidentiality.clone(),
+        vec![],
+        vec![],
+        old.anchors.clone(),
+    );
+    assert_eq!(
+        kernel::ownership_scale(&intensive, &[a]).unwrap_err().code,
+        "FMINE-REF-103"
+    );
+}
+
 #[cfg(test)]
 mod derived_amount_claims {
     use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};

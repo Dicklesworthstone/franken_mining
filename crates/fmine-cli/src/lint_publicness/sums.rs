@@ -18,7 +18,7 @@ pub(super) struct Assessment {
     refusal: Option<Refusal>,
 }
 
-fn interpret(c: &KeyedCell, kind: Quantity) -> Result<Claim<Amount>, Refusal> {
+pub(super) fn interpret(c: &KeyedCell, kind: Quantity) -> Result<Claim<Amount>, Refusal> {
     let bad = |why| Refusal::new(RefusalCode::SourceCellUnusable208, why);
     let basis = explicit_basis(c.key.ownership_basis);
     if basis.is_none()
@@ -29,7 +29,7 @@ fn interpret(c: &KeyedCell, kind: Quantity) -> Result<Claim<Amount>, Refusal> {
             && explicit_basis(c.printed_basis) != basis)
     {
         return Err(bad(
-            "quarter sum requires explicit compatible extensive basis and scope",
+            "public derivation requires explicit compatible extensive basis and scope",
         ));
     }
     let ownership = match c.key.ownership_basis {
@@ -200,7 +200,7 @@ fn arithmetic(detail: &str) -> Refusal {
     Refusal::new(RefusalCode::NumericalCertificateFailed207, detail)
 }
 
-fn interval(i: Interval) -> String {
+pub(super) fn interval(i: Interval) -> String {
     format!(
         "{{\"lo\":{{\"num\":\"{}\",\"den\":\"{}\"}},\"hi\":{{\"num\":\"{}\",\"den\":\"{}\"}},\"lo_strict\":false,\"hi_strict\":false}}",
         i.lo.num(),
@@ -210,7 +210,7 @@ fn interval(i: Interval) -> String {
     )
 }
 
-fn claim(c: &Claim<Amount>) -> String {
+pub(super) fn claim(c: &Claim<Amount>) -> String {
     let mut body = String::new();
     for byte in c.canonical_body() {
         let _ = write!(body, "{byte:02x}");

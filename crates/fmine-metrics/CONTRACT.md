@@ -12,7 +12,7 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
 - the declared arithmetic identities of a PDF table, such as a roll-forward, over agreed readings, and reserve-replacement ratios bound to a cited definition (`roll_forward`, `roll_forward::assess_with_metrics`);
 - reserve replacement over a complete declared annual window, on attributable gold or GEO (`reserve_replacement`, BD-063);
 - a quarter derived from cumulative disclosures (Q2 = H1 − Q1, Q3 = 9M − H1, Q4 = FY − 9M) and checked against a draft's displayed figure (`roll_forward::quarter`, BD-345.S4);
-- H1 and FY as sums of complete quarters, carried as Claims (`public_derivation`, BD-345.S4);
+- H1, nine months and FY as sums of complete quarters, and full-mine amounts scaled by explicit ownership, carried as Claims (`public_derivation`, BD-345.S4);
 - a source-bound projection of an issuer's declared reserve rows, with their filing vintages and quoted price decks, and an exact check of gold, copper and GEO reserve rows against their quoted prices (`reserves`, `reserves::geo`, BD-335, BD-070);
 - whether the reporters of one asset agree on the gold it produced or sold, or on its sustaining, project and total capital, on one 100% basis (`mirror`, `mirror::capex`);
 - at the crate root: an AISC consolidation check, GEO under a price deck, reserve replacement and a float cut-off solver.
@@ -81,6 +81,13 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   numeric Claim and remain in the original report. The CLI renders these identities and ancestry.
 - **`roll_forward::quarter::assess`** gives a `Report`: a `Status` (`Derived`, `PrecisionNotEstablished`, `Contradicted`, `ConflictingDerivations`, `NotAvailable` or `Refused`), and every evaluated `Pair` with its exact interval, relation and rule (`H1-Q1`, `9M-H1` or `FY-9M`). JSON bounds are exact rational strings. `WARNING` says that derived information is not an issuer disclosure. No target-period Claim is made. `fmine-cli`'s `lint_publicness.rs` calls it.
 - **`public_derivation::derive`** gives the H1, nine-month or FY `Claim<Amount>`, or a `Refusal`. `fmine-cli`'s `lint_publicness/sums.rs` calls it.
+- DESIGN (BD-345.S4): `public_derivation::ownership_scale` accepts one full-mine `Claim<Amount>` and
+  `Claim<OwnershipShare>` witnesses for the same issuer, subject, perimeter and physical period. Every
+  exact share must agree and lie in (0, 1]. The result multiplies both closed amount bounds by that share,
+  preserves every independent witness, source anchor and inherited Claim metadata, and never scales a rate.
+  The CLI ownership adapter admits only printed shares from the amount's own dated source, retains other
+  vintages as context, and rejects competing amounts or conflicting shares without selecting by draft value.
+  These are arithmetic enclosures; no disclosure permission, reverse ownership conversion or gate pass is claimed.
 - **`reserves::assess`** gives a `ReserveReport`: every admitted or refused `IssuerReserveRow`, the `CurrentSelection`, each `VintageComparison`, the `ReserveDeck` prices, the document metadata and `geo_checks`, with JSON, Markdown and digests over all of them. Each `reserves::geo::GeoCheckReport` gives the stated-deck result, the exact converted and reported bounds, every strict-convention fit, the declared and candidate sources and content digests. `fmine-cli`'s `tables.rs` calls it.
 - **`mirror::compare`** gives a `MirrorReport` with a `MirrorVerdict`. `Consistent` carries a checked source-basis witness and a common full-basis Claim. `Conflict` carries the checked certificate/digest, blame status and inclusion-minimal source sets. `Indeterminate` has no common quantity. **`compare_capex`** gives a `CapexReport`: independent single-line checks in `lines`, and the separate `ComponentSum` assessment in `joint`. `fmine-cli`'s `mirror.rs` calls both.
 
@@ -324,7 +331,7 @@ The other modules have local errors with no refusal code:
   Canonical APIs: `ClaimBasis`, `InputRole`, `InputClaim`, `ReplacementValue`, `ReplacementClaims::to_json`,
   `SeriesResult::{claims, check_claims}` and `ReplacementReport::claims`.
 - **`roll_forward::quarter`:** `WARNING`, `Quantity`, `Printed`, `Observation`, `Status`, `Pair`, `Report` and `assess` (BD-345.S4).
-- **`public_derivation`:** `INPUT_METRIC`, `WARNING`, `AmountKind`, `Amount`, `Rule` and `derive` (BD-345.S4).
+- **`public_derivation`:** `INPUT_METRIC`, `SHARE_METRIC`, `OWNERSHIP_SCALE_RULE`, `WARNING`, `AmountKind`, `Amount`, `OwnershipShare`, `Rule`, `derive` and `ownership_scale` (BD-345.S4).
 - **`reserves`:** `NO_CLAIM`, `ReserveKey`, `SourceRole`, `ReserveDeck`, `IssuerReserveRow`, `ReserveRefusal`, `CurrentSelection`, `VintageComparison`, `ReserveReport` and `assess` (BD-335). `reserves::geo`: `NO_CLAIM`, `GeoAmount`, `GeoDeckInput` and `GeoCheckReport` with `digest`, `to_json` and `to_markdown` (BD-340.S4, BD-070).
 - **`mirror`:** `READING_METRIC`, `NO_CLAIM`, `Perimeter`, `MirrorMetric`, `MirrorQuantity`, `MirrorReading`, `MirrorCommon`, `MirrorReport`, `MirrorVerdict` and `compare` (BD-346). Capital (BD-346.S4): `CapexScope`, `CapexTiming`, `LeaseTreatment`, `CapexBasis`, `CapexReport`, `CapexJointReport` and `compare_capex`. `mirror::transcriptions`: `BoundReadings`, `bind`, `keys` and `period_label`. `bind(subject, period, kind, issuer, document, rows, evidence)` returns the separately cited ownership Claim, when needed, and source reading Claims. Capital keys are `capex_sustaining`, `capex_project` or `capex_total` with `_100_usd_m` or `_attr_usd_m`, the source unit is exactly `USD_m`, and the context needs `timing`, `leases` and the definition's own page, table, row and column.
 

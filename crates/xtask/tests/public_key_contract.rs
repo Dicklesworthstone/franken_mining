@@ -141,6 +141,38 @@ fn test_ownership_100_detected_before_footnote_strip() {
     }
 }
 
+#[test]
+fn ownership_percentage_tokens_do_not_match_inside_another_number() {
+    for label in [
+        "Site (1100%)",
+        "Site (1000%)",
+        "Site (-100%)",
+        "Site (60%) (100%)",
+    ] {
+        assert!(parse_ownership(label).is_err(), "{label}");
+    }
+    assert_eq!(
+        parse_ownership("Site (0.100%)"),
+        Ok(OwnershipBasis::Attributable {
+            num: 1,
+            den: 1000,
+            source: ShareSource::Printed,
+        })
+    );
+    for label in [
+        "Site (100.0%)",
+        "Site ( 100 %)",
+        "Site (100.000%)2",
+        "Site 100%",
+    ] {
+        assert_eq!(
+            parse_ownership(label),
+            Ok(OwnershipBasis::Consolidated100),
+            "{label}"
+        );
+    }
+}
+
 fn number(text: &str, v: f64) -> ExtractedCell {
     ExtractedCell {
         cell_ref: "B10".to_string(),

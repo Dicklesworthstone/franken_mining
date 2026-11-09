@@ -21,9 +21,10 @@ use fmine_registry::sources::{PUBLISHED_AT_BASES, is_date};
 
 use crate::json_string as js;
 
+mod ownership;
 mod sums;
 
-pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences and complete quarter sums against dated, registered public sources at the requested cut. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
+pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences, complete quarter sums and full-mine to attributable amounts against dated, registered public sources at the requested cut. Ownership scaling requires the same source's explicit printed share for the same physical period. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
 
 #[derive(Debug, Clone)]
 pub(super) struct Publication {
@@ -55,6 +56,7 @@ struct Finding {
     evidence: Vec<SourceEvidence>,
     derivation: Option<Derivation>,
     quarter_sum: Option<sums::Assessment>,
+    ownership: Option<ownership::Assessment>,
 }
 
 #[derive(Debug, Clone)]
@@ -571,6 +573,7 @@ pub(super) fn assess(
             evidence: Vec::new(),
             derivation: None,
             quarter_sum: None,
+            ownership: None,
         };
         if keys.len() == 1 {
             let candidates = keys.iter().next().and_then(|k| index.get(k));
@@ -631,6 +634,8 @@ pub(super) fn assess(
         result.derivation = derivation(draft, f, cells, profile, &publications, as_of, retrieved);
         result.quarter_sum =
             sums::assess(draft, f, cells, profile, &publications, as_of, retrieved);
+        result.ownership =
+            ownership::assess(draft, f, cells, profile, &publications, as_of, retrieved);
         let derived_reason = if result
             .derivation
             .as_ref()
@@ -643,6 +648,12 @@ pub(super) fn assess(
             .is_some_and(|s| s.status == "derived")
         {
             Some("complete_dated_quarter_sum_supports_the_draft_precision")
+        } else if result
+            .ownership
+            .as_ref()
+            .is_some_and(|s| s.status == "derived")
+        {
+            Some("same_source_printed_ownership_supports_the_draft_precision")
         } else {
             None
         };
@@ -704,16 +715,17 @@ impl PublicnessReport {
     fn body_json(&self) -> String {
         let findings = self.findings.iter().map(|f| {
             format!(
-                "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"first_registered_disclosure\":{},\"evidence\":[{}],\"derivation\":{},\"quarter_sum\":{}}}",
+                "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"first_registered_disclosure\":{},\"evidence\":[{}],\"derivation\":{},\"quarter_sum\":{},\"ownership_scaling\":{}}}",
                 f.span.0, f.span.1, js(f.status), js(f.reason),
                 optional(f.first_registered_disclosure.as_deref()),
                 f.evidence.iter().map(SourceEvidence::to_json).collect::<Vec<_>>().join(","),
                 f.derivation.as_ref().map_or_else(|| "null".into(), Derivation::to_json),
                 f.quarter_sum.as_ref().map_or_else(|| "null".into(), sums::Assessment::to_json),
+                f.ownership.as_ref().map_or_else(|| "null".into(), ownership::Assessment::to_json),
             )
         }).collect::<Vec<_>>().join(",");
         format!(
-            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"rate_or_ownership_scaling_identities\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
+            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"rate_identities\",\"reverse_ownership_scaling\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
             js(&self.as_of),
             js(&self.draft_digest.to_hex()),
             js(&self.claims_digest.to_hex()),
@@ -765,6 +777,9 @@ impl PublicnessReport {
             if let Some(sum) = &f.quarter_sum {
                 out.push_str(&sum.to_markdown());
             }
+            if let Some(ownership) = &f.ownership {
+                out.push_str(&ownership.to_markdown());
+            }
             if let Some(d) = &f.derivation {
                 let _ = writeln!(
                     out,
@@ -793,6 +808,7 @@ impl PublicnessReport {
                 .iter()
                 .chain(f.derivation.iter().flat_map(|d| &d.evidence))
                 .chain(f.quarter_sum.iter().flat_map(|s| &s.evidence))
+                .chain(f.ownership.iter().flat_map(|s| &s.evidence))
             {
                 let _ = writeln!(
                     out,
