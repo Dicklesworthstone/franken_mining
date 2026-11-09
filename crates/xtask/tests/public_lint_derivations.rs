@@ -1894,6 +1894,375 @@ fn exact_ownership_kernel_preserves_witnesses_and_refuses_mutation_invalid_share
     );
 }
 
+const AISC_RATE_DRAFT: &str = "Example Mine Q1 2030 attributable AISC per ounce sold is $1.5k/oz.";
+
+fn cost_sheet(numerator: &str, sold: MinimalCell, printed_rate: Option<&str>) -> MinimalSheet {
+    let mut cells = vec![
+        (
+            "A1".into(),
+            MinimalCell::Text(
+                "Reconciliation of cost of sales to total cash costs and all-in sustaining costs"
+                    .into(),
+            ),
+        ),
+        (
+            "A3".into(),
+            MinimalCell::Text("($ millions, except per ounce information)".into()),
+        ),
+        ("B4".into(), MinimalCell::Text("Example Mine".into())),
+    ];
+    for (row, label, value) in [
+        (
+            5,
+            "Cost of sales applicable to gold production",
+            number("100"),
+        ),
+        (6, "Depreciation", number("0")),
+        (7, "Non-controlling interests", number("0")),
+        (8, "Total cash costs", number("100")),
+        (9, "General & administrative costs", number("0")),
+        (10, "Minesite sustaining capital expenditures", number("50")),
+        (11, "All-in sustaining costs", number(numerator)),
+        (13, "Ounces sold - attributable basis (000s ounces)", sold),
+        (14, "Cost of sales per ounce", number("1000")),
+        (
+            15,
+            "Total cash costs per ounce",
+            MinimalCell::Text("—".into()),
+        ),
+        (
+            16,
+            "All-in sustaining costs per ounce",
+            printed_rate.map_or_else(|| MinimalCell::Text("—".into()), number),
+        ),
+    ] {
+        cells.push((format!("A{row}"), MinimalCell::Text(label.into())));
+        cells.push((format!("B{row}"), value));
+    }
+    MinimalSheet {
+        name: "Q1 2030".into(),
+        hidden: false,
+        cells,
+    }
+}
+
+fn cost_source(
+    root: &Path,
+    file: &str,
+    date: Option<&str>,
+    precision: &str,
+    sheet: MinimalSheet,
+) -> String {
+    let note = MinimalSheet {
+        name: "Publication note".into(),
+        hidden: false,
+        cells: vec![(
+            "A1".into(),
+            MinimalCell::Text(format!("Invented cost filing {file}")),
+        )],
+    };
+    let hash = source(root, file, "2030Q1", date, precision, &[sheet, note]);
+    let path = registry_path(root, DERIVATION_ISSUER);
+    let mut registry = std::fs::read_to_string(&path).unwrap();
+    let before = format!("file = \"{file}\"\nkind = \"mine_stats\"");
+    assert_eq!(registry.matches(&before).count(), 1);
+    registry = registry.replace(
+        &before,
+        &format!("file = \"{file}\"\nkind = \"aisc_reconciliation\""),
+    );
+    if !registry.contains("[[share]]") {
+        registry.push_str("\n[[share]]\nsubject = \"Example Mine\"\nnum = 3\nden = 5\nevidence = \"FACT: invented registry basis, not a printed numeric share\"\n");
+    }
+    std::fs::write(path, registry).unwrap();
+    hash
+}
+
+fn cost_rate_report(report: &Envelope) -> &str {
+    report
+        .payload_json
+        .split_once("\"cost_rate\":")
+        .expect("cost-rate assessment")
+        .1
+}
+
+#[test]
+fn cost_rates_derive_gold_aisc_and_byproduct_tcc_from_exact_printed_source_enclosures() {
+    let root = derivation_workspace();
+    let hash = cost_source(
+        &root,
+        "Costs.xlsx",
+        Some("2030-05-01"),
+        "0",
+        cost_sheet("150.4", number("100"), None),
+    );
+    for (draft, family, lo, hi) in [
+        (AISC_RATE_DRAFT, "aisc_per_oz", "299000", "301000"),
+        (
+            "Example Mine Q1 2030 attributable by-product TCC per ounce sold is $1.0k/oz.",
+            "tcc_per_oz",
+            "199000",
+            "201000",
+        ),
+    ] {
+        let report = assess(&root, draft, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(
+            string_field(rate, "status"),
+            "derived",
+            "{}",
+            report.to_json()
+        );
+        assert!(report.payload_json.contains("\"status\":\"derivable\""));
+        assert_eq!(string_field(rate, "family"), family);
+        assert!(rate.contains(&format!("\"lo\":{{\"num\":\"{lo}\",\"den\":\"201\"}}")));
+        assert!(rate.contains(&format!("\"hi\":{{\"num\":\"{hi}\",\"den\":\"199\"}}")));
+        let derived = rate
+            .split_once("\"derived_claim\":")
+            .unwrap()
+            .1
+            .split_once(",\"evidence\":[")
+            .unwrap()
+            .0;
+        assert!(derived.contains("\"evidence\":\"Assertion { source: Issuer }\""));
+        assert!(!derived.contains("\"evidence\":\"Derived\""));
+        assert!(derived.contains("\"additivity\":\"IntensiveWeighted\""));
+        let parents = derived
+            .split_once("\"parents\":[")
+            .unwrap()
+            .1
+            .split(']')
+            .next()
+            .unwrap();
+        assert_eq!(parents.matches("clm_").count(), 2);
+        assert!(derived.contains("\"locator\":\"Q1 2030!B13\""));
+        assert!(derived.contains(&hash));
+        assert!(rate.contains("\"formula\":\"1000*N/Q\""));
+        assert!(rate.contains("\"unit\":\"USD/oz\""));
+        assert!(
+            rate.contains("\"kind\":\"unprinted\""),
+            "original numerator basis survives"
+        );
+        assert!(
+            rate.contains("\"source\":\"registry\""),
+            "the share is not relabelled printed"
+        );
+        assert!(rate.contains(&hash));
+        assert!(rate.contains("Costs.xlsx:Q1 2030!B13"));
+        assert!(rate.contains("not make the derived figure an issuer disclosure"));
+        assert_eq!(report, assess(&root, draft, "2030-05-01"));
+    }
+    let aisc = assess(&root, AISC_RATE_DRAFT, "2030-05-01");
+    assert!(cost_rate_report(&aisc).contains("\"stored\":\"150.4\",\"displayed\":\"150\""));
+    let (markdown, exit) = run(
+        &args(&[
+            "lint",
+            "derived.md",
+            "--issuer",
+            DERIVATION_ISSUER,
+            "--discover",
+            "--as-of",
+            "2030-05-01",
+            "--format",
+            "markdown",
+        ]),
+        &root,
+    );
+    assert_eq!(exit, 0);
+    assert!(markdown.contains("299000/201"));
+    assert!(markdown.contains("301000/199"));
+    assert!(markdown.contains("Costs.xlsx:Q1 2030!B11"));
+    assert!(markdown.contains("1000*N/Q"));
+}
+
+#[test]
+fn cost_rate_rounding_and_definition_controls_never_invent_precision_or_a_denominator_basis() {
+    let root = derivation_workspace();
+    cost_source(
+        &root,
+        "Costs.xlsx",
+        Some("2030-05-01"),
+        "0",
+        cost_sheet("150", number("100"), None),
+    );
+    for (value, status) in [
+        ("$1,500/oz", "precision_not_established"),
+        ("$2.0k/oz", "contradicted"),
+    ] {
+        let report = assess(
+            &root,
+            &AISC_RATE_DRAFT.replace("$1.5k/oz", value),
+            "2030-05-01",
+        );
+        assert_eq!(string_field(cost_rate_report(&report), "status"), status);
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+    for draft in [
+        "Example Mine Q1 2030 attributable AISC per ounce produced is $1.5k/oz.",
+        "Example Mine Q1 2030 100% basis AISC per ounce sold is $1.5k/oz.",
+        "Example Mine Q1 2030 attributable co-product TCC per ounce sold is $1.0k/oz.",
+        "Example Mine Q1 2030 attributable TCC per ounce sold is $1.0k/oz.",
+        "Example Mine Q1 2030 attributable C1 per pound sold is $1.5/lb.",
+        "Example Mine Q1 2030 attributable cost of sales per ounce sold is $1.0k/oz.",
+    ] {
+        let report = assess(&root, draft, "2030-05-01");
+        assert!(
+            cost_rate_report(&report).starts_with("null"),
+            "{draft}: {}",
+            report.to_json()
+        );
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+}
+
+#[test]
+fn cost_rates_keep_publication_cuts_unknowns_and_nonpositive_denominators_explicit() {
+    for (date, precision, sold, status, refusal) in [
+        (None, "0", number("100"), "not_available", None),
+        (
+            Some("2030-05-02"),
+            "0",
+            number("100"),
+            "not_available",
+            None,
+        ),
+        (
+            Some("2030-05-01"),
+            "0.0",
+            number("100"),
+            "refused",
+            Some("FMINE-REF-208"),
+        ),
+        (
+            Some("2030-05-01"),
+            "0",
+            number("0"),
+            "refused",
+            Some("FMINE-REF-104"),
+        ),
+        (
+            Some("2030-05-01"),
+            "0",
+            number("-1"),
+            "refused",
+            Some("FMINE-REF-104"),
+        ),
+        (
+            Some("2030-05-01"),
+            "0",
+            MinimalCell::Text("—".into()),
+            "not_available",
+            None,
+        ),
+    ] {
+        let root = derivation_workspace();
+        cost_source(
+            &root,
+            "Costs.xlsx",
+            date,
+            precision,
+            cost_sheet("150", sold, None),
+        );
+        let report = assess(&root, AISC_RATE_DRAFT, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(string_field(rate, "status"), status, "{}", report.to_json());
+        assert!(rate.contains("\"derived_claim\":null"));
+        if let Some(code) = refusal {
+            assert!(rate.contains(code));
+        }
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+    let root = derivation_workspace();
+    cost_source(
+        &root,
+        "Reversal.xlsx",
+        Some("2030-05-01"),
+        "0",
+        cost_sheet("-150", number("100"), None),
+    );
+    let report = assess(
+        &root,
+        &AISC_RATE_DRAFT.replace("$1.5k", "-$1.5k"),
+        "2030-05-01",
+    );
+    let rate = cost_rate_report(&report);
+    assert_eq!(string_field(rate, "status"), "derived");
+    assert!(rate.contains("\"lo\":{\"num\":\"-301000\",\"den\":\"199\"}"));
+    assert!(rate.contains("\"hi\":{\"num\":\"-299000\",\"den\":\"201\"}"));
+}
+
+#[test]
+fn cost_rates_retain_competing_vintages_without_selecting_a_matching_number() {
+    for (other_date, other_value) in [
+        (Some("2030-05-02"), "150"),
+        (Some("2030-05-02"), "200"),
+        (None, "150"),
+    ] {
+        let root = derivation_workspace();
+        let first = cost_source(
+            &root,
+            "Original.xlsx",
+            Some("2030-05-01"),
+            "0",
+            cost_sheet("150", number("100"), None),
+        );
+        let second = cost_source(
+            &root,
+            "Restated.xlsx",
+            other_date,
+            "0",
+            cost_sheet(other_value, number("100"), None),
+        );
+        let report = assess(&root, AISC_RATE_DRAFT, "2030-05-02");
+        let rate = cost_rate_report(&report);
+        assert_eq!(string_field(rate, "status"), "ambiguous");
+        assert!(rate.contains(&first) && rate.contains(&second));
+        assert!(rate.contains("\"derived_claim\":null"));
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+        if other_date.is_some() {
+            let before = assess(&root, AISC_RATE_DRAFT, "2030-05-01");
+            assert_eq!(string_field(cost_rate_report(&before), "status"), "derived");
+            assert!(cost_rate_report(&before).contains("\"admission\":\"after_cut\""));
+        }
+    }
+}
+
+#[test]
+fn cost_rate_arithmetic_never_overrides_a_same_basis_direct_disclosure_or_conflict() {
+    for (printed, expected) in [("1500", "disclosed"), ("2000", "contradicts_disclosed")] {
+        let root = derivation_workspace();
+        cost_source(
+            &root,
+            "Costs.xlsx",
+            Some("2030-05-01"),
+            "0",
+            cost_sheet("150", number("100"), None),
+        );
+        source(
+            &root,
+            "PublishedRate.xlsx",
+            "2030Q1",
+            Some("2030-05-01"),
+            "0",
+            &[summary(
+                "Q1",
+                "Example Mine (60%)",
+                "All-in sustaining costs ($/oz)",
+                number(printed),
+            )],
+        );
+        let report = assess(&root, AISC_RATE_DRAFT, "2030-05-01");
+        assert_eq!(string_field(cost_rate_report(&report), "status"), "derived");
+        assert!(
+            report
+                .payload_json
+                .contains(&format!("\"status\":\"{expected}\"")),
+            "{}",
+            report.to_json()
+        );
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+}
+
 #[cfg(test)]
 mod derived_amount_claims {
     use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};

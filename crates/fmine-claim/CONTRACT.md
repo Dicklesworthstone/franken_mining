@@ -9,6 +9,8 @@ The universal Claim and the checks around it:
 - `dag::TemporalGraph` checks a root's temporal ancestry at an availability cut, and `dag::replay` replays a generator through a guarded read view (BD-344).
 - `reliance` is the issued-output journal. It keeps the integrity of issued bytes apart from permission to reuse them now (BD-347).
 - `forecast_journal` is the forecast-operation journal codec, independent of reliance's business ledger (BD-047).
+- `inspection` renders checked public Claim metadata and diagnostic guard outcomes for source and derived
+  evidence. Domain value codecs and interpretation remain with the caller (BD-040, BD-115).
 
 It does no I/O. Storage, locking and key custody belong to the callers in `fmine-io` and `fmine-cli`.
 
@@ -16,7 +18,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **Layer:** S0
 - **Subsystem:** Plumb
 - **LOC budget:** 16,000 planned / 18,000 ceiling
-- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal"]`
+- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal", "inspection"]`
 
 ## 2. Inputs
 - **`Claim::new`** takes 13 arguments: metric key, value, canonical value tag, representation, support, additivity, evidence class, epistemic status, knowledge state, label, UU terms, parents and anchors. It takes the evidence class and parents as given. Nothing checks that they agree. `stale`, `calibration_failed` and `supersedes` start false or `None`. They are `pub` fields that callers set afterwards.
@@ -27,9 +29,14 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **`dag::replay::verify_replay`.** A graph, root and cut, a `ReplayStore` of canonical bytes under their content ids, and a generator closure.
 - **`reliance`.** Journal records as values or bytes, a `Header` (the owner policy), a `ReleaseCapability` proved from the release key, and a `TrustContext` holding an exact head pin and a `TrustedTime`. The runtime supplies the last two. They are never decoded from the journal.
 - **No files.** It reads no files or registries.
+- **`inspection`.** A Claim, a category and caller-encoded JSON for its typed value; the diagnostic view also
+  takes the domain's interpretation text. The caller must bind the typed value to its canonical value tag.
 
 ## 3. Outputs
 - **`Claim<T>`**, with `canonical_body()` bytes and `color() -> Result<Color, Refusal>`.
+- **`inspection::{public_json, public_inspection}`** return deterministic public JSON after checking export
+  clearance and canonical identity. `PublicInspection` retains the canonical body, ancestry, source anchors,
+  UU terms and recorded guard results; it establishes neither complete ancestry nor decision authority.
 - **`compose_binary -> Claim<R>`.**
   - Class: the meet of the parents' classes.
   - Epistemic status and knowledge state: the `and` of the parents'.

@@ -126,12 +126,7 @@ pub(super) fn assess(
         refusal: None,
     };
     let run = (|| -> Result<(), Refusal> {
-        let draft = Printed {
-            value: decimal(target.value).ok_or_else(|| arithmetic("draft value overflow"))?,
-            step: decimal(target.step).ok_or_else(|| arithmetic("draft precision overflow"))?,
-        }
-        .interval()
-        .map_err(|_| arithmetic("draft interval overflow"))?;
+        let draft = draft_interval(target)?;
         out.draft = Some(draft);
         let mut counts = BTreeMap::new();
         let mut unavailable = false;
@@ -163,28 +158,12 @@ pub(super) fn assess(
             return Ok(());
         }
         let derived = kernel::derive(Rule::QuarterSum, &out.inputs)?;
-        let source = derived.value.interval;
-        let cmp = |a: Rat, b: Rat| {
-            a.checked_cmp(b)
-                .map_err(|_| arithmetic("interval comparison overflow"))
+        out.status = compare(draft, derived.value.interval)?;
+        out.reason = match out.status {
+            "derived" => "complete_quarter_sum_supports_the_draft_precision",
+            "contradicted" => "complete_quarter_sum_is_disjoint_from_the_draft",
+            _ => "quarter_rounding_uncertainty_exceeds_the_draft_precision",
         };
-        (out.status, out.reason) =
-            if cmp(draft.lo, source.lo)?.is_le() && cmp(draft.hi, source.hi)?.is_ge() {
-                (
-                    "derived",
-                    "complete_quarter_sum_supports_the_draft_precision",
-                )
-            } else if cmp(draft.hi, source.lo)?.is_lt() || cmp(draft.lo, source.hi)?.is_gt() {
-                (
-                    "contradicted",
-                    "complete_quarter_sum_is_disjoint_from_the_draft",
-                )
-            } else {
-                (
-                    "precision_not_established",
-                    "quarter_rounding_uncertainty_exceeds_the_draft_precision",
-                )
-            };
         out.derived = Some(derived);
         Ok(())
     })();
@@ -198,6 +177,44 @@ pub(super) fn assess(
 
 fn arithmetic(detail: &str) -> Refusal {
     Refusal::new(RefusalCode::NumericalCertificateFailed207, detail)
+}
+
+pub(super) fn draft_interval(
+    target: fmine_public::lint::EqualityTarget,
+) -> Result<Interval, Refusal> {
+    Printed {
+        value: decimal(target.value).ok_or_else(|| arithmetic("draft value overflow"))?,
+        step: decimal(target.step).ok_or_else(|| arithmetic("draft precision overflow"))?,
+    }
+    .interval()
+    .map_err(|_| arithmetic("draft interval overflow"))
+}
+
+pub(super) fn compare(draft: Interval, source: Interval) -> Result<&'static str, Refusal> {
+    let cmp = |a: Rat, b: Rat| {
+        a.checked_cmp(b)
+            .map_err(|_| arithmetic("interval comparison overflow"))
+    };
+    Ok(
+        if cmp(draft.lo, source.lo)?.is_le() && cmp(draft.hi, source.hi)?.is_ge() {
+            "derived"
+        } else if cmp(draft.hi, source.lo)?.is_lt() || cmp(draft.lo, source.hi)?.is_gt() {
+            "contradicted"
+        } else {
+            "precision_not_established"
+        },
+    )
+}
+
+pub(super) fn derived_markdown(out: &mut String, id: fmine_claim::ClaimId, i: Interval) {
+    let _ = writeln!(
+        out,
+        "    - Derived Claim `{id}`: [{}/{}, {}/{}].",
+        i.lo.num(),
+        i.lo.den(),
+        i.hi.num(),
+        i.hi.den()
+    );
 }
 
 pub(super) fn interval(i: Interval) -> String {
@@ -270,11 +287,7 @@ impl Assessment {
             self.draft.map_or_else(|| "null".into(), interval),
             self.inputs.iter().map(claim).collect::<Vec<_>>().join(","),
             self.derived.as_ref().map_or_else(|| "null".into(), claim),
-            self.evidence
-                .iter()
-                .map(SourceEvidence::to_json)
-                .collect::<Vec<_>>()
-                .join(","),
+            evidence_json(&self.evidence),
             refusal
         )
     }
@@ -288,16 +301,7 @@ impl Assessment {
             kernel::WARNING
         );
         if let Some(c) = &self.derived {
-            let i = c.value.interval;
-            let _ = writeln!(
-                out,
-                "    - Derived Claim `{}`: [{}/{}, {}/{}].",
-                c.claim_id,
-                i.lo.num(),
-                i.lo.den(),
-                i.hi.num(),
-                i.hi.den()
-            );
+            derived_markdown(&mut out, c.claim_id, c.value.interval);
         }
         for e in &self.evidence {
             let at = e.source.locator.replace(['\n', '\r', '`'], " ");

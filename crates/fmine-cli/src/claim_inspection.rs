@@ -1,16 +1,10 @@
 //! Reads of verified source projections, including the typed recovery model's retained Claim DAG.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
-
-use fmine_claim::{Claim, ClaimId, Confidentiality};
-use fmine_core::Digest32;
-use fmine_evidence::{Color, Refusal, RefusalCode};
-use fmine_metrics::recovery::{
-    Estimate, Fit, ModelProjection, Ownership, Period, Quantity, SquareRoot,
-};
-use fmine_numerics::exact_feas::Rat;
+use fmine_claim::{Claim, ClaimId};
+use fmine_evidence::{Refusal, RefusalCode};
+use fmine_metrics::recovery::render::{fit, projection, quantity, rational};
 use fmine_public::{PublicAssuranceReport, recovery::RecoveryReport, sources::IssuerProfile};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{ClaimView, Envelope, NextAction, claim_actions, escape_json, json_string as js};
 fn ids(values: impl IntoIterator<Item = ClaimId>) -> String {
@@ -20,147 +14,6 @@ fn ids(values: impl IntoIterator<Item = ClaimId>) -> String {
         .collect::<Vec<_>>()
         .join(",")
 }
-fn refusal(r: &Refusal) -> String {
-    format!(
-        "{{\"code\":{},\"exit_code\":{},\"what\":{},\"fix\":{}}}",
-        js(r.code),
-        r.exit_code,
-        js(&r.what),
-        js(r.fix)
-    )
-}
-fn guard(result: &Result<(), Refusal>) -> String {
-    match result {
-        Ok(()) => "{\"status\":\"passed\",\"refusal\":null}".into(),
-        Err(r) => format!("{{\"status\":\"refused\",\"refusal\":{}}}", refusal(r)),
-    }
-}
-fn finite(value: f64) -> String {
-    if value.is_finite() {
-        value.to_string()
-    } else {
-        "null".into()
-    }
-}
-fn color(value: &Result<Color, Refusal>) -> String {
-    let body = match value {
-        Err(r) => return format!("{{\"status\":\"refused\",\"refusal\":{}}}", refusal(r)),
-        Ok(Color::Estimated {
-            estimator,
-            dispersion,
-        }) => format!(
-            "\"kind\":\"estimated\",\"estimator\":{},\"dispersion\":{},\"dispersion_is_finite\":{}",
-            js(estimator),
-            finite(*dispersion),
-            dispersion.is_finite()
-        ),
-        Ok(Color::Verified { lo, hi }) => format!(
-            "\"kind\":\"verified\",\"lo\":{},\"hi\":{}",
-            finite(*lo),
-            finite(*hi)
-        ),
-        Ok(Color::Validated { regime, dataset }) => format!(
-            "\"kind\":\"validated\",\"dataset\":{},\"bounds\":[{}]",
-            js(dataset),
-            regime
-                .bounds()
-                .iter()
-                .map(|(axis, (lo, hi))| format!(
-                    "{{\"axis\":{},\"lo\":{},\"hi\":{}}}",
-                    js(axis),
-                    finite(*lo),
-                    finite(*hi)
-                ))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-    };
-    format!("{{\"status\":\"available\",{body},\"refusal\":null}}")
-}
-fn rational(value: Rat) -> String {
-    js(&format!("{}/{}", value.num(), value.den()))
-}
-fn estimate(value: Estimate) -> String {
-    format!(
-        "{{\"point\":{},\"lo\":{},\"hi\":{},\"lo_strict\":{},\"hi_strict\":{}}}",
-        rational(value.point),
-        rational(value.interval.lo),
-        rational(value.interval.hi),
-        value.interval.lo_strict,
-        value.interval.hi_strict
-    )
-}
-fn sqrt(value: SquareRoot) -> String {
-    format!(
-        "{{\"approx\":{},\"lo\":{},\"hi\":{},\"interpretation\":\"numerical square-root enclosure only\"}}",
-        finite(value.approx),
-        finite(value.enclosure[0]),
-        finite(value.enclosure[1])
-    )
-}
-fn ownership(value: Ownership) -> String {
-    match value {
-        Ownership::Full => "{\"kind\":\"full\"}".into(),
-        Ownership::Attributable { share } => format!(
-            "{{\"kind\":\"attributable\",\"share\":{}}}",
-            rational(share)
-        ),
-    }
-}
-fn period(value: Period) -> String {
-    format!(
-        "{{\"year\":{},\"first_month\":{},\"last_month\":{}}}",
-        value.year, value.first_month, value.last_month
-    )
-}
-fn quantity(value: &Quantity) -> String {
-    format!(
-        "{{\"subject\":{},\"period\":{},\"ownership\":{},\"kind\":{},\"estimate\":{}}}",
-        js(&value.subject),
-        period(value.period),
-        ownership(value.ownership),
-        js(&format!("{:?}", value.kind)),
-        estimate(Estimate {
-            point: value.point,
-            interval: value.interval
-        })
-    )
-}
-fn fit(value: &Fit) -> String {
-    format!(
-        "{{\"subject\":{},\"ownership\":{},\"training_years\":[{}],\"mean_head_percent\":{},\"constant_tails_percent\":{},\"intercept_percent\":{},\"slope\":{},\"residual_sample_variance_at_printed\":{},\"residual_sample_sd_at_printed\":{},\"regression_error_variance_at_printed\":{},\"regression_error_sd_at_printed\":{}}}",
-        js(&value.subject),
-        ownership(value.ownership),
-        value
-            .training_years
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(","),
-        estimate(value.mean_head),
-        estimate(value.constant_tails),
-        estimate(value.intercept),
-        estimate(value.slope),
-        rational(value.residual_sample_variance_at_printed),
-        sqrt(value.residual_sample_sd_at_printed),
-        rational(value.regression_error_variance_at_printed),
-        sqrt(value.regression_error_sd_at_printed)
-    )
-}
-fn projection(value: &ModelProjection) -> String {
-    format!(
-        "{{\"subject\":{},\"period\":{},\"ownership\":{},\"model\":{},\"expected_recovery_percent\":{},\"gap_pp\":{},\"copper_difference_kt\":{},\"fraction_of_reported_output\":{}}}",
-        js(&value.subject),
-        period(value.period),
-        ownership(value.ownership),
-        js(&format!("{:?}", value.model)),
-        estimate(value.expected_recovery_percent),
-        estimate(value.gap_pp),
-        estimate(value.copper_difference_kt),
-        estimate(value.fraction_of_reported_output)
-    )
-}
-
 struct Node {
     parents: Vec<ClaimId>,
     anchored: bool,
@@ -169,80 +22,21 @@ struct Node {
 }
 
 /// Export the complete checked canonical Claim beside its caller-supplied typed value.
-pub(crate) fn canonical_claim_json<T>(
-    claim: &Claim<T>,
-    category: &str,
-    value: String,
-) -> Result<String, Refusal> {
-    node(claim, category, value).map(|node| node.json)
-}
+pub(crate) use fmine_claim::inspection::public_json as canonical_claim_json;
 
 /// Keep the typed value beside the exact canonical body; reading never upgrades its evidence.
 fn node<T>(claim: &Claim<T>, category: &str, value: String) -> Result<Node, Refusal> {
-    claim.verify_export_clearance(&Confidentiality::public())?;
-    claim.check_id()?;
-    let mut body = String::new();
-    for byte in claim.canonical_body() {
-        let _ = write!(body, "{byte:02x}");
-    }
-    let anchors = claim
-        .anchors
-        .iter()
-        .map(|a| {
-            format!(
-                "{{\"artifact_path\":{},\"sha256\":{},\"locator\":{}}}",
-                js(&a.artifact_path),
-                js(&Digest32(a.artifact_sha256).to_hex()),
-                js(&a.locator)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let uu = claim.uu_terms.iter().map(|u| format!("{{\"scenario_id\":{},\"description\":{},\"downside_exposure_usd_m\":{},\"exposure_is_finite\":{},\"trigger_indicator\":{}}}", js(&u.scenario_id), js(&u.description), finite(u.downside_exposure_usd_m), u.downside_exposure_usd_m.is_finite(), js(&u.trigger_indicator))).collect::<Vec<_>>().join(",");
-    let json = format!(
-        "{{\"claim_id\":{},\"category\":{},\"metric_key\":{},\"value_tag\":{},\"canonical_body_hex\":{},\"value\":{value},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"representation\":{},\"support\":{},\"additivity\":{},\"confidentiality\":{},\"parents\":[{}],\"anchors\":[{anchors}],\"uu_terms\":[{uu}],\"supersedes\":{},\"stale\":{},\"calibration_failed\":{}}}",
-        js(&claim.claim_id.to_string()),
-        js(category),
-        js(&claim.metric_key),
-        js(claim.value_tag()),
-        js(&body),
-        js(&format!("{:?}", claim.evidence)),
-        js(&format!("{:?}", claim.epistemic)),
-        js(&format!("{:?}", claim.state)),
-        js(&format!("{:?}", claim.representation)),
-        js(&format!("{:?}", claim.support)),
-        js(&format!("{:?}", claim.additivity)),
-        js(&claim.confidentiality.to_string()),
-        ids(claim.parents.iter().copied()),
-        claim
-            .supersedes
-            .map_or_else(|| "null".into(), |id| js(&id.to_string())),
-        claim.stale,
-        claim.calibration_failed
-    );
-    let color_result = claim.color();
-    let uu_guard = claim.verify_uu_slot_for_decision();
-    let first_refusal = uu_guard
-        .as_ref()
-        .err()
-        .or_else(|| color_result.as_ref().err());
-    let why = format!(
-        "{{\"schema\":\"fmine.claim.why.v1\",\"color\":{},\"uu_guard\":{},\"public_export_guard\":{},\"canonical_id_guard\":{},\"decision_admission\":{{\"scope\":\"Claim color and UU guards only\",\"claim_guards_pass\":{},\"first_refusal\":{},\"decision_context\":null,\"flip_margin\":null}},\"calibration\":{{\"failed\":{},\"assessment\":null}},\"freshness\":{{\"recorded_stale\":{},\"assessment\":\"not_assessed\"}},\"interpretation\":{}}}",
-        color(&color_result),
-        guard(&uu_guard),
-        guard(&Ok(())),
-        guard(&Ok(())),
-        first_refusal.is_none(),
-        first_refusal.map_or_else(|| "null".into(), refusal),
-        claim.calibration_failed,
-        claim.stale,
-        js(fmine_metrics::recovery::MODEL_CAVEAT)
-    );
+    let view = fmine_claim::inspection::public_inspection(
+        claim,
+        category,
+        &value,
+        fmine_metrics::recovery::MODEL_CAVEAT,
+    )?;
     Ok(Node {
         parents: claim.parents.clone(),
         anchored: !claim.anchors.is_empty(),
-        json,
-        why,
+        json: view.json,
+        why: view.why,
     })
 }
 

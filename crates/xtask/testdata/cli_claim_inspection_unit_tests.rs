@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmine_claim::Confidentiality;
 
     #[test]
     #[allow(clippy::expect_used)]

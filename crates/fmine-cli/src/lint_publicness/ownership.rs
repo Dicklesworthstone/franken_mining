@@ -56,13 +56,7 @@ pub(super) fn assess(
         })
         .map(|c| source_evidence(c, profile, publications, as_of, retrieved))
         .collect();
-    evidence.sort_by(|a, b| {
-        a.source
-            .claim
-            .claim_id
-            .cmp(&b.source.claim.claim_id)
-            .then_with(|| a.source.to_json().cmp(&b.source.to_json()))
-    });
+    evidence.sort_by_cached_key(|e| (e.source.claim.claim_id, e.to_json()));
     let mut out = Assessment {
         status: "not_available",
         reason: "unique_full_mine_amount_and_same_source_printed_share_required",
@@ -184,30 +178,13 @@ pub(super) fn assess(
                 "ownership comparison overflow",
             )
         };
-        let interval = Printed {
-            value: decimal(target.value).ok_or_else(bad)?,
-            step: decimal(target.step).ok_or_else(bad)?,
-        }
-        .interval()
-        .map_err(|_| bad())?;
-        let cmp = |a: Rat, b: Rat| a.checked_cmp(b).map_err(|_| bad());
-        (out.status, out.reason) =
-            if cmp(interval.lo, bounds.lo)?.is_le() && cmp(interval.hi, bounds.hi)?.is_ge() {
-                (
-                    "derived",
-                    "dated_full_mine_amount_and_printed_share_support_the_draft_precision",
-                )
-            } else if cmp(interval.hi, bounds.lo)?.is_lt() || cmp(interval.lo, bounds.hi)?.is_gt() {
-                (
-                    "contradicted",
-                    "ownership_scaled_amount_is_disjoint_from_the_draft",
-                )
-            } else {
-                (
-                    "precision_not_established",
-                    "ownership_scaled_rounding_exceeds_the_draft_precision",
-                )
-            };
+        let interval = sums::draft_interval(target).map_err(|_| bad())?;
+        out.status = sums::compare(interval, bounds).map_err(|_| bad())?;
+        out.reason = match out.status {
+            "derived" => "dated_full_mine_amount_and_printed_share_support_the_draft_precision",
+            "contradicted" => "ownership_scaled_amount_is_disjoint_from_the_draft",
+            _ => "ownership_scaled_rounding_exceeds_the_draft_precision",
+        };
         out.derived = Some(derived);
         Ok(())
     })();
@@ -223,8 +200,7 @@ impl Assessment {
     pub(super) fn to_json(&self) -> String {
         let shares = self.shares.iter().map(|s| {
             let value = format!("{{\"issuer\":{},\"subject\":{},\"scope\":{},\"year\":{},\"first_month\":{},\"last_month\":{},\"fraction\":{{\"num\":\"{}\",\"den\":\"{}\"}}}}", js(&s.value.issuer), js(&s.value.subject), js(&s.value.scope), s.value.period.year, s.value.period.first_month, s.value.period.last_month, s.value.fraction.num(), s.value.fraction.den());
-            crate::claim_inspection::canonical_claim_json(s, "printed_ownership_share", value)
-                .unwrap_or_else(|r| format!("{{\"refusal\":{}}}", js(&r.what)))
+            canonical_json(s, "printed_ownership_share", value)
         }).collect::<Vec<_>>().join(",");
         format!(
             "{{\"rule\":{},\"status\":{},\"reason\":{},\"warning\":{},\"amount_claim\":{},\"share_claims\":[{}],\"derived_claim\":{},\"evidence\":[{}],\"refusal\":{}}}",
@@ -239,11 +215,7 @@ impl Assessment {
             self.derived
                 .as_ref()
                 .map_or_else(|| "null".into(), sums::claim),
-            self.evidence
-                .iter()
-                .map(SourceEvidence::to_json)
-                .collect::<Vec<_>>()
-                .join(","),
+            evidence_json(&self.evidence),
             self.refusal.as_ref().map_or_else(
                 || "null".into(),
                 |r| format!("{{\"code\":{},\"what\":{}}}", js(r.code), js(&r.what))
@@ -260,16 +232,7 @@ impl Assessment {
             kernel::WARNING
         );
         if let Some(c) = &self.derived {
-            let i = c.value.interval;
-            let _ = writeln!(
-                out,
-                "    - Derived Claim `{}`: [{}/{}, {}/{}].",
-                c.claim_id,
-                i.lo.num(),
-                i.lo.den(),
-                i.hi.num(),
-                i.hi.den()
-            );
+            sums::derived_markdown(&mut out, c.claim_id, c.value.interval);
         }
         for s in &self.shares {
             let _ = writeln!(

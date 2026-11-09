@@ -22,9 +22,10 @@ use fmine_registry::sources::{PUBLISHED_AT_BASES, is_date};
 use crate::json_string as js;
 
 mod ownership;
+mod rates;
 mod sums;
 
-pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences, complete quarter sums and full-mine to attributable amounts against dated, registered public sources at the requested cut. Ownership scaling requires the same source's explicit printed share for the same physical period. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
+pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences, complete quarter sums, full-mine to attributable amounts and gold AISC/by-product TCC cost-over-sales rates against dated, registered public sources at the requested cut. Ownership scaling requires the same source's explicit printed share for the same physical period. Cost rates require same-table whole-number US$M and attributable koz operands under their declared identity basis. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
 
 #[derive(Debug, Clone)]
 pub(super) struct Publication {
@@ -57,6 +58,7 @@ struct Finding {
     derivation: Option<Derivation>,
     quarter_sum: Option<sums::Assessment>,
     ownership: Option<ownership::Assessment>,
+    cost_rate: Option<rates::Assessment>,
 }
 
 #[derive(Debug, Clone)]
@@ -574,6 +576,7 @@ pub(super) fn assess(
             derivation: None,
             quarter_sum: None,
             ownership: None,
+            cost_rate: None,
         };
         if keys.len() == 1 {
             let candidates = keys.iter().next().and_then(|k| index.get(k));
@@ -636,6 +639,7 @@ pub(super) fn assess(
             sums::assess(draft, f, cells, profile, &publications, as_of, retrieved);
         result.ownership =
             ownership::assess(draft, f, cells, profile, &publications, as_of, retrieved);
+        result.cost_rate = rates::assess(draft, f, cells, profile, &publications, as_of, retrieved);
         let derived_reason = if result
             .derivation
             .as_ref()
@@ -654,6 +658,12 @@ pub(super) fn assess(
             .is_some_and(|s| s.status == "derived")
         {
             Some("same_source_printed_ownership_supports_the_draft_precision")
+        } else if result
+            .cost_rate
+            .as_ref()
+            .is_some_and(|s| s.status == "derived")
+        {
+            Some("same_source_cost_over_sales_supports_the_draft_precision")
         } else {
             None
         };
@@ -682,7 +692,7 @@ pub(super) fn assess(
 impl SourceEvidence {
     fn to_json(&self) -> String {
         format!(
-            "{{\"file\":{},\"url\":{},\"sha256\":{},\"published_at\":{},\"published_at_basis\":{},\"known_available_by_retrieval\":{},\"relation\":{},\"admission\":{},\"reason\":{},\"source_claim\":{}}}",
+            "{{\"file\":{},\"url\":{},\"sha256\":{},\"published_at\":{},\"published_at_basis\":{},\"known_available_by_retrieval\":{},\"relation\":{},\"admission\":{},\"reason\":{},\"source_claim\":{},\"canonical_claim\":{}}}",
             optional(self.file.as_deref()),
             optional(self.url.as_deref()),
             js(&self.source.key.reporting_vintage.file_sha256),
@@ -693,8 +703,27 @@ impl SourceEvidence {
             js(self.admission),
             js(self.reason),
             self.source.to_json(),
+            canonical_json(&self.source.claim, "public_source", self.source.to_json()),
         )
     }
+}
+
+fn canonical_json<T>(claim: &fmine_claim::Claim<T>, category: &str, value: String) -> String {
+    crate::claim_inspection::canonical_claim_json(claim, category, value).unwrap_or_else(|r| {
+        format!(
+            "{{\"refusal\":{{\"code\":{},\"what\":{}}}}}",
+            js(r.code),
+            js(&r.what)
+        )
+    })
+}
+
+fn evidence_json(evidence: &[SourceEvidence]) -> String {
+    evidence
+        .iter()
+        .map(SourceEvidence::to_json)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 impl Derivation {
@@ -702,11 +731,7 @@ impl Derivation {
         format!(
             "{{{},\"evidence\":[{}]}}",
             self.report.body_json(),
-            self.evidence
-                .iter()
-                .map(SourceEvidence::to_json)
-                .collect::<Vec<_>>()
-                .join(",")
+            evidence_json(&self.evidence)
         )
     }
 }
@@ -715,17 +740,18 @@ impl PublicnessReport {
     fn body_json(&self) -> String {
         let findings = self.findings.iter().map(|f| {
             format!(
-                "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"first_registered_disclosure\":{},\"evidence\":[{}],\"derivation\":{},\"quarter_sum\":{},\"ownership_scaling\":{}}}",
+                "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"first_registered_disclosure\":{},\"evidence\":[{}],\"derivation\":{},\"quarter_sum\":{},\"ownership_scaling\":{},\"cost_rate\":{}}}",
                 f.span.0, f.span.1, js(f.status), js(f.reason),
                 optional(f.first_registered_disclosure.as_deref()),
-                f.evidence.iter().map(SourceEvidence::to_json).collect::<Vec<_>>().join(","),
+                evidence_json(&f.evidence),
                 f.derivation.as_ref().map_or_else(|| "null".into(), Derivation::to_json),
                 f.quarter_sum.as_ref().map_or_else(|| "null".into(), sums::Assessment::to_json),
                 f.ownership.as_ref().map_or_else(|| "null".into(), ownership::Assessment::to_json),
+                f.cost_rate.as_ref().map_or_else(|| "null".into(), rates::Assessment::to_json),
             )
         }).collect::<Vec<_>>().join(",");
         format!(
-            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"rate_identities\",\"reverse_ownership_scaling\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
+            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"cost_of_sales_co_product_and_copper_rates\",\"noninteger_cost_rate_operands\",\"reverse_ownership_scaling\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
             js(&self.as_of),
             js(&self.draft_digest.to_hex()),
             js(&self.claims_digest.to_hex()),
@@ -780,6 +806,9 @@ impl PublicnessReport {
             if let Some(ownership) = &f.ownership {
                 out.push_str(&ownership.to_markdown());
             }
+            if let Some(rate) = &f.cost_rate {
+                out.push_str(&rate.to_markdown());
+            }
             if let Some(d) = &f.derivation {
                 let _ = writeln!(
                     out,
@@ -809,6 +838,7 @@ impl PublicnessReport {
                 .chain(f.derivation.iter().flat_map(|d| &d.evidence))
                 .chain(f.quarter_sum.iter().flat_map(|s| &s.evidence))
                 .chain(f.ownership.iter().flat_map(|s| &s.evidence))
+                .chain(f.cost_rate.iter().flat_map(|s| &s.evidence))
             {
                 let _ = writeln!(
                     out,

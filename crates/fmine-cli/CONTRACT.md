@@ -1030,9 +1030,22 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   derived Claim and refusal; same-fraction witnesses keep their individual ancestry. Competing amounts
   or conflicting shares stay ambiguous, and future, undated, unusable or registry-corrected witnesses
   cannot authorize scaling. The full enclosure must fit the draft precision; direct disclosures and
-  contradictions retain priority. Reverse scaling and intensive rates remain unsupported. Source-to-command
+  contradictions retain priority. Reverse scaling and scaling of intensive rates remain unsupported. Source-to-command
   and kernel regressions live in `xtask/tests/public_lint_derivations.rs`; share-parser boundary regressions
   in `xtask/tests/public_key_contract.rs` keep 0.100% distinct from 100% and reject 1100%.
+  DESIGN (bounded BD-345.S4): `lint_publicness::rates` derives gold AISC and explicitly by-product TCC
+  per sold ounce from a unique same-source, same-table, same-column US$M numerator and attributable koz
+  denominator under the declared identity family. The exact kernel computes `1000*N/Q` over each
+  independently printed whole-number operand's half-step box; the complete denominator box must be positive.
+  The `cost_rate` result retains its formula and identity basis, exact draft/result intervals, both original
+  operands and a derived Claim whose evidence is no stronger than either source. A declared interpretation
+  never changes a printed ownership assertion. Signed numerators remain signed; competing, undated,
+  unusable or incompatible operands cannot establish a derivation, and direct disclosures retain priority.
+  Co-product TCC, cost-of-sales bridges, copper rates and produced-ounce denominators are outside this rule.
+  Every public-record source now retains its keyed projection and checked canonical Claim companion, binding
+  UU terms, parents, supersedes and recorded flags even when the numerical Claim ID is unchanged. Canonical
+  export failures remain structured refusals. Generic Claim inspection and typed recovery codecs live with
+  their owning Claim/metrics crates; the CLI retains source selection and domain-specific interpretation.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
   displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,

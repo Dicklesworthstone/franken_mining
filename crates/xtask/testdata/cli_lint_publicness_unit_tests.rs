@@ -445,6 +445,224 @@ mod tests {
         );
     }
 
+    const COST_RATE_DRAFT: &str = "Site A Q1 2030 attributable AISC per ounce sold is $2.0k/oz.";
+
+    fn seal_cost_source(cell: &mut KeyedCell) {
+        let old = &cell.claim;
+        let mut claim = Claim::new(
+            &cell.key.line.label,
+            old.value.clone(),
+            &canonical_value_tag(&cell.key, &old.value),
+            old.representation.clone(),
+            old.support,
+            old.additivity,
+            old.evidence,
+            old.epistemic,
+            old.state,
+            old.confidentiality.clone(),
+            old.uu_terms.clone(),
+            old.parents.clone(),
+            old.anchors.clone(),
+        );
+        claim.supersedes = old.supersedes;
+        claim.stale = old.stale;
+        claim.calibration_failed = old.calibration_failed;
+        cell.claim = claim;
+    }
+
+    fn cost_rate_fixture() -> (IssuerProfile, Vec<KeyedCell>, Vec<Publication>) {
+        let (mut profile, original, dates) = fixture(&["500"]);
+        profile.sources[0].kind = SourceKind::AiscReconciliation;
+        let mut cells = vec![original[0].clone(), original[0].clone()];
+        for (i, cell) in cells.iter_mut().enumerate() {
+            cell.key.line.label = if i == 0 {
+                "all-in sustaining costs"
+            } else {
+                "ounces sold"
+            }
+            .into();
+            cell.key.unit = if i == 0 { "usd_m" } else { "koz" }.into();
+            let at = if i == 0 { "QTD!D11" } else { "QTD!D13" };
+            cell.claim.anchors[0].locator = at.into();
+            cell.locator = format!("Quarter1.xlsx:{at}");
+            cell.claim.additivity = AdditivityClass::ExtensiveAdditive;
+            let raw = if i == 0 { "500" } else { "250" };
+            cell.claim.value = PublicValue::Number {
+                stored: raw.into(),
+                displayed: Ok(raw.into()),
+                under_status: None,
+            };
+            if i == 1 {
+                cell.key.ownership_basis = OwnershipBasis::Attributable {
+                    num: 3,
+                    den: 5,
+                    source: fmine_public::key::ShareSource::Registry,
+                };
+                cell.basis_evidence = Some(
+                    "FACT: registered interpretation of explicitly attributable sold ounces".into(),
+                );
+            }
+            seal_cost_source(cell);
+        }
+        (profile, cells, dates)
+    }
+
+    #[test]
+    fn cost_rate_metadata_and_hand_derived_bounds_remain_source_bound_and_order_invariant() {
+        let (profile, mut cells, dates) = cost_rate_fixture();
+        for (i, cell) in cells.iter_mut().enumerate() {
+            cell.claim.uu_terms.push(fmine_claim::UuTerm {
+                scenario_id: format!("independent-source-tail-{i}"),
+                description: "Unmodeled source revision".into(),
+                downside_exposure_usd_m: 5.0 + i as f64,
+                trigger_indicator: "A later filed reconciliation".into(),
+            });
+        }
+        let original = evaluate(COST_RATE_DRAFT, &cells, &profile, &dates, "2030-05-01");
+        let rate = original.findings[0].cost_rate.as_ref().unwrap();
+        assert_eq!(rate.status, "derived");
+        let json = rate.to_json();
+        // 1000*(499.5)/(250.5) and 1000*(500.5)/(249.5), independently reduced.
+        assert!(json.contains("\"lo\":{\"num\":\"333000\",\"den\":\"167\"}"));
+        assert!(json.contains("\"hi\":{\"num\":\"1001000\",\"den\":\"499\"}"));
+        assert!(json.contains("independent-source-tail-0"));
+        assert!(json.contains("independent-source-tail-1"));
+        assert!(json.contains("\"canonical_claim\":{\"claim_id\":"));
+        for source in &cells {
+            assert!(json.contains(&source.claim.claim_id.to_string()));
+        }
+        let precise = evaluate(
+            &COST_RATE_DRAFT.replace("$2.0k", "$2,000"),
+            &cells,
+            &profile,
+            &dates,
+            "2030-05-01",
+        );
+        assert_eq!(
+            precise.findings[0].cost_rate.as_ref().unwrap().status,
+            "precision_not_established"
+        );
+        cells.reverse();
+        assert_eq!(
+            original.to_json(),
+            evaluate(COST_RATE_DRAFT, &cells, &profile, &dates, "2030-05-01").to_json()
+        );
+        let before = cells[0].claim.claim_id;
+        cells[0].claim.supersedes = Some(cells[1].claim.claim_id);
+        cells[0].claim.check_id().unwrap();
+        assert_eq!(before, cells[0].claim.claim_id);
+        let revised = evaluate(COST_RATE_DRAFT, &cells, &profile, &dates, "2030-05-01");
+        assert_eq!(
+            revised.findings[0].cost_rate.as_ref().unwrap().status,
+            "derived"
+        );
+        assert_ne!(
+            original.digest(),
+            revised.digest(),
+            "source metadata outside Claim identity remains bound"
+        );
+    }
+
+    #[test]
+    fn cost_rate_basis_source_and_claim_mutations_never_acquire_a_numeric_derivation() {
+        for fault in 0..11 {
+            let (profile, mut cells, dates) = cost_rate_fixture();
+            match fault {
+                0 => cells[0].key.unit = "kt".into(),
+                1 => {
+                    cells[1].claim.anchors[0].locator = "QTD!E13".into();
+                    cells[1].locator = "Quarter1.xlsx:QTD!E13".into();
+                }
+                2 => {
+                    cells[1].key.scope = Scope::Region {
+                        map_version: "registered:other-perimeter".into(),
+                    }
+                }
+                3 => cells[1].key.line.occurrence = 1,
+                4 => {
+                    cells[0].printed_basis = OwnershipBasis::Consolidated100;
+                    cells[0].basis_evidence = Some("Conflicting registered correction".into());
+                }
+                5 => cells[1].claim.additivity = AdditivityClass::IntensiveWeighted,
+                6 => cells[0].claim.evidence = EvidenceClass::Assumed,
+                7 => cells[1].claim.stale = true,
+                8 => cells[1].key.valid_period.kind = PeriodKind::Quarter(2),
+                9 => cells[0].claim.metric_key.push_str("-forged"),
+                _ => cells[0].printed_basis = OwnershipBasis::Consolidated100,
+            }
+            if fault != 9 {
+                for cell in &mut cells {
+                    seal_cost_source(cell);
+                }
+            }
+            let report = evaluate(COST_RATE_DRAFT, &cells, &profile, &dates, "2030-05-01");
+            assert_ne!(
+                report.findings[0].status,
+                "derivable",
+                "fault {fault}: {}",
+                report.to_json()
+            );
+            let json = report.findings[0].cost_rate.as_ref().unwrap().to_json();
+            assert!(
+                json.contains("\"derived_claim\":null"),
+                "fault {fault}: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn cost_rate_duplicate_identity_metadata_and_forged_future_operands_block_selection() {
+        let (mut profile, mut cells, mut dates) = cost_rate_fixture();
+        let mut competing = cells[0].clone();
+        competing.claim.supersedes = Some(cells[1].claim.claim_id);
+        assert_eq!(competing.claim.claim_id, cells[0].claim.claim_id);
+        cells.push(competing);
+        let first = evaluate(COST_RATE_DRAFT, &cells, &profile, &dates, "2030-05-01");
+        assert_eq!(
+            first.findings[0].cost_rate.as_ref().unwrap().status,
+            "ambiguous"
+        );
+        cells.reverse();
+        assert_eq!(
+            first.to_json(),
+            evaluate(COST_RATE_DRAFT, &cells, &profile, &dates, "2030-05-01").to_json()
+        );
+        let mut future = cells.remove(0);
+        future.claim.supersedes = None;
+        let mut source = profile.sources[0].clone();
+        source.file_name = "Future.xlsx".into();
+        source.sha256_hex = Digest32([42; 32]).to_hex();
+        future.claim.anchors[0].artifact_path = source.file_name.clone();
+        future.claim.anchors[0].artifact_sha256 = [42; 32];
+        future.locator = "Future.xlsx:QTD!D11".into();
+        future.key.reporting_vintage.file_sha256 = source.sha256_hex.clone();
+        let mut publication = dates[0].clone();
+        publication.file = source.file_name.clone();
+        publication.sha256 = source.sha256_hex.clone();
+        publication.published_at = "2030-06-01".into();
+        profile.sources.push(source);
+        dates.push(publication);
+        seal_cost_source(&mut future);
+        cells.push(future);
+        let later = evaluate(COST_RATE_DRAFT, &cells, &profile, &dates, "2030-05-01");
+        assert_eq!(
+            later.findings[0].cost_rate.as_ref().unwrap().status,
+            "derived"
+        );
+        cells
+            .last_mut()
+            .unwrap()
+            .claim
+            .metric_key
+            .push_str("-forged");
+        let forged = evaluate(COST_RATE_DRAFT, &cells, &profile, &dates, "2030-05-01");
+        assert_eq!(
+            forged.findings[0].cost_rate.as_ref().unwrap().status,
+            "ambiguous"
+        );
+        assert_ne!(forged.findings[0].status, "derivable");
+    }
+
     #[test]
     fn altered_or_unknown_source_claim_cannot_gain_public_evidence_status() {
         let (profile, mut cells, dates) = fixture(&["1250"]);

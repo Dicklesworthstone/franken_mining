@@ -1837,6 +1837,23 @@ cannot authorize the conversion. Direct disclosed matches and contradictions kee
 full-mine-to-attributable arithmetic check for gold production/sales and copper production; reverse scaling,
 unit-cost scaling and a new issuer disclosure are not inferred.
 
+DESIGN (BD-345.S4): gold **AISC and explicitly by-product total cash cost per sold ounce** can be derived
+from the same dated source table's cost numerator in US$ millions and attributable ounces sold in thousands:
+`1000 * cost / sold`. Both operands must be whole-number disclosures with a displayed step of one, and the
+entire sold-ounce rounding interval must be positive. The original printed and registered ownership evidence
+stays attached; the declared identity interpretation never invents a printed ownership share.
+
+For synthetic disclosed values of US$150M and 100 thousand ounces, the exact rate enclosure is
+`[299000/201, 301000/199] USD/oz`. The draft sentence
+`Example Mine Q1 2030 attributable AISC per ounce sold is $1.5k/oz.` is coarse enough for that enclosure;
+`$1,500/oz` claims more precision than those inputs establish. The `cost_rate` section retains the formula,
+identity basis, exact derived Claim and both original source Claims. The derived Claim retains their
+issuer-assertion evidence class. Stored workbook values remain visible, while displayed values determine
+the rounding bounds. Signed costs stay signed; zero, negative, missing or nonnumeric sales cannot provide
+a denominator. Competing operands remain ambiguous, and direct disclosed matches or contradictions retain
+priority. Co-product TCC, cost-of-sales bridges, copper rates and produced-ounce denominators require their
+own explicit constructions and are outside this rule.
+
 Nine-month cumulative disclosures can also be checked directly in cited or discovery mode. The grammar
 recognizes `9M 2030`, `20309M`, and `nine months of 2030`, keeping them distinct from Q3, H1, and FY.
 An undated `9M` remains a numeric nine-million amount. Every derived nine-month total requires all three

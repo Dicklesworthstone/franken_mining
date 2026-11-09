@@ -20,6 +20,8 @@ use fmine_units::UnitsError;
 
 pub use crate::guidance::{Ownership, Period};
 
+pub mod render;
+
 pub const RULES_VERSION: &str = "m0-recovery/1";
 pub const NO_CLAIM: &str = "Descriptive comparison with an annual historical grade and recovery relation; no causal attribution, recoverable-metal estimate, forecast or affiliation implied.";
 pub const MODEL_CAVEAT: &str = "The models omit ore type, grind, throughput effects and concentrate mass pull, and apply annual training to quarterly observations. Input-rounding enclosures are not confidence intervals or prediction intervals. Monetary downside is not quantified.";
