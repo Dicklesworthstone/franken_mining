@@ -2,7 +2,7 @@
 //! Exact quantiles and decimal export are distinct: outward rounding changes the interval that is scored.
 //! The unrounded bounds equal the persistence comparator on the same inputs; only its point estimate differs.
 //! This kernel authenticates no sources or time, and neither registers nor issues a forecast.
-//! Determinism: Exact.
+//! Determinism: Exact
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};

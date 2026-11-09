@@ -1,3 +1,5 @@
+//! Determinism: Exact
+
 use super::*;
 use crate::record::{parse_rules, persistence_interval};
 
