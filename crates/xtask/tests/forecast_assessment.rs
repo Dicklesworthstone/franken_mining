@@ -19,6 +19,47 @@ fn args(values: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn cusum_example_keeps_original_shift_and_missing_prefix_through_transcript_replay() {
+    let report = |cut, selector| {
+        let (envelope, _) = invoke(
+            &args(&[
+                "forecast",
+                "assess",
+                "--ledger",
+                "tests/forecasts/cusum_synthetic.toml",
+                "--cohort",
+                "synthetic-cusum",
+                "--as-of",
+                cut,
+                "--selector",
+                selector,
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!(envelope.exit_code, 0, "{envelope:?}");
+        envelope.payload_json
+    };
+    let early = report("2031-01-10T00:00:00Z", "first-published");
+    assert!(
+        early.contains("\"snapshot\":{\"n\":1,\"upper\":1.5,\"lower\":0,"),
+        "{early}"
+    );
+    assert!(early.contains("\"n_deferred\":1,\"n_deferred_resolved\":1"));
+    assert!(early.contains("\"reason\":\"not_published\""));
+    let latest = report("2031-01-13T00:00:00Z", "latest-as-of");
+    assert!(latest.contains("\"snapshot\":{\"n\":3,\"upper\":4.5,\"lower\":0,\"max_upper\":4.5,\"max_lower\":0,\"threshold\":3,\"first_upper_crossing\":2,\"first_lower_crossing\":null,\"first_crossing\":2,\"alarmed\":true}"), "{latest}");
+    assert!(latest.contains("\"value\":100,"));
+    assert!(latest.contains("\"standardized_residual\":2,"));
+    assert!(latest.contains(
+        "\"tuning_verified\":false,\"false_alarm_probability\":null,\"average_run_length\":null"
+    ));
+    assert_eq!(latest, report("2031-01-13T00:00:00Z", "latest-as-of"));
+    let (docs, _) = invoke(&args(&["robot-docs"]), &workspace_root());
+    assert!(docs.payload_json.contains("\"forecast_cusum_monitor\":"));
+    assert!(docs.payload_json.contains("cusum_reference_assumption"));
+}
+
+#[test]
 fn forecast_assessment_selectors_and_time_resolution_are_explicit() {
     let base = [
         "forecast",

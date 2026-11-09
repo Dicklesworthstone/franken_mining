@@ -218,6 +218,144 @@ fn gaussian_cohort(opt_in: bool) -> String {
     request
 }
 
+fn cusum_policy(order: &str) -> String {
+    format!(
+        "cusum_reference_value = \"0.5\"\ncusum_threshold = \"3\"\ncusum_support = \"Synthetic ordered output\"\ncusum_reference_assumption = \"Declared Gaussian residual reference\"\ncusum_tuning_basis = \"Illustrative only; no ARL validation\"\ncusum_order = \"{order}\"\n"
+    )
+}
+
+#[test]
+fn cusum_journal_preserves_missing_prefix_original_alarm_and_saved_report_after_restatement() {
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    for (alias, day) in [("f1", 2), ("f2", 3), ("f3", 4)] {
+        journal.append(
+            &gaussian_forecast(alias, DUE),
+            ns(&format!("2030-01-{day:02}T00:00:00Z")),
+        );
+    }
+    let request = format!("{}{}", cohort("f1,f2,f3"), cusum_policy("f1,f2,f3"));
+    let frozen = journal.append(&request, ns("2030-01-05T00:00:00Z"));
+    assert!(frozen.contains("\"v8\":1"));
+    journal.append(
+        &outcome("f1", 2, "2031-01-02T00:00:00Z", false),
+        ns("2031-01-03T00:00:00Z"),
+    );
+    journal.append("[[outcome]]\nforecast = \"f2\"\nkind = \"missing\"\navailable_at = \"2031-01-02T00:00:00Z\"\nreason = \"not_published\"\n", ns("2031-01-04T00:00:00Z"));
+    journal.append(
+        &outcome("f3", 2, "2031-01-02T00:00:00Z", false),
+        ns("2031-01-05T00:00:00Z"),
+    );
+    let early = journal.assess(CUT, "first-published", None, ns(CUT));
+    assert!(early.contains("\"snapshot\":{\"n\":1,\"upper\":1.5,\"lower\":0,"));
+    assert!(early.contains("\"n_deferred\":1,\"n_deferred_resolved\":1"));
+    let early_digest = assessment_digest(&early);
+    journal.append(
+        &outcome("f2", 2, "2031-01-02T00:00:00Z", false),
+        ns("2031-01-11T00:00:00Z"),
+    );
+    journal.append(
+        &outcome("f1", 0, "2031-01-12T00:00:00Z", true),
+        ns("2031-01-12T00:00:00Z"),
+    );
+    let latest = journal.assess(
+        "2031-01-13T00:00:00Z",
+        "latest-as-of",
+        None,
+        ns("2031-01-13T00:00:00Z"),
+    );
+    assert!(latest.contains("\"snapshot\":{\"n\":3,\"upper\":4.5,\"lower\":0,\"max_upper\":4.5,\"max_lower\":0,\"threshold\":3,\"first_upper_crossing\":2,\"first_lower_crossing\":null,\"first_crossing\":2,\"alarmed\":true}"), "{latest}");
+    let before = fs::read(&journal.path).unwrap();
+    for (digest, expected) in [
+        (early_digest, &early),
+        (assessment_digest(&latest), &latest),
+    ] {
+        let saved = journal.run(
+            &Command::Report {
+                journal: journal.path.clone(),
+                head: Some(journal.head),
+                assessment: digest,
+                provenance: None,
+                timestamp: None,
+            },
+            0,
+        );
+        assert_eq!(saved.exit_code, 0, "{saved:?}");
+        assert_eq!(assessment(&saved.payload_json), assessment(expected));
+        let markdown = saved
+            .rendered_markdown
+            .as_deref()
+            .expect("saved report text");
+        assert!(markdown.contains("## Gaussian residual CUSUM"));
+        assert!(markdown.contains("Illustrative only; no ARL validation"));
+        assert!(markdown.contains("Invented!A1"));
+        assert!(
+            markdown
+                .contains("Restatements do not replace the original sequence or erase an alarm")
+        );
+        if digest == early_digest {
+            assert!(markdown.contains("Sequence stops at unresolved forecast f2"));
+        } else {
+            assert!(markdown.contains("First upper/lower crossing: 2 / none. Alarmed: true."));
+        }
+    }
+    assert_eq!(fs::read(&journal.path).unwrap(), before);
+}
+
+#[test]
+fn cusum_live_freeze_composes_policies_and_rejects_retrospective_versions_without_append() {
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), SECOND as u64);
+    journal.append(&gaussian_forecast("f1", DUE), ns("2030-01-02T00:00:00Z"));
+    let combined = format!(
+        "{}{}monitor_alarm_alpha = \"0.05\"\nmonitor_support = \"Synthetic output\"\nmonitor_conditional_null = \"Conditional coverage 0.8\"\nmonitor_order = \"f1\"\n",
+        gaussian_cohort(true).replace("f1, f2", "f1"),
+        cusum_policy("f1")
+    );
+    for bad in [
+        combined.replace("cusum_threshold = \"3\"\n", ""),
+        combined.replace("cusum_order = \"f1\"", "cusum_order = \"f1,f1\""),
+        combined.replace(
+            "cusum_reference_value = \"0.5\"",
+            "cusum_reference_value = \"0\"",
+        ),
+    ] {
+        let command = journal.request(&bad);
+        let before = fs::read(&journal.path).unwrap();
+        let refused = journal.run(&command, ns("2030-01-03T00:00:00Z"));
+        assert_ne!(refused.exit_code, 0);
+        assert_eq!(fs::read(&journal.path).unwrap(), before);
+    }
+    let frozen = journal.append(&combined, ns("2030-01-03T00:00:00Z"));
+    assert!(frozen.contains("\"coverage_monitor\":"));
+    assert!(frozen.contains("\"gaussian_crps_bounds\":\"registered-domain\""));
+    assert!(frozen.contains("\"cusum_monitor\":"));
+    let snapshot = DurableJournal::open_read(&journal.path, Some(journal.head)).unwrap();
+    for older in 2..=7 {
+        let mut records = snapshot.records().to_vec();
+        for record in &mut records {
+            if let Entry::Operation(text) = &mut record.entry {
+                *text = text.replace(
+                    "fmine.forecast-operation.v8",
+                    &format!("fmine.forecast-operation.v{older}"),
+                );
+            }
+        }
+        let path = journal
+            .root
+            .join(format!("downgraded-cusum-v{older}.journal"));
+        let head = write_fixture(&path, &mut records);
+        assert_refused(
+            &journal.run(
+                &Command::Inspect {
+                    journal: path,
+                    head: Some(head),
+                },
+                0,
+            ),
+            "FMINE-REF-107",
+        );
+    }
+}
+
 fn cohort(members: &str) -> String {
     format!(
         "[[cohort]]\nname = \"three-sites\"\nmembers = \"{members}\"\nresolution_rule = \"Synthetic annual output on a fixed basis\"\neligible_sources = \"synthetic:issuer\"\nalpha = \"0.2\"\nmin_calibration_n = 35\nrho_low = \"0\"\nrho_high = \"0.5\"\noutcome_lo = \"0\"\noutcome_hi = \"100\"\n"

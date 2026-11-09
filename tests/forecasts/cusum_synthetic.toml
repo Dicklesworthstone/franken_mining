@@ -1,0 +1,108 @@
+# DESIGN (BD-051): invented Gaussian forecasts and outcomes; not issuer data or time proof.
+# With k=0.5 and h=3, original residuals [2, 2, 2] give upper sums [1.5, 3, 4.5].
+# The first assessment stops at missing f2 even though f3 is already available.
+# A later restatement of f1 to its mean cannot erase the original alarm at observation 2.
+schema = "fmine.forecast-ledger.v1"
+lane = "synthetic"
+
+[[forecast]]
+id = "f1"
+model_key = "synthetic:cusum"
+registered_at = "2030-01-01T00:00:00Z"
+outcome_due = "2030-12-31T00:00:00Z"
+kind = "gaussian"
+mean = "100"
+std_dev = "10"
+
+[[forecast]]
+id = "f2"
+model_key = "synthetic:cusum"
+registered_at = "2030-01-02T00:00:00Z"
+outcome_due = "2030-12-31T00:00:00Z"
+kind = "gaussian"
+mean = "100"
+std_dev = "10"
+
+[[forecast]]
+id = "f3"
+model_key = "synthetic:cusum"
+registered_at = "2030-01-03T00:00:00Z"
+outcome_due = "2030-12-31T00:00:00Z"
+kind = "gaussian"
+mean = "100"
+std_dev = "10"
+
+[[cohort]]
+name = "synthetic-cusum"
+frozen_at = "2030-01-04T00:00:00Z"
+members = "f1, f2, f3"
+resolution_rule = "Invented original outcomes at three ordered supports"
+eligible_sources = "synthetic:issuer"
+cusum_reference_value = "0.5"
+cusum_threshold = "3"
+cusum_support = "Three synthetic ordered annual site outputs"
+cusum_reference_assumption = "Standardized original residuals follow the declared Gaussian reference model"
+cusum_tuning_basis = "Illustrative k and h only; no false-alarm or average-run-length validation"
+cusum_order = "f1, f2, f3"
+
+[[outcome]]
+forecast = "f1"
+kind = "published"
+available_at = "2031-01-02T00:00:00Z"
+recorded_at = "2031-01-03T00:00:00Z"
+value = "120"
+source = "synthetic:issuer"
+vintage = "synthetic-original"
+locator = "Invented!A1"
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[outcome]]
+forecast = "f2"
+kind = "missing"
+available_at = "2031-01-02T00:00:00Z"
+recorded_at = "2031-01-04T00:00:00Z"
+reason = "not_published"
+
+[[outcome]]
+forecast = "f3"
+kind = "published"
+available_at = "2031-01-02T00:00:00Z"
+recorded_at = "2031-01-05T00:00:00Z"
+value = "120"
+source = "synthetic:issuer"
+vintage = "synthetic-original"
+locator = "Invented!A3"
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[assessment]]
+cohort = "synthetic-cusum"
+as_of = "2031-01-10T00:00:00Z"
+selector = "first-published"
+
+[[outcome]]
+forecast = "f2"
+kind = "published"
+available_at = "2031-01-02T00:00:00Z"
+recorded_at = "2031-01-11T00:00:00Z"
+value = "120"
+source = "synthetic:issuer"
+vintage = "synthetic-original"
+locator = "Invented!A2"
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[outcome]]
+forecast = "f1"
+kind = "restated"
+available_at = "2031-01-12T00:00:00Z"
+recorded_at = "2031-01-12T00:00:00Z"
+value = "100"
+source = "synthetic:issuer"
+vintage = "synthetic-restated"
+locator = "Invented!A1"
+sha256 = "2222222222222222222222222222222222222222222222222222222222222222"
+supersedes = 1
+
+[[assessment]]
+cohort = "synthetic-cusum"
+as_of = "2031-01-13T00:00:00Z"
+selector = "latest-as-of"

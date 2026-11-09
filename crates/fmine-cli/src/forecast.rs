@@ -21,6 +21,7 @@ use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 
 use crate::json_string as js;
 
+mod cusum;
 mod diagnostics;
 pub mod live;
 mod provenance;
@@ -36,6 +37,7 @@ pub const COVERAGE_MONITOR_JSON: &str = r#"{"cohort_fields":["monitor_alarm_alph
 pub const EVENT_LOG_JSON: &str = r#"{"cohort_field":"event_log_floor","declaration":"A quoted finite probability strictly between zero and 0.5, frozen before outcomes in an all-Bernoulli cohort","loss":"-ln(max(P(observed outcome), probability_floor)) in nats; the forecast probability is unchanged","interpretation":"The explicit floor caps extreme losses and removes strict propriety in the floored tails; the unchanged proper Brier score is also reported","missing":"Every unresolved member contributes both possible binary losses to whole-cohort completion bounds; no missing outcome leaves the denominator","journal":"Opt-in freezes use operation v5; omission preserves existing record identities and output","scope":"Descriptive scoring, not a calibration claim; continuous coverage monitoring cannot be enabled on the same cohort"}"#;
 pub const METADATA_JSON: &str = segments::ROBOT_DOCS_JSON;
 pub const DIAGNOSTICS_JSON: &str = diagnostics::ROBOT_DOCS_JSON;
+pub const CUSUM_MONITOR_JSON: &str = cusum::ROBOT_DOCS_JSON;
 
 const MONITOR_FIELDS: [&str; 4] = [
     "monitor_alarm_alpha",
@@ -229,6 +231,11 @@ impl Replay {
     }
 
     fn cohort_at(&mut self, row: Row<'_>, observed_ns: Option<i64>) -> Result<(), Refusal> {
+        let monitor_fields: Vec<_> = MONITOR_FIELDS
+            .iter()
+            .chain(&cusum::FIELDS)
+            .copied()
+            .collect();
         row.allowed(
             &[
                 "name",
@@ -251,7 +258,7 @@ impl Replay {
                 "public_members",
                 "public_vintages",
             ],
-            &MONITOR_FIELDS,
+            &monitor_fields,
         )?;
         let mut policy = AssessmentPolicy::default();
         if let Some(alpha) = row.optional_number("alpha")? {
@@ -301,6 +308,7 @@ impl Replay {
                     .collect::<Result<Vec<_>, _>>()?,
             });
         }
+        policy.cusum_monitor = cusum::parse(&row, self)?;
         let name = row.string("name")?.to_string();
         let members = row
             .identifiers("members")?
@@ -581,8 +589,9 @@ impl Replay {
             .unwrap_or_default();
         let segments = segments::assessment_json(self, report)?;
         let diagnostics = diagnostics::assessment_json(self, report)?;
+        let cusum = cusum::assessment_json(self, report)?;
         Ok(format!(
-            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]{monitor}{segments}{diagnostics}}},\"checkpoints\":[{}]}}",
+            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]{monitor}{cusum}{segments}{diagnostics}}},\"checkpoints\":[{}]}}",
             js(mode),
             js(&self.lane),
             js(&identity.to_hex()),
@@ -935,13 +944,16 @@ fn cohort_json(cohort: &Cohort) -> String {
     let event_log = p
         .event_log_floor
         .map_or_else(String::new, |floor| format!(",\"event_log_floor\":{floor}"));
+    let cusum = p.cusum_monitor.as_ref().map_or_else(String::new, |policy| {
+        format!(",\"cusum_monitor\":{}", cusum::policy_json(policy))
+    });
     let gaussian_bounds = if p.gaussian_crps_bounds {
         ",\"gaussian_crps_bounds\":\"registered-domain\""
     } else {
         ""
     };
     format!(
-        "{{\"name\":{},\"digest\":{},\"frozen_at\":{},\"resolution_rule\":{},\"public_resolution\":{public},\"eligible_sources\":[{}],\"policy\":{{\"alpha\":{},\"min_calibration_n\":{},\"correlation_range\":{},\"outcome_bounds\":{}{monitor}{event_log}{gaussian_bounds}}}}}",
+        "{{\"name\":{},\"digest\":{},\"frozen_at\":{},\"resolution_rule\":{},\"public_resolution\":{public},\"eligible_sources\":[{}],\"policy\":{{\"alpha\":{},\"min_calibration_n\":{},\"correlation_range\":{},\"outcome_bounds\":{}{monitor}{cusum}{event_log}{gaussian_bounds}}}}}",
         js(&spec.name),
         js(&cohort.digest.to_hex()),
         utc(spec.frozen_at_ns),

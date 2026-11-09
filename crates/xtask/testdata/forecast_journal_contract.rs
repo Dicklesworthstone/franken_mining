@@ -191,6 +191,47 @@ fn binary_monitored_freeze_survives_restart_and_invalid_policy_does_not_append()
 }
 
 #[test]
+fn binary_cusum_freeze_survives_restart_and_incomplete_policy_leaves_no_record() {
+    let workspace = Workspace::new();
+    let init = workspace.init();
+    let gaussian = "[[forecast]]\nid = \"f1\"\nmodel_key = \"synthetic:cusum\"\noutcome_due = \"2200-01-01T00:00:00Z\"\nkind = \"gaussian\"\nmean = \"100\"\nstd_dev = \"10\"\n";
+    let registered = workspace.append("register", field(&init, "head"), gaussian, 0);
+    let before = workspace.bytes();
+    let incomplete = format!("{COHORT}cusum_threshold = \"3\"\n");
+    let refused = workspace.append("freeze", field(&registered, "head"), &incomplete, 3);
+    assert!(refused.contains("FMINE-REF-107"));
+    assert_eq!(workspace.bytes(), before);
+    let policy = "cusum_reference_value = \"0.5\"\ncusum_threshold = \"3\"\ncusum_support = \"Synthetic output\"\ncusum_reference_assumption = \"Declared Gaussian reference\"\ncusum_tuning_basis = \"Illustrative only\"\ncusum_order = \"f1\"\n";
+    let frozen = workspace.append(
+        "freeze",
+        field(&registered, "head"),
+        &format!("{COHORT}{policy}"),
+        0,
+    );
+    let before = workspace.bytes();
+    let inspected = workspace.run(
+        &[
+            "inspect",
+            "--journal",
+            "journal",
+            "--head",
+            field(&frozen, "head"),
+        ],
+        0,
+    );
+    assert_eq!(workspace.bytes(), before);
+    assert!(inspected.contains("\"operation_version_counts\":{\"legacy_v1\":0,\"v2\":1,\"v8\":1}"));
+    assert!(inspected.contains("\"cusum_monitor\":{\"reference_value\":0.5,\"threshold\":3"));
+    let journal =
+        Journal::open_read(&workspace.0.join("journal"), None).expect("durable CUSUM record");
+    let Entry::Operation(request) = &journal.records()[2].entry else {
+        panic!("cohort operation")
+    };
+    assert!(request.starts_with("schema = \"fmine.forecast-operation.v8\"\n"));
+    assert!(request.contains(policy));
+}
+
+#[test]
 fn binary_rejects_caller_time_version_and_stale_head_without_changing_history() {
     let workspace = Workspace::new();
     let init = workspace.init();

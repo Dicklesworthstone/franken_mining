@@ -34,6 +34,7 @@ const V4_SCHEMA: &str = "fmine.forecast-operation.v4";
 const V5_SCHEMA: &str = "fmine.forecast-operation.v5";
 const V6_SCHEMA: &str = "fmine.forecast-operation.v6";
 const V7_SCHEMA: &str = "fmine.forecast-operation.v7";
+const V8_SCHEMA: &str = "fmine.forecast-operation.v8";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +54,7 @@ enum OperationVersion {
     V5 = 4,
     V6 = 5,
     V7 = 6,
+    V8 = 7,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -68,6 +70,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V5_SCHEMA => Ok(OperationVersion::V5),
             V6_SCHEMA => Ok(OperationVersion::V6),
             V7_SCHEMA => Ok(OperationVersion::V7),
+            V8_SCHEMA => Ok(OperationVersion::V8),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -82,7 +85,12 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if super::segments::FIELDS
+    let schema = if super::cusum::FIELDS
+        .iter()
+        .any(|key| doc.rows[0].get(key).is_some())
+    {
+        V8_SCHEMA
+    } else if super::segments::FIELDS
         .iter()
         .any(|key| doc.rows[0].get(key).is_some())
     {
@@ -1064,11 +1072,22 @@ fn apply(
     let monitor_declared = super::MONITOR_FIELDS
         .iter()
         .any(|key| row.get(key).is_some());
+    let cusum_declared = super::cusum::FIELDS
+        .iter()
+        .any(|key| row.get(key).is_some());
+    if cusum_declared && version != OperationVersion::V8 {
+        return Err(invalid("CUSUM policies require operation version eight"));
+    }
+    if version == OperationVersion::V8 && (row.table != "cohort" || !cusum_declared) {
+        return Err(invalid(
+            "operation version eight requires a CUSUM cohort freeze",
+        ));
+    }
     let event_log_declared = row.get("event_log_floor").is_some();
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
-    if gaussian_bounds_declared && version != OperationVersion::V6 {
+    if gaussian_bounds_declared && !matches!(version, OperationVersion::V6 | OperationVersion::V8) {
         return Err(invalid(
-            "Gaussian CRPS bounds require operation version six",
+            "Gaussian CRPS bounds require operation version six or eight",
         ));
     }
     if version == OperationVersion::V6 && (row.table != "cohort" || !gaussian_bounds_declared) {
@@ -1077,10 +1096,13 @@ fn apply(
         ));
     }
     if (monitor_declared || event_log_declared)
-        && !matches!(version, OperationVersion::V5 | OperationVersion::V6)
+        && !matches!(
+            version,
+            OperationVersion::V5 | OperationVersion::V6 | OperationVersion::V8
+        )
     {
         return Err(invalid(
-            "coverage monitor and event log policies require operation version five or six",
+            "coverage monitor and event log policies require operation version five, six or eight",
         ));
     }
     if version == OperationVersion::V5
@@ -1094,11 +1116,14 @@ fn apply(
     if row.get("public_vintages").is_some()
         && !matches!(
             version,
-            OperationVersion::V4 | OperationVersion::V5 | OperationVersion::V6
+            OperationVersion::V4
+                | OperationVersion::V5
+                | OperationVersion::V6
+                | OperationVersion::V8
         )
     {
         return Err(invalid(
-            "public vintage policy requires operation version four or an opt-in version-five/six freeze",
+            "public vintage policy requires operation version four or an opt-in version-five/six/eight freeze",
         ));
     }
     if version == OperationVersion::V4 && row.table != "registered_restatement" && !vintage_freeze {
@@ -1128,7 +1153,8 @@ fn apply(
         | OperationVersion::V4
         | OperationVersion::V5
         | OperationVersion::V6
-        | OperationVersion::V7 => upper,
+        | OperationVersion::V7
+        | OperationVersion::V8 => upper,
     };
     let row = Row(row);
     match row.0.table.as_str() {
@@ -1220,7 +1246,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 7]);
+struct VersionCounts([usize; 8]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {
@@ -1619,6 +1645,9 @@ fn markdown(
                 score.whole_cohort.lower,
                 display_or(score.whole_cohort.upper, "unbounded"),
             );
+        }
+        if let Some(monitor) = &report.cusum_monitor {
+            out.push_str(&super::cusum::markdown(state, monitor));
         }
         if let Some(monitor) = &report.coverage_monitor {
             let snapshot = monitor.snapshot;

@@ -435,14 +435,16 @@ an ordinary request, then adds `schema = "fmine.forecast-operation.v2"` to the s
 freeze and resolution operations described below use v3, and explicit vintage policies and comparative
 restatements use v4. Cohort freezes opting into sequential coverage monitoring or bounded event log loss
 use v5, including when the same freeze declares a public vintage policy. Finite-domain Gaussian CRPS
-freezes use v6, including a simultaneous coverage monitor or public vintage policy. The `FJR1`
+freezes use v6, including a simultaneous coverage monitor or public vintage policy. Gaussian CUSUM
+cohort freezes use v8, including simultaneous coverage, Gaussian bounds and public vintage policies. The `FJR1`
 frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
 their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
 top-level fields refuse.
-Replay requires v4 or an opt-in v5/v6 cohort freeze for explicit `public_vintages`; v4 admits only a vintage
+Replay requires v4 or an opt-in v5/v6/v8 cohort freeze for explicit `public_vintages`; v4 admits only a vintage
 freeze or a `registered_restatement`. V5 admits only a cohort freeze with a monitor declaration or
 `event_log_floor`. V6 admits only a cohort freeze declaring `gaussian_crps_bounds`; older versions reject
-that declaration. Older operation versions also reject the v5 scoring policies before mutating state.
+that declaration unless v8 declares the CUSUM extension. Older operation versions reject CUSUM fields,
+and v8 requires a CUSUM cohort freeze. Older operation versions also reject the v5 scoring policies before mutating state.
 Relabeling an ordinary operation or downgrading a new permission field refuses. Mixed journals preserve
 the earlier policies and identities without rewriting operations.
 
@@ -461,6 +463,18 @@ first unresolved member, its missing reason/event evidence, and counts of later 
 resolved members. Finite log evidence, its running maximum, the threshold and the first alarm are reported;
 exponentiated values are null if they cannot be represented as finite positive numbers. An alarm remains
 visible and does not recalibrate. Neither new monitor output nor policy bytes appear when monitoring is omitted.
+
+DESIGN (bounded BD-051): `cusum_reference_value`, `cusum_threshold`, `cusum_support`,
+`cusum_reference_assumption`, `cusum_tuning_basis` and `cusum_order` freeze a complete Gaussian residual
+CUSUM policy. All six fields are required; k/h are finite and positive and the order is a complete member
+permutation. The ledger owns standardization, both recurrences, first crossings, maxima and the contiguous
+original-publication prefix. JSON preserves per-observation member/source evidence and snapshots; saved
+journal Markdown shows the same residuals, source citations, digests, blocked member and deferred counts.
+An alarm can suppress a positive calibration label but never recalibrates or authorizes action. Reference
+and tuning assumptions remain unverified; false-alarm probability and average run length are null.
+The fixture `tests/forecasts/cusum_synthetic.toml` and direct transcript, live journal and real-binary
+regressions cover hand-derived sums, missing-prefix blocking, restatement persistence, failed-write
+atomicity, version downgrade refusal and saved-report replay. This does not close GATE-PLUMB-E5.
 
 DESIGN (BD-048, plan §10.2): `event_log_floor = "0.01"`, for example, freezes a finite floor strictly
 between zero and 0.5 in an all-Bernoulli cohort. The reported loss is
@@ -1009,6 +1023,16 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   before `derivable` is reported. Direct disclosures and contradictions retain priority, while missing
   quarters, unknown dates, insufficient precision and arithmetic refusals remain visible. These Claims
   establish arithmetic over source assertions, never an additional issuer disclosure or permission.
+  DESIGN (bounded BD-345.S4): `lint_publicness::ownership` binds one dated full-mine production/sales
+  amount to printed ownership witnesses from that exact source vintage, subject, period and perimeter.
+  It delegates full-mine-to-attributable scaling to the Claim-typed exact metrics kernel. The
+  `ownership_scaling` object retains every candidate, admitted amount/share Claims, exact enclosure,
+  derived Claim and refusal; same-fraction witnesses keep their individual ancestry. Competing amounts
+  or conflicting shares stay ambiguous, and future, undated, unusable or registry-corrected witnesses
+  cannot authorize scaling. The full enclosure must fit the draft precision; direct disclosures and
+  contradictions retain priority. Reverse scaling and intensive rates remain unsupported. Source-to-command
+  and kernel regressions live in `xtask/tests/public_lint_derivations.rs`; share-parser boundary regressions
+  in `xtask/tests/public_key_contract.rs` keep 0.100% distinct from 100% and reject 1100%.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
   displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,

@@ -1781,8 +1781,18 @@ can be supported by dated Q1 and Q2 disclosures of `100.0` and `200.0`: their ex
 The `quarter_sum` report preserves the interpreted input Claims, canonical derived Claim and complete
 source ancestry. Every quarter must be present on the same subject, metric, ownership and scope basis;
 competing eligible vintages stay ambiguous. Missing or undated quarters cannot become zero, and a
-supporting sum cannot conceal a directly disclosed contradiction. Rates and ownership scaling remain
-outside these arithmetic rules.
+supporting sum cannot conceal a directly disclosed contradiction. Rates remain outside these arithmetic rules.
+
+DESIGN (BD-345.S4): explicit **attributable production and sales** can also be checked against a full-mine
+amount and its printed ownership share. For example, a full-mine amount of `100 koz`, printed to the nearest
+koz, and a 60% share imply `[59.7, 60.3] koz`. This supports a draft stating `60 koz`; it does not establish
+the extra precision in `60.0 koz`. The `ownership_scaling` result retains the amount Claim, every admitted
+share Claim, the exact derived Claim and the dated source evidence. Ownership must be printed for the same
+site, period and perimeter in the exact source vintage supplying the full-mine amount. Conflicting shares
+and competing amount vintages remain ambiguous; future, undated, missing or registry-corrected share evidence
+cannot authorize the conversion. Direct disclosed matches and contradictions keep priority. This is a
+full-mine-to-attributable arithmetic check for gold production/sales and copper production; reverse scaling,
+unit-cost scaling and a new issuer disclosure are not inferred.
 
 Nine-month cumulative disclosures can also be checked directly in cited or discovery mode. The grammar
 recognizes `9M 2030`, `20309M`, and `nine months of 2030`, keeping them distinct from Q3, H1, and FY.
@@ -2149,6 +2159,38 @@ interval, hit, citation and event digest. Monitoring uses original publications 
 scoring selects a restatement. It stops at the first unresolved member rather than admitting later resolved
 outcomes out of order, and reports the blocked member and deferred counts. An alarm does not recalibrate
 the forecasts. In the example order, the missing south member blocks the already resolved central member.
+
+DESIGN (BD-051): Gaussian cohorts can also freeze a **two-sided residual CUSUM** to detect sustained
+positive or negative shifts. Supply all six fields in the cohort before outcomes:
+
+```toml
+cusum_reference_value = "0.5"
+cusum_threshold = "3"
+cusum_support = "Synthetic ordered site outputs"
+cusum_reference_assumption = "Standardized original residuals follow the declared Gaussian reference model"
+cusum_tuning_basis = "Illustrative only; no false-alarm or average-run-length validation"
+cusum_order = "f1,f2,f3"
+```
+
+The residual is `(original outcome - frozen mean) / frozen standard deviation`. The directional sums are
+`max(0, previous + residual - k)` and `max(0, previous - residual - k)`, with an alarm at either sum reaching
+`h`. Reports retain each residual, source citation and event digest, both sums and maxima, and each first
+crossing. Missing members stop the sequence; later resolved members remain deferred. Restatements can change
+the surrounding score but cannot replace the monitor's original outcomes or erase an alarm. Thresholds and
+reference assumptions are declared inputs: this diagnostic supplies no false-alarm probability, validated
+average run length, anytime guarantee, cause or recalibration. Coverage monitoring can be enabled alongside it.
+
+The invented example has residuals `[2, 2, 2]`, giving upper sums `[1.5, 3, 4.5]` and a first crossing at 2.
+Its early assessment stops at the missing second observation; its later assessment retains the alarm after
+the first outcome is restated to the forecast mean:
+
+```bash
+rch exec -- cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/cusum_synthetic.toml \
+  --cohort synthetic-cusum --as-of 2031-01-13T00:00:00Z --selector latest-as-of --json
+```
+
+Live CUSUM freezes use operation v8, selected by the writer. Existing journals without the opt-in keep their
+identities, and saved assessments replay the same monitoring evidence after later appends.
 
 For a separate all-Bernoulli cohort, add `event_log_floor = "0.01"` to its cohort row to enable a bounded
 event log score. The loss is `-ln(max(P(observed outcome), floor))`, in **nats**, with a finite floor strictly

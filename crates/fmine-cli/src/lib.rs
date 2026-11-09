@@ -2311,6 +2311,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(forecast::DISTRIBUTIONS_JSON);
             payload.push_str(",\"forecast_coverage_monitor\":");
             payload.push_str(forecast::COVERAGE_MONITOR_JSON);
+            payload.push_str(",\"forecast_cusum_monitor\":");
+            payload.push_str(forecast::CUSUM_MONITOR_JSON);
             payload.push_str(",\"forecast_event_log\":");
             payload.push_str(forecast::EVENT_LOG_JSON);
             payload.push_str(",\"forecast_metadata\":");

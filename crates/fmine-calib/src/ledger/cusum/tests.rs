@@ -1,5 +1,5 @@
 //! DESIGN: known-answer residual and durable-cohort controls for BD-051.
-//! Determinism: DeterministicPerIsa.
+//! Determinism: DeterministicPerIsa
 
 use super::*;
 use crate::{
