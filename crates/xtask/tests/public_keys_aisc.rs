@@ -136,6 +136,17 @@ mod tests {
     }
 
     fn keying_fixture(file: &str, release: &str, col: &str, shift: u32) -> LoadedSource {
+        keying_fixture_company(file, release, col, shift, &[], &[])
+    }
+
+    fn keying_fixture_company(
+        file: &str,
+        release: &str,
+        col: &str,
+        shift: u32,
+        company: &[(&str, &str)],
+        edits: &[(&str, fmine_io::xlsx::MinimalCell)],
+    ) -> LoadedSource {
         use fmine_io::xlsx::{MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx};
         let rows = [
             (5, "Cost of sales applicable to gold production", 100.0),
@@ -154,12 +165,37 @@ mod tests {
             format!("{col}{}", 2 + shift),
             MinimalCell::Text("Site A".to_string()),
         )];
+        if !company.is_empty() {
+            cells.push(("A1".into(), MinimalCell::Text(
+                "Reconciliation of gold cost of sales to total cash costs and all-in sustaining costs".into(),
+            )));
+            cells.push((
+                "A3".into(),
+                MinimalCell::Text("($ millions, except per ounce information)".into()),
+            ));
+            for (column, header) in company {
+                cells.push((
+                    format!("{column}{}", 2 + shift),
+                    MinimalCell::Text((*header).into()),
+                ));
+            }
+        }
         for (r, label, value) in rows {
             cells.push((
                 format!("A{}", r + shift),
                 MinimalCell::Text(label.to_string()),
             ));
             cells.push((format!("{col}{}", r + shift), MinimalCell::Number(value)));
+            for (column, _) in company {
+                cells.push((format!("{column}{}", r + shift), MinimalCell::Number(value)));
+            }
+        }
+        for (at, value) in edits {
+            cells
+                .iter_mut()
+                .find(|(cell, _)| cell == at)
+                .expect("edited cell")
+                .1 = value.clone();
         }
         let bytes = build_minimal_xlsx(&[MinimalSheet {
             name: "Q1 2030".to_string(),
@@ -176,6 +212,145 @@ mod tests {
             bytes: bytes.len() as u64,
             census: workbook.cell_census(),
             workbook,
+        }
+    }
+
+    #[test]
+    fn company_claims_are_cited_without_expanding_registered_identity_population() {
+        use fmine_public::key::{
+            Scope,
+            consistency::{VintageScope, compare_vintages_with_disclosures},
+        };
+        let profile = synthetic::synthetic_profile();
+        let sources = vec![
+            keying_fixture_company("first.xlsx", "2030Q1", "B", 0, &[("D", "Total")], &[]),
+            keying_fixture_company("later.xlsx", "2031Q1", "C", 5, &[("G", "Total Golda")], &[]),
+        ];
+        let instances = fixture_instances(&sources);
+        assert!(instances.iter().all(|i| i.subject == "Site A"));
+        let index = key_aisc_operands(&profile, &sources, &instances);
+        assert!(index.refusals.is_empty(), "{:?}", index.refusals);
+        let company: Vec<_> = index
+            .cells
+            .values()
+            .filter(|c| c.key.scope == Scope::Company)
+            .cloned()
+            .collect();
+        assert_eq!(company.len(), 22);
+        let first = &index.cells["first.xlsx:Q1 2030!D11"];
+        let later = &index.cells["later.xlsx:Q1 2030!G16"];
+        assert_eq!(first.key.subject, "Total Gold");
+        assert_eq!(first.label_as_printed.as_deref(), Some("Total"));
+        assert_eq!(later.label_as_printed.as_deref(), Some("Total Golda"));
+        assert_eq!(first.key.ownership_basis, OwnershipBasis::Unprinted);
+        assert_eq!(first.key.unit, "usd_m");
+        assert_eq!(first.key.series_key(), later.key.series_key());
+        assert_ne!(first.claim.claim_id, later.claim.claim_id);
+        assert_eq!(
+            first.claim.anchors,
+            vec![sources[0].workbook.make_anchor("Q1 2030", "D11")]
+        );
+        first.claim.check_id().unwrap();
+        assert_eq!(index.cells["first.xlsx:Q1 2030!D13"].key.unit, "koz");
+        assert_eq!(index.cells["first.xlsx:Q1 2030!D16"].key.unit, "usd_per_oz");
+        let vintages = compare_vintages_with_disclosures(&company, VintageScope::Aisc, None);
+        assert_eq!(vintages.totals.appearances, 22);
+        assert_eq!(vintages.multi_vintage, 11);
+        assert_eq!(vintages.totals.comparisons, 11);
+        assert_eq!(fixture_instances(&sources), instances);
+        // Company assertions remain available even when no arithmetic identity was requested.
+        assert_eq!(key_aisc_operands(&profile, &sources, &[]).cells.len(), 22);
+        // The canonical company name must not consume the "total" word in a site's cost metric.
+        let site = &index.cells["later.xlsx:Q1 2030!C20"];
+        let draft = format!(
+            "Site A Q1 2030 ownership basis unprinted by-product total cash costs per ounce sold is [1600 USD/oz](fmine:{}).",
+            site.claim.claim_id
+        );
+        let all: Vec<_> = index.cells.values().cloned().collect();
+        let lint = fmine_public::lint::lint_cited(&draft, &all);
+        assert_eq!(lint.findings.len(), 1, "{}", lint.to_json());
+        assert_eq!(
+            lint.findings[0].verdict,
+            fmine_public::lint::Verdict::Verified,
+            "{}",
+            lint.to_json()
+        );
+    }
+
+    #[test]
+    fn company_source_ambiguity_and_placeholders_are_preserved() {
+        use fmine_io::xlsx::MinimalCell;
+        use fmine_public::key::{
+            Scope,
+            consistency::{VintageScope, VintageState, compare_vintages_with_disclosures},
+        };
+        let profile = synthetic::synthetic_profile();
+        let source = keying_fixture_company(
+            "duplicate.xlsx",
+            "2030Q1",
+            "B",
+            0,
+            &[("C", "Total"), ("D", "Total Gold")],
+            &[("C11", MinimalCell::Text("—".into()))],
+        );
+        let index = key_aisc_operands(&profile, &[source], &[]);
+        assert!(index.refusals.is_empty(), "{:?}", index.refusals);
+        assert_eq!(index.cells.len(), 22);
+        assert!(matches!(
+            index.cells["duplicate.xlsx:Q1 2030!C11"].claim.value,
+            PublicValue::Nil { .. }
+        ));
+        let claims: Vec<_> = index.cells.values().cloned().collect();
+        assert!(claims.iter().all(|c| c.key.scope == Scope::Company));
+        let report = compare_vintages_with_disclosures(&claims, VintageScope::Aisc, None);
+        assert!(
+            report
+                .totals
+                .states
+                .get(&VintageState::Conflict)
+                .copied()
+                .unwrap_or(0)
+                > 0
+        );
+    }
+
+    #[test]
+    fn unqualified_or_differently_scaled_company_totals_do_not_gain_gold_claims() {
+        use fmine_io::xlsx::MinimalCell;
+        for (cell, value) in [
+            (
+                "A1",
+                "Reconciliation of copper cost of sales to total cash costs and all-in sustaining costs",
+            ),
+            ("A3", "EUR millions"),
+            ("A3", "$ thousands"),
+            ("A13", "Ounces sold - attributable basis"),
+            ("A13", "Ounces sold - 100% basis (000s ounces)"),
+        ] {
+            let source = keying_fixture_company(
+                "bad.xlsx",
+                "2030Q1",
+                "B",
+                0,
+                &[("D", "Total")],
+                &[(cell, MinimalCell::Text(value.into()))],
+            );
+            let index = key_aisc_operands(&synthetic::synthetic_profile(), &[source], &[]);
+            assert!(index.cells.is_empty(), "{value}");
+            assert_eq!(index.refusals.len(), 11, "{value}");
+            assert!(
+                index
+                    .refusals
+                    .iter()
+                    .all(|r| r.reason.contains("company Total requires")),
+                "{value}"
+            );
+        }
+        for header in ["Total Copper", "Subtotal", "Total operations"] {
+            let source =
+                keying_fixture_company("other.xlsx", "2030Q1", "B", 0, &[("D", header)], &[]);
+            let index = key_aisc_operands(&synthetic::synthetic_profile(), &[source], &[]);
+            assert!(index.cells.is_empty(), "{header}");
         }
     }
 

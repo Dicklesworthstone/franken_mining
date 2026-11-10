@@ -10,6 +10,15 @@
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
 
+- DESIGN (BD-273/BD-332): visible company `Total` or `Total Gold` columns in an explicitly labelled gold
+  AISC reconciliation enter the shared public Claim index under `Total Gold` and `Scope::Company`.
+  Admission requires the gold reconciliation title, USD-million heading and attributable thousand-ounce
+  denominator. Printed headers, signed amounts, placeholders, repeated rows, original locators, hashes
+  and every reporting vintage survive; no numeric ownership share is inferred. Duplicate company columns
+  remain separate source assertions. The existing registered-subject identity population is unchanged.
+  These Claims participate in supplemental AISC vintage inspection and the CLI's company-versus-regions
+  comparison, without claiming a complete company perimeter or an accounting reconciliation.
+
 - DESIGN (BD-067/BD-334): `forecast::build(workspace, rules_bytes, as_of, decimal_places)` produces an
   unissued quarterly-ratio candidate through `fmine_calib::record::candidate`. It reads only the original
   Mine Stats releases required by the declared historical pools and their common Q3 point. The supported

@@ -1,5 +1,5 @@
 //! DESIGN (BD-273): source binding for exact same-table AISC component comparisons.
-//! Only explicit region/subtotal memberships retained by the assurance report select columns.
+//! Explicit region/subtotal memberships and the retained company-versus-regions population select columns.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -26,8 +26,11 @@ type Result<T> = std::result::Result<T, Refusal>;
 #[derive(Default)]
 struct Selection {
     members: BTreeMap<String, String>,
+    member_scopes: BTreeMap<String, Scope>,
     partial: bool,
     region: bool,
+    company: bool,
+    issue: Option<String>,
 }
 
 struct Assessment {
@@ -171,6 +174,196 @@ fn selections(
     groups
 }
 
+fn region_scope<'a>(members: impl Iterator<Item = &'a str>) -> Scope {
+    let mut enc = Encoder::new_frame(*b"RMAP", 1);
+    for member in members.collect::<BTreeSet<_>>() {
+        enc.put_str(member);
+    }
+    Scope::Region {
+        map_version: blake3_hash(&enc.finish()).to_hex(),
+    }
+}
+
+fn company_selection(
+    report: &PublicAssuranceReport,
+    release: &str,
+    period: &str,
+    first: &str,
+    last: &str,
+) -> Selection {
+    let mut selection = Selection {
+        company: true,
+        ..Selection::default()
+    };
+    let layers: Vec<_> = report
+        .mine_ledger
+        .cost_layers
+        .rows
+        .iter()
+        .filter(|r| r.release == release && r.period.code() == period)
+        .collect();
+    let Some(basis) = layers.first() else {
+        selection.issue = Some(
+            "company comparison needs a same-release, same-period declared region population"
+                .into(),
+        );
+        return selection;
+    };
+    let map_key = |layer: &fmine_public::mine_ledger::CompanyCostLayer| {
+        layer
+            .region_map
+            .iter()
+            .map(|m| {
+                (
+                    m.region.clone(),
+                    m.member.clone(),
+                    m.first.clone(),
+                    m.last.clone(),
+                )
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let mut regions: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut assigned = BTreeMap::new();
+    for m in &basis.region_map {
+        if !m.holds_for(release)
+            || m.region.trim().is_empty()
+            || m.member.trim().is_empty()
+            || m.region == m.member
+            || assigned
+                .insert(m.member.as_str(), m.region.as_str())
+                .is_some()
+        {
+            selection.issue = Some(
+                "company region population has duplicate, overlapping or inapplicable membership"
+                    .into(),
+            );
+        }
+        regions.entry(&m.region).or_default().insert(&m.member);
+    }
+    for layer in &layers {
+        if map_key(layer) != map_key(basis)
+            || layer.region_map.len() != basis.region_map.len()
+            || layer.sources != basis.sources
+            || layer.sources.len() != 1
+            || layer.sources.iter().any(|(file, digest)| {
+                !report.sources.iter().any(|s| {
+                    s.kind == SourceKind::MineStats
+                        && s.quarter == release
+                        && s.workbook.artifact_path == *file
+                        && Digest32(s.workbook.sha256) == *digest
+                })
+            })
+        {
+            selection.issue =
+                Some("company region declarations or their source binding are ambiguous".into());
+        }
+        for region in &layer.regions {
+            regions.entry(&region.region).or_default();
+            if !region.mapped {
+                selection.issue = Some(format!(
+                    "printed company region has no active membership: {}",
+                    region.region
+                ));
+            }
+        }
+    }
+    if regions.is_empty() || regions.values().any(BTreeSet::is_empty) {
+        selection.issue = Some(
+            "company comparison requires nonempty membership for every declared region".into(),
+        );
+    }
+    for member in assigned.keys() {
+        if regions.contains_key(member) {
+            selection.issue = Some("company regions must not also appear as site members".into());
+        }
+    }
+    // Expand the registered flat subtotals before checking disjointness. Two different subtotals can
+    // overlap through a shared mine even when neither subtotal is itself a selected leaf.
+    let mut leaves = BTreeMap::new();
+    for member in assigned.keys() {
+        let children: Vec<_> = report
+            .subtotal_members
+            .iter()
+            .filter(|m| m.subtotal.as_str() == *member && m.overlaps_period(first, last))
+            .collect();
+        if children.iter().any(|m| !m.covers_period(first, last)) {
+            selection.partial = true;
+            selection.issue = Some(format!(
+                "company region population has partial-period subtotal membership: {member}"
+            ));
+        }
+        let expanded: BTreeSet<_> = if children.is_empty() {
+            BTreeSet::from([*member])
+        } else {
+            children.iter().map(|m| m.member.as_str()).collect()
+        };
+        if !children.is_empty() && expanded.len() != children.len() {
+            selection.issue = Some(format!(
+                "company region population repeats a constituent of subtotal {member}"
+            ));
+        }
+        for leaf in expanded {
+            if let Some(previous) = leaves.insert(leaf, *member) {
+                selection.issue = Some(format!(
+                    "company region population overlaps {previous} and {member} through {leaf}"
+                ));
+            }
+        }
+    }
+    let sources = basis
+        .sources
+        .iter()
+        .map(|(file, hash)| format!("{file}; sha256 {}", hash.to_hex()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    for (region, members) in regions {
+        let rules = basis
+            .region_map
+            .iter()
+            .filter(|m| m.region == region)
+            .map(|m| {
+                format!(
+                    "{} -> {}; release {} through {}",
+                    m.region,
+                    m.member,
+                    m.first,
+                    m.last.as_deref().unwrap_or("open")
+                )
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("; ");
+        let subtotals = report
+            .subtotal_members
+            .iter()
+            .filter(|m| members.contains(m.subtotal.as_str()) && m.overlaps_period(first, last))
+            .map(|m| {
+                format!(
+                    "subtotal {} -> {}; physical period {} through {}; {}",
+                    m.subtotal,
+                    m.member,
+                    m.period_from,
+                    m.period_to.as_deref().unwrap_or("open"),
+                    m.evidence
+                )
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("; ");
+        selection.members.insert(
+            region.into(),
+            format!("company-minus-declared-regions/1: Total Gold versus {region}; release {release}; physical period {period}; {rules}; {subtotals}; population source {sources}"),
+        );
+        selection
+            .member_scopes
+            .insert(region.into(), region_scope(members.into_iter()));
+    }
+    selection
+}
+
 fn source_line(sheet: &Sheet, table: &AiscTable, row: u32) -> Result<LineKey> {
     // Use the reader's registered anchors so abbreviations have the same canonical metric key.
     let anchors = [
@@ -209,22 +402,6 @@ fn source_line(sheet: &Sheet, table: &AiscTable, row: u32) -> Result<LineKey> {
         label: expected,
         occurrence,
     })
-}
-
-fn dollars_in_millions(label: &str) -> bool {
-    let label = label.trim();
-    let label = match label.strip_prefix('(') {
-        Some(inside) => match inside.strip_suffix(')') {
-            Some(inside) => inside.trim(),
-            None => return false,
-        },
-        None => label,
-    };
-    let (currency, qualifier) = label.split_once(',').unwrap_or((label, ""));
-    matches!(
-        currency.trim(),
-        "$ millions" | "us$ millions" | "usd millions"
-    ) && (qualifier.is_empty() || qualifier.trim().starts_with("except per ounce "))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -334,8 +511,12 @@ fn column(
         .row_cells(table.header_row)
         .into_iter()
         .filter(|h| {
-            aisc::cell_text(sheet, table.header_row, h.col)
-                .is_some_and(|s| aisc::match_subject(&s, &[subject]).is_some())
+            aisc::cell_text(sheet, table.header_row, h.col).is_some_and(|s| {
+                aisc::match_subject(&s, &[subject]).is_some()
+                    || (*expected_scope == Scope::Company
+                        && subject == "Total Gold"
+                        && aisc::match_subject(&s, &["Total"]).is_some())
+            })
         })
         .collect();
     let [header] = headers.as_slice() else {
@@ -439,15 +620,11 @@ fn bind(
     table: &AiscTable,
     row: &mut Assessment,
 ) -> Result<Claim<Comparison>> {
-    let aggregate_scope = if row.selection.region {
+    let aggregate_scope = if row.selection.company {
+        Scope::Company
+    } else if row.selection.region {
         // Match the source key's release-specific region perimeter (key::scope_for).
-        let mut enc = Encoder::new_frame(*b"RMAP", 1);
-        for member in row.selection.members.keys() {
-            enc.put_str(member);
-        }
-        Scope::Region {
-            map_version: blake3_hash(&enc.finish()).to_hex(),
-        }
+        region_scope(row.selection.members.keys().map(String::as_str))
     } else {
         Scope::Site
     };
@@ -469,7 +646,10 @@ fn bind(
             sheet,
             table,
             member,
-            &Scope::Site,
+            row.selection
+                .member_scopes
+                .get(member)
+                .unwrap_or(&Scope::Site),
             &mut row.inputs,
             &mut row.context,
         ));
@@ -486,6 +666,53 @@ fn bind(
     row.context.sort();
     row.context.dedup();
     row.inputs.sort_by(|a, b| a.locator.cmp(&b.locator));
+    if let Some(reason) = &row.selection.issue {
+        return Err(refused(reason));
+    }
+    if row.selection.company {
+        let prefix = format!("{}:{}!", src.file_name, sheet.name);
+        for (at, cell) in report.public_claims.cells.range(prefix.clone()..) {
+            if !at.starts_with(&prefix) {
+                break;
+            }
+            if matches!(cell.key.scope, Scope::Region { .. })
+                && !row.selection.members.contains_key(&cell.key.subject)
+            {
+                return Err(refused(format!(
+                    "printed AISC region is outside the declared company population: {} at {at}",
+                    cell.key.subject
+                )));
+            }
+        }
+        for header in report
+            .unregistered_headers
+            .iter()
+            .filter(|h| h.file == src.file_name && h.sheet == sheet.name)
+        {
+            if aisc::match_subject(&header.header, &["Total", "Total Gold"]).is_some() {
+                continue;
+            }
+            let Some((_, col)) = fmine_io::xlsx::parse_a1_ref(&header.cell) else {
+                return Err(refused("invalid unregistered AISC header locator"));
+            };
+            if table
+                .block1
+                .iter()
+                .chain(&table.block2)
+                .chain([&table.aisc_row, &table.ounces_row])
+                .any(|r| {
+                    sheet
+                        .cell(*r, col)
+                        .is_some_and(|c| matches!(c.value, CellValue::Number(_)))
+                })
+            {
+                return Err(refused(format!(
+                    "unregistered numeric AISC column cannot be omitted from a company comparison: {} at {prefix}{}",
+                    header.header, header.cell
+                )));
+            }
+        }
+    }
     let title = aisc::cell_text(sheet, 1, 1)
         .unwrap_or_default()
         .to_lowercase();
@@ -497,7 +724,8 @@ fn bind(
         .to_lowercase();
     if row.selection.partial
         || !title.contains("all-in sustaining costs")
-        || !dollars_in_millions(&units)
+        || (row.selection.company && !title.contains("gold cost of sales"))
+        || !aisc::is_usd_millions_label(&units)
         || !sold.contains("attributable basis")
         || !(sold.contains("000s ounces") || sold.contains("thousands of ounces"))
     {
@@ -597,7 +825,25 @@ pub(super) fn assess(report: &PublicAssuranceReport) -> Report {
             let ((year, first), (_, last)) = period.months();
             let first = format!("{year}Q{}", first.div_ceil(3));
             let last = format!("{year}Q{}", last.div_ceil(3));
-            for (subject, selection) in selections(report, &src.quarter, &first, &last) {
+            let mut selections = selections(report, &src.quarter, &first, &last);
+            let company_column = sheet.row_cells(table.header_row).iter().any(|c| {
+                aisc::cell_text(sheet, table.header_row, c.col)
+                    .is_some_and(|s| aisc::match_subject(&s, &["Total", "Total Gold"]).is_some())
+            });
+            if company_column
+                || report
+                    .mine_ledger
+                    .cost_layers
+                    .rows
+                    .iter()
+                    .any(|r| r.release == src.quarter && r.period == period)
+            {
+                selections.insert(
+                    "Total Gold".into(),
+                    company_selection(report, &src.quarter, &period.code(), &first, &last),
+                );
+            }
+            for (subject, selection) in selections {
                 let mut row = Assessment {
                     file: src.file_name.clone(),
                     sha256: Digest32(src.workbook.sha256).to_hex(),
@@ -715,13 +961,20 @@ impl Assessment {
             }
         };
         format!(
-            "{{\"file\":{},\"sha256\":{},\"release\":{},\"sheet\":{},\"period\":{},\"aggregate\":{},\"members\":[{members}],\"partial_membership\":{},\"accounting_reconciliation_verified\":false,\"inputs\":[{inputs}],\"context\":[{context}],{result}}}",
+            "{{\"file\":{},\"sha256\":{},\"release\":{},\"sheet\":{},\"period\":{},\"aggregate\":{},\"comparison_scope\":{},\"members\":[{members}],\"partial_membership\":{},\"accounting_reconciliation_verified\":false,\"inputs\":[{inputs}],\"context\":[{context}],{result}}}",
             js(&self.file),
             js(&self.sha256),
             js(&self.release),
             js(&self.sheet),
             js(&self.period),
             js(&self.subject),
+            js(if self.selection.company {
+                "company_minus_declared_regions"
+            } else if self.selection.region {
+                "region_minus_declared_sites"
+            } else {
+                "subtotal_minus_declared_sites"
+            }),
             self.selection.partial
         )
     }
@@ -736,7 +989,7 @@ impl Report {
             .collect::<Vec<_>>()
             .join(",");
         let body = format!(
-            "\"schema\":\"fmine.aisc_component_comparisons.v1\",\"interpretation\":{},\"membership_scope\":\"Explicit retained region and subtotal policies only; no inferred company membership\",\"rows\":[{rows}]",
+            "\"schema\":\"fmine.aisc_component_comparisons.v1\",\"interpretation\":{},\"membership_scope\":\"Explicit retained region and subtotal policies; company comparisons use the same-release, same-period declared region population and do not establish complete company consolidation\",\"rows\":[{rows}]",
             js(kernel::NO_CLAIM)
         );
         format!(
@@ -748,7 +1001,7 @@ impl Report {
 
     pub(super) fn markdown(&self) -> String {
         let mut out = format!(
-            "\n## AISC component comparisons\n\n{}\n\nSelections use retained region and subtotal membership; no company membership is inferred.\n",
+            "\n## AISC component comparisons\n\n{}\n\nSelections use retained region and subtotal membership. Company comparisons use the same-release, same-period declared region population; they do not establish complete company consolidation.\n",
             kernel::NO_CLAIM
         );
         if self.rows.is_empty() {
@@ -773,6 +1026,13 @@ impl Report {
                         .join(", ")
                 )
             );
+            if r.selection.company {
+                out.push_str("Company-minus-declared-regions comparison. The population below is preserved even when its evidence is unavailable.\n");
+                super::table(&mut out, &["Declared region", "Population evidence"]);
+                for (member, policy) in &r.selection.members {
+                    super::row(&mut out, &[member.clone(), policy.clone()]);
+                }
+            }
             match &r.result {
                 Err(e) => {
                     let _ = writeln!(

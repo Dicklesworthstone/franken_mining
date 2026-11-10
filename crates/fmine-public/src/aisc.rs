@@ -33,7 +33,7 @@ use fmine_numerics::exact_feas::{self as xf, Rat};
 
 use crate::LoadedSource;
 use crate::key::{
-    KeyedCell, LineKey, OwnershipBasis, PublicKey, ShareSource, Vintage, classify,
+    KeyedCell, LineKey, OwnershipBasis, PublicKey, Scope, ShareSource, Vintage, classify,
     parse_sheet_period, public_claim, scope_for, status_for,
 };
 use crate::sources::{IssuerProfile, SourceKind};
@@ -945,8 +945,10 @@ pub struct AiscClaimIndex {
     pub unregistered_all_zero: Vec<String>,
 }
 
-/// Builds one public Claim per distinct AISC operand and visible co-product rate, keeping every reporting
-/// vintage. The subject is read from the cell's own registered column, including regional member columns.
+/// Builds one public Claim per distinct AISC operand, visible co-product rate and printed company column,
+/// keeping every reporting vintage. The anchored gold table's `Total` / `Total Gold` column is keyed as
+/// `Total Gold`, with its printed header retained; it does not enter the registered identity population.
+/// Other subjects are read from the cell's own registered column, including regional member columns.
 /// A row's basis remains `Unprinted` unless its label explicitly states an attributable basis and a share
 /// is registered. Co-product rates have their own semantic line; they do not enter the by-product identity
 /// ledger or inherit its arithmetic conclusions.
@@ -1003,9 +1005,9 @@ pub fn key_aisc_operands(
             Err(reason) => index.refusals.push(KeyingRefusal { locator, reason }),
         }
     }
-    // FACT: the published co-product rate is outside the by-product identity operands (for example,
-    // Barrick_Q1_2025_AISC.xlsx:Q1 2024!C22). Re-read its visible row and registered subject columns rather
-    // than manufacturing a numeric identity merely to make the published Claim available.
+    // DESIGN: source assertions outside the identity denominator remain inspectable without manufacturing
+    // identities. The anchored gold table supplies the metal for its explicitly printed company Total;
+    // co-product rates keep their own lines and never inherit by-product arithmetic conclusions.
     for source in sources
         .values()
         .filter(|s| s.kind == SourceKind::AiscReconciliation)
@@ -1014,9 +1016,6 @@ pub fn key_aisc_operands(
             let rows = coproduct_rows
                 .entry((source.file_name.clone(), sheet.name.clone()))
                 .or_insert_with(|| coproduct_rate_rows(sheet));
-            if rows.is_empty() {
-                continue;
-            }
             let table = tables
                 .entry((source.file_name.clone(), sheet.name.clone()))
                 .or_insert_with(|| {
@@ -1036,14 +1035,19 @@ pub fn key_aisc_operands(
                 }
             };
             for header in sheet.row_cells(table.header_row) {
-                if header.col < 2
-                    || cell_text(sheet, table.header_row, header.col)
-                        .and_then(|h| match_subject(&h, &profile.subjects))
-                        .is_none()
-                {
+                if header.col < 2 {
                     continue;
                 }
-                for &row in rows.iter() {
+                let Some(subject) = cell_text(sheet, table.header_row, header.col)
+                    .and_then(|h| aisc_claim_subject(&h, profile))
+                else {
+                    continue;
+                };
+                let mut selected = rows.clone();
+                if subject == "Total Gold" {
+                    selected.extend(aisc_key_rows(table));
+                }
+                for row in selected {
                     let operand =
                         operand_at(&source.file_name, sheet, row, header.col, OperandRole::Rate);
                     let locator = format!("{}:{}!{}", operand.file, operand.sheet, operand.cell);
@@ -1082,6 +1086,16 @@ pub fn key_aisc_operands(
     index
 }
 
+// Only an already anchored gold AISC table may interpret the generic Total header. Changing the global
+// registered-subject matcher would also change identity denominators and site-only waterfall selections.
+fn aisc_claim_subject<'a>(header: &str, profile: &'a IssuerProfile) -> Option<&'a str> {
+    if match_subject(header, &["Total", "Total Gold"]).is_some() {
+        Some("Total Gold")
+    } else {
+        match_subject(header, &profile.subjects)
+    }
+}
+
 fn key_aisc_operand(
     profile: &IssuerProfile,
     source: &LoadedSource,
@@ -1097,8 +1111,22 @@ fn key_aisc_operand(
     }
     let header = cell_text(sheet, table.header_row, col)
         .ok_or_else(|| "the operand's subject header is missing".to_string())?;
-    let subject = match_subject(&header, &profile.subjects)
+    let subject = aisc_claim_subject(&header, profile)
         .ok_or_else(|| "the operand's subject header is not registered".to_string())?;
+    if subject == "Total Gold" {
+        let title = cell_text(sheet, 1, 1).unwrap_or_default().to_lowercase();
+        let sold = cell_text(sheet, table.ounces_row, 1)
+            .unwrap_or_default()
+            .to_lowercase();
+        if !title.contains("reconciliation of gold cost of sales")
+            || !title.contains("all-in sustaining costs")
+            || !is_usd_millions_label(&cell_text(sheet, 3, 1).unwrap_or_default().to_lowercase())
+            || !sold.contains("attributable basis")
+            || !(sold.contains("000s ounces") || sold.contains("thousands of ounces"))
+        {
+            return Err("company Total requires an explicit gold reconciliation, USD millions and attributable thousand-ounce denominator".into());
+        }
+    }
     let period = parse_sheet_period(&sheet.name).map_err(|e| e.to_string())?;
     let value = classify(
         sheet.cell(row, col),
@@ -1148,7 +1176,11 @@ fn key_aisc_operand(
             file_sha256: Digest32(source.workbook.sha256).to_hex(),
         },
         ownership_basis: basis,
-        scope: scope_for(profile, subject, &source.quarter),
+        scope: if subject == "Total Gold" {
+            Scope::Company
+        } else {
+            scope_for(profile, subject, &source.quarter)
+        },
         unit: unit.to_string(),
         line: LineKey {
             label,
@@ -1157,6 +1189,9 @@ fn key_aisc_operand(
         },
     };
     let mut cell = public_claim(&source.workbook, &sheet.name, &operand.cell, key, value);
+    if subject == "Total Gold" {
+        cell.label_as_printed = Some(header);
+    }
     // The label states attributable basis but contains no numeric ownership share. Preserve that distinction
     // from the registered share used in the key; removing the registry row must remove the supplied basis.
     cell.printed_basis = OwnershipBasis::Unprinted;
@@ -1168,6 +1203,25 @@ fn key_aisc_operand(
     }
     cell.cite_status(profile);
     Ok(cell)
+}
+
+/// The AISC table's explicit dollar-million heading, with its optional per-ounce qualifier.
+/// Other currencies, monetary scales and unmatched parentheses never imply USD millions.
+#[must_use]
+pub fn is_usd_millions_label(label: &str) -> bool {
+    let label = label.trim();
+    let label = match label.strip_prefix('(') {
+        Some(inside) => match inside.strip_suffix(')') {
+            Some(inside) => inside.trim(),
+            None => return false,
+        },
+        None => label,
+    };
+    let (currency, qualifier) = label.split_once(',').unwrap_or((label, ""));
+    matches!(
+        currency.trim(),
+        "$ millions" | "us$ millions" | "usd millions"
+    ) && (qualifier.is_empty() || qualifier.trim().starts_with("except per ounce "))
 }
 
 /// The explicitly printed gold co-product rate labels; never an inferred credit basis.

@@ -786,7 +786,12 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Nonpositive sales bounds refuse the rate calculation while retaining the dollar comparison. Source
   admission checks the live metric label, repeated-line occurrence, locator, scope and complete currency
   token; Australian dollars cannot enter as USD. Company-level reconciliation still needs separately
-  source-bound company evidence. Tests in `crates/xtask/tests/public_consolidation.rs` exercise the
+  source-bound company evidence. The adapter now compares a printed gold company Total with the retained
+  same-release, same-period regional population, using canonical `Total Gold` source Claims. Missing or
+  conflicting declarations, absent columns, duplicate Total aliases, unclassified numeric columns and
+  overlapping site/subtotal leaves refuse; every consumed subtotal policy participates in the digest.
+  The selected population remains explicit and is not asserted to be the full company perimeter.
+  Tests in `crates/xtask/tests/public_consolidation.rs` exercise the
   invented-source pipeline, including unequal sales, unexplained amounts, zero sales, currency and semantic
   mutations. These additions do not claim a complete BD-273/M0 gate.
 - A successful `recovery gap` envelope carries a `fmine.recovery.gap.v1` payload and the model's explicit

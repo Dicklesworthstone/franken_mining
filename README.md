@@ -325,6 +325,13 @@ The report lists each named difference, the reported numerator and sold-quantity
 arithmetic footing, and any unexplained numerator remainder. Exact display-rounding bounds, original source
 Claims, file hashes, cell locators and membership policies remain available alongside a separate report digest.
 
+The report also compares the gold reconciliation's printed company `Total` with its declared regional
+population at the same release and reporting period. Company amounts and rates use canonical `Total Gold`
+Claims while retaining the printed header, source cells and unknown ownership where no share is stated.
+Missing, stale, overlapping or ambiguous membership leaves this comparison unavailable, including two
+subtotals that contain the same mine. Company observations also remain inspectable across filing vintages;
+they do not enlarge the existing identity-check denominator.
+
 The same comparison also explains the recomputed **USD/oz gap**. Each component difference and any
 unexplained numerator remainder is divided by the aggregate's attributable ounces sold; a separate sales
 denominator term retains any difference between aggregate and combined member sales. The terms sum exactly
@@ -339,8 +346,8 @@ leave the comparison unavailable; cancelling omitted rows cannot make it pass. P
 only when the reported numerator is explained by the named differences, every column foots, and the printed
 sold quantities agree. These checks never establish accounting reconciliation. Differences are not assigned
 to corporate or JV costs, and ownership is not rescaled. Company-level reconciliation needs separately
-source-bound company reconciliation evidence; the current comparisons do not supply it or complete
-BD-273 or M0.
+source-bound company reconciliation evidence beyond the selected regional population. These comparisons
+do not establish complete company coverage or complete BD-273 or M0.
 
 ### Calculate a cost metric under an explicit definition
 

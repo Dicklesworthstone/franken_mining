@@ -381,17 +381,26 @@ mod tests {
         }
         let index = key_aisc_operands(&profile, &sources, &instances);
         assert!(index.refusals.is_empty(), "{:?}", index.refusals);
-        // Keep the frozen independent census on its original lines; the newly admitted AISC co-product
-        // population has its own independently read count and real-source known-answer test.
+        // Keep the frozen independent census on its original registered-subject lines. Supplemental
+        // company assertions were outside that denominator; co-product rates have their own read count.
         let claims: Vec<_> = index
             .cells
             .values()
             .filter(|c| {
-                c.key.line.label != "all-in sustaining costs per ounce (on a co-product basis)"
+                c.key.scope != Scope::Company
+                    && c.key.line.label
+                        != "all-in sustaining costs per ounce (on a co-product basis)"
             })
             .cloned()
             .collect();
-        assert_eq!(index.cells.len(), claims.len() + 359);
+        assert_eq!(
+            index
+                .cells
+                .values()
+                .filter(|c| c.key.scope != Scope::Company)
+                .count(),
+            claims.len() + 359
+        );
         let report = compare_vintages_with_disclosures(&claims, VintageScope::Aisc, None);
         println!(
             "AISC canonical vintage census: series={} multi_vintage={} totals={:?}",

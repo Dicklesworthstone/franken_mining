@@ -312,6 +312,240 @@ fn report_source(source: LoadedSource, partial: bool) -> PublicAssuranceReport {
 
 const UNITS: &str = "($ millions, except per ounce information)";
 
+fn company_report(changes: &[(&str, MinimalCell)]) -> PublicAssuranceReport {
+    let mut p = synthetic::synthetic_profile();
+    p.subjects = ["Region North", "Region South", "Site A", "Site B"]
+        .map(str::to_string)
+        .into();
+    p.regions = vec!["Region North".into(), "Region South".into()];
+    p.shares.clear();
+    p.reconstructions.clear();
+    p.missing_facts.clear();
+    p.subtotal_members.clear();
+    p.region_members = [("Region North", "Site A"), ("Region South", "Site B")]
+        .map(|(region, member)| RegionMemberRow {
+            region: region.into(),
+            member: member.into(),
+            first: "2030Q1".into(),
+            last: None,
+        })
+        .into();
+    let mut company_changes = vec![
+        ("B2", MinimalCell::Text("Total".into())),
+        ("C2", MinimalCell::Text("Region North".into())),
+        ("D2", MinimalCell::Text("Region South".into())),
+    ];
+    company_changes.extend_from_slice(changes);
+    let aisc = source(&company_changes, UNITS);
+    let mut cells: Vec<_> = [
+        ("A1", "Summary of Operations"),
+        ("A3", "For the three months ended March 31,"),
+        ("B4", "Gold produced (000s oz 100%)"),
+        ("C4", "Gold produced (000s oz attributable)"),
+        ("D4", "Gold sold (000s oz attributable)"),
+        ("E4", "Cost of sales ($/oz)"),
+        ("F4", "Total cash costs ($/oz)"),
+        ("G4", "All-In sustaining costs ($/oz)"),
+        ("A5", "Region North"),
+        ("A6", "Region South"),
+        ("A7", "Total Gold"),
+    ]
+    .into_iter()
+    .map(|(at, text)| (at.into(), MinimalCell::Text(text.into())))
+    .collect();
+    cells.push(("B3".into(), MinimalCell::Number(2030.0)));
+    for (row, quantity, rate) in [(5, 40.0, 8250.0), (6, 60.0, 8167.0), (7, 100.0, 8500.0)] {
+        for (col, value) in ["B", "C", "D", "E", "F", "G"]
+            .into_iter()
+            .zip([quantity, quantity, quantity, 10000.0, 7000.0, rate])
+        {
+            cells.push((format!("{col}{row}"), MinimalCell::Number(value)));
+        }
+    }
+    let bytes = build_minimal_xlsx(&[MinimalSheet {
+        name: "QTD".into(),
+        hidden: false,
+        cells,
+    }]);
+    let workbook = Workbook::from_bytes("invented_stats.xlsx", &bytes).unwrap();
+    let stats = LoadedSource {
+        file_name: "invented_stats.xlsx".into(),
+        kind: SourceKind::MineStats,
+        quarter: "2030Q1".into(),
+        url: "synthetic:invented".into(),
+        url_basis: "synthetic test only".into(),
+        bytes: bytes.len() as u64,
+        census: workbook.cell_census(),
+        workbook,
+    };
+    assess(&p, Lane::Synthetic, vec![aisc, stats])
+}
+
+fn company_json(report: &PublicAssuranceReport) -> String {
+    let json = assure_report::consolidation_json(report);
+    // Total Gold sorts after both invented regions, so this is the last complete comparison row.
+    json.split_once("\"aggregate\":\"Total Gold\",")
+        .expect("a company comparison, including unavailable evidence, remains visible")
+        .1
+        .to_string()
+}
+
+#[test]
+fn company_total_compares_all_declared_regions_with_canonical_claims_and_known_answers() {
+    let report = company_report(&[]);
+    let json = company_json(&report);
+    // Independent arithmetic: 850 - 330 - 490 = 30 USD M; sales 100 = 40 + 60 koz.
+    // Thus company 8500 minus combined regions 8200 = 300 USD/oz, entirely the printed G&A line.
+    for fragment in [
+        "\"comparison_scope\":\"company_minus_declared_regions\"",
+        "\"status\":\"printed_arithmetic_closed\"",
+        "\"source_line\":\"A9: General & administrative costs\",\"difference_usd_m\":{\"point\":\"30\",\"interval\":[\"57/2\",\"63/2\"]",
+        "\"gap_usd_per_oz\":{\"point\":\"300\"",
+        "\"unexplained_usd_m\":{\"point\":\"0\"",
+        "\"denominator_usd_per_oz\":{\"point\":\"0\"",
+        "\"point_closure_verified\":true",
+        "\"accounting_reconciliation_verified\":false",
+        "company-minus-declared-regions/1",
+    ] {
+        assert!(json.contains(fragment), "missing {fragment}: {json}");
+    }
+    for at in ["B5", "B9", "B11", "B13", "C9", "D9"] {
+        let source = &report.public_claims.cells[&format!("invented_aisc.xlsx:Q1 2030!{at}")];
+        assert!(json.contains(&source.claim.claim_id.to_string()), "{at}");
+        assert!(json.contains(&source.key.reporting_vintage.file_sha256));
+    }
+    let company = &report.public_claims.cells["invented_aisc.xlsx:Q1 2030!B9"];
+    assert_eq!(company.key.subject, "Total Gold");
+    assert_eq!(company.key.scope, fmine_public::key::Scope::Company);
+    let stats_hash = fmine_core::Digest32(report.sources[1].workbook.sha256).to_hex();
+    assert!(json.contains(&stats_hash));
+    let markdown = assure_report::markdown(&report).unwrap();
+    assert!(markdown.contains("### Total Gold / 2030Q1"));
+    assert!(markdown.contains("do not establish complete company consolidation"));
+    let mut reordered = report.clone();
+    reordered.sources.reverse();
+    reordered.mine_ledger.cost_layers.rows.reverse();
+    for layer in &mut reordered.mine_ledger.cost_layers.rows {
+        layer.region_map.reverse();
+        layer.regions.reverse();
+    }
+    assert_eq!(company_json(&reordered), json);
+}
+
+#[test]
+fn company_comparison_preserves_unexplained_amounts_and_separate_sales_effects() {
+    let report = company_report(&[
+        ("B11", MinimalCell::Number(851.0)),
+        ("B13", MinimalCell::Number(102.0)),
+    ]);
+    let json = company_json(&report);
+    // 851000/102 - 8200 = 7300/51. G&A 5000/17 + unexplained 500/51 - denominator 8200/51.
+    for fragment in [
+        "\"status\":\"unresolved\"",
+        "\"gap_usd_per_oz\":{\"point\":\"7300/51\"",
+        "\"unexplained_usd_m\":{\"point\":\"1\"",
+        "\"unexplained_usd_per_oz\":{\"point\":\"500/51\"",
+        "\"denominator_usd_per_oz\":{\"point\":\"-8200/51\"",
+        "\"point_closure_verified\":true",
+        "\"accounting_reconciliation_verified\":false",
+    ] {
+        assert!(json.contains(fragment), "missing {fragment}: {json}");
+    }
+    assert_ne!(json, company_json(&company_report(&[])));
+}
+
+#[test]
+fn company_population_never_shrinks_for_missing_columns_or_duplicate_total_aliases() {
+    for changes in [
+        vec![("B2", MinimalCell::Text("Unregistered company".into()))],
+        vec![("C2", MinimalCell::Text("Unregistered region".into()))],
+        vec![("C2", MinimalCell::Text("Total Gold".into()))],
+        vec![("D9", MinimalCell::Text("—".into()))],
+    ] {
+        let report = company_report(&changes);
+        let json = company_json(&report);
+        assert!(json.contains("\"status\":\"unavailable\""), "{json}");
+        assert!(json.contains("\"subject\":\"Region North\""));
+        assert!(json.contains("\"subject\":\"Region South\""));
+        assert!(!json.contains("\"gap_usd_per_oz\":"), "{json}");
+    }
+}
+
+#[test]
+fn company_comparison_requires_current_nonoverlapping_source_bound_region_evidence() {
+    for change in 0..7 {
+        let mut report = company_report(&[]);
+        match change {
+            0 => report.mine_ledger.cost_layers.rows.clear(),
+            1 => report.sources.retain(|s| s.kind != SourceKind::MineStats),
+            2 => {
+                for layer in &mut report.mine_ledger.cost_layers.rows {
+                    layer.release = "2030Q2".into();
+                }
+            }
+            3 => {
+                for layer in &mut report.mine_ledger.cost_layers.rows {
+                    let duplicate = layer.region_map[0].clone();
+                    layer.region_map.push(duplicate);
+                }
+            }
+            4 => {
+                report.mine_ledger.cost_layers.rows[0].region_map[0].member = "Other site".into();
+            }
+            5 => {
+                for layer in &mut report.mine_ledger.cost_layers.rows {
+                    layer.regions[0].mapped = false;
+                }
+            }
+            _ => report.subtotal_members.push(SubtotalMemberRow {
+                subtotal: "Site A".into(),
+                member: "Site B".into(),
+                period_from: "2030Q1".into(),
+                period_to: None,
+                evidence: "synthetic overlapping subtotal".into(),
+            }),
+        }
+        let json = company_json(&report);
+        assert!(
+            json.contains("\"status\":\"unavailable\""),
+            "case {change}: {json}"
+        );
+        assert!(
+            !json.contains("\"gap_usd_per_oz\":"),
+            "case {change}: {json}"
+        );
+        assert!(json.contains("FMINE-REF-208"));
+        assert!(json.contains("invented_aisc.xlsx:Q1 2030!B9"));
+    }
+}
+
+#[test]
+fn company_subtotal_leaves_are_disjoint_and_their_policies_affect_identity() {
+    let mut report = company_report(&[]);
+    let original = company_json(&report);
+    for (subtotal, member) in [("Site A", "Mine A"), ("Site B", "Mine B")] {
+        report.subtotal_members.push(SubtotalMemberRow {
+            subtotal: subtotal.into(),
+            member: member.into(),
+            period_from: "2030Q1".into(),
+            period_to: None,
+            evidence: "synthetic flat subtotal declaration".into(),
+        });
+    }
+    let disjoint = company_json(&report);
+    assert!(disjoint.contains("\"gap_usd_per_oz\":{\"point\":\"300\""));
+    assert!(disjoint.contains("synthetic flat subtotal declaration"));
+    assert!(disjoint.contains("subtotal Site A -> Mine A"));
+    assert_ne!(disjoint, original, "consumed membership evidence is bound");
+    report.subtotal_members[1].member = "Mine A".into();
+    let overlapping = company_json(&report);
+    assert!(overlapping.contains("\"status\":\"unavailable\""));
+    assert!(
+        overlapping.contains("company region population overlaps Site A and Site B through Mine A")
+    );
+    assert!(!overlapping.contains("\"gap_usd_per_oz\":"));
+}
+
 #[test]
 fn assurance_projection_preserves_source_claims_and_emits_named_differences() {
     let r = report(&[], UNITS, false);
