@@ -344,14 +344,32 @@ mod tests {
     #[test]
     fn one_sided_guidance_reaches_the_binary_without_invented_range_statistics() {
         let root = dated_workspace("one-sided");
-        let path = transcriptions_path(&root, "synthetic");
-        let readings = std::fs::read_to_string(&path)
+        // An imaginary registered issuer exercises admission of these exact fixture bytes. The
+        // reserved synthetic cohort lane uses built-in evidence instead of workspace readings.
+        let source = std::fs::read_to_string(registry_path(&root, "synthetic"))
             .unwrap()
+            .replace("issuer = \"synthetic\"", "issuer = \"boundcut\"");
+        std::fs::write(registry_path(&root, "boundcut"), source).unwrap();
+        let path = transcriptions_path(&root, "boundcut");
+        let readings = std::fs::read_to_string(transcriptions_path(&root, "synthetic"))
+            .unwrap()
+            .replace("issuer = \"synthetic\"", "issuer = \"boundcut\"")
             .replace("token = \"80 - 100\"", "token = \"at least 90\"")
             .replace("token = \"90 - 110\"", "token = \">= 100\"")
             .replace("token = \"900 - 1100\"", "token = \"≤1000\"");
         std::fs::write(&path, &readings).unwrap();
-        let expected = successful(&root, &[]);
+        let invoke_bound = |extra: &[&str]| {
+            let args: Vec<String> = ["track-record", "--issuer", "boundcut"]
+                .into_iter()
+                .chain(extra.iter().copied())
+                .map(str::to_owned)
+                .collect();
+            let (envelope, format) = fmine_cli::invoke(&args, &root);
+            assert_eq!(format, OutputFormat::Json);
+            envelope
+        };
+        let expected = invoke_bound(&[]);
+        assert_eq!(expected.exit_code, 0, "{}", expected.to_json());
         let annual = row(&expected.payload_json, "production_koz", 2024);
         assert!(annual.contains("\"kind\":\"at_least\""));
         assert!(annual.contains("\"side\":\"inside\""));
@@ -372,7 +390,7 @@ mod tests {
                 .args([
                     "track-record",
                     "--issuer",
-                    "synthetic",
+                    "boundcut",
                     "--format",
                     format,
                     "--workspace",
@@ -391,10 +409,20 @@ mod tests {
                 format!("{expected_text}\n")
             );
         }
-        let cut = successful(&root, &["--cohort-as-of", "2026-02-02"]);
+        let cut = invoke_bound(&["--cohort-as-of", "2026-02-02"]);
+        assert_eq!(cut.exit_code, 0, "{}", cut.to_json());
         assert!(cut.payload_json.contains("\"token\":\">= 100\""));
         assert!(cut.payload_json.contains("\"z\":null"));
-        assert!(cut.payload_json.contains("\"side\":\"inside\""));
+        assert!(
+            cut.payload_json
+                .contains("\"side\":\"Inside\",\"hit\":\"Boundary\",\"boundary\":true")
+        );
+        assert!(
+            cut.payload_json
+                .contains("Guidance2024.pdf:p1:Invented guidance:Site A production_koz/2024")
+        );
+        assert!(cut.payload_json.contains("Synthetic_2024Q4.xlsx:YTD!C5"));
+        assert!(cut.payload_json.contains(&sha256(DOCUMENT_2024).to_hex()));
         assert!(
             expected
                 .rendered_markdown
@@ -407,7 +435,7 @@ mod tests {
             readings.replacen("token = \">= 100\"", "token = \"<= 100\"", 1),
         )
         .unwrap();
-        let disagreement = invoke(&root, &[]);
+        let disagreement = invoke_bound(&[]);
         assert_ne!(disagreement.exit_code, 0);
         assert_eq!(disagreement.refusal.unwrap().code, "FMINE-REF-202");
     }
