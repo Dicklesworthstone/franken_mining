@@ -745,9 +745,16 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   survive in the derived result. Printed arithmetic closes only with zero nominal unexplained remainder,
   zero column footings and matching sold quantities. The separate comparison digest does not enlarge the
   identity-ledger certificate. `accounting_reconciliation_verified` is always false; no residual is labelled
-  a corporate/JV allocation and no ownership conversion is inferred. The current registry excludes company
-  Total, so no company-level bridge or complete BD-273/M0 gate is claimed. FACT: all 10 focused invented-source
-  tests in `crates/xtask/tests/public_consolidation.rs` pass, including cancellation and source-admission controls.
+  a corporate/JV allocation and no ownership conversion is inferred. The nested per-ounce result includes
+  recomputed aggregate and pooled-member rates, named component contributions, an explicit unexplained
+  numerator contribution and a separate sales-denominator term. Exact point closure and each term's rounding
+  bounds remain distinct from an accounting explanation and the issuer's printed per-ounce rates.
+  Nonpositive sales bounds refuse the rate calculation while retaining the dollar comparison. Source
+  admission checks the live metric label, repeated-line occurrence, locator, scope and complete currency
+  token; Australian dollars cannot enter as USD. Company-level reconciliation still needs separately
+  source-bound company evidence. Tests in `crates/xtask/tests/public_consolidation.rs` exercise the
+  invented-source pipeline, including unequal sales, unexplained amounts, zero sales, currency and semantic
+  mutations. These additions do not claim a complete BD-273/M0 gate.
 - A successful `recovery gap` envelope carries a `fmine.recovery.gap.v1` payload and the model's explicit
   `no_claim` text. Its own digest binds source rows, source Claims, the fit and quarterly outcomes. Both
   `anchor_id` and `certificate` remain null; no ledger snapshot or forecast registration is created. Each

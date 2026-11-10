@@ -307,12 +307,22 @@ The report lists each named difference, the reported numerator and sold-quantity
 arithmetic footing, and any unexplained numerator remainder. Exact display-rounding bounds, original source
 Claims, file hashes, cell locators and membership policies remain available alongside a separate report digest.
 
+The same comparison also explains the recomputed **USD/oz gap**. Each component difference and any
+unexplained numerator remainder is divided by the aggregate's attributable ounces sold; a separate sales
+denominator term retains any difference between aggregate and combined member sales. The terms sum exactly
+to the gap between the two recomputed rates, and every term carries exact rounding bounds. For example, an
+invented subtotal of $850 million on 100 thousand ounces versus members totalling $820 million on the same
+sales gives a $300/oz gap; a $30 million G&A difference accounts for that gap arithmetically. These recomputed
+rates are distinct from the issuer's printed per-ounce rates. A sales interval reaching zero refuses the
+per-ounce calculation while preserving the usable dollar comparison.
+
 Missing members, partial-period membership, incompatible source semantics and unlabelled numeric components
 leave the comparison unavailable; cancelling omitted rows cannot make it pass. Printed arithmetic closes
 only when the reported numerator is explained by the named differences, every column foots, and the printed
 sold quantities agree. These checks never establish accounting reconciliation. Differences are not assigned
-to corporate or JV costs, and ownership is not rescaled. The current source registry does not select company
-Total, so this feature does not provide a company-level corporate/JV bridge or complete BD-273 or M0.
+to corporate or JV costs, and ownership is not rescaled. Company-level reconciliation needs separately
+source-bound company reconciliation evidence; the current comparisons do not supply it or complete
+BD-273 or M0.
 
 ### Calculate a cost metric under an explicit definition
 

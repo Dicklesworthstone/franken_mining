@@ -57,6 +57,16 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   remain separate from the nominal `printed_arithmetic_closed` result. Closure is not an accounting
   reconciliation or evidence identifying corporate/JV allocations. The CLI binds verified AISC workbook
   Claims to this kernel for its explicit region and subtotal selections and retains unavailable members.
+  The nested `rates` result adds recomputed aggregate and pooled-member USD/oz rates under
+  `aisc.component-rate-bridge/1`. Named component differences and the unexplained remainder use aggregate
+  sales as their denominator. The separate denominator term is `1000 * member numerator *
+  (1 / aggregate sales - 1 / member sales)`. These terms close exactly to the recomputed rate gap;
+  printed per-ounce rows are never substituted. Every term retains its marginal display-rounding bounds,
+  including signed costs and decimal source precision. Shared operands do not imply independent errors.
+  A rate denominator touching zero refuses with 104; rate arithmetic overflow refuses with 207. Either
+  nested refusal preserves the valid dollar comparison and is bound, alongside successful rate outputs,
+  by the comparison's version-two `ACOU` identity. Neither arithmetic closure nor a valid denominator
+  resolves unexplained amounts or identifies corporate/JV allocations.
 - **`AiscConsolidationBridge::verify_rollup`** gives `Ok(())` or a `Refusal`.
 - **`compute_geo`** gives `GeoBreakdown`. Copper GEO koz is copper Mlb × 1,000 × the copper price ÷ the gold price.
 - **`ReserveReplacementBridge::compute`** gives organic and headline replacement as percentages of depletion, or `None`.
@@ -310,6 +320,12 @@ The other modules have local errors with no refusal code:
 - **The quarter work does not close the wider gates.** The additive quarter kernel and the quarter sums do not close the general derived-identity or the independently labelled disclosure-lint assessment gates.
 
 ## 11. Public API
+- **`consolidation`:** `RATE_RULES_VERSION`, `Printed`, `Column`, `Table`, `Difference`,
+  `RateComparison`, `Comparison` and `compare`. `Table` and `Comparison` expose `canonical_tag`;
+  comparisons cross the API in a Claim. Direct known-answer and signed source-box enclosure tests are
+  `consolidation::tests::signed_rate_bridge_has_exact_known_answers_and_rounding_bounds`,
+  `marginal_rate_bounds_enclose_every_signed_source_box_corner` and
+  `unavailable_rate_domains_keep_the_dollar_comparison_and_bind_the_refusal`.
 - **Root:** `SiteAiscRow`, `AiscConsolidationBridge::verify_rollup`, `PriceDeck` with `barrick_reserve(year)`, `GeoBreakdown`, `compute_geo`, `ReserveReplacementBridge::compute`, `CUTOFF_MAX_ITER`, `CUTOFF_TOL`, `CutoffSolution`, `CutoffError` and `solve_cutoff_grade`. The root re-exports `LmdiState`, `LmdiWaterfall`, `decompose_aisc_lmdi` and `logarithmic_mean`.
 - **`definitions`:** `bundled_registry`, `CostLine`, `MetricFailure`, `AllInCost`, `all_in_cost_per_oz`, `Project` and `is_non_sustaining`.
   - `CostUnit`, `UnitCost` and `cost_per_sold_unit` use explicitly typed gold-ounce or copper-pound

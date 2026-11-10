@@ -7,14 +7,16 @@ use std::fmt::Write as _;
 use fmine_claim::{
     AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
 };
-use fmine_core::{anchor::SourceAnchor, blake3_hash, hash::Digest32};
+use fmine_core::{Encoder, anchor::SourceAnchor, blake3_hash, hash::Digest32};
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_io::xlsx::{CellValue, Sheet, col_index_to_letters};
 use fmine_metrics::consolidation::{
     self as kernel, Column, Comparison, Difference, Printed, Table,
 };
 use fmine_public::aisc::{self, AiscTable, OperandRole, OperandValue};
-use fmine_public::key::{KeyedCell, PublicValue, canonical_value_tag, parse_sheet_period};
+use fmine_public::key::{
+    KeyedCell, LineKey, PublicValue, Scope, canonical_value_tag, parse_sheet_period,
+};
 use fmine_public::sources::SourceKind;
 use fmine_public::{LoadedSource, PublicAssuranceReport};
 use fmine_units::ExactQty as Rat;
@@ -25,6 +27,7 @@ type Result<T> = std::result::Result<T, Refusal>;
 struct Selection {
     members: BTreeMap<String, String>,
     partial: bool,
+    region: bool,
 }
 
 struct Assessment {
@@ -83,6 +86,42 @@ fn difference(d: Difference) -> String {
     )
 }
 
+fn rates_json(c: &Comparison, labels: &[String]) -> String {
+    match &c.rates {
+        Err(e) => format!(
+            "{{\"rules_version\":{},\"status\":\"unavailable\",\"refusal\":{{\"code\":{},\"what\":{},\"fix\":{}}}}}",
+            js(kernel::RATE_RULES_VERSION),
+            js(e.code),
+            js(&e.what),
+            js(e.fix)
+        ),
+        Ok(r) => {
+            let components = labels
+                .iter()
+                .zip(&r.components_usd_per_oz)
+                .map(|(label, d)| {
+                    format!(
+                        "{{\"source_line\":{},\"difference_usd_per_oz\":{}}}",
+                        js(label),
+                        difference(*d)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "{{\"rules_version\":{},\"status\":\"computed\",\"unit\":\"USD/oz\",\"interpretation\":\"Rates recomputed from printed USD million numerators and attributable thousand ounces sold; these are not the printed per-ounce rates. Component and unexplained numerator differences use aggregate sales; a separate denominator term retains unequal sales totals. Exact arithmetic closure does not identify corporate or JV allocations.\",\"aggregate_usd_per_oz\":{},\"members_usd_per_oz\":{},\"gap_usd_per_oz\":{},\"components\":[{components}],\"unexplained_usd_per_oz\":{},\"denominator_usd_per_oz\":{},\"point_closure_verified\":{}}}",
+                js(kernel::RATE_RULES_VERSION),
+                difference(r.aggregate_usd_per_oz),
+                difference(r.members_usd_per_oz),
+                difference(r.gap_usd_per_oz),
+                difference(r.unexplained_usd_per_oz),
+                difference(r.denominator_usd_per_oz),
+                r.point_closure_verified
+            )
+        }
+    }
+}
+
 fn selections(
     report: &PublicAssuranceReport,
     release: &str,
@@ -98,7 +137,9 @@ fn selections(
         .filter(|r| r.release == release)
     {
         for m in &layer.region_map {
-            groups.entry(m.region.clone()).or_default().members.insert(
+            let group = groups.entry(m.region.clone()).or_default();
+            group.region = true;
+            group.members.insert(
                 m.member.clone(),
                 format!(
                     "region_member: {} -> {}; release {} through {}",
@@ -130,15 +171,71 @@ fn selections(
     groups
 }
 
+fn source_line(sheet: &Sheet, table: &AiscTable, row: u32) -> Result<LineKey> {
+    // Use the reader's registered anchors so abbreviations have the same canonical metric key.
+    let anchors = [
+        table.cos_row,
+        table.tcc_row,
+        table.aisc_row,
+        table.ounces_row,
+        table.cos_rate_row,
+        table.tcc_rate_row,
+        table.aisc_rate_row,
+    ];
+    let label = |r| {
+        anchors
+            .iter()
+            .zip(aisc::ROW_ANCHORS)
+            .find_map(|(&at, anchor)| (at == r).then(|| anchor.names[0].to_string()))
+            .or_else(|| aisc::cell_text(sheet, r, 1).map(|s| s.to_lowercase()))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| refused("source metric label is missing"))
+    };
+    let rows: BTreeSet<_> = table
+        .block1
+        .iter()
+        .chain(&table.block2)
+        .copied()
+        .chain(anchors)
+        .collect();
+    let expected = label(row)?;
+    let mut occurrence = 0;
+    for &r in rows.range(..row) {
+        if label(r)? == expected {
+            occurrence += 1;
+        }
+    }
+    Ok(LineKey {
+        label: expected,
+        occurrence,
+    })
+}
+
+fn dollars_in_millions(label: &str) -> bool {
+    let label = label.trim();
+    let label = match label.strip_prefix('(') {
+        Some(inside) => match inside.strip_suffix(')') {
+            Some(inside) => inside.trim(),
+            None => return false,
+        },
+        None => label,
+    };
+    let (currency, qualifier) = label.split_once(',').unwrap_or((label, ""));
+    matches!(currency.trim(), "$ millions" | "us$ millions" | "usd millions")
+        && (qualifier.is_empty() || qualifier.trim().starts_with("except per ounce "))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reading(
     report: &PublicAssuranceReport,
     src: &LoadedSource,
     sheet: &Sheet,
+    table: &AiscTable,
     row: u32,
     col: u32,
     subject: &str,
     unit: &str,
+    expected_scope: &Scope,
     inputs: &mut Vec<KeyedCell>,
 ) -> Result<Printed> {
     let cell = format!("{}{row}", col_index_to_letters(col));
@@ -150,6 +247,7 @@ fn reading(
         .ok_or_else(|| refused(format!("missing canonical source Claim: {at}")))?;
     inputs.push(source.clone());
     source.claim.check_id()?;
+    let expected_line = source_line(sheet, table, row)?;
     let admitted_state = matches!(
         source.claim.state,
         KnowledgeState::Known | KnowledgeState::Estimated
@@ -163,6 +261,10 @@ fn reading(
         || source.key.subject != subject
         || Some(source.key.valid_period) != parse_sheet_period(&sheet.name).ok()
         || source.key.unit != unit
+        || source.locator != at
+        || source.key.line != expected_line
+        || source.claim.metric_key != expected_line.label
+        || &source.key.scope != expected_scope
         || source.claim.stale
         || source.claim.calibration_failed
         || !admitted_state
@@ -215,12 +317,14 @@ fn reading(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn column(
     report: &PublicAssuranceReport,
     src: &LoadedSource,
     sheet: &Sheet,
     table: &AiscTable,
     subject: &str,
+    expected_scope: &Scope,
     inputs: &mut Vec<KeyedCell>,
     context: &mut Vec<(String, String)>,
 ) -> Result<Column> {
@@ -282,6 +386,7 @@ fn column(
                 report,
                 src,
                 sheet,
+                table,
                 row,
                 header.col,
                 subject,
@@ -290,6 +395,7 @@ fn column(
                 } else {
                     "usd_m"
                 },
+                expected_scope,
                 inputs,
             )
         })
@@ -331,6 +437,18 @@ fn bind(
     table: &AiscTable,
     row: &mut Assessment,
 ) -> Result<Claim<Comparison>> {
+    let aggregate_scope = if row.selection.region {
+        // Match the source key's release-specific region perimeter (key::scope_for).
+        let mut enc = Encoder::new_frame(*b"RMAP", 1);
+        for member in row.selection.members.keys() {
+            enc.put_str(member);
+        }
+        Scope::Region {
+            map_version: blake3_hash(&enc.finish()).to_hex(),
+        }
+    } else {
+        Scope::Site
+    };
     let mut selected = Vec::new();
     selected.push(column(
         report,
@@ -338,6 +456,7 @@ fn bind(
         sheet,
         table,
         &row.subject,
+        &aggregate_scope,
         &mut row.inputs,
         &mut row.context,
     ));
@@ -348,6 +467,7 @@ fn bind(
             sheet,
             table,
             member,
+            &Scope::Site,
             &mut row.inputs,
             &mut row.context,
         ));
@@ -373,13 +493,9 @@ fn bind(
     let sold = aisc::cell_text(sheet, table.ounces_row, 1)
         .unwrap_or_default()
         .to_lowercase();
-    let dollar_unit = units.starts_with("($ millions")
-        || units.starts_with("$ millions")
-        || units.contains("us$ millions")
-        || units.contains("usd millions");
     if row.selection.partial
         || !title.contains("all-in sustaining costs")
-        || !dollar_unit
+        || !dollars_in_millions(&units)
         || !sold.contains("attributable basis")
         || !(sold.contains("000s ounces") || sold.contains("thousands of ounces"))
     {
@@ -578,7 +694,7 @@ impl Assessment {
                     .collect::<Vec<_>>()
                     .join(",");
                 format!(
-                    "\"status\":{},\"claim_id\":{},\"evidence\":{},\"knowledge\":{},\"uu_terms\":[{uu_terms}],\"printed_arithmetic_closed\":{},\"components\":[{lines}],\"summed_components_usd_m\":{},\"numerator_difference_usd_m\":{},\"sold_difference_koz\":{},\"unexplained_usd_m\":{},\"column_footings\":[{footings}]",
+                    "\"status\":{},\"claim_id\":{},\"evidence\":{},\"knowledge\":{},\"uu_terms\":[{uu_terms}],\"printed_arithmetic_closed\":{},\"components\":[{lines}],\"summed_components_usd_m\":{},\"numerator_difference_usd_m\":{},\"sold_difference_koz\":{},\"unexplained_usd_m\":{},\"column_footings\":[{footings}],\"per_ounce\":{}",
                     js(if c.printed_arithmetic_closed {
                         "printed_arithmetic_closed"
                     } else {
@@ -591,7 +707,8 @@ impl Assessment {
                     difference(c.summed_components_usd_m),
                     difference(c.numerator_usd_m),
                     difference(c.sold_koz),
-                    difference(c.unexplained_usd_m)
+                    difference(c.unexplained_usd_m),
+                    rates_json(c, &self.labels)
                 )
             }
         };
@@ -707,6 +824,70 @@ impl Report {
                         q(d.hi),
                         c.value.printed_arithmetic_closed
                     );
+                    match &c.value.rates {
+                        Err(e) => {
+                            let _ = writeln!(
+                                out,
+                                "\nPer-ounce comparison unavailable: {}. The dollar comparison above is retained.\n",
+                                super::text(&e.to_string())
+                            );
+                        }
+                        Ok(rates) => {
+                            out.push_str("\n#### Recomputed per-ounce comparison\n\nRates use printed USD million numerators and attributable thousand ounces sold. They are distinct from the issuer's printed per-ounce rates. Component and unexplained numerator differences use aggregate sales; the denominator term separately retains any difference in sales totals. Bounds reflect input rounding, not confidence.\n\n");
+                            let _ = writeln!(out, "Rule: `{}`.\n", kernel::RATE_RULES_VERSION);
+                            super::table(
+                                &mut out,
+                                &["Quantity", "USD/oz", "Closed rounding bounds"],
+                            );
+                            for (label, d) in [
+                                ("Recomputed aggregate rate", rates.aggregate_usd_per_oz),
+                                ("Recomputed combined member rate", rates.members_usd_per_oz),
+                                ("Aggregate minus combined member rate", rates.gap_usd_per_oz),
+                            ] {
+                                super::row(
+                                    &mut out,
+                                    &[
+                                        label.into(),
+                                        q(d.point),
+                                        format!("[{}, {}]", q(d.lo), q(d.hi)),
+                                    ],
+                                );
+                            }
+                            out.push('\n');
+                            super::table(
+                                &mut out,
+                                &["Gap component", "USD/oz", "Closed rounding bounds"],
+                            );
+                            for (label, d) in r.labels.iter().zip(&rates.components_usd_per_oz) {
+                                super::row(
+                                    &mut out,
+                                    &[
+                                        label.clone(),
+                                        q(d.point),
+                                        format!("[{}, {}]", q(d.lo), q(d.hi)),
+                                    ],
+                                );
+                            }
+                            for (label, d) in [
+                                ("Unexplained numerator remainder", rates.unexplained_usd_per_oz),
+                                ("Sales denominator difference", rates.denominator_usd_per_oz),
+                            ] {
+                                super::row(
+                                    &mut out,
+                                    &[
+                                        label.into(),
+                                        q(d.point),
+                                        format!("[{}, {}]", q(d.lo), q(d.hi)),
+                                    ],
+                                );
+                            }
+                            let _ = writeln!(
+                                out,
+                                "\nExact point closure verified: {}. Arithmetic closure does not identify corporate or JV allocations and does not resolve an unexplained remainder.\n",
+                                rates.point_closure_verified
+                            );
+                        }
+                    }
                     for (subject, d) in &c.value.column_footings_usd_m {
                         let _ = writeln!(
                             out,

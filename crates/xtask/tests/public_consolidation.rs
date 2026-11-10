@@ -8,7 +8,7 @@ use fmine_core::{anchor::SourceAnchor, sha256};
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx};
 use fmine_metrics::consolidation::{self, Column, Printed, Table};
-use fmine_public::sources::{SourceKind, SubtotalMemberRow};
+use fmine_public::sources::{RegionMemberRow, SourceKind, SubtotalMemberRow};
 use fmine_public::{Lane, LoadedSource, PublicAssuranceReport, assess, synthetic};
 use fmine_units::ExactQty as Rat;
 
@@ -365,6 +365,127 @@ fn source_mutation_changes_the_report_and_never_hides_an_unexplained_amount() {
 }
 
 #[test]
+fn source_bound_per_ounce_gap_keeps_named_components_and_recomputed_rates() {
+    let r = report(&[], UNITS, false);
+    let json = assure_report::consolidation_json(&r);
+    assert!(
+        json.contains(&format!(
+            "\"per_ounce\":{{\"rules_version\":\"{}\",\"status\":\"computed\"",
+            consolidation::RATE_RULES_VERSION
+        )),
+        "{json}"
+    );
+    // Independent arithmetic: 1000*850/100 = 8500, 1000*(330+490)/(40+60) = 8200.
+    // Only the G&A difference is nonzero: 1000*30/100 = 300 USD/oz.
+    for fragment in [
+        "\"aggregate_usd_per_oz\":{\"point\":\"8500\"",
+        "\"members_usd_per_oz\":{\"point\":\"8200\"",
+        "\"gap_usd_per_oz\":{\"point\":\"300\"",
+        "\"source_line\":\"A9: General & administrative costs\",\"difference_usd_per_oz\":{\"point\":\"300\"",
+        "\"unexplained_usd_per_oz\":{\"point\":\"0\"",
+        "\"denominator_usd_per_oz\":{\"point\":\"0\"",
+        "\"point_closure_verified\":true",
+        "\"accounting_reconciliation_verified\":false",
+    ] {
+        assert!(json.contains(fragment), "missing {fragment}: {json}");
+    }
+    let markdown = assure_report::markdown(&r).unwrap();
+    assert!(markdown.contains("Recomputed per-ounce comparison"));
+    assert!(markdown.contains("| Recomputed aggregate rate | 8500 |"));
+    assert!(markdown.contains("| Recomputed combined member rate | 8200 |"));
+    assert!(markdown.contains("| Aggregate minus combined member rate | 300 |"));
+    assert!(markdown.contains("Exact point closure verified: true"));
+    // Printed site rates 8250 and 8167 are deliberately rounded independently. The bridge uses dollars
+    // and sales, not a weighted average of those rates, and does not quietly treat them as exact inputs.
+    let changed_rates = report(
+        &[
+            ("C16", MinimalCell::Number(8251.0)),
+            ("D16", MinimalCell::Number(8168.0)),
+        ],
+        UNITS,
+        false,
+    );
+    let changed_json = assure_report::consolidation_json(&changed_rates);
+    assert!(changed_json.contains("\"members_usd_per_oz\":{\"point\":\"8200\""));
+    assert_ne!(
+        json, changed_json,
+        "source hash still commits to printed rate changes"
+    );
+}
+
+#[test]
+fn unequal_sales_have_a_separate_signed_per_ounce_denominator_effect() {
+    let r = report(&[("B13", MinimalCell::Number(102.0))], UNITS, false);
+    let json = assure_report::consolidation_json(&r);
+    // Exact hand calculation: aggregate = 425000/51, member = 8200; gap = 6800/51.
+    // G&A contributes 5000/17 and 820000*(1/102 - 1/100) contributes -8200/51.
+    for fragment in [
+        "\"status\":\"unresolved\"",
+        "\"aggregate_usd_per_oz\":{\"point\":\"425000/51\"",
+        "\"members_usd_per_oz\":{\"point\":\"8200\"",
+        "\"gap_usd_per_oz\":{\"point\":\"6800/51\"",
+        "\"source_line\":\"A9: General & administrative costs\",\"difference_usd_per_oz\":{\"point\":\"5000/17\"",
+        "\"denominator_usd_per_oz\":{\"point\":\"-8200/51\"",
+        "\"point_closure_verified\":true",
+    ] {
+        assert!(json.contains(fragment), "missing {fragment}: {json}");
+    }
+    let markdown = assure_report::markdown(&r).unwrap();
+    assert!(markdown.contains("| Sales denominator difference | -8200/51 |"));
+    assert!(markdown.contains("Printed arithmetic closes: false"));
+}
+
+#[test]
+fn unexplained_per_ounce_amount_survives_exact_closure_without_becoming_an_allocation() {
+    let r = report(&[("B11", MinimalCell::Number(851.0))], UNITS, false);
+    let json = assure_report::consolidation_json(&r);
+    for fragment in [
+        "\"status\":\"unresolved\"",
+        "\"gap_usd_per_oz\":{\"point\":\"310\"",
+        "\"unexplained_usd_per_oz\":{\"point\":\"10\"",
+        "\"point_closure_verified\":true",
+        "\"accounting_reconciliation_verified\":false",
+    ] {
+        assert!(json.contains(fragment), "missing {fragment}: {json}");
+    }
+    let markdown = assure_report::markdown(&r).unwrap();
+    assert!(markdown.contains("| Unexplained numerator remainder | 10 |"));
+    assert!(markdown.contains("does not resolve an unexplained remainder"));
+}
+
+#[test]
+fn zero_sales_refuse_only_the_per_ounce_comparison_and_keep_source_dollars() {
+    for changes in [
+        vec![("B13", MinimalCell::Number(0.0))],
+        vec![
+            ("C13", MinimalCell::Number(0.0)),
+            ("D13", MinimalCell::Number(0.0)),
+        ],
+    ] {
+        let r = report(&changes, UNITS, false);
+        let json = assure_report::consolidation_json(&r);
+        assert!(
+            json.contains(&format!(
+                "\"per_ounce\":{{\"rules_version\":\"{}\",\"status\":\"unavailable\"",
+                consolidation::RATE_RULES_VERSION
+            )),
+            "{json}"
+        );
+        assert!(json.contains("\"numerator_difference_usd_m\":{\"point\":\"30\""));
+        assert!(json.contains("\"source_line\":\"A9: General & administrative costs\",\"difference_usd_m\":{\"point\":\"30\""));
+        assert!(!json.contains("\"aggregate_usd_per_oz\":"));
+        for cell in ["B13", "C13", "D13"] {
+            let at = format!("invented_aisc.xlsx:Q1 2030!{cell}");
+            let source = r.public_claims.cells.get(&at).unwrap();
+            assert!(json.contains(&source.claim.claim_id.to_string()));
+        }
+        let markdown = assure_report::markdown(&r).unwrap();
+        assert!(markdown.contains("Per-ounce comparison unavailable"));
+        assert!(markdown.contains("The dollar comparison above is retained"));
+    }
+}
+
+#[test]
 fn missing_member_placeholder_and_wrong_units_refuse_instead_of_summing_a_subset() {
     for (changes, units) in [
         (
@@ -373,6 +494,9 @@ fn missing_member_placeholder_and_wrong_units_refuse_instead_of_summing_a_subset
         ),
         (vec![("D10", MinimalCell::Text("—".into()))], UNITS),
         (vec![], "(C$ millions, except per ounce information)"),
+        (vec![], "(AUS$ millions, except per ounce information)"),
+        (vec![], "(CAD millions; US$ millions comparative)"),
+        (vec![], "($ millionsAUD, except per ounce information)"),
         (
             vec![(
                 "A13",
@@ -394,9 +518,133 @@ fn missing_member_placeholder_and_wrong_units_refuse_instead_of_summing_a_subset
 }
 
 #[test]
+fn exact_currency_labels_and_repeated_source_metric_occurrences_are_admitted() {
+    for units in [
+        "$ millions",
+        "(US$ millions, except per ounce information)",
+        "USD millions, except per ounce information in dollars",
+    ] {
+        let json = assure_report::consolidation_json(&report(&[], units, false));
+        assert!(
+            json.contains("\"gap_usd_per_oz\":{\"point\":\"300\""),
+            "{json}"
+        );
+    }
+    let r = report(
+        &[("A10", MinimalCell::Text("Non-controlling interests".into()))],
+        UNITS,
+        false,
+    );
+    let second = &r.public_claims.cells["invented_aisc.xlsx:Q1 2030!C10"];
+    assert_eq!(second.key.line.label, "non-controlling interests");
+    assert_eq!(second.key.line.occurrence, 1);
+    let json = assure_report::consolidation_json(&r);
+    assert!(
+        json.contains("\"gap_usd_per_oz\":{\"point\":\"300\""),
+        "{json}"
+    );
+}
+
+#[test]
+fn registered_region_scope_is_reconstructed_from_the_same_release_membership() {
+    let mut p = synthetic::synthetic_profile();
+    p.subjects = ["Declared subtotal", "Site A", "Site B"]
+        .map(str::to_string)
+        .into();
+    p.regions = vec!["Declared subtotal".into()];
+    p.shares.clear();
+    p.reconstructions.clear();
+    p.missing_facts.clear();
+    p.region_members = ["Site A", "Site B"]
+        .map(|member| RegionMemberRow {
+            region: "Declared subtotal".into(),
+            member: member.into(),
+            first: "2030Q1".into(),
+            last: None,
+        })
+        .into();
+    let mut cells: Vec<_> = [
+        ("A1", "Summary of Operations"),
+        ("A3", "For the three months ended March 31,"),
+        ("B4", "Gold produced (000s oz 100%)"),
+        ("C4", "Gold produced (000s oz attributable)"),
+        ("D4", "Gold sold (000s oz attributable)"),
+        ("E4", "Cost of sales ($/oz)"),
+        ("F4", "Total cash costs ($/oz)"),
+        ("G4", "All-In sustaining costs ($/oz)"),
+        ("A5", "Declared subtotal"),
+        ("A6", "Total Gold"),
+    ]
+    .into_iter()
+    .map(|(at, text)| (at.into(), MinimalCell::Text(text.into())))
+    .collect();
+    cells.push(("B3".into(), MinimalCell::Number(2030.0)));
+    for row in [5, 6] {
+        for (col, value) in ["B", "C", "D", "E", "F", "G"]
+            .into_iter()
+            .zip([100.0, 100.0, 100.0, 10000.0, 7000.0, 8500.0])
+        {
+            cells.push((format!("{col}{row}"), MinimalCell::Number(value)));
+        }
+    }
+    let bytes = build_minimal_xlsx(&[MinimalSheet {
+        name: "QTD".into(),
+        hidden: false,
+        cells,
+    }]);
+    let workbook = Workbook::from_bytes("invented_stats.xlsx", &bytes).unwrap();
+    let stats = LoadedSource {
+        file_name: "invented_stats.xlsx".into(),
+        kind: SourceKind::MineStats,
+        quarter: "2030Q1".into(),
+        url: "synthetic:invented".into(),
+        url_basis: "synthetic test only".into(),
+        bytes: bytes.len() as u64,
+        census: workbook.cell_census(),
+        workbook,
+    };
+    let mut r = assess(&p, Lane::Synthetic, vec![source(&[], UNITS), stats]);
+    assert!(!r.mine_ledger.cost_layers.rows.is_empty());
+    let json = assure_report::consolidation_json(&r);
+    assert!(
+        json.contains("\"gap_usd_per_oz\":{\"point\":\"300\""),
+        "{json}"
+    );
+    let cell = r
+        .public_claims
+        .cells
+        .get_mut("invented_aisc.xlsx:Q1 2030!B5")
+        .unwrap();
+    cell.key.scope = fmine_public::key::Scope::Region {
+        map_version: "different-membership".into(),
+    };
+    let tag = fmine_public::key::canonical_value_tag(&cell.key, &cell.claim.value);
+    let old = &cell.claim;
+    cell.claim = Claim::new(
+        &old.metric_key,
+        old.value.clone(),
+        &tag,
+        old.representation.clone(),
+        old.support,
+        old.additivity,
+        old.evidence,
+        old.epistemic,
+        old.state,
+        old.confidentiality.clone(),
+        old.uu_terms.clone(),
+        old.parents.clone(),
+        old.anchors.clone(),
+    );
+    cell.claim.check_id().unwrap();
+    let json = assure_report::consolidation_json(&r);
+    assert!(json.contains("\"status\":\"unavailable\""), "{json}");
+    assert!(!json.contains("\"gap_usd_per_oz\":"));
+}
+
+#[test]
 fn bound_source_claims_cannot_change_knowledge_semantic_key_or_numeric_support() {
     use fmine_public::key::canonical_value_tag;
-    for change in 0..10 {
+    for change in 0..15 {
         let mut r = report(&[], UNITS, false);
         let cell = r
             .public_claims
@@ -423,12 +671,32 @@ fn bound_source_claims_cannot_change_knowledge_semantic_key_or_numeric_support()
                 cell.key.issuer = "another-issuer".into();
                 KnowledgeState::Known
             }
+            10 => {
+                cell.key.line.label = "unrelated monetary amount".into();
+                KnowledgeState::Known
+            }
+            11 => {
+                cell.key.line.occurrence = 1;
+                KnowledgeState::Known
+            }
+            12 => {
+                cell.key.scope = fmine_public::key::Scope::Company;
+                KnowledgeState::Known
+            }
+            13 => {
+                cell.locator = "invented_aisc.xlsx:Q1 2030!D5".into();
+                KnowledgeState::Known
+            }
             _ => KnowledgeState::Known,
         };
         let tag = canonical_value_tag(&cell.key, &cell.claim.value);
         let old = &cell.claim;
         cell.claim = Claim::new(
-            &old.metric_key,
+            if change == 14 {
+                "unrelated monetary amount"
+            } else {
+                &cell.key.line.label
+            },
             old.value.clone(),
             &tag,
             if change == 7 {
