@@ -363,6 +363,243 @@ fn availability_is_conservative_and_completed_quarters_cannot_look_ahead() {
 }
 
 #[test]
+fn original_historical_production_survives_source_proven_per_ounce_withholding() {
+    let note = "1 As a result of temporary suspension of operations at Site A starting January 14, 2030, no per ounce data is provided";
+    let (registry, sources) = fixture(|q, sheet| {
+        if q == 1 {
+            replace_cell(sheet, "B3", MinimalCell::Number(22.0));
+            replace_cell(sheet, "C3", MinimalCell::Text("—".into()));
+            sheet.cells.push(("A8".into(), MinimalCell::Text(note.into())));
+        }
+    });
+    let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
+    prepared.profile.subject_statuses.push(key::SubjectStatus {
+        subject: "Site A".into(),
+        kind: key::StatusKind::Withheld,
+        first: (2030, 1),
+        last: Some((2030, 3)),
+        evidence: "synthetic withholding".into(),
+    });
+    let report = finish(prepared, sources.clone(), 2).unwrap();
+    let row = report
+        .observations
+        .iter()
+        .find(|o| o.site == "Site A" && o.target == "production" && o.quarter.q == 1)
+        .unwrap();
+    assert_eq!(row.value, Some(Rat::from_integer(22)));
+    assert_eq!(
+        row.reason.as_deref(),
+        Some("included_production_with_per_ounce_only_note:Synthetic_Q1.xlsx:QTD!A8")
+    );
+    let claim = row.claim.as_ref().unwrap();
+    assert!(
+        matches!(&claim.claim.value, PublicValue::Number { stored, displayed: Ok(displayed), under_status: Some(key::StatusKind::Withheld) }
+        if stored == "22" && displayed == "22")
+    );
+    assert_eq!(claim.status_evidence.as_deref(), Some("synthetic withholding"));
+    assert_eq!(
+        claim.claim.anchors[0].artifact_sha256,
+        sources[0].workbook.sha256
+    );
+    let production = report
+        .candidate
+        .exact_rows
+        .iter()
+        .find(|r| r.site == "Site A" && r.target == "production")
+        .unwrap();
+    assert_eq!(
+        (production.lo, production.point, production.hi),
+        (
+            Rat::from_integer(30),
+            Rat::from_integer(30),
+            Rat::new(500, 11).unwrap()
+        )
+    );
+    let cost = report
+        .observations
+        .iter()
+        .find(|o| o.site == "Site A" && o.target == "unit_cost" && o.quarter.q == 1)
+        .unwrap();
+    assert!(cost.value.is_none());
+    assert!(matches!(
+        cost.claim.as_ref().unwrap().claim.value,
+        PublicValue::Nil { .. }
+    ));
+}
+
+#[test]
+fn withholding_exception_never_supplies_missing_notes_costs_points_or_disposal_support() {
+    for fault in [
+        "missing",
+        "subject",
+        "broader",
+        "middle_clause",
+        "month",
+        "date",
+        "signed_day",
+        "year",
+        "duplicate",
+        "cost",
+        "point",
+        "disposed",
+        "care",
+        "conflicting_status",
+    ] {
+        let quarter = if fault == "point" { 3 } else { 1 };
+        let (registry, sources) = fixture(|q, sheet| {
+            if q != quarter {
+                return;
+            }
+            replace_cell(
+                sheet,
+                "C3",
+                if fault == "cost" {
+                    MinimalCell::Number(1000.0)
+                } else {
+                    MinimalCell::Text("—".into())
+                },
+            );
+            let mut note = "1 As a result of temporary suspension of operations at Site A starting January 14, 2030, no per ounce data is provided".to_string();
+            match fault {
+                "subject" => note = note.replace("Site A", "Site B"),
+                "broader" => note = note.replace("no per ounce", "no operating or per ounce"),
+                "middle_clause" => {
+                    note = note.replace("January 14", "January 14; no production is provided");
+                }
+                "month" => note = note.replace("January", "Notamonth"),
+                "date" => note = note.replace("January 14", "February 30"),
+                "signed_day" => note = note.replace("January 14", "January +14"),
+                "year" => note = note.replace("2030", "2031"),
+                _ => {}
+            }
+            if fault != "missing" {
+                sheet
+                    .cells
+                    .push(("A8".into(), MinimalCell::Text(note.clone())));
+            }
+            if fault == "duplicate" {
+                sheet.cells.push(("A9".into(), MinimalCell::Text(note)));
+            }
+        });
+        let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        let status = key::SubjectStatus {
+            subject: "Site A".into(),
+            kind: match fault {
+                "disposed" => key::StatusKind::Disposed,
+                "care" => key::StatusKind::CareAndMaintenance,
+                _ => key::StatusKind::Withheld,
+            },
+            first: (2030, 3 * quarter - 2),
+            last: Some((2030, 3 * quarter)),
+            evidence: "synthetic withholding".into(),
+        };
+        prepared.profile.subject_statuses.push(status.clone());
+        if fault == "conflicting_status" {
+            prepared.profile.subject_statuses.push(key::SubjectStatus {
+                kind: key::StatusKind::CareAndMaintenance,
+                ..status
+            });
+        }
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str(), "{fault}");
+        assert!(error.what.contains("status"), "{fault}: {error:?}");
+    }
+    for missing in [MinimalCell::Number(0.0), MinimalCell::Text("—".into())] {
+        let (registry, sources) = fixture(|q, sheet| {
+            if q == 1 {
+                replace_cell(sheet, "B3", missing.clone());
+                replace_cell(sheet, "C3", missing.clone());
+            }
+        });
+        let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.profile.subject_statuses.push(key::SubjectStatus {
+            subject: "Site A".into(),
+            kind: key::StatusKind::Withheld,
+            first: (2030, 1),
+            last: Some((2030, 3)),
+            evidence: "synthetic withholding".into(),
+        });
+        let report = finish(prepared, sources, 2).unwrap();
+        assert!(
+            report
+                .candidate
+                .pools
+                .iter()
+                .all(|p| p.ratios.len() == 1 && p.excluded_pairs.len() == 1)
+        );
+        for row in report
+            .observations
+            .iter()
+            .filter(|r| r.site == "Site A" && r.quarter.q == 1)
+        {
+            assert!(matches!(
+                row.claim.as_ref().unwrap().claim.value,
+                PublicValue::Nil { .. }
+            ));
+            assert!(!row.reason.as_deref().unwrap_or("").starts_with("included_"));
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs the registered original Barrick Mine Stats corpus"]
+fn real_q3_candidate_preserves_partial_production_and_matches_independent_fraction_pools() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let rules = std::fs::read(root.join("forecasts/fy2026/rules.toml")).unwrap();
+    assert_eq!(
+        sha256(&rules).to_hex(),
+        "edfba6801621dd9091ddf3c392aa972a4254713bff2abc62863d4fd5331fee76"
+    );
+    let report = build(&root, &rules, "2026-11-10T06:15:38Z", 6).unwrap();
+    assert_eq!(report.candidate.exact_rows.len(), 22);
+    assert_eq!(report.candidate.not_published_sites, ["Hemlo", "Tongon"]);
+    for (target, count, excluded, ratios) in [
+        ("production", 96, 3, [(25, 32), (113, 112), (53, 39)]),
+        ("unit_cost", 94, 5, [(1407, 1774), (1732, 1643), (995, 773)]),
+    ] {
+        let pool = report
+            .candidate
+            .pools
+            .iter()
+            .find(|p| p.target == target)
+            .unwrap();
+        assert_eq!(
+            (pool.ratios.len(), pool.excluded_pairs.len()),
+            (count, excluded)
+        );
+        assert_eq!(
+            [pool.lower_ratio, pool.median_ratio, pool.upper_ratio],
+            ratios.map(|(n, d)| Rat::new(n, d).unwrap())
+        );
+    }
+    let original = report
+        .observations
+        .iter()
+        .find(|o| {
+            o.site == "Loulo-Gounkoto"
+                && o.target == "production"
+                && o.quarter.to_string() == "2025Q1"
+        })
+        .unwrap();
+    assert_eq!(original.value, Some(Rat::from_integer(22)));
+    assert_eq!(
+        original.sha256,
+        "ec5158f8b4624643ee83d0099e4f3354dc550729ebb443a2dbfacfc29315998b"
+    );
+    assert_eq!(
+        original.reason.as_deref(),
+        Some("included_production_with_per_ounce_only_note:Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!A35")
+    );
+    assert!(matches!(
+        original.claim.as_ref().unwrap().claim.value,
+        PublicValue::Number {
+            under_status: Some(key::StatusKind::Withheld),
+            ..
+        }
+    ));
+}
+
+#[test]
 fn incompatible_targets_ownership_changes_and_status_conflicts_refuse() {
     let (registry, sources) = fixture(|q, sheet| {
         if q == 2 {

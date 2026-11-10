@@ -988,29 +988,5 @@ fn leaf_check(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    // Cross-crate workbook mutation contracts retain this private adapter seam and their original names.
-    include!("../../xtask/testdata/public_live_mutation_contract.rs");
-
-    /// The threaded pass gives what one sequential pass gives, check for check and in the same order.
-    #[test]
-    fn test_live_leaves_threaded_matches_sequential() {
-        let base = synthetic_sources();
-        let threaded = prove_leaves(&base, &assess_synthetic);
-        let before = assess_synthetic(base.clone());
-        let sequential: Vec<LeafCheck> = before
-            .instances
-            .iter()
-            .flat_map(|i| i.operands.iter().map(move |o| (i, o)))
-            .map(|(i, o)| leaf_check(&base, &assess_synthetic, &before, i, o))
-            .collect();
-        let workers = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-        println!(
-            "{{\"test\":\"leaves_threaded\",\"workers\":{workers},\"checks\":{}}}",
-            threaded.len()
-        );
-        assert!(threaded.len() > 50, "{}", threaded.len());
-        assert_eq!(threaded, sequential);
-    }
-}
+#[path = "../../xtask/testdata/public_live_mutation_contract.rs"]
+mod tests;

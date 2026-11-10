@@ -75,14 +75,13 @@ pub(super) struct PublicnessReport {
     findings: Vec<Finding>,
 }
 
-type Family = (String, String, Period, Scope, String, String, u32);
+type Family = (String, String, Period, Scope, String, String, u32, bool);
 
 fn optional(s: Option<&str>) -> String {
     s.map_or_else(|| "null".to_string(), js)
 }
 
-// This is a conservative search partition, not a second equality grammar. Every candidate still goes
-// through the existing checker with the original draft amount, unit, period and basis.
+// Keep credit definitions distinct; every candidate still passes the canonical equality checker.
 fn family(c: &KeyedCell) -> Family {
     let label = c.key.line.label.as_str();
     let metric = if label.contains("aisc") || label.contains("all-in sustaining") {
@@ -112,6 +111,7 @@ fn family(c: &KeyedCell) -> Family {
         c.key.unit.clone(),
         metric.to_string(),
         c.key.line.occurrence,
+        fmine_public::aisc::is_coproduct_rate(&c.key.line.label),
     )
 }
 

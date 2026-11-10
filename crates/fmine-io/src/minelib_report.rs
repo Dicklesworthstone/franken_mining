@@ -74,6 +74,15 @@ pub fn evaluate(
     options: &Options,
     candidate: Option<Candidate<'_>>,
 ) -> Result<Report, Refusal> {
+    if options.decimals > minelib::MAX_DECIMALS {
+        return Err(Refusal::new(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!(
+                "MineLib report decimal places must be at most {}",
+                minelib::MAX_DECIMALS
+            ),
+        ));
+    }
     bind(upit, upit_source)?;
     bind(prec, prec_source)?;
     let rounding = if options.round {
@@ -254,5 +263,24 @@ mod tests {
         assert!(report.json.contains("\"value\":\"2.5\""));
         let optimum = "\"gap_to_optimum\":\"0.0\",\"verdict\":\"optimal\"";
         assert!(report.json.contains(optimum));
+    }
+
+    #[test]
+    fn empty_models_cannot_bypass_the_report_decimal_bound() {
+        let upit = "NAME: empty\nTYPE: UPIT\nNBLOCKS: 0\nOBJECTIVE_FUNCTION:\nEOF\n";
+        let source = SourceAnchor::new("empty.upit", sha256(upit.as_bytes()).0, "whole source");
+        let prec = SourceAnchor::new("empty.prec", sha256(b"").0, "whole source");
+        for decimals in [minelib::MAX_DECIMALS + 1, u32::MAX] {
+            let options = Options {
+                decimals,
+                round: false,
+                list_blocks: false,
+            };
+            let refusal = evaluate(upit, &source, "", &prec, &options, None)
+                .err()
+                .unwrap();
+            assert_eq!(refusal.code, "FMINE-REF-506");
+            assert!(refusal.what.contains("decimal places"));
+        }
     }
 }

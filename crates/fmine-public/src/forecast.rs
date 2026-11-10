@@ -119,10 +119,7 @@ fn expected_unit(target: &Target) -> Result<&'static str> {
     match (target.field.as_str(), target.outcome) {
         ("au_prod_100_koz", Outcome::FyMinus9m) => Ok("koz"),
         ("aisc_usd_per_oz", Outcome::Q4Qtd) => Ok("usd_per_oz"),
-        _ => Err(invalid(format!(
-            "unsupported field/outcome combination for {}",
-            target.id
-        ))),
+        _ => Err(invalid(format!("unsupported field/outcome for {}", target.id))),
     }
 }
 
@@ -259,6 +256,32 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     })
 }
 
+fn per_ounce_withholding_note(source: &LoadedSource, site: &str, year: u16) -> Option<String> {
+    const MONTHS: &str =
+        "january february march april may june july august september october november december";
+    let prefix = format!("as a result of temporary suspension of operations at {site} starting ")
+        .to_ascii_lowercase();
+    let suffix = format!(", {year}, no per ounce data is provided");
+    let mut note = None;
+    for sheet in &source.workbook.sheets {
+        for (&(row, col), cell) in &sheet.cells_by_coord {
+            let text = crate::aisc::cell_text(sheet, row, col)?.to_ascii_lowercase();
+            let text = text.trim_start_matches(|c: char| c.is_ascii_digit() || c.is_whitespace());
+            if let Some(date) = text.strip_prefix(&prefix) {
+                if note.is_some() || !matches!(cell.value, fmine_io::xlsx::CellValue::Text(_)) {
+                    return None;
+                }
+                let (month, day) = date.strip_suffix(&suffix)?.split_once(' ')?;
+                let month = MONTHS.split_whitespace().position(|m| m == month)? + 1;
+                let day = day.parse::<u8>().ok().filter(|_| !day.starts_with('+'))?;
+                record::parse_utc(&format!("{year:04}-{month:02}-{day:02}T00:00:00Z"))?;
+                note = Some(format!("{}:{}!{}", source.file_name, sheet.name, cell.cell_ref));
+            }
+        }
+    }
+    note
+}
+
 fn observation(
     profile: &IssuerProfile,
     source: &LoadedSource,
@@ -334,7 +357,7 @@ fn observation(
         .sheet(&raw.sheet)
         .and_then(|s| s.cells_by_coord.values().find(|c| c.cell_ref == raw.cell))
         .and_then(|c| c.displayed());
-    let (value, reason) = match displayed {
+    let (value, mut reason) = match displayed {
         Some(Ok(display)) => match Rat::from_decimal_str(&display.text()) {
             Ok(value) => (
                 Some(value),
@@ -368,6 +391,7 @@ fn observation(
     if let Some(value) = value {
         let (first, last) = period.months();
         let mut overlaps_status = false;
+        let mut only_withheld = true;
         for status in profile
             .subject_statuses
             .iter()
@@ -375,28 +399,37 @@ fn observation(
         {
             // from_date records the first FULL month after a disposal. Include the closing month
             // when checking quarterly support, so an unflagged partial-quarter stub is not forecast.
-            let start = if status.kind == key::StatusKind::Disposed {
-                let (year, month) = status.first;
-                if month == 1 {
-                    (
-                        year.checked_sub(1)
-                            .ok_or_else(|| invalid("invalid disposal year"))?,
-                        12,
-                    )
-                } else {
-                    (
-                        year,
-                        month
-                            .checked_sub(1)
-                            .ok_or_else(|| invalid("invalid disposal month"))?,
-                    )
-                }
-            } else {
-                status.first
+            let start = match (status.kind, status.first) {
+                (key::StatusKind::Disposed, (year, 1)) => (
+                    year.checked_sub(1)
+                        .ok_or_else(|| invalid("invalid disposal year"))?,
+                    12,
+                ),
+                (key::StatusKind::Disposed, (year, month)) => (
+                    year,
+                    month
+                        .checked_sub(1)
+                        .ok_or_else(|| invalid("invalid disposal month"))?,
+                ),
+                (_, start) => start,
             };
-            overlaps_status |= start <= last && status.last.is_none_or(|end| end >= first);
+            let overlaps = start <= last && status.last.is_none_or(|end| end >= first);
+            overlaps_status |= overlaps;
+            only_withheld &= !overlaps || status.kind == key::StatusKind::Withheld;
         }
-        if value.signum() != 0 && overlaps_status {
+        let flagged = match &claim.claim.value {
+            PublicValue::Number { under_status, .. } => *under_status,
+            _ => None,
+        };
+        // The original historical production Claim keeps its flag and the source's per-ounce limitation.
+        let note = (role == "history"
+            && target.outcome == Outcome::FyMinus9m
+            && value.signum() > 0
+            && only_withheld
+            && flagged == Some(key::StatusKind::Withheld))
+            .then(|| per_ounce_withholding_note(source, site, period.year))
+            .flatten();
+        if ((value.signum() != 0 && overlaps_status) || flagged.is_some()) && note.is_none() {
             return Err(refuse(
                 RefusalCode::BasisMismatch105,
                 format!(
@@ -405,17 +438,8 @@ fn observation(
                 ),
             ));
         }
-        if matches!(
-            claim.claim.value,
-            PublicValue::Number {
-                under_status: Some(_),
-                ..
-            }
-        ) {
-            return Err(refuse(
-                RefusalCode::BasisMismatch105,
-                format!("{} has a flagged site status", claim.locator),
-            ));
+        if let Some(note) = note {
+            reason = Some(format!("included_production_with_per_ounce_only_note:{note}"));
         }
     }
     row.value = value;

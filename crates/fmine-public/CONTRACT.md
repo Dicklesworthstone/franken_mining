@@ -28,6 +28,15 @@ The public lane of M0 (`fmine assure public`).
   source registrations retain a synthetic report label. This checks a declared information cut against the
   captured registry; it supplies no independent proof of the registry's historical existence, author access,
   attestation, pre-registration, calibration or forecast skill. It does not freeze or issue the candidate.
+  Historical positive 100%-gold production remains eligible under a canonical `Withheld` flag only when
+  the same original workbook contains exactly one subject-matched, same-year note explicitly withholding
+  per-ounce data. The original Claim, status evidence and displayed production remain unchanged; the
+  receipt records the note locator as an inclusion reason. This exception never supplies missing or zero
+  production, costs or live points, and never overrides disposal, care-and-maintenance, conflicting
+  statuses or broader withholding notes. Direct controls are
+  `forecast::tests::original_historical_production_survives_source_proven_per_ounce_withholding` and
+  `withholding_exception_never_supplies_missing_notes_costs_points_or_disposal_support`; the ignored
+  genuine-source test checks the original Loulo-Gounkoto Q1 2025 production cell and independent pools.
   Known-answer and negative controls: `forecast::tests::exact_displayed_observations_produce_complete_source_bound_candidate`,
   `missing_rows_placeholders_and_nonpositive_history_are_audited_without_imputation`,
   `availability_is_conservative_and_completed_quarters_cannot_look_ahead`,
