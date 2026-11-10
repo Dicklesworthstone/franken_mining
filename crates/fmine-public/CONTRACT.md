@@ -306,10 +306,17 @@ The public lane of M0 (`fmine assure public`).
   Every reader at a selected locator remains, including a conflicting quantity key. Registry syntax and
   document identity validation remain global.
   - Supported transcription quantities are `guidance_<site>_production_koz`, `production_kt`,
-    `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`. Each requires an explicit
+    `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz`, `c1_usd_per_lb`, `capex_usd_m`,
+    `capex_sustaining_usd_m` and `capex_projects_usd_m`. Each requires an explicit
     full calendar year and matching unit/ownership basis. Cost bases additionally name
     `;<aisc|tcc|c1>=issuer-reported-per-sold-<oz|lb>`. The supported, agreed registered population is
     explicit; unsupported quantities are named, and absent historical guidance is not invented.
+    Capital rows require `usd_m` and the matching `;capex=issuer-reported-total`,
+    `;capex=issuer-reported-minesite-sustaining` or `;capex=issuer-reported-projects` suffix. The shared
+    `capex_definition` mapping selects original annual site rows for either metal, keeping the printed
+    ownership and signed amount. Total is never reconstructed from components; missing originals and
+    ambiguous source appearances remain unresolved. These reported-line comparisons infer no cash/accrual,
+    lease, FX or ownership bridge and supply no royalty-price adjustment.
   - Every agreed guidance vintage remains visible. Summaries use the earliest registered document date per
     site/year/metric/normalized basis; tied earliest rows yield one unresolved denominator member. Later
     revisions cannot replace an initial miss or create extra members. Distinct metrics, units, ownership

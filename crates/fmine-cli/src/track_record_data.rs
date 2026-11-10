@@ -27,7 +27,7 @@ use fmine_registry::transcriptions::{Accepted, Agreement, Decimal, Locator, Toke
 
 use crate::json_string as js;
 
-pub const NO_CLAIM: &str = "Retrospective description of cited issuer guidance and reported outcomes. Any price sensitivity remains paired with its unconditional score. No forecast registration, calibration verdict, ranking, inferred probability or causal attribution.";
+pub const NO_CLAIM: &str = "Retrospective description of cited issuer guidance and reported outcomes. Any price sensitivity remains paired with its unconditional score. No forecast registration, calibration verdict, ranking, inferred probability or causal attribution. Capital comparisons use the declared issuer-reported line only; cash/accrual, lease treatment and cross-definition reconciliation are not established.";
 type Result<T> = std::result::Result<T, Refusal>;
 
 #[derive(Debug, Clone)]
@@ -417,7 +417,9 @@ fn assess_with_price_subject(
         let ordinal = seen.entry(family).or_default();
         row.vintage = *ordinal;
         *ordinal += 1;
-        if !row.metric.starts_with("production_") {
+        if !row.metric.starts_with("production_")
+            && fmine_public::guidance::track_record::capex_definition(&row.metric).is_none()
+        {
             row.price_sensitivity = Some(crate::track_record_price::assess(
                 profile,
                 transcripts,

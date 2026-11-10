@@ -537,10 +537,15 @@ mod tests {
         assert_eq!(pending.pending_transcriptions.len(), 1);
         assert!(production(&pending).score.is_some());
         t.agreement.single_reader.clear();
-        t.agreement.accepted[0].quantity = "guidance_example_mine_capex_usd_m".into();
+        t.agreement.accepted[0].quantity = "guidance_example_mine_unregistered_metric".into();
         let unsupported = assess(&p, &t, &c, None).expect("supported cost remains visible");
         assert_eq!(unsupported.unsupported_guidance.len(), 1);
-        assert!(unsupported.rows.iter().all(|r| r.metric != "capex_usd_m"));
+        assert!(
+            unsupported
+                .rows
+                .iter()
+                .all(|r| r.metric != "unregistered_metric")
+        );
     }
 
     #[test]

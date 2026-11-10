@@ -1410,7 +1410,12 @@ None: every failure is a usage error or a typed refusal.
   nonnegative thresholds for points, ranges and both directions; signed cost thresholds remain admissible.
   Strict inequalities and approximate wording are not interpreted as inclusive targets. Point-only and
   finite-interval consumers refuse directional tokens; a newest one-sided guidance row cannot fall back
-  to an older finite baseline. Capex remains outside the cohort source binder's supported input schema.
+  to an older finite baseline. Total, minesite-sustaining and project capex now use shared explicit
+  reported-line definitions in ordinary, dated and publication-cohort modes. Each requires `usd_m` and
+  matching ownership, preserves signed annual source amounts and canonical Claim ancestry, and keeps
+  the scopes separate. Missing originals remain unresolved; no component reconstruction, cash/accrual,
+  lease, FX, ownership or royalty-price bridge is inferred. Registered gold/copper workbook tests exercise
+  all three modes and the actual JSON/Markdown executable path.
 - Writes only explicitly requested local reliance journals and artifact files; never sends messages or writes
   to an external system. Recall covers recorded copies; local retrieval does not prove remote delivery or
   recall every detached copy. The local journal is not a replicated authority service.

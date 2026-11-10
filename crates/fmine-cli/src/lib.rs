@@ -2257,6 +2257,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "{\"mode\":\"retrospective_descriptive\",\"schema\":\"fmine.guidance.track-record.v1\",",
                 "\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",",
                 "\"outcome_selector\":\"Original annual releases and comparative-only populations remain separate\",",
+                "\"capital_expenditure\":{\"unit\":\"usd_m\",\"ownership\":\"100% or attributable:n/d, followed by the required definition suffix\",\"definitions\":{\"capex_usd_m\":\";capex=issuer-reported-total\",\"capex_sustaining_usd_m\":\";capex=issuer-reported-minesite-sustaining\",\"capex_projects_usd_m\":\";capex=issuer-reported-projects\"},\"scope\":\"Direct annual reported rows in all three modes; no component reconstruction, FX, ownership, cash/accrual or lease bridge\"},",
                 "\"price_sensitivity\":\"Paired AISC sensitivity on complete declared quarterly evidence, exact proportionality and current-period compatibility; --price-subject explicitly selects a commodity-price proxy\",",
                 "\"as_of\":{\"mode\":\"descriptive_source_comparison\",\"schema\":\"fmine.guidance.track-record.as-of.v1\",",
                 "\"cut\":\"Explicit --as-of YYYY-MM-DD; no inferred wall clock; exclusive with --through\",",

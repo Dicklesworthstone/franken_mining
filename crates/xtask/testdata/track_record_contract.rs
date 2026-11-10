@@ -180,6 +180,10 @@ mod tests {
         let key = format!("\"site\":\"Site A\",\"metric\":\"{metric}\",\"year\":{year},");
         let key_at = payload.find(&key).expect("requested row exists");
         let start = payload[..key_at].rfind("{\"id\":").unwrap();
+        object(payload, start)
+    }
+
+    fn object(payload: &str, start: usize) -> &str {
         let (mut depth, mut quoted, mut escaped) = (0_u32, false, false);
         for (offset, byte) in payload[start..].bytes().enumerate() {
             if escaped {
@@ -295,6 +299,246 @@ mod tests {
         )
         .unwrap();
         root
+    }
+
+    fn capex_sheet(year: u16, metal: &str, current: [f64; 3], prior: [f64; 3]) -> MinimalSheet {
+        let mut cells = vec![
+            text("A1", &format!("Mine Statistics ({metal})")),
+            text("B2", "Site A (75%)"),
+            text("A3", "For the twelve months ended December 31,"),
+            number("B3", f64::from(year)),
+            number("C3", f64::from(year - 1)),
+            text("A4", "Capital expenditures ($ millions)"),
+            text("A5", "Minesite sustaining"),
+            text("A6", "Projects"),
+            text("A7", "Total capital expenditures ($ millions)"),
+        ];
+        for (index, (current, prior)) in current.into_iter().zip(prior).enumerate() {
+            cells.push(number(&format!("B{}", index + 5), current));
+            cells.push(number(&format!("C{}", index + 5), prior));
+        }
+        MinimalSheet {
+            name: "Minestats1".into(),
+            hidden: false,
+            cells,
+        }
+    }
+
+    /// Invented registered gold/copper site capital lines, with a later comparative that must not replace
+    /// the original annual outcome. The reported scopes make no assertion about cash/accrual or leases.
+    fn capex_workspace(tag: &str, metal: &str, original_total: Option<f64>) -> PathBuf {
+        let root = workspace(tag);
+        let mut first = capex_sheet(2024, metal, [40.0, 60.0, 100.0], [30.0, 50.0, 80.0]);
+        if let Some(total) = original_total {
+            first.cells.iter_mut().find(|(at, _)| at == "B7").unwrap().1 =
+                MinimalCell::Number(total);
+        } else {
+            first.cells.retain(|(at, _)| at != "B7");
+        }
+        let original = build_minimal_xlsx(&[summary_sheet(2024, 100.0, 90.0, true), first]);
+        let later = build_minimal_xlsx(&[
+            summary_sheet(2025, 120.0, 150.0, true),
+            capex_sheet(2025, metal, [60.0, 100.0, 160.0], [50.0, 100.0, 150.0]),
+        ]);
+        install_sources(&root, &original, &later);
+        let registry = std::fs::read_to_string(registry_path(&root, "synthetic"))
+            .unwrap()
+            .replace("issuer = \"synthetic\"", "issuer = \"capexcut\"")
+            .replace("retrieved_utc = \"synthetic\"", "retrieved_utc = \"2026-02-01T00:00:00Z\"")
+            .replace("quarter = \"2024Q4\"", "quarter = \"2024Q4\"\npublished_at = \"2025-02-01\"\npublished_at_basis = \"FACT: invented fixture publication date\"")
+            .replace("quarter = \"2025Q4\"", "quarter = \"2025Q4\"\npublished_at = \"2026-02-01\"\npublished_at_basis = \"FACT: invented fixture publication date\"");
+        std::fs::write(registry_path(&root, "capexcut"), registry).unwrap();
+        let mut readings = std::fs::read_to_string(transcriptions_path(&root, "synthetic"))
+            .unwrap()
+            .replace("issuer = \"synthetic\"", "issuer = \"capexcut\"");
+        for reader in ["reader_a", "reader_b"] {
+            for (metric, scope, token) in [
+                ("capex_usd_m", "total", "90 - 110"),
+                ("capex_sustaining_usd_m", "minesite-sustaining", "35 - 45"),
+                ("capex_projects_usd_m", "projects", "50 - 70"),
+            ] {
+                writeln!(readings,
+                    "\n[[entry]]\ndoc = \"Guidance2024.pdf\"\ndoc_sha256 = \"{}\"\npage = 1\n\
+                     table = \"Invented guidance\"\nrow = \"Site A {metric}\"\ncol = \"2024\"\n\
+                     token = \"{token}\"\nquantity = \"guidance_site_a_{metric}\"\nunit = \"usd_m\"\n\
+                     basis = \"attributable:3/4;capex=issuer-reported-{scope}\"\nperiod = \"2024FY\"\nreader = \"{reader}\"",
+                    sha256(DOCUMENT_2024).to_hex(),
+                ).unwrap();
+            }
+        }
+        std::fs::write(transcriptions_path(&root, "capexcut"), readings).unwrap();
+        root
+    }
+
+    fn invoke_capex(root: &Path, extra: &[&str]) -> Envelope {
+        let args: Vec<String> = ["track-record", "--issuer", "capexcut"]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .map(str::to_owned)
+            .collect();
+        let (envelope, format) = fmine_cli::invoke(&args, root);
+        assert_eq!(format, OutputFormat::Json);
+        envelope
+    }
+
+    #[test]
+    fn capex_reported_scopes_reach_all_track_record_modes_with_exact_source_claims() {
+        for metal in ["Gold", "Copper"] {
+            let root = capex_workspace(&format!("capex-{metal}"), metal, Some(100.0));
+            let result = invoke_capex(&root, &[]);
+            assert_eq!(result.exit_code, 0, "{}", result.to_json());
+            for (metric, token, cell) in [
+                ("capex_usd_m", "100", "B7"),
+                ("capex_sustaining_usd_m", "40", "B5"),
+                ("capex_projects_usd_m", "60", "B6"),
+            ] {
+                let annual = row(&result.payload_json, metric, 2024);
+                assert!(
+                    annual.contains("\"state\":\"resolved_first_published\""),
+                    "{annual}"
+                );
+                assert!(selected(annual).contains(&format!("\"displayed\":\"{token}\"")));
+                assert!(annual.contains("\"side\":\"inside\""));
+                assert!(annual.contains("\"z\":{\"num\":\"0\",\"den\":\"1\"}"));
+                assert!(annual.contains("\"unit\":\"usd_m\""));
+                assert!(annual.contains("\"interpreted_outcome_claim\":{\"claim_id\":\"clm_"));
+                assert!(annual.contains(&format!("{ORIGINAL}:Minestats1!{cell}")));
+                assert!(!selected(annual).contains(LATER));
+                assert!(
+                    annual.contains(LATER),
+                    "the later restatement stays visible"
+                );
+            }
+            let profile = load_issuer_profile(&root, "capexcut").unwrap();
+            let inventory = fmine_public::key::mine_stats::load_claims(&profile, &root).unwrap();
+            let total = inventory
+                .claims
+                .iter()
+                .find(|c| c.locator == format!("{ORIGINAL}:Minestats1!B7"))
+                .unwrap();
+            let annual = row(&result.payload_json, "capex_usd_m", 2024);
+            assert!(annual.contains(&format!("\"parents\":[\"{}\"]", total.claim.claim_id)));
+            assert!(annual.contains(&total.key.reporting_vintage.file_sha256));
+            assert_eq!(result, invoke_capex(&root, &[]));
+
+            for selector in ["--as-of", "--cohort-as-of"] {
+                let dated = invoke_capex(&root, &[selector, "2025-03-01"]);
+                assert_eq!(dated.exit_code, 0, "{}", dated.to_json());
+                let site = if selector == "--as-of" {
+                    "site-a"
+                } else {
+                    "Site A"
+                };
+                for (metric, cell) in [
+                    ("capex_usd_m", "B7"),
+                    ("capex_sustaining_usd_m", "B5"),
+                    ("capex_projects_usd_m", "B6"),
+                ] {
+                    let start = dated
+                        .payload_json
+                        .find(&format!(
+                            "{{\"site\":\"{site}\",\"year\":2024,\"metric\":\"{metric}\""
+                        ))
+                        .unwrap();
+                    let annual = object(&dated.payload_json, start);
+                    assert!(
+                        annual.contains(&format!("{ORIGINAL}:Minestats1!{cell}")),
+                        "{annual}"
+                    );
+                    assert!(annual.contains("\"score\":{\""), "{annual}");
+                    assert!(
+                        annual.contains("\"side\":\"inside\"")
+                            || annual.contains("\"side\":\"Inside\""),
+                        "{annual}"
+                    );
+                    assert!(
+                        !annual.contains(LATER),
+                        "future comparative cannot enter a dated row: {annual}"
+                    );
+                }
+                let markdown = dated.rendered_markdown.unwrap();
+                assert!(markdown.contains("capex\\_usd\\_m") || markdown.contains("capex_usd_m"));
+                assert!(markdown.contains("issuer-reported-total"));
+            }
+            for (format, expected) in [
+                ("json", result.to_json()),
+                ("markdown", result.rendered_markdown.unwrap()),
+            ] {
+                let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
+                    .args([
+                        "track-record",
+                        "--issuer",
+                        "capexcut",
+                        "--format",
+                        format,
+                        "--workspace",
+                    ])
+                    .arg(&root)
+                    .output()
+                    .unwrap();
+                assert_eq!(output.status.code(), Some(0));
+                assert_eq!(
+                    String::from_utf8(output.stdout).unwrap(),
+                    format!("{expected}\n")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capex_never_replaces_missing_originals_or_converts_ownership_units_and_scopes() {
+        let missing = capex_workspace("capex-missing", "Gold", None);
+        let result = invoke_capex(&missing, &[]);
+        assert_eq!(result.exit_code, 0, "{}", result.to_json());
+        let annual = row(&result.payload_json, "capex_usd_m", 2024);
+        assert!(annual.contains("\"state\":\"unresolved\""));
+        assert!(annual.contains("\"score\":null"));
+        assert!(annual.contains(LATER));
+        assert!(
+            row(&result.payload_json, "capex_projects_usd_m", 2024).contains("\"side\":\"inside\"")
+        );
+
+        for (tag, from, to, code) in [
+            (
+                "ownership",
+                "attributable:3/4;capex=issuer-reported-total",
+                "100%;capex=issuer-reported-total",
+                "FMINE-REF-105",
+            ),
+            (
+                "currency",
+                "unit = \"usd_m\"",
+                "unit = \"cad_m\"",
+                "FMINE-REF-105",
+            ),
+            (
+                "scope",
+                ";capex=issuer-reported-total",
+                ";capex=issuer-reported-projects",
+                "FMINE-REF-105",
+            ),
+            (
+                "unstated",
+                ";capex=issuer-reported-total",
+                "",
+                "FMINE-REF-105",
+            ),
+        ] {
+            let root = capex_workspace(&format!("capex-{tag}"), "Copper", Some(100.0));
+            let path = transcriptions_path(&root, "capexcut");
+            let source = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(&path, source.replace(from, to)).unwrap();
+            let result = invoke_capex(&root, &[]);
+            assert!(
+                result.to_json().contains(code),
+                "{tag}: {}",
+                result.to_json()
+            );
+            if result.exit_code == 0 {
+                let annual = row(&result.payload_json, "capex_usd_m", 2024);
+                assert!(annual.contains("\"score\":null"), "{tag}: {annual}");
+            }
+        }
     }
 
     #[test]

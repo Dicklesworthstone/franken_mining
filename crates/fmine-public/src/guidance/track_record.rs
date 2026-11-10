@@ -24,16 +24,40 @@ use crate::sources::{
 use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_prefixes};
 use crate::{js, mine_ledger::rat_text};
 
-pub const NO_CLAIM: &str = "Descriptive comparison of registered issuer guidance and reported outcomes; no forecast, calibration verdict, site ranking or proof of historical forecast registration. From public filings; no affiliation implied.";
-const METRICS: [&str; 6] = [
+pub const NO_CLAIM: &str = "Descriptive comparison of registered issuer guidance and reported outcomes; no forecast, calibration verdict, site ranking or proof of historical forecast registration. From public filings; no affiliation implied. Capital comparisons use the declared issuer-reported line only; cash/accrual, lease treatment and cross-definition reconciliation are not established.";
+const METRICS: [&str; 9] = [
     "production_koz",
     "production_kt",
     "aisc_usd_per_oz",
     "aisc_usd_per_lb",
     "tcc_usd_per_oz",
     "c1_usd_per_lb",
+    "capex_usd_m",
+    "capex_sustaining_usd_m",
+    "capex_projects_usd_m",
 ];
 type Result<T> = std::result::Result<T, Refusal>;
+
+/// Explicit reported-line capital definitions shared by the retrospective and dated adapters.
+/// The suffix identifies the issuer's printed scope; it establishes no cash/accrual or lease bridge.
+#[must_use]
+pub fn capex_definition(metric: &str) -> Option<(&'static str, &'static str)> {
+    Some(match metric {
+        "capex_usd_m" => (
+            ";capex=issuer-reported-total",
+            "site::total capital expenditures ($ millions)",
+        ),
+        "capex_sustaining_usd_m" => (
+            ";capex=issuer-reported-minesite-sustaining",
+            "site:capital expenditures ($ millions):minesite sustaining",
+        ),
+        "capex_projects_usd_m" => (
+            ";capex=issuer-reported-projects",
+            "site:capital expenditures ($ millions):projects",
+        ),
+        _ => return None,
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct OutcomeAssessment {
@@ -99,7 +123,9 @@ fn metric_key(quantity: &str) -> Option<(String, &'static str)> {
 }
 
 fn unit(metric: &str) -> &'static str {
-    if metric == "production_koz" {
+    if capex_definition(metric).is_some() {
+        "usd_m"
+    } else if metric == "production_koz" {
         "koz"
     } else if metric == "production_kt" {
         "kt"
@@ -122,7 +148,17 @@ fn basis(row: &Accepted, metric: &str) -> Result<Ownership> {
             ),
         ));
     }
-    let ownership = if metric.starts_with("production_") {
+    let ownership = if let Some((suffix, _)) = capex_definition(metric) {
+        row.basis.strip_suffix(suffix).ok_or_else(|| {
+            refuse(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                format!(
+                    "{}: capital guidance must explicitly name {suffix}",
+                    row.locator
+                ),
+            )
+        })?
+    } else if metric.starts_with("production_") {
         row.basis.as_str()
     } else {
         let family = metric.split('_').next().unwrap_or("");
@@ -139,17 +175,20 @@ fn basis(row: &Accepted, metric: &str) -> Result<Ownership> {
 }
 
 fn normalized_basis(row: &Accepted, metric: &str) -> String {
+    let suffix = capex_definition(metric).map_or("", |(suffix, _)| suffix);
     match basis(row, metric) {
-        Ok(Ownership::Full) => "100%".into(),
+        Ok(Ownership::Full) => format!("100%{suffix}"),
         Ok(Ownership::Attributable { share }) => {
-            format!("attributable:{}/{}", share.num(), share.den())
+            format!("attributable:{}/{}{suffix}", share.num(), share.den())
         }
         Err(_) => row.basis.clone(),
     }
 }
 
 fn line(metric: &str, ownership: Ownership) -> String {
-    if metric.starts_with("production_") {
+    if let Some((_, line)) = capex_definition(metric) {
+        line.into()
+    } else if metric.starts_with("production_") {
         let metal = if metric == "production_koz" {
             "au"
         } else {
@@ -273,11 +312,12 @@ fn checked_source<'a>(
             "outcome is unknown or a placeholder",
         ));
     }
-    let expected_additivity = if metric.starts_with("production_") {
-        AdditivityClass::ExtensiveAdditive
-    } else {
-        AdditivityClass::IntensiveWeighted
-    };
+    let expected_additivity =
+        if metric.starts_with("production_") || capex_definition(metric).is_some() {
+            AdditivityClass::ExtensiveAdditive
+        } else {
+            AdditivityClass::IntensiveWeighted
+        };
     if source.claim.support != SpatialSupport::PeriodAggregate
         || source.claim.additivity != expected_additivity
     {

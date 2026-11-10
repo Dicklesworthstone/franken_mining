@@ -23,6 +23,7 @@ use fmine_numerics::exact_feas::{Convention, Interval, Rat};
 use fmine_registry::sources::{is_date, is_quarter};
 use fmine_registry::transcriptions::{Accepted, Decimal, Token, parse_token};
 
+use fmine_public::guidance::track_record::capex_definition;
 use fmine_public::key::{
     KeyedCell, OwnershipBasis, PeriodKind, PublicValue, Scope, StatusKind, SubjectStatus,
 };
@@ -30,7 +31,7 @@ use fmine_public::transcribe::{TranscriptionReport, load_guidance_transcription_
 
 use crate::json_string as js;
 
-pub const NO_CLAIM: &str = "Descriptive comparison of stated guidance with separately identified published outcomes; no forecast, calibration verdict, site ranking or external time proof. From public filings; no affiliation implied.";
+pub const NO_CLAIM: &str = "Descriptive comparison of stated guidance with separately identified published outcomes; no forecast, calibration verdict, site ranking or external time proof. From public filings; no affiliation implied. Capital comparisons use the declared issuer-reported line only; cash/accrual, lease treatment and cross-definition reconciliation are not established.";
 const VERSION: &str = "guidance.track_record/2";
 type Result<T> = std::result::Result<T, Refusal>;
 
@@ -190,6 +191,9 @@ fn slug(s: &str) -> String {
 }
 
 fn definition(metric: &str) -> Option<&'static str> {
+    if let Some((suffix, _)) = capex_definition(metric) {
+        return Some(suffix);
+    }
     match metric {
         "aisc_usd_per_oz" => Some(";aisc=issuer-reported-per-sold-oz"),
         "aisc_usd_per_lb" => Some(";aisc=issuer-reported-per-sold-lb"),
@@ -242,6 +246,9 @@ fn basis(a: &Accepted, metric: &str) -> Result<(String, bool)> {
 }
 
 fn field(metric: &str, full: bool) -> (&'static str, String) {
+    if let Some((_, line)) = capex_definition(metric) {
+        return ("usd_m", line.into());
+    }
     let share = if full { "100" } else { "attr" };
     match metric {
         "production_koz" => ("koz", format!("summary:au_prod_{share}_koz")),
@@ -269,7 +276,7 @@ fn actual_basis(c: &KeyedCell, metric: &str) -> Result<String> {
 }
 
 fn additive(metric: &str) -> AdditivityClass {
-    if metric.starts_with("production_") {
+    if metric.starts_with("production_") || capex_definition(metric).is_some() {
         AdditivityClass::ExtensiveAdditive
     } else {
         AdditivityClass::IntensiveWeighted
@@ -625,6 +632,9 @@ pub fn assess(input: TrackRecordInput<'_>) -> Result<TrackRecordReport> {
             "aisc_usd_per_lb",
             "tcc_usd_per_oz",
             "c1_usd_per_lb",
+            "capex_usd_m",
+            "capex_sustaining_usd_m",
+            "capex_projects_usd_m",
         ];
         if input
             .site

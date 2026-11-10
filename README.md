@@ -2094,7 +2094,8 @@ number preserves that state. Other Claim admission failures retain their typed r
 The public command requires `registries/transcriptions/<issuer>.toml` with agreed readings from registered
 documents. These transcriptions and source documents remain outside git. Quantity keys follow
 `guidance_<site>_<metric>`, with site hyphens written as underscores; supported metrics are `production_koz`,
-`production_kt`, `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`.
+`production_kt`, `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz`, `c1_usd_per_lb` and the three
+capital-expenditure scopes below.
 Production basis is `100%` or `attributable:n/d`. Cost basis also declares its definition, for example
 `attributable:4/5;aisc=issuer-reported-per-sold-oz`; the analogous per-sold-lb, `tcc` and `c1` definitions are
 explicit. Registered runs require complete two-reader agreement across the selected guidance namespace.
@@ -2102,6 +2103,21 @@ The retrospective command also refuses unsupported guidance quantities; the date
 them as diagnostics. The pure source-binding API can retain pending guidance readings alongside admitted rows.
 Missing or changed source bytes refuse. The synthetic command is an invented known-answer demonstration
 through the same binding and scoring code.
+
+Gold and copper site capital guidance uses `usd_m`, explicit ownership and one of these reported-line definitions:
+
+| Metric | Required suffix on the ownership basis | Annual source row |
+|---|---|---|
+| `capex_usd_m` | `;capex=issuer-reported-total` | Total capital expenditures |
+| `capex_sustaining_usd_m` | `;capex=issuer-reported-minesite-sustaining` | Minesite sustaining |
+| `capex_projects_usd_m` | `;capex=issuer-reported-projects` | Projects |
+
+For example, `attributable:3/4;capex=issuer-reported-total` compares total capital expenditure on the
+same reported ownership basis. Ordinary, `--as-of` and `--cohort-as-of` reports all support these scopes.
+They select the printed annual row directly and retain its sign, rounding interval, source hash and Claim
+ancestry. A missing original total stays unresolved even when its components or a later comparative exist.
+The three scopes remain separate; there is no inferred cash/accrual or lease-treatment bridge, currency
+conversion, ownership conversion or royalty-price adjustment.
 
 #### Restrict original-outcome cohorts to an evidence date
 
