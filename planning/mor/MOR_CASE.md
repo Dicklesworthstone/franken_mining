@@ -1667,3 +1667,105 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     has not fired. BD-194 re-checks it against its measured count.
   - **Not checked.** Files from writers other than omf-rust (none was examined), and omf-rust's full transitive
     closure (`cargo tree` was not run).
+
+- **E859** Q3 2026 Barrick source admission (bd-s9j3.3; FACT, retrieved 2026-11-10, unless marked).
+  - **Issuer discovery.** The Quarterly Reports page,
+    `https://www.barrick.com/English/investors/quarterly-reports/default.aspx`, loads its financial-report feed.
+    `https://www.barrick.com/feed/FinancialReport.svc/GetFinancialReportList?LanguageId=1&reportTypes=First%20Quarter%7CSecond%20Quarter%7CThird%20Quarter%7CFourth%20Quarter&reportSubTypeList=Third%20Quarter&pageSize=-1&pageNumber=0&includeTags=true&year=2026&excludeSelection=1`
+    returned the Third Quarter 2026 record with ReportDate `11/09/2026 00:00:00` and the two exact workbook URLs
+    now registered. The fetched feed's sha256 was
+    `97e44646aa0929ff8f9bbe346d2a7b23fe548d2130a9a1e045253ddaabd1fab0`. These URLs were read from that response,
+    not admitted from a naming-rule guess. The association of the exact workbook bytes with the release date is
+    **INFERENCE**; the registry records retrieval separately and does not backdate knowledge of those bytes.
+  - **Fetch and source identity.** `scripts/register_vintage.sh` fetched both URLs without a redirect into the
+    ignored `corpus_of_input_docs/incoming/20261110_q3_release/`, using User-Agent
+    `OpenAI File Downloader, XaiImageApiFetch/1.0`. The subsequent `repro/barrick/fetch.sh` verified all 20 rows.
+
+    | Registered file | Exact fetch UTC | Bytes | SHA-256 |
+    |---|---|---:|---|
+    | Barrick_Q3_2026_Mine_Stats.xlsx | 2026-11-10T04:42:40.788224Z | 117,080 | `0de125d64fb11c7f29b345336c10c16194597ec2b0d7056061f1eeb0e88caaac` |
+    | Barrick_Q3_2026_AISC.xlsx | 2026-11-10T04:42:46.905161Z | 36,406 | `bf3a2a6cb54938cd101191b8bc4edb514200969259b1498201672226cedec604` |
+
+    Each new row's `retrieved_utc` rounds its exact fetch time upward to a whole second. The original 18 rows'
+    retrieval default, bytes, order and hashes are unchanged. Their registry epoch remains
+    `1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d`; the 20-source epoch is
+    `68dc630e352dff2ed5d9f2dd73d49952344b334630fd92ec86253293a401af15`. No issuer workbook is committed.
+  - **Reader first.** The unchanged `fidelity.py` and `census2.py --displayed` ran before any candidate execution
+    on Q3. `oracle.jsonl` was sealed at `2026-11-10T04:42:49.367233Z`, sha256
+    `694dad152d5a185d5f53b9b532bfbb3052e8c4f9ff78afbe572a8998af3378e2`. The two census rows are
+    `(visible, hidden, numeric, placeholder, error, text)`:
+
+    | Source | Census | Numeric digest |
+    |---|---|---|
+    | Q3 Mine Stats | (6, 0, 2246, 459, 0, 406) | `90721f64c49162a25255564ff707bd6cdf343795be70651b46ca3f27d142f011` |
+    | Q3 AISC | (5, 0, 1088, 0, 0, 254) | `0c265d1a70c0ee91caea34d10745b07efd0a4fb67dee06a943664b3cf357814d` |
+
+    The raw displayed AISC reader counts 320 new instances. Before candidate execution, the unchanged
+    `mine_stats_census.py`, `share_census.py` and `region_census.py` also ran on the 20 verified files; their
+    outputs were sealed at `2026-11-10T04:45:41.769385Z` with respective sha256 values
+    `242e3d4ca23ef4f7f4064eb7999705a48af4f22318bd4543ee39c837f145b2e2`,
+    `48abd99ca313ddd7dfdd2978dc9981777c0e4022e6f63883f1b184b31a622ed3`, and
+    `9148941aca84ff2e6fa48ed110a44e9cb3f1eb740e35346f3cc63769ef0fca79`. The existing independent AISC aggregator
+    yields Q3 totals `(i, ii, iii, iv, v, np) = (299, 0, 0, 9, 2, 10)`; its aggregate record was sealed at
+    `2026-11-10T04:46:41.323599Z`, sha256 `6fb7df520b31b32f343ba461a17642c0cda4e00a209e05a3287e57d6cf643557`.
+    The two (v) outcomes are Kibali cost-of-sales-per-ounce at `Q3 2026!L19` and `YTD Q3 2026!L19`: the frozen
+    share registry has no Kibali entry. Q3 adds 1,126 Mine Stats instances, including five (iii) and three (iv).
+  - **Known-file execution.** The debug binary's sha256 was
+    `3d9a5f41db2e5937ba2c871d13f8c4f8a694349ecf7e10a09b3d7c105bdd20e4`, built from the working tree based on
+    `46833070c1c1ca796b3212d597c1488046428182`, including per-source retrieval support. It is not attributed to
+    a later main revision. The original oracle seal was checked intact before execution. The through-2026Q2
+    run started at `2026-11-10T04:48:02.769517Z`; the 20-source run started at `2026-11-10T04:49:22.918265Z`.
+    Both exited 0 with empty stderr. The former retains the exact root
+    `0effa0b43ff122299e95b8d12cdfa57319b26a1f2a7a71fce4ea7367d0e2f264` and anchor
+    `anc_81413afd2e7cfa34b7969c5fb4e35f85`. The latter gives root
+    `59557e70da000c968869cff416283d0ef6fe2a06b7540d9882b46abf38cda3e0` and anchor
+    `anc_cde02b00b4575d4245777d60a658f704`, with 39 AISC tables and 2,915 instances:
+    `(i, ii, iii, iv, v, np) = (2735, 3, 4, 101, 2, 70)`. There are no unregistered headers or table refusals.
+    Both new file censuses equal the sealed reader results. The census digest of digests is
+    `4695f88014f536d87c7d4971efad385abe2fe5252ae4eac512a7f40d019e8dc3`. These roots are regression pins, not
+    independent evidence of correctness; the new integration test compares the census and per-family counts
+    against the sealed readers. Historical tests select the latest pin for their own registry epoch.
+  - **Scope.** This is a source admission and a known-file regression. The pre-release binary in E854 targets
+    `aarch64-apple-darwin`; it was not executed on this Linux host. Its hash and blind record remain unchanged.
+    The new retrieval metadata also needs the updated registry parser; no compatibility transformation or
+    bypass of the recorded binary check was applied.
+    No human independent census, clean-clone CI result or full blind-layout gate is asserted here.
+
+- **E860** Cost-of-sales ownership is determined by the operating reconciliation (FACT and source-grounded
+  correction, 2026-11-10; subsequent to the preserved E859 baseline).
+  - **Source evidence.** In the Q3 AISC bytes registered in E859, Kibali's `Q3 2026` and `YTD Q3 2026` columns
+    each have zero operating non-controlling interests at `L9`, between cost of sales and total cash costs.
+    The nonzero `L16` adjustment is in the later sustaining-cost reconciliation. Both sheets' `A32` states the
+    cost-of-sales rate on an attributable numerator and denominator. The same-release Mine Stats `QTD!A16`
+    and `YTD!A16` print a 45% Kibali ownership share; that does not justify applying ownership a second time to
+    an amount already attributable. Independent exact arithmetic over the printed half-unit intervals for
+    `L5`, `L18` and `L19` admits the direct `1000*N/Q` rate on both sheets and excludes the `9/20`-scaled rate.
+  - **Population before the change.** A separate displayed-value scan of all registered AISC workbooks,
+    including hidden sheets, found exactly two columns with nonzero sustaining NCI and no nonzero operating
+    NCI: those two Q3 Kibali columns. None of the historical 18-source snapshot's visible or hidden columns
+    satisfies that condition. The E859 reader outputs and baseline roots remain unchanged records.
+  - **Correction.** The cost-of-sales ledger, one-cell diagnostic and conditional footnote/member citations
+    now use only NCI rows in the cost-of-sales-to-TCC block to decide whether ownership conversion is needed.
+    Both operating and sustaining NCI cells remain cited. No share is added, no source label is changed, and
+    no frozen Python reader is edited. A factor of `(1,1)` means use the numerator as printed; it is not a
+    claim that Barrick owns 100% of the mine.
+  - **Known-answer regression.**
+    `xtask::public_report_contract::tests::test_cos_ownership_ignores_sustaining_only_nci` passed. Synthetic
+    direct-basis cases cover a subject without a registered share and one whose confirmed share would be
+    incorrectly applied twice. The operating-NCI control still requires its confirmed share and refuses when
+    that share is missing; ledger, diagnostic and cited operands are checked together.
+  - **Corrected real-file execution.** The product source was committed as
+    `f9f6a33dd37b3c2bc439d5c75498c3e2bf061dd3`; the binary sha256 is
+    `38ba1b3a6adeac4db6112b6b6e59a5f3a8b94ddd893f851c9d1afb2b5e6cdad5`. The 20-source registry was still
+    pending admission at execution. The corrected Q3 run started at `2026-11-10T05:03:34.859727Z`, and the
+    through-Q2 run at `2026-11-10T05:04:40.680617Z`; both exited 0 with empty stderr. The Q3 root is
+    `a969738fca74d44e0907045d6603a82035784ada6fe50909ba579a698ddf025a`, anchor
+    `anc_8f8541a968d889f9e055041cdcb75d5c`. Its 2,915 AISC instances are
+    `(i, ii, iii, iv, v, np) = (2737, 3, 4, 101, 0, 70)`.
+    Comparing all AISC instances by locator and family against E859 found exactly two state changes:
+    `Barrick_Q3_2026_AISC.xlsx:Q3 2026!L19` and `Barrick_Q3_2026_AISC.xlsx:YTD Q3 2026!L19`, both (v) to (i).
+    The full source census records and full Mine Stats ledger match E859's baseline. No unregistered header
+    or table refusal appears. The original 18-source root remains exactly
+    `0effa0b43ff122299e95b8d12cdfa57319b26a1f2a7a71fce4ea7367d0e2f264` with its original anchor and counts.
+    The frozen Python AISC aggregator still reports E859's two refusals; agreement is not asserted for those
+    two outcomes. Their correction rests on the separately stated source evidence and exact arithmetic above.

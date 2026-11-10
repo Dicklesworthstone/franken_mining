@@ -4,6 +4,7 @@
 #
 # Cases:
 # - the happy path prints two rows spelled as the registry spells them, and seals the oracle;
+# - per-source retrieval bounds retain whole seconds and round fractional seconds up, including year rollover;
 # - a reused incoming directory refuses (exit 2);
 # - an already-registered sha256 prints no row, and with --dry-run it does;
 # - --run refuses a binary whose sha256 differs from the blind record (exit 1) and runs nothing;
@@ -113,6 +114,34 @@ happy() {
     has "$dir1/log.jsonl" '"stage": "oracle_sealed"' && [[ "$out" == *'"stage":"rows"'*'"count":2'* ]]
 }
 check happy_path "rows, oracle seal and log lines" happy
+
+retrieval_bounds() {
+  python3 -I - "$here/register_vintage.py" "$dir1" <<'PY'
+import contextlib, datetime, io, json, os, runpy, sys
+helper = runpy.run_path(sys.argv[1])
+upper = helper["retrieval_upper"]
+assert upper("2026-11-09T11:00:00Z") == "2026-11-09T11:00:00Z"
+assert upper("2026-11-09T11:00:00.000000Z") == "2026-11-09T11:00:00Z"
+assert upper("2026-12-31T23:59:59.000001Z") == "2027-01-01T00:00:00Z"
+for bad in ("2026-11-09", "2026-11-09T11:00:00+01:00", "2026-02-30T11:00:00Z"):
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            upper(bad)
+        except SystemExit as e:
+            assert e.code == 2
+        else:
+            raise AssertionError("accepted invalid retrieval time " + bad)
+rows = open(os.path.join(sys.argv[2], "rows.toml")).read()
+for raw in open(os.path.join(sys.argv[2], "fetch.jsonl")):
+    utc = json.loads(raw)["utc"]
+    bound = upper(utc)
+    elapsed = datetime.datetime.fromisoformat(bound) - datetime.datetime.fromisoformat(utc)
+    assert datetime.timedelta() <= elapsed < datetime.timedelta(seconds=1)
+    assert 'retrieved_utc = "%s"' % bound in rows
+    assert "# retrieved_utc " + utc in rows
+PY
+}
+check source_retrieval_bounds "each fetched source retains its conservative retrieval time" retrieval_bounds
 
 vintage "$ws1" t1 "${urls[@]}"
 reuse() { [[ $code -eq 2 && "$err" == *"is not empty"* ]]; }

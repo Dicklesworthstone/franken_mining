@@ -66,6 +66,19 @@ def grouped(n):
     return "{:,}".format(n).replace(",", "_")
 
 
+def retrieval_upper(utc):
+    """Conservative whole-second registry bound; keep the exact fetch time in the log and comment."""
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z", utc):
+        refuse("retrieval time must be an ISO UTC timestamp: " + utc)
+    try:
+        when = datetime.datetime.fromisoformat(utc.replace("Z", "+00:00"))
+        if when.microsecond:
+            when = when.replace(microsecond=0) + datetime.timedelta(seconds=1)
+        return when.isoformat(timespec="seconds").replace("+00:00", "Z")
+    except (ValueError, OverflowError):
+        refuse("invalid retrieval time: " + utc)
+
+
 def candidate(issuer, prefix, url, nbytes, sha, utc):
     """(row dict, TOML text, warnings) for one fetched file; refuses when the kind or quarter cannot be read."""
     base = url.rsplit("/", 1)[-1]
@@ -92,9 +105,11 @@ def candidate(issuer, prefix, url, nbytes, sha, utc):
         warnings.append("outside url_prefix: path is the full URL; registry-check refuses it until resolved")
     row = {"file": "%s_Q%s_%s_%s.xlsx" % (issuer.capitalize(), q, year, suffix), "kind": kind,
            "quarter": "%sQ%s" % (year, q), "path": path,
-           "url_basis": "fetched and verified " + utc[:10], "bytes": nbytes, "sha256": sha}
+           "retrieved_utc": retrieval_upper(utc), "url_basis": "fetched and verified " + utc[:10],
+           "bytes": nbytes, "sha256": sha}
     text = ("# retrieved_utc %s; kind read from the URL name (confirm); evidence OPEN\n[[source]]\n" % utc
-            + "".join('%s = "%s"\n' % (k, row[k]) for k in ("file", "kind", "quarter", "path", "url_basis"))
+            + "".join('%s = "%s"\n' % (k, row[k]) for k in
+                      ("file", "kind", "quarter", "path", "retrieved_utc", "url_basis"))
             + "bytes = %s\nsha256 = \"%s\"\n" % (grouped(nbytes), sha))
     return row, text, warnings
 

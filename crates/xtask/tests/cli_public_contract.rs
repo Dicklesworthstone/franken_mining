@@ -158,25 +158,52 @@ mod tests {
         ws
     }
 
+    fn historical_expected(root: &Path) -> fmine_public::sources::ExpectedRoot {
+        let profile = fmine_public::load_issuer_profile(root, "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("historical registry");
+        let mut lines: Vec<_> = profile
+            .sources
+            .iter()
+            .map(|s| format!("{}\t{}\n", s.file_name, s.sha256_hex))
+            .collect();
+        lines.sort();
+        let epoch = fmine_core::hash::sha256(lines.concat().as_bytes()).to_hex();
+        fmine_public::sources::load_expected_roots(
+            &fmine_public::sources::expected_roots_path(root, "barrick"),
+        )
+        .expect("expected roots")
+        .into_iter()
+        .rev()
+        .find(|e| e.registry_epoch == epoch)
+        .expect("expected historical source epoch")
+    }
+
     #[test]
     #[ignore = "requires verified Barrick workbooks, PDFs and local two-reader recovery inputs"]
     fn test_real_recovery_is_embedded_in_assurance_with_separate_digest() {
         let root = workspace_root();
-        let recovery = fmine_public::recovery::run_public(&root, "barrick", None)
+        let recovery = fmine_public::recovery::run_public(&root, "barrick", Some("2026Q2"))
             .expect("registered recovery evidence");
         assert_eq!(recovery.quarters.len(), 14);
         assert!(recovery.quarters.iter().all(|q| q.outcome.is_ok()));
-        let (env, _) = invoke(&args(&["assure", "public", "--issuer", "barrick"]), &root);
+        let (env, _) = invoke(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026Q2",
+            ]),
+            &root,
+        );
         assert_eq!((env.status, env.exit_code), ("ok", 0), "{:?}", env.refusal);
         assert!(
             env.payload_json
                 .contains(&format!("\"recovery\":{}", recovery.to_json()))
         );
-        let roots = fmine_public::sources::load_expected_roots(
-            &fmine_public::sources::expected_roots_path(&root, "barrick"),
-        )
-        .expect("existing identity/waterfall roots");
-        let expected = roots.last().expect("current registered root");
+        let expected = historical_expected(&root);
         assert_eq!(
             env.certificate.as_deref(),
             Some(expected.state_root.as_str())
@@ -429,12 +456,8 @@ mod tests {
         assert!(json.contains("\"lane\":\"public\",\"gate_eligible\":true"));
         assert!(json.contains("\"through\":\"2026Q2\""));
         // Regression pin of this implementation's output, not an independent value: the root and anchor of the
-        // last row of repro/barrick/expected.toml (BD-339.S1), which records why each root moved.
-        let expected = fmine_public::sources::load_expected_roots(
-            &fmine_public::sources::expected_roots_path(&root, "barrick"),
-        )
-        .expect("expected roots");
-        let last = expected.last().expect("at least one row");
+        // latest row of repro/barrick/expected.toml for this source epoch (BD-339.S1).
+        let last = historical_expected(&root);
         assert!(
             json.contains(&format!("\"state_root\":\"{}\"", last.state_root)),
             "root differs from the expected row of {}",

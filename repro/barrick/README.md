@@ -8,10 +8,13 @@ FrankenMining is not affiliated with Barrick; these are Barrick's public files, 
 
 ## What a passing run shows
 
-- The 18 registered files and this code revision give the state root, anchor and instance counts in the last
-  `[[expected]]` row of [`expected.toml`](expected.toml).
-- The counts are also checked against independent Python readers of the same cells (`scripts/oracle/`). The root
-  is a reproducibility pin, not a second oracle: it moves whenever the code's output moves. Each move appends a
+- The 20 registered files through 2026Q3 and this code revision give the state root, anchor and instance counts
+  in the latest `[[expected]]` row for that `registry_epoch` in [`expected.toml`](expected.toml). The historical
+  `--through 2026Q2` run retains its 18-source epoch and its own regression pin.
+- Extraction censuses and Mine Stats family counts are checked against the independent Python readers of the
+  same cells (`scripts/oracle/`). The two corrected Q3 Kibali AISC outcomes differ from the frozen aggregator as
+  documented below. The root is a reproducibility pin, not a second oracle: it moves whenever the code's output
+  moves. Each move appends a
   row to `expected.toml` with its reason and evidence id. Rows are never edited.
 - Two values in each row can be recomputed without this code: `registry_epoch` (sha256 over the sorted
   `file<TAB>sha256` lines of the registry) and `census_digest_of_digests` (sha256 over `file<TAB>numeric digest`
@@ -40,7 +43,14 @@ python3 -I repro/barrick/first_vintage_aisc_census.py
 
 This aggregates the existing Python displayed-value, share and region readers, keeping all-file counts
 beside first-registered counts and the cited Kibali/Porgera histories. It prints computed counts rather than
-a pass/fail verdict; the Rust integration test pins the independently obtained answers.
+a pass/fail verdict. For Q3 2026 the unchanged aggregator retains two Kibali missing-share refusals in the
+E859 baseline. E860 separately establishes that these columns have zero operating NCI and nonzero sustaining
+NCI: the later sustaining adjustment cannot change the earlier cost-of-sales numerator's basis. Independent
+exact interval arithmetic admits both direct rates and excludes applying ownership again. The corrected
+candidate therefore has two more consistent outcomes and two fewer refusals than the frozen aggregator:
+`(i, ii, iii, iv, v, np)` is `(2737, 3, 4, 101, 0, 70)`, versus `(2735, 3, 4, 101, 2, 70)` in that baseline.
+The original reader outputs and expected-root row are retained; tests check the two named corrections and
+all remaining census and family-count expectations.
 
 `fetch.sh` reads `registries/sources/barrick.toml`. It downloads only the files that are missing, two seconds
 apart, saves each under its registered name only when its size and SHA-256 match, and verifies every file
@@ -49,11 +59,11 @@ already present without overwriting it. It prints one JSON line per file and a s
 To see the root and anchor yourself:
 
 ```sh
-cargo run -q -p fmine-cli -- assure public --issuer barrick --through 2026Q2
+cargo run -q -p fmine-cli -- assure public --issuer barrick --through 2026Q3
 ```
 
-The envelope's `certificate` is the state root and `anchor_id` is the anchor. Compare them with the last row of
-`expected.toml`. `cargo run -q -p fmine-cli -- doctor` lists each registered file as present and verified, or
+The envelope's `certificate` is the state root and `anchor_id` is the anchor. Compare them with the latest row of
+`expected.toml` for that source epoch. `cargo run -q -p fmine-cli -- doctor` lists each registered file as present and verified, or
 not. `repro/barrick/ci_real_files.sh` runs the whole sequence the way CI does.
 
 ## If something does not match
@@ -67,8 +77,8 @@ not. `repro/barrick/ci_real_files.sh` runs the whole sequence the way CI does.
 ## Registering a new quarter
 
 A new quarter is data: two `[[source]]` rows in `registries/sources/barrick.toml`, run by a binary built before
-the files existed (bd-s9j3; GATE-BULL-01's blind-layout clause). For Q3 2026 the issuer publishes at
-2026-11-09 11:00Z.
+the files existed (bd-s9j3; GATE-BULL-01's blind-layout clause). Barrick's Quarterly Reports feed lists the Q3
+2026 release on 2026-11-09; the registered workbooks were retrieved on 2026-11-10 (E859).
 
 1. **Before the release.**
    - Push the revision that will run.
@@ -83,13 +93,18 @@ the files existed (bd-s9j3; GATE-BULL-01's blind-layout clause). For Q3 2026 the
    `2025/01/`).
 3. **Run `scripts/register_vintage.sh <url>...`.** It fetches the files into a new
    `corpus_of_input_docs/incoming/<stamp>/`. It runs the independent readers and seals their output before any
-   fmine run, then prints candidate `[[source]]` rows.
+   fmine run, then prints candidate `[[source]]` rows, each carrying its own conservative `retrieved_utc`.
+   Keep the registry's historical retrieval default unchanged.
 4. **Commit the rows alone.** Paste them into `registries/sources/barrick.toml`, then confirm each `kind`. Edit
    nothing else: subjects and labels were frozen before the release. Then run `repro/barrick/fetch.sh`.
 5. **Run `scripts/register_vintage.sh --run 2026Q2 <incoming dir>`.** It refuses unless the seal holds and the
    binary matches `blind_record.json`. It then prints the roots and diffs against the sealed readers. The
-   `--through 2026Q2` root must still equal the last row of `expected.toml`.
+   `--through 2026Q2` root must still equal the latest row for its 18-source epoch in `expected.toml`.
 6. **Record a new E id** with the blind record, the rows, the sealed readers' numbers and the printed diffs.
+
+E859 records the Q3 2026 source admission and a known-file run with unchanged source selectors. The pre-release
+Apple binary was not executed on the Linux host, and the new per-source retrieval metadata requires the updated
+registry parser. The blind-layout gate and human census remain open; the recorded binary check is not bypassed.
 
 ## Do not redistribute the files
 
@@ -193,4 +208,6 @@ An identity that closes only when a component published elsewhere is added. The 
 | `Barrick_Q4_2025_AISC.xlsx` | aisc_reconciliation | 2025Q4 | https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/2025/q4/AISC_Q4_2025.xlsx | fetched and verified 2026-10-30 | 40336 | `2ce7b8e46b36d745228487e683b221101c4db3019ba67acedea96967486d6755` |
 | `Barrick_Q1_2026_AISC.xlsx` | aisc_reconciliation | 2026Q1 | https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/2026/q1/AISC_Q1_2026.xlsx | fetched and verified 2026-10-30 | 43718 | `dbe567e90730b4ef87330b1eaa539c7289a92781e452b949c24f7b705464ef28` |
 | `Barrick_Q2_2026_AISC.xlsx` | aisc_reconciliation | 2026Q2 | https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/2026/q2/AISC_Q2_2026.xlsx | fetched and verified 2026-10-30 | 49738 | `66515a4ae4305de130b72fa1a3a78bf6aa51ac5a10350fc43732bb621c6d0e99` |
+| `Barrick_Q3_2026_Mine_Stats.xlsx` | mine_stats | 2026Q3 | https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/2026/q3/Barrick_Q3_2026_Mine_Stats.xlsx | fetched and verified 2026-11-10 | 117080 | `0de125d64fb11c7f29b345336c10c16194597ec2b0d7056061f1eeb0e88caaac` |
+| `Barrick_Q3_2026_AISC.xlsx` | aisc_reconciliation | 2026Q3 | https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/2026/q3/AISC_Q3_2026.xlsx | fetched and verified 2026-11-10 | 36406 | `bf3a2a6cb54938cd101191b8bc4edb514200969259b1498201672226cedec604` |
 <!-- END GENERATED SELECTORS -->

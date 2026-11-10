@@ -66,7 +66,7 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 | Is it evidenced? | **Yes, with a register.** [`planning/mor/MOR_CASE.md`](planning/mor/MOR_CASE.md) holds E001–E852. The corpus rows (E101–E399) were re-read by a second reader against the PDFs and workbooks: 273 exact, 18 confirmed with nuance, 3 page-locator fixes, 0 substantive errors. The research rows (E401–E655) still await a second reader |
 | Has it been reviewed? | **Five audits and six hypothesis passes.** AUDIT_1–AUDIT_5 covered domain accuracy, suite fit, internal consistency, a corpus second read and a second-wave review of equations, guards and the bead graph. Brenner passes B1–B6 covered subsurface, prospectivity, planning and capital, substrate, wedge and pre-mortem, and operations, plant, tailings and workforce. Their corrections are folded in (plan Appendix H) |
 | Is there a work plan? | **Yes.** 21 work packages and 485 beads with 917 dependency edges, acyclic. Instantiated in `.beads/` for `br` |
-| Is there code? | **Yes, and the public lane runs.** `fmine assure public --issuer barrick` runs end to end on the 18 registered workbooks (not in git) and reproduces the state root pinned in `repro/barrick/expected.toml`. The M0 gate is not passed: the M0 report, the security pack and the hashed FY2026 forecasts are still open |
+| Is there code? | **Yes, and the public lane runs.** `fmine assure public --issuer barrick` runs end to end on the 20 registered workbooks through 2026Q3 (not in git), evaluating 2,915 AISC identities and reproducing the source-epoch pin in `repro/barrick/expected.toml`. `--through 2026Q2` retains the earlier 18-source root. Q3 admission and its two source-grounded COS ownership corrections are recorded in E859–E860. The full M0 gate remains open |
 | Has anything been benchmarked? | **No benchmark suite.** One machine has timed `fmine-optimize`'s certified ultimate pit: MineLib's 2.1M-block mclaughlin in about 1.2 s, and a synthetic 10⁷-block model in under a minute (`crates/fmine-optimize/CONTRACT.md` §8). Every other speed and scale number in the plan is a TARGET |
 
 ### Run declared plant accounting
@@ -3291,8 +3291,8 @@ with **some data** is assurance of the numbers behind guidance and disclosure: A
 grade and recovery by site (plan §37.1).
 
 - **M0, Public Mirror plus Spine (Nov 2026–Jan 2027).** `fmine assure public --issuer barrick` will:
-  - reproduce every per-site value in Barrick's published quarterly Mine Stats workbooks (2024Q1–2026Q2, plus
-    Q3 2026 when it is released), each cell cited by `<file-period>:<Sheet>!<Cell>` and file hash;
+  - reproduce every per-site value in Barrick's published quarterly Mine Stats workbooks (2024Q1–2026Q3),
+    each cell cited by `<file-period>:<Sheet>!<Cell>` and file hash;
   - reproduce every cut-off grade stated in a technical report;
   - keep a discrepancy register;
   - hash FY2026 per-site forecasts, with 80% intervals, *before* the February 2027 release.

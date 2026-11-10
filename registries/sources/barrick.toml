@@ -1,7 +1,7 @@
 # Barrick public-lane source registry (bd-s9j3.1, schema fmine.sources.v1). `fmine assure public --issuer
 # barrick` reads it at run time from <workspace>/registries/sources/barrick.toml; it is never compiled into
 # the binary. Registering a quarterly vintage is a data edit here: append its [[source]] rows (row order
-# matters, because the state root binds sources in this order), widen retrieved_utc, then run
+# matters, because the state root binds sources in this order), record each new row's retrieved_utc, then run
 # `cargo run -p xtask -- check-all`, which applies the registry-check rules.
 #
 # Provenance (FACT): planning/research/W1_barrick_mine_stats.md sections 2.1-2.2 (E451, E452). All files were
@@ -18,7 +18,7 @@ corpus_dir = "corpus_of_input_docs/downloaded/mine_stats"
 retrieved_utc = "2026-10-29T03:35:00Z/03:36:24Z"
 url_prefix = "https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/"
 
-# Mine Stats for 2024Q1-2026Q2 and the AISC reconciliation workbooks for 2024Q3-2026Q2 (the issuer
+# Mine Stats for 2024Q1-2026Q3 and the AISC reconciliation workbooks for 2024Q3-2026Q3 (the issuer
 # published none for 2024Q1 or 2024Q2).
 
 [[source]]
@@ -186,6 +186,34 @@ published_at_basis = "INFERENCE: accompanies the Q2 2026 results release dated 2
 url_basis = "fetched and verified 2026-10-30"
 bytes = 49_738
 sha256 = "66515a4ae4305de130b72fa1a3a78bf6aa51ac5a10350fc43732bb621c6d0e99"
+
+# Q3 2026 URLs were read from Barrick's Quarterly Reports page and its financial-report feed (E859).
+# The new rows retain their own retrieval bounds, leaving the historical default above unchanged.
+# Exact fetch UTC: 2026-11-10T04:42:40.788224Z; the whole-second bound rounds upward.
+[[source]]
+file = "Barrick_Q3_2026_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2026Q3"
+path = "2026/q3/Barrick_Q3_2026_Mine_Stats.xlsx"
+retrieved_utc = "2026-11-10T04:42:41Z"
+published_at = "2026-11-09"
+published_at_basis = "INFERENCE: accompanies Third Quarter 2026, dated 2026-11-09 in Barrick's Quarterly Reports financial-report feed (E859); registered bytes were verified at retrieval"
+url_basis = "fetched and verified 2026-11-10"
+bytes = 117_080
+sha256 = "0de125d64fb11c7f29b345336c10c16194597ec2b0d7056061f1eeb0e88caaac"
+
+# Exact fetch UTC: 2026-11-10T04:42:46.905161Z; the whole-second bound rounds upward.
+[[source]]
+file = "Barrick_Q3_2026_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2026Q3"
+path = "2026/q3/AISC_Q3_2026.xlsx"
+retrieved_utc = "2026-11-10T04:42:47Z"
+published_at = "2026-11-09"
+published_at_basis = "INFERENCE: accompanies Third Quarter 2026, dated 2026-11-09 in Barrick's Quarterly Reports financial-report feed (E859); registered bytes were verified at retrieval"
+url_basis = "fetched and verified 2026-11-10"
+bytes = 36_406
+sha256 = "bf3a2a6cb54938cd101191b8bc4edb514200969259b1498201672226cedec604"
 
 # PDF documents (bd-plx1). A run reads no values from them: a value printed only in a PDF enters as a
 # two-reader transcription row in registries/transcriptions/barrick.toml (git-ignored pending OPEN-R7-1), and a

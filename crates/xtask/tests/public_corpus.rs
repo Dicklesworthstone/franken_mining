@@ -567,16 +567,162 @@ mod corpus {
         );
 
         // Regression pin (not independent; see the doc comment): root, anchor, totals, registry epoch and digest
-        // of digests equal the last row of repro/barrick/expected.toml, which records why each root moved.
+        // of digests equal the latest row for this source epoch; later vintages keep their own pins.
         let expected = sources::load_expected_roots(&sources::expected_roots_path(
             &workspace_root(),
             "barrick",
         ))
         .expect("expected roots");
-        let last = expected.last().expect("at least one row");
+        let epoch = r.registry_epoch();
+        let last = expected
+            .iter()
+            .rev()
+            .find(|e| e.registry_epoch == epoch)
+            .expect("expected root for this source epoch");
         if let Err(why) = r.check_expected(last) {
             panic!("{why}");
         }
+    }
+
+    /// E859: issuer Q3 files, with the unchanged Python readers sealed before the current binary saw them.
+    /// Numeric digests and Mine Stats counts are sealed-reader results. E860 corrects exactly two AISC
+    /// outcomes from that frozen baseline; every other outcome count remains unchanged.
+    /// This known-file check does not claim the pre-release Apple binary or a human census was run.
+    #[test]
+    #[ignore = "needs the 20 registered Barrick workbooks through 2026Q3"]
+    fn barrick_q3_2026_matches_sealed_readers() {
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .and_then(|p| p.through("2026Q3"))
+            .expect("Q3 registry");
+        let report = run_public_assurance(&profile, &root).expect("verified issuer workbooks");
+        assert_eq!(report.sources.len(), 20);
+        for (file, counts, digest) in [
+            (
+                "Barrick_Q3_2026_Mine_Stats.xlsx",
+                [6, 0, 2246, 459, 0, 406],
+                "90721f64c49162a25255564ff707bd6cdf343795be70651b46ca3f27d142f011",
+            ),
+            (
+                "Barrick_Q3_2026_AISC.xlsx",
+                [5, 0, 1088, 0, 0, 254],
+                "0c265d1a70c0ee91caea34d10745b07efd0a4fb67dee06a943664b3cf357814d",
+            ),
+        ] {
+            let source = report
+                .sources
+                .iter()
+                .find(|s| s.file_name == file)
+                .expect(file);
+            let c = &source.census;
+            assert_eq!(
+                [
+                    c.visible_sheets,
+                    c.hidden_sheets,
+                    c.numeric_cells,
+                    c.placeholder_cells,
+                    c.formula_error_cells,
+                    c.text_cells
+                ],
+                counts,
+                "{file}"
+            );
+            assert_eq!(hex(&c.numeric_digest), digest, "{file}");
+        }
+        assert!(report.table_refusals.is_empty() && report.unregistered_headers.is_empty());
+        let aisc: Vec<_> = report
+            .instances
+            .iter()
+            .filter(|i| i.file == "Barrick_Q3_2026_AISC.xlsx")
+            .collect();
+        assert_eq!(aisc.len(), 320);
+        assert_eq!(
+            ["i", "ii", "iii", "iv", "v", "np"]
+                .map(|code| aisc.iter().filter(|i| i.state.code() == code).count()),
+            [301, 0, 0, 9, 0, 10]
+        );
+        // E859's two missing-share refusals were caused by sustaining NCI. That later AISC adjustment cannot
+        // change the earlier COS numerator. Direct attributable rates fit; applying Kibali's 45% again fails.
+        let corrected: Vec<_> = aisc
+            .iter()
+            .filter(|i| {
+                i.subject == "Kibali"
+                    && i.cell == "L19"
+                    && ["Q3 2026", "YTD Q3 2026"].contains(&i.sheet.as_str())
+            })
+            .collect();
+        assert_eq!(corrected.len(), 2);
+        for i in corrected {
+            assert_eq!(
+                i.state,
+                IdentityState::Consistent {
+                    alternate_consistent: true,
+                    basis: None
+                }
+            );
+            let check = report
+                .one_cell
+                .iter()
+                .find(|c| c.file == i.file && c.sheet == i.sheet && c.column == "L")
+                .expect("Kibali COS check");
+            assert!(matches!(
+                check.outcome,
+                aisc::OneCellOutcome::Checked {
+                    basis: (1, 1),
+                    pass: true,
+                    at_full: true,
+                    at_share: None,
+                    ..
+                }
+            ));
+        }
+        let mut mine = BTreeMap::new();
+        for i in report
+            .mine_ledger
+            .instances
+            .iter()
+            .filter(|i| i.anchor.starts_with("2026Q3:"))
+        {
+            *mine
+                .entry((i.family.as_str(), i.state.code()))
+                .or_insert(0_usize) += 1;
+        }
+        let expected_mine = BTreeMap::from([
+            (("ownership", "i"), 53),
+            (("ownership", "iii"), 3),
+            (("ownership", "np"), 4),
+            (("ownership", "v"), 12),
+            (("quarter_sum", "i"), 109),
+            (("quarter_sum", "iii"), 2),
+            (("quarter_sum", "np"), 6),
+            (("quarter_sum", "v"), 9),
+            (("region_to_total", "i"), 12),
+            (("region_to_total", "v"), 12),
+            (("site_quarter_sum", "i"), 409),
+            (("site_quarter_sum", "np"), 87),
+            (("site_quarter_sum", "v"), 12),
+            (("site_sheet", "i"), 330),
+            (("site_sheet", "np"), 20),
+            (("site_sheet", "v"), 10),
+            (("sites_to_region", "i"), 12),
+            (("sites_to_subtotal", "i"), 12),
+            (("sold_weighted_rate", "i"), 9),
+            (("sold_weighted_rate", "iv"), 3),
+        ]);
+        assert_eq!(mine, expected_mine, "every Q3 Mine Stats identity family");
+        let expected = sources::load_expected_roots(&sources::expected_roots_path(&root, "barrick"))
+            .expect("expected roots");
+        let epoch = report.registry_epoch();
+        assert_eq!(
+            epoch,
+            "68dc630e352dff2ed5d9f2dd73d49952344b334630fd92ec86253293a401af15"
+        );
+        let pin = expected
+            .iter()
+            .rev()
+            .find(|e| e.registry_epoch == epoch)
+            .expect("Q3 pin");
+        report.check_expected(pin).expect("Q3 regression root");
     }
 
     /// bd-jg43.3 on the real files: E823's 12 Loulo-Gounkoto instances (column K of `Q1 2026` in the Q1 2026

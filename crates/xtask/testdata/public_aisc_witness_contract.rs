@@ -84,7 +84,7 @@ fn test_sign_flip_witness_from_certificate_c8_c6() {
 
 /// BD-331.S6 on the registered Barrick workbooks through 2026Q2. At cd423b9 the two kernels ran side by side
 /// on all 3,030 instances with no difference; the corner kernel is gone, and the root pins the result:
-/// `root_old` is the last row of `repro/barrick/expected.toml` (the corner kernel's until bd-jg43.3 moved
+/// `root_old` is the latest row for this source epoch (the corner kernel's until bd-jg43.3 moved
 /// the root on purpose, at 2386e66). Every (iii) carries
 /// S3's one minimal set. Prints locators and counts only (RISK-31).
 #[test]
@@ -101,7 +101,13 @@ fn barrick_port_keeps_root_and_minimal_sets() {
     let expected =
         crate::sources::load_expected_roots(&crate::sources::expected_roots_path(&root, "barrick"))
             .expect("expected roots");
-    let root_old = &expected.last().expect("a row").state_root;
+    let epoch = run.registry_epoch();
+    let root_old = &expected
+        .iter()
+        .rev()
+        .find(|e| e.registry_epoch == epoch)
+        .expect("expected root for this source epoch")
+        .state_root;
     let all: Vec<&IdentityInstance> = run
         .instances
         .iter()

@@ -19,7 +19,7 @@ fn assert_source_fields_affect_frame(bytes: impl Fn(&IdentityState) -> Vec<u8>) 
 }
 
 /// BD-339.S1: the expected-roots file parses and every row is well formed. Each anchor is the one the run
-/// derives from its root (18 sources, public lane), so a typo in either is caught without the corpus.
+/// derives from its root and exact source epoch, so a typo in either is caught without the corpus.
 #[test]
 fn test_expected_roots_file_is_well_formed() {
     let rows =
@@ -49,14 +49,31 @@ fn test_expected_roots_file_is_well_formed() {
             assert!(hex64(h), "{at}: {h}");
         }
         assert!(!row.reason.is_empty() && !row.evidence.is_empty(), "{at}");
-        assert_eq!(row.totals.iter().sum::<u64>(), 2595, "{at}");
+        let (source_count, instance_count) = match row.registry_epoch.as_str() {
+            "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d" => {
+                assert_eq!(registry.sources.len(), 18);
+                (18, 2595)
+            }
+            "68dc630e352dff2ed5d9f2dd73d49952344b334630fd92ec86253293a401af15" => {
+                assert_eq!(
+                    load_issuer_profile(&workspace_root(), "barrick")
+                        .unwrap()
+                        .sources
+                        .len(),
+                    20
+                );
+                (20, 2915)
+            }
+            epoch => panic!("{at}: unregistered source-population epoch {epoch}"),
+        };
+        assert_eq!(row.totals.iter().sum::<u64>(), instance_count, "{at}");
         let mut root = [0_u8; 32];
         for (i, byte) in root.iter_mut().enumerate() {
             *byte = u8::from_str_radix(&row.state_root[2 * i..2 * i + 2], 16).expect("hex");
         }
         let root = Digest32(root);
         assert_eq!(
-            ledger_anchor("barrick", Lane::Public, registry.sources.len(), root)
+            ledger_anchor("barrick", Lane::Public, source_count, root)
                 .anchor_id()
                 .to_string(),
             row.anchor_id,

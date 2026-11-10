@@ -1,7 +1,7 @@
-# Expected results of `fmine assure public --issuer barrick --through 2026Q2` on the 18 registered workbooks
+# Expected results of `fmine assure public --issuer barrick`, selected by the run's registry_epoch
 # (BD-339.S1). Append-only: a change that moves the root appends a row in the same commit, with its reason and a
-# bead or E id. Rows are never edited. The ignored real-file tests in fmine-public and fmine-cli check the last
-# row.
+# bead or E id. Rows are never edited. The ignored real-file tests check the latest row for their source epoch,
+# so a new quarter cannot replace an earlier bound's pin. through names the latest registered quarter.
 #
 # The state root is a regression value, not an independent oracle: it is BLAKE3 over the M0AS frame, which
 # binds file names, digests, census numbers, every instance's state and detail text. The same bytes and the same
@@ -17,7 +17,7 @@
 
 schema = "fmine.expected_roots.v1"
 issuer = "barrick"
-through = "2026Q2"
+through = "2026Q3"
 
 [[expected]]
 commit = "748da79"
@@ -341,3 +341,42 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "M0AS frame v9 binds cited subtotal membership and the ledger adds 102 physical-period NGM gold-flow identities; no prior identity state moves."
 evidence = "BD-331.S4, bd-prmn.4, commit:c45e62f, record:scripts/oracle/mine_stats_census.py, test:xtask::public_corpus::corpus::barrick_mine_ledger_matches_census"
+
+# E859: observed 2026-11-10 with the working tree based on 46833070, including per-source retrieval support.
+# Exact binary sha256: 3d9a5f41db2e5937ba2c871d13f8c4f8a694349ecf7e10a09b3d7c105bdd20e4.
+# This is a known-file run, not the E854 pre-release binary or a claim about a later main revision.
+# Q3 adds two verified issuer sources, 320 AISC instances and 1,126 Mine Stats instances. The independent
+# readers were sealed before execution. The through-2026Q2 root above remains unchanged in the same binary.
+[[expected]]
+commit = "46833070c1c1ca796b3212d597c1488046428182"
+registry_epoch = "68dc630e352dff2ed5d9f2dd73d49952344b334630fd92ec86253293a401af15"
+state_root = "59557e70da000c968869cff416283d0ef6fe2a06b7540d9882b46abf38cda3e0"
+anchor_id = "anc_cde02b00b4575d4245777d60a658f704"
+totals_i = 2735
+totals_ii = 3
+totals_iii = 4
+totals_iv = 101
+totals_v = 2
+totals_np = 70
+census_digest_of_digests = "4695f88014f536d87c7d4971efad385abe2fe5252ae4eac512a7f40d019e8dc3"
+reason = "Admit the issuer's Q3 2026 Mine Stats and AISC workbooks without changing frozen labels, subjects, shares or scoring; retain two Kibali missing-share refusals and preserve the Q2 source epoch."
+evidence = "bd-s9j3.3, E859, test:xtask::public_corpus::corpus::barrick_q3_2026_matches_sealed_readers"
+
+# E860: observed 2026-11-10 from product source committed as f9f6a33, with the Q3 source rows pending admission.
+# Exact binary sha256: 38ba1b3a6adeac4db6112b6b6e59a5f3a8b94ddd893f851c9d1afb2b5e6cdad5.
+# The E859 baseline above is retained. Only the two Kibali COS rates with zero operating NCI and nonzero
+# sustaining NCI change state, from missing-share refusal to consistent without another ownership conversion.
+[[expected]]
+commit = "f9f6a33dd37b3c2bc439d5c75498c3e2bf061dd3"
+registry_epoch = "68dc630e352dff2ed5d9f2dd73d49952344b334630fd92ec86253293a401af15"
+state_root = "a969738fca74d44e0907045d6603a82035784ada6fe50909ba579a698ddf025a"
+anchor_id = "anc_8f8541a968d889f9e055041cdcb75d5c"
+totals_i = 2737
+totals_ii = 3
+totals_iii = 4
+totals_iv = 101
+totals_v = 0
+totals_np = 70
+census_digest_of_digests = "4695f88014f536d87c7d4971efad385abe2fe5252ae4eac512a7f40d019e8dc3"
+reason = "COS ownership conversion follows operating NCI before TCC; sustaining-only NCI no longer changes the earlier numerator's basis. Two Q3 Kibali rates become consistent; source censuses and Mine Stats identities do not change."
+evidence = "E860, commit:f9f6a33, test:xtask::public_report_contract::tests::test_cos_ownership_ignores_sustaining_only_nci, test:xtask::public_corpus::corpus::barrick_q3_2026_matches_sealed_readers"
