@@ -327,6 +327,12 @@ mutates_authority = false
 description = "Calculate source-bound Bond grinding energy and dry-metric-tonne throughput over explicitly declared complete joint scenarios and validity domains"
 
 [[verb]]
+path = "plant trajectory"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Jointly reconcile shared inventory states across contiguous periods using genuine flow and stocktake observations with full cross-period covariance"
+
+[[verb]]
 path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false

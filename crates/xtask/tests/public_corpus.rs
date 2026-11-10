@@ -710,8 +710,9 @@ mod corpus {
             (("sold_weighted_rate", "iv"), 3),
         ]);
         assert_eq!(mine, expected_mine, "every Q3 Mine Stats identity family");
-        let expected = sources::load_expected_roots(&sources::expected_roots_path(&root, "barrick"))
-            .expect("expected roots");
+        let expected =
+            sources::load_expected_roots(&sources::expected_roots_path(&root, "barrick"))
+                .expect("expected roots");
         let epoch = report.registry_epoch();
         assert_eq!(
             epoch,

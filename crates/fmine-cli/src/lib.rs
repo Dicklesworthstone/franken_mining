@@ -2191,6 +2191,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::RECOVERY_USAGE,
                 plant::RTD_USAGE,
                 plant::GRINDING_USAGE,
+                plant::TRAJECTORY_USAGE,
                 html::USAGE,
                 "decide card <model-file>",
                 "decide recovery-bounds <model-file>",
@@ -2314,6 +2315,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(plant::RTD_DOCS_JSON);
             payload.push_str(",\"plant_grinding\":");
             payload.push_str(plant::GRINDING_DOCS_JSON);
+            payload.push_str(",\"plant_trajectory\":");
+            payload.push_str(plant::TRAJECTORY_DOCS_JSON);
             payload.push_str(",\"html_claims\":");
             payload.push_str(html::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_distributions\":");

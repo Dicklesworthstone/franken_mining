@@ -381,6 +381,12 @@ fn supplied_quantile_losses_match_normal_and_saved_reports_without_reselecting_e
             .strip_suffix('}')
             .unwrap()
     }
+    fn markdown_parts(markdown: &str) -> (&str, &str) {
+        let section = &markdown[markdown.find("### Supplied quantile losses\n").unwrap()..];
+        section
+            .split_once("\nTimestamp commitment (SHA-256): ")
+            .unwrap()
+    }
     struct NoReportClock;
     impl WallClock for NoReportClock {
         fn now_ns(&self) -> Result<i64, ClockError> {
@@ -495,16 +501,17 @@ fn supplied_quantile_losses_match_normal_and_saved_reports_without_reselecting_e
     let markdown = reopened.rendered_markdown.as_deref().unwrap();
     assert!(markdown.contains("### Supplied quantile losses"));
     assert!(markdown.contains("| 0.5 | 2 / 2 | 1 | 1 | 1 | 0 | 3 | [3/2, 14] |"));
-    assert_eq!(
-        markdown
-            .split_once("### Supplied quantile losses")
-            .unwrap()
-            .1,
-        current_markdown
-            .split_once("### Supplied quantile losses")
-            .unwrap()
-            .1,
-    );
+    let (reopened_quantiles, reopened_commitment) = markdown_parts(markdown);
+    let (current_quantiles, current_commitment) = markdown_parts(current_markdown);
+    assert_eq!(reopened_quantiles, current_quantiles);
+    // The parent and complete projection stay immutable while the current journal prefix advances.
+    assert_ne!(head(&saved), journal.head);
+    assert_eq!(head(&reopened.payload_json), journal.head);
+    let prior_imprint = string_field(&saved, "imprint_sha256");
+    let latest_imprint = string_field(&reopened.payload_json, "imprint_sha256");
+    assert_ne!(prior_imprint, latest_imprint);
+    assert!(current_commitment.contains(prior_imprint));
+    assert!(reopened_commitment.contains(latest_imprint));
     assert!(markdown.contains("Invented!A1"));
     assert!(markdown.contains(&"11".repeat(32)));
 }

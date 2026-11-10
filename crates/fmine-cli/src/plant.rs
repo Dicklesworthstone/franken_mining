@@ -7,6 +7,7 @@ mod network;
 mod project;
 mod recovery;
 mod rtd;
+mod trajectory;
 mod transfer;
 
 use std::collections::BTreeMap;
@@ -44,6 +45,8 @@ pub const RTD_USAGE: &str = "plant rtd --input <worksheet.toml>";
 pub const RTD_DOCS_JSON: &str = fmine_plant::rtd::worksheet::ROBOT_DOCS_JSON;
 pub const GRINDING_USAGE: &str = "plant grinding --input <worksheet.toml>";
 pub const GRINDING_DOCS_JSON: &str = fmine_plant::grinding::worksheet::ROBOT_DOCS_JSON;
+pub const TRAJECTORY_USAGE: &str = "plant trajectory --input <worksheet.toml>";
+pub const TRAJECTORY_DOCS_JSON: &str = fmine_plant::trajectory::worksheet::ROBOT_DOCS_JSON;
 pub const SCHEMA: &str = "fmine.plant-inventory.v1";
 const MAX_BYTES: u64 = 1024 * 1024;
 const ROLES: [&str; 5] = ["opening", "feed", "product", "other_outflow", "closing"];
@@ -91,6 +94,7 @@ pub enum Command {
     Recovery { input: PathBuf },
     Rtd { input: PathBuf },
     Grinding { input: PathBuf },
+    Trajectory { input: PathBuf },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -101,7 +105,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         || args[3].starts_with("--")
     {
         return Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {GRINDING_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
         ));
     }
     let input = PathBuf::from(&args[3]);
@@ -121,8 +125,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "recovery" => Ok(Command::Recovery { input }),
         "rtd" => Ok(Command::Rtd { input }),
         "grinding" => Ok(Command::Grinding { input }),
+        "trajectory" => Ok(Command::Trajectory { input }),
         _ => Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {GRINDING_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
         )),
     }
 }
@@ -578,6 +583,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         Command::Recovery { input } => return recovery::execute(input, root),
         Command::Rtd { input } => return rtd::execute(input, root),
         Command::Grinding { input } => return grinding::execute(input, root),
+        Command::Trajectory { input } => return trajectory::execute(input, root),
     };
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) =

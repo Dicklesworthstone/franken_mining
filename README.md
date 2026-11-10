@@ -77,6 +77,7 @@ bytes, physical support, original observations and model assumptions in its outp
 ```bash
 cargo run -p fmine-cli -- plant balance --input tests/plant/closed_inventory.toml
 cargo run -p fmine-cli -- plant reconcile --input tests/plant/measured_inventory.toml
+cargo run -p fmine-cli -- plant trajectory --input tests/plant/trajectory_survey.toml --format markdown
 cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.toml
 cargo run -p fmine-cli -- plant transfer --input tests/plant/raw_transfer.toml
 cargo run -p fmine-cli -- plant flowsheet --input tests/plant/flowsheet_reconcile.toml
@@ -91,6 +92,15 @@ Rejected candidates return a nonzero exit status and no admitted balance Claim w
 observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. This calculation
 does not audit a site's measurements, infer recovery or certify P754 compliance. `fmine robot-docs` documents
 the strict worksheet fields, explicit kg basis, stocktake timing and all required covariance pairs.
+
+`plant trajectory` links 2–32 contiguous periods for one conserved elemental inventory. Adjacent periods
+share one boundary stock; every stock is either measured once or explicitly unmeasured. The declared full
+measurement covariance includes cross-period terms, and the output retains the full covariance of fitted
+flows and stocks. A later survey can revise earlier stock estimates in a new receipt while the previous
+receipt remains unchanged. The synthetic example infers the intermediate stock as 14.5 kg after admitting
+the terminal survey; without that survey it is 12 kg. With only one observed stocktake there is no redundant
+gross-error test, which is reported explicitly. This bounded linear estimator supplies no sensor-bias,
+stockpile-mixing or hierarchical R2 model.
 
 `plant project` converts explicit dry/wet masses, wet-basis moisture and total dry-basis assays into exact
 material and elemental kilograms. It preserves the submitted values and units. It requires all measurements
@@ -485,7 +495,8 @@ U fastest, then V, then W from the bottom upward.
 This path accepts regular parent grids with W pointing straight up. It refuses ambiguous model or
 attribute names, missing/null values, unsupported geometry and mixed MineLib options. The finite-depth
 uniform slope is an explicit modeling assumption; sector-specific slope tables and external OMF
-candidate pits remain outside this command. OMF period scheduling is available below. The supplied values are not independently
+candidate pits remain outside this command. OMF period scheduling is available below. The supplied values
+are not independently
 derived from prices, costs or recoveries, and the result supplies no reserve classification or slope approval.
 The integration tests independently enumerate all closed sets for 24 small authored OMF models, check
 source perturbations and signed rounding, and exercise the built executable; these are synthetic checks.
@@ -2305,6 +2316,15 @@ counts, hits, lower misses and upper misses. Completion bounds retain every supp
 an empty denominator is unavailable. Every member remains visible with its inclusive interval or unavailable
 reason. Empirical ties may give more than the nominal mass. The separate CVG1/v1 digest binds the original
 assessment and selection without changing existing forecast, cohort, assessment or DGN1 diagnostic identities.
+
+The separate `quantile_losses` projection scores **every supplied quantile**, including interior levels such
+as the median. It reports twice-pinball loss, so the median's loss equals absolute error, while preserving the
+original frozen central interval score. Each exact level keeps its own complete population and unresolved
+outcome bounds under the frozen domain. Scores are checked rational numbers of the recorded binary values;
+capacity failures remain `arithmetic_indeterminate` and never cause a partial average. An absent outcome
+domain leaves the upper completion bound unbounded. QNT1/v1 binds the saved assessment and its selected
+evidence; later restatements cannot alter an earlier projection. Assessment JSON and saved-journal Markdown
+include the level summaries and individual scores without implying calibration or predictive skill.
 
 The synthetic example below keeps an unresolved northern forecast in its two-member group: the observed
 interval score is 10, while the final group mean can range from 10 to 260 under its declared outcome domain.

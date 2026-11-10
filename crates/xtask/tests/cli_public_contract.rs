@@ -169,9 +169,9 @@ mod tests {
             .collect();
         lines.sort();
         let epoch = fmine_core::hash::sha256(lines.concat().as_bytes()).to_hex();
-        fmine_public::sources::load_expected_roots(
-            &fmine_public::sources::expected_roots_path(root, "barrick"),
-        )
+        fmine_public::sources::load_expected_roots(&fmine_public::sources::expected_roots_path(
+            root, "barrick",
+        ))
         .expect("expected roots")
         .into_iter()
         .rev()

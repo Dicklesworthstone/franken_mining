@@ -11,3 +11,4 @@ pub mod measurements;
 pub mod raw_measurements;
 pub mod reconciliation;
 pub mod rtd;
+pub mod trajectory;

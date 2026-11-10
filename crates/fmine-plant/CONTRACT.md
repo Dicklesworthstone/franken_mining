@@ -13,7 +13,7 @@ K0 numerical owner, preserving the original observations and a separately declar
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory", "flowsheet", "grinding", "reconciliation", "measurements", "raw_measurements", "cards", "rtd"]`
+- **Allowed Module Families:** `["inventory", "flowsheet", "grinding", "reconciliation", "measurements", "raw_measurements", "cards", "rtd", "trajectory"]`
 
 ## 2. Inputs
 
@@ -142,8 +142,9 @@ BD-175 now has a nominal conservative plant-flow graph and a joint conditional r
 process-model prediction and shared cross-domain flow adapters remain. BD-177 now has covariance-aware
 reconciliation of fully measured carrier and elemental totals, plus identifiable explicitly unmeasured
 streams with measured endpoint stocks (§17), and identifiable unmeasured endpoint stocks (§22),
-including cross-element, cross-stream and inventory covariance. Nonlinear uncertainty propagation,
-temporal inventory smoothing, sensor bias estimation, plant error-model
+including cross-element, cross-stream and inventory covariance. Bounded single-boundary multi-period
+linear inventory reconciliation is now available (§23). Nonlinear uncertainty propagation,
+general R2 temporal/bias models, sensor bias estimation, plant error-model
 calibration and full P754 reconciliation remain.
 BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18), with declared joint
 input populations propagated per realization (§20); report ingestion, source-box qualification,
@@ -686,3 +687,48 @@ endpoint and have null `source_claim_id`. Existing v1 worksheets retain their st
 This single-window conditional estimator supplies no across-period smoothing, latent sensor bias,
 stockpile mixing, voxel provenance, leach dynamics or empirical P754 qualification. BD-154 and BD-177
 remain open for those broader capabilities and their evidence gates.
+
+## 23. Multi-period inventory trajectories (DESIGN; bounded BD-154/177, plan §§20.2–20.3, 20.8)
+
+`trajectory::reconcile_trajectory` jointly estimates one conserved total elemental measurand in kg
+inside one complete physical storage boundary across 2..32 contiguous periods. Each period's total
+inflow and outflow must be genuine observed Claims, including explicit zero totals. Every boundary
+stock is either one genuine stocktake Claim or explicitly declared unmeasured. The same stock coordinate
+is used as closing inventory of one period and opening inventory of the next; no second observation,
+fake timestamp, covariance row, prior or balancing plug is created for a latent state.
+
+The source-bound population declares the full scope, strictly increasing shared endpoints, completeness
+and unmeasured states. `trajectory::observation_order` admits source identity, elemental mass basis,
+exact physical time, support, evidence and usability before defining the full measurement covariance.
+`Claim<TrajectoryErrorModel>` binds the exact population and ordered source Claims, complete covariance
+including cross-period errors, named error basis, unbiased Gaussian assumption and diagnostic policy.
+The existing linear/partial GLS owners solve all period balances simultaneously. An entirely unmeasured
+stock trajectory has an unidentifiable common offset and refuses `FMINE-REF-104`. No rank is repaired.
+
+`TrajectoryOutcome` retains immutable original Claims and the error model, every measured and inferred
+estimate, full measured/latent posterior covariance, adjustment covariance, correlated normalized
+adjustments, exact observed conservation contributions and fitted period residuals. A later stocktake
+can change earlier inventory estimates and their covariance by creating a new retrospective receipt;
+the earlier result is never mutated or represented as a forecast that knew that later observation.
+Gross-error or negative-physical-state rejection retains the entire fitted candidate and a rejected
+receipt digest, with no admitted Claim. Zero residual degrees of freedom is `NoRedundancy`, with no
+available chi-square test, not a passed quality test. Source envelopes, support, UU, supersession,
+calibration metadata, assumptions, numerical diagnostics and rejection all participate in identity.
+
+`plant trajectory --input FILE` consumes the pure `trajectory::worksheet` owner. Schema
+`fmine.plant-trajectory.v1` requires `[[period]]` integrated inflow/outflow rows, `[[stocktake]]` or
+`[[unmeasured_stocktake]]` rows for every boundary, and every unordered `[[covariance]]` pair for genuine
+observations, including explicit zero cross terms. Keys are `stock/<instant>`,
+`inflow/<start>/<end>` and `outflow/<start>/<end>` in integer nanoseconds. Exact submitted UTF-8 bytes
+are SHA-256 bound before parsing. Work is bounded to 1 MiB, 32 periods, 97 fitted coordinates and
+32 conservation constraints before dense numerical allocation. The original worksheet, source Claims,
+conditional stock standard deviations, all fitted flow coordinates and complete joint covariance appear
+in the versioned JSON result; Markdown exposes the trajectory, adjustments and investigation diagnostics.
+Worksheet inputs remain Assumed, Internal and uncalibrated.
+
+`tests/plant/trajectory_survey.toml` is a synthetic worked example. Independent reduced-closure tests
+check the complete covariance with independent and correlated flow errors, retrospective conditioning,
+shared endpoints, no-redundancy semantics, source tampering and refusals; actual CLI tests live in
+`crates/xtask/tests/plant_trajectory.rs`. This slice does not supply hierarchical measurement biases,
+robust likelihoods, stockpile mixing, multiple elemental/carrier channels, voxel provenance, leach
+kinetics, empirical state calibration or P754 fixture parity. The broad BD-154/177 gates remain open.
