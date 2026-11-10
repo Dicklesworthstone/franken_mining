@@ -19,6 +19,7 @@ mod tests {
             let hash = Digest32([u8::try_from(i + 1).expect("small fixture"); 32]);
             let release = format!("2030Q{}", i + 1);
             profile.sources.push(RegisteredSource {
+                retrieved_utc: None,
                 published_at: None,
                 published_at_basis: None,
                 file_name: file.clone(),

@@ -12,6 +12,7 @@ fn synthetic_assumed_royalties_never_override_negative_knowledge_states() {
     let file = "Synthetic_Royalty_2024Q1.xlsx";
     let mut profile = fmine_public::synthetic::synthetic_profile();
     profile.sources.push(RegisteredSource {
+        retrieved_utc: None,
         published_at: None,
         published_at_basis: None,
         file_name: file.into(),

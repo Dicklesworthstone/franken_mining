@@ -15,7 +15,7 @@ use crate::toml_subset::{SubsetError, TomlDoc, TomlField, TomlRow, TomlValue, pa
 mod availability;
 pub use availability::{
     PublicationCut, RegisteredSource, SourceAvailability, SourceKind, available_date, day_end,
-    publication_cut, publication_date, retrieval_upper,
+    publication_cut, publication_date, retrieval_upper, source_publication_cut,
 };
 
 /// Schema id a sources registry must declare.
@@ -100,6 +100,8 @@ pub struct SourceRow {
     pub url_basis: String,
     pub bytes: u64,
     pub sha256: String,
+    /// Retrieval evidence for these bytes; omitted rows retain the registry's original batch evidence.
+    pub retrieved_utc: Option<String>,
     /// Optional publication date for these registered bytes or their text, never inferred from retrieval.
     pub published_at: Option<String>,
     /// Required with the date; uses the same FACT/INFERENCE citation convention as documents.
@@ -812,6 +814,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "url_basis",
             "bytes",
             "sha256",
+            "retrieved_utc",
             "published_at",
             "published_at_basis",
         ])?;
@@ -869,6 +872,13 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         }
         let published_at = f.optional_string("published_at")?;
         let published_at_basis = f.optional_string("published_at_basis")?;
+        let source_retrieved = f.optional_string("retrieved_utc")?;
+        if let Some(value) = &source_retrieved {
+            retrieval_upper(value).map_err(|error| SourcesError {
+                line: row.line,
+                reason: error.what,
+            })?;
+        }
         if let Err(error) = publication_date(published_at.as_deref(), published_at_basis.as_deref())
         {
             return fail(row.line, error.what);
@@ -881,6 +891,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             url_basis,
             bytes,
             sha256,
+            retrieved_utc: source_retrieved,
             published_at,
             published_at_basis,
         });

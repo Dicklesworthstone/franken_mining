@@ -393,7 +393,6 @@ impl Inventory {
         outcome_year: u16,
         as_of: i64,
     ) -> Result<Self> {
-        let retrieved = retrieval_upper(&profile.retrieved_utc);
         let vocabulary = profile
             .mine_stats_labels
             .iter()
@@ -451,7 +450,7 @@ impl Inventory {
             } else if let Some(publication) = publication {
                 Some(publication.upper()?)
             } else {
-                retrieved.as_ref().ok().copied()
+                retrieval_upper(source.retrieval(&profile.retrieved_utc)).ok()
             };
             let benchmark = match available {
                 Some(at) if at < after_quarter(*quarter)? => Some(format!(

@@ -87,7 +87,6 @@ pub(super) fn assess(
     profile: &IssuerProfile,
     publications: &BTreeMap<(String, String), &Publication>,
     as_of: &str,
-    retrieved: Option<&str>,
 ) -> Option<Assessment> {
     let prototypes: Vec<_> = cells
         .iter()
@@ -114,7 +113,7 @@ pub(super) fn assess(
             && prototypes.iter().any(|(p, _, _)| p.key.issuer == c.key.issuer
                 && p.key.subject == c.key.subject
                 && std::mem::discriminant(&p.key.ownership_basis) == std::mem::discriminant(&c.key.ownership_basis))
-    }).map(|c| source_evidence(c, profile, publications, as_of, retrieved)).collect();
+    }).map(|c| source_evidence(c, profile, publications, as_of)).collect();
     sort_evidence(&mut evidence);
     let mut out = Assessment {
         status: "not_available",

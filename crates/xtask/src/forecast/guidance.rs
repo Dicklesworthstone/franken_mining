@@ -11,7 +11,7 @@ use fmine_core::hash::{Digest32, sha256};
 use fmine_public::key::{self, KeyedCell, OwnershipBasis, PeriodKind, Scope};
 use fmine_public::sources::{IssuerProfile, SourceKind};
 use fmine_public::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_prefixes};
-use fmine_registry::sources::is_date;
+use fmine_registry::sources::{available_date, is_date};
 use fmine_registry::transcriptions::{Accepted, Decimal, Token, parse_token};
 
 use super::{FY2026_RULES, Res, exact_text, fail, parse_rules_bytes, read};
@@ -158,20 +158,11 @@ impl BaselineReport {
 }
 
 fn availability(profile: &IssuerProfile, as_of: &str) -> Res<String> {
-    let date = profile
-        .retrieved_utc
-        .split('/')
-        .filter_map(|s| s.get(..10))
-        .filter(|s| is_date(s))
-        .max()
-        .ok_or_else(|| vec!["workbooks have no dated availability evidence".into()])?;
-    if date > as_of {
-        return fail(format!(
-            "this baseline requires verified retrieval {date}, which cannot support evidence cut {as_of}"
-        ));
-    }
+    let mut latest = None;
     // Every registered workbook belongs to a completed quarter; a future quarter cannot enter persistence.
     for source in &profile.sources {
+        let date = available_date(None, None, source.retrieval(&profile.retrieved_utc))
+            .map_err(|e| vec![format!("{}: {e}", source.file_name)])?;
         let q = record::Quarter::parse(&source.quarter)
             .ok_or_else(|| vec!["invalid workbook quarter".into()])?;
         let end = format!(
@@ -180,14 +171,28 @@ fn availability(profile: &IssuerProfile, as_of: &str) -> Res<String> {
             q.q * 3,
             if matches!(q.q, 1 | 4) { "31" } else { "30" }
         );
-        if end.as_str() > date {
+        if end > date {
             return fail(format!(
                 "{}: quarter end {end} follows its registered availability bound {date}",
                 source.file_name
             ));
         }
+        if latest.as_ref().is_none_or(|previous| previous < &date) {
+            latest = Some(date);
+        }
     }
-    Ok(date.to_string())
+    let date = match latest {
+        Some(date) => date,
+        None => {
+            available_date(None, None, &profile.retrieved_utc).map_err(|e| vec![e.to_string()])?
+        }
+    };
+    if date.as_str() > as_of {
+        return fail(format!(
+            "this baseline requires verified retrieval {date}, which cannot support evidence cut {as_of}"
+        ));
+    }
+    Ok(date)
 }
 
 fn key(site: &str) -> String {

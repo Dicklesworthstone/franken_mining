@@ -78,8 +78,8 @@ impl IdentityFamily {
             }
             Self::AiscFooting => "US$M; attributable total cash costs plus sustaining lines",
             Self::CosPerOunce => {
-                "cost of sales US$M (100% consolidated) over attributable ounces sold (thousands); when a \
-                 non-zero non-controlling-interest line shows the two bases differ, the issuer's footnote states \
+                "cost of sales US$M over attributable ounces sold (thousands); when a non-zero operating \
+                 non-controlling-interest line before TCC shows the two bases differ, the issuer's footnote states \
                  both on an attributable basis, so the rate is checked at the registered share s: 1000·s·N/Q"
             }
             Self::TccPerOunce => {
@@ -873,7 +873,7 @@ pub enum OperandRole {
     Ounces,
     /// The printed total a rate divides.
     Numerator,
-    /// A non-controlling-interest line, which decides a cost-of-sales rate's basis.
+    /// A cited non-controlling-interest line; only the operating block decides the cost-of-sales basis.
     NciLine,
     /// A registered reconstruction's component cell.
     Component,
@@ -1326,7 +1326,7 @@ pub fn operand_at(file: &str, sheet: &Sheet, row: u32, col: u32, role: OperandRo
 
 /// The table cells one instance of `family` in column `col` is computed from. An all-zero column's instances
 /// are decided by every used cell of the column. The AISC footing's alternate rule counts block 1's lines too.
-/// A cost-of-sales rate with a non-zero NCI line also reads the attributable-basis footnote (`footnote`, a cell
+/// A cost-of-sales rate with a non-zero operating NCI line also reads the attributable-basis footnote (`footnote`, a cell
 /// of this sheet); the registered share's label cell is in another workbook and is added by the caller. A region's
 /// such rate also reads each printed member's rate and ounces (`members`, BD-331.S4).
 #[allow(clippy::too_many_arguments)]
@@ -1385,10 +1385,7 @@ fn family_operands(
         }
         IdentityFamily::CosPerOunce => {
             out.extend(t.nci_rows.iter().map(|&r| at(r, R::NciLine)));
-            let nci = t
-                .nci_rows
-                .iter()
-                .any(|&r| non_zero_number(val(sheet, r, col)));
+            let nci = cos_needs_share(sheet, t, col);
             if let Some((r, c)) = footnote.filter(|_| nci).and_then(parse_a1_ref) {
                 out.push(operand_at(file, sheet, r, c, R::LabelCheck));
             }
@@ -1427,6 +1424,15 @@ pub struct AiscTable {
     pub block2: Vec<u32>,
     /// Rows of `block1 ∪ block2` labelled "Non-controlling interests".
     pub nci_rows: Vec<u32>,
+}
+
+// A sustaining-cost NCI adjustment changes the AISC bridge, not its earlier cost-of-sales numerator.
+// Keep both blocks cited, but only the operating reconciliation can require a COS ownership conversion.
+fn cos_needs_share(sheet: &Sheet, table: &AiscTable, col: u32) -> bool {
+    table
+        .nci_rows
+        .iter()
+        .any(|&row| table.block1.contains(&row) && non_zero_number(val(sheet, row, col)))
 }
 
 /// Lower-case, whitespace-collapsed text of a cell (numbers in `f64` `Display` form).
@@ -1952,7 +1958,7 @@ pub fn feasible_share_text(n: i64, k: i64, q: i64, r: i64) -> Option<String> {
         .map(|(lo, hi)| format!("[{}, {}]", four_places(lo, false), four_places(hi, true)))
 }
 
-/// The state of a cost-of-sales-per-ounce instance whose column has a non-zero non-controlling-interest line
+/// The state of a cost-of-sales-per-ounce instance with non-zero operating non-controlling interests
 /// (BD-331.S3). The sheet's footnote states the rate on an attributable basis, so the rate is checked at the
 /// subject's registered, label-confirmed share; regions and sites without a confirmed share stay (v).
 fn stated_share_state(
@@ -2287,18 +2293,18 @@ pub struct OneCellCheck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OneCellOutcome {
     /// No basis to check at. When only the basis is refused (the operands are valid integers), `at_full` and
-    /// `at_share` still report the checks at 100% and at the registered share; otherwise both are `None`.
+    /// `at_share` still report checks without ownership conversion and at the registered share; otherwise both are `None`.
     Refused {
         reason: &'static str,
         at_full: Option<bool>,
         at_share: Option<bool>,
     },
     Checked {
-        /// The share `(num, den)` the column is stated on: `(1, 1)` at 100%, the registered, label-confirmed
-        /// share where a non-controlling-interest line is non-zero.
+        /// The numerator multiplier: `(1, 1)` uses the amount as printed, without claiming 100% mine ownership;
+        /// a non-zero operating NCI line requires the registered, label-confirmed share.
         basis: (i64, i64),
         pass: bool,
-        /// The check at 100%.
+        /// The check using the numerator as printed, with no ownership conversion.
         at_full: bool,
         /// The check at the subject's registered share, for a site that has one, whatever the column's basis.
         at_share: Option<bool>,
@@ -2431,7 +2437,7 @@ fn one_cell_outcome(
     let (Ok(at_full), Ok(at_share)) = (at((1, 1)), site_share.map(at).transpose()) else {
         return refused("exact kernel made no claim");
     };
-    let nci = t.nci_rows.iter().any(|&row| non_zero_number(v(row)));
+    let nci = cos_needs_share(sheet, t, col);
     let unbased = |reason: &'static str| OneCellOutcome::Refused {
         reason,
         at_full: Some(at_full),
@@ -2752,7 +2758,7 @@ fn column_ledger(
                     r: line_value(rv),
                 };
                 calc = Calc::Rate(miss);
-                let nci = t.nci_rows.iter().any(|&r| non_zero_number(v(r)));
+                let nci = cos_needs_share(sheet, t, col);
                 let at = |k| rate_holds(miss.n, k, miss.q, miss.r, (1, 1));
                 if family == IdentityFamily::CosPerOunce && nci {
                     match (stated.footnote, stated.region) {

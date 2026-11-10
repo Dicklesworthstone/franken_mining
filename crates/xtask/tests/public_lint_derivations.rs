@@ -236,6 +236,91 @@ fn public_record_discovery_never_uses_retrieval_as_a_publication_date() {
 }
 
 #[test]
+fn source_retrieval_override_reaches_assurance_trace_and_public_record() {
+    let (workspace, registry) = public_record_workspace("public-record-source-retrieval", None);
+    let original = std::fs::read_to_string(&registry).expect("registry");
+    let marker = "[[source]]\nfile = \"Synthetic_AISC.xlsx\"\n";
+    assert_eq!(original.matches(marker).count(), 1);
+    let override_time = "2030-06-02T23:59:59Z/2030-06-03T00:00:01Z";
+    std::fs::write(
+        &registry,
+        original.replace(
+            marker,
+            &format!("{marker}retrieved_utc = \"{override_time}\"\n"),
+        ),
+    )
+    .expect("source-specific retrieval");
+    let profile = load_issuer_profile(&workspace, PUBLIC_RECORD_ISSUER)
+        .expect("registry with override")
+        .through("2030Q1")
+        .expect("selected quarter");
+    let snapshot = fmine_public::run_public_assurance(&profile, &workspace).expect("snapshot");
+    assert_eq!(snapshot.retrieved_utc, "2030-06-01T00:00:00Z");
+    assert_eq!(
+        snapshot.source_retrievals["Synthetic_AISC.xlsx"],
+        override_time
+    );
+    assert!(
+        snapshot
+            .to_json()
+            .contains(&format!("\"retrieved_utc\":\"{override_time}\""))
+    );
+    let cell = &snapshot.public_claims.cells["Synthetic_AISC.xlsx:Q1 2030!B16"];
+    let trace = fmine_public::key::inspect::trace_json(cell, &profile);
+    assert!(trace.contains(&format!("\"retrieved_utc\":\"{override_time}\"")));
+    std::fs::write(
+        workspace.join("retrieval.md"),
+        "Site A Q1 2030 ownership basis unprinted AISC per ounce sold is $1,250/oz.\n",
+    )
+    .expect("draft");
+    let arguments = args(&[
+        "lint",
+        "retrieval.md",
+        "--issuer",
+        PUBLIC_RECORD_ISSUER,
+        "--through",
+        "2030Q1",
+        "--as-of",
+        "2030-06-10",
+        "--discover",
+    ]);
+    let result = invoke(&arguments, &workspace).0;
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    assert!(
+        result
+            .payload_json
+            .contains("\"known_available_by_retrieval\":\"2030-06-03\"")
+    );
+    assert!(
+        result
+            .payload_json
+            .contains("\"status\":\"publication_date_unknown\"")
+    );
+    assert!(!result.payload_json.contains("\"status\":\"disclosed\""));
+    std::fs::write(
+        &registry,
+        original.replace(marker, &format!("{marker}retrieved_utc = \"2030-06-05\"\n")),
+    )
+    .expect("revised source retrieval evidence");
+    let revised = invoke(&arguments, &workspace).0;
+    assert_eq!(revised.exit_code, 0, "{}", revised.to_json());
+    assert!(
+        revised
+            .payload_json
+            .contains("\"known_available_by_retrieval\":\"2030-06-05\"")
+    );
+    assert_eq!(result.certificate, revised.certificate);
+    assert_eq!(
+        public_record_component_digest(&result.payload_json, "lint"),
+        public_record_component_digest(&revised.payload_json, "lint"),
+    );
+    assert_ne!(
+        public_record_component_digest(&result.payload_json, "public_record"),
+        public_record_component_digest(&revised.payload_json, "public_record"),
+    );
+}
+
+#[test]
 fn public_record_discovery_rechecks_source_bytes_before_reusing_a_disclosure_result() {
     let (workspace, _) = public_record_workspace("public-record-tamper", Some("2030-05-01"));
     let draft = "Site A Q1 2030 ownership basis unprinted AISC per ounce sold is $1,250/oz.\n";

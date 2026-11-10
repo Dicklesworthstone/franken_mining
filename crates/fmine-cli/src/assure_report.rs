@@ -95,6 +95,7 @@ fn source_inventory(out: &mut String, report: &PublicAssuranceReport) {
         &[
             "File / kind",
             "Release",
+            "Retrieved UTC",
             "Bytes",
             "Visible / hidden sheets",
             "Numeric / placeholder / error cells",
@@ -108,6 +109,11 @@ fn source_inventory(out: &mut String, report: &PublicAssuranceReport) {
             &[
                 format!("{} / {}", source.file_name, source.kind.as_str()),
                 source.quarter.clone(),
+                report
+                    .source_retrievals
+                    .get(&source.file_name)
+                    .unwrap_or(&report.retrieved_utc)
+                    .clone(),
                 source.bytes.to_string(),
                 format!("{} / {}", census.visible_sheets, census.hidden_sheets),
                 format!(
@@ -747,7 +753,7 @@ fn derived_sections(out: &mut String, report: &PublicAssuranceReport) {
 pub(super) fn markdown(report: &PublicAssuranceReport) -> Result<String, Refusal> {
     let packets = packet::packets_from_report(report)?;
     let mut out = format!(
-        "# Public assurance — {}\n\n{}\n\n{}\n\n- Lane: {}\n- Selected releases: {}\n- Retrieval metadata: {}\n- Ledger anchor: `{}`\n- Identity state root: `{}`\n- Public gate eligibility: {} (eligibility does not establish passage)\n\n",
+        "# Public assurance — {}\n\n{}\n\n{}\n\n- Lane: {}\n- Selected releases: {}\n- Default retrieval metadata: {}\n- Ledger anchor: `{}`\n- Identity state root: `{}`\n- Public gate eligibility: {} (eligibility does not establish passage)\n\n",
         text(&report.issuer),
         fmine_public::NO_CLAIM,
         if report.lane == Lane::Synthetic {

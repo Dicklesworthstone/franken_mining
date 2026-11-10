@@ -172,7 +172,6 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     if registry.issuer != rules.issuer {
         return Err(invalid("source registry issuer differs from the rules"));
     }
-    let retrieved = retrieval_upper(&registry.retrieved_utc)?;
     let mut wanted = BTreeSet::new();
     let mut points = BTreeSet::new();
     for target in &rules.targets {
@@ -204,6 +203,11 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
             ));
         };
         let complete = after_quarter(*q)?;
+        let retrieved_utc = source
+            .retrieved_utc
+            .as_deref()
+            .unwrap_or(&registry.retrieved_utc);
+        let retrieved = retrieval_upper(retrieved_utc)?;
         let publication = source.published_at.as_deref().map(day_end).transpose()?;
         if retrieved < complete || publication.is_some_and(|t| t < complete) {
             return Err(refuse(
@@ -230,7 +234,7 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
             url: source.url.clone(),
             sha256: source.sha256.clone(),
             bytes: source.bytes,
-            retrieved_utc: registry.retrieved_utc.clone(),
+            retrieved_utc: retrieved_utc.to_string(),
             available_by_utc: record::format_utc(available),
             published_at: source.published_at.clone(),
             published_at_basis: source.published_at_basis.clone(),

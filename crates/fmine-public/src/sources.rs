@@ -223,17 +223,10 @@ impl IssuerProfile {
     /// Declared publication availability, with retrieval as the fallback for undated workbooks.
     /// No historical registry existence or independently authenticated timestamp is asserted.
     pub fn mine_stats_as_of(&self, as_of: &str) -> Result<PublicationCut, Refusal> {
-        fmine_registry::sources::publication_cut(
+        fmine_registry::sources::source_publication_cut(
             self.sources
                 .iter()
-                .filter(|s| s.kind == SourceKind::MineStats)
-                .map(|s| {
-                    (
-                        s.file_name.as_str(),
-                        s.published_at.as_deref(),
-                        s.published_at_basis.as_deref(),
-                    )
-                }),
+                .filter(|s| s.kind == SourceKind::MineStats),
             &self.retrieved_utc,
             as_of,
         )

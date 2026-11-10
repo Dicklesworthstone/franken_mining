@@ -32,6 +32,7 @@ fn example(metric: PublicMetric) -> (PublicResolutionPolicy, ObjectId, SourceRow
         url_basis: "W1 table".into(),
         bytes: bytes.len() as u64,
         sha256: Digest32(workbook.sha256).to_hex(),
+        retrieved_utc: None,
         published_at: Some("2031-02-15".into()),
         published_at_basis: Some("FACT: invented test release date".into()),
     };

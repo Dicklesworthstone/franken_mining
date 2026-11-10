@@ -493,6 +493,7 @@ fn disclosed_vintage_fixture(first_uses_old_section: bool) -> PublicAssuranceRep
     profile.sources = sources
         .iter()
         .map(|s| RegisteredSource {
+            retrieved_utc: None,
             published_at: None,
             published_at_basis: None,
             file_name: s.file_name.clone(),

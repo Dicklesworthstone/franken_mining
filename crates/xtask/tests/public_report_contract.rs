@@ -479,6 +479,93 @@ mod tests {
         );
     }
 
+    /// Sustaining ownership adjustments do not change the earlier cost-of-sales numerator's basis.
+    /// Hand arithmetic: Site A is 1000*500/400=1250 with no registered share; Site H is 1000*300/150=2000,
+    /// although its registered 3/4 ownership would incorrectly give 1500 if applied a second time.
+    #[test]
+    fn test_cos_ownership_ignores_sustaining_only_nci() {
+        let profile = synthetic::synthetic_profile();
+        let sustaining = [
+            (
+                "A9".into(),
+                MinimalCell::Text("Non-controlling interests".into()),
+            ),
+            ("K5".into(), MinimalCell::Number(300.0)),
+            ("K7".into(), MinimalCell::Number(0.0)),
+        ];
+        let report = synthetic_run_with(&profile, &sustaining, "Site H (75%)1");
+        for cell in ["B14", "K14"] {
+            assert_eq!(
+                state_of(&report, cell, IdentityFamily::CosPerOunce),
+                &IdentityState::Consistent {
+                    alternate_consistent: true,
+                    basis: None
+                }
+            );
+        }
+        for (column, alternate) in [("B", None), ("K", Some(false))] {
+            assert!(matches!(one_cell(&report, column).outcome,
+                OneCellOutcome::Checked { basis: (1, 1), pass: true, at_full: true, at_share, .. }
+                if at_share == alternate));
+        }
+        let cos = report
+            .instances
+            .iter()
+            .find(|i| i.cell == "K14" && i.family == IdentityFamily::CosPerOunce)
+            .expect("COS");
+        let cited_nci: Vec<_> = cos
+            .operands
+            .iter()
+            .filter(|o| o.role == OperandRole::NciLine)
+            .map(|o| o.cell.as_str())
+            .collect();
+        assert_eq!(
+            cited_nci,
+            ["K7", "K9"],
+            "both reconciliation blocks remain auditable"
+        );
+        assert!(
+            cos.operands
+                .iter()
+                .all(|o| o.role != OperandRole::LabelCheck)
+        );
+
+        // With operating NCI, the independent control is 1000*(3/4)*400/150=2000. The share is necessary.
+        let operating = [
+            (
+                "A9".into(),
+                MinimalCell::Text("Non-controlling interests".into()),
+            ),
+            ("K7".into(), MinimalCell::Number(-100.0)),
+        ];
+        let report = synthetic_run_with(&profile, &operating, "Site H (75%)1");
+        assert!(matches!(
+            state_of(&report, "K14", IdentityFamily::CosPerOunce),
+            IdentityState::Consistent {
+                basis: Some(ConsistentBasis::Share(_)),
+                ..
+            }
+        ));
+        assert!(matches!(
+            one_cell(&report, "K").outcome,
+            OneCellOutcome::Checked {
+                basis: (3, 4),
+                pass: true,
+                at_full: false,
+                ..
+            }
+        ));
+        let mut missing = profile;
+        missing.shares.retain(|s| s.subject != "Site H");
+        let report = synthetic_run_with(&missing, &operating, "Site H (75%)1");
+        assert_eq!(
+            state_of(&report, "K14", IdentityFamily::CosPerOunce),
+            &IdentityState::Refused {
+                reason: RefusedReason::NoRegisteredShare
+            }
+        );
+    }
+
     /// bd-prmn.8: a column registered at the wrong share fails at that basis and K.4's verdict names it a basis
     /// rule; with the right share and Site I's miss counted as a known item, the verdict is site-specific.
     #[test]

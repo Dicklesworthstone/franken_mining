@@ -204,7 +204,6 @@ fn source_evidence(
     profile: &IssuerProfile,
     publications: &BTreeMap<(String, String), &Publication>,
     as_of: &str,
-    retrieved: Option<&str>,
 ) -> SourceEvidence {
     let source = source_for(c, profile);
     let publication = source
@@ -241,7 +240,10 @@ fn source_evidence(
         url: source.map(|s| s.url.clone()),
         published_at: publication.map(|p| p.published_at.clone()),
         publication_basis: publication.map(|p| p.published_at_basis.clone()),
-        known_available_by: source.and(retrieved).map(str::to_string),
+        known_available_by: source.and_then(|s| {
+            fmine_registry::sources::available_date(None, None, s.retrieval(&profile.retrieved_utc))
+                .ok()
+        }),
         relation: "unchecked",
         admission,
         reason,
@@ -335,7 +337,6 @@ fn derivation(
     profile: &IssuerProfile,
     publications: &BTreeMap<(String, String), &Publication>,
     as_of: &str,
-    retrieved: Option<&str>,
 ) -> Option<Derivation> {
     // Prototypes bind prose only. No target-period Claim is manufactured, and a prototype's numeric
     // value never selects a vintage. Gather every sibling, including corrected/conflicting bases.
@@ -366,7 +367,7 @@ fn derivation(
                             == std::mem::discriminant(&c.key.ownership_basis)
                 })
         })
-        .map(|c| source_evidence(c, profile, publications, as_of, retrieved))
+        .map(|c| source_evidence(c, profile, publications, as_of))
         .collect();
     sort_evidence(&mut evidence);
     let inputs = evidence
@@ -553,8 +554,6 @@ pub(super) fn assess(
         ));
     }
     let publications = publication_map(profile, publications)?;
-    let retrieved = fmine_calib::record::parse_utc(&profile.retrieved_utc)
-        .and_then(|_| profile.retrieved_utc.get(..10));
     let mut index: BTreeMap<Family, Vec<&KeyedCell>> = BTreeMap::new();
     for c in cells {
         index.entry(family(c)).or_default().push(c);
@@ -582,7 +581,7 @@ pub(super) fn assess(
             let candidates = keys.iter().next().and_then(|k| index.get(k));
             let ambiguous_share = candidates.is_some_and(|c| ambiguous_attributable_shares(f, c));
             for c in candidates.into_iter().flatten() {
-                let mut evidence = source_evidence(c, profile, &publications, as_of, retrieved);
+                let mut evidence = source_evidence(c, profile, &publications, as_of);
                 if evidence.admission != "unusable" {
                     evidence.relation = relation(probe(draft, f, c).as_ref());
                 }
@@ -634,12 +633,10 @@ pub(super) fn assess(
                 result.reason = "source_identity_or_evidence_admission_failed";
             }
         }
-        result.derivation = derivation(draft, f, cells, profile, &publications, as_of, retrieved);
-        result.quarter_sum =
-            sums::assess(draft, f, cells, profile, &publications, as_of, retrieved);
-        result.ownership =
-            ownership::assess(draft, f, cells, profile, &publications, as_of, retrieved);
-        result.cost_rate = rates::assess(draft, f, cells, profile, &publications, as_of, retrieved);
+        result.derivation = derivation(draft, f, cells, profile, &publications, as_of);
+        result.quarter_sum = sums::assess(draft, f, cells, profile, &publications, as_of);
+        result.ownership = ownership::assess(draft, f, cells, profile, &publications, as_of);
+        result.cost_rate = rates::assess(draft, f, cells, profile, &publications, as_of);
         let derived_reason = if result
             .derivation
             .as_ref()

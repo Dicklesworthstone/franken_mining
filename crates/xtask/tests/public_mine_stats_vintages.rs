@@ -794,6 +794,7 @@ mod tests {
             profile.subjects.push(key.subject.clone());
         }
         profile.sources = vec![RegisteredSource {
+            retrieved_utc: None,
             published_at: None,
             published_at_basis: None,
             file_name: file.into(),

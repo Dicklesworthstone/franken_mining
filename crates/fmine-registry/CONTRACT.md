@@ -118,8 +118,14 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   together. The date must be a calendar date and the basis must cite a source after `FACT: ` or
   `INFERENCE: `. Both remain absent for older registries; neither quarter labels nor retrieval dates
   manufacture a publication date. These fields support dated public-record checks and do not authorize disclosure.
+  Each source can also declare its own `retrieved_utc`; absent overrides retain the registry's batch value.
+  Explicit overrides must be valid UTC/date evidence or monotone intervals, and malformed values refuse
+  instead of silently falling back. A new release therefore cannot change the recorded retrieval of older
+  sources. The upper endpoint controls undated availability; retrieval never manufactures publication.
 - DESIGN (BD-341/BD-342): `sources::{RegisteredSource, SourceKind, PublicationCut}` preserves typed workbook
-  identity and publication citations across public projections. `publication_cut` admits a cited date on or
+  identity and publication citations across public projections. `source_publication_cut` applies each
+  source's effective retrieval evidence; `publication_cut` retains the legacy shared-evidence interface.
+  Both admit a cited date on or
   before the requested calendar cut, using strict retrieval evidence only for undated workbooks. Exact UTC,
   date-only retrieval and monotone slash intervals (including same-day shortened endpoints) share one parser.
   Every source keeps its actual basis and eligibility; no eligible source yields a null aggregate bound.

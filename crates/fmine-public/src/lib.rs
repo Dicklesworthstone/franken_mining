@@ -253,6 +253,8 @@ pub struct PublicAssuranceReport {
     pub issuer: String,
     pub lane: Lane,
     pub retrieved_utc: String,
+    /// Effective retrieval evidence for each workbook, separate from publication and the numeric state root.
+    pub source_retrievals: BTreeMap<String, String>,
     /// The `--through YYYYQn` bound the run applied, if any. Not in the state root: the sources it kept are.
     pub through: Option<String>,
     pub sources: Vec<LoadedSource>,
@@ -902,7 +904,7 @@ impl PublicAssuranceReport {
             let c = &s.census;
             let _ = write!(
                 o,
-                "{}{{\"file\":{},\"kind\":{},\"quarter\":{},\"url\":{},\"url_basis\":{},\"bytes\":{},\
+                "{}{{\"file\":{},\"kind\":{},\"quarter\":{},\"url\":{},\"url_basis\":{},\"retrieved_utc\":{},\"bytes\":{},\
                  \"sha256\":{},\"visible_sheets\":{},\"hidden_sheets\":{},\"numeric_cells\":{},\
                  \"placeholder_cells\":{},\"formula_error_cells\":{},\"text_cells\":{},\"numeric_digest\":{}}}",
                 if n == 0 { "" } else { "," },
@@ -911,6 +913,10 @@ impl PublicAssuranceReport {
                 js(&s.quarter),
                 js(&s.url),
                 js(&s.url_basis),
+                js(self
+                    .source_retrievals
+                    .get(&s.file_name)
+                    .unwrap_or(&self.retrieved_utc)),
                 s.bytes,
                 js(&hex(&s.workbook.sha256)),
                 c.visible_sheets,
@@ -1987,6 +1993,16 @@ fn assess_inner(
         issuer: issuer.to_string(),
         lane,
         retrieved_utc: profile.retrieved_utc.clone(),
+        source_retrievals: profile
+            .sources
+            .iter()
+            .map(|s| {
+                (
+                    s.file_name.clone(),
+                    s.retrieval(&profile.retrieved_utc).to_string(),
+                )
+            })
+            .collect(),
         through: profile.through.clone(),
         sources,
         aisc_tables,

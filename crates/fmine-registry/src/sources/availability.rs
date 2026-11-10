@@ -36,6 +36,7 @@ pub struct RegisteredSource {
     pub url_basis: String,
     pub bytes: u64,
     pub sha256_hex: String,
+    pub retrieved_utc: Option<String>,
     pub published_at: Option<String>,
     pub published_at_basis: Option<String>,
 }
@@ -56,9 +57,18 @@ impl TryFrom<super::SourceRow> for RegisteredSource {
             url_basis: row.url_basis,
             bytes: row.bytes,
             sha256_hex: row.sha256,
+            retrieved_utc: row.retrieved_utc,
             published_at: row.published_at,
             published_at_basis: row.published_at_basis,
         })
+    }
+}
+
+impl RegisteredSource {
+    /// A later release can carry its own retrieval evidence without changing earlier sources' timing.
+    #[must_use]
+    pub fn retrieval<'a>(&'a self, batch: &'a str) -> &'a str {
+        self.retrieved_utc.as_deref().unwrap_or(batch)
     }
 }
 
@@ -207,6 +217,36 @@ pub fn publication_cut<'a>(
     retrieved: &str,
     as_of: &str,
 ) -> Result<PublicationCut, Refusal> {
+    publication_cut_rows(
+        rows.into_iter()
+            .map(|(file, date, basis)| (file, date, basis, retrieved)),
+        as_of,
+    )
+}
+
+/// The same public-record selection with each workbook's own retrieval fallback.
+pub fn source_publication_cut<'a>(
+    sources: impl IntoIterator<Item = &'a RegisteredSource>,
+    batch: &'a str,
+    as_of: &str,
+) -> Result<PublicationCut, Refusal> {
+    publication_cut_rows(
+        sources.into_iter().map(|s| {
+            (
+                s.file_name.as_str(),
+                s.published_at.as_deref(),
+                s.published_at_basis.as_deref(),
+                s.retrieval(batch),
+            )
+        }),
+        as_of,
+    )
+}
+
+fn publication_cut_rows<'a>(
+    rows: impl IntoIterator<Item = (&'a str, Option<&'a str>, Option<&'a str>, &'a str)>,
+    as_of: &str,
+) -> Result<PublicationCut, Refusal> {
     if !is_date(as_of) {
         return Err(Refusal::new(
             RefusalCode::AssayLookahead108,
@@ -216,7 +256,7 @@ pub fn publication_cut<'a>(
     let mut sources = Vec::new();
     let mut available_by = None;
     let mut files = std::collections::BTreeSet::new();
-    for (file, date, basis) in rows {
+    for (file, date, basis, retrieved) in rows {
         if !files.insert(file) {
             return Err(invalid(format!("duplicate availability source {file:?}")));
         }

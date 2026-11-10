@@ -21,8 +21,9 @@ The public lane of M0 (`fmine assure public`).
   Historical placeholders, absent rows and nonpositive printed values remain named observations; excluded
   ratio pairs and every `not_published` site remain visible. Every live point must be positive and usable.
   The receipt binds the exact rules bytes and FMRUL1 digest, raw source-registry bytes, declared information
-  cut, source digests, source Claims, model version and exported candidate. Registry retrieval intervals use
-  their upper endpoint; date-only publication claims are admitted only through the end of that day. Required
+  cut, source digests, source Claims, model version and exported candidate. Source-specific `retrieved_utc`
+  overrides take precedence over the legacy registry batch value, and retrieval intervals use their upper
+  endpoint; date-only publication claims are admitted only through the end of that day. Required
   quarters must have ended by retrieval, and all availability bounds must precede the declared cut. Synthetic
   source registrations retain a synthetic report label. This checks a declared information cut against the
   captured registry; it supplies no independent proof of the registry's historical existence, author access,
@@ -121,11 +122,16 @@ The public lane of M0 (`fmine assure public`).
 - `sources`: the source registry (`BD-055`, `BD-322`, bd-s9j3.1), read at run time from
   `<workspace>/registries/sources/<issuer>.toml` (schema `fmine.sources.v1`, checked by `fmine_registry::sources`
   and by `xtask registry-check`). It pins each public workbook by file name, URL, byte size and SHA-256 (Barrick:
-  Mine Stats 2024Q1–2026Q2 and AISC reconciliations 2024Q3–2026Q2, from W1, E451, E452), and holds the reporting
+  Mine Stats 2024Q1–2026Q3 and AISC reconciliations 2024Q3–2026Q3, from W1, E451, E452, E859), and holds the reporting
   subjects printed in the AISC table headers and the registered reconstructions (E816). Registering a vintage is
   a TOML edit, never a code change; `through(YYYYQn)` keeps only rows at or before a quarter, so an earlier run
   reproduces after later rows are added. Document-only partner profiles use the same schema and document
   verification path; workbook assurance and workbook Claims require at least one registered workbook.
+  Per-source `retrieved_utc` overrides preserve later-release timing without changing older batch evidence.
+  Source inventories, Claim traces, forecast availability and public-record retrieval bounds use the same
+  effective value. The numeric identity root remains independent of timing metadata; candidate receipts
+  and public-record comparison digests retain their relevant timing evidence. Retrieval and publication
+  remain distinct, including for undated sources and intervals that cross midnight.
 - `aisc`: a label-anchored reader for the AISC reconciliation tables. It finds rows by column-A label and the
   header row by registered subjects, so no coordinate is fixed. It also builds the identity ledger
   (`GATE-BULL-01` part 2, plan §21.6).
@@ -151,8 +157,10 @@ The public lane of M0 (`fmine assure public`).
     counted in the totals, `by_family` or `GATE-BULL-01`.
   - **One-cell check** (bd-prmn.8, Appendix K.4): a diagnostic, never a state and not in the state root. On
     every registered-subject column of the visible tables, cost of sales per ounce is checked against
-    1000·s·N/Q at the column's basis. The basis is the registered, label-confirmed share where an NCI line is
-    non-zero, and 100% otherwise. Each column reports the check at 100%, the check at the registered share,
+    1000·s·N/Q at the column's basis. The factor is the registered, label-confirmed share where an operating
+    NCI line before TCC is non-zero, and one otherwise. A sustaining-only NCI adjustment never rescales the
+    earlier cost-of-sales numerator. Factor one preserves the printed numerator; it does not establish
+    100% ownership. Each column reports the unscaled check, the check at the registered share,
     and the implied ounce interval. `one_cell_verdict` counts the failures outside a caller's K.4 items:
     "site-specific" if there are none, otherwise "basis rule".
   - **Construction discovery** (bd-4wvl.4, BD-340.S4 part 1): a report, never a state and not in the state root.
@@ -510,7 +518,8 @@ The public lane of M0 (`fmine assure public`).
   - **Cited cells:**
     - the table cells of the instance's family;
     - every used cell, for an all-zero column;
-    - the footnote and the confirmed share label, for a cost-of-sales rate with a non-zero NCI line;
+    - the footnote and the confirmed share label, for a cost-of-sales rate with a non-zero operating NCI line
+      before TCC; sustaining NCI rows remain cited but do not trigger ownership conversion;
     - each printed member's rate and ounces, for such a rate of a region with registered members;
     - a consulted reconstruction's quote, label-check and component cells.
   - **Not cited:** structure cells (row labels, subject headers, a sheet's title and period line).
@@ -771,7 +780,8 @@ The public lane of M0 (`fmine assure public`).
   printed share, unusable cell token, source binding or explicit unit that could not be read; the projection
   names the failing locator and reason. A refused Claim is never supplied with an inferred period, unit,
   ownership share or numeric replacement. The ledger's already computed state remains available.
-- Cost of sales per ounce in a column with a non-zero non-controlling-interest line (BD-331.S3) is checked at the
+- Cost of sales per ounce in a column with a non-zero operating non-controlling-interest line before TCC
+  (BD-331.S3, E860) is checked at the
   subject's registered share, s: 1000·s·N/Q on exact corners. A fit is (i), and its `basis` cites the share, the
   footnote and the label. A miss is (iv), giving the feasible share interval, rounded outward, and the missing
   fact. The instance is (v) instead when:

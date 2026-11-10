@@ -192,8 +192,8 @@ pub fn trace_json(cell: &KeyedCell, profile: &IssuerProfile) -> String {
         let source = registered.map_or_else(|| "null".into(), |source| format!(
             "{{\"file\":{},\"kind\":{},\"release\":{},\"url\":{},\"url_basis\":{},\"retrieved_utc\":{}}}",
             js(&source.file_name), js(source.kind.as_str()), js(&source.quarter), js(&source.url),
-            js(&source.url_basis), if profile.retrieved_utc.is_empty() { "null".into() }
-                else { js(&profile.retrieved_utc) }
+            js(&source.url_basis), if source.retrieval(&profile.retrieved_utc).is_empty() { "null".into() }
+                else { js(source.retrieval(&profile.retrieved_utc)) }
         ));
         format!(
             "{{\"artifact_path\":{},\"sha256\":{},\"locator\":{},\"registered_source\":{source}}}",

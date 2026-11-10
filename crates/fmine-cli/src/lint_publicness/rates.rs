@@ -43,7 +43,6 @@ pub(super) fn assess(
     profile: &IssuerProfile,
     publications: &BTreeMap<(String, String), &Publication>,
     as_of: &str,
-    retrieved: Option<&str>,
 ) -> Option<Assessment> {
     let (prototype, target, numerator, family) = cells.iter().find_map(|sold| {
         if sold.key.line.label != "ounces sold"
@@ -76,7 +75,7 @@ pub(super) fn assess(
                 && c.key.valid_period == target.period
                 && (c.key.line.label == numerator || c.key.line.label == "ounces sold")
         })
-        .map(|c| source_evidence(c, profile, publications, as_of, retrieved))
+        .map(|c| source_evidence(c, profile, publications, as_of))
         .collect();
     evidence.sort_by_cached_key(|e| (e.source.claim.claim_id, e.to_json()));
     evidence.dedup_by(|a, b| a.source == b.source);

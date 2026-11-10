@@ -2,8 +2,8 @@
 //! Determinism: Exact (invented source declarations; no wall clock or network).
 
 use fmine_registry::sources::{
-    RegisteredSource, SourceKind, SourceRow, available_date, day_end, publication_cut,
-    publication_date, retrieval_upper,
+    RegisteredSource, SourceKind, SourceRow, available_date, day_end, parse_sources_registry,
+    publication_cut, publication_date, retrieval_upper,
 };
 
 #[test]
@@ -113,6 +113,7 @@ fn typed_registered_projection_keeps_the_original_publication_citation() {
         url_basis: "W1 table".into(),
         bytes: 1,
         sha256: "a".repeat(64),
+        retrieved_utc: None,
         published_at: Some("2031-01-15".into()),
         published_at_basis: Some("FACT: invented release".into()),
     })
@@ -123,4 +124,94 @@ fn typed_registered_projection_keeps_the_original_publication_citation() {
         source.published_at_basis.as_deref(),
         Some("FACT: invented release")
     );
+}
+
+fn registry(override_time: Option<&str>) -> String {
+    format!(
+        r#"schema = "fmine.sources.v1"
+issuer = "invented"
+corpus_dir = "invented"
+retrieved_utc = "2030-07-02T10:00:00Z/10:01:00Z"
+url_prefix = "https://example.invalid/"
+[[source]]
+file = "old.xlsx"
+kind = "mine_stats"
+quarter = "2030Q2"
+path = "old.xlsx"
+url_basis = "W1 table"
+bytes = 1
+sha256 = "{}"
+[[source]]
+file = "new.xlsx"
+kind = "mine_stats"
+quarter = "2030Q3"
+path = "new.xlsx"
+url_basis = "W1 table"
+bytes = 1
+sha256 = "{}"
+{}
+[[subject]]
+name = "Invented site"
+"#,
+        "a".repeat(64),
+        "b".repeat(64),
+        override_time.map_or_else(String::new, |time| format!("retrieved_utc = \"{time}\""))
+    )
+}
+
+#[test]
+fn new_vintage_retrieval_does_not_move_old_source_availability() {
+    let parsed =
+        parse_sources_registry(&registry(Some("2030-10-02T23:59:59Z/2030-10-03T00:00:01Z")))
+            .unwrap();
+    assert_eq!(parsed.sources[0].retrieved_utc, None);
+    let profile = fmine_public::sources::IssuerProfile::from_registry(parsed).unwrap();
+    let old_cut = profile.mine_stats_as_of("2030-07-02").unwrap();
+    assert!(old_cut.includes("old.xlsx"));
+    assert!(!old_cut.includes("new.xlsx"));
+    assert_eq!(old_cut.available_by.as_deref(), Some("2030-07-02"));
+    assert!(
+        !profile
+            .mine_stats_as_of("2030-10-02")
+            .unwrap()
+            .includes("new.xlsx")
+    );
+    let new_cut = profile.mine_stats_as_of("2030-10-03").unwrap();
+    assert!(new_cut.includes("new.xlsx"));
+    assert_eq!(old_cut.sources[1], new_cut.sources[1]); // Sorted old source, untouched.
+    assert_eq!(
+        new_cut.sources[0].basis,
+        "2030-10-02T23:59:59Z/2030-10-03T00:00:01Z"
+    );
+    let legacy = fmine_public::sources::IssuerProfile::from_registry(
+        parse_sources_registry(&registry(None)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        legacy.mine_stats_as_of("2030-07-02").unwrap().sources[1],
+        old_cut.sources[1]
+    );
+}
+
+#[test]
+fn malformed_per_source_retrieval_never_falls_back_to_the_batch() {
+    assert!(parse_sources_registry(&registry(Some("2030-10-03"))).is_ok());
+    for bad in [
+        "",
+        "unknown",
+        "2030-02-29",
+        "2030-10-03T01:00:00Z/00:59:59Z",
+        "2030-10-03T00:00:00+00:00",
+    ] {
+        assert!(
+            parse_sources_registry(&registry(Some(bad))).is_err(),
+            "{bad}"
+        );
+    }
+    let valid = registry(Some("2030-10-03"));
+    let duplicate = valid.replace(
+        "retrieved_utc = \"2030-10-03\"",
+        "retrieved_utc = \"2030-10-03\"\nretrieved_utc = \"2030-10-04\"",
+    );
+    assert!(parse_sources_registry(&duplicate).is_err());
 }

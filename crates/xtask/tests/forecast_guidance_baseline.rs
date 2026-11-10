@@ -396,3 +396,62 @@ fn negative_remainder_is_visible_and_availability_never_uses_the_host_clock() {
     );
     assert!(guidance::run(&root, "2026-13-01").is_err());
 }
+
+#[test]
+fn each_workbook_uses_its_own_retrieval_upper_bound_before_opening_source_bytes() {
+    let root = fixture(true, "300");
+    let text = std::fs::read_to_string(registry(&root))
+        .unwrap()
+        .replace("2026-10-01T00:00:00Z", "2026-07-02T00:00:00Z")
+        .replace(
+            "file = \"2026Q3.xlsx\"",
+            "file = \"2026Q3.xlsx\"\nretrieved_utc = \"2026-10-02T23:59:59Z/2026-10-03T00:00:01Z\"",
+        );
+    std::fs::write(registry(&root), text).unwrap();
+    let early = guidance::run(&root, "2026-10-02").unwrap_err().join(" ");
+    assert!(early.contains("verified retrieval 2026-10-03"), "{early}");
+    let ready = guidance::run(&root, "2026-10-03").unwrap();
+    assert_eq!(ready.workbooks_available_by, "2026-10-03");
+    assert_eq!(row(&ready, "production").interval, interval(100, 200));
+    assert_eq!(row(&ready, "production").actuals.len(), 1);
+
+    std::fs::write(root.join("corpus/2026Q3.xlsx"), b"altered future bytes").unwrap();
+    let early = guidance::run(&root, "2026-10-02").unwrap_err().join(" ");
+    assert!(early.contains("verified retrieval 2026-10-03"), "{early}");
+    assert!(
+        guidance::run(&root, "2026-10-03")
+            .unwrap_err()
+            .join(" ")
+            .contains("FMINE-REF-505")
+    );
+}
+
+#[test]
+fn later_batch_cannot_hide_an_impossible_source_date_or_a_reversed_interval() {
+    let root = fixture(true, "300");
+    let original = std::fs::read_to_string(registry(&root)).unwrap();
+    std::fs::write(
+        registry(&root),
+        original.replace(
+            "file = \"2026Q3.xlsx\"",
+            "file = \"2026Q3.xlsx\"\nretrieved_utc = \"2026-09-29T23:59:59Z\"",
+        ),
+    )
+    .unwrap();
+    let error = guidance::run(&root, "2026-11-10").unwrap_err().join(" ");
+    assert!(
+        error.contains("2026Q3.xlsx: quarter end 2026-09-30"),
+        "{error}"
+    );
+
+    std::fs::write(
+        registry(&root),
+        original.replace(
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:00:00Z/2026-09-30T23:59:59Z",
+        ),
+    )
+    .unwrap();
+    let error = guidance::run(&root, "2026-11-10").unwrap_err().join(" ");
+    assert!(error.contains("retrieval interval is reversed"), "{error}");
+}

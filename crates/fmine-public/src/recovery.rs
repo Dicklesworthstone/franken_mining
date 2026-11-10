@@ -1205,6 +1205,7 @@ fn synthetic_inputs() -> Result<(IssuerProfile, TranscriptionReport, Vec<KeyedCe
         .map_err(|e| source_error(format!("synthetic workbook: {e:?}")))?;
     let sha = Digest32(workbook.sha256).to_hex();
     profile.sources = vec![RegisteredSource {
+        retrieved_utc: None,
         published_at: None,
         published_at_basis: None,
         file_name: file.into(),

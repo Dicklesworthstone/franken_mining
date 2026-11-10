@@ -43,6 +43,7 @@ fn fixture() -> (IssuerProfile, TranscriptionReport, Vec<KeyedCell>) {
             sources.insert(
                 name.clone(),
                 RegisteredSource {
+                    retrieved_utc: None,
                     published_at: None,
                     published_at_basis: None,
                     file_name: name,
