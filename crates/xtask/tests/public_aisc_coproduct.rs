@@ -17,6 +17,107 @@ mod tests {
     use fmine_public::synthetic::synthetic_profile;
 
     const LINE: &str = "Total cash costs per ounce (on a co-product basis)";
+    const AISC: &str = "All-in sustaining costs per ounce (on a co-product basis)";
+
+    /// FACT: independent visible-OOXML read, 2026-11-10: 359 numeric AISC co-product cells in 22
+    /// sheets of these five registered files; seven Loulo-Gounkoto zeros carry the withheld status.
+    #[test]
+    #[ignore = "needs the registered Barrick AISC workbooks under corpus_of_input_docs/"]
+    fn real_coproduct_aisc_cells_are_keyed_and_support_exact_lint_and_vintage_comparison() {
+        use fmine_public::lint::{Verdict, lint_cited, lint_discover};
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut profile =
+            fmine_public::sources::load_issuer_profile(&root, "barrick").expect("profile");
+        let files = [
+            "Barrick_Q3_2024_AISC.xlsx",
+            "Barrick_Q4_2024_AISC.xlsx",
+            "Barrick_Q1_2025_AISC.xlsx",
+            "Barrick_Q2_2025_AISC.xlsx",
+            "Barrick_Q3_2025_AISC.xlsx",
+        ];
+        profile.sources.retain(|s| files.contains(&s.file_name.as_str()));
+        assert_eq!(profile.sources.len(), 5);
+        let sources =
+            fmine_public::load_registered_sources(&profile, &root).expect("verified source bytes");
+        let index = key_aisc_operands(&profile, &sources, &[]);
+        assert!(index.refusals.is_empty(), "{:?}", index.refusals);
+        assert_eq!(
+            index.cells.len(),
+            718,
+            "all 359 TCC and 359 AISC co-product cells"
+        );
+        let claims: Vec<_> = index
+            .cells
+            .values()
+            .filter(|c| c.key.line.label == AISC.to_lowercase())
+            .collect();
+        assert_eq!(claims.len(), 359);
+        assert!(claims.iter().all(|c| c.key.unit == "usd_per_oz"
+            && c.key.ownership_basis == OwnershipBasis::Unprinted));
+        assert_eq!(
+            claims
+                .iter()
+                .filter(|c| matches!(
+                    c.claim.value,
+                    PublicValue::Number {
+                        displayed: Ok(_),
+                        ..
+                    }
+                ))
+                .count(),
+            352
+        );
+        assert_eq!(
+            claims
+                .iter()
+                .filter(|c| matches!(
+                    c.claim.value,
+                    PublicValue::Nil {
+                        reason: NilReason::Withheld,
+                        ..
+                    }
+                ))
+                .count(),
+            7
+        );
+        let first = &index.cells["Barrick_Q1_2025_AISC.xlsx:Q1 2025!C24"];
+        let later = &index.cells["Barrick_Q2_2025_AISC.xlsx:Q1 2025!C24"];
+        assert_eq!(first.key.subject, "Carlin");
+        assert_eq!(
+            first.key.reporting_vintage.file_sha256,
+            "06951434c3a3e325553dbe25018544c7329bc1a8b6e01ab0d3fcdeba2bb4388e"
+        );
+        assert!(
+            matches!(&first.claim.value, PublicValue::Number { stored, displayed: Ok(displayed), .. }
+                if stored == "2577.1763085877856" && displayed == "2577")
+        );
+        let draft = format!("Carlin Q1 2025 ownership basis unprinted co-product AISC per ounce sold is [$2,577/oz](fmine:{}).", first.claim.claim_id);
+        assert_eq!(
+            lint_cited(&draft, std::slice::from_ref(first)).findings[0].verdict,
+            Verdict::Verified
+        );
+        let discovered = "Carlin Q1 2025 ownership basis unprinted co-product AISC per ounce sold is $2,577/oz.";
+        assert_eq!(
+            lint_discover(discovered, std::slice::from_ref(first)).findings[0].verdict,
+            Verdict::Verified
+        );
+        assert_eq!(
+            lint_cited(
+                &draft.replace("co-product", "by-product"),
+                std::slice::from_ref(first)
+            )
+            .findings[0]
+                .verdict,
+            Verdict::BasisMismatch
+        );
+        let comparison = compare_vintages_with_disclosures(
+            &[first.clone(), later.clone()],
+            VintageScope::Aisc,
+            None,
+        );
+        assert_eq!(comparison.totals.states[&VintageState::Unchanged], 1);
+        assert!(comparison.items.is_empty());
+    }
 
     fn fixture(
         release: &str,
@@ -94,6 +195,11 @@ mod tests {
 
     #[test]
     fn co_product_rates_keep_units_identity_and_display_precision_when_rows_move() {
+        check_shifted_rate(LINE);
+        check_shifted_rate(AISC);
+    }
+
+    fn check_shifted_rate(line: &str) {
         let sources = [
             fixture(
                 "2030Q1",
@@ -101,7 +207,7 @@ mod tests {
                 0,
                 &[(
                     16,
-                    LINE,
+                    line,
                     Some(MinimalCell::Styled {
                         raw: "1466.1763085877856".into(),
                         xf: 1,
@@ -112,7 +218,7 @@ mod tests {
                 "2031Q1",
                 "G",
                 5,
-                &[(16, LINE, Some(MinimalCell::Number(1466.0)))],
+                &[(16, line, Some(MinimalCell::Number(1466.0)))],
             ),
         ];
         let profile = synthetic_profile();
@@ -138,7 +244,7 @@ mod tests {
         let claims: Vec<_> = index
             .cells
             .values()
-            .filter(|c| c.key.line.label == LINE.to_lowercase())
+            .filter(|c| c.key.line.label == line.to_lowercase())
             .cloned()
             .collect();
         assert_eq!(
@@ -172,6 +278,11 @@ mod tests {
 
     #[test]
     fn co_product_rows_are_optional_exact_and_occurrences_are_not_collapsed() {
+        check_optional_rows(LINE);
+        check_optional_rows(AISC);
+    }
+
+    fn check_optional_rows(line: &str) {
         let profile = synthetic_profile();
         for rows in [
             vec![],
@@ -189,7 +300,7 @@ mod tests {
             "2030Q1",
             "B",
             0,
-            &[(16, LINE, None), (17, LINE, Some(MinimalCell::Number(0.0)))],
+            &[(16, line, None), (17, line, Some(MinimalCell::Number(0.0)))],
         );
         let index = key_aisc_operands(&profile, &[source], &[]);
         assert!(index.refusals.is_empty());
@@ -204,6 +315,11 @@ mod tests {
 
     #[test]
     fn co_product_tokens_status_and_display_refusals_use_the_canonical_classifier() {
+        check_rate_tokens(LINE);
+        check_rate_tokens(AISC);
+    }
+
+    fn check_rate_tokens(line: &str) {
         let cases = [
             (
                 MinimalCell::Text("—".into()),
@@ -232,7 +348,7 @@ mod tests {
         ];
         let mut profile = synthetic_profile();
         for (input, expected) in cases {
-            let source = fixture("2030Q1", "B", 0, &[(16, LINE, Some(input))]);
+            let source = fixture("2030Q1", "B", 0, &[(16, line, Some(input))]);
             let index = key_aisc_operands(&profile, &[source], &[]);
             assert!(index.refusals.is_empty());
             assert_eq!(
@@ -251,7 +367,7 @@ mod tests {
             "2030Q1",
             "B",
             0,
-            &[(16, LINE, Some(MinimalCell::Number(0.0)))],
+            &[(16, line, Some(MinimalCell::Number(0.0)))],
         );
         let index = key_aisc_operands(&profile, &[source], &[]);
         let cell = index.cells.values().next().expect("disposed Claim");
@@ -267,7 +383,7 @@ mod tests {
             "2030Q1",
             "B",
             0,
-            &[(16, LINE, Some(MinimalCell::Error("#REF!".into())))],
+            &[(16, line, Some(MinimalCell::Error("#REF!".into())))],
         );
         let index = key_aisc_operands(&profile, &[source], &[]);
         assert!(index.cells.is_empty());

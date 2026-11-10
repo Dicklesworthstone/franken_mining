@@ -85,7 +85,10 @@ The public lane of M0 (`fmine assure public`).
   ownership checks are the same as for gold, with no ounce/pound conversion. The HTML source keys join
   these same checks for gold/copper costs and production, and gold sales. Printed HTML AISC/TCC/C1 labels
   never establish by-/co-product treatment: an explicit credit-basis assertion remains unchecked.
-  Co-product TCC stays distinct from by-product TCC. Canonical copper
+  Explicitly printed gold co-product TCC and AISC stay distinct from by-product rates. Their cited and
+  discovery checks require the co-product qualifier and retain original publication cuts, source hashes
+  and ownership evidence. A direct printed co-product rate is used without inventing a credit add-back.
+  Canonical copper
   C1 summary/site rows require explicit `$/lb` or `US$/lb` and per-pound-sold denominators; by/co-product,
   gold-ounce and produced-denominator assertions are not inferred from C1. Copper production requires an
   explicit copper metric and canonical `kt`; historical millions-of-pounds site rows stay unchecked.
@@ -689,7 +692,7 @@ The public lane of M0 (`fmine assure public`).
   the CLI's show/why/trace views. Absent decision, calibration and clock assessments stay absent; unresolved
   parent IDs mark a partial trace. No upstream measurement history or arbitrary derived-Claim store is inferred.
 - `aisc::{AiscClaimIndex, KeyingRefusal, key_aisc_operands}` (BD-332.S2): one keyed Claim per distinct arithmetic
-  operand and per explicitly labelled co-product cash-cost rate, with the subject read from its own column
+  operand and per explicitly labelled co-product cash-cost or AISC rate, with the subject read from its own column
   (including regional member inputs), canonical
   metric labels, repeated-label occurrence indices and units `usd_m`, `koz` or `usd_per_oz`. An operand must
   still agree with its loaded source cell. Co-product rows retain their distinct line and `usd_per_oz` unit;

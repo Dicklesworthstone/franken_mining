@@ -226,9 +226,17 @@ no applicable verified note is registered. All 30 region-map exclusions cite E46
 remain `not_comparable`. A difference does not identify which publication is correct, and this classification
 does not establish whether an explanation exists outside the registered evidence.
 
-The same engine compares the AISC workbooks under `issuer_consistency.aisc_vintages`: 9,541 appearances,
-5,819 series and 3,722 later comparisons, all unchanged in the registered corpus. This includes 359 explicitly
-labelled co-product cash-cost rates, kept distinct from the by-product rates used by the identity ledger.
+The same engine compares the AISC workbooks under `issuer_consistency.aisc_vintages`. Its frozen original
+population through 2026Q2 contains 9,541 appearances, 5,819 series and 3,722 later comparisons, including
+359 explicitly labelled co-product cash-cost rates. The original census remains pinned separately from
+newly admitted rate families and later source vintages.
+
+Explicitly printed **gold co-product AISC** is now also admitted as a distinct USD/oz source Claim.
+An independent visible-OOXML read identified 359 additional source cells across 22 sheets in five registered
+workbooks. Stored precision, displayed rounding, reporting vintage, original source hashes, unprinted
+ownership and status-bearing zeros are preserved. Cited and discovery checks require the co-product
+qualifier and keep co-product ownership comparisons separate from by-product ones. The direct printed
+rate provides the evidence; no credit add-back or co-product numerator is inferred.
 
 **DESIGN (BD-504e):** `issuer_consistency.mine_stats_identities` also follows the seven Mine Stats
 arithmetic identity families across releases. It shows state counts at each identity's earliest registered

@@ -2071,6 +2071,52 @@ fn cost_rate_report(report: &Envelope) -> &str {
 }
 
 #[test]
+fn coproduct_aisc_is_disclosed_from_its_own_dated_source_rate() {
+    let root = derivation_workspace();
+    let mut sheet = cost_sheet("150", number("100"), Some("1500"));
+    sheet.cells.extend([
+        (
+            "A17".into(),
+            MinimalCell::Text(
+                "All-in sustaining costs per ounce (on a co-product basis)".into(),
+            ),
+        ),
+        ("B17".into(), number("1600.4")),
+    ]);
+    let hash = cost_source(&root, "Costs.xlsx", Some("2030-05-01"), "0", sheet);
+    let draft = "Example Mine Q1 2030 ownership basis unprinted co-product AISC per ounce sold is $1,600/oz.";
+    let report = assess(&root, draft, "2030-05-01");
+    assert!(
+        report.payload_json.contains("\"verdict\":\"verified\""),
+        "{}",
+        report.to_json()
+    );
+    assert!(report.payload_json.contains("\"status\":\"disclosed\""));
+    assert!(report.payload_json.contains("Costs.xlsx:Q1 2030!B17"));
+    assert!(
+        report.payload_json.contains("\"stored\":\"1600.4\",\"displayed\":\"1600\"")
+    );
+    assert!(report.payload_json.contains(&hash));
+    assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    assert_eq!(report, assess(&root, draft, "2030-05-01"));
+    let before = assess(&root, draft, "2030-04-30");
+    assert!(!before.payload_json.contains("\"status\":\"disclosed\""));
+    let contradicted = assess(
+        &root,
+        &draft.replace("$1,600/oz", "$1,500/oz"),
+        "2030-05-01",
+    );
+    assert!(
+        contradicted
+            .payload_json
+            .contains("\"status\":\"contradicts_disclosed\""),
+        "{}",
+        contradicted.to_json()
+    );
+    assert!(contradicted.payload_json.contains("Costs.xlsx:Q1 2030!B17"));
+}
+
+#[test]
 fn cost_rates_derive_gold_aisc_and_byproduct_tcc_from_exact_printed_source_enclosures() {
     let root = derivation_workspace();
     let hash = cost_source(

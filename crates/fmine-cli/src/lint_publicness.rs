@@ -494,15 +494,11 @@ fn ambiguous_attributable_shares(f: &LintFinding, candidates: &[&KeyedCell]) -> 
         ) {
             return false;
         }
-        let co_product =
-            source.key.line.label == "total cash costs per ounce (on a co-product basis)";
+        let co_product = fmine_public::aisc::is_coproduct_rate(&source.key.line.label);
         candidates
             .iter()
             .copied()
-            .filter(|c| {
-                (c.key.line.label == "total cash costs per ounce (on a co-product basis)")
-                    == co_product
-            })
+            .filter(|c| fmine_public::aisc::is_coproduct_rate(&c.key.line.label) == co_product)
             .collect()
     } else {
         f.candidates.iter().collect()

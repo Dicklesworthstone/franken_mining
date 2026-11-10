@@ -351,8 +351,10 @@ mod tests {
     fn real_aisc_vintages_match_independent_census() {
         use fmine_public::aisc::{key_aisc_operands, ledger_for_table, locate_table};
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let profile =
-            fmine_public::sources::load_issuer_profile(&root, "barrick").expect("profile");
+        let profile = fmine_public::sources::load_issuer_profile(&root, "barrick")
+            .expect("profile")
+            .through("2026Q2")
+            .expect("original census source population");
         let sources =
             fmine_public::load_registered_sources(&profile, &root).expect("verified sources");
         let mut instances = Vec::new();
@@ -379,7 +381,17 @@ mod tests {
         }
         let index = key_aisc_operands(&profile, &sources, &instances);
         assert!(index.refusals.is_empty(), "{:?}", index.refusals);
-        let claims: Vec<_> = index.cells.values().cloned().collect();
+        // Keep the frozen independent census on its original lines; the newly admitted AISC co-product
+        // population has its own independently read count and real-source known-answer test.
+        let claims: Vec<_> = index
+            .cells
+            .values()
+            .filter(|c| {
+                c.key.line.label != "all-in sustaining costs per ounce (on a co-product basis)"
+            })
+            .cloned()
+            .collect();
+        assert_eq!(index.cells.len(), claims.len() + 359);
         let report = compare_vintages_with_disclosures(&claims, VintageScope::Aisc, None);
         println!(
             "AISC canonical vintage census: series={} multi_vintage={} totals={:?}",

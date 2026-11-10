@@ -1149,6 +1149,62 @@ fn equal_value_links_cannot_swap_subject_metric_period_ownership_or_units() {
 }
 
 #[test]
+fn coproduct_aisc_requires_its_credit_basis_and_keeps_ownership_ambiguity_separate() {
+    let co = observation("1100", |k| {
+        k.line.label = "all-in sustaining costs per ounce (on a co-product basis)".into();
+        k.ownership_basis = OwnershipBasis::Attributable {
+            num: 3,
+            den: 5,
+            source: ShareSource::Printed,
+        };
+    });
+    let by = observation("1100", |k| {
+        k.ownership_basis = OwnershipBasis::Attributable {
+            num: 4,
+            den: 5,
+            source: ShareSource::Printed,
+        };
+    });
+    let draft = sentence(&co, "$1,100/oz")
+        .replace("ownership basis unprinted", "attributable")
+        .replace("AISC", "co-product AISC");
+    let discovered = draft.replace(
+        &format!("[$1,100/oz](fmine:{})", co.claim.claim_id),
+        "$1,100/oz",
+    );
+    let claims = [co.clone(), by];
+    assert_eq!(verdict(&draft, &claims), Verdict::Verified);
+    assert_eq!(
+        lint_discover(&discovered, &claims).findings[0].verdict,
+        Verdict::Verified
+    );
+    assert_eq!(
+        verdict(&draft.replace("co-product", "by-product"), &claims),
+        Verdict::BasisMismatch
+    );
+    assert_eq!(
+        verdict(&draft.replace("co-product ", ""), &claims),
+        Verdict::Ambiguous
+    );
+    assert_eq!(
+        verdict(
+            &draft.replace("per ounce sold", "per ounce produced"),
+            &claims
+        ),
+        Verdict::BasisMismatch
+    );
+    let competing = observation("1900", |k| {
+        k.line.label = co.key.line.label.clone();
+        k.ownership_basis = OwnershipBasis::Attributable {
+            num: 4,
+            den: 5,
+            source: ShareSource::Printed,
+        };
+    });
+    assert_eq!(verdict(&draft, &[co, competing]), Verdict::Ambiguous);
+}
+
+#[test]
 fn distinct_credit_and_production_bases_have_positive_known_answers() {
     let co = observation("1100", |k| {
         k.line.label = "total cash costs per ounce (on a co-product basis)".into()

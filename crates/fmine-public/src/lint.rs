@@ -283,6 +283,7 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         "summary:aisc_usd_per_oz"
         | "html:aisc_usd_per_oz_sold"
         | "all-in sustaining costs per ounce"
+        | "all-in sustaining costs per ounce (on a co-product basis)"
         | "site:costs per ounce:all-in sustaining costs"
         | "site:costs per ounce ($/oz):all-in sustaining costs"
         | "summary:aisc_usd_per_lb"
@@ -336,7 +337,7 @@ fn attribution_key(c: &KeyedCell) -> Option<AttributionKey> {
         c.key.scope.clone(),
         c.key.unit.clone(),
         metric(c)?,
-        c.key.line.label == "total cash costs per ounce (on a co-product basis)",
+        crate::aisc::is_coproduct_rate(&c.key.line.label),
     ))
 }
 
@@ -634,7 +635,10 @@ fn basis_findings(c: &Context, claim: &KeyedCell, metric: Metric) -> Vec<(Verdic
     {
         failures.push((Verdict::BasisMismatch, "sold_produced_denominator"));
     }
-    let co_product = claim.key.line.label == "total cash costs per ounce (on a co-product basis)";
+    let co_product = crate::aisc::is_coproduct_rate(&claim.key.line.label);
+    if co_product && !c.bases.iter().any(|basis| basis.is_credit()) {
+        failures.push((Verdict::Ambiguous, "credit_basis_required"));
+    }
     // HTML labels establish the printed rate, not the issuer's by-/co-product definition.
     let unstated_credit = matches!(
         claim.key.line.label.as_str(),

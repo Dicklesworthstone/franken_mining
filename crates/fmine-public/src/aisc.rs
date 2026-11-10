@@ -1170,17 +1170,24 @@ fn key_aisc_operand(
     Ok(cell)
 }
 
-const COPRODUCT_RATE_LABEL: &str = "total cash costs per ounce (on a co-product basis)";
+/// The explicitly printed gold co-product rate labels; never an inferred credit basis.
+#[must_use]
+pub fn is_coproduct_rate(label: &str) -> bool {
+    [
+        "total cash costs per ounce (on a co-product basis)",
+        "all-in sustaining costs per ounce (on a co-product basis)",
+    ]
+    .iter()
+    .any(|expected| label.eq_ignore_ascii_case(expected))
+}
 
 fn coproduct_rate_rows(sheet: &Sheet) -> BTreeSet<u32> {
     sheet
         .cells_by_coord
         .keys()
         .filter_map(|&(row, col)| {
-            (col == 1
-                && cell_text(sheet, row, col)
-                    .is_some_and(|label| label.eq_ignore_ascii_case(COPRODUCT_RATE_LABEL)))
-            .then_some(row)
+            (col == 1 && cell_text(sheet, row, col).is_some_and(|label| is_coproduct_rate(&label)))
+                .then_some(row)
         })
         .collect()
 }
