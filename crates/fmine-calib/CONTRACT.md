@@ -105,6 +105,23 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   forecast/cohort/assessment identities. Pure JSON and Markdown renderers expose this descriptive projection;
   no calibration, independence or confidence claim follows. Public-API acceptance tests live in
   `xtask/tests/forecast_diagnostics.rs`; private bin/count edge tests remain beside the kernel.
+- DESIGN (BD-048/049): `quantile_diagnostics(saved_digest)` supplements the saved assessment with twice-pinball
+  loss at **every supplied quantile**, including interior levels. The preregistered central interval score
+  remains unchanged. At level 1/2 this loss is absolute error; for exactly complementary levels p and 1-p,
+  the pair's sum divided by 2p equals the interval score. No CDF, interpolated level or CRPS is inferred.
+  Checked i128 rationals score the exact frozen IEEE-754 values, not their decimal display strings; JSON
+  numerators and denominators are strings to preserve their full precision. Representation, multiplication,
+  summation or mean overflow is explicit arithmetic indeterminacy, never a rounded value or dropped member.
+  Each exact probability has its own supplied/resolved/unresolved population, with absent levels and other
+  distributions visible. Observed means require every resolved loss; completion means retain every supplied
+  member and use only the frozen outcome domain. Their convex loss minima occur at the quantile clamped to
+  that domain and maxima at an endpoint; without a domain the minimum is zero and the upper bound unbounded.
+  QNT1/v1 binds the parent assessment, frozen domain, full source-bound membership, table and exact results.
+  Later outcomes cannot rewrite it; parent forecast/cohort/assessment, DGN1 and CVG1 identities are unchanged.
+  JSON and journal Markdown expose both individual losses and per-level completion bounds. This supplemental
+  descriptive projection changes no calibration flags and establishes no independence or predictive skill.
+  Known-answer, precision, missing-outcome, arithmetic-capacity and source-tamper controls live in
+  `xtask/tests/forecast_quantiles.rs`; transcript/journal/reopened-report agreement is in `forecast_live.rs`.
 - BD-343: `freeze_cohort(CohortSpec)` freezes sorted membership, the resolution rule, eligible sources and
   `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
   Payloads are Gaussian, a uniform empirical distribution, an interval with a stated or explicitly absent

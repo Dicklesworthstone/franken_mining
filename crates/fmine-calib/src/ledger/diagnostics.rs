@@ -14,6 +14,7 @@ use super::{
 };
 
 pub mod coverage;
+pub mod quantiles;
 
 pub const SCOPE: &str = "Descriptive diagnostics within one frozen cohort, not calibration verdicts, independence estimates, confidence intervals or predictive-skill claims. Unsupported distributions and unresolved members remain visible.";
 pub const BIN_RULE: &str = "Fixed deciles [lower, upper), with the final bin including 1; exact edge values enter the bin on their right. Completion bounds retain every unresolved member and are not simultaneous confidence intervals.";

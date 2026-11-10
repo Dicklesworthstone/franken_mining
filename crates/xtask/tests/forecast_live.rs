@@ -371,6 +371,144 @@ fn outcome(alias: &str, value: i64, available: &str, restated: bool) -> String {
     )
 }
 
+#[test]
+fn supplied_quantile_losses_match_normal_and_saved_reports_without_reselecting_evidence() {
+    fn projection(json: &str) -> &str {
+        assessment(json)
+            .split_once("\"quantile_losses\":")
+            .unwrap()
+            .1
+            .strip_suffix('}')
+            .unwrap()
+    }
+    struct NoReportClock;
+    impl WallClock for NoReportClock {
+        fn now_ns(&self) -> Result<i64, ClockError> {
+            panic!("saved quantile reports must not sample a clock")
+        }
+    }
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    let forecasts = ["f1", "f2"].map(|alias| format!(
+        "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{alias}\"\noutcome_due = \"{DUE}\"\nkind = \"quantiles\"\nlevels = \"0.25,0.5,0.75\"\nvalues = \"10,15,20\"\n"
+    ));
+    for request in &forecasts {
+        journal.append(request, ns("2030-01-02T00:00:00Z"));
+    }
+    let frozen = cohort("f1,f2")
+        .replace("alpha = \"0.2\"", "alpha = \"0.5\"")
+        .replace("outcome_hi = \"100\"", "outcome_hi = \"40\"");
+    journal.append(&frozen, ns("2030-01-03T00:00:00Z"));
+    let original = outcome("f1", 18, "2031-01-01T00:00:00Z", false);
+    let missing = "[[outcome]]\nforecast = \"f2\"\nkind = \"missing\"\navailable_at = \"2031-01-01T00:00:00Z\"\nreason = \"not_published\"\n";
+    journal.append(&original, ns("2031-01-02T00:00:00Z"));
+    journal.append(missing, ns("2031-01-02T00:00:00Z"));
+    let current = journal.run(
+        &Command::Assess {
+            journal: journal.path.clone(),
+            head: journal.head,
+            cohort: "three-sites".into(),
+            as_of: CUT.into(),
+            selector: "first-published".into(),
+            expected_digest: None,
+        },
+        ns(CUT),
+    );
+    assert_eq!(current.exit_code, 0, "{}", current.to_json());
+    journal.head = head(&current.payload_json);
+    let current_markdown = current.rendered_markdown.as_deref().unwrap();
+    assert!(current_markdown.contains("### Supplied quantile losses"));
+    assert!(current_markdown.contains("| 0.5 | 2 / 2 | 1 | 1 | 1 | 0 | 3 | [3/2, 14] |"));
+    let saved = current.payload_json.clone();
+    let old_digest = assessment_digest(&saved);
+    let old_projection = projection(&saved).to_owned();
+    assert!(old_projection.contains("\"schema\":\"fmine.forecast-quantile-loss.v1\""));
+    assert!(old_projection.contains(
+        "\"n_supplied\":2,\"n_not_supplied\":0,\"n_resolved\":1,\"n_unresolved\":1,\"n_scored\":1"
+    ));
+    assert!(old_projection.contains("\"lower\":{\"num\":\"2\",\"den\":\"1\"},\"upper\":{\"num\":\"19\",\"den\":\"2\"},\"upper_unbounded\":false"));
+    assert!(old_projection.contains("\"status\":\"unresolved\",\"loss\":null"));
+    assert!(old_projection.contains("\"selected_event\":{\"seq\":1,"));
+    assert!(assessment(&saved).contains("Invented!A1"));
+    assert!(assessment(&saved).contains(&"11".repeat(32)));
+
+    // Feed the same frozen records and event times through the ordinary transcript command.
+    let mut transcript = "schema = \"fmine.forecast-ledger.v1\"\nlane = \"synthetic\"\n".to_owned();
+    for request in &forecasts {
+        transcript
+            .push_str(&request.replace("id =", "registered_at = \"2030-01-02T00:00:00Z\"\nid ="));
+    }
+    transcript.push_str(&frozen.replace("name =", "frozen_at = \"2030-01-03T00:00:00Z\"\nname ="));
+    for request in [original.as_str(), missing] {
+        transcript.push_str(&request.replace(
+            "available_at =",
+            "recorded_at = \"2031-01-02T00:00:00Z\"\navailable_at =",
+        ));
+    }
+    fs::write(journal.root.join("quantiles.toml"), transcript).unwrap();
+    let args = [
+        "forecast",
+        "assess",
+        "--ledger",
+        "quantiles.toml",
+        "--cohort",
+        "three-sites",
+        "--as-of",
+        CUT,
+    ]
+    .map(str::to_owned);
+    let normal = fmine_cli::invoke(&args, &journal.root).0;
+    assert_eq!(normal.exit_code, 0, "{}", normal.to_json());
+    assert_eq!(projection(&normal.payload_json), old_projection);
+
+    journal.append(
+        &outcome("f1", 12, "2031-01-11T00:00:00Z", true),
+        ns("2031-01-12T00:00:00Z"),
+    );
+    journal.append(
+        &outcome("f2", 20, "2031-01-11T00:00:00Z", false),
+        ns("2031-01-12T00:00:00Z"),
+    );
+    let latest = journal.assess(
+        "2031-01-13T00:00:00Z",
+        "latest-as-of",
+        None,
+        ns("2031-01-13T00:00:00Z"),
+    );
+    assert_ne!(projection(&latest), old_projection);
+    assert!(projection(&latest).contains("\"n_resolved\":2,\"n_unresolved\":0,\"n_scored\":2"));
+    let bytes = fs::read(&journal.path).unwrap();
+    let reopened = execute_with_clock(
+        &Command::Report {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            assessment: old_digest,
+            provenance: None,
+            timestamp: None,
+        },
+        &journal.root,
+        &NoReportClock,
+    );
+    assert_eq!(reopened.exit_code, 0, "{}", reopened.to_json());
+    assert_eq!(projection(&reopened.payload_json), old_projection);
+    assert_eq!(assessment(&reopened.payload_json), assessment(&saved));
+    assert_eq!(fs::read(&journal.path).unwrap(), bytes);
+    let markdown = reopened.rendered_markdown.as_deref().unwrap();
+    assert!(markdown.contains("### Supplied quantile losses"));
+    assert!(markdown.contains("| 0.5 | 2 / 2 | 1 | 1 | 1 | 0 | 3 | [3/2, 14] |"));
+    assert_eq!(
+        markdown
+            .split_once("### Supplied quantile losses")
+            .unwrap()
+            .1,
+        current_markdown
+            .split_once("### Supplied quantile losses")
+            .unwrap()
+            .1,
+    );
+    assert!(markdown.contains("Invented!A1"));
+    assert!(markdown.contains(&"11".repeat(32)));
+}
+
 fn one_member(skew: u64) -> Journal {
     let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), skew);
     journal.append(&forecast("f1", 40, 50, DUE), ns("2030-01-02T00:00:00Z"));
