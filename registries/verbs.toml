@@ -48,7 +48,7 @@ description = "Compare exact production GEO across named versioned price decks o
 path = "plan pit"
 subsystem = "Pushback"
 mutates_authority = false
-description = "Solve the ultimate pit of a MineLib UPIT block-value and precedence pair by pseudoflow, with exact decimal values and the closure certificate re-verified"
+description = "Solve certified ultimate pits from MineLib UPIT pairs or regular OMF block models with explicit value scale and uniform slope declarations"
 
 [[verb]]
 path = "html claims"

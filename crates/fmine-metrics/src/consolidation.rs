@@ -599,10 +599,7 @@ mod tests {
             (q(17600, 21), q(856000, 323))
         );
         assert_eq!(
-            (
-                r.components_usd_per_oz[1].lo,
-                r.components_usd_per_oz[1].hi
-            ),
+            (r.components_usd_per_oz[1].lo, r.components_usd_per_oz[1].hi),
             (q(-22000, 19), q(-6000, 7))
         );
         // Closure does not remove the already-detected sales discrepancy.
@@ -627,11 +624,7 @@ mod tests {
             }
             let source: Vec<_> = std::iter::once(&t.aggregate)
                 .chain(&t.members)
-                .flat_map(|c| {
-                    c.components
-                        .iter()
-                        .chain([&c.numerator_usd_m, &c.sold_koz])
-                })
+                .flat_map(|c| c.components.iter().chain([&c.numerator_usd_m, &c.sold_koz]))
                 .copied()
                 .collect();
             let r = run(t).value.rates.unwrap();

@@ -221,8 +221,10 @@ fn dollars_in_millions(label: &str) -> bool {
         None => label,
     };
     let (currency, qualifier) = label.split_once(',').unwrap_or((label, ""));
-    matches!(currency.trim(), "$ millions" | "us$ millions" | "usd millions")
-        && (qualifier.is_empty() || qualifier.trim().starts_with("except per ounce "))
+    matches!(
+        currency.trim(),
+        "$ millions" | "us$ millions" | "usd millions"
+    ) && (qualifier.is_empty() || qualifier.trim().starts_with("except per ounce "))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -869,7 +871,10 @@ impl Report {
                                 );
                             }
                             for (label, d) in [
-                                ("Unexplained numerator remainder", rates.unexplained_usd_per_oz),
+                                (
+                                    "Unexplained numerator remainder",
+                                    rates.unexplained_usd_per_oz,
+                                ),
                                 ("Sales denominator difference", rates.denominator_usd_per_oz),
                             ] {
                                 super::row(

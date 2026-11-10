@@ -456,6 +456,32 @@ with a verdict: `not_closed`, `optimal` or `suboptimal`. Nothing the candidate s
 MineLib's kd, for example, the optimal pit without its highest-numbered block is `suboptimal` by 132,781.5934, and
 with block 0 removed it is `not_closed`, because eight pit blocks require block 0.
 
+### Solve an ultimate pit directly from an OMF block model
+
+`plan pit` also connects the OMF 2 reader to the certified pit solver. Select the regular parent-block
+model and its numeric value attribute, and declare the integer value scale and uniform slope cone:
+
+```bash
+cargo run --release -p fmine-cli -- plan pit --omf model.omf \
+  --block-model orebody --value-attribute value --per-unit 100 \
+  --slope-rise 1 --slope-run 1 --slope-levels 3 --round --list-blocks --json
+```
+
+All selectors, scale and slope parameters are required. `--round` explicitly accepts binary64 scaling
+followed by nearest-integer rounding, with halves away from zero. The certificate proves the optimum of
+that **scaled integer model**; it does not prove the optimum of the original unrounded attribute.
+The receipt binds the actual OMF bytes by SHA-256 and records the coordinate context, selected attribute,
+declared slope, scale, exact scaled value and verification result. Listed block IDs follow OMF order:
+U fastest, then V, then W from the bottom upward.
+
+This path accepts regular parent grids with W pointing straight up. It refuses ambiguous model or
+attribute names, missing/null values, unsupported geometry and mixed MineLib options. The finite-depth
+uniform slope is an explicit modeling assumption; sector-specific slope tables, OMF scheduling and
+external OMF candidate pits remain outside this command. The supplied values are not independently
+derived from prices, costs or recoveries, and the result supplies no reserve classification or slope approval.
+The integration tests independently enumerate all closed sets for 24 small authored OMF models, check
+source perturbations and signed rounding, and exercise the built executable; these are synthetic checks.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

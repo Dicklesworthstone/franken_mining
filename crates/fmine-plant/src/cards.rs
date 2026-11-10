@@ -19,6 +19,7 @@ pub mod ensemble;
 mod formula;
 #[cfg(test)]
 mod tests;
+pub mod worksheet;
 
 type Result<T> = std::result::Result<T, Refusal>;
 pub const TEST_WORK_METRIC: &str = "plant.recovery.test_work_card/1";

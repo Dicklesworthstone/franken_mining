@@ -61,7 +61,7 @@ pub enum CliCommand {
     MetricsCost(cost::Command),
     /// Compare unchanged production quantities under explicit named and versioned price decks.
     MetricsGeo(geo::Command),
-    /// The certified ultimate pit of a MineLib UPIT pair (bd-ip99).
+    /// A certified ultimate pit from a MineLib pair or explicitly declared OMF model (BD-194/250).
     PlanPit(pit::Command),
     /// Checked PCPSP production schedule, external destination splits and a verified global bound.
     PlanSchedule(schedule::Command),

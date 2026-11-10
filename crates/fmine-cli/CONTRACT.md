@@ -103,7 +103,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     output remains unchanged. The Fraction oracle checks actual LP-guided value 10→18, limit handling,
     signed-resource scope, external dominance, deterministic reruns and preallocation refusals.
   - DESIGN (BD-176/287): `plant recovery --input <worksheet.toml>` reads the bounded, byte-bound
-    `fmine.plant-recovery.v1` worksheet and delegates to `fmine-plant::cards::RecoveryModel`.
+    `fmine.plant-recovery.v1` worksheet and delegates source admission, parsing and evaluation to
+    `fmine-plant::cards::worksheet`, which verifies the source hash before invoking `RecoveryModel`.
     One versioned test-work formula, exact input requirements, ordered operational factors, a correction,
     optional explicit cap and route retain their source Claims. Processing support, scope, validity and
     matching input units/measurands are explicit. Original numeric tokens and every intermediate fraction
@@ -232,6 +233,21 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     `FMINE-REF-506`. Any value or bound the candidate claims is ignored. The test compares every verdict, value,
     gap and witness list with brute force on 120 candidates (each pair's brute-force optimum, a random closed
     set and a random set).
+    The alternate `--omf <file.omf> --block-model <name> --value-attribute <name> --per-unit N
+    --slope-rise N --slope-run N --slope-levels N --round [--list-blocks]` path (bd-joiv, BD-194/250)
+    reads a regular binary file bounded to 1 GiB and binds its exact SHA-256. It passes the explicitly
+    selected regular parent-block model, numeric Primitives attribute and uniform finite-depth slope
+    cone through `fmine-io::omf::pit::PitModel`; the existing solver verifies its final flow certificate.
+    Scale, slope and selectors are mandatory, and mixed MineLib-only flags refuse. Explicit `--round`
+    accepts binary64 scaling followed by nearest-integer rounding, halves away from zero. Payload
+    `fmine.plan-pit.omf.v1` retains coordinate context, declarations, exact scaled value and ratio,
+    block/arc counts, solver counters and certificate status. Listed IDs are converted back to OMF order
+    (U fastest, V, W bottom-up). The certificate covers the integer model only; the raw-attribute
+    optimality bound is null. Ambiguous names, null values, nonregular grids and tilted W refuse.
+    Sector/domain slope tables, OMF candidates and scheduling remain unsupported. Twenty-four small
+    synthetic OMF fixtures are checked against independent geometric closure enumeration, alongside
+    hand-worked cones, signed rounding, source perturbation, refusals and actual-binary execution in
+    `crates/xtask/tests/plan_pit_omf.rs`.
   - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
     worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
     SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC

@@ -14,8 +14,8 @@
 //! 2^32. Scaling by a power of two is exact; sizes no such power makes integers, such as 0.1, are refused.
 //!
 //! **Values.** A block's weight is its value times `per_unit`, rounded to the nearest integer (halves away from zero).
-//! Each block moves by at most half a unit, `1 / (2 · per_unit)`, so the pit is best for the rounded values and
-//! within `blocks / per_unit` of best for the attribute's own.
+//! Integer attributes scale exactly; float attributes use binary64 multiplication before rounding. The pit is
+//! certified best for the resulting integer weights; no optimality bound for the raw float attribute is supplied.
 //!
 //! **Schedules** (bd-fr8x). [`PitModel::schedule`] builds `toposort`'s problem from the values, the precedence arcs
 //! and capacities whose per-block uses are attributes, rounded up so that a schedule within the scaled limits is
@@ -122,6 +122,40 @@ fn on_blocks<'a>(e: &'a Element, name: &str) -> Result<&'a Attribute, Refusal> {
         return Err(missing(format!(
             "OMF: attribute \"{name}\" of block model \"{}\" is on {:?}, not on the parent blocks (Primitives)",
             e.name, a.location
+        )));
+    }
+    Ok(a)
+}
+
+/// Select the unique integer or float Number attribute on the named model's parent blocks before constructing
+/// a [`PitModel`]. This checks selector, location and type without allocating per-block domains or slope arcs.
+/// Value nulls, finiteness and scaled range are checked by [`PitModel::weights`].
+///
+/// # Errors
+/// `FMINE-REF-506` for a missing or ambiguous element or attribute, a non-BlockModel element, a non-Primitives
+/// location, or values other than integer or float Numbers.
+pub fn value_attribute<'a>(
+    project: &'a Project,
+    block_model: &str,
+    attribute: &str,
+) -> Result<&'a Attribute, Refusal> {
+    let e = element(project, block_model)?;
+    if !matches!(&e.geometry, Geometry::BlockModel(_)) {
+        return Err(missing(format!(
+            "OMF: element \"{block_model}\" is {}, not a BlockModel",
+            kind(&e.geometry)
+        )));
+    }
+    let a = on_blocks(e, attribute)?;
+    if !matches!(
+        &a.data,
+        AttributeData::Number {
+            values: Numbers::Integer(_) | Numbers::Float(_),
+            ..
+        }
+    ) {
+        return Err(missing(format!(
+            "OMF: attribute \"{attribute}\" of block model \"{block_model}\" is not a Number of integers or floats"
         )));
     }
     Ok(a)

@@ -49,9 +49,11 @@ changes no proportion. `surface_mesh` certifies the surface closed and outward (
 `omf::pit::PitModel` (bd-joiv, plan §15.4) turns a regular OMF block model into `fmine_optimize::pitflow`'s
 problem: precedence arcs from slope templates (`slope_arcs`), with each block's slope domain taken from a Category
 attribute, then a certified ultimate pit (`solve`) or nested shells by revenue factor (`nested_shells`).
-- Values come from Number attributes on the parent blocks (`Primitives`). Each weight is value × `per_unit` rounded
-  to the nearest integer, so each block moves by at most `1 / (2 · per_unit)` and the pit is within
-  `blocks / per_unit` of best for the attribute's values.
+- Values come from Number attributes on the parent blocks (`Primitives`). Integer attributes scale exactly;
+  float attributes use binary64 multiplication by `per_unit` before nearest-integer rounding, halves away from
+  zero. The certificate proves optimality for these integer weights; no raw-float optimality bound is supplied.
+  `value_attribute` admits the unique model, attribute, parent-block location and numeric type before a caller
+  allocates per-block slope domains or arcs; `PitModel::weights` checks nulls, finiteness and scaled range.
 - OMF orders parent blocks U first, then V, then W upward (omf-rust `block_model.rs`); `pitflow` puts layer 0 on
   top. So the layers are reversed on the way in, and `omf_order` reverses them back.
 - W must be (0, 0, 1) with V counterclockwise of U. A model turned about W is taken, and its slope sectors are then
@@ -168,7 +170,7 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   `AttributeData::item_count` give the counts the location lengths follow from.
 - `omf::{surface_mesh, parent_grid, proportions_in_surface}` (bd-aqfl) and `omf::surface_mesh_in` (bd-wn57),
   returning `fmine_geom::volcert`'s `ClosedMesh`, `BlockGrid` and `Proportions`.
-- `omf::pit::{PitModel, MAX_SIZE_SCALE}` (bd-joiv). `PitModel::{new, grid, size_scale, arc_count, weights,
+- `omf::pit::{PitModel, value_attribute, MAX_SIZE_SCALE}` (bd-joiv). `PitModel::{new, grid, size_scale, arc_count, weights,
   ultimate_pit, shells, omf_order}` return `fmine_optimize::pitflow`'s `BlockGrid`, `PitSolution` and
   `NestedShells`.
 - `omf::pit::{Capacity, ScheduleSpec, OmfSchedule}` and `PitModel::{uses, schedule}` (bd-fr8x).

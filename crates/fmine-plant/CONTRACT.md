@@ -575,8 +575,10 @@ the result Claim and receipt digest. Fixed reduction order makes evaluation `Det
 
 The existing `plant recovery` worksheet accepts optional named scenario probabilities and complete
 scenario input sets alongside its nominal processing inputs. Without scenarios its nominal schema
-and output remain unchanged. Submitted numeric tokens and exact source bytes remain the CLI
-adapter's responsibility; kernel rendering retains exact normalized probabilities and inputs.
+and output remain unchanged. `cards::worksheet::evaluate` admits the bounded source bytes, verifies
+their SHA-256 anchor and preserves submitted numeric tokens, versioned source Claims and parsed
+declarations even when the recovery kernel refuses. The CLI performs bounded file IO and constructs
+the response envelope; kernel rendering retains exact normalized probabilities and inputs.
 
 Known-answer tests use authored finite populations, not plant measurements. For `R(g)=g²/4` at
 `g={0,2}` with equal probabilities, mean recovery is 1/2 and variance is 1/4, while the card at
