@@ -29,7 +29,9 @@ mod gzip;
 pub mod json;
 mod parquet;
 pub mod pit;
+pub mod pit_report;
 mod proportions;
+pub mod scheduling;
 
 pub use json::Json;
 use parquet::{Column, Logical, Table, Values};

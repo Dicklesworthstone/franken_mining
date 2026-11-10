@@ -65,6 +65,15 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   true ones. It places blocks in the caller's rank order with TopoSort (`greedy`) and improves the schedule by local
   search at the discount rate (`improve`); both refuse a schedule that fails `toposort::check`. The result is
   feasible and locally improved, not proved best.
+- DESIGN: `omf::scheduling::evaluate` reads a strict `fmine.omf-schedule.v1` JSON declaration and exact
+  OMF bytes, checks both source hashes and composes the existing schedule/candidate kernels. It retains
+  the empty schedule and only feasible incumbents, checks the selected schedule again, and replays the
+  integer Lagrangian bound at its reported prices. Objective, bound and gap use the same floored `2^40`
+  discount factors. Capacity limits are explicitly scaled integers; uses round up, values nearest with
+  halves away from zero. Original candidate findings and OMF block order survive rendering. Bounded
+  periods, resources and time-expanded nodes/arcs are admitted before slope allocation. This is a
+  deterministic declared-model certificate, with no LP-guidance, multi-destination or operational claim.
+  `omf::pit_report` similarly owns the source-bound ultimate-pit report used by the CLI.
 - `PitModel::lp_schedule` (bd-djb7) takes its starts from an LP instead of the caller's ranks. It builds the same
   `ScheduleProblem` and its relaxation (`toposort::lp::relaxation` at decimals 0, so the LP is in units of
   `1 / per_unit`, discounted by `(1 + rate)^-t` in `f64`), solves it with fmine-lp's PDLP, then searches from

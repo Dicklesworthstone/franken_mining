@@ -484,8 +484,8 @@ U fastest, then V, then W from the bottom upward.
 
 This path accepts regular parent grids with W pointing straight up. It refuses ambiguous model or
 attribute names, missing/null values, unsupported geometry and mixed MineLib options. The finite-depth
-uniform slope is an explicit modeling assumption; sector-specific slope tables, OMF scheduling and
-external OMF candidate pits remain outside this command. The supplied values are not independently
+uniform slope is an explicit modeling assumption; sector-specific slope tables and external OMF
+candidate pits remain outside this command. OMF period scheduling is available below. The supplied values are not independently
 derived from prices, costs or recoveries, and the result supplies no reserve classification or slope approval.
 The integration tests independently enumerate all closed sets for 24 small authored OMF models, check
 source perturbations and signed rounding, and exercise the built executable; these are synthetic checks.
@@ -568,6 +568,66 @@ constraints, lower/equality resource limits, stochastic sampling error and empir
 remain outside this slice. The independent Python Fraction oracle checks the actual binary against the
 example and 16 generated models, including exhaustive feasible schedules and independent dual-price
 replay; these are known answers, not operating-mine validation.
+
+### Schedule an OMF block model under resource limits
+
+`plan schedule` also accepts an OMF model and a separate JSON declaration. It constructs a whole-block
+schedule, improves it by local search, checks every precedence and capacity row, and computes a global
+Lagrangian upper bound on the **same integer-discount objective**. Both input files retain their SHA-256
+identities in the report. This connects the OMF scheduling kernels to an executable workflow.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --omf model.omf --spec schedule.json --list-schedule --json
+```
+
+For example, `schedule.json` can declare the following assumptions for numeric parent-block attributes
+named `value` and `tonnes` on a regular block model named `orebody`:
+
+```json
+{
+  "schema": "fmine.omf-schedule.v1",
+  "block_model": "orebody",
+  "value_attribute": "value",
+  "value_per_unit": 100,
+  "value_rounding": "nearest_integer_half_away_from_zero",
+  "slope": {"rise": 1, "run": 1, "levels": 3},
+  "periods": 3,
+  "discount": {"rate": 1, "scale": 10},
+  "capacities": [
+    {"attribute": "tonnes", "per_unit": 1, "limits_scaled": [10000, 12000, 12000]}
+  ],
+  "search_rounds": 20,
+  "bound_steps": 64
+}
+```
+
+The discount rate is `rate / scale` per period, here 10%. Period zero has factor `2^40`; each later
+factor is `floor(previous * scale / (scale + rate))`. Values round to the nearest integer after scaling;
+resource uses round upward. Capacity limits are **already scaled integers**, not unscaled tonnes or
+implicitly converted quantities. Each row must have exactly one nonnegative upper limit per period.
+Signed per-block uses are supported for declared blending rows. All declaration fields above are
+required, and unknown or duplicate fields refuse.
+
+To check a schedule exported by another planning tool, add
+`"candidate": {"attribute": "mining_year", "first": 2027}`. The numeric OMF attribute then maps 2027 to
+period zero, 2028 to period one, and null to unmined. The report preserves the candidate's original value,
+capacity overruns and unmet-precedence witnesses. Only a feasible candidate can seed local search or
+replace the selected schedule; a structurally valid but infeasible candidate remains visible as a finding.
+The empty schedule remains an available zero-value incumbent.
+
+JSON schema `fmine.plan-schedule.omf.v1` reports the selected origin, exact rational discounted value,
+per-period values and resource usage, and independently replayed bound prices and gap. `--list-schedule`
+adds one zero-based period or null per original OMF block, in U/V/W bottom-up order. A positive gap is
+distance to a verified upper bound; it does not prove that much improvement is achievable. The certificate
+covers the scaled deterministic model and finite-depth uniform slope cones. It supplies no reserve
+classification, approved slope, execution authorization or optimum for the original unrounded attributes.
+
+The declaration is bounded to 1 MiB and the OMF archive to 1 GiB. Work limits include 256 periods,
+32 resource rows, 1,000 search rounds, 256 bound steps, one million block-period cells and a conservative
+eight-million-arc bound before slope construction. Unsupported geometry, ambiguous selectors, null value
+or capacity attributes, invalid candidate periods and oversized expansions refuse. OMF schedules use one
+destination per block; the MineLib path above provides destination splits and optional LP guidance.
 
 ### Turn registered HTML tables into cited Claims
 

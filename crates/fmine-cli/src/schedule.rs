@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 mod guidance;
+pub mod omf;
 
 pub const USAGE: &str = "plan schedule --pcpsp <file.pcpsp> --prec <file.prec> [--candidate <file.sol>] [--decimals N] [--use-decimals N] [--share-decimals N] [--round] [--rounds N] [--bound-steps N] [--lp-guidance [--lp-iterations N]] [--list-schedule]";
 const NO_CLAIM: &str = "A checked schedule and upper bound for the supplied deterministic PCPSP model and explicit integer discount factors. Values, capacities and precedence are declarations; sampling error and input calibration are not measured. A positive gap may reflect a loose bound. No reserve, execution authority or operational feasibility beyond the declared rows is established.";

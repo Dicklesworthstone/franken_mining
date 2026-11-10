@@ -65,6 +65,8 @@ pub enum CliCommand {
     PlanPit(pit::Command),
     /// Checked PCPSP production schedule, external destination splits and a verified global bound.
     PlanSchedule(schedule::Command),
+    /// Checked OMF period schedule with explicit capacities and an integer Lagrangian bound.
+    PlanOmfSchedule(schedule::omf::Command),
     /// Account or reconcile declared elemental inventory with original observations retained.
     Plant(plant::Command),
     /// Project exact registered HTML cells with source-verified semantic labels into canonical Claims.
@@ -896,6 +898,9 @@ pub fn parse_args(
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
             "plan pit" => CliCommand::PlanPit(pit::parse(&words)?),
+            "plan schedule" if words.iter().any(|word| word == "--omf" || word == "--spec") => {
+                CliCommand::PlanOmfSchedule(schedule::omf::parse(&words)?)
+            }
             "plan schedule" => CliCommand::PlanSchedule(schedule::parse(&words)?),
             "plant" => CliCommand::Plant(plant::parse(&words)?),
             _ => CliCommand::HtmlClaims(html::parse(&words)?),
@@ -1786,6 +1791,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
         CliCommand::PlanSchedule(command) => schedule::execute(command, workspace_root),
+        CliCommand::PlanOmfSchedule(command) => schedule::omf::execute(command, workspace_root),
         CliCommand::Plant(command) => plant::execute(command, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
@@ -2175,6 +2181,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 geo::USAGE,
                 pit::USAGE,
                 schedule::USAGE,
+                schedule::omf::USAGE,
                 plant::BALANCE_USAGE,
                 plant::RECONCILE_USAGE,
                 plant::PROJECT_USAGE,
@@ -2289,6 +2296,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(pit::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_schedule\":");
             payload.push_str(schedule::ROBOT_DOCS_JSON);
+            payload.push_str(",\"plan_schedule_omf\":");
+            payload.push_str(fmine_io::omf::scheduling::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_inventory\":");
             payload.push_str(plant::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_material\":");

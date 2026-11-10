@@ -5,13 +5,11 @@
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_io::omf;
-use fmine_optimize::pitflow::slope::{SlopeTable, SlopeTangent};
+use fmine_io::omf::{self, pit_report::MAX_BYTES};
 use fmine_optimize::pitflow::{self, candidate, minelib};
 
 use crate::{Envelope, NextAction, escape_json, worksheet_input};
 
-const MAX_BYTES: u64 = 1024 * 1024 * 1024;
 pub const USAGE: &str = "plan pit --upit <file.upit> --prec <file.prec> [--decimals N] [--round] [--list-blocks] [--candidate <file>] | plan pit --omf <file.omf> --block-model <name> --value-attribute <name> --per-unit N --slope-rise N --slope-run N --slope-levels N --round [--list-blocks]";
 const NO_CLAIM: &str = "The maximum-value closed set of the supplied block values and precedence arcs. Values and \
 arcs are taken as given: no price, cost, recovery or slope is derived or checked, and the pit is not a reserve, \
@@ -27,12 +25,7 @@ pub enum Input {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OmfInput {
     pub path: PathBuf,
-    pub block_model: String,
-    pub value_attribute: String,
-    pub per_unit: u32,
-    pub slope_rise: u32,
-    pub slope_run: u32,
-    pub slope_levels: u32,
+    pub spec: omf::pit_report::PitSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,12 +120,15 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         }
         Input::Omf(OmfInput {
             path,
-            block_model: block_model.ok_or("plan pit --omf requires --block-model")?,
-            value_attribute: value_attribute.ok_or("plan pit --omf requires --value-attribute")?,
-            per_unit: per_unit.ok_or("plan pit --omf requires --per-unit")?,
-            slope_rise: slope_rise.ok_or("plan pit --omf requires --slope-rise")?,
-            slope_run: slope_run.ok_or("plan pit --omf requires --slope-run")?,
-            slope_levels: slope_levels.ok_or("plan pit --omf requires --slope-levels")?,
+            spec: omf::pit_report::PitSpec {
+                block_model: block_model.ok_or("plan pit --omf requires --block-model")?,
+                value_attribute: value_attribute
+                    .ok_or("plan pit --omf requires --value-attribute")?,
+                per_unit: per_unit.ok_or("plan pit --omf requires --per-unit")?,
+                slope_rise: slope_rise.ok_or("plan pit --omf requires --slope-rise")?,
+                slope_run: slope_run.ok_or("plan pit --omf requires --slope-run")?,
+                slope_levels: slope_levels.ok_or("plan pit --omf requires --slope-levels")?,
+            },
         })
     } else {
         if block_model.is_some()
@@ -160,13 +156,10 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
 
 /// `units` at 10^`places` as an exact decimal.
 fn decimal(units: i128, places: u32) -> String {
-    let scale = 10_i128.pow(places);
-    let (sign, abs) = if units < 0 {
-        ("-", units.unsigned_abs())
-    } else {
-        ("", units.unsigned_abs())
-    };
-    let (int, frac) = (abs / scale.unsigned_abs(), abs % scale.unsigned_abs());
+    let scale = 10_u128.pow(places);
+    let sign = if units < 0 { "-" } else { "" };
+    let abs = units.unsigned_abs();
+    let (int, frac) = (abs / scale, abs % scale);
     if places == 0 {
         format!("{sign}{int}")
     } else {
@@ -322,94 +315,15 @@ fn execute_minelib(command: &Command, root: &Path, upit_path: &Path, prec_path: 
 }
 
 fn execute_omf(input: &OmfInput, list_blocks: bool, root: &Path) -> Envelope {
-    const NO_CLAIM: &str = "The maximum-value closed set for the OMF adapter's scaled integer block values and the declared uniform finite-depth slope cones. The certificate covers that integer model only; no optimum for the unrounded attribute, geological validity, approved slope, reserve, schedule, mine plan or execution authorization is supplied.";
     let run = || -> Result<Envelope, Refusal> {
         let (bytes, source) =
             worksheet_input::read_bytes(&root.join(&input.path), "OMF", MAX_BYTES)?;
-        let bind_refusal = |mut refusal: Refusal| {
-            refusal.what.push_str(&format!(
-                " [source {}; sha256={}]",
-                source.artifact_path,
-                fmine_core::Digest32(source.artifact_sha256)
-            ));
-            refusal
-        };
-        let project = omf::read(&bytes).map_err(&bind_refusal)?;
-        let value_attribute =
-            omf::pit::value_attribute(&project, &input.block_model, &input.value_attribute)
-                .map_err(&bind_refusal)?;
-        let slopes = SlopeTable::uniform(
-            SlopeTangent::new(input.slope_rise, input.slope_run).map_err(&bind_refusal)?,
-        );
-        let model = omf::pit::PitModel::new(
-            &project,
-            &input.block_model,
-            &slopes,
-            None,
-            input.slope_levels,
-        )
-        .map_err(&bind_refusal)?;
-        // The admitted adapter constructs the problem; solve verifies its final flow certificate before return.
-        let pit = model
-            .ultimate_pit(&input.value_attribute, input.per_unit)
-            .map_err(&bind_refusal)?;
-        let stats = pit.stats();
-        let mut payload = format!(
-            "{{\"schema\":\"fmine.plan-pit.omf.v1\",\"model\":{{\"format\":\"omf2\",\"name\":\"{}\",\"source\":{},\"block_model\":\"{}\",\"value_attribute\":\"{}\",\"value_units\":\"{}\",\"coordinate_reference_system\":\"{}\",\"length_units\":\"{}\"}},\"blocks\":{},\"arcs\":{},\"slope\":{{\"kind\":\"uniform\",\"rise\":{},\"run\":{},\"levels\":{}}},\"rounding\":\"nearest_integer_half_away_from_zero\",\"per_unit\":{},\"scaled_value\":\"{}\",\"value\":\"{}/{}\",\"raw_attribute_optimality_bound\":null,\"pit_blocks\":{},\"block_order\":\"omf_u_then_v_then_w_bottom_up\",\"certificate\":{{\"verified\":true,\"method\":\"pseudoflow final arc flows; pit closed, no flow enters it, excess non-negative inside and non-positive outside\"}},\"solver\":{{\"mergers\":{},\"splits\":{},\"relabels\":{},\"max_label\":{}}}",
-            escape_json(&project.name),
-            worksheet_input::source_json(&source, bytes.len()),
-            escape_json(&input.block_model),
-            escape_json(&input.value_attribute),
-            escape_json(&value_attribute.units),
-            escape_json(&project.coordinate_reference_system),
-            escape_json(&project.units),
-            model.grid().block_count(),
-            model.arc_count(),
-            input.slope_rise,
-            input.slope_run,
-            input.slope_levels,
-            input.per_unit,
-            pit.value(),
-            pit.value(),
-            input.per_unit,
-            pit.pit_size(),
-            stats.mergers,
-            stats.splits,
-            stats.relabels,
-            stats.max_label,
-        );
-        if list_blocks {
-            let ids: Vec<String> = model
-                .omf_order(pit.in_pit())
-                .iter()
-                .enumerate()
-                .filter(|(_, inside)| **inside)
-                .map(|(b, _)| b.to_string())
-                .collect();
-            payload.push_str(&format!(",\"in_pit\":[{}]", ids.join(",")));
-        }
-        payload.push('}');
-        let mut envelope = Envelope::ok("plan pit", payload, Vec::new());
-        envelope.no_claim = Some(NO_CLAIM);
-        envelope.warnings.push("OMF float values use binary64 scaling before rounding; the exact certificate applies to the resulting integer model. Slope cones are a finite-depth approximation, not a geotechnical sign-off.".into());
-        envelope.rendered_markdown = Some(format!(
-            "# Ultimate pit: {}\n\nOMF block model `{}`, value attribute `{}`. Source SHA-256: `{}`.\n\n| blocks | arcs | pit blocks | exact scaled value | units per attribute unit | certificate |\n|---:|---:|---:|---:|---:|---|\n| {} | {} | {} | {} | {} | verified |\n\nUniform slope tangent {}/{}, {} levels. Listed block IDs use OMF order (U, V, then W from bottom upward).\n\n{NO_CLAIM}\n",
-            project.name,
-            input.block_model,
-            input.value_attribute,
-            fmine_core::Digest32(source.artifact_sha256),
-            model.grid().block_count(),
-            model.arc_count(),
-            pit.pit_size(),
-            pit.value(),
-            input.per_unit,
-            input.slope_rise,
-            input.slope_run,
-            input.slope_levels,
-        ));
+        let report = omf::pit_report::evaluate(&bytes, &source, &input.spec, list_blocks)?;
+        let mut envelope = Envelope::ok("plan pit", report.json, Vec::new());
+        envelope.rendered_markdown = Some(report.markdown);
         Ok(envelope)
     };
-    run().unwrap_or_else(|refusal| {
+    let mut envelope = run().unwrap_or_else(|refusal| {
         Envelope::refused(
             "plan pit",
             refusal,
@@ -418,5 +332,8 @@ fn execute_omf(input: &OmfInput, list_blocks: bool, root: &Path) -> Envelope {
                 "inspect the supported OMF parent grid, value attribute and explicit slope/scale declarations",
             )],
         )
-    })
+    });
+    envelope.no_claim = Some(omf::pit_report::NO_CLAIM);
+    envelope.warnings.push(omf::pit_report::WARNING.into());
+    envelope
 }

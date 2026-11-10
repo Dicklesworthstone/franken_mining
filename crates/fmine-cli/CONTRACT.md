@@ -244,10 +244,18 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     block/arc counts, solver counters and certificate status. Listed IDs are converted back to OMF order
     (U fastest, V, W bottom-up). The certificate covers the integer model only; the raw-attribute
     optimality bound is null. Ambiguous names, null values, nonregular grids and tilted W refuse.
-    Sector/domain slope tables, OMF candidates and scheduling remain unsupported. Twenty-four small
+    Sector/domain slope tables and OMF candidate pits remain unsupported. Twenty-four small
     synthetic OMF fixtures are checked against independent geometric closure enumeration, alongside
     hand-worked cones, signed rounding, source perturbation, refusals and actual-binary execution in
     `crates/xtask/tests/plan_pit_omf.rs`.
+    DESIGN: `plan schedule --omf <file.omf> --spec <schedule.json> [--list-schedule]` uses
+    `fmine-io::omf::scheduling` for strict source-bound declarations, TopoSort/local search, imported
+    candidate-period checks and an integer Lagrangian bound replay. The CLI only reads bounded regular
+    files and renders the owner report. Payload `fmine.plan-schedule.omf.v1` retains both hashes,
+    declared scales and slopes, exact integer discount factors, candidate findings, selected feasibility,
+    resource use, bound prices and gap on that same objective. Listed periods use original OMF order.
+    MineLib-only flags refuse. Uniform slope, single-destination, upper-limit and uncalibrated-input
+    limits remain explicit. `omf::pit_report` also owns existing ultimate-pit composition and rendering.
   - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
     worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
     SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC

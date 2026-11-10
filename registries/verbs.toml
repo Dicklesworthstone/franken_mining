@@ -51,6 +51,12 @@ mutates_authority = false
 description = "Solve certified ultimate pits from MineLib UPIT pairs or regular OMF block models with explicit value scale and uniform slope declarations"
 
 [[verb]]
+path = "plan schedule"
+subsystem = "Pushback"
+mutates_authority = false
+description = "Build and check capacity-constrained MineLib or OMF production schedules with exact feasibility and an integer Lagrangian upper bound"
+
+[[verb]]
 path = "html claims"
 subsystem = "Bullion"
 mutates_authority = false

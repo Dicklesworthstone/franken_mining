@@ -88,7 +88,7 @@ fn ill_posed(detail: String) -> Refusal {
 
 /// `size` scaled by the smallest power of two, at most `2^MAX_SIZE_SCALE`, that makes all three integers from 1 to
 /// `u32::MAX`, with that power's exponent.
-fn integer_sizes(size: [f64; 3]) -> Option<([u32; 3], u32)> {
+pub(super) fn integer_sizes(size: [f64; 3]) -> Option<([u32; 3], u32)> {
     let mut scaled = size;
     for m in 0..=MAX_SIZE_SCALE {
         if scaled
