@@ -131,7 +131,7 @@ pub fn tie_outcome(accepted: &[Accepted]) -> Option<Result<TieOutcome, String>> 
         .iter()
         .filter_map(|a| match a.value {
             Token::Point(d) => Some((a, d)),
-            Token::Range(..) => None,
+            Token::Range(..) | Token::AtMost(_) | Token::AtLeast(_) => None,
         })
         .collect();
     let shared = |q: &str| {

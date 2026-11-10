@@ -1381,8 +1381,13 @@ None: every failure is a usage error or a typed refusal.
   estimate dependence or effective sample size, provide bias confidence intervals, or satisfy the full BD-341
   data/coverage gates. Conditional binomial intervals are labelled with their independence assumption. Sparse
   evidence and unprinted outcome bases remain explicit; real guidance transcriptions are local inputs.
-  Point targets have no normalized range position. Capex and one-sided transcription syntax are outside the
-  cohort source binder's supported input schema.
+  Point and one-sided targets have no normalized range position. Agreed inclusive `AtMost`/`AtLeast`
+  transcriptions retain their original token and direction in canonical Claims and JSON/Markdown, and use
+  the existing bound scorer in ordinary, dated and cohort projections. Production targets require
+  nonnegative thresholds for points, ranges and both directions; signed cost thresholds remain admissible.
+  Strict inequalities and approximate wording are not interpreted as inclusive targets. Point-only and
+  finite-interval consumers refuse directional tokens; a newest one-sided guidance row cannot fall back
+  to an older finite baseline. Capex remains outside the cohort source binder's supported input schema.
 - Writes only explicitly requested local reliance journals and artifact files; never sends messages or writes
   to an external system. Recall covers recorded copies; local retrieval does not prove remote delivery or
   recall every detached copy. The local journal is not a replicated authority service.

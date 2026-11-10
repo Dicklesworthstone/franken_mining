@@ -221,6 +221,27 @@ fn registered_guidance_and_original_nine_months_produce_exact_source_bound_basel
 }
 
 #[test]
+fn one_sided_latest_guidance_never_becomes_a_finite_baseline_or_selects_an_older_range() {
+    for token in ["at least 240", "≤300"] {
+        let root = fixture(true, "300");
+        add_guidance(
+            &root,
+            "Bound.pdf",
+            "2026-10-03",
+            token,
+            &["reader-a", "reader-b"],
+        );
+        let report = run(&root);
+        let production = row(&report, "production");
+        assert!(production.interval.is_none());
+        assert!(production.reason.contains("one-sided guidance"));
+        assert_eq!(production.guidance[0].document.file, "Bound.pdf");
+        assert_eq!(report.rows.len(), 26);
+        assert_eq!(row(&report, "unit_cost").interval, interval(900, 1100));
+    }
+}
+
+#[test]
 fn cut_selects_last_guidance_and_does_not_read_future_document_bytes() {
     let root = fixture(true, "300");
     add_guidance(

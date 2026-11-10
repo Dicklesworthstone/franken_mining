@@ -552,6 +552,9 @@ impl Inventory {
                         .and_then(|d| match parse_token(&d.text())? {
                             Token::Point(n) => decimal(n).map_err(|e| e.to_string()),
                             Token::Range(..) => Err("outcome cell prints a range".into()),
+                            Token::AtMost(_) | Token::AtLeast(_) => {
+                                Err("outcome cell prints a one-sided bound".into())
+                            }
                         });
                     this.observations.push(Observation {
                         release: *quarter,
@@ -1103,6 +1106,11 @@ impl Guidance {
         let (mut lo, mut hi) = match row.value {
             Token::Point(n) => (decimal(n)?, decimal(n)?),
             Token::Range(lo, hi) => (decimal(lo)?, decimal(hi)?),
+            Token::AtMost(_) | Token::AtLeast(_) => {
+                return Ok(unavailable(
+                    "one-sided guidance cannot supply the frozen finite-interval baseline",
+                ));
+            }
         };
         let basis_text = if target.outcome == Outcome::Q4Qtd {
             let Some(ownership) = row.basis.strip_suffix(";aisc=issuer-reported-per-sold-oz")

@@ -147,7 +147,10 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   `col` (labels as printed), `token` (exactly as printed), `quantity` (a key two documents share when they print
   the same quantity), `unit`, `basis`, `period`, `reader` (a role id, never a name); one entry per reader and
   locator, and per reader, document and quantity. `parse_token` reads "(708)" as −708, "6.7" as 67 at scale 1
-  (step 0.1), "1,423" as 1423, and "200 - 230" or "200–230" as a range; a dash, "n/a" or bad grouping refuses
+  (step 0.1), "1,423" as 1423, and "200 - 230" or "200–230" as a range. Inclusive one-sided tokens
+  `<=`, `≤`, `at most`, `>=`, `≥` and `at least` retain the exact decimal and their direction as
+  `AtMost` or `AtLeast`; they never become a point or a finite interval. Strict inequalities and qualified
+  estimates remain unsupported. A dash, "n/a" or bad grouping refuses
   with a reason that names no value. `agree` accepts a locator only when two or more readers entered it with
   the same token, quantity, unit, basis and period; a disagreement lists the readers and the differing fields
   (never their values) and is never resolved, a third reader included; a lone reader's locator is pending; one
@@ -155,6 +158,11 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   accepted rows without readers, so a third reader who agrees reproduces it. Locators are cited
   `<doc>:p<page>:<table>:<row>/<col>`: bd-plx1's form with the table added, since one page can print two tables
   with the same labels.
+  DESIGN (BD-341): track-record adapters admit one-sided guidance into the existing bound scorer, with
+  inclusive hit/rounding-boundary behavior and no midpoint or normalized range statistic. Finite-interval
+  baselines and point-only physical/table consumers refuse these tokens. Tie discovery includes point
+  readings only; source renderers preserve each bound's kind and raw token. Reader agreement still requires
+  the exact printed token, so `<= 120` does not silently agree with `≤ 120`.
   DESIGN (BD-341.S5): `Agreement::rejected_quantities` retains every reader's quantity identity at each
   pending, disagreeing or clashing locator, without raw tokens. `is_complete_for_prefix` checks a named
   quantity namespace while treating missing, invalid or orphan identity metadata as incomplete. A mixed

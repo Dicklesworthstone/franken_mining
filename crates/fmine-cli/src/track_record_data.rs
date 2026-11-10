@@ -220,6 +220,8 @@ pub(super) fn limits(a: &Accepted) -> Result<Guidance> {
     }
     match a.value {
         Token::Point(d) => Ok(Guidance::Point { value: decimal(d)? }),
+        Token::AtMost(d) => Ok(Guidance::AtMost { upper: decimal(d)? }),
+        Token::AtLeast(d) => Ok(Guidance::AtLeast { lower: decimal(d)? }),
         Token::Range(lo, hi) => {
             let (lo, hi) = (decimal(lo)?, decimal(hi)?);
             Ok(if lo == hi {

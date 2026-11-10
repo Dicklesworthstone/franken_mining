@@ -212,6 +212,19 @@ fn checked_document<'a>(
 }
 
 fn stated_guidance(row: &Accepted) -> Result<Guidance> {
+    match row.value {
+        Token::AtMost(d) => {
+            return Ok(Guidance::AtMost {
+                upper: super::decimal(d)?,
+            });
+        }
+        Token::AtLeast(d) => {
+            return Ok(Guidance::AtLeast {
+                lower: super::decimal(d)?,
+            });
+        }
+        Token::Point(_) | Token::Range(..) => {}
+    }
     let range = super::token_interval(row.value, false)?;
     Ok(if range.lo == range.hi {
         Guidance::Point { value: range.lo }
@@ -336,15 +349,20 @@ fn score_source(
         value: super::decimal(point)?,
         interval: super::token_interval(Token::Point(point), true)?,
     };
-    if metric.starts_with("production_")
-        && (super::token_interval(row.value, false)?.lo.num() < 0 || printed.value.num() < 0)
-    {
+    let guidance = stated_guidance(row)?;
+    let threshold = match guidance {
+        Guidance::Range { lo, .. } => lo,
+        Guidance::Point { value } => value,
+        Guidance::AtMost { upper } => upper,
+        Guidance::AtLeast { lower } => lower,
+    };
+    if metric.starts_with("production_") && (threshold.num() < 0 || printed.value.num() < 0) {
         return Err(refuse(
             RefusalCode::OutsidePhysicalDomain109,
             "production guidance and observed production must be nonnegative",
         ));
     }
-    let score = guidance_scores::score(stated_guidance(row)?, printed)
+    let score = guidance_scores::score(guidance, printed)
         .map_err(|e| refuse(RefusalCode::NumericalCertificateFailed207, e.to_string()))?;
     Ok((score, printed))
 }

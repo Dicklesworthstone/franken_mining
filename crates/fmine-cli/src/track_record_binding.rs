@@ -317,6 +317,8 @@ fn guidance(
     }
     let target = match a.value {
         Token::Point(d) => GuidanceTarget::Point(decimal(d)?),
+        Token::AtMost(d) => GuidanceTarget::AtMost(decimal(d)?),
+        Token::AtLeast(d) => GuidanceTarget::AtLeast(decimal(d)?),
         Token::Range(lo, hi) => {
             let (lo, hi) = (decimal(lo)?, decimal(hi)?);
             if lo == hi {
@@ -326,6 +328,18 @@ fn guidance(
             }
         }
     };
+    let threshold = match target {
+        GuidanceTarget::Range { lo, .. } => lo,
+        GuidanceTarget::Point(value)
+        | GuidanceTarget::AtMost(value)
+        | GuidanceTarget::AtLeast(value) => value,
+    };
+    if metric.starts_with("production_") && threshold.num() < 0 {
+        return Err(refusal(
+            RefusalCode::OutsidePhysicalDomain109,
+            "production guidance thresholds cannot be negative",
+        ));
+    }
     let value = GuidanceValue {
         key: SeriesKey {
             subject: subject.into(),

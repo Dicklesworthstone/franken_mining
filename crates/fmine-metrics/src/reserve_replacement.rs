@@ -768,6 +768,8 @@ fn accepted_json(a: &Accepted) -> String {
             decimal(lo),
             decimal(hi)
         ),
+        Token::AtMost(d) => format!("{{\"kind\":\"at_most\",\"upper\":{}}}", decimal(d)),
+        Token::AtLeast(d) => format!("{{\"kind\":\"at_least\",\"lower\":{}}}", decimal(d)),
     };
     format!(
         "{{\"locator\":{},\"doc\":{},\"page\":{},\"table\":{},\"row\":{},\"col\":{},\"sha256\":{},\"token\":{},\"admitted_value\":{admitted},\"quantity\":{},\"unit\":{},\"basis\":{},\"period\":{},\"readers\":{}}}",

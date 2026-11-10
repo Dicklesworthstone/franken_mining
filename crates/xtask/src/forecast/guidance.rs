@@ -252,6 +252,9 @@ fn endpoints(a: &Accepted, production: bool) -> Result<(Rat, Rat, String), Strin
     let (lo, hi) = match a.value {
         Token::Point(d) => (decimal(d)?, decimal(d)?),
         Token::Range(lo, hi) => (decimal(lo)?, decimal(hi)?),
+        Token::AtMost(_) | Token::AtLeast(_) => {
+            return Err("one-sided guidance cannot supply a finite-interval baseline".into());
+        }
     };
     if production {
         Ok((

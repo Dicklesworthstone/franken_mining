@@ -106,6 +106,9 @@ fn point_token(text: &str) -> Result<Decimal> {
     match parse_token(text).map_err(source_error)? {
         Token::Point(d) => Ok(d),
         Token::Range(..) => Err(source_error("one printed point is required, not a range")),
+        Token::AtMost(_) | Token::AtLeast(_) => {
+            Err(source_error("one printed point is required, not a bound"))
+        }
     }
 }
 

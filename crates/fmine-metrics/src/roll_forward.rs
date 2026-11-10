@@ -95,6 +95,8 @@ pub(crate) fn canonical_readings(readings: &mut [Accepted]) {
     let value_key = |a: &Accepted| match a.value {
         Token::Point(d) => (0_u8, d.mantissa, d.scale, 0, 0),
         Token::Range(lo, hi) => (1, lo.mantissa, lo.scale, hi.mantissa, hi.scale),
+        Token::AtMost(d) => (2, d.mantissa, d.scale, 0, 0),
+        Token::AtLeast(d) => (3, d.mantissa, d.scale, 0, 0),
     };
     for reading in readings.iter_mut() {
         reading.readers.sort();
@@ -653,6 +655,8 @@ pub(crate) fn accepted_json(a: &Accepted) -> String {
             decimal(lo),
             decimal(hi)
         ),
+        Token::AtMost(d) => format!("{{\"kind\":\"at_most\",\"upper\":{}}}", decimal(d)),
+        Token::AtLeast(d) => format!("{{\"kind\":\"at_least\",\"lower\":{}}}", decimal(d)),
     };
     format!(
         "{{\"locator\":{},\"doc\":{},\"page\":{},\"table\":{},\"row\":{},\"col\":{},\"sha256\":{},\"token\":{},\"admitted_value\":{value},\"quantity\":{},\"unit\":{},\"basis\":{},\"period\":{},\"readers\":{}}}",

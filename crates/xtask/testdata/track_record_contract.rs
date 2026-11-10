@@ -341,6 +341,77 @@ mod tests {
         assert_eq!(unknown.refusal.as_ref().unwrap().code, "FMINE-REF-201");
     }
 
+    #[test]
+    fn one_sided_guidance_reaches_the_binary_without_invented_range_statistics() {
+        let root = dated_workspace("one-sided");
+        let path = transcriptions_path(&root, "synthetic");
+        let readings = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("token = \"80 - 100\"", "token = \"at least 90\"")
+            .replace("token = \"90 - 110\"", "token = \">= 100\"")
+            .replace("token = \"900 - 1100\"", "token = \"≤1000\"");
+        std::fs::write(&path, &readings).unwrap();
+        let expected = successful(&root, &[]);
+        let annual = row(&expected.payload_json, "production_koz", 2024);
+        assert!(annual.contains("\"kind\":\"at_least\""));
+        assert!(annual.contains("\"side\":\"inside\""));
+        assert!(annual.contains("\"boundary\":true"));
+        assert!(annual.contains("\"z\":null"));
+        assert!(annual.contains("\"midpoint\":null"));
+        assert!(annual.contains("Synthetic_2024Q4.xlsx:YTD!C5"));
+        let cost = row(&expected.payload_json, "aisc_usd_per_oz", 2024);
+        assert!(cost.contains("\"kind\":\"at_most\""));
+        assert!(cost.contains("\"token\":\"≤1000\""));
+        assert!(cost.contains("\"side\":\"inside\""));
+        assert!(cost.contains("\"z\":null"));
+        for (format, expected_text) in [
+            ("json", expected.to_json()),
+            ("markdown", expected.rendered_markdown.clone().unwrap()),
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
+                .args([
+                    "track-record",
+                    "--issuer",
+                    "synthetic",
+                    "--format",
+                    format,
+                    "--workspace",
+                ])
+                .arg(&root)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{expected_text}\n")
+            );
+        }
+        let cut = successful(&root, &["--cohort-as-of", "2026-02-02"]);
+        assert!(cut.payload_json.contains("\"token\":\">= 100\""));
+        assert!(cut.payload_json.contains("\"z\":null"));
+        assert!(cut.payload_json.contains("\"side\":\"inside\""));
+        assert!(
+            expected
+                .rendered_markdown
+                .unwrap()
+                .contains("Point and one-sided guidance have no z")
+        );
+
+        std::fs::write(
+            &path,
+            readings.replacen("token = \">= 100\"", "token = \"<= 100\"", 1),
+        )
+        .unwrap();
+        let disagreement = invoke(&root, &[]);
+        assert_ne!(disagreement.exit_code, 0);
+        assert_eq!(disagreement.refusal.unwrap().code, "FMINE-REF-202");
+    }
+
     fn royalty_sheet(year: u16, months: &str, royalty: f64) -> MinimalSheet {
         MinimalSheet {
             name: "Minestats3".into(),

@@ -189,7 +189,7 @@ fn points(accepted: &[Accepted]) -> Result<Vec<Printed>, ()> {
                 printed,
                 step,
             })),
-            Token::Range(..) => None,
+            Token::Range(..) | Token::AtMost(_) | Token::AtLeast(_) => None,
         })
         .collect()
 }
@@ -330,6 +330,14 @@ fn assertion_json(a: &Accepted) -> String {
             "{{\"kind\":\"range\",\"lo\":{},\"hi\":{},\"comparison\":\"range_not_a_point\"}}",
             decimal_json(lo),
             decimal_json(hi)
+        ),
+        Token::AtMost(d) => format!(
+            "{{\"kind\":\"at_most\",\"upper\":{},\"comparison\":\"inclusive_bound_not_a_point\"}}",
+            decimal_json(d)
+        ),
+        Token::AtLeast(d) => format!(
+            "{{\"kind\":\"at_least\",\"lower\":{},\"comparison\":\"inclusive_bound_not_a_point\"}}",
+            decimal_json(d)
         ),
     };
     format!(

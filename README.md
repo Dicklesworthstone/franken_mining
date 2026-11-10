@@ -2009,6 +2009,13 @@ whole-cohort completion bounds. Rounding-aware bounds additionally preserve boun
 has no normalized range position. Exact rational IID reference bounds are retained alongside display projections;
 they do not estimate dependence, effective sample size, bias confidence intervals or forecasting skill.
 
+Inclusive one-sided guidance is also accepted from agreed printed tokens: `<= 120`, `≤120`,
+`at most 120`, `>= 120`, `≥120` and `at least 120`. Hit and miss counts include these targets, with
+exact inclusive-boundary and printed-rounding ambiguity checks. They have no midpoint, normalized deviation,
+opposite endpoint or implied probability. Finite-interval forecast baselines still require a point or a
+two-ended range; strict `<`/`>` and approximate wording refuse. Negative production thresholds refuse,
+while signed cost thresholds remain valid. The original token and its direction must agree between readers.
+
 Historical guidance transcriptions and the full M0/BD-341 data, dependence and coverage gates remain open.
 This cohort mode keeps unconditional scores; the paired sensitivities below require their own cited price
 and royalty evidence. JSON is the default (`--json` also selects it); Markdown includes comparisons and citations.

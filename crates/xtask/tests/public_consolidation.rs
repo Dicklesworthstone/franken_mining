@@ -417,13 +417,14 @@ fn source_bound_per_ounce_gap_keeps_named_components_and_recomputed_rates() {
 fn unequal_sales_have_a_separate_signed_per_ounce_denominator_effect() {
     let r = report(&[("B13", MinimalCell::Number(102.0))], UNITS, false);
     let json = assure_report::consolidation_json(&r);
-    // Exact hand calculation: aggregate = 425000/51, member = 8200; gap = 6800/51.
-    // G&A contributes 5000/17 and 820000*(1/102 - 1/100) contributes -8200/51.
+    // Exact input arithmetic, reduced to canonical fractions:
+    // aggregate = 1000*850/102 = 25000/3, member = 1000*820/100 = 8200; gap = 400/3.
+    // G&A = 1000*30/102 = 5000/17; denominator = 820000*(1/102 - 1/100) = -8200/51.
     for fragment in [
         "\"status\":\"unresolved\"",
-        "\"aggregate_usd_per_oz\":{\"point\":\"425000/51\"",
+        "\"aggregate_usd_per_oz\":{\"point\":\"25000/3\"",
         "\"members_usd_per_oz\":{\"point\":\"8200\"",
-        "\"gap_usd_per_oz\":{\"point\":\"6800/51\"",
+        "\"gap_usd_per_oz\":{\"point\":\"400/3\"",
         "\"source_line\":\"A9: General & administrative costs\",\"difference_usd_per_oz\":{\"point\":\"5000/17\"",
         "\"denominator_usd_per_oz\":{\"point\":\"-8200/51\"",
         "\"point_closure_verified\":true",

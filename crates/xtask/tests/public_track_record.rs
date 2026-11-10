@@ -544,6 +544,31 @@ fn late_guidance_and_future_outcomes_cannot_become_historical_successes() {
 }
 
 #[test]
+fn dated_public_projection_scores_one_sided_guidance_without_range_statistics() {
+    for (token, side, inside) in [
+        ("at least 125", Side::Inside, true),
+        ("<= 120", Side::Above, false),
+    ] {
+        let (p, mut t, c) = fixture();
+        for row in &mut t.agreement.accepted {
+            row.token = token.into();
+            row.value = parse_token(token).unwrap();
+        }
+        let report = run(&p, &t, &c);
+        let score = report.rows[0].first_published.score.unwrap();
+        assert_eq!(score.side, side);
+        assert_eq!(score.possibly_inside, inside);
+        assert!(score.z.is_none());
+        assert!(score.half_width.is_none());
+        assert!(score.above_midpoint.is_none());
+        assert_eq!(report.summaries[0].scores.n_members, 2);
+        assert_eq!(report.summaries[0].scores.n_unresolved, 1);
+        assert_eq!(report.summaries[0].scores.n_ranges, 0);
+        assert!(report.to_json().contains(token));
+    }
+}
+
+#[test]
 fn production_and_cost_metrics_require_their_own_units_and_sold_definitions() {
     for (metric, unit, line, definition) in [
         ("production_kt", "kt", "cu_prod_attr_kt", ""),

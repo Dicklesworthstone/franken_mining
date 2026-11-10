@@ -119,6 +119,10 @@ fn token_interval(token: Token, rounded: bool) -> Result<Interval> {
             RefusalCode::SourceCellUnusable208,
             "an actual cell must print one number",
         )),
+        Token::AtMost(_) | Token::AtLeast(_) => Err(refuse(
+            RefusalCode::SourceCellUnusable208,
+            "a one-sided assertion cannot supply a finite interval",
+        )),
     }
 }
 

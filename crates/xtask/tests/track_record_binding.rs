@@ -560,6 +560,125 @@ fn point_guidance_has_no_invented_normalized_miss() {
 }
 
 #[test]
+fn one_sided_guidance_preserves_inclusive_boundaries_sources_and_missing_members() {
+    use fmine_calib::guidance_scores::claims::GuidanceTarget;
+    let mut identities = std::collections::BTreeSet::new();
+    for (token, target, side, hit) in [
+        (
+            "≤125",
+            GuidanceTarget::AtMost(Rat::from_integer(125)),
+            Side::Inside,
+            Hit::Boundary,
+        ),
+        (
+            ">= 125",
+            GuidanceTarget::AtLeast(Rat::from_integer(125)),
+            Side::Inside,
+            Hit::Boundary,
+        ),
+        (
+            "at most 120",
+            GuidanceTarget::AtMost(Rat::from_integer(120)),
+            Side::Above,
+            Hit::CertainMiss,
+        ),
+        (
+            "at least 120",
+            GuidanceTarget::AtLeast(Rat::from_integer(120)),
+            Side::Inside,
+            Hit::CertainHit,
+        ),
+    ] {
+        let (mut t, cells) = track_record::synthetic_evidence().unwrap();
+        for a in &mut t.agreement.accepted {
+            a.token = token.into();
+            a.value = parse_token(token).unwrap();
+        }
+        let report = assess(&t, &cells, &[]).unwrap();
+        let row = report
+            .rows
+            .iter()
+            .find(|r| r.site == "Example Mine")
+            .unwrap();
+        assert_eq!(row.guidance.value.target, target);
+        assert!(identities.insert(row.guidance.claim_id));
+        let score = row.original.score.as_ref().unwrap();
+        assert_eq!(score.value.side, side, "{token}");
+        assert_eq!(score.value.hit, hit, "{token}");
+        assert!(score.value.z.is_none());
+        assert!(score.value.midpoint.is_none());
+        assert!(score.value.half_width.is_none());
+        assert_eq!(row.guidance_source.token, token);
+        assert_eq!(
+            row.guidance.parents,
+            vec![row.guidance_source_claim.claim_id]
+        );
+        assert!(
+            row.guidance_source_claim
+                .anchors
+                .iter()
+                .all(|a| a.artifact_sha256 != [0; 32])
+        );
+        row.guidance.check_id().unwrap();
+        score.check_id().unwrap();
+        let summary = &report.summaries[0].summary.value;
+        assert_eq!(summary.members, 3);
+        assert_eq!(summary.unresolved, 1);
+        assert_eq!(summary.z_members, 0);
+        assert!(summary.mean_z.is_none());
+        assert_eq!(summary.flag, CalibrationFlag::Descriptive);
+        assert_eq!(report.to_json(), assess(&t, &cells, &[]).unwrap().to_json());
+    }
+}
+
+#[test]
+fn negative_production_thresholds_refuse_while_signed_cost_targets_remain_valid() {
+    for token in ["-1", "-2 - 0", "at most -1", ">= -1"] {
+        let (mut t, mut cells) = track_record::synthetic_evidence().unwrap();
+        for a in &mut t.agreement.accepted {
+            a.token = token.into();
+            a.value = parse_token(token).unwrap();
+        }
+        assert_eq!(
+            assess(&t, &cells, &[]).unwrap_err().code,
+            "FMINE-REF-109",
+            "{token}"
+        );
+
+        for a in &mut t.agreement.accepted {
+            a.quantity = a.quantity.replace("production_koz", "aisc_usd_per_oz");
+            a.unit = "usd_per_oz".into();
+            a.basis.push_str(";aisc=issuer-reported-per-sold-oz");
+        }
+        for cell in &mut cells {
+            cell.key.line.label = "summary:aisc_usd_per_oz".into();
+            cell.key.unit = "usd_per_oz".into();
+            *cell = rebind(
+                cell,
+                PublicValue::Number {
+                    stored: "-1".into(),
+                    displayed: Ok("-1".into()),
+                    under_status: None,
+                },
+            );
+        }
+        let report = assess(&t, &cells, &[]).unwrap();
+        let row = report
+            .rows
+            .iter()
+            .find(|r| r.site == "Example Mine")
+            .unwrap();
+        assert_eq!(
+            row.original.score.as_ref().unwrap().value.side,
+            Side::Inside,
+            "{token}"
+        );
+        assert_eq!(report.summaries[0].summary.value.members, 3);
+        assert_eq!(report.summaries[0].summary.value.unresolved, 1);
+    }
+}
+
+#[test]
 fn another_issuers_identically_named_site_cannot_supply_an_outcome() {
     let (t, mut cells) = track_record::synthetic_evidence().unwrap();
     cells[0].key.issuer = "another-issuer".into();

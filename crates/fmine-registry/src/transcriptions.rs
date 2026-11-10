@@ -39,6 +39,10 @@ pub enum Token {
     Point(Decimal),
     /// A range `lo - hi` (a spaced hyphen or an en dash), with `lo ≤ hi`.
     Range(Decimal, Decimal),
+    /// An inclusive upper bound, without an implied lower bound or probability.
+    AtMost(Decimal),
+    /// An inclusive lower bound, without an implied upper bound or probability.
+    AtLeast(Decimal),
 }
 
 fn ten_pow(n: u32) -> Option<i128> {
@@ -106,8 +110,25 @@ fn parse_number(s: &str) -> Result<Decimal, String> {
 }
 
 /// Parses a token as printed: "(708)" is −708, "6.7" is 67 at scale 1 (step 0.1), "200 - 230" is the range
-/// [200, 230]. The reason names no value, so it can be logged.
+/// [200, 230]. Inclusive bounds use `<=`, `≤`, `at most`, `>=`, `≥` or `at least`. Strict bounds
+/// and qualified estimates remain unsupported; a bound never becomes a point or a finite range.
+/// The reason names no value, so it can be logged.
 pub fn parse_token(token: &str) -> Result<Token, String> {
+    let token = token.trim();
+    if let Some(value) = token
+        .strip_prefix("<=")
+        .or_else(|| token.strip_prefix('≤'))
+        .or_else(|| token.strip_prefix("at most "))
+    {
+        return parse_number(value).map(Token::AtMost);
+    }
+    if let Some(value) = token
+        .strip_prefix(">=")
+        .or_else(|| token.strip_prefix('≥'))
+        .or_else(|| token.strip_prefix("at least "))
+    {
+        return parse_number(value).map(Token::AtLeast);
+    }
     let range = token
         .split_once(" - ")
         .or_else(|| token.split_once('\u{2013}'));
@@ -683,6 +704,69 @@ mod tests {
                 Ok(t) => panic!("{token:?} parsed as {t:?}"),
                 Err(e) => assert!(e.contains(why), "{token:?}: {e}"),
             }
+        }
+    }
+
+    #[test]
+    fn inclusive_bounds_remain_directional_assertions() {
+        for (token, expected) in [
+            ("<= 120", Token::AtMost(d(120, 0))),
+            ("≤1,200.50", Token::AtMost(d(120050, 2))),
+            ("at most (0.05)", Token::AtMost(d(-5, 2))),
+            (">= 125", Token::AtLeast(d(125, 0))),
+            ("≥-3.6", Token::AtLeast(d(-36, 1))),
+            (" at least 0 ", Token::AtLeast(d(0, 0))),
+        ] {
+            assert_eq!(parse_token(token), Ok(expected), "{token}");
+        }
+        for token in [
+            "< 120",
+            "> 120",
+            "approximately 120",
+            "at most",
+            "<=",
+            "≤≤120",
+            "at least 100 - 120",
+            "<= 100 - 120",
+            "at most ≥120",
+            "at least 1,23",
+        ] {
+            assert!(parse_token(token).is_err(), "{token}");
+        }
+    }
+
+    #[test]
+    fn bound_readers_must_agree_on_the_original_direction_and_token() {
+        let rows = |second: &str| {
+            registry(&[
+                entry(
+                    "reader_a",
+                    "Deck.pdf",
+                    1,
+                    "Guidance",
+                    "≤ 120",
+                    "guidance_demo",
+                ),
+                entry(
+                    "reader_b",
+                    "Deck.pdf",
+                    1,
+                    "Guidance",
+                    second,
+                    "guidance_demo",
+                ),
+            ])
+        };
+        let accepted = agree(&parse_transcriptions(&rows("≤ 120"), "demo", &docs()).unwrap());
+        assert_eq!(accepted.accepted.len(), 1);
+        assert_eq!(accepted.accepted[0].value, Token::AtMost(d(120, 0)));
+        assert_eq!(accepted.accepted[0].token, "≤ 120");
+        for second in ["≥ 120", "120", "<= 120"] {
+            let disagreement =
+                agree(&parse_transcriptions(&rows(second), "demo", &docs()).unwrap());
+            assert!(disagreement.accepted.is_empty());
+            assert_eq!(disagreement.disagreements.len(), 1);
+            assert!(!disagreement.is_complete_for_prefix("guidance_"));
         }
     }
 
