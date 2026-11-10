@@ -123,6 +123,11 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   - a `SlopeTable`: per domain, sectors listed counterclockwise, each starting at a boundary direction `(east, north)` and holding a tangent `rise / run`;
   - one `u16` domain per block, and K, the number of layers a cone spans.
 
+  `slope_arcs_bounded` additionally accepts a retained-arc cap, never above the existing `u32::MAX - 1`
+  ceiling. Both boundary pushes and interior bulk appends check it before growing the target buffer;
+  geometric reservations are capped too. A zero cap admits a graph with no arcs. `slope_arcs` preserves
+  its existing interface and results through this bounded constructor at the original ceiling.
+
   Block `(i, j, k)` is `(k·ny + j)·nx + i`, with `k = 0` at the top. The slope that applies is the lower block's, for the direction from it to the upper block. No angle in degrees or float crosses the API: the caller turns an angle into a tangent.
 - For `toposort` (`ScheduleProblem::new`): a `ClosureProblem` (values and requirements, as above), a period count, and per resource one `i64` use per block, of either sign, and one non-negative `i64` upper limit per period.
   - A schedule is one `Option<u32>` per block: its period, or `None` for unmined.
@@ -260,9 +265,12 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   - K of 0, a domain list of the wrong length, or a block in a domain the table lacks;
   - reach boxes over `MAX_SCAN` (2²⁶) candidate offsets in all, or a cone over `MAX_PATTERN` (2¹⁶) offsets;
   - a cone test that would overflow `u128`;
-  - `u32::MAX` or more arcs.
+  - `u32::MAX` or more arcs, exceeding the caller's `slope_arcs_bounded` retained-arc cap, or a failed
+    target-buffer reservation.
 
-  Tests: `slope::tests::bad_input_is_refused`, one row each.
+  Tests: `slope::tests::bad_input_is_refused`, one row each; and
+  `retained_arc_budget_checks_boundary_and_interior_before_growth`, including the exact 33-arc cap,
+  zero-arc admission, boundary/interior refusal and checked addition before any buffer growth.
 - `FMINE-REF-506` (proposed), from `minelib::parse` and `minelib::scaled`:
   - a missing, repeated or unknown header, or a `TYPE` other than `UPIT`;
   - a value that is not a decimal (an exponent of more than two digits included), does not fit `i64` at the places declared, or has non-zero places past them under `Rounding::Refuse`; more than 9 declared places;
@@ -600,7 +608,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pitflow::slope::BlockGrid` (`new`, `block_count`, `index`)
 - `pitflow::slope::SlopeTangent` (`new`), `pitflow::slope::Sector` (`new`), `pitflow::slope::SlopeTable` (`new`, `uniform`)
 - `pitflow::slope::SlopeArcs` (`offsets`, `targets`, `arc_count`, `full_cone_arcs`, `boundary_blocks`, `into_csr`)
-- `pitflow::slope::slope_arcs`
+- `pitflow::slope::{slope_arcs, slope_arcs_bounded}`
 - `pitflow::slope::MAX_PATTERN`, `MAX_SCAN`, `WITNESSES`
 - `pitflow::minelib::Rounding` (`Refuse`, `HalfAwayFromZero`, `Ceiling`, `Floor`)
 - `toposort::ScheduleProblem` (`new`, `blocks`, `periods`, `resources`, `usage`, `limits`)

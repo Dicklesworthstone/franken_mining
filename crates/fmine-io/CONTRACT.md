@@ -71,7 +71,11 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   integer Lagrangian bound at its reported prices. Objective, bound and gap use the same floored `2^40`
   discount factors. Capacity limits are explicitly scaled integers; uses round up, values nearest with
   halves away from zero. Original candidate findings and OMF block order survive rendering. Bounded
-  periods, resources and time-expanded nodes/arcs are admitted before slope allocation. This is a
+  periods, resources and time-expanded nodes are admitted before slope allocation. The retained-arc
+  allowance is passed into `PitModel::new_bounded`; each CSR append and target-buffer reservation checks
+  that allowance before growth. This admits reduced graphs that a full rectangular-cone estimate would
+  reject, without allowing excess allocation. Independent archive, schedule and price-witness controls
+  are in `xtask/tests/omf_schedule_cli.rs`. This is a
   deterministic declared-model certificate, with no LP-guidance, multi-destination or operational claim.
   `omf::pit_report` similarly owns the source-bound ultimate-pit report used by the CLI.
 - DESIGN: `omf::shells_report::evaluate` binds an OMF archive and strict `fmine.omf-shells.v1`
@@ -81,8 +85,9 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   `sum(num * scaled_revenue - den * scaled_cost) / (per_unit * den)`. The existing solver verifies
   each flow, then checks that the running union is closed and preserves that factor's optimum.
   The report retains both source hashes, per-factor counts and exact objectives; optional `first_shell`
-  uses original OMF order with null for never-mined blocks. The shared preallocation guard bounds
-  blocks times factors at one million and conservative cone work times factors at eight million.
+  uses original OMF order with null for never-mined blocks. The shared admission guard bounds
+  blocks times factors at one million and `(retained_arcs + blocks) * factors` at eight million;
+  `PitModel::new_bounded` enforces the retained-arc allowance before CSR appends and reservations.
   Tied shells need not be minimal or maximal; flow witnesses are checked internally, not exported.
   No raw-float optimum, geotechnical approval, designed pushback or operational claim is supplied.
 - `minelib_report::evaluate` owns the existing MineLib UPIT report and optional candidate comparison.
@@ -193,7 +198,7 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   `AttributeData::item_count` give the counts the location lengths follow from.
 - `omf::{surface_mesh, parent_grid, proportions_in_surface}` (bd-aqfl) and `omf::surface_mesh_in` (bd-wn57),
   returning `fmine_geom::volcert`'s `ClosedMesh`, `BlockGrid` and `Proportions`.
-- `omf::pit::{PitModel, value_attribute, MAX_SIZE_SCALE}` (bd-joiv). `PitModel::{new, grid, size_scale, arc_count, weights,
+- `omf::pit::{PitModel, value_attribute, MAX_SIZE_SCALE}` (bd-joiv). `PitModel::{new, new_bounded, grid, size_scale, arc_count, weights,
   ultimate_pit, shells, omf_order}` return `fmine_optimize::pitflow`'s `BlockGrid`, `PitSolution` and
   `NestedShells`.
 - `omf::pit::{Capacity, ScheduleSpec, OmfSchedule}` and `PitModel::{uses, schedule}` (bd-fr8x).
@@ -621,7 +626,7 @@ OMF pits take block values as given in attributes. They hold no price deck or co
 and do not write the pit back to OMF. Schedules have no destinations (PCPSP). `schedule` takes the caller's
 ranking; `lp_schedule` searches from the LP's starts and reports its gap to the bound, but proves no schedule best.
 No outside solver runs in CI or at run time: HiGHS ran once in the lab and its output is pinned. There is no CLI verb
-for the MPS export, the solution import or a candidate schedule (fmine-cli is past its planned budget). A candidate
+for MPS export or LP-solution import. `plan schedule --omf` admits candidate period attributes. A candidate
 comes only as periods per parent block, from an attribute or the caller. Periods as dates, a calendar, vendor
 string files and partial blocks are not read, and a broken candidate is never repaired. The shell-to-design loss is
 geometric: no grade uncertainty over realizations (no geostatistics here), no ramp-induced slope flattening, no

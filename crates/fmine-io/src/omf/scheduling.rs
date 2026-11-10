@@ -15,7 +15,7 @@ pub const MAX_SPEC_BYTES: u64 = 1024 * 1024;
 pub const MAX_OMF_BYTES: u64 = 1024 * 1024 * 1024;
 const ROUNDING: &str = "nearest_integer_half_away_from_zero";
 pub const NO_CLAIM: &str = "A feasible schedule and re-verified upper bound for the declared scaled integer OMF model and emitted integer discount factors. Values, slope cones, capacities and rounding are declarations; the search is heuristic and sampling/calibration errors are not measured. No raw-attribute feasibility or optimality, approved slope, reserve, operational mine plan or execution authorization is established.";
-pub const ROBOT_DOCS_JSON: &str = r#"{"command":"plan schedule --omf <model.omf> --spec <schedule.json> [--list-schedule]","schema":"fmine.omf-schedule.v1","input":"Regular OMF parent blocks; exact OMF and strict JSON declaration bytes SHA-256 bound. All spec fields are mandatory except candidate; duplicate and unknown keys refuse","spec":"block_model, value_attribute, value_per_unit, value_rounding=nearest_integer_half_away_from_zero; slope{rise,run,levels}; periods; discount{rate,scale}; capacities[{attribute,per_unit,limits_scaled}]; search_rounds; bound_steps; optional candidate{attribute,first}","scaling":"Positive integer value/resource scales. Values use binary64 multiplication then nearest integer, halves away from zero; resource uses round up. Resource limits are already-scaled nonnegative integers, one per period. No units are converted","method":"Ultimate-pit ranks seed TopoSort and local search. An optional OMF period attribute is checked as an untrusted candidate; null leaves a block out, first maps to period0. Only feasible candidates are improved or selected. The empty0 schedule remains an incumbent. Final feasibility and value are independently recomputed; Lagrangian prices are replayed against exactly the same integer discount factors","work":"Spec<=1MiB; OMF<=1GiB; periods1..256; capacities<=32; search_rounds0..1000; bound_steps1..256. Before slope allocation, conservative uniform-cone bounds require <=1000000 expanded nodes and <=8000000 expanded arcs","output":"fmine.plan-schedule.omf.v1: both sources, units/selectors/scales, declared capacity limits, exact period values/resource use, selected and candidate results, integer discount factors, same-objective bound/gap, replayed prices and bound history. --list-schedule emits OMF-order period arrays; first_unmet witnesses also use OMF order","limits":"Single destination; uniform finite-depth declared slopes; no LP guidance, price deck, raw-float objective certificate, empirical calibration or reserve/execution claim"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"command":"plan schedule --omf <model.omf> --spec <schedule.json> [--list-schedule]","schema":"fmine.omf-schedule.v1","input":"Regular OMF parent blocks; exact OMF and strict JSON declaration bytes SHA-256 bound. All spec fields are mandatory except candidate; duplicate and unknown keys refuse","spec":"block_model, value_attribute, value_per_unit, value_rounding=nearest_integer_half_away_from_zero; slope{rise,run,levels}; periods; discount{rate,scale}; capacities[{attribute,per_unit,limits_scaled}]; search_rounds; bound_steps; optional candidate{attribute,first}","scaling":"Positive integer value/resource scales. Values use binary64 multiplication then nearest integer, halves away from zero; resource uses round up. Resource limits are already-scaled nonnegative integers, one per period. No units are converted","method":"Ultimate-pit ranks seed TopoSort and local search. An optional OMF period attribute is checked as an untrusted candidate; null leaves a block out, first maps to period0. Only feasible candidates are improved or selected. The empty0 schedule remains an incumbent. Final feasibility and value are independently recomputed; Lagrangian prices are replayed against exactly the same integer discount factors","work":"Spec<=1MiB; OMF<=1GiB; periods1..256; capacities<=32; search_rounds0..1000; bound_steps1..256. Before slope allocation, expanded nodes must be <=1000000; reduced slope construction enforces a retained-arc cap so expanded precedence entries stay <=8000000, without rejecting a model solely because a rectangular cone bound is loose","output":"fmine.plan-schedule.omf.v1: both sources, units/selectors/scales, declared capacity limits, exact period values/resource use, selected and candidate results, integer discount factors, same-objective bound/gap, replayed prices and bound history. --list-schedule emits OMF-order period arrays; first_unmet witnesses also use OMF order","limits":"Single destination; uniform finite-depth declared slopes; no LP guidance, price deck, raw-float objective certificate, empirical calibration or reserve/execution claim"}"#;
 
 /// Pure adapter result; the caller supplies its response envelope and performs file IO.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,7 +184,7 @@ fn parse(spec: &str) -> Result<Spec, Refusal> {
     })
 }
 
-fn dimensions(project: &Project, spec: &Spec) -> Result<(), Refusal> {
+fn dimensions(project: &Project, spec: &Spec) -> Result<usize, Refusal> {
     pit::planning_work_limit(
         project,
         &spec.block_model,
@@ -324,10 +324,17 @@ pub fn evaluate(
         if let Some(candidate) = &declaration.candidate {
             pit::value_attribute(&project, &declaration.block_model, &candidate.attribute)?;
         }
-        dimensions(&project, &declaration)?;
+        let max_arcs = dimensions(&project, &declaration)?;
         let [rise, run, levels] = declaration.slope;
         let slopes = SlopeTable::uniform(SlopeTangent::new(rise, run)?);
-        let model = PitModel::new(&project, &declaration.block_model, &slopes, None, levels)?;
+        let model = PitModel::new_bounded(
+            &project,
+            &declaration.block_model,
+            &slopes,
+            None,
+            levels,
+            max_arcs,
+        )?;
         let capacities = declaration
             .capacities
             .iter()
@@ -568,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn work_bounds_refuse_nodes_and_broad_slope_arcs_before_model_allocation() {
+    fn work_bounds_refuse_nodes_and_limit_arcs_during_construction() {
         let mut spec = parse(
             r#"{
             "schema":"fmine.omf-schedule.v1","block_model":"section","value_attribute":"value",
@@ -578,18 +585,31 @@ mod tests {
         }"#,
         )
         .unwrap();
-        dimensions(&project([5, 1, 3]), &spec).unwrap();
+        assert_eq!(dimensions(&project([5, 1, 3]), &spec).unwrap(), 2_666_651);
         for count in [[1000, 1000, 1], [u32::MAX; 3]] {
             let refusal = dimensions(&project(count), &spec).unwrap_err();
             assert_eq!(refusal.code, "FMINE-REF-207");
             assert!(refusal.what.contains("expanded nodes"));
         }
-        spec.slope = [1, u32::MAX, 1];
-        let refusal = dimensions(&project([100, 100, 2]), &spec).unwrap_err();
+        let small = project([3, 3, 2]);
+        let slopes = SlopeTable::uniform(SlopeTangent::new(1, 1).unwrap());
+        // Nine vertical arcs and twelve along each horizontal axis; the 33rd arc cannot be allocated
+        // under a cap of 32. The same admitted model succeeds exactly at its required cap.
+        let refusal = PitModel::new_bounded(&small, "section", &slopes, None, 1, 32).unwrap_err();
         assert_eq!(refusal.code, "FMINE-REF-207");
-        assert!(refusal.what.contains("expanded arcs"));
+        assert!(refusal.what.contains("retained arc budget 32 exceeded"));
+        assert_eq!(
+            PitModel::new_bounded(&small, "section", &slopes, None, 1, 33)
+                .unwrap()
+                .arc_count(),
+            33
+        );
+        // A long narrow cone can fit after reduction even when its rectangular bound does not.
+        spec.periods = 100;
+        spec.slope[2] = 99;
+        assert_eq!(dimensions(&project([1, 1, 100]), &spec).unwrap(), 79_900);
         // Levels beyond the top are unused; a one-layer model allocates no slope arcs.
         spec.slope[2] = u32::MAX;
-        dimensions(&project([2, 1, 1]), &spec).unwrap();
+        assert_eq!(dimensions(&project([2, 1, 1]), &spec).unwrap(), 79_998);
     }
 }

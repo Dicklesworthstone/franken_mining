@@ -2077,9 +2077,7 @@ fn coproduct_aisc_is_disclosed_from_its_own_dated_source_rate() {
     sheet.cells.extend([
         (
             "A17".into(),
-            MinimalCell::Text(
-                "All-in sustaining costs per ounce (on a co-product basis)".into(),
-            ),
+            MinimalCell::Text("All-in sustaining costs per ounce (on a co-product basis)".into()),
         ),
         ("B17".into(), number("1600.4")),
     ]);
@@ -2094,7 +2092,9 @@ fn coproduct_aisc_is_disclosed_from_its_own_dated_source_rate() {
     assert!(report.payload_json.contains("\"status\":\"disclosed\""));
     assert!(report.payload_json.contains("Costs.xlsx:Q1 2030!B17"));
     assert!(
-        report.payload_json.contains("\"stored\":\"1600.4\",\"displayed\":\"1600\"")
+        report
+            .payload_json
+            .contains("\"stored\":\"1600.4\",\"displayed\":\"1600\"")
     );
     assert!(report.payload_json.contains(&hash));
     assert!(!report.payload_json.contains("\"status\":\"derivable\""));

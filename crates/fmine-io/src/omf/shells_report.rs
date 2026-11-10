@@ -15,7 +15,7 @@ pub const MAX_OMF_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_FACTORS: usize = 64;
 const ROUNDING: &str = "nearest_integer_half_away_from_zero";
 pub const NO_CLAIM: &str = "Each nested shell maximizes the declared revenue-factor objective for the scaled integer parent-block values and uniform finite-depth slope cones. Revenue and cost are input attributes, not a price deck or calibrated economic model. No optimum for raw floating-point values, approved slope, reserve, designed pushback, schedule, operational mine plan or execution authorization is established. Tied shells are not claimed to be minimal or maximal; flow witnesses are verified internally and are not exported.";
-pub const ROBOT_DOCS_JSON: &str = r#"{"command":"plan shells --omf <model.omf> --spec <shells.json> [--list-blocks]","schema":"fmine.omf-shells.v1","input":"Regular OMF parent blocks; exact OMF and strict JSON declaration bytes SHA-256 bound. All fields are required; duplicate and unknown keys refuse","spec":"block_model, revenue_attribute, cost_attribute, per_unit, value_rounding=nearest_integer_half_away_from_zero; slope{rise,run,levels}; factors[{num,den}]","scaling":"Revenue and cost must have the same nonempty unit label. No conversion. Integer attributes scale exactly; float attributes use binary64 multiplication then nearest integer, halves away from zero. Scaled revenue must be nonnegative; costs may have either sign","factors":"1..64 positive exact i64 numerator/denominator pairs, strictly increasing as written. No sorting, normalization or deduplication. At num/den the objective is sum(num*scaled_revenue-den*scaled_cost)/(per_unit*den)","method":"Existing PitModel::shells solves and verifies a maximum closure at every factor. Its running union supplies nested shells; each union's closure and exact objective are checked against that factor's certified optimum. Each factor is a fresh solve","work":"Spec<=1MiB; OMF<=1GiB. Before slope allocation, blocks*factor_count<=1000000 and the conservative uniform-cone arc bound*factor_count<=8000000 (including one node allowance per block/factor)","output":"fmine.plan-shells.omf.v1: both sources, units/selectors/scales, slope, exact per-factor values, shell counts and added counts, verified nestedness. --list-blocks emits first_shell in OMF U/V/W bottom-up order; null means absent at every factor","limits":"Scaled integer objective only; no raw-float optimality bound, parametric warm start, exported flow witnesses, empirical calibration, schedule or reserve/execution claim"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"command":"plan shells --omf <model.omf> --spec <shells.json> [--list-blocks]","schema":"fmine.omf-shells.v1","input":"Regular OMF parent blocks; exact OMF and strict JSON declaration bytes SHA-256 bound. All fields are required; duplicate and unknown keys refuse","spec":"block_model, revenue_attribute, cost_attribute, per_unit, value_rounding=nearest_integer_half_away_from_zero; slope{rise,run,levels}; factors[{num,den}]","scaling":"Revenue and cost must have the same nonempty unit label. No conversion. Integer attributes scale exactly; float attributes use binary64 multiplication then nearest integer, halves away from zero. Scaled revenue must be nonnegative; costs may have either sign","factors":"1..64 positive exact i64 numerator/denominator pairs, strictly increasing as written. No sorting, normalization or deduplication. At num/den the objective is sum(num*scaled_revenue-den*scaled_cost)/(per_unit*den)","method":"Existing PitModel::shells solves and verifies a maximum closure at every factor. Its running union supplies nested shells; each union's closure and exact objective are checked against that factor's certified optimum. Each factor is a fresh solve","work":"Spec<=1MiB; OMF<=1GiB. Before slope allocation, blocks*factor_count<=1000000. During reduced slope construction, (retained_arcs+blocks)*factor_count<=8000000 is enforced before target-buffer growth","output":"fmine.plan-shells.omf.v1: both sources, units/selectors/scales, slope, exact per-factor values, shell counts and added counts, verified nestedness. --list-blocks emits first_shell in OMF U/V/W bottom-up order; null means absent at every factor","limits":"Scaled integer objective only; no raw-float optimality bound, parametric warm start, exported flow witnesses, empirical calibration, schedule or reserve/execution claim"}"#;
 
 /// Pure adapter result; the caller supplies its response envelope and performs file IO.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,7 +207,7 @@ pub fn evaluate(
                 ),
             ));
         }
-        pit::planning_work_limit(
+        let max_arcs = pit::planning_work_limit(
             &project,
             &spec.block_model,
             spec.slope,
@@ -217,7 +217,8 @@ pub fn evaluate(
         )?;
         let [rise, run, levels] = spec.slope;
         let slopes = SlopeTable::uniform(SlopeTangent::new(rise, run)?);
-        let model = PitModel::new(&project, &spec.block_model, &slopes, None, levels)?;
+        let model =
+            PitModel::new_bounded(&project, &spec.block_model, &slopes, None, levels, max_arcs)?;
         let nested = model.shells(
             &spec.revenue_attribute,
             &spec.cost_attribute,

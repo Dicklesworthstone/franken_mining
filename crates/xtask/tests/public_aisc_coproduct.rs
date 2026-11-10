@@ -35,7 +35,9 @@ mod tests {
             "Barrick_Q2_2025_AISC.xlsx",
             "Barrick_Q3_2025_AISC.xlsx",
         ];
-        profile.sources.retain(|s| files.contains(&s.file_name.as_str()));
+        profile
+            .sources
+            .retain(|s| files.contains(&s.file_name.as_str()));
         assert_eq!(profile.sources.len(), 5);
         let sources =
             fmine_public::load_registered_sources(&profile, &root).expect("verified source bytes");
@@ -52,8 +54,10 @@ mod tests {
             .filter(|c| c.key.line.label == AISC.to_lowercase())
             .collect();
         assert_eq!(claims.len(), 359);
-        assert!(claims.iter().all(|c| c.key.unit == "usd_per_oz"
-            && c.key.ownership_basis == OwnershipBasis::Unprinted));
+        assert!(
+            claims.iter().all(|c| c.key.unit == "usd_per_oz"
+                && c.key.ownership_basis == OwnershipBasis::Unprinted)
+        );
         assert_eq!(
             claims
                 .iter()
@@ -91,12 +95,16 @@ mod tests {
             matches!(&first.claim.value, PublicValue::Number { stored, displayed: Ok(displayed), .. }
                 if stored == "2577.1763085877856" && displayed == "2577")
         );
-        let draft = format!("Carlin Q1 2025 ownership basis unprinted co-product AISC per ounce sold is [$2,577/oz](fmine:{}).", first.claim.claim_id);
+        let draft = format!(
+            "Carlin Q1 2025 ownership basis unprinted co-product AISC per ounce sold is [$2,577/oz](fmine:{}).",
+            first.claim.claim_id
+        );
         assert_eq!(
             lint_cited(&draft, std::slice::from_ref(first)).findings[0].verdict,
             Verdict::Verified
         );
-        let discovered = "Carlin Q1 2025 ownership basis unprinted co-product AISC per ounce sold is $2,577/oz.";
+        let discovered =
+            "Carlin Q1 2025 ownership basis unprinted co-product AISC per ounce sold is $2,577/oz.";
         assert_eq!(
             lint_discover(discovered, std::slice::from_ref(first)).findings[0].verdict,
             Verdict::Verified

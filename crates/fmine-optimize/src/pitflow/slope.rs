@@ -456,6 +456,24 @@ pub fn slope_arcs(
     domain_of: &[u16],
     levels: u32,
 ) -> Result<SlopeArcs, Refusal> {
+    slope_arcs_bounded(grid, table, domain_of, levels, NONE as usize - 1)
+}
+
+/// The same arcs as [`slope_arcs`], with a caller's maximum retained arc count. Zero permits an empty graph.
+/// The limit is checked before each append, and target-buffer growth never requests capacity above it.
+/// The existing pattern, scan and block-count limits still apply independently.
+///
+/// # Errors
+/// The errors of [`slope_arcs`], or `FMINE-REF-207` when the next retained arc would exceed `max_arcs`,
+/// or target-buffer allocation fails. A limit above the existing `u32::MAX - 1` ceiling does not raise it.
+pub fn slope_arcs_bounded(
+    grid: &BlockGrid,
+    table: &SlopeTable,
+    domain_of: &[u16],
+    levels: u32,
+    max_arcs: usize,
+) -> Result<SlopeArcs, Refusal> {
+    let max_arcs = max_arcs.min(NONE as usize - 1);
     let n = grid.block_count();
     if levels == 0 {
         return Err(refuse("slope: levels must be at least 1".to_string()));
@@ -506,7 +524,9 @@ pub fn slope_arcs(
                 if interior {
                     full_cone_arcs += p.full_upto[up as usize] as u64;
                     let to = |o: &Offset| (b as i64 + o[0] + o[1] * nx - o[2] * layer) as u32;
-                    targets.extend(p.reduced[..p.reduced_upto[up as usize]].iter().map(to));
+                    let reduced = &p.reduced[..p.reduced_upto[up as usize]];
+                    reserve_targets(&mut targets, reduced.len(), max_arcs)?;
+                    targets.extend(reduced.iter().map(to));
                 } else {
                     boundary_blocks += 1;
                     for (&o, w) in p.full[..p.full_upto[up as usize]].iter().zip(&p.witnesses) {
@@ -521,14 +541,10 @@ pub fn slope_arcs(
                             })
                         });
                         if !implied {
+                            reserve_targets(&mut targets, 1, max_arcs)?;
                             targets.push(t as u32);
                         }
                     }
-                }
-                if targets.len() >= NONE as usize {
-                    return Err(refuse(format!(
-                        "slope: {NONE} or more arcs; use fewer layers or a smaller grid"
-                    )));
                 }
                 offsets.push(targets.len());
             }
@@ -540,6 +556,31 @@ pub fn slope_arcs(
         full_cone_arcs,
         boundary_blocks,
     })
+}
+
+fn reserve_targets(
+    targets: &mut Vec<u32>,
+    additional: usize,
+    max_arcs: usize,
+) -> Result<(), Refusal> {
+    let needed = targets
+        .len()
+        .checked_add(additional)
+        .filter(|&n| n <= max_arcs)
+        .ok_or_else(|| refuse(format!("slope: retained arc budget {max_arcs} exceeded")))?;
+    if needed > targets.capacity() {
+        // Geometric growth keeps boundary appends cheap, but Vec's implicit growth could exceed the cap.
+        let capacity = targets
+            .capacity()
+            .saturating_mul(2)
+            .max(4)
+            .max(needed)
+            .min(max_arcs);
+        targets
+            .try_reserve_exact(capacity - targets.len())
+            .map_err(|_| refuse(format!("slope: cannot allocate {capacity} retained arcs")))?;
+    }
+    Ok(())
 }
 
 /// Box counts of mixed blocks: those whose next block east, north or below is in another domain.
@@ -679,6 +720,41 @@ mod tests {
             slope_arcs(&grid, &one, &domains, 3).unwrap(),
             slope_arcs(&grid, &one, &domains, 300).unwrap()
         );
+    }
+
+    #[test]
+    fn retained_arc_budget_checks_boundary_and_interior_before_growth() {
+        let table = SlopeTable::uniform(tan(1, 1));
+        let grid = BlockGrid::new([3, 3, 2], [1, 1, 1]).unwrap();
+        // Nine straight-up arcs, twelve east/west and twelve north/south arcs.
+        let exact = slope_arcs_bounded(&grid, &table, &[0; 18], 1, 33).unwrap();
+        assert_eq!(exact.arc_count(), 33);
+        assert_eq!(exact, slope_arcs(&grid, &table, &[0; 18], 1).unwrap());
+        for cap in [0, 2, 18, 32] {
+            // Cap 2 stops inside the first corner's three arcs. Cap 18 stops before the central
+            // interior block's five-arc bulk append, after fourteen boundary arcs.
+            let refusal = slope_arcs_bounded(&grid, &table, &[0; 18], 1, cap).unwrap_err();
+            assert_eq!(refusal.code, "FMINE-REF-207");
+            assert!(
+                refusal
+                    .what
+                    .contains(&format!("retained arc budget {cap} exceeded"))
+            );
+        }
+        let flat = BlockGrid::new([3, 3, 1], [1, 1, 1]).unwrap();
+        assert_eq!(
+            slope_arcs_bounded(&flat, &table, &[0; 9], 1, 0)
+                .unwrap()
+                .arc_count(),
+            0
+        );
+        let mut targets = vec![0, 1];
+        let capacity = targets.capacity();
+        assert!(reserve_targets(&mut targets, 2, 3).is_err());
+        assert_eq!(targets, [0, 1]);
+        assert_eq!(targets.capacity(), capacity);
+        assert!(reserve_targets(&mut targets, usize::MAX, usize::MAX).is_err());
+        assert_eq!(targets.capacity(), capacity);
     }
 
     #[test]

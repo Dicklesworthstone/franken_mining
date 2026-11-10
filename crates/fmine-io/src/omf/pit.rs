@@ -60,7 +60,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_geom::volcert::block_proportions;
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, PdlpSolution, certified_bound, solve as solve_lp};
 use fmine_optimize::pitflow::shells::{NestedShells, RevenueFactor, ShellModel, nested_shells};
-use fmine_optimize::pitflow::slope::{BlockGrid, SlopeTable, slope_arcs};
+use fmine_optimize::pitflow::slope::{BlockGrid, SlopeTable, slope_arcs_bounded};
 use fmine_optimize::pitflow::{ClosureProblem, PitSolution, solve};
 use fmine_optimize::toposort::lp::{Incumbent, Shares, incumbent, relaxation, starts};
 use fmine_optimize::toposort::search::{Improvement, discount_factors, discounted_value, improve};
@@ -102,8 +102,8 @@ pub(super) fn integer_sizes(size: [f64; 3]) -> Option<([u32; 3], u32)> {
     None
 }
 
-/// Bound unreduced slope CSR work before allocation, multiplied by periods or revenue-factor solves.
-/// Every uniform cone lies within this rectangular offset box, including boundary and truncated cones.
+/// Bound nodes before allocation and return the retained-arc cap for periods or revenue-factor solves.
+/// Both callers enforce this cap during reduced CSR construction with `PitModel::new_bounded`.
 pub(super) fn planning_work_limit(
     project: &Project,
     block_model: &str,
@@ -111,7 +111,7 @@ pub(super) fn planning_work_limit(
     repetitions: usize,
     operation: &str,
     axis: &str,
-) -> Result<(), Refusal> {
+) -> Result<usize, Refusal> {
     const MAX_NODES: u128 = 1_000_000;
     const MAX_ARCS: u128 = 8_000_000;
     let numerical = |detail| ill_posed(format!("OMF {operation}: {detail}"));
@@ -136,7 +136,7 @@ pub(super) fn planning_work_limit(
             "work budget exceeded: {n} blocks times {repetitions} {axis}; at most {MAX_NODES} expanded nodes"
         )));
     }
-    let (sizes, _) = integer_sizes(*size).ok_or_else(|| {
+    integer_sizes(*size).ok_or_else(|| {
         outside(
             "OMF block sizes are not integers below 2^32 after permitted power-of-two scaling"
                 .into(),
@@ -147,18 +147,11 @@ pub(super) fn planning_work_limit(
             "slope rise, run and levels must be positive".into(),
         ));
     }
-    let [dx, dy, dz] = sizes.map(u128::from);
-    let levels = u128::from(slope[2]).min(nz - 1);
-    let horizontal = dz * levels * u128::from(slope[1]) / u128::from(slope[0]);
-    let (rx, ry) = ((horizontal / dx).min(nx), (horizontal / dy).min(ny));
-    let box_size = (2 * rx + 1) * (2 * ry + 1) * levels;
-    let arcs = n * box_size * repetitions + n * repetitions;
-    if arcs > MAX_ARCS {
-        return Err(numerical(format!(
-            "work budget exceeded: uniform-cone bound is {arcs} expanded arcs; at most {MAX_ARCS}; use fewer blocks, {axis} or levels, or steeper slopes"
-        )));
-    }
-    Ok(())
+    // This also bounds scheduling time links and the aggregate graph work across shell factors.
+    (MAX_ARCS / repetitions)
+        .checked_sub(n)
+        .and_then(|arcs| usize::try_from(arcs).ok())
+        .ok_or_else(|| numerical("work budget cannot represent the retained-arc limit".into()))
 }
 
 /// Per-block values from OMF's order to `pitflow`'s, or back: the layers in reverse.
@@ -251,6 +244,22 @@ impl<'p> PitModel<'p> {
         domain: Option<&str>,
         levels: u32,
     ) -> Result<Self, Refusal> {
+        Self::new_bounded(project, block_model, slopes, domain, levels, usize::MAX)
+    }
+
+    /// [`Self::new`] with an explicit retained-arc limit checked during slope construction, before any
+    /// append or target-buffer growth could exceed it. Pattern and scan limits still apply independently.
+    ///
+    /// # Errors
+    /// The errors of [`Self::new`], plus `FMINE-REF-207` if construction would exceed `max_arcs`.
+    pub fn new_bounded(
+        project: &'p Project,
+        block_model: &str,
+        slopes: &SlopeTable,
+        domain: Option<&str>,
+        levels: u32,
+        max_arcs: usize,
+    ) -> Result<Self, Refusal> {
         let e = element(project, block_model)?;
         let Geometry::BlockModel(BlockModel { orient, grid, .. }) = &e.geometry else {
             return Err(missing(format!(
@@ -317,7 +326,8 @@ impl<'p> PitModel<'p> {
                 reversed_layers(&omf, *count)
             }
         };
-        let (offsets, targets) = slope_arcs(&grid, slopes, &domain_of, levels)?.into_csr();
+        let (offsets, targets) =
+            slope_arcs_bounded(&grid, slopes, &domain_of, levels, max_arcs)?.into_csr();
         Ok(Self {
             project,
             element: e,
