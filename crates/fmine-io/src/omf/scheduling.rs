@@ -6,15 +6,13 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_optimize::pitflow::slope::{SlopeTable, SlopeTangent};
 use fmine_optimize::toposort::{ScheduleCheck, check, lp, search};
 
+use super::Project;
 use super::json::{self, Json};
 use super::pit::{self, Capacity, PitModel, ScheduleSpec};
 use super::pit_report::{escape_json, source_json};
-use super::{Geometry, Grid3, Project};
 
 pub const MAX_SPEC_BYTES: u64 = 1024 * 1024;
 pub const MAX_OMF_BYTES: u64 = 1024 * 1024 * 1024;
-const MAX_NODES: u128 = 1_000_000;
-const MAX_ARCS: u128 = 8_000_000;
 const ROUNDING: &str = "nearest_integer_half_away_from_zero";
 pub const NO_CLAIM: &str = "A feasible schedule and re-verified upper bound for the declared scaled integer OMF model and emitted integer discount factors. Values, slope cones, capacities and rounding are declarations; the search is heuristic and sampling/calibration errors are not measured. No raw-attribute feasibility or optimality, approved slope, reserve, operational mine plan or execution authorization is established.";
 pub const ROBOT_DOCS_JSON: &str = r#"{"command":"plan schedule --omf <model.omf> --spec <schedule.json> [--list-schedule]","schema":"fmine.omf-schedule.v1","input":"Regular OMF parent blocks; exact OMF and strict JSON declaration bytes SHA-256 bound. All spec fields are mandatory except candidate; duplicate and unknown keys refuse","spec":"block_model, value_attribute, value_per_unit, value_rounding=nearest_integer_half_away_from_zero; slope{rise,run,levels}; periods; discount{rate,scale}; capacities[{attribute,per_unit,limits_scaled}]; search_rounds; bound_steps; optional candidate{attribute,first}","scaling":"Positive integer value/resource scales. Values use binary64 multiplication then nearest integer, halves away from zero; resource uses round up. Resource limits are already-scaled nonnegative integers, one per period. No units are converted","method":"Ultimate-pit ranks seed TopoSort and local search. An optional OMF period attribute is checked as an untrusted candidate; null leaves a block out, first maps to period0. Only feasible candidates are improved or selected. The empty0 schedule remains an incumbent. Final feasibility and value are independently recomputed; Lagrangian prices are replayed against exactly the same integer discount factors","work":"Spec<=1MiB; OMF<=1GiB; periods1..256; capacities<=32; search_rounds0..1000; bound_steps1..256. Before slope allocation, conservative uniform-cone bounds require <=1000000 expanded nodes and <=8000000 expanded arcs","output":"fmine.plan-schedule.omf.v1: both sources, units/selectors/scales, declared capacity limits, exact period values/resource use, selected and candidate results, integer discount factors, same-objective bound/gap, replayed prices and bound history. --list-schedule emits OMF-order period arrays; first_unmet witnesses also use OMF order","limits":"Single destination; uniform finite-depth declared slopes; no LP guidance, price deck, raw-float objective certificate, empirical calibration or reserve/execution claim"}"#;
@@ -186,45 +184,15 @@ fn parse(spec: &str) -> Result<Spec, Refusal> {
     })
 }
 
-/// Bound even the unreduced slope CSR before allocating it. The exact integer-size admission is shared with
-/// PitModel; every cone lies in this rectangular offset box, including boundary blocks and truncated levels.
 fn dimensions(project: &Project, spec: &Spec) -> Result<(), Refusal> {
-    let e = super::proportions::element(project, &spec.block_model)?;
-    let Geometry::BlockModel(model) = &e.geometry else {
-        return Err(invalid("selected element is not a BlockModel"));
-    };
-    let Grid3::Regular { size, count } = &model.grid else {
-        return Err(Refusal::new(
-            RefusalCode::OutsidePhysicalDomain109,
-            "OMF schedule requires a regular grid",
-        ));
-    };
-    let [nx, ny, nz] = count.map(u128::from);
-    let n = nx * ny * nz;
-    let periods = spec.periods as u128;
-    if n == 0 || n * periods > MAX_NODES {
-        return Err(numerical(format!(
-            "work budget exceeded: {n} blocks times {periods} periods; at most {MAX_NODES} expanded nodes"
-        )));
-    }
-    let (sizes, _) = pit::integer_sizes(*size).ok_or_else(|| {
-        Refusal::new(
-            RefusalCode::OutsidePhysicalDomain109,
-            "OMF block sizes are not integers below 2^32 after permitted power-of-two scaling",
-        )
-    })?;
-    let [dx, dy, dz] = sizes.map(u128::from);
-    let levels = u128::from(spec.slope[2]).min(nz - 1);
-    let horizontal = dz * levels * u128::from(spec.slope[1]) / u128::from(spec.slope[0]);
-    let (rx, ry) = ((horizontal / dx).min(nx), (horizontal / dy).min(ny));
-    let box_size = (2 * rx + 1) * (2 * ry + 1) * levels;
-    let arcs = n * box_size * periods + n * periods;
-    if arcs > MAX_ARCS {
-        return Err(numerical(format!(
-            "work budget exceeded: uniform-cone bound is {arcs} expanded arcs; at most {MAX_ARCS}; use fewer blocks, periods or levels, or steeper slopes"
-        )));
-    }
-    Ok(())
+    pit::planning_work_limit(
+        project,
+        &spec.block_model,
+        spec.slope,
+        spec.periods,
+        "schedule",
+        "periods",
+    )
 }
 
 fn integers<T: std::fmt::Display>(values: &[T]) -> String {
@@ -534,7 +502,7 @@ pub fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::omf::{BlockModel, Element, Orient3};
+    use crate::omf::{BlockModel, Element, Geometry, Grid3, Orient3};
 
     #[test]
     fn both_source_anchors_are_rechecked_and_refusals_bind_actual_bytes() {

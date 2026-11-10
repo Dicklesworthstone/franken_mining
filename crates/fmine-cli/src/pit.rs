@@ -4,16 +4,16 @@
 
 use std::path::{Path, PathBuf};
 
-use fmine_evidence::{Refusal, RefusalCode};
-use fmine_io::omf::{self, pit_report::MAX_BYTES};
-use fmine_optimize::pitflow::{self, candidate, minelib};
+use fmine_evidence::Refusal;
+use fmine_io::{
+    minelib_report,
+    omf::{self, pit_report::MAX_BYTES},
+};
+use fmine_optimize::pitflow::minelib;
 
-use crate::{Envelope, NextAction, escape_json, worksheet_input};
+use crate::{Envelope, NextAction, worksheet_input};
 
 pub const USAGE: &str = "plan pit --upit <file.upit> --prec <file.prec> [--decimals N] [--round] [--list-blocks] [--candidate <file>] | plan pit --omf <file.omf> --block-model <name> --value-attribute <name> --per-unit N --slope-rise N --slope-run N --slope-levels N --round [--list-blocks]";
-const NO_CLAIM: &str = "The maximum-value closed set of the supplied block values and precedence arcs. Values and \
-arcs are taken as given: no price, cost, recovery or slope is derived or checked, and the pit is not a reserve, \
-a schedule or a mine plan.";
 pub const ROBOT_DOCS_JSON: &str = r#"{"input":"MineLib UPIT pair: <name>.upit (NAME, TYPE: UPIT, NBLOCKS, OBJECTIVE_FUNCTION, one '<block> <value>' line per block) and <name>.prec (one '<block> <count> <required>...' line per block); each file at most 1 GiB, SHA-256 bound","values":"Plain decimals scaled to integers at --decimals places (default 6, at most 9); a value with more non-zero places refuses unless --round, which rounds half away from zero and reports the count and the bound on the value","output":"Exact value at the declared places, pit and model sizes, the pseudoflow certificate re-verified (closed pit, no flow into it, excess signs), solver counters; --list-blocks adds the in-pit block ids","candidate":"MineLib only: --candidate <file>, whitespace-separated block ids ('%' comments), SHA-256 bound; reports its exact value, unmet requirements and witnesses, certified gap when closed, and verdict not_closed, optimal or suboptimal; candidate claims are ignored","omf":{"command":"plan pit --omf <file.omf> --block-model <name> --value-attribute <name> --per-unit N --slope-rise N --slope-run N --slope-levels N --round [--list-blocks]","input":"OMF 2.x archive, regular file at most 1 GiB, exact bytes SHA-256 bound; one uniquely named regular parent-block model with W straight up and a unique Number attribute on Primitives","slopes":"Uniform declared slope tangent rise/run with positive integer parts; positive slope-levels sets the finite cone depth. No geotechnical slope approval is inferred","values":"Positive integer per-unit scale is mandatory. --round explicitly accepts the existing OMF adapter's nearest-integer scaling, halves away from zero. Certificate covers this scaled integer model only; raw-attribute optimum is not certified","block_order":"Listed block ids are OMF order: U fastest, then V, then W from bottom upward","output":"fmine.plan-pit.omf.v1: source, selectors, coordinate context, slope declaration, scale, exact scaled value and ratio, pit/arc counts and verified pseudoflow certificate","limits":"No sub-block values, tensor grid, sector/domain-specific slope table, candidate, schedule, price/cost derivation or reserve claim; MineLib-only flags refuse"},"no_claim":"Not a reserve, schedule or mine plan"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,19 +154,6 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     })
 }
 
-/// `units` at 10^`places` as an exact decimal.
-fn decimal(units: i128, places: u32) -> String {
-    let scale = 10_u128.pow(places);
-    let sign = if units < 0 { "-" } else { "" };
-    let abs = units.unsigned_abs();
-    let (int, frac) = (abs / scale, abs % scale);
-    if places == 0 {
-        format!("{sign}{int}")
-    } else {
-        format!("{sign}{int}.{frac:0width$}", width = places as usize)
-    }
-}
-
 pub fn execute(command: &Command, root: &Path) -> Envelope {
     match &command.input {
         Input::MineLib { upit, prec } => execute_minelib(command, root, upit, prec),
@@ -178,128 +165,36 @@ fn execute_minelib(command: &Command, root: &Path, upit_path: &Path, prec_path: 
     let run = || -> Result<Envelope, Refusal> {
         let (upit, upit_source) = worksheet_input::read(&root.join(upit_path), "UPIT", MAX_BYTES)?;
         let (prec, prec_source) = worksheet_input::read(&root.join(prec_path), "PREC", MAX_BYTES)?;
-        let rounding = if command.round {
-            minelib::Rounding::HalfAwayFromZero
-        } else {
-            minelib::Rounding::Refuse
-        };
-        let model = minelib::parse(&upit, &prec, command.decimals, rounding)?;
-        let pit = pitflow::solve(&model.problem)?;
-        // `solve` verifies before it returns; the certificate is checked once more against the parsed problem.
-        if pitflow::verify(&model.problem, pit.in_pit(), pit.arc_flow())? != pit.value() {
-            return Err(Refusal::new(
-                RefusalCode::NumericalCertificateFailed207,
-                "plan pit: the re-verified value differs from the solver's".to_string(),
-            ));
-        }
-        let d = command.decimals;
-        let stats = pit.stats();
-        // Each rounding moves a pit's value by at most half a unit at `d` places: count × 5 at `d + 1` places.
-        let bound = i128::try_from(model.rounded)
-            .ok()
-            .and_then(|r| r.checked_mul(5))
-            .ok_or_else(|| {
-                Refusal::new(
-                    RefusalCode::NumericalCertificateFailed207,
-                    "plan pit: the rounding bound overflows".to_string(),
-                )
-            })?;
-        let mut payload = format!(
-            "{{\"schema\":\"fmine.plan-pit.v1\",\"model\":{{\"format\":\"minelib_upit\",\"name\":\"{}\",\"upit\":{},\"prec\":{}}},\"blocks\":{},\"arcs\":{},\"decimals\":{d},\"rounding\":\"{}\",\"rounded_values\":{},\"value_bound\":\"{}\",\"value\":\"{}\",\"pit_blocks\":{},\"certificate\":{{\"verified\":true,\"method\":\"pseudoflow final arc flows; pit closed, no flow enters it, excess non-negative inside and non-positive outside\"}},\"solver\":{{\"mergers\":{},\"splits\":{},\"relabels\":{},\"max_label\":{}}}",
-            escape_json(&model.name),
-            worksheet_input::source_json(&upit_source, upit.len()),
-            worksheet_input::source_json(&prec_source, prec.len()),
-            model.problem.node_count(),
-            model.problem.arc_count(),
-            if command.round {
-                "half_away_from_zero"
-            } else {
-                "refuse"
+        let candidate = command
+            .candidate
+            .as_ref()
+            .map(|path| {
+                worksheet_input::read(&root.join(path), "CANDIDATE", MAX_BYTES)
+                    .map(|(text, source)| (text, source, path.display().to_string()))
+            })
+            .transpose()?;
+        let report = minelib_report::evaluate(
+            &upit,
+            &upit_source,
+            &prec,
+            &prec_source,
+            &minelib_report::Options {
+                decimals: command.decimals,
+                round: command.round,
+                list_blocks: command.list_blocks,
             },
-            model.rounded,
-            decimal(bound, d + 1),
-            decimal(i128::from(pit.value()), d),
-            pit.pit_size(),
-            stats.mergers,
-            stats.splits,
-            stats.relabels,
-            stats.max_label,
-        );
-        if command.list_blocks {
-            let ids: Vec<String> = pit
-                .in_pit()
-                .iter()
-                .enumerate()
-                .filter(|(_, inside)| **inside)
-                .map(|(b, _)| b.to_string())
-                .collect();
-            payload.push_str(",\"in_pit\":[");
-            payload.push_str(&ids.join(","));
-            payload.push(']');
-        }
-        let mut candidate_line = String::new();
-        if let Some(path) = &command.candidate {
-            let (text, source) = worksheet_input::read(&root.join(path), "CANDIDATE", MAX_BYTES)?;
-            let in_set = candidate::parse_ids(&text, model.problem.node_count())?;
-            let c = candidate::check(&model.problem, &in_set)?;
-            let gap = i128::from(pit.value()) - i128::from(c.value);
-            // A closed set worth more than the certified optimum would contradict the certificate.
-            if c.closed() && gap < 0 {
-                return Err(Refusal::new(
-                    RefusalCode::NumericalCertificateFailed207,
-                    "plan pit: a closed candidate exceeds the certified optimum".to_string(),
-                ));
-            }
-            let verdict = match (c.closed(), gap) {
-                (false, _) => "not_closed",
-                (true, 0) => "optimal",
-                (true, _) => "suboptimal",
-            };
-            let gap_text = if c.closed() {
-                format!("\"{}\"", decimal(gap, d))
-            } else {
-                "null".to_string()
-            };
-            let witnesses: Vec<String> = c
-                .first_unmet
-                .iter()
-                .map(|(b, p)| format!("[{b},{p}]"))
-                .collect();
-            payload.push_str(&format!(
-                ",\"candidate\":{{\"source\":{},\"blocks\":{},\"value\":\"{}\",\"unmet_requirements\":{},\"first_unmet\":[{}],\"gap_to_optimum\":{gap_text},\"verdict\":\"{verdict}\"}}",
-                worksheet_input::source_json(&source, text.len()),
-                c.blocks,
-                decimal(i128::from(c.value), d),
-                c.unmet,
-                witnesses.join(","),
-            ));
-            candidate_line = format!(
-                "\n**Candidate** `{}`: {verdict}. {} blocks, value {}, {} unmet requirements, gap to the certified optimum {}.\n",
-                path.display(),
-                c.blocks,
-                decimal(i128::from(c.value), d),
-                c.unmet,
-                gap_text.trim_matches('"'),
-            );
-        }
-        payload.push('}');
-        let mut envelope = Envelope::ok("plan pit", payload, Vec::new());
-        envelope.no_claim = Some(NO_CLAIM);
-        if model.rounded > 0 {
-            envelope.warnings.push(format!(
-                "{} values were rounded to {d} places; the value is exact for the rounded problem and within the stated bound of the file's optimum.",
-                model.rounded
-            ));
-        }
-        envelope.rendered_markdown = Some(format!(
-            "# Ultimate pit: {}\n\n| blocks | arcs | pit blocks | value | rounded values | certificate |\n|---:|---:|---:|---:|---:|---|\n| {} | {} | {} | {} | {} | verified |\n{candidate_line}\n{NO_CLAIM}\n",
-            model.name,
-            model.problem.node_count(),
-            model.problem.arc_count(),
-            pit.pit_size(),
-            decimal(i128::from(pit.value()), d),
-            model.rounded
-        ));
+            candidate
+                .as_ref()
+                .map(|(text, source, display_path)| minelib_report::Candidate {
+                    text,
+                    source,
+                    display_path,
+                }),
+        )?;
+        let mut envelope = Envelope::ok("plan pit", report.json, Vec::new());
+        envelope.no_claim = Some(minelib_report::NO_CLAIM);
+        envelope.warnings = report.warnings;
+        envelope.rendered_markdown = Some(report.markdown);
         Ok(envelope)
     };
     run().unwrap_or_else(|refusal| {

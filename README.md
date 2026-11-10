@@ -580,6 +580,48 @@ remain outside this slice. The independent Python Fraction oracle checks the act
 example and 16 generated models, including exhaustive feasible schedules and independent dual-price
 replay; these are known answers, not operating-mine validation.
 
+### Compare OMF pit shells across revenue factors
+
+`plan shells` solves a nested family of pit limits from explicitly supplied revenue and cost attributes.
+It checks each scaled integer optimum and verifies that every shell contains the preceding shell.
+The OMF archive and the declaration both retain their SHA-256 identities in the result.
+
+```bash
+cargo run --release -p fmine-cli -- plan shells \
+  --omf model.omf --spec shells.json --list-blocks --json
+```
+
+For numeric parent-block attributes `revenue` and `cost` with the same nonempty unit label on a regular
+block model named `orebody`, `shells.json` can contain:
+
+```json
+{
+  "schema": "fmine.omf-shells.v1",
+  "block_model": "orebody",
+  "revenue_attribute": "revenue",
+  "cost_attribute": "cost",
+  "per_unit": 100,
+  "value_rounding": "nearest_integer_half_away_from_zero",
+  "slope": {"rise": 1, "run": 1, "levels": 3},
+  "factors": [{"num": 1, "den": 2}, {"num": 1, "den": 1}, {"num": 3, "den": 2}]
+}
+```
+
+Every field is required. Factors are positive exact integer fractions, strictly increasing as written;
+the command does not sort or deduplicate them. Revenue and cost are separately scaled and rounded to the
+nearest integer, halves away from zero. At factor `num/den`, the reported objective is exactly
+`sum(num * scaled_revenue - den * scaled_cost) / (per_unit * den)`. Scaled revenue must be nonnegative;
+signed costs are supported. Different or missing unit labels refuse, and no conversion is inferred.
+
+The report gives each shell's exact objective, total blocks and newly added blocks. `--list-blocks` adds
+`first_shell`: one zero-based shell index per original OMF block, or null if absent at every factor.
+Block order is U, then V, then W from bottom upward. The independent actual-binary oracle enumerates
+small synthetic models, including tied optima, signed costs and exact rational factor boundaries.
+
+Certificates cover the declared scaled integer model and finite-depth uniform slope cones. The existing
+solver checks flow witnesses internally; this report does not export them. Shells are mathematical pit
+limits, with no designed-pushback, reserve, approved-slope, raw-float optimum or execution claim.
+
 ### Schedule an OMF block model under resource limits
 
 `plan schedule` also accepts an OMF model and a separate JSON declaration. It constructs a whole-block

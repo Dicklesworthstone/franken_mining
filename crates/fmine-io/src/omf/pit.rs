@@ -102,6 +102,65 @@ pub(super) fn integer_sizes(size: [f64; 3]) -> Option<([u32; 3], u32)> {
     None
 }
 
+/// Bound unreduced slope CSR work before allocation, multiplied by periods or revenue-factor solves.
+/// Every uniform cone lies within this rectangular offset box, including boundary and truncated cones.
+pub(super) fn planning_work_limit(
+    project: &Project,
+    block_model: &str,
+    slope: [u32; 3],
+    repetitions: usize,
+    operation: &str,
+    axis: &str,
+) -> Result<(), Refusal> {
+    const MAX_NODES: u128 = 1_000_000;
+    const MAX_ARCS: u128 = 8_000_000;
+    let numerical = |detail| ill_posed(format!("OMF {operation}: {detail}"));
+    let e = element(project, block_model)?;
+    let Geometry::BlockModel(model) = &e.geometry else {
+        return Err(missing(format!(
+            "OMF {operation} declaration: selected element is not a BlockModel"
+        )));
+    };
+    let Grid3::Regular { size, count } = &model.grid else {
+        return Err(outside(format!("OMF {operation} requires a regular grid")));
+    };
+    let [nx, ny, nz] = count.map(u128::from);
+    let n = nx * ny * nz;
+    let repetitions = repetitions as u128;
+    if n == 0
+        || repetitions == 0
+        || n.checked_mul(repetitions)
+            .is_none_or(|nodes| nodes > MAX_NODES)
+    {
+        return Err(numerical(format!(
+            "work budget exceeded: {n} blocks times {repetitions} {axis}; at most {MAX_NODES} expanded nodes"
+        )));
+    }
+    let (sizes, _) = integer_sizes(*size).ok_or_else(|| {
+        outside(
+            "OMF block sizes are not integers below 2^32 after permitted power-of-two scaling"
+                .into(),
+        )
+    })?;
+    if slope.contains(&0) {
+        return Err(numerical(
+            "slope rise, run and levels must be positive".into(),
+        ));
+    }
+    let [dx, dy, dz] = sizes.map(u128::from);
+    let levels = u128::from(slope[2]).min(nz - 1);
+    let horizontal = dz * levels * u128::from(slope[1]) / u128::from(slope[0]);
+    let (rx, ry) = ((horizontal / dx).min(nx), (horizontal / dy).min(ny));
+    let box_size = (2 * rx + 1) * (2 * ry + 1) * levels;
+    let arcs = n * box_size * repetitions + n * repetitions;
+    if arcs > MAX_ARCS {
+        return Err(numerical(format!(
+            "work budget exceeded: uniform-cone bound is {arcs} expanded arcs; at most {MAX_ARCS}; use fewer blocks, {axis} or levels, or steeper slopes"
+        )));
+    }
+    Ok(())
+}
+
 /// Per-block values from OMF's order to `pitflow`'s, or back: the layers in reverse.
 fn reversed_layers<T: Clone>(per_block: &[T], count: [u32; 3]) -> Vec<T> {
     let layer = (count[0] as usize * count[1] as usize).max(1);

@@ -32,6 +32,7 @@ pub mod pit;
 pub mod pit_report;
 mod proportions;
 pub mod scheduling;
+pub mod shells_report;
 
 pub use json::Json;
 use parquet::{Column, Logical, Table, Values};

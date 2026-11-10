@@ -57,6 +57,12 @@ mutates_authority = false
 description = "Build and check capacity-constrained MineLib or OMF production schedules with exact feasibility and an integer Lagrangian upper bound"
 
 [[verb]]
+path = "plan shells"
+subsystem = "Pushback"
+mutates_authority = false
+description = "Solve nested OMF pit shells across explicit exact revenue factors with verified integer closure objectives and original block membership"
+
+[[verb]]
 path = "html claims"
 subsystem = "Bullion"
 mutates_authority = false

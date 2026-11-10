@@ -27,7 +27,7 @@ pub struct Report {
     pub markdown: String,
 }
 
-pub(super) fn escape_json(s: &str) -> String {
+pub(crate) fn escape_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
@@ -43,7 +43,7 @@ pub(super) fn escape_json(s: &str) -> String {
     out
 }
 
-pub(super) fn source_json(source: &SourceAnchor, bytes: usize) -> String {
+pub(crate) fn source_json(source: &SourceAnchor, bytes: usize) -> String {
     format!(
         "{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{bytes}}}",
         escape_json(&source.artifact_path),

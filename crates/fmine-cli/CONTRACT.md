@@ -256,6 +256,16 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     resource use, bound prices and gap on that same objective. Listed periods use original OMF order.
     MineLib-only flags refuse. Uniform slope, single-destination, upper-limit and uncalibrated-input
     limits remain explicit. `omf::pit_report` also owns existing ultimate-pit composition and rendering.
+    DESIGN: `plan shells --omf <file.omf> --spec <shells.json> [--list-blocks]` exposes
+    `fmine-io::omf::shells_report` through the same bounded-reader adapter. Exact ascending factors,
+    explicit integer scaling and uniform slopes, and matching nonempty revenue/cost units are required.
+    Payload `fmine.plan-shells.omf.v1` binds both files and reports each certified scaled objective,
+    nested block counts and additions; optional `first_shell` retains original OMF block order.
+    No factor sorting, unit conversion, raw-float optimality or designed-pushback claim is inferred.
+    The actual-binary Python Fraction oracle independently enumerates closed sets and nesting,
+    including signed costs, ties, unreduced and neighboring i64 factors, and refusal boundaries.
+    MineLib UPIT report composition now lives in `fmine-io::minelib_report`; the CLI retains bounded
+    file reads and envelopes while its existing payload and candidate semantics stay unchanged.
   - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
     worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
     SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC

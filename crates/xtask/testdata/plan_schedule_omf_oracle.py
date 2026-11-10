@@ -78,11 +78,12 @@ def parquet(values):
     return b'PAR1' + page + footer + struct.pack('<I',len(footer)) + b'PAR1'
 
 
-def write_omf(attributes, defect=None):
+def write_omf(attributes, defect=None, *, units=None):
     attrs, members = [], []
     for name, values in attributes.items():
         filename = name + '.parquet'
-        attrs.append({'name': name, 'units': 'USD' if name == 'value' else 'synthetic units',
+        declared_units = (units or {}).get(name, 'USD' if name == 'value' else 'synthetic units')
+        attrs.append({'name': name, 'units': declared_units,
                       'location': 'Primitives', 'data': {'type': 'Number', 'values':
                       {'filename': filename, 'item_count': len(values)}}})
         members.append((filename, parquet(values)))
@@ -401,5 +402,6 @@ def command():
     assert changed_omf['payload']['selected']['discounted_value'] != changed['payload']['selected']['discounted_value']
 
 
-globals()[sys.argv[2]]()
-print('OMF schedule oracle passed:', sys.argv[2])
+if __name__ == '__main__':
+    globals()[sys.argv[2]]()
+    print('OMF schedule oracle passed:', sys.argv[2])

@@ -65,8 +65,8 @@ pub enum CliCommand {
     PlanPit(pit::Command),
     /// Checked PCPSP production schedule, external destination splits and a verified global bound.
     PlanSchedule(schedule::Command),
-    /// Checked OMF period schedule with explicit capacities and an integer Lagrangian bound.
-    PlanOmfSchedule(schedule::omf::Command),
+    /// Checked OMF period schedules and nested revenue-factor shells under explicit declarations.
+    PlanOmf(schedule::omf::Command),
     /// Account or reconcile declared elemental inventory with original observations retained.
     Plant(plant::Command),
     /// Project exact registered HTML cells with source-verified semantic labels into canonical Claims.
@@ -538,6 +538,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--format" | "--workspace" => next += 2,
                         "--json" => next += 1,
                         "schedule" => return "plan schedule",
+                        "shells" => return "plan shells",
                         _ => return "plan pit",
                     }
                 }
@@ -891,7 +892,13 @@ pub fn parse_args(
     let verb = verb_hint(args);
     if matches!(
         verb,
-        "metrics cost" | "metrics geo" | "plan pit" | "plan schedule" | "html claims" | "plant"
+        "metrics cost"
+            | "metrics geo"
+            | "plan pit"
+            | "plan schedule"
+            | "plan shells"
+            | "html claims"
+            | "plant"
     ) {
         let (words, format, root) = common_options(args, default_root)?;
         let command = match verb {
@@ -899,8 +906,9 @@ pub fn parse_args(
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
             "plan pit" => CliCommand::PlanPit(pit::parse(&words)?),
             "plan schedule" if words.iter().any(|word| word == "--omf" || word == "--spec") => {
-                CliCommand::PlanOmfSchedule(schedule::omf::parse(&words)?)
+                CliCommand::PlanOmf(schedule::omf::parse(&words)?)
             }
+            "plan shells" => CliCommand::PlanOmf(schedule::omf::parse(&words)?),
             "plan schedule" => CliCommand::PlanSchedule(schedule::parse(&words)?),
             "plant" => CliCommand::Plant(plant::parse(&words)?),
             _ => CliCommand::HtmlClaims(html::parse(&words)?),
@@ -1791,7 +1799,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
         CliCommand::PlanSchedule(command) => schedule::execute(command, workspace_root),
-        CliCommand::PlanOmfSchedule(command) => schedule::omf::execute(command, workspace_root),
+        CliCommand::PlanOmf(command) => schedule::omf::execute(command, workspace_root),
         CliCommand::Plant(command) => plant::execute(command, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
@@ -2182,6 +2190,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 pit::USAGE,
                 schedule::USAGE,
                 schedule::omf::USAGE,
+                schedule::omf::SHELLS_USAGE,
                 plant::BALANCE_USAGE,
                 plant::RECONCILE_USAGE,
                 plant::PROJECT_USAGE,
@@ -2299,6 +2308,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(schedule::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_schedule_omf\":");
             payload.push_str(fmine_io::omf::scheduling::ROBOT_DOCS_JSON);
+            payload.push_str(",\"plan_shells\":");
+            payload.push_str(fmine_io::omf::shells_report::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_inventory\":");
             payload.push_str(plant::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_material\":");

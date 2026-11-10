@@ -74,6 +74,20 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   periods, resources and time-expanded nodes/arcs are admitted before slope allocation. This is a
   deterministic declared-model certificate, with no LP-guidance, multi-destination or operational claim.
   `omf::pit_report` similarly owns the source-bound ultimate-pit report used by the CLI.
+- DESIGN: `omf::shells_report::evaluate` binds an OMF archive and strict `fmine.omf-shells.v1`
+  declaration, admits matching nonempty revenue/cost unit labels, and runs `PitModel::shells` for
+  1..64 strictly increasing exact positive rational factors. No unit conversion or factor sorting is
+  inferred. Scaled revenue is nonnegative; costs may be signed. Each objective is
+  `sum(num * scaled_revenue - den * scaled_cost) / (per_unit * den)`. The existing solver verifies
+  each flow, then checks that the running union is closed and preserves that factor's optimum.
+  The report retains both source hashes, per-factor counts and exact objectives; optional `first_shell`
+  uses original OMF order with null for never-mined blocks. The shared preallocation guard bounds
+  blocks times factors at one million and conservative cone work times factors at eight million.
+  Tied shells need not be minimal or maximal; flow witnesses are checked internally, not exported.
+  No raw-float optimum, geotechnical approval, designed pushback or operational claim is supplied.
+- `minelib_report::evaluate` owns the existing MineLib UPIT report and optional candidate comparison.
+  All source hashes are rechecked; final flow verification, exact decimal rounding bounds, candidate
+  closure witnesses and optimum gaps retain the existing CLI payload semantics.
 - `PitModel::lp_schedule` (bd-djb7) takes its starts from an LP instead of the caller's ranks. It builds the same
   `ScheduleProblem` and its relaxation (`toposort::lp::relaxation` at decimals 0, so the LP is in units of
   `1 / per_unit`, discounted by `(1 + rate)^-t` in `f64`), solves it with fmine-lp's PDLP, then searches from
