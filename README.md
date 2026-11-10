@@ -3197,6 +3197,10 @@ source hashes and exact source-cell anchors are checked before scoring. When ori
 is unestablished, the registered retrieval date is used conservatively. `--through` and `--as-of` are
 mutually exclusive; neither invents an external timestamp proof.
 
+The workbook publication cut is applied before opening source files. A future workbook remains visible
+as an excluded registry declaration, but its absence or changed bytes cannot alter the historical report
+or either report digest. Every eligible workbook still has to pass its registered size and hash checks.
+
 The report gives exact range-normalized misses, their direction, source-rounding ambiguity, observed hit
 rates and bounds that retain unresolved outcomes. Its Clopper–Pearson reference interval is explicitly
 conditional on independent Bernoulli hits; common year or site shocks are not modelled. Guidance ranges

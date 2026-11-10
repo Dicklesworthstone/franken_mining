@@ -492,7 +492,9 @@ mod tests {
         assert_eq!(result.exit_code, 0, "{}", result.to_json());
         let annual = row(&result.payload_json, "capex_usd_m", 2024);
         assert!(annual.contains("\"state\":\"unresolved\""));
-        assert!(annual.contains("\"score\":null"));
+        let score = object(annual.split_once("\"score\":").unwrap().1, 0);
+        assert!(score.contains("\"value\":null,\"claim\":null"));
+        assert!(annual.contains("\"interpreted_outcome_claim\":null"));
         assert!(annual.contains(LATER));
         assert!(
             row(&result.payload_json, "capex_projects_usd_m", 2024).contains("\"side\":\"inside\"")
@@ -536,9 +538,91 @@ mod tests {
             );
             if result.exit_code == 0 {
                 let annual = row(&result.payload_json, "capex_usd_m", 2024);
-                assert!(annual.contains("\"score\":null"), "{tag}: {annual}");
+                let score = object(annual.split_once("\"score\":").unwrap().1, 0);
+                assert!(
+                    score.contains("\"value\":null,\"claim\":null"),
+                    "{tag}: {score}"
+                );
+                assert!(annual.contains("\"interpreted_outcome_claim\":null"));
             }
         }
+    }
+
+    #[test]
+    fn as_of_ignores_future_workbook_bytes_but_verifies_included_sources() {
+        let root = capex_workspace("asof-workbook-cut", "Gold", Some(100.0));
+        let cut = ["--as-of", "2025-03-01"];
+        let baseline = invoke_capex(&root, &cut);
+        assert_eq!(baseline.exit_code, 0, "{}", baseline.to_json());
+        assert!(
+            baseline
+                .payload_json
+                .contains("\"workbooks_available_by\":\"2025-02-01\"")
+        );
+        assert!(
+            baseline
+                .payload_json
+                .contains("\"digest_scope\":\"base_comparison_and_both_price_selections\"")
+        );
+        let future_start = baseline
+            .payload_json
+            .find(&format!("{{\"file\":\"{LATER}\""))
+            .unwrap();
+        let future = object(&baseline.payload_json, future_start);
+        assert!(future.contains("\"available_by\":\"2026-02-01\""));
+        assert!(future.contains("\"basis_kind\":\"registered_publication\""));
+        assert!(future.contains("\"eligible\":false"));
+        let annual_start = baseline
+            .payload_json
+            .find("{\"site\":\"site-a\",\"year\":2024,\"metric\":\"capex_usd_m\"")
+            .unwrap();
+        let annual = object(&baseline.payload_json, annual_start);
+        assert!(annual.contains(&format!("{ORIGINAL}:Minestats1!B7")));
+        assert!(annual.contains("\"score\":{\""));
+        assert!(!annual.contains(LATER));
+        let cohort_cut = ["--cohort-as-of", "2025-03-01"];
+        let cohort_baseline = invoke_capex(&root, &cohort_cut);
+        assert_eq!(
+            cohort_baseline.exit_code,
+            0,
+            "{}",
+            cohort_baseline.to_json()
+        );
+
+        let future_path = root.join("corpus").join(LATER);
+        std::fs::write(&future_path, b"altered future workbook").unwrap();
+        assert_eq!(
+            invoke_capex(&root, &cut),
+            baseline,
+            "future bytes must not affect either report digest or presentation"
+        );
+        assert_eq!(invoke_capex(&root, &cohort_cut), cohort_baseline);
+        std::fs::rename(&future_path, root.join("corpus/FutureHeldAside.xlsx")).unwrap();
+        assert_eq!(
+            invoke_capex(&root, &cut),
+            baseline,
+            "an unavailable future workbook must not affect a historical report"
+        );
+        assert_eq!(invoke_capex(&root, &cohort_cut), cohort_baseline);
+
+        // Publication, rather than local file availability, decides which bytes must verify.
+        let advanced = invoke_capex(&root, &["--as-of", "2026-03-01"]);
+        let refusal = advanced.refusal.as_ref().expect("included file is missing");
+        assert_eq!(refusal.code, "FMINE-REF-506");
+        assert!(refusal.what.contains(LATER));
+        std::fs::write(
+            root.join("corpus").join(ORIGINAL),
+            b"altered included workbook",
+        )
+        .unwrap();
+        let altered = invoke_capex(&root, &cut);
+        let refusal = altered
+            .refusal
+            .as_ref()
+            .expect("included source tampering must fail");
+        assert_eq!(refusal.code, "FMINE-REF-505");
+        assert!(refusal.what.contains(ORIGINAL));
+        assert!(!refusal.what.contains(LATER));
     }
 
     #[test]

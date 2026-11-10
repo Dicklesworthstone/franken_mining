@@ -63,7 +63,7 @@ pub(crate) fn execute_as_of(
 
     let loaded = (|| {
         let profile = load_issuer_profile(root, issuer)?;
-        let claims = fmine_public::key::mine_stats::load_claims(&profile, root)?;
+        let (claims, _) = fmine_public::key::mine_stats::load_claims_as_of(&profile, root, as_of)?;
         let transcripts = load_guidance_transcription_report(&profile, root, Some(as_of))?
             .ok_or_else(|| Refusal::new(
                 RefusalCode::NoClaimInDomain201,

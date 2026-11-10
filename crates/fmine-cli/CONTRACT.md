@@ -393,7 +393,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     `track-record --synthetic --cohort-as-of YYYY-MM-DD`: separate cohorts for each guidance publication,
     retaining original-outcome denominators and separate later appearances. This mode is distinct from
     `--as-of`, which selects earliest registered guidance with first-published and latest-at-cut assessments.
-    The two date selectors are mutually exclusive; only `--cohort-as-of` rejects `--price-subject`;
+    The two date selectors are mutually exclusive; only `--cohort-as-of` rejects `--price-subject`.
+    Both select eligible workbooks before reading bytes. Missing or changed future files leave historical
+    report bytes and digests unchanged; admitted files still require their registered size and hash;
   - `recovery gap --issuer <issuer> [--through YYYYQn]` or `--synthetic`: two cited historical
     grade-normalised recovery comparisons for Lumwana, with exact points and input-rounding enclosures
     (bd-srqc). The bound filters workbook releases for a retrospective computation using current verified
