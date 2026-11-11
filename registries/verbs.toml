@@ -183,6 +183,12 @@ mutates_authority = false
 description = "Recover a persisted forecast assessment by exact digest, optionally checking supplied temporal provenance, without changing the journal"
 
 [[verb]]
+path = "forecast journal compare"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Compare two saved public forecast assessments on identical selected outcomes, retaining missing subjects and exact full-population loss-difference bounds"
+
+[[verb]]
 path = "reliance init"
 subsystem = "Adit"
 mutates_authority = true

@@ -185,6 +185,13 @@ pub enum Command {
         provenance: Option<PathBuf>,
         timestamp: Option<TimestampProof>,
     },
+    /// Compare two persisted assessments without sampling time or adding journal records.
+    Compare {
+        journal: PathBuf,
+        head: Option<Digest32>,
+        left: Digest32,
+        right: Digest32,
+    },
 }
 
 impl Command {
@@ -199,6 +206,7 @@ impl Command {
             Self::Assess { .. } => "assess",
             Self::Inspect { .. } => "inspect",
             Self::Report { .. } => "report",
+            Self::Compare { .. } => "compare",
         }
     }
 }
@@ -237,6 +245,30 @@ fn perform(
     clock: &dyn WallClock,
 ) -> Result<(String, String), AssessmentFailure> {
     match command {
+        Command::Compare {
+            journal,
+            head,
+            left,
+            right,
+        } => {
+            let journal = Journal::open_read(&root.join(journal), *head)?;
+            let mut state = replay(&journal)?;
+            persisted_report(&mut state, *left)?;
+            persisted_report(&mut state, *right)?;
+            let report = state.ledger.compare_assessments(*left, *right)?;
+            let head_digest = journal
+                .records()
+                .last()
+                .ok_or_else(|| absent("journal genesis missing"))?
+                .chain_head()?;
+            let payload = format!(
+                "{{\"operation\":\"compare\",\"head\":{},\"head_pinned\":{},\"comparison\":{}}}",
+                js(&head_digest.to_hex()),
+                head.is_some(),
+                super::comparison::json(&state, &report)?,
+            );
+            return Ok((payload, super::comparison::markdown(&report)));
+        }
         Command::Init {
             journal,
             cell_id,

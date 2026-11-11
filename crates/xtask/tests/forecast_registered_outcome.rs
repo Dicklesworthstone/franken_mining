@@ -27,6 +27,8 @@ const AVAILABLE: &str = "2031-02-16T00:00:00Z";
 const CUT: &str = "2031-02-17T00:00:00Z";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[path = "../testdata/forecast_saved_comparison.rs"]
+mod comparison;
 #[path = "../testdata/forecast_physical_outcomes.rs"]
 mod physical;
 

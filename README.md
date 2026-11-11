@@ -2947,6 +2947,34 @@ does not issue the FY2026 forecast set or replace its separate frozen-record acc
 corrupt or truncated bytes, and stale heads refuse. A failed write retains its bytes for inspection and never
 silently repairs or truncates history.
 
+### Compare two saved public forecast assessments
+
+After persisting assessments for two public-bound cohorts in the same journal, compare their saved results:
+
+```bash
+cargo run -p fmine-cli -- forecast journal compare \
+  --journal runs/forecast-demo/history \
+  --left LEFT_ASSESSMENT_DIGEST --right RIGHT_ASSESSMENT_DIGEST \
+  --head LATEST_RETAINED_HEAD --format markdown
+```
+
+Replace the digest placeholders with complete hexadecimal values from successful receipts. Both assessments
+must use the same cut and outcome selector, with matching frozen issuer, metric/unit, ownership, calendar
+period, vintage permission and interval alpha. Members are paired by their frozen public subjects. The
+command retains both source selections and pairs numeric outcomes only when their values and complete
+publication citations agree. It reads saved journal evidence without sampling a clock, reopening workbooks
+or appending records.
+
+The result reports exact rational interval loss on the frozen binary values, expressed as left minus right;
+a negative difference favors the left cohort under that loss. The observed mean names its paired population.
+Every missing forecast, unresolved outcome and publication mismatch remains visible in the union of subjects.
+When every subject has both forecasts and compatible selections, whole-population completion bounds include
+unresolved pairs using global loss-difference extrema at the common alpha. A missing forecast, selection
+mismatch or unrepresentable calculation makes the corresponding aggregate unavailable. Completion bounds
+are arithmetic bounds, not confidence intervals. Registration times and information sets may differ; this
+comparison does not establish independent forecasting skill. JSON is available with `--format json`, including
+both source admissions, exact numerator/denominator strings and a separate comparison digest.
+
 ### Issue reports with explicit time and build identity
 
 DESIGN (BD-347): `assure issue` produces the same verified JSON envelope as `assure public`, including its

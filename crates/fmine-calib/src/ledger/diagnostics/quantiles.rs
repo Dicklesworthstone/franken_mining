@@ -107,7 +107,7 @@ pub struct QuantileDiagnostics {
 
 /// Convert the frozen binary value itself, including its exact significand and exponent.
 /// Extremely large/small values may exceed the checked i128 rational representation.
-fn exact(value: f64) -> Result<ExactQty, UnitsError> {
+pub(in crate::ledger) fn exact(value: f64) -> Result<ExactQty, UnitsError> {
     if !value.is_finite() {
         return Err(UnitsError::Overflow);
     }

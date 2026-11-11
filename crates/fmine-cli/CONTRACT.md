@@ -427,7 +427,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
     cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
-  - `forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report --journal <path>`: durable forecast admission,
+  - `forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report|compare --journal <path>`: durable forecast admission,
     cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
   - `forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <pem>`:
     authenticated frozen-record assessment and common-population baseline comparison in JSON or Markdown (BD-076);
@@ -737,6 +737,21 @@ of optional `--head`, which pins the final opened history and still detects suff
 
 Malformed inputs, stale heads and semantic refusal cannot append. A failed write/sync poisons the writer and
 retains unconfirmed bytes for inspection. No command repairs, truncates or deletes journal history.
+
+DESIGN (BD-048/049): `forecast journal compare --journal <path> --left <assessment-digest>
+--right <assessment-digest> [--head <hex>] [--format json|markdown]` reads two assessments already persisted
+in the same journal. It samples no clock, reads no source workbooks and appends no operation. The saved cuts,
+selectors and frozen public target/ownership/vintage/alpha must match. The `fmine.forecast-comparison.v1`
+projection retains both assessment identities, each subject in their union, both selected source citations
+and admissions, exact rational interval-loss differences and whole-population completion bounds. Negative
+left-minus-right differences favor the left cohort. Missing forecasts and incompatible outcome selections
+prevent a whole-population bound; unresolved pairs contribute their global common-alpha difference bounds.
+Unrepresentable exact arithmetic remains explicit, with no member dropped or rounded result substituted.
+Markdown includes the actual cut, selector, alpha and both source selections. The comparison digest is
+separate from its immutable parents. These are descriptive arithmetic results; registration times and
+information sets may differ, and the output supplies no significance or predictive-skill claim. Parser,
+read-only replay and publication-evidence checks are in `xtask/testdata/forecast_saved_comparison.rs`, loaded
+by `xtask/tests/forecast_registered_outcome.rs`; this is synthetic test evidence.
 
 ### Issued-output reliance (BD-347)
 

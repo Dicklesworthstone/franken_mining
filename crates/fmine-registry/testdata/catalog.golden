@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 61
+[verbs] 62
 decide card
 decide recovery-bounds
 decide program
@@ -104,6 +104,7 @@ forecast journal restate
 forecast journal assess
 forecast journal inspect
 forecast journal report
+forecast journal compare
 reliance init
 reliance issue
 reliance reissue

@@ -21,6 +21,7 @@ use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 
 use crate::json_string as js;
 
+pub(crate) mod comparison;
 mod cusum;
 mod diagnostics;
 pub mod live;

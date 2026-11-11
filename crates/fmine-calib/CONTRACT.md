@@ -77,6 +77,19 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   separate digest binding the exact parent report, complete partition and descriptive calculations;
   later outcomes and restatements cannot rewrite an earlier report. These groups are neither confidence
   intervals nor an author ranking, and they do not establish independent observations or predictive skill.
+- DESIGN (BD-048/049, plan §10.2): `compare_assessments(left_digest, right_digest)` compares two saved public
+  assessments without selecting outcomes again. The frozen issuer, metric/unit, ownership, calendar period,
+  vintage permission and alpha must match, as must the assessment cut and outcome selector. Subjects are
+  paired by their frozen mappings; resolved pairs require identical numeric values and complete citations.
+  The union retains missing forecasts, unresolved outcomes and publication mismatches. Exact rational interval
+  losses use the frozen binary values and interval endpoints; negative left-minus-right differences favor
+  the left cohort. The observed mean includes only identical selected publications. Whole-population bounds
+  require both forecasts and compatible selections for every subject; unresolved pairs use the existing exact
+  four-endpoint global extrema at common alpha. Checked arithmetic failure keeps members explicit and makes
+  the affected result unavailable. PAIR/v1 separately binds both parent assessments and the comparison;
+  existing forecast, cohort, assessment and journal identities remain unchanged. Registration times and
+  information sets may differ. These completion bounds are not confidence intervals or a predictive-skill
+  claim. Independent examples and source-selection controls are in `xtask/tests/forecast_comparison.rs`.
 - DESIGN (BD-048/049, plan §10.2): `assessment_diagnostics(saved_digest)` derives Gaussian PIT values and
   fixed-decile histograms, Bernoulli reliability bins, and exact empirical CDF rank intervals from the
   selected outcomes in an immutable saved assessment. Every member and event/source identity is retained.

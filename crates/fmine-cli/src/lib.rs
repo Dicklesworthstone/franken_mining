@@ -663,7 +663,7 @@ fn parse_forecast_journal(
     let (mut fields, words) = journal_arguments(args, &["--json", "--trust-host-clock"])?;
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report"
+            "expected forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report|compare"
                 .to_string(),
         );
     };
@@ -682,7 +682,7 @@ fn parse_forecast_journal(
     };
     let journal = PathBuf::from(take(&mut fields, "--journal")?);
     let trust_host_clock = fields.remove("--trust-host-clock").is_some();
-    let read_only = matches!(*verb, "inspect" | "report");
+    let read_only = matches!(*verb, "inspect" | "report" | "compare");
     if !read_only && !trust_host_clock {
         return Err(
             "forecast journal mutations require --trust-host-clock for the declared clock policy"
@@ -785,6 +785,15 @@ fn parse_forecast_journal(
                 .remove("--head")
                 .map(|value| digest(&value))
                 .transpose()?,
+        },
+        "compare" => Command::Compare {
+            journal,
+            head: fields
+                .remove("--head")
+                .map(|value| digest(&value))
+                .transpose()?,
+            left: digest(&take(&mut fields, "--left")?)?,
+            right: digest(&take(&mut fields, "--right")?)?,
         },
         "report" => {
             let timestamp = if [
@@ -2279,6 +2288,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal restate --journal <path> --head <hex> --cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
+                "forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 forecast_candidate::USAGE,
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
@@ -2384,6 +2394,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(forecast::METADATA_JSON);
             payload.push_str(",\"forecast_diagnostics\":");
             payload.push_str(forecast::DIAGNOSTICS_JSON);
+            payload.push_str(",\"forecast_comparison\":");
+            payload.push_str(forecast::comparison::ROBOT_DOCS_JSON);
             payload.push_str(",\"capital_program\":");
             payload.push_str(capital::ROBOT_DOCS_JSON);
             payload.push_str(concat!(
