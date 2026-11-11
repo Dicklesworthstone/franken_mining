@@ -1,0 +1,72 @@
+# SYNTHETIC, independent one-tank analytic inverse, not plant measurements.
+# One unit of slurry volume in each interval; initial elemental stock is 1 kg.
+# With h=exp(-1), outlet response H=[[h,0],[(1-h)^2,h]].
+# Unknown feeds [2,4] kg give outlets [1+h,2+h+h^2] kg.
+# The two outlet variances are 0.01 and 0.04 kg2, with zero cross covariance.
+# These two observations identify two feeds but provide no redundant error test.
+schema = "fmine.plant-rtd-inverse.v1"
+boundary = "synthetic-inverse-one-tank/v1"
+element = "Au"
+measurand = "total-Au/all-phases"
+mass_basis = "kg-total/all-phases/full-physical-boundary"
+start_ns = "0"
+end_ns = "2000000000"
+opening_ns = "0"
+tanks = "1"
+volume_m3 = "1"
+bypass_fraction = "0"
+dead_fraction = "0"
+min_flow_m3_per_s = "0"
+max_flow_m3_per_s = "2"
+common_conservative_transport = "true"
+piecewise_constant_feed_per_volume = "true"
+dry_tolerance_kg = "0.00000001"
+water_tolerance_kg = "0.00000001"
+element_tolerance_kg = "0.00000001"
+max_kernel_steps = "128"
+error_model_basis = "synthetic independent outlet observations; variances are illustrative, not empirical sensor calibration"
+fixed_transport_and_opening = "true"
+unbiased_gaussian_errors = "true"
+global_chi_square_limit = "10"
+closure_tolerance_kg = "0.00000001"
+
+[[opening]]
+tank = "1"
+dry_kg = "10"
+water_kg = "20"
+element_kg = "1"
+
+[[opening]]
+tank = "dead"
+dry_kg = "0"
+water_kg = "0"
+element_kg = "0"
+
+[[interval]]
+start_ns = "0"
+end_ns = "1000000000"
+slurry_volume_m3 = "1"
+feed_kg = "unmeasured"
+outlet_kg = "1.36787944117144232159552377"
+
+[[interval]]
+start_ns = "1000000000"
+end_ns = "2000000000"
+slurry_volume_m3 = "1"
+feed_kg = "unmeasured"
+outlet_kg = "2.50321472440805501348952327"
+
+[[covariance]]
+left = "outlet/0/1000000000"
+right = "outlet/0/1000000000"
+kg2 = "0.01"
+
+[[covariance]]
+left = "outlet/0/1000000000"
+right = "outlet/1000000000/2000000000"
+kg2 = "0"
+
+[[covariance]]
+left = "outlet/1000000000/2000000000"
+right = "outlet/1000000000/2000000000"
+kg2 = "0.04"

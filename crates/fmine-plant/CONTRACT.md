@@ -149,7 +149,8 @@ calibration and full P754 reconciliation remain.
 BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18), with declared joint
 input populations propagated per realization (§20); report ingestion, source-box qualification,
 fitting and calibration remain. BD-313 now has source-bound forward RTD
-transport and conditional lag alignment (§19); kernel fitting and noisy inverse deconvolution remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
+transport and conditional lag alignment (§19), plus bounded known-kernel noisy inverse reconciliation
+(§24); kernel fitting and uncertainty in transport parameters or initial stocks remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
 worksheets expose nominal material conversion, elemental inventory accounting/reconciliation and joint flowsheet reconciliation;
 their byte-bound declarations remain Assumed rather than verified plant measurements.
@@ -517,8 +518,8 @@ interval composition, source mutation, missing observations, conversion/domain r
 bounded work/cancellation. Together with §18 and existing plant tests, the actual plant library
 passes 111 tests and all-target Clippy with warnings denied.
 
-This is known-kernel forward transport and conditional lag alignment. RTD fitting, noisy inverse
-deconvolution, mixed residence/reaction kinetics, empirical kernel qualification and recovery-card
+This is known-kernel forward transport and conditional lag alignment. The separate inverse owner in §24
+adds conditional measurement-error inference. RTD fitting, mixed residence/reaction kinetics, empirical kernel qualification and recovery-card
 calibration remain unimplemented. BD-313 remains open.
 
 ### Declared residence-time worksheet (DESIGN; BD-313)
@@ -732,3 +733,49 @@ shared endpoints, no-redundancy semantics, source tampering and refusals; actual
 `crates/xtask/tests/plant_trajectory.rs`. This slice does not supply hierarchical measurement biases,
 robust likelihoods, stockpile mixing, multiple elemental/carrier channels, voxel provenance, leach
 kinetics, empirical state calibration or P754 fixture parity. The broad BD-154/177 gates remain open.
+
+## 24. Known-kernel noisy residence-time inversion (DESIGN; bounded BD-313, plan §17.3)
+
+`rtd::inverse::deconvolve` reconstructs one conserved total elemental feed history from complete
+interval-integrated outlet observations and optional genuine feed observations. It reuses the existing
+source-bound `RtdModel`, explicit `RtdOpening` and analytic tank transitions. The interval Claims fix
+elemental basis, physical interval, total slurry throughput and each observed or explicitly unmeasured
+feed. No zero, observation Claim, covariance row or regularization prior is invented for a missing feed.
+
+The causal response matrix is constructed in cumulative throughput volume, retaining the contribution
+of every initial tank. Bypass receives its immediate share and reduces active-train flow; dead stock
+does not exchange. The numerical owner jointly minimizes the full correlated measurement-error
+objective subject to outlet = initial contribution + response × feed. With unmeasured feeds it uses
+the existing observable partial GLS solver; otherwise it uses the existing complete linear solver.
+The error-model Claim binds the precise kernel, opening, canonical observation order, full covariance,
+named error basis, conditional fixed-transport assumption and explicit diagnostic thresholds.
+
+The result retains every original Claim and observation, all fitted feed/outlet coordinates, full
+joint measured/latent covariance, adjustment covariance, normalized diagnostics and the complete
+response matrix. An independent scalar forward replay of the fitted feeds yields outlet and closing
+inventory trajectories, per-interval transport/conservation residuals and whole-window closure.
+Negative physical fits and failed gross-error or closure checks retain rejected diagnostics without an
+admitted Claim. Rank-deficient inference refuses `FMINE-REF-104`, never a repaired rank. An identifiable
+inverse with no redundant observation returns `NoRedundancy`; it has no passed gross-error test. Weak
+transfer can produce large conditional uncertainty, which remains visible rather than regularized.
+
+Work is bounded to 32 intervals, 64 fitted coordinates, 32 constraints and 4,194,304 declared scalar-work
+units for response construction plus replay. The supplied kernel-step budget covers both passes.
+Cancellation or numerical-range failure returns no partial successful receipt. Inputs and outputs
+retain their evidence and confidentiality, with output knowledge at most `Estimated`. Scope, source
+envelopes, covariance, diagnostics and any rejection participate in receipt identity.
+
+`fmine plant rtd-infer --input tests/plant/rtd_inverse.toml` exposes this owner through the strict
+`fmine.plant-rtd-inverse.v1` worksheet. Each interval declares `feed_kg` as an exact mass or `unmeasured`,
+and every outlet must be observed. Every covariance pair for genuine observations is explicit, including
+zero cross terms. JSON retains the original worksheet, source Claims, fitted trajectory, full covariance
+and investigation diagnostics; Markdown shows the reconstructed feeds, conditional standard deviations
+and residuals. The checked-in example is synthetic and does not qualify a real plant response.
+
+Independent one-/two-tank closed forms and explicit GLS formulas are the regression oracles for positive
+inverse recovery and full correlated covariance, mixed measured/missing feeds, gross-error and
+negative-fit rejection, throughput-clock equivalence, complete bypass, dead stocks, shutdown, weak
+transfer, source binding, work bounds and cancellation. This conditional slice does not fit RTD parameters,
+model uncertainty in initial stocks or flow, identify sensor biases, separate transport from reaction,
+calibrate recovery cards or establish empirical P754/plant gates. BD-313 remains open for those broader
+requirements.

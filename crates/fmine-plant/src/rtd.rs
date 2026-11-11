@@ -2,7 +2,8 @@
 //! (plan §17.3, GB-41; bounded BD-313 slice). Source quantities remain extensive:
 //! dry matter, H2O and total elements share one explicitly assumed passive RTD.
 //! A known initial inventory is required; it never defaults to empty or steady.
-//! No response-curve fit, noisy inverse, chemical reaction or plant calibration
+//! The separate inverse adapter reconciles noisy elemental observations under a
+//! fixed kernel. No response-curve fit, chemical reaction or plant calibration
 //! is supplied. The optional recovery comparison declares delay then separation.
 //! Determinism: DeterministicPerIsa
 
@@ -20,6 +21,7 @@ use fmine_units::{ExactQty, Qty, Volume};
 pub use crate::flowsheet::reconciliation::MaterialChannel;
 use kernel::{Sum, product, quotient, sum};
 
+pub mod inverse;
 mod kernel;
 pub mod recovery;
 pub mod worksheet;

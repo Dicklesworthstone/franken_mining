@@ -2199,6 +2199,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::INFER_USAGE,
                 plant::RECOVERY_USAGE,
                 plant::RTD_USAGE,
+                plant::RTD_INVERSE_USAGE,
                 plant::GRINDING_USAGE,
                 plant::TRAJECTORY_USAGE,
                 html::USAGE,
@@ -2325,6 +2326,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(plant::RECOVERY_DOCS_JSON);
             payload.push_str(",\"plant_rtd\":");
             payload.push_str(plant::RTD_DOCS_JSON);
+            payload.push_str(",\"plant_rtd_inverse\":");
+            payload.push_str(plant::RTD_INVERSE_DOCS_JSON);
             payload.push_str(",\"plant_grinding\":");
             payload.push_str(plant::GRINDING_DOCS_JSON);
             payload.push_str(",\"plant_trajectory\":");

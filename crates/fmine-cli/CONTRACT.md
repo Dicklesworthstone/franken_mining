@@ -36,6 +36,18 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   optional ordinary versus lag-aligned recovery. Any recovery failure refuses the complete result.
   Inputs remain Assumed and Internal; synthetic fixtures and direct CLI-library checks are in
   `tests/plant/rtd_*.toml` and `xtask/tests/plant_rtd.rs`.
+- DESIGN (BD-313): `plant rtd-infer --input <worksheet.toml>` reads strict
+  `fmine.plant-rtd-inverse.v1` declarations and calls the pure known-kernel inverse adapter.
+  Up to 32 contiguous intervals declare outlet elemental kilograms and either a genuine measured
+  feed or explicit `unmeasured`; unknown feeds receive no invented observation or prior variance.
+  The complete covariance of genuine observations includes every cross-period pair. The declared
+  RTD, opening inventory and throughput volumes are fixed and source-bound. JSON and Markdown
+  retain conditional feed estimates, full joint covariance, response matrix, independent forward
+  replay, conservation and gross-error diagnostics. No redundancy is reported as unavailable,
+  never a passing test. Negative or gross-error fits retain rejected diagnostics and no admitted
+  Claim. Assumptions remain Assumed, Internal and uncalibrated. Synthetic independent analytic
+  answers and strict refusal checks live in `tests/plant/rtd_inverse.toml` and
+  `xtask/tests/plant_rtd_inverse.rs`.
 
 - DESIGN (BD-341): `track_record_binding` composes agreed, dated guidance transcriptions with annual
   Mine Stats Claims loaded by `fmine-public`. Supported quantity suffixes are `production_koz`,

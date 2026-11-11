@@ -122,7 +122,6 @@ fn physical_cells_preserve_exact_printed_units_and_saved_diagnostics() {
                     "\"exact_value\":{{\"numerator\":\"{numerator}\",\"denominator\":\"{denominator}\"}}"
                 ),
                 source.claim.claim_id.to_string(),
-                fixture.source_digest.to_hex(),
             ] {
                 assert!(
                     resolved.payload_json.contains(&fragment),
@@ -137,6 +136,38 @@ fn physical_cells_preserve_exact_printed_units_and_saved_diagnostics() {
                     .unwrap()
                     .contains(&format!("{numerator}/{denominator}"))
             );
+            let persisted =
+                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
+            let operation = persisted
+                .records()
+                .iter()
+                .find_map(|record| {
+                    if let Entry::Operation(text) = &record.entry {
+                        parse_subset(text)
+                            .unwrap()
+                            .rows
+                            .into_iter()
+                            .find(|row| row.table == "registered_outcome")
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            for (field, expected) in [
+                ("sha256", fixture.source_digest.to_hex()),
+                ("locator", locator.clone()),
+                ("claim_id", source.claim.claim_id.to_string()),
+                ("value", display.to_string()),
+                ("numerator", numerator.to_string()),
+                ("denominator", denominator.to_string()),
+            ] {
+                assert_eq!(
+                    operation.get(field).map(|field| &field.value),
+                    Some(&TomlValue::Str(expected)),
+                    "{metric}: durable admission {field}"
+                );
+            }
+            drop(persisted);
             let assessed = fixture.ok(
                 Command::Assess {
                     journal: JOURNAL.into(),
@@ -152,6 +183,10 @@ fn physical_cells_preserve_exact_printed_units_and_saved_diagnostics() {
             assert!(expected.contains("\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0"));
             assert!(expected.contains("\"crps\":{\"n_scored\":1"));
             assert!(expected.contains(&source.claim.claim_id.to_string()));
+            assert!(expected.contains(&format!(
+                "\"citation\":{{\"source\":\"{ISSUER}\",\"vintage\":\"2030Q4\",\"locator\":\"{locator}\",\"sha256\":\"{}\"}}",
+                fixture.source_digest.to_hex()
+            )));
             assert!(assessed.payload_json.contains("empirical_rank"));
             let saved = digest_field(&expected, "digest");
             let before = fixture.bytes();

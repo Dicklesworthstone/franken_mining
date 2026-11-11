@@ -327,6 +327,12 @@ mutates_authority = false
 description = "Propagate declared tank-train inventories and feed histories, retaining conservation and optional lag-aligned versus same-interval recovery"
 
 [[verb]]
+path = "plant rtd-infer"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Deconvolve measured elemental outlet histories under a declared fixed tank-train model, retaining inferred feeds, joint covariance, conservation and rejected diagnostics"
+
+[[verb]]
 path = "plant grinding"
 subsystem = "Crucible"
 mutates_authority = false
