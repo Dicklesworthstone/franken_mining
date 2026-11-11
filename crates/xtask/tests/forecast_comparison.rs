@@ -1,5 +1,7 @@
 //! Synthetic independent arithmetic and source-selection controls for paired saved assessments.
 
+#![cfg(test)]
+
 use fmine_calib::ledger::binding::{
     PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy, PublicVintagePolicy,
 };

@@ -1733,13 +1733,14 @@ mod tests {
             .expect("workspace root")
             .to_path_buf();
         let prefix = "https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/";
+        // Synthetic future vintage: the real Q3 2026 workbook is already registered.
         let sha = "ab".repeat(32);
         let out = std::process::Command::new("python3")
             .arg("-I")
             .arg(root.join("scripts/register_vintage.py"))
             .args(["row", "barrick", prefix])
-            .arg(format!("{prefix}2026/q3/AISC_Q3_2026.xlsx"))
-            .args(["51234", &sha, "2026-11-10T11:05:00Z"])
+            .arg(format!("{prefix}2099/q3/AISC_Q3_2099.xlsx"))
+            .args(["51234", &sha, "2099-11-10T11:05:00Z"])
             .output()
             .expect("python3 runs");
         assert!(
@@ -1750,11 +1751,11 @@ mod tests {
         let row = String::from_utf8(out.stdout).expect("utf-8");
         for want in [
             "[[source]]\n",
-            "file = \"Barrick_Q3_2026_AISC.xlsx\"\n",
+            "file = \"Barrick_Q3_2099_AISC.xlsx\"\n",
             "kind = \"aisc_reconciliation\"\n",
-            "quarter = \"2026Q3\"\n",
-            "path = \"2026/q3/AISC_Q3_2026.xlsx\"\n",
-            "url_basis = \"fetched and verified 2026-11-10\"\n",
+            "quarter = \"2099Q3\"\n",
+            "path = \"2099/q3/AISC_Q3_2099.xlsx\"\n",
+            "url_basis = \"fetched and verified 2099-11-10\"\n",
             "bytes = 51_234\n",
         ] {
             assert!(row.contains(want), "{want:?} not in {row}");
