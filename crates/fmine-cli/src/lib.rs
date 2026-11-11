@@ -15,6 +15,7 @@ mod lint;
 mod lint_guidance;
 mod lint_html;
 mod lint_publicness;
+mod lint_reserve;
 pub mod mirror;
 pub mod packet;
 pub mod pit;
@@ -167,6 +168,8 @@ pub enum CliCommand {
         discover: bool,
         /// Assess dated publication evidence independently of numeric equality (BD-345.S4).
         as_of: Option<String>,
+        /// Explicit source-bound reserve definitions, separate from workbook equalities.
+        reserve_bindings: Option<PathBuf>,
     },
     /// Check a disclosure draft against explicitly mapped, registered HTML source Claims.
     LintHtml {
@@ -957,6 +960,7 @@ pub fn parse_args(
     let mut provenance = None;
     let mut definitions = None;
     let mut html_definitions = None;
+    let mut reserve_bindings = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -1075,6 +1079,16 @@ pub fn parse_args(
                     return Err("--html-definitions may be supplied only once".into());
                 }
             }
+            "--reserve-bindings" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    .ok_or("missing value for --reserve-bindings")?;
+                if reserve_bindings.replace(PathBuf::from(value)).is_some() {
+                    return Err("--reserve-bindings may be supplied only once".into());
+                }
+            }
             flag if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
             arg => positional.push(arg.to_string()),
         }
@@ -1148,6 +1162,25 @@ pub fn parse_args(
     }
     if html_definitions.is_some() && positional[0] != "lint" {
         return Err("--html-definitions requires 'lint'".into());
+    }
+    if reserve_bindings.is_some()
+        && (positional[0] != "lint"
+            || issuer.is_none()
+            || as_of.is_none()
+            || synthetic
+            || html_definitions.is_some())
+    {
+        return Err(
+            "--reserve-bindings requires 'lint' with --issuer and --as-of, without --synthetic or --html-definitions"
+                .into(),
+        );
+    }
+    if reserve_bindings.is_some() {
+        for flag in ["--issuer", "--as-of", "--discover"] {
+            if args.iter().filter(|arg| arg.as_str() == flag).count() > 1 {
+                return Err(format!("{flag} may be supplied only once"));
+            }
+        }
     }
 
     let cmd = match positional[0].as_str() {
@@ -1433,6 +1466,7 @@ pub fn parse_args(
                     through,
                     discover,
                     as_of,
+                    reserve_bindings,
                 }
             }
         }
@@ -1987,12 +2021,14 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             through,
             discover,
             as_of,
+            reserve_bindings,
         } => lint::execute(
             draft,
             issuer.as_deref(),
             through.as_deref(),
             *discover,
             as_of.as_deref(),
+            reserve_bindings.as_deref(),
             workspace_root,
         ),
         CliCommand::ForecastAssess {
@@ -2233,6 +2269,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "lint <draft> --issuer <issuer> [--through YYYYQn] [--discover] [--as-of YYYY-MM-DD]",
                 "lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]",
                 "lint <draft> --synthetic [--discover]",
+                "lint <draft> --issuer <issuer> --reserve-bindings <bindings.toml> --as-of YYYY-MM-DD [--discover]",
                 "forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]",
                 "forecast journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]",
                 "forecast journal register --journal <path> --head <hex> --request <path> --trust-host-clock",
@@ -2254,6 +2291,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             ].map(|verb| format!("\"{}\"", escape_json(verb))).join(",");
             let reliance_verbs = reliance::VERBS_JSON;
             let reliance_docs = reliance::ROBOT_DOCS_JSON;
+            let reserve_lint_docs = lint_reserve::ROBOT_DOCS_JSON;
             let track_record_modes = concat!(
                 "{\"mode\":\"retrospective_descriptive\",\"schema\":\"fmine.guidance.track-record.v1\",",
                 "\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",",
@@ -2273,7 +2311,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "\"scope\":\"Registered transcription population; no completeness, historical forecast registration, ranking or calibration verdict\"}"
             );
             let mut payload = format!(
-                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[{verbs},{reliance_verbs}],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok; lint verdicts and track-record misses are data\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"lint\":{{\"mode\":\"cited equality by default; --discover searches uncited equalities\",\"link\":\"[printed number and unit](fmine:clm_ID)\",\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",\"discovery\":\"All semantic candidates remain visible; multiple matches stay ambiguous and the amount never selects a vintage\",\"scope\":\"Selected registered source snapshot; optional --as-of adds a separate dated public-record assessment with citations and explicit unknown publication dates; no disclosure permission\"}},\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",\"default_selector\":\"first-published\",\"provenance\":{{\"schema\":\"fmine.forecast-provenance.v1\",\"tables\":[\"node\",\"anchor\",\"binding\"],\"cut\":\"Each frozen forecast registered_at, not the assessment date\",\"coverage\":\"Every cohort member, including unresolved outcomes\",\"without_bundle\":\"not_checked\",\"generator_replay\":\"not_performed\",\"example\":\"tests/forecasts/provenance_synthetic.toml\"}},\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},\"reliance\":{reliance_docs},\"track_record\":{track_record_modes},\"refusals\":[{}]}}",
+                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[{verbs},{reliance_verbs}],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok; lint verdicts and track-record misses are data\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"lint\":{{\"mode\":\"cited equality by default; --discover searches uncited equalities\",\"link\":\"[printed number and unit](fmine:clm_ID)\",\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",\"discovery\":\"All semantic candidates remain visible; multiple matches stay ambiguous and the amount never selects a vintage\",\"scope\":\"Selected registered source snapshot; optional --as-of adds a separate dated public-record assessment with citations and explicit unknown publication dates; no disclosure permission\"}},\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",\"default_selector\":\"first-published\",\"provenance\":{{\"schema\":\"fmine.forecast-provenance.v1\",\"tables\":[\"node\",\"anchor\",\"binding\"],\"cut\":\"Each frozen forecast registered_at, not the assessment date\",\"coverage\":\"Every cohort member, including unresolved outcomes\",\"without_bundle\":\"not_checked\",\"generator_replay\":\"not_performed\",\"example\":\"tests/forecasts/provenance_synthetic.toml\"}},\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},\"reliance\":{reliance_docs},\"reserve_replacement_lint\":{reserve_lint_docs},\"track_record\":{track_record_modes},\"refusals\":[{}]}}",
                 issuers.join(","),
                 refusals.join(",")
             );

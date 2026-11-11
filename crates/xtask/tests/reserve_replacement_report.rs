@@ -757,6 +757,357 @@ fn agreed_but_wrong_unit_basis_or_period_remains_a_series_refusal() {
     }
 }
 
+fn precise_lint_fixture(tag: &str) -> Fixture {
+    let fixture = Fixture::new(tag, true);
+    let mut rows = readings();
+    for row in &mut rows {
+        row.token = match row.token {
+            "6.0" => "6.0000",
+            "8.0" => "8.0000",
+            "10.0" => "10.0000",
+            "12.0" => "12.0000",
+            "18.0" => "18.0000",
+            "24.0" => "24.0000",
+            // This invented aggregate is deliberately changed with its precision to equal its annual sum.
+            "53.9" => "54.0000",
+            "(3.0)" => "(3.0000)",
+            "(6.0)" => "(6.0000)",
+            "(12.0)" => "(12.0000)",
+            other => other,
+        };
+    }
+    fixture.write_readings(&rows);
+    fixture
+}
+
+fn reserve_draft(metal: &str, definition: &str, deck: Option<&str>, amount: &str) -> String {
+    let deck = deck.map_or_else(String::new, |d| format!(" using `{d}`"));
+    format!(
+        "Company attributable {metal} reserve replacement for 2030–2032 excluding acquisitions and \
+         divestments under `{definition}`{deck} is {amount}.\n"
+    )
+}
+
+fn invoke_reserve_lint(fixture: &Fixture, draft: &str, discover: bool) -> Envelope {
+    fs::write(fixture.root.join("reserve-draft.md"), draft).expect("local draft");
+    let mut args = vec![
+        "lint",
+        "reserve-draft.md",
+        "--issuer",
+        ISSUER,
+        "--reserve-bindings",
+        BINDINGS,
+        "--as-of",
+        "2033-02-01",
+    ];
+    if discover {
+        args.push("--discover");
+    }
+    invoke(
+        &args.into_iter().map(str::to_string).collect::<Vec<_>>(),
+        &fixture.root,
+    )
+    .0
+}
+
+fn reserve_lint(json: &str) -> &str {
+    json.split_once("\"reserve_replacement\":")
+        .expect("supplemental reserve lint")
+        .1
+}
+
+fn reserve_findings(json: &str) -> &str {
+    reserve_lint(json)
+        .split_once(",\"source_report\":")
+        .expect("bound source report")
+        .0
+}
+
+#[test]
+fn reserve_lint_discovers_both_metals_with_exact_rounding_and_complete_source_evidence() {
+    let fixture = precise_lint_fixture("lint-positive");
+    let draft = format!(
+        "{}{}",
+        reserve_draft("gold", "replacement.gold@fixture", None, "200%"),
+        reserve_draft(
+            "GEO",
+            "replacement.geo@fixture",
+            Some("geo.deck@fixture"),
+            "450%"
+        )
+    );
+    let report = invoke_reserve_lint(&fixture, &draft, true);
+    ok(&report);
+    let findings = reserve_findings(&report.payload_json);
+    assert_eq!(
+        findings.matches("\"verdict\":\"verified\"").count(),
+        2,
+        "{findings}"
+    );
+    assert_eq!(findings.matches("\"mode\":\"discovered\"").count(), 2);
+    let bound = reserve_lint(&report.payload_json);
+    assert!(bound.contains("\"num\":\"47999900\",\"den\":\"240001\""));
+    assert!(bound.contains("\"num\":\"48000100\",\"den\":\"239999\""));
+    for fragment in [
+        "geo.deck@fixture",
+        "Reserve.pdf:p2:Invented reserve replacement:2030/Gold net change",
+        "\"role\":\"annual_depletion\"",
+        "\"canonical_body\":",
+        "\"calibration_claim\":false",
+    ] {
+        assert!(bound.contains(fragment), "{fragment}: {bound}");
+    }
+    assert!(bound.contains(&sha256(PDF).to_hex()));
+    assert_eq!(
+        invoke_reserve_lint(&fixture, &draft, true).payload_json,
+        report.payload_json
+    );
+    assert!(report.certificate.is_none() && report.anchor_id.is_none());
+    let markdown = report.rendered_markdown.as_ref().expect("readable lint");
+    assert!(markdown.contains("**verified**") && markdown.contains(&sha256(PDF).to_hex()));
+    // Only the amount spans and requested semantic evidence are rendered, never the complete draft.
+    assert!(!report.to_json().contains(draft.trim_end()));
+    for flag in [
+        "reserve_disclosure_claim",
+        "execution_authorized",
+        "geotechnical_signoff",
+        "regulatory_compliance_claim",
+    ] {
+        assert!(report.to_json().contains(&format!("\"{flag}\":false")));
+    }
+}
+
+#[test]
+fn reserve_lint_cited_mode_requires_the_actual_derived_claim_and_checks_its_named_basis() {
+    let fixture = precise_lint_fixture("lint-cited");
+    let draft = reserve_draft("gold", "replacement.gold@fixture", None, "200%");
+    let uncited = invoke_reserve_lint(&fixture, &draft, false);
+    ok(&uncited);
+    assert!(reserve_findings(&uncited.payload_json).contains("\"verdict\":\"uncited\""));
+    let id = field(reserve_findings(&uncited.payload_json), "claim").to_string();
+    let linked = draft.replace("200%", &format!("[200%](fmine:{id})"));
+    let cited = invoke_reserve_lint(&fixture, &linked, false);
+    ok(&cited);
+    assert!(reserve_findings(&cited.payload_json).contains("\"verdict\":\"verified\""));
+    assert!(reserve_findings(&cited.payload_json).contains("\"mode\":\"cited\""));
+    assert!(reserve_findings(&cited.payload_json).contains("\"raw\":\"200%\""));
+    let wrong_period =
+        invoke_reserve_lint(&fixture, &linked.replace("2030–2032", "2029–2031"), true);
+    assert!(
+        reserve_findings(&wrong_period.payload_json).contains("\"verdict\":\"period_mismatch\"")
+    );
+    let wrong_basis = linked
+        .replace("gold reserve replacement", "GEO reserve replacement")
+        .replace(" is [", " using `geo.deck@fixture` is [");
+    let mismatch = invoke_reserve_lint(&fixture, &wrong_basis, true);
+    assert!(reserve_findings(&mismatch.payload_json).contains("\"verdict\":\"basis_mismatch\""));
+    let absent = linked.replace(&id, "clm_00000000000000000000000000000000");
+    let absent = invoke_reserve_lint(&fixture, &absent, true);
+    assert!(reserve_findings(&absent.payload_json).contains("\"verdict\":\"uncited\""));
+    assert!(!reserve_findings(&absent.payload_json).contains("\"verdict\":\"verified\""));
+}
+
+#[test]
+fn reserve_lint_retains_rounding_uncertainty_and_never_fills_missing_semantic_qualifiers() {
+    let fixture = precise_lint_fixture("lint-predicate");
+    let valid = reserve_draft("gold", "replacement.gold@fixture", None, "200%");
+    for (draft, verdict) in [
+        (valid.replace("200%", "201%"), "value_mismatch"),
+        (
+            valid.replace("200%", "200.0000%"),
+            "rounding_not_established",
+        ),
+        (valid.replace("200%", "about 200%"), "unchecked"),
+        (valid.replace("attributable ", ""), "unchecked"),
+        (
+            valid.replace("excluding acquisitions and divestments ", ""),
+            "unchecked",
+        ),
+        (valid.replace("Company", "Other Company"), "unchecked"),
+        (valid.replace(" is ", " is not "), "unchecked"),
+        (
+            reserve_draft("GEO", "replacement.geo@fixture", None, "450%"),
+            "unchecked",
+        ),
+        (
+            reserve_draft(
+                "GEO",
+                "replacement.geo@fixture",
+                Some("another.deck"),
+                "450%",
+            ),
+            "basis_mismatch",
+        ),
+    ] {
+        let result = invoke_reserve_lint(&fixture, &draft, true);
+        ok(&result);
+        let findings = reserve_findings(&result.payload_json);
+        assert!(
+            findings.contains(&format!("\"verdict\":\"{verdict}\"")),
+            "{draft}: {findings}"
+        );
+        assert!(
+            !findings.contains("\"verdict\":\"verified\""),
+            "{draft}: {findings}"
+        );
+    }
+}
+
+#[test]
+fn reserve_lint_discovery_keeps_competing_bound_series_even_when_their_values_agree() {
+    let fixture = precise_lint_fixture("lint-ambiguous");
+    let original = bindings();
+    let gold = original
+        .split_once("\n[[series]]\nid = \"gold\"")
+        .expect("gold series")
+        .1
+        .split_once("\n[[series]]\nid = \"geo\"")
+        .expect("geo series")
+        .0;
+    let duplicate = format!(
+        "{original}\n[[series]]\nid = \"gold_copy\"{}",
+        gold.replace("series = \"gold\"", "series = \"gold_copy\"")
+    );
+    fs::write(fixture.root.join(BINDINGS), duplicate).expect("competing explicit series");
+    let draft = reserve_draft("gold", "replacement.gold@fixture", None, "200%");
+    let report = invoke_reserve_lint(&fixture, &draft, true);
+    ok(&report);
+    let findings = reserve_findings(&report.payload_json);
+    assert!(findings.contains("\"verdict\":\"ambiguous\""), "{findings}");
+    assert!(findings.contains("\"gold\"") && findings.contains("\"gold_copy\""));
+    assert!(!findings.contains("\"verdict\":\"verified\""));
+
+    // A refused alternative remains a semantic candidate; it cannot promote the complete survivor.
+    let missing = format!(
+        "{original}\n[[series]]\nid = \"gold_copy\"{}",
+        gold.replace("series = \"gold\"", "series = \"gold_copy\"")
+            .replace(
+                "net_change = \"gold_net_2031\"",
+                "net_change = \"gold_missing_2031\""
+            )
+    );
+    fs::write(fixture.root.join(BINDINGS), missing).expect("incomplete competing series");
+    let report = invoke_reserve_lint(&fixture, &draft, true);
+    ok(&report);
+    let findings = reserve_findings(&report.payload_json);
+    assert!(findings.contains("\"verdict\":\"ambiguous\""), "{findings}");
+    assert!(findings.contains("\"gold\"") && findings.contains("\"gold_copy\""));
+    assert!(reserve_lint(&report.payload_json).contains("\"state\":\"refused\""));
+    assert!(!findings.contains("\"verdict\":\"verified\""));
+}
+
+#[test]
+fn reserve_lint_source_failures_preserve_refusals_and_cannot_become_verified() {
+    let draft = reserve_draft("gold", "replacement.gold@fixture", None, "200%");
+    let fixture = precise_lint_fixture("lint-tamper");
+    let mut altered = PDF.to_vec();
+    altered[PDF.len() - 1] ^= 1;
+    fs::write(fixture.root.join("docs").join(DOC), altered).expect("altered source bytes");
+    let refused_source = invoke_reserve_lint(&fixture, &draft, true);
+    ok(&refused_source);
+    assert!(reserve_lint(&refused_source.payload_json).contains("\"code\":\"FMINE-REF-505\""));
+    assert!(reserve_findings(&refused_source.payload_json).contains("\"verdict\":\"refused\""));
+    assert!(!reserve_findings(&refused_source.payload_json).contains("\"verdict\":\"verified\""));
+
+    let pending = Fixture::new("lint-pending", true);
+    let mut rows = readings();
+    rows.retain(|r| !(r.quantity == "gold_net_2031" && r.reader == "synthetic_reader_b"));
+    pending.write_readings(&rows);
+    let report = invoke_reserve_lint(&pending, &draft, true);
+    ok(&report);
+    assert!(reserve_findings(&report.payload_json).contains("\"verdict\":\"refused\""));
+    assert!(reserve_lint(&report.payload_json).contains("\"pending_readings\":[{"));
+    assert!(reserve_lint(&report.payload_json).contains("\"series_id\":\"geo\""));
+
+    let future = precise_lint_fixture("lint-future");
+    let sources = fs::read_to_string(registry_path(&future.root, ISSUER)).expect("registry");
+    fs::write(
+        registry_path(&future.root, ISSUER),
+        sources.replace(
+            "published_at = \"2033-02-01\"",
+            "published_at = \"2033-02-02\"",
+        ),
+    )
+    .expect("future declared publication");
+    let report = invoke_reserve_lint(&future, &draft, true);
+    ok(&report);
+    assert!(reserve_lint(&report.payload_json).contains("\"code\":\"FMINE-REF-110\""));
+    assert!(reserve_findings(&report.payload_json).contains("\"verdict\":\"refused\""));
+}
+
+#[test]
+fn reserve_lint_requires_explicit_source_and_date_options_and_rejects_issuer_rebinding() {
+    let fixture = precise_lint_fixture("lint-options");
+    for args in [
+        vec![
+            "lint",
+            "draft",
+            "--issuer",
+            ISSUER,
+            "--reserve-bindings",
+            BINDINGS,
+        ],
+        vec![
+            "lint",
+            "draft",
+            "--synthetic",
+            "--reserve-bindings",
+            BINDINGS,
+            "--as-of",
+            "2033-02-01",
+        ],
+        vec![
+            "lint",
+            "draft",
+            "--issuer",
+            ISSUER,
+            "--reserve-bindings",
+            BINDINGS,
+            "--as-of",
+            "2033-02-01",
+            "--reserve-bindings",
+            BINDINGS,
+        ],
+        vec![
+            "lint",
+            "draft",
+            "--issuer",
+            ISSUER,
+            "--reserve-bindings",
+            BINDINGS,
+            "--as-of",
+            "2033-02-01",
+            "--html-definitions",
+            "html.toml",
+        ],
+        vec!["doctor", "--reserve-bindings", BINDINGS],
+    ] {
+        let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+        let envelope = invoke(&args, &fixture.root).0;
+        assert_eq!(
+            (envelope.status, envelope.exit_code),
+            ("usage_error", 2),
+            "{}",
+            envelope.to_json()
+        );
+    }
+    let sources = fs::read_to_string(registry_path(&fixture.root, ISSUER)).expect("registry");
+    fs::write(
+        registry_path(&fixture.root, ISSUER),
+        sources.replace(
+            &format!("issuer = \"{ISSUER}\""),
+            "issuer = \"other_fixture\"",
+        ),
+    )
+    .expect("issuer rebinding");
+    let draft = reserve_draft("gold", "replacement.gold@fixture", None, "200%");
+    refused(
+        &invoke_reserve_lint(&fixture, &draft, true),
+        "FMINE-REF-506",
+        5,
+    );
+}
+
 #[test]
 fn a_missing_year_binding_cannot_shrink_the_declared_denominator() {
     let fixture = Fixture::new("missing-year", true);

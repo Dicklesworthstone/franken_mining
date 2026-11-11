@@ -11,7 +11,7 @@ use fmine_metrics::reserve_replacement::{
     self, Bounds, ClaimBasis, ReplacementClaims, ReplacementReport, SeriesAssessment, Totals,
 };
 use fmine_public::sources::{
-    is_issuer_name, load_issuer_profile, registry_path, transcriptions_path,
+    IssuerProfile, is_issuer_name, load_issuer_profile, registry_path, transcriptions_path,
 };
 use fmine_public::transcribe::{check_docs, load_transcription_quantities_as_of};
 use fmine_registry::metrics::MetricRegistry;
@@ -122,22 +122,86 @@ pub(crate) fn execute(command: &Command, root: &Path) -> Envelope {
 
 fn execute_inner(command: &Command, root: &Path) -> Result<Envelope, Refusal> {
     let profile = load_issuer_profile(root, &command.issuer)?;
-    if profile.issuer != command.issuer {
+    let loaded = load(
+        &profile,
+        &command.issuer,
+        &command.bindings,
+        command.as_of.as_deref(),
+        root,
+    )?;
+    let payload = loaded.to_json();
+    let mut envelope = if loaded.report.registry_refusal.is_some()
+        || loaded
+            .report
+            .series
+            .iter()
+            .any(|s| matches!(s, SeriesAssessment::Refused(_)))
+    {
+        Envelope::refused(
+            VERB,
+            Refusal::new(
+                RefusalCode::NotObservable202,
+                "one or more declared reserve-replacement series cannot be computed; see retained checks",
+            ),
+            actions(),
+        )
+    } else {
+        Envelope::ok(VERB, payload.clone(), actions())
+    };
+    envelope.payload_json = payload;
+    envelope.no_claim = Some(NO_CLAIM);
+    envelope.rendered_markdown = Some(loaded.to_markdown(command.as_of.as_deref()));
+    Ok(envelope)
+}
+
+/// One authenticated source snapshot shared by the reserve report and disclosure lint.
+pub(super) struct Loaded {
+    pub(super) report: ReplacementReport,
+    pub(super) claims: Vec<ReplacementClaims>,
+    pending: Vec<(Locator, String)>,
+    pub(super) digest: String,
+    body: String,
+}
+
+impl Loaded {
+    pub(super) fn to_json(&self) -> String {
+        format!("{{\"digest\":{},{}", js(&self.digest), &self.body[1..])
+    }
+
+    pub(super) fn to_markdown(&self, as_of: Option<&str>) -> String {
+        markdown(
+            &self.report,
+            &self.claims,
+            &self.pending,
+            as_of,
+            &self.digest,
+        )
+    }
+}
+
+pub(super) fn load(
+    profile: &IssuerProfile,
+    issuer: &str,
+    bindings_path: &Path,
+    as_of: Option<&str>,
+    root: &Path,
+) -> Result<Loaded, Refusal> {
+    if profile.issuer != issuer {
         return Err(Refusal::new(
             RefusalCode::NotObservable202,
             format!(
                 "source registry issuer {} does not match requested issuer {}",
-                profile.issuer, command.issuer
+                profile.issuer, issuer
             ),
         ));
     }
-    let path = if command.bindings.is_absolute() {
-        command.bindings.clone()
+    let path = if bindings_path.is_absolute() {
+        bindings_path.to_path_buf()
     } else {
-        root.join(&command.bindings)
+        root.join(bindings_path)
     };
     let bindings_text = read(&path, "reserve bindings")?;
-    let bindings = parse_replacement_registry(&bindings_text, &command.issuer).map_err(|e| {
+    let bindings = parse_replacement_registry(&bindings_text, issuer).map_err(|e| {
         Refusal::new(
             RefusalCode::NotObservable202,
             format!("reserve bindings: {e}"),
@@ -184,11 +248,7 @@ fn execute_inner(command: &Command, root: &Path) -> Result<Envelope, Refusal> {
                 format!("reserve selector {doc} must name exactly one registered document"),
             ));
         };
-        if command
-            .as_of
-            .as_deref()
-            .is_some_and(|cut| document.published_at.as_str() > cut)
-        {
+        if as_of.is_some_and(|cut| document.published_at.as_str() > cut) {
             return Err(Refusal::new(
                 RefusalCode::TemporalConeViolation110,
                 format!(
@@ -204,9 +264,9 @@ fn execute_inner(command: &Command, root: &Path) -> Result<Envelope, Refusal> {
     for (doc, keys) in &quantities {
         let keys: Vec<_> = keys.iter().cloned().collect();
         let Some(report) = load_transcription_quantities_as_of(
-            &profile,
+            profile,
             root,
-            command.as_of.as_deref().unwrap_or("9999-12-31"),
+            as_of.unwrap_or("9999-12-31"),
             &keys,
             Some(doc),
         )?
@@ -215,7 +275,7 @@ fn execute_inner(command: &Command, root: &Path) -> Result<Envelope, Refusal> {
                 RefusalCode::InputMissingOrUnreadable506,
                 format!(
                     "reserve operands require {}",
-                    transcriptions_path(root, &command.issuer).display()
+                    transcriptions_path(root, issuer).display()
                 ),
             ));
         };
@@ -261,46 +321,25 @@ fn execute_inner(command: &Command, root: &Path) -> Result<Envelope, Refusal> {
         })
         .collect::<Vec<_>>()
         .join(",");
-    let as_of = command.as_of.as_deref().map_or_else(|| "null".into(), js);
+    let as_of = as_of.map_or_else(|| "null".into(), js);
     let body = format!(
         "{{\"schema\":\"fmine.reserve-replacement.report.v1\",\"lane\":\"public\",\"gate_eligible\":false,\
          \"issuer\":{},\"bindings_sha256\":{},\"rules_sha256\":{},\"as_of\":{as_of},\
          \"checks\":{},\"claims\":[{claims_json}],\"pending_readings\":[{pending_json}],\"no_claim\":{}}}",
-        js(&command.issuer),
+        js(issuer),
         js(&sha256(bindings_text.as_bytes()).to_hex()),
         js(&sha256(metrics_text.as_bytes()).to_hex()),
         report.to_json(),
         js(NO_CLAIM),
     );
     let digest = sha256(format!("fmine.reserve-replacement.report.v1\0{body}").as_bytes()).to_hex();
-    let payload = format!("{{\"digest\":{},{}", js(&digest), &body[1..]);
-    let mut envelope = if report.registry_refusal.is_some()
-        || report
-            .series
-            .iter()
-            .any(|s| matches!(s, SeriesAssessment::Refused(_)))
-    {
-        Envelope::refused(
-            VERB,
-            Refusal::new(
-                RefusalCode::NotObservable202,
-                "one or more declared reserve-replacement series cannot be computed; see retained checks",
-            ),
-            actions(),
-        )
-    } else {
-        Envelope::ok(VERB, payload.clone(), actions())
-    };
-    envelope.payload_json = payload;
-    envelope.no_claim = Some(NO_CLAIM);
-    envelope.rendered_markdown = Some(markdown(
-        &report,
-        &claims,
-        &pending,
-        command.as_of.as_deref(),
-        &digest,
-    ));
-    Ok(envelope)
+    Ok(Loaded {
+        report,
+        claims,
+        pending,
+        digest,
+        body,
+    })
 }
 
 fn bounds(value: Bounds) -> String {

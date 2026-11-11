@@ -2064,8 +2064,39 @@ production in millions of pounds stays unchecked; no unit conversion is inferred
 explicit `g/t` (or `grams per tonne`) or percent units; recovery uses percent. For example, an invented draft
 `Site A Q1 2030 ownership basis unprinted recovery is 91.5%.` checks the source's displayed percentage-point
 interval, including when the workbook stores `0.915` with a percent format. It never compares `91.5%` with a raw
-fraction as though they were the same unit. Bare/mined grade, circuit recovery and reserve replacement
-remain outside discovery's supported grammar. Independently labelled general-prose accuracy remains unmeasured.
+fraction as though they were the same unit. Bare/mined grade and circuit recovery remain outside the workbook
+grammar. Independently labelled general-prose accuracy remains unmeasured.
+
+#### Check a named reserve-replacement percentage
+
+DESIGN (bounded BD-345.S3/BD-063): reserve-replacement equalities use the authenticated annual selectors
+from the standalone reserve report. Select the bindings and a publication date explicitly:
+
+```bash
+fmine lint draft.md --issuer barrick --as-of 2026-11-01 \
+  --reserve-bindings registries/reserve_replacement/barrick.toml --discover --format markdown
+```
+
+Each supported standalone line states company scope, attributable gold or GEO, the complete year window,
+exclusion of acquisitions and divestments, and the backtick-quoted reserve definition. GEO also names its
+deck definition with `using`. For example, these statements use **invented** fixture definitions and values:
+
+```text
+Company attributable gold reserve replacement for 2030-2032 excluding acquisitions and divestments under `replacement.gold@fixture` is 200%.
+Company attributable GEO reserve replacement for 2030-2032 excluding acquisitions and divestments under `replacement.geo@fixture` using `geo.deck@fixture` is 450%.
+```
+
+Cited mode uses `[200%](fmine:clm_...)`, with the exact cumulative Claim ID from `reserve replacement`.
+Discovery retains every matching bound series and refusal; equal amounts never select a preferred source.
+The entire exact source-rounding enclosure must fit the draft's printed half-step interval for `verified`.
+Disjoint intervals give `value_mismatch`; overlap without containment gives `rounding_not_established`.
+Approximate language and missing basis qualifiers stay unchecked.
+
+The separate `reserve_replacement` result retains the full source report, annual decks, canonical Claims,
+reader roles, hashes and publication cut. Missing or altered optional reserve evidence stays visible while
+the workbook findings remain available. This checks arithmetic and declared precision; it supplies no
+reserve classification or disclosure permission. The actual PDF bytes and agreeing local readings remain
+required, and authentic issuer coverage is still an open gate.
 
 The command reads the draft locally, writes no files, and emits number spans and verdicts rather than whole
 sentences. JSON includes the draft and Claim-population digests and the source snapshot root. Findings are data:

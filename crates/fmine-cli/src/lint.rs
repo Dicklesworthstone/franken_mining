@@ -77,6 +77,7 @@ pub(super) fn execute(
     through: Option<&str>,
     discover: bool,
     as_of: Option<&str>,
+    reserve_bindings: Option<&Path>,
     root: &Path,
 ) -> Envelope {
     let actions = || vec![NextAction::new("fmine robot-docs", crate::ROBOT_DOCS_WHY)];
@@ -154,6 +155,18 @@ pub(super) fn execute(
         }
         _ => None,
     };
+    let reserve_replacement = match (reserve_bindings, as_of, registered.as_ref()) {
+        (Some(bindings), Some(cut), Some((profile, _))) => Some(crate::lint_reserve::assess(
+            &draft, profile, bindings, cut, discover, root,
+        )),
+        (Some(_), _, _) => {
+            return Envelope::usage_error(
+                "lint",
+                "--reserve-bindings requires --issuer and --as-of",
+            );
+        }
+        _ => None,
+    };
     let cut = through.map_or_else(|| "null".to_string(), |s| format!("\"{}\"", escape_json(s)));
     let as_of = as_of.map_or_else(|| "null".to_string(), |s| format!("\"{}\"", escape_json(s)));
     let public_json = public_record
@@ -162,6 +175,9 @@ pub(super) fn execute(
     let guidance_json = forward_guidance
         .as_ref()
         .map_or_else(|| "null".into(), |r| r.to_json());
+    let reserve_json = reserve_replacement.as_ref().map_or_else(String::new, |r| {
+        format!(",\"reserve_replacement\":{}", r.to_json())
+    });
     let has_workbooks = registered
         .as_ref()
         .is_none_or(|(profile, _)| !profile.sources.is_empty());
@@ -174,7 +190,7 @@ pub(super) fn execute(
         "{{\"schema\":\"fmine.lint_snapshot.v1\",\"issuer\":\"{}\",\"lane\":\"{}\",\
          \"through\":{cut},\"as_of\":{as_of},\"read_mode\":\"verified_source_projection\",\
          \"source_state_root\":{state_root},\"source_mapping_refusals\":{{\"count\":{}}},\"lint\":{},\
-         \"public_record\":{public_json},\"forward_guidance\":{guidance_json}}}",
+         \"public_record\":{public_json},\"forward_guidance\":{guidance_json}{reserve_json}}}",
         escape_json(&snapshot.issuer),
         snapshot.lane.as_str(),
         snapshot.public_claims.refusals.len(),
@@ -200,6 +216,10 @@ pub(super) fn execute(
         envelope.no_claim = Some(lint.mode.no_claim());
     }
     if let Some(report) = forward_guidance {
+        markdown.push('\n');
+        markdown.push_str(&report.to_markdown());
+    }
+    if let Some(report) = reserve_replacement {
         markdown.push('\n');
         markdown.push_str(&report.to_markdown());
     }

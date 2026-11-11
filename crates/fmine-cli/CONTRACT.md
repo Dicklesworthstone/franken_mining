@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -1063,7 +1063,7 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   The existing `assure public --through` path continues to skip PDF transcriptions, independently of
   the dedicated recovery command's retrospective workbook bound.
 - DESIGN (BD-345): lint bounds its local UTF-8 draft read, verifies the selected sources once, and delegates
-  every finding to `fmine_public::lint`. Its certificate identifies the source assurance snapshot; the lint
+  workbook findings to `fmine_public::lint`. Its certificate identifies the source assurance snapshot; the lint
   payload separately binds the draft and canonical Claim population. Only number spans and findings are
   emitted, never the draft's full prose. Drafts are never written or sent over a network. A completed check
   exits zero even when findings report mismatches; invalid syntax is exit two and source failures retain
@@ -1133,10 +1133,27 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   their owning Claim/metrics crates; the CLI retains source selection and domain-specific interpretation.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
-  displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,
-  and reserve replacement remain outside the discovery grammar. Copper C1 requires explicit per-pound-sold
+  displayed percentage-point interval while retaining the stored fraction. Bare/mined grade and circuit recovery
+  remain outside the workbook discovery grammar. Reserve replacement requires the explicit source-bound
+  companion described below. Copper C1 requires explicit per-pound-sold
   and `US$/lb` or `$/lb` tokens; copper production requires `kt`. C1 does not inherit gold TCC's credit
   convention, and historical site production in millions of pounds remains unchecked.
+- DESIGN (bounded BD-345.S3/BD-063): `lint --issuer <issuer> --as-of YYYY-MM-DD
+  --reserve-bindings <bindings.toml>` adds a separate reserve-replacement assessment using the same
+  authenticated annual selectors and exact Claims as `reserve replacement`. Each standalone equality
+  must name the company, attributable gold or GEO basis, complete annual window, exclusion of acquisitions
+  and divestments, and backtick-quoted definition; GEO also names its registered deck definition.
+  Cited mode requires the cumulative derived Claim ID. Discovery retains all definition/window matches,
+  including refused series; multiple matches stay ambiguous even when their amounts agree. The entire
+  exact source rounding enclosure must fit the draft's printed half-step interval before `verified`;
+  disjoint intervals mismatch, and overlap alone leaves precision unestablished. Approximate prose and
+  missing semantic qualifiers stay unchecked. JSON and Markdown retain the complete source report,
+  canonical Claims, annual decks, source hashes, reader roles, publication cut and local source refusals.
+  The shared loader also keeps the standalone command's output unchanged. Neither result authenticates
+  the issuer assertion, classifies reserves or permits disclosure. Invented source-to-command regressions
+  in `xtask/tests/reserve_replacement_report.rs` cover both metals, cited/discovered checks, competing
+  series, exact rounding, pending readers, byte mutation, future publication and issuer rebinding.
+  Real issuer coverage and the broader BD-345/BD-063 gates remain open.
 - DESIGN (BD-345.S4): `lint --as-of` also supplies an independent `forward_guidance` assessment for a
   standalone line explicitly marked `forecast` or `guidance`, with one equality, registered site, fiscal
   year, ownership basis and unit. Gold/copper production, gold/copper AISC, TCC and C1 reuse the canonical
