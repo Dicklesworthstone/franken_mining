@@ -1,10 +1,11 @@
-//! Registered additive public-disclosure identities (BD-345.S4).
+//! Registered public-disclosure arithmetic (BD-345.S4).
 //! Determinism: Exact
 //!
 //! DESIGN: closed rational intervals propagate the printed precision of source assertions. They are
 //! neither forecasts nor confidence intervals. Complete quarter sums and full-mine amounts scaled by
-//! explicitly evidenced ownership are admitted here. Publication admission belongs to the source adapter; cumulative differences
-//! use the existing `roll_forward::quarter` identity.
+//! explicitly evidenced ownership are admitted here, alongside cost-per-sold-unit enclosures with an
+//! explicit scale. Publication admission belongs to the source adapter; cumulative differences use
+//! the existing `roll_forward::quarter` identity.
 
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::{Encoder, blake3_hash};
@@ -12,12 +13,205 @@ use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, Re
 use fmine_numerics::exact_feas::{Interval, Rat};
 
 use crate::guidance::{Ownership, Period};
+use crate::roll_forward::quarter::Printed;
 
 type Result<T> = std::result::Result<T, Refusal>;
 pub const INPUT_METRIC: &str = "public_disclosure.period_amount";
 pub const SHARE_METRIC: &str = "public_disclosure.ownership_share";
 pub const OWNERSHIP_SCALE_RULE: &str = "public-disclosure.ownership-scale/1";
 pub const WARNING: &str = "Arithmetic over dated public assertions does not make the derived figure an issuer disclosure. A non-obvious derived figure can itself be new information; obtain appropriate disclosure review.";
+
+/// Explicit sold-metal scale for a US$M cost numerator. No mass or ownership conversion is inferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostRateUnit {
+    GoldKoz,
+    CopperMillionPounds,
+}
+
+impl CostRateUnit {
+    #[must_use]
+    pub const fn denominator_unit(self) -> &'static str {
+        match self {
+            Self::GoldKoz => "koz",
+            Self::CopperMillionPounds => "Mlb",
+        }
+    }
+
+    #[must_use]
+    pub const fn rate_unit(self) -> &'static str {
+        match self {
+            Self::GoldKoz => "usd_per_oz",
+            Self::CopperMillionPounds => "usd_per_lb",
+        }
+    }
+
+    #[must_use]
+    pub const fn display_unit(self) -> &'static str {
+        match self {
+            Self::GoldKoz => "USD/oz",
+            Self::CopperMillionPounds => "USD/lb",
+        }
+    }
+
+    #[must_use]
+    pub const fn formula(self) -> &'static str {
+        match self {
+            Self::GoldKoz => "1000*N/Q",
+            Self::CopperMillionPounds => "N/Q",
+        }
+    }
+
+    #[must_use]
+    pub const fn rule(self) -> &'static str {
+        match self {
+            Self::GoldKoz => "public-disclosure.cost-rate/1",
+            Self::CopperMillionPounds => "public-disclosure.copper-cost-rate/1",
+        }
+    }
+
+    const fn factor(self) -> Rat {
+        Rat::from_integer(match self {
+            Self::GoldKoz => 1000,
+            Self::CopperMillionPounds => 1,
+        })
+    }
+}
+
+/// Exact cost-per-sold-unit enclosure over independently printed decimal operands. The whole sales
+/// interval must be positive; numerator signs and both operands' own precision are retained. This
+/// arithmetic does not establish source publication, matching ownership or a cost definition.
+pub fn cost_rate_bounds(
+    unit: CostRateUnit,
+    numerator: Printed,
+    denominator: Printed,
+) -> Result<Interval> {
+    use fmine_numerics::exact_feas as xf;
+    let numerical = |detail| refusal(RefusalCode::NumericalCertificateFailed207, detail);
+    numerator
+        .interval()
+        .map_err(|_| numerical("cost rounding interval is invalid or overflows"))?;
+    let denominator_box = denominator
+        .interval()
+        .map_err(|_| numerical("sold-metal rounding interval is invalid or overflows"))?;
+    if denominator_box.lo.signum() <= 0 {
+        return Err(refusal(
+            RefusalCode::NonIdentifiableAttribution104,
+            "the sold-metal rounding enclosure must be strictly positive",
+        ));
+    }
+    let cell = |id: &str, p: Printed| xf::Cell {
+        locator: id.into(),
+        sha256: String::new(),
+        token: format!("{}/{}", p.value.num(), p.value.den()),
+        printed: p.value,
+        step: p.step,
+        scope: xf::Scope::Visible,
+    };
+    let cells = [
+        cell("N", numerator),
+        cell("Q", denominator),
+        cell(
+            "R",
+            Printed {
+                value: Rat::from_integer(0),
+                step: Rat::from_integer(1),
+            },
+        ),
+    ];
+    let identity = xf::Identity {
+        id: "cost_rate".into(),
+        family: unit.rule().into(),
+        closure: xf::Closure::Definitional,
+        kind: xf::IdentityKind::Ratio {
+            rate: "R".into(),
+            num: "N".into(),
+            den: "Q".into(),
+            factor: unit.factor(),
+        },
+    };
+    xf::implied_interval(
+        &cells,
+        &[identity],
+        &xf::Rules::new(xf::Convention::Closed),
+        "R",
+        true,
+    )
+    .map_err(|_| numerical("exact cost-rate enclosure could not be certified"))
+}
+
+/// Derives a cost-rate claim without strengthening either public parent's evidence. The adapter
+/// authenticates publication, matching source/period/ownership and the named cost family, and binds
+/// each parsed printed value to its parent. An unavailable printed operand remains a typed refusal.
+pub fn derive_cost_rate<N, Q>(
+    unit: CostRateUnit,
+    family: &str,
+    numerator: (&Claim<N>, Option<Printed>),
+    denominator: (&Claim<Q>, Option<Printed>),
+) -> Result<Claim<Interval>> {
+    if !matches!(
+        (unit, family),
+        (CostRateUnit::GoldKoz, "aisc_per_oz" | "tcc_per_oz")
+            | (
+                CostRateUnit::CopperMillionPounds,
+                "aisc_per_lb" | "c1_per_lb"
+            )
+    ) {
+        return Err(refusal(
+            RefusalCode::BasisMismatch105,
+            "cost-rate family does not match the explicit sold-metal scale",
+        ));
+    }
+    let ((n, np), (q, qp)) = (numerator, denominator);
+    validate_source(n, &n.metric_key, n.value_tag())?;
+    validate_source(q, &q.metric_key, q.value_tag())?;
+    if n.additivity != AdditivityClass::ExtensiveAdditive
+        || q.additivity != AdditivityClass::ExtensiveAdditive
+    {
+        return Err(refusal(
+            RefusalCode::NonAdditiveAverage103,
+            "cost-rate numerator and sold-metal denominator must be extensive",
+        ));
+    }
+    let (Some(np), Some(qp)) = (np, qp) else {
+        return Err(refusal(
+            RefusalCode::SourceCellUnusable208,
+            "cost-rate operands require exact displayed numbers and their printed precision",
+        ));
+    };
+    let bounds = cost_rate_bounds(unit, np, qp)?;
+    let mut terms = n.uu_terms.clone();
+    for term in &q.uu_terms {
+        if !terms.contains(term) {
+            terms.push(term.clone());
+        }
+    }
+    let mut anchors = n.anchors.clone();
+    anchors.extend(q.anchors.iter().cloned());
+    anchors.sort();
+    anchors.dedup();
+    let tag = format!(
+        "{family}:{{\"lo\":{{\"num\":\"{}\",\"den\":\"{}\"}},\"hi\":{{\"num\":\"{}\",\"den\":\"{}\"}},\"lo_strict\":false,\"hi_strict\":false}}",
+        bounds.lo.num(),
+        bounds.lo.den(),
+        bounds.hi.num(),
+        bounds.hi.den()
+    );
+    Ok(Claim::new(
+        unit.rule(),
+        bounds,
+        &tag,
+        Representation::Deterministic,
+        SpatialSupport::PeriodAggregate,
+        AdditivityClass::IntensiveWeighted,
+        n.evidence.meet(q.evidence).meet(EvidenceClass::Derived),
+        n.epistemic.and(q.epistemic),
+        n.state.and(q.state),
+        n.confidentiality.join(&q.confidentiality),
+        terms,
+        vec![n.claim_id, q.claim_id],
+        anchors,
+    ))
+}
 
 /// Extensive quantities only: rates, grades, recovery and per-unit costs cannot enter these identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

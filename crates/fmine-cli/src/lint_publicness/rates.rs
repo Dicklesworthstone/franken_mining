@@ -1,18 +1,75 @@
-//! DESIGN (BD-345.S4): 1000 times a printed gold cost numerator divided by attributable ounces sold.
+//! DESIGN (BD-345.S4): printed gold and copper cost numerators divided by explicitly based metal sales.
 //! Declared identity bases never replace the original operands' printed and registered basis evidence.
 
 use super::*;
 use fmine_claim::Claim;
+use fmine_metrics::public_derivation::{CostRateUnit, derive_cost_rate};
 use fmine_numerics::exact_feas::Interval;
-use fmine_public::aisc::{IdentityFamily, rate_range};
+use fmine_public::aisc::IdentityFamily;
 
-const RULE: &str = "public-disclosure.cost-rate/1";
+#[derive(Debug, Clone, Copy)]
+struct RateKind {
+    unit: CostRateUnit,
+    family: &'static str,
+    numerator: &'static str,
+    rate_label: &'static str,
+    basis: &'static str,
+}
+
+impl RateKind {
+    const ALL: [Self; 4] = [
+        Self {
+            unit: CostRateUnit::GoldKoz,
+            family: "aisc_per_oz",
+            numerator: "all-in sustaining costs",
+            rate_label: "all-in sustaining costs per ounce",
+            basis: IdentityFamily::AiscPerOunce.basis(),
+        },
+        Self {
+            unit: CostRateUnit::GoldKoz,
+            family: "tcc_per_oz",
+            numerator: "total cash costs",
+            rate_label: "total cash costs per ounce",
+            basis: IdentityFamily::TccPerOunce.basis(),
+        },
+        Self {
+            unit: CostRateUnit::CopperMillionPounds,
+            family: "aisc_per_lb",
+            numerator: "site:costs ($ millions):all-in sustaining costs",
+            rate_label: "site:costs per pound:all-in sustaining costs",
+            basis: "AISC US$M over copper sales in millions of pounds, both on the same explicitly printed ownership basis",
+        },
+        Self {
+            unit: CostRateUnit::CopperMillionPounds,
+            family: "c1_per_lb",
+            numerator: "site:costs ($ millions):c1 cash costs",
+            rate_label: "site:costs per pound:c1 cash costs",
+            basis: "C1 cash costs US$M over copper sales in millions of pounds, both on the same explicitly printed ownership basis",
+        },
+    ];
+
+    const fn denominator(self) -> &'static str {
+        match self.unit {
+            CostRateUnit::GoldKoz => "ounces sold",
+            CostRateUnit::CopperMillionPounds => "site::sales (millions of pounds)",
+        }
+    }
+
+    fn accepts_basis(self, cell: &KeyedCell) -> bool {
+        explicit_basis(cell.key.ownership_basis).is_some()
+            && (self.unit == CostRateUnit::CopperMillionPounds
+                || matches!(
+                    cell.key.ownership_basis,
+                    OwnershipBasis::Attributable { .. }
+                ))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct Assessment {
     pub(super) status: &'static str,
     reason: &'static str,
-    family: IdentityFamily,
+    kind: RateKind,
     pub(super) evidence: Vec<SourceEvidence>,
     draft: Option<Interval>,
     derived: Option<Claim<Interval>>,
@@ -24,18 +81,6 @@ fn column(c: &KeyedCell) -> Option<(&str, u32)> {
     Some((sheet, fmine_io::xlsx::parse_a1_ref(cell)?.1))
 }
 
-fn whole(c: &KeyedCell) -> Result<i64, Refusal> {
-    printed(c)
-        .filter(|p| p.step == Rat::from_integer(1) && p.value.den() == 1)
-        .and_then(|p| i64::try_from(p.value.num()).ok())
-        .ok_or_else(|| {
-            Refusal::new(
-                RefusalCode::SourceCellUnusable208,
-                "cost-rate operands require whole-number displayed US$M and koz with step one",
-            )
-        })
-}
-
 pub(super) fn assess(
     draft: &str,
     f: &LintFinding,
@@ -44,27 +89,19 @@ pub(super) fn assess(
     publications: &BTreeMap<(String, String), &Publication>,
     as_of: &str,
 ) -> Option<Assessment> {
-    let (prototype, target, numerator, family) = cells.iter().find_map(|sold| {
-        if sold.key.line.label != "ounces sold"
-            || sold.key.unit != "koz"
-            || !matches!(
-                sold.key.ownership_basis,
-                OwnershipBasis::Attributable { .. }
-            )
-        {
-            return None;
-        }
-        [
-            ("all-in sustaining costs", IdentityFamily::AiscPerOunce),
-            ("total cash costs", IdentityFamily::TccPerOunce),
-        ]
-        .into_iter()
-        .find_map(|(numerator, family)| {
+    let (prototype, target, kind) = cells.iter().find_map(|sold| {
+        RateKind::ALL.into_iter().find_map(|kind| {
+            if sold.key.line.label != kind.denominator()
+                || sold.key.unit != kind.unit.denominator_unit()
+                || !kind.accepts_basis(sold)
+            {
+                return None;
+            }
             // A grammar prototype changes only metric/unit; it supplies neither a number nor a printed share.
             let mut p = sold.clone();
-            p.key.line.label = format!("{numerator} per ounce");
-            p.key.unit = "usd_per_oz".into();
-            Some((sold, equality_target(draft, f.span, &p)?, numerator, family))
+            p.key.line.label = kind.rate_label.into();
+            p.key.unit = kind.unit.rate_unit().into();
+            Some((sold, equality_target(draft, f.span, &p)?, kind))
         })
     })?;
     let mut evidence: Vec<_> = cells
@@ -73,7 +110,7 @@ pub(super) fn assess(
             c.key.issuer == prototype.key.issuer
                 && c.key.subject == prototype.key.subject
                 && c.key.valid_period == target.period
-                && (c.key.line.label == numerator || c.key.line.label == "ounces sold")
+                && (c.key.line.label == kind.numerator || c.key.line.label == kind.denominator())
         })
         .map(|c| source_evidence(c, profile, publications, as_of))
         .collect();
@@ -81,8 +118,8 @@ pub(super) fn assess(
     evidence.dedup_by(|a, b| a.source == b.source);
     let mut out = Assessment {
         status: "not_available",
-        reason: "unique_dated_same_source_cost_and_attributable_sales_required",
-        family,
+        reason: "unique_dated_same_source_cost_and_explicit_sales_basis_required",
+        kind,
         evidence,
         draft: None,
         derived: None,
@@ -95,7 +132,7 @@ pub(super) fn assess(
             .evidence
             .iter_mut()
             .filter(|e| e.admission != "after_cut")
-            .partition(|e| e.source.key.line.label == numerator);
+            .partition(|e| e.source.key.line.label == kind.numerator);
         if numerators.len() > 1 || denominators.len() > 1 {
             out.status = "ambiguous";
             out.reason = "competing_cost_or_sales_assertions_are_not_selected_by_amount";
@@ -111,15 +148,20 @@ pub(super) fn assess(
         q.relation = "sold_denominator";
         let (n, q) = (&n.source, &q.source);
         if n.key.unit != "usd_m"
-            || q.key.unit != "koz"
+            || q.key.unit != kind.unit.denominator_unit()
             || n.key.reporting_vintage != q.key.reporting_vintage
             || !column(n).is_some_and(|col| Some(col) == column(q))
             || n.key.scope != q.key.scope
             || n.key.line.occurrence != q.key.line.occurrence
-            || explicit_basis(q.key.ownership_basis).is_none()
-            || !matches!(q.key.ownership_basis, OwnershipBasis::Attributable { .. })
+            || !kind.accepts_basis(q)
             || (n.key.ownership_basis != OwnershipBasis::Unprinted
-                && n.key.ownership_basis != q.key.ownership_basis)
+                && explicit_basis(n.key.ownership_basis) != explicit_basis(q.key.ownership_basis))
+            || (kind.unit == CostRateUnit::CopperMillionPounds
+                && ([n, q]
+                    .iter()
+                    .any(|c| c.printed_basis == OwnershipBasis::Unprinted)
+                    || explicit_basis(n.key.ownership_basis)
+                        != explicit_basis(q.key.ownership_basis)))
             || [n, q].iter().any(|c| {
                 c.claim.additivity != AdditivityClass::ExtensiveAdditive
                     || (c.printed_basis != OwnershipBasis::Unprinted
@@ -130,53 +172,22 @@ pub(super) fn assess(
         {
             return Err(Refusal::new(
                 RefusalCode::BasisMismatch105,
-                "cost-rate operands must share source table, column, period, perimeter and declared attributable basis",
+                "cost-rate operands must share source table, column, period, perimeter and an admissible explicit ownership basis",
             ));
         }
-        let denominator = whole(q)?;
-        if denominator < 1 {
-            return Err(Refusal::new(
-                RefusalCode::NonIdentifiableAttribution104,
-                "the sold-ounce rounding enclosure must be strictly positive",
-            ));
-        }
-        let bounds = rate_range(whole(n)?, 1, denominator)
-            .map_err(|e| Refusal::new(RefusalCode::NumericalCertificateFailed207, e.0))?;
-        out.status = sums::compare(interval, bounds)?;
+        let derived = derive_cost_rate(
+            kind.unit,
+            kind.family,
+            (&n.claim, printed(n)),
+            (&q.claim, printed(q)),
+        )?;
+        out.status = sums::compare(interval, derived.value)?;
         out.reason = match out.status {
             "derived" => "same_source_cost_over_sales_supports_the_draft_precision",
             "contradicted" => "cost_rate_enclosure_is_disjoint_from_the_draft",
             _ => "cost_and_sales_rounding_exceeds_the_draft_precision",
         };
-        let mut terms = n.claim.uu_terms.clone();
-        for term in &q.claim.uu_terms {
-            if !terms.contains(term) {
-                terms.push(term.clone());
-            }
-        }
-        let mut anchors = n.claim.anchors.clone();
-        anchors.extend(q.claim.anchors.iter().cloned());
-        anchors.sort();
-        anchors.dedup();
-        let tag = format!("{}:{}", family.as_str(), sums::interval(bounds));
-        out.derived = Some(Claim::new(
-            RULE,
-            bounds,
-            &tag,
-            Representation::Deterministic,
-            SpatialSupport::PeriodAggregate,
-            AdditivityClass::IntensiveWeighted,
-            n.claim
-                .evidence
-                .meet(q.claim.evidence)
-                .meet(EvidenceClass::Derived),
-            n.claim.epistemic.and(q.claim.epistemic),
-            n.claim.state.and(q.claim.state),
-            n.claim.confidentiality.join(&q.claim.confidentiality),
-            terms,
-            vec![n.claim.claim_id, q.claim.claim_id],
-            anchors,
-        ));
+        out.derived = Some(derived);
         Ok(())
     })();
     if let Err(refusal) = run {
@@ -191,13 +202,21 @@ impl Assessment {
     pub(super) fn to_json(&self) -> String {
         let derived = self.derived.as_ref().map_or_else(
             || "null".into(),
-            |c| canonical_json(c, "derived_cost_rate_usd_per_oz", sums::interval(c.value)),
+            |c| {
+                canonical_json(
+                    c,
+                    &format!("derived_cost_rate_{}", self.kind.unit.rate_unit()),
+                    sums::interval(c.value),
+                )
+            },
         );
         format!(
-            "{{\"rule\":{},\"family\":{},\"identity_basis\":{},\"formula\":\"1000*N/Q\",\"unit\":\"USD/oz\",\"construction\":\"printed numerator and denominator, each plus or minus one half\",\"status\":{},\"reason\":{},\"warning\":{},\"draft_interval\":{},\"derived_claim\":{},\"evidence\":[{}],\"refusal\":{}}}",
-            js(RULE),
-            js(self.family.as_str()),
-            js(self.family.basis()),
+            "{{\"rule\":{},\"family\":{},\"identity_basis\":{},\"formula\":{},\"unit\":{},\"construction\":\"each printed operand plus or minus half its own displayed step\",\"status\":{},\"reason\":{},\"warning\":{},\"draft_interval\":{},\"derived_claim\":{},\"evidence\":[{}],\"refusal\":{}}}",
+            js(self.kind.unit.rule()),
+            js(self.kind.family),
+            js(self.kind.basis),
+            js(self.kind.unit.formula()),
+            js(self.kind.unit.display_unit()),
             js(self.status),
             js(self.reason),
             js(fmine_metrics::public_derivation::WARNING),
@@ -213,11 +232,14 @@ impl Assessment {
 
     pub(super) fn to_markdown(&self) -> String {
         let mut out = format!(
-            "  - Cost rate `{RULE}` ({}), 1000*N/Q in USD/oz: **{}**; {}. {}. {}\n",
-            self.family.as_str(),
+            "  - Cost rate `{}` ({}), {} in {}: **{}**; {}. {}. {}\n",
+            self.kind.unit.rule(),
+            self.kind.family,
+            self.kind.unit.formula(),
+            self.kind.unit.display_unit(),
             self.status,
             self.reason,
-            self.family.basis(),
+            self.kind.basis,
             fmine_metrics::public_derivation::WARNING
         );
         if let Some(c) = &self.derived {

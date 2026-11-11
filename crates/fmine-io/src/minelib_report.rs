@@ -1,5 +1,5 @@
 //! DESIGN: source-bound MineLib ultimate-pit composition and untrusted candidate comparison (BD-194).
-//! Determinism: Exact. This report certifies only the supplied integer-scaled values and precedence arcs.
+//! Determinism: Exact (certifies only the supplied integer-scaled values and precedence arcs).
 
 use fmine_core::{anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{Refusal, RefusalCode};
@@ -216,9 +216,8 @@ mod tests {
         let upit = "NAME: synthetic\nTYPE: UPIT\nNBLOCKS: 1\nOBJECTIVE_FUNCTION:\n0 2.5\nEOF\n";
         let prec = "0 0\n";
         let text = "0\n";
-        let source = |path, bytes: &str| {
-            SourceAnchor::new(path, sha256(bytes.as_bytes()).0, "whole source")
-        };
+        let source =
+            |path, bytes: &str| SourceAnchor::new(path, sha256(bytes.as_bytes()).0, "whole source");
         let upit_source = source("pit.upit", upit);
         let prec_source = source("pit.prec", prec);
         let candidate_source = source("candidate.sol", text);

@@ -664,6 +664,110 @@ mod tests {
         assert_ne!(forged.findings[0].status, "derivable");
     }
 
+    fn copper_rate_fixture() -> (IssuerProfile, Vec<KeyedCell>, Vec<Publication>) {
+        let (mut profile, mut cells, dates) = cost_rate_fixture();
+        profile.sources[0].kind = SourceKind::MineStats;
+        let ownership = OwnershipBasis::Attributable {
+            num: 3,
+            den: 5,
+            source: fmine_public::key::ShareSource::Printed,
+        };
+        for (i, cell) in cells.iter_mut().enumerate() {
+            cell.key.ownership_basis = ownership;
+            cell.printed_basis = ownership;
+            cell.basis_evidence = None;
+            cell.key.line.label = if i == 0 {
+                "site:costs ($ millions):c1 cash costs"
+            } else {
+                "site::sales (millions of pounds)"
+            }
+            .into();
+            cell.key.unit = if i == 0 { "usd_m" } else { "Mlb" }.into();
+            cell.claim.value = PublicValue::Number {
+                stored: if i == 0 { "200.004" } else { "100.004" }.into(),
+                displayed: Ok(if i == 0 { "200.00" } else { "100.00" }.into()),
+                under_status: None,
+            };
+            seal_cost_source(cell);
+        }
+        (profile, cells, dates)
+    }
+
+    #[test]
+    fn copper_cost_rate_never_converts_tonnes_or_infers_a_missing_or_conflicting_share() {
+        let draft = "Site A Q1 2030 attributable C1 per pound sold is $2.00/lb.";
+        let (profile, mut cells, dates) = copper_rate_fixture();
+        let original = evaluate(draft, &cells, &profile, &dates, "2030-05-01");
+        assert_eq!(original.findings[0].status, "derivable");
+        cells.reverse();
+        assert_eq!(
+            original.to_json(),
+            evaluate(draft, &cells, &profile, &dates, "2030-05-01").to_json()
+        );
+        for fault in 0..7 {
+            let (profile, mut cells, dates) = copper_rate_fixture();
+            match fault {
+                0 => cells[1].key.unit = "kt".into(),
+                1 => cells[0].printed_basis = OwnershipBasis::Unprinted,
+                2 => cells[1].printed_basis = OwnershipBasis::Unprinted,
+                3 => {
+                    cells[0].key.ownership_basis = OwnershipBasis::Consolidated100;
+                    cells[0].printed_basis = OwnershipBasis::Consolidated100;
+                }
+                4 => cells[0].printed_basis = OwnershipBasis::Consolidated100,
+                5 => cells[0].key.unit = "cad_m".into(),
+                _ => {
+                    cells[0].key.scope = Scope::Region {
+                        map_version: "unregistered:test".into(),
+                    };
+                    cells[1].key.scope = cells[0].key.scope.clone();
+                }
+            }
+            for cell in &mut cells {
+                seal_cost_source(cell);
+            }
+            let report = evaluate(draft, &cells, &profile, &dates, "2030-05-01");
+            assert_ne!(
+                report.findings[0].status,
+                "derivable",
+                "fault {fault}: {}",
+                report.to_json()
+            );
+            if let Some(rate) = &report.findings[0].cost_rate {
+                assert!(
+                    rate.to_json().contains("\"derived_claim\":null"),
+                    "fault {fault}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decimal_cost_rate_uses_individual_precision_and_signed_zero_numerator_bounds() {
+        let (profile, mut cells, dates) = cost_rate_fixture();
+        for (cell, token) in cells.iter_mut().zip(["0.00", "100.0"]) {
+            cell.claim.value = PublicValue::Number {
+                stored: token.into(),
+                displayed: Ok(token.into()),
+                under_status: None,
+            };
+            seal_cost_source(cell);
+        }
+        let draft = "Site A Q1 2030 attributable AISC per ounce sold is $0/oz.";
+        let report = evaluate(draft, &cells, &profile, &dates, "2030-05-01");
+        let rate = report.findings[0].cost_rate.as_ref().unwrap();
+        assert_eq!(rate.status, "derived");
+        // [-0.005, 0.005] US$M / [99.95, 100.05] koz; both extremes use the lower denominator.
+        assert!(
+            rate.to_json()
+                .contains("\"lo\":{\"num\":\"-100\",\"den\":\"1999\"}")
+        );
+        assert!(
+            rate.to_json()
+                .contains("\"hi\":{\"num\":\"100\",\"den\":\"1999\"}")
+        );
+    }
+
     #[test]
     fn altered_or_unknown_source_claim_cannot_gain_public_evidence_status() {
         let (profile, mut cells, dates) = fixture(&["1250"]);

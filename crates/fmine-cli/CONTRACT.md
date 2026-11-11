@@ -1088,12 +1088,17 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   DESIGN (bounded BD-345.S4): `lint_publicness::rates` derives gold AISC and explicitly by-product TCC
   per sold ounce from a unique same-source, same-table, same-column US$M numerator and attributable koz
   denominator under the declared identity family. The exact kernel computes `1000*N/Q` over each
-  independently printed whole-number operand's half-step box; the complete denominator box must be positive.
+  independently printed integer or decimal operand's half-step box; the complete denominator box must be positive.
   The `cost_rate` result retains its formula and identity basis, exact draft/result intervals, both original
   operands and a derived Claim whose evidence is no stronger than either source. A declared interpretation
   never changes a printed ownership assertion. Signed numerators remain signed; competing, undated,
   unusable or incompatible operands cannot establish a derivation, and direct disclosures retain priority.
-  Co-product TCC, cost-of-sales bridges, copper rates and produced-ounce denominators are outside this rule.
+  A separate copper identity derives AISC and C1 `USD/lb` as `N/Q` from explicitly registered detailed
+  `Costs ($ millions)` numerator rows and `Sales (millions of pounds)` in the same table column. Both copper
+  operands require identical explicit ownership; no mass or ownership conversion is inferred. JSON and
+  Markdown preserve the metal-specific formula, unit, family and all source evidence. Co-product TCC,
+  cost-of-sales bridges and produced-metal denominators are outside these rules. Synthetic XLSX regression
+  cases exercise the source-to-command path; they do not establish actual issuer numerator coverage.
   Every public-record source now retains its keyed projection and checked canonical Claim companion, binding
   UU terms, parents, supersedes and recorded flags even when the numerical Claim ID is unchanged. Canonical
   export failures remain structured refusals. Generic Claim inspection and typed recovery codecs live with

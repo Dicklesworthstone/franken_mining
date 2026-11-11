@@ -1,5 +1,5 @@
 //! Source-bound OMF scheduling declarations over the existing planning engines (plan §15.4).
-//! Determinism: DeterministicPerIsa. The emitted integer discount factors define both objective and bound.
+//! Determinism: DeterministicPerIsa (emitted integer discount factors define both objective and bound).
 
 use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{Refusal, RefusalCode};

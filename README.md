@@ -2021,8 +2021,9 @@ unit-cost scaling and a new issuer disclosure are not inferred.
 
 DESIGN (BD-345.S4): gold **AISC and explicitly by-product total cash cost per sold ounce** can be derived
 from the same dated source table's cost numerator in US$ millions and attributable ounces sold in thousands:
-`1000 * cost / sold`. Both operands must be whole-number disclosures with a displayed step of one, and the
-entire sold-ounce rounding interval must be positive. The original printed and registered ownership evidence
+`1000 * cost / sold`. Integer and decimal disclosures use their own displayed precision: each operand's
+rounding interval extends by half its printed step. The entire sold-ounce interval must be positive.
+The original printed and registered ownership evidence
 stays attached; the declared identity interpretation never invents a printed ownership share.
 
 For synthetic disclosed values of US$150M and 100 thousand ounces, the exact rate enclosure is
@@ -2033,8 +2034,17 @@ identity basis, exact derived Claim and both original source Claims. The derived
 issuer-assertion evidence class. Stored workbook values remain visible, while displayed values determine
 the rounding bounds. Signed costs stay signed; zero, negative, missing or nonnumeric sales cannot provide
 a denominator. Competing operands remain ambiguous, and direct disclosed matches or contradictions retain
-priority. Co-product TCC, cost-of-sales bridges, copper rates and produced-ounce denominators require their
-own explicit constructions and are outside this rule.
+priority. Co-product TCC, cost-of-sales bridges and produced-ounce denominators require their own explicit
+constructions and are outside this rule.
+
+Copper **AISC and C1 cash cost per pound sold** use the separate `N/Q` identity when the same dated table
+explicitly supplies a cost numerator in US$ millions and sales in millions of pounds. Both operands must
+carry the same explicit ownership basis. Decimal costs and sales retain their independently printed
+rounding intervals, so a coarse disclosure cannot establish extra precision in a draft. The result names
+`USD/lb`, its copper identity and both source Claims; gold's thousand-ounce scale is never applied to it.
+Missing dollar numerators, sales in tonnes, unprinted ownership or competing source assertions remain
+unavailable, refused or ambiguous. This support does not assert that a particular issuer publishes all
+required numerator rows.
 
 Nine-month cumulative disclosures can also be checked directly in cited or discovery mode. The grammar
 recognizes `9M 2030`, `20309M`, and `nine months of 2030`, keeping them distinct from Q3, H1, and FY.

@@ -13,6 +13,7 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
 - reserve replacement over a complete declared annual window, on attributable gold or GEO (`reserve_replacement`, BD-063);
 - a quarter derived from cumulative disclosures (Q2 = H1 − Q1, Q3 = 9M − H1, Q4 = FY − 9M) and checked against a draft's displayed figure (`roll_forward::quarter`, BD-345.S4);
 - H1, nine months and FY as sums of complete quarters, and full-mine amounts scaled by explicit ownership, carried as Claims (`public_derivation`, BD-345.S4);
+- gold and copper cost-per-sold-unit enclosures from independently printed cost and sales amounts, with source-parent Claims retained (`public_derivation`, BD-345.S4);
 - a source-bound projection of an issuer's declared reserve rows, with their filing vintages and quoted price decks, and an exact check of gold, copper and GEO reserve rows against their quoted prices (`reserves`, `reserves::geo`, BD-335, BD-070);
 - whether the reporters of one asset agree on the gold it produced or sold, or on its sustaining, project and total capital, on one 100% basis (`mirror`, `mirror::capex`);
 - at the crate root: an AISC consolidation check, GEO under a price deck, reserve replacement and a float cut-off solver.
@@ -46,6 +47,14 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`reserve_replacement`.** Bindings for a complete declared annual window, the metric registry, agreed PDF point readings and document metadata. Each GEO year names its reserve-price deck and definition evidence.
 - **`roll_forward::quarter`.** A `Quantity` (additive gold production or sales in koz, or copper production in kt), the target quarter, a draft `Printed` value and step, and `Observation`s. Source ids name the actual operands. A caller-authenticated series key binds issuer, subject, year, scope and perimeter version, metric, unit, occurrence and an explicit normalised ownership. Each observation states its cumulative ending quarter and either its displayed value and step or an unusable value.
 - **`public_derivation`.** A `Rule` and `Claim<Amount>`s: exactly Q1 and Q2, or Q1 to Q4, of one extensive `AmountKind`. Rates and grades cannot enter the enum. The caller authenticates the source bytes and publication availability.
+  DESIGN: `cost_rate_bounds` separately accepts `CostRateUnit::GoldKoz` or `CopperMillionPounds` and two
+  `roll_forward::quarter::Printed` operands. A US$M numerator divided by sold koz uses factor 1000;
+  a US$M numerator divided by sold millions of pounds uses factor 1. Each operand retains its own positive
+  displayed step, signed cost intervals remain signed, and the complete sales interval must be positive.
+  `derive_cost_rate` also accepts the named cost family and canonical source-parent Claims, returning a
+  derived interval Claim with their evidence, uncertainty terms, source anchors and parent identities.
+  Source selection, publication-date admission, same-table scope and ownership compatibility remain the
+  adapter's responsibility; neither arithmetic entry point authenticates a disclosure or infers unit conversions.
 - **`reserves`.** A `TableIdentityRegistry`, `Accepted` readings and `DocumentRow`s. `reserves::geo` takes explicit gold, copper and GEO row memberships, the primary GEO row's quoted prices and declared convention, and optional candidate decks with independently bound price readings.
 - **`mirror`.** `Claim<MirrorReading>`s under `READING_METRIC`: gold produced or sold in koz, or sustaining, project or total capital in USD millions, over one declared asset, operation perimeter and calendar period, each box on a fixed full or attributable basis. Every capital amount carries its scope, cash or accrual timing, lease treatment and a citation to that reporter's definition page. `mirror::transcriptions::bind` builds them from already-agreed S0 `Accepted` rows and a `DocumentRow`.
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.

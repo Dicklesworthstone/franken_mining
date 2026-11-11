@@ -7,8 +7,7 @@ use crate::{Lane, synthetic};
 // Public live-dependency integration checks also live in xtask/tests/public_report_contract.rs.
 // S2: leaves. Every expected value below is read from the seeded answers in `synthetic.rs`, never from a run.
 fn synthetic_sources() -> Vec<LoadedSource> {
-    crate::load_synthetic(synthetic::synthetic_workbooks(&[]))
-        .expect("synthetic workbooks parse")
+    crate::load_synthetic(synthetic::synthetic_workbooks(&[])).expect("synthetic workbooks parse")
 }
 
 fn assess_synthetic(sources: Vec<LoadedSource>) -> PublicAssuranceReport {

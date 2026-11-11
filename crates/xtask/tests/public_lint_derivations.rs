@@ -2258,13 +2258,6 @@ fn cost_rates_keep_publication_cuts_unknowns_and_nonpositive_denominators_explic
         ),
         (
             Some("2030-05-01"),
-            "0.0",
-            number("100"),
-            "refused",
-            Some("FMINE-REF-208"),
-        ),
-        (
-            Some("2030-05-01"),
             "0",
             number("0"),
             "refused",
@@ -2392,6 +2385,289 @@ fn cost_rate_arithmetic_never_overrides_a_same_basis_direct_disclosure_or_confli
         );
         assert!(!report.payload_json.contains("\"status\":\"derivable\""));
     }
+}
+
+#[test]
+fn decimal_gold_cost_rates_keep_each_displayed_rounding_step() {
+    for (numerator, amount, lo, hi) in [
+        ("150.004", "$1,500/oz", "29999000/20001", "30001000/19999"),
+        (
+            "-150.004",
+            "-$1,500/oz",
+            "-30001000/19999",
+            "-29999000/20001",
+        ),
+    ] {
+        let root = derivation_workspace();
+        let hash = cost_source(
+            &root,
+            "DecimalCosts.xlsx",
+            Some("2030-05-01"),
+            "0.00",
+            cost_sheet(numerator, number("100.004"), None),
+        );
+        let draft = AISC_RATE_DRAFT.replace("$1.5k/oz", amount);
+        let report = assess(&root, &draft, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(
+            string_field(rate, "status"),
+            "derived",
+            "{}",
+            report.to_json()
+        );
+        for (key, value) in [("lo", lo), ("hi", hi)] {
+            let (n, d) = value.split_once('/').unwrap();
+            assert!(rate.contains(&format!("\"{key}\":{{\"num\":\"{n}\",\"den\":\"{d}\"}}")));
+        }
+        assert!(rate.contains("\"stored\":\"100.004\",\"displayed\":\"100.00\""));
+        assert!(rate.contains(&hash));
+        assert!(rate.contains("half its own displayed step"));
+        assert!(report.payload_json.contains("\"status\":\"derivable\""));
+        let precise = assess(
+            &root,
+            &draft.replace("1,500/oz", "1,500.00/oz"),
+            "2030-05-01",
+        );
+        assert_eq!(
+            string_field(cost_rate_report(&precise), "status"),
+            "precision_not_established"
+        );
+        assert!(!precise.payload_json.contains("\"status\":\"derivable\""));
+        assert_eq!(report, assess(&root, &draft, "2030-05-01"));
+    }
+}
+
+fn copper_cost_sheet(subject: &str, sold: &str, c1: &str, aisc: &str) -> MinimalSheet {
+    let text = |s: &str| MinimalCell::Text(s.into());
+    MinimalSheet {
+        name: "Minestats1".into(),
+        hidden: false,
+        cells: vec![
+            ("B1".into(), text(subject)),
+            ("A2".into(), text("For the three months ended March 31,")),
+            ("B2".into(), MinimalCell::Number(2030.0)),
+            ("A3".into(), text("Sales (millions of pounds)")),
+            ("B3".into(), number(sold)),
+            ("A4".into(), text("Costs ($ millions)")),
+            ("A5".into(), text("C1 cash costs")),
+            ("B5".into(), number(c1)),
+            ("A6".into(), text("All-in sustaining costs")),
+            ("B6".into(), number(aisc)),
+        ],
+    }
+}
+
+fn copper_cost_source(root: &Path, file: &str, date: Option<&str>, sheet: MinimalSheet) -> String {
+    let hash = source(root, file, "2030Q1", date, "0.00", &[sheet]);
+    let path = registry_path(root, DERIVATION_ISSUER);
+    let mut registry = std::fs::read_to_string(&path).unwrap();
+    if !registry.contains("[[mine_stats_label]]") {
+        registry.push_str(
+            "\n[[mine_stats_label]]\nlabel = \"Sales (millions of pounds)\"\n\
+             [[mine_stats_label]]\nsection = \"Costs ($ millions)\"\nlabel = \"C1 cash costs\"\n\
+             [[mine_stats_label]]\nsection = \"Costs ($ millions)\"\nlabel = \"All-in sustaining costs\"\n",
+        );
+        std::fs::write(path, registry).unwrap();
+    }
+    hash
+}
+
+#[test]
+fn copper_cost_rates_derive_aisc_and_c1_from_registered_decimal_workbook_rows() {
+    for (subject, ownership) in [
+        ("Example Mine (60%)", "attributable"),
+        ("Example Mine (100%)", "100% basis"),
+    ] {
+        let root = derivation_workspace();
+        let hash = copper_cost_source(
+            &root,
+            "CopperCosts.xlsx",
+            Some("2030-05-01"),
+            copper_cost_sheet(subject, "100.004", "200.004", "225.004"),
+        );
+        for (metric, amount, family, lo, hi) in [
+            ("AISC", "2.25", "aisc_per_lb", "44999/20001", "45001/19999"),
+            ("C1", "2.00", "c1_per_lb", "39999/20001", "40001/19999"),
+        ] {
+            let draft = format!(
+                "Example Mine Q1 2030 {ownership} {metric} per pound sold is ${amount}/lb."
+            );
+            let report = assess(&root, &draft, "2030-05-01");
+            let rate = cost_rate_report(&report);
+            assert_eq!(
+                string_field(rate, "status"),
+                "derived",
+                "{}",
+                report.to_json()
+            );
+            assert_eq!(string_field(rate, "family"), family);
+            assert!(rate.contains("\"formula\":\"N/Q\""));
+            assert!(rate.contains("\"unit\":\"USD/lb\""));
+            assert!(rate.contains("public-disclosure.copper-cost-rate/1"));
+            for (key, value) in [("lo", lo), ("hi", hi)] {
+                let (n, d) = value.split_once('/').unwrap();
+                assert!(rate.contains(&format!("\"{key}\":{{\"num\":\"{n}\",\"den\":\"{d}\"}}")));
+            }
+            assert!(rate.contains("\"stored\":\"100.004\",\"displayed\":\"100.00\""));
+            assert!(rate.contains("CopperCosts.xlsx:Minestats1!B3"));
+            assert!(rate.contains(&hash));
+            assert!(rate.contains("\"evidence\":\"Assertion { source: Issuer }\""));
+            assert!(rate.contains("\"additivity\":\"IntensiveWeighted\""));
+            assert!(report.payload_json.contains("\"status\":\"derivable\""));
+            assert!(!report.payload_json.contains("\"status\":\"disclosed\""));
+            assert_eq!(report, assess(&root, &draft, "2030-05-01"));
+            let precise = assess(
+                &root,
+                &draft.replace(&format!("${amount}/lb"), &format!("${amount}00/lb")),
+                "2030-05-01",
+            );
+            assert_eq!(
+                string_field(cost_rate_report(&precise), "status"),
+                "precision_not_established"
+            );
+            let contradicted = assess(
+                &root,
+                &draft.replace(&format!("${amount}/lb"), "$9.00/lb"),
+                "2030-05-01",
+            );
+            assert_eq!(
+                string_field(cost_rate_report(&contradicted), "status"),
+                "contradicted"
+            );
+            assess(&root, &draft, "2030-05-01");
+            let (markdown, exit) = run(
+                &args(&[
+                    "lint",
+                    "derived.md",
+                    "--issuer",
+                    DERIVATION_ISSUER,
+                    "--discover",
+                    "--as-of",
+                    "2030-05-01",
+                    "--format",
+                    "markdown",
+                ]),
+                &root,
+            );
+            assert_eq!(exit, 0);
+            assert!(markdown.contains(lo) && markdown.contains(hi));
+            assert!(markdown.contains("N/Q in USD/lb"));
+        }
+    }
+}
+
+#[test]
+fn copper_cost_rates_keep_publication_cuts_competing_vintages_and_corruption_explicit() {
+    let draft = "Example Mine Q1 2030 attributable C1 per pound sold is $2.00/lb.";
+    for later_date in [Some("2030-05-02"), None] {
+        let root = derivation_workspace();
+        let first = copper_cost_source(
+            &root,
+            "Copper.xlsx",
+            Some("2030-05-01"),
+            copper_cost_sheet("Example Mine (60%)", "100", "200", "225"),
+        );
+        let before = assess(&root, draft, "2030-04-30");
+        assert_eq!(
+            string_field(cost_rate_report(&before), "status"),
+            "not_available"
+        );
+        assert!(!before.payload_json.contains("\"status\":\"derivable\""));
+        let second = copper_cost_source(
+            &root,
+            "RevisedCopper.xlsx",
+            later_date,
+            copper_cost_sheet("Example Mine (60%)", "100", "210", "235"),
+        );
+        let report = assess(&root, draft, "2030-05-02");
+        let rate = cost_rate_report(&report);
+        assert_eq!(string_field(rate, "status"), "ambiguous");
+        assert!(rate.contains(&first) && rate.contains(&second));
+        assert!(rate.contains("\"derived_claim\":null"));
+        if later_date.is_some() {
+            let earlier = assess(&root, draft, "2030-05-01");
+            assert_eq!(
+                string_field(cost_rate_report(&earlier), "status"),
+                "derived"
+            );
+        }
+        std::fs::write(root.join("corpus/Copper.xlsx"), b"changed workbook bytes").unwrap();
+        let corrupted = invoke(
+            &args(&[
+                "lint",
+                "derived.md",
+                "--issuer",
+                DERIVATION_ISSUER,
+                "--as-of",
+                "2030-05-02",
+            ]),
+            &root,
+        )
+        .0;
+        assert_ne!(corrupted.exit_code, 0);
+        assert!(corrupted.to_json().contains("FMINE-REF-505"));
+    }
+}
+
+#[test]
+fn copper_cost_rates_refuse_unknown_ownership_production_units_and_unsafe_denominators() {
+    let draft = "Example Mine Q1 2030 attributable C1 per pound sold is $2.00/lb.";
+    for (subject, sales, status) in [
+        ("Example Mine", "100.00", "none"),
+        ("Example Mine (60%)", "0.00", "refused"),
+        ("Example Mine (60%)", "-0.01", "refused"),
+    ] {
+        let root = derivation_workspace();
+        copper_cost_source(
+            &root,
+            "Copper.xlsx",
+            Some("2030-05-01"),
+            copper_cost_sheet(subject, sales, "200.00", "225.00"),
+        );
+        let report = assess(&root, draft, "2030-05-01");
+        if status == "none" {
+            assert!(cost_rate_report(&report).starts_with("null"));
+        } else {
+            assert_eq!(string_field(cost_rate_report(&report), "status"), status);
+            assert!(cost_rate_report(&report).contains("FMINE-REF-104"));
+        }
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+    let root = derivation_workspace();
+    copper_cost_source(
+        &root,
+        "Copper.xlsx",
+        Some("2030-05-01"),
+        copper_cost_sheet("Example Mine (60%)", "100.00", "200.00", "225.00"),
+    );
+    for invalid in [
+        draft.replace("sold", "produced"),
+        draft.replace("pound", "ounce").replace("/lb", "/oz"),
+        draft.replace("attributable", "100% basis"),
+        draft.replace("C1", "co-product C1"),
+        draft.replace("C1", "by-product TCC"),
+    ] {
+        let report = assess(&root, &invalid, "2030-05-01");
+        assert!(
+            cost_rate_report(&report).starts_with("null"),
+            "{invalid}: {}",
+            report.to_json()
+        );
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+    // The real registry has stale Mlb labels whose printed values are kt. Honour that correction;
+    // the source adapter must never turn an alias into a silent tonne-to-pound conversion here.
+    let path = registry_path(&root, DERIVATION_ISSUER);
+    let mut registry = std::fs::read_to_string(&path).unwrap();
+    registry.push_str(
+        "\n[[mine_stats_label_alias]]\nlabel = \"Sales (millions of pounds)\"\n\
+         reads_as = \"Sales (Thousands of tonnes)\"\nfirst = \"2030Q1\"\nlast = \"2030Q1\"\n\
+         evidence = \"FACT: invented source label correction\"\n",
+    );
+    std::fs::write(path, registry).unwrap();
+    let corrected = assess(&root, draft, "2030-05-01");
+    assert!(cost_rate_report(&corrected).starts_with("null"));
+    assert!(!corrected.payload_json.contains("\"status\":\"derivable\""));
 }
 
 #[cfg(test)]

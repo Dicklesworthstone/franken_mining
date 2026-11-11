@@ -119,12 +119,15 @@ fn expected_unit(target: &Target) -> Result<&'static str> {
     match (target.field.as_str(), target.outcome) {
         ("au_prod_100_koz", Outcome::FyMinus9m) => Ok("koz"),
         ("aisc_usd_per_oz", Outcome::Q4Qtd) => Ok("usd_per_oz"),
-        _ => Err(invalid(format!("unsupported field/outcome for {}", target.id))),
+        _ => Err(invalid(format!(
+            "unsupported field/outcome for {}",
+            target.id
+        ))),
     }
 }
 
 fn pool(rules: &RecordRules, target: &str) -> Result<(Quarter, Quarter, Quarter)> {
-    let matches: Vec<_> = rules
+    let mut matches = rules
         .baselines
         .iter()
         .filter(|b| b.target == target)
@@ -135,14 +138,13 @@ fn pool(rules: &RecordRules, target: &str) -> Result<(Quarter, Quarter, Quarter)
                 point,
             } => Some((pool_from, pool_through, point)),
             BaselineKind::IssuerGuidance => None,
-        })
-        .collect();
-    let [value] = matches.as_slice() else {
+        });
+    let (Some(value), None) = (matches.next(), matches.next()) else {
         return Err(invalid(format!(
             "{target} needs exactly one declared persistence pool"
         )));
     };
-    Ok(*value)
+    Ok(value)
 }
 
 struct Prepared {
@@ -188,12 +190,11 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     }
     let mut sources = Vec::new();
     for q in &wanted {
-        let matches: Vec<_> = registry
+        let mut matches = registry
             .sources
             .iter()
-            .filter(|s| s.kind == "mine_stats" && s.quarter == q.to_string())
-            .collect();
-        let [source] = matches.as_slice() else {
+            .filter(|s| s.kind == "mine_stats" && s.quarter == q.to_string());
+        let (Some(source), None) = (matches.next(), matches.next()) else {
             return Err(refuse(
                 RefusalCode::NoClaimInDomain201,
                 format!("{q} needs exactly one registered original Mine Stats release"),
@@ -275,7 +276,10 @@ fn per_ounce_withholding_note(source: &LoadedSource, site: &str, year: u16) -> O
                 let month = MONTHS.split_whitespace().position(|m| m == month)? + 1;
                 let day = day.parse::<u8>().ok().filter(|_| !day.starts_with('+'))?;
                 record::parse_utc(&format!("{year:04}-{month:02}-{day:02}T00:00:00Z"))?;
-                note = Some(format!("{}:{}!{}", source.file_name, sheet.name, cell.cell_ref));
+                note = Some(format!(
+                    "{}:{}!{}",
+                    source.file_name, sheet.name, cell.cell_ref
+                ));
             }
         }
     }
@@ -331,6 +335,7 @@ fn observation(
     };
     let claim = key::from_mine_stats(profile, &source.workbook, &source.quarter, raw)
         .map_err(|e| source_error(e.to_string()))?;
+    let locator = &claim.locator;
     if claim.key.issuer != profile.issuer
         || claim.key.subject != site
         || claim.key.valid_period != period
@@ -346,10 +351,7 @@ fn observation(
     {
         return Err(refuse(
             RefusalCode::BasisMismatch105,
-            format!(
-                "{} has incompatible target, scope, unit or ownership",
-                claim.locator
-            ),
+            format!("{locator} has incompatible target, scope, unit or ownership"),
         ));
     }
     let displayed = source
@@ -369,15 +371,14 @@ fn observation(
             }
             Err(_) => {
                 return Err(source_error(format!(
-                    "{} display is not an exact number",
-                    claim.locator
+                    "{locator} display is not an exact number"
                 )));
             }
         },
         Some(Err(e)) => {
             return Err(source_error(format!(
-                "{} display refused: {}",
-                claim.locator, e.code
+                "{locator} display refused: {}",
+                e.code
             )));
         }
         None => (
@@ -427,19 +428,18 @@ fn observation(
             && value.signum() > 0
             && only_withheld
             && flagged == Some(key::StatusKind::Withheld))
-            .then(|| per_ounce_withholding_note(source, site, period.year))
-            .flatten();
+        .then(|| per_ounce_withholding_note(source, site, period.year))
+        .flatten();
         if ((value.signum() != 0 && overlaps_status) || flagged.is_some()) && note.is_none() {
             return Err(refuse(
                 RefusalCode::BasisMismatch105,
-                format!(
-                    "{} numeric observation overlaps a registered site status",
-                    claim.locator
-                ),
+                format!("{locator} numeric observation overlaps a registered site status"),
             ));
         }
         if let Some(note) = note {
-            reason = Some(format!("included_production_with_per_ounce_only_note:{note}"));
+            reason = Some(format!(
+                "included_production_with_per_ounce_only_note:{note}"
+            ));
         }
     }
     row.value = value;

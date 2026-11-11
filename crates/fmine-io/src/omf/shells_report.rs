@@ -1,5 +1,5 @@
 //! DESIGN: source-bound nested OMF revenue-factor shells over the admitted pitflow pipeline (plan §15.4).
-//! Determinism: DeterministicPerIsa. Certificates cover the scaled integer values and declared slope cones.
+//! Determinism: DeterministicPerIsa (certificates cover scaled integer values and declared slope cones).
 
 use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{Refusal, RefusalCode};

@@ -2,6 +2,205 @@
 mod tests {
     use super::*;
 
+    #[test]
+    fn public_cost_rate_bounds_keep_decimal_scales_signs_and_invalid_steps_explicit() {
+        use crate::public_derivation::{CostRateUnit, cost_rate_bounds};
+        use crate::roll_forward::quarter::Printed;
+        use fmine_numerics::exact_feas::Rat;
+        let printed = |value, step_den| Printed {
+            value: Rat::from_integer(value),
+            step: Rat::new(1, step_den).unwrap(),
+        };
+        for (unit, numerator, n_step, q_step, lo, hi) in [
+            (
+                CostRateUnit::GoldKoz,
+                150,
+                100,
+                100,
+                (29999000, 20001),
+                (30001000, 19999),
+            ),
+            (
+                CostRateUnit::GoldKoz,
+                -150,
+                100,
+                100,
+                (-30001000, 19999),
+                (-29999000, 20001),
+            ),
+            (CostRateUnit::GoldKoz, 0, 100, 10, (-100, 1999), (100, 1999)),
+            (
+                CostRateUnit::CopperMillionPounds,
+                200,
+                100,
+                100,
+                (39999, 20001),
+                (40001, 19999),
+            ),
+        ] {
+            let result =
+                cost_rate_bounds(unit, printed(numerator, n_step), printed(100, q_step)).unwrap();
+            assert_eq!(result.lo, Rat::new(lo.0, lo.1).unwrap());
+            assert_eq!(result.hi, Rat::new(hi.0, hi.1).unwrap());
+            assert!(!result.lo_strict && !result.hi_strict);
+        }
+        for step in [0, -1] {
+            let invalid = Printed {
+                value: Rat::from_integer(100),
+                step: Rat::from_integer(step),
+            };
+            for (n, q) in [(invalid, printed(100, 1)), (printed(100, 1), invalid)] {
+                assert_eq!(
+                    cost_rate_bounds(CostRateUnit::GoldKoz, n, q)
+                        .unwrap_err()
+                        .code,
+                    "FMINE-REF-207"
+                );
+            }
+        }
+        for value in [
+            Rat::new(1, 2).unwrap(),
+            Rat::from_integer(0),
+            Rat::from_integer(-1),
+        ] {
+            let q = Printed {
+                value,
+                step: Rat::from_integer(1),
+            };
+            assert_eq!(
+                cost_rate_bounds(CostRateUnit::GoldKoz, printed(100, 1), q)
+                    .unwrap_err()
+                    .code,
+                "FMINE-REF-104"
+            );
+        }
+        assert_eq!(
+            cost_rate_bounds(
+                CostRateUnit::GoldKoz,
+                printed(i128::MAX, 1),
+                printed(100, 1)
+            )
+            .unwrap_err()
+            .code,
+            "FMINE-REF-207"
+        );
+    }
+
+    #[test]
+    fn public_cost_rate_claim_preserves_parent_metadata_and_refuses_mixed_families() {
+        use crate::public_derivation::{CostRateUnit, derive_cost_rate};
+        use crate::roll_forward::quarter::Printed;
+        use fmine_claim::{
+            AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
+        };
+        use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
+        use fmine_numerics::exact_feas::Rat;
+        let np = Printed {
+            value: Rat::from_integer(200),
+            step: Rat::new(1, 100).unwrap(),
+        };
+        let qp = Printed {
+            value: Rat::from_integer(100),
+            ..np
+        };
+        let common = UuTerm {
+            scenario_id: "invented-accounting-correction".into(),
+            description: "Synthetic unknown cost allocation".into(),
+            downside_exposure_usd_m: 1.0,
+            trigger_indicator: "later issuer correction".into(),
+        };
+        let mut extra = common.clone();
+        extra.scenario_id = "invented-sales-correction".into();
+        let parent = |label: &str, value, evidence, state, terms| {
+            Claim::new(
+                "public_disclosure.cost_operand",
+                value,
+                label,
+                Representation::Deterministic,
+                SpatialSupport::PeriodAggregate,
+                AdditivityClass::ExtensiveAdditive,
+                evidence,
+                EpistemicStatus::KnownUnknown(KuKind::Parametric),
+                state,
+                Confidentiality::public(),
+                terms,
+                vec![],
+                vec![
+                    SourceAnchor::new("invented.xlsx", [41; 32], label),
+                    SourceAnchor::new("invented.xlsx", [41; 32], "shared-note"),
+                ],
+            )
+        };
+        let n = parent(
+            "N",
+            np,
+            EvidenceClass::Measured,
+            KnowledgeState::Known,
+            vec![common.clone()],
+        );
+        let q = parent(
+            "Q",
+            qp,
+            EvidenceClass::ISSUER,
+            KnowledgeState::Estimated,
+            vec![common.clone(), extra.clone()],
+        );
+        let derive = |unit, family, n_printed, q_printed| {
+            derive_cost_rate(unit, family, (&n, n_printed), (&q, q_printed))
+        };
+        let result = derive(
+            CostRateUnit::CopperMillionPounds,
+            "c1_per_lb",
+            Some(np),
+            Some(qp),
+        )
+        .unwrap();
+        assert!(result.check_id().is_ok());
+        assert_eq!(result.metric_key, "public-disclosure.copper-cost-rate/1");
+        assert!(result.value_tag().starts_with("c1_per_lb:"));
+        assert_eq!(result.value.lo, Rat::new(39999, 20001).unwrap());
+        assert_eq!(result.value.hi, Rat::new(40001, 19999).unwrap());
+        assert_eq!(result.evidence, EvidenceClass::ISSUER);
+        assert_eq!(result.state, KnowledgeState::Estimated);
+        assert_eq!(result.epistemic, q.epistemic);
+        assert_eq!(result.uu_terms, vec![common, extra]);
+        assert_eq!(result.additivity, AdditivityClass::IntensiveWeighted);
+        assert_eq!(result.support, SpatialSupport::PeriodAggregate);
+        assert!(result.confidentiality.is_public());
+        let mut parents = vec![n.claim_id, q.claim_id];
+        parents.sort();
+        assert_eq!(result.parents, parents);
+        let mut anchors = n.anchors.clone();
+        anchors.extend(q.anchors.clone());
+        anchors.sort();
+        anchors.dedup();
+        assert_eq!(result.anchors, anchors);
+        assert_eq!(result.anchors.len(), 3);
+        for (n_printed, q_printed) in [(None, Some(qp)), (Some(np), None)] {
+            assert_eq!(
+                derive(
+                    CostRateUnit::CopperMillionPounds,
+                    "c1_per_lb",
+                    n_printed,
+                    q_printed
+                )
+                .unwrap_err()
+                .code,
+                "FMINE-REF-208"
+            );
+        }
+        for (unit, family) in [
+            (CostRateUnit::GoldKoz, "c1_per_lb"),
+            (CostRateUnit::CopperMillionPounds, "aisc_per_oz"),
+            (CostRateUnit::CopperMillionPounds, "cost_of_sales_per_lb"),
+        ] {
+            assert_eq!(
+                derive(unit, family, Some(np), Some(qp)).unwrap_err().code,
+                "FMINE-REF-105"
+            );
+        }
+    }
+
     /// Synthetic numbers (no issuer's figures): exercises the `L_corp` refusal and reconciliation.
     #[test]
     fn test_aisc_consolidation_bridge_l_corp_refusal_and_reconciliation() {
