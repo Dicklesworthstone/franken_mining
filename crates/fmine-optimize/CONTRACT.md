@@ -116,7 +116,21 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   usable pricing result preserves the original schedule. Integer overflow refuses. At most one
   bounded Price pass and `resources+3` directions are evaluated per nonempty positive-discount
   period; zero whole-search rounds still permit this fractional pass.
-  Seven kernel tests include the half-capacity value-5 solution, the signed-blend 25-to-33 example,
+  DESIGN: that same pricing pass can retain a simultaneous fractional master mixture. For at most
+  32 resources, the last successfully solved basis is reconstructed from the integer columns with
+  checked exact rational elimination, including every slack. Nonnegative weights and unit block
+  totals are required. Destination totals are combined before conversion and must be represented
+  exactly at the caller's decimal scale; no individual weight or resource excess is rounded away.
+  Integer resource sums are checked before selection and the final independent candidate check
+  still applies. The mixture replaces a line only on a strict exact gain. A singular or overflowing
+  reconstruction, an unrepresentable destination total, or the resource work cap preserves the
+  existing line-search fallback. Whole-destination repair does not perform this rational work.
+  Added controls specify distinct fractions 1/2 and 3/4 under two capacity rows (value 17 versus the
+  best single line's 14), and opposite signed rows where neither whole direction is feasible but a
+  half/half mixture earns 4 rather than 1. The existing real-CLI Fraction oracle checks these cases,
+  exported candidates and replayed bounds. These are constructed numerical cases, not a MineLib
+  performance result or a proof of global or fixed-period optimality.
+  Kernel tests also include the half-capacity value-5 solution, the signed-blend 25-to-33 example,
   exact downward decimal-grid steps at a one-third limit, zero-precision fallback, invalid starts,
   overflow and 24 signed models compared with exhaustive 11³-grid enumeration. Planner tests also
   retain an initial negative-cost dump assignment long enough to discover a positive split after
@@ -580,7 +594,12 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   external-corpus check, not evidence supplied by these synthetic cases.
 - `bd-nzwd` and `bd-t75z` have one adapter, `fmine-io`'s `omf::pit::PitModel` (bd-joiv). It feeds `slope_arcs`, `solve` and `nested_shells` a regular OMF block model whose values are attributes, tested so far only on synthetic files. `fmine plan pit --omf` now exposes ultimate pits through that adapter with mandatory model/attribute selectors, scale, uniform finite-depth slope and rounding acceptance; the certificate covers the scaled integer problem. The CLI also retains MineLib UPIT pairs (BD-250). No price deck feeds either path; OMF nested shells, sector/domain slope tables, schedules and external candidate admission are not exposed by this command.
 - PCPSP (`toposort::pcpsp`):
-  - Period/local search still uses whole destinations. Automatic fractional polishing searches exact lines from a feasible whole assignment toward Price's proposed whole assignments, at the requested decimal scale. It does not solve the full fixed-period destination LP or optimize the mining periods jointly with fractional routes; an imported split can remain better.
+  - Period/local search still uses whole destinations. Automatic fractional polishing searches exact lines
+    toward Price's proposed assignments and admits exactly representable simultaneous master mixtures
+    after rational reconstruction and integer checks. It does not certify the full fixed-period LP optimum
+    or optimize mining periods jointly with fractional routes; an imported split can remain better.
+    Mixtures requiring non-decimal fractions, rational arithmetic beyond i128, or more than 32 resource
+    rows fall back to the existing exact line search. Bounded pricing can stop before the best mixture.
   - General side constraints and lower limits are not read.
   - w23's schedule is 4.41% below its certified bound (§9). At its own mining periods, the destination LP is worth only 0.014% more, so what remains is in the mining periods or in the LP relaxation's gap. No move changes a block's period with the destination LP in view.
   - Price (`bd-rbxh`) solves each period's destination LP approximately, in `f64`: there is no anti-cycling rule, and at most `PRICE_COLUMNS` (256) columns, `MASTER_STEPS` (1,024) simplex steps per solve and `REPAIR_MOVES` (256) repair moves. A weak solve costs value, never feasibility. It runs at most once per period per `destinations` call, and only after switches and exchanges stop. On MineLib, w23's six searches went from 4.1 s to 11.4 s and mclaughlin's from 51.3 s to 73.5 s (§9).

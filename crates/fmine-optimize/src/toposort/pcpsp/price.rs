@@ -34,6 +34,8 @@
 //! ends the pricing, and the last prices are used. Such a stop can only weaken the prices; step 4 still applies in
 //! full.
 
+use fmine_numerics::exact_feas::Rat;
+
 use super::PcpspModel;
 
 /// The most master columns, the current assignment's included.
@@ -51,6 +53,10 @@ const TOLERANCE: f64 = 1e-9;
 /// The smallest pivot the simplex accepts, on scaled data.
 const PIVOT: f64 = 1e-12;
 
+/// Exact reconstruction is optional guidance. Bound its dense rational work;
+/// larger masters retain the existing whole-assignment proposals.
+const EXACT_RESOURCES: usize = 32;
+
 /// One solve of the master: a price per unit of each resource, the convexity row's dual, the scale of the column
 /// values, and the optimal mixture as `(assignment, weight)` pairs with a positive weight, in basis order.
 struct Prices {
@@ -58,6 +64,7 @@ struct Prices {
     mu: f64,
     scale: f64,
     mixture: Vec<(usize, f64)>,
+    basis: Vec<usize>,
 }
 
 /// The master: assignment columns, each its value and its use of every resource, and a basis kept between solves.
@@ -147,6 +154,7 @@ impl Master<'_> {
                             j.checked_sub(rows).filter(|_| w > 0.0).map(|k| (k, w))
                         })
                         .collect(),
+                    basis: self.basis.clone(),
                 });
             };
             let a = column(q).1;
@@ -314,6 +322,69 @@ fn repair(model: &PcpspModel, blocks: &[usize], pick: &mut [usize], caps: &[i128
     None
 }
 
+/// A float-priced basis is only a candidate. Solve it again from integer
+/// resource columns, including its slacks, and reject negative basic values.
+/// Singular or unrepresentable arithmetic supplies no mixture, never an
+/// approximately feasible set of weights.
+fn exact_basis(columns: &[Vec<i128>], caps: &[i128], basis: &[usize]) -> Option<Vec<Rat>> {
+    let rows = caps.len();
+    if rows > EXACT_RESOURCES || basis.len() != rows + 1 {
+        return None;
+    }
+    let zero = Rat::from_integer(0);
+    let one = Rat::from_integer(1);
+    let mut a = vec![vec![zero; rows + 2]; rows + 1];
+    for (j, &column) in basis.iter().enumerate() {
+        if column < rows {
+            a[column][j] = one;
+        } else {
+            let uses = columns.get(column - rows)?;
+            if uses.len() != rows {
+                return None;
+            }
+            for (row, &used) in a.iter_mut().zip(uses) {
+                row[j] = Rat::from_integer(used);
+            }
+            a[rows][j] = one;
+        }
+    }
+    for (row, &cap) in a.iter_mut().zip(caps) {
+        row[rows + 1] = Rat::from_integer(cap);
+    }
+    a[rows][rows + 1] = one;
+    for k in 0..=rows {
+        let pivot = (k..=rows).find(|&i| a[i][k].signum() != 0)?;
+        a.swap(k, pivot);
+        let divisor = a[k][k];
+        for value in &mut a[k][k..] {
+            *value = value.checked_div(divisor).ok()?;
+        }
+        let pivot_row = a[k].clone();
+        for (i, row) in a.iter_mut().enumerate().filter(|(i, _)| *i != k) {
+            let multiplier = row[k];
+            if multiplier.signum() == 0 {
+                continue;
+            }
+            for (value, &other) in row[k..].iter_mut().zip(&pivot_row[k..]) {
+                *value = value
+                    .checked_sub(other.checked_mul(multiplier).ok()?)
+                    .ok()?;
+            }
+            debug_assert_eq!(row[k], zero, "row {i}");
+        }
+    }
+    let weights: Vec<_> = a.iter().map(|row| row[rows + 1]).collect();
+    weights.iter().all(|w| w.signum() >= 0).then_some(weights)
+}
+
+/// Whole assignments still feed repair and line search. Exact destination
+/// shares additionally preserve mixtures whose useful columns cannot be used
+/// separately, for example opposite signed-blend directions at a tight limit.
+pub(super) struct Proposals {
+    pub directions: Vec<Vec<usize>>,
+    pub shares: Option<Vec<Vec<Rat>>>,
+}
+
 /// Deterministic pre-repair proposals: the last priced assignment, the mixture's
 /// modal assignment, then its active columns in basis order. At most resources
 /// plus three assignments are retained. Whole repair and exact fractional
@@ -325,7 +396,8 @@ pub(super) fn proposals(
     blocks: &[usize],
     destination: &[u32],
     caps: &[i128],
-) -> Option<Vec<Vec<usize>>> {
+    exact_shares: bool,
+) -> Option<Proposals> {
     let current: Vec<usize> = blocks.iter().map(|&b| destination[b] as usize).collect();
     let (now, used) = column(model, blocks, &current);
     if blocks.is_empty() || used.iter().zip(caps).any(|(u, c)| u > c) {
@@ -358,12 +430,14 @@ pub(super) fn proposals(
             master.columns.push((v, u));
             priced_at.push(Some(prices.lambda.clone()));
         }
-        last = Some((pick, prices.mixture));
+        // Keep the basis of this successful solve, not one partially pivoted
+        // by a later solve that fails or reaches its iteration budget.
+        last = Some((pick, prices.mixture, prices.basis));
         if done {
             break;
         }
     }
-    let (pick, mixture) = last?;
+    let (pick, mixture, basis) = last?;
     let dn = model.destinations;
     let mut weight = vec![0.0_f64; blocks.len() * dn];
     let mut candidates = vec![pick];
@@ -392,7 +466,40 @@ pub(super) fn proposals(
             .collect(),
     );
     candidates.extend(columns);
-    Some(candidates)
+    let shares = (|| {
+        if !exact_shares || caps.len() > EXACT_RESOURCES {
+            return None;
+        }
+        let mut exact_columns = vec![Vec::new(); master.columns.len()];
+        let mut assignments = Vec::new();
+        for (j, &column) in basis.iter().enumerate() {
+            if let Some(k) = column.checked_sub(caps.len()) {
+                let picked = regenerate(k, &priced_at);
+                exact_columns[k] = self::column(model, blocks, &picked).1;
+                assignments.push((j, picked));
+            }
+        }
+        let weights = exact_basis(&exact_columns, caps, &basis)?;
+        let mut shares = vec![vec![Rat::from_integer(0); dn]; blocks.len()];
+        for (j, picked) in assignments {
+            for (row, d) in shares.iter_mut().zip(picked) {
+                row[d] = row[d].checked_add(weights[j]).ok()?;
+            }
+        }
+        for row in &shares {
+            let total = row
+                .iter()
+                .try_fold(Rat::from_integer(0), |a, &b| a.checked_add(b).ok())?;
+            if total != Rat::from_integer(1) {
+                return None;
+            }
+        }
+        Some(shares)
+    })();
+    Some(Proposals {
+        directions: candidates,
+        shares,
+    })
 }
 
 /// The **Price** move on one period (see the module notes): `blocks` are the period's mined blocks, `destination`
@@ -404,11 +511,11 @@ pub(super) fn reprice(
     destination: &[u32],
     caps: &[i128],
 ) -> Option<Vec<usize>> {
-    let candidates = proposals(model, blocks, destination, caps)?;
+    let candidates = proposals(model, blocks, destination, caps, false)?;
     let current: Vec<usize> = blocks.iter().map(|&b| destination[b] as usize).collect();
     let (now, _) = column(model, blocks, &current);
     let mut best: Option<(i128, Vec<usize>)> = None;
-    for mut pick in candidates {
+    for mut pick in candidates.directions {
         if repair(model, blocks, &mut pick, caps).is_none() {
             continue;
         }
@@ -432,6 +539,30 @@ mod tests {
     // the target (+2 each, worth 3 more at the mill), block 2 below it (−4, worth 5 less at the mill). All three at the
     // mill gain 3 + 3 − 5 = 1. One block above the target cannot go alone, and with block 2 it gains 3 − 5 < 0.
     const THREE: &str = "NAME: three\nTYPE: PCPSP\nNBLOCKS: 3\nNPERIODS: 1\nNDESTINATIONS: 2\nNRESOURCE_SIDE_CONSTRAINTS: 1\nNGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\nRESOURCE_CONSTRAINT_LIMITS:\n0 0 L 0\nOBJECTIVE_FUNCTION:\n0 0 3\n1 0 3\n2 0 -5\nRESOURCE_CONSTRAINT_COEFFICIENTS:\n0 1 0 2\n1 1 0 2\n2 1 0 -4\nEOF\n";
+
+    #[test]
+    fn exact_reconstruction_checks_slacks_and_refuses_singular_or_oversized_bases() {
+        let columns = vec![vec![0], vec![4]];
+        assert_eq!(
+            exact_basis(&columns, &[2], &[1, 2]),
+            Some(vec![Rat::new(1, 2).unwrap(); 2])
+        );
+        // A zero-cost slack remains part of feasibility: a whole use-4
+        // assignment under capacity 2 has slack -2 and must not be admitted.
+        assert!(exact_basis(&columns, &[2], &[0, 2]).is_none());
+        assert!(exact_basis(&columns, &[2], &[1, 1]).is_none());
+        assert!(exact_basis(&columns, &[2], &[1, 3]).is_none());
+        assert!(exact_basis(&[vec![]], &[2], &[0, 1]).is_none());
+        let many = vec![0; EXACT_RESOURCES + 1];
+        assert!(
+            exact_basis(
+                &[many.clone()],
+                &many,
+                &(0..=many.len()).collect::<Vec<_>>()
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn three_blocks_go_to_the_mill_together() {

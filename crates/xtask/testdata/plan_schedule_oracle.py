@@ -41,7 +41,7 @@ def command(extra=(), *, success=True):
 def value_and_feasible(values, uses, requires, periods, caps, schedule, factors):
     mined, totals, used, value = {}, {}, {}, Q(0)
     for b, d, t, part in schedule:
-        assert 0 <= b < len(values) and d in (0, 1) and 0 <= t < periods and 0 < part <= 1
+        assert 0 <= b < len(values) and 0 <= d < len(values[b]) and 0 <= t < periods and 0 < part <= 1
         if b in mined and mined[b] != t:
             return value, False
         mined[b] = t
@@ -87,7 +87,7 @@ def verify(report, values, uses, requires, caps, expected=None):
     # destination relaxation attains its maximum at a whole destination per block.
     prices = [[int(x) for x in row] for row in p["bound"]["prices"]]
     best = None
-    choices = [None] + [(t, d) for t in range(len(factors)) for d in range(2)]
+    choices = [None] + [(t, d) for t in range(len(factors)) for d in range(len(values[0]))]
     for allocation in product(choices, repeat=len(values)):
         if any(slot is not None and any(allocation[q] is None or allocation[q][0] > slot[0]
                                        for q in requires[b]) for b, slot in enumerate(allocation)):
@@ -219,6 +219,62 @@ def automatic_fractional():
     assert p["selected"]["origin"] == "fractional_candidate"
 
 
+def master_mixtures():
+    # Independent exact optima: 4 + 8x + 12y under x <= 1/2, y <= 3/4;
+    # and 1 + 2x + 4y under x == y, x + y <= 1. Each case needs a mixture
+    # of distinct whole assignments rather than one line from the baseline.
+    cases = [
+        ([[2, 10], [2, 14]],
+         [[[0, 0], [2, 0]], [[0, 0], [0, 4]]],
+         [[1], [3]], Q(17), Q(4),
+         "0 0 0 0.5\n0 1 0 0.5\n1 0 0 0.25\n1 1 0 0.75\n"),
+        ([[1, 3, 5]],
+         [[[0, 0], [1, -1], [-1, 1]]],
+         [[0], [0]], Q(4), Q(1),
+         "0 1 0 0.5\n0 2 0 0.5\n"),
+    ]
+    for values, uses, caps, expected, whole_value, solution in cases:
+        n, destinations = len(values), len(values[0])
+        requires = [[] for _ in values]
+        text = (f"NAME: exact-master-mixture\nTYPE: PCPSP\nNBLOCKS: {n}\n"
+                f"NPERIODS: 1\nNDESTINATIONS: {destinations}\n"
+                f"NRESOURCE_SIDE_CONSTRAINTS: {len(caps)}\n"
+                "NGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\n"
+                "RESOURCE_CONSTRAINT_LIMITS:\n")
+        text += "".join(f"{r} 0 L {row[0]}\n" for r, row in enumerate(caps))
+        text += "OBJECTIVE_FUNCTION:\n"
+        text += "".join(f"{b} " + " ".join(map(str, row)) + "\n" for b, row in enumerate(values))
+        text += "RESOURCE_CONSTRAINT_COEFFICIENTS:\n"
+        text += "".join(f"{b} {d} {r} {u}\n" for b in range(n)
+                        for d in range(destinations) for r, u in enumerate(uses[b][d]))
+        (ROOT / "model.pcpsp").write_text(text + "EOF\n")
+        (ROOT / "model.prec").write_text("".join(f"{b} 0\n" for b in range(n)))
+        options = ["--share-decimals", "3"]
+        report = command(options)
+        p = verify(report, values, uses, requires, caps, expected)
+        assert fraction(p["selected"]["discounted_value"]) == expected
+        assert p["selected"]["solution"] == solution
+        assert p["selected"]["origin"] == "fractional_greedy"
+        assert command(options) == report
+        (ROOT / "candidate.sol").write_text(solution)
+        admitted = verify(command([*options, "--candidate", "candidate.sol"]),
+                          values, uses, requires, caps, expected)
+        assert admitted["selected"]["origin"] == "external_candidate"
+        assert admitted["selected"]["solution"] == solution
+        whole = verify(command(["--share-decimals", "0"]), values, uses, requires, caps)
+        assert fraction(whole["selected"]["discounted_value"]) == whole_value
+        if destinations == 3:
+            # Preserve unit block mass but violate the second signed row by
+            # exactly two units of the requested decimal lattice.
+            changed = solution.replace("0 1 0 0.5", "0 1 0 0.499")
+            changed = changed.replace("0 2 0 0.5", "0 2 0 0.501")
+            (ROOT / "candidate.sol").write_text(changed)
+            rejected = verify(command([*options, "--candidate", "candidate.sol"]),
+                              values, uses, requires, caps, expected)
+            assert not rejected["candidate"]["check"]["feasible"]
+            assert rejected["selected"]["solution"] == solution
+
+
 def lp_guidance():
     def write_model(values, uses, requires, caps):
         n, periods = len(values), len(caps[0])
@@ -293,7 +349,8 @@ def lp_guidance():
 
 known_split()
 automatic_fractional()
+master_mixtures()
 joint_routes()
 generated_models()
 lp_guidance()
-print("PASS: exact split oracles, joint route/period5-to6 improvement, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")
+print("PASS: exact split and simultaneous-mixture oracles, joint route/period5-to6 improvement, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")

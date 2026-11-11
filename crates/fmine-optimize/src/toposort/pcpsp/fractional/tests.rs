@@ -56,6 +56,105 @@ fn active_master_column_supplies_the_profitable_half_that_whole_repair_loses() {
 }
 
 #[test]
+fn exact_master_mixture_preserves_distinct_splits_across_binding_capacities() {
+    let m = model(
+        &[[2, 10], [2, 14]],
+        &[vec![[0, 2], [0, 0]], vec![[0, 0], [0, 4]]],
+        &[vec![1], vec![3]],
+        1,
+    );
+    // For mill fractions x and y, 2x <= 1 and 4y <= 3. The objective
+    // 4 + 8x + 12y has its unique maximum 17 at (1/2, 3/4).
+    // A single line to a whole assignment can reach at most 14.
+    assert!(price::reprice(&m, &[0, 1], &[0, 0], &[1, 3]).is_none());
+    let p = polish(&m, &[Some(0); 2], &[0; 2], &[1], 3).unwrap();
+    assert_eq!((p.before, p.after), (4_000, 17_000));
+    assert_eq!(p.checked.used, [vec![1_000], vec![3_000]]);
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n1 0 0 0.25\n1 1 0 0.75\n"
+    );
+    assert!(p.checked.feasible());
+    assert_eq!(p.improved_periods, 1);
+    assert_eq!(polish(&m, &[Some(0); 2], &[0; 2], &[1], 3).unwrap(), p);
+    // The optimum's quarter share is not rounded to tenths. The previous
+    // exact line remains available and supplies value 14 on that coarser grid.
+    let coarse = polish(&m, &[Some(0); 2], &[0; 2], &[1], 1).unwrap();
+    assert_eq!(coarse.after, 140);
+    assert!(coarse.checked.feasible());
+}
+
+fn opposing_routes(positive_use: i64) -> PcpspModel {
+    PcpspModel {
+        name: "opposite blend directions".into(),
+        periods: 1,
+        destinations: 3,
+        values: vec![1, 3, 5],
+        uses: vec![vec![0, positive_use, -1], vec![0, -positive_use, 1]],
+        limits: vec![vec![0]; 2],
+        requires: vec![vec![]],
+        discount_rate: 0,
+        rounded_values: 0,
+        rounded_uses: 0,
+        rounded_limits: 0,
+    }
+}
+
+#[test]
+fn a_joint_mixture_crosses_opposing_signed_rows_that_block_every_single_line() {
+    let m = opposing_routes(1);
+    // Both signed rows must be <= 0, hence route1 == route2. Neither
+    // non-baseline destination is usable by itself, but their half/half mix
+    // earns 4 rather than the baseline's 1. The block remains fully mined.
+    assert!(price::reprice(&m, &[0], &[0], &[0, 0]).is_none());
+    let p = polish(&m, &[Some(0)], &[0], &[DISCOUNT_SCALE], 3).unwrap();
+    assert_eq!(p.after, 4_000 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(p.checked.used, [vec![0], vec![0]]);
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 1 0 0.5\n0 2 0 0.5\n"
+    );
+    assert_eq!(candidate::check(&m, &p.schedule).unwrap(), p.checked);
+    let whole = polish(&m, &[Some(0)], &[0], &[1], 0).unwrap();
+    assert_eq!((whole.before, whole.after), (1, 1));
+
+    // No exact decimal represents the full 1/3 : 2/3 mixture. Unresolved
+    // arithmetic and work caps preserve the feasible baseline, not a rounded
+    // violation of either tight signed constraint.
+    for mut other in [opposing_routes(2), opposing_routes(1)] {
+        if other.uses[0][1] == 1 {
+            other.uses.resize(33, vec![0; 3]);
+            other.limits.resize(33, vec![0]);
+        }
+        let fallback = polish(&other, &[Some(0)], &[0], &[1], 3).unwrap();
+        assert_eq!((fallback.before, fallback.after), (1_000, 1_000));
+        assert!(fallback.checked.feasible());
+        assert_eq!(candidate::write_solution(&fallback.schedule), "0 0 0 1\n");
+    }
+}
+
+#[test]
+fn decimal_mixture_rechecks_mass_and_every_signed_row_without_tolerance() {
+    let m = opposing_routes(1);
+    let q = |n, d| Rat::new(n, d).unwrap();
+    let good = vec![vec![q(0, 1), q(1, 2), q(1, 2)]];
+    assert_eq!(
+        decimal_mixture(&m, &[0], &[0, 0], &good, 1_000),
+        Some((4_000, vec![vec![0, 500, 500]]))
+    );
+    for row in [
+        vec![q(0, 1), q(499, 1_000), q(501, 1_000)],
+        vec![q(0, 1), q(501, 1_000), q(499, 1_000)],
+        vec![q(0, 1), q(1, 2), q(1, 4)],
+        vec![q(-1, 1), q(1, 1), q(1, 1)],
+        vec![q(0, 1), q(1, 3), q(2, 3)],
+    ] {
+        assert!(decimal_mixture(&m, &[0], &[0, 0], &[row], 1_000).is_none());
+    }
+    assert!(decimal_mixture(&m, &[0], &[0], &good, 1_000).is_none());
+}
+
+#[test]
 fn all_signed_rows_bound_the_step_and_preserve_the_mining_periods() {
     let mut m = model(
         &[[-4, 12], [-2, 8], [-3, 21]],

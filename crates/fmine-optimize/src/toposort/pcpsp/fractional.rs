@@ -3,13 +3,17 @@
 //!
 //! Price's whole-assignment columns guide the search. Each profitable column is
 //! joined to the original feasible assignment by a line, and the largest exact
-//! decimal-grid step within every signed resource limit is considered. Mining
-//! periods and total mined fractions never change. This is a bounded heuristic,
-//! not an optimum of the destination LP. No proposal or no representable gain
+//! decimal-grid step within every signed resource limit is considered. The last
+//! successful master basis also supplies an exact rational mixture when it can
+//! be reconstructed. Its per-block destination totals must be representable on
+//! the requested decimal grid; no mixture weight is rounded. Mining periods and
+//! total mined fractions never change. This is a bounded heuristic, not a proof
+//! of the destination LP optimum. No proposal or no representable gain
 //! returns the original feasible schedule. The candidate checker independently
 //! verifies the result; no floating weight or feasibility tolerance is admitted.
 
 use fmine_evidence::Refusal;
+use fmine_numerics::exact_feas::Rat;
 
 use super::{PcpspModel, candidate, price};
 use crate::toposort::refuse;
@@ -23,7 +27,15 @@ pub struct Improvement {
     pub before: i128,
     pub after: i128,
     pub improved_periods: usize,
+    /// Whole-assignment proposals used for line searches; the optional exact
+    /// master mixture uses the same pricing pass and is not another direction.
     pub proposals: usize,
+}
+
+#[derive(Clone)]
+enum Selection {
+    Line(i64, Vec<usize>),
+    Mixture(Vec<Vec<i64>>),
 }
 
 fn overflow() -> Refusal {
@@ -35,11 +47,65 @@ fn add(total: &mut i128, value: i64) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Convert only exactly representable per-block totals, then independently
+/// check their integer resource sums before considering this advisory mixture.
+/// Failed reconstruction or arithmetic preserves the line-search fallback.
+fn decimal_mixture(
+    model: &PcpspModel,
+    blocks: &[usize],
+    caps: &[i128],
+    shares: &[Vec<Rat>],
+    scale: i64,
+) -> Option<(i128, Vec<Vec<i64>>)> {
+    if shares.len() != blocks.len() || caps.len() != model.resources() {
+        return None;
+    }
+    let mut fractions = Vec::with_capacity(blocks.len());
+    let mut value = 0_i128;
+    let mut used = vec![0_i128; model.resources()];
+    for (&b, row) in blocks.iter().zip(shares) {
+        if row.len() != model.destinations() {
+            return None;
+        }
+        let mut total = 0_i64;
+        let mut exact = Vec::with_capacity(row.len());
+        for (d, &share) in row.iter().enumerate() {
+            let share = share
+                .checked_mul(Rat::from_integer(i128::from(scale)))
+                .ok()?;
+            if share.den() != 1 || share.signum() < 0 {
+                return None;
+            }
+            let fraction = i64::try_from(share.num()).ok()?;
+            total = total.checked_add(fraction)?;
+            value = value
+                .checked_add(i128::from(model.value(b, d)?).checked_mul(i128::from(fraction))?)?;
+            for (r, amount) in used.iter_mut().enumerate() {
+                *amount = amount.checked_add(
+                    i128::from(model.uses(r, b, d)?).checked_mul(i128::from(fraction))?,
+                )?;
+            }
+            exact.push(fraction);
+        }
+        if total != scale {
+            return None;
+        }
+        fractions.push(exact);
+    }
+    for (&amount, &cap) in used.iter().zip(caps) {
+        if amount > cap.checked_mul(i128::from(scale))? {
+            return None;
+        }
+    }
+    Some((value, fractions))
+}
+
 /// Propose exact fractional destination changes for a feasible whole schedule.
 /// The scale is `10^share_decimals` (0..=9). Each period uses one bounded Price
 /// pass: at most 256 columns, 1,024 simplex steps per master solve and at most
-/// resource-count plus three directions. The first strictly best direction wins
-/// ties. Zero-discount periods are retained without work.
+/// resource-count plus three directions, plus one exact reconstruction for at
+/// most 32 resources. The first strictly best direction wins ties; an equal
+/// mixture does not displace it. Zero-discount periods are retained without work.
 ///
 /// # Errors
 /// Invalid schedules, dimensions, scales or negative factors refuse. Numerical
@@ -67,19 +133,19 @@ pub fn polish(
             by_period[*t as usize].push(b);
         }
     }
-    let mut selected: Vec<Option<(i64, Vec<usize>)>> = vec![None; model.periods()];
+    let mut selected: Vec<Option<Selection>> = vec![None; model.periods()];
     let (mut improved_periods, mut proposals) = (0, 0);
     for (t, blocks) in by_period.iter().enumerate() {
         if blocks.is_empty() || factors[t] == 0 {
             continue;
         }
         let caps: Vec<i128> = model.limits.iter().map(|r| i128::from(r[t])).collect();
-        let Some(directions) = price::proposals(model, blocks, destinations, &caps) else {
+        let Some(priced) = price::proposals(model, blocks, destinations, &caps, true) else {
             continue;
         };
         let base = checked.period_values[t];
         let mut best = base;
-        for direction in directions {
+        for direction in priced.directions {
             proposals += 1;
             let mut value = 0_i128;
             let mut uses = vec![0_i128; model.resources()];
@@ -121,8 +187,16 @@ pub fn polish(
             if proposed > best {
                 let step = i64::try_from(step).map_err(|_| overflow())?;
                 best = proposed;
-                selected[t] = Some((step, direction));
+                selected[t] = Some(Selection::Line(step, direction));
             }
+        }
+        if let Some((value, shares)) = priced
+            .shares
+            .as_ref()
+            .and_then(|shares| decimal_mixture(model, blocks, &caps, shares, scale))
+            && value > best
+        {
+            selected[t] = Some(Selection::Mixture(shares));
         }
         improved_periods += usize::from(selected[t].is_some());
     }
@@ -140,9 +214,6 @@ pub fn polish(
     for (t, blocks) in by_period.iter().enumerate() {
         for (i, &b) in blocks.iter().enumerate() {
             let from = destinations[b];
-            let (step, to) = selected[t]
-                .as_ref()
-                .map_or((0, from), |(q, d)| (*q, d[i] as u32));
             let mut emit = |destination, fraction| {
                 if fraction > 0 {
                     assignments.push(candidate::DestinationShare {
@@ -153,11 +224,22 @@ pub fn polish(
                     });
                 }
             };
-            if from == to {
-                emit(from, scale);
-            } else {
-                emit(from, scale - step);
-                emit(to, step);
+            match &selected[t] {
+                Some(Selection::Line(step, direction)) => {
+                    let to = direction[i] as u32;
+                    if from == to {
+                        emit(from, scale);
+                    } else {
+                        emit(from, scale - step);
+                        emit(to, *step);
+                    }
+                }
+                Some(Selection::Mixture(shares)) => {
+                    for (d, &fraction) in shares[i].iter().enumerate() {
+                        emit(d as u32, fraction);
+                    }
+                }
+                None => emit(from, scale),
             }
         }
     }

@@ -208,6 +208,39 @@ fn generates_a_profitable_split_without_an_external_candidate() {
 }
 
 #[test]
+fn distinct_route_fractions_reach_the_fixed_period_optimum_with_a_global_certificate() {
+    let mut m = model(
+        &[[2, 10], [2, 14]],
+        &[[0, 2], [0, 0]],
+        &[1],
+        "0",
+        &[vec![], vec![]],
+    );
+    m.uses.push(vec![0, 0, 0, 4]);
+    m.limits.push(vec![3]);
+    let p = solve(&m, options(8), None).unwrap();
+    // The constraints independently require x <= 1/2 and y <= 3/4;
+    // 4 + 8x + 12y is maximised at 17. Every whole schedule is worth <= 4.
+    assert_eq!(p.discounted_numerator, 17_000 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(
+        exhaustive_whole(&m, &p.factors),
+        4 * i128::from(DISCOUNT_SCALE)
+    );
+    assert_eq!(p.origin, "fractional_greedy");
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n1 0 0 0.25\n1 1 0 0.75\n"
+    );
+    assert_certificate(&m, &p);
+    let roundtrip =
+        candidate::parse_solution(&candidate::write_solution(&p.schedule), &m, 3).unwrap();
+    let external = solve(&m, options(8), Some(&roundtrip)).unwrap();
+    assert_eq!(external.origin, "external_candidate");
+    assert_eq!(external.schedule, p.schedule);
+    assert_eq!(solve(&m, options(8), None).unwrap(), p);
+}
+
+#[test]
 fn initial_greedy_mining_set_is_polished_before_local_search_discards_a_loss_making_dump() {
     let m = model(&[[-2, 10]], &[[0, 2]], &[1], "0", &[vec![]]);
     let p = solve(&m, options(8), None).unwrap();
