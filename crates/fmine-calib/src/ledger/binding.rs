@@ -77,6 +77,10 @@ pub enum PublicMetric {
     TccUsdPerOz,
     C1UsdPerLb,
     AiscUsdPerLb,
+    ProcessedKt,
+    ProcessedGradeGPerT,
+    ProcessedGradeFraction,
+    RecoveryFraction,
 }
 
 impl PublicMetric {
@@ -88,6 +92,10 @@ impl PublicMetric {
             "tcc_usd_per_oz" => Ok(Self::TccUsdPerOz),
             "c1_usd_per_lb" => Ok(Self::C1UsdPerLb),
             "aisc_usd_per_lb" => Ok(Self::AiscUsdPerLb),
+            "processed_kt" => Ok(Self::ProcessedKt),
+            "processed_grade_g_per_t" => Ok(Self::ProcessedGradeGPerT),
+            "processed_grade_fraction" => Ok(Self::ProcessedGradeFraction),
+            "recovery_fraction" => Ok(Self::RecoveryFraction),
             _ => Err(domain("unsupported public-resolution metric")),
         }
     }
@@ -100,21 +108,47 @@ impl PublicMetric {
             Self::TccUsdPerOz => "tcc_usd_per_oz",
             Self::C1UsdPerLb => "c1_usd_per_lb",
             Self::AiscUsdPerLb => "aisc_usd_per_lb",
+            Self::ProcessedKt => "processed_kt",
+            Self::ProcessedGradeGPerT => "processed_grade_g_per_t",
+            Self::ProcessedGradeFraction => "processed_grade_fraction",
+            Self::RecoveryFraction => "recovery_fraction",
         }
     }
 
     pub const fn unit(self) -> &'static str {
         match self {
             Self::ProductionKoz => "koz",
-            Self::ProductionKt => "kt",
+            Self::ProductionKt | Self::ProcessedKt => "kt",
             Self::AiscUsdPerOz | Self::TccUsdPerOz => "usd_per_oz",
             Self::C1UsdPerLb | Self::AiscUsdPerLb => "usd_per_lb",
+            Self::ProcessedGradeGPerT => "g_per_t",
+            Self::ProcessedGradeFraction | Self::RecoveryFraction => "mass_fraction",
         }
     }
 
     /// Both production quantities are extensive and nonnegative; the source unit never converts.
     pub const fn is_production(self) -> bool {
         matches!(self, Self::ProductionKoz | Self::ProductionKt)
+    }
+
+    /// Minestats site physicals retain the declared printed ownership context. In particular, processed
+    /// tonnes are not silently grossed up, and intensive grade/recovery are never ownership-scaled.
+    pub const fn is_site_physical(self) -> bool {
+        matches!(
+            self,
+            Self::ProcessedKt
+                | Self::ProcessedGradeGPerT
+                | Self::ProcessedGradeFraction
+                | Self::RecoveryFraction
+        )
+    }
+
+    pub const fn is_extensive(self) -> bool {
+        self.is_production() || matches!(self, Self::ProcessedKt)
+    }
+
+    pub const fn is_fraction(self) -> bool {
+        matches!(self, Self::ProcessedGradeFraction | Self::RecoveryFraction)
     }
 
     /// Exact original-release line label. Costs retain their issuer-reported definition and sold-unit
@@ -131,6 +165,10 @@ impl PublicMetric {
             (Self::TccUsdPerOz, _) => "summary:tcc_usd_per_oz",
             (Self::C1UsdPerLb, _) => "summary:c1_usd_per_lb",
             (Self::AiscUsdPerLb, _) => "summary:aisc_usd_per_lb",
+            (Self::ProcessedKt, _) => "site::tonnes processed (thousands)",
+            (Self::ProcessedGradeGPerT, _) => "site:average grade (grams per tonne):processed",
+            (Self::ProcessedGradeFraction, _) => "site:average grade:processed",
+            (Self::RecoveryFraction, _) => "site::recovery rate (percent)",
         }
     }
 }
@@ -446,7 +484,7 @@ impl PublicResolutionPolicy {
         }
         if matches!(forecast.payload, ForecastPayload::Bernoulli { .. }) {
             return Err(domain(
-                "a public production or cost cell requires a continuous forecast",
+                "a public physical or cost cell requires a continuous forecast",
             ));
         }
         Ok(())
@@ -1047,6 +1085,76 @@ mod tests {
             "aisc_usd_per_kt",
             "adjusted_aisc_usd_per_lb",
             "adjusted_tcc",
+        ] {
+            assert!(PublicMetric::parse(unsupported).is_err(), "{unsupported}");
+        }
+    }
+
+    #[test]
+    fn site_physical_targets_freeze_exact_sections_units_and_ownership_context() {
+        let mut target = policy(&[ObjectId::from_raw(PrefixKind::Forecast, [1; 16])]);
+        let mut encodings = BTreeSet::new();
+        for (metric, unit, field, extensive, fraction) in [
+            (
+                "processed_kt",
+                "kt",
+                "site::tonnes processed (thousands)",
+                true,
+                false,
+            ),
+            (
+                "processed_grade_g_per_t",
+                "g_per_t",
+                "site:average grade (grams per tonne):processed",
+                false,
+                false,
+            ),
+            (
+                "processed_grade_fraction",
+                "mass_fraction",
+                "site:average grade:processed",
+                false,
+                true,
+            ),
+            (
+                "recovery_fraction",
+                "mass_fraction",
+                "site::recovery rate (percent)",
+                false,
+                true,
+            ),
+        ] {
+            target.metric = PublicMetric::parse(metric).unwrap();
+            assert_eq!(target.metric.as_str(), metric);
+            assert_eq!(target.metric.unit(), unit);
+            assert!(target.metric.is_site_physical());
+            assert!(!target.metric.is_production());
+            assert_eq!(target.metric.is_extensive(), extensive);
+            assert_eq!(target.metric.is_fraction(), fraction);
+            for ownership in [
+                PublicOwnership::Full,
+                PublicOwnership::Attributable { num: 3, den: 5 },
+            ] {
+                target.ownership = ownership;
+                assert_eq!(target.metric.field(ownership), field);
+                for vintages in [
+                    PublicVintagePolicy::OriginalOnly,
+                    PublicVintagePolicy::RegisteredComparatives,
+                ] {
+                    let rule = target.to_resolution_rule_with_vintages(vintages).unwrap();
+                    assert!(encodings.insert(rule.clone()));
+                    assert_eq!(
+                        PublicResolutionPolicy::parse_resolution_rule_with_vintages(&rule).unwrap(),
+                        Some((target.clone(), vintages))
+                    );
+                }
+            }
+        }
+        for unsupported in [
+            "processed_t",
+            "recovery_percent",
+            "grade",
+            "recovery_oxide_mill",
         ] {
             assert!(PublicMetric::parse(unsupported).is_err(), "{unsupported}");
         }

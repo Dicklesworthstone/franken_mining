@@ -142,6 +142,14 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   leaves prior target encodings and original/comparative permissions unchanged. Full production and
   attributable production remain distinct even at an attributable fraction of one. Adding copper preserves
   the existing gold policy bytes and does not change original-only or comparative-vintage permissions.
+  Site physical targets add `processed_kt`, `processed_grade_g_per_t`, `processed_grade_fraction` and
+  `recovery_fraction`. Each freezes one complete Minestats section/row key and its exact `kt`, `g_per_t` or
+  `mass_fraction` unit; circuit recovery and mined-grade rows cannot replace site recovery or processed grade.
+  Tonnes remain extensive on the declared printed ownership basis. Grade and recovery remain intensive and
+  are never multiplied by a share. The two fraction targets preserve percent display as a source token and
+  score its exact fraction (for example `91%` becomes `91/100`); unformatted percent quantities need a distinct
+  unsupported target. The source adapter requires matching printed ownership context and validates both
+  stored and displayed physical domains. Existing target frames retain their exact bytes.
   `validate`, `to_resolution_rule`, `parse_resolution_rule`, period and ownership helpers perform no I/O.
   `PublicVintagePolicy::OriginalOnly` keeps those exact v1 bytes and permissions. An opt-in
   `RegisteredComparatives` policy is encoded by `to_resolution_rule_with_vintages` as a

@@ -801,15 +801,18 @@ fn apply_source(
     let exact = Rat::new(integer("numerator")?, integer("denominator")?)
         .map_err(|_| invalid("invalid exact source value"))?;
     let displayed = row.string("value")?.to_string();
-    let fmine_registry::transcriptions::Token::Point(decimal) =
-        fmine_registry::transcriptions::parse_token(&displayed).map_err(invalid)?
-    else {
-        return Err(invalid("registered outcome needs one printed number"));
+    let printed = if policy.metric.is_site_physical() {
+        super::source::displayed_value(policy.metric, &displayed)?
+    } else {
+        let fmine_registry::transcriptions::Token::Point(decimal) =
+            fmine_registry::transcriptions::parse_token(&displayed).map_err(invalid)?
+        else {
+            return Err(invalid("registered outcome needs one printed number"));
+        };
+        Rat::new(decimal.mantissa, 10_i128.pow(decimal.scale))
+            .map_err(|_| invalid("invalid printed value"))?
     };
-    if Rat::new(decimal.mantissa, 10_i128.pow(decimal.scale))
-        .map_err(|_| invalid("invalid printed value"))?
-        != exact
-    {
+    if printed != exact {
         return Err(invalid(
             "printed source value differs from its exact rational",
         ));

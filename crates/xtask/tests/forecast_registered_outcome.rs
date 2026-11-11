@@ -27,6 +27,9 @@ const AVAILABLE: &str = "2031-02-16T00:00:00Z";
 const CUT: &str = "2031-02-17T00:00:00Z";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[path = "../testdata/forecast_physical_outcomes.rs"]
+mod physical;
+
 struct FixedClock(i64);
 
 impl WallClock for FixedClock {
@@ -308,15 +311,19 @@ impl Fixture {
     }
 
     fn replace_workbook(&mut self, sheets: &[MinimalSheet]) {
-        let path = self.root.join("corpus/2030Q4.xlsx");
-        let old_size = fs::metadata(&path).unwrap().len();
-        let bytes = build_minimal_xlsx_styled(
+        self.replace_styled_workbook(
             sheets,
-            Some(&MinimalStyles {
+            &MinimalStyles {
                 num_fmts: vec![],
                 xfs: vec![1],
-            }),
+            },
         );
+    }
+
+    fn replace_styled_workbook(&mut self, sheets: &[MinimalSheet], styles: &MinimalStyles) {
+        let path = self.root.join("corpus/2030Q4.xlsx");
+        let old_size = fs::metadata(&path).unwrap().len();
+        let bytes = build_minimal_xlsx_styled(sheets, Some(styles));
         let digest = sha256(&bytes);
         fs::write(path, &bytes).unwrap();
         let registry = registry_path(&self.root, ISSUER);

@@ -242,16 +242,21 @@ fn resolve_selected(
         release,
         (!profile.mine_stats_labels.is_empty()).then_some(&vocabulary),
     )?;
-    // Summary reader errors may hide a competing row before it reaches raw candidate selection.
+    // Reader errors may hide a competing row before it reaches raw candidate selection. Physical targets
+    // use only Minestats blocks; their repeated-label refusals cannot leave a seemingly unique first row.
     let summary_prefixes = [format!("{release}:QTD!"), format!("{release}:YTD!")];
     if let Some(error) = read.refusals.iter().find(|error| {
-        summary_prefixes
-            .iter()
-            .any(|prefix| error.locator.starts_with(prefix.as_str()))
+        if policy.metric.is_site_physical() {
+            error.locator.starts_with(&format!("{release}:Minestats"))
+        } else {
+            summary_prefixes
+                .iter()
+                .any(|prefix| error.locator.starts_with(prefix.as_str()))
+        }
     }) {
         return Err(refusal(
             RefusalCode::SourceCellUnusable208,
-            format!("summary reader refused {}: {}", error.locator, error.reason),
+            format!("source reader refused {}: {}", error.locator, error.reason),
         ));
     }
     let period = policy.period.label();
@@ -270,18 +275,28 @@ fn resolve_selected(
             .iter()
             .find(|alias| alias.label == row.label && alias.holds_for(release))
             .map_or(row.label.as_str(), |alias| alias.reads_as.as_str());
-        row.view == View::Summary
-            && row.period == period
-            && named == subject
-            && field
-                == format!(
-                    "summary:{}",
-                    label
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .to_lowercase()
-                )
+        let normalized = |value: &str| {
+            value
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+        let line = if row.view == View::Summary {
+            format!("summary:{}", normalized(label))
+        } else {
+            format!(
+                "site:{}:{}",
+                normalized(row.section.as_deref().unwrap_or("")),
+                normalized(label)
+            )
+        };
+        let wanted_view = if policy.metric.is_site_physical() {
+            View::Minestats
+        } else {
+            View::Summary
+        };
+        row.view == wanted_view && row.period == period && named == subject && field == line
     });
     let row = rows.next().ok_or_else(|| {
         refusal(
@@ -389,7 +404,12 @@ fn sold_unit_cost(metric: PublicMetric, header: Option<&str>) -> bool {
             "($/lb)",
             ["per sold pound", "per pound sold"],
         ),
-        PublicMetric::ProductionKoz | PublicMetric::ProductionKt => return true,
+        PublicMetric::ProductionKoz
+        | PublicMetric::ProductionKt
+        | PublicMetric::ProcessedKt
+        | PublicMetric::ProcessedGradeGPerT
+        | PublicMetric::ProcessedGradeFraction
+        | PublicMetric::RecoveryFraction => return true,
     };
     let Some(header) = header else {
         return false;
@@ -491,6 +511,50 @@ fn same_ownership(actual: OwnershipBasis, expected: PublicOwnership) -> bool {
     }
 }
 
+/// Scoring uses the printed value in the frozen unit. A mass-fraction source has Excel's percent
+/// presentation, so `91%` is exactly 91/100, not 91 or the more precise unprinted stored value.
+/// Both source admission and offline journal replay use this rule and retain the original display token.
+pub(super) fn displayed_value(metric: PublicMetric, displayed: &str) -> Result<Rat> {
+    let invalid = |reason: String| refusal(RefusalCode::SourceCellUnusable208, reason);
+    let number = if metric.is_fraction() {
+        displayed.strip_suffix('%').ok_or_else(|| {
+            invalid("a frozen mass-fraction target requires an explicit percent display".into())
+        })?
+    } else {
+        displayed
+    };
+    let value = Rat::from_decimal_str(number).map_err(|error| {
+        invalid(format!(
+            "displayed outcome is not an exact decimal: {error}"
+        ))
+    })?;
+    let value = if metric.is_fraction() {
+        value
+            .checked_div(Rat::from_integer(100))
+            .map_err(|error| invalid(format!("percent display conversion failed: {error}")))?
+    } else {
+        value
+    };
+    physical_domain(metric, value)?;
+    Ok(value)
+}
+
+fn physical_domain(metric: PublicMetric, value: Rat) -> Result<()> {
+    if (metric.is_production() || metric.is_site_physical()) && value.num() < 0 {
+        return Err(refusal(
+            RefusalCode::SourceCellUnusable208,
+            "physical outcomes cannot be negative",
+        ));
+    }
+    if metric.is_fraction() && value.num() > value.den() {
+        return Err(refusal(
+            RefusalCode::SourceCellUnusable208,
+            "grade and recovery fractions cannot exceed one",
+        ));
+    }
+    Ok(())
+}
+
 /// Reconstruct an original-release receipt, without accepting a later comparative in its place.
 pub(super) fn receipt_value_tag(
     policy: &PublicResolutionPolicy,
@@ -573,6 +637,16 @@ fn receipt_value_tag_at_vintage(
     ownership_source: &str,
 ) -> Result<String> {
     public_policy(policy)?;
+    if policy.metric.is_site_physical() {
+        let stored = Rat::from_decimal_str(stored).map_err(|error| {
+            refusal(
+                RefusalCode::SourceCellUnusable208,
+                format!("invalid stored physical value: {error}"),
+            )
+        })?;
+        physical_domain(policy.metric, stored)?;
+        displayed_value(policy.metric, displayed)?;
+    }
     release_period(policy, &citation.vintage)?;
     let subject = policy.members.get(&forecast_id).ok_or_else(|| {
         refusal(
@@ -674,7 +748,7 @@ pub(super) fn receipt_claim_body_at_vintage(
         &tag,
         Representation::Deterministic,
         SpatialSupport::PeriodAggregate,
-        if policy.metric.is_production() {
+        if policy.metric.is_extensive() {
             AdditivityClass::ExtensiveAdditive
         } else {
             AdditivityClass::IntensiveWeighted
@@ -983,18 +1057,7 @@ fn bind_value(
             "outcome is missing, a placeholder, status-bearing or not exactly displayable",
         ));
     };
-    let value = Rat::from_decimal_str(displayed).map_err(|error| {
-        refusal(
-            RefusalCode::SourceCellUnusable208,
-            format!("displayed outcome is not an exact decimal: {error}"),
-        )
-    })?;
-    if policy.metric.is_production() && value.num() < 0 {
-        return Err(refusal(
-            RefusalCode::SourceCellUnusable208,
-            "production cannot be negative",
-        ));
-    }
+    let value = displayed_value(policy.metric, displayed)?;
     let out = ResolvedPublicOutcome {
         source: cell.clone(),
         value,

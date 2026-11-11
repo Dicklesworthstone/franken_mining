@@ -571,6 +571,21 @@ printed zero remains valid. Gold/copper AISC, TCC and C1 retain signed cost valu
 original admission, permitted comparative restatement, scoring and offline report replay. Existing target
 and receipt encodings remain unchanged.
 
+Site physical targets select detailed Minestats rows: `processed_kt` is the top-level
+`Tonnes processed (thousands)` row, `processed_grade_g_per_t` is `Processed` under
+`Average grade (grams per tonne)`, `processed_grade_fraction` is `Processed` under `Average grade`, and
+`recovery_fraction` is the top-level `Recovery rate (percent)` row. The complete section is frozen;
+mined grades, individual circuits and summary production cannot fill one of these targets. Units are
+exactly `kt`, `g_per_t` and `mass_fraction`. An Excel percentage such as `91%` scores as exact `91/100`,
+retaining its source's stored token, displayed token, canonical Claim and printed precision. No unprinted
+precision becomes the outcome. Both stored and displayed physical values must be nonnegative, and fractions
+must be at most one. Site-sheet tonnes remain attributable where the header says so; no gross-up is inferred.
+Grade and recovery are intensive and are never multiplied by the ownership share. Unprinted or mismatched
+ownership context, wrong units, duplicate source assertions and Minestats reader refusals reject admission.
+These targets reuse original/comparative receipts, saved assessments, diagnostic projections and offline
+replay without changing existing target or journal encodings. They are quarterly/yearly public observations,
+not the monthly site forecasts or twelve-month field validation required by BD-181/BD-263.
+
 `forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias>
 --trust-host-clock` takes no outcome value, target override, source locator or availability timestamp.
 Under the exclusive writer lock it loads the original registered Mine Stats release, verifies source
@@ -583,9 +598,10 @@ different: `resolve` appends a source-verified `NotPublished` missing event, ret
 source Claim, workbook hash and publication evidence. It remains in the cohort denominator and cannot later be
 reinterpreted as a numeric original. `n/a`, withheld/disposed interpretations and other status-derived placeholders
 still refuse because their additional interpretation evidence is not yet frozen by this protocol. Candidate
-cardinality is checked before canonical-key projection, and a reader refusal on either QTD/YTD summary sheet blocks
-admission: an unusable competing row cannot disappear and leave a false singleton. Unrelated detailed-sheet
-refusals do not replace the target. A later comparative cannot fill a missing original. An unmarked printed zero
+cardinality is checked before canonical-key projection. For summary targets, a reader refusal on either QTD/YTD
+sheet blocks admission; physical targets instead require clean Minestats reads. An unusable competing row cannot
+disappear and leave a false singleton. Unrelated views do not replace the target. A later comparative cannot
+fill a missing original. An unmarked printed zero
 remains valid. Cross-crate forecast replay controls retain their CLI harness and all
 assertions in `crates/xtask/testdata/forecast_replay_controls.rs`.
 The six cross-crate forecast-record source fixture tests likewise retain their CLI harness and unchanged

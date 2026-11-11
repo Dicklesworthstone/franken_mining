@@ -87,9 +87,11 @@ dependencies = [
  "fmine-decide",
  "fmine-evidence",
  "fmine-io",
+ "fmine-lp",
  "fmine-metrics",
  "fmine-numerics",
  "fmine-optimize",
+ "fmine-plant",
  "fmine-public",
  "fmine-registry",
  "fmine-runtime",
@@ -145,6 +147,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-geom"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+]
+
+[[package]]
 name = "fmine-io"
 version = "0.1.0"
 dependencies = [
@@ -152,7 +162,18 @@ dependencies = [
  "fmine-claim",
  "fmine-core",
  "fmine-evidence",
+ "fmine-geom",
+ "fmine-lp",
+ "fmine-optimize",
  "fmine-runtime",
+]
+
+[[package]]
+name = "fmine-lp"
+version = "0.1.0"
+dependencies = [
+ "fmine-evidence",
+ "fmine-numerics",
 ]
 
 [[package]]
@@ -184,6 +205,19 @@ version = "0.1.0"
 dependencies = [
  "fmine-evidence",
  "fmine-numerics",
+]
+
+[[package]]
+name = "fmine-plant"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-numerics",
+ "fmine-registry",
+ "fmine-time",
+ "fmine-units",
 ]
 
 [[package]]

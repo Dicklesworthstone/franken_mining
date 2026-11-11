@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 57
+[verbs] 60
 decide card
 decide recovery-bounds
 decide program
@@ -82,6 +82,8 @@ assure challenges
 metrics cost
 metrics geo
 plan pit
+plan schedule
+plan shells
 html claims
 check tables
 reserve replacement
@@ -127,6 +129,7 @@ plant infer
 plant recovery
 plant rtd
 plant grinding
+plant trajectory
 robot schema
 assure issue
 reliance export
