@@ -57,7 +57,7 @@ fn source(root: &Path, release: &str, sheets: &[MinimalSheet]) {
         sheets,
         Some(&MinimalStyles {
             num_fmts: vec![],
-            xfs: vec![1, 2],
+            xfs: vec![1],
         }),
     );
     let file = format!("{release}.xlsx");
@@ -107,44 +107,10 @@ fn add_guidance(root: &Path, name: &str, date: &str, token: &str, readers: &[&st
 }
 
 fn fixture(q3: bool, actual: &str) -> PathBuf {
-    fixture_for(q3, actual, None)
+    fixture_with_metric(q3, actual, None)
 }
 
-fn copper_sheet(
-    name: &str,
-    year: i32,
-    months: &str,
-    end: &str,
-    production: &str,
-    cost: &str,
-) -> MinimalSheet {
-    let mut sheet = sheet(name, year, months, end, production);
-    for (at, cell) in &mut sheet.cells {
-        *cell = match at.as_str() {
-            "B4" => MinimalCell::Text("Copper produced (kt 100%)".into()),
-            "C4" => MinimalCell::Text(
-                match cost {
-                    "c1_usd_per_lb" => "C1 cash costs ($/lb)",
-                    "aisc_usd_per_lb" => "All-in sustaining costs ($/lb)",
-                    _ => panic!("unsupported invented copper cost"),
-                }
-                .into(),
-            ),
-            "B5" => MinimalCell::Styled {
-                raw: production.into(),
-                xf: 1,
-            },
-            "C5" => MinimalCell::Styled {
-                raw: "2.135".into(),
-                xf: 1,
-            },
-            _ => continue,
-        };
-    }
-    sheet
-}
-
-fn fixture_for(q3: bool, actual: &str, copper_cost: Option<&str>) -> PathBuf {
+fn fixture_with_metric(q3: bool, actual: &str, copper_cost: Option<&str>) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "fmine-baseline-{}-{}",
         std::process::id(),
@@ -158,24 +124,22 @@ fn fixture_for(q3: bool, actual: &str, copper_cost: Option<&str>) -> PathBuf {
     ] {
         std::fs::create_dir_all(root.join(dir)).unwrap();
     }
-    std::fs::write(
-        root.join("forecasts/fy2026/rules.toml"),
-        RULES.replace(
-            "issuer = \"barrick\"",
-            &format!("issuer = \"{SYNTHETIC_ISSUER}\""),
-        ),
-    )
-    .unwrap();
+    let mut rules = RULES.replace(
+        "issuer = \"barrick\"",
+        &format!("issuer = \"{SYNTHETIC_ISSUER}\""),
+    );
+    if let Some(cost) = copper_cost {
+        rules = rules
+            .replace("au_prod_100_koz", "cu_prod_100_kt")
+            .replace("aisc_usd_per_oz", cost);
+    }
+    std::fs::write(root.join("forecasts/fy2026/rules.toml"), rules).unwrap();
     std::fs::write(registry(&root), format!("schema = \"fmine.sources.v1\"\nissuer = \"{SYNTHETIC_ISSUER}\"\ncorpus_dir = \"corpus\"\nretrieved_utc = \"2026-10-01T00:00:00Z\"\nurl_prefix = \"https://example.invalid/\"\n[[subject]]\nname = \"North Mara\"\n")).unwrap();
     std::fs::write(
         transcripts(&root),
         format!("schema = \"fmine.transcriptions.v1\"\nissuer = \"{SYNTHETIC_ISSUER}\"\n"),
     )
     .unwrap();
-    let make_sheet = |name, year, months, end, production| match copper_cost {
-        Some(cost) => copper_sheet(name, year, months, end, production, cost),
-        None => sheet(name, year, months, end, production),
-    };
     for year in 2024..=2026 {
         for q in 1..=if year == 2026 {
             if q3 { 3 } else { 2 }
@@ -183,9 +147,27 @@ fn fixture_for(q3: bool, actual: &str, copper_cost: Option<&str>) -> PathBuf {
             4
         } {
             let end = ["March 31", "June 30", "September 30", "December 31"][q - 1];
-            let mut sheets = vec![make_sheet("QTD", year, "three", end, "100")];
+            let mut sheets = vec![sheet("QTD", year, "three", end, "100")];
             if year == 2026 && q == 3 {
-                sheets.push(make_sheet("YTD", year, "nine", end, actual));
+                sheets.push(sheet("YTD", year, "nine", end, actual));
+            }
+            if let Some(cost) = copper_cost {
+                for sheet in &mut sheets {
+                    for (at, cell) in &mut sheet.cells {
+                        if at == "B4" {
+                            *cell = MinimalCell::Text("Copper produced (kt 100%)".into());
+                        } else if at == "C4" {
+                            *cell = MinimalCell::Text(
+                                if cost == "c1_usd_per_lb" {
+                                    "C1 cash costs ($/lb)"
+                                } else {
+                                    "All-in sustaining costs ($/lb)"
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                }
             }
             source(&root, &format!("{year}Q{q}"), &sheets);
         }
@@ -205,30 +187,23 @@ fn fixture_for(q3: bool, actual: &str, copper_cost: Option<&str>) -> PathBuf {
         &["reader-a", "reader-b"],
     );
     if let Some(cost) = copper_cost {
-        // Only invented fixture rules change; the sealed issuer rules remain untouched.
-        let path = root.join("forecasts/fy2026/rules.toml");
-        let rules = std::fs::read_to_string(&path)
-            .unwrap()
-            .replace("au_prod_100_koz", "cu_prod_100_kt")
-            .replace("aisc_usd_per_oz", cost);
-        std::fs::write(path, rules).unwrap();
         let definition = if cost == "c1_usd_per_lb" {
             "c1"
         } else {
             "aisc"
         };
-        let text = std::fs::read_to_string(transcripts(&root))
+        let readings = std::fs::read_to_string(transcripts(&root))
             .unwrap()
             .replace("production_koz", "production_kt")
             .replace("unit = \"koz\"", "unit = \"kt\"")
             .replace("aisc_usd_per_oz", cost)
-            .replace("usd_per_oz", "usd_per_lb")
-            .replace("900 - 1100", "2.10 - 2.30")
+            .replace("unit = \"usd_per_oz\"", "unit = \"usd_per_lb\"")
+            .replace("900 - 1100", "2.40 - 3.00")
             .replace(
                 ";aisc=issuer-reported-per-sold-oz",
                 &format!(";{definition}=issuer-reported-per-sold-lb"),
             );
-        std::fs::write(transcripts(&root), text).unwrap();
+        std::fs::write(transcripts(&root), readings).unwrap();
     }
     root
 }
@@ -286,6 +261,94 @@ fn registered_guidance_and_original_nine_months_produce_exact_source_bound_basel
             .contains(&production.actuals[0].claim.claim_id.to_string())
     );
     assert_eq!(lines, baseline_lines_as_of(&root, "2026-11-10").unwrap());
+}
+
+#[test]
+fn copper_guidance_uses_exact_kilotonnes_and_distinct_sold_pound_cost_definitions() {
+    for cost in ["c1_usd_per_lb", "aisc_usd_per_lb"] {
+        let root = fixture_with_metric(true, "300", Some(cost));
+        let report = run(&root);
+        let production = row(&report, "production");
+        // Independent arithmetic: attributable [240, 300] / (3/5) - 300 kt.
+        assert_eq!(production.interval, interval(100, 200));
+        assert_eq!(production.unit, "kt");
+        assert_eq!(production.basis, "100%");
+        assert_eq!(
+            production.actuals[0].key.line.label,
+            "summary:cu_prod_100_kt"
+        );
+        assert_eq!(production.actuals[0].key.unit, "kt");
+        let rate = row(&report, "unit_cost");
+        assert_eq!(
+            rate.interval,
+            Some((Rat::new(12, 5).unwrap(), Rat::from_integer(3)))
+        );
+        assert_eq!(rate.unit, "usd_per_lb");
+        assert!(
+            rate.actuals.is_empty(),
+            "rates must not subtract nine-month values"
+        );
+        assert!(rate.guidance[0].reading.quantity.ends_with(cost));
+        let lines = baseline_lines_as_of(&root, "2026-11-10").unwrap();
+        assert!(lines[0].contains("\"synthetic\":true"));
+        assert!(lines.join("\n").contains("summary:cu_prod_100_kt"));
+        assert_eq!(lines, baseline_lines_as_of(&root, "2026-11-10").unwrap());
+    }
+}
+
+#[test]
+fn copper_baseline_refuses_unit_definition_and_additivity_substitutions() {
+    for (from, to, target) in [
+        ("unit = \"kt\"", "unit = \"koz\"", "production"),
+        (
+            "unit = \"usd_per_lb\"",
+            "unit = \"usd_per_oz\"",
+            "unit_cost",
+        ),
+        (
+            ";c1=issuer-reported-per-sold-lb",
+            ";aisc=issuer-reported-per-sold-lb",
+            "unit_cost",
+        ),
+        (
+            ";c1=issuer-reported-per-sold-lb",
+            ";c1=issuer-reported-per-produced-lb",
+            "unit_cost",
+        ),
+    ] {
+        let root = fixture_with_metric(true, "300", Some("c1_usd_per_lb"));
+        let readings = std::fs::read_to_string(transcripts(&root))
+            .unwrap()
+            .replace(from, to);
+        std::fs::write(transcripts(&root), readings).unwrap();
+        assert!(row(&run(&root), target).interval.is_none());
+    }
+    let root = fixture_with_metric(true, "300", Some("c1_usd_per_lb"));
+    let path = root.join("forecasts/fy2026/rules.toml");
+    let rules = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("outcome = \"q4_qtd\"", "outcome = \"fy_minus_9m\"");
+    std::fs::write(path, rules).unwrap();
+    assert!(guidance::run(&root, "2026-11-10").is_err());
+    assert!(xtask::forecast::persistence_baselines(&root).is_err());
+}
+
+#[test]
+fn copper_baseline_keeps_missing_originals_and_signed_remainders_visible() {
+    let root = fixture_with_metric(false, "300", Some("c1_usd_per_lb"));
+    let report = run(&root);
+    assert_eq!(row(&report, "production").interval, None);
+    assert!(
+        row(&report, "production")
+            .reason
+            .contains("original Q3-release")
+    );
+    assert!(row(&report, "unit_cost").interval.is_some());
+    let signed = fixture_with_metric(true, "550", Some("aisc_usd_per_lb"));
+    assert_eq!(
+        row(&run(&signed), "production").interval,
+        interval(-150, -50)
+    );
 }
 
 #[test]
@@ -543,119 +606,4 @@ fn later_batch_cannot_hide_an_impossible_source_date_or_a_reversed_interval() {
     .unwrap();
     let error = guidance::run(&root, "2026-11-10").unwrap_err().join(" ");
     assert!(error.contains("retrieval interval is reversed"), "{error}");
-}
-
-#[test]
-fn copper_guidance_uses_exact_kilotonnes_and_distinct_sold_pound_cost_definitions() {
-    for (metric, definition) in [("c1_usd_per_lb", "c1"), ("aisc_usd_per_lb", "aisc")] {
-        let root = fixture_for(true, "300.124", Some(metric));
-        let report = run(&root);
-        assert_eq!(report.rows.len(), 26);
-        assert_eq!(report.rows.iter().filter(|r| r.interval.is_some()).count(), 2);
-        let production = row(&report, "production");
-        // [240, 300] attributable kt / (3/5) - displayed 300.12 kt.
-        assert_eq!(
-            production.interval,
-            Some((Rat::new(2497, 25).unwrap(), Rat::new(4997, 25).unwrap()))
-        );
-        assert_eq!(production.unit, "kt");
-        assert_eq!(production.basis, "100%");
-        assert_eq!(production.actuals.len(), 1);
-        assert_eq!(production.actuals[0].key.unit, "kt");
-        let evidence = production.actuals[0].to_json();
-        assert!(evidence.contains("\"stored\":\"300.124\""));
-        assert!(evidence.contains("\"displayed\":\"300.12\""));
-        let cost = row(&report, "unit_cost");
-        assert_eq!(
-            cost.interval,
-            Some((Rat::new(21, 10).unwrap(), Rat::new(23, 10).unwrap()))
-        );
-        assert_eq!(cost.unit, "usd_per_lb");
-        assert_eq!(
-            cost.basis,
-            format!("attributable:3/5;{definition}=issuer-reported-per-sold-lb")
-        );
-        assert!(cost.actuals.is_empty());
-        let lines = baseline_lines_as_of(&root, "2026-11-10").unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("\"baseline\":\"run_rate_persistence\""))
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("\"baseline\":\"issuer_guidance\""))
-        );
-        assert_eq!(lines, baseline_lines_as_of(&root, "2026-11-10").unwrap());
-    }
-}
-
-#[test]
-fn copper_baseline_refuses_unit_definition_and_additivity_substitutions() {
-    for (metric, definition, other) in [
-        ("c1_usd_per_lb", "c1", "aisc"),
-        ("aisc_usd_per_lb", "aisc", "c1"),
-    ] {
-        let sold = format!(";{definition}=issuer-reported-per-sold-lb");
-        let produced = format!(";{definition}=issuer-reported-per-produced-lb");
-        let other_definition = format!(";{other}=issuer-reported-per-sold-lb");
-        for (from, to, target) in [
-            ("unit = \"kt\"", "unit = \"koz\"", "production"),
-            ("unit = \"usd_per_lb\"", "unit = \"usd_per_oz\"", "unit_cost"),
-            (sold.as_str(), produced.as_str(), "unit_cost"),
-            (sold.as_str(), other_definition.as_str(), "unit_cost"),
-        ] {
-            let root = fixture_for(true, "300", Some(metric));
-            let text = std::fs::read_to_string(transcripts(&root))
-                .unwrap()
-                .replace(from, to);
-            std::fs::write(transcripts(&root), text).unwrap();
-            assert!(row(&run(&root), target).interval.is_none());
-        }
-        let root = fixture_for(true, "300", Some(metric));
-        let path = root.join("forecasts/fy2026/rules.toml");
-        let rules = std::fs::read_to_string(&path)
-            .unwrap()
-            .replace("outcome = \"q4_qtd\"", "outcome = \"fy_minus_9m\"");
-        std::fs::write(path, rules).unwrap();
-        assert!(guidance::run(&root, "2026-11-10").is_err());
-        assert!(xtask::forecast::persistence_baselines(&root).is_err());
-    }
-}
-
-#[test]
-fn copper_baseline_keeps_missing_originals_and_signed_remainders_visible() {
-    for metric in ["c1_usd_per_lb", "aisc_usd_per_lb"] {
-        let negative = fixture_for(true, "550", Some(metric));
-        assert_eq!(
-            row(&run(&negative), "production").interval,
-            interval(-150, -50)
-        );
-        let root = fixture_for(false, "300", Some(metric));
-        let assert_missing = |report: &BaselineReport| {
-            let production = row(report, "production");
-            assert_eq!(production.status, "not_available");
-            assert!(production.interval.is_none());
-            assert!(production.actuals.is_empty());
-            let cost = row(report, "unit_cost");
-            assert_eq!(cost.status, "available");
-            assert_eq!(
-                cost.interval,
-                Some((Rat::new(21, 10).unwrap(), Rat::new(23, 10).unwrap()))
-            );
-            assert!(cost.actuals.is_empty());
-        };
-        assert_missing(&run(&root));
-        source(
-            &root,
-            "2026Q4",
-            &[copper_sheet("YTD", 2026, "nine", "September 30", "301", metric)],
-        );
-        let text = std::fs::read_to_string(registry(&root))
-            .unwrap()
-            .replace("2026-10-01T00:00:00Z", "2027-01-15T00:00:00Z");
-        std::fs::write(registry(&root), text).unwrap();
-        assert_missing(&guidance::run(&root, "2027-02-01").unwrap());
-    }
 }

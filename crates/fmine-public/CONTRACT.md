@@ -23,10 +23,11 @@ The public lane of M0 (`fmine assure public`).
   unissued quarterly-ratio candidate through `fmine_calib::record::candidate`. It reads only the original
   Mine Stats releases required by the declared historical pools and their common Q3 point. The supported
   target meanings are 100%-basis gold production in koz and copper production in kt (`fy_minus_9m`),
-  plus printed gold AISC per ounce sold and copper C1/AISC per pound sold (`q4_qtd`). Shared
-  `fmine_calib::record::TargetMetric` semantics fix each field, unit and outcome kind; targets retain separate
-  historical ratio pools. Cost rates are neither differenced across cumulative periods nor ownership-scaled.
-  Every input uses the exact displayed decimal and the canonical source Claim. A missing original release, ambiguous cell, unreadable or changed
+  printed gold AISC per ounce sold, and copper C1 or AISC per pound sold (`q4_qtd`). Rates are never
+  differenced across cumulative periods. `fmine_calib::record::TargetMetric` supplies the same exact
+  field/outcome/unit interpretation used by the record scorers; metal quantities and cost families are
+  separate pools. Every input uses the exact displayed
+  decimal and the canonical source Claim. A missing original release, ambiguous cell, unreadable or changed
   source, unsupported target, unprinted or changing cost ownership, or nonzero observation overlapping a
   registered site status refuses. No source value is rescaled or filled from a later comparative.
   Historical placeholders, absent rows and nonpositive printed values remain named observations; excluded
@@ -53,10 +54,10 @@ The public lane of M0 (`fmine assure public`).
   `availability_is_conservative_and_completed_quarters_cannot_look_ahead`,
   `incompatible_targets_ownership_changes_and_status_conflicts_refuse`, and
   `receipt_binds_rules_registry_information_cut_and_source_values`.
-  Copper controls are `copper_candidates_keep_kt_and_both_per_pound_costs_in_separate_source_bound_pools`
-  and `copper_candidate_refuses_unit_aliases_attributable_targets_and_ownership_changes`: exact candidate
-  values, CSV round trips, explicit units and source ownership remain checked separately for production,
-  C1 and AISC. The per-ounce withholding exception above remains restricted to historical gold production.
+  Copper controls additionally cover three simultaneous target pools, exact CSV round trips, kt versus
+  pound/ounce refusals, attributable-production targets and changing cost ownership:
+  `copper_candidates_keep_kt_and_both_per_pound_costs_in_separate_source_bound_pools` and
+  `copper_candidate_refuses_unit_aliases_attributable_targets_and_ownership_changes`.
 
 - DESIGN (BD-057/BD-059): `html::run(workspace, issuer, definitions, as_of)` turns registered HTML
   table cells into canonical public Claims. It parses the exact captured source registry and mapping
