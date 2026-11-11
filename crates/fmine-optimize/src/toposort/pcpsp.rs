@@ -50,8 +50,11 @@
 //! periods with [`destinations`] until a cycle makes no move, then [`super::search::improve`], whose **Cone** move
 //! takes a block earlier with what it requires, with [`destinations`] until a cycle makes no move again, or the
 //! caller's limit (`bd-ynoj`). A cone takes room that destination switches may use better: allowed from the start, it
-//! left MineLib's w23 9.9% lower. It ends with [`check`] and refuses rather than return a schedule that fails it or
-//! is worth less than the one it was given.
+//! left MineLib's w23 9.9% lower. When those moves stop, a joint pass can change both a block's period and its
+//! destination, or insert an unmined block at a feasible destination other than its most valuable one. Each
+//! strictly profitable move checks both periods' signed resource totals and both sides of precedence. Ordinary
+//! moves then resume. It ends with [`check`] and refuses rather than return a schedule that fails it or is worth
+//! less than the one it was given.
 
 use fmine_evidence::Refusal;
 
@@ -795,6 +798,90 @@ pub fn destinations(
     Ok(moves)
 }
 
+/// One joint pass after the existing neighborhoods stop. The input has already
+/// passed `check`, and discount factors are non-negative and non-increasing.
+/// Blocks, periods and destinations are visited in id order; equal values keep
+/// the first feasible choice. Every move strictly raises discounted value.
+fn joint_destinations(
+    model: &PcpspModel,
+    schedule: &mut [Option<u32>],
+    destination: &mut [u32],
+    factors: &[i64],
+) -> Result<usize, Refusal> {
+    let problem = model.with_destinations(destination)?;
+    let mut used = check(&problem, schedule)?.used;
+    let (offsets, dependents) = super::dependents(problem.blocks())?;
+    let dn = model.destinations;
+    let mut moved = 0;
+    for b in 0..model.blocks() {
+        let old_period = schedule[b].map(|t| t as usize);
+        let old_destination = destination[b] as usize;
+        let old_column = b * dn + old_destination;
+        // Removing a blending credit can violate the period left even when
+        // the new destination uses less of every resource.
+        if old_period.is_some_and(|t| {
+            (0..model.resources()).any(|r| {
+                used[r][t] - i128::from(model.uses[r][old_column]) > i128::from(model.limits[r][t])
+            })
+        }) {
+            continue;
+        }
+        let Some(first) = model.requires[b]
+            .iter()
+            .filter(|&&q| q as usize != b)
+            .try_fold(0, |first, &q| {
+                schedule[q as usize].map(|t| first.max(t as usize))
+            })
+        else {
+            continue;
+        };
+        let last = dependents[offsets[b]..offsets[b + 1]]
+            .iter()
+            .filter(|&&q| q as usize != b)
+            .filter_map(|&q| schedule[q as usize].map(|t| t as usize))
+            .min()
+            .unwrap_or(model.periods - 1);
+        let mut best_value = old_period.map_or(0, |t| {
+            i128::from(model.values[old_column]) * i128::from(factors[t])
+        });
+        let mut best = None;
+        for (t, &factor) in factors.iter().enumerate().take(last + 1).skip(first) {
+            if old_period == Some(t) {
+                continue;
+            }
+            for d in 0..dn {
+                if old_period.is_some() && d == old_destination {
+                    continue;
+                }
+                let column = b * dn + d;
+                let value = i128::from(model.values[column]) * i128::from(factor);
+                if value > best_value
+                    && (0..model.resources()).all(|r| {
+                        used[r][t] + i128::from(model.uses[r][column])
+                            <= i128::from(model.limits[r][t])
+                    })
+                {
+                    best_value = value;
+                    best = Some((t, d));
+                }
+            }
+        }
+        if let Some((t, d)) = best {
+            for (r, row) in used.iter_mut().enumerate() {
+                if let Some(old) = old_period {
+                    row[old] -= i128::from(model.uses[r][old_column]);
+                }
+                row[t] += i128::from(model.uses[r][b * dn + d]);
+            }
+            // Both indices are bounded by the parsed model's u32-sized limits.
+            schedule[b] = Some(t as u32);
+            destination[b] = d as u32;
+            moved += 1;
+        }
+    }
+    Ok(moved)
+}
+
 /// What [`improve`] returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PcpspImprovement {
@@ -806,17 +893,20 @@ pub struct PcpspImprovement {
     pub before: i128,
     /// The discounted value of the result; never below `before`.
     pub after: i128,
-    /// Cycles of period moves then destination moves, the last of them the one without a move unless the limit
-    /// stopped it.
+    /// Cycles of period, destination and stalled-neighborhood joint moves; the
+    /// last makes no move unless the caller's limit stopped the search.
     pub cycles: usize,
     /// Period moves, from [`super::search::improve_without_cones`] and then [`super::search::improve`].
     pub moves: Moves,
     /// Destination moves, from [`destinations`].
     pub destination_moves: DestinationMoves,
+    /// Joint period/destination changes and feasible-route insertions.
+    pub joint_moves: usize,
 }
 
-/// Period moves and destination moves in turn, from a feasible schedule (see the module notes). `max_rounds` limits
-/// the cycles and each period search's rounds.
+/// Period and destination moves in turn, followed by joint moves when both
+/// neighborhoods stop (see the module notes). `max_rounds` limits the cycles and
+/// each period search's rounds; a joint pass visits each block once per cycle.
 ///
 /// # Errors
 /// `FMINE-REF-207` (proposed) when the schedule and destinations given fail [`check`] or do not fit the model, when
@@ -829,6 +919,16 @@ pub fn improve(
     factors: &[i64],
     max_rounds: usize,
 ) -> Result<PcpspImprovement, Refusal> {
+    if factors.len() != model.periods
+        || factors.iter().any(|&f| f < 0)
+        || factors.windows(2).any(|w| w[1] > w[0])
+    {
+        return Err(refuse(format!(
+            "pcpsp improve: {} factors for {} periods; they must be non-negative and never rise",
+            factors.len(),
+            model.periods
+        )));
+    }
     let start = model.with_destinations(destination)?;
     let first = check(&start, schedule)?;
     if !first.feasible() {
@@ -842,6 +942,7 @@ pub fn improve(
     let mut destination = destination.to_vec();
     let mut moves = Moves::default();
     let mut destination_moves = DestinationMoves::default();
+    let mut joint_moves = 0;
     let mut cycles = 0;
     // Cones only once period and destination moves have both stopped without them (`bd-ynoj`).
     let mut cones = false;
@@ -868,9 +969,15 @@ pub fn improve(
         destination_moves.unmined += d.unmined;
         if m == Moves::default() && d == DestinationMoves::default() {
             if cones {
-                break;
+                let joint = joint_destinations(model, &mut schedule, &mut destination, factors)?;
+                joint_moves += joint;
+                if joint == 0 {
+                    break;
+                }
+                cones = false;
+            } else {
+                cones = true;
             }
-            cones = true;
         }
     }
     let end = model.with_destinations(&destination)?;
@@ -894,6 +1001,7 @@ pub fn improve(
         cycles,
         moves,
         destination_moves,
+        joint_moves,
     })
 }
 
@@ -1167,6 +1275,117 @@ mod tests {
         assert!(destinations(&m, &[Some(0), Some(0)], &mut d, &[1]).is_err());
     }
 
+    fn joint_timing_model() -> PcpspModel {
+        PcpspModel {
+            name: "joint timing and destination".into(),
+            periods: 2,
+            destinations: 2,
+            values: vec![10, 9],
+            uses: vec![vec![1, 0]],
+            limits: vec![vec![0, 1]],
+            requires: vec![vec![]],
+            discount_rate: 100_000_000,
+            rounded_values: 0,
+            rounded_uses: 0,
+            rounded_limits: 0,
+        }
+    }
+
+    #[test]
+    fn joint_move_can_mine_earlier_at_a_lower_value_destination() {
+        let m = joint_timing_model();
+        let schedule = [Some(1)];
+        let f = [10, 8];
+        let timed = search::improve(&m.with_destinations(&[0]).unwrap(), &schedule, &f, 8).unwrap();
+        assert_eq!((timed.before, timed.after), (80, 80));
+        let mut d = [0];
+        assert_eq!(
+            destinations(&m, &schedule, &mut d, &f).unwrap(),
+            DestinationMoves::default()
+        );
+
+        let improved = improve(&m, &schedule, &d, &f, 8).unwrap();
+        assert_eq!((improved.before, improved.after), (80, 90));
+        assert_eq!(improved.schedule, [Some(0)]);
+        assert_eq!(improved.destination, [1]);
+        assert_eq!(improved.joint_moves, 1);
+        assert_eq!(
+            worth(&m, &improved.schedule, &improved.destination, &f),
+            Some(90)
+        );
+    }
+
+    #[test]
+    fn joint_move_can_wait_for_a_more_valuable_destination() {
+        let mut m = joint_timing_model();
+        m.values = vec![10, 8];
+        let improved = improve(&m, &[Some(0)], &[1], &[10, 9], 8).unwrap();
+        assert_eq!((improved.before, improved.after), (80, 90));
+        assert_eq!(improved.schedule, [Some(1)]);
+        assert_eq!(improved.destination, [0]);
+        assert_eq!(improved.joint_moves, 1);
+    }
+
+    #[test]
+    fn joint_insertion_uses_a_feasible_route_when_the_best_route_never_fits() {
+        let mut m = joint_timing_model();
+        m.limits[0] = vec![0, 0];
+        let improved = improve(&m, &[None], &[0], &[10, 8], 8).unwrap();
+        assert_eq!((improved.before, improved.after), (0, 90));
+        assert_eq!(improved.schedule, [Some(0)]);
+        assert_eq!(improved.destination, [1]);
+        assert_eq!(improved.joint_moves, 1);
+    }
+
+    #[test]
+    fn joint_moves_preserve_signed_capacity_in_the_period_left_and_entered() {
+        let mut m = joint_timing_model();
+        m.values.extend([20, 20]);
+        m.uses[0].extend([0, 0]);
+        m.uses.push(vec![-1, -1, 1, 1]);
+        m.limits.push(vec![0, 0]);
+        m.requires.push(vec![]);
+        let improved = improve(&m, &[Some(1), Some(1)], &[0, 0], &[10, 8], 8).unwrap();
+        // The low-grade block cannot leave the period that needs its blending
+        // credit. The high-grade block cannot enter an unblended period.
+        assert_eq!((improved.before, improved.after), (240, 240));
+        assert_eq!(improved.schedule, [Some(1), Some(1)]);
+
+        let mut m = joint_timing_model();
+        m.uses.push(vec![0, 1]);
+        m.limits.push(vec![0, 0]);
+        let improved = improve(&m, &[Some(1)], &[0], &[10, 8], 8).unwrap();
+        assert_eq!((improved.before, improved.after), (80, 80));
+        assert_eq!(improved.destination, [0]);
+    }
+
+    #[test]
+    fn joint_moves_respect_both_sides_of_precedence_and_self_arcs() {
+        let mut m = joint_timing_model();
+        m.values.extend([0, 0]);
+        m.uses[0].extend([0, 0]);
+        m.requires = vec![vec![1], vec![]];
+        let improved = improve(&m, &[Some(1), Some(1)], &[0, 0], &[10, 8], 8).unwrap();
+        assert_eq!((improved.before, improved.after), (80, 80));
+
+        m.values = vec![10, 8, 20, 20];
+        m.requires = vec![vec![], vec![0]];
+        let improved = improve(&m, &[Some(0), Some(0)], &[1, 0], &[10, 9], 8).unwrap();
+        assert_eq!((improved.before, improved.after), (280, 280));
+
+        m.values = vec![10, 9, 0, 0];
+        m.requires = vec![vec![1], vec![0]];
+        let improved = improve(&m, &[Some(1), Some(1)], &[0, 0], &[10, 8], 8).unwrap();
+        assert_eq!((improved.before, improved.after), (80, 80));
+
+        // A self arc alone permits a move: the block moves with itself.
+        let mut m = joint_timing_model();
+        m.requires[0].push(0);
+        let improved = improve(&m, &[Some(1)], &[0], &[10, 8], 8).unwrap();
+        assert_eq!((improved.before, improved.after), (80, 90));
+        assert_eq!(improved.schedule, [Some(0)]);
+    }
+
     /// A random model: up to five blocks, each requiring some lower-numbered blocks, two or three destinations.
     fn random_model(seed: u64) -> PcpspModel {
         let mut r = lcg(seed);
@@ -1289,8 +1508,13 @@ mod tests {
         );
         let again = improve(m, &i.schedule, &i.destination, &f, 1_000).unwrap();
         assert_eq!(
-            (again.moves, again.destination_moves, again.after),
-            (Moves::default(), DestinationMoves::default(), i.after),
+            (
+                again.moves,
+                again.destination_moves,
+                again.joint_moves,
+                again.after
+            ),
+            (Moves::default(), DestinationMoves::default(), 0, i.after),
             "seed {seed}: a second call moved"
         );
         (before, i.after, best, i.destination_moves.exchanges > 0)
@@ -1538,6 +1762,8 @@ mod tests {
         assert!(improve(&m, &s, &[0, 0], &f, 10).is_err());
         assert!(improve(&m, &s, &[0, 0, 1], &f[..1], 10).is_err());
         assert!(improve(&m, &s, &[0, 0, 1], &[1, 2], 10).is_err());
+        assert!(improve(&m, &s, &[0, 0, 1], &[1, 2], 0).is_err());
+        assert!(improve(&m, &s, &[0, 0, 1], &[1, -1], 0).is_err());
         let mut d = vec![0, 0, 1];
         assert!(destinations(&m, &s, &mut d, &f[..1]).is_err());
         let i = improve(&m, &s, &[0, 0, 0], &f, 0).unwrap();

@@ -517,6 +517,24 @@ destination allocations at fixed mining periods. Every selected schedule is inde
 A global Lagrangian upper bound is recomputed from the returned prices over **every model
 block**, including negative-value material that can enable a blend.
 
+DESIGN (plan §15.4–15.6): when separate period and destination improvements stop, whole-block
+search also considers changing both together. A profitable alternative route can move into an earlier
+period even when the current route cannot fit there, and an unmined block can enter through a feasible
+alternative route. Every accepted move checks predecessor and dependent periods and all signed resource
+limits in both the departing and arriving periods before changing the schedule.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/joint_route.pcpsp --prec tests/planning/joint_route.prec \
+  --list-schedule --format markdown
+```
+
+The synthetic example starts with a route worth **10** in period 1, discounted to **5**. Its capacity
+requirement prevents moving that route to period 0, while switching routes in period 1 would lose value.
+A joint move selects the alternative route in period 0 for **6**. `--rounds 0` retains the initial value
+of **5**. These bounded local moves improve the checked incumbent; the reported upper bound and gap
+still determine what is known about optimality.
+
 ```bash
 cargo run --release -p fmine-cli -- plan schedule \
   --pcpsp tests/planning/split.pcpsp --prec tests/planning/split.prec \

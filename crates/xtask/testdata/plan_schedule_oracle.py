@@ -131,6 +131,25 @@ def known_split():
         command(options, success=False)
 
 
+def joint_routes():
+    for suffix in ("pcpsp", "prec"):
+        (ROOT / ("model." + suffix)).write_bytes((REPO / "tests/planning" / ("joint_route." + suffix)).read_bytes())
+    values, uses, requires, caps = [[6, 10]], [[[0], [1]]], [[]], [[0, 1]]
+    unchanged = verify(command(["--rounds", "0"]), values, uses, requires, caps)
+    assert fraction(unchanged["selected"]["discounted_value"]) == 5
+    assert rows(unchanged["selected"]["solution"]) == [(0, 1, 1, Q(1))]
+    report = command()
+    p = verify(report, values, uses, requires, caps, Q(6))
+    assert fraction(p["selected"]["discounted_value"]) == 6
+    assert rows(p["selected"]["solution"]) == [(0, 0, 0, Q(1))]
+    assert p["selected"]["origin"] == "heuristic"
+    assert command() == report
+    (ROOT / "candidate.sol").write_text("0 1 1 1\n")
+    supplied = verify(command(["--candidate", "candidate.sol"]), values, uses, requires, caps, Q(6))
+    assert supplied["candidate"]["check"]["feasible"]
+    assert fraction(supplied["selected"]["discounted_value"]) == 6
+
+
 def generated_models():
     rng = random.Random(0x51A17)
     for case in range(16):
@@ -274,6 +293,7 @@ def lp_guidance():
 
 known_split()
 automatic_fractional()
+joint_routes()
 generated_models()
 lp_guidance()
-print("PASS: exact split oracles, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")
+print("PASS: exact split oracles, joint route/period5-to6 improvement, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")

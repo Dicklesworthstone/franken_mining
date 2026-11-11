@@ -1,0 +1,18 @@
+% SYNTHETIC: route 1 earns 10 but can only run in period 1, discounted to 5.
+% Changing both period and route earns 6 in period 0; either change alone loses.
+NAME: joint-period-destination-example
+TYPE: PCPSP
+NBLOCKS: 1
+NPERIODS: 2
+NDESTINATIONS: 2
+NRESOURCE_SIDE_CONSTRAINTS: 1
+NGENERAL_SIDE_CONSTRAINTS: 0
+DISCOUNT_RATE: 1
+RESOURCE_CONSTRAINT_LIMITS:
+0 0 L 0
+0 1 L 1
+OBJECTIVE_FUNCTION:
+0 6 10
+RESOURCE_CONSTRAINT_COEFFICIENTS:
+0 1 0 1
+EOF

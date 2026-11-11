@@ -88,7 +88,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     exact destination splits; infeasibility is diagnostic and never admits an incumbent. Structural errors
     refuse. Selected value and feasibility are recomputed, final Lagrangian prices replayed over every
     model block, and JSON emits exact rational value/gap plus the price witness. `--list-schedule` emits
-    canonical reusable MineLib rows. Bounded price columns propose exact decimal-grid destination splits
+    canonical reusable MineLib rows. When separate neighborhoods stall, whole-block search considers
+    joint period/destination moves and alternative-route insertions, retaining only exact positive gains
+    that preserve predecessor/dependent periods and every signed resource limit in both affected periods.
+    `tests/planning/joint_route.pcpsp` is the synthetic discounted-value 5→6 example; zero rounds retains
+    its initial schedule. Bounded price columns propose exact decimal-grid destination splits
     at fixed mining periods from internal and admitted external whole starts; only checked strict gains
     are retained, with genuine external splits preferred on equal value. No external claimed bound, calibration, sampling confidence, reserve
     status or execution permission is inferred. `xtask/tests/plan_schedule.rs` invokes a Python Fraction

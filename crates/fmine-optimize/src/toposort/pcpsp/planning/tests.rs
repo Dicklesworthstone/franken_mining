@@ -150,6 +150,27 @@ fn produces_a_positive_discounted_plan_and_replayable_global_certificate() {
 }
 
 #[test]
+fn jointly_changes_period_and_destination_when_each_separate_move_loses() {
+    // The high-value route cannot run before period 1. Its value 10 discounted
+    // by one half is less than the alternative route's value 6 in period 0.
+    // Neither a fixed-destination period move nor a fixed-period route move
+    // can improve the greedy schedule.
+    let m = model(&[[6, 10]], &[[0, 1]], &[0, 1], "1", &[vec![]]);
+    let start = solve(&m, options(0), None).unwrap();
+    assert_eq!(
+        start.discounted_numerator,
+        5_000 * i128::from(DISCOUNT_SCALE)
+    );
+    assert_eq!(candidate::write_solution(&start.schedule), "0 1 1 1\n");
+
+    let p = solve(&m, options(8), None).unwrap();
+    assert_eq!(p.discounted_numerator, 6_000 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(candidate::write_solution(&p.schedule), "0 0 0 1\n");
+    assert_certificate(&m, &p);
+    assert_eq!(solve(&m, options(8), None).unwrap(), p);
+}
+
+#[test]
 fn exact_split_beats_every_whole_destination_and_is_retained_without_rounding() {
     // One block: dump value 0/use 0, mill value 10/use 2, capacity 1.
     // Every feasible whole-block plan is worth 0; a half-mill split is worth 5.
