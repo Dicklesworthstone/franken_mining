@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -412,7 +412,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     The two date selectors are mutually exclusive; only `--cohort-as-of` rejects `--price-subject`.
     Both select eligible workbooks before reading bytes. Missing or changed future files leave historical
     report bytes and digests unchanged; admitted files still require their registered size and hash;
-  - `recovery gap --issuer <issuer> [--through YYYYQn]` or `--synthetic`: two cited historical
+  - `recovery gap --issuer <issuer> [--through YYYYQn]` or `--synthetic`, optionally with repeated
+    `--price SCENARIO=USD_PER_LB`: two cited historical
     grade-normalised recovery comparisons for Lumwana, with exact points and input-rounding enclosures
     (bd-srqc). The bound filters workbook releases for a retrospective computation using current verified
     historical documents; it does not establish a historical information cutoff;
@@ -849,6 +850,12 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   quarter retains its earliest registered release and comparative status, both model outputs or a named
   refusal, citations and input-rounding bounds. The residual sample and regression-error SDs retain their
   separate denominator conventions and numerical-evaluation bounds.
+  Explicit price scenarios instead emit `fmine.recovery.price-sensitivity.v1`, retaining the complete
+  unchanged base recovery report and its digest. Each scenario and both models retain exact signed
+  USD-million points and input-rounding enclosures, canonical parent Claims and sources. A new digest
+  binds the base report, scenario names, original decimal tokens and all resulting Claims. JSON and
+  Markdown keep refused quarters; any refused sensitivity produces a nonzero envelope with the complete
+  result population. Authority flags remain false, and the envelope has no ledger anchor or certificate.
 - A successful `mirror` emits `fmine.jv_mirror.v1` with both reporters' raw readings, source metadata,
   ownership Claims, source/perimeter anchors, normalized 100% Claims and an exact common interval or a
   checked exclusion certificate. The proof retains original closed rounding cells and Scale identities;
@@ -1077,6 +1084,17 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   `--synthetic` is exclusive with `--issuer` and `--through`; recovery accepts neither `--site` nor `--as-of`.
   The existing `assure public --through` path continues to skip PDF transcriptions, independently of
   the dedicated recovery command's retrospective workbook bound.
+- DESIGN (bd-srqc): optional repeated `--price NAME=USD_PER_LB` declares one to sixteen distinct
+  constant nominal price scenarios. Names use 1–64 ASCII letters, digits, dots, underscores or hyphens;
+  prices use nonnegative plain decimal syntax, including zero. Duplicate names, unknown options,
+  repeated source selectors, spare positional arguments, exponents and unavailable exact arithmetic
+  refuse. Scenarios sort by name, preserving byte-identical reruns across argument order. Source selection
+  and both recovery models remain unchanged; `fmine_metrics::recovery::sensitivity` applies the exact
+  statutory pound/gram conversion to the signed copper difference on its original full-site quarter.
+  Prices are explicitly Assumed declarations, not market observations, and no expected price, FX,
+  annualization, recoverable production, revenue, profit or monetary downside is inferred. Unit tests and
+  `xtask/tests/public_recovery.rs::cli_contract` check exact points, every bound, retained source/parent
+  identities, invalid arguments, changed scenarios and the actual binary with independent Python fractions.
 - DESIGN (BD-345): lint bounds its local UTF-8 draft read, verifies the selected sources once, and delegates
   workbook findings to `fmine_public::lint`. Its certificate identifies the source assurance snapshot; the lint
   payload separately binds the draft and canonical Claim population. Only number spans and findings are

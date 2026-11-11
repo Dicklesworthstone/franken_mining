@@ -322,7 +322,7 @@ fn mixed_missing_and_measured_feed_retains_redundancy_and_cross_period_informati
         close(actual.value(), expected, 8e-14);
     }
     assert_ne!(r.measured_adjustments_kg[2].value(), 0.0);
-    let mut jacobian = vec![0.0; 4 * 3];
+    let mut jacobian = [0.0; 4 * 3];
     for i in 0..3 {
         for j in 0..3 {
             jacobian[i * 3 + j] =

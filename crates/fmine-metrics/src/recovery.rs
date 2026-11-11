@@ -21,6 +21,7 @@ use fmine_units::UnitsError;
 pub use crate::guidance::{Ownership, Period};
 
 pub mod render;
+pub mod sensitivity;
 
 pub const RULES_VERSION: &str = "m0-recovery/1";
 pub const NO_CLAIM: &str = "Descriptive comparison with an annual historical grade and recovery relation; no causal attribution, recoverable-metal estimate, forecast or affiliation implied.";

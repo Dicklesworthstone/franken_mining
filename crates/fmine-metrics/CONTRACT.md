@@ -43,6 +43,9 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`guidance`.** `CompletionInputs`: six `Claim<Quantity>`, for the production and AISC guidance, the YTD production, sales and AISC, and a separately declared remaining-sales scenario. `compare_history` takes `HistoricalContinuation`s; `quarters::compare_quarters` takes `QuarterlyHistory` windows.
 - **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
 - **`recovery`.** `TrainingRow`s and an `OperatingRow` of `Claim<recovery::Quantity>`, in percent and kt units.
+  DESIGN (bd-srqc): `recovery::sensitivity` accepts a canonical quarterly `Claim<ModelProjection>`
+  and a separately declared `Claim<CopperPrice>`. The named, nonnegative USD/lb price is an exact constant
+  nominal assumption, with its own declaration anchor; it is never presented as a market observation.
 - **`roll_forward`.** Explicit PDF identity declarations, agreed point readings and their registered document metadata. `assess_with_metrics` also takes the metric registry. The caller authenticates the actual registered bytes and the reader agreement before public use.
 - **`reserve_replacement`.** Bindings for a complete declared annual window, the metric registry, agreed PDF point readings and document metadata. Each GEO year names its reserve-price deck and definition evidence.
 - **`roll_forward::quarter`.** A `Quantity` (additive gold production or sales in koz, or copper production in kt), the target quarter, a draft `Printed` value and step, and `Observation`s. Source ids name the actual operands. A caller-authenticated series key binds issuer, subject, year, scope and perimeter version, metric, unit, occurrence and an explicit normalised ownership. Each observation states its cumulative ending quarter and either its displayed value and step or an unusable value.
@@ -60,6 +63,12 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
 ## 3. Outputs
+- DESIGN (bd-srqc): `recovery::sensitivity::assess` returns a derived `Claim<Sensitivity>` retaining the
+  model, subject, full-site calendar quarter, signed copper difference in kt and exact signed USD-million
+  value enclosure under the named price. The conversion uses the statutory avoirdupois gram/pound ratio
+  from `fmine-units`. Both parent identities, sources, weaker evidence and uncertainty terms are retained.
+  It prices the descriptive model difference without claiming recoverable copper, revenue, profit,
+  monetary downside, a forecast, annualization or an implicit FX conversion.
 - DESIGN (BD-273): `consolidation::compare` returns a derived comparison Claim with each observed
   aggregate-minus-member component difference, the summed differences, numerator and sold-quantity gaps,
   unexplained remainder and every column's own footing residual. Exact marginal display-rounding bounds
@@ -150,6 +159,13 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   - No history, or a solver cap, gives `Indeterminate`: `missing_history_and_solver_caps_remain_indeterminate`.
 - **The capacity ceiling scales production by the attributable share, never grade or recovery.** `ownership_scales_production_not_the_physical_limits` and `rounding_uses_upper_physical_bounds_and_never_averages_rates`.
 - **The two recovery variances keep their denominators apart** (`SSE/(n−1)` and `SSE/(n−2)`): `residual_sample_sd_and_regression_error_use_distinct_denominators`. Wider input boxes never narrow an output: `widening_rounding_never_narrows_model_outputs`.
+- **Recovery price scenarios retain signs and source rounding.** The exact USD-million multiplier is
+  `100000000 / 45359237` times the declared USD/lb price for each kt. The independent known answer
+  `0.45359237 kt = 1,000,000 lb` gives exactly USD 4 million at USD 4/lb, with `[-4, 8]` for the
+  corresponding cross-zero quantity enclosure. `recovery::sensitivity::tests` checks this answer, negative
+  and zero scenarios, tampered typed values, stale Claims and invalid declarations. Claim identities,
+  canonical typed value tags, deterministic support and a complete full-site quarter are checked before
+  multiplication. Exact arithmetic overflow remains a refusal.
 - **Derived Claims keep their provenance and never gain strength.** `derived_claims_preserve_provenance_and_never_upgrade_evidence`, `derived_claims_keep_uncertainty_confidentiality_and_source_identity`, `ordering_is_deterministic_and_evidence_cannot_be_strengthened`, `fit_and_both_models_preserve_every_registered_venture_and_wall`, `summation_preserves_source_identity_weaker_metadata_and_unknown_terms`, `arithmetic_inherits_the_weakest_evidence_state_and_strongest_confidentiality` and `canonical_claims_preserve_issuer_evidence_and_complete_ancestry`.
 - **A roll-forward identity binds only agreeing members (BD-340.S5, BD-331.S7).** Units, basis, member periods, raw-token precision, distinct reader identities, page bounds and source hashes must agree. Shared cells within a document are solved jointly by `exact_feas`; each feasible witness and infeasible certificate is checked again before emission. Different documents remain separate vintages.
 - **A reserve-replacement ratio is exact and bound to one definition (BD-063).** `assess_with_metrics` uses the definition's declared numerator and denominator signs and scaling. The signed depletion interval must be strictly positive and bounded away from zero. Shared amounts enter the same joint solve as the sums and roll-forwards. Original source tokens are unchanged, and gold and GEO definitions, windows and deck keys stay distinct. There is no implicit metal or price conversion and no shared-rate nonlinear solve. `crates/xtask/tests/reserve_replacement.rs` covers it.
@@ -231,7 +247,7 @@ The other modules have local errors with no refusal code:
   and aggregate points, joint rounding bounds and approximate-headline status. No calibration or reserve
   truth is asserted. Changing precision, dates or source bytes changes the derived identity even when
   the printed percentage is unchanged. Document authentication remains at the public CLI boundary.
-- **`recovery`** starts from `ModelledUncalibrated`, `KnownUnknown(Parametric)` and `Estimated`, then meets its sources'. A model output is never calibrated here (NL-4). It adds one model UU term, named by `RULES_VERSION` and `MODEL_CAVEAT`.
+- **`recovery`** starts from `ModelledUncalibrated`, `KnownUnknown(Parametric)` and `Estimated`, then meets its sources'. A model output is never calibrated here (NL-4). It adds one model UU term, named by `RULES_VERSION` and `MODEL_CAVEAT`. Price sensitivity additionally meets an explicitly `Assumed` price Claim; a declaration digest does not authenticate a commodity-market price.
 - **`reserves`** rows keep their fields private and report a constant `EvidenceClass::ISSUER`, so relabelling cannot promote them. `reserves::NO_CLAIM` states that they are issuer assertions, not classified reserves; `reserves::geo::NO_CLAIM` says the same of the GEO checks.
 - **`mirror`**'s normalized and common Claims retain immediate source parents, anchors, weaker evidence/knowledge/epistemics, and every distinct UU term, including different terms sharing a scenario id. No assertion is promoted. `mirror::transcriptions::bind` preserves the supplied evidence class.
 - **The other outputs carry no Claim and no evidence class.** These are the root items, `definitions`, `cutoff`, both LMDI paths, `roll_forward` and `roll_forward::quarter`. `WATERFALL_NO_CLAIM`, `WATERFALL_RULES_VERSION`, `recovery::NO_CLAIM`, `roll_forward::NO_CLAIM`, `reserve_replacement::NO_CLAIM`, `quarter::WARNING` and `mirror::NO_CLAIM` state the descriptive reading. A `Conflict` or `Reproduced` cut-off state speaks to the registered inputs only, not to whether they suit the mine.
@@ -354,6 +370,8 @@ The other modules have local errors with no refusal code:
   - `quarters`: `QuarterlyHistory`, `WindowTotals`, `QuarterWitness`, `QuarterlyWitness`, `CheckedCertificate`, `QuarterlyCheck`, `QuarterlyHistoryReport`, `aggregate_quarters`, `check_quarter_witness` and `compare_quarters`.
 - **`capacity`:** `PhysicalKind`, `PhysicalLimit` with `canonical_tag`, `CapacityLimits`, `CapacityVerdict`, `CapacityReport` and `compare_production`.
 - **`recovery`:** `RULES_VERSION`, `NO_CLAIM`, `MODEL_CAVEAT`, `QuantityKind`, `Quantity`, `TrainingRow`, `OperatingRow`, `Estimate`, `SquareRoot`, `Fit`, `Model`, `ModelProjection`, `Projection`, `fit` and `project`. It re-exports `Ownership` and `Period` from `guidance`.
+- **`recovery::sensitivity`:** `RULE`, `NOTICE`, `CopperPrice`, `Sensitivity` and `assess`; prices provide
+  `canonical_tag` and `declared_claim`, and derived sensitivities provide `canonical_tag`.
 - **`roll_forward`:** `SCHEMA`, `NO_CLAIM`, `assess`, `assess_with_metrics`, `TableReport` (with `cutoffs`), `SourceCell`, `ComponentCheck` and `IdentityRefusal` (BD-340.S5, BD-331.S7, BD-063).
 - **`reserve_replacement`:** `SCHEMA`, `NO_CLAIM`, `Bounds`, `ExactValue`, `Reading`, `AnnualResult`, `Totals`, `AggregateResult`, `JointBounds`, `HeadlineState`, `HeadlineResult`, `SeriesResult`, `SeriesRefusal`, `SeriesAssessment`, `ReplacementReport` with `digest` and `to_json`, and `assess` (BD-063).
   Canonical APIs: `ClaimBasis`, `InputRole`, `InputClaim`, `ReplacementValue`, `ReplacementClaims::to_json`,

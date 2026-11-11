@@ -3350,8 +3350,32 @@ The exact rational points have conservative enclosures over the declared input-r
 do not assert statistical coverage. The fit also distinguishes the descriptive residual sample SD, using
 `SSE/(n−1)`, from the conventional regression residual-error SD, using `SSE/(n−2)`; their square-root bounds
 cover numerical evaluation only. The models omit ore type, grind, throughput effects and concentrate mass
-pull, and apply annual training to quarterly observations. Operational attribution, recoverable production,
-forecasts and dollar sensitivity are outside this output.
+pull, and apply annual training to quarterly observations. Operational attribution, recoverable production
+and forecasts remain outside this output.
+
+#### Apply explicit copper-price scenarios
+
+DESIGN (bd-srqc): repeat `--price SCENARIO=USD_PER_LB` to value each signed quarterly model difference
+under named constant nominal price assumptions. These example prices are illustrative declarations:
+
+```bash
+cargo run -p fmine-cli -- recovery gap --synthetic \
+  --price low=4.00 --price high=5.50 --format markdown
+cargo run -p fmine-cli -- recovery gap --issuer barrick --through 2026Q2 \
+  --price low=4.00 --price high=5.50 --json
+```
+
+Both models and every declared scenario retain exact USD-million points and all input-rounding bounds.
+The conversion uses the statutory avoirdupois pound, keeps negative and cross-zero differences, and
+retains the original full-site quarter. For an independent unit example, `0.45359237 kt` is exactly one
+million pounds, so USD 4/lb gives USD 4 million. This is a hypothetical gross metal-value sensitivity;
+it does not estimate recoverable copper, sales revenue, profit or monetary downside and is not annualized.
+
+The `fmine.recovery.price-sensitivity.v1` payload embeds the unchanged recovery report and base digest,
+plus canonical price declarations and derived Claims with their parent identities and source anchors.
+Scenario names are unique; up to sixteen nonnegative plain decimal prices are accepted, including zero.
+No price is fetched or inferred. Reordering scenarios keeps output bytes unchanged, while changing a price
+changes the sensitivity digest. Unusable quarters remain explicit refusals with the full result population.
 
 **`--through` limits workbook releases for a retrospective comparison.** The command still reads the current
 verified historical model documents, so the bound does not establish what was knowable at that earlier date.

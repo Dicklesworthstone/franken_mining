@@ -1039,6 +1039,117 @@ mod cli_contract {
     }
 
     #[test]
+    fn price_sensitivity_cli_matches_exact_fraction_oracle_and_preserves_sources() {
+        let executable = std::env::current_exe().expect("test executable");
+        let binary = std::env::var_os("FMINE_TEST_BINARY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                executable
+                    .ancestors()
+                    .find(|p| p.file_name().is_some_and(|n| n == "deps" || n == "build"))
+                    .and_then(std::path::Path::parent)
+                    .expect("Cargo output directory")
+                    .join(format!("fmine{}", std::env::consts::EXE_SUFFIX))
+            });
+        let oracle = r#"
+import json, subprocess, sys
+from fractions import Fraction as Q
+
+def run(extra=(), code=0):
+    p = subprocess.run([sys.argv[1], 'recovery', 'gap', '--synthetic', *extra, '--json'],
+                       text=True, capture_output=True)
+    assert p.returncode == code, (extra, p.returncode, p.stdout, p.stderr)
+    e = json.loads(p.stdout)
+    assert e['exit_code'] == code
+    assert e['anchor_id'] is None and e['certificate'] is None
+    assert e['flags'] == {name: False for name in (
+        'reserve_disclosure_claim', 'execution_authorized',
+        'geotechnical_signoff', 'regulatory_compliance_claim')}
+    return p.stdout, e['payload']
+
+base_raw, base = run()
+options = ['--price', 'low=4.00', '--price', 'high=5.50']
+raw, report = run(options)
+assert report['schema'] == 'fmine.recovery.price-sensitivity.v1'
+assert report['base_recovery_digest'] == base['digest']
+assert report['recovery'] == base
+start = base_raw.index('"payload":') + len('"payload":')
+_, length = json.JSONDecoder().raw_decode(base_raw[start:])
+assert base_raw[start:start + length] in raw  # Original source report bytes survive.
+assert run(options) == (raw, report)
+assert run(['--price', 'high=5.50', '--price', 'low=4.00']) == (raw, report)
+_, changed = run(['--price', 'low=4.00', '--price', 'high=6.00'])
+assert changed['digest'] != report['digest'] and changed['recovery'] == base
+
+prices = {p['claim']['value']['scenario']: p['claim'] for p in report['prices']}
+assert set(prices) == {'low', 'high'}
+assert {p['declared_token'] for p in report['prices']} == {'4.00', '5.50'}
+for name, amount in [('low', Q(4)), ('high', Q(11, 2))]:
+    p = prices[name]
+    assert Q(p['value']['value']) == amount and p['value']['unit'] == 'usd_per_lb'
+    assert p['evidence'] == 'Assumed' and p['value']['market_observation'] is False
+    assert p['parents'] == [] and p['anchors']
+
+# Independently derive synthetic copper differences from processed=6000 kt,
+# h=.62%, R=90%, mean tails=.04044%, and OLS tails=.03232+.014*h.
+h, lost = Q('0.62'), Q(1, 10)
+copper = {'constant_tails': 6000 * (h * lost - Q('0.04044')) / 100,
+          'grade_dependent_tails': 6000 * (h * lost - Q('0.03232') - Q('0.014') * h) / 100}
+assert copper == {'constant_tails': Q('1.2936'), 'grade_dependent_tails': Q('1.26')}
+rows = report['results']
+assert len(rows) == 4
+assert {(r['quarter'], r['model'], r['scenario']) for r in rows} == {
+    ('2025Q1', model, name) for model in copper for name in prices}
+assert len({r['claim']['claim_id'] for r in rows}) == len(rows)
+def anchors(claim):
+    return {(a.get('artifact_path', a.get('file')), a['sha256'], a['locator'])
+            for a in claim['anchors']}
+for row in rows:
+    assert row['status'] == 'computed' and row['refusal'] is None
+    claim, source, price = row['claim'], base['quarters'][0][row['model']], prices[row['scenario']]
+    value = claim['value']
+    assert value['subject'] == base['subject']
+    assert value['period'] == {'year': 2025, 'first_month': 1, 'last_month': 3}
+    assert value['ownership'] == source['ownership_basis'] == {'kind': 'full'}
+    assert value['model'] == row['model'] and value['price'] == price['value']
+    assert set(claim['parents']) == {source['claim_id'], price['claim_id']}
+    assert anchors(claim) == anchors(source) | anchors(price)
+    assert claim['evidence'] == 'Assumed' and claim['canonical_body_hex']
+    metal, usd = value['copper_difference_kt'], value['value_difference_usd_m']
+    assert Q(metal['point']) == copper[row['model']]
+    # 1 kt = 10^9 g, one lb = 453.59237 g, USD millions divide by 10^6.
+    factor = Q(100000000, 45359237) * Q(price['value']['value'])
+    for endpoint in ('point', 'lo', 'hi'):
+        assert Q(metal[endpoint]) == Q(source['copper_difference_kt'][endpoint]['v'])
+        assert Q(usd[endpoint]) == Q(metal[endpoint]) * factor
+    assert Q(usd['lo']) <= Q(usd['point']) <= Q(usd['hi'])
+    assert source['copper_difference_kt']['closed'] is True
+    assert not any(e[k] for e in (metal, usd) for k in ('lo_strict', 'hi_strict'))
+for bad in [
+    ['--price'], ['--price', 'low=-4'], ['--price', 'low=NaN'], ['--price', 'low=4e0'],
+    ['--price', 'bad name=4'], ['--price', 'low=4', '--price', 'low=5'],
+    ['--price', 'low=4', 'extra'], ['--price', 'low=4', '--site', 'Lumwana'],
+    ['--price', 'low=4', '--synthetic'],
+    [item for i in range(17) for item in ('--price', f'p{i}=4')],
+]:
+    _, error = run(bad, code=2)
+    assert 'error' in error
+print('PASS: exact recovery price points, signed-bound scaling, source retention, parents, scenarios and strict CLI')
+"#;
+        let output = std::process::Command::new("python3")
+            .args(["-I", "-c", oracle])
+            .arg(binary)
+            .output()
+            .expect("Python independent rational oracle");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn test_recovery_command_requires_evidence_and_unambiguous_selectors() {
         let ws = no_corpus_workspace("recovery-no-corpus");
         let (env, _) = invoke(&args(&["recovery", "gap", "--issuer", "barrick"]), &ws);

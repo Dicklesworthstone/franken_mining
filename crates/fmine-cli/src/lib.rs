@@ -20,6 +20,7 @@ pub mod mirror;
 pub mod packet;
 pub mod pit;
 pub mod plant;
+pub mod recovery;
 pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
@@ -158,6 +159,8 @@ pub enum CliCommand {
     },
     /// Invented annual and quarterly observations through the same recovery models.
     RecoverySynthetic,
+    /// Explicit nominal copper-price assumptions applied to each signed quarterly model difference.
+    RecoverySensitivity(recovery::Options),
     /// Check cited draft equalities against a verified public Claim snapshot (BD-345).
     Lint {
         draft: PathBuf,
@@ -902,6 +905,10 @@ pub fn parse_args(
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
     let verb = verb_hint(args);
+    if verb == "recovery gap" && args.iter().any(|arg| arg == "--price") {
+        let (options, format, root) = recovery::parse(args, default_root)?;
+        return Ok((CliCommand::RecoverySensitivity(options), format, root));
+    }
     if matches!(
         verb,
         "metrics cost"
@@ -2010,6 +2017,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
         ),
         CliCommand::RecoverySynthetic => recovery_envelope(fmine_public::recovery::run_synthetic()),
+        CliCommand::RecoverySensitivity(options) => recovery::execute(options, workspace_root),
         CliCommand::LintHtml {
             draft,
             issuer,
@@ -2273,8 +2281,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "track-record --issuer <issuer> --cohort-as-of YYYY-MM-DD [--site <site>] [--through YYYYQn]",
                 "track-record --synthetic --cohort-as-of YYYY-MM-DD",
                 "track-record --synthetic [--json]",
-                "recovery gap --issuer <issuer> [--through YYYYQn]",
-                "recovery gap --synthetic",
+                "recovery gap --issuer <issuer> [--through YYYYQn] [--price SCENARIO=USD_PER_LB]...",
+                "recovery gap --synthetic [--price SCENARIO=USD_PER_LB]...",
                 "lint <draft> --issuer <issuer> [--through YYYYQn] [--discover] [--as-of YYYY-MM-DD]",
                 "lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]",
                 "lint <draft> --synthetic [--discover]",
