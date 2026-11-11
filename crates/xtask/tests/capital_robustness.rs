@@ -93,3 +93,72 @@ fn capital_robustness_matches_independent_fraction_vertices_and_transport_duals(
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn adaptive_capital_robustness_matches_independent_policy_and_transport_oracles() {
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(root().join("crates/xtask/testdata/capital_robustness_oracle.py"))
+        .arg(binary())
+        .arg("--adaptive")
+        .output()
+        .expect("execute independent adaptive transport oracle");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn adaptive_capital_robustness_preserves_actual_cli_json_and_markdown() {
+    let fixture = Command::new("python3")
+        .arg("-I")
+        .arg(root().join("crates/xtask/testdata/capital_robustness_oracle.py"))
+        .arg(binary())
+        .arg("--adaptive-fixture")
+        .output()
+        .expect("create synthetic adaptive stress input");
+    assert!(
+        fixture.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fixture.stderr)
+    );
+    let root = PathBuf::from(
+        String::from_utf8(fixture.stdout)
+            .expect("UTF-8 fixture path")
+            .trim(),
+    );
+    let args = ["decide", "program", "capital-program.toml"].map(str::to_owned);
+    let (envelope, format) = fmine_cli::invoke(&args, &root);
+    assert_eq!(format, fmine_cli::OutputFormat::Json);
+    assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+    let json = envelope.to_json();
+    let markdown = envelope
+        .rendered_markdown
+        .as_deref()
+        .expect("adaptive stress Markdown");
+    for field in [
+        "\"scope\":\"nominally_feasible_adaptive_policies\"",
+        "\"scope\":\"nominally_feasible_static_bundles\"",
+        "\"worst_case_mean\":\"15/1\"",
+        "\"worst_case_expected_regret\":\"15/2\"",
+    ] {
+        assert!(json.contains(field), "missing {field}");
+    }
+    assert!(markdown.contains("## Capital policy scenario-weight robustness"));
+    for (format, expected) in [("json", json.as_str()), ("markdown", markdown)] {
+        let output = Command::new(binary())
+            .args(&args)
+            .args(["--format", format, "--workspace"])
+            .arg(&root)
+            .output()
+            .expect("execute actual adaptive stress command");
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("UTF-8 report"),
+            format!("{expected}\n")
+        );
+    }
+}

@@ -883,9 +883,9 @@ whole-bundle NAV per actual share, rather than dividing a mean total value by a 
 
 The report exposes both adversarial distributions, transported mass, transport cost, dual multipliers,
 dual potentials and exact zero duality gaps. It retains empty eligible populations, rejected bundle IDs
-and all co-winners. Geometry is limited to 64 states and bounded work over the complete subset population;
-adaptive recourse policies require a separate ambiguity model and are refused here. The option can coexist
-with the separate bootstrap diagnostic below, and an absent declaration preserves the prior report shape.
+and all co-winners. Geometry is limited to 64 states and bounded work over the complete subset population.
+The same explicit declaration also supports two-stage policies, described below. The option can coexist
+with the separate bootstrap diagnostic, and an absent declaration preserves the prior report shape.
 
 #### Measure whether the selected program changes under scenario resampling
 
@@ -1394,6 +1394,27 @@ This exact mode admits at most four observation classes and 256 policies. With `
 remain visible. The combined static and policy cash-checkpoint count must be at most 65,536. Larger models
 refuse explicitly. The evaluator reuses each static subset's same-state cash and equity results rather than
 recalculating those ledgers for every policy, and sorts exact distributions without floating-point rounding.
+
+Add the same `[[robustness]]` declaration and complete `[[transport_distance]]` matrix used by static
+programs to assess conditional policies under declared scenario-weight shifts. The report retains separate
+static-bundle and adaptive-policy comparisons; each has its own feasible population, hindsight-regret
+reference, co-winners and exact transport certificates. The adaptive report uses `policy_id` and scope
+`nominally_feasible_adaptive_policies`.
+
+The stress calculation changes the **unconditional weights of complete states**. A policy's paid study,
+observation classes and chosen continuations stay fixed. States with the same observation cannot acquire
+different decisions, and the study cost stays in every resulting path. Branch probabilities in the policy
+table remain nominal; each stress certificate displays its own adversarial distribution. Cash, contractual
+and share-count failures remain binding even if an adversary gives the failing state zero weight. Eligibility
+uses the original nominal tail-loss limits; this diagnostic does not establish stressed CVaR feasibility.
+
+INFERENCE from the independent synthetic study test: a USD 10 study followed by construction only in the
+good state has complete policy payoffs `[90, -10]`, with equal nominal weights and unit state distance.
+At radius `1/4`, its nominal mean is USD 40, worst-case mean is USD 15, and worst-case expected regret is
+USD 7.50 against the feasible policy population. At radius `1/2`, hold-cash wins on worst-case mean while
+the adaptive policy still wins on worst-case regret. These two criteria can choose different policies.
+The same calculation uses realized whole-policy NAV per actual share in equity mode. Combined work is
+bounded over all static subsets and policies before enumeration; the bootstrap diagnostic can run alongside it.
 
 These are conditional comparisons of declared assumptions. The examples apply no fitted reference-class
 correction, and the output supplies no calibrated signal probabilities, empirical selection frequency,

@@ -1065,12 +1065,6 @@ fn parse_model(
     let selection_stability =
         stability::finish(stability_row, &source, &doc.top, &unknowns, &uu_anchors);
     let robustness = robustness_rows.finish(&states, &source, &doc.top, &unknowns, &uu_anchors)?;
-    if information.is_some() && robustness.is_some() {
-        return Err(bad(
-            RefusalCode::NoClaimInDomain201,
-            "capital Wasserstein stress supports static bundles only; adaptive policies are outside this comparison",
-        ));
-    }
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()

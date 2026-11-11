@@ -6,6 +6,7 @@ transport polytope, without calling the Rust solver or its certificate checker.
 """
 from fractions import Fraction
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -22,10 +23,10 @@ def rat(value):
     return Fraction(value)
 
 
-def invoke(binary):
+def invoke(binary, model=MODEL, workspace=ROOT):
     output = subprocess.run(
-        [str(binary), "decide", "program", str(MODEL), "--json",
-         "--workspace", str(ROOT)],
+        [str(binary), "decide", "program", str(model), "--json",
+         "--workspace", str(workspace)],
         capture_output=True, text=True, encoding="utf-8", check=False, timeout=60,
     )
     assert output.returncode == 0, (output.stdout, output.stderr)
@@ -161,6 +162,110 @@ def main(binary):
     print("capital Wasserstein: exact independent vertices and all primal/dual witnesses verified")
 
 
+def adaptive_reference():
+    module = importlib.util.spec_from_file_location(
+        "capital_recourse_reference", Path(__file__).with_name("capital_recourse_oracle.py"))
+    reference = importlib.util.module_from_spec(module)
+    module.loader.exec_module(reference)
+    return reference
+
+
+def adaptive_fixture(reference, spec, radius):
+    states = [state for state, _ in spec["states"]]
+    rows = [reference.base.block("robustness", {
+        "method": "wasserstein_1", "radius": str(radius.numerator) + "/" + str(radius.denominator),
+        "metric_basis": "Synthetic unit distance between shared states",
+        "radius_basis": "Declared sensitivity, no empirical confidence claim",
+    })]
+    rows += [reference.base.block("transport_distance", {
+        "from": source, "to": target, "value": "0/1" if source == target else "1/1",
+    }) for source in states for target in states]
+    return reference.fixture(reference.model(spec) + "".join(rows))
+
+
+def adaptive_main(binary):
+    reference = adaptive_reference()
+    # The independent existing policy oracle accounts for all cash, shares and information sets.
+    specs = [reference.study_example(), reference.study_example(grouped=True),
+             reference.study_example(gated=False), reference.equity_example(),
+             reference.adaptive_only_example()]
+    for spec in specs:
+        expected = reference.enumerate_policies(spec)
+        weights = expected["weights"]
+        assert len(weights) == 2 and set(weights.values()) == {Fraction(1, 2)}
+        for radius in (Fraction(0), Fraction(1, 4), Fraction(1, 2), Fraction(1)):
+            root = adaptive_fixture(reference, spec, radius)
+            model = root / reference.FILE
+            raw = model.read_bytes()
+            first, payload = invoke(binary, model, root)
+            assert first == invoke(binary, model, root)[0]
+            assert model.read_bytes() == raw
+            assert payload["source"]["sha256"] == hashlib.sha256(raw).hexdigest()
+            report = payload["program"]
+            reference.CapitalRecourseScenarios().check_policies(report, spec)
+            summary = report["summary"]
+            stress = summary["robustness"]
+            assert stress["scope"] == "nominally_feasible_adaptive_policies"
+            assert stress["regret_reference"] == "all_nominally_feasible_adaptive_policies"
+            assert stress["objective_unit"] == ("USD/share" if "equity" in spec else "USD")
+            assert stress["stressed_tail_loss_feasibility_certified"] is False
+            assert report["static_comparison"]["summary"]["robustness"]["scope"] == "nominally_feasible_static_bundles"
+            design = report["static_comparison"]["inputs"]["robustness"]
+            assert design["id"] in report["claim"]["parents"]
+            assert all(anchor in report["claim"]["anchors"] for anchor in design["anchors"])
+            ids = {reference.policy_key(row["initial_selected"], row["branches"]): row["policy_id"]
+                   for row in summary["policies"]}
+            payoffs, structural, risk = {}, [], []
+            for key, row in expected["policies"].items():
+                identifier = ids[key]
+                if row["rejections"]:
+                    structural.append(identifier)
+                elif row["risk_rejected"]:
+                    risk.append(identifier)
+                else:
+                    payoffs[identifier] = (row["per_share"] if "equity" in spec else row)["values"]
+            assert sorted(stress["structural_rejections"]) == sorted(structural)
+            assert sorted(stress["nominal_risk_rejections"]) == sorted(risk)
+            assert stress["nominal_expected_value_winners"] == summary["feasible_winners"]
+            states = stress["state_ids"]
+            assert states == sorted(weights)
+            best = {state: max(row[state] for row in payoffs.values()) for state in states} if payoffs else {}
+            distributions = [{states[0]: Fraction(2 - forward + backward, 4),
+                              states[1]: Fraction(2 + forward - backward, 4)}
+                             for forward in range(3) for backward in range(3)
+                             if Fraction(forward + backward, 4) <= radius]
+            distances = {(a, b): Fraction(a != b) for a in states for b in states}
+            rows = {row["policy_id"]: row for row in stress["policies"]}
+            assert set(rows) == set(payoffs) and len(rows) == len(stress["policies"])
+            for identifier, values in payoffs.items():
+                row = rows[identifier]
+                regrets = {state: best[state] - values[state] for state in states}
+                dot = lambda law, objective: sum(law[state] * objective[state] for state in states)
+                assert rat(row["nominal_mean"]) == dot(weights, values)
+                assert rat(row["nominal_mean_regret"]) == dot(weights, regrets)
+                assert rat(row["worst_case_mean"]) == min(dot(law, values) for law in distributions)
+                assert rat(row["worst_case_expected_regret"]) == max(dot(law, regrets) for law in distributions)
+                certificate(row["loss_certificate"], states, weights, distances, radius,
+                            {state: -values[state] for state in states})
+                certificate(row["regret_certificate"], states, weights, distances, radius, regrets)
+            for field, value, choose in (("maximin_mean_winners", "worst_case_mean", max),
+                                        ("minimax_expected_regret_winners", "worst_case_expected_regret", min)):
+                optimum = choose(rat(row[value]) for row in rows.values()) if rows else None
+                assert sorted(stress[field]) == sorted(identifier for identifier, row in rows.items()
+                                                      if rat(row[value]) == optimum)
+            if radius == 0:
+                assert stress["maximin_mean_winners"] == summary["feasible_winners"]
+    print("adaptive capital Wasserstein: 20 independently enumerated policy/transport scenarios verified")
+
+
 if __name__ == "__main__":
-    assert len(sys.argv) == 2, "usage: capital_robustness_oracle.py /path/to/fmine"
-    main(Path(sys.argv[1]).resolve())
+    assert len(sys.argv) in (2, 3), "usage: capital_robustness_oracle.py /path/to/fmine [--adaptive|--adaptive-fixture]"
+    binary = Path(sys.argv[1]).resolve()
+    if len(sys.argv) == 2:
+        main(binary)
+    elif sys.argv[2] == "--adaptive":
+        adaptive_main(binary)
+    else:
+        assert sys.argv[2] == "--adaptive-fixture"
+        reference = adaptive_reference()
+        print(adaptive_fixture(reference, reference.study_example(), Fraction(1, 4)))

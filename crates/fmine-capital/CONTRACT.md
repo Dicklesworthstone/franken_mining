@@ -434,7 +434,7 @@ remain unchanged.
   without stripping staged tables or manufacturing another file hash. Unknown, duplicate and orphan rows
   refuse. Static models retain their existing report bytes. Staged output uses `fmine.capital-recourse.v1`.
 
-Static inputs may additionally carry
+Program inputs may additionally carry
 `robustness: Option<Claim<robustness::RobustnessDesign>>`, reusing the source-bound decision geometry
 type and its canonical design serializer. The corresponding optional summary retains objective units,
 canonical state IDs and nominal weights, structural and nominal-risk exclusion IDs, every eligible bundle,
@@ -442,7 +442,8 @@ nominal/maximin/minimax co-winners and both complete transport certificates. Eac
 transport cost, adversarial destination weights, every positive arc, dual multiplier/potentials/value and gap.
 The source design is admitted as a Claim and contributes all parents, anchors, epistemics, confidentiality,
 UU and non-hashed metadata to the capital result. Both JSON and Markdown disclose the nominal-feasible
-regret population and lack of stressed tail-risk certification. Absent stress preserves prior report bytes
+regret population and lack of stressed tail-risk certification. The staged comparison additionally scopes
+its rows to complete policies, as described in §8. Absent stress preserves prior report bytes
 and digest binding; no new optional key is emitted.
 
 The existing capital model schema accepts one `[[robustness]]` row with quoted fields
@@ -657,6 +658,34 @@ whole-bundle NAV/share, source binding, permutation invariance, empty and negati
 work-limit refusal and bootstrap coexistence tests. It does not close BD-229, claim an empirical stress
 radius, provide robust-CVaR feasibility or establish a production-scale portfolio gate.
 
+DESIGN (BD-229, §§22.5, 23.3): the same declared transport geometry now also evaluates the complete
+two-stage policy population. `RecourseSummary.robustness` uses `RobustnessScope::AdaptivePolicies`,
+with `policies` and `policy_id` in JSON; the retained independent static report keeps its original scope,
+row names and bytes. Each policy's utility is its complete unconditional same-state payoff, including
+initial commitments, paid information, cash/debt/capital-call constraints and actual-share denominators.
+The original observation partition and continuation decisions stay fixed as weights move; no stress
+law reveals a hidden state, chooses a new continuation or rewrites nominal branch probabilities.
+Regret is recomputed against the nominally feasible policy population. Structural and nominal tail-loss
+exclusions remain explicit, including secondary entity limits; no rejected policy contributes a
+hindsight payoff. Each criterion retains a separate exact primal/dual certificate. Static and policy
+stress rankings are separate comparisons, not a new adaptive-value difference or a robust-CVaR screen.
+
+The existing `[[robustness]]` and complete `[[transport_distance]]` rows are accepted with an explicit
+`[[recourse]]` declaration through `fmine decide program`. The shared 2,097,152 transport work cap counts
+`2 * (static subsets + policies) * states^2` before claim admission or enumeration, in addition to
+the existing cash, valuation and bootstrap bounds. Geometry and information Claims, every original
+source and the scoped certificates participate in the resulting receipt. Omitting robustness preserves
+the previous staged outputs and identity. Neither nominal outcomes nor bootstrap experiments change.
+
+Direct tests use a constructed USD 10 study, good-state construction payoff 100, bad-state payoff -60,
+equal state weights and unit distance. Good-build/bad-abandon yields net utilities [90,-10], mean 40,
+and, at radius 1/4, worst mean 15 and worst expected regret 15/2. At radius 1/2, maximin prefers hold
+while minimax expected regret retains the adaptive policy. Independent eighth-grid transport vertices
+and full primal/dual witnesses cover all eligible policies. Grouped observations, risk and cash failures,
+exact NAV/share, combined work limits, source mutation and bootstrap coexistence have regressions.
+The existing Python Fraction policy oracle supplies five independent scenarios at four radii through
+the real CLI; an additional integration check compares complete library/binary JSON and Markdown.
+
 ## 9. Lifted Code & Foundation Dependencies
 
 No new external dependencies. Reuses the exact units/rational arithmetic, strict registry TOML parser,
@@ -673,6 +702,7 @@ reference-class fitting, inferred JV dilution penalties or loan agreements,
 blended or simultaneous optimization objectives, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Conditional selection frequency requires
-the explicit bootstrap declaration; absent declarations remain unavailable. Conditional static Wasserstein
-comparisons require the explicit geometry and radius declaration. Adaptive-policy stress, stressed tail-risk
-feasibility and empirical model-uncertainty calibration are not supplied. Broad BD-229 and production-scale gates remain open.
+the explicit bootstrap declaration; absent declarations remain unavailable. Conditional static and adaptive-policy
+Wasserstein comparisons require the explicit geometry and radius declaration. Stressed tail-risk feasibility,
+dynamic adversarial recourse and empirical model-uncertainty calibration are not supplied.
+Broad BD-229 and production-scale gates remain open.

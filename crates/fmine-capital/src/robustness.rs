@@ -1,4 +1,4 @@
-//! DESIGN (BD-229, §§22.5, 23.3): declared state-weight stress of nominally feasible static bundles.
+//! DESIGN (BD-229, §§22.5, 23.3): declared state-weight stress of nominally feasible capital choices.
 //! Determinism: Exact (rational objectives and transport certificates on the original support).
 
 use super::*;
@@ -12,9 +12,17 @@ mod tests;
 pub const MAX_TRANSPORT_STATES: usize = 64;
 pub const MAX_TRANSPORT_WORK: usize = 2_097_152;
 pub const NO_CLAIM: &str = "Conditional finite-support Wasserstein-1 comparison of every nominally feasible static bundle. Only the original shared-scenario weights vary within the declared dimensionless metric and radius; neither is inferred or calibrated. All original structural, cash, contractual and share-count checks remain binding over the complete support. Eligibility retains the original nominal tail-loss screens, including secondary entity limits; those screens are not recomputed or certified under the stressed weights. Mean and regret use the original primary objective, in USD or exact USD/share. Regret compares the same nominally feasible static bundles in each original state. Each bundle and criterion has its own adversarial law and exact primal/dual certificate. Stress rankings do not replace the nominal selection and do not certify robust CVaR feasibility, omitted regimes, adaptive policies, empirical confidence coverage, actual agreement terms or execution authorization.";
+pub const POLICY_NO_CLAIM: &str = "Conditional finite-support Wasserstein-1 comparison of every nominally feasible two-stage policy. Only the original unconditional shared-state weights vary within the declared dimensionless metric and radius; neither is inferred or calibrated. Each policy retains its original paid information gate, observation partition, initial commitments and same-state continuation. No adversary selects a new continuation or reveals a hidden state. All original structural, cash, contractual and share-count checks remain binding over the complete support. Eligibility retains the original nominal tail-loss screens, including secondary entity limits; those screens are not recomputed or certified under stressed weights. Mean and regret use each complete policy's primary objective, in USD or exact USD/share. Regret compares the same nominally feasible policies in each original state; the separate static comparison retains its own population. Each policy and criterion has its own adversarial law and exact primal/dual certificate. Stress rankings do not replace nominal selections or net adaptive value and do not certify robust CVaR feasibility, dynamic adversarial decisions, omitted regimes, empirical confidence coverage, actual agreement terms or execution authorization.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RobustnessScope {
+    StaticBundles,
+    AdaptivePolicies,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RobustBundle {
+    /// A static bundle id or an adaptive policy id, as declared by the summary's scope.
     pub bundle_id: String,
     pub nominal_mean: Rat,
     pub worst_case_mean: Rat,
@@ -27,6 +35,7 @@ pub struct RobustBundle {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RobustnessSummary {
+    pub scope: RobustnessScope,
     pub design: RobustnessDesign,
     pub objective_unit: String,
     pub state_ids: Vec<String>,
@@ -47,20 +56,30 @@ fn invalid(why: &str) -> Refusal {
 
 /// Bound the complete population, including rejected bundles, before hashing or enumerating it.
 pub(crate) fn check_work(inputs: &ProgramInputs) -> Result<()> {
+    if inputs.robustness.is_none() {
+        return Ok(());
+    }
+    let population = 1_usize
+        .checked_shl(inputs.candidates.len() as u32)
+        .ok_or_else(|| invalid("capital transport population exceeds its bounded domain"))?;
+    check_population_work(inputs, population)
+}
+
+/// Adaptive evaluation also retains the static population; neither may evade the shared work cap.
+pub(crate) fn check_population_work(inputs: &ProgramInputs, population: usize) -> Result<()> {
     let Some(claim) = &inputs.robustness else {
         return Ok(());
     };
     let d = &claim.value;
     let states = inputs.weights.value.states.len();
     let cells = states.checked_mul(states);
-    let population = 1_usize.checked_shl(inputs.candidates.len() as u32);
-    let work = cells.and_then(|n| population.and_then(|p| p.checked_mul(2)?.checked_mul(n)));
+    let work = cells.and_then(|n| population.checked_mul(2)?.checked_mul(n));
     if !(1..=MAX_TRANSPORT_STATES).contains(&states)
         || cells != Some(d.distances.len())
         || work.is_none_or(|n| n > MAX_TRANSPORT_WORK)
     {
         return Err(invalid(
-            "capital Wasserstein stress requires 1..=64 states, every ordered distance pair and at most 2097152 objective/state-pair evaluations over all declared subsets",
+            "capital Wasserstein stress requires 1..=64 states, every ordered distance pair and at most 2097152 objective/state-pair evaluations over all declared static subsets and policies",
         ));
     }
     if d.method != METHOD
@@ -148,6 +167,37 @@ pub(crate) fn assess(
     choices: &[ProgramChoice],
     nominal_winners: &[String],
     plan: Option<&TransportPlan>,
+) -> Result<Option<RobustnessSummary>> {
+    assess_population(
+        inputs,
+        choices,
+        nominal_winners,
+        plan,
+        RobustnessScope::StaticBundles,
+    )
+}
+
+pub(crate) fn assess_policies(
+    inputs: &ProgramInputs,
+    choices: &[ProgramChoice],
+    nominal_winners: &[String],
+    plan: Option<&TransportPlan>,
+) -> Result<Option<RobustnessSummary>> {
+    assess_population(
+        inputs,
+        choices,
+        nominal_winners,
+        plan,
+        RobustnessScope::AdaptivePolicies,
+    )
+}
+
+fn assess_population(
+    inputs: &ProgramInputs,
+    choices: &[ProgramChoice],
+    nominal_winners: &[String],
+    plan: Option<&TransportPlan>,
+    scope: RobustnessScope,
 ) -> Result<Option<RobustnessSummary>> {
     let Some(claim) = &inputs.robustness else {
         return Ok(None);
@@ -238,6 +288,7 @@ pub(crate) fn assess(
         .distances
         .sort_by(|a, b| (&a.from_state, &a.to_state).cmp(&(&b.from_state, &b.to_state)));
     Ok(Some(RobustnessSummary {
+        scope,
         design,
         objective_unit: if inputs.equity.is_some() {
             "USD/share"

@@ -125,6 +125,7 @@ pub struct RecourseSummary {
     pub unconstrained_net_adaptive_value: Option<ExactMoney>,
     pub unconstrained_net_adaptive_value_per_share: Option<ExactPerShare>,
     pub selection_stability: Option<stability::SelectionStabilitySummary>,
+    pub robustness: Option<robustness::RobustnessSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,17 +203,12 @@ fn internal(why: impl Into<String>) -> Refusal {
 struct Admission {
     metadata: Metadata,
     policy_count: usize,
+    transport: Option<TransportPlan>,
 }
 
 /// Work is bounded before either the information tag or any static catalog is constructed.
 fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
     let program = &inputs.program;
-    if program.robustness.is_some() {
-        return Err(bad(
-            RefusalCode::NoClaimInDomain201,
-            "capital Wasserstein stress supports static bundles only; adaptive policies are outside this comparison",
-        ));
-    }
     let basis = &inputs.information.value;
     let candidate_count = program.candidates.len();
     let state_count = program.weights.value.states.len();
@@ -339,7 +335,8 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
     }
     entity::valuation::check_work_bound(program, (1_usize << candidate_count) + policy_count)?;
     stability::check_work(program, (1_usize << candidate_count) + policy_count)?;
-    let (mut metadata, _) = super::validate(program)?;
+    robustness::check_population_work(program, (1_usize << candidate_count) + policy_count)?;
+    let (mut metadata, transport) = super::validate(program)?;
     if basis.model_key != program.policy.value.model_key
         || basis.currency != program.policy.value.currency
         || basis.valuation_basis != program.policy.value.valuation_basis
@@ -521,6 +518,7 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
     Ok(Admission {
         metadata,
         policy_count,
+        transport,
     })
 }
 
@@ -1082,6 +1080,7 @@ pub fn evaluate(inputs: &RecourseInputs) -> Result<EvaluatedRecourseProgram> {
     let Admission {
         metadata,
         policy_count,
+        transport,
     } = admit_inputs(inputs)?;
     let static_program = super::evaluate(&inputs.program)?;
     let mut information = inputs.information.clone();
@@ -1184,6 +1183,12 @@ pub fn evaluate(inputs: &RecourseInputs) -> Result<EvaluatedRecourseProgram> {
         &metadata,
         &feasible_winners,
     )?;
+    let robustness = robustness::assess_policies(
+        &inputs.program,
+        &comparisons,
+        &feasible_winners,
+        transport.as_ref(),
+    )?;
     for (policy, comparison) in policies.iter_mut().zip(comparisons) {
         policy.statistics = comparison.statistics;
         policy.tail_loss = comparison.tail_loss;
@@ -1208,6 +1213,7 @@ pub fn evaluate(inputs: &RecourseInputs) -> Result<EvaluatedRecourseProgram> {
         unconstrained_net_adaptive_value,
         unconstrained_net_adaptive_value_per_share,
         selection_stability,
+        robustness,
     };
     let mut binding = Encoder::new_frame(*b"CAPR", 1);
     binding.put_str(static_program.digest());

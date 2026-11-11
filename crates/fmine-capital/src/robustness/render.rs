@@ -45,14 +45,45 @@ fn certificate_json(c: &TransportCertificate) -> String {
 }
 
 impl RobustnessSummary {
+    fn labels(
+        &self,
+    ) -> (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    ) {
+        match self.scope {
+            RobustnessScope::StaticBundles => (
+                "nominally_feasible_static_bundles",
+                "all_nominally_feasible_static_bundles",
+                "bundle",
+                "bundles",
+                "bundle_id",
+                NO_CLAIM,
+            ),
+            RobustnessScope::AdaptivePolicies => (
+                "nominally_feasible_adaptive_policies",
+                "all_nominally_feasible_adaptive_policies",
+                "policy",
+                "policies",
+                "policy_id",
+                POLICY_NO_CLAIM,
+            ),
+        }
+    }
+
     #[must_use]
     pub fn to_json(&self) -> String {
+        let (scope, reference, singular, plural, identity, no_claim) = self.labels();
         let bundles = self
             .bundles
             .iter()
             .map(|row| {
                 format!(
-                    "{{\"bundle_id\":{},\"nominal_mean\":{},\"worst_case_mean\":{},\"nominal_mean_regret\":{},\"worst_case_expected_regret\":{},\"loss_certificate\":{},\"regret_certificate\":{}}}",
+                    "{{\"{identity}\":{},\"nominal_mean\":{},\"worst_case_mean\":{},\"nominal_mean_regret\":{},\"worst_case_expected_regret\":{},\"loss_certificate\":{},\"regret_certificate\":{}}}",
                     js(&row.bundle_id),
                     rq(row.nominal_mean),
                     rq(row.worst_case_mean),
@@ -65,11 +96,11 @@ impl RobustnessSummary {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{{\"scope\":\"nominally_feasible_static_bundles\",\"status\":{},\"objective_unit\":{},\"regret_reference\":\"all_nominally_feasible_static_bundles\",\"eligibility_basis\":\"original_nominal_structural_and_tail_loss_screens\",\"stressed_tail_loss_feasibility_certified\":false,\"design\":{},\"state_ids\":{},\"nominal_weights\":{},\"structural_rejections\":{},\"nominal_risk_rejections\":{},\"nominal_expected_value_winners\":{},\"maximin_mean_winners\":{},\"minimax_expected_regret_winners\":{},\"nominal_winner_survives_maximin\":{},\"nominal_winner_survives_minimax_regret\":{},\"bundles\":[{bundles}],\"no_claim\":{}}}",
-            js(if self.bundles.is_empty() {
-                "no_nominally_feasible_bundle"
+            "{{\"scope\":\"{scope}\",\"status\":{},\"objective_unit\":{},\"regret_reference\":\"{reference}\",\"eligibility_basis\":\"original_nominal_structural_and_tail_loss_screens\",\"stressed_tail_loss_feasibility_certified\":false,\"design\":{},\"state_ids\":{},\"nominal_weights\":{},\"structural_rejections\":{},\"nominal_risk_rejections\":{},\"nominal_expected_value_winners\":{},\"maximin_mean_winners\":{},\"minimax_expected_regret_winners\":{},\"nominal_winner_survives_maximin\":{},\"nominal_winner_survives_minimax_regret\":{},\"{plural}\":[{bundles}],\"no_claim\":{}}}",
+            js(&if self.bundles.is_empty() {
+                format!("no_nominally_feasible_{singular}")
             } else {
-                "ok"
+                "ok".into()
             }),
             js(&self.objective_unit),
             self.design.to_json(),
@@ -82,12 +113,19 @@ impl RobustnessSummary {
             ids(&self.minimax_expected_regret_winners),
             self.nominal_winner_survives_maximin,
             self.nominal_winner_survives_minimax_regret,
-            js(NO_CLAIM),
+            js(no_claim),
         )
     }
 
     #[must_use]
     pub fn to_markdown(&self) -> String {
+        let (_, _, singular, _, _, no_claim) = self.labels();
+        let (heading, column) = match self.scope {
+            RobustnessScope::StaticBundles => ("Capital scenario-weight robustness", "Bundle"),
+            RobustnessScope::AdaptivePolicies => {
+                ("Capital policy scenario-weight robustness", "Policy")
+            }
+        };
         let names = |values: &[String]| {
             if values.is_empty() {
                 "none".into()
@@ -96,7 +134,7 @@ impl RobustnessSummary {
             }
         };
         let mut out = format!(
-            "\n## Capital scenario-weight robustness\n\n{NO_CLAIM}\n\n**Objective unit:** {}. **Stress radius:** {}.\n\n**Metric basis:** {}.\n\n**Radius basis:** {}.\n\n**Nominal expected-value co-winners:** {}. **Maximin mean co-winners:** {}. **Minimax expected-regret co-winners:** {}.\n\n**Structural exclusions:** {}. **Nominal risk exclusions:** {}. Their original complete assessment rows retain the reasons and binding limits. No excluded bundle enters this stress comparison or its hindsight benchmark.\n\nThe nominal tail-loss limits have not been certified under the stressed laws. Unlike the preceding nominal regret columns, regret here compares only the nominally feasible population. Loss certificates maximize the negative primary payoff; regret certificates maximize same-state regret. The adversaries are separate.\n\n| Bundle | Nominal mean | Worst-case mean | Nominal expected regret | Worst-case expected regret |\n|---|---:|---:|---:|---:|\n",
+            "\n## {heading}\n\n{no_claim}\n\n**Objective unit:** {}. **Stress radius:** {}.\n\n**Metric basis:** {}.\n\n**Radius basis:** {}.\n\n**Nominal expected-value co-winners:** {}. **Maximin mean co-winners:** {}. **Minimax expected-regret co-winners:** {}.\n\n**Structural exclusions:** {}. **Nominal risk exclusions:** {}. Their original complete assessment rows retain the reasons and binding limits. No excluded {singular} enters this stress comparison or its hindsight benchmark.\n\nThe nominal tail-loss limits have not been certified under the stressed laws. Unlike the preceding nominal regret columns, regret here compares only the nominally feasible population. Loss certificates maximize the negative primary payoff; regret certificates maximize same-state regret. The adversaries are separate.\n\n| {column} | Nominal mean | Worst-case mean | Nominal expected regret | Worst-case expected regret |\n|---|---:|---:|---:|---:|\n",
             md(&self.objective_unit),
             ratio(self.design.radius),
             md(&self.design.metric_basis),
@@ -119,7 +157,10 @@ impl RobustnessSummary {
             );
         }
         if self.bundles.is_empty() {
-            out.push_str("\nNo nominally feasible bundle exists; no stress winner or fallback is supplied.\n");
+            let _ = writeln!(
+                out,
+                "\nNo nominally feasible {singular} exists; no stress winner or fallback is supplied."
+            );
         }
         out.push_str("\n### Declared dimensionless transport geometry\n\n| From state | To state | Distance |\n|---|---|---:|\n");
         for row in &self.design.distances {

@@ -95,27 +95,66 @@ fn strict_parser_refuses_orphans_missing_pairs_duplicates_unknowns_and_invalid_m
 }
 
 #[test]
-fn both_source_dispatch_and_direct_recourse_reject_static_stress_on_adaptive_policies() {
+fn staged_source_dispatch_reaches_policy_stress_and_retains_independent_static_comparison() {
     let text = format!("{STAGED}{}", geometry(&["good", "bad"]));
-    assert_eq!(
-        evaluate(&text, source(&text)).unwrap_err().code,
-        "FMINE-REF-201"
+    let (program, information) = parse_model(&text, source(&text), true).unwrap();
+    let design = program.robustness.as_ref().unwrap().clone();
+    let direct = crate::recourse::evaluate(&RecourseInputs {
+        program,
+        information: information.unwrap(),
+    })
+    .unwrap();
+    let dispatched = evaluate(&text, source(&text)).unwrap();
+    assert_eq!(direct.to_json(), dispatched.to_json());
+    assert_eq!(direct.to_markdown(), dispatched.to_markdown());
+    assert!(direct.claim().parents.contains(&design.claim_id));
+    assert!(
+        design
+            .anchors
+            .iter()
+            .all(|anchor| anchor.artifact_sha256 == sha256(text.as_bytes()).0
+                && direct.claim().anchors.contains(anchor))
     );
+    assert_eq!(
+        direct.summary().robustness.as_ref().unwrap().scope,
+        crate::robustness::RobustnessScope::AdaptivePolicies
+    );
+    assert_eq!(
+        direct
+            .static_program()
+            .summary()
+            .robustness
+            .as_ref()
+            .unwrap()
+            .scope,
+        crate::robustness::RobustnessScope::StaticBundles
+    );
+    let changed = format!("# New source annotation\n{text}");
+    assert_eq!(
+        evaluate(&changed, source(&text)).unwrap_err().code,
+        "FMINE-REF-505"
+    );
+    assert_ne!(
+        evaluate(&changed, source(&changed)).unwrap().to_json(),
+        direct.to_json()
+    );
+}
+
+#[test]
+fn adaptive_stress_does_not_admit_a_geometry_from_another_model() {
     let (mut program, information) = parse_model(STAGED, source(STAGED), true).unwrap();
     let declared = parse(
         &format!("{STATIC}{}", geometry(&["base", "delay"])),
         source(&format!("{STATIC}{}", geometry(&["base", "delay"]))),
     )
     .unwrap();
-    // Even a design from another model is refused as unsupported recourse before it can be applied.
     program.robustness = declared.robustness;
     let refusal = crate::recourse::evaluate(&RecourseInputs {
         program,
         information: information.unwrap(),
     })
     .unwrap_err();
-    assert_eq!(refusal.code, "FMINE-REF-201");
-    assert!(refusal.what.contains("static bundles only"));
+    assert_eq!(refusal.code, "FMINE-REF-105");
 }
 
 #[test]

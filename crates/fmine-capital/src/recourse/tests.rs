@@ -7,6 +7,8 @@ use crate::tests::{
     set_baseline_flow, set_candidate_flow, set_share_change, usd, with_equity, with_schedule,
 };
 
+mod robustness;
+
 fn information_claim(value: RecourseBasis) -> Claim<RecourseBasis> {
     let tag = value.canonical_tag();
     claim(

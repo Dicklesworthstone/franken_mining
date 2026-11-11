@@ -187,8 +187,14 @@ pub(super) fn summary_json(summary: &RecourseSummary) -> String {
     } else {
         "unavailable_declared_two_stage_model"
     };
+    let robustness = summary
+        .robustness
+        .as_ref()
+        .map_or_else(String::new, |comparison| {
+            format!(",\"robustness\":{}", comparison.to_json())
+        });
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"status\":{},\"information\":{},\"per_share_objective\":{},\"objective\":{},\"objective_unit\":{},\"statistics_unit\":\"USD\",\"per_share_statistics_unit\":\"USD/share\",\"tail_loss_unit\":\"USD\",\"per_share_tail_loss_unit\":\"USD/share\",\"spending_unit\":\"USD\",\"cash_unit\":\"USD\",\"policies\":[{policies}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"expected_per_share_cost_of_risk_limit\":{},\"net_adaptive_value\":{},\"net_adaptive_value_per_share\":{},\"net_adaptive_value_status\":{adaptive_status},\"unconstrained_net_adaptive_value\":{},\"unconstrained_net_adaptive_value_per_share\":{},\"unconstrained_net_adaptive_value_status\":{unconstrained_adaptive_status},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_policies_before_risk_limit\"}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"status\":{},\"information\":{},\"per_share_objective\":{},\"objective\":{},\"objective_unit\":{},\"statistics_unit\":\"USD\",\"per_share_statistics_unit\":\"USD/share\",\"tail_loss_unit\":\"USD\",\"per_share_tail_loss_unit\":\"USD/share\",\"spending_unit\":\"USD\",\"cash_unit\":\"USD\",\"policies\":[{policies}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"expected_per_share_cost_of_risk_limit\":{},\"net_adaptive_value\":{},\"net_adaptive_value_per_share\":{},\"net_adaptive_value_status\":{adaptive_status},\"unconstrained_net_adaptive_value\":{},\"unconstrained_net_adaptive_value_per_share\":{},\"unconstrained_net_adaptive_value_status\":{unconstrained_adaptive_status},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_policies_before_risk_limit\"{robustness}}}",
         js(&summary.model_key),
         js(&summary.question),
         currency(summary.currency),
@@ -483,6 +489,9 @@ impl EvaluatedRecourseProgram {
         }
         if let Some(stability) = &s.selection_stability {
             out.push_str(&stability.to_markdown());
+        }
+        if let Some(robustness) = &s.robustness {
+            out.push_str(&robustness.to_markdown());
         }
         out.push_str("\nAll four authority flags are false: reserve disclosure, execution authorization, geotechnical sign-off and regulatory compliance.\n\n## Complete precommitted comparison and program inputs\n\nThe following retained static report includes every declared candidate, state, cash-flow input, equity input and source Claim. It is the independent precommitted comparison population.\n\n---\n\n");
         out.push_str(&self.static_program().to_markdown());
