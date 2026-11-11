@@ -1846,12 +1846,15 @@ mod tests {
         std::fs::create_dir_all(&reg_dir).expect("temp registry dir");
         let text = std::fs::read_to_string(sources::registry_path(&workspace_root(), "barrick"))
             .expect("read");
-        let base = load_issuer_profile(&workspace_root(), "barrick")
-            .expect("registry")
+        let baseline = load_issuer_profile(&workspace_root(), "barrick").expect("registry");
+        let base = baseline.sources.len();
+        let base_through = baseline
+            .through("2026Q2")
+            .expect("baseline bound")
             .sources
             .len();
-        let added = "\n[[source]]\nfile = \"Barrick_Q3_2026_Mine_Stats.xlsx\"\nkind = \"mine_stats\"\n\
-                     quarter = \"2026Q3\"\npath = \"2026/q3/Barrick_Q3_2026_Mine_Stats.xlsx\"\n\
+        let added = "\n[[source]]\nfile = \"Barrick_Q3_2099_Mine_Stats.xlsx\"\nkind = \"mine_stats\"\n\
+                     quarter = \"2099Q3\"\npath = \"2099/q3/Barrick_Q3_2099_Mine_Stats.xlsx\"\n\
                      url_basis = \"W1 naming rule\"\nbytes = 1\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000001\"\n";
         std::fs::write(reg_dir.join("barrick.toml"), format!("{text}{added}")).expect("write");
         let profile = load_issuer_profile(&ws, "barrick").expect("extended registry");
@@ -1863,11 +1866,15 @@ mod tests {
                 .what
                 .contains(&format!("{n} of {n} registered barrick workbooks unusable"))
         );
-        assert!(refusal.what.contains("Barrick_Q3_2026_Mine_Stats.xlsx"));
+        assert!(refusal.what.contains("Barrick_Q3_2099_Mine_Stats.xlsx"));
         // `--through 2026Q2` drops the added row again.
-        assert_eq!(
-            profile.through("2026Q2").expect("bound").sources.len(),
-            base
+        let bounded = profile.through("2026Q2").expect("bound");
+        assert_eq!(bounded.sources.len(), base_through);
+        assert!(
+            bounded
+                .sources
+                .iter()
+                .all(|source| source.file_name != "Barrick_Q3_2099_Mine_Stats.xlsx")
         );
         let _ = std::fs::remove_dir_all(&ws);
     }

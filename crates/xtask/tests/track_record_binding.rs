@@ -335,13 +335,17 @@ fn pending_and_unsupported_guidance_are_visible_without_filling_values() {
         "pending-reader".into(),
     ));
     let mut unsupported = t.agreement.accepted[0].clone();
-    unsupported.quantity = "guidance_example_mine_capex_usd_m".into();
-    unsupported.locator.col = "Capital expenditure".into();
+    unsupported.quantity = "guidance_example_mine_unregistered_metric".into();
+    unsupported.locator.col = "Unregistered metric".into();
     t.agreement.accepted.push(unsupported);
     let r = assess(&t, &cells, &[]).unwrap();
     assert_eq!(r.rows.len(), 3);
     assert_eq!(r.pending_transcriptions.len(), 1);
     assert_eq!(r.unsupported_guidance.len(), 1);
+    assert_eq!(
+        r.unsupported_guidance[0].quantity,
+        "guidance_example_mine_unregistered_metric"
+    );
     assert!(r.to_json().contains("unsupported_metric"));
     let mut broken = t.clone();
     broken.agreement.accepted[0].readers.pop();

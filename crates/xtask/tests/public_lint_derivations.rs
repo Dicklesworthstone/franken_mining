@@ -2485,9 +2485,10 @@ fn copper_cost_rates_derive_aisc_and_c1_from_registered_decimal_workbook_rows() 
             Some("2030-05-01"),
             copper_cost_sheet(subject, "100.004", "200.004", "225.004"),
         );
+        // Printed C1 lower endpoint: 199.995 / 100.005 = 39999/20001 = 13333/6667.
         for (metric, amount, family, lo, hi) in [
             ("AISC", "2.25", "aisc_per_lb", "44999/20001", "45001/19999"),
-            ("C1", "2.00", "c1_per_lb", "39999/20001", "40001/19999"),
+            ("C1", "2.00", "c1_per_lb", "13333/6667", "40001/19999"),
         ] {
             let draft = format!(
                 "Example Mine Q1 2030 {ownership} {metric} per pound sold is ${amount}/lb."
@@ -2660,7 +2661,8 @@ fn copper_cost_rates_refuse_unknown_ownership_production_units_and_unsafe_denomi
     let path = registry_path(&root, DERIVATION_ISSUER);
     let mut registry = std::fs::read_to_string(&path).unwrap();
     registry.push_str(
-        "\n[[mine_stats_label_alias]]\nlabel = \"Sales (millions of pounds)\"\n\
+        "\n[[mine_stats_label]]\nlabel = \"Sales (Thousands of tonnes)\"\n\
+         [[mine_stats_label_alias]]\nlabel = \"Sales (millions of pounds)\"\n\
          reads_as = \"Sales (Thousands of tonnes)\"\nfirst = \"2030Q1\"\nlast = \"2030Q1\"\n\
          evidence = \"FACT: invented source label correction\"\n",
     );

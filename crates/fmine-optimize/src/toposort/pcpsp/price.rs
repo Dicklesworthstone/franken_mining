@@ -556,7 +556,7 @@ mod tests {
         let many = vec![0; EXACT_RESOURCES + 1];
         assert!(
             exact_basis(
-                &[many.clone()],
+                std::slice::from_ref(&many),
                 &many,
                 &(0..=many.len()).collect::<Vec<_>>()
             )

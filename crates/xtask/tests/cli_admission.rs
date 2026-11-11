@@ -81,8 +81,12 @@ mod tests {
             ]),
             &ws,
         );
-        assert_eq!(env.status, "refused");
-        assert_eq!(env.refusal.expect("missing guidance").code, "FMINE-REF-201");
+        // Registered actuals must be readable before missing guidance can be assessed.
+        assert_eq!((env.status, env.exit_code), ("refused", 5));
+        let refusal = env.refusal.expect("missing registered Mine Stats");
+        assert_eq!(refusal.code, "FMINE-REF-506");
+        assert!(refusal.what.contains("Barrick_Q2_2026_Mine_Stats.xlsx"));
+        assert!(!refusal.what.contains("Q3_2026"));
         assert_eq!(env.payload_json, "null");
         for bad in [
             vec!["assure", "challenges"],
