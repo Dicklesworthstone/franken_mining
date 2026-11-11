@@ -410,6 +410,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     decides the `BaselineKind`, and `run_rate_persistence` carries its pool's `Quarter`s and the point quarter
     after them) and the named site universe (`live`/`not_published`, never dropped); refuses an `OPEN` marker in
     any value, a duplicate id, an unknown baseline id and every malformed or missing key;
+  - `TargetMetric::from_target` gives candidate and scoring adapters one explicit source interpretation:
+    `au_prod_100_koz` and `cu_prod_100_kt` require `fy_minus_9m`; `aisc_usd_per_oz`, `c1_usd_per_lb` and
+    `aisc_usd_per_lb` require `q4_qtd`. It supplies the exact unit, guidance quantity key and cost-definition
+    suffix. Production is additive on the 100% basis; sold-metal cost rates are neither subtracted nor
+    ownership-scaled. Unsupported field/outcome pairs have no interpretation. This adds no durable tags
+    or changes to existing rules/record frames;
   - `parse_forecasts(csv, rules)` → `Vec<ForecastRow>` (BD-334.S3): the header `forecasts_header` derives from α
     (`site,target,point,p10,p90,uncalibrated` at 0.2), exactly one row per live site × target, none for a
     `not_published` site, exact decimals with 0 ≤ lower ≤ point ≤ upper, and `uncalibrated` = `true`;
@@ -517,6 +523,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   `guidance_scores::certified::tests::test_frozen_95_percent_level_against_independent_binomial_sum` compares
   95% endpoints with an independent 90-digit Decimal binomial summation. A separate regression pins the
   previous CP90 grid endpoints and a dyadic exact-root case.
+- `public_target_semantics_keep_metal_denominator_and_additivity_distinct` checks all five public target
+  interpretations and rejects reversed outcome kinds and an attributable-production alias.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 A miscalibrated spatial front alarms when either score's wealth reaches `2 / alpha` (40 at `alpha = 0.05`). Nothing

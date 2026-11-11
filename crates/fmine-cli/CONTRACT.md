@@ -901,6 +901,24 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   rounding and upward point ties. Exact bounds equal the persistence comparator before rounding; the median
   point is not evidence of independent skill. The output manifest preserves retrieval evidence separately
   from declared publication dates and is not the completed issuance manifest.
+- DESIGN (BD-067/BD-076): candidate generation and frozen-record scoring share
+  `fmine_calib::record::TargetMetric` semantics. Alongside gold production and AISC, supported copper
+  targets are `cu_prod_100_kt` with `fy_minus_9m`, and `c1_usd_per_lb` or `aisc_usd_per_lb` with
+  `q4_qtd`. Copper production is the signed exact original FY-minus-original-nine-month quantity on the
+  100% basis in kt; costs use the original Q4 printed rate per copper pound sold in `usd_per_lb`.
+  Separate target pools keep C1 and AISC distinct. Source Claims retain exact ownership evidence;
+  cost rates are neither ownership-scaled nor subtracted across cumulative periods.
+  Copper guidance uses `guidance_<site>_production_kt`, `guidance_<site>_c1_usd_per_lb` or
+  `guidance_<site>_aisc_usd_per_lb`. Production guidance divides by its own stated share before subtracting
+  original nine-month production. Cost guidance requires the explicit ownership basis followed by
+  `;c1=issuer-reported-per-sold-lb` or `;aisc=issuer-reported-per-sold-lb`, respectively.
+  Missing originals, incompatible units, ambiguous sources and unsupported definitions retain their
+  existing refusals or unavailable rows; later comparatives never replace originals. Same-universe
+  guidance/persistence comparisons keep every declared site and target, including missing outcomes.
+  Existing durable gold frames and the sealed FY2026 rules remain unchanged; copper needs explicit rules.
+  The synthetic `xtask/tests/forecast_record_score.rs` copper regression builds a draft, freezes its
+  exact CSV, verifies real local TSA receipts, scores both baselines and rejects changed bytes. That test
+  demonstrates the workflow, not independent historical issuance or an issued copper forecast.
 - `packet::{packets_from_report, ChallengePacket}`; immutable packet accessors, `validate`, `to_json`,
   `to_markdown`. The existing assurance engine computes the states; this module packages their evidence.
 - `track_record_binding::{run, assess, assess_snapshot, synthetic, synthetic_as_of, TrackRecordInput,

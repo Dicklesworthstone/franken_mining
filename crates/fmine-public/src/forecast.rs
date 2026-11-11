@@ -8,7 +8,7 @@ use std::io::Read;
 use std::path::Path;
 
 use fmine_calib::record::{
-    self, BaselineKind, Outcome, Quarter, Rat, RecordRules, SiteStatus, Target,
+    self, BaselineKind, Outcome, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
     candidate::{Candidate, CandidateSeries, build_candidate},
 };
 use fmine_core::codec::Encoder;
@@ -116,14 +116,9 @@ fn after_quarter(q: Quarter) -> Result<i64> {
 }
 
 fn expected_unit(target: &Target) -> Result<&'static str> {
-    match (target.field.as_str(), target.outcome) {
-        ("au_prod_100_koz", Outcome::FyMinus9m) => Ok("koz"),
-        ("aisc_usd_per_oz", Outcome::Q4Qtd) => Ok("usd_per_oz"),
-        _ => Err(invalid(format!(
-            "unsupported field/outcome for {}",
-            target.id
-        ))),
-    }
+    TargetMetric::from_target(target)
+        .map(TargetMetric::unit)
+        .ok_or_else(|| invalid(format!("unsupported field/outcome for {}", target.id)))
 }
 
 fn pool(rules: &RecordRules, target: &str) -> Result<(Quarter, Quarter, Quarter)> {
@@ -424,7 +419,7 @@ fn observation(
         };
         // The original historical production Claim keeps its flag and the source's per-ounce limitation.
         let note = (role == "history"
-            && target.outcome == Outcome::FyMinus9m
+            && TargetMetric::from_target(target) == Some(TargetMetric::GoldProduction)
             && value.signum() > 0
             && only_withheld
             && flagged == Some(key::StatusKind::Withheld))

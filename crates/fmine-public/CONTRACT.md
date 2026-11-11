@@ -22,9 +22,11 @@ The public lane of M0 (`fmine assure public`).
 - DESIGN (BD-067/BD-334): `forecast::build(workspace, rules_bytes, as_of, decimal_places)` produces an
   unissued quarterly-ratio candidate through `fmine_calib::record::candidate`. It reads only the original
   Mine Stats releases required by the declared historical pools and their common Q3 point. The supported
-  target meanings are 100%-basis gold production in koz (`fy_minus_9m`) and printed AISC per ounce sold
-  (`q4_qtd`); the latter is never differenced across cumulative periods. Every input uses the exact displayed
-  decimal and the canonical source Claim. A missing original release, ambiguous cell, unreadable or changed
+  target meanings are 100%-basis gold production in koz and copper production in kt (`fy_minus_9m`),
+  plus printed gold AISC per ounce sold and copper C1/AISC per pound sold (`q4_qtd`). Shared
+  `fmine_calib::record::TargetMetric` semantics fix each field, unit and outcome kind; targets retain separate
+  historical ratio pools. Cost rates are neither differenced across cumulative periods nor ownership-scaled.
+  Every input uses the exact displayed decimal and the canonical source Claim. A missing original release, ambiguous cell, unreadable or changed
   source, unsupported target, unprinted or changing cost ownership, or nonzero observation overlapping a
   registered site status refuses. No source value is rescaled or filled from a later comparative.
   Historical placeholders, absent rows and nonpositive printed values remain named observations; excluded
@@ -51,6 +53,10 @@ The public lane of M0 (`fmine assure public`).
   `availability_is_conservative_and_completed_quarters_cannot_look_ahead`,
   `incompatible_targets_ownership_changes_and_status_conflicts_refuse`, and
   `receipt_binds_rules_registry_information_cut_and_source_values`.
+  Copper controls are `copper_candidates_keep_kt_and_both_per_pound_costs_in_separate_source_bound_pools`
+  and `copper_candidate_refuses_unit_aliases_attributable_targets_and_ownership_changes`: exact candidate
+  values, CSV round trips, explicit units and source ownership remain checked separately for production,
+  C1 and AISC. The per-ounce withholding exception above remains restricted to historical gold production.
 
 - DESIGN (BD-057/BD-059): `html::run(workspace, issuer, definitions, as_of)` turns registered HTML
   table cells into canonical public Claims. It parses the exact captured source registry and mapping

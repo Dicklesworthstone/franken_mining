@@ -296,7 +296,7 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
         command.as_of,
         loaded.record_digest.to_hex(),
         digest.to_hex(),
-        scores_markdown(&assessment),
+        scores_markdown(&assessment, &loaded.rules),
         resolved.evidence_markdown,
         NO_CLAIM,
     );
@@ -321,7 +321,10 @@ fn rational(value: record::Rat) -> String {
     }
 }
 
-fn scores_markdown(scores: &record::scoring::paired::RecordAssessment) -> String {
+fn scores_markdown(
+    scores: &record::scoring::paired::RecordAssessment,
+    rules: &RecordRules,
+) -> String {
     use record::scoring::paired::Availability;
     let value = |v: Option<record::Rat>| v.map_or_else(|| "unavailable".into(), rational);
     let bounds = |v: fmine_numerics::exact_feas::Interval| {
@@ -339,10 +342,26 @@ fn scores_markdown(scores: &record::scoring::paired::RecordAssessment) -> String
     );
     let _ = writeln!(out, "\n{}", record::scoring::paired::CP_ASSUMPTION);
     for target in &scores.targets {
+        let _ = writeln!(out, "\n## {}\n", markdown_text(&target.target));
+        if let Some((declared, metric)) = rules
+            .targets
+            .iter()
+            .find(|declared| declared.id == target.target)
+            .and_then(|declared| {
+                record::TargetMetric::from_target(declared).map(|metric| (declared, metric))
+            })
+        {
+            // These code spans contain only the exact supported field and its static unit.
+            let _ = writeln!(
+                out,
+                "Metric: `{}`. Unit: `{}`. Outcomes, forecast and baseline bounds, interval scores and score differences use this unit.\n",
+                declared.field,
+                metric.unit(),
+            );
+        }
         let _ = writeln!(
             out,
-            "\n## {}\n\n{} declared sites; {} frozen live members; {} frozen not-published sites; {} resolved; {} unresolved live members; {} paired comparisons.\n\n| Method | Scored / live | Mean interval score | Paired mean |\n|---|---:|---:|---:|",
-            markdown_text(&target.target),
+            "{} declared sites; {} frozen live members; {} frozen not-published sites; {} resolved; {} unresolved live members; {} paired comparisons.\n\n| Method | Scored / live | Mean interval score | Paired mean |\n|---|---:|---:|---:|",
             target.n_members,
             target.n_live,
             target.n_not_published,

@@ -8,7 +8,8 @@ use std::path::Path;
 use fmine_calib::record::scoring::paired::{Availability, BaselineRow, Bounds, OutcomeRow};
 use fmine_calib::record::{
     self, BaselineKind, BaselineRule, InputDoc, Outcome, Quarter, Rat, RecordManifest, RecordRules,
-    RegisteredDigest, SiteStatus, Target, format_utc, parse_date, parse_hex32, parse_utc,
+    RegisteredDigest, SiteStatus, Target, TargetMetric, format_utc, parse_date, parse_hex32,
+    parse_utc,
 };
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
@@ -114,14 +115,14 @@ fn outcome_year(rules: &RecordRules) -> Result<u16> {
 }
 
 fn target_unit(target: &Target) -> Result<&'static str> {
-    match (target.field.as_str(), target.outcome) {
-        ("au_prod_100_koz", Outcome::FyMinus9m) => Ok("koz"),
-        ("aisc_usd_per_oz", Outcome::Q4Qtd) => Ok("usd_per_oz"),
-        _ => Err(invalid(format!(
-            "unsupported target field/outcome combination for {}",
-            target.id
-        ))),
-    }
+    TargetMetric::from_target(target)
+        .map(TargetMetric::unit)
+        .ok_or_else(|| {
+            invalid(format!(
+                "unsupported target field/outcome combination for {}",
+                target.id
+            ))
+        })
 }
 
 fn after_quarter(quarter: Quarter) -> Result<i64> {
@@ -319,7 +320,7 @@ impl Observation {
             .map(String::as_str)
             .or_else(|| self.printed.as_ref().err().map(String::as_str));
         format!(
-            "{{\"locator\":{},\"sha256\":{},\"raw_kind\":{},\"raw\":{},\"printed\":{},\"claim_id\":{},\"unit\":{},\"basis\":{},\"printed_basis\":{},\"basis_evidence\":{},\"status_evidence\":{},\"unusable\":{}}}",
+            "{{\"locator\":{},\"sha256\":{},\"raw_kind\":{},\"raw\":{},\"printed\":{},\"claim_id\":{},\"metric\":{},\"unit\":{},\"basis\":{},\"printed_basis\":{},\"basis_evidence\":{},\"status_evidence\":{},\"unusable\":{}}}",
             js(&self.locator()),
             js(&self.hash),
             js(self.raw.value.kind()),
@@ -328,6 +329,7 @@ impl Observation {
                 .as_ref()
                 .map_or_else(|_| "null".into(), |n| rat(*n)),
             cell.map_or_else(|| "null".into(), |c| js(&c.claim.claim_id.to_string())),
+            cell.map_or_else(|| "null".into(), |c| js(&c.key.line.label)),
             cell.map_or_else(|| "null".into(), |c| js(&c.key.unit)),
             cell.map_or_else(|| "null".into(), |c| js(&basis(c.key.ownership_basis))),
             cell.map_or_else(|| "null".into(), |c| js(&basis(c.printed_basis))),
@@ -1002,12 +1004,9 @@ impl Guidance {
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("_");
-        let metric = if target.outcome == Outcome::FyMinus9m {
-            "production_koz"
-        } else {
-            "aisc_usd_per_oz"
-        };
-        let quantity = format!("guidance_{slug}_{metric}");
+        let metric = TargetMetric::from_target(target)
+            .ok_or_else(|| invalid("guidance target has no supported source interpretation"))?;
+        let quantity = format!("guidance_{slug}_{}", metric.guidance_quantity());
         let period = format!("{year}FY");
         // At midnight that day's guidance cannot strictly precede the cut. Within a day retain the
         // latest candidate even when its timing is uncertain, so it cannot be replaced by older guidance.
@@ -1112,11 +1111,10 @@ impl Guidance {
                 ));
             }
         };
-        let basis_text = if target.outcome == Outcome::Q4Qtd {
-            let Some(ownership) = row.basis.strip_suffix(";aisc=issuer-reported-per-sold-oz")
-            else {
+        let basis_text = if let Some(suffix) = metric.guidance_basis_suffix() {
+            let Some(ownership) = row.basis.strip_suffix(suffix) else {
                 return Ok(unavailable(
-                    "cost guidance lacks its explicit issuer-reported per-sold-ounce definition",
+                    "cost guidance lacks the target's explicit issuer-reported sold-metal definition",
                 ));
             };
             ownership

@@ -185,6 +185,179 @@ fn replace_cell(sheet: &mut MinimalSheet, cell: &str, value: MinimalCell) {
         .1 = value;
 }
 
+fn copper_rules() -> String {
+    let mut rules = RULES
+        .replace("100% gold production", "100% copper production")
+        .replace("au_prod_100_koz", "cu_prod_100_kt")
+        .replace(
+            "AISC per attributable ounce sold",
+            "C1 per attributable pound sold",
+        )
+        .replace("printed Q4 AISC", "printed Q4 C1")
+        .replace("aisc_usd_per_oz", "c1_usd_per_lb");
+    rules.push_str(
+        r#"
+[[target]]
+id = "copper_aisc"
+quantity = "AISC per attributable copper pound sold"
+scored_quantity = "printed Q4 copper AISC"
+field = "aisc_usd_per_lb"
+outcome = "q4_qtd"
+[[baseline]]
+id = "run_rate_persistence"
+target = "copper_aisc"
+rule = "consecutive positive quarterly ratios"
+source = "invented copper workbooks"
+pool_from = "2030Q1"
+pool_through = "2030Q2"
+point_quarter = "2030Q3"
+"#,
+    );
+    rules
+}
+
+fn copper_sheet(q: u8, sheet: &mut MinimalSheet) {
+    replace_cell(
+        sheet,
+        "B2",
+        MinimalCell::Text("Copper produced (kt 100%)".into()),
+    );
+    replace_cell(
+        sheet,
+        "C2",
+        MinimalCell::Text("C1 cash costs ($/lb)".into()),
+    );
+    let c1 = [2.0, 4.0, 3.0][usize::from(q - 1)];
+    let aisc = [3.0, 6.0, 5.0][usize::from(q - 1)];
+    for (row, scale) in [(3, 1.0), (4, 2.0)] {
+        replace_cell(sheet, &format!("C{row}"), MinimalCell::Number(scale * c1));
+        sheet
+            .cells
+            .push((format!("D{row}"), MinimalCell::Number(scale * aisc)));
+    }
+    sheet.cells.push((
+        "D2".into(),
+        MinimalCell::Text("All-in sustaining costs ($/lb)".into()),
+    ));
+}
+
+#[test]
+fn copper_candidates_keep_kt_and_both_per_pound_costs_in_separate_source_bound_pools() {
+    let rules = copper_rules();
+    let (registry, sources) = fixture(copper_sheet);
+    let report = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+        sources.clone(),
+        2,
+    )
+    .unwrap();
+    let rows = &report.candidate.exact_rows;
+    assert_eq!(rows.len(), 6);
+    for (site, target, expected) in [
+        ("Site A", "production", 20),
+        ("Site B", "production", 80),
+        ("Site A", "unit_cost", 6),
+        ("Site B", "unit_cost", 12),
+        ("Site A", "copper_aisc", 10),
+        ("Site B", "copper_aisc", 20),
+    ] {
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.site == site && r.target == target)
+                .unwrap()
+                .point,
+            Rat::from_integer(expected)
+        );
+    }
+    assert_eq!(
+        record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+        report.candidate.serialized_rows
+    );
+    for row in &report.observations {
+        let claim = row.claim.as_ref().unwrap();
+        assert_eq!(
+            claim.key.unit,
+            if row.target == "production" {
+                "kt"
+            } else {
+                "usd_per_lb"
+            }
+        );
+        assert_eq!(
+            claim.key.line.label,
+            match row.target.as_str() {
+                "production" => "summary:cu_prod_100_kt",
+                "unit_cost" => "summary:c1_usd_per_lb",
+                _ => "summary:aisc_usd_per_lb",
+            }
+        );
+        assert_eq!(
+            claim.key.ownership_basis == OwnershipBasis::Consolidated100,
+            row.target == "production"
+        );
+    }
+    let repeated = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+        sources,
+        2,
+    )
+    .unwrap();
+    assert_eq!(report.digest, repeated.digest);
+    assert_eq!(report.candidate.csv, repeated.candidate.csv);
+}
+
+#[test]
+fn copper_candidate_refuses_unit_aliases_attributable_targets_and_ownership_changes() {
+    let rules = copper_rules();
+    let (registry, _) = fixture(copper_sheet);
+    for bad in [
+        rules.replace("cu_prod_100_kt", "cu_prod_attr_kt"),
+        rules.replace("c1_usd_per_lb", "c1_usd_per_oz"),
+    ] {
+        assert_eq!(
+            prepare(bad.as_bytes(), registry.as_bytes(), CUT)
+                .err()
+                .unwrap()
+                .code,
+            "FMINE-REF-107"
+        );
+    }
+    let (registry, changed) = fixture(|q, sheet| {
+        copper_sheet(q, sheet);
+        if q == 3 {
+            replace_cell(sheet, "A3", MinimalCell::Text("Site A (60%)".into()));
+        }
+    });
+    assert_eq!(
+        finish(
+            prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+            changed,
+            2
+        )
+        .unwrap_err()
+        .code,
+        "FMINE-REF-105"
+    );
+    let (registry, wrong_units) = fixture(|q, sheet| {
+        copper_sheet(q, sheet);
+        if q == 3 {
+            replace_cell(
+                sheet,
+                "B2",
+                MinimalCell::Text("Copper produced (millions of pounds 100%)".into()),
+            );
+        }
+    });
+    assert!(
+        finish(
+            prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+            wrong_units,
+            2
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn exact_displayed_observations_produce_complete_source_bound_candidate() {
     let (registry, sources) = fixture(|q, sheet| {
@@ -369,7 +542,9 @@ fn original_historical_production_survives_source_proven_per_ounce_withholding()
         if q == 1 {
             replace_cell(sheet, "B3", MinimalCell::Number(22.0));
             replace_cell(sheet, "C3", MinimalCell::Text("—".into()));
-            sheet.cells.push(("A8".into(), MinimalCell::Text(note.into())));
+            sheet
+                .cells
+                .push(("A8".into(), MinimalCell::Text(note.into())));
         }
     });
     let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
@@ -396,7 +571,10 @@ fn original_historical_production_survives_source_proven_per_ounce_withholding()
         matches!(&claim.claim.value, PublicValue::Number { stored, displayed: Ok(displayed), under_status: Some(key::StatusKind::Withheld) }
         if stored == "22" && displayed == "22")
     );
-    assert_eq!(claim.status_evidence.as_deref(), Some("synthetic withholding"));
+    assert_eq!(
+        claim.status_evidence.as_deref(),
+        Some("synthetic withholding")
+    );
     assert_eq!(
         claim.claim.anchors[0].artifact_sha256,
         sources[0].workbook.sha256
@@ -501,7 +679,11 @@ fn withholding_exception_never_supplies_missing_notes_costs_points_or_disposal_s
             });
         }
         let error = finish(prepared, sources, 2).unwrap_err();
-        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str(), "{fault}");
+        assert_eq!(
+            error.code,
+            RefusalCode::BasisMismatch105.as_str(),
+            "{fault}"
+        );
         assert!(error.what.contains("status"), "{fault}: {error:?}");
     }
     for missing in [MinimalCell::Number(0.0), MinimalCell::Text("—".into())] {
@@ -588,7 +770,9 @@ fn real_q3_candidate_preserves_partial_production_and_matches_independent_fracti
     );
     assert_eq!(
         original.reason.as_deref(),
-        Some("included_production_with_per_ounce_only_note:Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!A35")
+        Some(
+            "included_production_with_per_ounce_only_note:Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!A35"
+        )
     );
     assert!(matches!(
         original.claim.as_ref().unwrap().claim.value,

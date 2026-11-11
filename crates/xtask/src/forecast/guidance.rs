@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use fmine_calib::record::{self, BaselineKind, Outcome, Rat, RecordRules, SiteStatus, Target};
+use fmine_calib::record::{self, BaselineKind, Rat, RecordRules, SiteStatus, Target, TargetMetric};
 use fmine_core::hash::{Digest32, sha256};
 use fmine_public::key::{self, KeyedCell, OwnershipBasis, PeriodKind, Scope};
 use fmine_public::sources::{IssuerProfile, SourceKind};
@@ -204,15 +204,13 @@ fn key(site: &str) -> String {
         .join("_")
 }
 
-fn specification(target: &Target) -> Res<(&'static str, &'static str)> {
-    match (target.field.as_str(), target.outcome) {
-        ("au_prod_100_koz", Outcome::FyMinus9m) => Ok(("production_koz", "koz")),
-        ("aisc_usd_per_oz", Outcome::Q4Qtd) => Ok(("aisc_usd_per_oz", "usd_per_oz")),
-        _ => fail(format!(
+fn specification(target: &Target) -> Res<TargetMetric> {
+    TargetMetric::from_target(target).ok_or_else(|| {
+        vec![format!(
             "{}: issuer-guidance baseline has no declared adapter for {} {:?}",
             target.id, target.field, target.outcome
-        )),
-    }
+        )]
+    })
 }
 
 fn decimal(d: Decimal) -> Result<Rat, String> {
@@ -222,16 +220,15 @@ fn decimal(d: Decimal) -> Result<Rat, String> {
     Rat::new(d.mantissa, den).map_err(|e| e.to_string())
 }
 
-fn endpoints(a: &Accepted, production: bool) -> Result<(Rat, Rat, String), String> {
+fn endpoints(a: &Accepted, metric: TargetMetric) -> Result<(Rat, Rat, String), String> {
     if parse_token(&a.token)? != a.value {
         return Err("guidance token differs from the agreed interpretation".into());
     }
-    let ownership = if production {
-        a.basis.as_str()
-    } else {
-        a.basis
-            .strip_suffix(";aisc=issuer-reported-per-sold-oz")
-            .ok_or("AISC guidance must declare issuer-reported cost per sold ounce")?
+    let ownership = match metric.guidance_basis_suffix() {
+        None => a.basis.as_str(),
+        Some(suffix) => a.basis.strip_suffix(suffix).ok_or_else(|| {
+            format!("cost guidance must declare its exact issuer-reported sold-unit basis {suffix}")
+        })?,
     };
     let share = if ownership == "100%" {
         Rat::from_integer(1)
@@ -256,7 +253,7 @@ fn endpoints(a: &Accepted, production: bool) -> Result<(Rat, Rat, String), Strin
             return Err("one-sided guidance cannot supply a finite-interval baseline".into());
         }
     };
-    if production {
+    if metric.is_production() {
         Ok((
             lo.checked_div(share).map_err(|e| e.to_string())?,
             hi.checked_div(share).map_err(|e| e.to_string())?,
@@ -333,13 +330,13 @@ fn select(
     }
 }
 
-fn check_actual(cell: &KeyedCell) -> Result<(), String> {
+fn check_actual(cell: &KeyedCell, metric: TargetMetric) -> Result<(), String> {
     cell.claim.check_id().map_err(|e| e.to_string())?;
     if cell.claim.metric_key != cell.key.line.label
         || cell.claim.value_tag() != key::canonical_value_tag(&cell.key, &cell.claim.value)
         || cell.key.ownership_basis != OwnershipBasis::Consolidated100
         || cell.key.scope != Scope::Site
-        || cell.key.unit != "koz"
+        || cell.key.unit != metric.unit()
         || !cell.claim.confidentiality.is_public()
         || cell.claim.stale
         || cell.claim.calibration_failed
@@ -376,7 +373,8 @@ pub(super) fn bind_rows(
             .iter()
             .find(|t| t.id == baseline.target)
             .ok_or_else(|| vec!["baseline target is undeclared".into()])?;
-        let (metric, unit) = specification(target)?;
+        let metric = specification(target)?;
+        let unit = metric.unit();
         for site in &rules.sites {
             let mut row = BaselineRow {
                 site: site.name.clone(),
@@ -399,7 +397,11 @@ pub(super) fn bind_rows(
                 rows.push(row);
                 continue;
             }
-            let quantity = format!("guidance_{}_{metric}", key(&site.name));
+            let quantity = format!(
+                "guidance_{}_{}",
+                key(&site.name),
+                metric.guidance_quantity()
+            );
             let resolved = (|| {
                 select(&mut row, transcripts, &quantity, &period)?;
                 eligible(&row.guidance[0])?;
@@ -407,10 +409,10 @@ pub(super) fn bind_rows(
                 if a.unit != unit {
                     return Err(format!("guidance unit {} differs from {unit}", a.unit));
                 }
-                let production = target.outcome == Outcome::FyMinus9m;
-                let (mut lo, mut hi, basis) = endpoints(a, production)?;
+                let (mut lo, mut hi, basis) = endpoints(a, metric)?;
                 row.basis = basis;
-                if production {
+                if metric.is_production() {
+                    let label = format!("summary:{}", target.field);
                     row.actuals = cells
                         .iter()
                         .filter(|c| {
@@ -418,7 +420,7 @@ pub(super) fn bind_rows(
                                 && c.key.valid_period.year == year
                                 && c.key.valid_period.kind == PeriodKind::NineMonths
                                 && c.key.reporting_vintage.release == original_release
-                                && c.key.line.label == "summary:au_prod_100_koz"
+                                && c.key.line.label == label
                         })
                         .cloned()
                         .collect();
@@ -430,7 +432,7 @@ pub(super) fn bind_rows(
                         }
                         .into());
                     };
-                    check_actual(cell)?;
+                    check_actual(cell, metric)?;
                     let nine_months = number(cell)?;
                     lo = lo.checked_sub(nine_months).map_err(|e| e.to_string())?;
                     hi = hi.checked_sub(nine_months).map_err(|e| e.to_string())?;

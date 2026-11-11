@@ -606,6 +606,68 @@ pub struct Target {
     pub outcome: Outcome,
 }
 
+/// DESIGN (BD-067/076): source semantics shared by candidate generation and both record scorers.
+/// This interpretation does not alter the durable rules. Production uses an additive 100% quantity;
+/// cost rates retain their sold-metal denominator and are never subtracted or ownership-scaled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetMetric {
+    GoldProduction,
+    GoldAisc,
+    CopperProduction,
+    CopperC1,
+    CopperAisc,
+}
+
+impl TargetMetric {
+    #[must_use]
+    pub fn from_target(target: &Target) -> Option<Self> {
+        match (target.field.as_str(), target.outcome) {
+            ("au_prod_100_koz", Outcome::FyMinus9m) => Some(Self::GoldProduction),
+            ("aisc_usd_per_oz", Outcome::Q4Qtd) => Some(Self::GoldAisc),
+            ("cu_prod_100_kt", Outcome::FyMinus9m) => Some(Self::CopperProduction),
+            ("c1_usd_per_lb", Outcome::Q4Qtd) => Some(Self::CopperC1),
+            ("aisc_usd_per_lb", Outcome::Q4Qtd) => Some(Self::CopperAisc),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn unit(self) -> &'static str {
+        match self {
+            Self::GoldProduction => "koz",
+            Self::GoldAisc => "usd_per_oz",
+            Self::CopperProduction => "kt",
+            Self::CopperC1 | Self::CopperAisc => "usd_per_lb",
+        }
+    }
+
+    #[must_use]
+    pub const fn guidance_quantity(self) -> &'static str {
+        match self {
+            Self::GoldProduction => "production_koz",
+            Self::GoldAisc => "aisc_usd_per_oz",
+            Self::CopperProduction => "production_kt",
+            Self::CopperC1 => "c1_usd_per_lb",
+            Self::CopperAisc => "aisc_usd_per_lb",
+        }
+    }
+
+    #[must_use]
+    pub const fn guidance_basis_suffix(self) -> Option<&'static str> {
+        match self {
+            Self::GoldProduction | Self::CopperProduction => None,
+            Self::GoldAisc => Some(";aisc=issuer-reported-per-sold-oz"),
+            Self::CopperC1 => Some(";c1=issuer-reported-per-sold-lb"),
+            Self::CopperAisc => Some(";aisc=issuer-reported-per-sold-lb"),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_production(self) -> bool {
+        matches!(self, Self::GoldProduction | Self::CopperProduction)
+    }
+}
+
 /// What a baseline row computes. The id decides it, so the scoring code never reads the prose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaselineKind {
@@ -1807,6 +1869,69 @@ mod tests {
          [[site]]\nname = \"Synthetic A\"\nstatus = \"live\"\nlocator = \"S!A1\"\n\n\
          [[site]]\nname = \"Synthetic B\"\nstatus = \"not_published\"\nlocator = \"S!A2\"\nreason = \"sold\"\n"
             .to_string()
+    }
+
+    #[test]
+    fn public_target_semantics_keep_metal_denominator_and_additivity_distinct() {
+        for (field, outcome, unit, guidance, suffix) in [
+            (
+                "au_prod_100_koz",
+                Outcome::FyMinus9m,
+                "koz",
+                "production_koz",
+                None,
+            ),
+            (
+                "aisc_usd_per_oz",
+                Outcome::Q4Qtd,
+                "usd_per_oz",
+                "aisc_usd_per_oz",
+                Some(";aisc=issuer-reported-per-sold-oz"),
+            ),
+            (
+                "cu_prod_100_kt",
+                Outcome::FyMinus9m,
+                "kt",
+                "production_kt",
+                None,
+            ),
+            (
+                "c1_usd_per_lb",
+                Outcome::Q4Qtd,
+                "usd_per_lb",
+                "c1_usd_per_lb",
+                Some(";c1=issuer-reported-per-sold-lb"),
+            ),
+            (
+                "aisc_usd_per_lb",
+                Outcome::Q4Qtd,
+                "usd_per_lb",
+                "aisc_usd_per_lb",
+                Some(";aisc=issuer-reported-per-sold-lb"),
+            ),
+        ] {
+            let mut target = Target {
+                id: "declared-target".into(),
+                quantity: "explicit test interpretation".into(),
+                scored_quantity: "declared outcome".into(),
+                field: field.into(),
+                outcome,
+            };
+            let metric = TargetMetric::from_target(&target).unwrap();
+            assert_eq!(metric.unit(), unit);
+            assert_eq!(metric.guidance_quantity(), guidance);
+            assert_eq!(metric.guidance_basis_suffix(), suffix);
+            assert_eq!(metric.is_production(), outcome == Outcome::FyMinus9m);
+            target.outcome = if outcome == Outcome::FyMinus9m {
+                Outcome::Q4Qtd
+            } else {
+                Outcome::FyMinus9m
+            };
+            assert!(TargetMetric::from_target(&target).is_none());
+            target.outcome = outcome;
+            target.field = "cu_prod_attr_kt".into();
+            assert!(TargetMetric::from_target(&target).is_none());
+        }
     }
 
     #[test]

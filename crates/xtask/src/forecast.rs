@@ -338,6 +338,12 @@ pub fn persistence_baselines(root: &Path) -> Res<Vec<PersistenceBaseline>> {
         let Some(target) = rules.targets.iter().find(|t| t.id == b.target) else {
             return fail(format!("baseline target {:?} is not declared", b.target));
         };
+        if record::TargetMetric::from_target(target).is_none() {
+            return fail(format!(
+                "unsupported frozen persistence target {} / {}",
+                target.id, target.field
+            ));
+        }
         let mut series = Vec::with_capacity(live.len());
         for site in &live {
             let mut s = Vec::new();

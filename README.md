@@ -1410,6 +1410,7 @@ uses the original nominal tail-loss limits; this diagnostic does not establish s
 
 INFERENCE from the independent synthetic study test: a USD 10 study followed by construction only in the
 good state has complete policy payoffs `[90, -10]`, with equal nominal weights and unit state distance.
+Construction in this fixture requires the study; building without it is structurally excluded from regret.
 At radius `1/4`, its nominal mean is USD 40, worst-case mean is USD 15, and worst-case expected regret is
 USD 7.50 against the feasible policy population. At radius `1/2`, hold-cash wins on worst-case mean while
 the adaptive policy still wins on worst-case regret. These two criteria can choose different policies.
@@ -2591,12 +2592,26 @@ candidate. Each live site and target remains required; the rules' `not_published
 report. Historical missing or nonpositive observations exclude their adjacent transitions and retain both
 endpoints in the report. A missing quarter never creates a ratio across the gap.
 
+Candidate generation and record scoring share these explicit target meanings:
+
+| Rules `field` | Unit | Rules `outcome` and scored value |
+|---|---|---|
+| `au_prod_100_koz` | `koz` | `fy_minus_9m`: original FY gold production minus original nine-month production, both on the 100% basis |
+| `cu_prod_100_kt` | `kt` | `fy_minus_9m`: original FY copper production minus original nine-month production, both on the 100% basis |
+| `aisc_usd_per_oz` | `usd_per_oz` | `q4_qtd`: original Q4 AISC per ounce sold |
+| `c1_usd_per_lb` | `usd_per_lb` | `q4_qtd`: original Q4 C1 per copper pound sold |
+| `aisc_usd_per_lb` | `usd_per_lb` | `q4_qtd`: original Q4 AISC per copper pound sold |
+
+Copper forecasts require rules that explicitly declare these copper targets, their site universe and
+comparators. The sealed `forecasts/fy2026/rules.toml` remains the gold record. This support does not change
+those rules or issue copper forecasts; production quantities are additive, while cost rates retain their
+printed ownership evidence and are neither subtracted nor ownership-scaled.
+
 The `pooled-quarterly-ratio-empirical-v1` model uses the historical pool fixed by each persistence rule. For
 each target it multiplies a site's latest positive Q3 observation by the pool's lower, median and upper
-inverse-ECDF ratios. Gold production is a Q4 quantity on the 100% basis; AISC is the Q4 printed rate per sold
-ounce. The model assumes the pooled changes apply to the future site-quarter. Its exact interval bounds
-equal the persistence comparator's bounds on the same inputs, so the different median point does not improve
-its interval score or establish independent forecasting skill.
+inverse-ECDF ratios, keeping each target's pool separate. The model assumes the pooled changes apply to the
+future site-quarter. Its exact interval bounds equal the persistence comparator's bounds on the same inputs,
+so the different median point does not improve its interval score or establish independent forecasting skill.
 
 Every operand uses the published display value and retains its source Claim, cell, source hash, period,
 vintage, unit and ownership basis. Later comparative releases cannot replace originals. Availability uses
@@ -2632,15 +2647,20 @@ cargo run -p xtask -- forecast-baseline --as-of 2026-11-01
 
 The command retains every site and target in the frozen rules. Production guidance is divided by the share
 printed with that guidance, then the original Q3 release's nine-month production on the 100% basis is
-subtracted. AISC guidance remains its published per-sold-ounce interval: unit costs are not subtracted across
-periods. For example, synthetic attributable guidance `[240, 300]` at a 60% share and nine-month production
+subtracted. Gold AISC and copper C1/AISC guidance retain their published sold-metal rate intervals. For
+example, synthetic attributable guidance `[240, 300]` at a 60% share and nine-month production
 of `300` gives an exact Q4 comparator of `[100, 200]`. The calculation uses the displayed workbook number,
 while its citation retains both stored and displayed values. Negative remainders are reported unchanged.
+
+Copper guidance uses `guidance_<site>_production_kt`, `guidance_<site>_c1_usd_per_lb` and
+`guidance_<site>_aisc_usd_per_lb`. Each cost entry requires unit `usd_per_lb` and an explicit ownership basis
+followed by `;c1=issuer-reported-per-sold-lb` or `;aisc=issuer-reported-per-sold-lb`, respectively.
+These definitions keep C1 and AISC distinct throughout source selection, persistence and scoring.
 
 The latest agreed guidance on or before the cut is selected. Competing values on its latest publication date,
 newer pending readings, missing original actuals, or unsupported labels remain explicit unavailable rows.
 Excluded sites remain named `not_published` members. Before the Q3 workbook is registered, production
-comparators remain unavailable; their guidance evidence is still shown. AISC comparators can be available
+comparators remain unavailable; their guidance evidence is still shown. Cost comparators can be available
 independently. The report binds exact endpoints, rules, document hashes, reader roles, and canonical actual
 Claims. It is followed by the existing persistence output.
 
@@ -2664,8 +2684,9 @@ Rules must precede the record even after accounting for both proofs' stated accu
 
 Scoring verifies the record before opening registered original-release outcome workbooks. Q4 production is
 the exact signed difference between the original FY and nine-month totals on the explicit 100% basis.
-Q4 AISC uses its printed quarterly rate directly. Outcomes use the exact **displayed** numeric value while
-retaining the stored token and source Claim for audit; printed zero counts, and a displayed dash stays missing.
+Gold AISC and copper C1/AISC use their printed quarterly rates directly. Outcomes use the exact **displayed**
+numeric value while retaining the stored token and source Claim for audit; printed zero counts, and a
+displayed dash stays missing.
 Later comparative releases cannot substitute for missing originals. Ownership-label changes remain visible
 even when registry corrections make the effective ownership fractions equal.
 
@@ -2678,7 +2699,7 @@ The same assessment computes both preregistered comparators. Issuer guidance mus
 frozen information cutoff; date-only metadata on the cutoff day remains unresolved unless the exact document
 is in the frozen manifest with an earlier declared retrieval. The report names that declaration and does not
 present it as independent proof of publication time. Production guidance is converted to the 100% basis and
-reduced by the original nine-month displayed total; the AISC range is used directly. Signed remainders and
+reduced by the original nine-month displayed total; cost ranges are used directly. Signed remainders and
 point ranges remain unchanged, and issuer guidance is assigned no nominal probability.
 
 Persistence uses the frozen original Q3 observation and original consecutive-quarter ratio pool, with
@@ -2687,9 +2708,9 @@ observations can follow the forecast cutoff; the report makes no claim that the 
 information. Missing or unreadable required historical sources refuse the comparator instead of silently
 shortening its pool. Printed zero is a valid persistence point.
 
-For each target, all three interval-score means and both forecast-minus-comparator differences use exactly
-the same eligible sites. Every excluded site lists all missing inputs. A negative difference favors the
-forecast under this loss, without establishing skill or calibration. Optional comparator failures, including
+For each gold or copper target, all three interval-score means and both forecast-minus-comparator differences
+use exactly the same eligible sites. Every excluded site lists all missing inputs. A negative difference
+favors the forecast under this loss, without establishing skill or calibration. Optional comparator failures, including
 arithmetic overflow, preserve the verified forecast/outcome scores and appear as explicit unavailable or
 refused comparisons. The `benchmark_assessment` object carries the detailed statuses, evidence and results.
 

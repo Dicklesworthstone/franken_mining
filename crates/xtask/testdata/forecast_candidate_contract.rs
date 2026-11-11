@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use fmine_calib::record::{parse_forecasts, parse_rules};
+use fmine_calib::record::{Rat, parse_forecasts, parse_rules};
 use fmine_core::hash::sha256;
 use fmine_io::omf::json::{self, Json};
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
@@ -82,6 +82,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_metrics(
+            RULES,
+            "Gold produced (000s oz, 100%)",
+            "All-in sustaining costs ($/oz)",
+        )
+    }
+
+    fn with_metrics(rules: &str, production_header: &str, cost_header: &str) -> Self {
         let root = std::env::temp_dir().join(format!(
             "fmine-forecast-candidate-{}-{}",
             std::process::id(),
@@ -89,13 +97,13 @@ impl Fixture {
         ));
         std::fs::create_dir_all(root.join("invented")).unwrap();
         std::fs::create_dir_all(root.join("registries/sources")).unwrap();
-        std::fs::write(root.join("rules.toml"), RULES).unwrap();
+        std::fs::write(root.join("rules.toml"), rules).unwrap();
         let mut registry = String::from(
             "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"invented\"\n\
              retrieved_utc = \"2030-10-02T10:00:00Z/10:01:00Z\"\nurl_prefix = \"https://example.invalid/\"\n",
         );
         for quarter in 1..=3 {
-            let bytes = workbook(quarter);
+            let bytes = workbook(quarter, production_header, cost_header);
             let file = format!("Invented_Q{quarter}.xlsx");
             std::fs::write(root.join("invented").join(&file), &bytes).unwrap();
             writeln!(registry,
@@ -131,7 +139,7 @@ impl Fixture {
     }
 }
 
-fn workbook(quarter: u8) -> Vec<u8> {
+fn workbook(quarter: u8, production_header: &str, cost_header: &str) -> Vec<u8> {
     let text = |value: &str| MinimalCell::Text(value.into());
     let styled = |value: &str| MinimalCell::Styled {
         raw: value.into(),
@@ -151,8 +159,8 @@ fn workbook(quarter: u8) -> Vec<u8> {
             cells: vec![
                 ("A1".into(), text("For the three months ended")),
                 ("B1".into(), MinimalCell::Number(2030.0)),
-                ("B2".into(), text("Gold produced (000s oz, 100%)")),
-                ("C2".into(), text("All-in sustaining costs ($/oz)")),
+                ("B2".into(), text(production_header)),
+                ("C2".into(), text(cost_header)),
                 ("A3".into(), text("Site A (50%)")),
                 ("B3".into(), styled(values[0])),
                 ("C3".into(), styled(values[1])),
@@ -197,6 +205,53 @@ fn at<'a>(value: &'a Json, path: &[&str]) -> &'a Json {
             .get(key)
             .unwrap_or_else(|| panic!("missing {key}: {value:?}"))
     })
+}
+
+#[test]
+fn copper_draft_cli_keeps_source_units_and_emits_record_parseable_csv() {
+    for (field, header) in [
+        ("c1_usd_per_lb", "C1 cash costs ($/lb)"),
+        ("aisc_usd_per_lb", "All-in sustaining costs ($/lb)"),
+    ] {
+        let rules = RULES
+            .replace("au_prod_100_koz", "cu_prod_100_kt")
+            .replace("gold produced", "copper produced")
+            .replace("aisc_usd_per_oz", field)
+            .replace("ounce sold", "copper pound sold");
+        let fixture = Fixture::with_metrics(&rules, "Copper produced (kt 100%)", header);
+        let (exit, value, bytes) = invoke(&fixture.args());
+        assert_eq!(exit, 0, "{bytes}");
+        let report = at(&value, &["payload"]);
+        let csv = at(report, &["forecasts_csv"]).as_str().unwrap();
+        let parsed = parse_forecasts(csv.as_bytes(), &parse_rules(&rules).unwrap()).unwrap();
+        assert_eq!(parsed.len(), 4);
+        let production = parsed
+            .iter()
+            .find(|r| r.site == "Site A" && r.target == "production")
+            .unwrap();
+        assert_eq!(production.point, Rat::from_integer(150));
+        assert_eq!(production.hi, Rat::from_integer(375));
+        assert!(bytes.contains("\"unit\":\"kt\""));
+        assert!(bytes.contains("\"unit\":\"usd_per_lb\""));
+        assert!(bytes.contains(&format!("summary:{field}")));
+        assert!(!bytes.contains("summary:au_prod_100_koz"));
+        for target in at(report, &["targets"]).as_array().unwrap() {
+            let production = at(target, &["id"]).as_str() == Some("production");
+            assert_eq!(
+                at(target, &["unit"]).as_str(),
+                Some(if production { "kt" } else { "usd_per_lb" })
+            );
+            assert_eq!(
+                at(target, &["basis"]).as_str(),
+                Some(if production {
+                    "100%"
+                } else {
+                    "reported_rate_per_copper_pound_sold"
+                })
+            );
+        }
+        assert_eq!(invoke(&fixture.args()).2, bytes);
+    }
 }
 
 #[test]

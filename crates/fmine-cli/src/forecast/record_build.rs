@@ -14,7 +14,7 @@ use fmine_public::forecast::{CandidateObservation, CandidateSource, PublicCandid
 use crate::{Envelope, NextAction, OutputFormat, json_string as js};
 
 pub const USAGE: &str = "forecast record build --rules <rules.toml> --model pooled-quarterly-ratio-empirical-v1 --as-of YYYY-MM-DDTHH:MM:SSZ [--decimal-places 6]";
-pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.forecast-record-candidate.v1","model":"pooled-quarterly-ratio-empirical-v1","status":"draft; uncalibrated; not issued or externally timestamped","inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","estimate":"Latest Q3 observation multiplied by the pooled historical quarterly-ratio median","interval":"Latest Q3 observation multiplied by inverse empirical CDF tails under the rules' alpha; exact bounds equal the registered persistence baseline","rounding":"CSV lower bounds round down, upper bounds up, points to nearest with ties upward; 0 through 12 decimal places, default 6","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; no comparative substitution or silent population shrinkage","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.forecast-record-candidate.v1","model":"pooled-quarterly-ratio-empirical-v1","status":"draft; uncalibrated; not issued or externally timestamped","targets":{"fy_minus_9m":["au_prod_100_koz","cu_prod_100_kt"],"q4_qtd":["aisc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"]},"inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","estimate":"Latest Q3 observation multiplied by the pooled historical quarterly-ratio median","interval":"Latest Q3 observation multiplied by inverse empirical CDF tails under the rules' alpha; exact bounds equal the registered persistence baseline","rounding":"CSV lower bounds round down, upper bounds up, points to nearest with ties upward; 0 through 12 decimal places, default 6","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; no comparative substitution or silent population shrinkage","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow"}"#;
 
 const VERB: &str = "forecast record build";
 const MAX_RULES_BYTES: u64 = 1024 * 1024;
@@ -184,13 +184,20 @@ fn row_json(row: &ForecastRow) -> String {
 }
 
 fn target_json(target: &Target) -> String {
-    let (unit, basis, outcome) = match target.outcome {
-        Outcome::FyMinus9m => ("koz", "100%", "fy_minus_9m"),
-        Outcome::Q4Qtd => (
-            "usd_per_oz",
-            "reported_rate_per_attributable_ounce_sold",
-            "q4_qtd",
-        ),
+    use fmine_calib::record::TargetMetric;
+    let metric = TargetMetric::from_target(target);
+    let unit = metric.map(TargetMetric::unit);
+    let basis = match metric {
+        Some(TargetMetric::GoldProduction | TargetMetric::CopperProduction) => Some("100%"),
+        Some(TargetMetric::GoldAisc) => Some("reported_rate_per_ounce_sold"),
+        Some(TargetMetric::CopperC1 | TargetMetric::CopperAisc) => {
+            Some("reported_rate_per_copper_pound_sold")
+        }
+        None => None,
+    };
+    let outcome = match target.outcome {
+        Outcome::FyMinus9m => "fy_minus_9m",
+        Outcome::Q4Qtd => "q4_qtd",
     };
     format!(
         "{{\"id\":{},\"field\":{},\"quantity\":{},\"scored_quantity\":{},\"unit\":{},\"basis\":{},\"outcome\":{}}}",
@@ -198,8 +205,8 @@ fn target_json(target: &Target) -> String {
         js(&target.field),
         js(&target.quantity),
         js(&target.scored_quantity),
-        js(unit),
-        js(basis),
+        optional(unit),
+        optional(basis),
         js(outcome),
     )
 }

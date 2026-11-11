@@ -1,7 +1,7 @@
 //! Source-bound outcomes for externally timestamped public forecast records.
 //! Determinism: Exact (frozen bytes, canonical source Claims and rational arithmetic).
 //!
-//! Q4 production is the original FY total less the original nine-month total. Q4 AISC is the original
+//! Q4 production is the original FY total less the original nine-month total. Q4 AISC/C1 is the original
 //! three-month rate; subtracting annual and nine-month rates is forbidden. Later comparatives are never
 //! substituted. A missing release or cell remains an explicit unresolved member of the frozen universe.
 
@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use fmine_calib::record::{
-    BaselineKind, Outcome, Rat, RecordRules, SiteStatus, Target,
+    BaselineKind, Outcome, Rat, RecordRules, SiteStatus, Target, TargetMetric,
     scoring::{self, OutcomeRow, TargetScore},
 };
 use fmine_public::LoadedSource;
@@ -69,17 +69,17 @@ fn year(rules: &RecordRules) -> Res<u16> {
     u16::try_from(year).map_err(|_| vec!["outcome year is outside the supported calendar".into()])
 }
 
-/// This first adapter implements the two frozen FY2026 target meanings. Unsupported fields refuse;
+/// Every adapter shares the frozen production and sold-unit cost meanings. Unsupported fields refuse;
 /// arbitrary rates cannot be made additive by changing an outcome selector in a new rules file.
 fn expected_unit(target: &Target) -> Res<&'static str> {
-    match (&target.outcome, target.field.as_str()) {
-        (Outcome::FyMinus9m, "au_prod_100_koz") => Ok("koz"),
-        (Outcome::Q4Qtd, "aisc_usd_per_oz") => Ok("usd_per_oz"),
-        _ => fail(format!(
-            "unsupported frozen outcome rule for {} / {}",
-            target.id, target.field
-        )),
-    }
+    TargetMetric::from_target(target)
+        .map(TargetMetric::unit)
+        .ok_or_else(|| {
+            vec![format!(
+                "unsupported frozen outcome rule for {} / {}",
+                target.id, target.field
+            )]
+        })
 }
 
 fn original<'a>(
@@ -148,6 +148,13 @@ fn original<'a>(
         {
             return fail(format!(
                 "{}: production must be explicitly on the 100% basis",
+                cell.locator
+            ));
+        }
+        if target.outcome == Outcome::Q4Qtd && cell.key.ownership_basis == OwnershipBasis::Unprinted
+        {
+            return fail(format!(
+                "{}: a cost rate requires its explicitly printed ownership basis",
                 cell.locator
             ));
         }
@@ -797,6 +804,134 @@ mod tests {
             source.claim.check_id().unwrap();
             assert!(!source.claim.anchors.is_empty());
         }
+    }
+
+    #[test]
+    fn copper_originals_resolve_displayed_tonnes_and_each_sold_pound_rate() {
+        let mut d = empty_data();
+        for (release, total, c1, aisc) in [
+            ("2030Q3", "300.124", "2.123", "4.123"),
+            ("2030Q4", "405.374", "2.987", "4.567"),
+            ("2031Q4", "900.00", "7.111", "9.111"),
+        ] {
+            let end = if release == "2030Q3" {
+                "September 30"
+            } else {
+                "December 31"
+            };
+            let months = if release == "2030Q3" {
+                "nine"
+            } else {
+                "twelve"
+            };
+            let text = |s: &str| MinimalCell::Text(s.into());
+            let number = |s: &str| MinimalCell::Styled {
+                raw: s.into(),
+                xf: 1,
+            };
+            let sheet = |name: &str, duration: &str, production: &str, cash: &str, all_in: &str| {
+                MinimalSheet {
+                    name: name.into(),
+                    hidden: false,
+                    cells: vec![
+                        (
+                            "A1".into(),
+                            text(&format!("For the {duration} months ended {end},")),
+                        ),
+                        ("B1".into(), MinimalCell::Number(2030.0)),
+                        ("B2".into(), text("Copper produced (kt 100%)")),
+                        ("C2".into(), text("C1 cash costs ($/lb)")),
+                        ("D2".into(), text("All-in sustaining costs ($/lb)")),
+                        ("A3".into(), text("Example Mine (60%)")),
+                        ("B3".into(), number(production)),
+                        ("C3".into(), number(cash)),
+                        ("D3".into(), number(all_in)),
+                    ],
+                }
+            };
+            let bytes = build_minimal_xlsx_styled(
+                &[
+                    sheet("YTD", months, total, "100.00", "200.00"),
+                    sheet("QTD", "three", "999.00", c1, aisc),
+                ],
+                Some(&MinimalStyles {
+                    num_fmts: vec![],
+                    xfs: vec![0, 2],
+                }),
+            );
+            d.cells.extend(add_workbook(
+                &mut d.profile,
+                &mut d.reported,
+                &format!("copper_{release}.xlsx"),
+                release,
+                &bytes,
+            ));
+        }
+        let mut production = d.rules.targets[0].clone();
+        production.field = "cu_prod_100_kt".into();
+        let outcome = row(&d, "Example Mine", &production).unwrap();
+        // Printed original totals are 405.37 and 300.12; their signed difference is 105.25 kt.
+        assert_eq!(outcome.value, Some(Rat::new(421, 4).unwrap()));
+        assert_eq!(outcome.sources.len(), 2);
+        assert!(outcome.sources.iter().all(|(_, c)| c.key.unit == "kt"));
+        for (field, expected) in [("c1_usd_per_lb", 299), ("aisc_usd_per_lb", 457)] {
+            let mut cost = d.rules.targets[1].clone();
+            cost.field = field.into();
+            let outcome = row(&d, "Example Mine", &cost).unwrap();
+            assert_eq!(outcome.value, Some(Rat::new(expected, 100).unwrap()));
+            assert_eq!(outcome.sources.len(), 1);
+            assert_eq!(outcome.sources[0].1.key.unit, "usd_per_lb");
+            assert_eq!(
+                outcome.sources[0].1.key.valid_period.kind,
+                PeriodKind::Quarter(4)
+            );
+            cost.outcome = Outcome::FyMinus9m;
+            assert!(row(&d, "Example Mine", &cost).is_err());
+        }
+        d.profile
+            .sources
+            .retain(|source| source.quarter != "2030Q4");
+        let absent = row(&d, "Example Mine", &production).unwrap();
+        assert_eq!(absent.value, None);
+        assert_eq!(absent.status, "release_not_registered");
+        assert!(
+            absent
+                .sources
+                .iter()
+                .all(|(_, c)| c.key.reporting_vintage.release != "2031Q4")
+        );
+    }
+
+    #[test]
+    fn copper_rate_without_printed_ownership_cannot_enter_frozen_scoring() {
+        let mut d = empty_data();
+        let text = |s: &str| MinimalCell::Text(s.into());
+        let bytes = build_minimal_xlsx(&[MinimalSheet {
+            name: "QTD".into(),
+            hidden: false,
+            cells: vec![
+                ("A1".into(), text("For the three months ended December 31,")),
+                ("B1".into(), MinimalCell::Number(2030.0)),
+                ("A3".into(), text("Example Mine")),
+                ("B2".into(), text("C1 cash costs ($/lb)")),
+                ("B3".into(), MinimalCell::Number(2.0)),
+            ],
+        }]);
+        d.cells.extend(add_workbook(
+            &mut d.profile,
+            &mut d.reported,
+            "copper_2030Q4.xlsx",
+            "2030Q4",
+            &bytes,
+        ));
+        let mut cost = d.rules.targets[1].clone();
+        cost.field = "c1_usd_per_lb".into();
+        let errors = row(&d, "Example Mine", &cost).err().unwrap();
+        assert!(
+            errors
+                .join("; ")
+                .contains("explicitly printed ownership basis")
+        );
     }
 
     #[test]

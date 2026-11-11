@@ -59,10 +59,12 @@ fn observation(
             (
                 "B4".into(),
                 MinimalCell::Text(
-                    if target.outcome == Outcome::FyMinus9m {
-                        "Gold produced (000s oz 100%)"
-                    } else {
-                        "All-in sustaining costs ($/oz)"
+                    match target.field.as_str() {
+                        "au_prod_100_koz" => "Gold produced (000s oz 100%)",
+                        "cu_prod_100_kt" => "Copper produced (kt 100%)",
+                        "c1_usd_per_lb" => "C1 cash costs ($/lb)",
+                        "aisc_usd_per_lb" => "All-in sustaining costs ($/lb)",
+                        _ => "All-in sustaining costs ($/oz)",
                     }
                     .into(),
                 ),
@@ -123,6 +125,258 @@ fn inventory(observations: Vec<Observation>) -> Inventory {
             .collect(),
         observations,
         evidence: Evidence::default(),
+    }
+}
+
+fn copper_target(field: &str) -> Target {
+    let mut value = target(field == "cu_prod_100_kt");
+    value.id = field.into();
+    value.field = field.into();
+    value
+}
+
+#[test]
+fn copper_outcomes_select_original_cumulative_tonnes_and_printed_per_pound_rates() {
+    let fy = Period {
+        year: 2030,
+        kind: PeriodKind::FullYear,
+    };
+    let nine = Period {
+        year: 2030,
+        kind: PeriodKind::NineMonths,
+    };
+    let q4 = Period {
+        year: 2030,
+        kind: PeriodKind::Quarter(4),
+    };
+    let production = copper_target("cu_prod_100_kt");
+    let c1 = copper_target("c1_usd_per_lb");
+    let aisc = copper_target("aisc_usd_per_lb");
+    let mut sources = inventory(vec![
+        observation("2030Q4", fy, &production, "100.25", false),
+        observation("2030Q3", nine, &production, "70", false),
+        observation("2030Q4", q4, &production, "30.75", false),
+        observation("2031Q4", fy, &production, "999", false),
+        observation("2030Q4", q4, &c1, "2.25", false),
+        observation("2030Q4", fy, &c1, "1.75", false),
+        observation("2030Q3", nine, &c1, "1.5", false),
+        observation("2030Q4", q4, &aisc, "3", false),
+        observation("2030Q4", fy, &aisc, "2.4", false),
+        observation("2030Q3", nine, &aisc, "2.2", false),
+    ]);
+    for (target, expected) in [(&production, "30.25"), (&c1, "2.25"), (&aisc, "3")] {
+        let result = infer_outcome(&mut sources, "Site A", target, 2030).unwrap();
+        assert_eq!(
+            number(&result.value),
+            Some(Rat::from_decimal_str(expected).unwrap())
+        );
+        assert_eq!(
+            result.locators.len(),
+            if target.outcome == Outcome::FyMinus9m {
+                2
+            } else {
+                1
+            }
+        );
+    }
+    sources.observations.retain(|o| {
+        !(o.release.to_string() == "2030Q4"
+            && o.raw.months == 12
+            && o.raw.label == production.field)
+    });
+    assert!(
+        matches!(
+            infer_outcome(&mut sources, "Site A", &production, 2030)
+                .unwrap()
+                .value,
+            Availability::Unavailable(_)
+        ),
+        "a later comparative and original QTD cannot replace the frozen FY-minus-9M outcome"
+    );
+    sources
+        .observations
+        .push(observation("2030Q4", fy, &production, "65", false));
+    assert_eq!(
+        number(
+            &infer_outcome(&mut sources, "Site A", &production, 2030)
+                .unwrap()
+                .value
+        ),
+        Some(Rat::from_integer(-5))
+    );
+    assert!(
+        sources
+            .evidence
+            .cells
+            .values()
+            .any(|s| s.contains("\"unit\":\"kt\""))
+    );
+    assert!(
+        sources
+            .evidence
+            .cells
+            .values()
+            .any(|s| s.contains("\"unit\":\"usd_per_lb\""))
+    );
+}
+
+#[test]
+fn copper_guidance_uses_its_own_share_and_requires_each_sold_pound_definition() {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "fmine-copper-guidance-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let bytes = b"SYNTHETIC copper guidance, not issuer evidence";
+    std::fs::write(root.join("copper.pdf"), bytes).unwrap();
+    let mut profile = fmine_public::synthetic::synthetic_profile();
+    profile.documents = vec![DocumentRow {
+        file: "copper.pdf".into(),
+        dir: ".".into(),
+        kind: "mda".into(),
+        url: "https://example.invalid/copper.pdf".into(),
+        url_basis: "invented".into(),
+        published_at: "2030-10-01".into(),
+        published_at_basis: "invented".into(),
+        pages: 1,
+        bytes: bytes.len() as u64,
+        sha256: sha256(bytes).to_hex(),
+    }];
+    let frozen = manifest(vec![]);
+    for (field, metric, unit, token, basis, expected) in [
+        (
+            "cu_prod_100_kt",
+            "production_kt",
+            "kt",
+            "90 - 105",
+            "attributable:3/4",
+            ("40", "60"),
+        ),
+        (
+            "c1_usd_per_lb",
+            "c1_usd_per_lb",
+            "usd_per_lb",
+            "2.1 - 2.3",
+            "attributable:3/4;c1=issuer-reported-per-sold-lb",
+            ("2.1", "2.3"),
+        ),
+        (
+            "aisc_usd_per_lb",
+            "aisc_usd_per_lb",
+            "usd_per_lb",
+            "3.1 - 3.3",
+            "attributable:3/4;aisc=issuer-reported-per-sold-lb",
+            ("3.1", "3.3"),
+        ),
+    ] {
+        let target = copper_target(field);
+        let mut guidance = Guidance {
+            registry: Some(TranscriptionRegistry {
+                issuer: profile.issuer.clone(),
+                entries: ["one", "two"]
+                    .into_iter()
+                    .map(|reader| EntryRow {
+                        locator: Locator {
+                            doc: "copper.pdf".into(),
+                            page: 1,
+                            table: "Synthetic copper".into(),
+                            row: "Site A".into(),
+                            col: metric.into(),
+                        },
+                        doc_sha256: sha256(bytes).to_hex(),
+                        token: token.into(),
+                        value: parse_token(token).unwrap(),
+                        quantity: format!("guidance_site_a_{metric}"),
+                        unit: unit.into(),
+                        basis: basis.into(),
+                        period: "2030FY".into(),
+                        reader: reader.into(),
+                        line: 1,
+                    })
+                    .collect(),
+            }),
+            checked: BTreeMap::new(),
+        };
+        let mut sources = inventory(vec![observation(
+            "2030Q3",
+            Period {
+                year: 2030,
+                kind: PeriodKind::NineMonths,
+            },
+            &copper_target("cu_prod_100_kt"),
+            "80",
+            false,
+        )]);
+        let result = guidance
+            .resolve(
+                &root,
+                &profile,
+                &frozen,
+                &mut sources,
+                "Site A",
+                &target,
+                2030,
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            Availability::Available(Bounds {
+                lo: Rat::from_decimal_str(expected.0).unwrap(),
+                hi: Rat::from_decimal_str(expected.1).unwrap()
+            })
+        );
+        assert!(
+            sources
+                .evidence
+                .cells
+                .values()
+                .all(|s| !s.contains("production_koz"))
+        );
+        for entry in &mut guidance.registry.as_mut().unwrap().entries {
+            entry.unit = "koz".into();
+        }
+        assert!(matches!(
+            guidance
+                .resolve(
+                    &root,
+                    &profile,
+                    &frozen,
+                    &mut sources,
+                    "Site A",
+                    &target,
+                    2030
+                )
+                .unwrap(),
+            Availability::Unavailable(_)
+        ));
+        if field != "cu_prod_100_kt" {
+            for wrong in [
+                "attributable:3/4;aisc=issuer-reported-per-sold-oz",
+                "attributable:3/4;c1=issuer-reported-per-produced-lb",
+                "attributable:3/4",
+            ] {
+                for entry in &mut guidance.registry.as_mut().unwrap().entries {
+                    entry.unit = unit.into();
+                    entry.basis = wrong.into();
+                }
+                assert!(matches!(
+                    guidance
+                        .resolve(
+                            &root,
+                            &profile,
+                            &frozen,
+                            &mut sources,
+                            "Site A",
+                            &target,
+                            2030
+                        )
+                        .unwrap(),
+                    Availability::Unavailable(_)
+                ));
+            }
+        }
     }
 }
 
