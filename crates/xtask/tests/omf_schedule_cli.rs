@@ -663,3 +663,439 @@ fn malformed_requests_sources_and_candidate_periods_fail_without_a_numeric_resul
     a[at] = "absent.omf".into();
     assert_ne!(run(&root, &a).exit_code, 0);
 }
+
+const SECTION_MPS: &str = include_str!("../../fmine-io/testdata/omf_section_schedule.mps");
+const HIGHS_COLUMNS: &str =
+    include_str!("../../../fixtures/fmine-io/omf_section_schedule_highs_columns.txt");
+const HIGHS_ROWS: &str =
+    include_str!("../../../fixtures/fmine-io/omf_section_schedule_highs_rows.txt");
+
+fn export_lp(root: &Path, spec: &str) -> (Envelope, Json) {
+    fs::write(root.join("schedule.json"), spec).unwrap();
+    let mut a = args();
+    a.push("--export-lp".into());
+    let e = run(root, &a);
+    assert_eq!(e.exit_code, 0, "{}", e.to_json());
+    let json = parse(e.payload_json.as_bytes()).unwrap();
+    (e, json)
+}
+
+fn import_lp(root: &Path, digest: &str, primal: Option<&str>, dual: Option<&str>) -> Envelope {
+    let mut a = args();
+    a.extend(["--lp-sha256".into(), digest.into()]);
+    for (flag, path, text) in [
+        ("--lp-primal", "primal.txt", primal),
+        ("--lp-dual", "dual.txt", dual),
+    ] {
+        if let Some(text) = text {
+            fs::write(root.join(path), text).unwrap();
+            a.extend([flag.into(), path.into()]);
+        }
+    }
+    run(root, &a)
+}
+
+fn one_period_spec() -> String {
+    SPEC.replace("\"periods\":3", "\"periods\":1")
+        .replace("\"value_per_unit\":4", "\"value_per_unit\":1")
+        .replace("[10,10,10]", "[4]")
+        .replace("\"search_rounds\":100", "\"search_rounds\":0")
+}
+
+#[test]
+fn external_lp_export_matches_the_pinned_relaxation_and_binds_both_source_snapshots() {
+    let root = root();
+    let bytes = fixture(&root, [5, 1, 3], &section(9.25, None));
+    let (e, exported) = export_lp(&root, SPEC);
+    let mps = string(&exported, "mps");
+    let digest = string(&exported, "mps_sha256");
+    let expected = format!(
+        "* fmine.omf-schedule-lp.v1\n* omf_sha256={}\n* spec_sha256={}\n{}",
+        sha256(&bytes),
+        sha256(SPEC.as_bytes()),
+        SECTION_MPS.replacen("NAME section", "NAME fmine_schedule", 1),
+    );
+    assert_eq!(mps, expected);
+    assert_eq!(digest, sha256(mps.as_bytes()).to_hex());
+    assert_eq!(field(&exported, "columns").u64(), Some(45));
+    assert_eq!(field(&exported, "rows").u64(), Some(111));
+    let parsed = fmine_lp::mps::read(mps).unwrap();
+    assert_eq!(
+        fmine_lp::mps::write("fmine_schedule", &parsed.problem).unwrap(),
+        SECTION_MPS.replacen("NAME section", "NAME fmine_schedule", 1)
+    );
+    assert!(exported.get("selected").is_none());
+    assert!(exported.get("certificate").is_none());
+    assert_eq!(export_lp(&root, SPEC).0.to_json(), e.to_json());
+    assert!(e.rendered_markdown.as_ref().unwrap().contains(mps));
+
+    // A search-only or whitespace edit leaves the coefficient matrix unchanged but changes the
+    // pinned request. The caller cannot apply an old solver result to a different source snapshot.
+    for spec in [
+        format!("{SPEC}\n"),
+        SPEC.replace("\"bound_steps\":32", "\"bound_steps\":31"),
+    ] {
+        let (_, changed) = export_lp(&root, &spec);
+        assert_ne!(string(&changed, "mps_sha256"), digest);
+        assert_eq!(
+            string(&changed, "mps").split_once("NAME ").unwrap().1,
+            mps.split_once("NAME ").unwrap().1
+        );
+        let stale = import_lp(&root, digest, Some(HIGHS_COLUMNS), Some(HIGHS_ROWS));
+        assert!(
+            stale.to_json().contains("FMINE-REF-505"),
+            "{}",
+            stale.to_json()
+        );
+        assert!(!stale.payload_json.contains("\"selected\""));
+    }
+    fs::write(root.join("schedule.json"), SPEC).unwrap();
+    fixture(&root, [5, 1, 3], &section(10.25, None));
+    let stale = import_lp(&root, digest, Some(HIGHS_COLUMNS), None);
+    assert!(stale.to_json().contains("FMINE-REF-505"));
+}
+
+#[test]
+fn pinned_highs_values_keep_the_binary64_bound_separate_from_the_exact_schedule_gap() {
+    let root = root();
+    fixture(&root, [5, 1, 3], &section(9.25, None));
+    let (_, baseline) = good(&root, SPEC);
+    let (_, exported) = export_lp(&root, SPEC);
+    let e = import_lp(
+        &root,
+        string(&exported, "mps_sha256"),
+        Some(HIGHS_COLUMNS),
+        Some(HIGHS_ROWS),
+    );
+    assert_eq!(e.exit_code, 0, "{}", e.to_json());
+    let json = parse(e.payload_json.as_bytes()).unwrap();
+    assert_eq!(field(&json, "selected"), field(&baseline, "selected"));
+    assert_eq!(field(&json, "certificate"), field(&baseline, "certificate"));
+    assert_eq!(field(&json, "external_lp_selected"), &Json::Bool(false));
+    let external = field(&json, "external_lp");
+    let primal = field(external, "primal");
+    assert_eq!(field(primal, "searched_starts").u64(), Some(6));
+    assert_eq!(
+        ints(field(field(primal, "checked"), "period_values")),
+        [-16, 21, 0]
+    );
+    let exact = field(primal, "integer_discounted_value");
+    assert_eq!(numerator(exact), 3_398_490_485_834);
+    assert_eq!(string(exact, "denominator"), "4398046511104");
+    let dual = field(external, "dual");
+    assert_eq!(string(dual, "status"), "certified");
+    let bound = field(dual, "upper_bound_scaled").f64().unwrap();
+    assert!((bound - 475.0 / 99.0).abs() < 1e-6, "{bound}");
+    assert_eq!(
+        field(field(external, "objective"), "value_per_unit").u64(),
+        Some(4)
+    );
+    assert_eq!(
+        field(
+            field(external, "objective"),
+            "used_for_integer_schedule_gap"
+        ),
+        &Json::Bool(false)
+    );
+    assert_eq!(
+        string(field(primal, "source"), "sha256"),
+        sha256(HIGHS_COLUMNS.as_bytes()).to_hex()
+    );
+    assert_eq!(
+        string(field(dual, "source"), "sha256"),
+        sha256(HIGHS_ROWS.as_bytes()).to_hex()
+    );
+    let markdown = e.rendered_markdown.as_ref().unwrap();
+    assert!(markdown.contains("scaled value units"));
+    assert!(markdown.contains("never used to tighten the integer schedule certificate"));
+
+    // An arbitrary row-sign convention may weaken the LP bound. It cannot alter or tighten the
+    // separate integer certificate. Nonmonotone, row-infeasible shares remain advisory as well.
+    let wrong_sign = HIGHS_ROWS
+        .lines()
+        .map(|line| {
+            let mut fields = line.split_whitespace();
+            match (fields.next(), fields.next()) {
+                (Some(name), Some(value)) if name.starts_with('R') => {
+                    format!("{name} {}\n", -value.parse::<f64>().unwrap())
+                }
+                _ => format!("{line}\n"),
+            }
+        })
+        .collect::<String>();
+    for value in [0.0, 1.0] {
+        let shares = (0..45)
+            .map(|i| format!("C{i} {value}\n"))
+            .collect::<String>();
+        let e = import_lp(
+            &root,
+            string(&exported, "mps_sha256"),
+            Some(&shares),
+            Some(&wrong_sign),
+        );
+        assert_eq!(e.exit_code, 0, "{}", e.to_json());
+        let json = parse(e.payload_json.as_bytes()).unwrap();
+        assert_eq!(field(&json, "selected"), field(&baseline, "selected"));
+        assert_eq!(field(&json, "certificate"), field(&baseline, "certificate"));
+    }
+}
+
+#[test]
+fn external_primal_can_improve_the_exact_incumbent_and_keep_negative_blend_helpers() {
+    let root = root();
+    fixture(
+        &root,
+        [3, 1, 1],
+        &[
+            ("value", vec![Some(6.0), Some(5.0), Some(5.0)]),
+            ("tonnes", vec![Some(3.0), Some(2.0), Some(2.0)]),
+        ],
+    );
+    let spec = one_period_spec();
+    let (_, baseline) = good(&root, &spec);
+    assert_eq!(
+        numerator(field(field(&baseline, "selected"), "discounted_value")),
+        6 * SCALE
+    );
+    let (_, exported) = export_lp(&root, &spec);
+    let e = import_lp(
+        &root,
+        string(&exported, "mps_sha256"),
+        Some("C0 0\nC1 1\nC2 1\n"),
+        Some("R0 -2.5\n"),
+    );
+    assert_eq!(e.exit_code, 0, "{}", e.to_json());
+    let json = parse(e.payload_json.as_bytes()).unwrap();
+    assert_eq!(string(field(&json, "selected"), "origin"), "external_lp");
+    assert_eq!(
+        assignment(field(&json, "selected")),
+        [None, Some(0), Some(0)]
+    );
+    assert_eq!(
+        numerator(field(field(&json, "selected"), "discounted_value")),
+        10 * SCALE
+    );
+    assert_eq!(field(&json, "external_lp_selected"), &Json::Bool(true));
+    let certificate = field(&json, "certificate");
+    assert!(numerator(field(certificate, "upper_bound")) >= 10 * SCALE);
+    assert_eq!(
+        numerator(field(certificate, "gap")),
+        numerator(field(certificate, "upper_bound")) - 10 * SCALE
+    );
+
+    // The -1 helper is outside the positive-value ultimate pit but supplies the signed blend
+    // credit required by the +5 block. Export and imported guidance must use the full model.
+    fixture(
+        &root,
+        [2, 1, 1],
+        &[
+            ("value", vec![Some(-1.0), Some(5.0)]),
+            ("blend", vec![Some(-1.0), Some(1.0)]),
+        ],
+    );
+    let spec = spec.replace("tonnes", "blend").replace("[4]", "[0]");
+    let (_, baseline) = good(&root, &spec);
+    assert_eq!(
+        numerator(field(field(&baseline, "selected"), "discounted_value")),
+        0
+    );
+    let (_, exported) = export_lp(&root, &spec);
+    assert_eq!(field(&exported, "columns").u64(), Some(2));
+    let e = import_lp(
+        &root,
+        string(&exported, "mps_sha256"),
+        Some("C0 1\nC1 1\n"),
+        Some("R0 -1\n"),
+    );
+    assert_eq!(e.exit_code, 0, "{}", e.to_json());
+    let json = parse(e.payload_json.as_bytes()).unwrap();
+    assert_eq!(assignment(field(&json, "selected")), [Some(0), Some(0)]);
+    assert_eq!(
+        numerator(field(field(&json, "selected"), "discounted_value")),
+        4 * SCALE
+    );
+    assert_eq!(
+        field(
+            field(field(&json, "external_lp"), "dual"),
+            "upper_bound_scaled"
+        )
+        .f64(),
+        Some(4.0)
+    );
+}
+
+#[test]
+fn boxed_zero_row_lps_accept_empty_duals_and_negative_models_keep_the_empty_incumbent() {
+    let root = root();
+    let spec = one_period_spec().replace(
+        "[{\"attribute\":\"tonnes\",\"per_unit\":1,\"limits_scaled\":[4]}]",
+        "[]",
+    );
+    for (value, expected) in [(5.0, 5), (-5.0, 0)] {
+        fixture(&root, [1, 1, 1], &[("value", vec![Some(value)])]);
+        let (_, exported) = export_lp(&root, &spec);
+        assert_eq!(field(&exported, "columns").u64(), Some(1));
+        assert_eq!(field(&exported, "rows").u64(), Some(0));
+        let e = import_lp(
+            &root,
+            string(&exported, "mps_sha256"),
+            None,
+            Some("# no rows\n"),
+        );
+        assert_eq!(e.exit_code, 0, "{}", e.to_json());
+        let json = parse(e.payload_json.as_bytes()).unwrap();
+        assert_eq!(
+            numerator(field(field(&json, "selected"), "discounted_value")),
+            expected * SCALE
+        );
+        assert_eq!(field(field(&json, "external_lp"), "primal"), &Json::Null);
+        assert_eq!(
+            field(
+                field(field(&json, "external_lp"), "dual"),
+                "upper_bound_scaled"
+            )
+            .f64(),
+            Some(expected as f64)
+        );
+    }
+}
+
+#[test]
+fn malformed_or_unbound_external_lp_values_refuse_before_any_schedule_is_admitted() {
+    let root = root();
+    let bytes = fixture(&root, [5, 1, 3], &section(9.25, None));
+    let (_, exported) = export_lp(&root, SPEC);
+    let digest = string(&exported, "mps_sha256");
+    let zeroes = (0..45).map(|i| format!("C{i} 0\n")).collect::<String>();
+    for bad in [
+        zeroes.replacen("C0 0\n", "", 1),
+        format!("{zeroes}C0 0\n"),
+        zeroes.replacen("C0", "C00", 1),
+        zeroes.replacen("C0", "R0", 1),
+        zeroes.replacen("C0", "C45", 1),
+        zeroes.replacen("C0 0", "C0 NaN", 1),
+        zeroes.replacen("C0 0", "C0 inf", 1),
+        zeroes.replacen("C0 0", "C0 -0.000001", 1),
+        zeroes.replacen("C0 0", "C0 1.000001", 1),
+        zeroes.replacen("C0 0", "C0 0 ignored", 1),
+    ] {
+        let e = import_lp(&root, digest, Some(&bad), None);
+        assert_ne!(e.exit_code, 0, "{}", e.to_json());
+        assert!(!e.payload_json.contains("\"selected\""));
+    }
+    for bad in ["R0 0\n", "C0 0\n", "R0 NaN\n"] {
+        let e = import_lp(&root, digest, None, Some(bad));
+        assert_ne!(e.exit_code, 0, "{}", e.to_json());
+    }
+    for extra in [
+        vec![
+            "--export-lp",
+            "--lp-sha256",
+            digest,
+            "--lp-primal",
+            "primal.txt",
+        ],
+        vec!["--lp-sha256", digest],
+        vec!["--lp-primal", "primal.txt"],
+        vec!["--export-lp", "--export-lp"],
+    ] {
+        let mut a = args();
+        a.extend(extra.into_iter().map(str::to_string));
+        assert_eq!(run(&root, &a).exit_code, 2);
+    }
+    let model_source = SourceAnchor::new("section.omf", sha256(&bytes).0, "model");
+    let spec_source = SourceAnchor::new("schedule.json", sha256(SPEC.as_bytes()).0, "spec");
+    let forged = SourceAnchor::new("primal.txt", [0; 32], "unbound primal");
+    let refusal = fmine_io::omf::scheduling::evaluate_with_lp(
+        &bytes,
+        &model_source,
+        SPEC,
+        &spec_source,
+        true,
+        Some(fmine_io::omf::scheduling::external_lp::Request::Import {
+            mps_sha256: digest,
+            primal: Some((&zeroes, &forged)),
+            dual: None,
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(refusal.code, "FMINE-REF-505");
+}
+
+#[test]
+fn external_lp_text_budget_refuses_before_relaxation_allocation() {
+    let root = root();
+    fixture(&root, [64, 64, 1], &[("value", vec![Some(1.0); 4096])]);
+    let spec = SPEC.replace("\"periods\":3", "\"periods\":32").replace(
+        "[{\"attribute\":\"tonnes\",\"per_unit\":1,\"limits_scaled\":[10,10,10]}]",
+        "[]",
+    );
+    fs::write(root.join("schedule.json"), spec).unwrap();
+    let mut a = args();
+    a.push("--export-lp".into());
+    let e = run(&root, &a);
+    assert!(e.to_json().contains("FMINE-REF-207"), "{}", e.to_json());
+    assert!(e.to_json().contains("MPS text budget"));
+    assert!(!e.payload_json.contains("\"mps\""));
+}
+
+#[test]
+fn external_lp_commands_match_the_actual_binary_json_and_markdown() {
+    let executable = std::env::var_os("FMINE_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let current = std::env::current_exe().unwrap();
+            let profile = current
+                .ancestors()
+                .find(|path| {
+                    path.file_name()
+                        .is_some_and(|name| name == "deps" || name == "build")
+                })
+                .and_then(Path::parent)
+                .unwrap();
+            profile.join(format!("fmine{}", std::env::consts::EXE_SUFFIX))
+        });
+    let root = root();
+    fixture(&root, [5, 1, 3], &section(9.25, None));
+    let (_, exported) = export_lp(&root, SPEC);
+    let digest = string(&exported, "mps_sha256");
+    fs::write(root.join("primal.txt"), HIGHS_COLUMNS).unwrap();
+    fs::write(root.join("dual.txt"), HIGHS_ROWS).unwrap();
+    for extra in [
+        vec!["--export-lp"],
+        vec![
+            "--lp-sha256",
+            digest,
+            "--lp-primal",
+            "primal.txt",
+            "--lp-dual",
+            "dual.txt",
+        ],
+    ] {
+        let mut a = args();
+        a.extend(extra.into_iter().map(str::to_string));
+        let expected = run(&root, &a);
+        assert_eq!(expected.exit_code, 0);
+        for format in ["json", "markdown"] {
+            let output = Command::new(&executable)
+                .args(&a)
+                .arg("--workspace")
+                .arg(&root)
+                .args(["--format", format])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            let text = String::from_utf8(output.stdout).unwrap();
+            let expected = if format == "json" {
+                expected.to_json()
+            } else {
+                expected.rendered_markdown.as_ref().unwrap().clone()
+            };
+            assert_eq!(text.trim_end(), expected.trim_end());
+        }
+    }
+}

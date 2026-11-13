@@ -311,6 +311,20 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     resource use, bound prices and gap on that same objective. Listed periods use original OMF order.
     MineLib-only flags refuse. Uniform slope, single-destination, upper-limit and uncalibrated-input
     limits remain explicit. `omf::pit_report` also owns existing ultimate-pit composition and rendering.
+    DESIGN (plan §15.4, bd-06kg): `plan schedule --omf --export-lp` emits deterministic MPS text
+    and its SHA-256 before scheduling; header comments bind the complete OMF/spec byte digests.
+    Import requires `--lp-sha256` and at least one of `--lp-primal` or `--lp-dual`, using complete
+    finite `C0...`/`R0...` name-value files. Bounded snapshots and their hashes are retained. Primal
+    shares in [0,1] guide six checked starts and replace the exact incumbent only on strict improvement.
+    Row multipliers are locally certified against the reconstructed stored-binary64 relaxation. That
+    raw bound remains in scaled value units with `value_per_unit` explicit; it never replaces or
+    tightens the integer-factor Lagrangian certificate or gap. Dual-only imports, including zero-row
+    empty/comment files, are supported; absent finite bounds remain explicit. Source changes,
+    malformed names and unsupported combinations refuse. Sparse dimensions and conservative serialized
+    text are bounded before LP allocation, each value file/MPS is limited to 64 MiB, and no external
+    solver is launched. Omission preserves the prior schedule payload. `omf_schedule_cli` tests use
+    pinned HiGHS output, exact improving schedules, signed blend helpers, source/malformed controls
+    and actual-binary parity.
     DESIGN: `plan shells --omf <file.omf> --spec <shells.json> [--list-blocks]` exposes
     `fmine-io::omf::shells_report` through the same bounded-reader adapter. Exact ascending factors,
     explicit integer scaling and uniform slopes, and matching nonempty revenue/cost units are required.

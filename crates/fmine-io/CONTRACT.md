@@ -106,6 +106,25 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   `schedule_bound` is minus `certified_bound` of any row multipliers `y`. Neither trusts the solver. `x` only ranks
   and releases blocks, and TopoSort and the search refuse a schedule that fails `check`. Every `y` bounds by weak
   duality, so a poor one only bounds loosely.
+- DESIGN (plan §15.4, bd-06kg): `omf::scheduling::evaluate_with_lp` exposes that exchange through
+  `plan schedule --omf`. `--export-lp` returns deterministic MPS text and its SHA-256 before any heuristic
+  scheduling or Lagrangian search. Its fixed-name header comments bind the complete OMF and declaration
+  byte digests, including edits that do not change a coefficient. Column `C(t*n+b)` is block `b`'s share
+  mined by period `t`, in pitflow's top-down order, and every original block remains in the relaxation.
+  This includes negative-value helpers for signed resource constraints.
+  `--lp-sha256` with `--lp-primal` and/or `--lp-dual` admits complete finite named value files through the
+  existing MPS parser. `external_lp::ValueFiles` retains bounded original text and SourceAnchors; the pure
+  adapter rechecks their digests. Primal values only guide six checked starts. A strict improvement of
+  the exact integer-factor incumbent is required, preserving earlier candidates and presentation ties.
+  Final schedule feasibility and the integer Lagrangian bound/gap still use the original independent checks.
+  The imported dual certificate applies **only to the exported stored-binary64 LP**, with raw scaled-value
+  units and `value_per_unit` reported separately. Attribute/constraint casts and floating discount factors
+  can differ from the integer model; no division or cross-objective gap is asserted. Arbitrary row signs
+  can weaken the bound, and overflow can leave no finite bound. Neither case fabricates a certificate.
+  Export/import additionally bounds columns to 1,000,000, rows to 2,000,000, nonzeros to 8,000,000 and a
+  conservative 64 MiB serialized-text estimate before sparse allocation. Each imported file and actual
+  MPS text is limited to 64 MiB. The estimate covers coefficients and up to three row/column lines at
+  128 bytes each. No outside solver is launched, and omission preserves the previous schedule payload.
 - Candidates (bd-jfg4, plan §15.4 `UntrustedCandidate`). A client's own schedule, such as the mining period its
   planning tool exported as a Number attribute on the parent blocks, comes in through `PitModel::periods`. The value
   `first` is period 0, and a null leaves a block out. `PitModel::candidate_schedule` checks it with
@@ -237,6 +256,11 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   and `toposort::lp::Incumbent`.
 - `PitModel::{schedule_lp, guided_schedule, schedule_bound}` and `omf::pit::GuidedSchedule` (bd-06kg).
   `GuidedSchedule::{problem, factors, incumbent}` give the same as `LpSchedule`'s.
+- `omf::scheduling::{evaluate, evaluate_with_lp, Report}` and
+  `omf::scheduling::external_lp::{Request, ValueFiles, MAX_TEXT_BYTES, NO_CLAIM}`.
+  `Request` is an export or a source-bound primal/dual import. `ValueFiles::{read, request}` supplies
+  retained file snapshots; `evaluate_with_lp` also accepts already supplied text/anchors directly.
+  The schedule, shell and design `Report` names re-export the common `omf::pit_report::Report` type.
 - `PitModel::{periods, candidate_schedule, omf_index}` and `omf::pit::CandidateSchedule` (bd-jfg4).
   `CandidateSchedule::{problem, factors, schedule, check, value, improvement}` give the `ScheduleProblem`, the
   discount factors, the candidate in `pitflow`'s order, `toposort::ScheduleCheck`, its discounted value, and
@@ -653,8 +677,9 @@ tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the
 OMF pits take block values as given in attributes. They hold no price deck or cost model, do not value sub-blocks,
 and do not write the pit back to OMF. Schedules have no destinations (PCPSP). `schedule` takes the caller's
 ranking; `lp_schedule` searches from the LP's starts and reports its gap to the bound, but proves no schedule best.
-No outside solver runs in CI or at run time: HiGHS ran once in the lab and its output is pinned. There is no CLI verb
-for MPS export or LP-solution import. `plan schedule --omf` admits candidate period attributes. A candidate
+No outside solver runs in CI or at run time: HiGHS ran once in the lab and its output is pinned.
+`plan schedule --omf` exports source-bound MPS and imports named primal/dual values, retaining separate
+binary64-LP and integer-schedule certificates. The command also admits candidate period attributes. A candidate
 comes only as periods per parent block, from an attribute or the caller. Periods as dates, a calendar, vendor
 string files and partial blocks are not read, and a broken candidate is never repaired. The shell-to-design loss is
 geometric: no grade uncertainty over realizations (no geostatistics here), no ramp-induced slope flattening, no

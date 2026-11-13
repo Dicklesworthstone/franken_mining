@@ -805,6 +805,51 @@ eight-million-arc bound before slope construction. Unsupported geometry, ambiguo
 or capacity attributes, invalid candidate periods and oversized expansions refuse. OMF schedules use one
 destination per block; the MineLib path above provides destination splits and optional LP guidance.
 
+#### Solve the OMF relaxation with an external solver
+
+Export the source-bound LP without running the schedule search:
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --omf model.omf --spec schedule.json --export-lp --json > lp-export.json
+jq -r '.payload.mps' lp-export.json > schedule.mps
+jq -r '.payload.mps_sha256' lp-export.json
+```
+
+The MPS uses a minimization of negated discounted value. Columns `C0`, `C1`, and so on represent
+by-period block shares: `C(t*n+b)` is the share of block `b` mined by period `t`. Blocks use the engine's
+top-down order, which reverses OMF's vertical layers; each layer retains U/V ordering. The comments
+bind the complete OMF and declaration SHA-256 digests. Preserve them and the returned MPS digest.
+
+Solve that file with an external LP solver, then supply complete named values, one `name value` pair
+per line. `primal.txt` uses every column name (`C0 0.5`, for example); `dual.txt` uses every row name
+(`R0 -2.5`, for example). Blank and `#` comment lines are accepted. Names cannot be missing or repeated;
+values must be finite, and primal shares must lie in `[0,1]` without clamping.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --omf model.omf --spec schedule.json \
+  --lp-sha256 <mps-sha256-from-export> --lp-primal primal.txt --lp-dual dual.txt \
+  --list-schedule --format markdown
+```
+
+Either value file may be supplied alone. A zero-row LP accepts an empty or comments-only dual file.
+The source-bound MPS digest must match the reconstructed export; changes to the OMF or declaration,
+including whitespace and search controls, require a new export. The command retains each value file's
+SHA-256. It never starts an external solver.
+
+Imported primal shares guide six searched schedule starts. They do not establish LP feasibility or
+optimality. Only a strictly better exact incumbent replaces the existing baseline or candidate; its
+precedence, resource use and integer-factor value are independently rechecked.
+
+Imported row multipliers produce a **separate certificate for the exported binary64 LP**. Its raw upper
+bound is in scaled value units; `value_per_unit` states how the input values were scaled. Floating casts
+and `(1 + rate/scale)^(-t)` discount factors can differ from the exact integer schedule model, so this
+bound never tightens the schedule's integer Lagrangian certificate or gap. Incorrect multiplier signs
+can yield a loose bound, and unrepresentable arithmetic leaves an explicit `no_finite_bound` result.
+No solver-reported objective or status is trusted. Additional preallocation checks bound LP columns,
+rows, nonzeros and estimated MPS text; each imported file and exported MPS is limited to 64 MiB.
+
 ### Turn registered HTML tables into cited Claims
 
 `html claims` reads local, registered HTML filings and explicit label mappings into canonical public Claims:

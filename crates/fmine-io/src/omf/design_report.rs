@@ -17,12 +17,7 @@ const ROUNDING: &str = "nearest_integer_half_away_from_zero";
 pub const NO_CLAIM: &str = "The shell is optimal only for the declared scaled integer values and finite-depth uniform slope cones. Design quantities assume each scaled parent-block total is uniformly distributed within that block. Geometric enclosures inherit volcert's nominal binary64 sub-cell boundaries and winding-number classification; they are not statistical confidence intervals. The design's slope feasibility is not checked, so a negative shell-minus-design value is possible. No raw-float optimum, mineable design, geotechnical sign-off, reserve, schedule, regulatory compliance or execution authorization is established.";
 pub const ROBOT_DOCS_JSON: &str = r#"{"command":"plan design --omf <model.omf> --spec <design.json> [--list-blocks]","schema":"fmine.omf-design.v1","input":"Both OMF and strict JSON declaration bytes are SHA-256 bound; all fields required, duplicate/unknown keys refuse","spec":"block_model, value_attribute, value_per_unit, value_rounding=nearest_integer_half_away_from_zero, surface, depth, slope{rise,run,levels}, quantities[{attribute,per_unit}]","quantities":"Zero to 16 additional unique Number attributes on parent blocks, each with explicit nonempty units and positive integer scale. Values and quantities round nearest, halves away from zero; signed values remain signed. No density, grade, currency or mass conversion is inferred","method":"Solve and verify the integer ultimate-pit shell, then use PitModel::design and Design::against for exact shell, design, left, added and shell-minus-design quantity enclosures. Each scaled total is uniform within its parent block. Depth0..6; sub-cells per block=8^depth","work":"OMF<=1GiB; spec<=1MiB. Existing 1000000-block/8000000-graph-work limits apply. Before geometry allocation: at most100000 vertices and100000 triangles; blocks*(1+8^depth)<=2000000 and triangles*blocks*8^depth<=64000000. Reduce depth or split a refused model","output":"fmine.plan-design.omf.v1; exact rational endpoint strings, actual source hashes, integer objective certificate, geometric method limits. --list-blocks gives shell flags and [inside,inside+band] sub-cell counts in OMF U/V/W bottom-up order","limits":"Surface must be closed, outward-oriented and entirely within the block model. Volcert winding classification is checked near an integer but not proved correctly rounded. No design slope validation, raw-float optimum, reserve or execution claim"}"#;
 
-/// Rendered evidence; file reading and response envelopes belong to the caller.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Report {
-    pub json: String,
-    pub markdown: String,
-}
+pub use super::pit_report::Report;
 
 struct Quantity {
     attribute: String,

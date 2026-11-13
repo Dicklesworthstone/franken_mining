@@ -11,18 +11,14 @@ use super::json::{self, Json};
 use super::pit::{self, Capacity, PitModel, ScheduleSpec};
 use super::pit_report::{escape_json, source_json};
 
+pub mod external_lp;
+pub use super::pit_report::Report;
+
 pub const MAX_SPEC_BYTES: u64 = 1024 * 1024;
 pub const MAX_OMF_BYTES: u64 = 1024 * 1024 * 1024;
 const ROUNDING: &str = "nearest_integer_half_away_from_zero";
 pub const NO_CLAIM: &str = "A feasible schedule and re-verified upper bound for the declared scaled integer OMF model and emitted integer discount factors. Values, slope cones, capacities and rounding are declarations; the search is heuristic and sampling/calibration errors are not measured. No raw-attribute feasibility or optimality, approved slope, reserve, operational mine plan or execution authorization is established.";
-pub const ROBOT_DOCS_JSON: &str = r#"{"command":"plan schedule --omf <model.omf> --spec <schedule.json> [--list-schedule]","schema":"fmine.omf-schedule.v1","input":"Regular OMF parent blocks; exact OMF and strict JSON declaration bytes SHA-256 bound. All spec fields are mandatory except candidate; duplicate and unknown keys refuse","spec":"block_model, value_attribute, value_per_unit, value_rounding=nearest_integer_half_away_from_zero; slope{rise,run,levels}; periods; discount{rate,scale}; capacities[{attribute,per_unit,limits_scaled}]; search_rounds; bound_steps; optional candidate{attribute,first}","scaling":"Positive integer value/resource scales. Values use binary64 multiplication then nearest integer, halves away from zero; resource uses round up. Resource limits are already-scaled nonnegative integers, one per period. No units are converted","method":"Ultimate-pit ranks seed TopoSort and local search. An optional OMF period attribute is checked as an untrusted candidate; null leaves a block out, first maps to period0. Only feasible candidates are improved or selected. The empty0 schedule remains an incumbent. Final feasibility and value are independently recomputed; Lagrangian prices are replayed against exactly the same integer discount factors","work":"Spec<=1MiB; OMF<=1GiB; periods1..256; capacities<=32; search_rounds0..1000; bound_steps1..256. Before slope allocation, expanded nodes must be <=1000000; reduced slope construction enforces a retained-arc cap so expanded precedence entries stay <=8000000, without rejecting a model solely because a rectangular cone bound is loose","output":"fmine.plan-schedule.omf.v1: both sources, units/selectors/scales, declared capacity limits, exact period values/resource use, selected and candidate results, integer discount factors, same-objective bound/gap, replayed prices and bound history. --list-schedule emits OMF-order period arrays; first_unmet witnesses also use OMF order","limits":"Single destination; uniform finite-depth declared slopes; no LP guidance, price deck, raw-float objective certificate, empirical calibration or reserve/execution claim"}"#;
-
-/// Pure adapter result; the caller supplies its response envelope and performs file IO.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Report {
-    pub json: String,
-    pub markdown: String,
-}
+pub const ROBOT_DOCS_JSON: &str = r#"{"command":"plan schedule --omf <model.omf> --spec <schedule.json> [--list-schedule] [--export-lp | --lp-sha256 <hex> [--lp-primal <values.txt>] [--lp-dual <values.txt>]]","schema":"fmine.omf-schedule.v1","input":"Regular OMF parent blocks; exact OMF and strict JSON declaration bytes SHA-256 bound. All spec fields are mandatory except candidate; duplicate and unknown keys refuse","spec":"block_model, value_attribute, value_per_unit, value_rounding=nearest_integer_half_away_from_zero; slope{rise,run,levels}; periods; discount{rate,scale}; capacities[{attribute,per_unit,limits_scaled}]; search_rounds; bound_steps; optional candidate{attribute,first}","scaling":"Positive integer value/resource scales. Values use binary64 multiplication then nearest integer, halves away from zero; resource uses round up. Resource limits are already-scaled nonnegative integers, one per period. No units are converted","method":"Ultimate-pit ranks seed TopoSort and local search. An optional OMF period attribute is checked as an untrusted candidate; null leaves a block out, first maps to period0. Only feasible candidates are improved or selected. The empty0 schedule remains an incumbent. Final feasibility and value are independently recomputed; Lagrangian prices are replayed against exactly the same integer discount factors","external_lp":"--export-lp returns canonical MPS text and mps_sha256 in payload before scheduling. MPS comments bind exact OMF/spec SHA-256. Import requires --lp-sha256 and at least one of --lp-primal/--lp-dual: complete finite C0... or R0... name-value files, comments allowed. Primal shares in [0,1] guide six checked searches and replace the exact incumbent only on strict improvement. Row multipliers produce a separate local weak-duality certificate for the stored binary64 LP, in raw scaled value units. It never tightens the integer-factor certificate or gap; no solver process runs","work":"Spec<=1MiB; OMF<=1GiB; periods1..256; capacities<=32; search_rounds0..1000; bound_steps1..256. Before slope allocation, expanded nodes must be <=1000000; reduced slope construction enforces a retained-arc cap so expanded precedence entries stay <=8000000. External LP additionally checks <=1000000 columns, <=2000000 rows, <=8000000 nonzeros and a conservative 64MiB text budget before sparse allocation; each imported file<=64MiB","output":"fmine.plan-schedule.omf.v1: both sources, units/selectors/scales, declared capacity limits, exact period values/resource use, selected and candidate results, integer discount factors, same-objective bound/gap, replayed prices and bound history. --list-schedule emits OMF-order period arrays; first_unmet witnesses also use OMF order. Export schema fmine.omf-schedule-lp.v1; imports add external_lp source hashes, guided candidate and separately scoped dual result","limits":"Single destination; uniform finite-depth declared slopes; no internal OMF LP solve, price deck, unrounded-attribute objective certificate, empirical calibration or reserve/execution claim"}"#;
 
 struct Resource {
     attribute: String,
@@ -283,6 +279,28 @@ pub fn evaluate(
     spec_source: &SourceAnchor,
     list_schedule: bool,
 ) -> Result<Report, Refusal> {
+    evaluate_with_lp(
+        omf_bytes,
+        omf_source,
+        spec_text,
+        spec_source,
+        list_schedule,
+        None,
+    )
+}
+
+/// Evaluate the schedule with optional source-bound external LP export or imported guidance.
+///
+/// # Errors
+/// Those of `evaluate`, plus malformed or stale imported values and bounded LP expansion failures.
+pub fn evaluate_with_lp(
+    omf_bytes: &[u8],
+    omf_source: &SourceAnchor,
+    spec_text: &str,
+    spec_source: &SourceAnchor,
+    list_schedule: bool,
+    request: Option<external_lp::Request<'_>>,
+) -> Result<Report, Refusal> {
     let omf_digest = sha256(omf_bytes);
     let spec_digest = sha256(spec_text.as_bytes());
     let run = || -> Result<Report, Refusal> {
@@ -352,6 +370,24 @@ pub fn evaluate(
             discount: declaration.discount,
             max_rounds: declaration.search_rounds,
         };
+        let external = match request
+            .map(|request| {
+                external_lp::evaluate(
+                    &model,
+                    &spec,
+                    [
+                        (omf_source, omf_bytes.len()),
+                        (spec_source, spec_text.len()),
+                    ],
+                    request,
+                )
+            })
+            .transpose()?
+        {
+            Some(external_lp::Outcome::Export(report)) => return Ok(report),
+            Some(external_lp::Outcome::Import(imported)) => Some(imported),
+            None => None,
+        };
         let pit = model.ultimate_pit(spec.value, spec.per_unit)?;
         let rank = model
             .omf_order(pit.in_pit())
@@ -399,6 +435,13 @@ pub fn evaluate(
                 ));
             }
             candidate_json.push('}');
+        }
+        if let Some((schedule, value)) = external.as_ref().and_then(|e| e.guidance.as_ref())
+            && *value > best
+        {
+            best = *value;
+            selected.clone_from(schedule);
+            origin = "external_lp";
         }
         let selected_check = check(problem, &selected)?;
         let objective = search::discounted_value(problem, &selected, factors)?;
@@ -495,7 +538,11 @@ pub fn evaluate(
             declaration.value_per_unit,
             search::DISCOUNT_SCALE,
         );
-        Ok(Report { json, markdown })
+        let mut report = Report { json, markdown };
+        if let Some(external) = external {
+            external.append(&mut report, origin == "external_lp");
+        }
+        Ok(report)
     };
     run().map_err(|mut refusal| {
         refusal.what.push_str(&format!(
