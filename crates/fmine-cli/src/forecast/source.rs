@@ -242,11 +242,11 @@ fn resolve_selected(
         release,
         (!profile.mine_stats_labels.is_empty()).then_some(&vocabulary),
     )?;
-    // Reader errors may hide a competing row before it reaches raw candidate selection. Physical targets
-    // use only Minestats blocks; their repeated-label refusals cannot leave a seemingly unique first row.
+    // Reader errors may hide a competing row before raw selection. Site targets require clean Minestats
+    // blocks; repeated-label refusals cannot leave a seemingly unique first row.
     let summary_prefixes = [format!("{release}:QTD!"), format!("{release}:YTD!")];
     if let Some(error) = read.refusals.iter().find(|error| {
-        if policy.metric.is_site_physical() {
+        if policy.metric.is_site_row() {
             error.locator.starts_with(&format!("{release}:Minestats"))
         } else {
             summary_prefixes
@@ -291,7 +291,7 @@ fn resolve_selected(
                 normalized(label)
             )
         };
-        let wanted_view = if policy.metric.is_site_physical() {
+        let wanted_view = if policy.metric.is_site_row() {
             View::Minestats
         } else {
             View::Summary
@@ -379,37 +379,29 @@ fn numeric_footnote(text: &str) -> &str {
         .trim_start()
 }
 
-/// The registered Mine Stats cost conventions are per attributable unit sold (plan Appendix I.9).
-/// Only the exact supported name, unit, numeric footnotes and an optional matching sold-unit suffix
-/// are admitted. Produced-unit, adjusted, co-product and mixed-denominator labels need another policy.
-fn sold_unit_cost(metric: PublicMetric, header: Option<&str>) -> bool {
-    let (name, unit, sold) = match metric {
-        PublicMetric::AiscUsdPerOz => (
-            "all-in sustaining costs",
-            "($/oz)",
-            ["per sold ounce", "per ounce sold"],
-        ),
-        PublicMetric::AiscUsdPerLb => (
-            "all-in sustaining costs",
-            "($/lb)",
-            ["per sold pound", "per pound sold"],
-        ),
-        PublicMetric::TccUsdPerOz => (
-            "total cash costs",
-            "($/oz)",
-            ["per sold ounce", "per ounce sold"],
-        ),
-        PublicMetric::C1UsdPerLb => (
-            "c1 cash costs",
-            "($/lb)",
-            ["per sold pound", "per pound sold"],
-        ),
-        PublicMetric::ProductionKoz
-        | PublicMetric::ProductionKt
-        | PublicMetric::ProcessedKt
-        | PublicMetric::ProcessedGradeGPerT
-        | PublicMetric::ProcessedGradeFraction
-        | PublicMetric::RecoveryFraction => return true,
+/// Costs require their exact sold-unit definition; capex requires its printed reported-line scope.
+/// Numeric footnotes are allowed. A registered label alias cannot redefine the frozen monetary target.
+fn target_header(metric: PublicMetric, header: Option<&str>) -> bool {
+    let name = match metric {
+        PublicMetric::AiscUsdPerOz | PublicMetric::AiscUsdPerLb => "all-in sustaining costs",
+        PublicMetric::TccUsdPerOz => "total cash costs",
+        PublicMetric::C1UsdPerLb => "c1 cash costs",
+        _ => {
+            return !metric.is_capex()
+                || header.is_some_and(|printed| {
+                    let (label, _) = fmine_public::mine_stats::strip_footnote(printed);
+                    let label = label.split_whitespace().collect::<Vec<_>>().join(" ");
+                    metric
+                        .field(PublicOwnership::Full)
+                        .rsplit_once(':')
+                        .is_some_and(|(_, expected)| label.eq_ignore_ascii_case(expected))
+                });
+        }
+    };
+    let (unit, sold) = if metric.unit() == "usd_per_oz" {
+        ("($/oz)", ["per sold ounce", "per ounce sold"])
+    } else {
+        ("($/lb)", ["per sold pound", "per pound sold"])
     };
     let Some(header) = header else {
         return false;
@@ -929,10 +921,10 @@ fn bind_value(
             "outcome source is not public",
         ));
     }
-    if !sold_unit_cost(policy.metric, cell.label_as_printed.as_deref()) {
+    if !target_header(policy.metric, cell.label_as_printed.as_deref()) {
         return Err(refusal(
             RefusalCode::BasisMismatch105,
-            "source header does not state the frozen issuer cost definition and sold-unit denominator",
+            "source header does not state the frozen issuer monetary definition and denominator",
         ));
     }
     if cell.key.scope != Scope::Site

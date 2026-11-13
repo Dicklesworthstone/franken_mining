@@ -2,7 +2,8 @@ use super::*;
 use std::collections::BTreeMap;
 
 use fmine_calib::ledger::binding::PublicMetric::{
-    AiscUsdPerLb, AiscUsdPerOz, C1UsdPerLb, ProductionKoz, ProductionKt, TccUsdPerOz,
+    AiscUsdPerLb, AiscUsdPerOz, C1UsdPerLb, CapexProjectsUsdM, CapexSustainingUsdM, CapexUsdM,
+    ProductionKoz, ProductionKt, TccUsdPerOz,
 };
 use fmine_core::id::PrefixKind;
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx};
@@ -68,6 +69,9 @@ fn example(metric: PublicMetric) -> (PublicResolutionPolicy, ObjectId, SourceRow
         AiscUsdPerLb => Some("All-in sustaining costs ($/lb)".into()),
         TccUsdPerOz => Some("Total cash costs ($/oz)".into()),
         C1UsdPerLb => Some("C1 cash costs ($/lb)".into()),
+        CapexUsdM => Some("Total capital expenditures ($ millions)".into()),
+        CapexSustainingUsdM => Some("Minesite sustaining".into()),
+        CapexProjectsUsdM => Some("Projects".into()),
         _ => None,
     };
     (policy, id, registered, cell)
@@ -101,6 +105,9 @@ fn original_displayed_number_and_source_identity_survive_the_receipt() {
         TccUsdPerOz,
         C1UsdPerLb,
         AiscUsdPerLb,
+        CapexUsdM,
+        CapexSustainingUsdM,
+        CapexProjectsUsdM,
     ] {
         let (policy, id, source, cell) = example(metric);
         let ResolvedOriginalOutcome::Published(result) =
@@ -157,6 +164,65 @@ fn original_displayed_number_and_source_identity_survive_the_receipt() {
             .expect("different stored token"),
             body
         );
+    }
+}
+
+#[test]
+fn capital_scopes_preserve_signed_amounts_and_refuse_label_alias_reinterpretation() {
+    use fmine_calib::ledger::binding::PublicVintagePolicy;
+    let mut rules = std::collections::BTreeSet::new();
+    for metric in [CapexUsdM, CapexSustainingUsdM, CapexProjectsUsdM] {
+        let (policy, id, registered, mut cell) = example(metric);
+        assert_eq!(PublicMetric::parse(metric.as_str()).unwrap(), metric);
+        assert_eq!(metric.unit(), "usd_m");
+        assert!(metric.is_extensive());
+        assert!(metric.is_site_row());
+        assert!(!metric.is_site_physical());
+        for vintages in [
+            PublicVintagePolicy::OriginalOnly,
+            PublicVintagePolicy::RegisteredComparatives,
+        ] {
+            let rule = policy.to_resolution_rule_with_vintages(vintages).unwrap();
+            assert!(
+                rules.insert(rule.clone()),
+                "capital scopes must remain distinct"
+            );
+            assert_eq!(
+                PublicResolutionPolicy::parse_resolution_rule_with_vintages(&rule).unwrap(),
+                Some((policy.clone(), vintages))
+            );
+        }
+        cell.claim.value = PublicValue::Number {
+            stored: "-12.504".into(),
+            displayed: Ok("-12.50".into()),
+            under_status: None,
+        };
+        reseal(&mut cell);
+        let ResolvedOriginalOutcome::Published(outcome) =
+            bind(&registered, &policy, id, std::slice::from_ref(&cell)).unwrap()
+        else {
+            panic!("signed capital outturn must remain numeric");
+        };
+        assert_eq!(outcome.value, Rat::new(-25, 2).unwrap());
+        assert_eq!(
+            outcome.source.claim.additivity,
+            AdditivityClass::ExtensiveAdditive
+        );
+        for label in [
+            None,
+            Some("Adjusted capital expenditures"),
+            Some("Projects excluding leases"),
+        ] {
+            let mut changed = cell.clone();
+            changed.label_as_printed = label.map(str::to_string);
+            assert_eq!(
+                bind(&registered, &policy, id, &[changed]).unwrap_err().code,
+                "FMINE-REF-105"
+            );
+        }
+    }
+    for unsupported in ["capex_usd", "capex_aud_m", "capex_projects_per_oz"] {
+        assert!(PublicMetric::parse(unsupported).is_err());
     }
 }
 

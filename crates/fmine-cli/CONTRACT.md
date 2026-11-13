@@ -633,6 +633,16 @@ printed zero remains valid. Gold/copper AISC, TCC and C1 retain signed cost valu
 original admission, permitted comparative restatement, scoring and offline report replay. Existing target
 and receipt encodings remain unchanged.
 
+Reported-capital targets `capex_usd_m`, `capex_sustaining_usd_m` and `capex_projects_usd_m` select the
+printed total-capital, minesite-sustaining and project rows in `usd_m`, for either gold or copper sites.
+They retain exact displayed decimals, signed monetary credits and additive source-Claim typing, with the
+same explicitly printed ownership as the frozen target. A total is never reconstructed from its components;
+a source-label alias cannot substitute an adjusted or differently scoped capital definition. No cash/accrual,
+lease, FX or ownership bridge is inferred. These site-row targets use clean Minestats reads while remaining
+outside the physical nonnegativity checks. Original-release resolution, prospective comparative permission,
+saved first/latest assessments and offline receipt replay use the existing protocols without changing prior
+policy or receipt identities.
+
 Site physical targets select detailed Minestats rows: `processed_kt` is the top-level
 `Tonnes processed (thousands)` row, `processed_grade_g_per_t` is `Processed` under
 `Average grade (grams per tonne)`, `processed_grade_fraction` is `Processed` under `Average grade`, and
@@ -661,7 +671,7 @@ source Claim, workbook hash and publication evidence. It remains in the cohort d
 reinterpreted as a numeric original. `n/a`, withheld/disposed interpretations and other status-derived placeholders
 still refuse because their additional interpretation evidence is not yet frozen by this protocol. Candidate
 cardinality is checked before canonical-key projection. For summary targets, a reader refusal on either QTD/YTD
-sheet blocks admission; physical targets instead require clean Minestats reads. An unusable competing row cannot
+sheet blocks admission; detailed site-row targets instead require clean Minestats reads. An unusable competing row cannot
 disappear and leave a false singleton. Unrelated views do not replace the target. A later comparative cannot
 fill a missing original. An unmarked printed zero
 remains valid. Cross-crate forecast replay controls retain their CLI harness and all

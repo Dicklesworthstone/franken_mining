@@ -3186,9 +3186,8 @@ fn gold_cost_of_sales_derives_exact_source_bound_enclosures_on_both_printed_owne
             Some("2030-05-01"),
             gold_sales_cost_sheet(subject, "100.004", "150.004"),
         );
-        let draft = format!(
-            "Example Mine Q1 2030 {ownership} cost of sales per ounce sold is $1.5k/oz."
-        );
+        let draft =
+            format!("Example Mine Q1 2030 {ownership} cost of sales per ounce sold is $1.5k/oz.");
         let report = assess(&root, &draft, "2030-05-01");
         let rate = cost_rate_report(&report);
         assert!(rate.starts_with('{'), "{}", report.to_json());
@@ -3233,7 +3232,10 @@ fn gold_cost_of_sales_derives_exact_source_bound_enclosures_on_both_printed_owne
                 gold_sales_cost_sheet(subject, sold, cost),
             );
             let changed = assess(&changed, &draft, "2030-05-01");
-            assert_eq!(string_field(cost_rate_report(&changed), "status"), "contradicted");
+            assert_eq!(
+                string_field(cost_rate_report(&changed), "status"),
+                "contradicted"
+            );
             assert_ne!(report.payload_json, changed.payload_json);
         }
     }
@@ -3259,7 +3261,9 @@ fn gold_cost_of_sales_preserves_signed_costs_and_direct_disclosure_precedence() 
         assert_eq!(string_field(rate, "status"), "derived");
         assert!(rate.contains(&format!("\"lo\":{{\"num\":\"{lo}\",\"den\":\"19999\"}}")));
         let upper_den = if cost == "0" { "19999" } else { "20001" };
-        assert!(rate.contains(&format!("\"hi\":{{\"num\":\"{hi}\",\"den\":\"{upper_den}\"}}")));
+        assert!(rate.contains(&format!(
+            "\"hi\":{{\"num\":\"{hi}\",\"den\":\"{upper_den}\"}}"
+        )));
     }
     for (printed, status) in [("1500", "disclosed"), ("2000", "contradicts_disclosed")] {
         let root = derivation_workspace();
@@ -3276,7 +3280,11 @@ fn gold_cost_of_sales_preserves_signed_costs_and_direct_disclosure_precedence() 
             "2030-05-01",
         );
         assert_eq!(string_field(cost_rate_report(&report), "status"), "derived");
-        assert!(report.payload_json.contains(&format!("\"status\":\"{status}\"")));
+        assert!(
+            report
+                .payload_json
+                .contains(&format!("\"status\":\"{status}\""))
+        );
         assert!(!report.payload_json.contains("\"status\":\"derivable\""));
     }
 }
@@ -3312,7 +3320,12 @@ fn gold_cost_of_sales_never_infers_sources_ownership_or_sold_units() {
         ("Example Mine (60%)", "100", None, "not_available"),
     ] {
         let root = derivation_workspace();
-        gold_cost_source(&root, "Gold.xlsx", date, gold_sales_cost_sheet(subject, sold, "150"));
+        gold_cost_source(
+            &root,
+            "Gold.xlsx",
+            date,
+            gold_sales_cost_sheet(subject, sold, "150"),
+        );
         let report = assess(&root, draft, "2030-05-01");
         let rate = cost_rate_report(&report);
         if expected == "null" {
@@ -3324,10 +3337,13 @@ fn gold_cost_of_sales_never_infers_sources_ownership_or_sold_units() {
     }
     let separate = derivation_workspace();
     let mut cost = gold_sales_cost_sheet("Example Mine (60%)", "100", "150");
-    cost.cells.retain(|(at, _)| !["A3", "B3"].contains(&at.as_str()));
+    cost.cells
+        .retain(|(at, _)| !["A3", "B3"].contains(&at.as_str()));
     gold_cost_source(&separate, "Costs.xlsx", Some("2030-05-01"), cost);
     let mut sales = gold_sales_cost_sheet("Example Mine (60%)", "100", "150");
-    sales.cells.retain(|(at, _)| !["A4", "A5", "B5"].contains(&at.as_str()));
+    sales
+        .cells
+        .retain(|(at, _)| !["A4", "A5", "B5"].contains(&at.as_str()));
     gold_cost_source(&separate, "Sales.xlsx", Some("2030-05-01"), sales);
     let report = assess(&separate, draft, "2030-05-01");
     assert_eq!(string_field(cost_rate_report(&report), "status"), "refused");
@@ -3342,5 +3358,8 @@ fn gold_cost_of_sales_never_infers_sources_ownership_or_sold_units() {
         );
     }
     let report = assess(&competing, draft, "2030-05-01");
-    assert_eq!(string_field(cost_rate_report(&report), "status"), "ambiguous");
+    assert_eq!(
+        string_field(cost_rate_report(&report), "status"),
+        "ambiguous"
+    );
 }

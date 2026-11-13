@@ -69,63 +69,53 @@ impl PublicVintagePolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublicMetric {
-    ProductionKoz,
-    ProductionKt,
-    AiscUsdPerOz,
-    TccUsdPerOz,
-    C1UsdPerLb,
-    AiscUsdPerLb,
-    ProcessedKt,
-    ProcessedGradeGPerT,
-    ProcessedGradeFraction,
-    RecoveryFraction,
+// One declaration binds each public name, source unit and default field. Only production has a
+// different attributable field; every other target retains the explicitly printed site ownership.
+macro_rules! public_metrics {
+    ($($variant:ident: $name:literal, $unit:literal, $field:literal;)*) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum PublicMetric { $($variant,)* }
+        impl PublicMetric {
+            pub fn parse(value: &str) -> Result<Self, Refusal> {
+                match value {
+                    $($name => Ok(Self::$variant),)*
+                    _ => Err(domain("unsupported public-resolution metric")),
+                }
+            }
+            pub const fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $name,)* }
+            }
+            pub const fn unit(self) -> &'static str {
+                match self { $(Self::$variant => $unit,)* }
+            }
+            const fn source_field(self) -> &'static str {
+                match self { $(Self::$variant => $field,)* }
+            }
+        }
+    };
+}
+
+public_metrics! {
+    ProductionKoz: "production_koz", "koz", "summary:au_prod_100_koz";
+    ProductionKt: "production_kt", "kt", "summary:cu_prod_100_kt";
+    AiscUsdPerOz: "aisc_usd_per_oz", "usd_per_oz", "summary:aisc_usd_per_oz";
+    TccUsdPerOz: "tcc_usd_per_oz", "usd_per_oz", "summary:tcc_usd_per_oz";
+    C1UsdPerLb: "c1_usd_per_lb", "usd_per_lb", "summary:c1_usd_per_lb";
+    AiscUsdPerLb: "aisc_usd_per_lb", "usd_per_lb", "summary:aisc_usd_per_lb";
+    ProcessedKt: "processed_kt", "kt", "site::tonnes processed (thousands)";
+    ProcessedGradeGPerT: "processed_grade_g_per_t", "g_per_t",
+        "site:average grade (grams per tonne):processed";
+    ProcessedGradeFraction: "processed_grade_fraction", "mass_fraction",
+        "site:average grade:processed";
+    RecoveryFraction: "recovery_fraction", "mass_fraction", "site::recovery rate (percent)";
+    CapexUsdM: "capex_usd_m", "usd_m", "site::total capital expenditures ($ millions)";
+    CapexSustainingUsdM: "capex_sustaining_usd_m", "usd_m",
+        "site:capital expenditures ($ millions):minesite sustaining";
+    CapexProjectsUsdM: "capex_projects_usd_m", "usd_m",
+        "site:capital expenditures ($ millions):projects";
 }
 
 impl PublicMetric {
-    pub fn parse(value: &str) -> Result<Self, Refusal> {
-        match value {
-            "production_koz" => Ok(Self::ProductionKoz),
-            "production_kt" => Ok(Self::ProductionKt),
-            "aisc_usd_per_oz" => Ok(Self::AiscUsdPerOz),
-            "tcc_usd_per_oz" => Ok(Self::TccUsdPerOz),
-            "c1_usd_per_lb" => Ok(Self::C1UsdPerLb),
-            "aisc_usd_per_lb" => Ok(Self::AiscUsdPerLb),
-            "processed_kt" => Ok(Self::ProcessedKt),
-            "processed_grade_g_per_t" => Ok(Self::ProcessedGradeGPerT),
-            "processed_grade_fraction" => Ok(Self::ProcessedGradeFraction),
-            "recovery_fraction" => Ok(Self::RecoveryFraction),
-            _ => Err(domain("unsupported public-resolution metric")),
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ProductionKoz => "production_koz",
-            Self::ProductionKt => "production_kt",
-            Self::AiscUsdPerOz => "aisc_usd_per_oz",
-            Self::TccUsdPerOz => "tcc_usd_per_oz",
-            Self::C1UsdPerLb => "c1_usd_per_lb",
-            Self::AiscUsdPerLb => "aisc_usd_per_lb",
-            Self::ProcessedKt => "processed_kt",
-            Self::ProcessedGradeGPerT => "processed_grade_g_per_t",
-            Self::ProcessedGradeFraction => "processed_grade_fraction",
-            Self::RecoveryFraction => "recovery_fraction",
-        }
-    }
-
-    pub const fn unit(self) -> &'static str {
-        match self {
-            Self::ProductionKoz => "koz",
-            Self::ProductionKt | Self::ProcessedKt => "kt",
-            Self::AiscUsdPerOz | Self::TccUsdPerOz => "usd_per_oz",
-            Self::C1UsdPerLb | Self::AiscUsdPerLb => "usd_per_lb",
-            Self::ProcessedGradeGPerT => "g_per_t",
-            Self::ProcessedGradeFraction | Self::RecoveryFraction => "mass_fraction",
-        }
-    }
-
     /// Both production quantities are extensive and nonnegative; the source unit never converts.
     pub const fn is_production(self) -> bool {
         matches!(self, Self::ProductionKoz | Self::ProductionKt)
@@ -144,7 +134,19 @@ impl PublicMetric {
     }
 
     pub const fn is_extensive(self) -> bool {
-        self.is_production() || matches!(self, Self::ProcessedKt)
+        self.is_production() || matches!(self, Self::ProcessedKt) || self.is_capex()
+    }
+
+    /// Reported capital scopes are signed monetary amounts, never physical quantities or cost rates.
+    pub const fn is_capex(self) -> bool {
+        matches!(
+            self,
+            Self::CapexUsdM | Self::CapexSustainingUsdM | Self::CapexProjectsUsdM
+        )
+    }
+
+    pub const fn is_site_row(self) -> bool {
+        self.is_site_physical() || self.is_capex()
     }
 
     pub const fn is_fraction(self) -> bool {
@@ -155,20 +157,11 @@ impl PublicMetric {
     /// denominator: AISC/TCC per gold ounce, AISC/C1 per copper pound (plan Appendix I.9).
     pub const fn field(self, ownership: PublicOwnership) -> &'static str {
         match (self, ownership) {
-            (Self::ProductionKoz, PublicOwnership::Full) => "summary:au_prod_100_koz",
             (Self::ProductionKoz, PublicOwnership::Attributable { .. }) => {
                 "summary:au_prod_attr_koz"
             }
-            (Self::ProductionKt, PublicOwnership::Full) => "summary:cu_prod_100_kt",
             (Self::ProductionKt, PublicOwnership::Attributable { .. }) => "summary:cu_prod_attr_kt",
-            (Self::AiscUsdPerOz, _) => "summary:aisc_usd_per_oz",
-            (Self::TccUsdPerOz, _) => "summary:tcc_usd_per_oz",
-            (Self::C1UsdPerLb, _) => "summary:c1_usd_per_lb",
-            (Self::AiscUsdPerLb, _) => "summary:aisc_usd_per_lb",
-            (Self::ProcessedKt, _) => "site::tonnes processed (thousands)",
-            (Self::ProcessedGradeGPerT, _) => "site:average grade (grams per tonne):processed",
-            (Self::ProcessedGradeFraction, _) => "site:average grade:processed",
-            (Self::RecoveryFraction, _) => "site::recovery rate (percent)",
+            _ => self.source_field(),
         }
     }
 }

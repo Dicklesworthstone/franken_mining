@@ -1424,8 +1424,12 @@ fn registered_cost_with_format(
             xfs: vec![format_id],
         }),
     );
+    register_source_bytes(fixture, release, published, &bytes);
+}
+
+fn register_source_bytes(fixture: &Fixture, release: &str, published: &str, bytes: &[u8]) {
     let file = format!("{release}.xlsx");
-    fs::write(fixture.root.join("corpus").join(&file), &bytes).unwrap();
+    fs::write(fixture.root.join("corpus").join(&file), bytes).unwrap();
     // These fixture registries contain one header/subject section followed only by source rows.
     let path = registry_path(&fixture.root, ISSUER);
     let old = fs::read_to_string(&path).unwrap();
@@ -1440,7 +1444,7 @@ fn registered_cost_with_format(
     registry.push_str(&format!(
         "\n[[source]]\nfile = \"{file}\"\nkind = \"mine_stats\"\nquarter = \"{release}\"\npath = \"{file}\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\npublished_at = \"{published}\"\npublished_at_basis = \"FACT: invented comparative release fixture\"\n",
         bytes.len(),
-        sha256(&bytes),
+        sha256(bytes),
     ));
     fs::write(path, registry).unwrap();
 }
@@ -2228,4 +2232,337 @@ fn later_sources_preserve_calendar_ambiguity_and_byte_guards_without_fallback() 
         ns("2032-02-16T00:00:00Z"),
         "FMINE-REF-202",
     );
+}
+
+/// Invented independent reported scopes; the total intentionally need not equal its two components.
+fn capital_sheet(metal: &str, months: &str, site: &str, amounts: [&str; 3]) -> MinimalSheet {
+    let text = |value: &str| MinimalCell::Text(value.into());
+    let mut cells = vec![
+        ("A1".into(), text(&format!("Mine Statistics ({metal})"))),
+        ("B2".into(), text(site)),
+        (
+            "A3".into(),
+            text(&format!("For the {months} months ended December 31,")),
+        ),
+        ("B3".into(), MinimalCell::Number(2030.0)),
+        ("A4".into(), text("Capital expenditures ($ millions)")),
+        ("A5".into(), text("Minesite sustaining")),
+        ("A6".into(), text("Projects")),
+        ("A7".into(), text("Total capital expenditures ($ millions)")),
+    ];
+    for (index, amount) in amounts.into_iter().enumerate() {
+        cells.push((
+            format!("B{}", index + 5),
+            MinimalCell::Styled {
+                raw: amount.into(),
+                xf: 0,
+            },
+        ));
+    }
+    MinimalSheet {
+        name: "Minestats1".into(),
+        hidden: false,
+        cells,
+    }
+}
+
+fn capital_styles() -> MinimalStyles {
+    MinimalStyles {
+        num_fmts: vec![],
+        xfs: vec![2],
+    }
+}
+
+fn change_capital(sheet: &mut MinimalSheet, locator: &str, value: MinimalCell) {
+    sheet
+        .cells
+        .iter_mut()
+        .find(|(at, _)| at == locator)
+        .unwrap()
+        .1 = value;
+}
+
+#[test]
+fn capital_outcomes_preserve_signed_decimals_scopes_and_offline_revision_scores() {
+    use fmine_claim::AdditivityClass;
+    for (metric, cell, raw, value, num, den, score, revised, revised_score) in [
+        (
+            "capex_sustaining_usd_m",
+            "B5",
+            "-12.504",
+            "-12.5",
+            "-25",
+            "2",
+            "40",
+            "-21.25",
+            "52.5",
+        ),
+        (
+            "capex_projects_usd_m",
+            "B6",
+            "27.254",
+            "27.25",
+            "109",
+            "4",
+            "112.5",
+            "-3.75",
+            "40",
+        ),
+        (
+            "capex_usd_m",
+            "B7",
+            "0.004",
+            "0",
+            "0",
+            "1",
+            "40",
+            "2.5",
+            "40",
+        ),
+    ] {
+        for (metal, period, months) in [("Gold", "2030FY", "twelve"), ("Copper", "2030Q4", "three")]
+        {
+            let mut fixture = Fixture::with_vintages(
+                metric,
+                "attributable:3/5",
+                period,
+                -20,
+                20,
+                Some("registered_comparatives"),
+            );
+            fixture.replace_styled_workbook(
+                &[capital_sheet(
+                    metal,
+                    months,
+                    "Site A (60%)",
+                    ["-12.504", "27.254", "0.004"],
+                )],
+                &capital_styles(),
+            );
+            let locator = format!("2030Q4.xlsx:Minestats1!{cell}");
+            let source = fixture.source_claim(&locator);
+            assert_eq!(source.key.unit, "usd_m");
+            assert_eq!(source.claim.additivity, AdditivityClass::ExtensiveAdditive);
+            assert_eq!(
+                source.key.line.label,
+                fmine_public::guidance::track_record::capex_definition(metric)
+                    .unwrap()
+                    .1
+            );
+            let admitted = fixture.ok(fixture.resolve(), ns(AVAILABLE));
+            for expected in [
+                format!("\"source_claim_id\":\"{}\"", source.claim.claim_id),
+                format!("\"exact_value\":{{\"numerator\":\"{num}\",\"denominator\":\"{den}\"}}"),
+            ] {
+                assert!(admitted.payload_json.contains(&expected), "{admitted:?}");
+            }
+            let journal =
+                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
+            let Entry::Operation(receipt) = &journal.records().last().unwrap().entry else {
+                panic!("source admission must retain its exact receipt");
+            };
+            assert!(receipt.contains(&format!("stored = \"{raw}\"")));
+            drop(journal);
+            let original = assess_revision(&mut fixture, CUT, "first-published");
+            let original_body = assessment(&original.payload_json);
+            assert!(
+                original_body.contains(&format!("\"value\":{value},")),
+                "{original_body}"
+            );
+            assert!(
+                original_body.contains(&format!(
+                    "\"interval_score\":{{\"n_scored\":1,\"observed_mean\":{score},"
+                )),
+                "{original_body}"
+            );
+            assert!(original_body.contains(&fixture.source_digest.to_hex()));
+            assert!(original_body.contains(&locator));
+            let saved = digest_field(original_body, "digest");
+            let saved_report = full_report(&original.payload_json).to_string();
+
+            let bytes = build_minimal_xlsx_styled(
+                &[capital_sheet(
+                    metal,
+                    months,
+                    "Site A (60%)",
+                    ["-21.254", "-3.754", "2.504"],
+                )],
+                Some(&capital_styles()),
+            );
+            register_source_bytes(&fixture, "2031Q4", "2032-02-15", &bytes);
+            fixture.ok(restate(&fixture, "2031Q4"), ns("2032-02-16T00:00:00Z"));
+            let latest = assess_revision(&mut fixture, "2032-02-17T00:00:00Z", "latest-as-of");
+            let latest_body = assessment(&latest.payload_json);
+            assert!(
+                latest_body.contains(&format!("\"value\":{revised},")),
+                "{latest_body}"
+            );
+            assert!(
+                latest_body.contains(&format!(
+                    "\"interval_score\":{{\"n_scored\":1,\"observed_mean\":{revised_score},"
+                )),
+                "{latest_body}"
+            );
+            assert!(latest_body.contains("\"kind\":\"restated\""));
+            assert!(latest_body.contains("\"supersedes\":1"));
+            assert!(latest_body.contains(&format!("2031Q4.xlsx:Minestats1!{cell}")));
+            let revised_digest = digest_field(latest_body, "digest");
+            let revised_report = full_report(&latest.payload_json).to_string();
+            let first = assess_revision(&mut fixture, "2032-02-18T00:00:00Z", "first-published");
+            assert!(assessment(&first.payload_json).contains(&format!("\"value\":{value},")));
+
+            fs::rename(
+                fixture.root.join("corpus"),
+                fixture.root.join("offline-corpus"),
+            )
+            .unwrap();
+            fs::rename(
+                fixture.root.join("registries"),
+                fixture.root.join("offline-registries"),
+            )
+            .unwrap();
+            for (digest, report) in [(saved, saved_report), (revised_digest, revised_report)] {
+                assert_eq!(
+                    full_report(&reopen_revision(&fixture, digest).payload_json),
+                    report
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn capital_admission_refuses_scope_currency_ownership_ambiguity_and_altered_sources() {
+    for (defect, code) in [
+        ("missing_total", "FMINE-REF-201"),
+        ("currency", "FMINE-REF-201"),
+        ("unprinted", "FMINE-REF-105"),
+        ("wrong_share", "FMINE-REF-105"),
+        ("full_not_grossed_up", "FMINE-REF-105"),
+        ("duplicate_sheet", "FMINE-REF-104"),
+        ("duplicate_row", "FMINE-REF-208"),
+        ("calendar", "FMINE-REF-102"),
+        ("changed_bytes", "FMINE-REF-505"),
+        ("redefined_label", "FMINE-REF-105"),
+    ] {
+        let ownership = match defect {
+            "wrong_share" => "attributable:1/2",
+            "full_not_grossed_up" => "100%",
+            _ => "attributable:3/5",
+        };
+        let mut fixture = Fixture::new("capex_usd_m", ownership, "2030FY", -20, 20);
+        let mut sheet = capital_sheet("Gold", "twelve", "Site A (60%)", ["5", "6", "11"]);
+        let text = |value: &str| MinimalCell::Text(value.into());
+        match defect {
+            "missing_total" => sheet.cells.retain(|(at, _)| at != "A7" && at != "B7"),
+            "currency" => change_capital(
+                &mut sheet,
+                "A7",
+                text("Total capital expenditures (CAD millions)"),
+            ),
+            "unprinted" => change_capital(&mut sheet, "B2", text("Site A")),
+            "duplicate_row" => sheet.cells.extend([
+                ("A8".into(), text("Total capital expenditures ($ millions)")),
+                ("B8".into(), MinimalCell::Number(12.0)),
+            ]),
+            "calendar" => change_capital(
+                &mut sheet,
+                "A3",
+                text("For the twelve months ended June 30,"),
+            ),
+            "redefined_label" => change_capital(
+                &mut sheet,
+                "A7",
+                text("Adjusted total capital expenditures ($ millions)"),
+            ),
+            _ => {}
+        }
+        let mut sheets = vec![sheet];
+        if defect == "duplicate_sheet" {
+            let mut duplicate = sheets[0].clone();
+            duplicate.name = "Minestats2".into();
+            sheets.push(duplicate);
+        }
+        fixture.replace_styled_workbook(&sheets, &capital_styles());
+        if defect == "changed_bytes" {
+            let path = fixture.root.join("corpus/2030Q4.xlsx");
+            let mut bytes = fs::read(&path).unwrap();
+            bytes.push(0);
+            fs::write(path, bytes).unwrap();
+        } else if defect == "redefined_label" {
+            let path = registry_path(&fixture.root, ISSUER);
+            let mut registry = fs::read_to_string(&path).unwrap();
+            // Register every printed data row and both alias labels before testing the raw-label guard.
+            registry.push_str(
+                "\n[[mine_stats_label]]\nlabel = \"Adjusted total capital expenditures ($ millions)\"\n\
+                 [[mine_stats_label]]\nlabel = \"Total capital expenditures ($ millions)\"\n\
+                 [[mine_stats_label]]\nsection = \"Capital expenditures ($ millions)\"\nlabel = \"Minesite sustaining\"\n\
+                 [[mine_stats_label]]\nsection = \"Capital expenditures ($ millions)\"\nlabel = \"Projects\"\n",
+            );
+            registry.push_str("\n[[mine_stats_label_alias]]\nlabel = \"Adjusted total capital expenditures ($ millions)\"\nreads_as = \"Total capital expenditures ($ millions)\"\nfirst = \"2030Q4\"\nlast = \"2030Q4\"\nevidence = \"DESIGN: invented definition substitution\"\n");
+            fs::write(path, registry).unwrap();
+        }
+        fixture.refuse(&fixture.resolve(), ns(AVAILABLE), code);
+    }
+}
+
+#[test]
+fn capital_missing_originals_and_frozen_revision_permissions_keep_the_denominator() {
+    let mut missing = Fixture::new("capex_usd_m", "attributable:3/5", "2030FY", -20, 20);
+    let mut sheet = capital_sheet("Gold", "twelve", "Site A (60%)", ["5", "6", "11"]);
+    change_capital(&mut sheet, "B7", MinimalCell::Text("—".into()));
+    missing.replace_styled_workbook(&[sheet], &capital_styles());
+    let admitted = missing.ok(missing.resolve(), ns(AVAILABLE));
+    assert!(
+        admitted
+            .payload_json
+            .contains("\"missing_reason\":\"not_published\"")
+    );
+    let report = assess_revision(&mut missing, CUT, "first-published");
+    assert!(
+        assessment(&report.payload_json)
+            .contains("\"n_members\":1,\"n_resolved\":0,\"n_unresolved\":1")
+    );
+    for defect in ["missing_original", "original_only"] {
+        let mut fixture = Fixture::new("capex_usd_m", "attributable:3/5", "2030FY", -20, 20);
+        let original = capital_sheet("Gold", "twelve", "Site A (60%)", ["5", "6", "11"]);
+        fixture.replace_styled_workbook(&[original], &capital_styles());
+        if defect == "original_only" {
+            fixture.ok(fixture.resolve(), ns(AVAILABLE));
+        }
+        let bytes = build_minimal_xlsx_styled(
+            &[capital_sheet(
+                "Gold",
+                "twelve",
+                "Site A (60%)",
+                ["5", "6", "12"],
+            )],
+            Some(&capital_styles()),
+        );
+        register_source_bytes(&fixture, "2031Q4", "2032-02-15", &bytes);
+        if defect == "missing_original" {
+            fs::rename(
+                fixture.root.join("corpus/2030Q4.xlsx"),
+                fixture.root.join("corpus/2030Q4.xlsx.saved"),
+            )
+            .unwrap();
+            fixture.refuse(
+                &fixture.resolve(),
+                ns("2032-02-16T00:00:00Z"),
+                "FMINE-REF-506",
+            );
+        } else {
+            let before = fixture.bytes();
+            let refused = execute_with_clock(
+                &restate(&fixture, "2031Q4"),
+                &fixture.root,
+                &FixedClock(ns("2032-02-16T00:00:00Z")),
+            );
+            assert_ne!(refused.exit_code, 0, "{refused:?}");
+            assert_eq!(fixture.bytes(), before);
+            assert!(
+                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).is_ok()
+            );
+        }
+    }
 }

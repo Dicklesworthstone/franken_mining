@@ -167,6 +167,13 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   score its exact fraction (for example `91%` becomes `91/100`); unformatted percent quantities need a distinct
   unsupported target. The source adapter requires matching printed ownership context and validates both
   stored and displayed physical domains. Existing target frames retain their exact bytes.
+  Reported capital targets add `capex_usd_m`, `capex_sustaining_usd_m` and `capex_projects_usd_m`.
+  They freeze the total-capital row or the minesite-sustaining/project row under the capital-expenditures
+  section, in `usd_m`. These are distinct extensive monetary amounts, including signed credits; they never
+  enter the nonnegative physical-domain guard. The exact printed ownership remains mandatory. Total capital
+  is not reconstructed from the components, and a label alias cannot change the reported scope. No cash/accrual,
+  lease, FX or ownership bridge is inferred. Original and permitted comparative receipts retain their source
+  Claims and exact displayed amounts, and old target frames and identities are unchanged.
   `validate`, `to_resolution_rule`, `parse_resolution_rule`, period and ownership helpers perform no I/O.
   `PublicVintagePolicy::OriginalOnly` keeps those exact v1 bytes and permissions. An opt-in
   `RegisteredComparatives` policy is encoded by `to_resolution_rule_with_vintages` as a

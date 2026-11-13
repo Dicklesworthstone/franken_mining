@@ -148,14 +148,13 @@ pub fn derive_cost_rate<N, Q>(
     numerator: (&Claim<N>, Option<Printed>),
     denominator: (&Claim<Q>, Option<Printed>),
 ) -> Result<Claim<Interval>> {
-    if !matches!(
-        (unit, family),
-        (CostRateUnit::GoldKoz, "aisc_per_oz" | "tcc_per_oz" | "cos_per_oz")
-            | (
-                CostRateUnit::CopperMillionPounds,
-                "aisc_per_lb" | "c1_per_lb" | "cos_per_lb"
-            )
-    ) {
+    let supported = match unit {
+        CostRateUnit::GoldKoz => matches!(family, "aisc_per_oz" | "tcc_per_oz" | "cos_per_oz"),
+        CostRateUnit::CopperMillionPounds => {
+            matches!(family, "aisc_per_lb" | "c1_per_lb" | "cos_per_lb")
+        }
+    };
+    if !supported {
         return Err(refusal(
             RefusalCode::BasisMismatch105,
             "cost-rate family does not match the explicit sold-metal scale",
