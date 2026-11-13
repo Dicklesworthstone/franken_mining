@@ -153,6 +153,63 @@
     }
 
     #[test]
+    fn copper_kinds_keep_units_and_never_alias_existing_gold_claims() {
+        let gold = pair([1000, 615, 385]);
+        let mut quantity = gold[0].value.quantity.clone();
+        let mut tags = BTreeSet::new();
+        for (kind, legacy_kind) in [
+            (MirrorMetric::ProductionKoz, crate::guidance::QuantityKind::ProductionKoz),
+            (MirrorMetric::SoldKoz, crate::guidance::QuantityKind::SoldKoz),
+        ] {
+            quantity.kind = kind;
+            let legacy = crate::guidance::Quantity {
+                subject: quantity.subject.clone(),
+                period: quantity.period,
+                ownership: quantity.ownership,
+                kind: legacy_kind,
+                definition: String::new(),
+                interval: quantity.interval,
+            };
+            assert_eq!(quantity.canonical_tag(), legacy.canonical_tag());
+            assert!(tags.insert(quantity.canonical_tag()));
+        }
+        for kind in [MirrorMetric::CopperProductionKt, MirrorMetric::CopperSoldKt] {
+            quantity.kind = kind;
+            assert_eq!(kind.unit(), "kt");
+            assert!(tags.insert(quantity.canonical_tag()));
+            let mut inputs = gold.clone();
+            for input in &mut inputs {
+                input.value.quantity.kind = kind;
+                reseal(input);
+            }
+            let report = compare(&inputs).unwrap();
+            let common = report.common.as_ref().unwrap();
+            assert_eq!(common.value.quantity.kind, kind);
+            assert_eq!(common.value.quantity.interval, interval(rat(1999, 2), rat(2001, 2)));
+            assert_eq!(common.evidence, EvidenceClass::Assumed);
+            assert!(report.physical_nonnegative);
+            assert!(inputs.iter().zip(&gold).all(|(copper, gold)| copper.claim_id != gold.claim_id));
+            let MirrorVerdict::Consistent { witness } = &report.verdict else {
+                panic!("{report:?}");
+            };
+            xf::check_witness(&report.cells, &report.identities, &report.rules, witness).unwrap();
+            for other in [MirrorMetric::ProductionKoz, MirrorMetric::SoldKoz,
+                MirrorMetric::CopperProductionKt, MirrorMetric::CopperSoldKt] {
+                if other == kind {
+                    continue;
+                }
+                let mut mixed = inputs.clone();
+                mixed[2].value.quantity.kind = other;
+                reseal(&mut mixed[2]);
+                assert_eq!(compare(&mixed).unwrap_err().code, "FMINE-REF-105");
+            }
+            let mut stale_tag = inputs;
+            stale_tag[2].value.quantity.kind = MirrorMetric::ProductionKoz;
+            assert_eq!(compare(&stale_tag).unwrap_err().code, "FMINE-REF-507");
+        }
+    }
+
+    #[test]
     fn exact_exclusion_has_independently_checked_minimal_source_pairs() {
         let report = compare(&pair([1000, 615, 450])).unwrap();
         let MirrorVerdict::Conflict {

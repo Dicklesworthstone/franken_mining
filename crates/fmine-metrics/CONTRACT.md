@@ -15,7 +15,7 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
 - H1, nine months and FY as sums of complete quarters, and full-mine amounts scaled by explicit ownership, carried as Claims (`public_derivation`, BD-345.S4);
 - gold and copper cost-per-sold-unit enclosures from independently printed cost and sales amounts, with source-parent Claims retained (`public_derivation`, BD-345.S4);
 - a source-bound projection of an issuer's declared reserve rows, with their filing vintages and quoted price decks, and an exact check of gold, copper and GEO reserve rows against their quoted prices (`reserves`, `reserves::geo`, BD-335, BD-070);
-- whether the reporters of one asset agree on the gold it produced or sold, or on its sustaining, project and total capital, on one 100% basis (`mirror`, `mirror::capex`);
+- whether the reporters of one asset agree on the gold or copper it produced or sold, or on its sustaining, project and total capital, on one 100% basis (`mirror`, `mirror::capex`);
 - at the crate root: an AISC consolidation check, GEO under a price deck, reserve replacement and a float cut-off solver.
 
 The results are descriptive arithmetic. None identifies an operational cause, forecasts, or proves physical feasibility. The crate does no I/O at run time.
@@ -59,7 +59,7 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   Source selection, publication-date admission, same-table scope and ownership compatibility remain the
   adapter's responsibility; neither arithmetic entry point authenticates a disclosure or infers unit conversions.
 - **`reserves`.** A `TableIdentityRegistry`, `Accepted` readings and `DocumentRow`s. `reserves::geo` takes explicit gold, copper and GEO row memberships, the primary GEO row's quoted prices and declared convention, and optional candidate decks with independently bound price readings.
-- **`mirror`.** `Claim<MirrorReading>`s under `READING_METRIC`: gold produced or sold in koz, or sustaining, project or total capital in USD millions, over one declared asset, operation perimeter and calendar period, each box on a fixed full or attributable basis. Every capital amount carries its scope, cash or accrual timing, lease treatment and a citation to that reporter's definition page. `mirror::transcriptions::bind` builds them from already-agreed S0 `Accepted` rows and a `DocumentRow`.
+- **`mirror`.** `Claim<MirrorReading>`s under `READING_METRIC`: gold produced or sold in koz, copper produced or sold in kt, or sustaining, project or total capital in USD millions, over one declared asset, operation perimeter and calendar period, each box on a fixed full or attributable basis. Every capital amount carries its scope, cash or accrual timing, lease treatment and a citation to that reporter's definition page. `mirror::transcriptions::bind` builds them from already-agreed S0 `Accepted` rows and a `DocumentRow`. Copper has distinct metric-bearing canonical tags; existing gold Claim identities are unchanged. No implicit metal, production/sales or mass-unit conversion is applied.
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
 ## 3. Outputs

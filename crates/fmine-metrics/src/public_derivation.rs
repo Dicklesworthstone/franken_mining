@@ -153,7 +153,7 @@ pub fn derive_cost_rate<N, Q>(
         (CostRateUnit::GoldKoz, "aisc_per_oz" | "tcc_per_oz")
             | (
                 CostRateUnit::CopperMillionPounds,
-                "aisc_per_lb" | "c1_per_lb"
+                "aisc_per_lb" | "c1_per_lb" | "cos_per_lb"
             )
     ) {
         return Err(refusal(

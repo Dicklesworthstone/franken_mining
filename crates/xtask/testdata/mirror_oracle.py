@@ -42,7 +42,7 @@ def no_authority(envelope):
     assert envelope["anchor_id"] is None and envelope["certificate"] is None
 
 
-def positive(x):
+def positive(x, amount_field="interval_koz"):
     p = x["payload"]
     contains(x, (
         "alpha", "beta", "Left.pdf", "Right.pdf", "615", "385", "1000",
@@ -53,7 +53,7 @@ def positive(x):
     assert p["verdict"]["independently_checked"] is True
     assert p["gate_eligible"] is False and p["jv_sensitive"] is True
     assert len(p["sources"]) == 2 and len(p["inputs"]) == 3 and len(p["normalized"]) == 3
-    assert bounds(p["common"]["interval_koz"]) == (Fraction(1999, 2), Fraction(2001, 2))
+    assert bounds(p["common"][amount_field]) == (Fraction(1999, 2), Fraction(2001, 2))
     shares = {s["issuer"]: rat(s["ownership_claim"]["fraction"]) for s in p["sources"]}
     assert shares == {"alpha": Fraction(123, 200), "beta": Fraction(77, 200)}
     for source in p["sources"]:
@@ -66,7 +66,7 @@ def positive(x):
     for source in p["inputs"]:
         normalized = next(n for n in p["normalized"] if n["source"] == source["source"])
         factor = rat(source["ownership"]["share"]) if source["ownership"]["kind"] == "attributable" else 1
-        assert bounds(normalized["interval_koz"]) == tuple(v / factor for v in bounds(source["interval_koz"]))
+        assert bounds(normalized[amount_field]) == tuple(v / factor for v in bounds(source[amount_field]))
         if source["ownership"]["kind"] == "attributable":
             equity = next(s["ownership_claim"] for s in p["sources"] if s["issuer"] == source["reporter"])
             assert equity["claim_id"] in source["parents"]
@@ -90,7 +90,7 @@ def point(x):
     assert all(rat(c["step"]) == 1 for c in p["proof"]["cells"])
 
 
-def conflict(x):
+def conflict(x, amount_field="interval_koz"):
     p = x["payload"]
     verdict = p["verdict"]
     contains(x, ("conflict", "alpha", "beta", "Left.pdf", "Right.pdf", "400"))
@@ -103,7 +103,7 @@ def conflict(x):
     assert verdict["blame"]["minimal_sets_exhaustive"] is False
     sets = verdict["minimal_source_sets"]
     assert sets
-    intervals = [bounds(c["interval_koz"]) for c in p["normalized"]]
+    intervals = [bounds(c[amount_field]) for c in p["normalized"]]
     for source_set in sets:
         assert len(source_set) == 2 and len(set(source_set)) == 2
         assert {p["inputs"][i]["reporter"] for i in source_set} == {"alpha", "beta"}
@@ -331,6 +331,126 @@ class MirrorIntegration(unittest.TestCase):
 
     def fixture(self, tag):
         return Fixture(self.binary, tag)
+
+    def copper_fixture(self, tag, metric="produced"):
+        fixture = self.fixture(tag)
+        for document in (fixture.left[0], fixture.right[0]):
+            for reading in document.readings:
+                if reading.quantity.endswith(EQUITY):
+                    continue
+                reading.quantity = reading.quantity.replace("gold_produced", f"copper_{metric}").replace("_koz", "_kt")
+                reading.row = reading.row.replace("gold_produced", f"copper_{metric}").replace("_koz", "_kt")
+                reading.unit = "kt"
+        return fixture
+
+    def test_copper_production_and_sales_keep_exact_units_ownership_and_source_witnesses(self):
+        for metric, selector in (("produced", "copper-production"), ("sold", "copper-sold")):
+            with self.subTest(metric=metric):
+                fixture = self.copper_fixture(f"copper-{metric}", metric)
+                fixture.write()
+                arguments = fixture.arguments() + ["--metric", selector]
+                report = successful(fixture.invoke(arguments))
+                positive(report, "interval_kt")
+                self.assertEqual(report["payload"]["metric"], f"copper_{metric}_kt")
+                self.assertNotIn("interval_koz", report.raw)
+                self.assertNotIn("interval_usd_m", report.raw)
+                self.assertTrue(report["payload"]["proof"]["physical_nonnegative"])
+                for source in report["payload"]["sources"]:
+                    for reading in source["readings"]:
+                        if not reading["quantity"].endswith(EQUITY):
+                            self.assertEqual(reading["unit"], "kt")
+                markdown = fixture.markdown(arguments)
+                self.assertIn("Common 100% interval: [1999/2, 2001/2] kt", markdown)
+                self.assertIn(f"copper_{metric}", markdown)
+                same(report, successful(fixture.invoke(arguments)))
+                swapped = list(arguments)
+                for flag, value in (("--left-issuer", "beta"), ("--left-document", "Right.pdf"),
+                                    ("--right-issuer", "alpha"), ("--right-document", "Left.pdf")):
+                    replace_argument(swapped, flag, value)
+                same(report, successful(fixture.invoke(swapped)))
+                refused(fixture.invoke(), "FMINE-REF-201")
+
+    def test_copper_decimal_precision_and_changed_readings_remain_visible(self):
+        fixture = self.copper_fixture("copper-decimal")
+        fixture.left[0].token("copper_produced_100_kt", "100.00")
+        fixture.left[0].token("copper_produced_attr_kt", "61.50")
+        fixture.right[0].token("copper_produced_attr_kt", "38.50")
+        fixture.write()
+        arguments = fixture.arguments() + ["--metric", "copper-production"]
+        original = successful(fixture.invoke(arguments))
+        self.assertEqual(bounds(original["payload"]["common"]["interval_kt"]),
+                         (Fraction(19999, 200), Fraction(20001, 200)))
+        self.assertTrue(all(rat(c["step"]) == Fraction(1, 100)
+                            for c in original["payload"]["proof"]["cells"]))
+        for document, amount in ((fixture.left[0], "123.00"), (fixture.right[0], "77.00")):
+            document.token("copper_produced_attr_kt", amount)
+        fixture.left[0].token("copper_produced_100_kt", "200.00")
+        fixture.write()
+        changed = successful(fixture.invoke(arguments))
+        self.assertEqual(bounds(changed["payload"]["common"]["interval_kt"]),
+                         (Fraction(39999, 200), Fraction(40001, 200)))
+        self.assertNotEqual(original["payload"]["payload_digest"], changed["payload"]["payload_digest"])
+        self.assertNotEqual(original["payload"]["common"]["claim_id"], changed["payload"]["common"]["claim_id"])
+        no_authority(changed)
+
+    def test_copper_conflict_keeps_checked_minimal_source_sets(self):
+        fixture = self.copper_fixture("copper-conflict")
+        fixture.right[0].token("copper_produced_attr_kt", "400")
+        fixture.write()
+        report = successful(fixture.invoke(fixture.arguments() + ["--metric", "copper-production"]))
+        conflict(report, "interval_kt")
+        self.assertNotIn("interval_koz", report.raw)
+        no_authority(report)
+
+    def test_copper_units_periods_and_ownership_cannot_borrow_other_assertions(self):
+        for scenario, code in (("koz", "105"), ("Mlb", "105"), ("tonnes", "105"),
+                               ("period", "105"), ("gold", "201"), ("sold", "201"),
+                               ("missing-share", "104")):
+            with self.subTest(scenario=scenario):
+                fixture = self.copper_fixture(f"copper-refusal-{scenario}")
+                if scenario == "missing-share":
+                    fixture.right[0].readings = [r for r in fixture.right[0].readings
+                                                 if not r.quantity.endswith(EQUITY)]
+                for reading in fixture.right[0].readings:
+                    if reading.quantity.endswith(EQUITY):
+                        continue
+                    if scenario in ("koz", "Mlb", "tonnes"):
+                        reading.unit = scenario
+                    elif scenario == "period":
+                        reading.period = "2025H1"
+                    elif scenario == "gold":
+                        reading.quantity = reading.quantity.replace("copper_produced", "gold_produced").replace("_kt", "_koz")
+                        reading.unit = "koz"
+                    elif scenario == "sold":
+                        reading.quantity = reading.quantity.replace("copper_produced", "copper_sold")
+                fixture.write()
+                refused(fixture.invoke(fixture.arguments() + ["--metric", "copper-production"]),
+                        f"FMINE-REF-{code}")
+
+    def test_copper_sources_retain_publication_and_byte_integrity_guards(self):
+        fixture = self.copper_fixture("copper-source-cut")
+        fixture.write()
+        arguments = fixture.arguments() + ["--metric", "copper-production"]
+        before = list(arguments)
+        replace_argument(before, "--as-of", "2026-01-14")
+        refused(fixture.invoke(before), "FMINE-REF-108")
+        successful(fixture.invoke(arguments))
+        (fixture.root / "corpus/beta/Right.pdf").write_bytes(b"altered invented source")
+        refused(fixture.invoke(arguments), "FMINE-REF-505")
+
+    def test_synthetic_copper_selectors_are_explicit_and_keep_assumed_evidence(self):
+        fixture = self.fixture("copper-synthetic")
+        for selector, metric in (("copper-production", "produced"), ("copper-sold", "sold")):
+            with self.subTest(selector=selector):
+                arguments = ["mirror", "--synthetic", "--metric", selector]
+                report = successful(fixture.invoke(arguments))
+                synthetic(report)
+                self.assertEqual(report["payload"]["metric"], f"copper_{metric}_kt")
+                self.assertIn("interval_kt", report.raw)
+                self.assertNotIn("interval_koz", report.raw)
+                same(report, successful(fixture.invoke(["mirror", "--metric", selector, "--synthetic"])))
+                self.assertIn(" kt", fixture.markdown(arguments))
+                self.assertEqual(fixture.invoke(arguments + ["--asset", "example-jv"])["exit_code"], 2)
 
     def capex_fixture(self, tag):
         fixture = self.fixture(tag)

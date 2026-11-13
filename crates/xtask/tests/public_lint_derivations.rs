@@ -2465,11 +2465,157 @@ fn copper_cost_source(root: &Path, file: &str, date: Option<&str>, sheet: Minima
         registry.push_str(
             "\n[[mine_stats_label]]\nlabel = \"Sales (millions of pounds)\"\n\
              [[mine_stats_label]]\nsection = \"Costs ($ millions)\"\nlabel = \"C1 cash costs\"\n\
-             [[mine_stats_label]]\nsection = \"Costs ($ millions)\"\nlabel = \"All-in sustaining costs\"\n",
+             [[mine_stats_label]]\nsection = \"Costs ($ millions)\"\nlabel = \"All-in sustaining costs\"\n\
+             [[mine_stats_label]]\nsection = \"Costs ($ millions)\"\nlabel = \"Cost of sales\"\n",
         );
         std::fs::write(path, registry).unwrap();
     }
     hash
+}
+
+fn copper_sales_cost_sheet(subject: &str, sold: &str, cost: &str) -> MinimalSheet {
+    let mut sheet = copper_cost_sheet(subject, sold, "200", "225");
+    sheet.cells.extend([
+        ("A7".into(), MinimalCell::Text("Cost of sales".into())),
+        ("B7".into(), number(cost)),
+    ]);
+    sheet
+}
+
+#[test]
+fn copper_cost_of_sales_derives_cited_exact_bounds_and_reacts_to_both_operands() {
+    for (subject, ownership) in [
+        ("Example Mine (60%)", "attributable"),
+        ("Example Mine (100%)", "100% basis"),
+    ] {
+        let root = derivation_workspace();
+        let hash = copper_cost_source(
+            &root,
+            "CopperCosts.xlsx",
+            Some("2030-05-01"),
+            copper_sales_cost_sheet(subject, "100.004", "300.004"),
+        );
+        let draft =
+            format!("Example Mine Q1 2030 {ownership} cost of sales per pound sold is $3.00/lb.");
+        let report = assess(&root, &draft, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(
+            string_field(rate, "status"),
+            "derived",
+            "{}",
+            report.to_json()
+        );
+        assert_eq!(string_field(rate, "family"), "cos_per_lb");
+        // The displayed 300.00 and 100.00 carry their own half-cent boxes, not the stored decimals.
+        assert!(rate.contains("\"lo\":{\"num\":\"59999\",\"den\":\"20001\"}"));
+        assert!(rate.contains("\"hi\":{\"num\":\"60001\",\"den\":\"19999\"}"));
+        assert!(rate.contains("\"formula\":\"N/Q\""));
+        assert!(rate.contains("\"unit\":\"USD/lb\""));
+        assert!(rate.contains("CopperCosts.xlsx:Minestats1!B7"));
+        assert!(rate.contains("CopperCosts.xlsx:Minestats1!B3"));
+        assert!(rate.contains(&hash));
+        assert!(rate.contains("\"stored\":\"300.004\",\"displayed\":\"300.00\""));
+        assert!(rate.contains("\"evidence\":\"Assertion { source: Issuer }\""));
+        assert!(report.payload_json.contains("\"status\":\"derivable\""));
+        assert!(!report.payload_json.contains("\"status\":\"disclosed\""));
+        assert_eq!(report, assess(&root, &draft, "2030-05-01"));
+        no_authority(&report);
+
+        let precise = assess(&root, &draft.replace("3.00/lb", "3.0000/lb"), "2030-05-01");
+        assert_eq!(
+            string_field(cost_rate_report(&precise), "status"),
+            "precision_not_established"
+        );
+        let before = assess(&root, &draft, "2030-04-30");
+        assert_eq!(
+            string_field(cost_rate_report(&before), "status"),
+            "not_available"
+        );
+
+        for (sold, cost) in [("100.004", "310.004"), ("120.004", "300.004")] {
+            let changed = derivation_workspace();
+            copper_cost_source(
+                &changed,
+                "CopperCosts.xlsx",
+                Some("2030-05-01"),
+                copper_sales_cost_sheet(subject, sold, cost),
+            );
+            let result = assess(&changed, &draft, "2030-05-01");
+            assert_eq!(
+                string_field(cost_rate_report(&result), "status"),
+                "contradicted"
+            );
+            assert_ne!(report.payload_json, result.payload_json);
+        }
+        assess(&root, &draft, "2030-05-01");
+        let (markdown, exit) = run(
+            &args(&[
+                "lint",
+                "derived.md",
+                "--issuer",
+                DERIVATION_ISSUER,
+                "--discover",
+                "--as-of",
+                "2030-05-01",
+                "--format",
+                "markdown",
+            ]),
+            &root,
+        );
+        assert_eq!(exit, 0);
+        assert!(markdown.contains("cos_per_lb"));
+        assert!(markdown.contains("59999/20001") && markdown.contains("60001/19999"));
+    }
+}
+
+#[test]
+fn copper_cost_of_sales_cannot_mix_source_tables_or_infer_missing_bases() {
+    let draft = "Example Mine Q1 2030 attributable cost of sales per pound sold is $3.00/lb.";
+    let root = derivation_workspace();
+    let mut costs = copper_sales_cost_sheet("Example Mine (60%)", "100", "300");
+    costs.cells.retain(|(at, _)| at != "A3" && at != "B3");
+    copper_cost_source(&root, "Costs.xlsx", Some("2030-05-01"), costs);
+    copper_cost_source(
+        &root,
+        "Sales.xlsx",
+        Some("2030-05-01"),
+        copper_cost_sheet("Example Mine (60%)", "100", "200", "225"),
+    );
+    let split = assess(&root, draft, "2030-05-01");
+    let rate = cost_rate_report(&split);
+    assert_eq!(string_field(rate, "status"), "refused");
+    assert!(rate.contains("FMINE-REF-105"));
+    assert!(rate.contains("\"derived_claim\":null"));
+
+    let root = derivation_workspace();
+    copper_cost_source(
+        &root,
+        "Copper.xlsx",
+        Some("2030-05-01"),
+        copper_sales_cost_sheet("Example Mine (60%)", "100", "300"),
+    );
+    for unsupported in [
+        draft.replace("sold", "produced"),
+        draft.replace("pound", "ounce").replace("/lb", "/oz"),
+        draft.replace("attributable", "100% basis"),
+        draft.replace("Q1", "Q2"),
+    ] {
+        let report = assess(&root, &unsupported, "2030-05-01");
+        assert!(
+            !report.payload_json.contains("\"status\":\"derivable\""),
+            "{}",
+            report.to_json()
+        );
+        assert!(!report.payload_json.contains("\"status\":\"derived\""));
+    }
+    let unknown = derivation_workspace();
+    copper_cost_source(
+        &unknown,
+        "Copper.xlsx",
+        Some("2030-05-01"),
+        copper_sales_cost_sheet("Example Mine", "100", "300"),
+    );
+    assert!(cost_rate_report(&assess(&unknown, draft, "2030-05-01")).starts_with("null"));
 }
 
 #[test]

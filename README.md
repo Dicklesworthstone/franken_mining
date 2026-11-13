@@ -2059,7 +2059,7 @@ a denominator. Competing operands remain ambiguous, and direct disclosed matches
 priority. Co-product TCC, cost-of-sales bridges and produced-ounce denominators require their own explicit
 constructions and are outside this rule.
 
-Copper **AISC and C1 cash cost per pound sold** use the separate `N/Q` identity when the same dated table
+Copper **AISC, C1 cash cost and cost of sales per pound sold** use the separate `N/Q` identity when the same dated table
 explicitly supplies a cost numerator in US$ millions and sales in millions of pounds. Both operands must
 carry the same explicit ownership basis. Decimal costs and sales retain their independently printed
 rounding intervals, so a coarse disclosure cannot establish extra precision in a draft. The result names
@@ -2067,6 +2067,15 @@ rounding intervals, so a coarse disclosure cannot establish extra precision in a
 Missing dollar numerators, sales in tonnes, unprinted ownership or competing source assertions remain
 unavailable, refused or ambiguous. This support does not assert that a particular issuer publishes all
 required numerator rows.
+
+For example, the supported draft equality
+`Example Mine Q1 2030 attributable cost of sales per pound sold is $3.00/lb.`
+can be checked against the same column's printed `Costs ($ millions): Cost of sales` and
+`Sales (millions of pounds)` rows. Printed values of `300.00` and `100.00` imply the exact enclosure
+`[59999/20001, 60001/19999] USD/lb`, which supports the draft's cent precision. The output identifies
+the `cos_per_lb` family and retains both source locators, hashes and original printed values.
+Gold cost-of-sales derivation still requires an explicit bridge between its consolidated numerator
+and attributable sales; the copper rule does not supply that bridge.
 
 Nine-month cumulative disclosures can also be checked directly in cited or discovery mode. The grammar
 recognizes `9M 2030`, `20309M`, and `nine months of 2030`, keeping them distinct from Q3, H1, and FY.
@@ -2281,15 +2290,17 @@ completed quarterly history by the requested evidence cut, and assesses first-pu
 outcomes separately.
 `--cohort-as-of` keeps unconditional scores and cannot be combined with `--price-subject`.
 
-### Mirror two reporters' gold quantities and capital expenditure
+### Mirror two reporters' gold, copper and capital expenditure
 
 ```bash
 cargo run -p fmine-cli -- mirror --synthetic
 cargo run -p fmine-cli -- mirror --synthetic --format markdown
+cargo run -p fmine-cli -- mirror --synthetic --metric copper-production --format markdown
+cargo run -p fmine-cli -- mirror --synthetic --metric copper-sold --json
 cargo run -p fmine-cli -- mirror --synthetic --metric capex --format markdown
 ```
 
-DESIGN (BD-346): the mirror checks whether two reporters' printed gold quantities admit a common 100%
+DESIGN (BD-346): the mirror checks whether two reporters' printed gold or copper quantities admit a common 100%
 quantity under their independently cited ownership and complete dated operating perimeter. The synthetic
 demo uses invented evidence. To use registered filings, explicitly select both issuers and documents;
 the following names are placeholders for your local registries:
@@ -2302,6 +2313,10 @@ cargo run -p fmine-cli -- mirror --asset example-jv --period 2025 --as-of 2026-0
 
 `--metric production` is the default; `--metric sold` checks ounces sold separately. Periods are calendar
 years (`2025` or `2025FY`), quarters (`2025Q1` through `2025Q4`) or halves (`2025H1`, `2025H2`).
+`--metric copper-production` and `--metric copper-sold` select copper in kilotonnes (`kt`). Copper outputs
+carry `interval_kt` throughout, including the common quantity, while gold retains `interval_koz` and its
+existing Claim identities. The command requires exact selected units; pounds and gold ounces cannot
+substitute for copper tonnes. Both copper selectors also work with `--synthetic`.
 Capital selections are `capex-sustaining`, `capex-project`, `capex-total`, or `capex` for all three scopes
 and their joint footing check. `--synthetic` is exclusive with source selectors; the capex demo accepts
 `--synthetic --metric capex`. JSON is the default; `--workspace` selects the local root.
@@ -2329,6 +2344,13 @@ attributable quantity is required from each issuer, and both assertions particip
 Attributable quantities require the separate ownership row at its own page/table/row/column. Its printed
 point is an exact stated percent, converted rationally to a share; a range or missing share is not inferred
 from the other partner. Two reporters need not own the entire venture.
+
+For copper, use `copper_produced_100_kt` and `copper_produced_attr_kt` after the same asset/period prefix;
+sales use `copper_sold_100_kt` and `copper_sold_attr_kt`. Their transcription unit is exactly `kt`, and
+the separate `ownership_percent` row and dated operating-perimeter evidence use the same grammar.
+For example, independently reported attributable quantities of `60.00 kt` at 60% and `40.00 kt` at 40%
+can be checked against one full-mine quantity without assuming that the reporters use the same precision.
+The comparison preserves each printed rounding interval and selects no corrected source value.
 
 Each row's basis appends the following exact fields. This is an **invented grammar example**, not an
 assertion about any mine:

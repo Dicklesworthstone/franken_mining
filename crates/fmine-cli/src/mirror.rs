@@ -78,6 +78,8 @@ fn metric_name(kind: MirrorMetric) -> &'static str {
     match kind {
         MirrorMetric::ProductionKoz => "gold_produced_koz",
         MirrorMetric::SoldKoz => "gold_sold_koz",
+        MirrorMetric::CopperProductionKt => "copper_produced_kt",
+        MirrorMetric::CopperSoldKt => "copper_sold_kt",
         MirrorMetric::Capex(CapexScope::Sustaining) => "capex_sustaining_usd_m",
         MirrorMetric::Capex(CapexScope::Project) => "capex_project_usd_m",
         MirrorMetric::Capex(CapexScope::Total) => "capex_total_usd_m",
@@ -88,6 +90,7 @@ fn unit(kind: MirrorMetric) -> &'static str {
     match kind {
         MirrorMetric::Capex(_) => "USD_m",
         MirrorMetric::ProductionKoz | MirrorMetric::SoldKoz => "koz",
+        MirrorMetric::CopperProductionKt | MirrorMetric::CopperSoldKt => "kt",
     }
 }
 
@@ -104,6 +107,7 @@ pub struct Selection {
 pub enum Command {
     Public(Selection),
     Synthetic,
+    SyntheticMetric(MirrorMetric),
     SyntheticCapex,
 }
 
@@ -152,6 +156,16 @@ pub fn parse(args: &[String]) -> std::result::Result<Command, String> {
     {
         return Ok(Command::SyntheticCapex);
     }
+    for (selector, kind) in [
+        ("copper-production", MirrorMetric::CopperProductionKt),
+        ("copper-sold", MirrorMetric::CopperSoldKt),
+    ] {
+        if args == ["mirror", "--synthetic", "--metric", selector]
+            || args == ["mirror", "--metric", selector, "--synthetic"]
+        {
+            return Ok(Command::SyntheticMetric(kind));
+        }
+    }
     let mut values = BTreeMap::new();
     let mut i = 1;
     while i < args.len() {
@@ -199,13 +213,15 @@ pub fn parse(args: &[String]) -> std::result::Result<Command, String> {
     let metric = match values.get("--metric").copied().unwrap_or("production") {
         "production" => MetricSelection::Single(MirrorMetric::ProductionKoz),
         "sold" => MetricSelection::Single(MirrorMetric::SoldKoz),
+        "copper-production" => MetricSelection::Single(MirrorMetric::CopperProductionKt),
+        "copper-sold" => MetricSelection::Single(MirrorMetric::CopperSoldKt),
         "capex-sustaining" => MetricSelection::Single(MirrorMetric::Capex(CapexScope::Sustaining)),
         "capex-project" => MetricSelection::Single(MirrorMetric::Capex(CapexScope::Project)),
         "capex-total" => MetricSelection::Single(MirrorMetric::Capex(CapexScope::Total)),
         "capex" => MetricSelection::Capex,
         _ => {
             return Err(
-                "mirror --metric supports production, sold, capex-sustaining, capex-project, capex-total or capex".into(),
+                "mirror --metric supports production, sold, copper-production, copper-sold, capex-sustaining, capex-project, capex-total or capex".into(),
             );
         }
     };
@@ -536,6 +552,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
     let result = match command {
         Command::Public(s) => public(root, s),
         Command::Synthetic => synthetic(MetricSelection::Single(MirrorMetric::ProductionKoz)),
+        Command::SyntheticMetric(kind) => synthetic(MetricSelection::Single(*kind)),
         Command::SyntheticCapex => synthetic(MetricSelection::Capex),
     };
     match result {
@@ -597,6 +614,9 @@ fn amount(kind: MirrorMetric, value: fmine_numerics::exact_feas::Interval) -> St
     match kind {
         MirrorMetric::ProductionKoz | MirrorMetric::SoldKoz => {
             format!("\"interval_koz\":{}", interval(value))
+        }
+        MirrorMetric::CopperProductionKt | MirrorMetric::CopperSoldKt => {
+            format!("\"interval_kt\":{}", interval(value))
         }
         MirrorMetric::Capex(_) => format!("\"interval_usd_m\":{}", interval(value)),
     }

@@ -17,7 +17,7 @@ struct RateKind {
 }
 
 impl RateKind {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self {
             unit: CostRateUnit::GoldKoz,
             family: "aisc_per_oz",
@@ -45,6 +45,13 @@ impl RateKind {
             numerator: "site:costs ($ millions):c1 cash costs",
             rate_label: "site:costs per pound:c1 cash costs",
             basis: "C1 cash costs US$M over copper sales in millions of pounds, both on the same explicitly printed ownership basis",
+        },
+        Self {
+            unit: CostRateUnit::CopperMillionPounds,
+            family: "cos_per_lb",
+            numerator: "site:costs ($ millions):cost of sales",
+            rate_label: "site:costs per pound:cost of sales",
+            basis: "Cost of sales US$M over copper sales in millions of pounds, both on the same explicitly printed ownership basis",
         },
     ];
 

@@ -422,7 +422,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     Discovery searches for uncited matches while preserving ambiguous candidate sets (BD-345);
   - `mirror --asset <slug> --period <YYYY|YYYYQn|YYYYHn> --as-of YYYY-MM-DD
     --left-issuer <issuer> --left-document <file> --right-issuer <issuer> --right-document <file>
-    [--metric production|sold]` or `--synthetic`: exact gold-production or ounces-sold compatibility under
+    [--metric production|sold|copper-production|copper-sold]` or `--synthetic`: exact gold/copper production
+    or sales compatibility under
     independently cited ownership and a common dated perimeter; production is the default (BD-346);
   - `forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
@@ -1172,11 +1173,11 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   operands and a derived Claim whose evidence is no stronger than either source. A declared interpretation
   never changes a printed ownership assertion. Signed numerators remain signed; competing, undated,
   unusable or incompatible operands cannot establish a derivation, and direct disclosures retain priority.
-  A separate copper identity derives AISC and C1 `USD/lb` as `N/Q` from explicitly registered detailed
+  A separate copper identity derives AISC, C1 and cost of sales `USD/lb` as `N/Q` from explicitly registered detailed
   `Costs ($ millions)` numerator rows and `Sales (millions of pounds)` in the same table column. Both copper
   operands require identical explicit ownership; no mass or ownership conversion is inferred. JSON and
   Markdown preserve the metal-specific formula, unit, family and all source evidence. Co-product TCC,
-  cost-of-sales bridges and produced-metal denominators are outside these rules. Synthetic XLSX regression
+  gold cost-of-sales bridges and produced-metal denominators are outside these rules. Synthetic XLSX regression
   cases exercise the source-to-command path; they do not establish actual issuer numerator coverage.
   Every public-record source now retains its keyed projection and checked canonical Claim companion, binding
   UU terms, parents, supersedes and recorded flags even when the numerical Claim ID is unchanged. Canonical
@@ -1385,7 +1386,7 @@ None: every failure is a usage error or a typed refusal.
   An explicit date checks selected document availability, not full hindcast closure. The committed Barrick
   bindings contain no values; PDF bytes and real transcription inputs remain ignored pending OPEN-R7-1.
   Source-bound arithmetic and AI reading checks do not close the authentic independently reviewed data gate.
-- The mirror supports produced and sold gold in koz and sustaining, project or total capital in USD millions
+- The mirror supports produced and sold gold in koz, copper in kt, and sustaining, project or total capital in USD millions
   from explicitly selected, agreed document assertions. It neither selects a correct reporter nor establishes
   physical truth or disclosure permission. Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM
   vend-in boundaries and definition/cost/accounting bridges remain open; synthetic/source-adapter checks do

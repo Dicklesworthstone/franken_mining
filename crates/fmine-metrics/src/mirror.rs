@@ -95,11 +95,13 @@ pub struct CapexBasis {
     pub leases: LeaseTreatment,
 }
 
-/// Mirror-local units and quantity kinds. Capital never masquerades as AISC spending or gold ounces.
+/// Mirror-local units and quantity kinds. Copper tonnes, gold ounces and capital never convert implicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MirrorMetric {
     ProductionKoz,
     SoldKoz,
+    CopperProductionKt,
+    CopperSoldKt,
     Capex(CapexScope),
 }
 
@@ -109,6 +111,8 @@ impl MirrorMetric {
         match self {
             Self::ProductionKoz => "gold_produced",
             Self::SoldKoz => "gold_sold",
+            Self::CopperProductionKt => "copper_produced",
+            Self::CopperSoldKt => "copper_sold",
             Self::Capex(CapexScope::Sustaining) => "capex_sustaining",
             Self::Capex(CapexScope::Project) => "capex_project",
             Self::Capex(CapexScope::Total) => "capex_total",
@@ -119,6 +123,7 @@ impl MirrorMetric {
     pub const fn unit(self) -> &'static str {
         match self {
             Self::ProductionKoz | Self::SoldKoz => "koz",
+            Self::CopperProductionKt | Self::CopperSoldKt => "kt",
             Self::Capex(_) => "USD_m",
         }
     }
@@ -143,8 +148,13 @@ pub struct MirrorQuantity {
 impl MirrorQuantity {
     #[must_use]
     pub fn canonical_tag(&self) -> String {
-        // DESIGN: existing physical Claims retain their original bytes and identities.
-        if !self.kind.is_capex() && self.capex_basis.is_none() {
+        // DESIGN: existing gold Claims retain their original bytes and identities. New copper kinds
+        // use the metric-bearing MCQ1 frame so identical numbers never acquire gold or sold-gold tags.
+        if matches!(
+            self.kind,
+            MirrorMetric::ProductionKoz | MirrorMetric::SoldKoz
+        ) && self.capex_basis.is_none()
+        {
             return crate::guidance::Quantity {
                 subject: self.subject.clone(),
                 period: self.period,
@@ -248,7 +258,7 @@ impl MirrorReading {
 }
 
 /// The common full-perimeter quantity conditional on every supplied source interpretation.
-/// Gold amounts are nonnegative; capital amounts retain their signed monetary domain.
+/// Physical metal amounts are nonnegative; capital amounts retain their signed monetary domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MirrorCommon {
     pub reporters: Vec<String>,
@@ -414,11 +424,14 @@ fn validate(claim: &Claim<MirrorReading>) -> Result<()> {
     }
     let q = &reading.quantity;
     match q.kind {
-        MirrorMetric::ProductionKoz | MirrorMetric::SoldKoz => {
+        MirrorMetric::ProductionKoz
+        | MirrorMetric::SoldKoz
+        | MirrorMetric::CopperProductionKt
+        | MirrorMetric::CopperSoldKt => {
             if q.capex_basis.is_some() || reading.basis_source.is_some() {
                 return refuse(
                     RefusalCode::BasisMismatch105,
-                    "physical gold quantities cannot carry a capital definition",
+                    "physical metal quantities cannot carry a capital definition",
                 );
             }
         }
