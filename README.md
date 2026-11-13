@@ -3133,10 +3133,32 @@ the publication day. The stated FACT/INFERENCE basis is retained metadata, not i
 Missing original-release files, altered bytes, ambiguous cells and ownership mismatches refuse without changing
 the journal. When the authenticated original cell itself prints a source-native dash, `resolve` instead records a
 source-verified `not_published` missing event. The dash token, canonical source Claim, workbook hash and publication
-evidence remain attached, and the member stays in every cohort denominator. Status-derived placeholders and
-`n/a` still refuse rather than guessing their meaning. Caller-supplied `outcome` requests cannot bypass a frozen
-public binding. Historical reports reconstruct the recorded source Claim without requiring the workbook to remain
-on disk.
+evidence remain attached, and the member stays in every cohort denominator. Caller-supplied `outcome` requests
+cannot bypass a frozen public binding. Historical reports reconstruct the recorded source Claim without requiring
+the workbook to remain on disk.
+
+The same `resolve` command also uses registered subject-status evidence to keep an incomplete or changed target
+unresolved. It first authenticates the original workbook and uniquely matches the frozen source assertion, then
+applies the status to the complete target period:
+
+| Registered status relative to the frozen target | Recorded outcome |
+|---|---|
+| Disposal covers the full target period | `divested` |
+| Withholding covers the full target period | `not_published` |
+| A partial overlap, including a disposal's closing month | `definition_changed` |
+| Care-and-maintenance, or a status entirely outside the target | Ordinary source-value checks continue |
+
+A printed partial-period number stays visible as source evidence while the full target remains unresolved.
+The receipt retains its exact stored/displayed tokens, original Claim body and workbook hash, together with
+the subject status, effective months, cited evidence and digest of the exact registry snapshot. Full-period
+status placeholders and flagged numeric assertions likewise preserve their original Claims. Missing or unreadable
+files, absent or `n/a` cells, competing assertions and incompatible units or ownership still refuse.
+
+Status interpretation uses receipt version 10. It becomes available at the writer's persisted admission clock
+upper bound; the earlier workbook publication date remains separate metadata. Effective status dates cannot
+backdate newly admitted knowledge. Earlier saved assessments retain their original results, and later saved
+reports reopen without current workbook or registry files. Missing members remain in coverage and score
+completion bounds. Existing numeric/dash and comparative receipts retain their previous semantics.
 
 To retain later comparative revisions as separately scored outcomes, include this field in the cohort
 request **before freezing it**:
@@ -3165,8 +3187,8 @@ superseded event under lock; callers supply neither its sequence nor an outcome 
 continues to score the original, while `latest-as-of` uses a restatement only once both its availability
 and recording time fall within the assessment cut. Each event retains its own source Claim and publication
 evidence. Previously saved reports retain their original result, journal prefix and source admission after
-later revisions. An original source-native dash is already a durable `not_published` event and cannot be backfilled
-by a comparative; automatic inference of other missing reasons remains outside this source-bound protocol.
+later revisions. An original source-native dash or a registered status outcome is a durable missing event and
+cannot be backfilled by a comparative. Other missing reasons still require their own supported evidence protocol.
 
 For example, an outcome available at `12:00:00Z` and recorded at an observed `12:00:01.500Z` with a one-second
 uncertainty has a recording upper bound of `12:00:02.500Z`. A later assessment cut at `12:00:02Z` leaves that
