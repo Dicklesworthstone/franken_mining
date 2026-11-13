@@ -312,7 +312,7 @@ fn stressed_tail_limit_uses_the_complete_paid_policy_and_retains_nominal_value()
     let stress = report.summary().robustness.as_ref().unwrap();
     assert_eq!(
         report.summary().feasible_winners,
-        [bought.policy_id.clone()]
+        std::slice::from_ref(&bought.policy_id)
     );
     assert_eq!(report.summary().net_adaptive_value.unwrap().major, r(40, 1));
     let tail = &result(&report, &bought.policy_id).tail_limits[0];
@@ -321,15 +321,10 @@ fn stressed_tail_limit_uses_the_complete_paid_policy_and_retains_nominal_value()
     assert_eq!(tail.nominal_tail_loss, r(-70, 3));
     assert_eq!(tail.worst_case_tail_loss, r(10, 1));
     assert!(!tail.passes);
-    assert_eq!(stress.robust_tail_feasible, [held.policy_id.clone()]);
-    assert_eq!(
-        stress.robust_tail_maximin_mean_winners,
-        [held.policy_id.clone()]
-    );
-    assert_eq!(
-        stress.robust_tail_minimax_expected_regret_winners,
-        [held.policy_id.clone()]
-    );
+    let held_ids = std::slice::from_ref(&held.policy_id);
+    assert_eq!(stress.robust_tail_feasible, held_ids);
+    assert_eq!(stress.robust_tail_maximin_mean_winners, held_ids);
+    assert_eq!(stress.robust_tail_minimax_expected_regret_winners, held_ids);
     assert_eq!(tail.certificate.duality_gap, ZERO);
     assert!(
         report
