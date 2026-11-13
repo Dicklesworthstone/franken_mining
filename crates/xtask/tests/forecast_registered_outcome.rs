@@ -15,7 +15,7 @@ use fmine_core::hash::{Digest32, sha256};
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_io::forecast::Journal as DurableJournal;
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
-use fmine_public::key::KeyedCell;
+use fmine_public::key::{KeyedCell, PublicValue, StatusKind};
 use fmine_public::sources::{load_issuer_profile, registry_path};
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 use fmine_runtime::{ClockError, WallClock};
@@ -194,6 +194,17 @@ impl Fixture {
         payload: &str,
         vintages: Option<&str>,
     ) -> Self {
+        Self::with_payload_and_clock_skew(metric, ownership, period, payload, vintages, 0)
+    }
+
+    fn with_payload_and_clock_skew(
+        metric: &str,
+        ownership: &str,
+        period: &str,
+        payload: &str,
+        vintages: Option<&str>,
+        clock_skew_ns: u64,
+    ) -> Self {
         let root = std::env::temp_dir().join(format!(
             "fmine-registered-outcome-{}-{}",
             std::process::id(),
@@ -223,7 +234,7 @@ impl Fixture {
             Command::Init {
                 journal: JOURNAL.into(),
                 cell_id: "invented-source-test".into(),
-                clock_skew_ns: 0,
+                clock_skew_ns,
             },
             ns("2030-01-01T00:00:00Z"),
         );
@@ -339,6 +350,67 @@ impl Fixture {
         fs::write(registry, text).unwrap();
         self.source_digest = digest;
     }
+}
+
+fn register_subject_status(fixture: &Fixture, kind: &str, dates: &str) -> Digest32 {
+    let path = registry_path(&fixture.root, ISSUER);
+    let mut registry = fs::read_to_string(&path).unwrap();
+    registry.push_str(&format!(
+        "\n[[subject_status]]\nsubject = \"Site A\"\nstatus = \"{kind}\"\n{dates}\nevidence = \"FACT: invented status evidence\"\n"
+    ));
+    fs::write(path, &registry).unwrap();
+    sha256(registry.as_bytes())
+}
+
+fn status_fixture(token: Option<&str>, kind: &str, dates: &str) -> Fixture {
+    let mut fixture = Fixture::with_vintages(
+        "production_koz",
+        "100%",
+        "2030FY",
+        350,
+        450,
+        Some("registered_comparatives"),
+    );
+    let mut annual = sheet(
+        "YTD",
+        "twelve",
+        "400.4",
+        "All-in sustaining costs ($/oz)",
+        "December 31",
+    );
+    if let Some(token) = token {
+        annual
+            .cells
+            .iter_mut()
+            .find(|(cell, _)| cell == "B5")
+            .unwrap()
+            .1 = if matches!(token, "—" | "n/a") {
+            MinimalCell::Text(token.into())
+        } else {
+            MinimalCell::Styled {
+                raw: token.into(),
+                xf: 0,
+            }
+        };
+    } else {
+        annual.cells.retain(|(cell, _)| cell != "B5");
+    }
+    fixture.replace_workbook(&[annual]);
+    register_subject_status(&fixture, kind, dates);
+    fixture
+}
+
+fn registered_missing_receipt(fixture: &Fixture) -> String {
+    let journal =
+        DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
+    journal
+        .records()
+        .iter()
+        .find_map(|record| match &record.entry {
+            Entry::Operation(text) if text.contains("[[registered_missing]]") => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap()
 }
 
 #[test]
@@ -837,6 +909,367 @@ fn original_registered_dash_becomes_durable_not_published_without_denominator_le
         ns("2031-05-16T00:00:00Z"),
         "FMINE-REF-107",
     );
+}
+
+#[test]
+fn registered_status_outcomes_keep_source_assertions_denominators_and_offline_reports() {
+    let withheld = "first = \"2030Q1\"\nlast = \"2030Q4\"";
+    let disposed = "closed = \"2029-12-31\"";
+    for (kind, dates, token, value_kind, reason) in [
+        ("withheld", withheld, "0", "nil_withheld", "not_published"),
+        ("withheld", withheld, "400.4", "number", "not_published"),
+        ("withheld", withheld, "—", "nil_unknown", "not_published"),
+        ("disposed", disposed, "0", "nil_disposed", "divested"),
+        ("disposed", disposed, "400.4", "number", "divested"),
+        ("disposed", disposed, "—", "nil_unknown", "divested"),
+        (
+            "disposed",
+            "closed = \"2030-11-15\"",
+            "400.4",
+            "number",
+            "definition_changed",
+        ),
+        (
+            "withheld",
+            "first = \"2030Q2\"\nlast = \"2030Q3\"",
+            "400.4",
+            "number",
+            "definition_changed",
+        ),
+    ] {
+        let mut fixture = status_fixture(Some(token), kind, dates);
+        let registry_digest = sha256(&fs::read(registry_path(&fixture.root, ISSUER)).unwrap());
+        let source = fixture.source_claim("2030Q4.xlsx:YTD!B5");
+        let claim_id = source.claim.claim_id.to_string();
+        let registry_hex = registry_digest.to_hex();
+        let source_hex = fixture.source_digest.to_hex();
+        let source_body: String = source
+            .claim
+            .canonical_body()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        fixture.ok(fixture.resolve(), ns(CUT));
+        let receipt = registered_missing_receipt(&fixture);
+        assert!(receipt.starts_with("schema = \"fmine.forecast-operation.v10\"\n"));
+        for (field, value) in [
+            ("reason", reason),
+            ("value_kind", value_kind),
+            ("token", token),
+            ("claim_id", claim_id.as_str()),
+            ("claim_body", source_body.as_str()),
+            ("status_registry_sha256", registry_hex.as_str()),
+            ("sha256", source_hex.as_str()),
+            ("available_at", AVAILABLE),
+        ] {
+            assert!(
+                receipt.contains(&format!("{field} = \"{value}\"\n")),
+                "{receipt}"
+            );
+        }
+        if value_kind == "number" {
+            assert!(receipt.contains("displayed = \"400\"\n"));
+            let expected_status = match (reason, kind) {
+                ("definition_changed", _) => None,
+                (_, "disposed") => Some(StatusKind::Disposed),
+                _ => Some(StatusKind::Withheld),
+            };
+            assert!(matches!(
+                &source.claim.value,
+                PublicValue::Number { under_status, .. } if *under_status == expected_status
+            ));
+        }
+        let mut saved = Vec::new();
+        for selector in ["first-published", "latest-as-of"] {
+            let report = assess_revision(&mut fixture, CUT, selector);
+            let result = assessment(&report.payload_json);
+            for fragment in [
+                "\"n_members\":1,\"n_resolved\":0,\"n_unresolved\":1".to_string(),
+                format!("\"unresolved_by_reason\":{{\"{reason}\":1}}"),
+                "\"coverage\":{\"inside\":0,\"observed_fraction\":null,\"whole_cohort\":[0,1]}".into(),
+                "\"interval_score\":{\"n_scored\":0,\"observed_mean\":null,\"whole_cohort\":{\"lower\":100,\"upper\":null,\"upper_unbounded\":true}}".into(),
+                "\"kind\":\"missing\"".into(),
+                format!("\"status\":\"unresolved\",\"reason\":\"{reason}\""),
+                "\"exact_value\":null,\"displayed\":null".into(),
+                format!("\"source_value_kind\":\"{value_kind}\""),
+                format!("\"source_token\":\"{token}\""),
+                format!("\"registry_sha256\":\"{registry_digest}\""),
+                format!("\"source_sha256\":\"{}\"", fixture.source_digest),
+                "\"source_locator\":\"2030Q4.xlsx:YTD!B5\"".into(),
+                "\"availability_basis\":\"recorded_admission_clock_upper_bound\"".into(),
+                source.claim.claim_id.to_string(),
+            ] {
+                assert!(result.contains(&fragment), "{kind}/{token}: missing {fragment}: {result}");
+            }
+            if value_kind == "number" {
+                assert!(result.contains("\"source_displayed\":\"400\""));
+            }
+            let markdown = report.rendered_markdown.as_deref().unwrap();
+            assert!(markdown.contains("FACT: invented status evidence"));
+            assert!(markdown.contains(&registry_digest.to_hex()));
+            saved.push((
+                digest_field(result, "digest"),
+                full_report(&report.payload_json).to_string(),
+            ));
+        }
+        fixture.refuse(&fixture.resolve(), ns(CUT) + 1_000_000_000, "FMINE-REF-507");
+        fixture.refuse(
+            &restate(&fixture, "2031Q1"),
+            ns(CUT) + 1_000_000_000,
+            "FMINE-REF-107",
+        );
+        // Reopening proves that the saved interpretation uses its admitted source and registry
+        // evidence, without silently substituting whatever files happen to be present now.
+        fs::rename(
+            fixture.root.join("corpus"),
+            fixture.root.join("corpus.saved"),
+        )
+        .unwrap();
+        fs::rename(
+            fixture.root.join("registries"),
+            fixture.root.join("registries.saved"),
+        )
+        .unwrap();
+        for (digest, expected) in saved {
+            let reopened = reopen_revision(&fixture, digest);
+            assert_eq!(full_report(&reopened.payload_json), expected);
+        }
+    }
+}
+
+#[test]
+fn status_availability_uses_the_admission_upper_bound_and_preserves_earlier_reports() {
+    let skew = 1_000_000_000;
+    let mut fixture = Fixture::with_payload_and_clock_skew(
+        "production_koz",
+        "100%",
+        "2030FY",
+        "kind = \"interval\"\nlo = \"350\"\nhi = \"450\"\nnominal = \"0.8\"",
+        Some("registered_comparatives"),
+        u64::try_from(skew).unwrap(),
+    );
+    register_subject_status(
+        &fixture,
+        "withheld",
+        "first = \"2030Q1\"\nlast = \"2030Q4\"",
+    );
+    let assess = |fixture: &Fixture, as_of: &str| Command::Assess {
+        journal: JOURNAL.into(),
+        head: fixture.head,
+        cohort: COHORT.into(),
+        as_of: as_of.into(),
+        selector: "first-published".into(),
+        expected_digest: None,
+    };
+    let early = fixture.ok(assess(&fixture, AVAILABLE), ns(AVAILABLE) + skew);
+    let early_saved = digest_field(assessment(&early.payload_json), "digest");
+    let admitted = fixture.ok(fixture.resolve(), ns(CUT));
+    assert!(
+        admitted
+            .payload_json
+            .contains(&format!("\"available_at_ns\":{}", ns(CUT) + skew))
+    );
+    assert!(
+        admitted
+            .payload_json
+            .contains("\"published_at\":\"2031-02-15\"")
+    );
+
+    // Even a cut at the observed admission instant is too early: the frozen clock uncertainty
+    // makes the upper bound one second later. Effective status dates and publication cannot backdate it.
+    let before_upper = fixture.ok(assess(&fixture, CUT), ns(CUT) + 2 * skew);
+    for report in [&early, &before_upper] {
+        let result = assessment(&report.payload_json);
+        assert!(result.contains("\"unresolved_by_reason\":{\"overdue\":1}"));
+        assert!(result.contains("\"selected_event\":null"));
+        assert!(result.contains("\"source_admission\":null"));
+        assert!(!result.contains("status_interpretation"));
+    }
+    let available = "2031-02-17T00:00:01Z";
+    let after_upper = fixture.ok(assess(&fixture, available), ns(CUT) + 4 * skew);
+    let result = assessment(&after_upper.payload_json);
+    assert!(result.contains("\"unresolved_by_reason\":{\"not_published\":1}"));
+    assert!(result.contains(&format!(
+        "\"available_at\":\"{available}\",\"recorded_at\":\"{available}\""
+    )));
+    assert!(result.contains("\"n_members\":1,\"n_resolved\":0,\"n_unresolved\":1"));
+    let reopened = reopen_revision(&fixture, early_saved);
+    assert_eq!(
+        full_report(&reopened.payload_json),
+        full_report(&early.payload_json)
+    );
+}
+
+#[test]
+fn irrelevant_statuses_leave_numeric_outcomes_and_legacy_receipts_unchanged() {
+    for (kind, dates) in [
+        ("care_and_maintenance", "first = \"2030Q1\""),
+        ("withheld", "first = \"2031Q1\""),
+        ("withheld", "first = \"2029Q1\"\nlast = \"2029Q4\""),
+        ("disposed", "closed = \"2031-01-01\""),
+    ] {
+        for (token, printed) in [("0", 0), ("400.4", 400)] {
+            let mut fixture = status_fixture(Some(token), kind, dates);
+            let admitted = fixture.ok(fixture.resolve(), ns(AVAILABLE));
+            assert!(!admitted.payload_json.contains("status_interpretation"));
+            let journal =
+                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
+            let Entry::Operation(receipt) = &journal.records().last().unwrap().entry else {
+                panic!("source admission must be an operation");
+            };
+            assert!(receipt.starts_with("schema = \"fmine.forecast-operation.v3\"\n"));
+            assert!(receipt.contains("[[registered_outcome]]"));
+            assert!(!receipt.contains("status_"));
+            drop(journal);
+            let report = assess_revision(&mut fixture, CUT, "first-published");
+            let result = assessment(&report.payload_json);
+            assert!(result.contains("\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0"));
+            assert!(result.contains(&format!("\"status\":\"resolved\",\"value\":{printed},")));
+        }
+    }
+}
+
+#[test]
+fn a_registered_status_cannot_supply_an_absent_or_inapplicable_original_cell() {
+    for token in [None, Some("n/a")] {
+        let fixture = status_fixture(token, "withheld", "first = \"2030Q1\"\nlast = \"2030Q4\"");
+        let before = fixture.bytes();
+        let result = execute_with_clock(
+            &fixture.resolve(),
+            &fixture.root,
+            &FixedClock(ns(AVAILABLE)),
+        );
+        assert_ne!(result.exit_code, 0, "{token:?}: {result:?}");
+        assert_eq!(fixture.bytes(), before);
+        assert!(DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).is_ok());
+    }
+}
+
+#[test]
+fn replay_rechecks_complete_status_evidence_even_in_valid_recomputed_frames() {
+    let dates = "first = \"2030Q1\"\nlast = \"2030Q4\"";
+    // A dash deliberately keeps the same source Claim with and without status. Omitting the
+    // status kind must still refuse instead of downgrading availability to legacy publication time.
+    let mut original = status_fixture(Some("—"), "withheld", dates);
+    original.ok(original.resolve(), ns(CUT));
+    let receipt = registered_missing_receipt(&original);
+    let mut variants = vec![("intact".to_string(), receipt.clone())];
+    for field in [
+        "subject",
+        "kind",
+        "first",
+        "last",
+        "evidence",
+        "registry_sha256",
+    ] {
+        let prefix = format!("status_{field} = ");
+        assert_eq!(
+            receipt
+                .lines()
+                .filter(|line| line.starts_with(&prefix))
+                .count(),
+            1
+        );
+        let without = receipt
+            .lines()
+            .filter(|line| !line.starts_with(&prefix))
+            .collect::<Vec<_>>()
+            .join("\n");
+        variants.push((format!("missing_{field}"), format!("{without}\n")));
+    }
+    for version in ["v3", "v4"] {
+        variants.push((
+            version.into(),
+            receipt.replacen(
+                "fmine.forecast-operation.v10",
+                &format!("fmine.forecast-operation.{version}"),
+                1,
+            ),
+        ));
+    }
+    variants.push((
+        "legacy".into(),
+        receipt
+            .strip_prefix("schema = \"fmine.forecast-operation.v10\"\n")
+            .unwrap()
+            .into(),
+    ));
+    variants.push((
+        "no_status".into(),
+        format!(
+            "{}\n",
+            receipt
+                .lines()
+                .filter(|line| !line.starts_with("status_"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    ));
+    for table in ["registered_outcome", "assessment"] {
+        variants.push((
+            table.into(),
+            receipt.replacen("[[registered_missing]]", &format!("[[{table}]]"), 1),
+        ));
+    }
+    let registry_digest =
+        sha256(&fs::read(registry_path(&original.root, ISSUER)).unwrap()).to_hex();
+    for (variant, field, from, to) in [
+        ("reason", "reason", "not_published", "divested"),
+        ("subject", "status_subject", "Site A", "Site B"),
+        ("kind", "status_kind", "withheld", "disposed"),
+        ("outside_period", "status_first", "2030-01", "2031-01"),
+        ("reversed_months", "status_last", "2030-12", "2029-12"),
+        (
+            "empty_evidence",
+            "status_evidence",
+            "FACT: invented status evidence",
+            "",
+        ),
+        (
+            "registry_digest",
+            "status_registry_sha256",
+            registry_digest.as_str(),
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ),
+        ("token", "token", "—", "400.4"),
+    ] {
+        let from = format!("{field} = \"{from}\"\n");
+        assert_eq!(receipt.matches(&from).count(), 1);
+        variants.push((
+            variant.into(),
+            receipt.replace(&from, &format!("{field} = \"{to}\"\n")),
+        ));
+    }
+    for (variant, operation) in variants {
+        let mut recipient = status_fixture(Some("—"), "withheld", dates);
+        let mut writer =
+            DurableJournal::open_write(&recipient.root.join(JOURNAL), recipient.head).unwrap();
+        writer
+            .append(&operation, &FixedClock(ns(CUT)), |_, _| Ok(()))
+            .unwrap();
+        recipient.head = writer.head();
+        drop(writer);
+        assert!(
+            DurableJournal::open_read(&recipient.root.join(JOURNAL), Some(recipient.head)).is_ok()
+        );
+        let before = recipient.bytes();
+        let result = execute_with_clock(
+            &Command::Inspect {
+                journal: JOURNAL.into(),
+                head: Some(recipient.head),
+            },
+            &recipient.root,
+            &NeverClock,
+        );
+        if variant == "intact" {
+            assert_eq!(result.exit_code, 0, "{result:?}");
+            assert!(result.payload_json.contains("\"n_outcomes\":1"));
+        } else {
+            assert_ne!(result.exit_code, 0, "{variant}: {result:?}");
+            assert!(result.refusal.is_some(), "{variant}: {result:?}");
+        }
+        assert_eq!(recipient.bytes(), before, "{variant} changed replay bytes");
+    }
 }
 
 #[test]

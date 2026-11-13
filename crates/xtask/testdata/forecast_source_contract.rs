@@ -115,8 +115,8 @@ fn original_displayed_number_and_source_identity_survive_the_receipt() {
         else {
             panic!("numeric source must resolve as a published outcome");
         };
-        assert_eq!(result.value, Rat::from_integer(400));
-        assert_eq!(result.stored, "400.4");
+        assert_eq!(result.value.exact, Rat::from_integer(400));
+        assert_eq!(result.value.stored, "400.4");
         assert_eq!(result.source.claim.claim_id, cell.claim.claim_id);
         assert_eq!(
             result.available_at_ns,
@@ -127,41 +127,27 @@ fn original_displayed_number_and_source_identity_survive_the_receipt() {
             result.published_at_basis,
             "FACT: invented test release date"
         );
-        let body = receipt_claim_body(
-            &policy,
-            id,
-            &result.citation,
-            &result.stored,
-            &result.displayed,
-            result.ownership_source,
-            &cell.claim.anchors[0].artifact_path,
-        )
-        .expect("reconstructed original source");
+        let receipt = ReceiptClaim {
+            policy: &policy,
+            forecast_id: id,
+            citation: &result.citation,
+            ownership_source: result.ownership_source,
+            anchor_path: &cell.claim.anchors[0].artifact_path,
+        };
+        let body = receipt
+            .number(&result.value.stored, &result.value.displayed, false)
+            .expect("reconstructed original source");
         assert_eq!(body, cell.claim.canonical_body());
         assert_ne!(
-            receipt_claim_body(
-                &policy,
-                id,
-                &result.citation,
-                &result.stored,
-                "401",
-                result.ownership_source,
-                &cell.claim.anchors[0].artifact_path
-            )
-            .expect("different assertion"),
+            receipt
+                .number(&result.value.stored, "401", false)
+                .expect("different assertion"),
             body
         );
         assert_ne!(
-            receipt_claim_body(
-                &policy,
-                id,
-                &result.citation,
-                "400.5",
-                &result.displayed,
-                result.ownership_source,
-                &cell.claim.anchors[0].artifact_path
-            )
-            .expect("different stored token"),
+            receipt
+                .number("400.5", &result.value.displayed, false)
+                .expect("different stored token"),
             body
         );
     }
@@ -203,7 +189,7 @@ fn capital_scopes_preserve_signed_amounts_and_refuse_label_alias_reinterpretatio
         else {
             panic!("signed capital outturn must remain numeric");
         };
-        assert_eq!(outcome.value, Rat::new(-25, 2).unwrap());
+        assert_eq!(outcome.value.exact, Rat::new(-25, 2).unwrap());
         assert_eq!(
             outcome.source.claim.additivity,
             AdditivityClass::ExtensiveAdditive
@@ -412,7 +398,7 @@ fn full_production_column_does_not_adopt_the_site_rows_attributable_share() {
         else {
             panic!("numeric production must resolve as a published outcome");
         };
-        assert_eq!(result.value, Rat::from_integer(400));
+        assert_eq!(result.value.exact, Rat::from_integer(400));
     }
 }
 
@@ -431,7 +417,7 @@ fn wholly_owned_attributable_production_still_binds_the_attributable_column() {
     };
     assert_eq!(out.ownership_source, "full");
     assert_eq!(out.source.claim.claim_id, cell.claim.claim_id);
-    assert_eq!(out.value, Rat::from_integer(400));
+    assert_eq!(out.value.exact, Rat::from_integer(400));
 }
 
 #[test]
@@ -449,7 +435,7 @@ fn numeric_zero_is_preserved_and_unknown_or_status_values_refuse() {
     else {
         panic!("printed numeric zero must not become a missing outcome");
     };
-    assert_eq!(result.value, Rat::from_integer(0));
+    assert_eq!(result.value.exact, Rat::from_integer(0));
     for value in [
         PublicValue::Number {
             stored: "0".into(),
@@ -491,28 +477,27 @@ fn availability_requires_registered_publication_after_period_end() {
     let mut citation = result.citation.clone();
     citation.locator = "Different.xlsx:YTD!B5".into();
     assert!(
-        receipt_claim_body(
-            &policy,
-            id,
-            &citation,
-            &result.stored,
-            &result.displayed,
-            result.ownership_source,
-            "corpus/Original.xlsx"
-        )
+        ReceiptClaim {
+            policy: &policy,
+            forecast_id: id,
+            citation: &citation,
+            ownership_source: result.ownership_source,
+            anchor_path: "corpus/Original.xlsx",
+        }
+        .number(&result.value.stored, &result.value.displayed, false)
         .is_err()
     );
-    citation = result.citation;
+    citation = result.citation.clone();
     citation.vintage = "2031Q1".into();
     assert!(
-        receipt_value_tag(
-            &policy,
-            id,
-            &citation,
-            &result.stored,
-            &result.displayed,
-            result.ownership_source
-        )
+        ReceiptClaim {
+            policy: &policy,
+            forecast_id: id,
+            citation: &citation,
+            ownership_source: result.ownership_source,
+            anchor_path: "corpus/Original.xlsx",
+        }
+        .number(&result.value.stored, &result.value.displayed, false)
         .is_err()
     );
     let mut synthetic = policy;
@@ -520,15 +505,14 @@ fn availability_requires_registered_publication_after_period_end() {
     citation.source = synthetic.issuer.clone();
     citation.vintage = synthetic.period.original_release();
     assert!(
-        receipt_claim_body(
-            &synthetic,
-            id,
-            &citation,
-            &result.stored,
-            &result.displayed,
-            result.ownership_source,
-            "corpus/Original.xlsx"
-        )
+        ReceiptClaim {
+            policy: &synthetic,
+            forecast_id: id,
+            citation: &citation,
+            ownership_source: result.ownership_source,
+            anchor_path: "corpus/Original.xlsx",
+        }
+        .number(&result.value.stored, &result.value.displayed, false)
         .is_err()
     );
 }
@@ -558,15 +542,18 @@ fn explicit_comparative_retains_frozen_target_and_reconstructs_exact_source_clai
         AiscUsdPerLb,
     ] {
         let (policy, id, registered, cell) = comparative(metric);
-        let result = bind_release(
+        let ResolvedOriginalOutcome::Published(result) = bind_value(
             &registered,
             &policy,
             id,
             "2031Q4",
             std::slice::from_ref(&cell),
+            None,
         )
-        .expect("selected comparative");
-        assert_eq!(result.value, Rat::from_integer(390));
+        .expect("selected comparative") else {
+            panic!("an explicit comparative must be numeric");
+        };
+        assert_eq!(result.value.exact, Rat::from_integer(390));
         assert_eq!(
             result.source.key.valid_period,
             parse_period_code("2030FY").unwrap()
@@ -577,33 +564,26 @@ fn explicit_comparative_retains_frozen_target_and_reconstructs_exact_source_clai
             result.available_at_ns,
             CivilDate::new(2032, 2, 16).unwrap().to_epoch_days() * NS_PER_DAY
         );
+        let receipt = ReceiptClaim {
+            policy: &policy,
+            forecast_id: id,
+            citation: &result.citation,
+            ownership_source: result.ownership_source,
+            anchor_path: &cell.claim.anchors[0].artifact_path,
+        };
         assert_eq!(
-            receipt_claim_body_at_vintage(
-                &policy,
-                id,
-                &result.citation,
-                &result.stored,
-                &result.displayed,
-                result.ownership_source,
-                &cell.claim.anchors[0].artifact_path
-            )
-            .unwrap(),
+            receipt
+                .number(&result.value.stored, &result.value.displayed, true)
+                .unwrap(),
             cell.claim.canonical_body()
         );
         assert!(bind(&registered, &policy, id, std::slice::from_ref(&cell)).is_err());
         assert!(
-            receipt_claim_body(
-                &policy,
-                id,
-                &result.citation,
-                &result.stored,
-                &result.displayed,
-                result.ownership_source,
-                &cell.claim.anchors[0].artifact_path
-            )
-            .is_err()
+            receipt
+                .number(&result.value.stored, &result.value.displayed, false)
+                .is_err()
         );
-        assert!(bind_release(&registered, &policy, id, "2032Q4", &[cell]).is_err());
+        assert!(bind_value(&registered, &policy, id, "2032Q4", &[cell], None).is_err());
     }
 }
 
@@ -622,9 +602,19 @@ fn comparative_cannot_change_target_basis_or_authenticate_another_workbook() {
         let mut changed = cell.clone();
         mutate(&mut changed);
         reseal(&mut changed);
-        assert!(bind_release(&registered, &policy, id, "2031Q4", &[changed]).is_err());
+        assert!(bind_value(&registered, &policy, id, "2031Q4", &[changed], None).is_err());
     }
-    assert!(bind_release(&registered, &policy, id, "2031Q4", &[cell.clone(), cell]).is_err());
+    assert!(
+        bind_value(
+            &registered,
+            &policy,
+            id,
+            "2031Q4",
+            &[cell.clone(), cell],
+            None
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -636,9 +626,150 @@ fn selected_release_requires_its_own_complete_period_and_publication_evidence() 
     for date in [None, Some("2031-02-15"), Some("2031-12-31")] {
         let mut bad = source.clone();
         bad.published_at = date.map(str::to_string);
-        assert!(bind_release(&bad, &policy, id, "2031Q4", std::slice::from_ref(&cell)).is_err());
+        assert!(
+            bind_value(
+                &bad,
+                &policy,
+                id,
+                "2031Q4",
+                std::slice::from_ref(&cell),
+                None
+            )
+            .is_err()
+        );
     }
     let mut bad = source;
     bad.published_at_basis = None;
-    assert!(bind_release(&bad, &policy, id, "2031Q4", &[cell]).is_err());
+    assert!(bind_value(&bad, &policy, id, "2031Q4", &[cell], None).is_err());
+}
+
+fn status_evidence(kind: StatusKind, first: (u16, u8), last: Option<(u16, u8)>) -> StatusEvidence {
+    StatusEvidence {
+        status: SubjectStatus {
+            subject: "Example Mine".into(),
+            kind,
+            first,
+            last,
+            evidence: "FACT: invented status effective dates for a calendar boundary control"
+                .into(),
+        },
+        registry_sha256: sha256(b"invented immutable status registry"),
+    }
+}
+
+#[test]
+fn status_interpretation_uses_full_calendar_support_and_the_disposal_closing_month() {
+    let (mut policy, id, _, _) = example(ProductionKoz);
+    let disposal = StatusEvidence {
+        status: SubjectStatus::from_date(
+            "Example Mine",
+            StatusKind::Disposed,
+            (2030, 12, 31),
+            "FACT: invented disposal closed on 31 December 2030",
+        ),
+        registry_sha256: sha256(b"invented disposal registry"),
+    };
+    let withheld = status_evidence(StatusKind::Withheld, (2030, 4), Some((2030, 9)));
+    let care = status_evidence(StatusKind::CareAndMaintenance, (2030, 1), None);
+    for (status, period, expected) in [
+        (&disposal, "2030Q3", None),
+        (&disposal, "2030Q4", Some(MissingReason::DefinitionChanged)),
+        (&disposal, "2030FY", Some(MissingReason::DefinitionChanged)),
+        (&disposal, "2031Q1", Some(MissingReason::Divested)),
+        (&disposal, "2031FY", Some(MissingReason::Divested)),
+        (&withheld, "2030Q1", None),
+        (&withheld, "2030Q2", Some(MissingReason::NotPublished)),
+        (&withheld, "2030Q3", Some(MissingReason::NotPublished)),
+        (&withheld, "2030Q4", None),
+        (&withheld, "2030FY", Some(MissingReason::DefinitionChanged)),
+        (&care, "2030Q1", None),
+        (&care, "2030FY", None),
+    ] {
+        policy.period = PublicPeriod::parse(period).unwrap();
+        assert_eq!(
+            status.reason(&policy, id).unwrap(),
+            expected,
+            "{period}: {status:?}"
+        );
+    }
+}
+
+#[test]
+fn status_interpretation_refuses_unbound_or_invalid_retained_evidence() {
+    let (policy, id, _, _) = example(ProductionKoz);
+    let status = status_evidence(StatusKind::Withheld, (2030, 1), None);
+    for change in [
+        (|s: &mut StatusEvidence| s.status.subject = "Another Mine".into())
+            as fn(&mut StatusEvidence),
+        |s| s.status.first = (0, 1),
+        |s| s.status.first = (2030, 0),
+        |s| s.status.first = (2030, 13),
+        |s| s.status.last = Some((2029, 12)),
+        |s| s.status.last = Some((2030, 13)),
+        |s| s.status.evidence = " \n ".into(),
+        |s| s.registry_sha256 = Digest32::default(),
+    ] {
+        let mut changed = status.clone();
+        change(&mut changed);
+        assert_eq!(
+            changed.reason(&policy, id).unwrap_err().code,
+            "FMINE-REF-208"
+        );
+    }
+}
+
+#[test]
+fn partial_period_status_keeps_raw_number_but_never_resolves_it_as_full_period() {
+    let (policy, id, registered, cell) = example(ProductionKoz);
+    for status in [
+        status_evidence(StatusKind::Disposed, (2030, 7), None),
+        status_evidence(StatusKind::Withheld, (2030, 1), Some((2030, 9))),
+    ] {
+        let ResolvedOriginalOutcome::Missing(outcome) = bind_value(
+            &registered,
+            &policy,
+            id,
+            "2030Q4",
+            std::slice::from_ref(&cell),
+            Some(status.clone()),
+        )
+        .expect("a printed stub remains an unresolved full-period target") else {
+            panic!("a partial-period number must not enter the full-period score");
+        };
+        assert_eq!(outcome.value.reason, MissingReason::DefinitionChanged);
+        assert_eq!(outcome.value.value_kind, "number");
+        assert_eq!(outcome.value.token, "400.4");
+        assert_eq!(outcome.value.displayed.as_deref(), Some("400"));
+        assert_eq!(outcome.source.claim, cell.claim);
+        assert_eq!(
+            outcome.value.status.unwrap().registry_sha256,
+            status.registry_sha256
+        );
+        for value in [
+            PublicValue::Missing,
+            PublicValue::NotApplicable {
+                token: "n/a".into(),
+            },
+            PublicValue::Number {
+                stored: "400.4".into(),
+                displayed: Err("FMINE-REF-208"),
+                under_status: None,
+            },
+        ] {
+            let mut changed = cell.clone();
+            changed.claim.value = value;
+            reseal(&mut changed);
+            assert!(
+                bind_value(
+                    &registered,
+                    &policy,
+                    id,
+                    "2030Q4",
+                    &[changed],
+                    Some(status.clone())
+                )
+                .is_err()
+            );
+        }
+    }
 }

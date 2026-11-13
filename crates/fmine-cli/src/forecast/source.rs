@@ -13,7 +13,9 @@ use fmine_calib::ledger::binding::{
     PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy,
 };
 use fmine_calib::ledger::{MissingReason, OutcomeCitation};
-use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+#[cfg(test)]
+use fmine_claim::{AdditivityClass, Claim, Confidentiality};
+use fmine_claim::{Representation, SpatialSupport};
 use fmine_core::ObjectId;
 use fmine_core::anchor::SourceAnchor;
 use fmine_core::hash::{Digest32, sha256};
@@ -22,7 +24,8 @@ use fmine_io::xlsx::Workbook;
 use fmine_numerics::exact_feas::Rat;
 use fmine_public::key::{
     KeyedCell, LineKey, NilReason, OwnershipBasis, PublicKey, PublicValue, Scope, ShareSource,
-    Vintage, canonical_value_tag, parse_period_code, public_claim_anchored,
+    StatusKind, SubjectStatus, Vintage, canonical_value_tag, parse_period_code,
+    public_claim_anchored,
 };
 use fmine_public::mine_stats::{View, read_mine_stats};
 use fmine_public::sources::{IssuerProfile, SourceKind, is_issuer_name, registry_path};
@@ -34,11 +37,8 @@ type Result<T> = std::result::Result<T, Refusal>;
 /// Immutable admission evidence. A saved journal operation retains these facts rather than claiming
 /// that replay has authenticated the current contents of a source file.
 #[derive(Debug, Clone)]
-pub(super) struct ResolvedPublicOutcome {
+pub(super) struct SourceReceipt {
     pub source: KeyedCell,
-    pub value: Rat,
-    pub stored: String,
-    pub displayed: String,
     pub ownership_source: &'static str,
     pub citation: OutcomeCitation,
     /// Conservative date-only availability: midnight immediately following the publication date.
@@ -47,24 +47,98 @@ pub(super) struct ResolvedPublicOutcome {
     pub published_at_basis: String,
 }
 
-/// A byte-verified original-release assertion that explicitly has no numeric outcome.
 #[derive(Debug, Clone)]
-pub(super) struct ResolvedPublicMissing {
-    pub source: KeyedCell,
-    pub reason: MissingReason,
-    pub value_kind: &'static str,
-    pub token: String,
-    pub ownership_source: &'static str,
-    pub citation: OutcomeCitation,
-    pub available_at_ns: i64,
-    pub published_at: String,
-    pub published_at_basis: String,
+pub(super) struct ResolvedPublic<T> {
+    pub receipt: SourceReceipt,
+    pub value: T,
 }
+
+impl<T> std::ops::Deref for ResolvedPublic<T> {
+    type Target = SourceReceipt;
+    fn deref(&self) -> &Self::Target {
+        &self.receipt
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PublicNumber {
+    pub exact: Rat,
+    pub stored: String,
+    pub displayed: String,
+}
+
+/// A missing target retains its original assertion, including a printed partial-period number.
+#[derive(Debug, Clone)]
+pub(super) struct PublicMissing {
+    pub reason: MissingReason,
+    pub value_kind: String,
+    pub token: String,
+    pub displayed: Option<String>,
+    pub status: Option<StatusEvidence>,
+}
+
+pub(super) type ResolvedPublicOutcome = ResolvedPublic<PublicNumber>;
+pub(super) type ResolvedPublicMissing = ResolvedPublic<PublicMissing>;
 
 #[derive(Debug, Clone)]
 pub(super) enum ResolvedOriginalOutcome {
     Published(ResolvedPublicOutcome),
     Missing(ResolvedPublicMissing),
+}
+
+/// Interpretation data from the exact registry snapshot parsed at admission, not publication-time proof.
+#[derive(Debug, Clone)]
+pub(super) struct StatusEvidence {
+    pub status: SubjectStatus,
+    pub registry_sha256: Digest32,
+}
+
+impl StatusEvidence {
+    pub(super) fn reason(
+        &self,
+        policy: &PublicResolutionPolicy,
+        forecast_id: ObjectId,
+    ) -> Result<Option<MissingReason>> {
+        let status = &self.status;
+        if policy.members.get(&forecast_id) != Some(&status.subject)
+            || self.registry_sha256 == Digest32::default()
+            || status.evidence.trim().is_empty()
+            || status.last.is_some_and(|last| last < status.first)
+            || std::iter::once(status.first)
+                .chain(status.last)
+                .any(|(year, month)| {
+                    year == 0 || CivilDate::new(i32::from(year), month, 1).is_err()
+                })
+        {
+            return Err(refusal(
+                RefusalCode::SourceCellUnusable208,
+                "invalid retained subject status",
+            ));
+        }
+        let period = parse_period_code(&policy.period.label())
+            .ok_or_else(|| refusal(RefusalCode::SupportMismatch102, "invalid target period"))?;
+        let (start, end) = period.months();
+        // A disposal's first full month follows its closing month. A target overlapping that
+        // closing month is a stub even though the raw source Claim correctly keeps its number.
+        let first = match (status.kind, status.first) {
+            (StatusKind::Disposed, (year, 1)) => (year - 1, 12),
+            (StatusKind::Disposed, (year, month)) => (year, month - 1),
+            _ => status.first,
+        };
+        if status.kind == StatusKind::CareAndMaintenance
+            || end < first
+            || status.last.is_some_and(|last| start > last)
+        {
+            return Ok(None);
+        }
+        Ok(Some(if !status.applies(&period) {
+            MissingReason::DefinitionChanged
+        } else if status.kind == StatusKind::Disposed {
+            MissingReason::Divested
+        } else {
+            MissingReason::NotPublished
+        }))
+    }
 }
 
 fn refusal(code: RefusalCode, reason: impl Into<String>) -> Refusal {
@@ -316,16 +390,28 @@ fn resolve_selected(
     }
     let cell = fmine_public::key::from_mine_stats(&profile, &workbook, release, row)
         .map_err(|error| refusal(RefusalCode::SourceCellUnusable208, error.to_string()))?;
-    let result = if release == policy.period.original_release() {
+    let mut statuses = profile
+        .subject_statuses
+        .iter()
+        .filter(|s| s.subject == *subject);
+    let status = statuses.next().cloned().map(|status| StatusEvidence {
+        status,
+        registry_sha256: sha256(&registry_bytes),
+    });
+    if statuses.next().is_some() {
+        return Err(refusal(
+            RefusalCode::NonIdentifiableAttribution104,
+            "multiple subject-status interpretations",
+        ));
+    }
+    let status = match status {
+        Some(status) if status.reason(policy, forecast_id)?.is_some() => Some(status),
+        _ => None,
+    };
+    let result = if status.is_none() && release == policy.period.original_release() {
         bind(&source, policy, forecast_id, &[cell])?
     } else {
-        ResolvedOriginalOutcome::Published(bind_release(
-            &source,
-            policy,
-            forecast_id,
-            release,
-            &[cell],
-        )?)
+        bind_value(&source, policy, forecast_id, release, &[cell], status)?
     };
     calendar_period(row, policy.period)?;
     Ok(result)
@@ -424,6 +510,33 @@ fn target_header(metric: PublicMetric, header: Option<&str>) -> bool {
     })
 }
 
+/// The same publication metadata validation is used at admission and offline receipt replay.
+pub(super) fn publication_start(
+    date: &str,
+    basis: &str,
+) -> std::result::Result<i64, (RefusalCode, &'static str)> {
+    if !fmine_registry::sources::is_date(date)
+        || !fmine_registry::sources::PUBLISHED_AT_BASES
+            .iter()
+            .any(|prefix| {
+                basis
+                    .strip_prefix(prefix)
+                    .is_some_and(|s| !s.trim().is_empty())
+            })
+    {
+        return Err((
+            RefusalCode::NotObservable202,
+            "invalid publication-date evidence",
+        ));
+    }
+    fmine_calib::record::parse_utc(&format!("{date}T00:00:00Z"))
+        .and_then(|seconds| seconds.checked_mul(1_000_000_000))
+        .ok_or((
+            RefusalCode::AssayLookahead108,
+            "publication time exceeds the supported calendar",
+        ))
+}
+
 fn publication(
     source: &SourceRow,
     policy: &PublicResolutionPolicy,
@@ -440,38 +553,7 @@ fn publication(
             "publication date has no stated evidence basis",
         )
     })?;
-    if !fmine_registry::sources::is_date(date)
-        || !fmine_registry::sources::PUBLISHED_AT_BASES
-            .iter()
-            .any(|prefix| {
-                basis
-                    .strip_prefix(prefix)
-                    .is_some_and(|s| !s.trim().is_empty())
-            })
-    {
-        return Err(refusal(
-            RefusalCode::NotObservable202,
-            "invalid publication-date evidence",
-        ));
-    }
-    let year = date[..4]
-        .parse::<i32>()
-        .map_err(|_| refusal(RefusalCode::AssayLookahead108, "invalid publication year"))?;
-    let month = date[5..7]
-        .parse::<u8>()
-        .map_err(|_| refusal(RefusalCode::AssayLookahead108, "invalid publication month"))?;
-    let day = date[8..]
-        .parse::<u8>()
-        .map_err(|_| refusal(RefusalCode::AssayLookahead108, "invalid publication day"))?;
-    let days = CivilDate::new(year, month, day)
-        .map_err(|error| refusal(RefusalCode::AssayLookahead108, error.to_string()))?
-        .to_epoch_days();
-    let start = days.checked_mul(NS_PER_DAY).ok_or_else(|| {
-        refusal(
-            RefusalCode::AssayLookahead108,
-            "publication time exceeds the supported calendar",
-        )
-    })?;
+    let start = publication_start(date, basis).map_err(|(code, reason)| refusal(code, reason))?;
     let available = start.checked_add(NS_PER_DAY).ok_or_else(|| {
         refusal(
             RefusalCode::AssayLookahead108,
@@ -547,31 +629,6 @@ fn physical_domain(metric: PublicMetric, value: Rat) -> Result<()> {
     Ok(())
 }
 
-/// Reconstruct an original-release receipt, without accepting a later comparative in its place.
-pub(super) fn receipt_value_tag(
-    policy: &PublicResolutionPolicy,
-    forecast_id: ObjectId,
-    citation: &OutcomeCitation,
-    stored: &str,
-    displayed: &str,
-    ownership_source: &str,
-) -> Result<String> {
-    if citation.vintage != policy.period.original_release() {
-        return Err(refusal(
-            RefusalCode::SupportMismatch102,
-            "receipt is not from the frozen original release",
-        ));
-    }
-    receipt_value_tag_at_vintage(
-        policy,
-        forecast_id,
-        citation,
-        stored,
-        displayed,
-        ownership_source,
-    )
-}
-
 fn receipt_ownership(ownership: PublicOwnership, source: &str) -> Result<OwnershipBasis> {
     Ok(match (ownership, source) {
         (PublicOwnership::Full, "full")
@@ -620,15 +677,11 @@ fn receipt_locator<'a>(citation: &'a OutcomeCitation, anchor_path: &str) -> Resu
     Ok(locator)
 }
 
-fn receipt_value_tag_at_vintage(
+fn receipt_number(
     policy: &PublicResolutionPolicy,
-    forecast_id: ObjectId,
-    citation: &OutcomeCitation,
     stored: &str,
     displayed: &str,
-    ownership_source: &str,
-) -> Result<String> {
-    public_policy(policy)?;
+) -> Result<PublicValue> {
     if policy.metric.is_site_physical() {
         let stored = Rat::from_decimal_str(stored).map_err(|error| {
             refusal(
@@ -639,191 +692,153 @@ fn receipt_value_tag_at_vintage(
         physical_domain(policy.metric, stored)?;
         displayed_value(policy.metric, displayed)?;
     }
-    release_period(policy, &citation.vintage)?;
-    let subject = policy.members.get(&forecast_id).ok_or_else(|| {
-        refusal(
-            RefusalCode::NoClaimInDomain201,
-            "receipt forecast is outside the frozen member mapping",
-        )
-    })?;
-    if citation.source != policy.issuer {
-        return Err(refusal(
-            RefusalCode::SupportMismatch102,
-            "receipt issuer differs from the frozen policy",
-        ));
-    }
-    let ownership_basis = receipt_ownership(policy.ownership, ownership_source)?;
-    let key = PublicKey {
-        issuer: policy.issuer.clone(),
-        subject: subject.clone(),
-        valid_period: parse_period_code(&policy.period.label())
-            .ok_or_else(|| refusal(RefusalCode::SupportMismatch102, "invalid receipt period"))?,
-        reporting_vintage: Vintage {
-            release: citation.vintage.clone(),
-            file_sha256: Digest32(citation.sha256).to_hex(),
-        },
-        ownership_basis,
-        scope: Scope::Site,
-        unit: policy.metric.unit().into(),
-        line: LineKey {
-            label: policy.metric.field(policy.ownership).into(),
-            occurrence: 0,
-        },
-    };
-    Ok(canonical_value_tag(
-        &key,
-        &PublicValue::Number {
-            stored: stored.into(),
-            displayed: Ok(displayed.into()),
-            under_status: None,
-        },
-    ))
-}
-
-/// Rebuild only the original admitted public assertion, without I/O or comparative fallback.
-pub(super) fn receipt_claim_body(
-    policy: &PublicResolutionPolicy,
-    forecast_id: ObjectId,
-    citation: &OutcomeCitation,
-    stored: &str,
-    displayed: &str,
-    ownership_source: &str,
-    anchor_path: &str,
-) -> Result<Vec<u8>> {
-    receipt_value_tag(
-        policy,
-        forecast_id,
-        citation,
-        stored,
-        displayed,
-        ownership_source,
-    )?;
-    receipt_claim_body_at_vintage(
-        policy,
-        forecast_id,
-        citation,
-        stored,
-        displayed,
-        ownership_source,
-        anchor_path,
-    )
-}
-
-/// Rebuild a source assertion at its retained reporting vintage. Admission of a revision additionally
-/// needs the journal's checked predecessor; this pure reconstruction grants no current-source trust.
-pub(super) fn receipt_claim_body_at_vintage(
-    policy: &PublicResolutionPolicy,
-    forecast_id: ObjectId,
-    citation: &OutcomeCitation,
-    stored: &str,
-    displayed: &str,
-    ownership_source: &str,
-    anchor_path: &str,
-) -> Result<Vec<u8>> {
-    let locator = receipt_locator(citation, anchor_path)?;
-    let tag = receipt_value_tag_at_vintage(
-        policy,
-        forecast_id,
-        citation,
-        stored,
-        displayed,
-        ownership_source,
-    )?;
-    let value = PublicValue::Number {
+    Ok(PublicValue::Number {
         stored: stored.into(),
         displayed: Ok(displayed.into()),
         under_status: None,
-    };
-    Ok(Claim::new(
-        policy.metric.field(policy.ownership),
-        value,
-        &tag,
-        Representation::Deterministic,
-        SpatialSupport::PeriodAggregate,
-        if policy.metric.is_extensive() {
-            AdditivityClass::ExtensiveAdditive
-        } else {
-            AdditivityClass::IntensiveWeighted
-        },
-        EvidenceClass::ISSUER,
-        EpistemicStatus::KnownKnown,
-        KnowledgeState::Known,
-        Confidentiality::public(),
-        vec![],
-        vec![],
-        vec![SourceAnchor::new(anchor_path, citation.sha256, locator)],
-    )
-    .canonical_body())
+    })
 }
 
-/// Rebuild an admitted original-release dash from the frozen target and retained source anchor.
-/// Status-derived placeholders keep refusing until their interpretation evidence is frozen separately.
-pub(super) fn receipt_missing_claim_body(
-    policy: &PublicResolutionPolicy,
-    forecast_id: ObjectId,
-    citation: &OutcomeCitation,
-    value_kind: &str,
-    token: &str,
-    ownership_source: &str,
-    anchor_path: &str,
-) -> Result<Vec<u8>> {
-    public_policy(policy)?;
-    if citation.vintage != policy.period.original_release() {
-        return Err(refusal(
-            RefusalCode::SupportMismatch102,
-            "missing-outcome receipt must come from the frozen original release",
-        ));
+/// Pure reconstruction of one frozen source Claim; no current-source or comparative authority is implied.
+pub(super) struct ReceiptClaim<'a> {
+    pub policy: &'a PublicResolutionPolicy,
+    pub forecast_id: ObjectId,
+    pub citation: &'a OutcomeCitation,
+    pub ownership_source: &'a str,
+    pub anchor_path: &'a str,
+}
+
+impl ReceiptClaim<'_> {
+    fn original_release(&self) -> Result<()> {
+        if self.citation.vintage != self.policy.period.original_release() {
+            return Err(refusal(
+                RefusalCode::SupportMismatch102,
+                "receipt is not from the frozen original release",
+            ));
+        }
+        Ok(())
     }
-    release_period(policy, &citation.vintage)?;
-    let subject = policy.members.get(&forecast_id).ok_or_else(|| {
-        refusal(
-            RefusalCode::NoClaimInDomain201,
-            "receipt forecast is outside the frozen member mapping",
+
+    fn key(&self) -> Result<PublicKey> {
+        let policy = self.policy;
+        let citation = self.citation;
+        public_policy(policy)?;
+        release_period(policy, &citation.vintage)?;
+        let subject = policy.members.get(&self.forecast_id).ok_or_else(|| {
+            refusal(
+                RefusalCode::NoClaimInDomain201,
+                "receipt forecast is outside the frozen member mapping",
+            )
+        })?;
+        if citation.source != policy.issuer {
+            return Err(refusal(
+                RefusalCode::SupportMismatch102,
+                "receipt issuer differs from the frozen policy",
+            ));
+        }
+        Ok(PublicKey {
+            issuer: policy.issuer.clone(),
+            subject: subject.clone(),
+            valid_period: parse_period_code(&policy.period.label()).ok_or_else(|| {
+                refusal(RefusalCode::SupportMismatch102, "invalid receipt period")
+            })?,
+            reporting_vintage: Vintage {
+                release: citation.vintage.clone(),
+                file_sha256: Digest32(citation.sha256).to_hex(),
+            },
+            ownership_basis: receipt_ownership(policy.ownership, self.ownership_source)?,
+            scope: Scope::Site,
+            unit: policy.metric.unit().into(),
+            line: LineKey {
+                label: policy.metric.field(policy.ownership).into(),
+                occurrence: 0,
+            },
+        })
+    }
+
+    fn body(&self, value: PublicValue) -> Result<Vec<u8>> {
+        let key = self.key()?;
+        let locator = receipt_locator(self.citation, self.anchor_path)?;
+        Ok(public_claim_anchored(
+            SourceAnchor::new(self.anchor_path, self.citation.sha256, locator),
+            vec![],
+            key,
+            value,
         )
-    })?;
-    if citation.source != policy.issuer {
-        return Err(refusal(
-            RefusalCode::SupportMismatch102,
-            "receipt issuer differs from the frozen policy",
-        ));
+        .claim
+        .canonical_body())
     }
-    let ownership_basis = receipt_ownership(policy.ownership, ownership_source)?;
-    if value_kind != "nil_unknown" {
-        return Err(refusal(
-            RefusalCode::SourceCellUnusable208,
-            "unsupported source placeholder for a frozen missing outcome",
-        ));
+
+    /// The journal separately checks a permitted comparative's numeric predecessor before admission.
+    pub(super) fn number(
+        &self,
+        stored: &str,
+        displayed: &str,
+        allow_comparative: bool,
+    ) -> Result<Vec<u8>> {
+        if !allow_comparative {
+            self.original_release()?;
+        }
+        self.body(receipt_number(self.policy, stored, displayed)?)
     }
-    let value = PublicValue::Nil {
-        token: token.to_string(),
-        reason: NilReason::Unknown,
-    };
-    let locator = receipt_locator(citation, anchor_path)?;
-    let key = PublicKey {
-        issuer: policy.issuer.clone(),
-        subject: subject.clone(),
-        valid_period: parse_period_code(&policy.period.label())
-            .ok_or_else(|| refusal(RefusalCode::SupportMismatch102, "invalid receipt period"))?,
-        reporting_vintage: Vintage {
-            release: citation.vintage.clone(),
-            file_sha256: Digest32(citation.sha256).to_hex(),
-        },
-        ownership_basis,
-        scope: Scope::Site,
-        unit: policy.metric.unit().into(),
-        line: LineKey {
-            label: policy.metric.field(policy.ownership).into(),
-            occurrence: 0,
-        },
-    };
-    Ok(public_claim_anchored(
-        SourceAnchor::new(anchor_path, citation.sha256, locator),
-        vec![],
-        key,
-        value,
-    )
-    .claim
-    .canonical_body())
+
+    /// Keep the raw assertion unchanged and independently recheck its retained status interpretation.
+    pub(super) fn missing(&self, missing: &PublicMissing) -> Result<Vec<u8>> {
+        self.original_release()?;
+        let invalid = || {
+            refusal(
+                RefusalCode::SourceCellUnusable208,
+                "source value or reason contradicts its retained status",
+            )
+        };
+        let reason = match &missing.status {
+            Some(status) => status
+                .reason(self.policy, self.forecast_id)?
+                .ok_or_else(invalid)?,
+            None => MissingReason::NotPublished,
+        };
+        if missing.reason != reason {
+            return Err(invalid());
+        }
+        let full_status = missing
+            .status
+            .as_ref()
+            .and_then(|s| (reason != MissingReason::DefinitionChanged).then_some(s.status.kind));
+        let token = missing.token.clone();
+        let zero = token.trim().parse::<f64>() == Ok(0.0);
+        let value = match missing.value_kind.as_str() {
+            "nil_unknown"
+                if missing.displayed.is_none()
+                    && (missing.status.is_none() || matches!(token.trim(), "-" | "–" | "—")) =>
+            {
+                PublicValue::Nil {
+                    token,
+                    reason: NilReason::Unknown,
+                }
+            }
+            "nil_withheld" | "nil_disposed" if zero && missing.displayed.is_none() => {
+                let nil = match (missing.value_kind.as_str(), full_status) {
+                    ("nil_withheld", Some(StatusKind::Withheld)) => NilReason::Withheld,
+                    ("nil_disposed", Some(StatusKind::Disposed)) => NilReason::Disposed,
+                    _ => return Err(invalid()),
+                };
+                PublicValue::Nil { token, reason: nil }
+            }
+            "number" if missing.status.is_some() && !(zero && full_status.is_some()) => {
+                let mut value = receipt_number(
+                    self.policy,
+                    &token,
+                    missing.displayed.as_deref().ok_or_else(invalid)?,
+                )?;
+                if let PublicValue::Number { under_status, .. } = &mut value {
+                    *under_status = full_status;
+                }
+                value
+            }
+            _ => return Err(invalid()),
+        };
+        self.body(value)
+    }
 }
 
 fn bind(
@@ -838,24 +853,8 @@ fn bind(
         forecast_id,
         &policy.period.original_release(),
         cells,
-        true,
+        None,
     )
-}
-
-fn bind_release(
-    registered: &SourceRow,
-    policy: &PublicResolutionPolicy,
-    forecast_id: ObjectId,
-    release: &str,
-    cells: &[KeyedCell],
-) -> Result<ResolvedPublicOutcome> {
-    match bind_value(registered, policy, forecast_id, release, cells, false)? {
-        ResolvedOriginalOutcome::Published(outcome) => Ok(outcome),
-        ResolvedOriginalOutcome::Missing(_) => Err(refusal(
-            RefusalCode::NotObservable202,
-            "selected comparative does not publish a numeric value for the frozen target",
-        )),
-    }
 }
 
 fn bind_value(
@@ -864,10 +863,11 @@ fn bind_value(
     forecast_id: ObjectId,
     release: &str,
     cells: &[KeyedCell],
-    allow_missing: bool,
+    status: Option<StatusEvidence>,
 ) -> Result<ResolvedOriginalOutcome> {
     public_policy(policy)?;
     release_period(policy, release)?;
+    let allow_missing = release == policy.period.original_release();
     if registered.quarter != release || registered.kind != "mine_stats" {
         return Err(refusal(
             RefusalCode::SupportMismatch102,
@@ -991,22 +991,76 @@ fn bind_value(
             "outcome must be one standalone source assertion",
         ));
     };
-
+    let receipt = SourceReceipt {
+        source: cell.clone(),
+        ownership_source,
+        citation,
+        available_at_ns,
+        published_at,
+        published_at_basis,
+    };
+    let reconstruction = ReceiptClaim {
+        policy,
+        forecast_id,
+        citation: &receipt.citation,
+        ownership_source,
+        anchor_path: &anchor.artifact_path,
+    };
+    if status.is_some() && (!allow_missing || cell.claim.calibration_failed) {
+        return Err(refusal(
+            RefusalCode::NotObservable202,
+            "status-dependent target is not an admissible comparative outcome",
+        ));
+    }
     if allow_missing
-        && let PublicValue::Nil {
-            token,
-            reason: NilReason::Unknown,
-        } = &cell.claim.value
+        && (status.is_some()
+            || matches!(
+                cell.claim.value,
+                PublicValue::Nil {
+                    reason: NilReason::Unknown,
+                    ..
+                }
+            ))
     {
-        let expected = receipt_missing_claim_body(
-            policy,
-            forecast_id,
-            &citation,
-            "nil_unknown",
+        let (value_kind, token, displayed) = match &cell.claim.value {
+            PublicValue::Nil { token, reason } => (
+                match reason {
+                    NilReason::Unknown => "nil_unknown",
+                    NilReason::Withheld => "nil_withheld",
+                    NilReason::Disposed => "nil_disposed",
+                },
+                token.clone(),
+                None,
+            ),
+            PublicValue::Number {
+                stored,
+                displayed: Ok(displayed),
+                ..
+            } => ("number", stored.clone(), Some(displayed.clone())),
+            _ => {
+                return Err(refusal(
+                    RefusalCode::SourceCellUnusable208,
+                    "status cannot supply an absent or unusable source assertion",
+                ));
+            }
+        };
+        let reason = match &status {
+            Some(s) => s.reason(policy, forecast_id)?.ok_or_else(|| {
+                refusal(
+                    RefusalCode::SourceCellUnusable208,
+                    "status does not affect the target",
+                )
+            })?,
+            None => MissingReason::NotPublished,
+        };
+        let missing = PublicMissing {
+            reason,
+            value_kind: value_kind.into(),
             token,
-            ownership_source,
-            &anchor.artifact_path,
-        )?;
+            displayed,
+            status,
+        };
+        let expected = reconstruction.missing(&missing)?;
         if expected != cell.claim.canonical_body() {
             return Err(refusal(
                 RefusalCode::NotObservable202,
@@ -1014,15 +1068,8 @@ fn bind_value(
             ));
         }
         return Ok(ResolvedOriginalOutcome::Missing(ResolvedPublicMissing {
-            source: cell.clone(),
-            reason: MissingReason::NotPublished,
-            value_kind: "nil_unknown",
-            token: token.clone(),
-            ownership_source,
-            citation,
-            available_at_ns,
-            published_at,
-            published_at_basis,
+            receipt,
+            value: missing,
         }));
     }
 
@@ -1050,33 +1097,20 @@ fn bind_value(
         ));
     };
     let value = displayed_value(policy.metric, displayed)?;
-    let out = ResolvedPublicOutcome {
-        source: cell.clone(),
-        value,
-        stored: stored.clone(),
-        displayed: displayed.clone(),
-        ownership_source,
-        citation,
-        available_at_ns,
-        published_at,
-        published_at_basis,
-    };
-    if receipt_claim_body_at_vintage(
-        policy,
-        forecast_id,
-        &out.citation,
-        &out.stored,
-        &out.displayed,
-        out.ownership_source,
-        &anchor.artifact_path,
-    )? != out.source.claim.canonical_body()
-    {
+    if reconstruction.number(stored, displayed, true)? != cell.claim.canonical_body() {
         return Err(refusal(
             RefusalCode::NotObservable202,
             "outcome Claim differs from the admitted public issuer source shape",
         ));
     }
-    Ok(ResolvedOriginalOutcome::Published(out))
+    Ok(ResolvedOriginalOutcome::Published(ResolvedPublicOutcome {
+        receipt,
+        value: PublicNumber {
+            exact: value,
+            stored: stored.clone(),
+            displayed: displayed.clone(),
+        },
+    }))
 }
 
 #[cfg(test)]

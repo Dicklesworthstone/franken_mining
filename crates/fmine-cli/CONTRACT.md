@@ -678,13 +678,12 @@ Under the exclusive writer lock it loads the original registered Mine Stats rele
 bytes and the canonical Claim, and matches the exact frozen issuer, subject, period, metric, unit, scope
 and ownership. It uses the displayed decimal, retaining the stored value and exact rational separately;
 the existing score kernel receives that rational's deterministic floating-point projection.
-Ambiguous, absent-file, status-derived, stale, altered and incompatible sources refuse without appending.
+Ambiguous, absent-file, stale, altered and incompatible sources refuse without appending.
 A source-native dash (`NilReason::Unknown`) at the exact frozen target in the authenticated original release is
 different: `resolve` appends a source-verified `NotPublished` missing event, retaining the dash token, canonical
 source Claim, workbook hash and publication evidence. It remains in the cohort denominator and cannot later be
-reinterpreted as a numeric original. `n/a`, withheld/disposed interpretations and other status-derived placeholders
-still refuse because their additional interpretation evidence is not yet frozen by this protocol. Candidate
-cardinality is checked before canonical-key projection. For summary targets, a reader refusal on either QTD/YTD
+reinterpreted as a numeric original. An absent or `n/a` assertion still refuses. Candidate cardinality is checked
+before canonical-key projection. For summary targets, a reader refusal on either QTD/YTD
 sheet blocks admission; detailed site-row targets instead require clean Minestats reads. An unusable competing row cannot
 disappear and leave a false singleton. Unrelated views do not replace the target. A later comparative cannot
 fill a missing original. An unmarked printed zero
@@ -694,10 +693,10 @@ The six cross-crate forecast-record source fixture tests likewise retain their C
 assertions in `crates/xtask/testdata/forecast_record_sources.rs`.
 Publication date and its registered FACT/INFERENCE basis are mandatory; that date must fall after the
 complete target period. Retrieval never substitutes for a missing publication date, and the stated basis
-is retained metadata rather than independent proof of publication time. Conservative availability is
+is retained metadata rather than independent proof of publication time. Conservative source availability is
 midnight after that date, checked against the sampled clock's lower bound before admission.
 
-Public-bound freezes and generated `registered_outcome` / `registered_missing` operations use
+Public-bound freezes and generated numeric/dash `registered_outcome` / `registered_missing` operations use
 `schema = "fmine.forecast-operation.v3"`; their authority time uses the same upper-bound policy as v2.
 The raw `outcome` route refuses every public-bound member, including members shared with other cohorts.
 A numeric generated operation retains the frozen cohort digest, source Claim ID and canonical body, exact and
@@ -710,6 +709,23 @@ subject, period, basis or anchor substitution.
 from unverified supplied outcomes. Replay does not re-read source files or assert present file availability.
 The journal head binds admission evidence; the existing assessment digest binds the cohort, numeric event
 and citations. Refused resolutions leave members unresolved in the frozen denominator.
+
+DESIGN (plan §§10.1, 21.6; BD-047/BD-059/BD-076): a uniquely matched original source assertion may remain
+unresolved when a registered subject status affects the frozen target. A full disposed period becomes
+`Divested`; a full withholding period becomes `NotPublished`; any overlapping partial period, including a
+disposal closing month, becomes `DefinitionChanged`. Care-and-maintenance and statuses outside the target
+do not make a numeric outcome missing. The printed source Claim remains unchanged, including a partial-period
+number or a full-status numeric flag. Status interprets the frozen target; it does not prove that a printed
+cell was absent. Missing files, absent assertions, `n/a`, ambiguous candidates and incompatible source Claims
+still refuse. No comparative release substitutes for an original.
+New status receipts use `fmine.forecast-operation.v10` and retain the complete subject/kind/first/last/evidence
+tuple plus SHA-256 of the exact registry bytes parsed at admission. Their availability is the persisted
+admission clock upper bound; source publication date/basis remain separate and cannot backdate the interpretation.
+Replay checks complete metadata, status-to-period/reason consistency and the unchanged source Claim without
+reopening source files. The retained hash identifies the admitted registry snapshot; replay does not independently
+reauthenticate unavailable registry bytes. Legacy v3 numeric/dash and v4 comparative receipts retain their bytes
+and semantics. Missing members remain in coverage and score completion denominators. Source boundary tests and
+`forecast_registered_outcome` cover full/partial periods, clock skew, offline reports and semantic replay tampering.
 
 DESIGN (BD-343): `public_vintages = "registered_comparatives"` is an optional pre-freeze permission for
 source-bound restatements. Omission or `original_only` retains the existing version-one policy bytes;

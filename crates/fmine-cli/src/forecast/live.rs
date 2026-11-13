@@ -14,9 +14,11 @@ use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::forecast::Journal;
 use fmine_numerics::exact_feas::Rat;
+use fmine_public::key::{StatusKind, SubjectStatus};
 use fmine_registry::toml_subset::{TomlDoc, TomlValue};
 use fmine_runtime::{HostWallClock, WallClock};
 
+use super::source::{PublicMissing, ReceiptClaim, ResolvedOriginalOutcome, StatusEvidence};
 use super::{
     Assessment, AssessmentFailure, MemberOutcome, Replay, Row, absent, cohort_json, display_or,
     invalid, js, missing, missing_name, parse_subset, payload_json, selection, selector_name, time,
@@ -36,6 +38,7 @@ const V6_SCHEMA: &str = "fmine.forecast-operation.v6";
 const V7_SCHEMA: &str = "fmine.forecast-operation.v7";
 const V8_SCHEMA: &str = "fmine.forecast-operation.v8";
 const V9_SCHEMA: &str = "fmine.forecast-operation.v9";
+const V10_SCHEMA: &str = "fmine.forecast-operation.v10";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +60,7 @@ enum OperationVersion {
     V7 = 6,
     V8 = 7,
     V9 = 8,
+    V10 = 9,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -74,6 +78,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V7_SCHEMA => Ok(OperationVersion::V7),
             V8_SCHEMA => Ok(OperationVersion::V8),
             V9_SCHEMA => Ok(OperationVersion::V9),
+            V10_SCHEMA => Ok(OperationVersion::V10),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -88,41 +93,44 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if expected_table == "plant_forecast" {
-        V9_SCHEMA
-    } else if super::cusum::FIELDS
-        .iter()
-        .any(|key| doc.rows[0].get(key).is_some())
-    {
-        V8_SCHEMA
-    } else if super::segments::FIELDS
-        .iter()
-        .any(|key| doc.rows[0].get(key).is_some())
-    {
-        V7_SCHEMA
-    } else if doc.rows[0].get("gaussian_crps_bounds").is_some() {
-        V6_SCHEMA
-    } else if super::MONITOR_FIELDS
-        .iter()
-        .any(|key| doc.rows[0].get(key).is_some())
-        || doc.rows[0].get("event_log_floor").is_some()
-    {
-        V5_SCHEMA
-    } else if expected_table == "registered_restatement"
-        || doc.rows[0].get("public_vintages").is_some()
-    {
-        V4_SCHEMA
-    } else if expected_table == "registered_outcome"
-        || expected_table == "registered_missing"
-        || doc.rows[0]
-            .fields
+    let schema =
+        if expected_table == "registered_missing" && doc.rows[0].get("status_kind").is_some() {
+            V10_SCHEMA
+        } else if expected_table == "plant_forecast" {
+            V9_SCHEMA
+        } else if super::cusum::FIELDS
             .iter()
-            .any(|field| field.key.starts_with("public_"))
-    {
-        V3_SCHEMA
-    } else {
-        V2_SCHEMA
-    };
+            .any(|key| doc.rows[0].get(key).is_some())
+        {
+            V8_SCHEMA
+        } else if super::segments::FIELDS
+            .iter()
+            .any(|key| doc.rows[0].get(key).is_some())
+        {
+            V7_SCHEMA
+        } else if doc.rows[0].get("gaussian_crps_bounds").is_some() {
+            V6_SCHEMA
+        } else if super::MONITOR_FIELDS
+            .iter()
+            .any(|key| doc.rows[0].get(key).is_some())
+            || doc.rows[0].get("event_log_floor").is_some()
+        {
+            V5_SCHEMA
+        } else if expected_table == "registered_restatement"
+            || doc.rows[0].get("public_vintages").is_some()
+        {
+            V4_SCHEMA
+        } else if expected_table == "registered_outcome"
+            || expected_table == "registered_missing"
+            || doc.rows[0]
+                .fields
+                .iter()
+                .any(|field| field.key.starts_with("public_"))
+        {
+            V3_SCHEMA
+        } else {
+            V2_SCHEMA
+        };
     let versioned = format!("schema = \"{schema}\"\n{request}");
     if versioned.len() > MAX_OPERATION_BYTES {
         return Err(invalid(
@@ -389,18 +397,16 @@ fn perform(
         } => {
             let id = state.forecast_id(forecast)?;
             let policy = state.public_policy(cohort, id)?;
-            match super::source::resolve(root, &policy, id)? {
-                super::source::ResolvedOriginalOutcome::Published(resolved) => (
-                    source_request(&state, cohort, forecast, &resolved, None)?,
-                    "registered_outcome",
-                    None,
-                ),
-                super::source::ResolvedOriginalOutcome::Missing(resolved) => (
-                    source_missing_request(&state, cohort, forecast, &resolved)?,
-                    "registered_missing",
-                    None,
-                ),
-            }
+            let resolved = super::source::resolve(root, &policy, id)?;
+            let table = match &resolved {
+                ResolvedOriginalOutcome::Published(_) => "registered_outcome",
+                ResolvedOriginalOutcome::Missing(_) => "registered_missing",
+            };
+            (
+                source_request(&state, cohort, forecast, &resolved, None)?,
+                table,
+                None,
+            )
         }
         Command::Restate {
             cohort,
@@ -413,7 +419,13 @@ fn perform(
             let predecessor = restatement_predecessor(&state, cohort, forecast, release)?;
             let resolved = super::source::resolve_release(root, &policy, id, release)?;
             (
-                source_request(&state, cohort, forecast, &resolved, Some(predecessor))?,
+                source_request(
+                    &state,
+                    cohort,
+                    forecast,
+                    &ResolvedOriginalOutcome::Published(resolved),
+                    Some(predecessor),
+                )?,
                 "registered_restatement",
                 None,
             )
@@ -573,9 +585,8 @@ enum SourceAdmissionValue {
         displayed: String,
     },
     Missing {
-        value_kind: String,
-        token: String,
-        reason: fmine_calib::MissingReason,
+        receipt: PublicMissing,
+        available_at_ns: i64,
     },
 }
 
@@ -583,6 +594,7 @@ enum SourceAdmissionValue {
 pub(super) struct SourceAdmission {
     cohort: Digest32,
     claim: ObjectId,
+    citation: fmine_calib::OutcomeCitation,
     value: SourceAdmissionValue,
     published_at: String,
     published_at_basis: String,
@@ -590,32 +602,54 @@ pub(super) struct SourceAdmission {
 
 impl SourceAdmission {
     pub(super) fn to_json(&self) -> String {
-        match &self.value {
+        let value = match &self.value {
             SourceAdmissionValue::Numeric { exact, displayed } => format!(
-                "{{\"basis\":\"recorded_registered_source_admission\",\"source_bytes_reverified_on_replay\":false,\"cohort_digest\":{},\"source_claim_id\":{},\"exact_value\":{{\"numerator\":{},\"denominator\":{}}},\"displayed\":{},\"published_at\":{},\"published_at_basis\":{}}}",
-                js(&self.cohort.to_hex()),
-                js(&self.claim.to_string()),
+                "\"exact_value\":{{\"numerator\":{},\"denominator\":{}}},\"displayed\":{}",
                 js(&exact.num().to_string()),
                 js(&exact.den().to_string()),
                 js(displayed),
-                js(&self.published_at),
-                js(&self.published_at_basis),
             ),
             SourceAdmissionValue::Missing {
-                value_kind,
-                token,
-                reason,
-            } => format!(
-                "{{\"basis\":\"recorded_registered_source_admission\",\"source_bytes_reverified_on_replay\":false,\"cohort_digest\":{},\"source_claim_id\":{},\"exact_value\":null,\"displayed\":null,\"source_value_kind\":{},\"source_token\":{},\"missing_reason\":{},\"published_at\":{},\"published_at_basis\":{}}}",
-                js(&self.cohort.to_hex()),
-                js(&self.claim.to_string()),
-                js(value_kind),
-                js(token),
-                js(missing_name(*reason)),
-                js(&self.published_at),
-                js(&self.published_at_basis),
-            ),
-        }
+                receipt,
+                available_at_ns,
+            } => {
+                let mut value = format!(
+                    "\"exact_value\":null,\"displayed\":null,\"source_value_kind\":{},\"source_token\":{},\"missing_reason\":{}",
+                    js(&receipt.value_kind),
+                    js(&receipt.token),
+                    js(missing_name(receipt.reason)),
+                );
+                if let Some(status) = &receipt.status {
+                    let _ = write!(
+                        value,
+                        ",\"status_interpretation\":{{\"subject\":{},\"kind\":{},\"first_full_month\":{},\"last_month\":{},\"evidence\":{},\"registry_sha256\":{},\"available_at_ns\":{available_at_ns},\"availability_basis\":\"recorded_admission_clock_upper_bound\",\"source_locator\":{},\"source_sha256\":{},\"source_displayed\":{}}}",
+                        js(&status.status.subject),
+                        js(status_name(status.status.kind)),
+                        js(&month_text(status.status.first)),
+                        status
+                            .status
+                            .last
+                            .map_or_else(|| "null".into(), |last| js(&month_text(last))),
+                        js(&status.status.evidence),
+                        js(&status.registry_sha256.to_hex()),
+                        js(&self.citation.locator),
+                        js(&Digest32(self.citation.sha256).to_hex()),
+                        receipt
+                            .displayed
+                            .as_deref()
+                            .map_or_else(|| "null".into(), js),
+                    );
+                }
+                value
+            }
+        };
+        format!(
+            "{{\"basis\":\"recorded_registered_source_admission\",\"source_bytes_reverified_on_replay\":false,\"cohort_digest\":{},\"source_claim_id\":{},{value},\"published_at\":{},\"published_at_basis\":{}}}",
+            js(&self.cohort.to_hex()),
+            js(&self.claim.to_string()),
+            js(&self.published_at),
+            js(&self.published_at_basis),
+        )
     }
 }
 
@@ -694,124 +728,123 @@ fn source_request(
     state: &Replay,
     cohort: &str,
     forecast: &str,
-    resolved: &super::source::ResolvedPublicOutcome,
+    resolved: &ResolvedOriginalOutcome,
     supersedes: Option<u64>,
 ) -> Result<String, Refusal> {
+    let (receipt, table) = match resolved {
+        ResolvedOriginalOutcome::Published(outcome) => (
+            &outcome.receipt,
+            if supersedes.is_some() {
+                "registered_restatement"
+            } else {
+                "registered_outcome"
+            },
+        ),
+        ResolvedOriginalOutcome::Missing(outcome) => (&outcome.receipt, "registered_missing"),
+    };
     let id = state
         .cohorts
         .get(cohort)
         .ok_or_else(|| absent("frozen cohort missing"))?;
-    let anchor = resolved
+    let anchor = receipt
         .source
         .claim
         .anchors
         .first()
         .ok_or_else(|| absent("source Claim anchor missing"))?;
-    let mut request = if supersedes.is_some() {
-        String::from("[[registered_restatement]]\n")
-    } else {
-        String::from("[[registered_outcome]]\n")
-    };
+    let mut request = format!("[[{table}]]\n");
     if let Some(sequence) = supersedes {
         let _ = writeln!(request, "supersedes = {sequence}");
     }
-    for (key, value) in [
-        ("forecast", forecast.to_string()),
-        ("cohort", cohort.to_string()),
-        ("cohort_digest", id.to_hex()),
-        ("value", resolved.displayed.clone()),
-        ("numerator", resolved.value.num().to_string()),
-        ("denominator", resolved.value.den().to_string()),
-        ("source", resolved.citation.source.clone()),
-        ("vintage", resolved.citation.vintage.clone()),
-        ("locator", resolved.citation.locator.clone()),
-        ("sha256", Digest32(resolved.citation.sha256).to_hex()),
-        ("claim_id", resolved.source.claim.claim_id.to_string()),
-        (
-            "claim_body",
-            bytes_hex(&resolved.source.claim.canonical_body()),
-        ),
-        ("stored", resolved.stored.clone()),
-        ("ownership_source", resolved.ownership_source.to_string()),
-        ("anchor_path", anchor.artifact_path.clone()),
-        ("published_at", resolved.published_at.clone()),
-        ("published_at_basis", resolved.published_at_basis.clone()),
-        (
-            "available_at",
-            fmine_calib::record::format_utc(resolved.available_at_ns / 1_000_000_000),
-        ),
-    ] {
-        let _ = writeln!(request, "{key} = {}", toml_string(&value)?);
+    let mut put = |key: &str, value: &str| -> Result<(), Refusal> {
+        let _ = writeln!(request, "{key} = {}", toml_string(value)?);
+        Ok(())
+    };
+    put("forecast", forecast)?;
+    put("cohort", cohort)?;
+    put("cohort_digest", &id.to_hex())?;
+    match resolved {
+        ResolvedOriginalOutcome::Published(outcome) => {
+            put("value", &outcome.value.displayed)?;
+            put("numerator", &outcome.value.exact.num().to_string())?;
+            put("denominator", &outcome.value.exact.den().to_string())?;
+        }
+        ResolvedOriginalOutcome::Missing(outcome) => {
+            put("reason", missing_name(outcome.value.reason))?
+        }
     }
+    put("source", &receipt.citation.source)?;
+    put("vintage", &receipt.citation.vintage)?;
+    put("locator", &receipt.citation.locator)?;
+    put("sha256", &Digest32(receipt.citation.sha256).to_hex())?;
+    put("claim_id", &receipt.source.claim.claim_id.to_string())?;
+    put(
+        "claim_body",
+        &bytes_hex(&receipt.source.claim.canonical_body()),
+    )?;
+    match resolved {
+        ResolvedOriginalOutcome::Published(outcome) => put("stored", &outcome.value.stored)?,
+        ResolvedOriginalOutcome::Missing(outcome) => {
+            let missing = &outcome.value;
+            put("value_kind", &missing.value_kind)?;
+            put("token", &missing.token)?;
+            if let Some(status) = &missing.status {
+                put("status_subject", &status.status.subject)?;
+                put("status_kind", status_name(status.status.kind))?;
+                put("status_first", &month_text(status.status.first))?;
+                put(
+                    "status_last",
+                    &status.status.last.map_or_else(String::new, month_text),
+                )?;
+                put("status_evidence", &status.status.evidence)?;
+                put("status_registry_sha256", &status.registry_sha256.to_hex())?;
+                if let Some(displayed) = &missing.displayed {
+                    put("displayed", displayed)?;
+                }
+            }
+        }
+    }
+    put("ownership_source", receipt.ownership_source)?;
+    put("anchor_path", &anchor.artifact_path)?;
+    put("published_at", &receipt.published_at)?;
+    put("published_at_basis", &receipt.published_at_basis)?;
+    put(
+        "available_at",
+        &fmine_calib::record::format_utc(receipt.available_at_ns / 1_000_000_000),
+    )?;
     Ok(request)
 }
 
-fn source_missing_request(
-    state: &Replay,
-    cohort: &str,
-    forecast: &str,
-    resolved: &super::source::ResolvedPublicMissing,
-) -> Result<String, Refusal> {
-    let id = state
-        .cohorts
-        .get(cohort)
-        .ok_or_else(|| absent("frozen cohort missing"))?;
-    let anchor = resolved
-        .source
-        .claim
-        .anchors
-        .first()
-        .ok_or_else(|| absent("source Claim anchor missing"))?;
-    let mut request = String::from("[[registered_missing]]\n");
-    for (key, value) in [
-        ("forecast", forecast.to_string()),
-        ("cohort", cohort.to_string()),
-        ("cohort_digest", id.to_hex()),
-        ("reason", missing_name(resolved.reason).to_string()),
-        ("source", resolved.citation.source.clone()),
-        ("vintage", resolved.citation.vintage.clone()),
-        ("locator", resolved.citation.locator.clone()),
-        ("sha256", Digest32(resolved.citation.sha256).to_hex()),
-        ("claim_id", resolved.source.claim.claim_id.to_string()),
-        (
-            "claim_body",
-            bytes_hex(&resolved.source.claim.canonical_body()),
-        ),
-        ("value_kind", resolved.value_kind.to_string()),
-        ("token", resolved.token.clone()),
-        ("ownership_source", resolved.ownership_source.to_string()),
-        ("anchor_path", anchor.artifact_path.clone()),
-        ("published_at", resolved.published_at.clone()),
-        ("published_at_basis", resolved.published_at_basis.clone()),
-        (
-            "available_at",
-            fmine_calib::record::format_utc(resolved.available_at_ns / 1_000_000_000),
-        ),
-    ] {
-        let _ = writeln!(request, "{key} = {}", toml_string(&value)?);
+fn status_name(status: StatusKind) -> &'static str {
+    match status {
+        StatusKind::Disposed => "disposed",
+        StatusKind::Withheld => "withheld",
+        StatusKind::CareAndMaintenance => "care_and_maintenance",
     }
-    Ok(request)
+}
+
+fn month_text((year, month): (u16, u8)) -> String {
+    format!("{year:04}-{month:02}")
+}
+
+fn status_month(value: &str) -> Result<(u16, u8), Refusal> {
+    let invalid = || invalid("status month must be YYYY-MM");
+    let (year, month) = value.split_once('-').ok_or_else(invalid)?;
+    let month = (
+        year.parse().map_err(|_| invalid())?,
+        month.parse().map_err(|_| invalid())?,
+    );
+    if month_text(month) != value {
+        return Err(invalid());
+    }
+    Ok(month)
 }
 
 fn publication_metadata(row: &Row<'_>) -> Result<(String, String, i64), Refusal> {
     let published_at = row.string("published_at")?.to_string();
-    if !fmine_registry::sources::is_date(&published_at) {
-        return Err(invalid("source publication date must be YYYY-MM-DD"));
-    }
-    let publication_start = time(&format!("{published_at}T00:00:00Z"))?;
     let published_at_basis = row.string("published_at_basis")?;
-    if !fmine_registry::sources::PUBLISHED_AT_BASES
-        .iter()
-        .any(|prefix| {
-            published_at_basis
-                .strip_prefix(prefix)
-                .is_some_and(|detail| !detail.trim().is_empty())
-        })
-    {
-        return Err(invalid(
-            "publication basis needs FACT: or INFERENCE: followed by its evidence",
-        ));
-    }
+    let publication_start = super::source::publication_start(&published_at, published_at_basis)
+        .map_err(|(_, reason)| invalid(reason))?;
     Ok((
         published_at,
         published_at_basis.to_string(),
@@ -819,20 +852,14 @@ fn publication_metadata(row: &Row<'_>) -> Result<(String, String, i64), Refusal>
     ))
 }
 
-fn apply_source(
-    state: &mut Replay,
-    row: Row<'_>,
-    recorded_ns: i64,
-    restatement: bool,
-) -> Result<(), Refusal> {
+fn apply_source(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<(), Refusal> {
+    let is_missing = row.0.table == "registered_missing";
+    let restatement = row.0.table == "registered_restatement";
     row.allowed(
         &[
             "forecast",
             "cohort",
             "cohort_digest",
-            "value",
-            "numerator",
-            "denominator",
             "source",
             "vintage",
             "locator",
@@ -842,66 +869,40 @@ fn apply_source(
             "published_at",
             "published_at_basis",
             "available_at",
-            "stored",
             "ownership_source",
             "anchor_path",
         ],
-        if restatement { &["supersedes"] } else { &[] },
+        if is_missing {
+            &[
+                "reason",
+                "value_kind",
+                "token",
+                "displayed",
+                "status_subject",
+                "status_kind",
+                "status_first",
+                "status_last",
+                "status_evidence",
+                "status_registry_sha256",
+            ]
+        } else if restatement {
+            &["value", "numerator", "denominator", "stored", "supersedes"]
+        } else {
+            &["value", "numerator", "denominator", "stored"]
+        },
     )?;
     let forecast = state.forecast_id(row.string("forecast")?)?;
     let cohort = row.string("cohort")?;
     let (policy, vintages) = state.public_policy_with_vintages(cohort, forecast)?;
     let release = row.string("vintage")?;
     vintages.validate_release(policy.period, release, restatement)?;
-    let supersedes = if restatement {
-        let expected = restatement_predecessor(state, cohort, row.string("forecast")?, release)?;
-        if row
-            .optional_integer("supersedes")?
-            .and_then(|n| u64::try_from(n).ok())
-            != Some(expected)
-        {
-            return Err(invalid(
-                "registered restatement must name its latest numeric predecessor",
-            ));
-        }
-        Some(expected)
-    } else {
-        None
-    };
     let cohort_digest = super::hex(row.string("cohort_digest")?)?;
     if state.cohorts.get(cohort) != Some(&cohort_digest) || row.string("source")? != policy.issuer {
         return Err(invalid(
             "source admission differs from the frozen cohort or issuer",
         ));
     }
-    let integer = |key| {
-        row.string(key)?.parse::<i128>().map_err(|_| {
-            invalid("source exact value needs signed integer numerator and denominator")
-        })
-    };
-    let exact = Rat::new(integer("numerator")?, integer("denominator")?)
-        .map_err(|_| invalid("invalid exact source value"))?;
-    let displayed = row.string("value")?.to_string();
-    let printed = if policy.metric.is_site_physical() {
-        super::source::displayed_value(policy.metric, &displayed)?
-    } else {
-        let fmine_registry::transcriptions::Token::Point(decimal) =
-            fmine_registry::transcriptions::parse_token(&displayed).map_err(invalid)?
-        else {
-            return Err(invalid("registered outcome needs one printed number"));
-        };
-        Rat::new(decimal.mantissa, 10_i128.pow(decimal.scale))
-            .map_err(|_| invalid("invalid printed value"))?
-    };
-    if printed != exact {
-        return Err(invalid(
-            "printed source value differs from its exact rational",
-        ));
-    }
     let (published_at, published_at_basis, publication_start) = publication_metadata(&row)?;
-    if policy.metric.is_production() && exact.num() < 0 {
-        return Err(invalid("production cannot be negative"));
-    }
     let available_ns = publication_start
         .checked_add(86_400_000_000_000)
         .ok_or_else(|| invalid("publication availability overflows"))?;
@@ -930,159 +931,165 @@ fn apply_source(
         locator: row.string("locator")?.to_string(),
         sha256: super::hex(row.string("sha256")?)?.0,
     };
-    let reconstruct = if restatement {
-        super::source::receipt_claim_body_at_vintage
-    } else {
-        super::source::receipt_claim_body
+    let reconstruction = ReceiptClaim {
+        policy: &policy,
+        forecast_id: forecast,
+        citation: &citation,
+        ownership_source: row.string("ownership_source")?,
+        anchor_path: row.string("anchor_path")?,
     };
-    let expected_body = reconstruct(
-        &policy,
-        forecast,
-        &citation,
-        row.string("stored")?,
-        &displayed,
-        row.string("ownership_source")?,
-        row.string("anchor_path")?,
-    )?;
+    let (expected_body, kind, value, event_available_ns) = if is_missing {
+        if !state.ledger.outcomes(forecast).is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::FrozenRecordMutation507,
+                "the original public outcome status was already recorded",
+            ));
+        }
+        let status = if row
+            .0
+            .fields
+            .iter()
+            .any(|field| field.key.starts_with("status_"))
+        {
+            let kind = row.string("status_kind")?;
+            let Some(TomlValue::Str(last)) = row.0.get("status_last").map(|field| &field.value)
+            else {
+                return Err(invalid(
+                    "status_last must declare a quoted end month or an empty open interval",
+                ));
+            };
+            Some(StatusEvidence {
+                status: SubjectStatus {
+                    subject: row.string("status_subject")?.into(),
+                    kind: match kind {
+                        "disposed" => StatusKind::Disposed,
+                        "withheld" => StatusKind::Withheld,
+                        _ => return Err(invalid("unsupported target-status interpretation")),
+                    },
+                    first: status_month(row.string("status_first")?)?,
+                    last: if last.is_empty() {
+                        None
+                    } else {
+                        Some(status_month(last)?)
+                    },
+                    evidence: row.string("status_evidence")?.into(),
+                },
+                registry_sha256: super::hex(row.string("status_registry_sha256")?)?,
+            })
+        } else {
+            None
+        };
+        let missing = PublicMissing {
+            reason: missing(row.string("reason")?)?,
+            value_kind: row.string("value_kind")?.into(),
+            token: row.string("token")?.into(),
+            displayed: row.optional_string("displayed")?.map(str::to_string),
+            status,
+        };
+        if missing.status.is_none() && missing.reason != fmine_calib::MissingReason::NotPublished {
+            return Err(invalid(
+                "registered source dashes map only to not_published",
+            ));
+        }
+        let body = reconstruction.missing(&missing)?;
+        // Effective dates and a registry digest do not prove when the interpretation became known.
+        // Only the persisted admission clock bound supplies its availability; source publication stays separate.
+        let available_at_ns = if missing.status.is_some() {
+            recorded_ns
+        } else {
+            available_ns
+        };
+        (
+            body,
+            fmine_calib::OutcomeKind::Missing {
+                reason: missing.reason,
+            },
+            SourceAdmissionValue::Missing {
+                receipt: missing,
+                available_at_ns,
+            },
+            available_at_ns,
+        )
+    } else {
+        let supersedes = if restatement {
+            let expected =
+                restatement_predecessor(state, cohort, row.string("forecast")?, release)?;
+            if row
+                .optional_integer("supersedes")?
+                .and_then(|n| u64::try_from(n).ok())
+                != Some(expected)
+            {
+                return Err(invalid(
+                    "registered restatement must name its latest numeric predecessor",
+                ));
+            }
+            Some(expected)
+        } else {
+            None
+        };
+        let integer = |key| {
+            row.string(key)?.parse::<i128>().map_err(|_| {
+                invalid("source exact value needs signed integer numerator and denominator")
+            })
+        };
+        let exact = Rat::new(integer("numerator")?, integer("denominator")?)
+            .map_err(|_| invalid("invalid exact source value"))?;
+        let displayed = row.string("value")?.to_string();
+        let printed = if policy.metric.is_site_physical() {
+            super::source::displayed_value(policy.metric, &displayed)?
+        } else {
+            let fmine_registry::transcriptions::Token::Point(decimal) =
+                fmine_registry::transcriptions::parse_token(&displayed).map_err(invalid)?
+            else {
+                return Err(invalid("registered outcome needs one printed number"));
+            };
+            Rat::new(decimal.mantissa, 10_i128.pow(decimal.scale))
+                .map_err(|_| invalid("invalid printed value"))?
+        };
+        if printed != exact {
+            return Err(invalid(
+                "printed source value differs from its exact rational",
+            ));
+        }
+        if policy.metric.is_production() && exact.num() < 0 {
+            return Err(invalid("production cannot be negative"));
+        }
+        let body = reconstruction.number(row.string("stored")?, &displayed, restatement)?;
+        let number = exact.num() as f64 / exact.den() as f64;
+        let kind = match supersedes {
+            Some(supersedes) => fmine_calib::OutcomeKind::Restated {
+                value: number,
+                citation: citation.clone(),
+                supersedes,
+            },
+            None => fmine_calib::OutcomeKind::Published {
+                value: number,
+                citation: citation.clone(),
+            },
+        };
+        (
+            body,
+            kind,
+            SourceAdmissionValue::Numeric { exact, displayed },
+            available_ns,
+        )
+    };
     if body != expected_body {
         return Err(Refusal::new(
             RefusalCode::FrozenRecordMutation507,
             "source Claim does not bind the frozen target, exact printed value and cited anchor",
         ));
     }
-    let value = exact.num() as f64 / exact.den() as f64;
-    let kind = match supersedes {
-        Some(supersedes) => fmine_calib::OutcomeKind::Restated {
-            value,
-            citation,
-            supersedes,
-        },
-        None => fmine_calib::OutcomeKind::Published { value, citation },
-    };
     let event = state
         .ledger
-        .append_outcome(forecast, available_ns, recorded_ns, kind)?;
+        .append_outcome(forecast, event_available_ns, recorded_ns, kind)?;
     state.source_admissions.insert(
         (forecast, event),
         SourceAdmission {
             cohort: cohort_digest,
             claim,
-            value: SourceAdmissionValue::Numeric { exact, displayed },
-            published_at,
-            published_at_basis,
-        },
-    );
-    Ok(())
-}
-
-fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<(), Refusal> {
-    row.allowed(
-        &[
-            "forecast",
-            "cohort",
-            "cohort_digest",
-            "reason",
-            "source",
-            "vintage",
-            "locator",
-            "sha256",
-            "claim_id",
-            "claim_body",
-            "value_kind",
-            "token",
-            "ownership_source",
-            "anchor_path",
-            "published_at",
-            "published_at_basis",
-            "available_at",
-        ],
-        &[],
-    )?;
-    let forecast = state.forecast_id(row.string("forecast")?)?;
-    let cohort = row.string("cohort")?;
-    let policy = state.public_policy(cohort, forecast)?;
-    if row.string("vintage")? != policy.period.original_release()
-        || row.string("source")? != policy.issuer
-    {
-        return Err(invalid(
-            "registered missing outcome must bind the frozen issuer's original release",
-        ));
-    }
-    let cohort_digest = super::hex(row.string("cohort_digest")?)?;
-    if state.cohorts.get(cohort) != Some(&cohort_digest) {
-        return Err(invalid(
-            "source missing admission differs from the frozen cohort",
-        ));
-    }
-    if !state.ledger.outcomes(forecast).is_empty() {
-        return Err(Refusal::new(
-            RefusalCode::FrozenRecordMutation507,
-            "the original public outcome status was already recorded",
-        ));
-    }
-    let reason = missing(row.string("reason")?)?;
-    if reason != fmine_calib::MissingReason::NotPublished {
-        return Err(invalid(
-            "registered source dashes map only to not_published",
-        ));
-    }
-    let (published_at, published_at_basis, publication_start) = publication_metadata(&row)?;
-    let available_ns = publication_start
-        .checked_add(86_400_000_000_000)
-        .ok_or_else(|| invalid("publication availability overflows"))?;
-    if available_ns != row.time("available_at")? || publication_start < policy.period.end_ns()? {
-        return Err(invalid(
-            "source availability must conservatively follow the complete target and publication day",
-        ));
-    }
-    let body = claim_body(row.string("claim_body")?)?;
-    let claim = row
-        .string("claim_id")?
-        .parse::<ObjectId>()
-        .map_err(|e| invalid(e.to_string()))?;
-    if claim != ObjectId::from_canonical_bytes(PrefixKind::Claim, &body) {
-        return Err(Refusal::new(
-            RefusalCode::FrozenRecordMutation507,
-            "source Claim body differs from its stored identity",
-        ));
-    }
-    let citation = fmine_calib::OutcomeCitation {
-        source: policy.issuer.clone(),
-        vintage: row.string("vintage")?.to_string(),
-        locator: row.string("locator")?.to_string(),
-        sha256: super::hex(row.string("sha256")?)?.0,
-    };
-    let expected = super::source::receipt_missing_claim_body(
-        &policy,
-        forecast,
-        &citation,
-        row.string("value_kind")?,
-        row.string("token")?,
-        row.string("ownership_source")?,
-        row.string("anchor_path")?,
-    )?;
-    if body != expected {
-        return Err(Refusal::new(
-            RefusalCode::FrozenRecordMutation507,
-            "missing-outcome Claim does not bind the frozen target, dash and cited anchor",
-        ));
-    }
-    let event = state.ledger.append_outcome(
-        forecast,
-        available_ns,
-        recorded_ns,
-        fmine_calib::OutcomeKind::Missing { reason },
-    )?;
-    state.source_admissions.insert(
-        (forecast, event),
-        SourceAdmission {
-            cohort: cohort_digest,
-            claim,
-            value: SourceAdmissionValue::Missing {
-                value_kind: row.string("value_kind")?.to_string(),
-                token: row.string("token")?.to_string(),
-                reason,
-            },
+            citation,
+            value,
             published_at,
             published_at_basis,
         },
@@ -1140,86 +1147,62 @@ fn apply(
         return Err(invalid("a stored live request needs exactly one table"));
     }
     let row = &doc.rows[0];
+    let status_declared = row
+        .fields
+        .iter()
+        .any(|field| field.key.starts_with("status_"));
     let metadata_declared = super::segments::FIELDS
         .iter()
         .any(|key| row.get(key).is_some());
-    if metadata_declared && !matches!(version, OperationVersion::V7 | OperationVersion::V9) {
-        return Err(invalid(
-            "forecast metadata requires operation version seven or nine",
-        ));
-    }
-    if version == OperationVersion::V7 && (row.table != "forecast" || !metadata_declared) {
-        return Err(invalid(
-            "operation version seven requires a forecast registration with complete metadata",
-        ));
-    }
-    if (version == OperationVersion::V9 && (row.table != "plant_forecast" || !metadata_declared))
-        || (row.table == "plant_forecast" && version != OperationVersion::V9)
-    {
-        return Err(invalid(
-            "plant source registration requires operation version nine and complete metadata",
-        ));
-    }
     let monitor_declared = super::MONITOR_FIELDS
         .iter()
         .any(|key| row.get(key).is_some());
     let cusum_declared = super::cusum::FIELDS
         .iter()
         .any(|key| row.get(key).is_some());
-    if cusum_declared && version != OperationVersion::V8 {
-        return Err(invalid("CUSUM policies require operation version eight"));
-    }
-    if version == OperationVersion::V8 && (row.table != "cohort" || !cusum_declared) {
-        return Err(invalid(
-            "operation version eight requires a CUSUM cohort freeze",
-        ));
-    }
     let event_log_declared = row.get("event_log_floor").is_some();
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
-    if gaussian_bounds_declared && !matches!(version, OperationVersion::V6 | OperationVersion::V8) {
-        return Err(invalid(
-            "Gaussian CRPS bounds require operation version six or eight",
-        ));
+    let vintage_declared = row.get("public_vintages").is_some();
+    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10};
+    // A feature's accepted schemas and each schema's required operation are separate constraints.
+    // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
+    let features: &[(bool, &[OperationVersion], &str)] = &[
+        (metadata_declared, &[V7, V9], "forecast metadata"),
+        (cusum_declared, &[V8], "CUSUM policy"),
+        (gaussian_bounds_declared, &[V6, V8], "Gaussian CRPS bounds"),
+        (
+            monitor_declared || event_log_declared,
+            &[V5, V6, V8],
+            "coverage or event-log policy",
+        ),
+        (vintage_declared, &[V4, V5, V6, V8], "public vintage policy"),
+        (status_declared, &[V10], "subject-status interpretation"),
+        (
+            row.table == "plant_forecast",
+            &[V9],
+            "plant source registration",
+        ),
+    ];
+    for (declared, allowed, feature) in features {
+        if *declared && !allowed.contains(&version) {
+            return Err(invalid(format!(
+                "{feature} is not supported by this operation schema"
+            )));
+        }
     }
-    if version == OperationVersion::V6 && (row.table != "cohort" || !gaussian_bounds_declared) {
+    let required = match version {
+        V4 => row.table == "registered_restatement" || (row.table == "cohort" && vintage_declared),
+        V5 => row.table == "cohort" && (monitor_declared || event_log_declared),
+        V6 => row.table == "cohort" && gaussian_bounds_declared,
+        V7 => row.table == "forecast" && metadata_declared,
+        V8 => row.table == "cohort" && cusum_declared,
+        V9 => row.table == "plant_forecast" && metadata_declared,
+        V10 => row.table == "registered_missing" && status_declared,
+        _ => true,
+    };
+    if !required {
         return Err(invalid(
-            "operation version six requires a finite-domain Gaussian CRPS cohort freeze",
-        ));
-    }
-    if (monitor_declared || event_log_declared)
-        && !matches!(
-            version,
-            OperationVersion::V5 | OperationVersion::V6 | OperationVersion::V8
-        )
-    {
-        return Err(invalid(
-            "coverage monitor and event log policies require operation version five, six or eight",
-        ));
-    }
-    if version == OperationVersion::V5
-        && (row.table != "cohort" || !(monitor_declared || event_log_declared))
-    {
-        return Err(invalid(
-            "operation version five requires a coverage-monitor or event-log cohort freeze",
-        ));
-    }
-    let vintage_freeze = row.table == "cohort" && row.get("public_vintages").is_some();
-    if row.get("public_vintages").is_some()
-        && !matches!(
-            version,
-            OperationVersion::V4
-                | OperationVersion::V5
-                | OperationVersion::V6
-                | OperationVersion::V8
-        )
-    {
-        return Err(invalid(
-            "public vintage policy requires operation version four or an opt-in version-five/six/eight freeze",
-        ));
-    }
-    if version == OperationVersion::V4 && row.table != "registered_restatement" && !vintage_freeze {
-        return Err(invalid(
-            "operation version four requires a public-vintage freeze or registered restatement",
+            "operation schema requires its declared policy and matching table",
         ));
     }
     if expected_table.is_some_and(|expected| row.table != expected) {
@@ -1239,14 +1222,7 @@ fn apply(
     let (lower, upper) = record.time_bounds(header)?;
     let authority_ns = match version {
         OperationVersion::LegacyV1 => record.observed_ns,
-        OperationVersion::V2
-        | OperationVersion::V3
-        | OperationVersion::V4
-        | OperationVersion::V5
-        | OperationVersion::V6
-        | OperationVersion::V7
-        | OperationVersion::V8
-        | OperationVersion::V9 => upper,
+        _ => upper,
     };
     let row = Row(row);
     match row.0.table.as_str() {
@@ -1307,44 +1283,21 @@ fn apply(
             }
             state.outcome_at(row, Some(authority_ns))?;
         }
-        "registered_outcome" => {
-            if version != OperationVersion::V3 {
-                return Err(invalid(
-                    "registered source outcomes require operation version three",
-                ));
+        "registered_outcome" | "registered_missing" | "registered_restatement" => {
+            let required = match row.0.table.as_str() {
+                "registered_restatement" => OperationVersion::V4,
+                "registered_missing" if status_declared => OperationVersion::V10,
+                _ => OperationVersion::V3,
+            };
+            if version != required {
+                return Err(invalid("registered source operation has the wrong version"));
             }
             if row.time("available_at")? > lower {
                 return Err(late(
                     "registered publication availability exceeds the writer's earliest possible clock time",
                 ));
             }
-            apply_source(state, row, authority_ns, false)?;
-        }
-        "registered_missing" => {
-            if version != OperationVersion::V3 {
-                return Err(invalid(
-                    "registered source missing outcomes require operation version three",
-                ));
-            }
-            if row.time("available_at")? > lower {
-                return Err(late(
-                    "registered publication availability exceeds the writer's earliest possible clock time",
-                ));
-            }
-            apply_source_missing(state, row, authority_ns)?;
-        }
-        "registered_restatement" => {
-            if version != OperationVersion::V4 {
-                return Err(invalid(
-                    "registered restatements require operation version four",
-                ));
-            }
-            if row.time("available_at")? > lower {
-                return Err(late(
-                    "registered comparative availability exceeds the writer's earliest possible clock time",
-                ));
-            }
-            apply_source(state, row, authority_ns, true)?;
+            apply_source(state, row, authority_ns)?;
         }
         "assessment" => {
             if version != OperationVersion::LegacyV1 {
@@ -1363,7 +1316,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 9]);
+struct VersionCounts([usize; 10]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {
@@ -1680,15 +1633,31 @@ fn markdown(
                     format!("{}/{}", exact.num(), exact.den())
                 }
                 SourceAdmissionValue::Missing {
-                    value_kind,
-                    token,
-                    reason,
-                } => format!(
-                    "missing: {} ({}; token {})",
-                    missing_name(*reason),
-                    value_kind,
-                    token
-                ),
+                    receipt,
+                    available_at_ns,
+                } => {
+                    let mut value = format!(
+                        "missing: {} ({}; token {})",
+                        missing_name(receipt.reason),
+                        receipt.value_kind,
+                        receipt.token
+                    );
+                    if let Some(status) = &receipt.status {
+                        let _ = write!(
+                            value,
+                            "; {} from {}, through {}; evidence {}; registry SHA-256 {}; source {} / SHA-256 {}; displayed {}; interpretation available at admission {available_at_ns} ns",
+                            status_name(status.status.kind),
+                            month_text(status.status.first),
+                            status.status.last.map_or_else(|| "open".into(), month_text),
+                            status.status.evidence,
+                            status.registry_sha256,
+                            source.citation.locator,
+                            Digest32(source.citation.sha256),
+                            receipt.displayed.as_deref().unwrap_or("none")
+                        );
+                    }
+                    value
+                }
             };
             let _ = writeln!(
                 out,
