@@ -3139,3 +3139,208 @@ mod derived_amount_claims {
         }
     }
 }
+
+fn gold_sales_cost_sheet(subject: &str, sold: &str, cost: &str) -> MinimalSheet {
+    let text = |s: &str| MinimalCell::Text(s.into());
+    MinimalSheet {
+        name: "Minestats1".into(),
+        hidden: false,
+        cells: vec![
+            ("B1".into(), text(subject)),
+            ("A2".into(), text("For the three months ended March 31,")),
+            ("B2".into(), MinimalCell::Number(2030.0)),
+            ("A3".into(), text("Sales (thousands of ounces)")),
+            ("B3".into(), number(sold)),
+            ("A4".into(), text("Costs ($ millions)")),
+            ("A5".into(), text("Cost of sales")),
+            ("B5".into(), number(cost)),
+        ],
+    }
+}
+
+fn gold_cost_source(root: &Path, file: &str, date: Option<&str>, sheet: MinimalSheet) -> String {
+    let hash = source(root, file, "2030Q1", date, "0.00", &[sheet]);
+    let path = registry_path(root, DERIVATION_ISSUER);
+    let mut registry = std::fs::read_to_string(&path).unwrap();
+    if !registry.contains("[[mine_stats_label]]") {
+        registry.push_str(
+            "\n[[mine_stats_label]]\nlabel = \"Sales (thousands of ounces)\"\n\
+             [[mine_stats_label]]\nsection = \"Costs ($ millions)\"\nlabel = \"Cost of sales\"\n\
+             [[mine_stats_label]]\nsection = \"Costs per ounce\"\nlabel = \"Cost of sales\"\n",
+        );
+        std::fs::write(path, registry).unwrap();
+    }
+    hash
+}
+
+#[test]
+fn gold_cost_of_sales_derives_exact_source_bound_enclosures_on_both_printed_ownership_bases() {
+    for (subject, ownership) in [
+        ("Example Mine (60%)", "attributable"),
+        ("Example Mine (100%)", "100% basis"),
+    ] {
+        let root = derivation_workspace();
+        let hash = gold_cost_source(
+            &root,
+            "GoldCosts.xlsx",
+            Some("2030-05-01"),
+            gold_sales_cost_sheet(subject, "100.004", "150.004"),
+        );
+        let draft = format!(
+            "Example Mine Q1 2030 {ownership} cost of sales per ounce sold is $1.5k/oz."
+        );
+        let report = assess(&root, &draft, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert!(rate.starts_with('{'), "{}", report.to_json());
+        assert_eq!(string_field(rate, "status"), "derived");
+        assert_eq!(string_field(rate, "family"), "cos_per_oz");
+        // 1000 * [149.995, 150.005] / [99.995, 100.005], independently computed.
+        assert!(rate.contains("\"lo\":{\"num\":\"29999000\",\"den\":\"20001\"}"));
+        assert!(rate.contains("\"hi\":{\"num\":\"30001000\",\"den\":\"19999\"}"));
+        for expected in [
+            "1000*N/Q",
+            "USD/oz",
+            "GoldCosts.xlsx:Minestats1!B5",
+            "GoldCosts.xlsx:Minestats1!B3",
+            &hash,
+            "\"stored\":\"150.004\",\"displayed\":\"150.00\"",
+            "Assertion { source: Issuer }",
+            "not make the derived figure an issuer disclosure",
+        ] {
+            assert!(rate.contains(expected), "missing {expected}: {rate}");
+        }
+        assert!(report.payload_json.contains("\"status\":\"derivable\""));
+        assert!(!report.payload_json.contains("\"status\":\"disclosed\""));
+        assert_eq!(report, assess(&root, &draft, "2030-05-01"));
+        for (amount, expected) in [
+            ("$1500.00/oz", "precision_not_established"),
+            ("$2.0k/oz", "contradicted"),
+        ] {
+            let changed = assess(&root, &draft.replace("$1.5k/oz", amount), "2030-05-01");
+            assert_eq!(string_field(cost_rate_report(&changed), "status"), expected);
+        }
+        let before = assess(&root, &draft, "2030-04-30");
+        assert_eq!(
+            string_field(cost_rate_report(&before), "status"),
+            "not_available"
+        );
+        for (sold, cost) in [("100.004", "160.004"), ("120.004", "150.004")] {
+            let changed = derivation_workspace();
+            gold_cost_source(
+                &changed,
+                "GoldCosts.xlsx",
+                Some("2030-05-01"),
+                gold_sales_cost_sheet(subject, sold, cost),
+            );
+            let changed = assess(&changed, &draft, "2030-05-01");
+            assert_eq!(string_field(cost_rate_report(&changed), "status"), "contradicted");
+            assert_ne!(report.payload_json, changed.payload_json);
+        }
+    }
+}
+
+#[test]
+fn gold_cost_of_sales_preserves_signed_costs_and_direct_disclosure_precedence() {
+    for (cost, amount, lo, hi) in [
+        ("-150.004", "-$1.5k/oz", "-30001000", "-29999000"),
+        ("0", "$0.0k/oz", "-1000", "1000"),
+    ] {
+        let root = derivation_workspace();
+        gold_cost_source(
+            &root,
+            "Signed.xlsx",
+            Some("2030-05-01"),
+            gold_sales_cost_sheet("Example Mine (60%)", "100.004", cost),
+        );
+        let draft =
+            format!("Example Mine Q1 2030 attributable cost of sales per ounce sold is {amount}.");
+        let report = assess(&root, &draft, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(string_field(rate, "status"), "derived");
+        assert!(rate.contains(&format!("\"lo\":{{\"num\":\"{lo}\",\"den\":\"19999\"}}")));
+        let upper_den = if cost == "0" { "19999" } else { "20001" };
+        assert!(rate.contains(&format!("\"hi\":{{\"num\":\"{hi}\",\"den\":\"{upper_den}\"}}")));
+    }
+    for (printed, status) in [("1500", "disclosed"), ("2000", "contradicts_disclosed")] {
+        let root = derivation_workspace();
+        let mut sheet = gold_sales_cost_sheet("Example Mine (60%)", "100", "150");
+        sheet.cells.extend([
+            ("A6".into(), MinimalCell::Text("Costs per ounce".into())),
+            ("A7".into(), MinimalCell::Text("Cost of sales".into())),
+            ("B7".into(), number(printed)),
+        ]);
+        gold_cost_source(&root, "Direct.xlsx", Some("2030-05-01"), sheet);
+        let report = assess(
+            &root,
+            "Example Mine Q1 2030 attributable cost of sales per ounce sold is $1.5k/oz.",
+            "2030-05-01",
+        );
+        assert_eq!(string_field(cost_rate_report(&report), "status"), "derived");
+        assert!(report.payload_json.contains(&format!("\"status\":\"{status}\"")));
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+}
+
+#[test]
+fn gold_cost_of_sales_never_infers_sources_ownership_or_sold_units() {
+    let draft = "Example Mine Q1 2030 attributable cost of sales per ounce sold is $1.5k/oz.";
+    let root = derivation_workspace();
+    gold_cost_source(
+        &root,
+        "Gold.xlsx",
+        Some("2030-05-01"),
+        gold_sales_cost_sheet("Example Mine (60%)", "100", "150"),
+    );
+    for unsupported in [
+        draft.replace("sold", "produced"),
+        draft.replace("ounce", "pound").replace("/oz", "/lb"),
+        draft.replace("attributable", "100% basis"),
+        draft.replace("Q1", "Q2"),
+        draft.replace("cost of sales", "co-product cost of sales"),
+    ] {
+        let report = assess(&root, &unsupported, "2030-05-01");
+        assert!(
+            !report.payload_json.contains("\"status\":\"derived\""),
+            "{}",
+            report.to_json()
+        );
+    }
+    for (subject, sold, date, expected) in [
+        ("Example Mine", "100", Some("2030-05-01"), "null"),
+        ("Example Mine (60%)", "0", Some("2030-05-01"), "refused"),
+        ("Example Mine (60%)", "-100", Some("2030-05-01"), "refused"),
+        ("Example Mine (60%)", "100", None, "not_available"),
+    ] {
+        let root = derivation_workspace();
+        gold_cost_source(&root, "Gold.xlsx", date, gold_sales_cost_sheet(subject, sold, "150"));
+        let report = assess(&root, draft, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        if expected == "null" {
+            assert!(rate.starts_with("null"));
+        } else {
+            assert_eq!(string_field(rate, "status"), expected, "{rate}");
+        }
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+    }
+    let separate = derivation_workspace();
+    let mut cost = gold_sales_cost_sheet("Example Mine (60%)", "100", "150");
+    cost.cells.retain(|(at, _)| !["A3", "B3"].contains(&at.as_str()));
+    gold_cost_source(&separate, "Costs.xlsx", Some("2030-05-01"), cost);
+    let mut sales = gold_sales_cost_sheet("Example Mine (60%)", "100", "150");
+    sales.cells.retain(|(at, _)| !["A4", "A5", "B5"].contains(&at.as_str()));
+    gold_cost_source(&separate, "Sales.xlsx", Some("2030-05-01"), sales);
+    let report = assess(&separate, draft, "2030-05-01");
+    assert_eq!(string_field(cost_rate_report(&report), "status"), "refused");
+    assert!(cost_rate_report(&report).contains("FMINE-REF-105"));
+    let competing = derivation_workspace();
+    for (file, cost) in [("One.xlsx", "150"), ("Two.xlsx", "200")] {
+        gold_cost_source(
+            &competing,
+            file,
+            Some("2030-05-01"),
+            gold_sales_cost_sheet("Example Mine (60%)", "100", cost),
+        );
+    }
+    let report = assess(&competing, draft, "2030-05-01");
+    assert_eq!(string_field(cost_rate_report(&report), "status"), "ambiguous");
+}

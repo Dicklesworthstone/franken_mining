@@ -1228,8 +1228,12 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   A separate copper identity derives AISC, C1 and cost of sales `USD/lb` as `N/Q` from explicitly registered detailed
   `Costs ($ millions)` numerator rows and `Sales (millions of pounds)` in the same table column. Both copper
   operands require identical explicit ownership; no mass or ownership conversion is inferred. JSON and
-  Markdown preserve the metal-specific formula, unit, family and all source evidence. Co-product TCC,
-  gold cost-of-sales bridges and produced-metal denominators are outside these rules. Synthetic XLSX regression
+  Markdown preserve the metal-specific formula, unit, family and all source evidence. Gold cost of sales
+  separately uses detailed Mine Stats `Costs ($ millions)` and `Sales (thousands of ounces)` rows from
+  the same file, sheet and column, with identical explicit printed ownership on both operands. Its
+  `cos_per_oz` family uses `1000*N/Q` and admits full or attributable figures without scaling either.
+  AISC-reconciliation cost-of-sales numerators with unresolved ownership, co-product rates and
+  produced-metal denominators remain outside these rules. Synthetic XLSX regression
   cases exercise the source-to-command path; they do not establish actual issuer numerator coverage.
   Every public-record source now retains its keyed projection and checked canonical Claim companion, binding
   UU terms, parents, supersedes and recorded flags even when the numerical Claim ID is unchanged. Canonical

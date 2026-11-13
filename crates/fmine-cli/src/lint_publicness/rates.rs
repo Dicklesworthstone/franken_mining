@@ -17,7 +17,7 @@ struct RateKind {
 }
 
 impl RateKind {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self {
             unit: CostRateUnit::GoldKoz,
             family: "aisc_per_oz",
@@ -31,6 +31,13 @@ impl RateKind {
             numerator: "total cash costs",
             rate_label: "total cash costs per ounce",
             basis: IdentityFamily::TccPerOunce.basis(),
+        },
+        Self {
+            unit: CostRateUnit::GoldKoz,
+            family: "cos_per_oz",
+            numerator: "site:costs ($ millions):cost of sales",
+            rate_label: "site:costs per ounce:cost of sales",
+            basis: "Cost of sales US$M over gold sales in thousands of ounces, both on the same explicitly printed ownership basis",
         },
         Self {
             unit: CostRateUnit::CopperMillionPounds,
@@ -55,16 +62,18 @@ impl RateKind {
         },
     ];
 
-    const fn denominator(self) -> &'static str {
-        match self.unit {
-            CostRateUnit::GoldKoz => "ounces sold",
-            CostRateUnit::CopperMillionPounds => "site::sales (millions of pounds)",
+    fn denominator(self) -> &'static str {
+        match (self.unit, self.family) {
+            (CostRateUnit::GoldKoz, "cos_per_oz") => "site::sales (thousands of ounces)",
+            (CostRateUnit::GoldKoz, _) => "ounces sold",
+            (CostRateUnit::CopperMillionPounds, _) => "site::sales (millions of pounds)",
         }
     }
 
     fn accepts_basis(self, cell: &KeyedCell) -> bool {
         explicit_basis(cell.key.ownership_basis).is_some()
             && (self.unit == CostRateUnit::CopperMillionPounds
+                || self.family == "cos_per_oz"
                 || matches!(
                     cell.key.ownership_basis,
                     OwnershipBasis::Attributable { .. }
@@ -154,6 +163,7 @@ pub(super) fn assess(
         n.relation = "cost_numerator";
         q.relation = "sold_denominator";
         let (n, q) = (&n.source, &q.source);
+        let strict = kind.unit == CostRateUnit::CopperMillionPounds || kind.family == "cos_per_oz";
         if n.key.unit != "usd_m"
             || q.key.unit != kind.unit.denominator_unit()
             || n.key.reporting_vintage != q.key.reporting_vintage
@@ -163,14 +173,9 @@ pub(super) fn assess(
             || !kind.accepts_basis(q)
             || (n.key.ownership_basis != OwnershipBasis::Unprinted
                 && explicit_basis(n.key.ownership_basis) != explicit_basis(q.key.ownership_basis))
-            || (kind.unit == CostRateUnit::CopperMillionPounds
-                && ([n, q]
-                    .iter()
-                    .any(|c| c.printed_basis == OwnershipBasis::Unprinted)
-                    || explicit_basis(n.key.ownership_basis)
-                        != explicit_basis(q.key.ownership_basis)))
             || [n, q].iter().any(|c| {
                 c.claim.additivity != AdditivityClass::ExtensiveAdditive
+                    || (strict && explicit_basis(c.printed_basis).is_none())
                     || (c.printed_basis != OwnershipBasis::Unprinted
                         && explicit_basis(c.printed_basis) != explicit_basis(c.key.ownership_basis))
                     || matches!(&c.key.scope, Scope::Region { map_version }

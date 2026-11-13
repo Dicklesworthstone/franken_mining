@@ -25,7 +25,7 @@ mod ownership;
 mod rates;
 mod sums;
 
-pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences, complete quarter sums, full-mine to attributable amounts and gold AISC/by-product TCC or copper AISC/C1/cost-of-sales rates against dated, registered public sources at the requested cut. Ownership scaling requires the same source's explicit printed share for the same physical period. Cost rates require same-table US$M and sold-metal operands under their declared identity basis: attributable koz for gold, explicitly same-ownership millions of pounds for copper. Each operand retains its own displayed decimal precision; no tonne/pound or ownership conversion is inferred. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
+pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences, complete quarter sums, full-mine to attributable amounts and gold AISC/by-product TCC/cost-of-sales or copper AISC/C1/cost-of-sales rates against dated, registered public sources at the requested cut. Ownership scaling requires the same source's explicit printed share for the same physical period. Cost rates require US$M and sold-metal operands from the same source file, sheet and column under their declared identity basis: attributable koz for gold AISC/TCC, explicitly same-ownership koz for gold cost of sales or millions of pounds for copper. Each operand retains its own displayed decimal precision; no tonne/pound or ownership conversion is inferred. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
 
 #[derive(Debug, Clone)]
 pub(super) struct Publication {
@@ -633,33 +633,26 @@ pub(super) fn assess(
         result.quarter_sum = sums::assess(draft, f, cells, profile, &publications, as_of);
         result.ownership = ownership::assess(draft, f, cells, profile, &publications, as_of);
         result.cost_rate = rates::assess(draft, f, cells, profile, &publications, as_of);
-        let derived_reason = if result
-            .derivation
-            .as_ref()
-            .is_some_and(|d| d.report.status == Status::Derived)
-        {
-            Some("every_admitted_cumulative_difference_supports_the_draft_precision")
-        } else if result
-            .quarter_sum
-            .as_ref()
-            .is_some_and(|s| s.status == "derived")
-        {
-            Some("complete_dated_quarter_sum_supports_the_draft_precision")
-        } else if result
-            .ownership
-            .as_ref()
-            .is_some_and(|s| s.status == "derived")
-        {
-            Some("same_source_printed_ownership_supports_the_draft_precision")
-        } else if result
-            .cost_rate
-            .as_ref()
-            .is_some_and(|s| s.status == "derived")
-        {
-            Some("same_source_cost_over_sales_supports_the_draft_precision")
-        } else {
-            None
-        };
+        let derived_reason = [
+            (
+                result.derivation.as_ref().map(|d| d.report.status) == Some(Status::Derived),
+                "every_admitted_cumulative_difference_supports_the_draft_precision",
+            ),
+            (
+                result.quarter_sum.as_ref().map(|s| s.status) == Some("derived"),
+                "complete_dated_quarter_sum_supports_the_draft_precision",
+            ),
+            (
+                result.ownership.as_ref().map(|s| s.status) == Some("derived"),
+                "same_source_printed_ownership_supports_the_draft_precision",
+            ),
+            (
+                result.cost_rate.as_ref().map(|s| s.status) == Some("derived"),
+                "same_source_cost_over_sales_supports_the_draft_precision",
+            ),
+        ]
+        .into_iter()
+        .find_map(|(derived, reason)| derived.then_some(reason));
         if let Some(reason) = derived_reason
             && !matches!(
                 result.status,
@@ -744,7 +737,7 @@ impl PublicnessReport {
             )
         }).collect::<Vec<_>>().join(",");
         format!(
-            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"gold_cost_of_sales_and_co_product_rates\",\"implicit_copper_tonne_to_pound_conversion\",\"reverse_ownership_scaling\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
+            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"gold_aisc_table_cost_of_sales_and_co_product_rates\",\"implicit_copper_tonne_to_pound_conversion\",\"reverse_ownership_scaling\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
             js(&self.as_of),
             js(&self.draft_digest.to_hex()),
             js(&self.claims_digest.to_hex()),

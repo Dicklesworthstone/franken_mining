@@ -150,7 +150,7 @@ pub fn derive_cost_rate<N, Q>(
 ) -> Result<Claim<Interval>> {
     if !matches!(
         (unit, family),
-        (CostRateUnit::GoldKoz, "aisc_per_oz" | "tcc_per_oz")
+        (CostRateUnit::GoldKoz, "aisc_per_oz" | "tcc_per_oz" | "cos_per_oz")
             | (
                 CostRateUnit::CopperMillionPounds,
                 "aisc_per_lb" | "c1_per_lb" | "cos_per_lb"

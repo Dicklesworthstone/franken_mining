@@ -704,7 +704,7 @@ mod tests {
             original.to_json(),
             evaluate(draft, &cells, &profile, &dates, "2030-05-01").to_json()
         );
-        for fault in 0..7 {
+        for fault in 0..8 {
             let (profile, mut cells, dates) = copper_rate_fixture();
             match fault {
                 0 => cells[1].key.unit = "kt".into(),
@@ -716,6 +716,14 @@ mod tests {
                 }
                 4 => cells[0].printed_basis = OwnershipBasis::Consolidated100,
                 5 => cells[0].key.unit = "cad_m".into(),
+                6 => {
+                    cells[0].key.ownership_basis = OwnershipBasis::Unprinted;
+                    cells[0].printed_basis = OwnershipBasis::Attributable {
+                        num: 0,
+                        den: 1,
+                        source: fmine_public::key::ShareSource::Printed,
+                    };
+                }
                 _ => {
                     cells[0].key.scope = Scope::Region {
                         map_version: "unregistered:test".into(),

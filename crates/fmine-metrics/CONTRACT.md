@@ -56,6 +56,8 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   displayed step, signed cost intervals remain signed, and the complete sales interval must be positive.
   `derive_cost_rate` also accepts the named cost family and canonical source-parent Claims, returning a
   derived interval Claim with their evidence, uncertainty terms, source anchors and parent identities.
+  Gold cost of sales is a distinct `cos_per_oz` family on the same explicit sold-koz scale; the kernel
+  does not establish whether a consolidated cost numerator matches an attributable sales denominator.
   Source selection, publication-date admission, same-table scope and ownership compatibility remain the
   adapter's responsibility; neither arithmetic entry point authenticates a disclosure or infers unit conversions.
 - **`reserves`.** A `TableIdentityRegistry`, `Accepted` readings and `DocumentRow`s. `reserves::geo` takes explicit gold, copper and GEO row memberships, the primary GEO row's quoted prices and declared convention, and optional candidate decks with independently bound price readings.
