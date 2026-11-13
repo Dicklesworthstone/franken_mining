@@ -57,7 +57,7 @@ pub struct Candidate {
     pub model_id: &'static str,
     pub alpha: Rat,
     pub decimal_places: u32,
-    /// Supplied latest observation times the inverse empirical CDF's lower, median and upper ratios.
+    /// Supplied latest observation times the ratio-pool median, with ordered scaled tail bounds.
     pub exact_rows: Vec<ForecastRow>,
     /// The actual decimal rows in `csv`, retained separately because these are the quantities later scored.
     pub serialized_rows: Vec<ForecastRow>,
@@ -91,11 +91,13 @@ fn quarter_index(q: Quarter) -> Result<i32, RecordError> {
 }
 
 /// Build all live site × target forecasts or refuse the request. The model assumes the pooled historical
-/// multiplicative changes apply to each site's latest positive observation. It supplies no calibrated
+/// multiplicative changes apply to each site's latest observation. Production points must be positive;
+/// explicitly supported sold-metal cost targets may be zero or signed. It supplies no calibrated
 /// probability, independent forecasting skill, fitted site effect, trend or ownership conversion.
 ///
-/// For observation `x`, lower/point/upper are `x × Q(alpha/2, 1/2, 1-alpha/2)` of the pool. Bounds therefore
-/// equal the frozen persistence comparator before decimal rounding and receive the same interval score.
+/// The point is `x × Q(1/2)` of the ratio pool. Bounds are the ordered endpoints of
+/// `x × [Q(alpha/2), Q(1-alpha/2)]`, reversing when `x` is negative. They therefore equal the frozen
+/// persistence comparator before decimal rounding and receive the same interval score.
 /// CSV lower bounds round down, upper bounds round up and points round to nearest, with exact ties upward.
 /// The CSV always carries `uncalibrated=true` and is checked by the existing frozen-record parser.
 pub fn build_candidate(
@@ -165,10 +167,16 @@ pub fn build_candidate(
                 s.site, s.target
             )));
         }
-        if s.point.is_none_or(|x| x.signum() <= 0) {
+        let signed = rules
+            .targets
+            .iter()
+            .any(|target| target.id == s.target && target.permits_signed_forecast());
+        if s.point.is_none_or(|x| x.signum() <= 0 && !signed) {
             return Err(invalid(format!(
-                "{} / {} needs a positive point-quarter observation",
-                s.site, s.target
+                "{} / {} needs a {} point-quarter observation",
+                s.site,
+                s.target,
+                if signed { "numeric" } else { "positive" }
             )));
         }
     }
@@ -285,12 +293,17 @@ pub fn build_candidate(
                 .get(&(*site, pool.target.as_str()))
                 .and_then(|s| s.point)
                 .ok_or_else(|| invalid("missing point observation after validation"))?;
+            let (lower_ratio, upper_ratio) = if point.signum() < 0 {
+                (pool.upper_ratio, pool.lower_ratio)
+            } else {
+                (pool.lower_ratio, pool.upper_ratio)
+            };
             let row = ForecastRow {
                 site: (*site).to_string(),
                 target: pool.target.clone(),
                 point: exact(point.checked_mul(pool.median_ratio))?,
-                lo: exact(point.checked_mul(pool.lower_ratio))?,
-                hi: exact(point.checked_mul(pool.upper_ratio))?,
+                lo: exact(point.checked_mul(lower_ratio))?,
+                hi: exact(point.checked_mul(upper_ratio))?,
             };
             csv.push_str(&format!(
                 "{},{},{},{},{},true\n",
@@ -329,12 +342,14 @@ enum Round {
 }
 
 fn decimal(value: Rat, places: u32, direction: Round) -> Result<String, RecordError> {
-    if value.signum() < 0 {
-        return Err(invalid("negative candidate value cannot be serialized"));
-    }
     let scale = 10_i128.checked_pow(places).ok_or(RecordError::Overflow)?;
     let scaled = exact(value.checked_mul(Rat::from_integer(scale)))?;
-    let (whole, remainder) = (scaled.num() / scaled.den(), scaled.num() % scaled.den());
+    // Euclidean division starts at the mathematical floor even for a signed value; a tie increments
+    // toward positive infinity. No negation of a possibly minimal signed numerator is required.
+    let (whole, remainder) = (
+        scaled.num().div_euclid(scaled.den()),
+        scaled.num().rem_euclid(scaled.den()),
+    );
     // Comparing r with d-r avoids overflowing 2*r at exact half ties.
     let increment = match direction {
         Round::Down => false,
@@ -347,10 +362,13 @@ fn decimal(value: Rat, places: u32, direction: Round) -> Result<String, RecordEr
     if places == 0 {
         Ok(rounded.to_string())
     } else {
+        let sign = if rounded < 0 { "-" } else { "" };
+        let magnitude = rounded.unsigned_abs();
+        let scale = scale as u128;
         Ok(format!(
-            "{}.{:0width$}",
-            rounded / scale,
-            rounded % scale,
+            "{sign}{}.{:0width$}",
+            magnitude / scale,
+            magnitude % scale,
             width = places as usize
         ))
     }

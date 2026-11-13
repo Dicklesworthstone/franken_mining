@@ -14,7 +14,7 @@ use fmine_public::forecast::{CandidateObservation, CandidateSource, PublicCandid
 use crate::{Envelope, NextAction, OutputFormat, json_string as js};
 
 pub const USAGE: &str = "forecast record build --rules <rules.toml> --model pooled-quarterly-ratio-empirical-v1 --as-of YYYY-MM-DDTHH:MM:SSZ [--decimal-places 6]";
-pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.forecast-record-candidate.v1","model":"pooled-quarterly-ratio-empirical-v1","status":"draft; uncalibrated; not issued or externally timestamped","targets":{"fy_minus_9m":["au_prod_100_koz","cu_prod_100_kt"],"q4_qtd":["aisc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"]},"inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","estimate":"Latest Q3 observation multiplied by the pooled historical quarterly-ratio median","interval":"Latest Q3 observation multiplied by inverse empirical CDF tails under the rules' alpha; exact bounds equal the registered persistence baseline","rounding":"CSV lower bounds round down, upper bounds up, points to nearest with ties upward; 0 through 12 decimal places, default 6","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; no comparative substitution or silent population shrinkage","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.forecast-record-candidate.v1","model":"pooled-quarterly-ratio-empirical-v1","status":"draft; uncalibrated; not issued or externally timestamped","targets":{"fy_minus_9m":["au_prod_100_koz","cu_prod_100_kt"],"q4_qtd":["aisc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"]},"inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","live_points":"Production must be positive; supported Q4 cost targets retain signed or zero printed values with verified ownership and no overlapping site status; historical ratio pairs still require two positive observations","estimate":"Latest Q3 observation multiplied by the pooled historical quarterly-ratio median","interval":"Latest Q3 observation multiplied by inverse empirical CDF tails under the rules' alpha, ordering endpoint products for signed costs; exact bounds equal the registered persistence baseline","rounding":"CSV lower bounds round toward negative infinity, upper bounds toward positive infinity, points to nearest with ties toward positive infinity; 0 through 12 decimal places, default 6; no negative zero","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; no comparative substitution or silent population shrinkage","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow"}"#;
 
 const VERB: &str = "forecast record build";
 const MAX_RULES_BYTES: u64 = 1024 * 1024;
@@ -363,7 +363,7 @@ fn render_markdown(report: &PublicCandidate) -> String {
             target.id, target.quantity, target.scored_quantity
         );
     }
-    out.push_str("\n## Exact model values\n\n| Site | Target | Median | Lower | Upper |\n|---|---|---:|---:|---:|\n");
+    out.push_str("\n## Exact model values\n\n| Site | Target | Model point | Lower | Upper |\n|---|---|---:|---:|---:|\n");
     for row in &report.candidate.exact_rows {
         let _ = writeln!(
             out,
@@ -390,7 +390,7 @@ fn render_markdown(report: &PublicCandidate) -> String {
     }
     let _ = write!(
         out,
-        "\n## Complete candidate CSV\n\nBounds round outward to {} decimal places; points round to nearest with ties upward.\n\n```csv\n{}```\n\n## Source manifest\n\n",
+        "\n## Complete candidate CSV\n\nBounds round outward to {} decimal places; points round to nearest with ties toward positive infinity. Zero is never printed with a minus sign.\n\n```csv\n{}```\n\n## Source manifest\n\n",
         report.candidate.decimal_places, report.candidate.csv,
     );
     for source in &report.sources {

@@ -42,15 +42,19 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - `FrozenForecast`, `ForecastPayload`, `ForecastLedger`
 - DESIGN (BD-067/BD-334): `record::candidate::build_candidate` generates a complete draft live-site × target
   record from already selected quarterly observations. The named `pooled-quarterly-ratio-empirical-v1` model
-  uses each target's frozen persistence pool and inverse empirical CDF: the latest positive observation times
-  the pooled lower, median and upper ratios. Its exact interval equals that comparator's interval on identical
+  uses each target's frozen persistence pool and inverse empirical CDF: the latest observation times
+  the pooled median, with ordered scaled tail bounds. Only the canonical Q4 gold AISC and copper C1/AISC
+  cost targets admit signed or zero live observations; production and unsupported targets still require a
+  positive point. Negative multipliers reverse the tail endpoints, while the point remains the multiplier
+  times the ratio-pool median. Its exact interval equals that comparator's interval on identical
   inputs, so it has the same interval score before export rounding; the changed point estimate is no evidence
   of independent forecasting skill. Historical missing or nonpositive observations omit only their adjacent
   pairs, with both endpoints retained in an exclusion audit. Missing live members or point observations,
   duplicate/foreign members, malformed pool dates, empty ratio pools and exact overflow refuse the entire
   candidate. Named not-published sites remain explicit. Output is deterministic in frozen rules order.
   The exact rational rows and actual serialized decimal rows are separate: at a declared 0–12 decimal places,
-  lower bounds round down, upper bounds round up and points round to nearest with ties upward. Every CSV row
+  lower bounds round down, upper bounds round up and points round to nearest with ties toward positive infinity.
+  Signed decimal formatting uses exact arithmetic and emits no negative zero. Every CSV row
   says `uncalibrated=true` and passes the existing complete-record parser. Export rounding can change scores;
   it never silently replaces the exact calculation. Limits are 4,096 live members and 65,536 history values.
   The pure kernel authenticates no source, availability time, author attestation or external time proof and

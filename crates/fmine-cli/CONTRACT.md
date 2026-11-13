@@ -946,8 +946,12 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   synthetic inputs. The receipt binds rules and registry bytes, source observations and the information cut.
   The command writes no files and leaves attestation, timestamp proof, certificate and issuance absent.
   A missing or unusable required original release or point observation refuses instead of shrinking the
-  candidate. CSV decimal precision is explicit (0–12, default 6), with lower-down, upper-up, nearest-point
-  rounding and upward point ties. Exact bounds equal the persistence comparator before rounding; the median
+  candidate. Positive production observations remain required; supported Q4 cost targets also admit signed
+  or zero printed live observations with verified ownership and no overlapping site status. The historical
+  ratio pool still uses positive adjacent observations only. Negative live costs reverse the two tail products;
+  the point remains the live cost times the pooled-ratio median. CSV decimal precision is explicit (0–12,
+  default 6), with lower-down, upper-up, nearest-point rounding, point ties toward positive infinity and
+  unsigned zero. Exact bounds equal the persistence comparator before rounding; the median
   point is not evidence of independent skill. The output manifest preserves retrieval evidence separately
   from declared publication dates and is not the completed issuance manifest.
 - DESIGN (BD-067/BD-076): annual public records support `cu_prod_100_kt` with `fy_minus_9m` and

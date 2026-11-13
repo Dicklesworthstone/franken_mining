@@ -1260,7 +1260,8 @@ pub fn quantile(sample: &[Rat], p: Rat, est: Estimator) -> Result<Rat, RecordErr
 
 /// The run-rate persistence baseline's 80% interval (§21.6): `point × exp(q10, q90)` of the pooled log ratios
 /// `log(Q_t+1 / Q_t)`. Under the inverse empirical CDF that is exactly `point × (q10, q90)` of the ratios, since
-/// `exp` is increasing and the estimator returns an observed value. The linear estimator is refused
+/// `exp` is increasing and the estimator returns an observed value. The returned endpoints are ordered:
+/// a negative point reverses the scaled tails and a zero point gives `[0, 0]`. The linear estimator is refused
 /// ([`RecordError::NotExact`]) rather than approximated.
 pub fn persistence_interval(
     ratios: &[Rat],
@@ -1269,6 +1270,11 @@ pub fn persistence_interval(
     est: Estimator,
 ) -> Result<(Rat, Rat), RecordError> {
     let (lo, hi) = ratio_quantiles(ratios, alpha, est)?;
+    let (lo, hi) = if point.signum() < 0 {
+        (hi, lo)
+    } else {
+        (lo, hi)
+    };
     Ok((exact(point.checked_mul(lo))?, exact(point.checked_mul(hi))?))
 }
 
@@ -1597,6 +1603,14 @@ mod tests {
         assert_eq!(
             persistence_interval(&ratios, i(200), a, Estimator::InverseEcdf),
             Ok((i(182), i(198)))
+        );
+        assert_eq!(
+            persistence_interval(&ratios, i(-200), a, Estimator::InverseEcdf),
+            Ok((i(-198), i(-182)))
+        );
+        assert_eq!(
+            persistence_interval(&ratios, i(0), a, Estimator::InverseEcdf),
+            Ok((i(0), i(0)))
         );
         // α = 0.4: levels 0.2 and 0.8, n p = 2 and 8, so the 2nd and 8th ratios.
         assert_eq!(

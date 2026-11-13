@@ -2833,9 +2833,15 @@ those rules or issue copper forecasts; production quantities are additive, while
 printed ownership evidence and are neither subtracted nor ownership-scaled.
 
 The `pooled-quarterly-ratio-empirical-v1` model uses the historical pool fixed by each persistence rule. For
-each target it multiplies a site's latest positive Q3 observation by the pool's lower, median and upper
-inverse-ECDF ratios, keeping each target's pool separate. The model assumes the pooled changes apply to the
-future site-quarter. Its exact interval bounds equal the persistence comparator's bounds on the same inputs,
+each target it multiplies a site's latest Q3 observation by the pool's lower, median and upper inverse-ECDF
+ratios, keeping each target's pool separate. Production requires a positive latest observation. Supported
+Q4 cost targets also accept signed or zero printed observations: a negative cost reverses the two interval
+endpoint products, and zero produces an exact zero point and interval under this multiplicative model.
+The point remains the latest cost multiplied by the pooled-ratio median. Source ownership and status checks
+still apply; a disposed or withheld zero placeholder cannot become a forecast. Historical ratio pairs still
+require two positive observations. The model assumes those pooled changes apply to the future site-quarter,
+including when its latest cost is nonpositive. Its exact interval bounds equal the persistence comparator's
+bounds on the same inputs,
 so the different median point does not improve its interval score or establish independent forecasting skill.
 
 Every operand uses the published display value and retains its source Claim, cell, source hash, period,
@@ -2846,8 +2852,10 @@ observations. This is a check against supplied registry evidence, not external p
 
 The JSON envelope includes `payload.exact_forecasts`, `serialized_forecasts`, `forecasts_csv`, `pools`,
 `input_manifest`, `observations` and `receipt_digest`. The complete CSV is accepted by the existing frozen-record
-parser. Lower bounds round down, upper bounds up, and points to nearest with ties upward at the requested
-precision (0–12 decimal places, default 6). Exact and serialized values remain separate because export rounding
+parser. Lower bounds round toward negative infinity, upper bounds toward positive infinity, and points to
+nearest with ties toward positive infinity at the requested precision (0–12 decimal places, default 6).
+For example, a point of `-1.25` becomes `-1.2` at one decimal place; zero never carries a minus sign.
+Exact and serialized values remain separate because export rounding
 can change the later score. `--format markdown` renders the forecasts, CSV, source manifest and receipt.
 
 Output remains an **uncalibrated draft**. The command writes no files and supplies no author attestation,

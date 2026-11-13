@@ -31,7 +31,12 @@ The public lane of M0 (`fmine assure public`).
   source, unsupported target, unprinted or changing cost ownership, or nonzero observation overlapping a
   registered site status refuses. No source value is rescaled or filled from a later comparative.
   Historical placeholders, absent rows and nonpositive printed values remain named observations; excluded
-  ratio pairs and every `not_published` site remain visible. Every live point must be positive and usable.
+  ratio pairs and every `not_published` site remain visible. Live production points must be positive and usable.
+  Canonical gold AISC and copper C1/AISC cost points may be signed or zero, retaining their exact displayed
+  value and printed ownership. Their negative multipliers reverse the scaled tail endpoints; zero remains
+  a complete zero candidate. The historical positive-ratio pool is unchanged. A live cost point overlapping
+  a registered site status refuses even when its raw cell contains zero; status-derived Nil and placeholders
+  never become zero forecasts. All admitted cost points participate in the ownership-consistency check.
   The receipt binds the exact rules bytes and FMRUL1 digest, raw source-registry bytes, declared information
   cut, source digests, source Claims, model version and exported candidate. Source-specific `retrieved_utc`
   overrides take precedence over the legacy registry batch value, and retrieval intervals use their upper

@@ -433,6 +433,184 @@ fn exact_displayed_observations_produce_complete_source_bound_candidate() {
 }
 
 #[test]
+fn signed_and_zero_cost_points_keep_exact_displayed_sources_and_complete_rows() {
+    let (registry, sources) = fixture(|q, sheet| {
+        if q == 3 {
+            replace_cell(
+                sheet,
+                "C3",
+                MinimalCell::Styled {
+                    raw: "-10.4".into(),
+                    xf: 1,
+                },
+            );
+            replace_cell(sheet, "C4", MinimalCell::Number(0.0));
+        }
+    });
+    let report = run(&registry, sources.clone()).unwrap();
+    assert!(report.synthetic);
+    assert_eq!(report.candidate.exact_rows.len(), 4);
+    assert_eq!(report.candidate.not_published_sites, ["Retired Site"]);
+    let cost = |site| {
+        report
+            .candidate
+            .exact_rows
+            .iter()
+            .find(|r| r.site == site && r.target == "unit_cost")
+            .unwrap()
+    };
+    let a = cost("Site A");
+    let b = cost("Site B");
+    // Independent ratios are 1.2 and 1.1; multiplying by -10 reverses their order.
+    assert_eq!(
+        (a.lo, a.point, a.hi),
+        (
+            Rat::from_integer(-12),
+            Rat::from_integer(-11),
+            Rat::from_integer(-11)
+        )
+    );
+    assert_eq!(
+        (b.lo, b.point, b.hi),
+        (
+            Rat::from_integer(0),
+            Rat::from_integer(0),
+            Rat::from_integer(0)
+        )
+    );
+    for row in report
+        .observations
+        .iter()
+        .filter(|r| r.role == "point" && r.target == "unit_cost")
+    {
+        assert!(row.reason.is_none());
+        let claim = row.claim.as_ref().unwrap();
+        assert!(matches!(
+            &claim.claim.value,
+            PublicValue::Number {
+                under_status: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            claim.claim.anchors[0].artifact_sha256,
+            sources[2].workbook.sha256
+        );
+        if row.site == "Site A" {
+            assert_eq!(row.value, Some(Rat::from_integer(-10)));
+            assert!(
+                matches!(&claim.claim.value, PublicValue::Number { stored, displayed: Ok(displayed), .. }
+                if stored == "-10.4" && displayed == "-10")
+            );
+        } else {
+            assert_eq!(row.value, Some(Rat::from_integer(0)));
+        }
+    }
+    assert_eq!(
+        record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+        report.candidate.serialized_rows
+    );
+    assert_eq!(report.digest, run(&registry, sources).unwrap().digest);
+
+    let rules = copper_rules();
+    let (registry, sources) = fixture(|q, sheet| {
+        copper_sheet(q, sheet);
+        if q == 2 {
+            replace_cell(sheet, "C4", MinimalCell::Number(12.0));
+            replace_cell(sheet, "D4", MinimalCell::Number(18.0));
+        } else if q == 3 {
+            replace_cell(sheet, "C3", MinimalCell::Number(-3.0));
+            replace_cell(sheet, "C4", MinimalCell::Number(0.0));
+            replace_cell(sheet, "D3", MinimalCell::Number(0.0));
+            replace_cell(sheet, "D4", MinimalCell::Number(-10.0));
+        }
+    });
+    let report = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+        sources,
+        2,
+    )
+    .unwrap();
+    for (site, target, lo, point, hi) in [
+        ("Site A", "unit_cost", -9, -6, -6),
+        ("Site B", "unit_cost", 0, 0, 0),
+        ("Site A", "copper_aisc", 0, 0, 0),
+        ("Site B", "copper_aisc", -30, -20, -20),
+    ] {
+        let row = report
+            .candidate
+            .exact_rows
+            .iter()
+            .find(|r| r.site == site && r.target == target)
+            .unwrap();
+        assert_eq!(
+            (row.lo, row.point, row.hi),
+            (
+                Rat::from_integer(lo),
+                Rat::from_integer(point),
+                Rat::from_integer(hi)
+            )
+        );
+    }
+    assert_eq!(report.candidate.exact_rows.len(), 6);
+    assert_eq!(
+        record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+        report.candidate.serialized_rows
+    );
+}
+
+#[test]
+fn signed_cost_points_keep_ownership_and_status_refusals_and_never_fill_placeholders() {
+    for value in [0.0, -1.0] {
+        let (registry, sources) = fixture(|q, sheet| {
+            if q == 3 {
+                replace_cell(sheet, "A3", MinimalCell::Text("Site A (60%)".into()));
+                replace_cell(sheet, "C3", MinimalCell::Number(value));
+            }
+        });
+        let error = run(&registry, sources).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str());
+        assert!(error.what.contains("changing ownership"));
+    }
+    for kind in [
+        key::StatusKind::Withheld,
+        key::StatusKind::Disposed,
+        key::StatusKind::CareAndMaintenance,
+    ] {
+        let (registry, sources) = fixture(|q, sheet| {
+            if q >= 2 {
+                replace_cell(sheet, "C3", MinimalCell::Number(0.0));
+            }
+        });
+        let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        // Isolate the cost target: a positive production point must not mask this zero-status rejection.
+        prepared
+            .rules
+            .targets
+            .retain(|t| t.outcome == Outcome::Q4Qtd);
+        prepared.rules.baselines.retain(|b| b.target == "unit_cost");
+        prepared.profile.subject_statuses.push(key::SubjectStatus {
+            subject: "Site A".into(),
+            kind,
+            first: (2030, 7),
+            last: Some((2030, 9)),
+            evidence: "synthetic status excludes the live point".into(),
+        });
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str());
+        assert!(error.what.contains("Synthetic_Q3.xlsx:QTD!C3") && error.what.contains("status"));
+    }
+    for token in ["—", "n/a"] {
+        let (registry, sources) = fixture(|q, sheet| {
+            if q == 3 {
+                replace_cell(sheet, "C3", MinimalCell::Text(token.into()));
+            }
+        });
+        assert!(run(&registry, sources).is_err());
+    }
+}
+
+#[test]
 fn missing_rows_placeholders_and_nonpositive_history_are_audited_without_imputation() {
     let (registry, sources) = fixture(|q, sheet| {
         if q == 1 {

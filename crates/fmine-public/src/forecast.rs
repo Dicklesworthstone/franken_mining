@@ -354,11 +354,16 @@ fn observation(
         .sheet(&raw.sheet)
         .and_then(|s| s.cells_by_coord.values().find(|c| c.cell_ref == raw.cell))
         .and_then(|c| c.displayed());
+    let signed_point = role == "point"
+        && matches!(
+            TargetMetric::from_target(target),
+            Some(TargetMetric::GoldAisc | TargetMetric::CopperC1 | TargetMetric::CopperAisc)
+        );
     let (value, mut reason) = match displayed {
         Some(Ok(display)) => match Rat::from_decimal_str(&display.text()) {
             Ok(value) => (
                 Some(value),
-                (value.signum() <= 0)
+                (value.signum() <= 0 && !signed_point)
                     .then(|| "non_positive_printed_number_excluded_by_model".to_string()),
             ),
             Err(_) if matches!(display.text().trim(), "" | "-" | "–" | "—" | "n/a" | "N/A") => {
@@ -425,7 +430,13 @@ fn observation(
             && flagged == Some(key::StatusKind::Withheld))
         .then(|| per_ounce_withholding_note(source, site, period.year))
         .flatten();
-        if ((value.signum() != 0 && overlaps_status) || flagged.is_some()) && note.is_none() {
+        // A zero cost point is usable only as an unflagged source number. In particular, a status-derived
+        // Nil must not become a zero forecast just because its stored cell happens to contain zero.
+        if (((value.signum() != 0 || signed_point) && overlaps_status)
+            || flagged.is_some()
+            || (signed_point && !matches!(&claim.claim.value, PublicValue::Number { .. })))
+            && note.is_none()
+        {
             return Err(refuse(
                 RefusalCode::BasisMismatch105,
                 format!("{locator} numeric observation overlaps a registered site status"),
@@ -515,7 +526,9 @@ fn finish(
             if target.outcome == Outcome::Q4Qtd {
                 let mut bases = BTreeSet::new();
                 for row in &observations[start..] {
-                    if row.value.is_some_and(|x| x.signum() > 0)
+                    if row
+                        .value
+                        .is_some_and(|x| x.signum() > 0 || row.role == "point")
                         && let Some(claim) = &row.claim
                     {
                         bases.insert(SeriesOwnershipBasis::from(claim.key.ownership_basis));

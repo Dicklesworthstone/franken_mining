@@ -106,6 +106,101 @@ fn exact_empirical_candidate_and_comparator_agree_on_bounds() {
 }
 
 #[test]
+fn signed_cost_points_reverse_bounds_and_zero_remains_a_complete_candidate() {
+    for field in ["aisc_usd_per_oz", "c1_usd_per_lb", "aisc_usd_per_lb"] {
+        let mut rules = rules();
+        // The target alias remains "production": only the exact field/outcome pair grants signed support.
+        rules.targets[0].field = field.into();
+        rules.targets[0].outcome = super::super::Outcome::Q4Qtd;
+        let positive = build_candidate(&rules, &series(), 2).unwrap();
+        let mut inputs = series();
+        inputs[0].point = Some(i(-200));
+        inputs[1].point = Some(i(0));
+        let candidate = build_candidate(&rules, &inputs, 2).unwrap();
+        assert_eq!(candidate.pools, positive.pools);
+        assert_eq!(candidate.not_published_sites, ["Hemlo"]);
+        assert_eq!(
+            (
+                candidate.exact_rows[0].lo,
+                candidate.exact_rows[0].point,
+                candidate.exact_rows[0].hi
+            ),
+            (i(-300), i(-220), i(-200))
+        );
+        assert_eq!(
+            (
+                candidate.exact_rows[1].lo,
+                candidate.exact_rows[1].point,
+                candidate.exact_rows[1].hi
+            ),
+            (i(0), i(0), i(0))
+        );
+        assert_eq!(
+            candidate.csv,
+            concat!(
+                "site,target,point,p10,p90,uncalibrated\n",
+                "Carlin,production,-220.00,-300.00,-200.00,true\n",
+                "Cortez,production,0.00,0.00,0.00,true\n",
+            )
+        );
+        assert_eq!(
+            parse_forecasts(candidate.csv.as_bytes(), &rules).unwrap(),
+            candidate.exact_rows
+        );
+        for (row, input) in candidate.exact_rows.iter().zip(&inputs) {
+            assert_eq!(
+                (row.lo, row.hi),
+                persistence_interval(
+                    &candidate.pools[0].ratios,
+                    input.point.unwrap(),
+                    rules.alpha,
+                    rules.estimator
+                )
+                .unwrap()
+            );
+        }
+
+        inputs[0].history[1] = Some(i(-1));
+        let excluded = build_candidate(&rules, &inputs, 2).unwrap();
+        assert_eq!(excluded.pools[0].ratios, [i(1), r(3, 2)]);
+        assert_eq!(excluded.pools[0].excluded_pairs.len(), 2);
+        inputs[0].point = None;
+        assert!(build_candidate(&rules, &inputs, 2).is_err());
+    }
+}
+
+#[test]
+fn nonpositive_points_cannot_borrow_cost_support_from_aliases_or_wrong_outcomes() {
+    use super::super::Outcome;
+
+    for (field, outcome) in [
+        ("au_prod_100_koz", Outcome::FyMinus9m),
+        ("cu_prod_100_kt", Outcome::FyMinus9m),
+        ("aisc_usd_per_oz", Outcome::FyMinus9m),
+        ("c1_usd_per_lb", Outcome::FyMinus9m),
+        ("aisc_usd_per_lb", Outcome::FyMinus9m),
+        ("c1_usd_per_oz", Outcome::Q4Qtd),
+        ("unknown", Outcome::Q4Qtd),
+    ] {
+        let mut rules = rules();
+        rules.targets[0].id = "unit_cost".into();
+        rules.targets[0].field = field.into();
+        rules.targets[0].outcome = outcome;
+        for b in &mut rules.baselines {
+            b.target = "unit_cost".into();
+        }
+        for point in [i(0), i(-1)] {
+            let mut inputs = series();
+            for s in &mut inputs {
+                s.target = "unit_cost".into();
+                s.point = Some(point);
+            }
+            assert!(build_candidate(&rules, &inputs, 2).is_err(), "{field}");
+        }
+    }
+}
+
+#[test]
 fn decimal_export_encloses_exact_ratios_and_keeps_actual_scoring_rows() {
     let mut inputs = series();
     for s in &mut inputs {
@@ -140,6 +235,60 @@ fn decimal_export_encloses_exact_ratios_and_keeps_actual_scoring_rows() {
     assert_eq!(decimal(r(3, 2), 0, Round::Nearest).unwrap(), "2");
     assert_eq!(decimal(r(1, 3), 0, Round::Down).unwrap(), "0");
     assert_eq!(decimal(r(1, 3), 0, Round::Up).unwrap(), "1");
+}
+
+#[test]
+fn signed_decimal_export_rounds_outward_with_ties_upward_and_no_negative_zero() {
+    for (value, places, down, nearest, up) in [
+        (r(-1, 8), 2, "-0.13", "-0.12", "-0.12"),
+        (r(-5, 4), 1, "-1.3", "-1.2", "-1.2"),
+        (r(-3, 2), 0, "-2", "-1", "-1"),
+        (r(-1, 3), 0, "-1", "0", "0"),
+        (r(-1, 1_000), 2, "-0.01", "0.00", "0.00"),
+        (r(-5, 1_000), 2, "-0.01", "0.00", "0.00"),
+        (r(-15, 1_000), 2, "-0.02", "-0.01", "-0.01"),
+        (r(i128::MIN, i128::MAX), 0, "-2", "-1", "-1"),
+    ] {
+        assert_eq!(decimal(value, places, Round::Down).unwrap(), down);
+        assert_eq!(decimal(value, places, Round::Nearest).unwrap(), nearest);
+        assert_eq!(decimal(value, places, Round::Up).unwrap(), up);
+    }
+    assert_eq!(
+        decimal(i(i128::MIN), 0, Round::Nearest).unwrap(),
+        i128::MIN.to_string()
+    );
+    assert_eq!(
+        decimal(r(i128::MIN, 10), 1, Round::Down).unwrap(),
+        "-17014118346046923173168730371588410572.8"
+    );
+    assert_eq!(
+        decimal(i(i128::MIN), 1, Round::Nearest),
+        Err(RecordError::Overflow)
+    );
+
+    let mut rules = rules();
+    rules.targets[0].field = "aisc_usd_per_oz".into();
+    rules.targets[0].outcome = super::super::Outcome::Q4Qtd;
+    let mut inputs = series();
+    for s in &mut inputs {
+        s.history = vec![Some(i(9)), Some(i(3)), Some(i(1))];
+        s.point = Some(i(-1));
+    }
+    let candidate = build_candidate(&rules, &inputs, 2).unwrap();
+    for (exact, written) in candidate.exact_rows.iter().zip(&candidate.serialized_rows) {
+        assert_eq!(
+            (exact.lo, exact.point, exact.hi),
+            (r(-1, 3), r(-1, 3), r(-1, 3))
+        );
+        assert_eq!(
+            (written.lo, written.point, written.hi),
+            (r(-34, 100), r(-33, 100), r(-33, 100))
+        );
+    }
+    assert_eq!(
+        parse_forecasts(candidate.csv.as_bytes(), &rules).unwrap(),
+        candidate.serialized_rows
+    );
 }
 
 #[test]
@@ -320,7 +469,7 @@ fn exact_overflow_refuses_instead_of_saturating_or_emitting_partial_rows() {
 
 #[test]
 fn decimal_enclosure_and_nearest_point_hold_over_a_rational_grid() {
-    for numerator in 0..=64 {
+    for numerator in -64..=64 {
         for denominator in 1..=31 {
             let value = r(numerator, denominator);
             for places in 0..=4 {

@@ -2,6 +2,7 @@
 //! Determinism: Exact
 
 use super::*;
+use crate::entity::valuation::CandidateNavChange;
 use crate::tests::{
     claim, equity_claim, inputs, policy_claim, r, set_baseline_flow, set_candidate_flow,
     set_share_change, usd, with_equity, with_schedule,
