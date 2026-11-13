@@ -4,6 +4,7 @@
 
 mod grinding;
 mod network;
+pub(crate) mod production;
 mod project;
 mod recovery;
 mod rtd;
@@ -47,6 +48,8 @@ pub const RTD_INVERSE_USAGE: &str = "plant rtd-infer --input <worksheet.toml>";
 pub const RTD_INVERSE_DOCS_JSON: &str = fmine_plant::rtd::inverse::worksheet::ROBOT_DOCS_JSON;
 pub const GRINDING_USAGE: &str = "plant grinding --input <worksheet.toml>";
 pub const GRINDING_DOCS_JSON: &str = fmine_plant::grinding::worksheet::ROBOT_DOCS_JSON;
+pub const PRODUCTION_USAGE: &str = "plant production --input <coupling.toml> --grinding <grinding.toml> --recovery <recovery.toml>";
+pub const PRODUCTION_DOCS_JSON: &str = fmine_plant::production::worksheet::ROBOT_DOCS_JSON;
 pub const TRAJECTORY_USAGE: &str = "plant trajectory --input <worksheet.toml>";
 pub const TRAJECTORY_DOCS_JSON: &str = fmine_plant::trajectory::worksheet::ROBOT_DOCS_JSON;
 pub const SCHEMA: &str = "fmine.plant-inventory.v1";
@@ -88,19 +91,69 @@ impl Mode {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Inventory { mode: Mode, input: PathBuf },
-    Project { input: PathBuf },
-    Transfer { input: PathBuf },
-    Network { input: PathBuf },
-    Infer { input: PathBuf },
-    Recovery { input: PathBuf },
-    Rtd { input: PathBuf },
-    RtdInverse { input: PathBuf },
-    Grinding { input: PathBuf },
-    Trajectory { input: PathBuf },
+    Inventory {
+        mode: Mode,
+        input: PathBuf,
+    },
+    Project {
+        input: PathBuf,
+    },
+    Transfer {
+        input: PathBuf,
+    },
+    Network {
+        input: PathBuf,
+    },
+    Infer {
+        input: PathBuf,
+    },
+    Recovery {
+        input: PathBuf,
+    },
+    Rtd {
+        input: PathBuf,
+    },
+    RtdInverse {
+        input: PathBuf,
+    },
+    Grinding {
+        input: PathBuf,
+    },
+    Production {
+        input: PathBuf,
+        grinding: PathBuf,
+        recovery: PathBuf,
+    },
+    Trajectory {
+        input: PathBuf,
+    },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
+    if args.first().is_some_and(|word| word == "plant")
+        && args.get(1).is_some_and(|word| word == "production")
+    {
+        if args.len() != 8 {
+            return Err(PRODUCTION_USAGE.into());
+        }
+        let mut paths = BTreeMap::new();
+        for pair in args[2..].as_chunks::<2>().0 {
+            if !["--input", "--grinding", "--recovery"].contains(&pair[0].as_str())
+                || pair[1].trim().is_empty()
+                || pair[1].starts_with("--")
+                || paths
+                    .insert(pair[0].as_str(), PathBuf::from(&pair[1]))
+                    .is_some()
+            {
+                return Err(PRODUCTION_USAGE.into());
+            }
+        }
+        return Ok(Command::Production {
+            input: paths.remove("--input").ok_or(PRODUCTION_USAGE)?,
+            grinding: paths.remove("--grinding").ok_or(PRODUCTION_USAGE)?,
+            recovery: paths.remove("--recovery").ok_or(PRODUCTION_USAGE)?,
+        });
+    }
     if args.len() != 4
         || args[0] != "plant"
         || args[2] != "--input"
@@ -588,6 +641,13 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         Command::Rtd { input } => return rtd::execute(input, root),
         Command::RtdInverse { input } => return rtd::execute_inverse(input, root),
         Command::Grinding { input } => return grinding::execute(input, root),
+        Command::Production {
+            input,
+            grinding,
+            recovery,
+        } => {
+            return production::execute(input, grinding, recovery, root);
+        }
         Command::Trajectory { input } => return trajectory::execute(input, root),
     };
     let run = || -> Result<Envelope, Refusal> {

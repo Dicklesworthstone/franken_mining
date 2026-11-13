@@ -369,6 +369,18 @@ mutates_authority = false
 description = "Jointly reconcile shared inventory states across contiguous periods using genuine flow and stocktake observations with full cross-period covariance"
 
 [[verb]]
+path = "plant production"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Compose matched grinding, grade, exposure and recovery scenarios into source-bound dry-tonnage and recovered-metal distributions"
+
+[[verb]]
+path = "forecast journal register-plant"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Register source-bound conditional plant quantiles before their physical period and retain both time boundaries and complete input evidence"
+
+[[verb]]
 path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false

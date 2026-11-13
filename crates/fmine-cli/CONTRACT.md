@@ -10,6 +10,26 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-176/181/182): `plant production --input <coupling> --grinding <worksheet> --recovery <worksheet>`
+  reads three bounded source snapshots, delegates admission to their existing plant owners, and exposes
+  the joined production receipt in JSON/Markdown. The input snapshots, model digests and all output Claim
+  ancestry remain visible. No numeric or scope inference occurs in the CLI. The source-bound raw-transfer
+  parser likewise lives in `fmine_plant::raw_measurements::worksheet`; `plant transfer` keeps its existing
+  IO/envelope behavior and exact schemas while the pure adapter becomes reusable without a CLI dependency.
+- DESIGN (BD-181): `forecast journal register-plant` consumes that same admitted calculation for an explicit
+  recovery, throughput, dry-tonnage, contained-metal or recovered-metal target. Exact-weight p10/p50/p90
+  become the existing quantile payload, with explicit quantity/unit, element, author role and complete
+  physical support. The opt-in v9 `plant_forecast` operation retains a separate prestart registration bound
+  and period-end outcome bound. Registration and cohort freeze use the writer's latest possible time;
+  replay rechecks both boundaries and preserves existing v1–v8 semantics. Plant source evidence is retained
+  as one hashed admission snapshot, bounded by the existing 64 KiB operation limit. Failed model, time,
+  size or presentation admission does not append or advance the journal. Whole-second UTC Unix-nanosecond
+  interpretation requires explicit acceptance; no rounding of arbitrary plant clock axes occurs.
+  Existing cohort, supplied-outcome and assessment owners provide the lifecycle. Only 80% interval scoring
+  is supported by these three quantiles, with no empirical CRPS, external time proof, source re-evaluation
+  on replay, validated plant outcomes or calibration/field-gate claim. Complete source and binary controls
+  live in `xtask/testdata/forecast_plant_controls.rs` and `plant_production_contract.rs`.
+
 - DESIGN (BD-225): `decide journal init|record|show` retains explicit act-now choices and rationales
   in the existing locked FJR1 operation store. A decision-specific genesis and canonical versioned
   operations separate this history from forecast journals. Recording evaluates the supplied model,

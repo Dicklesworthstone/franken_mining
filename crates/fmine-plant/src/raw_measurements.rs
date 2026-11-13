@@ -21,6 +21,8 @@ use fmine_numerics::reconciliation::{MAX_OBSERVATIONS, propagate_linear_covarian
 use fmine_time::ValidTime;
 use fmine_units::{ExactQty, UnitsError};
 
+pub mod worksheet;
+
 type Result<T> = std::result::Result<T, Refusal>;
 const ZERO: ExactQty = ExactQty::from_integer(0);
 const ONE: ExactQty = ExactQty::from_integer(1);

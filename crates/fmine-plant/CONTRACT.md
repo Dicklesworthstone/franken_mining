@@ -836,3 +836,12 @@ zero states, interval limits, canonical order and evidence preservation.
 This is a declared conditional production calculation. It supplies no transport lag, inventory draw,
 feedback, payable-metal or monetary conversion, empirically validated model uncertainty, registered
 forecast, calibration verdict or operating authority. The broader BD-176/181/182 field gates remain open.
+
+DESIGN: the CLI now exposes this owner as `plant production`, retaining all three source snapshots.
+The separate forecast-journal adapter can prospectively register its conditional quantiles; that upper
+layer owns clocks, durable history and later scoring. The plant kernel itself remains pure and read-only.
+Raw-transfer worksheet parsing and presentation also live with their existing owner through
+`raw_measurements::worksheet::evaluate(text, source)`. This pure boundary verifies source size and SHA-256,
+preserves existing transfer schemas and rejected diagnostics, and performs no file IO. The CLI wrapper
+continues to supply bounded source reads and envelopes; the underlying projection and covariance
+calculation, Claims and receipts are unchanged.

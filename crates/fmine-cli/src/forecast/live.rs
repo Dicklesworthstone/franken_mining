@@ -35,6 +35,7 @@ const V5_SCHEMA: &str = "fmine.forecast-operation.v5";
 const V6_SCHEMA: &str = "fmine.forecast-operation.v6";
 const V7_SCHEMA: &str = "fmine.forecast-operation.v7";
 const V8_SCHEMA: &str = "fmine.forecast-operation.v8";
+const V9_SCHEMA: &str = "fmine.forecast-operation.v9";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +56,7 @@ enum OperationVersion {
     V6 = 5,
     V7 = 6,
     V8 = 7,
+    V9 = 8,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -71,6 +73,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V6_SCHEMA => Ok(OperationVersion::V6),
             V7_SCHEMA => Ok(OperationVersion::V7),
             V8_SCHEMA => Ok(OperationVersion::V8),
+            V9_SCHEMA => Ok(OperationVersion::V9),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -85,7 +88,9 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if super::cusum::FIELDS
+    let schema = if expected_table == "plant_forecast" {
+        V9_SCHEMA
+    } else if super::cusum::FIELDS
         .iter()
         .any(|key| doc.rows[0].get(key).is_some())
     {
@@ -139,6 +144,18 @@ pub enum Command {
         journal: PathBuf,
         head: Digest32,
         request: PathBuf,
+    },
+    /// Register conditional plant quantiles from the admitted shared-scenario production receipt.
+    RegisterPlant {
+        journal: PathBuf,
+        head: Digest32,
+        input: PathBuf,
+        grinding: PathBuf,
+        recovery: PathBuf,
+        id: String,
+        target: super::plant::Target,
+        author_role: String,
+        time_basis: String,
     },
     Freeze {
         journal: PathBuf,
@@ -199,6 +216,7 @@ impl Command {
         match self {
             Self::Init { .. } => "init",
             Self::Register { .. } => "register",
+            Self::RegisterPlant { .. } => "register-plant",
             Self::Freeze { .. } => "freeze",
             Self::Outcome { .. } => "outcome",
             Self::Resolve { .. } => "resolve",
@@ -326,6 +344,7 @@ fn perform(
     }
     let (path, head) = match command {
         Command::Register { journal, head, .. }
+        | Command::RegisterPlant { journal, head, .. }
         | Command::Freeze { journal, head, .. }
         | Command::Outcome { journal, head, .. }
         | Command::Resolve { journal, head, .. }
@@ -335,8 +354,34 @@ fn perform(
     };
     let mut journal = Journal::open_write(&root.join(path), head)?;
     let mut state = replay(&journal)?;
+    let mut plant_evidence = None;
     let (request, table, selected) = match command {
         Command::Register { request, .. } => (read_request(&root.join(request))?, "forecast", None),
+        Command::RegisterPlant {
+            input,
+            grinding,
+            recovery,
+            id,
+            target,
+            author_role,
+            time_basis,
+            ..
+        } => {
+            let prepared = super::plant::prepare(
+                &super::plant::Registration {
+                    input,
+                    grinding,
+                    recovery,
+                    id,
+                    target: *target,
+                    author_role,
+                    time_basis,
+                },
+                root,
+            )?;
+            plant_evidence = Some(prepared.evidence_json);
+            (prepared.request, "plant_forecast", None)
+        }
         Command::Freeze { request, .. } => (read_request(&root.join(request))?, "cohort", None),
         Command::Outcome { request, .. } => (read_request(&root.join(request))?, "outcome", None),
         Command::Resolve {
@@ -428,7 +473,7 @@ fn perform(
         };
         // A rendering refusal must precede the durable append. The prepared response is released only
         // after append and sync succeed; a failed append drops this staged state and its response.
-        response = Some(presentation_at(
+        let mut presentation = presentation_at(
             header,
             record,
             &state,
@@ -440,7 +485,11 @@ fn perform(
                 report_origin,
                 timestamp: None,
             },
-        )?);
+        )?;
+        if let Some(evidence) = &plant_evidence {
+            super::plant::attach_evidence(&mut presentation, evidence)?;
+        }
+        response = Some(presentation);
         Ok(())
     })?;
     response
@@ -1094,14 +1143,21 @@ fn apply(
     let metadata_declared = super::segments::FIELDS
         .iter()
         .any(|key| row.get(key).is_some());
-    if metadata_declared && version != OperationVersion::V7 {
+    if metadata_declared && !matches!(version, OperationVersion::V7 | OperationVersion::V9) {
         return Err(invalid(
-            "forecast metadata requires operation version seven",
+            "forecast metadata requires operation version seven or nine",
         ));
     }
     if version == OperationVersion::V7 && (row.table != "forecast" || !metadata_declared) {
         return Err(invalid(
             "operation version seven requires a forecast registration with complete metadata",
+        ));
+    }
+    if (version == OperationVersion::V9 && (row.table != "plant_forecast" || !metadata_declared))
+        || (row.table == "plant_forecast" && version != OperationVersion::V9)
+    {
+        return Err(invalid(
+            "plant source registration requires operation version nine and complete metadata",
         ));
     }
     let monitor_declared = super::MONITOR_FIELDS
@@ -1189,10 +1245,27 @@ fn apply(
         | OperationVersion::V5
         | OperationVersion::V6
         | OperationVersion::V7
-        | OperationVersion::V8 => upper,
+        | OperationVersion::V8
+        | OperationVersion::V9 => upper,
     };
     let row = Row(row);
     match row.0.table.as_str() {
+        "plant_forecast" => {
+            let start = super::plant::registration_start(&row, request)?;
+            if upper >= start {
+                return Err(late(
+                    "plant registration's latest possible clock time must precede the physical interval's start",
+                ));
+            }
+            let mut forecast = row.0.clone();
+            forecast.table = "forecast".into();
+            forecast
+                .fields
+                .retain(|field| field.key != "registration_before");
+            state.forecast_at(Row(&forecast), Some(authority_ns))?;
+            let id = state.forecast_id(row.string("id")?)?;
+            state.plant_registration_starts.insert(id, start);
+        }
         "forecast" => {
             if upper >= row.time("outcome_due")? {
                 return Err(late(
@@ -1212,6 +1285,15 @@ fn apply(
                 if upper >= forecast.freeze_time_ns {
                     return Err(late(format!(
                         "cohort freeze's latest possible clock time reaches {alias}'s outcome deadline"
+                    )));
+                }
+                if state
+                    .plant_registration_starts
+                    .get(&id)
+                    .is_some_and(|start| upper >= *start)
+                {
+                    return Err(late(format!(
+                        "cohort freeze's latest possible clock time reaches {alias}'s plant physical start"
                     )));
                 }
             }
@@ -1281,7 +1363,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 8]);
+struct VersionCounts([usize; 9]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {
@@ -1432,7 +1514,9 @@ fn presentation_at(
     let forecasts = state.forecasts.iter().map(|(alias, id)| {
         let row = state.ledger.forecast(*id).ok_or_else(|| absent("registered forecast missing"))?;
         let metadata = super::segments::metadata_field(row.metadata.as_ref());
-        Ok(format!("{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_ns\":{},\"registered_at\":{},\"outcome_due_ns\":{},\"outcome_due\":{},\"payload\":{}{metadata}}}",
+        let registration_before = state.plant_registration_starts.get(id).map_or_else(String::new, |start| format!(
+            ",\"registration_before_ns\":{start},\"registration_before\":{}", utc(*start)));
+        Ok(format!("{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_ns\":{},\"registered_at\":{},\"outcome_due_ns\":{},\"outcome_due\":{},\"payload\":{}{metadata}{registration_before}}}",
             js(alias), js(&id.to_string()), js(&row.model_key), row.registered_ns, utc(row.registered_ns), row.freeze_time_ns, utc(row.freeze_time_ns), payload_json(&row.payload)))
     }).collect::<Result<Vec<_>, Refusal>>()?.join(",");
     let cohorts = state

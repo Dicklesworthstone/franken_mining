@@ -84,6 +84,7 @@ cargo run -p fmine-cli -- plant flowsheet --input tests/plant/flowsheet_reconcil
 cargo run -p fmine-cli -- plant infer --input tests/plant/flowsheet_infer.toml
 cargo run -p fmine-cli -- plant infer --input tests/plant/inventory_infer.toml
 cargo run -p fmine-cli -- plant recovery --input tests/plant/recovery_card.toml
+cargo run -p fmine-cli -- plant production --input tests/plant/production_joint.toml --grinding tests/plant/grinding_joint.toml --recovery tests/plant/production_recovery.toml
 ```
 
 The supplied examples are synthetic. `balance` checks exact nominal closure. `reconcile` uses the declared full
@@ -92,6 +93,29 @@ Rejected candidates return a nonzero exit status and no admitted balance Claim w
 observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. This calculation
 does not audit a site's measurements, infer recovery or certify P754 compliance. `fmine robot-docs` documents
 the strict worksheet fields, explicit kg basis, stocktake timing and all required covariance pairs.
+
+`plant production` joins the complete grinding and recovery populations by their shared scenario IDs
+and exact probabilities. A third worksheet declares the common physical support, linked recovery grade
+and P80 coordinates, and scheduled exposure. The calculation keeps every state paired through dry tonnes,
+contained metal and recovered metal before calculating conditional means and quantiles. In the supplied
+synthetic case, the mean is 200 dry tonnes, 0.32 kg contained Au and 0.24 kg recovered Au; multiplying the
+marginal means would incorrectly produce 0.375 kg recovered Au. The output preserves all three exact
+worksheets, source hashes, model receipt identities and Claim ancestry. `--format markdown` shows the
+same results. Mismatched populations, weights, scopes or linked model inputs refuse the whole calculation.
+
+`forecast journal register-plant` registers a selected recovery, throughput, dry-tonnage, contained-metal
+or recovered-metal target through the existing durable forecast journal. It takes the same three source
+paths plus `--journal`, `--head`, `--id`, `--target`, `--author-role`,
+`--time-basis utc-unix-ns` and `--trust-host-clock`. The explicit time basis requires whole-second UTC
+Unix nanoseconds; the demonstration's relative times must not be treated as future calendar dates.
+Registration and subsequent cohort freeze must precede the physical interval's start, while supplied
+outcomes cannot be available before its end. The v9 operation retains both bounds and rechecks them on
+replay. It records p10/p50/p90 with their exact-weight inverse-CDF interpretation, enabling the existing
+80% interval score. It does not claim full-distribution CRPS or calibrated probabilities. Complete source
+evidence is retained in the hashed operation; an operation exceeding 64 KiB refuses without advancing the
+journal. Existing `freeze`, `outcome` and `assess` commands handle cohort membership, explicitly supplied
+observations and scoring. Supplied plant outcomes remain unverified; this is no external timestamp proof
+or claim that a real monthly forecasting gate has passed. `fmine robot-docs` documents the fields.
 
 `plant trajectory` links 2–32 contiguous periods for one conserved elemental inventory. Adjacent periods
 share one boundary stock; every stock is either measured once or explicitly unmeasured. The declared full

@@ -670,7 +670,7 @@ fn parse_forecast_journal(
     let (mut fields, words) = journal_arguments(args, &["--json", "--trust-host-clock"])?;
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report|compare"
+            "expected forecast journal init|register|register-plant|freeze|outcome|resolve|restate|assess|inspect|report|compare"
                 .to_string(),
         );
     };
@@ -739,6 +739,18 @@ fn parse_forecast_journal(
                 },
             }
         }
+        "register-plant" => Command::RegisterPlant {
+            journal,
+            head: digest(&take(&mut fields, "--head")?)?,
+            input: PathBuf::from(take(&mut fields, "--input")?),
+            grinding: PathBuf::from(take(&mut fields, "--grinding")?),
+            recovery: PathBuf::from(take(&mut fields, "--recovery")?),
+            id: take(&mut fields, "--id")?,
+            target: forecast::plant::Target::parse(&take(&mut fields, "--target")?)
+                .map_err(|refusal| refusal.what)?,
+            author_role: take(&mut fields, "--author-role")?,
+            time_basis: take(&mut fields, "--time-basis")?,
+        },
         "resolve" => Command::Resolve {
             journal,
             head: digest(&take(&mut fields, "--head")?)?,
@@ -2263,6 +2275,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::RTD_USAGE,
                 plant::RTD_INVERSE_USAGE,
                 plant::GRINDING_USAGE,
+                plant::PRODUCTION_USAGE,
                 plant::TRAJECTORY_USAGE,
                 html::USAGE,
                 "decide card <model-file>",
@@ -2302,6 +2315,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]",
                 "forecast journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]",
                 "forecast journal register --journal <path> --head <hex> --request <path> --trust-host-clock",
+                "forecast journal register-plant --journal <path> --head <hex> --input <coupling.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target recovery|throughput|dry-tonnes|contained-metal|recovered-metal --author-role <role> --time-basis utc-unix-ns --trust-host-clock",
                 "forecast journal freeze --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias> --trust-host-clock",
@@ -2400,6 +2414,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(plant::RTD_INVERSE_DOCS_JSON);
             payload.push_str(",\"plant_grinding\":");
             payload.push_str(plant::GRINDING_DOCS_JSON);
+            payload.push_str(",\"plant_production\":");
+            payload.push_str(plant::PRODUCTION_DOCS_JSON);
+            payload.push_str(",\"plant_forecast_registration\":");
+            payload.push_str(forecast::plant::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_trajectory\":");
             payload.push_str(plant::TRAJECTORY_DOCS_JSON);
             payload.push_str(",\"html_claims\":");

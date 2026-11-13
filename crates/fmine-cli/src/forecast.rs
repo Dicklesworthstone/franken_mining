@@ -25,6 +25,7 @@ pub(crate) mod comparison;
 mod cusum;
 mod diagnostics;
 pub mod live;
+pub mod plant;
 mod provenance;
 pub mod record_build;
 pub mod record_score;
@@ -105,6 +106,8 @@ struct Replay {
     temporal_validation: Option<String>,
     /// Recorded byte-verified admissions, keyed by the immutable outcome event.
     source_admissions: BTreeMap<(ObjectId, u64), live::SourceAdmission>,
+    /// Replayed v9 plant registrations retain an earlier bound for prospective cohort membership.
+    plant_registration_starts: BTreeMap<ObjectId, i64>,
 }
 
 impl Replay {

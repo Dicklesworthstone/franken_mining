@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 65
+[verbs] 67
 decide card
 decide journal init
 decide journal record
@@ -135,6 +135,8 @@ plant rtd
 plant rtd-infer
 plant grinding
 plant trajectory
+plant production
+forecast journal register-plant
 robot schema
 assure issue
 reliance export
