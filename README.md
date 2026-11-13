@@ -184,6 +184,31 @@ These are assumed inputs and a known forward kernel. No residence-time fitting, 
 reactive-stock inference or plant calibration is supplied. Invalid optional recovery observations refuse
 the whole operation without a successful transport receipt.
 
+### Reconstruct delayed feed with uncertain opening stocks
+
+The separate `plant rtd-infer` command reconstructs explicitly unmeasured elemental feeds from integrated
+outlet observations under a declared transport model:
+
+```sh
+cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse.toml --json
+cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_opening.toml --format markdown
+```
+
+DESIGN: the v1 worksheet fixes initial stocks. The v2 worksheet instead declares every active tank's
+opening elemental stock as a measurement, with its variance and all opening/flow correlations. Opening
+stocks, measured feeds and outlet masses are fitted jointly; absent feeds receive no invented observation
+or prior. Dead stock and transport parameters remain fixed. Both modes keep original source Claims,
+the full joint covariance, source bytes, adjustment diagnostics and independently replayed conservation.
+
+The synthetic measured-opening example starts with a **2 kg** stock measurement and reconstructs
+**10 kg and 4 kg** interval feeds. Its declared correlated errors give feed variances of approximately
+**0.846854 and 0.886953 kg²**, including the opening-stock uncertainty. These known answers are checked
+against independently derived one-tank equations in `rtd::inverse::tests` and `xtask/tests/plant_rtd_inverse.rs`.
+The two unknown feeds consume all available redundancy; the report explicitly has no gross-error test.
+Negative fitted stocks or flows and failed diagnostic limits retain investigation details without an
+admitted result. These conditional calculations do not fit the kernel, identify sensor bias, qualify a
+real plant or establish calibrated recovery.
+
 ### Calculate grinding energy and throughput across joint scenarios
 
 `plant grinding` evaluates a declared Bond model at processing-blend support:

@@ -1,0 +1,87 @@
+# SYNTHETIC one-tank inverse with a measured, uncertain opening stock.
+# For a=exp(-1), G=[1-a,a*(1-a)] and H=[[a,0],[(1-a)^2,a]].
+# Opening 2 kg and feeds [10,4] kg give the outlet observations below.
+# Opening/outlet covariance is fully correlated; the true feed values are not inputs.
+# Unknown feeds remain identified, with no redundant gross-error test.
+schema = "fmine.plant-rtd-inverse.v2"
+boundary = "synthetic-inverse-measured-opening/v1"
+element = "Au"
+measurand = "total-Au/all-phases"
+mass_basis = "kg-total/all-phases/full-physical-boundary"
+start_ns = "0"
+end_ns = "2000000000"
+opening_ns = "0"
+tanks = "1"
+volume_m3 = "1"
+bypass_fraction = "0"
+dead_fraction = "0"
+min_flow_m3_per_s = "0"
+max_flow_m3_per_s = "2"
+common_conservative_transport = "true"
+piecewise_constant_feed_per_volume = "true"
+dry_tolerance_kg = "0.00000001"
+water_tolerance_kg = "0.00000001"
+element_tolerance_kg = "0.00000001"
+max_kernel_steps = "128"
+error_model_basis = "synthetic correlated opening and outlet observations; illustrative covariance, not empirical calibration"
+fixed_transport = "true"
+opening_treatment = "measured"
+unbiased_gaussian_errors = "true"
+global_chi_square_limit = "10"
+closure_tolerance_kg = "0.00000001"
+
+[[opening]]
+tank = "1"
+dry_kg = "10"
+water_kg = "20"
+element_kg = "2"
+
+[[opening]]
+tank = "dead"
+dry_kg = "0"
+water_kg = "0"
+element_kg = "0"
+
+[[interval]]
+start_ns = "0"
+end_ns = "1000000000"
+slurry_volume_m3 = "1"
+feed_kg = "unmeasured"
+outlet_kg = "4.943035529371538572764190161"
+
+[[interval]]
+start_ns = "1000000000"
+end_ns = "2000000000"
+slurry_volume_m3 = "1"
+feed_kg = "unmeasured"
+outlet_kg = "5.932370089492709032814663178"
+
+[[covariance]]
+left = "opening/1"
+right = "opening/1"
+kg2 = "0.25"
+
+[[covariance]]
+left = "opening/1"
+right = "outlet/0/1000000000"
+kg2 = "0.02"
+
+[[covariance]]
+left = "opening/1"
+right = "outlet/1000000000/2000000000"
+kg2 = "-0.03"
+
+[[covariance]]
+left = "outlet/0/1000000000"
+right = "outlet/0/1000000000"
+kg2 = "0.04"
+
+[[covariance]]
+left = "outlet/0/1000000000"
+right = "outlet/1000000000/2000000000"
+kg2 = "0.01"
+
+[[covariance]]
+left = "outlet/1000000000/2000000000"
+right = "outlet/1000000000/2000000000"
+kg2 = "0.09"

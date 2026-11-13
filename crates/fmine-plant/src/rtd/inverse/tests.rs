@@ -144,7 +144,8 @@ fn setup(feeds: &[Option<&str>], outlets: &[&str]) -> Inputs {
             .map(|i| KilogramsSquared::new(if i / n == i % n { 1.0 } else { 0.0 }))
             .collect(),
         error_model_basis: "explicit synthetic Gaussian covariance".into(),
-        fixed_transport_and_opening: true,
+        fixed_transport: true,
+        opening_treatment: OpeningTreatment::Fixed,
         unbiased_gaussian_errors: true,
         global_chi_square_limit: 100.0,
         normalized_adjustment_limit: None,
@@ -157,8 +158,20 @@ fn rebind(input: &mut Inputs) {
     error.scope = input.0.value.scope.clone();
     error.model_source = input.0.claim_id;
     error.opening_source = input.1.claim_id;
-    error.observations = observation_order(&input.2).unwrap();
+    error.observations =
+        observation_order_with_opening(&input.1, &input.2, error.opening_treatment).unwrap();
     input.3 = error_claim(error);
+}
+fn measured_opening(input: &mut Inputs, covariance: &[f64]) {
+    let mut error = input.3.value.clone();
+    error.opening_treatment = OpeningTreatment::Measured;
+    error.covariance = covariance
+        .iter()
+        .copied()
+        .map(KilogramsSquared::new)
+        .collect();
+    input.3 = error_claim(error);
+    rebind(input);
 }
 fn run(input: &Inputs) -> Result<InverseOutcome> {
     deconvolve(&input.0, &input.1, &input.2, &input.3, || false)
@@ -168,6 +181,302 @@ fn close(actual: f64, expected: f64, tolerance: f64) {
         (actual - expected).abs() <= tolerance,
         "{actual:.17e} != {expected:.17e}"
     );
+}
+
+#[test]
+fn measured_opening_joint_gls_matches_independent_one_tank_answer() {
+    // Independent x=1 CSTR equation: O=(1-a)S+aF, a=exp(-1).
+    // Observations [S,F,O] share a full covariance, including both stock/flow pairs.
+    let mut input = setup(&[Some("12")], &["4"]);
+    let v = [0.25, 0.05, -0.02, 0.05, 1.0, 0.1, -0.02, 0.1, 0.16];
+    measured_opening(&mut input, &v);
+    let result = run(&input).unwrap();
+    let r = &result.admitted_claim().unwrap().value;
+    assert_eq!(r.opening_coordinate_indices, [0]);
+    assert_eq!(r.feed_coordinate_indices, [1]);
+    assert_eq!(r.outlet_coordinate_indices, [2]);
+    assert_eq!(
+        r.observations[0],
+        InverseObservation {
+            source: input.1.claim_id,
+            role: ObservationRole::OpeningTank(0),
+        }
+    );
+    let a = (-1.0_f64).exp();
+    let c = [a - 1.0, -a, 1.0];
+    let y = [2.0, 12.0, 4.0];
+    let w: Vec<_> = (0..3)
+        .map(|i| (0..3).map(|j| v[i * 3 + j] * c[j]).sum::<f64>())
+        .collect();
+    let residual: f64 = c.iter().zip(y).map(|(c, y)| c * y).sum();
+    let variance: f64 = c.iter().zip(&w).map(|(c, w)| c * w).sum();
+    // Closed-form GLS: x=y-Vc(c'Vc)^-1 c'y; Cov(x)=V-Vc(c'Vc)^-1 c'V.
+    for i in 0..3 {
+        close(
+            r.estimates_kg[i].value(),
+            y[i] - w[i] * residual / variance,
+            4e-14,
+        );
+        close(
+            r.measured_adjustments_kg[i].value(),
+            -w[i] * residual / variance,
+            4e-14,
+        );
+        for j in 0..3 {
+            let adjustment_variance = w[i] * w[j] / variance;
+            close(
+                r.posterior_covariance[i * 3 + j].value(),
+                v[i * 3 + j] - adjustment_variance,
+                4e-15,
+            );
+            close(
+                r.measured_adjustment_covariance[i * 3 + j].value(),
+                adjustment_variance,
+                4e-15,
+            );
+        }
+    }
+    // Independently evaluated with 70-digit decimal exponentiation.
+    close(r.fitted_opening_kg[0].value(), 1.1092323769993064, 4e-14);
+    close(r.fitted_feed_kg[0].value(), 10.641857371547561, 4e-14);
+    close(r.fitted_outlet_kg[0].value(), 4.616089132890642, 4e-14);
+    close(r.predicted_outlet_kg[0].value(), 4.616089132890642, 4e-14);
+    close(r.closing_inventory_kg[0].value(), 7.135000615656226, 4e-14);
+    close(
+        r.opening_outlet_kg[0].value(),
+        (1.0 - a) * r.fitted_opening_kg[0].value(),
+        4e-15,
+    );
+    let GrossErrorDiagnostic::Available {
+        chi_square,
+        degrees_of_freedom,
+    } = r.gross_error
+    else {
+        panic!("measured feed supplies one redundant equation");
+    };
+    assert_eq!(degrees_of_freedom, 1);
+    close(chi_square, 7.61319826872064, 6e-14);
+    assert_eq!(result.opening(), &input.1);
+    assert_eq!(result.error_model(), &input.3);
+    assert_eq!(result, run(&input).unwrap());
+}
+
+#[test]
+fn measured_opening_and_missing_feeds_retain_full_joint_covariance() {
+    let mut input = setup(
+        &[None, None],
+        &[
+            "4.943035529371538572764190161",
+            "5.932370089492709032814663178",
+        ],
+    );
+    let v = [0.25, 0.02, -0.03, 0.02, 0.04, 0.01, -0.03, 0.01, 0.09];
+    measured_opening(&mut input, &v);
+    let result = run(&input).unwrap();
+    let r = &result.admitted_claim().unwrap().value;
+    assert_eq!(r.opening_coordinate_indices, [0]);
+    assert_eq!(r.outlet_coordinate_indices, [1, 2]);
+    assert_eq!(r.feed_coordinate_indices, [3, 4]);
+    assert_eq!(r.gross_error, GrossErrorDiagnostic::NoRedundancy);
+    assert_eq!(
+        r.measured_adjustments_kg
+            .iter()
+            .map(|q| q.value())
+            .collect::<Vec<_>>(),
+        [0.0; 3]
+    );
+    close(r.fitted_opening_kg[0].value(), 2.0, 2e-14);
+    close(r.fitted_feed_kg[0].value(), 10.0, 2e-13);
+    close(r.fitted_feed_kg[1].value(), 4.0, 2e-13);
+    let a = (-1.0_f64).exp();
+    let g = 1.0 - a;
+    // F=H^-1(O-GS), H=[[a,0],[g²,a]], G=[g,ag]. With no redundant
+    // observations, T maps [S,O0,O1] directly to [S,O0,O1,F0,F1].
+    let t = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [-g / a, 1.0 / a, 0.0],
+        [-g + g.powi(3) / a.powi(2), -g.powi(2) / a.powi(2), 1.0 / a],
+    ];
+    for i in 0..5 {
+        for j in 0..5 {
+            let mut expected = 0.0;
+            for k in 0..3 {
+                for l in 0..3 {
+                    expected += t[i][k] * v[k * 3 + l] * t[j][l];
+                }
+            }
+            close(r.posterior_covariance[i * 5 + j].value(), expected, 8e-14);
+        }
+    }
+    close(
+        r.posterior_covariance[3 * 5 + 3].value(),
+        0.8468543836415017,
+        8e-14,
+    );
+    close(
+        r.posterior_covariance[3 * 5 + 4].value(),
+        -0.4686319625863019,
+        8e-14,
+    );
+    close(
+        r.posterior_covariance[4 * 5 + 4].value(),
+        0.8869525049521716,
+        8e-14,
+    );
+    for (actual, expected) in r.opening_response_matrix.iter().zip([g, a * g]) {
+        close(*actual, expected, 1e-15);
+    }
+    close(r.closing_inventory_kg[1].value(), 5.124594381135752, 8e-14);
+    assert!(
+        r.conservation_residual_kg
+            .iter()
+            .all(|q| q.value().abs() < 1e-13)
+    );
+    assert!(
+        r.transport_residual_kg
+            .iter()
+            .all(|q| q.value().abs() < 1e-13)
+    );
+    let mut reversed = input.clone();
+    reversed.2.reverse();
+    assert_eq!(result, run(&reversed).unwrap());
+}
+
+#[test]
+fn measured_two_tank_openings_retain_separate_closed_form_responses() {
+    // For x=1 per interval, initial stocks advance by E=a[[1,0],[1,1]].
+    // Their interval discharge rows are [1-2a,1-a] and [2a-3a²,a-a²].
+    let mut input = setup(
+        &[None, None],
+        &[
+            "2.367879441171442321595523770",
+            "2.110067772330436991765617841",
+        ],
+    );
+    let mut model = input.0.value.clone();
+    model.tanks = 2;
+    model.volume_m3 = CubicMetres::new(2.0);
+    input.0 = model_claim(model);
+    let mut opening = input.1.value.clone();
+    opening.tanks = vec![masses("1"), masses("3")];
+    input.1 = opening_claim(opening);
+    measured_opening(
+        &mut input,
+        &[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+    );
+    let result = run(&input).unwrap();
+    let r = &result.admitted_claim().unwrap().value;
+    assert_eq!(r.opening_coordinate_indices, [0, 1]);
+    assert_eq!(r.outlet_coordinate_indices, [2, 3]);
+    assert_eq!(r.feed_coordinate_indices, [4, 5]);
+    assert_eq!(r.observations[0].role, ObservationRole::OpeningTank(0));
+    assert_eq!(r.observations[1].role, ObservationRole::OpeningTank(1));
+    assert_eq!(r.observations[0].source, input.1.claim_id);
+    assert_eq!(r.observations[1].source, input.1.claim_id);
+    let a = (-1.0_f64).exp();
+    for (actual, expected) in r.opening_response_matrix.iter().zip([
+        1.0 - 2.0 * a,
+        1.0 - a,
+        2.0 * a - 3.0 * a * a,
+        a - a * a,
+    ]) {
+        close(*actual, expected, 1e-15);
+    }
+    for (actual, expected) in r.response_matrix.iter().zip([
+        3.0 * a - 1.0,
+        0.0,
+        2.0 * (1.0 - a) * (1.0 - 2.0 * a),
+        3.0 * a - 1.0,
+    ]) {
+        close(*actual, expected, 1e-15);
+    }
+    close(r.fitted_opening_kg[0].value(), 1.0, 1e-14);
+    close(r.fitted_opening_kg[1].value(), 3.0, 1e-14);
+    close(r.fitted_feed_kg[0].value(), 2.0, 2e-13);
+    close(r.fitted_feed_kg[1].value(), 4.0, 2e-13);
+    assert_eq!(r.gross_error, GrossErrorDiagnostic::NoRedundancy);
+}
+
+#[test]
+fn measured_opening_source_order_and_covariance_are_bound() {
+    let mut input = setup(&[Some("10")], &["5"]);
+    measured_opening(&mut input, &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    let original = run(&input).unwrap();
+    original.admitted_claim().unwrap();
+    let mut changed = input.clone();
+    changed.1.value.tanks[0] = masses("2.1");
+    assert_eq!(run(&changed).unwrap_err().code, "FMINE-REF-507");
+    changed.1 = opening_claim(changed.1.value.clone());
+    assert_eq!(run(&changed).unwrap_err().code, "FMINE-REF-102");
+    rebind(&mut changed);
+    assert_ne!(original.digest(), run(&changed).unwrap().digest());
+    for mutation in 0..4 {
+        let mut changed = input.clone();
+        let mut error = changed.3.value.clone();
+        match mutation {
+            0 => error.observations[0].source = input.2[0].claim_id,
+            1 => {
+                error.observations.remove(0);
+            }
+            2 => error.observations.swap(0, 1),
+            _ => error.observations[0].role = ObservationRole::OpeningTank(1),
+        }
+        changed.3 = error_claim(error);
+        let expected = if mutation == 1 {
+            "FMINE-REF-105"
+        } else {
+            "FMINE-REF-102"
+        };
+        assert_eq!(run(&changed).unwrap_err().code, expected);
+    }
+    let mut changed = input.clone();
+    let mut error = changed.3.value.clone();
+    error.covariance = vec![KilogramsSquared::new(1.0); 4];
+    changed.3 = error_claim(error);
+    assert!(run(&changed).is_err());
+    let mut error = input.3.value.clone();
+    error.covariance[1] = KilogramsSquared::new(0.1);
+    changed.3 = error_claim(error);
+    assert!(run(&changed).is_err());
+    let mut error = input.3.value.clone();
+    error.covariance[0] = KilogramsSquared::new(0.0);
+    changed.3 = error_claim(error);
+    assert!(run(&changed).is_err());
+}
+
+#[test]
+fn negative_fitted_opening_keeps_diagnostics_without_admitted_claim() {
+    let mut input = setup(&[Some("10")], &["0"]);
+    let mut opening = input.1.value.clone();
+    opening.tanks[0] = masses("0");
+    input.1 = opening_claim(opening);
+    measured_opening(&mut input, &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    let result = run(&input).unwrap();
+    assert_eq!(result.refusal().unwrap().code, "FMINE-REF-109");
+    assert!(result.admitted_claim().is_err());
+    let r = result.diagnostics();
+    let a = (-1.0_f64).exp();
+    let g = 1.0 - a;
+    close(
+        r.fitted_opening_kg[0].value(),
+        -10.0 * a * g / (g * g + a * a + 1.0),
+        2e-14,
+    );
+    assert!(r.fitted_opening_kg[0].value() < 0.0);
+    assert!(r.fitted_feed_kg[0].value() > 0.0);
+    assert!(r.fitted_outlet_kg[0].value() > 0.0);
+    assert!(r.closing_inventory_kg[0].value() > 0.0);
+    assert_eq!(r.posterior_covariance.len(), 9);
+    assert_eq!(result.opening(), &input.1);
+    assert_eq!(
+        result.opening().value.tanks[0].elements_kg[&element()],
+        q("0")
+    );
+    assert_eq!(result, run(&input).unwrap());
 }
 
 #[test]

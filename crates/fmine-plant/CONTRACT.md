@@ -150,7 +150,8 @@ BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18), 
 input populations propagated per realization (§20); report ingestion, source-box qualification,
 fitting and calibration remain. BD-313 now has source-bound forward RTD
 transport and conditional lag alignment (§19), plus bounded known-kernel noisy inverse reconciliation
-(§24); kernel fitting and uncertainty in transport parameters or initial stocks remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
+(§24), including measured active-opening stock uncertainty; kernel fitting, uncertain transport parameters
+and unmeasured initial stocks remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
 worksheets expose nominal material conversion, elemental inventory accounting/reconciliation and joint flowsheet reconciliation;
 their byte-bound declarations remain Assumed rather than verified plant measurements.
@@ -743,23 +744,28 @@ elemental basis, physical interval, total slurry throughput and each observed or
 feed. No zero, observation Claim, covariance row or regularization prior is invented for a missing feed.
 
 The causal response matrix is constructed in cumulative throughput volume, retaining the contribution
-of every initial tank. Bypass receives its immediate share and reduces active-train flow; dead stock
+of every initial tank. `OpeningTreatment::Fixed` conditions on those stocks. The explicit `Measured`
+mode includes every active tank's elemental opening stock in the genuine observation population, ahead
+of the chronological flows. Its covariance includes every opening/opening and opening/flow pair;
+the kernel derives a separate outlet-response column for each tank. Bypass receives its immediate share and reduces active-train flow; dead stock
 does not exchange. The numerical owner jointly minimizes the full correlated measurement-error
-objective subject to outlet = initial contribution + response × feed. With unmeasured feeds it uses
+objective subject to outlet = opening response × opening stocks + feed response × feed. Fixed opening
+contributions move to the right-hand side; measured stocks are jointly fitted coordinates. With unmeasured feeds it uses
 the existing observable partial GLS solver; otherwise it uses the existing complete linear solver.
 The error-model Claim binds the precise kernel, opening, canonical observation order, full covariance,
 named error basis, conditional fixed-transport assumption and explicit diagnostic thresholds.
 
-The result retains every original Claim and observation, all fitted feed/outlet coordinates, full
+The result retains every original Claim and observation, all fitted opening/feed/outlet coordinates, full
 joint measured/latent covariance, adjustment covariance, normalized diagnostics and the complete
-response matrix. An independent scalar forward replay of the fitted feeds yields outlet and closing
+response matrices. An independent scalar forward replay of the fitted opening stocks and feeds yields outlet and closing
 inventory trajectories, per-interval transport/conservation residuals and whole-window closure.
 Negative physical fits and failed gross-error or closure checks retain rejected diagnostics without an
 admitted Claim. Rank-deficient inference refuses `FMINE-REF-104`, never a repaired rank. An identifiable
 inverse with no redundant observation returns `NoRedundancy`; it has no passed gross-error test. Weak
 transfer can produce large conditional uncertainty, which remains visible rather than regularized.
 
-Work is bounded to 32 intervals, 64 fitted coordinates, 32 constraints and 4,194,304 declared scalar-work
+Work is bounded to 32 intervals, 128 fitted coordinates (including at most 64 active opening stocks),
+32 constraints and 4,194,304 declared scalar-work
 units for response construction plus replay. The supplied kernel-step budget covers both passes.
 Cancellation or numerical-range failure returns no partial successful receipt. Inputs and outputs
 retain their evidence and confidentiality, with output knowledge at most `Estimated`. Scope, source
@@ -772,11 +778,22 @@ zero cross terms. JSON retains the original worksheet, source Claims, fitted tra
 and investigation diagnostics; Markdown shows the reconstructed feeds, conditional standard deviations
 and residuals. The checked-in example is synthetic and does not qualify a real plant response.
 
+DESIGN: `tests/plant/rtd_inverse_opening.toml` uses `fmine.plant-rtd-inverse.v2`, requiring
+`fixed_transport = "true"` and `opening_treatment = "measured"` in place of the v1 fixed-opening flag.
+Covariance keys `opening/1` through `opening/N` name the measured active tanks. Their original exact
+values remain in the opening Claim; fitted values, covariance, adjustments and response columns are
+separate output fields. Missing covariance pairs refuse rather than assume independence. Measured
+opening alone adds no redundant constraint, and negative fitted stock refuses even when the final
+total inventory is positive. Dead stock stays fixed and does not receive a covariance coordinate.
+The v2 input emits a v2 result and binds measured-opening semantics in RTIE/RTIR frame version 2;
+fixed-opening v1 source/receipt encodings retain their existing ordering and bytes.
+
 Independent one-/two-tank closed forms and explicit GLS formulas are the regression oracles for positive
 inverse recovery and full correlated covariance, mixed measured/missing feeds, gross-error and
-negative-fit rejection, throughput-clock equivalence, complete bypass, dead stocks, shutdown, weak
+negative-fit rejection, correlated measured openings, separate tank-stock responses, throughput-clock
+equivalence, complete bypass, dead stocks, shutdown, weak
 transfer, source binding, work bounds and cancellation. This conditional slice does not fit RTD parameters,
-model uncertainty in initial stocks or flow, identify sensor biases, separate transport from reaction,
+infer unmeasured initial stocks, model flow/kernel uncertainty, identify sensor biases, separate transport from reaction,
 calibrate recovery cards or establish empirical P754/plant gates. BD-313 remains open for those broader
 requirements.
 

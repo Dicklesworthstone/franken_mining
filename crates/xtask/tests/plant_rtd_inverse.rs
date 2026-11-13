@@ -12,6 +12,7 @@ use fmine_core::hash::sha256;
 use fmine_io::omf::json::{Json, parse};
 
 const TEXT: &str = include_str!("../../../tests/plant/rtd_inverse.toml");
+const MEASURED_OPENING: &str = include_str!("../../../tests/plant/rtd_inverse_opening.toml");
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 fn scratch() -> PathBuf {
@@ -170,6 +171,146 @@ fn command_recovers_missing_feeds_with_analytic_joint_covariance_and_no_redundan
     let markdown = envelope.rendered_markdown.expect("markdown");
     assert!(markdown.contains("Unmeasured, inferred"));
     assert!(markdown.contains("this is not a passed test"));
+}
+
+#[test]
+fn measured_opening_command_propagates_all_stock_flow_correlations() {
+    let (envelope, value) = evaluate(MEASURED_OPENING);
+    assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+    assert_eq!(
+        at(&value, &["schema"]).as_str(),
+        Some("fmine.plant-rtd-inverse-result.v2")
+    );
+    assert_eq!(
+        at(&value, &["error_model", "opening_treatment"]).as_str(),
+        Some("measured")
+    );
+    assert_eq!(at(&value, &["measured_coordinate_count"]).i64(), Some(3));
+    assert_eq!(array(at(&value, &["coordinate_order"])).len(), 5);
+    close(estimate(&value, "opening/1"), 2.0);
+    close(estimate(&value, "feed/0/1000000000"), 10.0);
+    close(estimate(&value, "feed/1000000000/2000000000"), 4.0);
+
+    // Independent inverse: [F0,F1] = H^-1 ([O0,O1]-G*S).
+    // T propagates the entire correlated [S,O0,O1] covariance, including signed cross terms.
+    let a = (-1.0_f64).exp();
+    let g = 1.0 - a;
+    let t = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [-g / a, 1.0 / a, 0.0],
+        [-g + g.powi(3) / a.powi(2), -g.powi(2) / a.powi(2), 1.0 / a],
+    ];
+    let v = [[0.25, 0.02, -0.03], [0.02, 0.04, 0.01], [-0.03, 0.01, 0.09]];
+    let keys = [
+        "opening/1",
+        "outlet/0/1000000000",
+        "outlet/1000000000/2000000000",
+        "feed/0/1000000000",
+        "feed/1000000000/2000000000",
+    ];
+    for (i, left) in keys.iter().enumerate() {
+        for (j, right) in keys.iter().enumerate() {
+            let expected = (0..3)
+                .map(|k| (0..3).map(|l| t[i][k] * v[k][l] * t[j][l]).sum::<f64>())
+                .sum();
+            close(covariance(&value, left, right), expected);
+        }
+    }
+    let response = array(at(&value, &["result", "opening_response_matrix"]));
+    close(number(&response[0]), g);
+    close(number(&response[1]), a * g);
+    assert_eq!(
+        at(&value, &["result", "opening_response_matrix_columns"]).i64(),
+        Some(1)
+    );
+    assert_eq!(
+        at(&value, &["result", "gross_error", "status"]).as_str(),
+        Some("no_redundancy")
+    );
+    let opening_coordinate = &array(at(&value, &["coordinate_order"]))[0];
+    assert_eq!(
+        at(opening_coordinate, &["source_claim_id"]),
+        at(&value, &["opening", "id"])
+    );
+    assert_eq!(
+        at(&value, &["source", "sha256"]).as_str(),
+        Some(sha256(MEASURED_OPENING.as_bytes()).to_hex().as_str())
+    );
+    assert!(
+        envelope
+            .rendered_markdown
+            .as_ref()
+            .expect("markdown")
+            .contains("Measured opening stocks")
+    );
+
+    let changed_covariance = changed(
+        MEASURED_OPENING,
+        "right = \"opening/1\"\nkg2 = \"0.25\"",
+        "right = \"opening/1\"\nkg2 = \"0.5\"",
+    );
+    let (other_envelope, other) = evaluate(&changed_covariance);
+    assert_eq!(other_envelope.exit_code, 0, "{}", other_envelope.to_json());
+    close(estimate(&other, "feed/0/1000000000"), 10.0);
+    assert!(covariance(&other, keys[3], keys[3]) > covariance(&value, keys[3], keys[3]));
+    assert_ne!(
+        at(&other, &["receipt_digest"]),
+        at(&value, &["receipt_digest"])
+    );
+}
+
+#[test]
+fn measured_opening_requires_its_explicit_policy_and_complete_covariance() {
+    let missing_pair = changed(
+        MEASURED_OPENING,
+        "[[covariance]]\nleft = \"opening/1\"\nright = \"outlet/0/1000000000\"\nkg2 = \"0.02\"",
+        "",
+    );
+    refused(&missing_pair, "FMINE-REF-506");
+    refused(
+        &changed(
+            MEASURED_OPENING,
+            "opening_treatment = \"measured\"",
+            "opening_treatment = \"fixed\"",
+        ),
+        "FMINE-REF-506",
+    );
+    refused(
+        &changed(
+            MEASURED_OPENING,
+            "fixed_transport = \"true\"",
+            "fixed_transport = \"false\"",
+        ),
+        "FMINE-REF-109",
+    );
+    refused(
+        &changed(
+            MEASURED_OPENING,
+            "fmine.plant-rtd-inverse.v2",
+            "fmine.plant-rtd-inverse.v1",
+        ),
+        "FMINE-REF-506",
+    );
+    refused(
+        &changed(
+            MEASURED_OPENING,
+            "left = \"opening/1\"",
+            "left = \"opening/dead\"",
+        ),
+        "FMINE-REF-506",
+    );
+    refused(
+        &changed(
+            MEASURED_OPENING,
+            "element_kg = \"2\"",
+            "element_kg = \"unmeasured\"",
+        ),
+        "FMINE-REF-506",
+    );
+    let missing_policy = changed(MEASURED_OPENING, "opening_treatment = \"measured\"", "");
+    refused(&missing_policy, "FMINE-REF-506");
 }
 
 fn measured_first_feed(value: &str) -> String {
