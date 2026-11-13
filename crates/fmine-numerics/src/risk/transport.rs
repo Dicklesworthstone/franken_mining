@@ -10,6 +10,9 @@ use fmine_units::{ExactQty as Rat, UnitsError};
 
 use super::exact::compare;
 
+mod tail;
+pub use tail::{CvarCertificate, MAX_CVAR_ORACLE_CALLS};
+
 pub const MAX_STATES: usize = 64;
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);

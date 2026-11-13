@@ -209,7 +209,8 @@ No fixture under `fixtures/` (§33.2).
 
 ## 10. Known gaps
 - **Finite transport is a declared ambiguity experiment.** It neither learns nor calibrates its metric or
-  radius, adds unseen scenarios, nor computes distributionally robust CVaR. Callers preserve these boundaries.
+  radius nor adds unseen scenarios. Its certified worst expectation and upper-tail CVaR remain conditional
+  on the declared finite support, metric and radius. Callers preserve these boundaries.
 - **Weighted bootstrap is conditional sensitivity.** It does not establish that input scenarios are independent
   observed samples, estimate a defensible effective sample size, calibrate their weights, or cover model misspecification.
 - **The four original kernels are not lifts.** Beyond its refusal test, each has one example test of its statistics or algebra (Ville, EVSI monotone, CVaR coherence, duality). `voi` also has GB-29's known answers, the exhaustive policy check and GATE-HELM-02, and `eproc` the score e-process's Ville test with its planted negative. The refusals make bad input visible; they do not make the kernels correct in general. A real lift waits on bd-022.
@@ -341,6 +342,19 @@ variances 1e20 and 1e-20 in either coordinate order.
   `TransportCertificate` retains `radius`, `worst_case_value`, `transport_cost`, `destination_weights`,
   `arcs`, `dual_lambda`, `dual_potentials`, `dual_value` and zero `duality_gap`. Radius zero recovers the
   nominal expectation; saturation reaches the largest declared value with λ = 0 and possible budget slack.
+  `maximize_cvar(losses, radius, tail_mass)` additionally maximizes signed upper-tail average loss over
+  the same ambiguity set, with exact tail mass in `(0,1]`. A bounded supporting-line search minimizes
+  `eta + max_transport E[(loss-eta)+]/tail_mass`. Its threshold may lie between observed losses; a mean-loss
+  maximizing law does not substitute for a tail-risk maximizer. At a kink, exact mixtures of supporting
+  transport laws can supply the maximizing law. Every success rechecks the original transport constraints,
+  a nonnegative tail submass bounded by its destination law and summing to the declared tail mass, and
+  exact equality of the tail objective with the global threshold/transport dual bound. No approximate
+  convergence result is admitted. `CvarCertificate` retains the threshold, worst CVaR, tail submasses,
+  complete hinge-objective transport certificate, dual value, zero gap and oracle-call count.
+  `MAX_CVAR_ORACLE_CALLS = 128` bounds work; exhaustion or rational overflow refuses `FMINE-REF-207`.
+  Signed gains are never clamped to zero. Independent two-state formulas and three-state transport-vertex
+  cuts at quantile boundaries exercise this path in `risk/transport/tail/tests.rs`, alongside direct
+  primal/dual witness checks. Neither empirical calibration nor additional states are supplied.
 - **`tropical::{PrecedenceArc { from, to, min_lag }, TropicalDag, TropicalError, RELAXATION_TOLERANCE}`**, with `new`, `add_arc` (checked when a pass runs), `earliest_starts() -> Result<Vec<f64>, TropicalError>` and `latest_starts(deadline) -> Result<Vec<f64>, TropicalError>`.
 - **`sparse`** (BD-145):
   - **`Coo::{new, push, staged, assemble}`.** Duplicates accumulate in insertion order after a stable (row, col) sort.
