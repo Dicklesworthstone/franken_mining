@@ -42,9 +42,9 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   are canonically sorted. Quantity, document, period, and basis fields are selectors, not numeric inputs.
   An approximate headline never supplies an invented tolerance.
 - `table_identities::{parse_table_identities, load_table_identities, TableIdentityRegistry, TableIdentity,
-  Term, Replacement, IdentityKind, TermRole}` (BD-340.S5, BD-063): strict `fmine.table-identities.v1` declarations for source-bound
-  PDF arithmetic, without source values. Every identity names its registered document, family, sum or
-  roll-forward kind, total quantity and period, unit, basis, construction and tie convention. Linked term rows
+  Term, Replacement, CostRate, IdentityKind, TermRole}` (BD-340.S5, BD-063): strict `fmine.table-identities.v1` declarations for source-bound
+  PDF arithmetic, without source values. Every identity names its registered document, family, explicit
+  kind, total quantity and period, unit, basis, construction and tie convention. Linked term rows
   explicitly name each member quantity, period, sign and role. A roll-forward has exactly one positive opening
   and at least one movement; signed printed values are multiplied by the explicit coefficient. Multi-year
   membership is declared rather than inferred. Duplicate quantities, unknown documents/fields, orphan terms,
@@ -54,8 +54,14 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   definition, explicit matching ounce units, percentage factor 100 and a price-deck key. The percentage and
   both operands share a three-year `YYYY-YYYY` window. Basis is explicitly attributable contained gold/GEO,
   excluding acquisitions/divestments, with the same deck key. Gold requires `none`; GEO requires a named deck.
-  Replacement metadata cannot decorate a sum or roll-forward. Shared amount quantities remain permitted;
+  Replacement metadata cannot decorate any other identity kind. Shared amount quantities remain permitted;
   reuse of a quoted percentage in another same-document identity refuses as unsupported nonlinear coupling.
+  DESIGN (BD-331/340): `gold_cost_per_sold_oz` declares `1000 * usd_m / koz = usd_per_oz`;
+  `copper_cost_per_sold_lb` declares `usd_m / Mlb = usd_per_lb`. `IdentityKind::cost_rate` exposes
+  these fixed native scales. Each requires one numerator and denominator, `rounded_once`, identical
+  periods and signs of +1 so signed printed costs are unchanged. The selected kind declares sold metal;
+  source-basis agreement is checked by the consumer, with no inferred accounting definition, FX,
+  mass or ownership conversion. Reusing either quoted rate in another identity also refuses.
   DESIGN (BD-335): optional `[[reserve_row]]` entries add explicit subject, reserve item/year, period, metal,
   unit, ownership, contained/recoverable support and convention; their source basis is the exact agreed string
   `<metal>;<ownership>;<support>`. An opening belongs to the preceding fiscal year. A quoted deck names the

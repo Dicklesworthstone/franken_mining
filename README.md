@@ -1905,6 +1905,53 @@ or depletion amounts can participate in sums or roll-forwards, and all those con
 Reusing the quoted percentage in another identity refuses because that would require a general nonlinear
 constraint. JSON and Markdown retain the named definition, window, deck, tokens, locators and checked result.
 
+Published gold and copper unit costs can use the same cited PDF workflow. Two explicit identity kinds fix
+the native units and exact conversion factor:
+
+| Kind | Cost numerator | Sold denominator | Reported rate | Exact formula |
+|---|---|---|---|---|
+| `gold_cost_per_sold_oz` | `usd_m` | `koz` | `usd_per_oz` | `1000 * cost / sold` |
+| `copper_cost_per_sold_lb` | `usd_m` | `Mlb` | `usd_per_lb` | `cost / sold` |
+
+For example, append this declaration to a definitions file after registering the named PDF and agreeing
+the three source quantities through the existing two-reader registry:
+
+```toml
+[[identity]]
+id = "gold_cost_rate_2025"
+doc = "Synthetic_Costs.pdf"
+family = "reported_cost_rate"
+kind = "gold_cost_per_sold_oz"
+total = "gold_cost_per_oz"
+total_period = "2025FY"
+unit = "usd_per_oz"
+basis = "attributable;denominator=sold"
+construction = "rounded_once"
+convention = "closed"
+
+[[term]]
+identity = "gold_cost_rate_2025"
+quantity = "gold_cost"
+period = "2025FY"
+sign = 1
+role = "numerator"
+
+[[term]]
+identity = "gold_cost_rate_2025"
+quantity = "gold_sold"
+period = "2025FY"
+sign = 1
+role = "denominator"
+```
+
+All three assertions must match the declared document, period and basis. The selected kind requires the
+numerator and denominator units shown above; it does not infer a cost definition or ownership conversion.
+Costs retain their printed sign, and the sold interval must be strictly positive throughout its rounding
+range. A cost subtotal can be shared with a sum identity so both relations are checked jointly. A quoted
+rate cannot itself be reused in another identity, which would require unsupported bilinear reasoning.
+The output retains the operands, exact factor, checked witness or conflict, and source hashes. Changing
+PDF bytes, disagreeing readers or an unavailable publication date still refuses the inspection.
+
 DESIGN boundary: these are arithmetic checks on issuer assertions. Different filing/deck vintages remain
 separate documents. The command does not determine which vintage is true, classify reserves or establish
 GATE-HALL-01. Its PDF report digest binds the declarations, readings and results; it is not a ledger anchor or

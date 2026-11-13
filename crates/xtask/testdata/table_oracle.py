@@ -356,6 +356,46 @@ def cutoff_workspace(tag, mode="constant", reverse=False):
     return root
 
 
+def cost_rate_workspace(copper=False, mode="normal"):
+    root = workspace(f"cost-rate-{copper}-{mode}")
+    kind, unit, sold_unit, rate = (
+        ("copper_cost_per_sold_lb", "usd_per_lb", "Mlb", "2.000") if copper
+        else ("gold_cost_per_sold_oz", "usd_per_oz", "koz", "2000.0")
+    )
+    basis = "attributable;denominator=sold"
+    definitions = (
+        'schema = "fmine.table-identities.v1"\nissuer = "table_test"\n'
+        f'[[identity]]\nid = "cost_rate"\ndoc = "{FILE}"\nfamily = "reported_cost_rate"\n'
+        f'kind = "{kind}"\ntotal = "rate"\ntotal_period = "2025FY"\nunit = "{unit}"\n'
+        f'basis = "{basis}"\nconstruction = "rounded_once"\nconvention = "closed"\n'
+    )
+    for quantity, role in (("cost", "numerator"), ("sold", "denominator")):
+        definitions += (
+            f'[[term]]\nidentity = "cost_rate"\nquantity = "{quantity}"\n'
+            f'period = "2025FY"\nsign = 1\nrole = "{role}"\n'
+        )
+    readings = 'schema = "fmine.transcriptions.v1"\nissuer = "table_test"\n'
+    for reader in ("reader_a", "reader_b"):
+        for quantity, token, source_unit in (
+            ("cost", "110.000" if mode == "changed_cost" else "100.000", "usd_m"),
+            ("sold", "40.000" if mode == "changed_sold" else "50.000", sold_unit),
+            ("rate", rate, unit),
+        ):
+            if mode == "pending_cost" and quantity == "cost" and reader == "reader_b":
+                continue
+            if mode == "disagreed_cost" and quantity == "cost" and reader == "reader_b":
+                token = "101.000"
+            readings += (
+                f'[[entry]]\ndoc = "{FILE}"\ndoc_sha256 = "{digest(DOCUMENT)}"\npage = 1\n'
+                f'table = "Invented cost reconciliation"\nrow = "{quantity}"\ncol = "2025FY"\n'
+                f'token = "{token}"\nquantity = "{quantity}"\nunit = "{source_unit}"\n'
+                f'basis = "{basis}"\nperiod = "2025FY"\nreader = "{reader}"\n'
+            )
+    (root / DEFINITIONS).write_text(definitions, encoding="utf-8")
+    (root / "registries/transcriptions/table_test.toml").write_text(readings, encoding="utf-8")
+    return root
+
+
 def binary(root, arguments, output_format=None):
     args = [str(BINARY), *arguments, "--workspace", str(root)]
     if output_format is not None:
@@ -556,6 +596,64 @@ class TableScenarios(unittest.TestCase):
                          (3, "FMINE-REF-202"), raw)
         self.assertIn(FILE, unavailable["refusal"]["what"])
         self.assertIsNone(unavailable["payload"])
+
+
+class CostRateScenarios(unittest.TestCase):
+    def test_native_gold_and_copper_cost_rates_keep_exact_witnesses_and_source_units(self):
+        for copper in (False, True):
+            with self.subTest(copper=copper):
+                root = cost_rate_workspace(copper)
+                envelope, raw = successful(root)
+                checks = envelope["payload"]["checks"]
+                self.assertEqual(checks["refused"], [])
+                self.assertEqual(len(checks["components"]), 1)
+                component = checks["components"][0]
+                self.assertEqual((component["verdict"], component["checked"]), ("feasible", True))
+                factor, sold_unit, rate_unit = (1, "Mlb", "usd_per_lb") if copper else (1000, "koz", "usd_per_oz")
+                self.assertEqual(checks["definitions"][0]["cost_rate"], {
+                    "numerator_unit": "usd_m", "denominator_unit": sold_unit,
+                    "unit": rate_unit, "factor": factor, "formula": "factor*cost/sold",
+                })
+                witness = {row["locator"]: Fraction(int(row["value"]["num"]), int(row["value"]["den"]))
+                           for row in component["witness"]}
+                value = lambda role: witness[f"{FILE}:p1:Invented cost reconciliation:{role}/2025FY"]
+                self.assertEqual(value("rate"), factor * value("cost") / value("sold"))
+                self.assertEqual(raw, successful(root)[1])
+                self.assertIsNone(envelope["certificate"])
+                self.assertTrue(all(value is False for value in envelope["flags"].values()))
+                markdown = binary(root, BASE, "markdown")
+                self.assertEqual(markdown.returncode, 0, markdown.stderr)
+                for expected in (FILE, digest(DOCUMENT), "reader\\_a", "reader\\_b", sold_unit,
+                                 "cost", "sold", "2025FY", rate_unit.replace("_", "\\_")):
+                    self.assertIn(expected, markdown.stdout)
+
+    def test_changed_cost_or_sales_moves_the_checked_finding_and_digest(self):
+        for copper in (False, True):
+            original, _ = successful(cost_rate_workspace(copper))
+            for mode in ("changed_cost", "changed_sold"):
+                with self.subTest(copper=copper, mode=mode):
+                    changed, _ = successful(cost_rate_workspace(copper, mode))
+                    component = changed["payload"]["checks"]["components"][0]
+                    self.assertEqual((component["verdict"], component["checked"]), ("infeasible", True))
+                    self.assertIsNotNone(component["certificate_digest"])
+                    self.assertNotEqual(report_digest(original["payload"]), report_digest(changed["payload"]))
+
+    def test_cost_rate_loader_still_requires_original_bytes_two_readers_and_publication_cut(self):
+        root = cost_rate_workspace()
+        path = root / "documents" / FILE
+        path.write_bytes(bytes([DOCUMENT[0] ^ 1]) + DOCUMENT[1:])
+        assert_refusal(root, "FMINE-REF-505", 8)
+        assert_refusal(cost_rate_workspace(mode="disagreed_cost"), "FMINE-REF-202", 3)
+        pending, _ = successful(cost_rate_workspace(mode="pending_cost"))
+        self.assertEqual(pending["payload"]["checks"]["components"], [])
+        self.assertEqual([row["identity"] for row in pending["payload"]["checks"]["refused"]], ["cost_rate"])
+        self.assertTrue(pending["payload"]["pending_readings"])
+        root = cost_rate_workspace(True)
+        excluded, raw = invoke(root, ["--as-of", "2026-01-31"])
+        self.assertEqual((excluded["exit_code"], excluded["refusal"]["code"]), (3, "FMINE-REF-202"), raw)
+        admitted, raw = invoke(root, ["--as-of", "2026-02-01"])
+        self.assertEqual(admitted["exit_code"], 0, raw)
+        self.assertTrue(admitted["payload"]["source_bytes_verified"])
 
 
 class CutoffScenarios(unittest.TestCase):
