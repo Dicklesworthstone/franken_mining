@@ -2,13 +2,16 @@
 # Net delta-NAV values are already net of investment costs. Costs constrain the budget only.
 # Nominal: risky wins at USD 12M. Worst-case mean: safe wins at USD 8M.
 # Worst-case expected regret: risky wins at USD 10M versus safe at USD 12M.
+# The declared worst-half loss cap is zero: risky passes nominally (-USD 4M),
+# but fails under stress (+USD 12M). Safe survives the robust tail-risk screen.
 schema = "fmine.capital-program.v1"
 model_key = "synthetic-capital-wasserstein"
 question = "Which affordable bundle is preferred under an explicitly declared probability stress?"
 currency = "USD"
 valuation_basis = "Invented common-date net delta-NAV in nominal USD, fixed share count and common economic ownership"
 budget = "10000000"
-tail_mass = "1/4"
+tail_mass = "1/2"
+max_tail_loss = "0"
 payoff_convention = "additive_net_delta_nav"
 reference_class_basis = "Synthetic scenario assumptions, with no fitted risk or overrun adjustment"
 

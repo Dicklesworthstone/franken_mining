@@ -974,14 +974,34 @@ including zero diagonals, must be explicit and form a proper metric. No geometry
 from state names or payoff values. Input bytes and source-bound Claims retain those assumptions.
 
 Structural, cash, debt, contractual and share-count constraints apply over the original complete state
-support. The original nominal primary and secondary tail-loss screens determine the comparison population.
-**The stress diagnostic does not certify tail-loss feasibility under the stressed weights.** Regret uses
-only the same nominally feasible alternatives. Models with a per-share objective stress each state's exact
-whole-bundle NAV per actual share, rather than dividing a mean total value by a mean share count.
+support. The original nominal primary and secondary tail-loss screens determine the mean/regret comparison
+population. Models with a per-share objective stress each state's exact whole-bundle NAV per actual share.
 
-The report exposes both adversarial distributions, transported mass, transport cost, dual multipliers,
+Every declared primary or secondary entity tail-loss cap also receives an exact worst-CVaR check over
+the same finite-support ambiguity set. Each cap keeps its original tail mass and USD or actual USD/share
+basis. Its certificate retains a feasible stressed law, worst-tail submass and matching transport/threshold
+upper bound. Separate robust-tail feasible sets and maximin-mean/minimax-regret co-winners require every
+declared cap to hold. Regret keeps the original nominally feasible benchmark; nominal selections and
+adaptive value remain separate. Equality to a cap passes. If every choice fails, the robust-tail winner
+lists are empty.
+
+The example declares a zero cap on the worst-half loss. All amounts below are USD millions:
+
+| Bundle | Nominal worst-half loss | Worst-case worst-half loss | Satisfies the cap throughout |
+|---|---:|---:|---|
+| Hold cash | 0 | 0 | Yes |
+| Risky project | -4 | 12 | No |
+| Safe project | -8 | -8 | Yes |
+
+Risky remains the nominal expected-value winner. Safe wins both robust-tail filtered comparisons at the
+declared radius of 1/4. These are conditional model calculations; geometry/radius calibration and omitted
+regimes remain outside this slice.
+
+The report exposes adversarial distributions, transported mass, transport cost, dual multipliers,
 dual potentials and exact zero duality gaps. It retains empty eligible populations, rejected bundle IDs
-and all co-winners. Geometry is limited to 64 states and bounded work over the complete subset population.
+and all co-winners. Geometry is limited to 64 states. Combined work is bounded before enumeration by
+`(static subsets + policies) × (2 + 128 × declared tail limits) × states² ≤ 2,097,152`;
+each tail check permits at most 128 exact transport calls and refuses unresolved convergence.
 The same explicit declaration also supports two-stage policies, described below. The option can coexist
 with the separate bootstrap diagnostic, and an absent declaration preserves the prior report shape.
 
@@ -1503,8 +1523,11 @@ The stress calculation changes the **unconditional weights of complete states**.
 observation classes and chosen continuations stay fixed. States with the same observation cannot acquire
 different decisions, and the study cost stays in every resulting path. Branch probabilities in the policy
 table remain nominal; each stress certificate displays its own adversarial distribution. Cash, contractual
-and share-count failures remain binding even if an adversary gives the failing state zero weight. Eligibility
-uses the original nominal tail-loss limits; this diagnostic does not establish stressed CVaR feasibility.
+and share-count failures remain binding even if an adversary gives the failing state zero weight.
+The nominal tail-loss screens define the mean/regret comparison population. Every declared primary and
+secondary entity cap also receives an exact worst-CVaR certificate for the complete policy outcomes.
+Separate robust-tail feasible sets and filtered co-winners require all caps to hold over the declared
+ambiguity set; the regret benchmark remains the original nominally feasible policy population.
 
 INFERENCE from the independent synthetic study test: a USD 10 study followed by construction only in the
 good state has complete policy payoffs `[90, -10]`, with equal nominal weights and unit state distance.

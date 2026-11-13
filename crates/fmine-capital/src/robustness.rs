@@ -3,7 +3,9 @@
 
 use super::*;
 pub use fmine_decide::card::robustness::{METHOD, RobustnessDesign, StateDistance};
-use fmine_numerics::risk::transport::{TransportCertificate, TransportPlan};
+use fmine_numerics::risk::transport::{
+    CvarCertificate, MAX_CVAR_ORACLE_CALLS, TransportCertificate, TransportPlan,
+};
 
 mod render;
 #[cfg(test)]
@@ -11,13 +13,24 @@ mod tests;
 
 pub const MAX_TRANSPORT_STATES: usize = 64;
 pub const MAX_TRANSPORT_WORK: usize = 2_097_152;
-pub const NO_CLAIM: &str = "Conditional finite-support Wasserstein-1 comparison of every nominally feasible static bundle. Only the original shared-scenario weights vary within the declared dimensionless metric and radius; neither is inferred or calibrated. All original structural, cash, contractual and share-count checks remain binding over the complete support. Eligibility retains the original nominal tail-loss screens, including secondary entity limits; those screens are not recomputed or certified under the stressed weights. Mean and regret use the original primary objective, in USD or exact USD/share. Regret compares the same nominally feasible static bundles in each original state. Each bundle and criterion has its own adversarial law and exact primal/dual certificate. Stress rankings do not replace the nominal selection and do not certify robust CVaR feasibility, omitted regimes, adaptive policies, empirical confidence coverage, actual agreement terms or execution authorization.";
-pub const POLICY_NO_CLAIM: &str = "Conditional finite-support Wasserstein-1 comparison of every nominally feasible two-stage policy. Only the original unconditional shared-state weights vary within the declared dimensionless metric and radius; neither is inferred or calibrated. Each policy retains its original paid information gate, observation partition, initial commitments and same-state continuation. No adversary selects a new continuation or reveals a hidden state. All original structural, cash, contractual and share-count checks remain binding over the complete support. Eligibility retains the original nominal tail-loss screens, including secondary entity limits; those screens are not recomputed or certified under stressed weights. Mean and regret use each complete policy's primary objective, in USD or exact USD/share. Regret compares the same nominally feasible policies in each original state; the separate static comparison retains its own population. Each policy and criterion has its own adversarial law and exact primal/dual certificate. Stress rankings do not replace nominal selections or net adaptive value and do not certify robust CVaR feasibility, dynamic adversarial decisions, omitted regimes, empirical confidence coverage, actual agreement terms or execution authorization.";
+pub const NO_CLAIM: &str = "Conditional finite-support Wasserstein-1 comparison of every nominally feasible static bundle. Only the original shared-scenario weights vary within the declared dimensionless metric and radius; neither is inferred or calibrated. All original structural, cash, contractual and share-count checks remain binding over the complete support. The original stress rankings retain nominal tail-loss eligibility. Separate robust-tail eligibility certifies every explicitly declared primary and secondary entity tail-loss limit under all admissible stressed laws, using its own exact maximizing tail witness. Mean and regret use the original primary objective, in USD or exact USD/share. Regret compares the same nominally feasible static bundles in each original state, including when robust-tail eligibility filters the ranked choices. Each bundle and criterion has its own adversarial law and exact primal/dual certificate. Stress rankings do not replace the nominal selection and do not certify omitted regimes, adaptive policies, empirical confidence coverage, actual agreement terms or execution authorization.";
+pub const POLICY_NO_CLAIM: &str = "Conditional finite-support Wasserstein-1 comparison of every nominally feasible two-stage policy. Only the original unconditional shared-state weights vary within the declared dimensionless metric and radius; neither is inferred or calibrated. Each policy retains its original paid information gate, observation partition, initial commitments and same-state continuation. No adversary selects a new continuation or reveals a hidden state. All original structural, cash, contractual and share-count checks remain binding over the complete support. The original stress rankings retain nominal tail-loss eligibility. Separate robust-tail eligibility certifies every explicitly declared primary and secondary entity tail-loss limit for the complete policy under all admissible stressed laws. Mean and regret use each complete policy's primary objective, in USD or exact USD/share. Regret compares the same nominally feasible policies in each original state, including when robust-tail eligibility filters the ranked choices; the separate static comparison retains its own population. Each policy and criterion has its own adversarial law and exact primal/dual certificate. Stress rankings do not replace nominal selections or net adaptive value and do not certify dynamic adversarial decisions, omitted regimes, empirical confidence coverage, actual agreement terms or execution authorization.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RobustnessScope {
     StaticBundles,
     AdaptivePolicies,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RobustTailLimit {
+    pub constraint: String,
+    pub objective_unit: String,
+    pub limit: Rat,
+    pub nominal_tail_loss: Rat,
+    pub worst_case_tail_loss: Rat,
+    pub passes: bool,
+    pub certificate: CvarCertificate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +44,9 @@ pub struct RobustBundle {
     /// Maximizes signed loss; its value is the negative of worst_case_mean.
     pub loss_certificate: TransportCertificate,
     pub regret_certificate: TransportCertificate,
+    pub tail_limits: Vec<RobustTailLimit>,
+    /// All explicitly declared limits hold for every law in the same transport ball.
+    pub robust_tail_feasible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +63,23 @@ pub struct RobustnessSummary {
     pub minimax_expected_regret_winners: Vec<String>,
     pub nominal_winner_survives_maximin: bool,
     pub nominal_winner_survives_minimax_regret: bool,
+    pub declared_tail_limits: usize,
+    pub robust_tail_feasible: Vec<String>,
+    pub robust_tail_rejections: Vec<String>,
+    pub robust_tail_maximin_mean_winners: Vec<String>,
+    pub robust_tail_minimax_expected_regret_winners: Vec<String>,
     pub bundles: Vec<RobustBundle>,
+}
+
+fn tail_limit_count(inputs: &ProgramInputs) -> usize {
+    usize::from(match &inputs.equity {
+        Some(equity) => equity.value.max_tail_loss_per_share.is_some(),
+        None => inputs.policy.value.max_tail_loss.is_some(),
+    }) + inputs
+        .entity_valuations
+        .iter()
+        .filter(|claim| claim.value.equity.max_tail_loss_per_share.is_some())
+        .count()
 }
 
 fn invalid(why: &str) -> Refusal {
@@ -73,13 +105,16 @@ pub(crate) fn check_population_work(inputs: &ProgramInputs, population: usize) -
     let d = &claim.value;
     let states = inputs.weights.value.states.len();
     let cells = states.checked_mul(states);
-    let work = cells.and_then(|n| population.checked_mul(2)?.checked_mul(n));
+    let objectives = tail_limit_count(inputs)
+        .checked_mul(MAX_CVAR_ORACLE_CALLS)
+        .and_then(|n| n.checked_add(2));
+    let work = cells.and_then(|n| population.checked_mul(objectives?)?.checked_mul(n));
     if !(1..=MAX_TRANSPORT_STATES).contains(&states)
         || cells != Some(d.distances.len())
         || work.is_none_or(|n| n > MAX_TRANSPORT_WORK)
     {
         return Err(invalid(
-            "capital Wasserstein stress requires 1..=64 states, every ordered distance pair and at most 2097152 objective/state-pair evaluations over all declared static subsets and policies",
+            "capital Wasserstein stress requires 1..=64 states, every ordered distance pair and at most 2097152 objective/state-pair evaluations over all declared static subsets and policies, including up to 128 transport calls per declared tail-loss limit",
         ));
     }
     if d.method != METHOD
@@ -141,7 +176,7 @@ pub(crate) fn prepare(inputs: &ProgramInputs) -> Result<Option<TransportPlan>> {
     TransportPlan::new(&weights, &costs).map(Some)
 }
 
-fn winners(rows: &[RobustBundle], regret: bool) -> Vec<String> {
+fn winners(rows: &[RobustBundle], regret: bool, robust_tail: bool) -> Vec<String> {
     let value = |row: &RobustBundle| {
         if regret {
             row.worst_case_expected_regret
@@ -149,7 +184,8 @@ fn winners(rows: &[RobustBundle], regret: bool) -> Vec<String> {
             row.worst_case_mean
         }
     };
-    let best = rows.iter().map(value).reduce(|a, b| {
+    let eligible = |row: &&RobustBundle| !robust_tail || row.robust_tail_feasible;
+    let best = rows.iter().filter(eligible).map(value).reduce(|a, b| {
         if exact_compare(a, b).is_lt() == regret {
             a
         } else {
@@ -157,9 +193,91 @@ fn winners(rows: &[RobustBundle], regret: bool) -> Vec<String> {
         }
     });
     rows.iter()
+        .filter(eligible)
         .filter(|row| Some(value(row)) == best)
         .map(|row| row.bundle_id.clone())
         .collect()
+}
+
+fn assess_tail_limits(
+    inputs: &ProgramInputs,
+    choice: &ProgramChoice,
+    primary_values: &[Rat],
+    plan: &TransportPlan,
+    radius: Rat,
+) -> Result<Vec<RobustTailLimit>> {
+    let missing = || {
+        bad(
+            RefusalCode::NumericalCertificateFailed207,
+            "capital stress lost admitted tail-loss outcomes or their nominal assessment",
+        )
+    };
+    let mut limits = Vec::new();
+    let mut assess =
+        |constraint: String, unit: &str, cap: Rat, nominal: Rat, values: &[Rat]| -> Result<()> {
+            let losses = values
+                .iter()
+                .map(|v| arithmetic(ZERO.checked_sub(*v)))
+                .collect::<Result<Vec<_>>>()?;
+            let certificate = plan.maximize_cvar(&losses, radius, inputs.policy.value.tail_mass)?;
+            if exact_compare(certificate.worst_case_cvar, nominal).is_lt() {
+                return Err(missing()); // The unchanged nominal law always belongs to the ambiguity set.
+            }
+            limits.push(RobustTailLimit {
+                constraint,
+                objective_unit: unit.into(),
+                limit: cap,
+                nominal_tail_loss: nominal,
+                worst_case_tail_loss: certificate.worst_case_cvar,
+                passes: !exact_compare(certificate.worst_case_cvar, cap).is_gt(),
+                certificate,
+            });
+            Ok(())
+        };
+    if let Some(equity) = &inputs.equity {
+        if let Some(cap) = equity.value.max_tail_loss_per_share {
+            assess(
+                "primary".into(),
+                "USD/share",
+                cap,
+                choice.per_share_tail_loss.ok_or_else(missing)?.major,
+                primary_values,
+            )?;
+        }
+    } else if let Some(cap) = inputs.policy.value.max_tail_loss {
+        assess(
+            "primary".into(),
+            "USD",
+            amount(cap)?,
+            choice.tail_loss.ok_or_else(missing)?.major,
+            primary_values,
+        )?;
+    }
+    for entity in &choice.entity_valuations {
+        if let Some(cap) = entity.max_tail_loss_per_share {
+            let values = fmine_decide::card::stability::ordered_values(
+                &inputs.weights.value.states,
+                entity
+                    .per_share_statistics
+                    .as_ref()
+                    .ok_or_else(missing)?
+                    .states
+                    .iter()
+                    .map(|row| (row.state_id.as_str(), row.payoff.major)),
+            )?;
+            assess(
+                format!("entity/{}", entity.entity),
+                "USD/share",
+                cap.major,
+                entity.per_share_tail_loss.ok_or_else(missing)?.major,
+                &values,
+            )?;
+        }
+    }
+    if limits.len() != tail_limit_count(inputs) {
+        return Err(missing());
+    }
+    Ok(limits)
 }
 
 pub(crate) fn assess(
@@ -238,7 +356,7 @@ fn assess_population(
                         .map(|row| (row.state_id.as_str(), row.payoff.major)),
                 )?
             };
-            eligible.push((choice.bundle_id.clone(), values));
+            eligible.push((choice, values));
         }
     }
     let best: Vec<_> = (0..states.len())
@@ -258,7 +376,7 @@ fn assess_population(
             })
     };
     let mut bundles = Vec::with_capacity(eligible.len());
-    for (bundle_id, values) in eligible {
+    for (choice, values) in eligible {
         let losses = values
             .iter()
             .map(|value| arithmetic(ZERO.checked_sub(*value)))
@@ -270,18 +388,21 @@ fn assess_population(
             .collect::<Result<Vec<_>>>()?;
         let loss_certificate = plan.maximize(&losses, claim.value.radius)?;
         let regret_certificate = plan.maximize(&regrets, claim.value.radius)?;
+        let tail_limits = assess_tail_limits(inputs, choice, &values, plan, claim.value.radius)?;
         bundles.push(RobustBundle {
-            bundle_id,
+            bundle_id: choice.bundle_id.clone(),
             nominal_mean: mean(&values)?,
             worst_case_mean: arithmetic(ZERO.checked_sub(loss_certificate.worst_case_value))?,
             nominal_mean_regret: mean(&regrets)?,
             worst_case_expected_regret: regret_certificate.worst_case_value,
             loss_certificate,
             regret_certificate,
+            robust_tail_feasible: tail_limits.iter().all(|limit| limit.passes),
+            tail_limits,
         });
     }
-    let maximin_mean_winners = winners(&bundles, false);
-    let minimax_expected_regret_winners = winners(&bundles, true);
+    let maximin_mean_winners = winners(&bundles, false, false);
+    let minimax_expected_regret_winners = winners(&bundles, true, false);
     let survives = |winners: &[String]| winners.iter().any(|id| nominal_winners.contains(id));
     let mut design = claim.value.clone();
     design
@@ -305,6 +426,19 @@ fn assess_population(
         nominal_winner_survives_minimax_regret: survives(&minimax_expected_regret_winners),
         maximin_mean_winners,
         minimax_expected_regret_winners,
+        declared_tail_limits: tail_limit_count(inputs),
+        robust_tail_feasible: bundles
+            .iter()
+            .filter(|row| row.robust_tail_feasible)
+            .map(|row| row.bundle_id.clone())
+            .collect(),
+        robust_tail_rejections: bundles
+            .iter()
+            .filter(|row| !row.robust_tail_feasible)
+            .map(|row| row.bundle_id.clone())
+            .collect(),
+        robust_tail_maximin_mean_winners: winners(&bundles, false, true),
+        robust_tail_minimax_expected_regret_winners: winners(&bundles, true, true),
         bundles,
     }))
 }

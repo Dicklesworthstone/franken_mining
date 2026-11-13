@@ -300,6 +300,46 @@ fn per_share_stress_uses_realized_whole_policy_denominators() {
 }
 
 #[test]
+fn stressed_tail_limit_uses_the_complete_paid_policy_and_retains_nominal_value() {
+    let mut inputs = with_stress(study_example(), r(1, 4));
+    let mut policy = inputs.program.policy.value.clone();
+    policy.tail_mass = r(3, 4);
+    policy.max_tail_loss = Some(usd(0));
+    inputs.program.policy = policy_claim(policy);
+    let report = evaluate(&inputs).unwrap();
+    let bought = adaptive(&report, &[("good", &["build"]), ("bad", &[])]);
+    let held = common(&report, &[]);
+    let stress = report.summary().robustness.as_ref().unwrap();
+    assert_eq!(
+        report.summary().feasible_winners,
+        [bought.policy_id.clone()]
+    );
+    assert_eq!(report.summary().net_adaptive_value.unwrap().major, r(40, 1));
+    let tail = &result(&report, &bought.policy_id).tail_limits[0];
+    // Paid policy values are 90 and -10, including the sunk study in both states.
+    // Its worst 3/4 nominal mass is 1/2 at loss10 and 1/4 at loss-90 => -70/3.
+    assert_eq!(tail.nominal_tail_loss, r(-70, 3));
+    assert_eq!(tail.worst_case_tail_loss, r(10, 1));
+    assert!(!tail.passes);
+    assert_eq!(stress.robust_tail_feasible, [held.policy_id.clone()]);
+    assert_eq!(
+        stress.robust_tail_maximin_mean_winners,
+        [held.policy_id.clone()]
+    );
+    assert_eq!(
+        stress.robust_tail_minimax_expected_regret_winners,
+        [held.policy_id.clone()]
+    );
+    assert_eq!(tail.certificate.duality_gap, ZERO);
+    assert!(
+        report
+            .to_json()
+            .contains("\"stressed_tail_loss_feasibility_certified\":true")
+    );
+    assert!(report.to_markdown().contains("Worst-tail submass"));
+}
+
+#[test]
 fn combined_static_and_policy_work_is_bounded_before_claim_admission() {
     let zeros = vec![0; 64];
     let study = vec![-10; 64];

@@ -238,8 +238,18 @@ nominal statistics still use all structurally feasible bundles before risk. Ever
 co-winner survives. A nonempty population containing only negative survivors keeps signed negative means;
 an empty population retains its geometry and excluded identifiers, with empty comparisons and winners.
 
-This diagnostic changes only state weights. It neither rechecks nor certifies the nominal tail-loss
-screens under those weights and never relabels a winner as stress-feasible. Original cash, contractual,
+DESIGN (BD-229): each explicitly declared primary or secondary entity tail-loss limit additionally receives
+its own exact worst-CVaR assessment over the same ambiguity set. The upper-tail mass remains the original
+policy's, and a cap retains USD or its entity's actual USD/share denominator. The nominally feasible population
+and existing mean/regret rankings are retained; separate robust-tail feasible/excluded lists and filtered
+maximin-mean/minimax-regret co-winners require every declared cap to hold. Regret keeps the original
+nominally feasible population as its benchmark. Nominal exclusions cannot become robust-feasible because the
+nominal law belongs to the ambiguity set. Exact equality to a cap passes, signed gains are not clamped, and
+no surviving choice produces empty robust-tail winners without an invented fallback. No cap is inferred
+when none was declared. Every tail result includes a feasible stressed law/tail submass and a matching global
+transport/threshold upper bound, independently rechecked by the numerical owner.
+
+This diagnostic changes only state weights. Original cash, contractual,
 share-count and structural obligations remain binding across all original states, including states which
 receive zero adversarial mass. Each criterion has its own adversary. No confidence level, fitted radius,
 unseen regime or adaptive policy is inferred. Bootstrap selection stability may coexist: both consume
@@ -442,7 +452,10 @@ nominal/maximin/minimax co-winners and both complete transport certificates. Eac
 transport cost, adversarial destination weights, every positive arc, dual multiplier/potentials/value and gap.
 The source design is admitted as a Claim and contributes all parents, anchors, epistemics, confidentiality,
 UU and non-hashed metadata to the capital result. Both JSON and Markdown disclose the nominal-feasible
-regret population and lack of stressed tail-risk certification. The staged comparison additionally scopes
+regret population, every declared limit's nominal/worst tail loss, exact witness and pass/fail result,
+and separate robust-tail feasible sets and co-winners. `stressed_tail_loss_feasibility_certified` is true
+when at least one limit is declared and all applicable checks completed; absent limits remain explicit.
+The staged comparison additionally scopes
 its rows to complete policies, as described in §8. Absent stress preserves prior report bytes
 and digest binding; no new optional key is emitted.
 
@@ -494,11 +507,11 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
 `FMINE-REF-505` for source SHA mismatch and `FMINE-REF-507` for altered typed Claims.
 
 - Static stress admits at most 64 original states and 2,097,152 objective/state-pair evaluations
-  (`2 * all_declared_subsets * state_count^2`), counting rejected subsets in the bound before hashing
+  (`(2 + 128 * declared_tail_limits) * all_declared_subsets * state_count^2`), counting rejected subsets in the bound before hashing
   or enumeration. The existing eight-candidate bound remains. Metric validation has its independently
   bounded cubic check; no partial or truncated stress population is returned.
-- Both direct recourse evaluation and model dispatch refuse a stress declaration on adaptive policies with
-  `FMINE-REF-201`. This bounded diagnostic does not turn a static bundle ranking into a policy ranking.
+- Recourse stress counts both complete static and policy populations against that same bound. A static
+  bundle ranking never substitutes for a separately assessed policy ranking or full-policy tail-risk test.
 
 ## 6. Proof Obligations
 
@@ -668,11 +681,15 @@ law reveals a hidden state, chooses a new continuation or rewrites nominal branc
 Regret is recomputed against the nominally feasible policy population. Structural and nominal tail-loss
 exclusions remain explicit, including secondary entity limits; no rejected policy contributes a
 hindsight payoff. Each criterion retains a separate exact primal/dual certificate. Static and policy
-stress rankings are separate comparisons, not a new adaptive-value difference or a robust-CVaR screen.
+stress rankings are separate comparisons, not a new adaptive-value difference. Every explicitly declared
+tail cap is separately certified on the complete unconditional policy, including its paid information cost,
+same-state continuation and each entity's realized share denominator. No observation-conditional cap
+replaces this full-policy limit, and stress does not re-optimize the continuation.
 
 The existing `[[robustness]]` and complete `[[transport_distance]]` rows are accepted with an explicit
 `[[recourse]]` declaration through `fmine decide program`. The shared 2,097,152 transport work cap counts
-`2 * (static subsets + policies) * states^2` before claim admission or enumeration, in addition to
+`(2 + 128 * declared tail limits) * (static subsets + policies) * states^2` before claim admission or
+enumeration (128 is the exact tail solver's maximum transport calls per cap), in addition to
 the existing cash, valuation and bootstrap bounds. Geometry and information Claims, every original
 source and the scoped certificates participate in the resulting receipt. Omitting robustness preserves
 the previous staged outputs and identity. Neither nominal outcomes nor bootstrap experiments change.
@@ -683,7 +700,12 @@ and, at radius 1/4, worst mean 15 and worst expected regret 15/2. At radius 1/2,
 while minimax expected regret retains the adaptive policy. Independent eighth-grid transport vertices
 and full primal/dual witnesses cover all eligible policies. Grouped observations, risk and cash failures,
 exact NAV/share, combined work limits, source mutation and bootstrap coexistence have regressions.
-The existing Python Fraction policy oracle supplies five independent scenarios at four radii through
+Tail regressions include a nominally acceptable risky bundle whose worst-half signed loss changes from
+-4 to +12 at radius 1/4, an empty robust-feasible population, negative caps and exact equality, and separate
+primary/secondary actual-share limits. A paid Good-build/Bad-abandon policy with original payoffs [90,-10]
+has nominal worst-three-quarters loss -70/3 and stressed loss 10, rejecting the policy under a zero cap while
+retaining its nominal mean and adaptive value. These are synthetic declared models, not calibrated risks.
+The existing Python Fraction policy oracle supplies six independent scenarios at four radii through
 the real CLI; an additional integration check compares complete library/binary JSON and Markdown.
 
 ## 9. Lifted Code & Foundation Dependencies
@@ -703,6 +725,6 @@ blended or simultaneous optimization objectives, portfolio safety, calibrated pr
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Conditional selection frequency requires
 the explicit bootstrap declaration; absent declarations remain unavailable. Conditional static and adaptive-policy
-Wasserstein comparisons require the explicit geometry and radius declaration. Stressed tail-risk feasibility,
-dynamic adversarial recourse and empirical model-uncertainty calibration are not supplied.
+Wasserstein comparisons and stressed declared-tail feasibility require the explicit geometry and radius
+declaration. Dynamic adversarial recourse and empirical model-uncertainty calibration are not supplied.
 Broad BD-229 and production-scale gates remain open.

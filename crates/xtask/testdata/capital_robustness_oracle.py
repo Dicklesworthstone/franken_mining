@@ -71,6 +71,38 @@ def certificate(cert, state_ids, weights, distances, radius, objective):
     assert rat(cert["duality_gap"]) == 0
 
 
+def tail_loss(losses, law, alpha):
+    remaining, weighted = alpha, Fraction(0)
+    for state in sorted(losses, key=lambda key: (-losses[key], key)):
+        mass = min(remaining, law[state])
+        remaining -= mass
+        weighted += mass * losses[state]
+    assert remaining == 0
+    return weighted / alpha
+
+
+def tail_limit(row, values, weights, distances, radius, alpha, cap, distributions):
+    losses = {state: -value for state, value in values.items()}
+    assert row["constraint"] == "primary" and rat(row["limit"]) == cap
+    assert rat(row["nominal_tail_loss"]) == tail_loss(losses, weights, alpha)
+    expected = max(tail_loss(losses, law, alpha) for law in distributions)
+    assert rat(row["worst_case_tail_loss"]) == expected
+    assert row["passes"] is (expected <= cap)
+    cert = row["certificate"]
+    assert rat(cert["tail_mass"]) == alpha
+    threshold, states = rat(cert["threshold"]), sorted(weights)
+    hinge = {state: max(0, losses[state] - threshold) for state in states}
+    certificate(cert["hinge_certificate"], states, weights, distances, radius, hinge)
+    law = dict(zip(states, map(rat, cert["hinge_certificate"]["destination_weights"]), strict=True))
+    submass = dict(zip(states, map(rat, cert["tail_masses"]), strict=True))
+    assert sum(submass.values()) == alpha
+    assert all(0 <= submass[state] <= law[state] for state in states)
+    primal = sum(submass[state] * losses[state] for state in states) / alpha
+    dual = threshold + rat(cert["hinge_certificate"]["dual_value"]) / alpha
+    assert primal == dual == expected == rat(cert["worst_case_cvar"]) == rat(cert["dual_value"])
+    assert rat(cert["duality_gap"]) == 0 and 1 <= cert["oracle_calls"] <= 128
+
+
 def main(binary):
     raw = MODEL.read_bytes()
     first, payload = invoke(binary)
@@ -100,8 +132,9 @@ def main(binary):
     assert stress["scope"] == "nominally_feasible_static_bundles"
     assert stress["regret_reference"] == "all_nominally_feasible_static_bundles"
     assert stress["eligibility_basis"] == "original_nominal_structural_and_tail_loss_screens"
-    assert stress["stressed_tail_loss_feasibility_certified"] is False
-    assert "not recomputed or certified" in stress["no_claim"]
+    assert stress["stressed_tail_loss_feasibility_certified"] is True
+    assert stress["declared_tail_limits"] == 1
+    assert "Separate robust-tail eligibility certifies" in stress["no_claim"]
 
     choices = {tuple(row["selected"]): row for row in summary["choices"]}
     assert set(choices) == {(), ("risky",), ("safe",), ("risky", "safe")}
@@ -114,6 +147,10 @@ def main(binary):
     assert stress["minimax_expected_regret_winners"] == [ids["risky",]]
     assert stress["nominal_winner_survives_maximin"] is False
     assert stress["nominal_winner_survives_minimax_regret"] is True
+    assert stress["robust_tail_rejections"] == [ids["risky",]]
+    assert stress["robust_tail_feasible"] == [ids[()], ids["safe",]]
+    assert stress["robust_tail_maximin_mean_winners"] == [ids["safe",]]
+    assert stress["robust_tail_minimax_expected_regret_winners"] == [ids["safe",]]
 
     state_ids = stress["state_ids"]
     assert state_ids == ["bad", "good"]
@@ -159,7 +196,11 @@ def main(binary):
         assert rat(row["loss_certificate"]["worst_case_value"]) == -rat(row["worst_case_mean"])
         assert rat(row["regret_certificate"]["worst_case_value"]) == rat(
             row["worst_case_expected_regret"])
-    print("capital Wasserstein: exact independent vertices and all primal/dual witnesses verified")
+        assert len(row["tail_limits"]) == 1
+        tail_limit(row["tail_limits"][0], values, weights, distances, radius,
+                   Fraction(1, 2), Fraction(0), distributions)
+        assert row["robust_tail_feasible"] is row["tail_limits"][0]["passes"]
+    print("capital Wasserstein: exact independent vertices and all primal/dual and tail witnesses verified")
 
 
 def adaptive_reference():
@@ -186,9 +227,11 @@ def adaptive_fixture(reference, spec, radius):
 def adaptive_main(binary):
     reference = adaptive_reference()
     # The independent existing policy oracle accounts for all cash, shares and information sets.
+    tail_case = reference.study_example()
+    tail_case.update(tail="3/4", cap="0")
     specs = [reference.study_example(), reference.study_example(grouped=True),
              reference.study_example(gated=False), reference.equity_example(),
-             reference.adaptive_only_example()]
+             reference.adaptive_only_example(), tail_case]
     for spec in specs:
         expected = reference.enumerate_policies(spec)
         weights = expected["weights"]
@@ -208,7 +251,7 @@ def adaptive_main(binary):
             assert stress["scope"] == "nominally_feasible_adaptive_policies"
             assert stress["regret_reference"] == "all_nominally_feasible_adaptive_policies"
             assert stress["objective_unit"] == ("USD/share" if "equity" in spec else "USD")
-            assert stress["stressed_tail_loss_feasibility_certified"] is False
+            assert stress["stressed_tail_loss_feasibility_certified"] is (stress["declared_tail_limits"] > 0)
             assert report["static_comparison"]["summary"]["robustness"]["scope"] == "nominally_feasible_static_bundles"
             design = report["static_comparison"]["inputs"]["robustness"]
             assert design["id"] in report["claim"]["parents"]
@@ -237,6 +280,9 @@ def adaptive_main(binary):
             distances = {(a, b): Fraction(a != b) for a in states for b in states}
             rows = {row["policy_id"]: row for row in stress["policies"]}
             assert set(rows) == set(payoffs) and len(rows) == len(stress["policies"])
+            cap = spec["equity"]["max_tail_loss_per_share"] if "equity" in spec else spec["cap"]
+            cap = None if cap is None else Fraction(cap)
+            assert stress["declared_tail_limits"] == int(cap is not None)
             for identifier, values in payoffs.items():
                 row = rows[identifier]
                 regrets = {state: best[state] - values[state] for state in states}
@@ -248,6 +294,21 @@ def adaptive_main(binary):
                 certificate(row["loss_certificate"], states, weights, distances, radius,
                             {state: -values[state] for state in states})
                 certificate(row["regret_certificate"], states, weights, distances, radius, regrets)
+                if cap is None:
+                    assert row["tail_limits"] == [] and row["robust_tail_feasible"] is True
+                else:
+                    assert len(row["tail_limits"]) == 1
+                    tail_limit(row["tail_limits"][0], values, weights, distances, radius,
+                               Fraction(spec["tail"]), cap, distributions)
+                    assert row["robust_tail_feasible"] is row["tail_limits"][0]["passes"]
+            survivors = {identifier: row for identifier, row in rows.items() if row["robust_tail_feasible"]}
+            assert sorted(stress["robust_tail_feasible"]) == sorted(survivors)
+            assert sorted(stress["robust_tail_rejections"]) == sorted(set(rows) - set(survivors))
+            for field, key, choose in (("robust_tail_maximin_mean_winners", "worst_case_mean", max),
+                                       ("robust_tail_minimax_expected_regret_winners", "worst_case_expected_regret", min)):
+                optimum = choose(rat(row[key]) for row in survivors.values()) if survivors else None
+                assert sorted(stress[field]) == sorted(identifier for identifier, row in survivors.items()
+                                                      if rat(row[key]) == optimum)
             for field, value, choose in (("maximin_mean_winners", "worst_case_mean", max),
                                         ("minimax_expected_regret_winners", "worst_case_expected_regret", min)):
                 optimum = choose(rat(row[value]) for row in rows.values()) if rows else None
@@ -255,7 +316,7 @@ def adaptive_main(binary):
                                                       if rat(row[value]) == optimum)
             if radius == 0:
                 assert stress["maximin_mean_winners"] == summary["feasible_winners"]
-    print("adaptive capital Wasserstein: 20 independently enumerated policy/transport scenarios verified")
+    print("adaptive capital Wasserstein: 24 independently enumerated policy/transport/tail scenarios verified")
 
 
 if __name__ == "__main__":

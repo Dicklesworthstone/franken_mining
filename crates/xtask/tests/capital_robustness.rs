@@ -42,7 +42,10 @@ fn capital_robustness_source_example_preserves_library_and_binary_rendering() {
     for expected in [
         "\"scope\":\"nominally_feasible_static_bundles\"",
         "\"objective_unit\":\"USD\"",
-        "\"stressed_tail_loss_feasibility_certified\":false",
+        "\"stressed_tail_loss_feasibility_certified\":true",
+        "\"robust_tail_rejections\":[\"bundle_01\"]",
+        "\"robust_tail_maximin_mean_winners\":[\"bundle_02\"]",
+        "\"worst_case_tail_loss\":\"12000000/1\"",
         "\"maximin_mean_winners\":[\"bundle_02\"]",
         "\"minimax_expected_regret_winners\":[\"bundle_01\"]",
         "\"worst_case_mean\":\"4000000/1\"",
@@ -59,7 +62,8 @@ fn capital_robustness_source_example_preserves_library_and_binary_rendering() {
         "### Declared dimensionless transport geometry",
         "signed loss certificate",
         "same-state regret certificate",
-        "The nominal tail-loss limits have not been certified under the stressed laws.",
+        "Tail-loss limits under every admissible stressed law",
+        "primary tail-risk certificate",
     ] {
         assert!(markdown.contains(expected), "missing {expected}");
     }

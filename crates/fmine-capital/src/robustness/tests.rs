@@ -247,6 +247,153 @@ fn nominal_risk_rejections_never_enter_stressed_hindsight_regret() {
 }
 
 #[test]
+fn declared_tail_limits_get_separate_certified_eligibility_without_changing_nominal_selection() {
+    let mut program = example(r(1, 4));
+    let mut policy = program.policy.value.clone();
+    policy.max_tail_loss = Some(usd(0));
+    program.policy = policy_claim(policy);
+    let report = evaluate(&program).unwrap();
+    let stress = report.summary().robustness.as_ref().unwrap();
+    assert_eq!(report.summary().feasible_winners, ["bundle_01"]);
+    assert_eq!(stress.declared_tail_limits, 1);
+    assert_eq!(stress.robust_tail_rejections, ["bundle_01"]);
+    assert_eq!(stress.robust_tail_feasible, ["bundle_00", "bundle_02"]);
+    assert_eq!(stress.robust_tail_maximin_mean_winners, ["bundle_02"]);
+    assert_eq!(
+        stress.robust_tail_minimax_expected_regret_winners,
+        ["bundle_02"]
+    );
+    let risky = &row(stress, "bundle_01").tail_limits[0];
+    // Nominal upper half: 1/4 at +12 loss and 1/4 at -20 loss => -4.
+    // Radius 1/4 permits the bad state's mass to reach 1/2 => tail loss +12.
+    assert_eq!(risky.nominal_tail_loss, r(-4, 1));
+    assert_eq!(risky.worst_case_tail_loss, r(12, 1));
+    assert!(!risky.passes);
+    assert_eq!(risky.certificate.duality_gap, ZERO);
+    assert_eq!(
+        row(stress, "bundle_02").tail_limits[0].worst_case_tail_loss,
+        r(-8, 1)
+    );
+    assert!(
+        report
+            .to_json()
+            .contains("\"stressed_tail_loss_feasibility_certified\":true")
+    );
+    assert!(
+        report
+            .to_markdown()
+            .contains("Tail-loss limits under every admissible stressed law")
+    );
+    assert!(
+        report
+            .to_markdown()
+            .contains("primary tail-risk certificate")
+    );
+
+    let mut design = program.robustness.take().unwrap().value;
+    design.radius = ZERO;
+    program.robustness = Some(design_claim(design));
+    let mut policy = program.policy.value.clone();
+    policy.max_tail_loss = Some(usd(-4));
+    program.policy = policy_claim(policy);
+    let exact = evaluate(&program).unwrap();
+    let cap = &row(exact.summary().robustness.as_ref().unwrap(), "bundle_01").tail_limits[0];
+    assert!(cap.passes); // Equality is allowed; a negative cap does not clamp signed losses.
+    assert_eq!(cap.worst_case_tail_loss, cap.nominal_tail_loss);
+}
+
+#[test]
+fn no_choice_survives_declared_stress_limits_without_an_invented_fallback() {
+    let program = with_design(
+        inputs(
+            &[("only", 1, &[20, -12])],
+            &[r(3, 4), r(1, 4)],
+            1,
+            r(1, 2),
+            Some(-2),
+        ),
+        r(1, 4),
+    );
+    let report = evaluate(&program).unwrap();
+    let stress = report.summary().robustness.as_ref().unwrap();
+    assert_eq!(report.summary().feasible_winners, ["bundle_01"]);
+    assert_eq!(stress.nominal_risk_rejections, ["bundle_00"]);
+    assert_eq!(stress.robust_tail_rejections, ["bundle_01"]);
+    assert!(stress.robust_tail_feasible.is_empty());
+    assert!(stress.robust_tail_maximin_mean_winners.is_empty());
+    assert!(
+        stress
+            .robust_tail_minimax_expected_regret_winners
+            .is_empty()
+    );
+    assert!(
+        report
+            .to_markdown()
+            .contains("No declared choice satisfies every tail-loss limit")
+    );
+}
+
+#[test]
+fn primary_and_secondary_tail_limits_use_their_actual_entity_share_denominators() {
+    for secondary in [false, true] {
+        let mut program = with_equity(example(r(1, 4)), &[1000, 1000], r(100, 1));
+        let mut equity = program.equity.as_ref().unwrap().value.clone();
+        set_share_change(&mut equity, "risky", "s0", r(-10, 1));
+        set_share_change(&mut equity, "risky", "s1", r(20, 1));
+        equity.max_tail_loss_per_share = Some(ONE);
+        if secondary {
+            equity.entity = "carve-out".into();
+            let nav_changes = program
+                .candidates
+                .iter()
+                .flat_map(|c| {
+                    c.value.payoffs.iter().map(|(s, v)| CandidateNavChange {
+                        candidate_id: c.value.candidate_id.clone(),
+                        state_id: s.clone(),
+                        value: *v,
+                    })
+                })
+                .collect();
+            let valuation = EntityValuation {
+                equity,
+                nav_changes,
+            };
+            let tag = valuation.canonical_tag();
+            program.entity_valuations.push(claim(
+                "capital.carve-out",
+                valuation,
+                &tag,
+                AdditivityClass::NonAdditive,
+            ));
+        } else {
+            program.equity = Some(equity_claim(equity));
+        }
+        let report = evaluate(&program).unwrap();
+        let stress = report.summary().robustness.as_ref().unwrap();
+        let cap = &row(stress, "bundle_01").tail_limits[0];
+        // Changed NAV/share is 4/3 in s0 and -53/30 in s1; USD totals cannot substitute.
+        assert_eq!(cap.nominal_tail_loss, r(13, 60));
+        assert_eq!(cap.worst_case_tail_loss, r(53, 30));
+        assert_eq!(cap.objective_unit, "USD/share");
+        assert_eq!(
+            cap.constraint,
+            if secondary {
+                "entity/carve-out"
+            } else {
+                "primary"
+            }
+        );
+        assert_eq!(stress.robust_tail_rejections, ["bundle_01"]);
+        assert!(
+            report
+                .summary()
+                .feasible_winners
+                .contains(&"bundle_01".into())
+        );
+    }
+}
+
+#[test]
 fn exact_nav_per_actual_share_uses_whole_bundle_denominators() {
     let mut program = with_equity(example(r(1, 4)), &[1000, 1000], r(100, 1));
     let mut equity = program.equity.take().unwrap().value;
