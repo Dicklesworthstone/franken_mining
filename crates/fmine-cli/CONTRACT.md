@@ -319,6 +319,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     No factor sorting, unit conversion, raw-float optimality or designed-pushback claim is inferred.
     The actual-binary Python Fraction oracle independently enumerates closed sets and nesting,
     including signed costs, ties, unreduced and neighboring i64 factors, and refusal boundaries.
+    DESIGN: `plan design --omf <file.omf> --spec <design.json> [--list-blocks]` uses
+    `fmine-io::omf::design_report` to compare an admitted closed design surface with the certified
+    integer ultimate-pit shell. The strict declaration names value and optional material attributes,
+    their integer scales, depth and uniform shell slopes. Payload `fmine.plan-design.omf.v1` retains
+    both source hashes and exact shell/design/left/added/loss intervals, with optional original-order
+    shell flags and sub-cell bounds. Geometric work is bounded before mesh construction. Neither
+    design slope feasibility nor raw-float optimality is claimed; the report preserves signed losses
+    and volcert's winding/sub-cell limitations. Common bounded regular-file reading now belongs to
+    `fmine_io::source`; CLI envelopes and established input refusal text remain unchanged.
     MineLib UPIT report composition now lives in `fmine-io::minelib_report`; the CLI retains bounded
     file reads and envelopes while its existing payload and candidate semantics stay unchanged.
   - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual

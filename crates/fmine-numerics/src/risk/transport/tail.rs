@@ -1,5 +1,6 @@
 //! DESIGN: exact worst upper-tail loss on the same declared finite transport ball.
-//! Determinism: Exact. A bounded convex search must finish with matching primal/dual witnesses.
+//! Determinism: Exact
+//! A bounded convex search must finish with matching primal/dual witnesses.
 
 use super::*;
 use std::collections::BTreeMap;

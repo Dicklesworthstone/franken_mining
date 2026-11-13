@@ -696,6 +696,55 @@ Certificates cover the declared scaled integer model and finite-depth uniform sl
 solver checks flow witnesses internally; this report does not export them. Shells are mathematical pit
 limits, with no designed-pushback, reserve, approved-slope, raw-float optimum or execution claim.
 
+### Compare an engineered pit design with its optimized shell
+
+`plan design` measures the value and material changes between a closed OMF design surface and the
+certified ultimate-pit shell of the same block model. It reports what the design leaves outside, what it
+adds beyond the shell, and their signed difference, with geometric uncertainty retained as intervals.
+
+```bash
+cargo run --release -p fmine-cli -- plan design \
+  --omf model.omf --spec design.json --list-blocks --json
+```
+
+For a regular block model named `orebody` and an engineer's closed surface named `designed_pit`, an
+explicit declaration can be:
+
+```json
+{
+  "schema": "fmine.omf-design.v1",
+  "block_model": "orebody",
+  "value_attribute": "value",
+  "value_per_unit": 100,
+  "value_rounding": "nearest_integer_half_away_from_zero",
+  "surface": "designed_pit",
+  "depth": 2,
+  "slope": {"rise": 1, "run": 1, "levels": 3},
+  "quantities": [
+    {"attribute": "dry_tonnes", "per_unit": 10},
+    {"attribute": "contained_gold_oz", "per_unit": 1000}
+  ]
+}
+```
+
+Each selected attribute must be a complete parent-block quantity with an explicit nonempty unit label.
+The command does not derive metal from grade, convert wet to dry tonnes, or infer a valuation model.
+It scales the declared block totals and assumes each is uniformly distributed within its block.
+Every reported endpoint is an integer numerator over `per_unit * 8^depth`, so signed costs and material
+fractions retain exact arithmetic after the declared scaling. `quantities: []` compares value alone.
+
+Both input hashes, the certified shell objective, and the surface selector are retained. With
+`--list-blocks`, the output also includes shell membership and the lower/upper number of design
+sub-cells for every original OMF block. Block order is U, then V, then W from bottom upward.
+Increasing depth can narrow the surface-intersection intervals; conservative work bounds refuse
+requests that would require excessive triangle/cell processing.
+
+The surface must be closed and lie entirely within the model. Geometry inherits the existing volcert
+nominal sub-cell and winding-classification limits; the intervals are not statistical confidence
+intervals. The design's slopes are not checked, so its value can exceed the slope-constrained shell's
+value and the signed loss can be negative. This comparison supplies no geotechnical sign-off,
+reserve, operational schedule or execution authority.
+
 ### Schedule an OMF block model under resource limits
 
 `plan schedule` also accepts an OMF model and a separate JSON declaration. It constructs a whole-block

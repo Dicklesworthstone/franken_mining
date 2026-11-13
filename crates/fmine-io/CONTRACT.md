@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Ingestion`
 - **LOC Budget:** `40k planned / 46k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report"]`
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report", "source"]`
 
 ## 2. Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
@@ -129,6 +129,34 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   placed and each block's quantity spread evenly through it, lies within the enclosure. A design reaching outside
   the block model's blocks is refused, since nothing values that part. The design is not checked against the
   slopes, so its loss can be negative when it breaks them.
+
+DESIGN (plan §15.5): `omf::design_report::evaluate` composes that comparison with the certified integer
+ultimate-pit solver and binds both supplied OMF and declaration bytes to checked SHA-256 anchors. The strict
+`fmine.omf-design.v1` JSON declaration names `block_model`, `value_attribute`, `value_per_unit`,
+`value_rounding=nearest_integer_half_away_from_zero`, `surface`, `depth`, `slope{rise,run,levels}` and
+`quantities[{attribute,per_unit}]`. All fields are required. Zero to 16 additional unique attributes are admitted;
+all numeric attributes must be on parent blocks, complete, and carry explicit nonempty unit labels. No semantic
+unit conversion is inferred. Every quantity rounds nearest, halves away from zero, at its declared scale;
+signed weights and negative shell-minus-design losses are retained. Output endpoints are exact integer strings
+over a shared `per_unit * 8^depth` denominator. The response separates shell, design, shell left outside the
+design, design added outside the shell, and their signed loss. Optional flags and sub-cell intervals are in
+OMF U/V/W bottom-up order.
+
+Before mesh or slope-graph allocation, the adapter enforces the existing one-million-block/eight-million-graph
+work bounds and a conservative geometry bound: at most 100,000 vertices and triangles, at most two million
+`blocks*(1+8^depth)` labels, and at most 64 million `triangles*blocks*8^depth` work units. Depth is 0..6;
+excessive geometry refuses with 207 and asks for a smaller depth or partition. These bounds include unreferenced
+vertices and pre-refinement triangle binning. The geometric enclosure has the existing volcert assumptions:
+nominal binary64 sub-cell boundaries and winding labels accepted near zero or one, without a proof of correct
+rounding or a global non-self-intersection check. Design slopes are not checked. Source-hash mismatches refuse
+with 505; missing units with 107; malformed declarations with 506. This is a geometric comparison, not a
+reserve, geotechnical approval, calibrated uncertainty statement or operational plan.
+
+`source::{read,read_bytes,read_model}` owns the common bounded regular-file reader previously in the CLI.
+UTF-8 text and binary reads hash the exact submitted bytes; model reads retain the established 4 MiB limit,
+locator and refusal wording. The path must be UTF-8. A metadata check precedes a `max_bytes+1` bounded read,
+which rejects a file that grows past the bound; malformed limits, unreadable/non-regular files and invalid
+text refuse with 506. This transfer changes ownership, not existing command input behavior.
 
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's

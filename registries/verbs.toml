@@ -81,6 +81,12 @@ mutates_authority = false
 description = "Solve nested OMF pit shells across explicit exact revenue factors with verified integer closure objectives and original block membership"
 
 [[verb]]
+path = "plan design"
+subsystem = "Pushback"
+mutates_authority = false
+description = "Compare a closed OMF pit design with a certified integer shell, retaining exact value and material enclosures for what the design leaves and adds"
+
+[[verb]]
 path = "html claims"
 subsystem = "Bullion"
 mutates_authority = false

@@ -1,20 +1,22 @@
-//! DESIGN: bounded source reads and CLI envelopes for OMF schedules and revenue-factor shells (BD-194/252).
+//! DESIGN: bounded source reads and CLI envelopes for OMF schedules, shells and designs (BD-194/252).
 //! Determinism: DeterministicPerIsa
 
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::Refusal;
-use fmine_io::omf::{scheduling, shells_report};
+use fmine_io::omf::{design_report, scheduling, shells_report};
 
 use crate::{Envelope, NextAction, worksheet_input};
 
 pub const USAGE: &str = "plan schedule --omf <model.omf> --spec <schedule.json> [--list-schedule]";
 pub const SHELLS_USAGE: &str = "plan shells --omf <model.omf> --spec <shells.json> [--list-blocks]";
+pub const DESIGN_USAGE: &str = "plan design --omf <model.omf> --spec <design.json> [--list-blocks]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Schedule,
     Shells,
+    Design,
 }
 
 impl Kind {
@@ -31,6 +33,12 @@ impl Kind {
                 SHELLS_USAGE,
                 "--list-blocks",
                 shells_report::NO_CLAIM,
+            ),
+            Self::Design => (
+                "plan design",
+                DESIGN_USAGE,
+                "--list-blocks",
+                design_report::NO_CLAIM,
             ),
         }
     }
@@ -51,7 +59,8 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     ) {
         (Some("plan"), Some("schedule")) => Kind::Schedule,
         (Some("plan"), Some("shells")) => Kind::Shells,
-        _ => return Err(format!("{USAGE} | {SHELLS_USAGE}")),
+        (Some("plan"), Some("design")) => Kind::Design,
+        _ => return Err(format!("{USAGE} | {SHELLS_USAGE} | {DESIGN_USAGE}")),
     };
     let (verb, usage, list_flag, _) = kind.labels();
     let (mut omf, mut spec, mut list_items) = (None, None, false);
@@ -105,6 +114,16 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             }
             Kind::Shells => {
                 let report = shells_report::evaluate(
+                    &bytes,
+                    &source,
+                    &spec,
+                    &spec_source,
+                    command.list_items,
+                )?;
+                (report.json, report.markdown)
+            }
+            Kind::Design => {
+                let report = design_report::evaluate(
                     &bytes,
                     &source,
                     &spec,

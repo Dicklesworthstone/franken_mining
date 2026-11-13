@@ -25,6 +25,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 
 use crate::zip_inflate::{archive_comment, read_stored_entries};
 
+pub mod design_report;
 mod gzip;
 pub mod json;
 mod parquet;

@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 67
+[verbs] 68
 decide card
 decide journal init
 decide journal record
@@ -87,6 +87,7 @@ metrics geo
 plan pit
 plan schedule
 plan shells
+plan design
 html claims
 check tables
 reserve replacement
