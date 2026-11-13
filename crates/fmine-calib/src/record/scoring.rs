@@ -142,12 +142,13 @@ pub fn assess(
     let mut fs = BTreeMap::new();
     let mut ys = BTreeMap::new();
     for f in forecasts {
+        let target = rules.targets.iter().find(|t| t.id == f.target);
         if !rules
             .sites
             .iter()
             .any(|s| s.name == f.site && s.status == SiteStatus::Live)
-            || !rules.targets.iter().any(|t| t.id == f.target)
-            || f.lo.signum() < 0
+            || target.is_none()
+            || (f.lo.signum() < 0 && !target.is_some_and(super::Target::permits_signed_forecast))
             || !le(f.lo, f.point)?
             || !le(f.point, f.hi)?
             || fs.insert((f.site.as_str(), f.target.as_str()), f).is_some()
@@ -659,6 +660,53 @@ mod tests {
         let mut invalid = f.clone();
         invalid[0].point = Rat::from_integer(200);
         assert!(assess(&r, &invalid, &y).is_err());
+    }
+
+    #[test]
+    fn direct_scoring_retains_signed_costs_and_refuses_unsigned_target_substitution() {
+        use crate::record::Outcome;
+        let (mut rules, mut forecasts, mut outcomes) = data();
+        forecasts[0].lo = Rat::from_integer(-4);
+        forecasts[0].point = Rat::from_integer(-2);
+        forecasts[0].hi = Rat::from_integer(0);
+        forecasts[1].lo = Rat::from_integer(-1);
+        forecasts[1].point = Rat::from_integer(0);
+        forecasts[1].hi = Rat::from_integer(1);
+        outcomes[0].value = Some(Rat::from_integer(-5));
+        outcomes[1].value = None;
+        for field in ["aisc_usd_per_oz", "c1_usd_per_lb", "aisc_usd_per_lb"] {
+            rules.targets[0].field = field.into();
+            rules.targets[0].outcome = Outcome::Q4Qtd;
+            let report = assess(&rules, &forecasts, &outcomes).expect(field);
+            let summary = &report.targets[0];
+            // First loss = width 4 + 10 * miss 1 = 14. Missing cross-zero row contributes width 2.
+            assert_eq!(
+                summary.observed_mean_interval_score,
+                Some(Rat::from_integer(14))
+            );
+            assert_eq!(
+                summary.full_mean_interval_score_lower,
+                Some(Rat::from_integer(8))
+            );
+            assert_eq!(
+                (summary.n_frozen, summary.n_scored, summary.n_unresolved),
+                (2, 1, 1)
+            );
+            assert_eq!(report.members[0].outcome, Some(Rat::from_integer(-5)));
+        }
+        for (field, outcome) in [
+            ("au_prod_100_koz", Outcome::FyMinus9m),
+            ("cu_prod_100_kt", Outcome::FyMinus9m),
+            ("net_cost", Outcome::Q4Qtd),
+            ("c1_usd_per_lb", Outcome::FyMinus9m),
+        ] {
+            rules.targets[0].field = field.into();
+            rules.targets[0].outcome = outcome;
+            assert!(
+                assess(&rules, &forecasts, &outcomes).is_err(),
+                "{field}/{outcome:?}"
+            );
+        }
     }
 
     #[test]

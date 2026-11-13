@@ -106,6 +106,10 @@ fn workspace() -> PathBuf {
 }
 
 fn workspace_with_copper_candidate(copper: bool) -> PathBuf {
+    workspace_with_signed_cost_forecast(copper, false)
+}
+
+fn workspace_with_signed_cost_forecast(copper: bool, signed_cost: bool) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "fmine-record-score-{}-{}",
         std::process::id(),
@@ -145,7 +149,10 @@ fn workspace_with_copper_candidate(copper: bool) -> PathBuf {
         "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\nretrieved_utc = \"2027-02-01T00:00:00Z\"\nurl_prefix = \"https://example.invalid/\"\n",
     );
     let mut inputs = String::new();
-    for (file, quarter, published, qtd, ytd) in books {
+    for (file, quarter, published, mut qtd, ytd) in books {
+        if signed_cost && quarter == "2026Q4" {
+            qtd[1] = -120.0;
+        }
         let mut sheets = vec![sheet("QTD", quarter, qtd)];
         if let Some(values) = ytd {
             sheets.push(sheet("YTD", quarter, values));
@@ -224,7 +231,13 @@ fn workspace_with_copper_candidate(copper: bool) -> PathBuf {
     };
     let cut = if copper { "2026-10-03T00:00:00Z" } else { CUT };
     fs::write(root.join("record/rules.toml"), &rules).unwrap();
-    let csv = if copper {
+    let csv = if signed_cost {
+        CSV.replace(
+            "Site A,unit_cost,105,100,110",
+            "Site A,unit_cost,-120,-125,-115",
+        )
+        .replace("Site B,unit_cost,105,100,110", "Site B,unit_cost,0,-5,5")
+    } else if copper {
         let (json, exit) = fmine_cli::run(
             &[
                 "forecast",
@@ -594,4 +607,76 @@ fn frozen_record_cli_scores_real_local_timestamps_and_keeps_every_named_site() {
     fs::write(root.join("assessment.md"), markdown).unwrap();
     eprintln!("forecast_record_score_fixture={}", root.display());
     // Scratch source files and throwaway private keys remain local; nothing is committed or deleted.
+}
+
+#[test]
+#[ignore = "requires OpenSSL 3.x and host clock from 2026-10-03 through 2026-12-31; real TSA time is never backdated"]
+fn signed_cost_records_preserve_negative_forecasts_outcomes_and_paired_scores() {
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    assert!(
+        (parse_utc("2026-10-03T00:00:00Z").unwrap()..parse_utc("2026-12-31T23:59:45Z").unwrap())
+            .contains(&now)
+    );
+    for copper in [false, true] {
+        let root = workspace_with_signed_cost_forecast(copper, true);
+        let csv = fs::read_to_string(root.join("record/forecasts.csv")).unwrap();
+        let (json, exit) = run(&root, AS_OF, "tsa/ca.pem", "json");
+        assert_eq!(exit, 0, "{json}");
+        assert_eq!(run(&root, AS_OF, "tsa/ca.pem", "json"), (json.clone(), 0));
+        let a = member(&json, "Site A", "unit_cost");
+        assert!(
+            a.contains(
+                "\"outcome\":{\"status\":\"available\",\"value\":{\"num\":\"-120\",\"den\":\"1\"}}"
+            ),
+            "{a}"
+        );
+        assert!(
+            a.contains("\"num\":\"-125\"") && a.contains("\"num\":\"-115\""),
+            "{a}"
+        );
+        assert_score(a.split("\"baselines\":").next().unwrap(), 10);
+        for (baseline, expected) in [("issuer_guidance", 2260), ("run_rate_persistence", 2300)] {
+            assert_score(
+                a.split(&format!("\"baseline\":\"{baseline}\""))
+                    .nth(1)
+                    .unwrap()
+                    .split("{\"baseline\":")
+                    .next()
+                    .unwrap(),
+                expected,
+            );
+        }
+        assert!(member(&json, "Site B", "unit_cost").contains("\"forecast_score\":null"));
+        assert!(member(&json, "Site C", "unit_cost").starts_with("\"not_published\""));
+        assert_eq!(json.matches("\"n_members\":3,\"n_live\":2,\"n_not_published\":1,\"n_resolved\":1,\"n_unresolved\":1,\"n_paired\":1").count(), 2, "{json}");
+        assert!(json.contains("Q4.xlsx:QTD!C5"));
+        assert!(json.contains(if copper {
+            "summary:c1_usd_per_lb"
+        } else {
+            "summary:aisc_usd_per_oz"
+        }));
+        assert!(json.contains("\"calibration_flag\":\"descriptive\""));
+        let (markdown, exit) = run(&root, AS_OF, "tsa/ca.pem", "markdown");
+        assert_eq!(exit, 0, "{markdown}");
+        assert!(
+            markdown.contains("-120") && markdown.contains("-125") && markdown.contains("-115"),
+            "{markdown}"
+        );
+        // The signed forecast bytes are part of the authenticated record, not a post-proof annotation.
+        fs::write(
+            root.join("record/forecasts.csv"),
+            csv.replace("-125,-115", "-126,-115"),
+        )
+        .unwrap();
+        let (altered, exit) = run(&root, AS_OF, "tsa/ca.pem", "json");
+        assert_eq!(exit, 8, "{altered}");
+        assert!(altered.contains("FMINE-REF-505"));
+        eprintln!("signed_cost_record_fixture={}", root.display());
+    }
 }

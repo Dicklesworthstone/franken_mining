@@ -336,16 +336,19 @@ pub fn assess(
     validate_rules(rules)?;
     let mut forecast_map = BTreeMap::new();
     for row in forecasts {
-        let (site, _) = member(rules, &row.site, &row.target)?;
+        let (site, target) = member(rules, &row.site, &row.target)?;
         if site.status != SiteStatus::Live {
             return Err(invalid(format!(
                 "{}: no forecast is permitted for a frozen NotPublished site",
                 row.site
             )));
         }
-        if row.lo.signum() < 0 || !le(row.lo, row.point)? || !le(row.point, row.hi)? {
+        if (row.lo.signum() < 0 && !target.permits_signed_forecast())
+            || !le(row.lo, row.point)?
+            || !le(row.point, row.hi)?
+        {
             return Err(domain(format!(
-                "{} / {}: forecast needs 0 <= lower <= point <= upper",
+                "{} / {}: forecast needs lower <= point <= upper within the target's domain",
                 row.site, row.target
             )));
         }
@@ -1210,6 +1213,61 @@ mod tests {
                 inside: true
             })
         );
+    }
+
+    #[test]
+    fn signed_cost_forecasts_pair_with_both_baselines_and_keep_missing_members() {
+        let (mut rules, mut forecasts, mut outcomes, mut baselines) = fixture();
+        for (row, (lo, point, hi)) in
+            forecasts
+                .iter_mut()
+                .zip([(-3, -2, -1), (-1, 0, 1), (-6, -4, -2)])
+        {
+            (row.lo, row.point, row.hi) = (i(lo), i(point), i(hi));
+        }
+        outcomes[0].value = Availability::Available(i(-2));
+        outcomes[1].value = Availability::Available(ZERO);
+        baselines[0].value = interval(-3, -1);
+        baselines[1].value = interval(0, 0);
+        for field in ["aisc_usd_per_oz", "c1_usd_per_lb", "aisc_usd_per_lb"] {
+            rules.targets[0].field = field.into();
+            rules.targets[0].outcome = Outcome::Q4Qtd;
+            let report = assess(&rules, &forecasts, &outcomes, &baselines).expect(field);
+            let target = &report.targets[0];
+            assert_eq!(
+                (
+                    target.n_members,
+                    target.n_live,
+                    target.n_resolved,
+                    target.n_unresolved
+                ),
+                (4, 3, 2, 1)
+            );
+            assert_eq!(target.n_paired, 1);
+            assert_eq!(target.forecast_minus_issuer_guidance, Some(ZERO));
+            assert_eq!(target.forecast_minus_run_rate_persistence, Some(i(-18)));
+            assert_eq!(target.methods[0].mean_interval_score, Some(i(2)));
+            assert_eq!(
+                target.methods[0].whole_cohort_coverage,
+                Some(closed(r(2, 3), ONE))
+            );
+            assert_eq!(report.flag, CalibrationFlag::Descriptive);
+        }
+        for (field, outcome) in [
+            ("au_prod_100_koz", Outcome::FyMinus9m),
+            ("cu_prod_100_kt", Outcome::FyMinus9m),
+            ("net_cost", Outcome::Q4Qtd),
+            ("c1_usd_per_lb", Outcome::FyMinus9m),
+        ] {
+            rules.targets[0].field = field.into();
+            rules.targets[0].outcome = outcome;
+            assert_eq!(
+                assess(&rules, &forecasts, &outcomes, &baselines)
+                    .expect_err(field)
+                    .code,
+                "FMINE-REF-109",
+            );
+        }
     }
 
     #[test]

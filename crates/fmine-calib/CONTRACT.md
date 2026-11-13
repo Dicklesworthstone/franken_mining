@@ -418,7 +418,11 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     or changes to existing rules/record frames;
   - `parse_forecasts(csv, rules)` → `Vec<ForecastRow>` (BD-334.S3): the header `forecasts_header` derives from α
     (`site,target,point,p10,p90,uncalibrated` at 0.2), exactly one row per live site × target, none for a
-    `not_published` site, exact decimals with 0 ≤ lower ≤ point ≤ upper, and `uncalibrated` = `true`;
+    `not_published` site, exact decimals with lower ≤ point ≤ upper, and `uncalibrated` = `true`.
+    Gold AISC and copper C1/AISC sold-metal cost targets admit signed forecasts, including credit-only and
+    cross-zero ranges. The exact field and `q4_qtd` outcome rule authorize this domain, never the target ID
+    or prose. Production, unknown fields and incompatible field/outcome pairs retain nonnegative bounds.
+    Both direct scoring APIs enforce the same target domain; signed costs are not clamped or excluded.
   - `interval_score` on exact rationals (refuses α outside (0, 1) and l > u), `quantile` (Hyndman–Fan types 1
     and 7), `pooled_ratios` (consecutive-quarter ratios per site; a pair with a value that is not a positive
     number is left out and counted, never imputed), `ratio_quantiles` (the ratios at α/2 and 1 − α/2) and

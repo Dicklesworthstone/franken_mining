@@ -606,6 +606,17 @@ pub struct Target {
     pub outcome: Outcome,
 }
 
+impl Target {
+    /// Net sold-metal cost forecasts may be credits. Unknown fields and incompatible outcome rules
+    /// retain the nonnegative domain; a caller's target ID or prose cannot authorize signed values.
+    fn permits_signed_forecast(&self) -> bool {
+        matches!(
+            TargetMetric::from_target(self),
+            Some(TargetMetric::GoldAisc | TargetMetric::CopperC1 | TargetMetric::CopperAisc)
+        )
+    }
+}
+
 /// DESIGN (BD-067/076): source semantics shared by candidate generation and both record scorers.
 /// This interpretation does not alter the durable rules. Production uses an additive 100% quantity;
 /// cost rates retain their sold-metal denominator and are never subtracted or ownership-scaled.
@@ -1326,7 +1337,8 @@ pub fn forecasts_header(rules: &RecordRules) -> Result<String, RecordError> {
 
 /// Parses `forecasts.csv` against the rules (BD-334.S3): the rules' header; then exactly one row for each live
 /// site × target and none for a `not_published` site or anything outside the universe; decimals with
-/// 0 ≤ lower ≤ point ≤ upper; and `uncalibrated` = `true`, since one period cannot calibrate (plan §21.6).
+/// lower ≤ point ≤ upper (nonnegative except for explicitly supported net cost targets); and
+/// `uncalibrated` = `true`, since one period cannot calibrate (plan §21.6).
 /// Lines end in `\n`; no field holds a comma, quote or surrounding space.
 pub fn parse_forecasts(csv: &[u8], rules: &RecordRules) -> Result<Vec<ForecastRow>, RecordError> {
     let bad = |line: usize, reason: String| RecordError::Forecast { line, reason };
@@ -1356,9 +1368,9 @@ pub fn parse_forecasts(csv: &[u8], rules: &RecordRules) -> Result<Vec<ForecastRo
             }
             Some(_) => {}
         }
-        if !rules.targets.iter().any(|t| t.id == target) {
+        let Some(target_rule) = rules.targets.iter().find(|t| t.id == target) else {
             return Err(bad(n, format!("{target:?} is not a target of the rules")));
-        }
+        };
         if rows.iter().any(|r| r.site == site && r.target == target) {
             return Err(bad(n, format!("a second {target} forecast for {site}")));
         }
@@ -1368,10 +1380,15 @@ pub fn parse_forecasts(csv: &[u8], rules: &RecordRules) -> Result<Vec<ForecastRo
         let number = |s: &str| {
             Rat::from_decimal_str(s)
                 .ok()
-                .filter(|x| x.signum() >= 0)
-                .ok_or_else(|| bad(n, format!("{s:?} is not a non-negative decimal")))
+                .ok_or_else(|| bad(n, format!("{s:?} is not a decimal")))
         };
         let (point, lo, hi) = (number(point)?, number(lo)?, number(hi)?);
+        if lo.signum() < 0 && !target_rule.permits_signed_forecast() {
+            return Err(bad(
+                n,
+                format!("{target:?} requires a nonnegative forecast lower bound"),
+            ));
+        }
         let le = |a: Rat, b: Rat| exact(a.checked_cmp(b)).map(|o| o != Ordering::Greater);
         if !(le(lo, point)? && le(point, hi)?) {
             return Err(bad(
@@ -1695,6 +1712,57 @@ mod tests {
             .expect("utf8")
             .replace("p10,p90", "lo,hi");
         assert_eq!(line(parse_forecasts(other_header.as_bytes(), &rules)), 1);
+    }
+
+    #[test]
+    fn signed_forecast_domain_uses_cost_field_and_outcome_not_target_alias() {
+        let mut rules = parse_rules(&rules_text()).expect("rules");
+        // Keep the alias "production": only the field plus outcome rule establishes the cost domain.
+        for field in ["aisc_usd_per_oz", "c1_usd_per_lb", "aisc_usd_per_lb"] {
+            rules.targets[0].field = field.into();
+            rules.targets[0].outcome = Outcome::Q4Qtd;
+            for (row, expected) in [
+                (
+                    "Synthetic A,production,-1.25,-2.5,-0.5,true",
+                    (r(-5, 2), r(-5, 4), r(-1, 2)),
+                ),
+                (
+                    "Synthetic A,production,0,-0.5,0.5,true",
+                    (r(-1, 2), i(0), r(1, 2)),
+                ),
+            ] {
+                let rows = parse_forecasts(&forecasts_csv(&[row]), &rules).expect(field);
+                assert_eq!((rows[0].lo, rows[0].point, rows[0].hi), expected);
+            }
+            assert!(
+                parse_forecasts(
+                    &forecasts_csv(&["Synthetic A,production,-2,-1,0,true"]),
+                    &rules,
+                )
+                .is_err(),
+                "inverted {field}"
+            );
+        }
+        for (field, outcome) in [
+            ("au_prod_100_koz", Outcome::FyMinus9m),
+            ("cu_prod_100_kt", Outcome::FyMinus9m),
+            ("unknown_usd_per_lb", Outcome::Q4Qtd),
+            ("c1_usd_per_lb", Outcome::FyMinus9m),
+            ("aisc_usd_per_oz", Outcome::FyMinus9m),
+            ("aisc_usd_per_lb", Outcome::FyMinus9m),
+        ] {
+            rules.targets[0].id = "unit_cost".into();
+            rules.targets[0].field = field.into();
+            rules.targets[0].outcome = outcome;
+            assert!(
+                parse_forecasts(
+                    &forecasts_csv(&["Synthetic A,unit_cost,0,-1,1,true"]),
+                    &rules,
+                )
+                .is_err(),
+                "negative value cannot be authorized by alias: {field}/{outcome:?}"
+            );
+        }
     }
 
     #[test]
