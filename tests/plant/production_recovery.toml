@@ -1,0 +1,94 @@
+# SYNTHETIC recovery model on the same physical blend and interval as grinding_joint.toml.
+# The grade and P80 coordinates are explicitly linked by production_joint.toml.
+schema = "fmine.plant-recovery.v1"
+circuit = "synthetic-ball-mill"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+processing_support = "true"
+valid_start_ns = "0"
+valid_end_ns = "3600000000000"
+start_ns = "0"
+end_ns = "3600000000000"
+
+[[test_work]]
+id = "invented-production-test-work"
+revision = "v1"
+formula = "60 + 10 * Au - P80 / 10"
+output_scale = "percent"
+
+[[requirement]]
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+lower = "0"
+upper = "4"
+lower_inclusive = "true"
+upper_inclusive = "true"
+
+[[requirement]]
+name = "P80"
+measurand = "grinding-product-p80"
+unit = "micrometres"
+lower = "100"
+upper = "200"
+lower_inclusive = "true"
+upper_inclusive = "true"
+
+[[correction]]
+id = "invented-no-correction"
+revision = "v1"
+additive_fraction = "0"
+
+[[route]]
+id = "invented-production-route"
+revision = "v1"
+route = "synthetic-leach"
+
+[[input]]
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "1"
+
+[[input]]
+name = "P80"
+measurand = "grinding-product-p80"
+unit = "micrometres"
+value = "100"
+
+[[scenario]]
+id = "soft"
+weight = "1/2"
+
+[[input]]
+scenario = "soft"
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "1"
+
+[[input]]
+scenario = "soft"
+name = "P80"
+measurand = "grinding-product-p80"
+unit = "micrometres"
+value = "100"
+
+[[scenario]]
+id = "hard"
+weight = "1/2"
+
+[[input]]
+scenario = "hard"
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "4"
+
+[[input]]
+scenario = "hard"
+name = "P80"
+measurand = "grinding-product-p80"
+unit = "micrometres"
+value = "100"

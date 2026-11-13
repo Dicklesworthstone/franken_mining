@@ -13,7 +13,7 @@ K0 numerical owner, preserving the original observations and a separately declar
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory", "flowsheet", "grinding", "reconciliation", "measurements", "raw_measurements", "cards", "rtd", "trajectory"]`
+- **Allowed Module Families:** `["inventory", "flowsheet", "grinding", "production", "reconciliation", "measurements", "raw_measurements", "cards", "rtd", "trajectory"]`
 
 ## 2. Inputs
 
@@ -779,3 +779,38 @@ transfer, source binding, work bounds and cancellation. This conditional slice d
 model uncertainty in initial stocks or flow, identify sensor biases, separate transport from reaction,
 calibrate recovery cards or establish empirical P754/plant gates. BD-313 remains open for those broader
 requirements.
+
+## 25. Shared-scenario processing production (DESIGN; BD-176/181/182, plan §17.4)
+
+`production::evaluate` joins immutable admitted Bond-grinding and recovery-ensemble receipts with a
+source-bound `Claim<ProductionInputs>`. All three populations must have the same unique scenario IDs
+and exact positive weights. Their circuit and physical interval must agree. An explicit coupling basis
+connects the grinding blend to the recovery material domain and dry state; no physical blending or
+sample-to-blend transfer is inferred. Named recovery coordinates must use g per dry metric tonne for
+grade and micrometres for product size, and match the production grade and grinding P80 respectively.
+
+Within each shared state, dry tonnes = throughput × scheduled hours, contained elemental kg = dry
+tonnes × grade / 1000, and recovered elemental kg = contained kg × recovery. Scheduled exposure is
+bounded by the physical interval. Grinding throughput already includes utilization, so it is applied
+once. Zero exposure and shutdown states remain in the full population with zero processed mass.
+The kernel refuses mismatched populations, inputs, scopes, unsupported units and numerical range loss.
+It never multiplies marginal means or substitutes independently sampled combinations.
+
+The immutable receipt retains both complete parent receipts, coupling Claim, every paired state,
+conditional weighted means, exact-weight inverse-CDF quantiles and source ancestry. Its output is an
+uncalibrated, non-additive Claim with recovered kg as the explicitly named scalar representation.
+Evidence and confidentiality can only weaken. Canonical input order is immaterial; a change to any
+submitted source bytes, scope or coupling declaration changes source-bound receipt identity.
+
+`production::worksheet` admits the strict `fmine.plant-production.v1` coupling grammar after source
+SHA-256 verification and delegates to the same owner. It contains no IO or clock. The declared grade
+and exposure retain exact rational values; JSON and Markdown show the complete paired calculation.
+The synthetic `production_joint.toml`, `production_recovery.toml` and `grinding_joint.toml` examples
+produce 200 dry tonnes, 0.32 kg contained Au and 0.24 kg recovered Au as conditional means. Independent
+hand arithmetic and an opposite-dependence control exercise the distinction from the 0.375 kg result
+of multiplying marginal means. Tests also cover scope/weight/coordinate refusals, source tampering,
+zero states, interval limits, canonical order and evidence preservation.
+
+This is a declared conditional production calculation. It supplies no transport lag, inventory draw,
+feedback, payable-metal or monetary conversion, empirically validated model uncertainty, registered
+forecast, calibration verdict or operating authority. The broader BD-176/181/182 field gates remain open.

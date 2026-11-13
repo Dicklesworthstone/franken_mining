@@ -662,6 +662,7 @@ pub struct WorksheetResult {
     json: String,
     refusal: Option<Refusal>,
     no_claim: &'static str,
+    ensemble_receipt: Option<ensemble::RecoveryEnsembleReceipt>,
 }
 
 impl WorksheetResult {
@@ -673,6 +674,11 @@ impl WorksheetResult {
     }
     pub fn no_claim(&self) -> &'static str {
         self.no_claim
+    }
+    /// Admitted immutable joint population for downstream processing calculations.
+    /// A refused member or a nominal-only worksheet cannot supply an ensemble.
+    pub fn ensemble_receipt(&self) -> Option<&ensemble::RecoveryEnsembleReceipt> {
+        self.ensemble_receipt.as_ref()
     }
 }
 
@@ -704,22 +710,25 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
             .transpose()?;
         Ok((nominal, ensemble))
     });
-    let (refusal, admitted, digest, result, ensemble) = match evaluation {
+    let (refusal, admitted, digest, result, ensemble_receipt) = match evaluation {
         Ok((receipt, ensemble)) => (
             None,
             claim_json(receipt.claim()),
             quoted(receipt.digest()),
             receipt.result_json(),
-            ensemble.map_or_else(|| "null".into(), |receipt| receipt.to_json()),
+            ensemble,
         ),
         Err(refusal) => (
             Some(refusal),
             "null".into(),
             "null".into(),
             "null".into(),
-            "null".into(),
+            None,
         ),
     };
+    let ensemble = ensemble_receipt
+        .as_ref()
+        .map_or_else(|| "null".into(), |receipt| receipt.to_json());
     let scope = &worksheet.test_work.value.scope;
     let population = worksheet
         .population
@@ -748,6 +757,7 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         json,
         refusal,
         no_claim,
+        ensemble_receipt,
     })
 }
 

@@ -1,0 +1,31 @@
+# SYNTHETIC shared scenario population; one scheduled hour includes utilization once.
+# Soft: 320 t * 1 g/t * 0.60 / 1000 = 0.192 kg Au.
+# Hard: 80 t * 4 g/t * 0.90 / 1000 = 0.288 kg Au.
+# Equal probabilities give 200 t, 0.32 kg contained and 0.24 kg recovered.
+# Multiplying marginal means instead would incorrectly give 0.375 kg.
+schema = "fmine.plant-production.v1"
+boundary = "synthetic-plant/v1"
+circuit = "synthetic-ball-mill"
+blend = "synthetic-shift-blend"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+start_ns = "0"
+end_ns = "3600000000000"
+grade_unit = "g_per_dry_t"
+duration_unit = "hours"
+coupling_basis = "SYNTHETIC simultaneous states of this processing blend; declared recovery domain and dry state apply to this grinding feed"
+grade_coordinate = "Au"
+product_size_coordinate = "P80"
+
+[[scenario]]
+id = "soft"
+weight = "1/2"
+grade_g_per_dry_t = "1"
+scheduled_hours = "1"
+
+[[scenario]]
+id = "hard"
+weight = "1/2"
+grade_g_per_dry_t = "4"
+scheduled_hours = "1"

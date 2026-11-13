@@ -8,6 +8,7 @@ pub mod flowsheet;
 pub mod grinding;
 pub mod inventory;
 pub mod measurements;
+pub mod production;
 pub mod raw_measurements;
 pub mod reconciliation;
 pub mod rtd;
