@@ -73,8 +73,11 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 62
+[verbs] 65
 decide card
+decide journal init
+decide journal record
+decide journal show
 decide recovery-bounds
 decide program
 assure public

@@ -8,6 +8,8 @@ use fmine_evidence::Refusal;
 
 use crate::{Envelope, NextAction, worksheet_input};
 
+pub mod journal;
+
 pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.decision-model.v1\",\"mode\":\"declared_model_comparison\",",
     "\"input\":\"Regular UTF-8 TOML file, at most 4 MiB; actual bytes are SHA-256 bound\",",

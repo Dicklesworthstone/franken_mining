@@ -18,6 +18,7 @@ use crate::inventory::{self, BalanceScope, BalanceValue, MetalBalanceInput, Meta
 use reconciliation::ObservationLocation;
 
 pub mod reconciliation;
+pub mod worksheet;
 
 type Result<T> = std::result::Result<T, Refusal>;
 const ZERO: ExactQty = ExactQty::from_integer(0);

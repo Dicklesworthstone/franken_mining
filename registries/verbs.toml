@@ -9,6 +9,24 @@ mutates_authority = false
 description = "Compare explicit monetary alternatives on shared declared scenarios, retaining exact risk, regret, assumptions and source evidence"
 
 [[verb]]
+path = "decide journal init"
+subsystem = "Helm"
+mutates_authority = true
+description = "Create a local append-only decision history under an explicitly declared host-clock policy"
+
+[[verb]]
+path = "decide journal record"
+subsystem = "Helm"
+mutates_authority = true
+description = "Record a named choice and rationale with exact source model and evaluated card bytes; no execution authorization"
+
+[[verb]]
+path = "decide journal show"
+subsystem = "Helm"
+mutates_authority = false
+description = "Verify and display retained decision snapshots, optionally pinning the exact final journal head"
+
+[[verb]]
 path = "decide recovery-bounds"
 subsystem = "Helm"
 mutates_authority = false

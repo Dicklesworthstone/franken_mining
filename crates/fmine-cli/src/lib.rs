@@ -34,6 +34,7 @@ mod track_record_data;
 mod track_record_price;
 mod worksheet_input;
 
+pub use decision::journal as decision_journal;
 pub use forecast::live as forecast_journal;
 pub use forecast::record_build as forecast_candidate;
 pub use forecast::record_score as forecast_record;
@@ -77,6 +78,8 @@ pub enum CliCommand {
     ReserveReplacement(reserve::Command),
     /// Compare explicit monetary alternatives on one declared finite scenario set (BD-225).
     DecideCard { model: PathBuf },
+    /// Retain an explicit choice, rationale and exact evaluated artifact in a local append-only history.
+    DecisionJournal(decision_journal::Command),
     /// Bound recovery for explicit tested and untested strata on one additive route (BD-351.S1).
     RecoveryBounds { model: PathBuf },
     /// Construct affordable static project bundles on shared declared scenarios (BD-229).
@@ -519,6 +522,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--format" | "--workspace" => next += 2,
                         "--json" => next += 1,
                         "program" => return "decide program",
+                        "journal" => return "decide journal",
                         "recovery-bounds" => return "decide recovery-bounds",
                         _ => return "decide card",
                     }
@@ -946,6 +950,10 @@ pub fn parse_args(
     if verb_hint(args) == "forecast journal" {
         return parse_forecast_journal(args, default_root)
             .map(|(command, format, root)| (CliCommand::ForecastJournal(command), format, root));
+    }
+    if verb == "decide journal" {
+        return decision_journal::parse(args, default_root)
+            .map(|(command, format, root)| (CliCommand::DecisionJournal(command), format, root));
     }
     if verb_hint(args) == "forecast record score" {
         return forecast_record::parse(args, default_root)
@@ -1854,6 +1862,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
         CliCommand::DecideCard { model } => decision::execute(model, workspace_root, false),
+        CliCommand::DecisionJournal(command) => decision_journal::execute(command, workspace_root),
         CliCommand::RecoveryBounds { model } => decision::execute(model, workspace_root, true),
         CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
@@ -2257,6 +2266,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::TRAJECTORY_USAGE,
                 html::USAGE,
                 "decide card <model-file>",
+                decision_journal::INIT_USAGE,
+                decision_journal::RECORD_USAGE,
+                decision_journal::SHOW_USAGE,
                 "decide recovery-bounds <model-file>",
                 capital::USAGE,
                 "assure public --issuer <issuer> [--through YYYYQn]",
@@ -2336,6 +2348,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.pop();
             payload.push_str(",\"decision\":");
             payload.push_str(decision::ROBOT_DOCS_JSON);
+            payload.push_str(",\"decision_journal\":");
+            payload.push_str(decision_journal::ROBOT_DOCS_JSON);
             payload.push_str(",\"recovery_bounds\":");
             payload.push_str(fmine_decide::bounds::model::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_candidate\":");

@@ -1517,6 +1517,41 @@ outside the priced scenario matrix. This comparison supplies no feasibility appr
 frequency, historical replay proof or durable decision-ledger entry. It does not pass the full
 BD-225 or Helm acceptance gates.
 
+#### Retain a decision and its original evaluated evidence
+
+DESIGN (bounded BD-225): `decide journal` records an explicit act-now choice, its rationale, and the exact
+model and evaluated card that supported it. It uses the existing locked, append-only journal. Initialize
+a new file, then set `FMINE_DECISION_HEAD` to the returned head and `FMINE_CODE_REVISION` to the declared
+40- or 64-character lowercase Git revision of the evaluator:
+
+```bash
+cargo run -p fmine-cli -- decide journal init --journal decisions.journal \
+  --cell planning-decisions --trust-host-clock
+
+cargo run -p fmine-cli -- decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model tests/decisions/expansion.toml \
+  --decision expansion-review --action smaller \
+  --reason "Prefer the fixed-return alternative under the declared downside exposure" \
+  --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
+
+cargo run -p fmine-cli -- decide journal show --journal decisions.journal \
+  --head "$FMINE_DECISION_HEAD" --format markdown
+```
+
+After each successful record, replace `FMINE_DECISION_HEAD` with that operation's returned head and keep
+the value independently of the journal. A stale expected head, reused decision id, unknown action or
+oversized record refuses without appending. A later choice uses a new decision id, preserving the earlier
+one. Any declared act-now alternative, including do nothing, can be recorded; selecting an action does
+not remove the other alternatives from the retained comparison.
+
+Each entry retains the original model bytes, evaluated card JSON, source path, SHA-256 digests, output
+Claim id and declared code revision. `show` verifies the chain and retained bytes without reopening the
+mutable model or recalculating the card with newer code. The complete encoded snapshot must fit the
+existing 64 KiB operation limit. An independently saved `--head` detects rollback or rewriting; unpinned
+inspection explicitly cannot establish the original history or evaluation provenance. Host-clock accuracy
+and the code revision are declarations, not external time proof or authenticated human identity. Recording
+a choice grants no approval, sign-off or execution authority and does not close the full BD-225 gate.
+
 #### Compare choices when scenario weights are contested
 
 DESIGN (BD-225, plan §22.5): an optional Wasserstein-1 comparison finds each original action's worst

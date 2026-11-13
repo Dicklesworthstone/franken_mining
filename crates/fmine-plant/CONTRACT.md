@@ -292,6 +292,11 @@ supports, every covariance pair and per-channel tolerances. The output preserves
 Claims and model, fitted covariance, unit/outer diagnostics and admitted or rejected receipt identity.
 Worksheet declarations remain Assumed, Internal and uncalibrated.
 
+DESIGN: `flowsheet::worksheet::parse` owns the pure measured and unmeasured worksheet admission.
+It preserves original tokens, line locators, source Claims and explicit covariance declarations.
+The CLI retains bounded file reads and response rendering; the existing reconciliation owners evaluate
+the parsed model. The same admission selects v2 endpoint-stock support before later field refusals.
+
 ## 16. Lot-to-stream projection with first-order covariance (DESIGN; BD-151/155/177)
 
 `raw_measurements::project_transfer` accepts an explicitly complete, nonoverlapping lot population

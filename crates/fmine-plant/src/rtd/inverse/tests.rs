@@ -238,7 +238,7 @@ fn measured_opening_joint_gls_matches_independent_one_tank_answer() {
     }
     // Independently evaluated with 70-digit decimal exponentiation.
     close(r.fitted_opening_kg[0].value(), 1.1092323769993064, 4e-14);
-    close(r.fitted_feed_kg[0].value(), 10.641857371547561, 4e-14);
+    close(r.fitted_feed_kg[0].value(), 10.641_857_371_547_56, 4e-14);
     close(r.fitted_outlet_kg[0].value(), 4.616089132890642, 4e-14);
     close(r.predicted_outlet_kg[0].value(), 4.616089132890642, 4e-14);
     close(r.closing_inventory_kg[0].value(), 7.135000615656226, 4e-14);

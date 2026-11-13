@@ -10,6 +10,23 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-225): `decide journal init|record|show` retains explicit act-now choices and rationales
+  in the existing locked FJR1 operation store. A decision-specific genesis and canonical versioned
+  operations separate this history from forecast journals. Recording evaluates the supplied model,
+  requires a known action and a unique decision id, then compares the expected final head under the
+  writer lock before appending and syncing. Each operation retains the exact source model and evaluated
+  JSON card, both SHA-256 digests, the output Claim id and an explicitly declared Git revision. The
+  existing 64 KiB encoded-operation limit bounds the complete snapshot; oversized records refuse
+  before appending. `show` checks the chain, canonical operations and retained content digests without
+  reading mutable source files or re-evaluating cards under newer code. It exposes original artifact
+  bytes as an escaped JSON string; Markdown shows the same retained JSON. An independently retained
+  `--head` checks the exact final prefix; unpinned inspection cannot detect rollback or a completely
+  rewritten, self-consistent history. Stored byte integrity does not independently verify evaluation
+  provenance, and `show` does not promote retained content into authenticated issuer or human evidence.
+  Mutations use a declared bounded host clock. Records confer no human identity, external timestamp,
+  approval, sign-off, execution authority or public disclosure permission. A nonoptimal known action
+  may be recorded; the full unchanged comparison remains visible. Source retention, refusal atomicity,
+  protocol separation and tamper controls are exercised in `xtask/tests/decision_journal.rs`.
 - DESIGN (BD-225/227, plan §22.4–22.5): `decide card` admits an optional source-bound
   `[[policy_optimization]]` declaration with `exact_deterministic` method, nominal or Wasserstein
   probability screen, and explicit policy/work limits. The decision owner streams complete one-test
