@@ -115,7 +115,35 @@ fn cumulative_public_targets_resolve_original_ytd_cells_and_preserve_revised_sco
                     .payload_json
                     .contains(&source.claim.claim_id.to_string())
             );
-            assert!(resolved.payload_json.contains(&locator));
+            // Numeric admission JSON is a summary; the journal retains its exact source citation.
+            let persisted =
+                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
+            let operation = persisted
+                .records()
+                .iter()
+                .find_map(|record| {
+                    if let Entry::Operation(text) = &record.entry {
+                        let doc = parse_subset(text).unwrap();
+                        doc.rows
+                            .into_iter()
+                            .find(|row| row.table == "registered_outcome")
+                    } else {
+                        None
+                    }
+                })
+                .expect("original cumulative outcome must persist its receipt");
+            for (field, expected) in [
+                ("locator", locator.clone()),
+                ("sha256", source.key.reporting_vintage.file_sha256.clone()),
+                ("claim_id", source.claim.claim_id.to_string()),
+            ] {
+                assert_eq!(
+                    operation.get(field).map(|field| &field.value),
+                    Some(&TomlValue::Str(expected)),
+                    "{period} {metric}: original cumulative receipt must retain {field}"
+                );
+            }
+            drop(persisted);
             assert!(resolved.payload_json.contains("\"numerator\":\"100\""));
 
             let first = assess_revision(&mut fixture, CUT, "first-published");

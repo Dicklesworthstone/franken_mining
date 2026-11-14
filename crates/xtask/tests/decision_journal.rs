@@ -181,12 +181,16 @@ fn operation_fields(f: &Fixture, pin: Digest32, sequence: usize) -> Vec<(String,
 
 fn retained_policy(f: &Fixture, pin: Digest32, sequence: usize) -> String {
     let fields = operation_fields(f, pin, sequence);
-    let value = &fields.iter().find(|(key, _)| key == "policy_hex").unwrap().1;
-    let bytes: Vec<u8> = (0..value.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).unwrap())
-        .collect();
-    let policy = String::from_utf8(bytes).unwrap();
+    let policy = if let Some((_, value)) = fields.iter().find(|(key, _)| key == "policy_json") {
+        value.clone()
+    } else {
+        let value = &fields.iter().find(|(key, _)| key == "policy_hex").unwrap().1;
+        let bytes: Vec<u8> = (0..value.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&value[index..index + 2], 16).unwrap())
+            .collect();
+        String::from_utf8(bytes).unwrap()
+    };
     assert_eq!(
         fields
             .iter()
@@ -199,7 +203,7 @@ fn retained_policy(f: &Fixture, pin: Digest32, sequence: usize) -> String {
 }
 
 #[test]
-fn information_policy_and_exact_costs_survive_mixed_v1_v2_history_and_source_edits() {
+fn information_policy_and_exact_costs_survive_mixed_v1_v3_history_and_source_edits() {
     let f = Fixture::new();
     let first = successful(execute_with_clock(
         &f.record(f.initial, "earlier-action", "hold"),
@@ -265,6 +269,69 @@ fn information_policy_and_exact_costs_survive_mixed_v1_v2_history_and_source_edi
 }
 
 #[test]
+fn legacy_v2_policy_bytes_reopen_and_accept_compact_v3_choices() {
+    let f = Fixture::new();
+    let model = INFORMATION.replace(
+        "label = \"Metallurgical testwork\"",
+        r#"label = "Metallurgical \"testwork\" \\ comparison""#,
+    );
+    fs::write(&f.model, model).unwrap();
+    let saved = successful(execute_with_clock(
+        &f.information(
+            f.initial,
+            "legacy-testwork",
+            "met_test",
+            PolicySelection::ExpectedValue,
+        ),
+        &f.root,
+        &Clock(200),
+    ));
+    let policy = retained_policy(&f, head(&saved), 1);
+    let fields = operation_fields(&f, head(&saved), 1);
+    let mut operation = String::new();
+    for (key, value) in fields {
+        let (key, value) = match key.as_str() {
+            "schema" => (key, "fmine.decision-operation.v2".into()),
+            "policy_json" => ("policy_hex".into(), hex(value.as_bytes())),
+            "card_json" => ("card_hex".into(), hex(value.as_bytes())),
+            _ => (key, value),
+        };
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        operation.push_str(&format!("{key} = \"{escaped}\"\n"));
+    }
+    assert!(operation.len() <= fmine_io::forecast::MAX_REQUEST_BYTES);
+    let journal = Journal::open_read(&f.journal, Some(head(&saved))).unwrap();
+    let mut records = journal.records().to_vec();
+    drop(journal);
+    records[1].entry = Entry::Operation(operation);
+    let legacy_head = records[1].chain_head().unwrap();
+    let legacy_bytes: Vec<_> = records.iter().flat_map(|r| r.to_line().unwrap()).collect();
+    fs::write(&f.journal, &legacy_bytes).unwrap();
+    successful(f.show(Some(legacy_head)));
+    assert_eq!(retained_policy(&f, legacy_head, 1), policy);
+    let legacy_fields = operation_fields(&f, legacy_head, 1);
+    let appended = successful(execute_with_clock(
+        &f.information(
+            legacy_head,
+            "compact-testwork",
+            "met_test",
+            PolicySelection::ExpectedValue,
+        ),
+        &f.root,
+        &Clock(300),
+    ));
+    let pin = head(&appended);
+    assert!(fs::read(&f.journal).unwrap().starts_with(&legacy_bytes));
+    assert_eq!(operation_fields(&f, pin, 1), legacy_fields);
+    assert_eq!(
+        operation_fields(&f, pin, 2)[0],
+        ("schema".into(), "fmine.decision-operation.v3".into())
+    );
+    assert_eq!(retained_policy(&f, pin, 2), policy);
+    successful(f.show(Some(pin)));
+}
+
+#[test]
 fn downside_optimized_selection_retains_its_distinct_policy_and_declared_screen() {
     let f = Fixture::new();
     fs::write(&f.model, CONSTRAINED).unwrap();
@@ -278,6 +345,15 @@ fn downside_optimized_selection_retains_its_distinct_policy_and_declared_screen(
         &f.root,
         &Clock(200),
     ));
+    let fields = operation_fields(&f, head(&fixed), 1);
+    assert_eq!(
+        fields[0],
+        ("schema".into(), "fmine.decision-operation.v3".into())
+    );
+    assert!(fields.iter().any(|(key, _)| key == "card_json"));
+    assert!(fields.iter().any(|(key, _)| key == "policy_json"));
+    assert!(!fields.iter().any(|(key, _)| key == "card_hex"));
+    assert!(!fields.iter().any(|(key, _)| key == "policy_hex"));
     let fixed_policy = retained_policy(&f, head(&fixed), 1);
     assert!(fixed_policy.contains("\"nominal_mean\":\"34/1\""));
     assert!(fixed_policy.contains("\"signal_id\":\"medium\",\"probability\":\"19/100\",\"action_id\":\"act\""));

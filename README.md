@@ -1710,8 +1710,10 @@ model; recording a policy does not observe a signal, execute its action, or asse
 Each entry retains the original model bytes, evaluated card JSON, source path, SHA-256 digests, output
 Claim id and declared code revision. `show` verifies the chain and retained bytes without reopening the
 mutable model or recalculating the card with newer code. The complete encoded snapshot must fit the
-existing 64 KiB operation limit. Existing act-now operations keep their v1 encoding; information choices
-use v2 operations, and mixed histories remain readable. An independently saved `--head` detects rollback or rewriting; unpinned
+existing 64 KiB operation limit. Existing act-now v1 and information-choice v2 operations keep their
+original encoding and remain readable. New information choices use compact v3 operations, retaining
+card and policy JSON directly as quoted strings while preserving their exact bytes and digests.
+Mixed histories use v2 reports. An independently saved `--head` detects rollback or rewriting; unpinned
 inspection explicitly cannot establish the original history or evaluation provenance. Host-clock accuracy
 and the code revision are declarations, not external time proof or authenticated human identity. Recording
 a choice grants no approval, sign-off or execution authority and does not close the full BD-225 gate.

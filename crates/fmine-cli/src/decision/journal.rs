@@ -22,13 +22,14 @@ pub use choice::{Choice, PolicySelection};
 const CELL_PREFIX: &str = "fmine.decision/v1:";
 const OPERATION_SCHEMA: &str = "fmine.decision-operation.v1";
 const POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v2";
+const COMPACT_POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v3";
 const REPORT_SCHEMA: &str = "fmine.decision-journal.v1";
 const POLICY_REPORT_SCHEMA: &str = "fmine.decision-journal.v2";
 pub const NO_CLAIM: &str = "Local record of an explicitly supplied choice and rationale, append-only through this writer. Model inputs remain Assumed, Internal and uncalibrated. The writer retains the evaluated card; replay verifies stored byte integrity, not independent evaluation provenance. This is not a new evaluation or evidence of approval, human identity, sign-off, execution authority or external time proof. Code revision and host-clock accuracy are operator declarations. Only an independently retained final-head pin detects rollback or whole-history rewriting.";
 pub const INIT_USAGE: &str = "decide journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]";
 pub const RECORD_USAGE: &str = "decide journal record --journal <path> --expected-head <hex> --model <path> --decision <id> (--action <id> | --information-option <id> --policy expected-value|downside-optimized) --reason <text> --code-revision <git-sha> --trust-host-clock";
 pub const SHOW_USAGE: &str = "decide journal show --journal <path> [--head <hex>]";
-pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.decision-journal.v2","operations":["init","record","show"],"storage":"Existing FJR1 append-only journal; decision-specific genesis and versioned opaque operations; OS locking, expected-head comparison and sync before success","choice":"Exactly one --action id or --information-option id with explicit --policy expected-value|downside-optimized; the complete unchanged comparison remains visible","policy":"Expected-value retains the displayed nominal signal policy and posterior ties. Downside-optimized requires a feasible optimizer result and retains its canonical complete mapping, exact co-optimal count and nominal or Wasserstein screen. Choosing an option never implicitly chooses a policy","identity":"Unique decision id per journal; another choice needs a new id and rationale; code revision is an explicit 40- or 64-character lowercase Git hash declaration","snapshot":"Exact model bytes, source path, SHA-256, output Claim id and evaluated JSON artifact with its own SHA-256. Information choices also retain an exact source-bound policy selection artifact and SHA-256. Retained artifacts are not re-evaluated on show","compatibility":"Act-now operations retain v1 bytes and remain readable; information choices use v2 operations and histories containing them use v2 reports","bounds":"Every encoded operation must fit the existing 65536-byte limit; oversized models/cards refuse before append","clock":"Mutations require --trust-host-clock; init declares the maximum host-clock skew, default 1000 ms; no external proof or inferred human authorization","show":"Reopens and verifies the complete hash chain and retained content digests without reading the mutable model file; --head pins the exact final head; without it rollback is not checked","scope":"Internal decision support only; no approval, sign-off or execution authorization"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.decision-journal.v2","operations":["init","record","show"],"storage":"Existing FJR1 append-only journal; decision-specific genesis and versioned opaque operations; OS locking, expected-head comparison and sync before success","choice":"Exactly one --action id or --information-option id with explicit --policy expected-value|downside-optimized; the complete unchanged comparison remains visible","policy":"Expected-value retains the displayed nominal signal policy and posterior ties. Downside-optimized requires a feasible optimizer result and retains its canonical complete mapping, exact co-optimal count and nominal or Wasserstein screen. Choosing an option never implicitly chooses a policy","identity":"Unique decision id per journal; another choice needs a new id and rationale; code revision is an explicit 40- or 64-character lowercase Git hash declaration","snapshot":"Exact model bytes, source path, SHA-256, output Claim id and evaluated JSON artifact with its own SHA-256. Information choices also retain an exact source-bound policy selection artifact and SHA-256. Retained artifacts are not re-evaluated on show","compatibility":"Act-now operations retain v1 bytes; legacy v2 information operations remain readable; new information choices use compact v3 operations and histories containing information choices use v2 reports","bounds":"Every encoded operation must fit the existing 65536-byte limit; oversized models/cards refuse before append","clock":"Mutations require --trust-host-clock; init declares the maximum host-clock skew, default 1000 ms; no external proof or inferred human authorization","show":"Reopens and verifies the complete hash chain and retained content digests without reading the mutable model file; --head pins the exact final head; without it rollback is not checked","scope":"Internal decision support only; no approval, sign-off or execution authorization"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -209,6 +210,8 @@ struct Snapshot {
     decision_id: String,
     choice: Choice,
     policy_snapshot: Option<String>,
+    // Replay must retain the original encoding so v1/v2 canonical bytes and heads remain stable.
+    compact_json: bool,
     rationale: String,
     model_path: String,
     model: String,
@@ -238,11 +241,11 @@ impl Snapshot {
             return Err(integrity("retained model and card must both be nonempty"));
         }
         match (&self.choice, &self.policy_snapshot) {
-            (Choice::ActNow(_), None) => {}
+            (Choice::ActNow(_), None) if !self.compact_json => {}
             (Choice::InformationOption { .. }, Some(policy)) if !policy.is_empty() => {}
             _ => {
                 return Err(integrity(
-                    "information choices require a retained policy artifact",
+                    "retained policy artifact or encoding does not match the choice",
                 ));
             }
         }
@@ -262,13 +265,26 @@ impl Snapshot {
                     .policy_snapshot
                     .as_deref()
                     .ok_or_else(|| integrity("missing information-policy snapshot"))?;
+                let (schema, policy_field, policy_value) = if self.compact_json {
+                    (
+                        COMPACT_POLICY_OPERATION_SCHEMA,
+                        "policy_json",
+                        snapshot.to_owned(),
+                    )
+                } else {
+                    (
+                        POLICY_OPERATION_SCHEMA,
+                        "policy_hex",
+                        hex(snapshot.as_bytes()),
+                    )
+                };
                 vec![
-                    ("schema", POLICY_OPERATION_SCHEMA.to_owned()),
+                    ("schema", schema.to_owned()),
                     ("decision_id", self.decision_id.clone()),
                     ("information_option", option_id.clone()),
                     ("policy_selection", policy.as_str().to_owned()),
                     ("policy_sha256", sha256(snapshot.as_bytes()).to_hex()),
-                    ("policy_hex", hex(snapshot.as_bytes())),
+                    (policy_field, policy_value),
                 ]
             }
         };
@@ -280,7 +296,11 @@ impl Snapshot {
             ("claim_id", self.claim_id.clone()),
             ("code_revision", self.code_revision.clone()),
             ("model_hex", hex(self.model.as_bytes())),
-            ("card_hex", hex(self.card.as_bytes())),
+            if self.compact_json {
+                ("card_json", self.card.clone())
+            } else {
+                ("card_hex", hex(self.card.as_bytes()))
+            },
         ]);
         let mut out = String::new();
         for (key, value) in fields {
@@ -307,43 +327,53 @@ impl Snapshot {
             };
             fields.insert(field.key, value);
         }
-        let (choice, policy_snapshot) =
-            match take(&mut fields, "schema").map_err(integrity)?.as_str() {
-                OPERATION_SCHEMA => (
-                    Choice::ActNow(take(&mut fields, "action").map_err(integrity)?),
-                    None,
-                ),
-                POLICY_OPERATION_SCHEMA => {
-                    let choice = Choice::InformationOption {
-                        option_id: take(&mut fields, "information_option").map_err(integrity)?,
-                        policy: PolicySelection::parse(
-                            &take(&mut fields, "policy_selection").map_err(integrity)?,
-                        )
-                        .map_err(integrity)?,
-                    };
-                    let snapshot = unhex(&take(&mut fields, "policy_hex").map_err(integrity)?)?;
-                    if digest(&take(&mut fields, "policy_sha256").map_err(integrity)?)
-                        .map_err(integrity)?
-                        != sha256(snapshot.as_bytes())
-                    {
-                        return Err(integrity(
-                            "retained policy_sha256 differs from its exact bytes",
-                        ));
-                    }
-                    (choice, Some(snapshot))
+        let schema = take(&mut fields, "schema").map_err(integrity)?;
+        let compact_json = schema == COMPACT_POLICY_OPERATION_SCHEMA;
+        let (choice, policy_snapshot) = match schema.as_str() {
+            OPERATION_SCHEMA => (
+                Choice::ActNow(take(&mut fields, "action").map_err(integrity)?),
+                None,
+            ),
+            POLICY_OPERATION_SCHEMA | COMPACT_POLICY_OPERATION_SCHEMA => {
+                let choice = Choice::InformationOption {
+                    option_id: take(&mut fields, "information_option").map_err(integrity)?,
+                    policy: PolicySelection::parse(
+                        &take(&mut fields, "policy_selection").map_err(integrity)?,
+                    )
+                    .map_err(integrity)?,
+                };
+                let snapshot = if compact_json {
+                    take(&mut fields, "policy_json").map_err(integrity)?
+                } else {
+                    unhex(&take(&mut fields, "policy_hex").map_err(integrity)?)?
+                };
+                if digest(&take(&mut fields, "policy_sha256").map_err(integrity)?)
+                    .map_err(integrity)?
+                    != sha256(snapshot.as_bytes())
+                {
+                    return Err(integrity(
+                        "retained policy_sha256 differs from its exact bytes",
+                    ));
                 }
-                _ => return Err(integrity("unknown decision operation schema")),
-            };
+                (choice, Some(snapshot))
+            }
+            _ => return Err(integrity("unknown decision operation schema")),
+        };
         let snapshot = Self {
             decision_id: take(&mut fields, "decision_id").map_err(integrity)?,
             choice,
             policy_snapshot,
+            compact_json,
             rationale: take(&mut fields, "rationale").map_err(integrity)?,
             model_path: take(&mut fields, "model_path").map_err(integrity)?,
             claim_id: take(&mut fields, "claim_id").map_err(integrity)?,
             code_revision: take(&mut fields, "code_revision").map_err(integrity)?,
             model: unhex(&take(&mut fields, "model_hex").map_err(integrity)?)?,
-            card: unhex(&take(&mut fields, "card_hex").map_err(integrity)?)?,
+            card: if compact_json {
+                take(&mut fields, "card_json").map_err(integrity)?
+            } else {
+                unhex(&take(&mut fields, "card_hex").map_err(integrity)?)?
+            },
         };
         for (key, bytes) in [
             ("model_sha256", snapshot.model.as_bytes()),
@@ -551,6 +581,7 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                 let snapshot = Snapshot {
                     decision_id: decision_id.clone(),
                     choice: choice.clone(),
+                    compact_json: policy_snapshot.is_some(),
                     policy_snapshot,
                     rationale: rationale.clone(),
                     model_path: source.artifact_path,

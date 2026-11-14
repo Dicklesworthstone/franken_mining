@@ -52,9 +52,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   identities and tie rule in a separately hashed opaque policy artifact. Expected-value selection keeps
   posterior ties and unreachable signals; downside-optimized selection requires an existing feasible
   optimizer result and retains its declared screen and exact co-optimal count. The two policies for the
-  same option are never conflated, and no winner is selected implicitly. Original act-now v1 operation
-  bytes and readers remain supported; information operations and mixed-history reports use v2. Replay
-  checks byte integrity without re-evaluation or any claim of authenticated policy provenance.
+  same option are never conflated, and no winner is selected implicitly. Original act-now v1 and
+  information-choice v2 operation bytes remain supported. New information operations use v3 with
+  quoted card/policy JSON instead of hex, keeping exact bytes and digests within the unchanged 64 KiB
+  operation bound; model bytes remain hex-encoded. Histories containing information choices still use
+  v2 reports. Replay checks byte integrity without re-evaluation or authenticated policy provenance.
 - DESIGN (BD-225/227, plan §22.4–22.5): `decide card` admits an optional source-bound
   `[[policy_optimization]]` declaration with `exact_deterministic` method, nominal or Wasserstein
   probability screen, and explicit policy/work limits. The decision owner streams complete one-test
