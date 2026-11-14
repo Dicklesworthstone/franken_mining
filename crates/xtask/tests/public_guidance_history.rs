@@ -75,14 +75,16 @@ mod tests {
         c.key.reporting_vintage.release = release.into();
         c.key.reporting_vintage.file_sha256 = digest.to_hex();
         c.locator = format!("synthetic/{release}/{period}/{}.txt", c.key.line.label);
+        let value = PublicValue::Number {
+            stored: token.into(),
+            displayed: Ok(token.into()),
+            under_status: None,
+        };
+        let tag = fmine_public::key::canonical_value_tag(&c.key, &value);
         c.claim = Claim::new(
             &c.key.line.label,
-            PublicValue::Number {
-                stored: token.into(),
-                displayed: Ok(token.into()),
-                under_status: None,
-            },
-            &c.key.canonical_tag(token),
+            value,
+            &tag,
             Representation::Deterministic,
             SpatialSupport::PeriodAggregate,
             template.claim.additivity,
@@ -253,6 +255,7 @@ mod tests {
             den: 4,
             source: ShareSource::Printed,
         };
+        wrong_basis[0] = cell(&wrong_basis[0], "2029Q3", "2029Q3", "70");
         let mut placeholder = cells.clone();
         placeholder[0].claim.representation = Representation::Placeholder {
             token: "not supplied".into(),
@@ -273,6 +276,22 @@ mod tests {
             assert_eq!(r.exclusions.len(), 1);
             assert_eq!(r.exclusions[0].code, code);
         }
+    }
+
+    #[test]
+    fn edited_historical_values_are_excluded_without_rewriting_their_source_identity() {
+        let (report, mut cells) = fixture();
+        let original_id = cells[0].claim.claim_id;
+        let PublicValue::Number { displayed, .. } = &mut cells[0].claim.value else {
+            panic!("numeric fixture");
+        };
+        *displayed = Ok("900".into());
+        let result = history::compare(&report.inputs, &cells).unwrap();
+        assert_eq!(result.comparison.tier, EnvelopeTier::T3);
+        assert!(result.sources.is_empty());
+        assert_eq!(result.exclusions.len(), 1);
+        assert_eq!(result.exclusions[0].code, "FMINE-REF-507");
+        assert_eq!(cells[0].claim.claim_id, original_id);
     }
 
     #[test]

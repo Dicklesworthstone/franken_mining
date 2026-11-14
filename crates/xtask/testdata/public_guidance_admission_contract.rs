@@ -21,6 +21,90 @@ mod tests {
 
     // The public synthetic completion contract is exercised in xtask/tests/public_guidance_history.rs.
 
+    fn reissue(cell: &mut KeyedCell) {
+        let c = &cell.claim;
+        cell.claim = Claim::new(
+            &c.metric_key,
+            c.value.clone(),
+            &crate::key::canonical_value_tag(&cell.key, &c.value),
+            c.representation.clone(),
+            c.support,
+            c.additivity,
+            c.evidence,
+            c.epistemic,
+            c.state,
+            c.confidentiality.clone(),
+            c.uu_terms.clone(),
+            c.parents.clone(),
+            c.anchors.clone(),
+        );
+    }
+
+    #[test]
+    fn edited_source_values_cannot_reuse_frozen_guidance_ancestry() {
+        let (t, cells) = synthetic_evidence().unwrap();
+        let original = render(&t, &cells).unwrap();
+        for index in 0..5 {
+            let mut edited = cells.clone();
+            let PublicValue::Number { displayed, .. } = &mut edited[index].claim.value else {
+                panic!("synthetic input must be numeric");
+            };
+            *displayed = Ok("900".into());
+            assert_eq!(
+                render(&t, &edited).map(|_| ()).unwrap_err().code,
+                "FMINE-REF-507",
+                "selected source {index} must retain its frozen value"
+            );
+        }
+        assert_eq!(render(&t, &cells).unwrap().digest, original.digest);
+    }
+
+    #[test]
+    fn source_interpretation_and_metadata_must_match_the_frozen_claim() {
+        let (_, cells) = synthetic_evidence().unwrap();
+        for mutation in 0..8 {
+            let mut c = cells[0].clone();
+            match mutation {
+                0 => {
+                    let PublicValue::Number { stored, .. } = &mut c.claim.value else {
+                        panic!("numeric fixture");
+                    };
+                    *stored = "900".into();
+                }
+                1 => c.key.ownership_basis = OwnershipBasis::Consolidated100,
+                2 => c.key.unit = "kt".into(),
+                3 => c.claim.epistemic = EpistemicStatus::UnmodelledBudget,
+                4 => c.claim.anchors[0].artifact_sha256 = [9; 32],
+                5 => c.claim.metric_key = "summary:au_sold_attr_koz".into(),
+                6 => c.claim.claim_id = cells[1].claim.claim_id,
+                _ => c.key.reporting_vintage.file_sha256 = sha256(b"other source").to_hex(),
+            }
+            assert_eq!(
+                actual_claim(&c, QuantityKind::ProductionKoz)
+                    .unwrap_err()
+                    .code,
+                "FMINE-REF-507",
+                "mutation {mutation} cannot acquire new provenance"
+            );
+        }
+        let mut c = cells[0].clone();
+        c.key.reporting_vintage.file_sha256 = sha256(b"unanchored vintage").to_hex();
+        reissue(&mut c);
+        assert_eq!(
+            actual_claim(&c, QuantityKind::ProductionKoz)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-505"
+        );
+    }
+
+    #[test]
+    fn guidance_interpretation_cannot_disagree_with_the_reader_agreed_token() {
+        let (mut t, cells) = synthetic_evidence().unwrap();
+        t.agreement.accepted[0].value = parse_token("900 - 950").unwrap();
+        assert_eq!(render(&t, &cells).unwrap_err().code, "FMINE-REF-507");
+    }
+
     #[test]
     fn latest_guidance_obeys_cutoff_and_ambiguity_refuses() {
         let (mut t, cells) = synthetic_evidence().unwrap();
@@ -71,20 +155,24 @@ mod tests {
         let (t, cells) = synthetic_evidence().unwrap();
         let mut changed = cells.clone();
         changed[1].key.ownership_basis = OwnershipBasis::Unprinted;
+        reissue(&mut changed[1]);
         assert_eq!(render(&t, &changed).unwrap_err().code, "FMINE-REF-107");
         changed = cells.clone();
         changed[4].key.ownership_basis = OwnershipBasis::Consolidated100;
+        reissue(&mut changed[4]);
         assert_eq!(render(&t, &changed).unwrap_err().code, "FMINE-REF-105");
         changed = cells.clone();
         if let PublicValue::Number { under_status, .. } = &mut changed[0].claim.value {
             *under_status = Some(crate::key::StatusKind::Disposed);
         }
+        reissue(&mut changed[0]);
         assert_eq!(render(&t, &changed).unwrap_err().code, "FMINE-REF-208");
         changed = cells.clone();
         changed.push(cells[0].clone());
         assert_eq!(render(&t, &changed).unwrap_err().code, "FMINE-REF-104");
         changed = cells.clone();
         changed[3].claim.value = changed[4].claim.value.clone();
+        reissue(&mut changed[3]);
         assert!(render(&t, &changed).is_err());
     }
 
@@ -101,6 +189,10 @@ mod tests {
             displayed: Ok("220".into()),
             under_status: None,
         };
+        let digest = sha256(b"synthetic revised FY sales: 220");
+        cells[3].key.reporting_vintage.file_sha256 = digest.to_hex();
+        cells[3].claim.anchors[0].artifact_sha256 = digest.0;
+        reissue(&mut cells[3]);
         let after = render(&t, &cells).unwrap();
         assert_ne!(before.digest, after.digest);
         assert_ne!(
@@ -119,6 +211,7 @@ mod tests {
             downside_exposure_usd_m: 1.0,
             trigger_indicator: "source revision".into(),
         });
+        reissue(&mut cells[3]);
         let report = render(&t, &cells).unwrap();
         assert_eq!(
             report.inputs.remaining_sold.epistemic,

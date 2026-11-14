@@ -462,6 +462,11 @@ The public lane of M0 (`fmine assure public`).
   source rows, `CapacityLimits` and the exact production/required-grade `CapacityReport`. Both JSON sections
   and their source metadata bind the content digest. This is not a forecast registration or ledger root and
   supplies no gate-eligibility claim. Source epistemics and unknown-unknown terms survive quantity conversion.
+  DESIGN (BD-342): numeric conversion rechecks the source Claim ID, metric, full public value tag and
+  matching document anchor before minting derived quantity Claims. Edited stored/displayed values,
+  ownership/unit/vintage keys and hashed source metadata refuse instead of acquiring fresh ancestry.
+  Guidance interpretations must still parse from the exact reader-agreed token. Newly issued, consistent
+  source assertions remain admissible; stale and unavailable historical windows retain their exclusions.
 - `recovery::{assess, run_public, run_synthetic, RecoveryReport, QuarterReport, RULES_VERSION}` and
   `PublicAssuranceReport::recovery` (bd-srqc). `RecoveryReport::{digest, to_json}` emits
   `fmine.recovery.gap.v1`, binding the accepted source rows, fit, selected quarterly source Claims, results

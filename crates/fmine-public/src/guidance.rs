@@ -362,6 +362,15 @@ fn guidance_claim(
     kind: QuantityKind,
     synthetic: bool,
 ) -> Result<Claim<Quantity>> {
+    if parse_token(&a.token).ok() != Some(a.value) {
+        return Err(refuse(
+            RefusalCode::FrozenRecordMutation507,
+            format!(
+                "{}: guidance interpretation differs from its agreed token",
+                a.locator
+            ),
+        ));
+    }
     let (basis, definition) = if kind == QuantityKind::AiscUsdPerSoldOz {
         let basis = a
             .basis
@@ -501,6 +510,30 @@ fn actual_claim(c: &KeyedCell, kind: QuantityKind) -> Result<Claim<Quantity>> {
         return Err(refuse(
             RefusalCode::NonAdditiveAverage103,
             "actual additivity does not match its quantity",
+        ));
+    }
+    // DESIGN (BD-342): conversion must not mint fresh provenance for an edited public assertion.
+    c.claim.check_id()?;
+    if c.claim.metric_key != c.key.line.label
+        || c.claim.value_tag() != crate::key::canonical_value_tag(&c.key, &c.claim.value)
+    {
+        return Err(refuse(
+            RefusalCode::FrozenRecordMutation507,
+            format!(
+                "{}: source key or value differs from its frozen Claim",
+                c.locator
+            ),
+        ));
+    }
+    if !c.claim.anchors.iter().any(|anchor| {
+        Digest32(anchor.artifact_sha256).to_hex() == c.key.reporting_vintage.file_sha256
+    }) {
+        return Err(refuse(
+            RefusalCode::DigestMismatch505,
+            format!(
+                "{}: source vintage has no matching document anchor",
+                c.locator
+            ),
         ));
     }
     let PublicValue::Number {
@@ -989,14 +1022,16 @@ fn synthetic_evidence() -> Result<(TranscriptionReport, Vec<KeyedCell>)> {
             },
         };
         let path = format!("synthetic/{release}/{field}.txt");
+        let value = PublicValue::Number {
+            stored: token.into(),
+            displayed: Ok(token.into()),
+            under_status: None,
+        };
+        let tag = crate::key::canonical_value_tag(&key, &value);
         let claim = Claim::new(
             &key.line.label,
-            PublicValue::Number {
-                stored: token.into(),
-                displayed: Ok(token.into()),
-                under_status: None,
-            },
-            &key.canonical_tag(token),
+            value,
+            &tag,
             Representation::Deterministic,
             SpatialSupport::PeriodAggregate,
             if field == "aisc_usd_per_oz" {
