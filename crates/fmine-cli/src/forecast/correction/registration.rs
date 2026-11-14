@@ -494,7 +494,11 @@ pub(in crate::forecast) fn apply(
         CorrectionMethod::MultiplicativeLog => format!("\"bias_factor\":{adjustment}"),
         CorrectionMethod::AdditiveResidual => format!(
             "\"method\":{},\"bias_shift\":{adjustment},\"adjustment_unit\":{}",
-            js(if request.series { method.series_name() } else { method.single_name() }),
+            js(if request.series {
+                method.series_name()
+            } else {
+                method.single_name()
+            }),
             js(unit)
         ),
     };

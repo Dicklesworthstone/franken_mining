@@ -382,15 +382,21 @@ assert all(h['first_registered'] is None and h['ambiguous_vintages'] == ['2024Q3
     }
 
     #[test]
-    #[ignore = "needs all registered Barrick workbooks under corpus_of_input_docs/downloaded/mine_stats/"]
+    #[ignore = "needs the 18 registered Barrick workbooks through 2026Q2 under corpus_of_input_docs/downloaded/mine_stats/"]
     fn test_part3_real_aisc_dedup_and_persisted() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let profile = load_issuer_profile(&root, "barrick").unwrap();
+        // The independent census below covers the 18-file, through-2026Q2 source epoch.
+        // E859's Q3 additions have separate sealed-reader coverage in public_corpus; later
+        // registry releases must not silently change this historical oracle's population.
+        let profile = load_issuer_profile(&root, "barrick")
+            .and_then(|profile| profile.through("2026Q2"))
+            .expect("historical source epoch");
         let report = assess(
             &profile,
             Lane::Public,
             load_registered_sources(&profile, &root).unwrap(),
         );
+        assert_eq!(report.sources.len(), 18, "historical source population");
         let index = key_aisc_operands(&profile, &report.sources, &report.instances);
         let consistency = aisc_consistency(&index, &report.instances);
         assert!(consistency.unkeyed.is_empty(), "{:?}", consistency.unkeyed);

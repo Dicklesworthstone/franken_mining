@@ -96,7 +96,6 @@ fn bounds(value: (f64, f64)) -> String {
     format!("[{},{}]", value.0, value.1)
 }
 
-
 fn version(method: CorrectionMethod) -> u16 {
     match method {
         CorrectionMethod::MultiplicativeLog => 1,
