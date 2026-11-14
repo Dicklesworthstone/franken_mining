@@ -109,9 +109,8 @@ fn weighted_permutation_ties_and_affine_changes_preserve_the_distribution() {
         assert!((actual - 8.0 * expected).abs() < 1e-13);
     }
     for outcome in [-1.0, 0.0, 1.0, 3.0] {
-        let tied =
-            weighted_empirical_crps(&[0.0, 2.0, 0.0], &[q(1, 4), q(1, 2), q(1, 4)], outcome)
-                .unwrap();
+        let tied = weighted_empirical_crps(&[0.0, 2.0, 0.0], &[q(1, 4), q(1, 2), q(1, 4)], outcome)
+            .unwrap();
         assert_eq!(
             tied,
             weighted_empirical_crps(&[0.0, 2.0], &[q(1, 2); 2], outcome).unwrap()

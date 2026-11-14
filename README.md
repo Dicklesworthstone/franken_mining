@@ -1730,6 +1730,36 @@ inspection explicitly cannot establish the original history or evaluation proven
 and the code revision are declarations, not external time proof or authenticated human identity. Recording
 a choice grants no approval, sign-off or execution authority and does not close the full BD-225 gate.
 
+To retain the registered forecasts behind a choice, add the complete option group to `record`:
+
+```bash
+--forecast-journal forecasts.journal --forecast-head "$FMINE_FORECAST_HEAD" \
+  --forecast-cohorts monthly-recovery,monthly-throughput
+```
+
+DESIGN (BD-225/BD-047): recording verifies the pinned forecast journal and every selected frozen cohort,
+retains all their members and rules by identity, and holds the source read lock through the decision append.
+The forecast prefix must precede the decision under the declared clock bounds. The decision must precede
+every member's deadline and any plant interval start, with no member outcome already recorded. A partial,
+stale or late request refuses without recording the choice. Linked choices use operation v4; older decision
+records retain their original meaning. Selecting forecasts declares their relevance to the choice; it does
+not establish that the decision's payoff model generated those forecasts.
+
+After outcomes and assessments have been saved in the forecast journal, inspect their connection to the
+unchanged decision with both current journal heads pinned:
+
+```bash
+fmine decide journal assess --journal decisions.journal --head "$FMINE_DECISION_HEAD" \
+  --decision expansion-review --forecast-journal forecasts.journal \
+  --forecast-head "$FMINE_FORECAST_HEAD" --assessments "$FMINE_ASSESSMENT_DIGESTS" \
+  --format markdown
+```
+
+This read-only comparison reconstructs the original forecast prefix before accepting its continuation.
+Every committed cohort remains visible, including those with no selected assessment. Saved scores retain
+their frozen denominators and outcome selections. Neither journal is changed. The result assesses the
+registered predictions; it does not identify the decision's causal effect or certify decision quality.
+
 #### Compare choices when scenario weights are contested
 
 DESIGN (BD-225, plan §22.5): an optional Wasserstein-1 comparison finds each original action's worst

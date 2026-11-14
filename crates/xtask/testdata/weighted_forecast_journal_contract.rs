@@ -196,12 +196,8 @@ fn offline_weighted_scores_preserve_mixed_cohort_denominators_and_decimal_quanti
             "registered_at = \"2030-01-02T00:00:00Z\"\nmodel_key =",
         )
     };
-    let frozen = |members| {
-        cohort(members).replace(
-            "name =",
-            "frozen_at = \"2030-01-03T00:00:00Z\"\nname =",
-        )
-    };
+    let frozen =
+        |members| cohort(members).replace("name =", "frozen_at = \"2030-01-03T00:00:00Z\"\nname =");
     let observed = |id, value| {
         outcome(id, value, "2031-01-01T00:00:00Z", false).replace(
             "available_at =",
@@ -231,7 +227,10 @@ fn offline_weighted_scores_preserve_mixed_cohort_denominators_and_decimal_quanti
     // Independent CRPS definition E|X-y| - E|X-X'|/2: 5/8 and 1/2.
     // Unresolved weighted minimum is 1/8; legacy Gaussian lower bound remains zero.
     near(field(summary, &["crps", "observed_mean"]), 9.0 / 16.0);
-    near(field(summary, &["crps", "whole_cohort", "lower"]), 5.0 / 16.0);
+    near(
+        field(summary, &["crps", "whole_cohort", "lower"]),
+        5.0 / 16.0,
+    );
     assert_eq!(
         field(summary, &["crps", "whole_cohort", "upper"]),
         &Json::Null
@@ -408,8 +407,10 @@ fn binary_v13_preserves_exact_weights_metadata_and_supplied_order_across_restart
         ],
     );
     let initial = field(&init, &["head"]).as_str().unwrap();
-    let request = format!("{}family = \"conditional-ensemble\"\nauthor_role = \"synthetic-model\"\ndomain = \"one-plant\"\nhorizon = \"one-period\"\nsite = \"synthetic\"\nquantity = \"recovered-metal\"\nunit = \"kg\"\n",
-        forecast("weighted", "2,0,2", "1/4,0.25,1/2").replace(DUE, "2200-01-01T00:00:00Z"));
+    let request = format!(
+        "{}family = \"conditional-ensemble\"\nauthor_role = \"synthetic-model\"\ndomain = \"one-plant\"\nhorizon = \"one-period\"\nsite = \"synthetic\"\nquantity = \"recovered-metal\"\nunit = \"kg\"\n",
+        forecast("weighted", "2,0,2", "1/4,0.25,1/2").replace(DUE, "2200-01-01T00:00:00Z")
+    );
     fs::write(root.join("request.toml"), &request).unwrap();
     let registered = binary(
         &root,

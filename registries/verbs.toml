@@ -27,6 +27,12 @@ mutates_authority = false
 description = "Verify and display retained decision snapshots, optionally pinning the exact final journal head"
 
 [[verb]]
+path = "decide journal assess"
+subsystem = "Helm"
+mutates_authority = false
+description = "Verify the decision's original frozen forecast commitments against later saved assessments without changing either journal"
+
+[[verb]]
 path = "decide recovery-bounds"
 subsystem = "Helm"
 mutates_authority = false

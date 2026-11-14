@@ -18,7 +18,6 @@ use xf::{Interval, Rat};
 
 pub const NO_CLAIM: &str = "Descriptive accounting bridge of independently printed cost and sold-volume assertions under an explicitly matched subject, ownership and definition. Arithmetic closure does not identify operational causes or verify accounting policy. Source bytes and reader agreement remain caller obligations. Selected filing vintages are retained; no first-publication or forecasting claim.";
 const RULE: &str = "pdf-cost-volume/1";
-const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 const TWO: Rat = Rat::from_integer(2);
 type Result<T> = std::result::Result<T, Refusal>;
@@ -335,8 +334,12 @@ fn mul(a: Interval, b: Interval) -> Result<Interval> {
         a.hi.checked_mul(b.hi),
     ] {
         let v = exact(v)?;
-        lo = lo.min(v);
-        hi = hi.max(v);
+        if exact(v.checked_cmp(lo))?.is_lt() {
+            lo = v;
+        }
+        if exact(v.checked_cmp(hi))?.is_gt() {
+            hi = v;
+        }
     }
     Ok(closed(lo, hi))
 }
@@ -500,7 +503,7 @@ pub fn assess(report: &TableReport, before_id: &str, after_id: &str) -> Result<C
         Ok(Bar {
             id,
             value: derived(exact(value.checked_mul(scale))?, interval, inputs.clone()),
-            sign_not_determined: interval.lo <= ZERO && interval.hi >= ZERO,
+            sign_not_determined: interval.lo.signum() <= 0 && interval.hi.signum() >= 0,
         })
     };
     let bars = [

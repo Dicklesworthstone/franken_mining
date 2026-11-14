@@ -214,7 +214,7 @@ fn source_populations_preserve_every_physical_target_element_units_and_entire_re
             registration_start(&Row(&doc.rows[0]), &changed)
                 .unwrap_err()
                 .code,
-            "FMINE-REF-107",
+            "FMINE-REF-107"
         );
     }
 }
@@ -247,15 +247,17 @@ fn arbitrary_exact_probability_mass_is_not_replaced_by_uniform_member_counts() {
     near(samples[1], 0.192);
     assert_eq!(
         weights,
-        &[ExactQty::new(19, 20).unwrap(), ExactQty::new(1, 20).unwrap()]
+        &[
+            ExactQty::new(19, 20).unwrap(),
+            ExactQty::new(1, 20).unwrap()
+        ]
     );
-    let (lo, hi) = fmine_calib::scoring::weighted_empirical_interval(samples, weights, 0.2)
-        .expect("exact weighted interval");
+    let (lo, hi) =
+        fmine_calib::scoring::weighted_empirical_interval(samples, weights, 0.2).unwrap();
     near(lo, 0.288);
     near(hi, 0.288);
     near(
-        fmine_calib::scoring::weighted_empirical_crps(samples, weights, 0.3)
-            .expect("full weighted distribution CRPS"),
+        fmine_calib::scoring::weighted_empirical_crps(samples, weights, 0.3).unwrap(),
         0.01224,
     );
     assert!(
@@ -367,12 +369,7 @@ fn plant_registration_reopens_and_scores_with_full_admission_evidence_retained()
     }
 }
 
-fn score_registered(
-    root: &Path,
-    start: i64,
-    expected_interval: f64,
-    expected_crps: Option<f64>,
-) {
+fn score_registered(root: &Path, start: i64, expected_interval: f64, expected_crps: Option<f64>) {
     std::fs::write(root.join("cohort.toml"), "[[cohort]]\nname = \"synthetic-production\"\nmembers = \"production-1\"\nresolution_rule = \"Supplied elemental production for the frozen complete physical interval\"\neligible_sources = \"synthetic:mill-report\"\noutcome_lo = \"0\"\noutcome_hi = \"1\"\n").unwrap();
     let frozen = execute_with_clock(
         &Command::Freeze {
@@ -438,7 +435,7 @@ fn score_registered(
         let mean = assessment
             .payload_json
             .split_once(marker)
-            .expect("weighted CRPS")
+            .expect("full-distribution CRPS")
             .1
             .split(',')
             .next()

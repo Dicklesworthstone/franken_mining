@@ -934,6 +934,20 @@ recomputed frame chains. Legacy v11 registration and replay stay logarithmic. Fo
 journal lifecycle tests cover both methods, signed/zero inputs, admission, later resolution, assessment,
 replay, stale requests, source-policy refusals and preservation of the raw journal prefix.
 
+### Decision-linked forecast assessment (BD-225/BD-047)
+
+DESIGN (BD-225/BD-047, plan §22): decision `record` optionally accepts the complete group
+`--forecast-journal`, `--forecast-head`, and `--forecast-cohorts`. It verifies the source journal's current
+pinned head and retains the cell, prefix, complete frozen cohorts and member identities in opt-in decision
+operation v4. A shared forecast lock remains held through append. Prefix clock upper < decision clock
+lower and decision clock upper < every member deadline/plant start are enforced on admission and replay;
+any recorded member outcome prevents admission. Legacy v1/v2/v3 decision encodings remain unchanged.
+`decide journal assess` is read-only and requires both current heads, a decision ID and saved assessment
+digests. It reconstructs the retained prefix, verifies its ancestry and identities, then retrieves only
+persisted digest-bound reports for the original cohorts. Every committed cohort remains visible, including
+unassessed cohorts. Neither journal is changed and no outcomes are invented. Relevance is operator-declared;
+there is no automatic payoff-model linkage, causal decision-quality conclusion or external time proof.
+
 ### Issued-output reliance (BD-347)
 
 `assure public --output <new-path>` requires `--journal`, `--head`, `--release-key`, `--trust-host-clock`,

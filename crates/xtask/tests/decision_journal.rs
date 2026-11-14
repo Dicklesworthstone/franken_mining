@@ -8,10 +8,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_claim::forecast_journal::Entry;
-use fmine_cli::decision_journal::{Choice, Command, PolicySelection, execute_with_clock};
+use fmine_cli::decision_journal::{
+    Choice, Command, ForecastSelection, PolicySelection, execute_with_clock,
+};
+use fmine_cli::forecast_journal::{
+    Command as ForecastCommand, execute_with_clock as forecast_with_clock,
+};
 use fmine_cli::{CliCommand, Envelope, OutputFormat, execute_command, parse_args};
 use fmine_core::hash::{Digest32, sha256};
 use fmine_io::forecast::Journal;
+use fmine_io::omf::json::{Json, parse as parse_json};
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 use fmine_runtime::{ClockError, WallClock};
 
@@ -117,6 +123,7 @@ impl Fixture {
             choice: Choice::ActNow(action.into()),
             rationale: "Keep this explicit choice beside every compared alternative".into(),
             code_revision: REVISION.into(),
+            forecasts: None,
         }
     }
 
@@ -888,8 +895,572 @@ fn cli_requires_explicit_mutation_policy_and_registers_all_operations() {
         "decide journal init",
         "decide journal record",
         "decide journal show",
+        "decide journal assess",
     ] {
         assert!(registry.contains(&format!("path = \"{verb}\"")));
         assert!(docs.payload_json.contains(verb));
+    }
+}
+
+fn json_field<'a>(value: &'a Json, keys: &[&str]) -> &'a Json {
+    keys.iter().fold(value, |value, key| {
+        value
+            .get(key)
+            .unwrap_or_else(|| panic!("missing {key}: {value:?}"))
+    })
+}
+
+struct Predictions {
+    root: PathBuf,
+    journal: PathBuf,
+    head: Digest32,
+    requests: usize,
+}
+
+impl Predictions {
+    fn new(root: &Path, name: &str) -> Self {
+        let journal = root.join(format!("{name}.forecast"));
+        let created = successful(forecast_with_clock(
+            &ForecastCommand::Init {
+                journal: journal.clone(),
+                cell_id: name.into(),
+                clock_skew_ns: 10,
+            },
+            root,
+            &Clock(100),
+        ));
+        let mut predictions = Self {
+            root: root.to_path_buf(),
+            journal,
+            head: head(&created),
+            requests: 0,
+        };
+        for (index, alias) in ["f1", "f2", "f3"].iter().enumerate() {
+            predictions.append(&format!(
+                "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{alias}\"\noutcome_due = \"1970-01-01T00:00:01Z\"\nkind = \"weighted_empirical\"\nsamples = \"0,4\"\nweights = \"1/4,3/4\"\n"), 200 + index as i64 * 100);
+        }
+        for (at, name, members) in [(500, "primary", "f1,f2"), (600, "secondary", "f3")] {
+            predictions.append(&format!(
+                "[[cohort]]\nname = \"{name}\"\nmembers = \"{members}\"\nresolution_rule = \"Invented complete observations\"\neligible_sources = \"synthetic:issuer\"\nalpha = \"0.2\"\noutcome_lo = \"0\"\noutcome_hi = \"4\"\n"), at);
+        }
+        predictions
+    }
+
+    fn append(&mut self, text: &str, at: i64) -> Json {
+        let request = self
+            .journal
+            .with_extension(format!("request{}.toml", self.requests));
+        self.requests += 1;
+        fs::write(&request, text).unwrap();
+        let command = match text.lines().next().unwrap() {
+            "[[forecast]]" => ForecastCommand::Register {
+                journal: self.journal.clone(),
+                head: self.head,
+                request,
+            },
+            "[[cohort]]" => ForecastCommand::Freeze {
+                journal: self.journal.clone(),
+                head: self.head,
+                request,
+            },
+            "[[outcome]]" => ForecastCommand::Outcome {
+                journal: self.journal.clone(),
+                head: self.head,
+                request,
+            },
+            _ => panic!("unknown synthetic request"),
+        };
+        self.execute(command, at)
+    }
+
+    fn execute(&mut self, command: ForecastCommand, at: i64) -> Json {
+        let envelope = successful(forecast_with_clock(&command, &self.root, &Clock(at)));
+        self.head = head(&envelope);
+        parse_json(envelope.payload_json.as_bytes()).unwrap()
+    }
+
+    fn selection(&self, cohorts: &[&str]) -> ForecastSelection {
+        ForecastSelection {
+            journal: self.journal.clone(),
+            head: self.head,
+            cohorts: cohorts.iter().map(|s| (*s).into()).collect(),
+        }
+    }
+
+    fn publish(&mut self) {
+        self.append(&format!(
+            "[[outcome]]\nforecast = \"f1\"\nkind = \"published\"\navailable_at = \"1970-01-01T00:00:02Z\"\nvalue = \"1\"\nsource = \"synthetic:issuer\"\nvintage = \"invented-original\"\nlocator = \"Synthetic!A1\"\nsha256 = \"{}\"\n", "ab".repeat(32)), 2_000_000_020);
+        self.append("[[outcome]]\nforecast = \"f2\"\nkind = \"missing\"\navailable_at = \"1970-01-01T00:00:02Z\"\nreason = \"not_published\"\n", 2_000_000_040);
+    }
+
+    fn assess(&mut self, cohort: &str, cut: &str, at: i64) -> (Digest32, Json) {
+        let report = self.execute(
+            ForecastCommand::Assess {
+                journal: self.journal.clone(),
+                head: self.head,
+                cohort: cohort.into(),
+                as_of: cut.into(),
+                selector: "first_published".into(),
+                expected_digest: None,
+            },
+            at,
+        );
+        let digest = Digest32(
+            fmine_calib::record::parse_hex32(
+                json_field(&report, &["report", "assessment", "digest"])
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        (digest, report)
+    }
+}
+
+fn linked_record(f: &Fixture, selection: ForecastSelection) -> Command {
+    let mut command = f.record(f.initial, "prospective-choice", "build");
+    let Command::Record { forecasts, .. } = &mut command else {
+        panic!("record")
+    };
+    *forecasts = Some(selection);
+    command
+}
+
+fn decision_review(
+    f: &Fixture,
+    decision_head: Digest32,
+    p: &Predictions,
+    assessments: Vec<Digest32>,
+) -> Command {
+    Command::Assess {
+        journal: f.journal.clone(),
+        head: decision_head,
+        decision_id: "prospective-choice".into(),
+        forecast_journal: p.journal.clone(),
+        forecast_head: p.head,
+        assessments,
+    }
+}
+
+#[test]
+fn decision_forecasts_retain_complete_members_and_retrieve_saved_weighted_scores() {
+    struct LockedForecast<'a>(&'a Predictions);
+    impl WallClock for LockedForecast<'_> {
+        fn now_ns(&self) -> Result<i64, ClockError> {
+            assert!(Journal::open_write(&self.0.journal, self.0.head).is_err());
+            Ok(1_000)
+        }
+    }
+    let f = Fixture::new();
+    let mut p = Predictions::new(&f.root, "predictions");
+    let forecast_prefix = p.head;
+    let recorded = successful(execute_with_clock(
+        &linked_record(&f, p.selection(&["secondary", "primary"])),
+        &f.root,
+        &LockedForecast(&p),
+    ));
+    let decision_head = head(&recorded);
+    assert_eq!(
+        operation_fields(&f, decision_head, 1)[0].1,
+        "fmine.decision-operation.v4"
+    );
+    let shown = successful(f.show(Some(decision_head)));
+    assert!(shown.payload_json.contains(&forecast_prefix.to_hex()));
+    assert!(shown.payload_json.contains("fmine.decision-journal.v3"));
+    let decision_json = parse_json(shown.payload_json.as_bytes()).unwrap();
+    let snapshot = json_field(&decision_json, &["decisions"])
+        .as_array()
+        .unwrap()[0]
+        .get("snapshot")
+        .unwrap();
+    let cohorts = json_field(snapshot, &["forecast_commitments", "cohorts"])
+        .as_array()
+        .unwrap();
+    assert_eq!(cohorts.len(), 2);
+    assert_eq!(
+        cohorts[0].get("members").unwrap().as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        cohorts[1].get("members").unwrap().as_array().unwrap().len(),
+        1
+    );
+
+    p.publish();
+    let (assessment, original) = p.assess("primary", "1970-01-01T00:00:03Z", 4_000_000_000);
+    fs::write(&f.model, "the reviewed model is no longer present here").unwrap();
+    let decision_bytes = fs::read(&f.journal).unwrap();
+    let forecast_bytes = fs::read(&p.journal).unwrap();
+    let command = decision_review(&f, decision_head, &p, vec![assessment]);
+    let reviewed = successful(execute_with_clock(&command, &f.root, &NoClock));
+    assert_eq!(fs::read(&f.journal).unwrap(), decision_bytes);
+    assert_eq!(fs::read(&p.journal).unwrap(), forecast_bytes);
+    let review = parse_json(reviewed.payload_json.as_bytes()).unwrap();
+    assert_eq!(review.get("read_only"), Some(&Json::Bool(true)));
+    assert_eq!(review.get("decision"), Some(snapshot));
+    assert_eq!(
+        review
+            .get("n_cohorts_without_selected_assessment")
+            .unwrap()
+            .u64(),
+        Some(1)
+    );
+    let rows = review.get("forecasts").unwrap().as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    let saved = &rows[0].get("assessments").unwrap().as_array().unwrap()[0];
+    assert_eq!(saved, original.get("report").unwrap());
+    let scores = json_field(saved, &["assessment", "summary"]);
+    assert_eq!(scores.get("n_members").unwrap().u64(), Some(2));
+    assert_eq!(scores.get("n_resolved").unwrap().u64(), Some(1));
+    assert_eq!(scores.get("n_unresolved").unwrap().u64(), Some(1));
+    // Independent discrete CRPS: .25*1 + .75*3 - .25*.75*4 = 1.75.
+    assert_eq!(
+        json_field(scores, &["crps", "observed_mean"]).f64(),
+        Some(1.75)
+    );
+    assert_eq!(
+        json_field(scores, &["crps", "whole_cohort", "lower"]).f64(),
+        Some(1.0)
+    );
+    assert_eq!(
+        json_field(scores, &["crps", "whole_cohort", "upper"]).f64(),
+        Some(2.0)
+    );
+    assert_eq!(
+        rows[1].get("status").unwrap().as_str(),
+        Some("no_assessment_selected")
+    );
+    assert!(reviewed.rendered_markdown.unwrap().contains("secondary"));
+    assert_eq!(
+        successful(f.show(Some(decision_head))).payload_json,
+        shown.payload_json
+    );
+}
+
+#[test]
+fn decision_forecast_admission_enforces_clock_bounds_frozen_members_and_current_head() {
+    let f = Fixture::new();
+    let mut p = Predictions::new(&f.root, "prospective");
+    let selection = p.selection(&["primary"]);
+    let original = fs::read(&f.journal).unwrap();
+    for at in [500, 620, 999_999_990, 1_000_000_000] {
+        let result = execute_with_clock(&linked_record(&f, selection.clone()), &f.root, &Clock(at));
+        assert_ne!(result.exit_code, 0, "{at}: {}", result.to_json());
+        assert_eq!(fs::read(&f.journal).unwrap(), original);
+    }
+    for cohorts in [vec![], vec!["primary", "primary"], vec!["unknown"]] {
+        let result = execute_with_clock(
+            &linked_record(&f, p.selection(&cohorts)),
+            &f.root,
+            &Clock(1_000),
+        );
+        assert_ne!(result.exit_code, 0);
+        assert_eq!(fs::read(&f.journal).unwrap(), original);
+    }
+    p.append("[[forecast]]\nid = \"later\"\nmodel_key = \"synthetic:later\"\noutcome_due = \"1970-01-01T00:00:01Z\"\nkind = \"empirical\"\nsamples = \"1\"\n", 700);
+    let stale = execute_with_clock(&linked_record(&f, selection), &f.root, &NoClock);
+    assert_ne!(stale.exit_code, 0);
+    assert_eq!(fs::read(&f.journal).unwrap(), original);
+    p.publish();
+    let resolved = execute_with_clock(
+        &linked_record(&f, p.selection(&["primary"])),
+        &f.root,
+        &NoClock,
+    );
+    assert_ne!(resolved.exit_code, 0);
+    assert!(
+        resolved
+            .refusal
+            .unwrap()
+            .what
+            .contains("recorded member outcome")
+    );
+    assert_eq!(fs::read(&f.journal).unwrap(), original);
+}
+
+#[test]
+fn decision_review_rejects_uncommitted_unsaved_duplicate_and_different_history_scores() {
+    let f = Fixture::new();
+    let mut p = Predictions::new(&f.root, "linked");
+    let recorded = successful(execute_with_clock(
+        &linked_record(&f, p.selection(&["primary"])),
+        &f.root,
+        &Clock(1_000),
+    ));
+    let pin = head(&recorded);
+    p.publish();
+    let (primary, _) = p.assess("primary", "1970-01-01T00:00:03Z", 4_000_000_000);
+    let (secondary, _) = p.assess("secondary", "1970-01-01T00:00:03Z", 4_000_000_020);
+    let bytes = fs::read(&f.journal).unwrap();
+    for digests in [
+        vec![secondary],
+        vec![Digest32([9; 32])],
+        vec![primary, primary],
+        vec![],
+    ] {
+        let rejected =
+            execute_with_clock(&decision_review(&f, pin, &p, digests), &f.root, &NoClock);
+        assert_ne!(rejected.exit_code, 0);
+        assert_eq!(fs::read(&f.journal).unwrap(), bytes);
+    }
+    let other = Predictions::new(&f.root, "same-labels-other-history");
+    let rejected = execute_with_clock(
+        &decision_review(&f, pin, &other, vec![primary]),
+        &f.root,
+        &NoClock,
+    );
+    assert_ne!(rejected.exit_code, 0);
+    assert!(rejected.refusal.unwrap().what.contains("prefix"));
+    successful(execute_with_clock(
+        &decision_review(&f, pin, &p, vec![primary]),
+        &f.root,
+        &NoClock,
+    ));
+}
+
+#[test]
+fn decision_review_requires_a_persisted_score_digest_and_original_complete_membership() {
+    let f = Fixture::new();
+    let mut p = Predictions::new(&f.root, "integrity");
+    let recorded = successful(execute_with_clock(
+        &linked_record(&f, p.selection(&["primary"])),
+        &f.root,
+        &Clock(1_000),
+    ));
+    let pin = head(&recorded);
+    p.publish();
+    let (assessment, _) = p.assess("primary", "1970-01-01T00:00:03Z", 4_000_000_000);
+
+    // Legacy checkpoints replay, but an omitted original result digest does not certify a saved score.
+    let mut forecast = Journal::open_write(&p.journal, p.head).unwrap();
+    forecast.append("[[assessment]]\ncohort = \"primary\"\nas_of = \"1970-01-01T00:00:05Z\"\nselector = \"first_published\"\n", &Clock(6_000_000_000), |_, _| Ok(())).unwrap();
+    p.head = forecast.head();
+    drop(forecast);
+    let inspected = successful(forecast_with_clock(
+        &ForecastCommand::Inspect {
+            journal: p.journal.clone(),
+            head: Some(p.head),
+        },
+        &f.root,
+        &NoClock,
+    ));
+    let inspected = parse_json(inspected.payload_json.as_bytes()).unwrap();
+    let last = inspected
+        .get("assessments")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap();
+    let unbound = Digest32(
+        fmine_calib::record::parse_hex32(last.get("digest").unwrap().as_str().unwrap()).unwrap(),
+    );
+    let rejected = execute_with_clock(
+        &decision_review(&f, pin, &p, vec![unbound]),
+        &f.root,
+        &NoClock,
+    );
+    assert_ne!(rejected.exit_code, 0);
+    assert!(
+        rejected
+            .refusal
+            .unwrap()
+            .what
+            .contains("persisted result digest")
+    );
+
+    // Even a separately pinned, rehashed decision copy cannot replace its committed member population.
+    let fields = operation_fields(&f, pin, 1);
+    let mut edited = String::new();
+    for (key, mut value) in fields {
+        if key == "forecast_commitments_hex" {
+            let bytes = (0..value.len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&value[index..index + 2], 16).unwrap())
+                .collect::<Vec<_>>();
+            let text = String::from_utf8(bytes).unwrap();
+            let members = text
+                .lines()
+                .find(|line| line.starts_with("members = "))
+                .unwrap();
+            let member = members
+                .strip_prefix("members = \"")
+                .unwrap()
+                .split(',')
+                .next()
+                .unwrap();
+            value = hex(text
+                .replace(members, &format!("members = \"{member}\""))
+                .as_bytes());
+        }
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        edited.push_str(&format!("{key} = \"{escaped}\"\n"));
+    }
+    let source = Journal::open_read(&f.journal, Some(pin)).unwrap();
+    let mut records = source.records().to_vec();
+    drop(source);
+    records[1].entry = Entry::Operation(edited);
+    let altered_pin = records[1].chain_head().unwrap();
+    let altered = f.root.join("altered-decision.journal");
+    fs::write(
+        &altered,
+        records
+            .iter()
+            .flat_map(|record| record.to_line().unwrap())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let mut command = decision_review(&f, pin, &p, vec![assessment]);
+    let Command::Assess { journal, head, .. } = &mut command else {
+        panic!("assess")
+    };
+    *journal = altered;
+    *head = altered_pin;
+    let rejected = execute_with_clock(&command, &f.root, &NoClock);
+    assert_ne!(rejected.exit_code, 0);
+    assert!(
+        rejected
+            .refusal
+            .unwrap()
+            .what
+            .contains("complete membership")
+    );
+    successful(execute_with_clock(
+        &decision_review(&f, pin, &p, vec![assessment]),
+        &f.root,
+        &NoClock,
+    ));
+}
+
+#[test]
+fn linked_information_choice_keeps_old_decision_bytes_and_original_policy() {
+    let f = Fixture::new();
+    let p = Predictions::new(&f.root, "information");
+    let old = successful(execute_with_clock(
+        &f.record(f.initial, "original-action", "hold"),
+        &f.root,
+        &Clock(200),
+    ));
+    let old_bytes = fs::read(&f.journal).unwrap();
+    fs::write(&f.model, INFORMATION).unwrap();
+    let mut command = f.information(
+        head(&old),
+        "buy-testwork",
+        "met_test",
+        PolicySelection::ExpectedValue,
+    );
+    let Command::Record { forecasts, .. } = &mut command else {
+        panic!("record")
+    };
+    *forecasts = Some(p.selection(&["primary"]));
+    let saved = successful(execute_with_clock(&command, &f.root, &Clock(1_000)));
+    assert!(fs::read(&f.journal).unwrap().starts_with(&old_bytes));
+    assert_eq!(
+        operation_fields(&f, head(&saved), 1)[0].1,
+        "fmine.decision-operation.v1"
+    );
+    assert_eq!(
+        operation_fields(&f, head(&saved), 2)[0].1,
+        "fmine.decision-operation.v4"
+    );
+    let policy = retained_policy(&f, head(&saved), 2);
+    assert!(policy.contains("\"nominal_mean\":\"131200000/1\""));
+    assert!(policy.contains("\"total_cost\":\"9800000/1\""));
+    successful(f.show(Some(head(&saved))));
+    let mut review = decision_review(&f, head(&saved), &p, vec![Digest32([9; 32])]);
+    let Command::Assess { decision_id, .. } = &mut review else {
+        panic!("assess")
+    };
+    *decision_id = "original-action".into();
+    let refusal = execute_with_clock(&review, &f.root, &NoClock);
+    assert_ne!(refusal.exit_code, 0);
+    assert!(
+        refusal
+            .refusal
+            .unwrap()
+            .what
+            .contains("cannot be attached after recording")
+    );
+}
+
+#[test]
+fn decision_forecast_cli_requires_complete_pins_and_read_only_review() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pin = "ab".repeat(32);
+    let base = [
+        "decide",
+        "journal",
+        "assess",
+        "--journal",
+        "choices",
+        "--head",
+        &pin,
+        "--decision",
+        "choice",
+        "--forecast-journal",
+        "predictions",
+        "--forecast-head",
+        &pin,
+        "--assessments",
+        &pin,
+    ];
+    let args = base.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    let (command, _, _) = parse_args(&args, &root).unwrap();
+    assert!(matches!(
+        command,
+        CliCommand::DecisionJournal(Command::Assess { .. })
+    ));
+    for flag in ["--head", "--forecast-head", "--assessments"] {
+        let mut omitted = args.clone();
+        let position = omitted.iter().position(|value| value == flag).unwrap();
+        omitted.drain(position..position + 2);
+        assert!(parse_args(&omitted, &root).is_err());
+    }
+    let mut clock = args.clone();
+    clock.push("--trust-host-clock".into());
+    assert!(parse_args(&clock, &root).is_err());
+    let record = [
+        "decide",
+        "journal",
+        "record",
+        "--journal",
+        "choices",
+        "--expected-head",
+        &pin,
+        "--model",
+        "model.toml",
+        "--decision",
+        "choice",
+        "--action",
+        "hold",
+        "--reason",
+        "why",
+        "--code-revision",
+        REVISION,
+        "--trust-host-clock",
+        "--forecast-journal",
+        "predictions",
+        "--forecast-head",
+        &pin,
+        "--forecast-cohorts",
+        "primary,secondary",
+    ];
+    let args = record.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    assert!(matches!(
+        parse_args(&args, &root).unwrap().0,
+        CliCommand::DecisionJournal(Command::Record {
+            forecasts: Some(_),
+            ..
+        })
+    ));
+    for flag in [
+        "--forecast-head",
+        "--forecast-cohorts",
+        "--forecast-journal",
+    ] {
+        let mut omitted = args.clone();
+        let position = omitted.iter().position(|value| value == flag).unwrap();
+        omitted.drain(position..position + 2);
+        assert!(parse_args(&omitted, &root).is_err());
     }
 }

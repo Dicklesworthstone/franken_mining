@@ -17,19 +17,25 @@ use fmine_runtime::{HostWallClock, WallClock};
 use crate::{Envelope, NextAction, OutputFormat, json_string as js, worksheet_input};
 
 mod choice;
+mod forecasts;
 pub use choice::{Choice, PolicySelection};
+use forecasts::ForecastLinks;
+pub use forecasts::ForecastSelection;
 
 const CELL_PREFIX: &str = "fmine.decision/v1:";
 const OPERATION_SCHEMA: &str = "fmine.decision-operation.v1";
 const POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v2";
 const COMPACT_POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v3";
+const LINKED_OPERATION_SCHEMA: &str = "fmine.decision-operation.v4";
 const REPORT_SCHEMA: &str = "fmine.decision-journal.v1";
 const POLICY_REPORT_SCHEMA: &str = "fmine.decision-journal.v2";
+const LINKED_REPORT_SCHEMA: &str = "fmine.decision-journal.v3";
 pub const NO_CLAIM: &str = "Local record of an explicitly supplied choice and rationale, append-only through this writer. Model inputs remain Assumed, Internal and uncalibrated. The writer retains the evaluated card; replay verifies stored byte integrity, not independent evaluation provenance. This is not a new evaluation or evidence of approval, human identity, sign-off, execution authority or external time proof. Code revision and host-clock accuracy are operator declarations. Only an independently retained final-head pin detects rollback or whole-history rewriting.";
 pub const INIT_USAGE: &str = "decide journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]";
-pub const RECORD_USAGE: &str = "decide journal record --journal <path> --expected-head <hex> --model <path> --decision <id> (--action <id> | --information-option <id> --policy expected-value|downside-optimized) --reason <text> --code-revision <git-sha> --trust-host-clock";
+pub const RECORD_USAGE: &str = "decide journal record --journal <path> --expected-head <hex> --model <path> --decision <id> (--action <id> | --information-option <id> --policy expected-value|downside-optimized) --reason <text> --code-revision <git-sha> [--forecast-journal <path> --forecast-head <hex> --forecast-cohorts <name,...>] --trust-host-clock";
 pub const SHOW_USAGE: &str = "decide journal show --journal <path> [--head <hex>]";
-pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.decision-journal.v2","operations":["init","record","show"],"storage":"Existing FJR1 append-only journal; decision-specific genesis and versioned opaque operations; OS locking, expected-head comparison and sync before success","choice":"Exactly one --action id or --information-option id with explicit --policy expected-value|downside-optimized; the complete unchanged comparison remains visible","policy":"Expected-value retains the displayed nominal signal policy and posterior ties. Downside-optimized requires a feasible optimizer result and retains its canonical complete mapping, exact co-optimal count and nominal or Wasserstein screen. Choosing an option never implicitly chooses a policy","identity":"Unique decision id per journal; another choice needs a new id and rationale; code revision is an explicit 40- or 64-character lowercase Git hash declaration","snapshot":"Exact model bytes, source path, SHA-256, output Claim id and evaluated JSON artifact with its own SHA-256. Information choices also retain an exact source-bound policy selection artifact and SHA-256. Retained artifacts are not re-evaluated on show","compatibility":"Act-now operations retain v1 bytes; legacy v2 information operations remain readable; new information choices use compact v3 operations and histories containing information choices use v2 reports","bounds":"Every encoded operation must fit the existing 65536-byte limit; oversized models/cards refuse before append","clock":"Mutations require --trust-host-clock; init declares the maximum host-clock skew, default 1000 ms; no external proof or inferred human authorization","show":"Reopens and verifies the complete hash chain and retained content digests without reading the mutable model file; --head pins the exact final head; without it rollback is not checked","scope":"Internal decision support only; no approval, sign-off or execution authorization"}"#;
+pub const ASSESS_USAGE: &str = "decide journal assess --journal <path> --head <hex> --decision <id> --forecast-journal <path> --forecast-head <hex> --assessments <digest,...> [--format json|markdown]";
+pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.decision-journal.v3","operations":["init","record","show","assess"],"storage":"Existing FJR1 append-only journal; decision-specific genesis and versioned opaque operations; OS locking, expected-head comparison and sync before success","choice":"Exactly one --action id or --information-option id with explicit --policy expected-value|downside-optimized; the complete unchanged comparison remains visible","policy":"Expected-value retains the displayed nominal signal policy and posterior ties. Downside-optimized requires a feasible optimizer result and retains its canonical complete mapping, exact co-optimal count and nominal or Wasserstein screen. Choosing an option never implicitly chooses a policy","identity":"Unique decision id per journal; another choice needs a new id and rationale; code revision is an explicit 40- or 64-character lowercase Git hash declaration","snapshot":"Exact model bytes, source path, SHA-256, output Claim id and evaluated JSON artifact with its own SHA-256. Information choices also retain an exact source-bound policy selection artifact and SHA-256. Retained artifacts are not re-evaluated on show","forecast_commitments":"Optional --forecast-journal, --forecast-head and --forecast-cohorts must occur together. One checked current final head binds one through 32 complete frozen cohorts; the shared forecast lock stays held through the decision append. The latest forecast-prefix clock bound must precede the earliest decision time, and the latest decision time must precede every member deadline and plant support start. Recorded member outcomes refuse. Relevance to the choice is declared, not inferred","assess":"Read-only: requires --journal, --head, --decision, --forecast-journal, --forecast-head and one through 64 distinct --assessments digests. Verifies the original prefix in the extended forecast history and retrieves only previously persisted, digest-bound assessments of committed cohorts. Every committed cohort remains visible, including no_assessment_selected; no score is pooled across cohorts and neither journal is changed","compatibility":"Unlinked act-now v1 and information v2/v3 operations retain their existing bytes. Linked decisions use v4 operations and v3 history reports. Assess emits fmine.decision-assessment.v1 without changing the original card, choice or forecasts","bounds":"Every encoded operation must fit the existing 65536-byte limit; oversized models, cards or commitments refuse before append","clock":"Mutations require --trust-host-clock; init declares the maximum host-clock skew, default 1000 ms. Read-only show and assess never sample a clock. Host bounds are operator declarations, not external proof","show":"Reopens and verifies the complete hash chain and retained content digests without reading the mutable model or forecast source; --head pins the exact final head; without it rollback is not checked","scope":"Internal decision support only; forecast scores do not establish decision quality, causality, calibration, approval, sign-off or execution authorization"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -46,10 +52,19 @@ pub enum Command {
         choice: Choice,
         rationale: String,
         code_revision: String,
+        forecasts: Option<ForecastSelection>,
     },
     Show {
         journal: PathBuf,
         head: Option<Digest32>,
+    },
+    Assess {
+        journal: PathBuf,
+        head: Digest32,
+        decision_id: String,
+        forecast_journal: PathBuf,
+        forecast_head: Digest32,
+        assessments: Vec<Digest32>,
     },
 }
 
@@ -59,6 +74,7 @@ impl Command {
             Self::Init { .. } => "decide journal init",
             Self::Record { .. } => "decide journal record",
             Self::Show { .. } => "decide journal show",
+            Self::Assess { .. } => "decide journal assess",
         }
     }
 }
@@ -82,7 +98,7 @@ pub(crate) fn parse(
 ) -> Result<(Command, OutputFormat, PathBuf), String> {
     let (mut fields, words) = crate::journal_arguments(args, &["--json", "--trust-host-clock"])?;
     let ["decide", "journal", verb] = words.as_slice() else {
-        return Err("expected decide journal init|record|show".into());
+        return Err("expected decide journal init|record|show|assess".into());
     };
     let format = match fields.remove("--format").as_deref().unwrap_or("json") {
         "json" => OutputFormat::Json,
@@ -102,8 +118,8 @@ pub(crate) fn parse(
     if matches!(*verb, "init" | "record") && !trust_clock {
         return Err("decision journal mutations require --trust-host-clock".into());
     }
-    if *verb == "show" && trust_clock {
-        return Err("show reads retained history and takes no --trust-host-clock".into());
+    if matches!(*verb, "show" | "assess") && trust_clock {
+        return Err("show and assess read retained history and take no --trust-host-clock".into());
     }
     let command = match *verb {
         "init" => {
@@ -144,11 +160,23 @@ pub(crate) fn parse(
                 choice,
                 rationale: take(&mut fields, "--reason")?,
                 code_revision: take(&mut fields, "--code-revision")?,
+                forecasts: ForecastSelection::parse(&mut fields)?,
             }
         }
         "show" => Command::Show {
             journal,
             head: fields.remove("--head").map(|v| digest(&v)).transpose()?,
+        },
+        "assess" => Command::Assess {
+            journal,
+            head: digest(&take(&mut fields, "--head")?)?,
+            decision_id: take(&mut fields, "--decision")?,
+            forecast_journal: PathBuf::from(take(&mut fields, "--forecast-journal")?),
+            forecast_head: digest(&take(&mut fields, "--forecast-head")?)?,
+            assessments: forecasts::names(&take(&mut fields, "--assessments")?, 64)?
+                .iter()
+                .map(|value| digest(value))
+                .collect::<Result<Vec<_>, _>>()?,
         },
         _ => return Err("unknown decision journal operation".into()),
     };
@@ -220,6 +248,7 @@ struct Snapshot {
     card: String,
     claim_id: String,
     code_revision: String,
+    forecasts: Option<ForecastLinks>,
 }
 
 impl Snapshot {
@@ -243,13 +272,28 @@ impl Snapshot {
             return Err(integrity("retained model and card must both be nonempty"));
         }
         match (&self.choice, &self.policy_snapshot) {
-            (Choice::ActNow(_), None) if !self.compact_json => {}
+            (Choice::ActNow(_), None) if self.compact_json == self.forecasts.is_some() => {}
             (Choice::InformationOption { .. }, Some(policy)) if !policy.is_empty() => {}
             _ => {
                 return Err(integrity(
                     "retained policy artifact or encoding does not match the choice",
                 ));
             }
+        }
+        if let Some(links) = &self.forecasts {
+            links.encode()?;
+            if !self.compact_json {
+                return Err(integrity(
+                    "linked decisions require their compact v4 encoding",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_at(&self, earliest_ns: i64, latest_ns: i64) -> Result<(), Refusal> {
+        if let Some(links) = &self.forecasts {
+            links.validate_at(earliest_ns, latest_ns)?;
         }
         Ok(())
     }
@@ -304,6 +348,10 @@ impl Snapshot {
                 ("card_hex", hex(self.card.as_bytes()))
             },
         ]);
+        if let Some(links) = &self.forecasts {
+            fields[0].1 = LINKED_OPERATION_SCHEMA.to_owned();
+            fields.push(("forecast_commitments_hex", hex(links.encode()?.as_bytes())));
+        }
         let mut out = String::new();
         for (key, value) in fields {
             let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
@@ -330,13 +378,20 @@ impl Snapshot {
             fields.insert(field.key, value);
         }
         let schema = take(&mut fields, "schema").map_err(integrity)?;
-        let compact_json = schema == COMPACT_POLICY_OPERATION_SCHEMA;
+        let compact_json = matches!(
+            schema.as_str(),
+            COMPACT_POLICY_OPERATION_SCHEMA | LINKED_OPERATION_SCHEMA
+        );
         let (choice, policy_snapshot) = match schema.as_str() {
             OPERATION_SCHEMA => (
                 Choice::ActNow(take(&mut fields, "action").map_err(integrity)?),
                 None,
             ),
-            POLICY_OPERATION_SCHEMA | COMPACT_POLICY_OPERATION_SCHEMA => {
+            LINKED_OPERATION_SCHEMA if fields.contains_key("action") => (
+                Choice::ActNow(take(&mut fields, "action").map_err(integrity)?),
+                None,
+            ),
+            POLICY_OPERATION_SCHEMA | COMPACT_POLICY_OPERATION_SCHEMA | LINKED_OPERATION_SCHEMA => {
                 let choice = Choice::InformationOption {
                     option_id: take(&mut fields, "information_option").map_err(integrity)?,
                     policy: PolicySelection::parse(
@@ -370,6 +425,13 @@ impl Snapshot {
             model_path: take(&mut fields, "model_path").map_err(integrity)?,
             claim_id: take(&mut fields, "claim_id").map_err(integrity)?,
             code_revision: take(&mut fields, "code_revision").map_err(integrity)?,
+            forecasts: if schema == LINKED_OPERATION_SCHEMA {
+                Some(ForecastLinks::decode(&unhex(
+                    &take(&mut fields, "forecast_commitments_hex").map_err(integrity)?,
+                )?)?)
+            } else {
+                None
+            },
             model: unhex(&take(&mut fields, "model_hex").map_err(integrity)?)?,
             card: if compact_json {
                 take(&mut fields, "card_json").map_err(integrity)?
@@ -398,6 +460,9 @@ impl Snapshot {
     }
 
     fn json(&self) -> Result<String, Refusal> {
+        let forecasts = self.forecasts.as_ref().map_or_else(String::new, |links| {
+            format!(",\"forecast_commitments\":{}", links.json())
+        });
         let choice = match &self.choice {
             Choice::ActNow(action) => format!("\"selected_action\":{}", js(action)),
             Choice::InformationOption { option_id, policy } => {
@@ -416,7 +481,7 @@ impl Snapshot {
             }
         };
         Ok(format!(
-            "{{\"decision_id\":{},{choice},\"rationale\":{},\"declared_code_revision\":{},\"claim_id\":{},\"model\":{{\"path\":{},\"sha256\":{},\"bytes\":{},\"content\":{}}},\"artifact\":{{\"media_type\":\"application/json\",\"sha256\":{},\"bytes\":{},\"content\":{}}}}}",
+            "{{\"decision_id\":{},{choice},\"rationale\":{},\"declared_code_revision\":{},\"claim_id\":{},\"model\":{{\"path\":{},\"sha256\":{},\"bytes\":{},\"content\":{}}},\"artifact\":{{\"media_type\":\"application/json\",\"sha256\":{},\"bytes\":{},\"content\":{}}}{forecasts}}}",
             js(&self.decision_id),
             js(&self.rationale),
             js(&self.code_revision),
@@ -448,6 +513,8 @@ fn replay(journal: &Journal) -> Result<Vec<Snapshot>, Refusal> {
             return Err(integrity("unexpected repeated genesis"));
         };
         let snapshot = Snapshot::decode(operation)?;
+        let (earliest, latest) = journal.header().time_bounds(record.observed_ns)?;
+        snapshot.validate_at(earliest, latest)?;
         if !ids.insert(snapshot.decision_id.clone()) {
             return Err(integrity("a decision id occurs more than once"));
         }
@@ -462,8 +529,16 @@ fn report(
     verb: &'static str,
 ) -> Result<Envelope, Refusal> {
     let mut rows = Vec::new();
+    let linked = snapshots
+        .iter()
+        .any(|snapshot| snapshot.forecasts.is_some());
+    let no_claim = if linked {
+        forecasts::NO_CLAIM
+    } else {
+        NO_CLAIM
+    };
     let mut markdown = format!(
-        "# Recorded decisions\n\n{NO_CLAIM}\n\nJournal head: `{}`. Decisions: {}.\n",
+        "# Recorded decisions\n\n{no_claim}\n\nJournal head: `{}`. Decisions: {}.\n",
         journal.head(),
         snapshots.len()
     );
@@ -492,8 +567,17 @@ fn report(
                 sha256(policy.as_bytes())
             );
         }
+        if let Some(links) = &snapshot.forecasts {
+            let _ = writeln!(
+                markdown,
+                "\nProspectively committed forecast cohorts:\n\n```json\n{}\n```",
+                links.json()
+            );
+        }
     }
-    let schema = if snapshots.iter().any(|s| s.policy_snapshot.is_some()) {
+    let schema = if linked {
+        LINKED_REPORT_SCHEMA
+    } else if snapshots.iter().any(|s| s.policy_snapshot.is_some()) {
         POLICY_REPORT_SCHEMA
     } else {
         REPORT_SCHEMA
@@ -515,7 +599,7 @@ fn report(
             "Read decision journal recording and independently retained head requirements",
         )],
     );
-    envelope.no_claim = Some(NO_CLAIM);
+    envelope.no_claim = Some(no_claim);
     envelope.rendered_markdown = Some(markdown);
     if !journal.is_pinned() && verb == "decide journal show" {
         envelope.warnings.push(
@@ -530,7 +614,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
     execute_with_clock(command, root, &HostWallClock)
 }
 
-/// Clock injection supports deterministic admission checks; `show` never asks the clock for a time.
+/// Clock injection supports deterministic admission checks; `show` and `assess` never ask for a time.
 #[must_use]
 pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock) -> Envelope {
     let perform = || -> Result<Envelope, Refusal> {
@@ -558,6 +642,32 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                 let snapshots = replay(&journal)?;
                 report(&journal, &snapshots, command.verb())
             }
+            Command::Assess {
+                journal,
+                head,
+                decision_id,
+                forecast_journal,
+                forecast_head,
+                assessments,
+            } => {
+                let journal = Journal::open_read(&root.join(journal), Some(*head))?;
+                let snapshots = replay(&journal)?;
+                let (record, snapshot) = journal
+                    .records()
+                    .iter()
+                    .skip(1)
+                    .zip(&snapshots)
+                    .find(|(_, snapshot)| snapshot.decision_id == *decision_id)
+                    .ok_or_else(|| invalid("decision id is absent from the pinned journal"))?;
+                forecasts::review(
+                    &journal,
+                    snapshot,
+                    record.chain_head()?,
+                    &root.join(forecast_journal),
+                    *forecast_head,
+                    assessments,
+                )
+            }
             Command::Record {
                 journal,
                 expected_head,
@@ -566,6 +676,7 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                 choice,
                 rationale,
                 code_revision,
+                forecasts,
             } => {
                 let (text, source) = worksheet_input::read_model(
                     &root.join(model),
@@ -580,10 +691,14 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                 let inputs = card::model::parse(&text, source.clone())?;
                 let evaluated = card::evaluate(&inputs)?;
                 let policy_snapshot = choice.snapshot(&evaluated)?;
+                let prepared_forecasts = forecasts
+                    .as_ref()
+                    .map(|selection| ForecastLinks::admit(selection, root))
+                    .transpose()?;
                 let snapshot = Snapshot {
                     decision_id: decision_id.clone(),
                     choice: choice.clone(),
-                    compact_json: policy_snapshot.is_some(),
+                    compact_json: policy_snapshot.is_some() || prepared_forecasts.is_some(),
                     policy_snapshot,
                     rationale: rationale.clone(),
                     model_path: source.artifact_path,
@@ -591,6 +706,7 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                     card: evaluated.to_json(),
                     claim_id: evaluated.claim().claim_id.to_string(),
                     code_revision: code_revision.clone(),
+                    forecasts: prepared_forecasts.as_ref().map(|(_, links)| links.clone()),
                 };
                 let operation = snapshot.operation()?;
                 let mut journal = Journal::open_write(&root.join(journal), *expected_head)?;
@@ -601,7 +717,11 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                         "decision journal: decision id already exists; retain the original and use a new id",
                     ));
                 }
-                journal.append(&operation, clock, |_, _| Ok(()))?;
+                journal.append(&operation, clock, |record, header| {
+                    let (earliest, latest) = header.time_bounds(record.observed_ns)?;
+                    snapshot.validate_at(earliest, latest)
+                })?;
+                drop(prepared_forecasts);
                 snapshots.push(snapshot);
                 report(&journal, &snapshots, command.verb())
             }

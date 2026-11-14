@@ -2416,6 +2416,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 decision_journal::INIT_USAGE,
                 decision_journal::RECORD_USAGE,
                 decision_journal::SHOW_USAGE,
+                decision_journal::ASSESS_USAGE,
                 "decide recovery-bounds <model-file>",
                 capital::USAGE,
                 "assure public --issuer <issuer> [--through YYYYQn]",

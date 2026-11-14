@@ -1,6 +1,7 @@
 //! Live forecast admission and durable replay (BD-047). The locked I/O owner assigns record times.
 //! Caller requests supply targets and source availability, never their own registration or recording time.
 
+pub(crate) mod decisions;
 mod proof;
 
 use std::fmt::Write as _;

@@ -3228,7 +3228,9 @@ mod tests {
             },
         );
         for id in &ids[..2] {
-            ledger.append_outcome(*id, 101, 101, published(0.0)).unwrap();
+            ledger
+                .append_outcome(*id, 101, 101, published(0.0))
+                .unwrap();
         }
         let report = ledger
             .assess(cohort, 102, OutcomeSelector::FirstPublished)
@@ -3287,7 +3289,9 @@ mod tests {
             let (mut ledger, cohort, ids) =
                 make_cohort(vec![payload.clone()], AssessmentPolicy::default());
             assert_eq!(ledger.forecast(ids[0]).unwrap().payload, payload);
-            ledger.append_outcome(ids[0], 101, 101, published(1.0)).unwrap();
+            ledger
+                .append_outcome(ids[0], 101, 101, published(1.0))
+                .unwrap();
             let original = ledger
                 .assess(cohort, 102, OutcomeSelector::FirstPublished)
                 .unwrap()
@@ -3353,7 +3357,9 @@ mod tests {
         assert!(coverage::monitor_interval(&payload, 0.2).is_err());
         let (mut ledger, cohort, ids) =
             make_cohort(vec![payload.clone()], AssessmentPolicy::default());
-        ledger.append_outcome(ids[0], 101, 101, published(2.0)).unwrap();
+        ledger
+            .append_outcome(ids[0], 101, 101, published(2.0))
+            .unwrap();
         let digest = ledger
             .assess(cohort, 102, OutcomeSelector::FirstPublished)
             .unwrap()
@@ -3364,9 +3370,7 @@ mod tests {
             [Some((1.0, 1.0)), Some((0.0, 1.0)), Some((0.0, 2.0))]
         );
         assert_eq!(
-            report
-                .levels
-                .map(|l| (l.n_supported, l.inside, l.above)),
+            report.levels.map(|l| (l.n_supported, l.inside, l.above)),
             [(1, 0, 1), (1, 0, 1), (1, 1, 0)]
         );
         let diagnostics = ledger.assessment_diagnostics(digest).unwrap();
@@ -3393,7 +3397,10 @@ mod tests {
         let report = ledger
             .assess(cohort, 102, OutcomeSelector::FirstPublished)
             .unwrap();
-        assert_eq!(report.summary.coverage.unwrap().observed_fraction, Some(0.8));
+        assert_eq!(
+            report.summary.coverage.unwrap().observed_fraction,
+            Some(0.8)
+        );
         assert_eq!(report.summary.flag, CalibrationFlag::Descriptive);
     }
 
