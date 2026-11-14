@@ -3,7 +3,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use fmine_metrics::roll_forward::{self, TableReport};
+use fmine_metrics::roll_forward::{self, TableReport, cost_bridge};
 use fmine_numerics::exact_feas::{Outcome, Rat};
 use fmine_registry::sources::DocumentRow;
 use fmine_registry::table_identities::{TableIdentityRegistry, parse_table_identities};
@@ -362,4 +362,357 @@ fn declarations_cannot_choose_a_rescuing_scale_period_sign_or_shared_rate() {
     constructed.identities[0].terms[0].sign = -1;
     assert!(constructed.validate(&[document()]).is_err());
     assert!(assess(&constructed, &readings(false)).components.is_empty());
+}
+
+const BRIDGE_BASIS: &str = "subject=synthetic_mine;ownership=attributable:1/2;definition=synthetic_cost@v1;denominator=sold";
+
+fn bridge_sources(copper: bool) -> (TableIdentityRegistry, Vec<Accepted>, Vec<DocumentRow>) {
+    let mut declared = registry(&declaration(copper));
+    let original = declared.identities[0].clone();
+    declared.identities.clear();
+    let mut documents = Vec::new();
+    let mut values = Vec::new();
+    for (id, file, period, cost, sold, rate, hash, publication) in [
+        (
+            "before",
+            "Before.pdf",
+            "2024FY",
+            "100",
+            "50",
+            if copper { "2.000" } else { "2000.000" },
+            "11",
+            "2025-02-01",
+        ),
+        (
+            "after",
+            "After.pdf",
+            "2025FY",
+            "120",
+            "40",
+            if copper { "3.000" } else { "3000.000" },
+            "22",
+            "2026-02-01",
+        ),
+    ] {
+        let mut d = original.clone();
+        d.id = id.into();
+        d.doc = file.into();
+        d.total_period = period.into();
+        d.basis = BRIDGE_BASIS.into();
+        for t in &mut d.terms {
+            t.period = period.into();
+        }
+        declared.identities.push(d);
+        let mut doc = document();
+        doc.file = file.into();
+        doc.sha256 = hash.repeat(32);
+        doc.published_at = publication.into();
+        for (quantity, token, unit) in [
+            ("cost", cost, "usd_m"),
+            ("sold", sold, if copper { "Mlb" } else { "koz" }),
+            (
+                "rate",
+                rate,
+                if copper { "usd_per_lb" } else { "usd_per_oz" },
+            ),
+        ] {
+            let mut row = reading(quantity, token, unit);
+            row.locator.doc = file.into();
+            row.locator.col = period.into();
+            row.doc_sha256 = doc.sha256.clone();
+            row.basis = BRIDGE_BASIS.into();
+            row.period = period.into();
+            values.push(row);
+        }
+        documents.push(doc);
+    }
+    (declared, values, documents)
+}
+
+fn change_token(values: &mut [Accepted], doc: &str, quantity: &str, token: &str) {
+    let row = values
+        .iter_mut()
+        .find(|r| r.locator.doc == doc && r.quantity == quantity)
+        .unwrap();
+    row.token = token.into();
+    row.value = parse_token(token).unwrap();
+}
+
+fn frac(n: i128, d: i128) -> Rat {
+    Rat::new(n, d).unwrap()
+}
+
+#[test]
+fn cost_volume_bridge_preserves_native_scales_known_answers_and_complete_source_evidence() {
+    for copper in [false, true] {
+        let (mut declared, mut values, mut documents) = bridge_sources(copper);
+        let report = roll_forward::assess(&declared, &values, &documents);
+        let original = report.clone();
+        let bridge = cost_bridge::assess(&report, "before", "after").unwrap();
+        let scale = if copper { 1 } else { 1000 };
+        // Independently: (120-100)*(1/50+1/40)/2 = 9/20;
+        // (100+120)*(1/40-1/50)/2 = 11/20. No printed rate enters either effect.
+        assert_eq!(bridge.bars[0].id, "cost");
+        assert_eq!(bridge.bars[0].value.point, frac(9 * scale, 20));
+        assert_eq!(bridge.bars[1].id, "sales_volume");
+        assert_eq!(bridge.bars[1].value.point, frac(11 * scale, 20));
+        assert_eq!(bridge.recomputed_change.point, frac(scale, 1));
+        assert_eq!(bridge.printed_rate_gap_change.point, frac(0, 1));
+        assert_eq!(bridge.inputs.len(), 6);
+        assert_eq!(
+            bridge.unit.denominator_unit,
+            if copper { "Mlb" } else { "koz" }
+        );
+        assert_eq!(
+            bridge.unit.unit,
+            if copper { "usd_per_lb" } else { "usd_per_oz" }
+        );
+        for bar in &bridge.bars {
+            assert!(bar.value.interval.contains(bar.value.point).unwrap());
+            assert!(!bar.sign_not_determined);
+            assert_eq!(bar.value.inputs.len(), 4);
+            for locator in &bar.value.inputs {
+                assert!(bridge.inputs.iter().any(|s| s.cell.locator == *locator));
+            }
+        }
+        for source in &bridge.inputs {
+            assert!(bridge.to_markdown().contains(&source.document.sha256));
+            assert!(bridge.to_json().contains(&source.cell.locator));
+        }
+        assert!(bridge.to_json().contains("\"identifying\":false"));
+        assert!(bridge.to_json().contains("not confidence intervals"));
+        assert_eq!(report, original);
+        declared.identities.reverse();
+        values.reverse();
+        documents.reverse();
+        let reversed = roll_forward::assess(&declared, &values, &documents);
+        assert_eq!(
+            bridge,
+            cost_bridge::assess(&reversed, "before", "after").unwrap()
+        );
+    }
+}
+
+#[test]
+fn printed_endpoint_gaps_remain_separate_from_cost_and_volume_effects() {
+    let (declared, mut values, documents) = bridge_sources(true);
+    let original = cost_bridge::assess(
+        &roll_forward::assess(&declared, &values, &documents),
+        "before",
+        "after",
+    )
+    .unwrap();
+    change_token(&mut values, "Before.pdf", "rate", "2.010");
+    change_token(&mut values, "After.pdf", "rate", "3.020");
+    let bridge = cost_bridge::assess(
+        &roll_forward::assess(&declared, &values, &documents),
+        "before",
+        "after",
+    )
+    .unwrap();
+    assert_eq!(bridge.bars, original.bars);
+    assert_eq!(bridge.recomputed_change, original.recomputed_change);
+    assert_eq!(bridge.endpoints[0].printed_rate_gap.point, frac(1, 100));
+    assert_eq!(bridge.endpoints[1].printed_rate_gap.point, frac(1, 50));
+    assert_eq!(bridge.printed_rate_gap_change.point, frac(1, 100));
+    assert_eq!(bridge.printed_change.point, frac(101, 100));
+    assert_ne!(bridge.digest(), original.digest());
+    assert_eq!(
+        bridge
+            .recomputed_change
+            .point
+            .checked_add(bridge.printed_rate_gap_change.point)
+            .unwrap(),
+        bridge.printed_change.point
+    );
+}
+
+#[test]
+fn signed_and_zero_costs_keep_exact_closure_and_conservative_corner_enclosures() {
+    for sign in [-1, 0, 1] {
+        let (declared, mut values, documents) = bridge_sources(true);
+        for (doc, cost, rate) in [
+            ("Before.pdf", 100 * sign, 2 * sign),
+            ("After.pdf", 120 * sign, 3 * sign),
+        ] {
+            change_token(&mut values, doc, "cost", &cost.to_string());
+            change_token(&mut values, doc, "rate", &format!("{rate}.000"));
+        }
+        let bridge = cost_bridge::assess(
+            &roll_forward::assess(&declared, &values, &documents),
+            "before",
+            "after",
+        )
+        .unwrap();
+        assert_eq!(bridge.recomputed_change.point, frac(sign, 1));
+        assert_eq!(bridge.bars[0].value.point, frac(9 * sign, 20));
+        assert_eq!(bridge.bars[1].value.point, frac(11 * sign, 20));
+        for c0 in [frac(200 * sign - 1, 2), frac(200 * sign + 1, 2)] {
+            for c1 in [frac(240 * sign - 1, 2), frac(240 * sign + 1, 2)] {
+                for q0 in [frac(99, 2), frac(101, 2)] {
+                    for q1 in [frac(79, 2), frac(81, 2)] {
+                        let (w0, w1) = (
+                            frac(1, 1).checked_div(q0).unwrap(),
+                            frac(1, 1).checked_div(q1).unwrap(),
+                        );
+                        let cost = c1
+                            .checked_sub(c0)
+                            .unwrap()
+                            .checked_mul(w0.checked_add(w1).unwrap())
+                            .unwrap()
+                            .checked_div(frac(2, 1))
+                            .unwrap();
+                        let sales = c0
+                            .checked_add(c1)
+                            .unwrap()
+                            .checked_mul(w1.checked_sub(w0).unwrap())
+                            .unwrap()
+                            .checked_div(frac(2, 1))
+                            .unwrap();
+                        assert!(bridge.bars[0].value.interval.contains(cost).unwrap());
+                        assert!(bridge.bars[1].value.interval.contains(sales).unwrap());
+                    }
+                }
+            }
+        }
+        if sign == 0 {
+            assert!(bridge.bars.iter().all(|b| b.sign_not_determined));
+            assert!(bridge.to_markdown().contains("sign not determined"));
+        }
+    }
+}
+
+#[test]
+fn cost_bridges_require_matched_explicit_semantics_and_advancing_calendar_support() {
+    for changed_basis in [
+        "attributable;denominator=sold",
+        "subject=synthetic_mine;ownership=attributable:0/1;definition=synthetic@v1;denominator=sold",
+        "subject=synthetic_mine;ownership=attributable:2/1;definition=synthetic@v1;denominator=sold",
+        "subject=synthetic_mine;ownership=100%;definition=unversioned;denominator=sold",
+        "subject=synthetic_mine;ownership=100%;definition=synthetic@v1;denominator=produced",
+    ] {
+        let (mut declared, mut values, documents) = bridge_sources(true);
+        for d in &mut declared.identities {
+            d.basis = changed_basis.into();
+        }
+        for r in &mut values {
+            r.basis = changed_basis.into();
+        }
+        let report = roll_forward::assess(&declared, &values, &documents);
+        assert!(report.refused.is_empty());
+        assert!(
+            cost_bridge::assess(&report, "before", "after").is_err(),
+            "{changed_basis}"
+        );
+    }
+    for case in 0..7 {
+        let (mut declared, mut values, documents) = bridge_sources(true);
+        let after = &mut declared.identities[1];
+        match case {
+            0 => after.family = "other_metric".into(),
+            1 => after.basis = BRIDGE_BASIS.replace("synthetic_mine", "other_mine"),
+            2 => after.basis = BRIDGE_BASIS.replace("1/2", "3/4"),
+            3 => after.basis = BRIDGE_BASIS.replace("@v1", "@v2"),
+            4 => after.total_period = "2024FY".into(),
+            5 => after.total_period = "2025H1".into(),
+            _ => {
+                after.total = "other_rate".into();
+                values
+                    .iter_mut()
+                    .find(|r| r.locator.doc == "After.pdf" && r.quantity == "rate")
+                    .unwrap()
+                    .quantity = "other_rate".into();
+            }
+        }
+        for term in &mut after.terms {
+            term.period = after.total_period.clone();
+        }
+        for row in values.iter_mut().filter(|r| r.locator.doc == "After.pdf") {
+            row.basis = after.basis.clone();
+            row.period = after.total_period.clone();
+        }
+        let report = roll_forward::assess(&declared, &values, &documents);
+        assert!(report.refused.is_empty(), "case {case}");
+        assert!(
+            cost_bridge::assess(&report, "before", "after").is_err(),
+            "case {case}"
+        );
+    }
+    let (mut declared, mut values, documents) = bridge_sources(true);
+    for (index, period) in ["2025Q1", "2025Q2"].into_iter().enumerate() {
+        let d = &mut declared.identities[index];
+        d.total_period = period.into();
+        for t in &mut d.terms {
+            t.period = period.into();
+        }
+        for r in values.iter_mut().filter(|r| r.locator.doc == d.doc) {
+            r.period = period.into();
+        }
+    }
+    let report = roll_forward::assess(&declared, &values, &documents);
+    assert!(cost_bridge::assess(&report, "before", "after").is_ok());
+    assert!(cost_bridge::assess(&report, "after", "before").is_err());
+    assert!(cost_bridge::assess(&report, "before", "before").is_err());
+}
+
+#[test]
+fn cost_bridge_rebinds_cached_sources_and_replays_connected_component_conflicts() {
+    let (mut declared, mut values, documents) = bridge_sources(true);
+    let clean = roll_forward::assess(&declared, &values, &documents);
+    for case in 0..7 {
+        let mut changed = clean.clone();
+        match case {
+            0 => changed.cells[0].cell.printed = frac(999, 1),
+            1 => changed.cells[0].cell.step = frac(1, 100),
+            2 => changed.cells[0].source.readers = vec!["one_reader".into()],
+            3 => changed.cells[0].source.doc_sha256 = "ff".repeat(32),
+            4 => changed.cells[0].source.token = "999".into(),
+            5 => {
+                changed.cells.pop();
+            }
+            _ => changed.cells.push(changed.cells[0].clone()),
+        }
+        assert!(
+            cost_bridge::assess(&changed, "before", "after").is_err(),
+            "case {case}"
+        );
+    }
+    let mut sum = registry(&format!("{}{SUM}", declaration(true)))
+        .identities
+        .into_iter()
+        .find(|d| d.id == "cost_sum")
+        .unwrap();
+    sum.doc = "After.pdf".into();
+    sum.basis = BRIDGE_BASIS.into();
+    declared.identities.push(sum);
+    change_token(&mut values, "After.pdf", "sold", "40.000");
+    let prototype = values
+        .iter()
+        .find(|r| r.locator.doc == "After.pdf" && r.quantity == "cost")
+        .unwrap()
+        .clone();
+    for quantity in ["cost_a", "cost_b"] {
+        let mut row = prototype.clone();
+        row.quantity = quantity.into();
+        row.locator.row = quantity.into();
+        row.token = "60.20".into();
+        row.value = parse_token(&row.token).unwrap();
+        values.push(row);
+    }
+    let mut conflict = roll_forward::assess(&declared, &values, &documents);
+    assert!(conflict.refused.is_empty());
+    assert!(
+        conflict
+            .components
+            .iter()
+            .any(|c| matches!(c.component.outcome, Outcome::Infeasible { .. }))
+    );
+    assert!(cost_bridge::assess(&conflict, "before", "after").is_err());
+    // Forging the cached verdict cannot bypass source rebinding and the joint identity solver.
+    for component in &mut conflict.components {
+        component.component.outcome = Outcome::Feasible {
+            witness: std::collections::BTreeMap::new(),
+        };
+    }
+    assert!(cost_bridge::assess(&conflict, "before", "after").is_err());
 }

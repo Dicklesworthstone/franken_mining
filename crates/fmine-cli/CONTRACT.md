@@ -1633,6 +1633,14 @@ None: every failure is a usage error or a typed refusal.
   visible, and retains ambiguous or unusable latest filings rather than falling back to an older assertion.
   An accepted value or price with a competing pending location refuses `FMINE-REF-202` with both citations;
   ordinary missing second readings remain visible as unavailable rows and pending evidence.
+  Optional `--cost-bridge before_id,after_id` selects two comparable gold/copper cost-rate identities
+  from those same verified inputs. It requires equal declared subject, exact ownership, cost definition,
+  family and quantity keys, plus advancing nonoverlapping calendar periods of the same support kind.
+  The metrics adapter rechecks connected source identities and computes exact symmetric aggregate
+  cost/sales effects with conservative rounding enclosures and separate printed-rate gaps. Unusable
+  selected evidence refuses the requested bridge; it cannot silently disappear. JSON includes the full
+  bridge in the outer digest and Markdown retains its sources. Omitting the option preserves existing
+  output. This supplies descriptive arithmetic, with no inferred cost numerator or causal attribution.
   Replacement declarations additionally load the selected workspace's metric registry and bind the selected
   definition metadata into the report. Gold/GEO metal, attributable contained basis, ex-A&D scope, three-year
   window, operand units, signs and price-deck key are explicit. Signed depletion must remain strictly positive

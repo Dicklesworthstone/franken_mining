@@ -396,6 +396,64 @@ def cost_rate_workspace(copper=False, mode="normal"):
     return root
 
 
+def cost_bridge_workspace(copper=True, mode="normal"):
+    """Two independent invented filings; no numerator reconstructed from a reported rate."""
+    root = workspace(f"cost-bridge-{copper}-{mode}")
+    source = (root / "registries/sources/table_test.toml").read_text(encoding="utf-8")
+    definitions = 'schema = "fmine.table-identities.v1"\nissuer = "table_test"\n'
+    readings = 'schema = "fmine.transcriptions.v1"\nissuer = "table_test"\n'
+    kind, unit, sold_unit, metric = (
+        ("copper_cost_per_sold_lb", "usd_per_lb", "Mlb", "c1.copper") if copper
+        else ("gold_cost_per_sold_oz", "usd_per_oz", "koz", "aisc.gold")
+    )
+    for identity, period, published, cost, sold, rate in (
+        ("before", "2024FY", "2025-02-01", "100.000", "50.000", "2.000" if copper else "2000.0"),
+        ("after", "2025FY", "2026-02-01", "120.000", "40.000", "3.000" if copper else "3000.0"),
+    ):
+        file = f"Cost_{identity}.pdf"
+        contents = f"%PDF-1.7 invented independent cost and sales assertion: {identity}".encode()
+        (root / "documents" / file).write_bytes(contents)
+        source += (
+            f'\n[[document]]\nfile = "{file}"\ndir = "documents"\nkind = "mda"\n'
+            f'url = "https://example.invalid/{file}"\nurl_basis = "DESIGN: invented fixture"\n'
+            f'published_at = "{published}"\npublished_at_basis = "FACT: invented fixture date"\n'
+            f'pages = 1\nbytes = {len(contents)}\nsha256 = "{digest(contents)}"\n'
+        )
+        ownership = "attributable:3/4" if identity == "after" and mode == "changed_share" else "attributable:1/2"
+        basis = f"subject=synthetic_mine;ownership={ownership};definition={metric}@synthetic-v1;denominator=sold"
+        if mode == "unknown_basis":
+            basis = "attributable;denominator=sold"
+        if identity == "after":
+            if mode == "zero_sold":
+                sold = "0.000"
+            elif mode == "conflicting_rate":
+                rate = "4.000" if copper else "4000.0"
+        definitions += (
+            f'\n[[identity]]\nid = "{identity}"\ndoc = "{file}"\nfamily = "synthetic_mine_cost"\n'
+            f'kind = "{kind}"\ntotal = "rate"\ntotal_period = "{period}"\nunit = "{unit}"\n'
+            f'basis = "{basis}"\nconstruction = "rounded_once"\nconvention = "closed"\n'
+        )
+        for quantity, role in (("cost", "numerator"), ("sold", "denominator")):
+            definitions += (
+                f'[[term]]\nidentity = "{identity}"\nquantity = "{quantity}"\n'
+                f'period = "{period}"\nsign = 1\nrole = "{role}"\n'
+            )
+        for reader in ("reader_a", "reader_b"):
+            for quantity, token, source_unit in (("cost", cost, "usd_m"), ("sold", sold, sold_unit), ("rate", rate, unit)):
+                if mode == "pending_cost" and identity == "after" and quantity == "cost" and reader == "reader_b":
+                    continue
+                readings += (
+                    f'[[entry]]\ndoc = "{file}"\ndoc_sha256 = "{digest(contents)}"\npage = 1\n'
+                    f'table = "Invented cost reconciliation"\nrow = "{quantity}"\ncol = "{period}"\n'
+                    f'token = "{token}"\nquantity = "{quantity}"\nunit = "{source_unit}"\n'
+                    f'basis = "{basis}"\nperiod = "{period}"\nreader = "{reader}"\n'
+                )
+    (root / "registries/sources/table_test.toml").write_text(source, encoding="utf-8")
+    (root / "registries/transcriptions/table_test.toml").write_text(readings, encoding="utf-8")
+    (root / DEFINITIONS).write_text(definitions, encoding="utf-8")
+    return root
+
+
 def binary(root, arguments, output_format=None):
     args = [str(BINARY), *arguments, "--workspace", str(root)]
     if output_format is not None:
@@ -599,6 +657,79 @@ class TableScenarios(unittest.TestCase):
 
 
 class CostRateScenarios(unittest.TestCase):
+    def test_cost_bridge_native_scales_close_exactly_and_keep_source_evidence(self):
+        def rational(value):
+            return Fraction(int(value["num"]), int(value["den"]))
+
+        for copper in (True, False):
+            with self.subTest(copper=copper):
+                root = cost_bridge_workspace(copper)
+                args = ["--cost-bridge", "before,after", "--as-of", "2026-02-01"]
+                envelope, raw = invoke(root, args)
+                self.assertEqual(envelope["exit_code"], 0, raw)
+                report = envelope["payload"]["cost_bridge"]
+                self.assertEqual(report["schema"], "fmine.pdf-cost-bridge.v1")
+                scale = 1 if copper else 1000
+                bars = {bar["id"]: bar for bar in report["bars"]}
+                # Independent average of the two possible cost/sales update orders.
+                cost_effect = scale * (Fraction(120 - 100, 50) + Fraction(120 - 100, 40)) / 2
+                volume_effect = scale * (100 + 120) * (Fraction(1, 40) - Fraction(1, 50)) / 2
+                self.assertEqual(rational(bars["cost"]["point"]), cost_effect)
+                self.assertEqual(rational(bars["sales_volume"]["point"]), volume_effect)
+                self.assertEqual(cost_effect + volume_effect, rational(report["recomputed_change"]["point"]))
+                self.assertEqual(rational(report["printed_rate_gap_change"]["point"]), 0)
+                for bar in bars.values():
+                    self.assertLessEqual(rational(bar["interval"]["lo"]), rational(bar["point"]))
+                    self.assertGreaterEqual(rational(bar["interval"]["hi"]), rational(bar["point"]))
+                    self.assertFalse(bar["sign_not_determined"])
+                    self.assertTrue(bar["in"])
+                self.assertEqual(report["denominator_unit"], "Mlb" if copper else "koz")
+                self.assertEqual(raw, invoke(root, args)[1])
+                self.assertIn("Cost_before.pdf", raw)
+                self.assertIn("Cost_after.pdf", raw)
+                for name in ("before", "after"):
+                    self.assertIn(digest((root / "documents" / f"Cost_{name}.pdf").read_bytes()), raw)
+                ordinary, _ = successful(root)
+                self.assertNotIn("cost_bridge", ordinary["payload"])
+                self.assertEqual(ordinary["payload"]["checks"], envelope["payload"]["checks"])
+                markdown = binary(root, [*BASE, *args], "markdown")
+                self.assertEqual(markdown.returncode, 0, markdown.stderr)
+                self.assertIn("Cost_before.pdf", markdown.stdout)
+                self.assertIn("Cost_after.pdf", markdown.stdout)
+                self.assertIn("sales", markdown.stdout.lower())
+
+    def test_cost_bridge_refuses_incompatible_or_incomplete_evidence(self):
+        for mode in ("changed_share", "unknown_basis", "zero_sold", "conflicting_rate", "pending_cost"):
+            with self.subTest(mode=mode):
+                envelope, raw = invoke(cost_bridge_workspace(mode=mode), ["--cost-bridge", "before,after"])
+                self.assertNotEqual(envelope["exit_code"], 0, raw)
+                self.assertIsNotNone(envelope["refusal"], raw)
+                self.assertIsNone(envelope["payload"], raw)
+
+    def test_cost_bridge_keeps_publication_cuts_and_source_hashes_mandatory(self):
+        root = cost_bridge_workspace()
+        envelope, raw = invoke(root, ["--cost-bridge", "before,after", "--as-of", "2026-01-31"])
+        self.assertEqual(envelope["refusal"]["code"], "FMINE-REF-202", raw)
+        path = root / "documents/Cost_after.pdf"
+        original = path.read_bytes()
+        path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+        envelope, raw = invoke(root, ["--cost-bridge", "before,after"])
+        self.assertEqual(envelope["refusal"]["code"], "FMINE-REF-505", raw)
+
+    def test_cost_bridge_selector_is_explicit_and_never_ignored(self):
+        root = cost_bridge_workspace()
+        for selector in ("before", "before,", ",after", "before,after,extra", "before,before"):
+            envelope, raw = invoke(root, ["--cost-bridge", selector])
+            self.assertEqual(envelope["exit_code"], 2, raw)
+        envelope, raw = invoke(root, ["--cost-bridge", "before,after", "--cost-bridge", "before,after"])
+        self.assertEqual(envelope["exit_code"], 2, raw)
+        for arguments in (["check", "tables", "--synthetic", "--cost-bridge", "before,after"],
+                          ["doctor", "--cost-bridge", "before,after"]):
+            envelope, raw = invoke(root, arguments=arguments)
+            self.assertEqual(envelope["exit_code"], 2, raw)
+        envelope, raw = invoke(root, ["--cost-bridge", "after,before"])
+        self.assertNotEqual(envelope["exit_code"], 0, raw)
+
     def test_native_gold_and_copper_cost_rates_keep_exact_witnesses_and_source_units(self):
         for copper in (False, True):
             with self.subTest(copper=copper):

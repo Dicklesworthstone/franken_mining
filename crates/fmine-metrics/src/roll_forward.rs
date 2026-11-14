@@ -17,6 +17,7 @@ use fmine_registry::table_identities::{
 };
 use fmine_registry::transcriptions::{Accepted, Token, parse_token};
 
+pub mod cost_bridge;
 pub mod quarter;
 
 pub const SCHEMA: &str = "fmine.pdf-table-check.v1";
@@ -691,6 +692,25 @@ pub(crate) fn accepted_json(a: &Accepted) -> String {
     )
 }
 
+pub(crate) fn source_cell_json(s: &SourceCell) -> String {
+    let d = &s.document;
+    format!(
+        "{{\"source\":{},\"printed\":{},\"step\":{},\"document\":{{\"file\":{},\"sha256\":{},\"kind\":{},\"published_at\":{},\"published_at_basis\":{},\"pages\":{},\"bytes\":{},\"url\":{},\"url_basis\":{}}}}}",
+        accepted_json(&s.source),
+        rat(s.cell.printed),
+        rat(s.cell.step),
+        js(&d.file),
+        js(&d.sha256),
+        js(&d.kind),
+        js(&d.published_at),
+        js(&d.published_at_basis),
+        d.pages,
+        d.bytes,
+        js(&d.url),
+        js(&d.url_basis)
+    )
+}
+
 pub(crate) fn definition_json(d: &TableIdentity) -> String {
     let replacement = d.replacement.as_ref().map_or_else(|| "null".into(), |r| format!(
         "{{\"definition\":{},\"numerator_unit\":{},\"denominator_unit\":{},\"factor\":{},\"price_deck\":{}}}",
@@ -817,11 +837,12 @@ impl TableReport {
             .map(definition_json)
             .collect::<Vec<_>>()
             .join(",");
-        let cells = self.cells.iter().map(|s| {
-            let d = &s.document;
-            format!("{{\"source\":{},\"printed\":{},\"step\":{},\"document\":{{\"file\":{},\"sha256\":{},\"kind\":{},\"published_at\":{},\"published_at_basis\":{},\"pages\":{},\"bytes\":{},\"url\":{},\"url_basis\":{}}}}}",
-                accepted_json(&s.source), rat(s.cell.printed), rat(s.cell.step), js(&d.file), js(&d.sha256), js(&d.kind), js(&d.published_at), js(&d.published_at_basis), d.pages, d.bytes, js(&d.url), js(&d.url_basis))
-        }).collect::<Vec<_>>().join(",");
+        let cells = self
+            .cells
+            .iter()
+            .map(source_cell_json)
+            .collect::<Vec<_>>()
+            .join(",");
         let components = self.components.iter().map(|check| {
             let result = match &check.component.outcome {
                 xf::Outcome::Feasible { witness } => {

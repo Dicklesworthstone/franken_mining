@@ -2057,6 +2057,28 @@ rate cannot itself be reused in another identity, which would require unsupporte
 The output retains the operands, exact factor, checked witness or conflict, and source hashes. Changing
 PDF bytes, disagreeing readers or an unavailable publication date still refuses the inspection.
 
+To explain the change between two comparable cost-rate identities, select their IDs explicitly:
+
+```bash
+fmine check tables --issuer demo --definitions local/cost_tables.toml \
+  --cost-bridge cost_2024,cost_2025 --as-of 2026-03-01 --format markdown
+```
+
+DESIGN (BD-064/BD-333): this bridge uses independently cited dollar costs and metal sold. It supports
+gold USD/oz and copper USD/lb in their native declared scales. Both identities must share their family,
+quantity keys and explicit basis, including subject, ownership and cost definition. For example, both
+the identities and their source readings can declare
+`subject=synthetic_mine;ownership=attributable:1/2;definition=c1.copper@synthetic-v1;denominator=sold`.
+An unspecified attributable share does not establish a common perimeter. Periods must advance without
+overlap and use the same calendar support kind; all connected source identities are checked again.
+
+The exact symmetric decomposition averages the two possible cost/sales update orders. Invented costs
+of USD 100 million then 120 million, with sales of 50 then 40 million pounds, give a USD 1/lb increase:
+USD 0.45/lb from aggregate cost and USD 0.55/lb from sales volume. Every bar retains its source citations
+and conservative exact input-rounding interval. Recomputed rates and gaps to the printed rates stay
+separate. These effects describe arithmetic; they do not identify controllable costs or operational causes.
+The optional bridge is included in the report digest. Omitting it preserves ordinary table-check output.
+
 DESIGN boundary: these are arithmetic checks on issuer assertions. Different filing/deck vintages remain
 separate documents. The command does not determine which vintage is true, classify reserves or establish
 GATE-HALL-01. Its PDF report digest binds the declarations, readings and results; it is not a ledger anchor or

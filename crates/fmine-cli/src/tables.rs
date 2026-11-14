@@ -37,7 +37,14 @@ pub(super) fn execute(
     through: Option<&str>,
     definitions: Option<&Path>,
     as_of: Option<&str>,
+    cost_bridge: Option<(&str, &str)>,
 ) -> Envelope {
+    if cost_bridge.is_some() && (definitions.is_none() || issuer.is_none()) {
+        return Envelope::usage_error(
+            "check tables",
+            "--cost-bridge requires --issuer and --definitions",
+        );
+    }
     if as_of.is_some() && (definitions.is_none() || issuer.is_none()) {
         return Envelope::usage_error(
             "check tables",
@@ -63,7 +70,7 @@ pub(super) fn execute(
                         "PDF definitions and workbook --through cannot be combined",
                     ));
                 }
-                document_tables(root, &profile, path, as_of)
+                document_tables(root, &profile, path, as_of, cost_bridge)
             } else {
                 let profile = match through {
                     Some(bound) => profile.through(bound)?,
@@ -87,6 +94,7 @@ fn document_tables(
     profile: &IssuerProfile,
     path: &Path,
     as_of: Option<&str>,
+    cost_bridge: Option<(&str, &str)>,
 ) -> Result<Envelope, Refusal> {
     let path = if path.is_absolute() {
         path.to_path_buf()
@@ -186,6 +194,9 @@ fn document_tables(
     };
     let report =
         roll_forward::assess_with_metrics(&definitions, &accepted, &profile.documents, &metrics);
+    let bridge = cost_bridge
+        .map(|(before, after)| roll_forward::cost_bridge::assess(&report, before, after))
+        .transpose()?;
     let reserves = fmine_metrics::reserves::assess(&definitions, &accepted, &profile.documents);
     let checked_json = checked
         .iter()
@@ -208,7 +219,7 @@ fn document_tables(
         })
         .collect::<Vec<_>>()
         .join(",");
-    let body = format!(
+    let mut body = format!(
         "{{\"schema\":\"fmine.table-check.v1\",\"mode\":\"declared_pdf\",\"lane\":\"public\",\"gate_eligible\":false,\
         \"issuer\":{},\"as_of\":{},\"source_bytes_verified\":true,\"checked_documents\":[{}],\
         \"definitions_sha256\":{},\"checks\":{},\"issuer_reserves\":{},\"pending_readings\":[{}],\"no_claim\":{}}}",
@@ -221,14 +232,23 @@ fn document_tables(
         pending_json,
         js(NO_CLAIM),
     );
+    if let Some(bridge) = &bridge {
+        body.pop();
+        body.push_str(",\"cost_bridge\":");
+        body.push_str(&bridge.to_json());
+        body.push('}');
+    }
     let digest = sha256(format!("fmine.table-check/1\n{body}").as_bytes()).to_hex();
     let payload = format!("{{\"digest\":{},{}", js(&digest), &body[1..]);
     let mut envelope = Envelope::ok("check tables", payload, actions());
     envelope.no_claim = Some(NO_CLAIM);
-    envelope.rendered_markdown = Some(
-        document_markdown(&profile.issuer, &report, &pending, &digest, as_of)
-            + &reserves.to_markdown(),
-    );
+    let mut markdown = document_markdown(&profile.issuer, &report, &pending, &digest, as_of)
+        + &reserves.to_markdown();
+    if let Some(bridge) = &bridge {
+        markdown.push('\n');
+        markdown.push_str(&bridge.to_markdown());
+    }
+    envelope.rendered_markdown = Some(markdown);
     Ok(envelope)
 }
 

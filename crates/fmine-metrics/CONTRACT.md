@@ -19,6 +19,8 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
 - whether the reporters of one asset agree on the gold or copper it produced or sold, or on its sustaining, project and total capital, on one 100% basis (`mirror`, `mirror::capex`);
 - at the crate root: an AISC consolidation check, GEO under a price deck, reserve replacement and a float cut-off solver.
 
+- an exact, source-bound cost and sold-volume bridge between explicitly selected gold or copper PDF cost-rate identities (roll_forward::cost_bridge).
+
 The results are descriptive arithmetic. None identifies an operational cause, forecasts, or proves physical feasibility. The crate does no I/O at run time.
 
 - **Crate:** `fmine-metrics`
@@ -28,6 +30,17 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation", "comparison"]`
 
 ## 2. Inputs
+
+- DESIGN: roll_forward::cost_bridge::assess takes a TableReport and two explicit identity IDs.
+  Both must be sold-metal cost-rate identities with the same metal, family, semantic quantity IDs,
+  unit and exact source-agreed basis. The basis names subject, ownership (100% or
+  attributable:n/d with a positive share at most one), a versioned definition and
+  denominator=sold. Periods advance without overlap on equal calendar support kinds (FY, half-year
+  or quarter), so leap years do not change annual comparability. Every connected declared identity
+  is rebound from retained source readings and checked again; a cached feasible verdict, changed
+  numeric projection, missing operand or inconsistent subtotal cannot supply a positive bridge.
+  The I/O caller remains responsible for document-byte authentication, full reader agreement and
+  publication-cut admission.
 
 - DESIGN (BD-355): `comparison::compare` takes a complete declared set of 2–64 issuer Claims on
   identical annual gold AISC/production or copper C1/AISC/production definitions. Each input retains its agreed metric,
@@ -85,6 +98,18 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
 ## 3. Outputs
+
+- DESIGN: CostBridge retains both selected definitions, every connected source operand, filing
+  metadata, reader roles and the parent table-check digest. It emits two exact symmetric effects:
+  cost change times mean inverse sales, and mean cost times inverse-sales change. They sum exactly
+  to the recomputed rate change. Copper USD millions over sold Mlb uses factor one; gold USD millions
+  over sold koz uses factor 1,000. Printed rates never reconstruct costs or enter the effect bars:
+  each endpoint gap and its change remain separate. Rational enclosures conservatively close the
+  declared rounding boxes, and zero-containing bars say sign not determined. Signed and zero
+  costs remain signed; sales boxes must stay strictly positive. JSON and Markdown carry the
+  descriptive, non-identifying interpretation. Matching declared definitions does not independently
+  verify accounting policy, establish original publication, explain physical causes or calibrate a
+  forecast. Direct known-answer and refusal controls live in xtask/tests/pdf_cost_rates.rs.
 
 - DESIGN (BD-355): `comparison::Report` retains all source Claims plus the derived rank Claim and
   explicit lowest/highest rank-at-most-N verdict. Exact closed half-step intervals feed competition

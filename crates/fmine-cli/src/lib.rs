@@ -118,6 +118,8 @@ pub enum CliCommand {
         definitions: Option<PathBuf>,
         /// Every declared PDF must have been publicly available by this date; no members are dropped.
         as_of: Option<String>,
+        /// Explicitly selected comparable cost-rate identities, in before/after order.
+        cost_bridge: Option<(String, String)>,
     },
     /// Necessary conditions for completing cited annual guidance under historical sales persistence (BD-342).
     GuidanceCompletion {
@@ -1087,6 +1089,7 @@ pub fn parse_args(
     let mut discover = false;
     let mut provenance = None;
     let mut definitions = None;
+    let mut cost_bridge = None;
     let mut html_definitions = None;
     let mut reserve_bindings = None;
 
@@ -1207,6 +1210,30 @@ pub fn parse_args(
                     return Err("--html-definitions may be supplied only once".into());
                 }
             }
+            "--cost-bridge" => {
+                i += 1;
+                let value = args.get(i).ok_or("missing value for --cost-bridge")?;
+                let (before, after) = value
+                    .split_once(',')
+                    .ok_or("--cost-bridge requires before_id,after_id")?;
+                if before == after
+                    || [before, after].iter().any(|id| {
+                        id.is_empty()
+                            || id.starts_with("--")
+                            || id
+                                .chars()
+                                .any(|c| c == ',' || c.is_whitespace() || c.is_control())
+                    })
+                {
+                    return Err("--cost-bridge requires two distinct nonempty identity IDs".into());
+                }
+                if cost_bridge
+                    .replace((before.to_owned(), after.to_owned()))
+                    .is_some()
+                {
+                    return Err("--cost-bridge may be supplied only once".into());
+                }
+            }
             "--reserve-bindings" => {
                 i += 1;
                 let value = args
@@ -1288,6 +1315,13 @@ pub fn parse_args(
     if definitions.is_some() && positional[0] != "check" {
         return Err("--definitions requires 'check tables'".to_string());
     }
+    if cost_bridge.is_some()
+        && (positional[0] != "check" || definitions.is_none() || issuer.is_none())
+    {
+        return Err(
+            "--cost-bridge requires 'check tables --issuer <issuer> --definitions <path>'".into(),
+        );
+    }
     if html_definitions.is_some() && positional[0] != "lint" {
         return Err("--html-definitions requires 'lint'".into());
     }
@@ -1368,6 +1402,7 @@ pub fn parse_args(
                 through,
                 definitions,
                 as_of,
+                cost_bridge,
             }
         }
         "assure" => {
@@ -1991,12 +2026,16 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             through,
             definitions,
             as_of,
+            cost_bridge,
         } => tables::execute(
             workspace_root,
             issuer.as_deref(),
             through.as_deref(),
             definitions.as_deref(),
             as_of.as_deref(),
+            cost_bridge
+                .as_ref()
+                .map(|(before, after)| (before.as_str(), after.as_str())),
         ),
         CliCommand::AssurePublic { issuer, through } => {
             if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {
@@ -2385,6 +2424,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "assure challenges --synthetic",
                 "check tables --issuer <issuer> [--through YYYYQn]",
                 "check tables --issuer <issuer> --definitions <path> [--as-of YYYY-MM-DD]",
+                "check tables --issuer <issuer> --definitions <path> --cost-bridge <before_id,after_id> [--as-of YYYY-MM-DD]",
                 "check tables --synthetic",
                 "assure issue (--issuer <issuer> [--through YYYYQn] | --synthetic) --output <path> --journal <path> --expected-head <hex> --key <path> --role <generic-role> --purpose <text> --now <UTC> --uncertainty-ns <n>",
                 "reliance init --journal <path> --key <path> --now <UTC> --uncertainty-ns <n> --max-age-ns <n> --max-skew-ns <n>",
@@ -2472,6 +2512,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "\"definitions\":\"fmine.table-identities.v1; explicit document, member periods and signs, construction per family and convention per document\",",
                 "\"pdf_inputs\":\"Every declared document must match its registered bytes; each operand needs agreeing independent reader roles\",",
                 "\"findings\":\"Joint exact feasibility, checked conflict certificates, correction sets and implied ranges; no selected correction\",",
+                "\"cost_bridge\":\"Explicit --cost-bridge before_id,after_id compares independently cited USD costs and sold metal under identical declared subject, ownership and definition; exact aggregate cost/sales effects and separate printed-rate gaps, no causal attribution\",",
                 "\"exit\":\"Infeasible identities are findings with exit zero; unreadable or altered bytes and reader disagreements retain typed refusals\"},",
                 "\"reliance_explicit\":{\"clock\":\"Caller-supplied --now UTC and --uncertainty-ns; no host clock inference\",",
                 "\"trust\":\"Independent final head required for current reuse; historical --as-of never authorizes reuse\",",
