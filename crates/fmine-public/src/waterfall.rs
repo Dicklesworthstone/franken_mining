@@ -625,13 +625,19 @@ fn prepare(
         read_quantity(cx, t.source, t.sheet, &cell, "usd_m", zero, inputs)
     };
     let mut lines = Vec::new();
-    let mut counted = 0;
-    let mut block1_count = 0;
+    let mut component_half_step = Rat::from_integer(0);
+    let mut block1_half_step = Rat::from_integer(0);
     for row in t.table.block1.iter().chain(&t.table.block2) {
         let q = quantity(*row, true, inputs)?;
-        counted += usize::from(q.half_step != Rat::from_integer(0));
-        block1_count +=
-            usize::from(t.table.block1.contains(row) && q.half_step != Rat::from_integer(0));
+        // Signed amounts add their rounding radii; different displayed precisions never become k/2.
+        component_half_step = component_half_step
+            .checked_add(q.half_step)
+            .map_err(|_| refuse("component half-width overflow"))?;
+        if t.table.block1.contains(row) {
+            block1_half_step = block1_half_step
+                .checked_add(q.half_step)
+                .map_err(|_| refuse("TCC half-width overflow"))?;
+        }
         if t.table.block2.contains(row) {
             let c = inputs
                 .cells
@@ -641,13 +647,11 @@ fn prepare(
         }
     }
     let mut tcc = quantity(t.table.tcc_row, false, inputs)?;
-    tcc.half_step =
-        Rat::new(block1_count as i128, 2).map_err(|_| refuse("TCC half-width overflow"))?;
+    tcc.half_step = block1_half_step;
     lines.push(("total_cash_costs_aggregate".to_string(), tcc));
     lines.sort_by(|a, b| a.0.cmp(&b.0));
     let mut cost = quantity(t.table.aisc_row, false, inputs)?;
-    cost.half_step =
-        Rat::new(counted as i128, 2).map_err(|_| refuse("component half-width overflow"))?;
+    cost.half_step = component_half_step;
     let mut at_row = |row, unit| {
         read_quantity(
             cx,

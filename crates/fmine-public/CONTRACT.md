@@ -799,7 +799,9 @@ The public lane of M0 (`fmine assure public`).
     signed cost-line/reciprocal-sales fallback only when the displayed component midpoints foot exactly.
     Its declared frontier is reported TCC as an aggregate plus signed block-2 sustaining adjustments;
     changing gross-cost row names never creates an alias or an assumed-zero component. Cost uncertainty
-    uses the full numeric component count, `k/2`; the TCC aggregate uses its block-1 count, `k1/2`.
+    sums the exact displayed half-steps of all components; the TCC aggregate sums its block-1 half-steps.
+    These reduce to `k/2` and `k1/2` for integer displays. Negative amounts retain positive rounding radii,
+    while literal placeholder zeros contribute no radius.
     Every bar carries its input citations, rounding enclosure and `sign_not_determined`; endpoint gaps and
     their change are separate exact quantities. Public bridges are descriptive and non-identifying.
   - Derived USD/oz endpoint fields use `waterfall.rate_reconciliation`; the measured residual uses

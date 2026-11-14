@@ -425,6 +425,62 @@ fn test_displayed_precision_and_explicit_percent_scaling() {
 }
 
 #[test]
+fn test_component_rounding_uses_each_displayed_precision() {
+    let base = run(|_, _| {});
+    let decimal = run(|file, sheets| {
+        if file.ends_with("aisc.xlsx") {
+            let later = file.starts_with("2031");
+            let (sheet, columns, gross, sustaining) = if later {
+                ("Q2 2031", ["C", "E"], "150", "15")
+            } else {
+                ("Q2 2030", ["B", "D"], "100", "10")
+            };
+            for col in columns {
+                replace(sheets, sheet, &format!("{col}4"), styled(gross, 1));
+                replace(sheets, sheet, &format!("{col}7"), styled(sustaining, 1));
+            }
+        }
+    });
+    // Hand intervals: gross and sustaining display two decimals (h = 0.005), while the signed
+    // NCI line displays integers (h = 0.5). TCC therefore has h = 0.505, and AISC has h = 0.51.
+    let fallback = bridge(&decimal.waterfall, "Heap Site");
+    let cash = fallback
+        .bars()
+        .iter()
+        .find(|b| b.id == "line:total_cash_costs_aggregate")
+        .unwrap();
+    let expected_cash = [
+        1000.0 * (25.0 - 1.01) * 0.5 * (1.0 / 50.5 + 1.0 / 60.5),
+        1000.0 * (25.0 + 1.01) * 0.5 * (1.0 / 49.5 + 1.0 / 59.5),
+    ];
+    let volume = fallback.bars().iter().find(|b| b.id == "volume").unwrap();
+    let expected_volume = [
+        1000.0 * (75.0 + 0.51) * (1.0 / 60.5 - 1.0 / 49.5),
+        1000.0 * (75.0 - 0.51) * (1.0 / 59.5 - 1.0 / 50.5),
+    ];
+    for (bar, expected) in [(cash, expected_cash), (volume, expected_volume)] {
+        for (bound, hand_answer) in bar.enclosure.iter().zip(expected) {
+            assert!((bound - hand_answer).abs() < 1e-9, "{}: {bar:?}", bar.id);
+        }
+    }
+    // Formatting changes the uncertainty and source identity, never the nominal bridge or gap.
+    for name in ["Lmdi Site", "Heap Site"] {
+        let original = bridge(&base.waterfall, name);
+        let precise = bridge(&decimal.waterfall, name);
+        assert_eq!(original.gap(), precise.gap());
+        for (a, b) in original.bars().iter().zip(precise.bars()) {
+            assert_eq!(a.point, b.point);
+        }
+    }
+    let original = bridge(&base.waterfall, "Lmdi Site");
+    let precise = bridge(&decimal.waterfall, "Lmdi Site");
+    let a = original.bars().iter().find(|b| b.id == "cost").unwrap();
+    let b = precise.bars().iter().find(|b| b.id == "cost").unwrap();
+    assert!(b.enclosure[0] > a.enclosure[0] && b.enclosure[1] < a.enclosure[1]);
+    assert_ne!(base.waterfall.digest(), decimal.waterfall.digest());
+}
+
+#[test]
 fn test_formatted_zero_keeps_numeric_radius_and_negative_lines_stay_signed() {
     let mut widths = Vec::new();
     for numeric_zero in [true, false] {
