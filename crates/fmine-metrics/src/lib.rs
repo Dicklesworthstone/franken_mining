@@ -10,6 +10,7 @@
 //!   the reports' printed inputs (`cutoff`, E182–E184, `BD-274`)
 
 pub mod capacity;
+pub mod comparison;
 pub mod consolidation;
 pub mod cutoff;
 pub mod definitions;

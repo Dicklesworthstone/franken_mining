@@ -4,6 +4,7 @@
 The public-lane metric kernels. Each one takes supplied numbers and computes a mining metric or a check on one:
 - AISC and AIC per ounce under a definition read from `registries/metrics.toml` (`definitions`), and as an exact cost receipt over declared Claims or a strict cost worksheet (`definitions::claims`, `definitions::worksheet`, BD-061);
 - exact production GEO under two to sixty-four named price decks, from declared Claims or a strict worksheet (`definitions::geo`, BD-062, GB-27);
+- complete source-bound annual peer comparisons with exact competition-rank ranges and explicit comparative claims (`comparison`, BD-355);
 - cut-off grades: the reference rows of `registries/published_cutoffs.toml` recomputed from their registered tokens (`cutoff`), and cut-offs bound to the readings of one registered technical report (`cutoff::source`, BD-274);
 - an AISC accounting waterfall, as a legacy float LMDI and as a typed exact kernel with an additive fallback (`lmdi`, `lmdi::waterfall`);
 - the production and AISC a year still needs to meet guidance, and whether the site's own history reaches it (`guidance`, `guidance::quarters`);
@@ -24,10 +25,18 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Layer:** E
 - **Subsystem:** Bullion
 - **LOC budget:** 18,000 planned / 21,000 ceiling
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation", "comparison"]`
 
 ## 2. Inputs
 
+- DESIGN (BD-355): `comparison::compare` takes a complete declared set of 2–64 issuer Claims on
+  identical annual AISC or gold-production definitions. Each input retains its agreed metric,
+  company scope, ownership, operations, metal, denominator, own-document definition citation,
+  source SHA-256, publication evidence and readers. AISC also requires allocation, credit location,
+  inventory, G&A, sustaining leases, minesite exploration, reclamation, stripping and accounting
+  treatment. Missing, extra or duplicate peers and differing fields refuse; no bridge or conversion
+  is inferred. `comparison::source::bind` admits two-reader-agreed printed actuals from a selected
+  registered financial or annual filing. The I/O owner authenticates bytes and complete reader agreement.
 - DESIGN (BD-346.S5): `mirror::cost::compare` accepts canonical `Claim<CostReading>`s for cash costs,
   AISC or cost of sales in USD millions. Each original and signed adjustment retains its raw printed
   token, agreeing reader IDs, exact half-step bounds, own-document definition locator, publication
@@ -74,6 +83,15 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 
 ## 3. Outputs
 
+- DESIGN (BD-355): `comparison::Report` retains all source Claims plus the derived rank Claim and
+  explicit lowest/highest rank-at-most-N verdict. Exact closed half-step intervals feed competition
+  ranks: ascending minimum is `1 + count(other.upper < self.lower)` and maximum is
+  `1 + count(other.lower < self.upper)`, excluding self; descending reverses the inequalities.
+  Ties share a rank. A claim is supported, unsupported or indeterminate over all admitted rounding
+  values. Every source parent and anchor, weakest evidence and uncertainty term remains bound.
+  These are arithmetic rank bounds, not probabilities or proprietary industry quartiles. Real peer
+  filing reproduction remains a data gate. Seven shared exact controls include the bead's known
+  answer, ties, touching endpoints, exhaustive small-box extrema and source-definition refusals.
 - DESIGN (BD-346.S5): `CostReport` keeps all source Claims, one exact adjusted full-basis Claim per
   reporter, and a common interval Claim when the intervals intersect. The status is `consistent`
   without adjustments and `explained` with them. Disjoint intervals produce `conflict`, no common
