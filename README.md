@@ -3465,7 +3465,8 @@ cargo run -p fmine-cli -- forecast journal correction \
 ```
 
 The report keeps the raw forecast, every selected training outcome, the fitted correction and the
-corrected proposal together. It fits the mean of `log(actual / raw_mean)`, uses its exponential as the
+corrected proposal together. The default `--method multiplicative-log` fits the mean of
+`log(actual / raw_mean)`, uses its exponential as the
 bias factor, and chooses a scale inflation from the complete empirical residual population at the
 assessment's frozen interval level. The inflation floor applies after bias rescaling; a bias factor
 below one can reduce absolute interval width. The report shows sample log dispersion and both raw and
@@ -3474,7 +3475,8 @@ corrected training hit counts. These reused training outcomes are not evidence o
 At least two resolved, strictly positive Gaussian forecast/outcome pairs are required. Model, family,
 author role, domain, horizon, site, quantity and unit must match the target exactly. The target must have
 been registered after the assessment's evidence cut and must have no recorded outcome. Missing members,
-mixed segments, incompatible interval levels, signed/zero outcomes and unrepresentable arithmetic refuse.
+mixed segments, incompatible interval levels and unrepresentable arithmetic refuse. The default
+multiplicative method additionally refuses signed or zero means and outcomes.
 
 For the same site observed across successive public reporting periods, select two or more saved
 assessments explicitly:
@@ -3501,6 +3503,35 @@ and target cohort policies. Both have a separate digest and explicit
 `unissued_proposal` and `uncalibrated` status. A proposal needs separate prospective registration and
 later scoring before it can become part of a forecasting track record.
 
+#### Correct signed and zero-valued forecasts explicitly
+
+For net costs, cash flow or other quantities that can cross zero, select the additive error model.
+The method is an explicit choice; a refused logarithmic fit never falls back automatically:
+
+```bash
+cargo run -p fmine-cli -- forecast journal correction \
+  --journal runs/forecast-demo/history --assessments FIRST_DIGEST,SECOND_DIGEST \
+  --forecast LATER_RAW_FORECAST_ALIAS --method additive-residual \
+  --head LATEST_RETAINED_HEAD --format markdown
+```
+
+The additive method keeps every finite signed or zero observation, fits
+`shift = mean(actual - raw_mean)`, and proposes `mean = raw_mean + shift`.
+The shift, residuals and sample residual standard deviation carry the target's declared unit.
+Inflation uses the complete empirical population of
+`abs(actual - (raw_mean + shift)) / (raw_std * z)` at the frozen interval level.
+Corrected standard deviation is `inflation * raw_std`, with inflation at least one. A constant
+residual never collapses predictive width. Overflow, unrepresentable intervals and insufficient
+fitted interval hits refuse. This is a pooled correction with descriptive training coverage;
+it supplies no evidence of future calibration or hierarchical fitting.
+
+Both singular and series selectors support the method, with the same complete-population,
+metadata, chronology and public-source checks. Additive JSON uses
+`fmine.forecast-correction.v2` or `fmine.forecast-correction-series.v2`, separate COR1/v2 or
+COR2/v2 digests, and explicit `mean_residual`, `sample_residual_std_dev`, `bias_shift`,
+`adjustment_unit` and per-member `residual` fields. Logarithmic output and digest bytes remain
+unchanged.
+
 ### Register a reviewed correction prospectively
 
 After reviewing the proposal, register a new forecast with an explicit new alias, corrected-model
@@ -3514,7 +3545,13 @@ cargo run -p fmine-cli -- forecast journal register-correction \
   --model-key corrected-production-v1 --author-role model-reviewer --trust-host-clock
 ```
 
-Use `--assessment` instead for a single saved training batch. The locked writer reconstructs the exact
+Use `--assessment` instead for a single saved training batch. For an additive proposal, include
+`--method additive-residual` again when registering; the reviewed digest must match that method.
+The default logarithmic registration retains operation v11. Additive registration uses v12 and binds
+the method explicitly; replay refuses absent, changed or downgraded method tags. Both remain
+uncalibrated and retain the exact reviewed proposal.
+
+The locked writer reconstructs the exact
 proposal, checks the expected journal head and proposal digest, and assigns a fresh registration time
 before the target deadline. The raw forecast stays immutable. The registered distribution keeps the
 raw target's quantity, unit, site, horizon and deadline; the explicit corrected model and author role

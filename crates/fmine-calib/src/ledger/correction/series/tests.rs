@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use crate::ledger::binding::{
     PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy, PublicVintagePolicy,
 };
+use crate::ledger::correction::CorrectionMethod;
 use crate::ledger::{
     AssessmentPolicy, CohortSpec, ForecastLedger, ForecastMetadata, ForecastPayload,
     OutcomeCitation, OutcomeKind, OutcomeSelector,
@@ -21,6 +22,9 @@ struct Spec {
     vintages: PublicVintagePolicy,
     model: String,
     metadata: ForecastMetadata,
+    metric: PublicMetric,
+    mean: f64,
+    std_dev: f64,
     alpha: f64,
     selector: OutcomeSelector,
     outcome: Option<f64>,
@@ -47,6 +51,9 @@ fn specs() -> [Spec; 3] {
             quantity: "production_koz".into(),
             unit: "koz".into(),
         },
+        metric: PublicMetric::ProductionKoz,
+        mean: (i + 1) as f64 * 10.0,
+        std_dev: (i + 1) as f64,
         alpha: 0.2,
         selector: OutcomeSelector::FirstPublished,
         outcome: Some((i + 1) as f64 * 20.0),
@@ -58,7 +65,7 @@ fn freeze(ledger: &mut ForecastLedger, spec: &Spec, id: ObjectId, name: &str, at
     let rule = if spec.public {
         PublicResolutionPolicy {
             issuer: spec.issuer.clone(),
-            metric: PublicMetric::ProductionKoz,
+            metric: spec.metric,
             period: spec.period,
             ownership: spec.ownership,
             members: BTreeMap::from([(id, spec.metadata.site.clone())]),
@@ -115,8 +122,8 @@ fn fixture(
                 early + i as i64,
                 ends[i],
                 ForecastPayload::Gaussian {
-                    mean: (i + 1) as f64 * 10.0,
-                    std_dev: (i + 1) as f64,
+                    mean: s.mean,
+                    std_dev: s.std_dev,
                 },
                 s.metadata.clone(),
             )
@@ -174,8 +181,8 @@ fn fixture(
             ends[0].max(ends[1]) + 20,
             ends[2],
             ForecastPayload::Gaussian {
-                mean: 30.0,
-                std_dev: 3.0,
+                mean: spec[2].mean,
+                std_dev: spec[2].std_dev,
             },
             spec[2].metadata.clone(),
         )
@@ -212,14 +219,30 @@ fn two_public_quarters_fit_one_later_target_and_order_is_canonical() {
         .correction_series_proposal(&reports, target)
         .expect("series");
     assert_eq!(
+        result.digest.to_hex(),
+        "98dc0a0df5f1a89c6e217b61f94979cc862b8f7aa8608e46b94bf3443aefca4f",
+        "FACT: captured from the unchanged log implementation before additive support"
+    );
+    assert_eq!(result.method, CorrectionMethod::MultiplicativeLog);
+    assert_eq!(
+        result,
+        ledger
+            .correction_series_proposal_with_method(
+                &reports,
+                target,
+                CorrectionMethod::MultiplicativeLog,
+            )
+            .expect("explicit legacy method")
+    );
+    assert_eq!(
         result,
         ledger
             .correction_series_proposal(&[reports[1], reports[0]], target)
             .expect("permuted series")
     );
-    close(result.bias_factor, 2.0);
-    close(result.mean_log_ratio, std::f64::consts::LN_2);
-    close(result.sample_log_std_dev, 0.0);
+    close(result.adjustment, 2.0);
+    close(result.mean_error, std::f64::consts::LN_2);
+    close(result.sample_error_std_dev, 0.0);
     assert_eq!(result.inflation, 1.0);
     let ForecastPayload::Gaussian { mean, std_dev } = result.corrected else {
         panic!("Gaussian");
@@ -262,9 +285,9 @@ fn series_reuses_the_same_inverse_empirical_inflation_known_answer() {
         .correction_series_proposal(&reports, target)
         .expect("series");
     // Ratios 1/2 and 2: mu=0, sample log SD=sqrt(2)*ln(2), max residual/(raw sigma)=10.
-    close(result.bias_factor, 1.0);
+    close(result.adjustment, 1.0);
     close(
-        result.sample_log_std_dev,
+        result.sample_error_std_dev,
         2.0_f64.sqrt() * std::f64::consts::LN_2,
     );
     close(result.inflation, 10.0 / 1.281_551_565_544_600_4);
@@ -325,39 +348,50 @@ fn saved_series_does_not_reselect_a_later_restatement_or_count_it_twice() {
 #[test]
 fn duplicate_reports_forecasts_and_cited_observations_never_expand_the_population() {
     let (ledger, reports, target, _) = fixture(specs(), false, true);
-    assert!(
-        ledger
-            .correction_series_proposal(&[reports[0], reports[0]], target)
-            .is_err()
-    );
-    assert!(
-        ledger
-            .correction_series_proposal(&[reports[0]], target)
-            .is_err()
-    );
-    assert!(
-        ledger
-            .correction_series_proposal(&[reports[0], Digest32([7; 32])], target)
-            .is_err()
-    );
+    for method in [
+        CorrectionMethod::MultiplicativeLog,
+        CorrectionMethod::AdditiveResidual,
+    ] {
+        for digests in [
+            vec![reports[0], reports[0]],
+            vec![reports[0]],
+            vec![reports[0], Digest32([7; 32])],
+        ] {
+            assert!(
+                ledger
+                    .correction_series_proposal_with_method(&digests, target, method)
+                    .is_err()
+            );
+        }
+    }
     let mut supplied = specs();
     supplied.iter_mut().for_each(|s| s.public = false);
     let (ledger, reports, target, _) = fixture(supplied.clone(), true, true);
-    let error = ledger
-        .correction_series_proposal(&reports, target)
-        .expect_err("same forecast in two cohorts");
-    assert!(error.what.contains("repeats a training forecast"));
+    for method in [
+        CorrectionMethod::MultiplicativeLog,
+        CorrectionMethod::AdditiveResidual,
+    ] {
+        let error = ledger
+            .correction_series_proposal_with_method(&reports, target, method)
+            .expect_err("same forecast in two cohorts");
+        assert!(error.what.contains("repeats a training forecast"));
+    }
     supplied[1].observation = supplied[0].observation;
     let (ledger, reports, target, _) = fixture(supplied, false, true);
-    let error = ledger
-        .correction_series_proposal(&reports, target)
-        .expect_err("same cited observation");
-    assert!(error.what.contains("same cited observation"));
+    for method in [
+        CorrectionMethod::MultiplicativeLog,
+        CorrectionMethod::AdditiveResidual,
+    ] {
+        let error = ledger
+            .correction_series_proposal_with_method(&reports, target, method)
+            .expect_err("same cited observation");
+        assert!(error.what.contains("same cited observation"));
+    }
 }
 
 #[test]
 fn incomplete_incompatible_and_overlapping_training_series_refuse() {
-    for case in 0..10 {
+    for case in 0..11 {
         let mut spec = specs();
         match case {
             0 => spec[1].outcome = None,
@@ -369,13 +403,25 @@ fn incomplete_incompatible_and_overlapping_training_series_refuse() {
             6 => spec[1].public = false,
             7 => spec[1].alpha = 0.1,
             8 => spec[1].selector = OutcomeSelector::LatestAsOf,
-            _ => spec[1].model = "different-model".into(),
+            9 => spec[1].model = "different-model".into(),
+            _ => {
+                spec[1].metric = PublicMetric::TccUsdPerOz;
+                spec[1].metadata.quantity = "tcc_usd_per_oz".into();
+                spec[1].metadata.unit = "usd_per_oz".into();
+            }
         }
         let (ledger, reports, target, _) = fixture(spec, false, true);
-        assert!(
-            ledger.correction_series_proposal(&reports, target).is_err(),
-            "case {case}"
-        );
+        for method in [
+            CorrectionMethod::MultiplicativeLog,
+            CorrectionMethod::AdditiveResidual,
+        ] {
+            assert!(
+                ledger
+                    .correction_series_proposal_with_method(&reports, target, method)
+                    .is_err(),
+                "case {case}"
+            );
+        }
     }
     for field in 0..7 {
         let mut spec = specs();
@@ -392,17 +438,33 @@ fn incomplete_incompatible_and_overlapping_training_series_refuse() {
             _ => spec[1].metadata.unit.push_str("-changed"),
         }
         let (ledger, reports, target, _) = fixture(spec, false, true);
-        assert!(
-            ledger.correction_series_proposal(&reports, target).is_err(),
-            "metadata field {field}"
-        );
+        for method in [
+            CorrectionMethod::MultiplicativeLog,
+            CorrectionMethod::AdditiveResidual,
+        ] {
+            assert!(
+                ledger
+                    .correction_series_proposal_with_method(&reports, target, method)
+                    .is_err(),
+                "metadata field {field}"
+            );
+        }
     }
 }
 
 #[test]
 fn public_target_needs_a_compatible_frozen_definition_and_no_outcome() {
     let (ledger, reports, target, _) = fixture(specs(), false, false);
-    assert!(ledger.correction_series_proposal(&reports, target).is_err());
+    for method in [
+        CorrectionMethod::MultiplicativeLog,
+        CorrectionMethod::AdditiveResidual,
+    ] {
+        assert!(
+            ledger
+                .correction_series_proposal_with_method(&reports, target, method)
+                .is_err()
+        );
+    }
     for case in 0..5 {
         let mut spec = specs();
         match case {
@@ -413,10 +475,17 @@ fn public_target_needs_a_compatible_frozen_definition_and_no_outcome() {
             _ => spec[2].alpha = 0.1,
         }
         let (ledger, reports, target, _) = fixture(spec, false, true);
-        assert!(
-            ledger.correction_series_proposal(&reports, target).is_err(),
-            "target case {case}"
-        );
+        for method in [
+            CorrectionMethod::MultiplicativeLog,
+            CorrectionMethod::AdditiveResidual,
+        ] {
+            assert!(
+                ledger
+                    .correction_series_proposal_with_method(&reports, target, method)
+                    .is_err(),
+                "target case {case}"
+            );
+        }
     }
     let (mut ledger, reports, target, _) = fixture(specs(), false, true);
     let due = ledger.forecast(target).expect("target").freeze_time_ns;
@@ -431,5 +500,123 @@ fn public_target_needs_a_compatible_frozen_definition_and_no_outcome() {
             },
         )
         .expect("target outcome");
-    assert!(ledger.correction_series_proposal(&reports, target).is_err());
+    for method in [
+        CorrectionMethod::MultiplicativeLog,
+        CorrectionMethod::AdditiveResidual,
+    ] {
+        assert!(
+            ledger
+                .correction_series_proposal_with_method(&reports, target, method)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn additive_cost_series_preserves_signed_sources_public_definitions_and_canonical_order() {
+    for metric in [
+        PublicMetric::AiscUsdPerOz,
+        PublicMetric::C1UsdPerLb,
+        PublicMetric::AiscUsdPerLb,
+    ] {
+        let mut spec = specs();
+        for (i, row) in spec.iter_mut().enumerate() {
+            row.metric = metric;
+            row.metadata.quantity = metric.as_str().into();
+            row.metadata.unit = metric.unit().into();
+            row.metadata.family = "quarterly-signed-cost".into();
+            row.mean = [-2.0, 0.0, -1.0][i];
+            row.std_dev = 1.0;
+            row.outcome = Some([0.0, 2.0, 1.0][i]);
+        }
+        let (mut ledger, reports, target, ids) = fixture(spec.clone(), false, true);
+        assert!(ledger.correction_series_proposal(&reports, target).is_err());
+        let raw = ledger.forecast(target).expect("raw").clone();
+        let result = ledger
+            .correction_series_proposal_with_method(
+                &reports,
+                target,
+                CorrectionMethod::AdditiveResidual,
+            )
+            .expect("signed public cost series");
+        assert_eq!(result.method, CorrectionMethod::AdditiveResidual);
+        close(result.mean_error, 2.0);
+        close(result.adjustment, 2.0);
+        close(result.sample_error_std_dev, 0.0);
+        assert_eq!(result.inflation, 1.0);
+        assert_eq!(
+            result.corrected,
+            ForecastPayload::Gaussian {
+                mean: 1.0,
+                std_dev: 1.0,
+            }
+        );
+        assert_eq!(result.metadata.unit, metric.unit());
+        assert_eq!(
+            (
+                result.required_training_hits,
+                result.raw_training_hits,
+                result.corrected_training_hits,
+            ),
+            (2, 0, 2)
+        );
+        assert_eq!(
+            result,
+            ledger
+                .correction_series_proposal_with_method(
+                    &[reports[1], reports[0]],
+                    target,
+                    CorrectionMethod::AdditiveResidual,
+                )
+                .expect("canonical additive series")
+        );
+        assert_eq!(result.parents.len(), 2);
+        assert_eq!(result.members.len(), 2);
+        assert_eq!(result.target_cohorts.len(), 1);
+        for ((parent, member), id) in result.parents.iter().zip(&result.members).zip(&ids) {
+            assert_eq!(parent.cohort.spec.members, [*id]);
+            assert_eq!(member.raw.forecast_id, *id);
+            close(member.error, 2.0);
+            let (policy, _) = PublicResolutionPolicy::parse_resolution_rule_with_vintages(
+                &parent.cohort.spec.resolution_rule,
+            )
+            .expect("parse retained definition")
+            .expect("public definition");
+            assert_eq!(policy.metric, metric);
+            assert_eq!(policy.ownership, PublicOwnership::Full);
+        }
+        assert_eq!(ledger.forecast(target), Some(&raw));
+        let registered = result.raw.registered_ns;
+        let predecessor = ledger.outcomes(ids[0])[0].seq;
+        let mut revised_source = citation(&spec[0]);
+        revised_source.vintage = spec[1].period.original_release();
+        ledger
+            .append_outcome(
+                ids[0],
+                registered + 1,
+                registered + 2,
+                OutcomeKind::Restated {
+                    value: -20.0,
+                    citation: revised_source,
+                    supersedes: predecessor,
+                },
+            )
+            .expect("later signed restatement");
+        assert_eq!(
+            result,
+            ledger
+                .correction_series_proposal_with_method(
+                    &reports,
+                    target,
+                    CorrectionMethod::AdditiveResidual,
+                )
+                .expect("immutable additive source selection")
+        );
+        assert!(
+            result
+                .method
+                .series_no_claim()
+                .contains("independent observations")
+        );
+    }
 }

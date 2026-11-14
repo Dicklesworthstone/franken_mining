@@ -898,6 +898,16 @@ training requires advancing nonoverlapping support of the same calendar kind and
 public target. Its distinct `fmine.forecast-correction-series.v1` / COR2/v1 identity preserves legacy
 single-assessment bytes. Selected reports establish neither independence nor complete historical coverage.
 
+`--method multiplicative-log|additive-residual` selects the error model for either proposal selector.
+Omission preserves the original positive-only logarithmic method and all v1 presentation/digest bytes.
+Explicit additive residuals admit finite signed and zero means/outcomes, while keeping positive Gaussian
+standard deviations and every existing population, chronology, metadata and source-policy guard. The
+shift is the mean of `actual - raw_mean` in the declared unit; corrected mean adds that shift and standard
+deviation is multiplied by empirical inflation floored at one. Zero residual dispersion never collapses
+predictive width. Additive JSON uses `fmine.forecast-correction.v2` or
+`fmine.forecast-correction-series.v2`, COR1/v2 or COR2/v2, explicit residual/shift fields and
+`adjustment_unit`. Rendering does not infer a method from failed logarithmic admission.
+
 `forecast journal register-correction` takes the raw alias, singular or plural saved assessments, exact
 `--expected-proposal`, new `--id`, declared `--model-key`, `--author-role`, expected journal head and
 `--trust-host-clock`. Operation v11 retains a compact reference to the immutable training and target
@@ -911,8 +921,13 @@ frozen and compatible. Later corrected cohorts retain source eligibility, exact 
 semantics; inherited public binding prohibits supplied outcomes even before that freeze. Inspect and
 saved reports expose raw/correction/corrected lineage. This is explicit registration, not automatic
 approval, external timestamp evidence or a calibration claim. Existing operation v1–v10 meanings remain
-unchanged. Focused public and supplied journal lifecycle tests cover admission, later resolution,
-assessment, replay, stale requests and source-policy refusals.
+unchanged. Additive registration additionally requires the same explicit `--method additive-residual`
+as the reviewed proposal and uses operation v12 with the exclusive `correction_method` tag. Its admission
+schema is `fmine.forecast-correction-admission.v2`, retaining the method, dimensioned shift and unit.
+Replay rejects missing, altered, incompatible or downgraded method tags, including otherwise valid
+recomputed frame chains. Legacy v11 registration and replay stay logarithmic. Focused public and supplied
+journal lifecycle tests cover both methods, signed/zero inputs, admission, later resolution, assessment,
+replay, stale requests, source-policy refusals and preservation of the raw journal prefix.
 
 ### Issued-output reliance (BD-347)
 

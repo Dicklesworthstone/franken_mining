@@ -656,6 +656,7 @@ fn parse_forecast_journal(
 ) -> Result<(forecast_journal::Command, OutputFormat, PathBuf), String> {
     use std::collections::BTreeMap;
 
+    use fmine_calib::ledger::correction::CorrectionMethod;
     use fmine_core::hash::Digest32;
     use forecast_journal::Command;
 
@@ -670,6 +671,20 @@ fn parse_forecast_journal(
         fmine_calib::record::parse_hex32(value)
             .map(Digest32)
             .ok_or_else(|| "digest requires 64 lowercase hexadecimal characters".to_string())
+    }
+
+    fn correction_method(
+        fields: &mut BTreeMap<String, String>,
+    ) -> Result<CorrectionMethod, String> {
+        match fields
+            .remove("--method")
+            .as_deref()
+            .unwrap_or("multiplicative-log")
+        {
+            "multiplicative-log" => Ok(CorrectionMethod::MultiplicativeLog),
+            "additive-residual" => Ok(CorrectionMethod::AdditiveResidual),
+            _ => Err("--method requires multiplicative-log or additive-residual".into()),
+        }
     }
 
     fn assessments(fields: &mut BTreeMap<String, String>) -> Result<(Vec<Digest32>, bool), String> {
@@ -793,6 +808,7 @@ fn parse_forecast_journal(
                 forecast: take(&mut fields, "--forecast")?,
                 assessments,
                 series,
+                method: correction_method(&mut fields)?,
                 expected_proposal: digest(&take(&mut fields, "--expected-proposal")?)?,
                 model_key: take(&mut fields, "--model-key")?,
                 author_role: take(&mut fields, "--author-role")?,
@@ -868,12 +884,14 @@ fn parse_forecast_journal(
                 .transpose()?;
             let forecast = take(&mut fields, "--forecast")?;
             let (assessments, series) = assessments(&mut fields)?;
+            let method = correction_method(&mut fields)?;
             if series {
                 Command::CorrectionSeries {
                     journal,
                     head,
                     assessments,
                     forecast,
+                    method,
                 }
             } else {
                 Command::Correction {
@@ -881,6 +899,7 @@ fn parse_forecast_journal(
                     head,
                     assessment: assessments[0],
                     forecast,
+                    method,
                 }
             }
         }

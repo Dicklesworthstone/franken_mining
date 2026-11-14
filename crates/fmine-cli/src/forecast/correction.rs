@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use fmine_calib::ledger::correction::{
-    CorrectionProposal, CorrectionSeriesProposal, METHOD, NO_CLAIM, SERIES_METHOD, SERIES_NO_CLAIM,
+    CorrectionMember, CorrectionMethod, CorrectionProposal, CorrectionSeriesProposal,
 };
 use fmine_calib::{Cohort, ForecastPayload, FrozenForecast, MemberOutcome};
 use fmine_core::{Digest32, ObjectId};
@@ -14,7 +14,7 @@ use super::{Replay, js, payload_json, selector_name, utc};
 
 pub(super) mod registration;
 
-pub(super) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal correction --journal <path> (--assessment <digest> | --assessments <digest,digest,...>) --forecast <alias> [--head <hex>]","operation":"Read-only unissued proposal; no host-clock sampling, outcome re-selection, journal append or replacement of an existing forecast","inputs":"Exactly one selector: --assessment retains one complete saved cohort with at least two positive Gaussian forecast/outcome pairs; --assessments requires at least two distinct saved assessments and retains every member. Every model/family/author/domain/horizon/site/quantity/unit label must match the later unresolved raw Gaussian target","series":"Repeated assessment, cohort, forecast or cited observation refuses. Every parent uses the same exact alpha and outcome selector. Public parents and frozen target cohorts retain the same issuer, metric, ownership, vintage permission and calendar period kind, with advancing nonoverlapping supports. Supplied parents retain the same resolution rule and eligible sources; supplied/public mixing refuses","chronology":"Target registration strictly follows every saved training cut and training outcome boundary; series additionally verifies selected-event availability and record times. The target has no recorded outcome event; all target cohorts use the same exact alpha","method":"mu=mean(log(actual/raw_mean)); factor=exp(mu); r_i=abs(actual_i-factor*mean_i)/(factor*std_i*z_(1-alpha/2)); kappa=max(1,inverse_empirical_CDF(r,1-alpha)), rounded outward when inflated; corrected Gaussian mean=factor*raw_mean, std=factor*kappa*raw_std","scope":"Pooled within one declared segment, not a hierarchical family/site estimator. Explicitly selecting complete reports does not establish a complete historical record or independent observations. Sample log dispersion and fitted training coverage are descriptive","output":"Unchanged raw forecast, visible dimensionless correction, corrected proposal and every selected source outcome. Singular mode preserves fmine.forecast-correction.v1 and COR1/v1; series uses fmine.forecast-correction-series.v1 and COR2/v1, retaining full parent/target cohort policies and membership. Uncalibrated and unissued, with no automatic registration or claimed out-of-sample coverage"}"#;
+pub(super) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal correction --journal <path> (--assessment <digest> | --assessments <digest,digest,...>) --forecast <alias> [--method multiplicative-log|additive-residual] [--head <hex>]","operation":"Read-only unissued proposal; no host-clock sampling, outcome re-selection, journal append or replacement of an existing forecast","inputs":"Exactly one selector: --assessment retains one complete saved cohort with at least two Gaussian forecast/outcome pairs; --assessments requires at least two distinct saved assessments and retains every member. All model/family/author/domain/horizon/site/quantity/unit labels match the later unresolved raw Gaussian target. Default multiplicative-log requires strictly positive means/outcomes; explicit additive-residual accepts finite signed and zero means/outcomes. Standard deviations remain positive","series":"Repeated assessment, cohort, forecast or cited observation refuses. Every parent uses the same exact alpha and outcome selector. Public parents and frozen target cohorts retain the same issuer, metric, ownership, vintage permission and calendar period kind, with advancing nonoverlapping supports. Supplied parents retain the same resolution rule and eligible sources; supplied/public mixing refuses","chronology":"Target registration strictly follows every saved training cut and training outcome boundary; series additionally verifies selected-event availability and record times. The target has no recorded outcome event; all target cohorts use the same exact alpha","multiplicative_log":"mu=mean(log(actual/raw_mean)); factor=exp(mu); r_i=abs(actual_i-factor*mean_i)/(factor*std_i*z_(1-alpha/2)); corrected Gaussian mean=factor*raw_mean, std=factor*kappa*raw_std","additive_residual":"shift=mean(actual-raw_mean), in the declared quantity unit; r_i=abs(actual_i-(mean_i+shift))/(std_i*z_(1-alpha/2)); corrected Gaussian mean=raw_mean+shift, std=kappa*raw_std","inflation":"kappa=max(1,inverse_empirical_CDF(r,1-alpha)), rounded outward when inflated; zero fitted error dispersion never collapses predictive width","scope":"Pooled within one declared segment, not a hierarchical family/site estimator. Explicit complete report selection establishes neither complete history nor independent observations. Sample error dispersion and fitted training coverage are descriptive","output":"Unchanged raw forecast, explicit method and correction, corrected proposal and every selected source outcome. Legacy multiplicative output and COR1/v1,COR2/v1 digests remain unchanged. Additive uses fmine.forecast-correction.v2 or fmine.forecast-correction-series.v2 with COR1/v2 or COR2/v2, mean_residual,sample_residual_std_dev,bias_shift,adjustment_unit and per-member residual. Series retains full parent/target policies and membership. Always uncalibrated and unissued, with no automatic registration or claimed out-of-sample coverage"}"#;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Proposal {
@@ -72,15 +72,16 @@ pub(super) fn proposal(
     assessments: &[Digest32],
     series: bool,
     raw_id: ObjectId,
+    method: CorrectionMethod,
 ) -> Result<Proposal, Refusal> {
     match (series, assessments) {
         (false, [assessment]) => state
             .ledger
-            .correction_proposal(*assessment, raw_id)
+            .correction_proposal_with_method(*assessment, raw_id, method)
             .map(Proposal::Single),
         (true, [_, _, ..]) => state
             .ledger
-            .correction_series_proposal(assessments, raw_id)
+            .correction_series_proposal_with_method(assessments, raw_id, method)
             .map(Proposal::Series),
         (false, _) => Err(super::invalid(
             "singular correction requires exactly one saved assessment",
@@ -95,20 +96,66 @@ fn bounds(value: (f64, f64)) -> String {
     format!("[{},{}]", value.0, value.1)
 }
 
-pub(super) fn json(state: &Replay, report: &CorrectionProposal) -> Result<String, Refusal> {
-    let members = report.members.iter().map(|member| {
+
+fn version(method: CorrectionMethod) -> u16 {
+    match method {
+        CorrectionMethod::MultiplicativeLog => 1,
+        CorrectionMethod::AdditiveResidual => 2,
+    }
+}
+
+fn fit_fields(
+    method: CorrectionMethod,
+    mean: f64,
+    spread: f64,
+    adjustment: f64,
+    unit: &str,
+) -> String {
+    match method {
+        CorrectionMethod::MultiplicativeLog => format!(
+            "\"mean_log_ratio\":{mean},\"sample_log_std_dev\":{spread},\"bias_factor\":{adjustment}"
+        ),
+        CorrectionMethod::AdditiveResidual => format!(
+            "\"mean_residual\":{mean},\"sample_residual_std_dev\":{spread},\"bias_shift\":{adjustment},\"adjustment_unit\":{}",
+            js(unit)
+        ),
+    }
+}
+
+fn members_json(
+    state: &Replay,
+    members: &[CorrectionMember],
+    method: CorrectionMethod,
+) -> Result<String, Refusal> {
+    let error_key = match method {
+        CorrectionMethod::MultiplicativeLog => "log_ratio",
+        CorrectionMethod::AdditiveResidual => "residual",
+    };
+    members.iter().map(|member| {
         Ok(format!(
-            "{{\"forecast\":{},\"forecast_id\":{},\"raw\":{},\"selected\":{},\"log_ratio\":{},\"raw_inside\":{},\"corrected_interval\":{},\"corrected_inside\":{}}}",
+            "{{\"forecast\":{},\"forecast_id\":{},\"raw\":{},\"selected\":{},\"{error_key}\":{},\"raw_inside\":{},\"corrected_interval\":{},\"corrected_inside\":{}}}",
             js(state.alias(member.raw.forecast_id)), js(&member.raw.forecast_id.to_string()),
-            payload_json(&member.raw.payload), state.member_json(&member.selected)?, member.log_ratio,
+            payload_json(&member.raw.payload), state.member_json(&member.selected)?, member.error,
             member.raw_inside, bounds(member.corrected_interval), member.corrected_inside,
         ))
-    }).collect::<Result<Vec<_>, Refusal>>()?.join(",");
+    }).collect::<Result<Vec<_>, Refusal>>().map(|members| members.join(","))
+}
+
+pub(super) fn json(state: &Replay, report: &CorrectionProposal) -> Result<String, Refusal> {
+    let members = members_json(state, &report.members, report.method)?;
+    let version = version(report.method);
+    let fit = fit_fields(
+        report.method,
+        report.mean_error,
+        report.sample_error_std_dev,
+        report.adjustment,
+        &report.metadata.unit,
+    );
     Ok(format!(
-        "{{\"schema\":\"fmine.forecast-correction.v1\",\"method\":{},\"digest\":{},\"status\":\"unissued_proposal\",\"uncalibrated\":true,\"no_claim\":{},\"assessment_digest\":{},\"cohort_digest\":{},\"training_as_of\":{},\"selector\":{},\"alpha\":{},\"model_key\":{}{},\"n_training\":{},\"mean_log_ratio\":{},\"sample_log_std_dev\":{},\"bias_factor\":{},\"inflation\":{},\"required_training_hits\":{},\"raw_training_hits\":{},\"corrected_training_hits\":{},\"coverage_interpretation\":\"fitted_in_sample_only\",\"target\":{{\"forecast\":{},\"forecast_id\":{},\"registered_at\":{},\"outcome_due\":{},\"raw\":{},\"raw_interval\":{},\"corrected\":{},\"corrected_interval\":{}}},\"members\":[{members}]}}",
-        js(METHOD),
+        "{{\"schema\":\"fmine.forecast-correction.v{version}\",\"method\":{},\"digest\":{},\"status\":\"unissued_proposal\",\"uncalibrated\":true,\"no_claim\":{},\"assessment_digest\":{},\"cohort_digest\":{},\"training_as_of\":{},\"selector\":{},\"alpha\":{},\"model_key\":{}{},\"n_training\":{},{fit},\"inflation\":{},\"required_training_hits\":{},\"raw_training_hits\":{},\"corrected_training_hits\":{},\"coverage_interpretation\":\"fitted_in_sample_only\",\"target\":{{\"forecast\":{},\"forecast_id\":{},\"registered_at\":{},\"outcome_due\":{},\"raw\":{},\"raw_interval\":{},\"corrected\":{},\"corrected_interval\":{}}},\"members\":[{members}]}}",
+        js(report.method.single_name()),
         js(&report.digest.to_hex()),
-        js(NO_CLAIM),
+        js(report.method.no_claim()),
         js(&report.assessment_digest.to_hex()),
         js(&report.cohort_digest.to_hex()),
         utc(report.training_as_of_ns),
@@ -117,9 +164,6 @@ pub(super) fn json(state: &Replay, report: &CorrectionProposal) -> Result<String
         js(&report.raw.model_key),
         super::segments::metadata_field(Some(&report.metadata)),
         report.members.len(),
-        report.mean_log_ratio,
-        report.sample_log_std_dev,
-        report.bias_factor,
         report.inflation,
         report.required_training_hits,
         report.raw_training_hits,
@@ -144,11 +188,36 @@ fn distribution(value: &ForecastPayload) -> String {
     }
 }
 
+fn method_text(method: CorrectionMethod) -> [&'static str; 6] {
+    match method {
+        CorrectionMethod::MultiplicativeLog => [
+            "Mean log(actual/raw mean)",
+            "Sample log-ratio standard deviation",
+            "Multiplicative bias factor",
+            "Scale inflation after bias rescaling",
+            "Log ratio",
+            "The bias factor is exp(mean(log(actual/raw mean))). Inflation is the inverse empirical (1-alpha) quantile of abs(actual-factor*mean)/(factor*std*z), floored at one, with outward rounding when inflated. Both corrected mean and standard deviation retain the declared unit. Zero fitted log dispersion does not collapse the predictive width. Inflation cannot narrow the bias-rescaled width; a factor below one can still shrink absolute width relative to the raw forecast.",
+        ],
+        CorrectionMethod::AdditiveResidual => [
+            "Mean residual (actual - raw mean)",
+            "Sample residual standard deviation",
+            "Additive bias shift",
+            "Scale inflation",
+            "Residual",
+            "The bias shift is mean(actual-raw_mean), in the declared quantity unit. The sample residual standard deviation uses that same unit. Inflation is the inverse empirical (1-alpha) quantile of abs(actual-(mean+shift))/(std*z), floored at one, with outward rounding when inflated. Corrected mean=raw_mean+shift and std=inflation*raw_std. Signed and zero values are retained. Zero fitted residual dispersion does not collapse predictive width, and inflation cannot narrow the raw width.",
+        ],
+    }
+}
+
 pub(super) fn markdown(state: &Replay, report: &CorrectionProposal) -> String {
     let text = crate::guidance::text;
     let metadata = &report.metadata;
+    let no_claim = report.method.no_claim();
+    let method = report.method.single_name();
+    let [mean_label, spread_label, adjustment_label, inflation_label, error_label, explanation] =
+        method_text(report.method);
     let mut out = format!(
-        "# Forecast correction proposal\n\n**Unissued and uncalibrated.** {NO_CLAIM}\n\nMethod: `{METHOD}`. Correction digest: `{}`.\n\nSaved assessment: `{}`. Training cut: {}; selector: {}.\n\nModel: {}. Family: {}. Author role: {}. Domain: {}. Horizon: {}. Site: {}. Quantity: {}. Unit: {}.\n\n## Raw, correction and corrected proposal\n\nTarget: {} (`{}`), registered {}, outcome due {}.\n\n| Quantity | Value |\n|---|---|\n| Unchanged raw Gaussian | {} |\n| Raw central interval | {} |\n| Mean log(actual/raw mean) | {} |\n| Sample log-ratio standard deviation | {} |\n| Multiplicative bias factor | {} |\n| Scale inflation after bias rescaling | {} |\n| Corrected Gaussian proposal | {} |\n| Corrected central interval | {} |\n\nIntervals use alpha {}. The bias factor is exp(mean(log(actual/raw mean))). Inflation is the inverse empirical (1-alpha) quantile of abs(actual-factor*mean)/(factor*std*z), floored at one, with outward rounding when inflated. Both corrected mean and standard deviation retain the declared unit. Zero fitted log dispersion does not collapse the predictive width. Inflation cannot narrow the bias-rescaled width; a factor below one can still shrink absolute width relative to the raw forecast.\n\n## Complete training population\n\nRaw hits: {}/{}. Fitted corrected hits: {}/{}; required empirical rank: {}. These are in-sample counts and do not demonstrate calibrated future coverage.\n\n| Forecast | Raw Gaussian | Log ratio | Raw hit | Corrected interval | Corrected hit |\n|---|---|---:|---|---|---|\n",
+        "# Forecast correction proposal\n\n**Unissued and uncalibrated.** {no_claim}\n\nMethod: `{method}`. Correction digest: `{}`.\n\nSaved assessment: `{}`. Training cut: {}; selector: {}.\n\nModel: {}. Family: {}. Author role: {}. Domain: {}. Horizon: {}. Site: {}. Quantity: {}. Unit: {}.\n\n## Raw, correction and corrected proposal\n\nTarget: {} (`{}`), registered {}, outcome due {}.\n\n| Quantity | Value |\n|---|---|\n| Unchanged raw Gaussian | {} |\n| Raw central interval | {} |\n| {mean_label} | {} |\n| {spread_label} | {} |\n| {adjustment_label} | {} |\n| {inflation_label} | {} |\n| Corrected Gaussian proposal | {} |\n| Corrected central interval | {} |\n\nIntervals use alpha {}. {explanation}\n\n## Complete training population\n\nRaw hits: {}/{}. Fitted corrected hits: {}/{}; required empirical rank: {}. These are in-sample counts and do not demonstrate calibrated future coverage.\n\n| Forecast | Raw Gaussian | {error_label} | Raw hit | Corrected interval | Corrected hit |\n|---|---|---:|---|---|---|\n",
         report.digest,
         report.assessment_digest,
         utc(report.training_as_of_ns).trim_matches('"'),
@@ -167,9 +236,9 @@ pub(super) fn markdown(state: &Replay, report: &CorrectionProposal) -> String {
         utc(report.raw.freeze_time_ns).trim_matches('"'),
         distribution(&report.raw.payload),
         bounds(report.raw_interval),
-        report.mean_log_ratio,
-        report.sample_log_std_dev,
-        report.bias_factor,
+        report.mean_error,
+        report.sample_error_std_dev,
+        report.adjustment,
         report.inflation,
         distribution(&report.corrected),
         bounds(report.corrected_interval),
@@ -186,7 +255,7 @@ pub(super) fn markdown(state: &Replay, report: &CorrectionProposal) -> String {
             "| {} | {} | {} | {} | {} | {} |",
             text(state.alias(member.raw.forecast_id)),
             distribution(&member.raw.payload),
-            member.log_ratio,
+            member.error,
             member.raw_inside,
             bounds(member.corrected_interval),
             member.corrected_inside
@@ -258,19 +327,20 @@ fn series_json(state: &Replay, report: &CorrectionSeriesProposal) -> Result<Stri
         })
         .collect::<Vec<_>>()
         .join(",");
-    let members = report.members.iter().map(|member| {
-        Ok(format!(
-            "{{\"forecast\":{},\"forecast_id\":{},\"raw\":{},\"selected\":{},\"log_ratio\":{},\"raw_inside\":{},\"corrected_interval\":{},\"corrected_inside\":{}}}",
-            js(state.alias(member.raw.forecast_id)), js(&member.raw.forecast_id.to_string()),
-            payload_json(&member.raw.payload), state.member_json(&member.selected)?, member.log_ratio,
-            member.raw_inside, bounds(member.corrected_interval), member.corrected_inside,
-        ))
-    }).collect::<Result<Vec<_>, Refusal>>()?.join(",");
+    let members = members_json(state, &report.members, report.method)?;
+    let version = version(report.method);
+    let fit = fit_fields(
+        report.method,
+        report.mean_error,
+        report.sample_error_std_dev,
+        report.adjustment,
+        &report.metadata.unit,
+    );
     Ok(format!(
-        "{{\"schema\":\"fmine.forecast-correction-series.v1\",\"method\":{},\"digest\":{},\"digest_encoding\":\"COR2/v1\",\"status\":\"unissued_proposal\",\"uncalibrated\":true,\"no_claim\":{},\"parents\":[{parents}],\"target_cohorts\":[{targets}],\"training_as_of\":{},\"selector\":{},\"alpha\":{},\"model_key\":{}{},\"n_assessments\":{},\"n_training\":{},\"mean_log_ratio\":{},\"sample_log_std_dev\":{},\"bias_factor\":{},\"inflation\":{},\"required_training_hits\":{},\"raw_training_hits\":{},\"corrected_training_hits\":{},\"coverage_interpretation\":\"fitted_in_sample_only\",\"target\":{{\"forecast\":{},\"forecast_id\":{},\"registered_at\":{},\"outcome_due\":{},\"raw\":{},\"raw_interval\":{},\"corrected\":{},\"corrected_interval\":{}}},\"members\":[{members}]}}",
-        js(SERIES_METHOD),
+        "{{\"schema\":\"fmine.forecast-correction-series.v{version}\",\"method\":{},\"digest\":{},\"digest_encoding\":\"COR2/v{version}\",\"status\":\"unissued_proposal\",\"uncalibrated\":true,\"no_claim\":{},\"parents\":[{parents}],\"target_cohorts\":[{targets}],\"training_as_of\":{},\"selector\":{},\"alpha\":{},\"model_key\":{}{},\"n_assessments\":{},\"n_training\":{},{fit},\"inflation\":{},\"required_training_hits\":{},\"raw_training_hits\":{},\"corrected_training_hits\":{},\"coverage_interpretation\":\"fitted_in_sample_only\",\"target\":{{\"forecast\":{},\"forecast_id\":{},\"registered_at\":{},\"outcome_due\":{},\"raw\":{},\"raw_interval\":{},\"corrected\":{},\"corrected_interval\":{}}},\"members\":[{members}]}}",
+        js(report.method.series_name()),
         js(&report.digest.to_hex()),
-        js(SERIES_NO_CLAIM),
+        js(report.method.series_no_claim()),
         utc(report.training_as_of_ns),
         js(selector_name(report.selector)),
         report.alpha,
@@ -278,9 +348,6 @@ fn series_json(state: &Replay, report: &CorrectionSeriesProposal) -> Result<Stri
         super::segments::metadata_field(Some(&report.metadata)),
         report.parents.len(),
         report.members.len(),
-        report.mean_log_ratio,
-        report.sample_log_std_dev,
-        report.bias_factor,
         report.inflation,
         report.required_training_hits,
         report.raw_training_hits,
@@ -317,8 +384,13 @@ fn cohort_markdown(out: &mut String, state: &Replay, cohort: &Cohort) {
 fn series_markdown(state: &Replay, report: &CorrectionSeriesProposal) -> String {
     let text = crate::guidance::text;
     let metadata = &report.metadata;
+    let no_claim = report.method.series_no_claim();
+    let method = report.method.series_name();
+    let version = version(report.method);
+    let [mean_label, spread_label, adjustment_label, inflation_label, error_label, explanation] =
+        method_text(report.method);
     let mut out = format!(
-        "# Forecast correction series proposal\n\n**Unissued and uncalibrated.** {SERIES_NO_CLAIM}\n\nMethod: `{SERIES_METHOD}`. Correction digest (COR2/v1): `{}`.\n\nSaved assessments: {}. Latest training cut: {}; selector: {}.\n\nModel: {}. Family: {}. Author role: {}. Domain: {}. Horizon: {}. Site: {}. Quantity: {}. Unit: {}.\n\n## Raw, correction and corrected proposal\n\nTarget: {} (`{}`), registered {}, outcome due {}.\n\n| Quantity | Value |\n|---|---|\n| Unchanged raw Gaussian | {} |\n| Raw central interval | {} |\n| Mean log(actual/raw mean) | {} |\n| Sample log-ratio standard deviation | {} |\n| Multiplicative bias factor | {} |\n| Scale inflation after bias rescaling | {} |\n| Corrected Gaussian proposal | {} |\n| Corrected central interval | {} |\n\nIntervals use alpha {}. The bias factor is exp(mean(log(actual/raw mean))). Inflation is the inverse empirical (1-alpha) quantile of abs(actual-factor*mean)/(factor*std*z), floored at one, with outward rounding when inflated. Both corrected mean and standard deviation retain the declared unit. Zero fitted log dispersion does not collapse the predictive width. Inflation cannot narrow the bias-rescaled width; a factor below one can still shrink absolute width relative to the raw forecast.\n\n## Complete selected training population\n\nRaw hits: {}/{}. Fitted corrected hits: {}/{}; required empirical rank: {}. These are in-sample counts and do not demonstrate calibrated future coverage. Every member of each selected assessment is retained; the selected assessments do not claim to be a complete historical record.\n\n| Forecast | Raw Gaussian | Log ratio | Raw hit | Corrected interval | Corrected hit |\n|---|---|---:|---|---|---|\n",
+        "# Forecast correction series proposal\n\n**Unissued and uncalibrated.** {no_claim}\n\nMethod: `{method}`. Correction digest (COR2/v{version}): `{}`.\n\nSaved assessments: {}. Latest training cut: {}; selector: {}.\n\nModel: {}. Family: {}. Author role: {}. Domain: {}. Horizon: {}. Site: {}. Quantity: {}. Unit: {}.\n\n## Raw, correction and corrected proposal\n\nTarget: {} (`{}`), registered {}, outcome due {}.\n\n| Quantity | Value |\n|---|---|\n| Unchanged raw Gaussian | {} |\n| Raw central interval | {} |\n| {mean_label} | {} |\n| {spread_label} | {} |\n| {adjustment_label} | {} |\n| {inflation_label} | {} |\n| Corrected Gaussian proposal | {} |\n| Corrected central interval | {} |\n\nIntervals use alpha {}. {explanation}\n\n## Complete selected training population\n\nRaw hits: {}/{}. Fitted corrected hits: {}/{}; required empirical rank: {}. These are in-sample counts and do not demonstrate calibrated future coverage. Every member of each selected assessment is retained; the selected assessments do not claim to be a complete historical record.\n\n| Forecast | Raw Gaussian | {error_label} | Raw hit | Corrected interval | Corrected hit |\n|---|---|---:|---|---|---|\n",
         report.digest,
         report.parents.len(),
         utc(report.training_as_of_ns).trim_matches('"'),
@@ -337,9 +409,9 @@ fn series_markdown(state: &Replay, report: &CorrectionSeriesProposal) -> String 
         utc(report.raw.freeze_time_ns).trim_matches('"'),
         distribution(&report.raw.payload),
         bounds(report.raw_interval),
-        report.mean_log_ratio,
-        report.sample_log_std_dev,
-        report.bias_factor,
+        report.mean_error,
+        report.sample_error_std_dev,
+        report.adjustment,
         report.inflation,
         distribution(&report.corrected),
         bounds(report.corrected_interval),
@@ -356,7 +428,7 @@ fn series_markdown(state: &Replay, report: &CorrectionSeriesProposal) -> String 
             "| {} | {} | {} | {} | {} | {} |",
             text(state.alias(member.raw.forecast_id)),
             distribution(&member.raw.payload),
-            member.log_ratio,
+            member.error,
             member.raw_inside,
             bounds(member.corrected_interval),
             member.corrected_inside

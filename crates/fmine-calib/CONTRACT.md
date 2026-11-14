@@ -125,6 +125,21 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   input-list permutations identical. Later restatements cannot alter earlier selected reports. The original
   single-assessment API and COR1/v1 bytes are unchanged. The series retains unissued/uncalibrated status and
   does not establish independence, a complete historical record, hierarchical fitting or future coverage.
+- DESIGN (BD-049, plan §10.3): `correction_proposal_with_method` and
+  `correction_series_proposal_with_method` take an explicit `CorrectionMethod` as their final argument.
+  `MultiplicativeLog` is the unchanged default of the original wrappers. `AdditiveResidual` admits finite
+  signed and zero Gaussian means and outcomes without changing population, source, chronology or segment
+  admission. It fits `shift = mean(actual - raw_mean)` in the target unit; sample residual dispersion is
+  descriptive. At the frozen alpha, inflation is the inverse empirical `(1-alpha)` quantile of
+  `abs(actual - (raw_mean + shift))/(raw_std*z)`, floored at one and rounded outward when inflated.
+  Corrected mean is `raw_mean + shift`; standard deviation is `raw_std*inflation`. Zero residual
+  dispersion never collapses width, and additive inflation never narrows the raw width. Checked finite
+  arithmetic, representable endpoints and actual fitted coverage remain mandatory. No automatic fallback
+  changes the requested method. Reports expose the method, mean error, sample error dispersion and
+  adjustment; member errors are log ratios or dimensioned residuals according to that method.
+  Additive COR1/v2 and COR2/v2 bind distinct method/no-claim text and all unchanged raw/source/parent/target
+  evidence. Exact legacy COR1/v1 and COR2/v1 regression digests remain fixed. This does not establish
+  independence, hierarchical fitting, calibrated future coverage or an observed public-data track record.
 - DESIGN (BD-048/049, plan §10.2): `assessment_diagnostics(saved_digest)` derives Gaussian PIT values and
   fixed-decile histograms, Bernoulli reliability bins, and exact empirical CDF rank intervals from the
   selected outcomes in an immutable saved assessment. Every member and event/source identity is retained.

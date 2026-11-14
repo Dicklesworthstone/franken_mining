@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use fmine_calib::ledger::correction::CorrectionMethod;
 use fmine_claim::forecast_journal::{Entry, Header, MAX_OPERATION_BYTES, Record};
 use fmine_core::hash::Digest32;
 use fmine_core::id::{ObjectId, PrefixKind};
@@ -40,6 +41,7 @@ const V8_SCHEMA: &str = "fmine.forecast-operation.v8";
 const V9_SCHEMA: &str = "fmine.forecast-operation.v9";
 const V10_SCHEMA: &str = "fmine.forecast-operation.v10";
 const V11_SCHEMA: &str = "fmine.forecast-operation.v11";
+const V12_SCHEMA: &str = "fmine.forecast-operation.v12";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +65,7 @@ enum OperationVersion {
     V9 = 8,
     V10 = 9,
     V11 = 10,
+    V12 = 11,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -82,6 +85,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V9_SCHEMA => Ok(OperationVersion::V9),
             V10_SCHEMA => Ok(OperationVersion::V10),
             V11_SCHEMA => Ok(OperationVersion::V11),
+            V12_SCHEMA => Ok(OperationVersion::V12),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -97,7 +101,11 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
         )));
     }
     let schema = if expected_table == "corrected_forecast" {
-        V11_SCHEMA
+        if doc.rows[0].get("correction_method").is_some() {
+            V12_SCHEMA
+        } else {
+            V11_SCHEMA
+        }
     } else if expected_table == "registered_missing" && doc.rows[0].get("status_kind").is_some() {
         V10_SCHEMA
     } else if expected_table == "plant_forecast" {
@@ -177,6 +185,7 @@ pub enum Command {
         forecast: String,
         assessments: Vec<Digest32>,
         series: bool,
+        method: CorrectionMethod,
         expected_proposal: Digest32,
         model_key: String,
         author_role: String,
@@ -239,6 +248,7 @@ pub enum Command {
         head: Option<Digest32>,
         assessment: Digest32,
         forecast: String,
+        method: CorrectionMethod,
     },
     /// Fit one correction to complete populations from explicitly selected saved assessments.
     CorrectionSeries {
@@ -246,6 +256,7 @@ pub enum Command {
         head: Option<Digest32>,
         assessments: Vec<Digest32>,
         forecast: String,
+        method: CorrectionMethod,
     },
 }
 
@@ -308,12 +319,14 @@ fn perform(
             head,
             assessment,
             forecast,
+            method,
         } => {
             let journal = Journal::open_read(&root.join(journal), *head)?;
             let mut state = replay(&journal)?;
             persisted_report(&mut state, *assessment)?;
             let target = state.forecast_id(forecast)?;
-            let report = super::correction::proposal(&state, &[*assessment], false, target)?;
+            let report =
+                super::correction::proposal(&state, &[*assessment], false, target, *method)?;
             let head_digest = journal
                 .records()
                 .last()
@@ -332,6 +345,7 @@ fn perform(
             head,
             assessments,
             forecast,
+            method,
         } => {
             let journal = Journal::open_read(&root.join(journal), *head)?;
             let mut state = replay(&journal)?;
@@ -339,7 +353,8 @@ fn perform(
                 persisted_report(&mut state, *assessment)?;
             }
             let target = state.forecast_id(forecast)?;
-            let report = super::correction::proposal(&state, assessments, true, target)?;
+            let report =
+                super::correction::proposal(&state, assessments, true, target, *method)?;
             let head_digest = journal
                 .records()
                 .last()
@@ -453,6 +468,7 @@ fn perform(
             forecast,
             assessments,
             series,
+            method,
             expected_proposal,
             model_key,
             author_role,
@@ -465,6 +481,7 @@ fn perform(
                     forecast: forecast.clone(),
                     assessments: assessments.clone(),
                     series: *series,
+                    method: *method,
                     expected_proposal: *expected_proposal,
                     model_key: model_key.clone(),
                     author_role: author_role.clone(),
@@ -1274,7 +1291,7 @@ fn apply(
     let event_log_declared = row.get("event_log_floor").is_some();
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
     let vintage_declared = row.get("public_vintages").is_some();
-    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11};
+    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12};
     // A feature's accepted schemas and each schema's required operation are separate constraints.
     // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
     let features: &[(bool, &[OperationVersion], &str)] = &[
@@ -1295,8 +1312,13 @@ fn apply(
         ),
         (
             row.table == "corrected_forecast",
-            &[V11],
+            &[V11, V12],
             "prospective correction registration",
+        ),
+        (
+            row.get("correction_method").is_some(),
+            &[V12],
+            "additive correction method",
         ),
     ];
     for (declared, allowed, feature) in features {
@@ -1315,6 +1337,7 @@ fn apply(
         V9 => row.table == "plant_forecast" && metadata_declared,
         V10 => row.table == "registered_missing" && status_declared,
         V11 => row.table == "corrected_forecast",
+        V12 => row.table == "corrected_forecast" && row.get("correction_method").is_some(),
         _ => true,
     };
     if !required {
@@ -1344,7 +1367,7 @@ fn apply(
     let row = Row(row);
     match row.0.table.as_str() {
         "corrected_forecast" => {
-            super::correction::registration::apply(state, row, authority_ns)?;
+            super::correction::registration::apply(state, row, authority_ns, version == V12)?;
         }
         "plant_forecast" => {
             let start = super::plant::registration_start(&row, request)?;
@@ -1438,7 +1461,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 11]);
+struct VersionCounts([usize; 12]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {

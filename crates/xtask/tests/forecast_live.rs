@@ -8,6 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use fmine_calib::ledger::correction::CorrectionMethod;
 use fmine_calib::record::{parse_hex32, parse_utc};
 use fmine_calib::{
     AssessmentPolicy, CohortSpec, ForecastLedger, ForecastPayload, OutcomeCitation, OutcomeKind,
@@ -260,6 +261,7 @@ fn saved_correction_exposes_raw_fit_and_proposal_without_sampling_clock_or_appen
         head: Some(journal.head),
         assessment: training,
         forecast: "future".into(),
+        method: CorrectionMethod::MultiplicativeLog,
     };
     let before = fs::read(&journal.path).expect("journal before proposal");
     let result = execute_with_clock(&command, &journal.root, &NoCorrectionClock);
@@ -336,6 +338,7 @@ fn saved_correction_exposes_raw_fit_and_proposal_without_sampling_clock_or_appen
         head: Some(journal.head),
         assessment: Digest32([9; 32]),
         forecast: "future".into(),
+        method: CorrectionMethod::MultiplicativeLog,
     };
     assert_ne!(
         execute_with_clock(&unknown, &journal.root, &NoCorrectionClock).exit_code,
@@ -346,6 +349,7 @@ fn saved_correction_exposes_raw_fit_and_proposal_without_sampling_clock_or_appen
         head: Some(journal.head),
         assessment: training,
         forecast: "f1".into(),
+        method: CorrectionMethod::MultiplicativeLog,
     };
     assert_ne!(
         execute_with_clock(&source, &journal.root, &NoCorrectionClock).exit_code,

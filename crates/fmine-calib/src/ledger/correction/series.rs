@@ -10,6 +10,8 @@ use crate::ledger::{Assessment, Cohort};
 
 pub const SERIES_METHOD: &str = "pooled-log-bias-gaussian-inflation-series-v1";
 pub const SERIES_NO_CLAIM: &str = "Unissued correction proposal fitted on an explicitly selected series of complete saved assessments, not a registered forecast, hierarchical fit or calibration result. Every selected member and source remains visible; selecting reports does not establish a complete historical record or independent observations. Public training and target supports use the same declared definition, ownership, vintage permission and calendar period kind, without overlap. Fitted coverage reuses training outcomes and is not out-of-sample evidence. No original forecast, outcome, assessment or journal record is changed; separate prospective registration and later scoring are required.";
+pub const ADDITIVE_SERIES_METHOD: &str = "pooled-additive-residual-gaussian-inflation-series-v1";
+pub const ADDITIVE_SERIES_NO_CLAIM: &str = "Unissued additive correction proposal fitted on an explicitly selected series of complete saved assessments, not a registered forecast, hierarchical fit or calibration result. Residuals and the mean shift retain the target's declared unit; predictive standard deviations are inflated without rescaling or narrowing. Signed and zero observations remain in every selected complete cohort; selection does not establish a complete historical record or independent observations. Public training and target supports retain the same declared definition, ownership, vintage permission and calendar period kind without overlap. Fitted coverage is not out-of-sample evidence. No original forecast, outcome, assessment or journal record is changed; separate prospective registration and later scoring are required.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorrectionTrainingAssessment {
@@ -23,6 +25,7 @@ pub struct CorrectionTrainingAssessment {
 /// Members follow canonical parent order, then the original saved assessment's forecast-id order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorrectionSeriesProposal {
+    pub method: CorrectionMethod,
     pub parents: Vec<CorrectionTrainingAssessment>,
     pub target_cohorts: Vec<Cohort>,
     pub training_as_of_ns: i64,
@@ -30,9 +33,9 @@ pub struct CorrectionSeriesProposal {
     pub alpha: f64,
     pub metadata: ForecastMetadata,
     pub members: Vec<CorrectionMember>,
-    pub mean_log_ratio: f64,
-    pub sample_log_std_dev: f64,
-    pub bias_factor: f64,
+    pub mean_error: f64,
+    pub sample_error_std_dev: f64,
+    pub adjustment: f64,
     pub inflation: f64,
     pub required_training_hits: usize,
     pub raw_training_hits: usize,
@@ -152,6 +155,21 @@ impl ForecastLedger {
         assessment_digests: &[Digest32],
         raw_forecast_id: ObjectId,
     ) -> Result<CorrectionSeriesProposal, Refusal> {
+        self.correction_series_proposal_with_method(
+            assessment_digests,
+            raw_forecast_id,
+            CorrectionMethod::MultiplicativeLog,
+        )
+    }
+
+    /// Retain the same complete source-bound series while explicitly choosing log ratios or signed
+    /// additive residuals. Method selection never changes the training population or source policy.
+    pub fn correction_series_proposal_with_method(
+        &self,
+        assessment_digests: &[Digest32],
+        raw_forecast_id: ObjectId,
+        method: CorrectionMethod,
+    ) -> Result<CorrectionSeriesProposal, Refusal> {
         if assessment_digests.len() < 2 {
             return Err(domain(
                 "correction series requires at least two saved assessments",
@@ -170,7 +188,7 @@ impl ForecastLedger {
             .metadata
             .as_ref()
             .ok_or_else(|| domain("correction requires prospectively declared target metadata"))?;
-        gaussian(&raw.payload)?;
+        gaussian(&raw.payload, method)?;
         let mut reports = BTreeSet::new();
         let mut cohorts = BTreeSet::new();
         let mut training = Vec::new();
@@ -307,8 +325,9 @@ impl ForecastLedger {
                 selected.push(member.clone());
             }
         }
-        let fit = self.fit_correction(raw, metadata, alpha, &selected)?;
+        let fit = self.fit_correction(raw, metadata, alpha, &selected, method)?;
         let mut report = CorrectionSeriesProposal {
+            method,
             parents: training.into_iter().map(|row| row.parent).collect(),
             target_cohorts,
             training_as_of_ns,
@@ -316,9 +335,9 @@ impl ForecastLedger {
             alpha,
             metadata: metadata.clone(),
             members: fit.members,
-            mean_log_ratio: fit.mean_log_ratio,
-            sample_log_std_dev: fit.sample_log_std_dev,
-            bias_factor: fit.bias_factor,
+            mean_error: fit.mean_error,
+            sample_error_std_dev: fit.sample_error_std_dev,
+            adjustment: fit.adjustment,
             inflation: fit.inflation,
             required_training_hits: fit.required_training_hits,
             raw_training_hits: fit.raw_training_hits,
@@ -335,9 +354,9 @@ impl ForecastLedger {
 }
 
 fn series_digest(report: &CorrectionSeriesProposal) -> Digest32 {
-    let mut enc = Encoder::new_frame(*b"COR2", 1);
-    enc.put_str(SERIES_METHOD);
-    enc.put_str(SERIES_NO_CLAIM);
+    let mut enc = Encoder::new_frame(*b"COR2", report.method.encoding_version());
+    enc.put_str(report.method.series_name());
+    enc.put_str(report.method.series_no_claim());
     enc.put_u64(report.parents.len() as u64);
     for parent in &report.parents {
         enc.put_fixed(&parent.assessment_digest.0);
@@ -364,9 +383,9 @@ fn series_digest(report: &CorrectionSeriesProposal) -> Digest32 {
         &mut enc,
         &[
             report.alpha,
-            report.mean_log_ratio,
-            report.sample_log_std_dev,
-            report.bias_factor,
+            report.mean_error,
+            report.sample_error_std_dev,
+            report.adjustment,
             report.inflation,
             report.raw_interval.0,
             report.raw_interval.1,
@@ -387,7 +406,7 @@ fn series_digest(report: &CorrectionSeriesProposal) -> Digest32 {
         floats(
             &mut enc,
             &[
-                member.log_ratio,
+                member.error,
                 member.corrected_interval.0,
                 member.corrected_interval.1,
             ],

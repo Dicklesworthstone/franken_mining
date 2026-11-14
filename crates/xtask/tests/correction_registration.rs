@@ -7,6 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use fmine_calib::ledger::correction::CorrectionMethod;
 use fmine_calib::record::{parse_hex32, parse_utc};
 use fmine_claim::forecast_journal::Entry;
 use fmine_cli::forecast_journal::{Command, execute_with_clock};
@@ -116,13 +117,13 @@ fn correction(json: &str) -> &str {
     object(json.split_once("\"correction\":").unwrap().1)
 }
 
-fn declared_forecast(alias: &str, mean: u32, due: &str) -> String {
+fn declared_forecast(alias: &str, mean: i64, due: &str) -> String {
     format!(
         "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"{RAW_MODEL}\"\noutcome_due = \"{due}\"\nkind = \"gaussian\"\nmean = \"{mean}\"\nstd_dev = \"1\"\nfamily = \"synthetic-production\"\nauthor_role = \"raw-model-role\"\ndomain = \"one-domain\"\nhorizon = \"year\"\nsite = \"Site A\"\nquantity = \"production_koz\"\nunit = \"koz\"\n"
     )
 }
 
-fn supplied_outcome(alias: &str, value: u32, year: u16) -> String {
+fn supplied_outcome(alias: &str, value: i64, year: u16) -> String {
     format!(
         "[[outcome]]\nforecast = \"{alias}\"\nkind = \"published\"\navailable_at = \"{}-02-01T00:00:00Z\"\nvalue = \"{value}\"\nsource = \"synthetic:issuer\"\nvintage = \"synthetic-{year}\"\nlocator = \"Invented!{alias}\"\nsha256 = \"{}\"\n",
         year + 1,
@@ -161,6 +162,7 @@ struct Fixture {
     saved_assessments: Vec<String>,
     source_hashes: Vec<Digest32>,
     public: bool,
+    method: CorrectionMethod,
     skew: u64,
     next_request: usize,
 }
@@ -180,6 +182,7 @@ impl Fixture {
             saved_assessments: Vec::new(),
             source_hashes: Vec::new(),
             public,
+            method: CorrectionMethod::MultiplicativeLog,
             skew,
             next_request: 0,
         };
@@ -198,8 +201,28 @@ impl Fixture {
     }
 
     fn series(public: bool, skew: u64, freeze_target: bool) -> Self {
+        Self::series_method(
+            public,
+            skew,
+            freeze_target,
+            CorrectionMethod::MultiplicativeLog,
+        )
+    }
+
+    fn series_method(
+        public: bool,
+        skew: u64,
+        freeze_target: bool,
+        method: CorrectionMethod,
+    ) -> Self {
         let mut fixture = Self::empty(public, skew);
+        fixture.method = method;
         for (year, mean, actual) in [(2030, 10, 20), (2031, 20, 40)] {
+            let mean = if method == CorrectionMethod::AdditiveResidual {
+                actual - 2
+            } else {
+                mean
+            };
             let alias = format!("train-{year}");
             let cohort = format!("training-{year}");
             let start = ns(&format!("{year}-02-05T00:00:00Z"));
@@ -213,6 +236,66 @@ impl Fixture {
         }
         fixture.future(freeze_target);
         fixture
+    }
+
+    fn signed(series: bool, skew: u64) -> Self {
+        let mut fixture = Self::empty(false, skew);
+        fixture.method = CorrectionMethod::AdditiveResidual;
+        for (index, mean, actual) in [(0_u16, -10, -8), (1, 0, 2)] {
+            let year = 2030 + if series { index } else { 0 };
+            let alias = format!("train-{index}");
+            let start = ns(&format!("{year}-02-05T00:00:00Z")) + i64::from(index) * SECOND;
+            fixture.append(
+                &Self::signed_forecast(&alias, mean, &format!("{year}-12-31T23:59:59Z")),
+                start,
+            );
+            if series {
+                let cohort = format!("training-{year}");
+                fixture.append(
+                    &fixture.signed_cohort(&cohort, &alias, year),
+                    start + SECOND,
+                );
+                fixture.resolve(&cohort, &alias, year, actual);
+                fixture.save_assessment(&cohort, &format!("{}-02-03T00:00:00Z", year + 1));
+            }
+        }
+        if !series {
+            fixture.append(
+                &fixture.signed_cohort("training-single", "train-0,train-1", 2030),
+                ns("2030-02-06T00:00:00Z"),
+            );
+            for (index, actual) in [(0, -8), (1, 2)] {
+                fixture.resolve_at(
+                    "training-single",
+                    &format!("train-{index}"),
+                    2030,
+                    actual,
+                    ns("2031-02-02T00:00:00Z") + index * SECOND,
+                );
+            }
+            fixture.save_assessment("training-single", "2031-02-03T00:00:00Z");
+        }
+        fixture.append(
+            &Self::signed_forecast("raw", -5, TARGET_DUE),
+            ns("2032-02-04T00:00:00Z"),
+        );
+        fixture.append(
+            &fixture.signed_cohort("future-raw", "raw", 2032),
+            ns("2032-02-05T00:00:00Z"),
+        );
+        fixture
+    }
+
+    fn signed_forecast(alias: &str, mean: i64, due: &str) -> String {
+        declared_forecast(alias, mean, due)
+            .replace("synthetic-production", "synthetic-net-cashflow")
+            .replace("production_koz", "net_cashflow")
+            .replace("unit = \"koz\"", "unit = \"USD\"")
+    }
+
+    fn signed_cohort(&self, name: &str, members: &str, year: u16) -> String {
+        self.cohort(name, members, year)
+            .replace("outcome_lo = \"0\"", "outcome_lo = \"-1000\"")
     }
 
     fn single() -> Self {
@@ -242,8 +325,13 @@ impl Fixture {
     }
 
     fn future(&mut self, freeze: bool) {
+        let mean = if self.method == CorrectionMethod::AdditiveResidual {
+            98
+        } else {
+            50
+        };
         self.append(
-            &declared_forecast("raw", 50, TARGET_DUE),
+            &declared_forecast("raw", mean, TARGET_DUE),
             ns("2032-02-04T00:00:00Z"),
         );
         if freeze {
@@ -356,7 +444,7 @@ impl Fixture {
         envelope
     }
 
-    fn resolve(&mut self, cohort: &str, alias: &str, year: u16, actual: u32) -> Envelope {
+    fn resolve(&mut self, cohort: &str, alias: &str, year: u16, actual: i64) -> Envelope {
         let at = ns(&format!("{}-02-02T00:00:00Z", year + 1));
         self.resolve_at(cohort, alias, year, actual, at)
     }
@@ -366,7 +454,7 @@ impl Fixture {
         cohort: &str,
         alias: &str,
         year: u16,
-        actual: u32,
+        actual: i64,
         at: i64,
     ) -> Envelope {
         if self.public {
@@ -409,6 +497,7 @@ impl Fixture {
                 head: Some(self.head),
                 assessment: self.parents[0],
                 forecast: "raw".into(),
+                method: self.method,
             }
         } else {
             Command::CorrectionSeries {
@@ -416,6 +505,7 @@ impl Fixture {
                 head: Some(self.head),
                 assessments: self.parents.clone(),
                 forecast: "raw".into(),
+                method: self.method,
             }
         }
     }
@@ -437,6 +527,7 @@ impl Fixture {
             expected_proposal: proposal,
             model_key: CORRECTED_MODEL.into(),
             author_role: "review-role".into(),
+            method: self.method,
         }
     }
 
@@ -452,6 +543,229 @@ impl Fixture {
         assert_eq!(result.exit_code, 0, "{}", result.to_json());
         result
     }
+}
+
+#[test]
+fn signed_additive_corrections_register_score_and_replay_without_rewriting_history() {
+    for series in [false, true] {
+        let mut fixture = Fixture::signed(series, 0);
+        let before = fixture.bytes();
+        let proposal = fixture.proposal();
+        let report = correction(&proposal.payload_json);
+        let schema = if series {
+            "fmine.forecast-correction-series.v2"
+        } else {
+            "fmine.forecast-correction.v2"
+        };
+        assert_eq!(string_field(report, "schema"), schema);
+        assert_eq!(number_field(report, "mean_residual"), 2.0);
+        assert_eq!(number_field(report, "sample_residual_std_dev"), 0.0);
+        assert_eq!(number_field(report, "bias_shift"), 2.0);
+        assert_eq!(string_field(report, "adjustment_unit"), "USD");
+        assert!(!report.contains("bias_factor") && !report.contains("log_ratio"));
+        assert!(report.contains(
+            "\"raw\":{\"kind\":\"gaussian\",\"mean\":-5,\"std_dev\":1}"
+        ));
+        assert!(report.contains("\"mean\":-3,\"std_dev\":1"));
+        assert!(report.contains("\"status\":\"unissued_proposal\",\"uncalibrated\":true"));
+        assert_eq!(number_field(report, "raw_training_hits"), 0.0);
+        assert_eq!(number_field(report, "corrected_training_hits"), 2.0);
+        assert_eq!(fixture.bytes(), before, "a proposal appends no bytes");
+        let mut args = vec![
+            "forecast".into(),
+            "journal".into(),
+            "correction".into(),
+            "--journal".into(),
+            JOURNAL.into(),
+            "--head".into(),
+            fixture.head.to_hex(),
+            "--forecast".into(),
+            "raw".into(),
+            if series {
+                "--assessments"
+            } else {
+                "--assessment"
+            }
+            .into(),
+            fixture
+                .parents
+                .iter()
+                .map(Digest32::to_hex)
+                .collect::<Vec<_>>()
+                .join(","),
+        ];
+        let default_log = fmine_cli::invoke(&args, &fixture.root).0;
+        assert_ne!(
+            default_log.exit_code, 0,
+            "signed values must not enter log ratios"
+        );
+        assert!(default_log.refusal.is_some());
+        args.extend(["--method".into(), "additive-residual".into()]);
+        assert_eq!(
+            fmine_cli::invoke(&args, &fixture.root).0.to_json(),
+            proposal.to_json(),
+            "the production argument parser routes the explicitly selected method"
+        );
+        let mut unknown = args.clone();
+        *unknown.last_mut().unwrap() = "unknown-correction".into();
+        assert!(parse_args(&unknown, &fixture.root).is_err());
+        assert_eq!(fixture.bytes(), before);
+
+        let expected = digest_field(report, "digest");
+        let raw = forecast(&fixture.inspect().payload_json, "raw").to_string();
+        let registered = fixture.ok(
+            fixture.register_command(expected),
+            ns("2032-02-06T00:00:00Z"),
+        );
+        assert!(fixture.bytes().starts_with(&before));
+        assert_eq!(forecast(&registered.payload_json, "raw"), raw);
+        let corrected = forecast(&registered.payload_json, "corrected").to_string();
+        assert_eq!(number_field(&corrected, "mean"), -3.0);
+        assert_eq!(number_field(&corrected, "std_dev"), 1.0);
+        assert_eq!(string_field(&corrected, "unit"), "USD");
+        assert_eq!(string_field(&corrected, "quantity"), "net_cashflow");
+        let admission = object(
+            registered
+                .payload_json
+                .split_once("\"correction_admissions\":[")
+                .unwrap()
+                .1,
+        )
+        .to_string();
+        assert!(admission.contains(
+            "\"schema\":\"fmine.forecast-correction-admission.v2\""
+        ));
+        assert!(
+            admission.contains(report),
+            "the exact reviewed signed proposal survives registration"
+        );
+        {
+            let durable =
+                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head))
+                    .unwrap();
+            let Entry::Operation(operation) = &durable.records().last().unwrap().entry else {
+                panic!("registered operation")
+            };
+            assert!(operation.contains("schema = \"fmine.forecast-operation.v12\""));
+            assert!(operation.contains("correction_method = \"additive-residual\""));
+        }
+        fixture.append(
+            &fixture.signed_cohort("future-corrected", "corrected", 2032),
+            ns("2032-02-07T00:00:00Z"),
+        );
+        fixture.resolve("future-corrected", "corrected", 2032, -3);
+        let saved = fixture.save_assessment("future-corrected", "2033-02-03T00:00:00Z");
+        let scored = assessment(&saved.payload_json).to_string();
+        assert!(scored.contains("\"value\":-3,"));
+        assert!(scored.contains("\"inside\":1"));
+        assert!(scored.contains("\"correction\":{"));
+        assert!(scored.contains(&expected.to_hex()));
+        fixture.resolve_at("future-raw", "raw", 2032, -3, ns("2033-02-04T00:00:00Z"));
+        let reopened = fixture.inspect();
+        assert_eq!(forecast(&reopened.payload_json, "raw"), raw);
+        assert_eq!(forecast(&reopened.payload_json, "corrected"), corrected);
+        assert_eq!(
+            object(
+                reopened
+                    .payload_json
+                    .split_once("\"correction_admissions\":[")
+                    .unwrap()
+                    .1
+            ),
+            admission
+        );
+        for (parent, original) in fixture.parents.iter().zip(&fixture.saved_assessments) {
+            let retrieved = execute_with_clock(
+                &Command::Report {
+                    journal: JOURNAL.into(),
+                    head: Some(fixture.head),
+                    assessment: *parent,
+                    provenance: None,
+                    timestamp: None,
+                },
+                &fixture.root,
+                &NeverClock,
+            );
+            assert_eq!(retrieved.exit_code, 0, "{}", retrieved.to_json());
+            assert_eq!(assessment(&retrieved.payload_json), original);
+        }
+    }
+}
+
+#[test]
+fn additive_public_registration_retains_source_policy_and_citations() {
+    let mut fixture = Fixture::series_method(
+        true,
+        0,
+        true,
+        CorrectionMethod::AdditiveResidual,
+    );
+    let proposal = fixture.proposal();
+    let report = correction(&proposal.payload_json);
+    let expected = digest_field(report, "digest");
+    assert_eq!(number_field(report, "bias_shift"), 2.0);
+    assert_eq!(string_field(report, "adjustment_unit"), "koz");
+    for source in &fixture.source_hashes[..2] {
+        assert!(report.contains(&source.to_hex()));
+    }
+    let before = fixture.bytes();
+    let raw = forecast(&fixture.inspect().payload_json, "raw").to_string();
+    let registered = fixture.ok(
+        fixture.register_command(expected),
+        ns("2032-02-06T00:00:00Z"),
+    );
+    assert!(fixture.bytes().starts_with(&before));
+    assert_eq!(forecast(&registered.payload_json, "raw"), raw);
+    let corrected = forecast(&registered.payload_json, "corrected");
+    assert_eq!(number_field(corrected, "mean"), 100.0);
+    assert_eq!(number_field(corrected, "std_dev"), 1.0);
+    let manual = fixture.request(&supplied_outcome("corrected", 100, 2032));
+    fixture.refuse(&manual, ns("2033-02-02T00:00:00Z"));
+    let proper = fixture.cohort("future-corrected", "corrected", 2032);
+    for altered in [
+        proper.replace("alpha = \"0.2\"", "alpha = \"0.1\""),
+        proper.replace(
+            "public_ownership = \"100%\"",
+            "public_ownership = \"attributable:3/5\"",
+        ),
+        format!("{proper}public_vintages = \"registered_comparatives\"\n"),
+    ] {
+        let command = fixture.request(&altered);
+        fixture.refuse(&command, ns("2032-02-07T00:00:00Z"));
+    }
+    fixture.append(&proper, ns("2032-02-07T00:00:00Z"));
+    fixture.resolve("future-corrected", "corrected", 2032, 100);
+    let saved = fixture.save_assessment("future-corrected", "2033-02-03T00:00:00Z");
+    let scored = assessment(&saved.payload_json).to_string();
+    assert!(scored.contains("\"value\":100,"));
+    assert!(scored.contains("\"inside\":1"));
+    assert!(scored.contains("\"source_admission\":{") && scored.contains("\"correction\":{"));
+    assert!(scored.contains(&fixture.source_hashes[2].to_hex()));
+    let saved_digest = digest_field(&scored, "digest");
+    fixture.resolve_at("future-raw", "raw", 2032, 100, ns("2033-02-04T00:00:00Z"));
+    for year in [2030, 2031, 2032] {
+        fs::write(
+            fixture.root.join(format!("corpus/{year}Q4.xlsx")),
+            b"changed after recorded admissions",
+        )
+        .unwrap();
+    }
+    let reopened = fixture.inspect();
+    assert_eq!(forecast(&reopened.payload_json, "raw"), raw);
+    assert!(reopened.payload_json.contains(report));
+    let retrieved = execute_with_clock(
+        &Command::Report {
+            journal: JOURNAL.into(),
+            head: Some(fixture.head),
+            assessment: saved_digest,
+            provenance: None,
+            timestamp: None,
+        },
+        &fixture.root,
+        &NeverClock,
+    );
+    assert_eq!(retrieved.exit_code, 0, "{}", retrieved.to_json());
+    assert_eq!(assessment(&retrieved.payload_json), scored);
 }
 
 #[test]
@@ -786,7 +1100,11 @@ fn public_corrected_forecast_cannot_escape_inherited_source_policy() {
 
 #[test]
 fn correction_registration_checks_review_identity_head_and_clock_upper_boundary() {
-    let mut fixture = Fixture::series(false, SECOND as u64, true);
+    check_correction_registration(Fixture::series(false, SECOND as u64, true));
+    check_correction_registration(Fixture::signed(true, SECOND as u64));
+}
+
+fn check_correction_registration(mut fixture: Fixture) {
     let expected = digest_field(correction(&fixture.proposal().payload_json), "digest");
     for change in [
         "digest",
@@ -796,6 +1114,7 @@ fn correction_registration_checks_review_identity_head_and_clock_upper_boundary(
         "parent",
         "selection",
         "duplicate",
+        "method",
     ] {
         let mut command = fixture.register_command(expected);
         let Command::RegisterCorrection {
@@ -805,6 +1124,7 @@ fn correction_registration_checks_review_identity_head_and_clock_upper_boundary(
             expected_proposal,
             assessments,
             series,
+            method,
             ..
         } = &mut command
         else {
@@ -818,6 +1138,13 @@ fn correction_registration_checks_review_identity_head_and_clock_upper_boundary(
             "parent" => assessments[0] = Digest32([7; 32]),
             "selection" => *series = false,
             "duplicate" => assessments[1] = assessments[0],
+            "method" => {
+                *method = if *method == CorrectionMethod::MultiplicativeLog {
+                    CorrectionMethod::AdditiveResidual
+                } else {
+                    CorrectionMethod::MultiplicativeLog
+                };
+            }
             _ => unreachable!(),
         }
         fixture.refuse(&command, ns("2032-02-06T00:00:00Z"));
@@ -831,7 +1158,11 @@ fn correction_registration_checks_review_identity_head_and_clock_upper_boundary(
     assert!(registered.contains(&format!("\"outcome_due_ns\":{},", ns(TARGET_DUE))));
     assert_eq!(
         number_field(forecast(&result.payload_json, "raw"), "mean"),
-        50.0
+        if fixture.method == CorrectionMethod::MultiplicativeLog {
+            50.0
+        } else {
+            -5.0
+        }
     );
 }
 
@@ -907,6 +1238,45 @@ fn parser_requires_one_selection_mode_and_explicit_reviewed_registration() {
         panic!("durable forecast command")
     };
     assert_eq!(parsed, fixture.register_command(expected));
+    for (value, method) in [
+        ("multiplicative-log", CorrectionMethod::MultiplicativeLog),
+        ("additive-residual", CorrectionMethod::AdditiveResidual),
+    ] {
+        let mut args = base.clone();
+        args.extend(["--method".into(), value.into()]);
+        let (parsed, _, _) = parse_args(&args, &fixture.root).unwrap();
+        let CliCommand::ForecastJournal(parsed) = parsed else {
+            panic!("durable forecast command")
+        };
+        let mut expected_command = fixture.register_command(expected);
+        let Command::RegisterCorrection {
+            method: expected_method,
+            ..
+        } = &mut expected_command
+        else {
+            panic!("registration command")
+        };
+        *expected_method = method;
+        assert_eq!(parsed, expected_command);
+    }
+    for value in ["additive", "unknown", ""] {
+        let mut args = base.clone();
+        args.extend(["--method".into(), value.into()]);
+        assert!(parse_args(&args, &fixture.root).is_err());
+    }
+    let mut missing_method = base.clone();
+    missing_method.push("--method".into());
+    assert!(parse_args(&missing_method, &fixture.root).is_err());
+    let unsupported = [
+        "forecast".into(),
+        "journal".into(),
+        "inspect".into(),
+        "--journal".into(),
+        JOURNAL.into(),
+        "--method".into(),
+        "additive-residual".into(),
+    ];
+    assert!(parse_args(&unsupported, &fixture.root).is_err());
     for flag in [
         "--head",
         "--expected-proposal",
@@ -941,14 +1311,25 @@ fn parser_requires_one_selection_mode_and_explicit_reviewed_registration() {
 
 #[test]
 fn intact_frame_chains_cannot_rewrite_correction_semantics_or_downgrade_its_version() {
-    let mut fixture = Fixture::series(false, 0, true);
+    check_correction_replay(Fixture::series(false, 0, true));
+    check_correction_replay(Fixture::signed(true, 0));
+}
+
+fn check_correction_replay(mut fixture: Fixture) {
     let expected = digest_field(correction(&fixture.proposal().payload_json), "digest");
     let registered = fixture.ok(
         fixture.register_command(expected),
         ns("2032-02-06T00:00:00Z"),
     );
     let wrong_raw = string_field(
-        forecast(&registered.payload_json, "train-2030"),
+        forecast(
+            &registered.payload_json,
+            if fixture.method == CorrectionMethod::AdditiveResidual {
+                "train-0"
+            } else {
+                "train-2030"
+            },
+        ),
         "forecast_id",
     );
     let (header, records) = {
@@ -956,7 +1337,7 @@ fn intact_frame_chains_cannot_rewrite_correction_semantics_or_downgrade_its_vers
             DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
         (source.header().clone(), source.records().to_vec())
     };
-    for change in [
+    let mut changes = vec![
         "unchanged",
         "mean_bits",
         "raw_forecast_id",
@@ -964,7 +1345,14 @@ fn intact_frame_chains_cannot_rewrite_correction_semantics_or_downgrade_its_vers
         "assessments",
         "missing-schema",
         "old-schema",
-    ] {
+        "retagged-method",
+    ];
+    if fixture.method == CorrectionMethod::AdditiveResidual {
+        changes.extend(["wrong-method", "missing-method", "legacy-schema"]);
+    } else {
+        changes.extend(["unexpected-method", "new-schema"]);
+    }
+    for change in changes {
         let path = fixture.root.join(format!("replay-{change}.journal"));
         let mut writer = DurableJournal::create(
             &path,
@@ -1002,6 +1390,41 @@ fn intact_frame_chains_cannot_rewrite_correction_semantics_or_downgrade_its_vers
                         "old-schema" if line.starts_with("schema = ") => {
                             "schema = \"fmine.forecast-operation.v2\"".into()
                         }
+                        "wrong-method" if line.starts_with("correction_method = ") => {
+                            "correction_method = \"multiplicative-log\"".into()
+                        }
+                        "missing-method" if line.starts_with("correction_method = ") => {
+                            changed_rows += 1;
+                            continue;
+                        }
+                        "legacy-schema" if line.starts_with("schema = ") => {
+                            "schema = \"fmine.forecast-operation.v11\"".into()
+                        }
+                        "new-schema" if line.starts_with("schema = ") => {
+                            "schema = \"fmine.forecast-operation.v12\"".into()
+                        }
+                        "unexpected-method" if line == "[[corrected_forecast]]" => {
+                            format!("{line}\ncorrection_method = \"additive-residual\"")
+                        }
+                        "retagged-method" if line.starts_with("schema = ") => {
+                            let version =
+                                if fixture.method == CorrectionMethod::AdditiveResidual {
+                                    11
+                                } else {
+                                    12
+                                };
+                            format!("schema = \"fmine.forecast-operation.v{version}\"")
+                        }
+                        "retagged-method" if line.starts_with("correction_method = ") => {
+                            changed_rows += 1;
+                            continue;
+                        }
+                        "retagged-method"
+                            if line == "[[corrected_forecast]]"
+                                && fixture.method == CorrectionMethod::MultiplicativeLog =>
+                        {
+                            format!("{line}\ncorrection_method = \"additive-residual\"")
+                        }
                         _ => line.into(),
                     };
                     changed_rows += usize::from(replacement != line);
@@ -1018,7 +1441,14 @@ fn intact_frame_chains_cannot_rewrite_correction_semantics_or_downgrade_its_vers
                 .append(&operation, &FixedClock(record.observed_ns), |_, _| Ok(()))
                 .unwrap();
         }
-        assert_eq!(changed_rows, usize::from(change != "unchanged"));
+        assert_eq!(
+            changed_rows,
+            if change == "retagged-method" {
+                2
+            } else {
+                usize::from(change != "unchanged")
+            }
+        );
         let head = writer.head();
         drop(writer);
         let intact = DurableJournal::open_read(&path, Some(head)).unwrap();
@@ -1043,11 +1473,16 @@ fn intact_frame_chains_cannot_rewrite_correction_semantics_or_downgrade_its_vers
             assert_ne!(reopened.exit_code, 0, "{change}: {}", reopened.to_json());
             let refusal = reopened.refusal.as_ref().unwrap();
             let reason = match change {
-                "mean_bits" | "raw_forecast_id" | "target_cohorts" => "stored correction payload",
-                "assessments" => "repeats a saved assessment",
-                _ => "prospective correction registration",
+                "mean_bits" | "raw_forecast_id" | "target_cohorts" => {
+                    Some("stored correction payload")
+                }
+                "assessments" => Some("repeats a saved assessment"),
+                "missing-schema" | "old-schema" => Some("prospective correction registration"),
+                _ => None,
             };
-            assert!(refusal.what.contains(reason), "{change}: {refusal:?}");
+            if let Some(reason) = reason {
+                assert!(refusal.what.contains(reason), "{change}: {refusal:?}");
+            }
         }
         assert_eq!(
             fs::read(&path).unwrap(),

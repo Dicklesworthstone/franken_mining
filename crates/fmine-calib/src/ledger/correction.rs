@@ -18,22 +18,81 @@ pub use series::{
 
 pub const METHOD: &str = "pooled-log-bias-gaussian-inflation-v1";
 pub const NO_CLAIM: &str = "Unissued correction proposal fitted on one complete saved assessment, not a registered forecast, hierarchical fit or calibration result. The same model and full declared segment are required. All selected historical outcomes remain visible. Fitted coverage reuses training outcomes and is not out-of-sample evidence. No original forecast, outcome, assessment or journal record is changed; separate prospective registration and later scoring are required.";
+pub const ADDITIVE_METHOD: &str = "pooled-additive-residual-gaussian-inflation-v1";
+pub const ADDITIVE_NO_CLAIM: &str = "Unissued additive correction proposal fitted on one complete saved assessment, not a registered forecast, hierarchical fit or calibration result. Residuals and the mean shift retain the target's declared unit; predictive standard deviations are inflated without rescaling or narrowing. Signed and zero observations remain in the complete declared segment. Fitted coverage reuses training outcomes and is not out-of-sample evidence. No original forecast, outcome, assessment or journal record is changed; separate prospective registration and later scoring are required.";
+
+/// The selected error model is explicit; a failed log-domain admission never falls back to additive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrectionMethod {
+    MultiplicativeLog,
+    AdditiveResidual,
+}
+
+impl CorrectionMethod {
+    #[must_use]
+    pub const fn single_name(self) -> &'static str {
+        match self {
+            Self::MultiplicativeLog => METHOD,
+            Self::AdditiveResidual => ADDITIVE_METHOD,
+        }
+    }
+
+    #[must_use]
+    pub const fn series_name(self) -> &'static str {
+        match self {
+            Self::MultiplicativeLog => SERIES_METHOD,
+            Self::AdditiveResidual => series::ADDITIVE_SERIES_METHOD,
+        }
+    }
+
+    #[must_use]
+    pub const fn no_claim(self) -> &'static str {
+        match self {
+            Self::MultiplicativeLog => NO_CLAIM,
+            Self::AdditiveResidual => ADDITIVE_NO_CLAIM,
+        }
+    }
+
+    #[must_use]
+    pub const fn series_no_claim(self) -> &'static str {
+        match self {
+            Self::MultiplicativeLog => SERIES_NO_CLAIM,
+            Self::AdditiveResidual => series::ADDITIVE_SERIES_NO_CLAIM,
+        }
+    }
+
+    const fn encoding_version(self) -> u16 {
+        match self {
+            Self::MultiplicativeLog => 1,
+            Self::AdditiveResidual => 2,
+        }
+    }
+
+    fn value(self, value: f64) -> Result<f64, Refusal> {
+        match self {
+            Self::MultiplicativeLog => positive(value),
+            Self::AdditiveResidual => numeric(value),
+        }
+    }
+}
 
 /// One unchanged forecast and the particular outcome already selected by the immutable assessment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorrectionMember {
     pub raw: FrozenForecast,
     pub selected: MemberAssessment,
-    pub log_ratio: f64,
+    /// Log(actual / raw mean), or actual - raw mean in the target's unit, under the declared method.
+    pub error: f64,
     pub corrected_interval: (f64, f64),
     pub raw_inside: bool,
     pub corrected_inside: bool,
 }
 
 /// A dimensioned predictive distribution stays attached to its complete frozen target and source cohort.
-/// The factor and inflation are dimensionless; log dispersion describes the fitted ratios only.
+/// Log corrections expose a dimensionless factor; additive corrections expose a shift in the target unit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorrectionProposal {
+    pub method: CorrectionMethod,
     pub assessment_digest: Digest32,
     pub cohort_digest: Digest32,
     pub training_as_of_ns: i64,
@@ -41,9 +100,10 @@ pub struct CorrectionProposal {
     pub alpha: f64,
     pub metadata: ForecastMetadata,
     pub members: Vec<CorrectionMember>,
-    pub mean_log_ratio: f64,
-    pub sample_log_std_dev: f64,
-    pub bias_factor: f64,
+    pub mean_error: f64,
+    pub sample_error_std_dev: f64,
+    /// Multiplicative factor or additive shift, according to `method`.
+    pub adjustment: f64,
     pub inflation: f64,
     pub required_training_hits: usize,
     pub raw_training_hits: usize,
@@ -57,9 +117,9 @@ pub struct CorrectionProposal {
 
 struct FittedCorrection {
     members: Vec<CorrectionMember>,
-    mean_log_ratio: f64,
-    sample_log_std_dev: f64,
-    bias_factor: f64,
+    mean_error: f64,
+    sample_error_std_dev: f64,
+    adjustment: f64,
     inflation: f64,
     required_training_hits: usize,
     raw_training_hits: usize,
@@ -88,13 +148,13 @@ fn positive(value: f64) -> Result<f64, Refusal> {
     }
 }
 
-fn gaussian(payload: &ForecastPayload) -> Result<(f64, f64), Refusal> {
+fn gaussian(payload: &ForecastPayload, method: CorrectionMethod) -> Result<(f64, f64), Refusal> {
     let ForecastPayload::Gaussian { mean, std_dev } = payload else {
         return Err(domain(
             "correction requires Gaussian forecasts throughout the complete cohort",
         ));
     };
-    Ok((positive(*mean)?, positive(*std_dev)?))
+    Ok((method.value(*mean)?, positive(*std_dev)?))
 }
 
 fn interval(payload: &ForecastPayload, alpha: f64) -> Result<(f64, f64), Refusal> {
@@ -112,13 +172,20 @@ fn interval(payload: &ForecastPayload, alpha: f64) -> Result<(f64, f64), Refusal
 
 fn corrected(
     raw: &ForecastPayload,
-    factor: f64,
+    adjustment: f64,
     inflation: f64,
+    method: CorrectionMethod,
 ) -> Result<ForecastPayload, Refusal> {
-    let (mean, std_dev) = gaussian(raw)?;
-    let result = ForecastPayload::Gaussian {
-        mean: positive(mean * factor)?,
-        std_dev: positive(positive(std_dev * factor)? * inflation)?,
+    let (mean, std_dev) = gaussian(raw, method)?;
+    let result = match method {
+        CorrectionMethod::MultiplicativeLog => ForecastPayload::Gaussian {
+            mean: positive(mean * adjustment)?,
+            std_dev: positive(positive(std_dev * adjustment)? * inflation)?,
+        },
+        CorrectionMethod::AdditiveResidual => ForecastPayload::Gaussian {
+            mean: numeric(mean + adjustment)?,
+            std_dev: positive(std_dev * inflation)?,
+        },
     };
     result.validate()?;
     Ok(result)
@@ -136,6 +203,21 @@ impl ForecastLedger {
         &self,
         assessment_digest: Digest32,
         raw_forecast_id: ObjectId,
+    ) -> Result<CorrectionProposal, Refusal> {
+        self.correction_proposal_with_method(
+            assessment_digest,
+            raw_forecast_id,
+            CorrectionMethod::MultiplicativeLog,
+        )
+    }
+
+    /// Fit the explicitly selected error model. Additive residuals admit signed and zero quantities
+    /// without changing cohort membership, source selection or the prospective target boundary.
+    pub fn correction_proposal_with_method(
+        &self,
+        assessment_digest: Digest32,
+        raw_forecast_id: ObjectId,
+        method: CorrectionMethod,
     ) -> Result<CorrectionProposal, Refusal> {
         let assessment = self
             .assessments
@@ -168,7 +250,7 @@ impl ForecastLedger {
             .metadata
             .as_ref()
             .ok_or_else(|| domain("correction requires prospectively declared target metadata"))?;
-        gaussian(&raw.payload)?;
+        gaussian(&raw.payload, method)?;
         let alpha = cohort.spec.policy.alpha;
         if self.cohorts.values().any(|target| {
             target.spec.members.contains(&raw_forecast_id)
@@ -184,8 +266,9 @@ impl ForecastLedger {
                 "correction needs at least two resolved members and no unresolved member in the complete frozen cohort",
             ));
         }
-        let fit = self.fit_correction(raw, metadata, alpha, &assessment.per_member)?;
+        let fit = self.fit_correction(raw, metadata, alpha, &assessment.per_member, method)?;
         let mut report = CorrectionProposal {
+            method,
             assessment_digest,
             cohort_digest: cohort.digest,
             training_as_of_ns: assessment.as_of_ns,
@@ -193,9 +276,9 @@ impl ForecastLedger {
             alpha,
             metadata: metadata.clone(),
             members: fit.members,
-            mean_log_ratio: fit.mean_log_ratio,
-            sample_log_std_dev: fit.sample_log_std_dev,
-            bias_factor: fit.bias_factor,
+            mean_error: fit.mean_error,
+            sample_error_std_dev: fit.sample_error_std_dev,
+            adjustment: fit.adjustment,
             inflation: fit.inflation,
             required_training_hits: fit.required_training_hits,
             raw_training_hits: fit.raw_training_hits,
@@ -218,6 +301,7 @@ impl ForecastLedger {
         metadata: &ForecastMetadata,
         alpha: f64,
         selected_members: &[MemberAssessment],
+        method: CorrectionMethod,
     ) -> Result<FittedCorrection, Refusal> {
         let n = selected_members.len();
         if n < 2 {
@@ -226,7 +310,7 @@ impl ForecastLedger {
             ));
         }
         let mut members = Vec::with_capacity(n);
-        let mut mean_log_ratio = 0.0;
+        let mut mean_error = 0.0;
         for selected in selected_members {
             let forecast = self
                 .records
@@ -242,31 +326,37 @@ impl ForecastLedger {
                     "correction training outcome boundaries must precede target registration",
                 ));
             }
-            let (mean, _) = gaussian(&forecast.payload)?;
+            let (mean, _) = gaussian(&forecast.payload, method)?;
             let MemberOutcome::Resolved { value, .. } = &selected.outcome else {
                 return Err(domain(
                     "an unresolved member cannot be excluded from correction fitting",
                 ));
             };
-            let value = positive(*value)?;
-            // DESIGN: logarithm subtraction avoids overflowing a representable pair's ratio.
-            let log_ratio = numeric(det::ln(value) - det::ln(mean))?;
-            mean_log_ratio = numeric(mean_log_ratio + log_ratio / n as f64)?;
+            let value = method.value(*value)?;
+            let error = match method {
+                // DESIGN: logarithm subtraction avoids overflowing a representable pair's ratio.
+                CorrectionMethod::MultiplicativeLog => numeric(det::ln(value) - det::ln(mean))?,
+                CorrectionMethod::AdditiveResidual => numeric(value - mean)?,
+            };
+            mean_error = numeric(mean_error + error / n as f64)?;
             members.push(CorrectionMember {
                 raw: forecast.clone(),
                 selected: selected.clone(),
-                log_ratio,
+                error,
                 corrected_interval: (0.0, 0.0),
                 raw_inside: inside(interval(&forecast.payload, alpha)?, value),
                 corrected_inside: false,
             });
         }
-        let sample_log_variance = members.iter().try_fold(0.0, |sum, member| {
-            let residual = member.log_ratio - mean_log_ratio;
+        let sample_error_variance = members.iter().try_fold(0.0, |sum, member| {
+            let residual = member.error - mean_error;
             numeric(sum + residual * residual / (n - 1) as f64)
         })?;
-        let sample_log_std_dev = numeric(sample_log_variance.sqrt())?;
-        let bias_factor = positive(det::exp(mean_log_ratio))?;
+        let sample_error_std_dev = numeric(sample_error_variance.sqrt())?;
+        let adjustment = match method {
+            CorrectionMethod::MultiplicativeLog => positive(det::exp(mean_error))?,
+            CorrectionMethod::AdditiveResidual => mean_error,
+        };
         let unit_gaussian = ForecastPayload::Gaussian {
             mean: 0.0,
             std_dev: 1.0,
@@ -274,12 +364,20 @@ impl ForecastLedger {
         let z = positive(interval(&unit_gaussian, alpha)?.1)?;
         let mut required_inflations = Vec::with_capacity(n);
         for member in &members {
-            let (mean, std_dev) = gaussian(&member.raw.payload)?;
+            let (mean, std_dev) = gaussian(&member.raw.payload, method)?;
             let MemberOutcome::Resolved { value, .. } = member.selected.outcome else {
                 return Err(domain("correction member unexpectedly unresolved"));
             };
-            let center = positive(mean * bias_factor)?;
-            let radius = positive(positive(std_dev * bias_factor)? * z)?;
+            let (center, radius) = match method {
+                CorrectionMethod::MultiplicativeLog => (
+                    positive(mean * adjustment)?,
+                    positive(positive(std_dev * adjustment)? * z)?,
+                ),
+                CorrectionMethod::AdditiveResidual => (
+                    numeric(mean + adjustment)?,
+                    positive(std_dev * z)?,
+                ),
+            };
             required_inflations.push(numeric((value - center).abs() / radius)?);
         }
         required_inflations.sort_by(f64::total_cmp);
@@ -297,7 +395,7 @@ impl ForecastLedger {
         };
         for member in &mut members {
             member.corrected_interval = interval(
-                &corrected(&member.raw.payload, bias_factor, inflation)?,
+                &corrected(&member.raw.payload, adjustment, inflation, method)?,
                 alpha,
             )?;
             let MemberOutcome::Resolved { value, .. } = member.selected.outcome else {
@@ -315,12 +413,12 @@ impl ForecastLedger {
                 "floating-point interval endpoints cannot certify the fitted training coverage; no rounded success is emitted",
             ));
         }
-        let corrected = corrected(&raw.payload, bias_factor, inflation)?;
+        let corrected = corrected(&raw.payload, adjustment, inflation, method)?;
         Ok(FittedCorrection {
             members,
-            mean_log_ratio,
-            sample_log_std_dev,
-            bias_factor,
+            mean_error,
+            sample_error_std_dev,
+            adjustment,
             inflation,
             required_training_hits,
             raw_training_hits,
@@ -333,9 +431,9 @@ impl ForecastLedger {
 }
 
 fn digest(report: &CorrectionProposal) -> Digest32 {
-    let mut enc = Encoder::new_frame(*b"COR1", 1);
-    enc.put_str(METHOD);
-    enc.put_str(NO_CLAIM);
+    let mut enc = Encoder::new_frame(*b"COR1", report.method.encoding_version());
+    enc.put_str(report.method.single_name());
+    enc.put_str(report.method.no_claim());
     enc.put_fixed(&report.assessment_digest.0);
     enc.put_fixed(&report.cohort_digest.0);
     enc.put_i64(report.training_as_of_ns);
@@ -350,9 +448,9 @@ fn digest(report: &CorrectionProposal) -> Digest32 {
         &mut enc,
         &[
             report.alpha,
-            report.mean_log_ratio,
-            report.sample_log_std_dev,
-            report.bias_factor,
+            report.mean_error,
+            report.sample_error_std_dev,
+            report.adjustment,
             report.inflation,
             report.raw_interval.0,
             report.raw_interval.1,
@@ -373,7 +471,7 @@ fn digest(report: &CorrectionProposal) -> Digest32 {
         floats(
             &mut enc,
             &[
-                member.log_ratio,
+                member.error,
                 member.corrected_interval.0,
                 member.corrected_interval.1,
             ],

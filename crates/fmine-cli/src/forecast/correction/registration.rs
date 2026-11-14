@@ -8,6 +8,7 @@ use std::fmt::Write as _;
 use fmine_calib::ledger::binding::{
     PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy, PublicVintagePolicy,
 };
+use fmine_calib::ledger::correction::CorrectionMethod;
 use fmine_calib::{Cohort, ForecastMetadata, ForecastPayload};
 use fmine_core::{Digest32, ObjectId};
 use fmine_evidence::{Refusal, RefusalCode};
@@ -16,7 +17,7 @@ use fmine_registry::toml_subset::parse_subset;
 use super::{Proposal, proposal};
 use crate::forecast::{Replay, Row, absent, hex, identifier, invalid, js, payload_json};
 
-pub(in crate::forecast) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal register-correction --journal <path> --head <hex> (--assessment <digest> | --assessments <digest,digest,...>) --forecast <raw-alias> --id <new-alias> --expected-proposal <digest> --model-key <distinct-model> --author-role <role> --trust-host-clock","operation":"Explicit new forecast registration from the exact reviewed correction; the raw forecast remains unchanged","bindings":"All parents must be persisted assessments. Raw target cohorts must exist and agree on exact alpha, source policy and eligible sources. Public issuer, metric, period, ownership, subject and vintage permission are inherited before a corrected cohort is frozen; supplied training cannot create a public-bound correction","time":"Writer-assigned upper-bound registration precedes the unchanged outcome deadline and any earlier inherited plant start","replay":"Version eleven retains canonical proposal/parent/target references, exact corrected Gaussian bits and deadline. Replay verifies the proposal at its historical prefix and caches its original presentation; later outcomes do not trigger refitting","scope":"Registration remains uncalibrated, with explicit new model/author labels and no external time proof, source authentication or execution authority"}"#;
+pub(in crate::forecast) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal register-correction --journal <path> --head <hex> (--assessment <digest> | --assessments <digest,digest,...>) --forecast <raw-alias> [--method multiplicative-log|additive-residual] --id <new-alias> --expected-proposal <digest> --model-key <distinct-model> --author-role <role> --trust-host-clock","operation":"Explicit new forecast registration from the exact reviewed correction, using the same explicit method; the raw forecast remains unchanged","bindings":"All parents must be persisted assessments. Raw target cohorts must exist and agree on exact alpha, source policy and eligible sources. Public issuer, metric, period, ownership, subject and vintage permission are inherited before a corrected cohort is frozen; supplied training cannot create a public-bound correction","time":"Writer-assigned upper-bound registration precedes the unchanged outcome deadline and any earlier inherited plant start","replay":"Default multiplicative-log preserves version eleven bytes and semantics. Explicit additive-residual uses version twelve, with a required exclusive correction_method tag. Both retain canonical proposal/parent/target references, exact corrected Gaussian bits and deadline. Replay verifies the reviewed method and proposal at its historical prefix and caches the original presentation; later outcomes never trigger refitting","scope":"Registration remains uncalibrated, with explicit new model/author labels and no external time proof, source authentication or execution authority"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::forecast) struct Registration {
@@ -24,6 +25,7 @@ pub(in crate::forecast) struct Registration {
     pub forecast: String,
     pub assessments: Vec<Digest32>,
     pub series: bool,
+    pub method: CorrectionMethod,
     pub expected_proposal: Digest32,
     pub model_key: String,
     pub author_role: String,
@@ -240,7 +242,13 @@ fn prepare_inner(state: &mut Replay, request: &Registration) -> Result<Prepared,
         crate::forecast::live::persisted_report(state, *assessment)?;
     }
     let raw_id = state.forecast_id(&request.forecast)?;
-    let proposal = proposal(state, &request.assessments, request.series, raw_id)?;
+    let proposal = proposal(
+        state,
+        &request.assessments,
+        request.series,
+        raw_id,
+        request.method,
+    )?;
     if proposal.digest() != request.expected_proposal {
         return Err(changed(
             "reviewed correction digest differs from the proposal at this journal prefix",
@@ -356,6 +364,9 @@ fn prepare_inner(state: &mut Replay, request: &Registration) -> Result<Prepared,
     if let Some(start) = plant_start {
         let _ = writeln!(operation, "registration_before_ns = {start}");
     }
+    if request.method == CorrectionMethod::AdditiveResidual {
+        operation.push_str("correction_method = \"additive-residual\"\n");
+    }
     let proposal_json = proposal.json(state)?;
     let proposal_markdown = proposal.markdown(state);
     Ok(Prepared {
@@ -382,6 +393,7 @@ pub(in crate::forecast) fn apply(
     state: &mut Replay,
     row: Row<'_>,
     authority_ns: i64,
+    additive: bool,
 ) -> Result<(), Refusal> {
     row.allowed(
         &[
@@ -398,9 +410,25 @@ pub(in crate::forecast) fn apply(
             "std_dev_bits",
             "outcome_due_ns",
             "registration_before_ns",
+            "correction_method",
         ],
         &[],
     )?;
+    let method = if additive {
+        if row.string("correction_method")? != "additive-residual" {
+            return Err(invalid(
+                "version twelve requires the additive-residual correction method",
+            ));
+        }
+        CorrectionMethod::AdditiveResidual
+    } else {
+        if row.0.get("correction_method").is_some() {
+            return Err(invalid(
+                "legacy correction registration cannot declare a new method",
+            ));
+        }
+        CorrectionMethod::MultiplicativeLog
+    };
     let request = Registration {
         id: row.string("id")?.into(),
         forecast: row.string("raw_forecast")?.into(),
@@ -414,6 +442,7 @@ pub(in crate::forecast) fn apply(
             "series" => true,
             _ => return Err(invalid("unknown correction selection mode")),
         },
+        method,
         expected_proposal: hex(row.string("proposal_digest")?)?,
         model_key: row.string("model_key")?.into(),
         author_role: row.string("corrected_author_role")?.into(),
@@ -456,12 +485,21 @@ pub(in crate::forecast) fn apply(
         corrected.clone(),
         prepared.metadata,
     )?;
-    let (factor, inflation) = match &prepared.proposal {
-        Proposal::Single(report) => (report.bias_factor, report.inflation),
-        Proposal::Series(report) => (report.bias_factor, report.inflation),
+    let (adjustment, inflation, unit) = match &prepared.proposal {
+        Proposal::Single(report) => (report.adjustment, report.inflation, &report.metadata.unit),
+        Proposal::Series(report) => (report.adjustment, report.inflation, &report.metadata.unit),
+    };
+    let version = super::version(method);
+    let adjustment = match method {
+        CorrectionMethod::MultiplicativeLog => format!("\"bias_factor\":{adjustment}"),
+        CorrectionMethod::AdditiveResidual => format!(
+            "\"method\":{},\"bias_shift\":{adjustment},\"adjustment_unit\":{}",
+            js(if request.series { method.series_name() } else { method.single_name() }),
+            js(unit)
+        ),
     };
     let compact = format!(
-        "{{\"schema\":\"fmine.forecast-correction-admission.v1\",\"status\":\"registered_corrected_forecast\",\"uncalibrated\":true,\"forecast\":{},\"forecast_id\":{},\"raw_forecast\":{},\"raw_forecast_id\":{},\"proposal_digest\":{},\"selection\":{},\"assessment_digests\":[{}],\"raw_target_cohorts\":[{}],\"model_key\":{},\"author_role\":{},\"registered_ns\":{authority_ns},\"outcome_due_ns\":{due},\"registration_before_ns\":{},\"raw\":{},\"bias_factor\":{factor},\"inflation\":{inflation},\"corrected\":{},\"inherited_source_policy\":{}}}",
+        "{{\"schema\":\"fmine.forecast-correction-admission.v{version}\",\"status\":\"registered_corrected_forecast\",\"uncalibrated\":true,\"forecast\":{},\"forecast_id\":{},\"raw_forecast\":{},\"raw_forecast_id\":{},\"proposal_digest\":{},\"selection\":{},\"assessment_digests\":[{}],\"raw_target_cohorts\":[{}],\"model_key\":{},\"author_role\":{},\"registered_ns\":{authority_ns},\"outcome_due_ns\":{due},\"registration_before_ns\":{},\"raw\":{},{adjustment},\"inflation\":{inflation},\"corrected\":{},\"inherited_source_policy\":{}}}",
         js(&request.id),
         js(&id.to_string()),
         js(&request.forecast),

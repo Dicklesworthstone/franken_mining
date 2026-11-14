@@ -1,6 +1,7 @@
 //! Determinism: DeterministicPerIsa
 
 use super::*;
+use crate::ledger::correction::CorrectionMethod;
 use crate::ledger::{AssessmentPolicy, CohortSpec, MissingReason, OutcomeCitation, OutcomeKind};
 
 fn metadata() -> ForecastMetadata {
@@ -113,9 +114,25 @@ fn constant_ratio_bias_is_visible_and_zero_log_dispersion_never_collapses_interv
     let proposal = ledger
         .correction_proposal(assessment, target)
         .expect("proposal");
-    close(proposal.bias_factor, 2.0);
-    close(proposal.mean_log_ratio, std::f64::consts::LN_2);
-    close(proposal.sample_log_std_dev, 0.0);
+    assert_eq!(
+        proposal.digest.to_hex(),
+        "25f3ef710a725a8f84f405c6ecf8c7d777d732cb42305385b730727c89ab01ad",
+        "FACT: captured from the unchanged log implementation before additive support"
+    );
+    assert_eq!(proposal.method, CorrectionMethod::MultiplicativeLog);
+    assert_eq!(
+        proposal,
+        ledger
+            .correction_proposal_with_method(
+                assessment,
+                target,
+                CorrectionMethod::MultiplicativeLog,
+            )
+            .expect("explicit legacy method")
+    );
+    close(proposal.adjustment, 2.0);
+    close(proposal.mean_error, std::f64::consts::LN_2);
+    close(proposal.sample_error_std_dev, 0.0);
     assert_eq!(proposal.inflation, 1.0);
     let ForecastPayload::Gaussian { mean, std_dev } = proposal.corrected else {
         panic!("Gaussian")
@@ -151,7 +168,7 @@ fn overprediction_bias_rescales_width_before_the_inflation_floor() {
     let report = ledger
         .correction_proposal(assessment, target)
         .expect("downward correction");
-    close(report.bias_factor, 0.5);
+    close(report.adjustment, 0.5);
     assert_eq!(report.inflation, 1.0);
     let ForecastPayload::Gaussian { mean, std_dev } = report.corrected else {
         panic!("Gaussian")
@@ -180,8 +197,8 @@ fn reciprocal_ratio_known_answer_restores_training_coverage_without_claiming_val
     let proposal = ledger
         .correction_proposal(assessment, target)
         .expect("proposal");
-    close(proposal.bias_factor, 1.0);
-    close(proposal.sample_log_std_dev, std::f64::consts::LN_2);
+    close(proposal.adjustment, 1.0);
+    close(proposal.sample_error_std_dev, std::f64::consts::LN_2);
     close(proposal.inflation, 10.0 / 1.281_551_565_544_600_4);
     close(proposal.corrected_interval.0, 0.0);
     close(proposal.corrected_interval.1, 60.0);
@@ -278,7 +295,16 @@ fn every_segment_dimension_is_required_and_outcomes_prevent_retrospective_propos
             gaussian_payload(50.0, 5.0),
             changed,
         );
-        assert!(ledger.correction_proposal(assessment, target).is_err());
+        for method in [
+            CorrectionMethod::MultiplicativeLog,
+            CorrectionMethod::AdditiveResidual,
+        ] {
+            assert!(
+                ledger
+                    .correction_proposal_with_method(assessment, target, method)
+                    .is_err()
+            );
+        }
     }
     let (mut ledger, assessment, target, _) = setup(
         &[(10.0, 1.0, Some(20.0)), (20.0, 2.0, Some(40.0))],
@@ -295,10 +321,17 @@ fn every_segment_dimension_is_required_and_outcomes_prevent_retrospective_propos
             },
         )
         .expect("missing event");
-    assert!(
-        ledger.correction_proposal(assessment, target).is_err(),
-        "missing is also an outcome event"
-    );
+    for method in [
+        CorrectionMethod::MultiplicativeLog,
+        CorrectionMethod::AdditiveResidual,
+    ] {
+        assert!(
+            ledger
+                .correction_proposal_with_method(assessment, target, method)
+                .is_err(),
+            "missing is also an outcome event"
+        );
+    }
 }
 
 #[test]
@@ -308,12 +341,21 @@ fn unseen_assessments_early_targets_and_conflicting_alpha_refuse() {
         gaussian_payload(50.0, 5.0),
         metadata(),
     );
-    assert!(
-        ledger
-            .correction_proposal(Digest32([7; 32]), target)
-            .is_err()
-    );
-    assert!(ledger.correction_proposal(assessment, ids[0]).is_err());
+    for method in [
+        CorrectionMethod::MultiplicativeLog,
+        CorrectionMethod::AdditiveResidual,
+    ] {
+        assert!(
+            ledger
+                .correction_proposal_with_method(Digest32([7; 32]), target, method)
+                .is_err()
+        );
+        assert!(
+            ledger
+                .correction_proposal_with_method(assessment, ids[0], method)
+                .is_err()
+        );
+    }
     ledger
         .freeze_cohort(CohortSpec {
             name: "future-at-another-level".into(),
@@ -327,7 +369,224 @@ fn unseen_assessments_early_targets_and_conflicting_alpha_refuse() {
             },
         })
         .expect("future cohort");
-    assert!(ledger.correction_proposal(assessment, target).is_err());
+    for method in [
+        CorrectionMethod::MultiplicativeLog,
+        CorrectionMethod::AdditiveResidual,
+    ] {
+        assert!(
+            ledger
+                .correction_proposal_with_method(assessment, target, method)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn additive_constant_residual_keeps_signed_and_zero_values_and_predictive_width() {
+    let (mut ledger, assessment, target, ids) = setup(
+        &[
+            (-10.0, 1.0, Some(-8.0)),
+            (-2.0, 1.0, Some(0.0)),
+            (0.0, 1.0, Some(2.0)),
+        ],
+        gaussian_payload(-5.0, 1.0),
+        metadata(),
+    );
+    assert!(
+        ledger.correction_proposal(assessment, target).is_err(),
+        "the default log method cannot silently fall back"
+    );
+    let raw_before = ledger.forecast(target).expect("raw").clone();
+    let proposal = ledger
+        .correction_proposal_with_method(assessment, target, CorrectionMethod::AdditiveResidual)
+        .expect("signed additive proposal");
+    assert_eq!(proposal.method, CorrectionMethod::AdditiveResidual);
+    close(proposal.mean_error, 2.0);
+    close(proposal.adjustment, 2.0);
+    close(proposal.sample_error_std_dev, 0.0);
+    assert_eq!(proposal.inflation, 1.0);
+    assert_eq!(proposal.corrected, gaussian_payload(-3.0, 1.0));
+    assert_eq!(
+        (
+            proposal.raw_training_hits,
+            proposal.corrected_training_hits,
+            proposal.required_training_hits,
+        ),
+        (0, 3, 3)
+    );
+    assert_eq!(proposal.members.len(), 3);
+    for member in &proposal.members {
+        close(member.error, 2.0);
+        close(
+            member.corrected_interval.1 - member.corrected_interval.0,
+            2.0 * 1.281_551_565_544_600_4,
+        );
+    }
+    assert_eq!(ledger.forecast(target), Some(&raw_before));
+    let saved_before = ledger
+        .assess(
+            proposal.cohort_digest,
+            proposal.training_as_of_ns,
+            proposal.selector,
+        )
+        .expect("saved assessment")
+        .clone();
+    let predecessor = ledger.outcomes(ids[0])[0].seq;
+    ledger
+        .append_outcome(
+            ids[0],
+            130,
+            131,
+            OutcomeKind::Restated {
+                value: -100.0,
+                citation: citation(0, "later"),
+                supersedes: predecessor,
+            },
+        )
+        .expect("later restatement");
+    assert_eq!(
+        proposal,
+        ledger
+            .correction_proposal_with_method(assessment, target, CorrectionMethod::AdditiveResidual)
+            .expect("unchanged historical selection")
+    );
+    assert_eq!(
+        ledger
+            .assess(
+                proposal.cohort_digest,
+                proposal.training_as_of_ns,
+                proposal.selector,
+            )
+            .expect("immutable saved assessment"),
+        &saved_before
+    );
+    assert!(proposal.method.no_claim().contains("target's declared unit"));
+    assert!(proposal.method.no_claim().contains("not out-of-sample"));
+}
+
+#[test]
+fn additive_residual_dispersion_inflates_against_the_complete_empirical_rank() {
+    // Independent calculation: residuals {-4, 0, 4} have mean 0 and sample SD 4.
+    // The 80% empirical rank is 3, so kappa=4/z_0.9; target half-width is 2*4=8.
+    let (ledger, assessment, target, _) = setup(
+        &[
+            (-10.0, 1.0, Some(-14.0)),
+            (0.0, 1.0, Some(0.0)),
+            (10.0, 1.0, Some(14.0)),
+        ],
+        gaussian_payload(-5.0, 2.0),
+        metadata(),
+    );
+    let proposal = ledger
+        .correction_proposal_with_method(assessment, target, CorrectionMethod::AdditiveResidual)
+        .expect("additive dispersion");
+    close(proposal.mean_error, 0.0);
+    close(proposal.adjustment, 0.0);
+    close(proposal.sample_error_std_dev, 4.0);
+    close(proposal.inflation, 4.0 / 1.281_551_565_544_600_4);
+    close(proposal.corrected_interval.0, -13.0);
+    close(proposal.corrected_interval.1, 3.0);
+    assert_eq!(
+        (proposal.raw_training_hits, proposal.corrected_training_hits),
+        (1, 3)
+    );
+    assert!(proposal.inflation > 1.0);
+    let ForecastPayload::Gaussian { mean, std_dev } = proposal.corrected else {
+        panic!("Gaussian")
+    };
+    close(mean, -5.0);
+    assert!(std_dev > 2.0);
+}
+
+#[test]
+fn additive_downward_shift_crosses_zero_without_narrowing_or_changing_log_identities() {
+    let (ledger, assessment, target, _) = setup(
+        &[(2.0, 1.0, Some(0.0)), (4.0, 2.0, Some(2.0))],
+        gaussian_payload(0.0, 3.0),
+        metadata(),
+    );
+    let proposal = ledger
+        .correction_proposal_with_method(assessment, target, CorrectionMethod::AdditiveResidual)
+        .expect("negative corrected mean");
+    close(proposal.adjustment, -2.0);
+    assert_eq!(proposal.corrected, gaussian_payload(-2.0, 3.0));
+    assert_eq!(proposal.inflation, 1.0);
+
+    let (ledger, assessment, target, _) = setup(
+        &[(10.0, 1.0, Some(12.0)), (20.0, 2.0, Some(22.0))],
+        gaussian_payload(30.0, 3.0),
+        metadata(),
+    );
+    let log = ledger
+        .correction_proposal(assessment, target)
+        .expect("positive log proposal");
+    let additive = ledger
+        .correction_proposal_with_method(assessment, target, CorrectionMethod::AdditiveResidual)
+        .expect("positive additive proposal");
+    assert_ne!(log.digest, additive.digest);
+    assert_ne!(log.method.single_name(), additive.method.single_name());
+    assert_eq!(additive.corrected, gaussian_payload(32.0, 3.0));
+}
+
+#[test]
+fn additive_still_refuses_incomplete_non_gaussian_and_unrepresentable_proposals() {
+    for historical in [
+        vec![(-10.0, 1.0, Some(-8.0))],
+        vec![(-10.0, 1.0, Some(-8.0)), (0.0, 1.0, None)],
+    ] {
+        let (ledger, assessment, target, _) =
+            setup(&historical, gaussian_payload(-5.0, 1.0), metadata());
+        assert!(
+            ledger
+                .correction_proposal_with_method(
+                    assessment,
+                    target,
+                    CorrectionMethod::AdditiveResidual,
+                )
+                .is_err()
+        );
+    }
+    for target in [
+        ForecastPayload::Interval {
+            lo: -10.0,
+            hi: 0.0,
+            nominal: Some(0.8),
+        },
+        gaussian_payload(-5.0, f64::from_bits(1)),
+    ] {
+        let (ledger, assessment, target, _) = setup(
+            &[(-10.0, 1.0, Some(-8.0)), (0.0, 1.0, Some(2.0))],
+            target,
+            metadata(),
+        );
+        let before = ledger.forecast(target).expect("raw").clone();
+        assert!(
+            ledger
+                .correction_proposal_with_method(
+                    assessment,
+                    target,
+                    CorrectionMethod::AdditiveResidual,
+                )
+                .is_err()
+        );
+        assert_eq!(ledger.forecast(target), Some(&before));
+    }
+    let (ledger, assessment, target, _) = setup(
+        &[
+            (0.0, 1e307, Some(1e307)),
+            (0.0, 1e307, Some(1e307)),
+        ],
+        gaussian_payload(f64::MAX / 1.005, 1e303),
+        metadata(),
+    );
+    let before = ledger.forecast(target).expect("raw").clone();
+    assert!(
+        ledger
+            .correction_proposal_with_method(assessment, target, CorrectionMethod::AdditiveResidual)
+            .is_err(),
+        "a finite raw mean plus a finite shift can still overflow"
+    );
+    assert_eq!(ledger.forecast(target), Some(&before));
 }
 
 #[test]
