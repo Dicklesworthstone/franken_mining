@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_claim::forecast_journal::Entry;
-use fmine_cli::decision_journal::{Command, execute_with_clock};
+use fmine_cli::decision_journal::{Choice, Command, PolicySelection, execute_with_clock};
 use fmine_cli::{CliCommand, Envelope, OutputFormat, execute_command, parse_args};
 use fmine_core::hash::{Digest32, sha256};
 use fmine_io::forecast::Journal;
@@ -17,6 +17,8 @@ use fmine_runtime::{ClockError, WallClock};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const MODEL: &str = include_str!("../../../tests/decisions/expansion.toml");
+const INFORMATION: &str = include_str!("../../../tests/decisions/metallurgical_test.toml");
+const CONSTRAINED: &str = include_str!("../../../tests/decisions/constrained_testwork.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 struct Clock(i64);
@@ -112,10 +114,27 @@ impl Fixture {
             expected_head,
             model: self.model.clone(),
             decision_id: id.into(),
-            action: action.into(),
+            choice: Choice::ActNow(action.into()),
             rationale: "Keep this explicit choice beside every compared alternative".into(),
             code_revision: REVISION.into(),
         }
+    }
+
+    fn information(
+        &self,
+        expected_head: Digest32,
+        id: &str,
+        option_id: &str,
+        policy: PolicySelection,
+    ) -> Command {
+        let mut command = self.record(expected_head, id, "unused");
+        if let Command::Record { choice, .. } = &mut command {
+            *choice = Choice::InformationOption {
+                option_id: option_id.into(),
+                policy,
+            };
+        }
+        command
     }
 
     fn show(&self, pin: Option<Digest32>) -> Envelope {
@@ -140,6 +159,252 @@ impl Fixture {
         );
         assert_eq!(fs::read(&self.journal).unwrap(), before);
     }
+}
+
+fn operation_fields(f: &Fixture, pin: Digest32, sequence: usize) -> Vec<(String, String)> {
+    let saved = Journal::open_read(&f.journal, Some(pin)).unwrap();
+    let Entry::Operation(operation) = &saved.records()[sequence].entry else {
+        panic!("operation")
+    };
+    parse_subset(operation)
+        .unwrap()
+        .top
+        .into_iter()
+        .map(|field| {
+            let TomlValue::Str(value) = field.value else {
+                panic!("string field")
+            };
+            (field.key, value)
+        })
+        .collect()
+}
+
+fn retained_policy(f: &Fixture, pin: Digest32, sequence: usize) -> String {
+    let fields = operation_fields(f, pin, sequence);
+    let value = &fields.iter().find(|(key, _)| key == "policy_hex").unwrap().1;
+    let bytes: Vec<u8> = (0..value.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).unwrap())
+        .collect();
+    let policy = String::from_utf8(bytes).unwrap();
+    assert_eq!(
+        fields
+            .iter()
+            .find(|(key, _)| key == "policy_sha256")
+            .unwrap()
+            .1,
+        sha256(policy.as_bytes()).to_hex()
+    );
+    policy
+}
+
+#[test]
+fn information_policy_and_exact_costs_survive_mixed_v1_v2_history_and_source_edits() {
+    let f = Fixture::new();
+    let first = successful(execute_with_clock(
+        &f.record(f.initial, "earlier-action", "hold"),
+        &f.root,
+        &Clock(200),
+    ));
+    let first_head = head(&first);
+    let old_fields = operation_fields(&f, first_head, 1);
+    assert_eq!(
+        old_fields[0],
+        ("schema".into(), "fmine.decision-operation.v1".into())
+    );
+    assert_eq!(old_fields[2], ("action".into(), "hold".into()));
+    fs::write(&f.model, INFORMATION).unwrap();
+    let next = successful(execute_with_clock(
+        &f.information(
+            first_head,
+            "buy-testwork",
+            "met_test",
+            PolicySelection::ExpectedValue,
+        ),
+        &f.root,
+        &Clock(300),
+    ));
+    let pin = head(&next);
+    assert_eq!(operation_fields(&f, pin, 1), old_fields);
+    let policy = retained_policy(&f, pin, 2);
+    for expected in [
+        "\"nominal_mean\":\"131200000/1\"",
+        "\"test_cost\":\"6000000/1\"",
+        "\"delay_cost\":\"3800000/1\"",
+        "\"total_cost\":\"9800000/1\"",
+        "\"nominal_loss_probability\":\"49/100\"",
+        "\"signal_id\":\"high\",\"probability\":\"57/100\",\"action_id\":\"build\"",
+        "\"signal_id\":\"low\",\"probability\":\"43/100\",\"action_id\":\"hold\"",
+        "\"option_claim_id\":",
+        "\"card_claim_id\":",
+    ] {
+        assert!(policy.contains(expected), "missing {expected}: {policy}");
+    }
+    let before = successful(f.show(Some(pin)));
+    assert!(
+        before
+            .payload_json
+            .contains("\"schema\":\"fmine.decision-journal.v2\"")
+    );
+    assert!(
+        before
+            .payload_json
+            .contains("\"selected_action\":\"hold\"")
+    );
+    assert!(
+        before
+            .payload_json
+            .contains("\"selected_information_option\":\"met_test\"")
+    );
+    assert!(before.payload_json.contains("\"n_decisions\":2"));
+    assert!(before.rendered_markdown.as_ref().unwrap().contains(&policy));
+    fs::write(&f.model, "the original source is no longer available").unwrap();
+    let after = successful(f.show(Some(pin)));
+    assert_eq!(before.payload_json, after.payload_json);
+    assert_eq!(before.rendered_markdown, after.rendered_markdown);
+}
+
+#[test]
+fn downside_optimized_selection_retains_its_distinct_policy_and_declared_screen() {
+    let f = Fixture::new();
+    fs::write(&f.model, CONSTRAINED).unwrap();
+    let fixed = successful(execute_with_clock(
+        &f.information(
+            f.initial,
+            "fixed",
+            "testwork",
+            PolicySelection::ExpectedValue,
+        ),
+        &f.root,
+        &Clock(200),
+    ));
+    let fixed_policy = retained_policy(&f, head(&fixed), 1);
+    assert!(fixed_policy.contains("\"nominal_mean\":\"34/1\""));
+    assert!(fixed_policy.contains("\"signal_id\":\"medium\",\"probability\":\"19/100\",\"action_id\":\"act\""));
+    let optimized = successful(execute_with_clock(
+        &f.information(
+            head(&fixed),
+            "constrained",
+            "testwork",
+            PolicySelection::DownsideOptimized,
+        ),
+        &f.root,
+        &Clock(300),
+    ));
+    let policy = retained_policy(&f, head(&optimized), 2);
+    for expected in [
+        "\"policy_selection\":\"downside-optimized\"",
+        "\"nominal_mean\":\"57/2\"",
+        "\"total_cost\":\"1/1\"",
+        "\"screen\":\"nominal\"",
+        "\"nominal_breach_probability\":\"1/100\"",
+        "\"screened_breach_probability\":\"1/100\"",
+        "\"signal_id\":\"medium\",\"action_id\":\"hold\"",
+        "\"signal_id\":\"strong\",\"action_id\":\"act\"",
+    ] {
+        assert!(policy.contains(expected), "missing {expected}: {policy}");
+    }
+    assert_ne!(policy, fixed_policy);
+    successful(f.show(Some(head(&optimized))));
+}
+
+#[test]
+fn expected_value_selection_keeps_posterior_ties_and_unreachable_signals() {
+    let f = Fixture::new();
+    let tied = INFORMATION
+        .replace("300000000.0000", "0.0000")
+        .replace("-200000000.0000", "0.0000");
+    let tied = format!("{tied}\n[[signal]]\noption = \"met_test\"\nid = \"unreachable\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"high\"\nsignal = \"unreachable\"\nprobability = \"0\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"low\"\nsignal = \"unreachable\"\nprobability = \"0\"\n");
+    fs::write(&f.model, tied).unwrap();
+    let saved = successful(execute_with_clock(
+        &f.information(
+            f.initial,
+            "tied-test",
+            "met_test",
+            PolicySelection::ExpectedValue,
+        ),
+        &f.root,
+        &Clock(200),
+    ));
+    let policy = retained_policy(&f, head(&saved), 1);
+    assert!(policy.contains("\"posterior_best_actions\":[\"build\",\"hold\"]"));
+    assert!(policy.contains("\"nominal_mean\":\"-9800000/1\""));
+    assert!(policy.contains("\"signal_id\":\"unreachable\",\"probability\":\"0/1\",\"action_id\":null,\"posterior_best_actions\":[]"));
+}
+
+#[test]
+fn missing_options_unavailable_policies_and_corrupt_policy_artifacts_refuse() {
+    let f = Fixture::new();
+    let command = f.information(
+        f.initial,
+        "test",
+        "met_test",
+        PolicySelection::ExpectedValue,
+    );
+    f.refuses_without_append(&command, 200, "FMINE-REF-107");
+    fs::write(&f.model, INFORMATION).unwrap();
+    f.refuses_without_append(
+        &f.information(
+            f.initial,
+            "missing",
+            "unknown",
+            PolicySelection::ExpectedValue,
+        ),
+        200,
+        "FMINE-REF-107",
+    );
+    f.refuses_without_append(
+        &f.information(
+            f.initial,
+            "unconfigured",
+            "met_test",
+            PolicySelection::DownsideOptimized,
+        ),
+        200,
+        "FMINE-REF-107",
+    );
+    let no_feasible = CONSTRAINED
+        .replace("floor = \"-10\"", "floor = \"0\"")
+        .replace(
+            "max_breach_probability = \"1/20\"",
+            "max_breach_probability = \"0\"",
+        );
+    fs::write(&f.model, no_feasible).unwrap();
+    f.refuses_without_append(
+        &f.information(
+            f.initial,
+            "infeasible",
+            "testwork",
+            PolicySelection::DownsideOptimized,
+        ),
+        200,
+        "FMINE-REF-107",
+    );
+    fs::write(&f.model, INFORMATION).unwrap();
+    let saved = successful(execute_with_clock(&command, &f.root, &Clock(200)));
+    let journal = Journal::open_read(&f.journal, Some(head(&saved))).unwrap();
+    let mut records = journal.records().to_vec();
+    drop(journal);
+    let Entry::Operation(operation) = &mut records[1].entry else {
+        panic!("operation")
+    };
+    let parsed = parse_subset(operation).unwrap();
+    let TomlValue::Str(old) = &parsed.top_get("policy_sha256").unwrap().value else {
+        panic!("digest")
+    };
+    *operation = operation.replace(old, &"a".repeat(64));
+    let path = f.root.join("corrupt-policy.journal");
+    let bytes: Vec<_> = records.iter().flat_map(|r| r.to_line().unwrap()).collect();
+    fs::write(&path, bytes).unwrap();
+    let result = execute_with_clock(
+        &Command::Show {
+            journal: path,
+            head: Some(records[1].chain_head().unwrap()),
+        },
+        &f.root,
+        &NoClock,
+    );
+    assert_eq!(result.refusal.unwrap().code, "FMINE-REF-505");
 }
 
 #[test]
@@ -477,6 +742,65 @@ fn cli_requires_explicit_mutation_policy_and_registers_all_operations() {
         ])
         .is_err()
     );
+    let initial = "0".repeat(64);
+    let base = vec![
+        "decide",
+        "journal",
+        "record",
+        "--journal",
+        "history",
+        "--expected-head",
+        &initial,
+        "--model",
+        "model.toml",
+        "--decision",
+        "decision",
+        "--reason",
+        "buy the declared information policy",
+        "--code-revision",
+        REVISION,
+        "--trust-host-clock",
+    ];
+    let mut information = base.clone();
+    information.extend([
+        "--information-option",
+        "met_test",
+        "--policy",
+        "expected-value",
+    ]);
+    let (parsed, _, _) = parse(&information).unwrap();
+    assert!(matches!(
+        parsed,
+        CliCommand::DecisionJournal(Command::Record {
+            choice: Choice::InformationOption {
+                policy: PolicySelection::ExpectedValue,
+                ..
+            },
+            ..
+        })
+    ));
+    for choices in [
+        vec![
+            "--action",
+            "build",
+            "--information-option",
+            "met_test",
+            "--policy",
+            "expected-value",
+        ],
+        vec!["--information-option", "met_test"],
+        vec![
+            "--information-option",
+            "met_test",
+            "--policy",
+            "choose-for-me",
+        ],
+        vec!["--action", "build", "--policy", "expected-value"],
+    ] {
+        let mut args = base.clone();
+        args.extend(choices);
+        assert!(parse(&args).is_err());
+    }
     let registry = include_str!("../../../registries/verbs.toml");
     let docs = successful(execute_command(&CliCommand::RobotDocs, &root));
     for verb in [

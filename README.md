@@ -1660,8 +1660,9 @@ BD-225 or Helm acceptance gates.
 
 #### Retain a decision and its original evaluated evidence
 
-DESIGN (bounded BD-225): `decide journal` records an explicit act-now choice, its rationale, and the exact
-model and evaluated card that supported it. It uses the existing locked, append-only journal. Initialize
+DESIGN (bounded BD-225/227): `decide journal` records an explicit act-now choice or an information option
+and its selected contingent policy, the rationale, and the exact model and evaluated card that supported
+it. It uses the existing locked, append-only journal. Initialize
 a new file, then set `FMINE_DECISION_HEAD` to the returned head and `FMINE_CODE_REVISION` to the declared
 40- or 64-character lowercase Git revision of the evaluator:
 
@@ -1685,10 +1686,32 @@ oversized record refuses without appending. A later choice uses a new decision i
 one. Any declared act-now alternative, including do nothing, can be recorded; selecting an action does
 not remove the other alternatives from the retained comparison.
 
+To record buying testwork, select the information option and policy explicitly instead of `--action`:
+
+```bash
+cargo run -p fmine-cli -- decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model tests/decisions/metallurgical_test.toml \
+  --decision testwork-review --information-option met_test --policy expected-value \
+  --reason "Buy the declared test and retain the response to each observed signal" \
+  --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
+```
+
+`expected-value` retains the card's displayed nominal policy, including all posterior ties and unreachable
+signals. `downside-optimized` selects the canonical feasible mapping from the model's explicit
+`policy_optimization` declaration; it refuses if optimization was not declared or no feasible mapping exists.
+For example, use `tests/decisions/constrained_testwork.toml`, option `testwork` and policy
+`downside-optimized` to retain the choice that acts only after a strong signal. The expected-value policy
+for that same option also acts after a medium signal, so naming the option alone is insufficient.
+The retained policy artifact includes the exact mapping, costs, nominal mean and tail-risk quantities,
+source and card Claim identities, and the applicable tie rule and downside screen. It is separately hashed
+and retained with the complete comparison. These choices remain conditional on the original uncalibrated
+model; recording a policy does not observe a signal, execute its action, or assert that its assumptions hold.
+
 Each entry retains the original model bytes, evaluated card JSON, source path, SHA-256 digests, output
 Claim id and declared code revision. `show` verifies the chain and retained bytes without reopening the
 mutable model or recalculating the card with newer code. The complete encoded snapshot must fit the
-existing 64 KiB operation limit. An independently saved `--head` detects rollback or rewriting; unpinned
+existing 64 KiB operation limit. Existing act-now operations keep their v1 encoding; information choices
+use v2 operations, and mixed histories remain readable. An independently saved `--head` detects rollback or rewriting; unpinned
 inspection explicitly cannot establish the original history or evaluation provenance. Host-clock accuracy
 and the code revision are declarations, not external time proof or authenticated human identity. Recording
 a choice grants no approval, sign-off or execution authority and does not close the full BD-225 gate.

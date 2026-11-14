@@ -16,14 +16,19 @@ use fmine_runtime::{HostWallClock, WallClock};
 
 use crate::{Envelope, NextAction, OutputFormat, json_string as js, worksheet_input};
 
+mod choice;
+pub use choice::{Choice, PolicySelection};
+
 const CELL_PREFIX: &str = "fmine.decision/v1:";
 const OPERATION_SCHEMA: &str = "fmine.decision-operation.v1";
+const POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v2";
 const REPORT_SCHEMA: &str = "fmine.decision-journal.v1";
+const POLICY_REPORT_SCHEMA: &str = "fmine.decision-journal.v2";
 pub const NO_CLAIM: &str = "Local record of an explicitly supplied choice and rationale, append-only through this writer. Model inputs remain Assumed, Internal and uncalibrated. The writer retains the evaluated card; replay verifies stored byte integrity, not independent evaluation provenance. This is not a new evaluation or evidence of approval, human identity, sign-off, execution authority or external time proof. Code revision and host-clock accuracy are operator declarations. Only an independently retained final-head pin detects rollback or whole-history rewriting.";
 pub const INIT_USAGE: &str = "decide journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]";
-pub const RECORD_USAGE: &str = "decide journal record --journal <path> --expected-head <hex> --model <path> --decision <id> --action <id> --reason <text> --code-revision <git-sha> --trust-host-clock";
+pub const RECORD_USAGE: &str = "decide journal record --journal <path> --expected-head <hex> --model <path> --decision <id> (--action <id> | --information-option <id> --policy expected-value|downside-optimized) --reason <text> --code-revision <git-sha> --trust-host-clock";
 pub const SHOW_USAGE: &str = "decide journal show --journal <path> [--head <hex>]";
-pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.decision-journal.v1","operations":["init","record","show"],"storage":"Existing FJR1 append-only journal; decision-specific genesis and versioned opaque operations; OS locking, expected-head comparison and sync before success","choice":"One explicit act-now action, including do_nothing, from the evaluated model; any known action may be recorded and the unchanged comparison remains visible","identity":"Unique decision id per journal; another choice needs a new id and rationale; code revision is an explicit 40- or 64-character lowercase Git hash declaration","snapshot":"Exact submitted model bytes and source path, SHA-256, output Claim id and exact evaluated JSON artifact with its own SHA-256; retained artifacts are not re-evaluated on show","bounds":"Every encoded operation must fit the existing 65536-byte limit; oversized models/cards refuse before append","clock":"Mutations require --trust-host-clock; init declares the maximum host-clock skew, default 1000 ms; no external proof or inferred human authorization","show":"Reopens and verifies the complete hash chain and retained content digests without reading the mutable model file; --head pins the exact final head; without it rollback is not checked","scope":"Internal decision support only; no approval, sign-off or execution authorization"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.decision-journal.v2","operations":["init","record","show"],"storage":"Existing FJR1 append-only journal; decision-specific genesis and versioned opaque operations; OS locking, expected-head comparison and sync before success","choice":"Exactly one --action id or --information-option id with explicit --policy expected-value|downside-optimized; the complete unchanged comparison remains visible","policy":"Expected-value retains the displayed nominal signal policy and posterior ties. Downside-optimized requires a feasible optimizer result and retains its canonical complete mapping, exact co-optimal count and nominal or Wasserstein screen. Choosing an option never implicitly chooses a policy","identity":"Unique decision id per journal; another choice needs a new id and rationale; code revision is an explicit 40- or 64-character lowercase Git hash declaration","snapshot":"Exact model bytes, source path, SHA-256, output Claim id and evaluated JSON artifact with its own SHA-256. Information choices also retain an exact source-bound policy selection artifact and SHA-256. Retained artifacts are not re-evaluated on show","compatibility":"Act-now operations retain v1 bytes and remain readable; information choices use v2 operations and histories containing them use v2 reports","bounds":"Every encoded operation must fit the existing 65536-byte limit; oversized models/cards refuse before append","clock":"Mutations require --trust-host-clock; init declares the maximum host-clock skew, default 1000 ms; no external proof or inferred human authorization","show":"Reopens and verifies the complete hash chain and retained content digests without reading the mutable model file; --head pins the exact final head; without it rollback is not checked","scope":"Internal decision support only; no approval, sign-off or execution authorization"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -37,7 +42,7 @@ pub enum Command {
         expected_head: Digest32,
         model: PathBuf,
         decision_id: String,
-        action: String,
+        choice: Choice,
         rationale: String,
         code_revision: String,
     },
@@ -114,15 +119,30 @@ pub(crate) fn parse(
                 clock_skew_ns,
             }
         }
-        "record" => Command::Record {
-            journal,
-            expected_head: digest(&take(&mut fields, "--expected-head")?)?,
-            model: PathBuf::from(take(&mut fields, "--model")?),
-            decision_id: take(&mut fields, "--decision")?,
-            action: take(&mut fields, "--action")?,
-            rationale: take(&mut fields, "--reason")?,
-            code_revision: take(&mut fields, "--code-revision")?,
-        },
+        "record" => {
+            let choice = match (
+                fields.contains_key("--action"),
+                fields.contains_key("--information-option"),
+            ) {
+                (true, false) => Choice::ActNow(take(&mut fields, "--action")?),
+                (false, true) => Choice::InformationOption {
+                    option_id: take(&mut fields, "--information-option")?,
+                    policy: PolicySelection::parse(&take(&mut fields, "--policy")?)?,
+                },
+                _ => {
+                    return Err("record requires exactly one --action or --information-option".into());
+                }
+            };
+            Command::Record {
+                journal,
+                expected_head: digest(&take(&mut fields, "--expected-head")?)?,
+                model: PathBuf::from(take(&mut fields, "--model")?),
+                decision_id: take(&mut fields, "--decision")?,
+                choice,
+                rationale: take(&mut fields, "--reason")?,
+                code_revision: take(&mut fields, "--code-revision")?,
+            }
+        }
         "show" => Command::Show {
             journal,
             head: fields.remove("--head").map(|v| digest(&v)).transpose()?,
@@ -187,7 +207,8 @@ fn unhex(value: &str) -> Result<String, Refusal> {
 #[derive(Debug)]
 struct Snapshot {
     decision_id: String,
-    action: String,
+    choice: Choice,
+    policy_snapshot: Option<String>,
     rationale: String,
     model_path: String,
     model: String,
@@ -198,8 +219,8 @@ struct Snapshot {
 
 impl Snapshot {
     fn validate(&self) -> Result<(), Refusal> {
+        self.choice.validate()?;
         if !clean(&self.decision_id, 256)
-            || !clean(&self.action, 256)
             || !clean(&self.rationale, 4096)
             || !clean(&self.model_path, 4096)
             || !clean(&self.claim_id, 128)
@@ -216,15 +237,42 @@ impl Snapshot {
         if self.model.is_empty() || self.card.is_empty() {
             return Err(integrity("retained model and card must both be nonempty"));
         }
+        match (&self.choice, &self.policy_snapshot) {
+            (Choice::ActNow(_), None) => {}
+            (Choice::InformationOption { .. }, Some(policy)) if !policy.is_empty() => {}
+            _ => {
+                return Err(integrity(
+                    "information choices require a retained policy artifact",
+                ));
+            }
+        }
         Ok(())
     }
 
     fn operation(&self) -> Result<String, Refusal> {
         self.validate()?;
-        let fields = [
-            ("schema", OPERATION_SCHEMA.to_owned()),
-            ("decision_id", self.decision_id.clone()),
-            ("action", self.action.clone()),
+        let mut fields = match &self.choice {
+            Choice::ActNow(action) => vec![
+                ("schema", OPERATION_SCHEMA.to_owned()),
+                ("decision_id", self.decision_id.clone()),
+                ("action", action.clone()),
+            ],
+            Choice::InformationOption { option_id, policy } => {
+                let snapshot = self
+                    .policy_snapshot
+                    .as_deref()
+                    .ok_or_else(|| integrity("missing information-policy snapshot"))?;
+                vec![
+                    ("schema", POLICY_OPERATION_SCHEMA.to_owned()),
+                    ("decision_id", self.decision_id.clone()),
+                    ("information_option", option_id.clone()),
+                    ("policy_selection", policy.as_str().to_owned()),
+                    ("policy_sha256", sha256(snapshot.as_bytes()).to_hex()),
+                    ("policy_hex", hex(snapshot.as_bytes())),
+                ]
+            }
+        };
+        fields.extend([
             ("rationale", self.rationale.clone()),
             ("model_path", self.model_path.clone()),
             ("model_sha256", sha256(self.model.as_bytes()).to_hex()),
@@ -233,7 +281,7 @@ impl Snapshot {
             ("code_revision", self.code_revision.clone()),
             ("model_hex", hex(self.model.as_bytes())),
             ("card_hex", hex(self.card.as_bytes())),
-        ];
+        ]);
         let mut out = String::new();
         for (key, value) in fields {
             let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
@@ -259,12 +307,37 @@ impl Snapshot {
             };
             fields.insert(field.key, value);
         }
-        if take(&mut fields, "schema").map_err(integrity)? != OPERATION_SCHEMA {
-            return Err(integrity("unknown decision operation schema"));
-        }
+        let (choice, policy_snapshot) =
+            match take(&mut fields, "schema").map_err(integrity)?.as_str() {
+                OPERATION_SCHEMA => (
+                    Choice::ActNow(take(&mut fields, "action").map_err(integrity)?),
+                    None,
+                ),
+                POLICY_OPERATION_SCHEMA => {
+                    let choice = Choice::InformationOption {
+                        option_id: take(&mut fields, "information_option").map_err(integrity)?,
+                        policy: PolicySelection::parse(
+                            &take(&mut fields, "policy_selection").map_err(integrity)?,
+                        )
+                        .map_err(integrity)?,
+                    };
+                    let snapshot = unhex(&take(&mut fields, "policy_hex").map_err(integrity)?)?;
+                    if digest(&take(&mut fields, "policy_sha256").map_err(integrity)?)
+                        .map_err(integrity)?
+                        != sha256(snapshot.as_bytes())
+                    {
+                        return Err(integrity(
+                            "retained policy_sha256 differs from its exact bytes",
+                        ));
+                    }
+                    (choice, Some(snapshot))
+                }
+                _ => return Err(integrity("unknown decision operation schema")),
+            };
         let snapshot = Self {
             decision_id: take(&mut fields, "decision_id").map_err(integrity)?,
-            action: take(&mut fields, "action").map_err(integrity)?,
+            choice,
+            policy_snapshot,
             rationale: take(&mut fields, "rationale").map_err(integrity)?,
             model_path: take(&mut fields, "model_path").map_err(integrity)?,
             claim_id: take(&mut fields, "claim_id").map_err(integrity)?,
@@ -292,11 +365,27 @@ impl Snapshot {
         Ok(snapshot)
     }
 
-    fn json(&self) -> String {
-        format!(
-            "{{\"decision_id\":{},\"selected_action\":{},\"rationale\":{},\"declared_code_revision\":{},\"claim_id\":{},\"model\":{{\"path\":{},\"sha256\":{},\"bytes\":{},\"content\":{}}},\"artifact\":{{\"media_type\":\"application/json\",\"sha256\":{},\"bytes\":{},\"content\":{}}}}}",
+    fn json(&self) -> Result<String, Refusal> {
+        let choice = match &self.choice {
+            Choice::ActNow(action) => format!("\"selected_action\":{}", js(action)),
+            Choice::InformationOption { option_id, policy } => {
+                let snapshot = self
+                    .policy_snapshot
+                    .as_deref()
+                    .ok_or_else(|| integrity("missing information-policy snapshot"))?;
+                format!(
+                    "\"selected_action\":null,\"selected_information_option\":{},\"policy_selection\":{},\"policy_artifact\":{{\"media_type\":\"application/json\",\"sha256\":{},\"bytes\":{},\"content\":{}}}",
+                    js(option_id),
+                    js(policy.as_str()),
+                    js(&sha256(snapshot.as_bytes()).to_hex()),
+                    snapshot.len(),
+                    js(snapshot),
+                )
+            }
+        };
+        Ok(format!(
+            "{{\"decision_id\":{},{choice},\"rationale\":{},\"declared_code_revision\":{},\"claim_id\":{},\"model\":{{\"path\":{},\"sha256\":{},\"bytes\":{},\"content\":{}}},\"artifact\":{{\"media_type\":\"application/json\",\"sha256\":{},\"bytes\":{},\"content\":{}}}}}",
             js(&self.decision_id),
-            js(&self.action),
             js(&self.rationale),
             js(&self.code_revision),
             js(&self.claim_id),
@@ -307,7 +396,7 @@ impl Snapshot {
             js(&sha256(self.card.as_bytes()).to_hex()),
             self.card.len(),
             js(&self.card),
-        )
+        ))
     }
 }
 
@@ -351,22 +440,34 @@ fn report(
         rows.push(format!(
             "{{\"sequence\":{},\"record_head\":{},\"observed_ns\":{},\"time_bounds_ns\":[{},{}],\"snapshot\":{}}}",
             record.sequence, js(&record.chain_head()?.to_hex()), js(&record.observed_ns.to_string()),
-            js(&earliest.to_string()), js(&latest.to_string()), snapshot.json(),
+            js(&earliest.to_string()), js(&latest.to_string()), snapshot.json()?,
         ));
         let _ = writeln!(
             markdown,
-            "\n## {}\n\nSelected action: {}.\n\nRationale: {}\n\nModel SHA-256: `{}`. Card SHA-256: `{}`.\n\nDeclared code revision: `{}`.\n\nRetained evaluated JSON:\n\n```json\n{}\n```",
+            "\n## {}\n\n{}\n\nRationale: {}\n\nModel SHA-256: `{}`. Card SHA-256: `{}`.\n\nDeclared code revision: `{}`.\n\nRetained evaluated JSON:\n\n```json\n{}\n```",
             snapshot.decision_id,
-            snapshot.action,
+            snapshot.choice.description(),
             snapshot.rationale,
             sha256(snapshot.model.as_bytes()),
             sha256(snapshot.card.as_bytes()),
             snapshot.code_revision,
             snapshot.card
         );
+        if let Some(policy) = &snapshot.policy_snapshot {
+            let _ = writeln!(
+                markdown,
+                "\nRetained selected policy (SHA-256 `{}`):\n\n```json\n{policy}\n```",
+                sha256(policy.as_bytes())
+            );
+        }
     }
+    let schema = if snapshots.iter().any(|s| s.policy_snapshot.is_some()) {
+        POLICY_REPORT_SCHEMA
+    } else {
+        REPORT_SCHEMA
+    };
     let payload = format!(
-        "{{\"schema\":\"{REPORT_SCHEMA}\",\"cell_id\":{},\"head\":{},\"final_head_pinned\":{},\"clock_skew_ns\":{},\"n_decisions\":{},\"decisions\":[{}]}}",
+        "{{\"schema\":\"{schema}\",\"cell_id\":{},\"head\":{},\"final_head_pinned\":{},\"clock_skew_ns\":{},\"n_decisions\":{},\"decisions\":[{}]}}",
         js(&journal.header().cell_id),
         js(&journal.head().to_hex()),
         journal.is_pinned(),
@@ -430,7 +531,7 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                 expected_head,
                 model,
                 decision_id,
-                action,
+                choice,
                 rationale,
                 code_revision,
             } => {
@@ -446,19 +547,11 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                 }
                 let inputs = card::model::parse(&text, source.clone())?;
                 let evaluated = card::evaluate(&inputs)?;
-                if !evaluated
-                    .summary()
-                    .alternatives
-                    .iter()
-                    .any(|row| row.action_id == *action)
-                {
-                    return Err(invalid(
-                        "selected action is not an act-now alternative in the evaluated model",
-                    ));
-                }
+                let policy_snapshot = choice.snapshot(&evaluated)?;
                 let snapshot = Snapshot {
                     decision_id: decision_id.clone(),
-                    action: action.clone(),
+                    choice: choice.clone(),
+                    policy_snapshot,
                     rationale: rationale.clone(),
                     model_path: source.artifact_path,
                     model: text,

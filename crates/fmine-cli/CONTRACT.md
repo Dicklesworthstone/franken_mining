@@ -30,10 +30,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   on replay, validated plant outcomes or calibration/field-gate claim. Complete source and binary controls
   live in `xtask/testdata/forecast_plant_controls.rs` and `plant_production_contract.rs`.
 
-- DESIGN (BD-225): `decide journal init|record|show` retains explicit act-now choices and rationales
+- DESIGN (BD-225/227): `decide journal init|record|show` retains explicit act-now choices or information
+  options with an explicit expected-value or downside-optimized contingent policy, and their rationales,
   in the existing locked FJR1 operation store. A decision-specific genesis and canonical versioned
   operations separate this history from forecast journals. Recording evaluates the supplied model,
-  requires a known action and a unique decision id, then compares the expected final head under the
+  requires a known action or admitted option/policy and a unique decision id, then compares the expected final head under the
   writer lock before appending and syncing. Each operation retains the exact source model and evaluated
   JSON card, both SHA-256 digests, the output Claim id and an explicitly declared Git revision. The
   existing 64 KiB encoded-operation limit bounds the complete snapshot; oversized records refuse
@@ -47,6 +48,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   approval, sign-off, execution authority or public disclosure permission. A nonoptimal known action
   may be recorded; the full unchanged comparison remains visible. Source retention, refusal atomicity,
   protocol separation and tamper controls are exercised in `xtask/tests/decision_journal.rs`.
+  Information operations retain the exact signal mapping, cost/mean/risk quantities, source/card Claim
+  identities and tie rule in a separately hashed opaque policy artifact. Expected-value selection keeps
+  posterior ties and unreachable signals; downside-optimized selection requires an existing feasible
+  optimizer result and retains its declared screen and exact co-optimal count. The two policies for the
+  same option are never conflated, and no winner is selected implicitly. Original act-now v1 operation
+  bytes and readers remain supported; information operations and mixed-history reports use v2. Replay
+  checks byte integrity without re-evaluation or any claim of authenticated policy provenance.
 - DESIGN (BD-225/227, plan §22.4–22.5): `decide card` admits an optional source-bound
   `[[policy_optimization]]` declaration with `exact_deterministic` method, nominal or Wasserstein
   probability screen, and explicit policy/work limits. The decision owner streams complete one-test
