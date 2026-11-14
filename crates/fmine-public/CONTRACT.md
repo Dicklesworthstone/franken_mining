@@ -1125,6 +1125,15 @@ The public lane of M0 (`fmine assure public`).
   their implementations. The integration groups preserve the original fixtures, assertions and ignore rules.
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-331.S8): the cross-vintage ledger projects each later source appearance against its earliest
+  registered release into a separate numeric denominator. Unchanged numbers are state i; verified stated
+  and reconstructed silent restatements are distinct state ii explanations; source assertion conflicts
+  are state iii; changes without complete disclosure coverage are state iv. Token-only and non-comparable
+  cases are named exclusions. Both source Claim ids, locators and hashes survive even for unchanged
+  comparisons; ambiguous releases retain all assertions without a minimal-set claim. Existing within-vintage
+  counts, first/single appearances and source-value classifications are unchanged. This is accounting of
+  registered assertions, not an arithmetic conflict certificate or a choice of the true vintage; authentic
+  corpus census acceptance remains separate.
 - DESIGN (BD-340.S5): `transcribe::check_docs` exposes the existing byte/digest verification for explicitly
   declared PDF tables. A consumer can require a document even when it has no transcription rows, so missing
   evidence cannot hide a missing or changed file. The consumer still owns identity definitions and arithmetic.

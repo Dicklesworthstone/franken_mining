@@ -13,6 +13,9 @@ use super::{
 };
 use crate::js;
 
+pub mod ledger;
+pub use ledger::CrossVintageLedger;
+
 /// The caller supplies visible canonical Claims for exactly this public document family.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum VintageScope {
@@ -180,6 +183,8 @@ pub struct VintageReport {
     pub totals: VintageCounts,
     pub by_vintage: BTreeMap<String, VintageCounts>,
     pub items: Vec<VintageItem>,
+    /// BD-331.S8: later appearances only, with numeric instances and named exclusions kept separate.
+    pub cross_vintage: CrossVintageLedger,
 }
 
 impl VintageReport {
@@ -456,6 +461,9 @@ pub fn compare_vintages_with_disclosures(
             let against_previous = (index != 0).then(|| {
                 assess_disclosure(compare(previous, current), previous, current, registry)
             });
+            if index != 0 {
+                report.cross_vintage.record(first, current, &against_first);
+            }
             report.totals.count(&against_first, index != 0);
             report
                 .by_vintage

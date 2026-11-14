@@ -254,6 +254,26 @@ fn original_and_comparative_values_and_corrected_identity_are_both_visible() {
     assert!(markdown.contains("Against earliest registered"));
     assert!(markdown.contains("Against immediately previous"));
     assert!(markdown.contains(fmine_public::consistency::FIRST_REGISTERED_CAVEAT));
+    assert!(markdown.contains("## Cross-vintage identity accounting"));
+    assert!(markdown.contains("### aisc cross-vintage ledger"));
+    let cross_vintage = &report.aisc_vintages.cross_vintage;
+    assert_eq!(
+        cross_vintage.entries.len(),
+        report.aisc_vintages.totals.comparisons
+    );
+    assert!(cross_vintage.instances() > 0);
+    assert!(cross_vintage.count("ii") > 0);
+    assert_eq!(
+        report.instances.len(),
+        10,
+        "cross-vintage comparisons never join the five within-vintage families"
+    );
+    assert_eq!(report.state_counts().values().sum::<usize>(), 10);
+    assert!(
+        report
+            .to_json()
+            .contains("\"cross_vintage_ledger\":{\"aisc\":")
+    );
     table_blocks_have_headers(&markdown);
 }
 
@@ -343,6 +363,21 @@ fn public_cli_markdown_uses_the_report_without_changing_the_json_receipt() {
     assert_eq!(exit, 0);
     assert!(rendered.starts_with("# Public assurance — synthetic\n"));
     assert!(rendered.contains("## AISC component comparisons"));
+    assert!(rendered.contains("## Cross-vintage identity accounting"));
     assert_eq!(rendered, markdown.rendered_markdown.unwrap());
     assert!(!rendered.starts_with("# fmine"));
+    let table_args = ["check", "tables", "--synthetic"].map(str::to_string);
+    let (tables, _) = fmine_cli::invoke(&table_args, &root);
+    assert_eq!(tables.exit_code, 0);
+    assert!(
+        tables
+            .to_json()
+            .contains("\"cross_vintage_ledger\":{\"aisc\":")
+    );
+    assert!(
+        tables
+            .rendered_markdown
+            .unwrap()
+            .contains("## Cross-vintage identity accounting")
+    );
 }

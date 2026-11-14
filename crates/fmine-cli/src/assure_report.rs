@@ -527,6 +527,77 @@ fn vintages(out: &mut String, value: &VintageReport) {
     }
 }
 
+pub(super) fn cross_vintage(out: &mut String, report: &PublicAssuranceReport) {
+    out.push_str("\n## Cross-vintage identity accounting\n\nEach later appearance is compared with its earliest registered release. These counts are separate from the within-vintage arithmetic totals. Numeric restatements keep stated and reconstructed explanations distinct; an incomplete disclosure check remains undecidable. Conflicts retain every source assertion and do not establish a true vintage or a minimal conflict set. First and single appearances remain in the source-value report.\n");
+    for value in [&report.aisc_vintages, &report.mine_stats_vintages] {
+        let ledger = &value.cross_vintage;
+        let _ = writeln!(
+            out,
+            "\n### {} cross-vintage ledger\n\n{} later comparisons; {} numeric instances; {} named exclusions. Input Claim digest: `{}`.\n",
+            value.scope.as_str(),
+            ledger.entries.len(),
+            ledger.instances(),
+            ledger.entries.len() - ledger.instances(),
+            value.input_claims_digest.to_hex(),
+        );
+        table(out, &["State", "Numeric instances"]);
+        for state in ["i", "ii", "iii", "iv", "v"] {
+            row(out, &[state.into(), ledger.count(state).to_string()]);
+        }
+        out.push_str("\nUnchanged numeric comparisons are retained with both citations in the JSON ledger. The table below lists every other comparison, including token-only and non-comparable exclusions.\n\n");
+        table(
+            out,
+            &[
+                "Subject / period / metric",
+                "State / explanation",
+                "Comparison / exclusion",
+                "Earliest registered sources",
+                "Later sources",
+            ],
+        );
+        for entry in ledger
+            .entries
+            .iter()
+            .filter(|entry| entry.state != Some("i"))
+        {
+            let sources = |values: &[fmine_public::key::consistency::ledger::SourceReference]| {
+                values
+                    .iter()
+                    .map(|source| {
+                        format!(
+                            "{} / {} / SHA-256 {} / {}",
+                            source.release, source.at, source.sha256, source.claim_id
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            row(
+                out,
+                &[
+                    format!("{} / {} / {}", entry.subject, entry.period, entry.metric),
+                    format!(
+                        "{} / {}",
+                        entry.state.unwrap_or("excluded"),
+                        entry.explanation.unwrap_or("none")
+                    ),
+                    format!(
+                        "{} / {}",
+                        entry.comparison.state.as_str(),
+                        entry
+                            .exclusion
+                            .or(entry.missing_fact())
+                            .or(entry.comparison.reason)
+                            .unwrap_or("none")
+                    ),
+                    sources(&entry.first),
+                    sources(&entry.current),
+                ],
+            );
+        }
+    }
+}
+
 fn extraction_limits(out: &mut String, report: &PublicAssuranceReport) {
     out.push_str("\n## Unusable or unclassified source evidence\n");
     table(out, &["Kind", "Source", "Reason / printed label"]);
@@ -787,6 +858,7 @@ pub(super) fn markdown(report: &PublicAssuranceReport) -> Result<String, Refusal
         "Mine Stats identity history",
         &report.mine_stats_consistency.identities,
     );
+    cross_vintage(&mut out, report);
     vintages(&mut out, &report.aisc_vintages);
     vintages(&mut out, &report.mine_stats_vintages);
     extraction_limits(&mut out, report);

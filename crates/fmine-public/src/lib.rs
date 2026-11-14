@@ -1026,6 +1026,12 @@ impl PublicAssuranceReport {
             "\"company_cost_layers\":{},",
             self.mine_ledger.cost_layers.to_json()
         );
+        let _ = write!(
+            o,
+            "\"cross_vintage_ledger\":{{\"aisc\":{},\"mine_stats\":{}}},",
+            self.aisc_vintages.cross_vintage.to_json(),
+            self.mine_stats_vintages.cross_vintage.to_json(),
+        );
 
         let counts = self.state_counts();
         let alt = self.alternate_counts();

@@ -1090,4 +1090,174 @@ mod tests {
             VintageState::RestatedDisclosed
         );
     }
+
+    #[test]
+    fn cross_vintage_numeric_accounting_keeps_citations_and_original_denominators() {
+        let claims = [
+            observation("2030Q1", "B1", number("1479")),
+            observation("2031Q1", "G2", number("1474")),
+            observation("2032Q1", "M3", number("1479.0")),
+        ];
+        let report = compare_vintages(&claims);
+        let ledger = &report.cross_vintage;
+        assert_eq!(report.totals.appearances, 3);
+        assert_eq!(report.totals.comparisons, 2);
+        assert_eq!(ledger.entries.len(), 2);
+        assert_eq!(ledger.instances(), 2);
+        assert_eq!(ledger.count("iv"), 1, "unassessed disclosure is undecidable");
+        assert_eq!(
+            ledger.count("i"),
+            1,
+            "reversion compares with the first appearance"
+        );
+        assert_eq!(ledger.count("ii"), 0);
+        for (index, entry) in ledger.entries.iter().enumerate() {
+            assert_eq!(entry.first[0].claim_id, claims[0].claim.claim_id.to_string());
+            assert_eq!(entry.first[0].at, claims[0].locator);
+            assert_eq!(
+                entry.current[0].claim_id,
+                claims[index + 1].claim.claim_id.to_string()
+            );
+            assert_eq!(entry.current[0].at, claims[index + 1].locator);
+            assert_eq!(
+                entry.current[0].sha256,
+                claims[index + 1].key.reporting_vintage.file_sha256
+            );
+        }
+        let mut reversed = claims.clone();
+        reversed.reverse();
+        assert_eq!(
+            ledger.to_json(),
+            compare_vintages(&reversed).cross_vintage.to_json()
+        );
+        assert!(
+            compare_vintages(&claims[..1])
+                .cross_vintage
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cross_vintage_explanations_require_the_existing_verified_disclosure_state() {
+        let claims = [
+            observation("2030Q1", "B1", number("100")),
+            observation("2031Q1", "G2", number("110")),
+            observation("2032Q1", "M3", number("120")),
+        ];
+        let (mut profile, sources) = note_fixture("2032Q1", &claims[2].key);
+        let verified = VerifiedDisclosureRegistry::verify(&profile, &sources, &claims);
+        let report =
+            compare_vintages_with_disclosures(&claims, VintageScope::Aisc, Some(&verified));
+        assert_eq!(report.cross_vintage.count("ii"), 2);
+        let entries = &report.cross_vintage.entries;
+        assert_eq!(entries[0].explanation, Some("reconstructed"));
+        assert_eq!(entries[1].explanation, Some("stated"));
+        assert_eq!(entries[0].comparison, report.items[0].against_first);
+        assert_eq!(entries[1].comparison, report.items[1].against_first);
+        assert!(entries[0].comparison.disclosures.is_empty());
+        assert_eq!(
+            entries[1].comparison.disclosures[0].sha256,
+            profile.restatement_notes[0].sha256
+        );
+        assert!(
+            report
+                .cross_vintage
+                .to_json()
+                .contains("SYNTHETIC-DISCLOSURE")
+        );
+        profile.restatement_notes[0].quoted_text = "Not present in the workbook.".into();
+        let incomplete = VerifiedDisclosureRegistry::verify(&profile, &sources, &claims);
+        assert!(!incomplete.is_complete());
+        let unassessed =
+            compare_vintages_with_disclosures(&claims, VintageScope::Aisc, Some(&incomplete));
+        assert_eq!(unassessed.cross_vintage.count("iv"), 2);
+        assert_eq!(unassessed.cross_vintage.count("ii"), 0);
+    }
+
+    #[test]
+    fn cross_vintage_excludes_nonnumeric_and_incomparable_appearances_by_name() {
+        let nil = |token: &str| PublicValue::Nil {
+            token: token.into(),
+            reason: NilReason::Unknown,
+        };
+        let claims = [
+            observation("2030Q1", "A1", nil("—")),
+            observation("2031Q1", "A2", nil("-")),
+            observation("2032Q1", "A3", number("0")),
+        ];
+        let report = compare_vintages(&claims);
+        assert_eq!(report.cross_vintage.entries.len(), report.totals.comparisons);
+        assert_eq!(report.cross_vintage.instances(), 0);
+        assert!(
+            report
+                .cross_vintage
+                .entries
+                .iter()
+                .all(|entry| entry.exclusion == Some("non_numeric_comparison")
+                    && entry.state.is_none())
+        );
+        assert!(report.cross_vintage.entries[0].comparison.token_glyph_changed);
+        let mut regions = [
+            observation("2030Q1", "B1", number("100")),
+            observation("2031Q1", "C1", number("100")),
+        ];
+        for (cell, version) in regions.iter_mut().zip(["old", "new"]) {
+            cell.key.scope = Scope::Region {
+                map_version: version.into(),
+            };
+        }
+        let region = compare_vintages(&regions);
+        assert_eq!(region.cross_vintage.instances(), 0);
+        assert_eq!(
+            region.cross_vintage.entries[0].exclusion,
+            Some("region_map")
+        );
+        regions[1].key.scope = regions[0].key.scope.clone();
+        regions[1].claim.value = PublicValue::Number {
+            stored: "100.1".into(),
+            displayed: Err("general_non_integer"),
+            under_status: None,
+        };
+        let malformed = compare_vintages(&regions);
+        assert_eq!(malformed.cross_vintage.instances(), 0);
+        assert_eq!(
+            malformed.cross_vintage.entries[0].exclusion,
+            Some("display_refused")
+        );
+    }
+
+    #[test]
+    fn cross_vintage_ambiguous_release_retains_every_assertion_without_counting_the_first() {
+        let claims = [
+            observation("2030Q1", "A1", number("100")),
+            observation("2030Q1", "B1", number("101")),
+            observation("2030Q1", "C1", number("102")),
+            observation("2031Q1", "D1", number("100")),
+        ];
+        let report = compare_vintages(&claims);
+        assert_eq!(report.totals.states[&VintageState::Conflict], 2);
+        assert_eq!(report.cross_vintage.count("iii"), 1);
+        let entry = &report.cross_vintage.entries[0];
+        assert_eq!(entry.comparison.reason, Some("ambiguous_same_release"));
+        assert_eq!(entry.first.len(), 3);
+        assert_eq!(entry.current.len(), 1);
+        assert_eq!(
+            entry
+                .first
+                .iter()
+                .map(|source| &source.at)
+                .collect::<BTreeSet<_>>(),
+            claims[..3]
+                .iter()
+                .map(|source| &source.locator)
+                .collect()
+        );
+        assert!(
+            report
+                .cross_vintage
+                .to_json()
+                .contains("No true vintage, arithmetic certificate or minimal conflict set is inferred.")
+        );
+    }
 }

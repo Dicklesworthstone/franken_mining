@@ -44,8 +44,18 @@ fn cumulative_public_targets_resolve_original_ytd_cells_and_preserve_revised_sco
     for (period, months, end) in PERIODS {
         let (original_release, later_release) = releases(period);
         for (metric, ownership, cell, header) in [
-            ("production_koz", "100%", "B5", "All-in sustaining costs ($/oz)"),
-            ("production_kt", "100%", "E5", "All-in sustaining costs ($/oz)"),
+            (
+                "production_koz",
+                "100%",
+                "B5",
+                "All-in sustaining costs ($/oz)",
+            ),
+            (
+                "production_kt",
+                "100%",
+                "E5",
+                "All-in sustaining costs ($/oz)",
+            ),
             (
                 "aisc_usd_per_oz",
                 "attributable:3/5",
@@ -112,8 +122,7 @@ fn cumulative_public_targets_resolve_original_ytd_cells_and_preserve_revised_sco
             let first_body = assessment(&first.payload_json);
             // Central 80% [90,110]: a hit scores its width, 20; a miss at 115 adds 10*5.
             assert!(
-                first_body
-                    .contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":20,")
+                first_body.contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":20,")
             );
             assert!(first_body.contains("\"value\":100,"));
             let first_digest = digest_field(first_body, "digest");
@@ -128,16 +137,11 @@ fn cumulative_public_targets_resolve_original_ytd_cells_and_preserve_revised_sco
                 },
             );
             publish(&fixture, later_release, "2032-02-15", &[ytd]);
-            fixture.ok(
-                restate(&fixture, later_release),
-                ns("2032-02-16T00:00:00Z"),
-            );
-            let revised =
-                assess_revision(&mut fixture, "2032-02-17T00:00:00Z", "latest-as-of");
+            fixture.ok(restate(&fixture, later_release), ns("2032-02-16T00:00:00Z"));
+            let revised = assess_revision(&mut fixture, "2032-02-17T00:00:00Z", "latest-as-of");
             let revised_body = assessment(&revised.payload_json);
             assert!(
-                revised_body
-                    .contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":70,")
+                revised_body.contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":70,")
             );
             assert!(revised_body.contains("\"value\":115,"));
             assert!(revised_body.contains(&format!("\"vintage\":\"{later_release}\"")));
@@ -188,8 +192,7 @@ fn cumulative_site_physical_and_capital_targets_keep_exact_printed_scope() {
             };
             let release = releases(period).0;
             publish(&fixture, release, "2031-02-15", &[row]);
-            let source =
-                fixture.source_claim(&format!("{release}.xlsx:Minestats1!B4"));
+            let source = fixture.source_claim(&format!("{release}.xlsx:Minestats1!B4"));
             assert_eq!(source.key.valid_period.code(), period);
             let resolved = fixture.ok(fixture.resolve(), ns(AVAILABLE));
             assert!(
@@ -197,7 +200,11 @@ fn cumulative_site_physical_and_capital_targets_keep_exact_printed_scope() {
                     .payload_json
                     .contains(&source.claim.claim_id.to_string())
             );
-            let expected = if metric == "processed_kt" { "1200" } else { "-12" };
+            let expected = if metric == "processed_kt" {
+                "1200"
+            } else {
+                "-12"
+            };
             assert!(
                 resolved
                     .payload_json

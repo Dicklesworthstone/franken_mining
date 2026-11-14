@@ -539,6 +539,7 @@ fn workbook_envelope(report: &PublicAssuranceReport) -> Envelope {
         }
     }
     crate::assure_report::subtotal_members(&mut out, report);
+    crate::assure_report::cross_vintage(&mut out, report);
     out.push_str(&report.mine_ledger.cost_layers.to_markdown());
     out.push_str("\n## Verified workbook bytes\n\n| File | SHA-256 |\n|---|---|\n");
     for source in &report.sources {
