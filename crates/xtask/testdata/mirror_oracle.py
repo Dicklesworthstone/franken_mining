@@ -796,8 +796,12 @@ class MirrorIntegration(unittest.TestCase):
                 arguments = fixture.arguments()
                 replace_argument(arguments, flag, value)
                 self.assertNotEqual(fixture.invoke(arguments)["exit_code"], 0)
-        for extra in (["--synthetic"], ["--metric", "aisc"], ["--through", "2025Q4"]):
+        for extra in (["--synthetic"], ["--metric", "unsupported-metric"], ["--through", "2025Q4"]):
             self.assertEqual(fixture.invoke(fixture.arguments() + extra)["exit_code"], 2)
+        # AISC is supported, but production-only rows cannot supply its cost evidence.
+        aisc = fixture.invoke(fixture.arguments() + ["--metric", "aisc"])
+        self.assertEqual(aisc["exit_code"], 3)
+        refused(aisc, "FMINE-REF-201")
         report = successful(fixture.invoke(["mirror", "--synthetic", "--json"]))
         synthetic(report)
         self.assertIsNone(report["certificate"])
