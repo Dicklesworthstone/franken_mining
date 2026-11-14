@@ -630,10 +630,16 @@ and `public_members` to the cohort request, with `resolution_rule = "registered-
 The member string maps existing aliases to exact source subjects (`alias=Subject,other=Other Subject`).
 The adapter converts aliases to immutable forecast IDs and embeds the canonical
 `fmine_calib::ledger::binding::PublicResolutionPolicy` in the cohort's hashed resolution rule.
-The complete member set, sole eligible issuer, metric/unit, original FY/quarter release and ownership
+The complete member set, sole eligible issuer, metric/unit, original reporting release and ownership
 basis are fixed before any outcome. Supported metrics are site-level gold `production_koz`, copper
 `production_kt`, gold `aisc_usd_per_oz` and `tcc_usd_per_oz`, and copper `aisc_usd_per_lb` and `c1_usd_per_lb`,
-over calendar years (`YYYYFY`) or individual calendar quarters; ownership is `100%` or `attributable:n/d`.
+over calendar years (`YYYYFY`), January–June (`YYYYH1`), January–September (`YYYY9M`) or individual calendar
+quarters; ownership is `100%` or `attributable:n/d`. H1 resolves from the original Q2 workbook and nine months
+from Q3. The source must explicitly state six months ended June 30 or nine months ended September 30.
+A same-release quarterly amount or rate cannot substitute for a cumulative target; no summing, averaging,
+annualizing or differencing is inferred. Original and comparative receipts retain the full cumulative support,
+including status-overlap checks and immutable saved assessments. The same periods apply to the physical and
+capital targets below. Existing year/quarter policy encodings remain unchanged.
 The four cost metrics
 retain separate issuer-reported definitions per sold gold ounce or sold copper pound, with no subtraction
 of annual and year-to-date rates or implicit ownership conversion. Admission requires the exact cost name

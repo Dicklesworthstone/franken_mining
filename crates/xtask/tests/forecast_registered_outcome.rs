@@ -29,6 +29,8 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[path = "../testdata/forecast_saved_comparison.rs"]
 mod comparison;
+#[path = "../testdata/forecast_cumulative_outcomes.rs"]
+mod cumulative;
 #[path = "../testdata/forecast_physical_outcomes.rs"]
 mod physical;
 
@@ -238,10 +240,15 @@ impl Fixture {
             },
             ns("2030-01-01T00:00:00Z"),
         );
+        let deadline = match &period[4..] {
+            "H1" => "2030-06-30T23:59:59Z",
+            "9M" => "2030-09-30T23:59:59Z",
+            _ => "2030-12-31T23:59:59Z",
+        };
         let forecast = fixture.request(
             "register.toml",
             &format!(
-                "[[forecast]]\nid = \"one\"\nmodel_key = \"invented-fixed-target\"\noutcome_due = \"2030-12-31T23:59:59Z\"\n{payload}\n"
+                "[[forecast]]\nid = \"one\"\nmodel_key = \"invented-fixed-target\"\noutcome_due = \"{deadline}\"\n{payload}\n"
             ),
         );
         fixture.ok(

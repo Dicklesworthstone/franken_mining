@@ -169,12 +169,23 @@ impl PublicMetric {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublicPeriod {
     Year(u16),
-    Quarter { year: u16, quarter: u8 },
+    /// January through June, resolved from the original second-quarter release.
+    FirstHalf(u16),
+    /// January through September, resolved from the original third-quarter release.
+    NineMonths(u16),
+    Quarter {
+        year: u16,
+        quarter: u8,
+    },
 }
 
 impl PublicPeriod {
     pub fn parse(value: &str) -> Result<Self, Refusal> {
-        let bad = || domain("public resolution requires a calendar YYYYFY or YYYYQ1..4 period");
+        let bad = || {
+            domain(
+                "public resolution requires a calendar YYYYFY, YYYYH1, YYYY9M or YYYYQ1..4 period",
+            )
+        };
         let bytes = value.as_bytes();
         if bytes.len() != 6 || !bytes[..4].iter().all(u8::is_ascii_digit) {
             return Err(bad());
@@ -182,6 +193,8 @@ impl PublicPeriod {
         let year = value[..4].parse().map_err(|_| bad())?;
         let period = match &bytes[4..] {
             b"FY" => Self::Year(year),
+            b"H1" => Self::FirstHalf(year),
+            b"9M" => Self::NineMonths(year),
             [b'Q', q @ b'1'..=b'4'] => Self::Quarter {
                 year,
                 quarter: q - b'0',
@@ -195,6 +208,8 @@ impl PublicPeriod {
     pub fn label(self) -> String {
         match self {
             Self::Year(year) => format!("{year:04}FY"),
+            Self::FirstHalf(year) => format!("{year:04}H1"),
+            Self::NineMonths(year) => format!("{year:04}9M"),
             Self::Quarter { year, quarter } => format!("{year:04}Q{quarter}"),
         }
     }
@@ -202,6 +217,8 @@ impl PublicPeriod {
     pub fn original_release(self) -> String {
         match self {
             Self::Year(year) => format!("{year:04}Q4"),
+            Self::FirstHalf(year) => format!("{year:04}Q2"),
+            Self::NineMonths(year) => format!("{year:04}Q3"),
             Self::Quarter { .. } => self.label(),
         }
     }
@@ -210,6 +227,8 @@ impl PublicPeriod {
     pub fn end_ns(self) -> Result<i64, Refusal> {
         let (year, quarter) = match self {
             Self::Year(year) => (year, 4),
+            Self::FirstHalf(year) => (year, 2),
+            Self::NineMonths(year) => (year, 3),
             Self::Quarter { year, quarter } if (1..=4).contains(&quarter) => (year, quarter),
             _ => return Err(domain("invalid public-resolution quarter")),
         };
@@ -607,6 +626,8 @@ mod tests {
     fn comparative_permission_never_replaces_an_original_or_accepts_an_earlier_release() {
         for target in [
             PublicPeriod::Year(2026),
+            PublicPeriod::FirstHalf(2026),
+            PublicPeriod::NineMonths(2026),
             PublicPeriod::Quarter {
                 year: 2026,
                 quarter: 1,
@@ -624,7 +645,9 @@ mod tests {
                     mode.validate_release(target, "2027Q1", true).is_ok(),
                     mode == PublicVintagePolicy::RegisteredComparatives
                 );
-                for bad in ["2025Q4", "2027FY", "2027Q0", "2027Q5", "2027Q1 ", "9999Q1"] {
+                for bad in [
+                    "2025Q4", "2027FY", "2027H1", "20279M", "2027Q0", "2027Q5", "2027Q1 ", "9999Q1",
+                ] {
                     assert!(mode.validate_release(target, bad, true).is_err(), "{bad}");
                 }
             }
@@ -919,13 +942,66 @@ mod tests {
             PublicPeriod::parse("2000Q1").unwrap().end_ns().unwrap(),
             954_547_199_999_999_999
         );
+        // January through June/September has 181/273 days in 1970; 2000 adds leap day.
+        for (label, end, release) in [
+            ("1970H1", 15_638_399_999_999_999, "1970Q2"),
+            ("19709M", 23_587_199_999_999_999, "1970Q3"),
+            ("2000H1", 962_409_599_999_999_999, "2000Q2"),
+            ("20009M", 970_358_399_999_999_999, "2000Q3"),
+        ] {
+            let period = PublicPeriod::parse(label).unwrap();
+            assert_eq!(period.label(), label);
+            assert_eq!(period.end_ns().unwrap(), end);
+            assert_eq!(period.original_release(), release);
+        }
         assert_eq!(PublicPeriod::Year(2026).original_release(), "2026Q4");
         assert_eq!(
             PublicPeriod::parse("2026Q2").unwrap().original_release(),
             "2026Q2"
         );
-        for invalid in ["2026Q0", "2026Q5", "2026Y", "2026Q１", "9999FY", "0000FY"] {
+        for invalid in [
+            "2026Q0", "2026Q5", "2026Y", "2026Q１", "9999FY", "0000FY", "2026H2", "2026M9",
+            "2026h1", "2026YTD", "9999H1", "00009M",
+        ] {
             assert!(PublicPeriod::parse(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn cumulative_targets_freeze_the_full_support_and_its_deadline() {
+        for period in [
+            PublicPeriod::FirstHalf(1970),
+            PublicPeriod::NineMonths(1970),
+        ] {
+            let end = period.end_ns().unwrap();
+            let (mut ledger, ids) = forecasts(end);
+            let mut target = policy(&ids);
+            target.period = period;
+            ledger
+                .freeze_cohort(spec(&target, "cumulative", 2))
+                .unwrap();
+            for vintages in [
+                PublicVintagePolicy::OriginalOnly,
+                PublicVintagePolicy::RegisteredComparatives,
+            ] {
+                let rule = target.to_resolution_rule_with_vintages(vintages).unwrap();
+                assert_eq!(
+                    PublicResolutionPolicy::parse_resolution_rule_with_vintages(&rule).unwrap(),
+                    Some((target.clone(), vintages))
+                );
+                let mut quarter = target.clone();
+                quarter.period = PublicPeriod::parse(&period.original_release()).unwrap();
+                assert_eq!(quarter.period.end_ns().unwrap(), end);
+                assert_ne!(
+                    quarter.to_resolution_rule_with_vintages(vintages).unwrap(),
+                    rule
+                );
+                assert!(target.validate_shared_targets(&quarter).is_err());
+            }
+            let (mut late_ledger, ids) = forecasts(end + 1);
+            let mut target = policy(&ids);
+            target.period = period;
+            assert!(late_ledger.freeze_cohort(spec(&target, "late", 2)).is_err());
         }
     }
 

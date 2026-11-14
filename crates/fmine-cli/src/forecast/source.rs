@@ -423,6 +423,8 @@ fn calendar_period(
 ) -> Result<()> {
     let (months, duration, end) = match period {
         PublicPeriod::Year(_) => (12, "twelve", "december 31"),
+        PublicPeriod::FirstHalf(_) => (6, "six", "june 30"),
+        PublicPeriod::NineMonths(_) => (9, "nine", "september 30"),
         PublicPeriod::Quarter { quarter: 1, .. } => (3, "three", "march 31"),
         PublicPeriod::Quarter { quarter: 2, .. } => (3, "three", "june 30"),
         PublicPeriod::Quarter { quarter: 3, .. } => (3, "three", "september 30"),

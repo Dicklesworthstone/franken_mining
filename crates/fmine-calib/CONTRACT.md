@@ -148,7 +148,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - DESIGN: `ledger::binding::PublicResolutionPolicy` freezes registered-public resolution semantics in the
   existing `CohortSpec.resolution_rule` string. Its reserved `fmine.public-resolution.v1:` prefix contains a
   canonical `PRP1`/v1 frame encoded as lowercase hexadecimal. It binds issuer, metric, explicit unit and source
-  field, calendar FY/quarter, original release, exact ownership fraction and every forecast-id-to-subject mapping.
+  field, calendar FY/H1/nine-month/quarter support, original release, exact ownership fraction and every
+  forecast-id-to-subject mapping. `YYYYH1` is January through June and first resolves from `YYYYQ2`;
+  `YYYY9M` is January through September and first resolves from `YYYYQ3`. A cumulative target remains
+  distinct from the quarter ending on the same date, including in its policy digest and shared-target check.
+  Existing FY/quarter frame bytes remain unchanged. Cumulative policies use the same original-only or
+  explicitly permitted comparative-vintage rules and period-end deadline checks.
   Metrics are gold production (`production_koz`, koz), copper production (`production_kt`, kt), and
   issuer-reported AISC and total cash cost per sold gold ounce in USD/oz, and AISC and C1 cash cost per sold
   copper pound in USD/lb. `aisc_usd_per_oz`, `tcc_usd_per_oz`, `aisc_usd_per_lb` and `c1_usd_per_lb` freeze

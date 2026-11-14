@@ -3112,8 +3112,12 @@ The frozen digest binds the exact issuer, subject, period, metric/unit and owner
 Supported metrics are gold production (`production_koz`), copper production (`production_kt`),
 issuer-reported AISC (`aisc_usd_per_oz`) and total cash costs (`tcc_usd_per_oz`) per sold gold ounce,
 and copper AISC (`aisc_usd_per_lb`) and C1 cash costs (`c1_usd_per_lb`) per sold pound, at site level over a
-calendar year (`YYYYFY`)
-or individual calendar quarter. Cost definitions and sold-unit denominators must match exactly; negative
+calendar year (`YYYYFY`), first half (`YYYYH1`, January–June), nine months (`YYYY9M`, January–September)
+or individual calendar quarter (`YYYYQ1` through `YYYYQ4`). H1 and nine-month targets resolve from the
+original Q2 and Q3 releases respectively, using their explicitly labelled cumulative cells. A quarter's
+production or cost rate never substitutes for the cumulative period, and cumulative rates are read directly
+without averaging or differencing. The same period choices apply to the physical and capital targets below.
+Cost definitions and sold-unit denominators must match exactly; negative
 printed costs remain signed. Copper production retains the printed kilotonnes and the declared full or attributable
 ownership basis; resolution performs no implicit pounds conversion or ownership scaling.
 A declared deadline after the target period ends
