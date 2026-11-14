@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as Process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_claim::forecast_journal::Entry;
@@ -26,6 +27,22 @@ const MODEL: &str = include_str!("../../../tests/decisions/expansion.toml");
 const INFORMATION: &str = include_str!("../../../tests/decisions/metallurgical_test.toml");
 const CONSTRAINED: &str = include_str!("../../../tests/decisions/constrained_testwork.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+
+fn binary() -> PathBuf {
+    if let Some(path) = std::env::var_os("FMINE_TEST_BINARY") {
+        return PathBuf::from(path);
+    }
+    let executable = std::env::current_exe().expect("current T executable");
+    let profile = executable
+        .ancestors()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "deps" || name == "build")
+        })
+        .and_then(Path::parent)
+        .expect("Cargo profile directory; set FMINE_TEST_BINARY for another layout");
+    profile.join(format!("fmine{}", std::env::consts::EXE_SUFFIX))
+}
 
 struct Clock(i64);
 impl WallClock for Clock {
@@ -1135,6 +1152,108 @@ fn decision_forecasts_retain_complete_members_and_retrieve_saved_weighted_scores
         successful(f.show(Some(decision_head))).payload_json,
         shown.payload_json
     );
+
+    let assert_known_scores = |report: &Json| {
+        let summary = json_field(report, &["assessment", "summary"]);
+        assert_eq!(summary.get("n_members").unwrap().u64(), Some(2));
+        assert_eq!(summary.get("n_resolved").unwrap().u64(), Some(1));
+        assert_eq!(summary.get("n_unresolved").unwrap().u64(), Some(1));
+        assert_eq!(
+            json_field(summary, &["crps", "observed_mean"]).f64(),
+            Some(1.75)
+        );
+        assert_eq!(
+            json_field(summary, &["crps", "whole_cohort", "lower"]).f64(),
+            Some(1.0)
+        );
+        assert_eq!(
+            json_field(summary, &["crps", "whole_cohort", "upper"]).f64(),
+            Some(2.0)
+        );
+    };
+    for format in ["json", "markdown"] {
+        let output = Process::new(binary())
+            .args(["decide", "journal", "assess", "--journal"])
+            .arg(&f.journal)
+            .args([
+                "--head",
+                &decision_head.to_hex(),
+                "--decision",
+                "prospective-choice",
+                "--forecast-journal",
+            ])
+            .arg(&p.journal)
+            .args([
+                "--forecast-head",
+                &p.head.to_hex(),
+                "--assessments",
+                &assessment.to_hex(),
+                "--format",
+                format,
+                "--workspace",
+            ])
+            .arg(&f.root)
+            .output()
+            .expect("execute actual decision forecast review");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{format}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(&f.journal).unwrap(), decision_bytes);
+        assert_eq!(fs::read(&p.journal).unwrap(), forecast_bytes);
+        if format == "json" {
+            let envelope = parse_json(&output.stdout).unwrap();
+            let payload = envelope.get("payload").unwrap();
+            assert_eq!(payload.get("read_only"), Some(&Json::Bool(true)));
+            assert_eq!(
+                json_field(payload, &["decision", "selected_action"]).as_str(),
+                Some("build")
+            );
+            assert_eq!(payload.get("n_committed_cohorts").unwrap().u64(), Some(2));
+            assert_eq!(
+                payload
+                    .get("n_cohorts_without_selected_assessment")
+                    .unwrap()
+                    .u64(),
+                Some(1)
+            );
+            let rows = payload.get("forecasts").unwrap().as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_known_scores(&rows[0].get("assessments").unwrap().as_array().unwrap()[0]);
+            assert_eq!(
+                json_field(&rows[1], &["cohort", "name"]).as_str(),
+                Some("secondary")
+            );
+            assert_eq!(
+                rows[1].get("status").unwrap().as_str(),
+                Some("no_assessment_selected")
+            );
+            assert!(
+                rows[1]
+                    .get("assessments")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        } else {
+            let markdown = String::from_utf8(output.stdout).unwrap();
+            assert!(markdown.contains("# Forecast outcomes for decision prospective-choice"));
+            let secondary = markdown.split_once("\n## secondary\n").unwrap().1;
+            assert!(secondary.contains("Status: `no_assessment_selected`."));
+            let report = markdown
+                .split_once("```json\n")
+                .unwrap()
+                .1
+                .split_once("\n```")
+                .unwrap()
+                .0;
+            assert_known_scores(&parse_json(report.as_bytes()).unwrap());
+        }
+    }
 }
 
 #[test]
