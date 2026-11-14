@@ -390,7 +390,7 @@ fn expected_value_selection_keeps_posterior_ties_and_unreachable_signals() {
     let tied = INFORMATION
         .replace("300000000.0000", "0.0000")
         .replace("-200000000.0000", "0.0000");
-    let tied = format!("{tied}\n[[signal]]\noption = \"met_test\"\nid = \"unreachable\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"high\"\nsignal = \"unreachable\"\nprobability = \"0\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"low\"\nsignal = \"unreachable\"\nprobability = \"0\"\n");
+    let tied = format!("{tied}\n[[signal]]\noption = \"met_test\"\nid = \"unreachable\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"high\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"low\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n");
     fs::write(&f.model, tied).unwrap();
     let saved = successful(execute_with_clock(
         &f.information(
@@ -443,7 +443,7 @@ fn missing_options_unavailable_policies_and_corrupt_policy_artifacts_refuse() {
         .replace("floor = \"-10\"", "floor = \"0\"")
         .replace(
             "max_breach_probability = \"1/20\"",
-            "max_breach_probability = \"0\"",
+            "max_breach_probability = \"0/1\"",
         );
     fs::write(&f.model, no_feasible).unwrap();
     f.refuses_without_append(
