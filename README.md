@@ -2563,6 +2563,46 @@ completed quarterly history by the requested evidence cut, and assesses first-pu
 outcomes separately.
 `--cohort-as-of` keeps unconditional scores and cannot be combined with `--price-subject`.
 
+### Compare a complete public peer set
+
+DESIGN (BD-355): `compare` checks annual AISC or gold production using each issuer's own registered
+financial filing, an agreed two-reader transcription, authenticated document bytes and publication
+evidence available by the chosen cut:
+
+```bash
+cargo run -p fmine-cli -- compare --metric aisc \
+  --issuers ISSUER_A,ISSUER_B,ISSUER_C --period 2025FY --as-of 2026-06-30 \
+  --bindings peer-bindings.toml --claim-issuer ISSUER_A --claim lowest --format markdown
+```
+
+Replace the issuer placeholders with registered issuer keys. A bindings file selects sources only:
+
+```toml
+schema = "fmine.peer-comparison.bindings.v1"
+
+[[issuer]]
+issuer = "registered_issuer_key"
+document = "registered-annual-filing.pdf"
+quantity = "agreed-company-aisc"
+```
+
+Include exactly one row per declared issuer. The agreed transcription basis must explicitly identify
+the metric, company scope, full or attributable ownership, operations, gold denominator and a definition
+locator in that same document. AISC additionally requires matching allocation, credit location,
+inventory, G&A, sustaining leases, minesite exploration, reclamation, stripping and accounting treatment.
+`robot-docs` lists the exact supported basis fields. The binding cannot supply values, replace a
+definition or transfer one issuer's reconciliation to another.
+
+The report retains all source Claims and shows ascending and descending competition-rank ranges over
+the exact printed rounding intervals. Equal values share rank; overlapping intervals can leave a rank
+indeterminate. `lowest:N` and `highest:N` mean competition rank at most N, including ties. A comparative
+claim is supported only if it holds throughout the admitted intervals, unsupported if it cannot hold,
+and otherwise indeterminate. Missing or incompatible peers refuse the entire comparison and keep the
+full requested issuer list visible. `--metric gold-production` supplies the same workflow for compatible
+company gold production in koz. No industry coverage, probability, proprietary quartile or automatically
+interpreted prose claim is inferred. The current controls use explicitly invented filings; real peer
+filing reproduction remains a separate source-data gate.
+
 ### Mirror two reporters' gold, copper and capital expenditure
 
 ```bash
@@ -3425,14 +3465,58 @@ author role, domain, horizon, site, quantity and unit must match the target exac
 been registered after the assessment's evidence cut and must have no recorded outcome. Missing members,
 mixed segments, incompatible interval levels, signed/zero outcomes and unrepresentable arithmetic refuse.
 
-This first correction path trains on one homogeneous, prospectively frozen batch. It does not pool
-rolling public forecasts across separate assessments or estimate hierarchical corrections. A public
-cohort containing different sites or quantities therefore cannot supply this correction's training set.
+For the same site observed across successive public reporting periods, select two or more saved
+assessments explicitly:
+
+```bash
+cargo run -p fmine-cli -- forecast journal correction \
+  --journal runs/forecast-demo/history --assessments FIRST_DIGEST,SECOND_DIGEST \
+  --forecast LATER_RAW_FORECAST_ALIAS --head LATEST_RETAINED_HEAD --format markdown
+```
+
+The series retains every member of every selected frozen cohort and every selected source event. It
+requires matching model, full metadata, selector, interval level, public issuer, metric, ownership,
+vintage permission and calendar period kind. Public supports advance without overlap; different
+quarter lengths and leap years are allowed. The raw target must already have a compatible frozen
+public cohort on later support. Repeated reports, revisions of the same cohort, repeated forecasts or
+cited observations refuse. Supplied histories retain identical resolution rules and eligible sources.
+Parent order is canonical, so reordering the CLI list does not change the result. This is explicit
+selection of complete assessments, without a claim that the selected history is complete or independent.
 
 The command reads the saved assessment, leaves the journal unchanged, and supplies no host-clock or
-external-time proof. Its JSON schema is `fmine.forecast-correction.v1`, with a separate digest and explicit
+external-time proof. The single-assessment JSON schema remains `fmine.forecast-correction.v1` with its
+unchanged COR1/v1 digest. Series use `fmine.forecast-correction-series.v1` and COR2/v1, binding all parent
+and target cohort policies. Both have a separate digest and explicit
 `unissued_proposal` and `uncalibrated` status. A proposal needs separate prospective registration and
 later scoring before it can become part of a forecasting track record.
+
+### Register a reviewed correction prospectively
+
+After reviewing the proposal, register a new forecast with an explicit new alias, corrected-model
+version, author role and the exact proposal digest:
+
+```bash
+cargo run -p fmine-cli -- forecast journal register-correction \
+  --journal runs/forecast-demo/history --head LATEST_RETAINED_HEAD \
+  --id CORRECTED_FORECAST_ALIAS --forecast LATER_RAW_FORECAST_ALIAS \
+  --assessments FIRST_DIGEST,SECOND_DIGEST --expected-proposal REVIEWED_PROPOSAL_DIGEST \
+  --model-key corrected-production-v1 --author-role model-reviewer --trust-host-clock
+```
+
+Use `--assessment` instead for a single saved training batch. The locked writer reconstructs the exact
+proposal, checks the expected journal head and proposal digest, and assigns a fresh registration time
+before the target deadline. The raw forecast stays immutable. The registered distribution keeps the
+raw target's quantity, unit, site, horizon and deadline; the explicit corrected model and author role
+are new immutable metadata. The journal retains raw/correction/corrected lineage, every training
+parent and the target's source policies. Replay verifies that admission against its historical prefix,
+so later outcomes do not invalidate an already admitted correction.
+
+The raw target must already belong to compatible frozen cohorts. Freeze the corrected forecast in its
+own cohort before its deadline, preserving the target's source rules, ownership, subject, vintage
+permission, eligible sources and interval level. Public corrections cannot receive caller-supplied
+outcomes, including before their own cohort is frozen. Resolve and assess them through the ordinary
+journal commands. This records an explicit prospective choice; it does not certify review, confer
+calibration, alter training history or trigger automatic retraining.
 
 ### Issue reports with explicit time and build identity
 

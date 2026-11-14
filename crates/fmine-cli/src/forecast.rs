@@ -42,6 +42,7 @@ pub const METADATA_JSON: &str = segments::ROBOT_DOCS_JSON;
 pub const DIAGNOSTICS_JSON: &str = diagnostics::ROBOT_DOCS_JSON;
 pub const CUSUM_MONITOR_JSON: &str = cusum::ROBOT_DOCS_JSON;
 pub const CORRECTION_JSON: &str = correction::ROBOT_DOCS_JSON;
+pub const CORRECTION_REGISTRATION_JSON: &str = correction::registration::ROBOT_DOCS_JSON;
 
 const MONITOR_FIELDS: [&str; 4] = [
     "monitor_alarm_alpha",
@@ -110,6 +111,8 @@ struct Replay {
     source_admissions: BTreeMap<(ObjectId, u64), live::SourceAdmission>,
     /// Replayed v9 plant registrations retain an earlier bound for prospective cohort membership.
     plant_registration_starts: BTreeMap<ObjectId, i64>,
+    /// Prefix-verified raw/correction/corrected lineage, retained independently of later outcomes.
+    correction_admissions: BTreeMap<ObjectId, correction::registration::Admission>,
 }
 
 impl Replay {
@@ -419,6 +422,13 @@ impl Replay {
     }
 
     fn public_bound(&self, forecast: ObjectId) -> Result<bool, Refusal> {
+        if self
+            .correction_admissions
+            .get(&forecast)
+            .is_some_and(|admission| admission.public_bound())
+        {
+            return Ok(true);
+        }
         for id in self.cohorts.values() {
             let cohort = self
                 .ledger
@@ -726,8 +736,14 @@ impl Replay {
             .and_then(|(seq, _)| self.source_admissions.get(&(member.forecast_id, seq)))
             .map_or_else(|| "null".to_string(), live::SourceAdmission::to_json);
         let metadata = segments::metadata_field(record.metadata.as_ref());
+        let correction = self
+            .correction_admissions
+            .get(&member.forecast_id)
+            .map_or_else(String::new, |admission| {
+                format!(",\"correction\":{}", admission.compact_json())
+            });
         Ok(format!(
-            "{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_at\":{},\"outcome_due\":{},\"payload\":{}{metadata},\"selected_event\":{selected},\"outcome\":{outcome},\"source_admission\":{admission}}}",
+            "{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_at\":{},\"outcome_due\":{},\"payload\":{}{metadata},\"selected_event\":{selected},\"outcome\":{outcome},\"source_admission\":{admission}{correction}}}",
             js(alias),
             js(&record.forecast_id.to_string()),
             js(&record.model_key),

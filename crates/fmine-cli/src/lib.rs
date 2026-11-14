@@ -3,6 +3,7 @@
 mod assure_report;
 mod capital;
 mod claim_inspection;
+mod compare;
 pub mod cost;
 mod decision;
 mod forecast;
@@ -64,6 +65,8 @@ pub enum CliCommand {
     MetricsCost(cost::Command),
     /// Compare unchanged production quantities under explicit named and versioned price decks.
     MetricsGeo(geo::Command),
+    /// Compare source-bound peer metrics without dropping incompatible or unavailable issuers.
+    Compare(compare::Command),
     /// A certified ultimate pit from a MineLib pair or explicitly declared OMF model (BD-194/250).
     PlanPit(pit::Command),
     /// Checked PCPSP production schedule, external destination splits and a verified global bound.
@@ -515,6 +518,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 };
             }
             "guidance" => return "guidance completion",
+            "compare" => return "compare",
             "decide" => {
                 let mut next = i + 1;
                 while let Some(word) = args.get(next) {
@@ -668,10 +672,38 @@ fn parse_forecast_journal(
             .ok_or_else(|| "digest requires 64 lowercase hexadecimal characters".to_string())
     }
 
+    fn assessments(fields: &mut BTreeMap<String, String>) -> Result<(Vec<Digest32>, bool), String> {
+        match (
+            fields.remove("--assessment"),
+            fields.remove("--assessments"),
+        ) {
+            (Some(value), None) => Ok((vec![digest(&value)?], false)),
+            (None, Some(values)) => {
+                let values = values
+                    .split(',')
+                    .map(digest)
+                    .collect::<Result<Vec<_>, _>>()?;
+                if values.len() < 2 {
+                    return Err(
+                        "--assessments requires at least two saved assessment digests".into(),
+                    );
+                }
+                let mut unique = values.clone();
+                unique.sort();
+                unique.dedup();
+                if unique.len() != values.len() {
+                    return Err("--assessments must not repeat a saved assessment".into());
+                }
+                Ok((values, true))
+            }
+            _ => Err("select exactly one of --assessment or --assessments".into()),
+        }
+    }
+
     let (mut fields, words) = journal_arguments(args, &["--json", "--trust-host-clock"])?;
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|register-plant|freeze|outcome|resolve|restate|assess|inspect|report|compare|correction"
+            "expected forecast journal init|register|register-plant|register-correction|freeze|outcome|resolve|restate|assess|inspect|report|compare|correction"
                 .to_string(),
         );
     };
@@ -752,6 +784,20 @@ fn parse_forecast_journal(
             author_role: take(&mut fields, "--author-role")?,
             time_basis: take(&mut fields, "--time-basis")?,
         },
+        "register-correction" => {
+            let (assessments, series) = assessments(&mut fields)?;
+            Command::RegisterCorrection {
+                journal,
+                head: digest(&take(&mut fields, "--head")?)?,
+                id: take(&mut fields, "--id")?,
+                forecast: take(&mut fields, "--forecast")?,
+                assessments,
+                series,
+                expected_proposal: digest(&take(&mut fields, "--expected-proposal")?)?,
+                model_key: take(&mut fields, "--model-key")?,
+                author_role: take(&mut fields, "--author-role")?,
+            }
+        }
         "resolve" => Command::Resolve {
             journal,
             head: digest(&take(&mut fields, "--head")?)?,
@@ -815,15 +861,29 @@ fn parse_forecast_journal(
             left: digest(&take(&mut fields, "--left")?)?,
             right: digest(&take(&mut fields, "--right")?)?,
         },
-        "correction" => Command::Correction {
-            journal,
-            head: fields
+        "correction" => {
+            let head = fields
                 .remove("--head")
                 .map(|value| digest(&value))
-                .transpose()?,
-            assessment: digest(&take(&mut fields, "--assessment")?)?,
-            forecast: take(&mut fields, "--forecast")?,
-        },
+                .transpose()?;
+            let forecast = take(&mut fields, "--forecast")?;
+            let (assessments, series) = assessments(&mut fields)?;
+            if series {
+                Command::CorrectionSeries {
+                    journal,
+                    head,
+                    assessments,
+                    forecast,
+                }
+            } else {
+                Command::Correction {
+                    journal,
+                    head,
+                    assessment: assessments[0],
+                    forecast,
+                }
+            }
+        }
         "report" => {
             let timestamp = if [
                 "--timestamp-head",
@@ -939,6 +999,7 @@ pub fn parse_args(
         verb,
         "metrics cost"
             | "metrics geo"
+            | "compare"
             | "plan pit"
             | "plan schedule"
             | "plan shells"
@@ -950,6 +1011,7 @@ pub fn parse_args(
         let command = match verb {
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
+            "compare" => CliCommand::Compare(compare::parse(&words)?),
             "plan pit" => CliCommand::PlanPit(pit::parse(&words)?),
             "plan schedule" if words.iter().any(|word| word == "--omf" || word == "--spec") => {
                 CliCommand::PlanOmf(schedule::omf::parse(&words)?)
@@ -1878,6 +1940,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     match cmd {
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
+        CliCommand::Compare(command) => compare::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
         CliCommand::PlanSchedule(command) => schedule::execute(command, workspace_root),
         CliCommand::PlanOmf(command) => schedule::omf::execute(command, workspace_root),
@@ -2272,6 +2335,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             let verbs = [
                 cost::USAGE,
                 geo::USAGE,
+                compare::USAGE,
                 pit::USAGE,
                 schedule::USAGE,
                 schedule::omf::USAGE,
@@ -2329,6 +2393,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]",
                 "forecast journal register --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal register-plant --journal <path> --head <hex> --input <coupling.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target recovery|throughput|dry-tonnes|contained-metal|recovered-metal --author-role <role> --time-basis utc-unix-ns --trust-host-clock",
+                "forecast journal register-correction --journal <path> --head <hex> --id <new-alias> --forecast <raw-alias> (--assessment <digest> | --assessments <digests>) --expected-proposal <digest> --model-key <corrected-model> --author-role <role> --trust-host-clock",
                 "forecast journal freeze --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias> --trust-host-clock",
@@ -2336,7 +2401,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
                 "forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--head <hex>]",
-                "forecast journal correction --journal <path> --assessment <digest> --forecast <alias> [--head <hex>]",
+                "forecast journal correction --journal <path> (--assessment <digest> | --assessments <digests>) --forecast <alias> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 forecast_candidate::USAGE,
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
@@ -2454,6 +2519,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(forecast::comparison::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_correction\":");
             payload.push_str(forecast::CORRECTION_JSON);
+            payload.push_str(",\"forecast_correction_registration\":");
+            payload.push_str(forecast::CORRECTION_REGISTRATION_JSON);
+            payload.push_str(",\"peer_comparison\":");
+            payload.push_str(compare::ROBOT_DOCS_JSON);
             payload.push_str(",\"capital_program\":");
             payload.push_str(capital::ROBOT_DOCS_JSON);
             payload.push_str(concat!(

@@ -5,10 +5,21 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
+
+- DESIGN (BD-355): `compare --metric aisc|gold-production --issuers a,b,... --period YYYYFY
+  --as-of YYYY-MM-DD --bindings <path>` admits each issuer's own registered financial filing and agreed
+  actual point, authenticating bytes, two readers and FACT publication evidence. The selector file has
+  no numeric or semantic overrides. Every issuer remains required. Identical source-declared definitions
+  feed exact closed rounding intervals and competition ranks; ties share rank, and no favorable ordering
+  is imposed. Optional `--claim-issuer` and `--claim lowest|highest|lowest:N|highest:N` report whether the
+  declared rank-at-most-N assertion is supported, unsupported or indeterminate. JSON and Markdown retain
+  source/result Claims, locators, publication dates and all rank directions. Missing peers or differing
+  definitions refuse with the complete requested population visible. Source-backed synthetic integration
+  controls do not establish real peer-filing reproduction or arbitrary prose interpretation.
 
 - DESIGN (BD-176/181/182): `plant production --input <coupling> --grinding <worksheet> --recovery <worksheet>`
   reads three bounded source snapshots, delegates admission to their existing plant owners, and exposes
@@ -874,6 +885,30 @@ saved-assessment check rejects unknown report digests. No source reread or retro
 is introduced. This provides a visible proposal, not a hierarchical correction, external time proof or
 automatic calibration. Independent known-answer and refusal tests live in the calibration module; the
 existing forecast-live integration suite verifies saved-journal replay, source rendering and unchanged bytes.
+
+`--assessments <digest,digest,...>` is mutually exclusive with the legacy singular selector. It invokes
+the complete saved-assessment series API, verifies every parent is persisted, and renders all training
+and target cohort policies, members, cuts, selected source events and fitted values. Reordered parents
+produce canonical output; duplicate assessments, cohorts, forecasts or observations refuse. Public
+training requires advancing nonoverlapping support of the same calendar kind and a compatible frozen
+public target. Its distinct `fmine.forecast-correction-series.v1` / COR2/v1 identity preserves legacy
+single-assessment bytes. Selected reports establish neither independence nor complete historical coverage.
+
+`forecast journal register-correction` takes the raw alias, singular or plural saved assessments, exact
+`--expected-proposal`, new `--id`, declared `--model-key`, `--author-role`, expected journal head and
+`--trust-host-clock`. Operation v11 retains a compact reference to the immutable training and target
+history plus exact fitted distribution bits. The writer reconstructs the proposal under its lock;
+replay reconstructs it at the historical prefix, then caches admission rendering independently of later
+outcomes. It registers a distinct forecast at the clock upper bound, before the raw deadline and any
+earlier physical-start bound. The raw forecast stays unchanged. The new model key differs from raw but
+may identify the same corrected model across future periods. All other segment labels and the deadline
+are inherited, with the author role explicitly declared. Raw target cohort policies must already be
+frozen and compatible. Later corrected cohorts retain source eligibility, exact alpha and public target
+semantics; inherited public binding prohibits supplied outcomes even before that freeze. Inspect and
+saved reports expose raw/correction/corrected lineage. This is explicit registration, not automatic
+approval, external timestamp evidence or a calibration claim. Existing operation v1–v10 meanings remain
+unchanged. Focused public and supplied journal lifecycle tests cover admission, later resolution,
+assessment, replay, stale requests and source-policy refusals.
 
 ### Issued-output reliance (BD-347)
 

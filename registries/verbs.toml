@@ -63,6 +63,12 @@ mutates_authority = false
 description = "Compare exact production GEO across named versioned price decks on one declared physical population, retaining contributions and source-bound Claims"
 
 [[verb]]
+path = "compare"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Compare a complete declared peer set using authenticated annual metric definitions, exact rounding-aware ranks and explicit comparative claims"
+
+[[verb]]
 path = "plan pit"
 subsystem = "Pushback"
 mutates_authority = false
@@ -216,7 +222,13 @@ description = "Compare two saved public forecast assessments on identical select
 path = "forecast journal correction"
 subsystem = "Plumb"
 mutates_authority = false
-description = "Propose an explicit prospective bias and coverage correction from one saved assessment while retaining the raw forecast and every training member"
+description = "Propose an explicit prospective bias and coverage correction from one saved assessment or a compatible saved series while retaining every member and source policy"
+
+[[verb]]
+path = "forecast journal register-correction"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Register an explicitly reviewed correction prospectively with immutable raw forecast, training lineage and inherited target source rules"
 
 [[verb]]
 path = "reliance init"

@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 69
+[verbs] 71
 decide card
 decide journal init
 decide journal record
@@ -84,6 +84,7 @@ assure public
 assure challenges
 metrics cost
 metrics geo
+compare
 plan pit
 plan schedule
 plan shells
@@ -110,6 +111,7 @@ forecast journal inspect
 forecast journal report
 forecast journal compare
 forecast journal correction
+forecast journal register-correction
 reliance init
 reliance issue
 reliance reissue

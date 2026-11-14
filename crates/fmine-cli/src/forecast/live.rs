@@ -39,6 +39,7 @@ const V7_SCHEMA: &str = "fmine.forecast-operation.v7";
 const V8_SCHEMA: &str = "fmine.forecast-operation.v8";
 const V9_SCHEMA: &str = "fmine.forecast-operation.v9";
 const V10_SCHEMA: &str = "fmine.forecast-operation.v10";
+const V11_SCHEMA: &str = "fmine.forecast-operation.v11";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +62,7 @@ enum OperationVersion {
     V8 = 7,
     V9 = 8,
     V10 = 9,
+    V11 = 10,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -79,6 +81,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V8_SCHEMA => Ok(OperationVersion::V8),
             V9_SCHEMA => Ok(OperationVersion::V9),
             V10_SCHEMA => Ok(OperationVersion::V10),
+            V11_SCHEMA => Ok(OperationVersion::V11),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -93,44 +96,45 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema =
-        if expected_table == "registered_missing" && doc.rows[0].get("status_kind").is_some() {
-            V10_SCHEMA
-        } else if expected_table == "plant_forecast" {
-            V9_SCHEMA
-        } else if super::cusum::FIELDS
+    let schema = if expected_table == "corrected_forecast" {
+        V11_SCHEMA
+    } else if expected_table == "registered_missing" && doc.rows[0].get("status_kind").is_some() {
+        V10_SCHEMA
+    } else if expected_table == "plant_forecast" {
+        V9_SCHEMA
+    } else if super::cusum::FIELDS
+        .iter()
+        .any(|key| doc.rows[0].get(key).is_some())
+    {
+        V8_SCHEMA
+    } else if super::segments::FIELDS
+        .iter()
+        .any(|key| doc.rows[0].get(key).is_some())
+    {
+        V7_SCHEMA
+    } else if doc.rows[0].get("gaussian_crps_bounds").is_some() {
+        V6_SCHEMA
+    } else if super::MONITOR_FIELDS
+        .iter()
+        .any(|key| doc.rows[0].get(key).is_some())
+        || doc.rows[0].get("event_log_floor").is_some()
+    {
+        V5_SCHEMA
+    } else if expected_table == "registered_restatement"
+        || doc.rows[0].get("public_vintages").is_some()
+    {
+        V4_SCHEMA
+    } else if expected_table == "registered_outcome"
+        || expected_table == "registered_missing"
+        || doc.rows[0]
+            .fields
             .iter()
-            .any(|key| doc.rows[0].get(key).is_some())
-        {
-            V8_SCHEMA
-        } else if super::segments::FIELDS
-            .iter()
-            .any(|key| doc.rows[0].get(key).is_some())
-        {
-            V7_SCHEMA
-        } else if doc.rows[0].get("gaussian_crps_bounds").is_some() {
-            V6_SCHEMA
-        } else if super::MONITOR_FIELDS
-            .iter()
-            .any(|key| doc.rows[0].get(key).is_some())
-            || doc.rows[0].get("event_log_floor").is_some()
-        {
-            V5_SCHEMA
-        } else if expected_table == "registered_restatement"
-            || doc.rows[0].get("public_vintages").is_some()
-        {
-            V4_SCHEMA
-        } else if expected_table == "registered_outcome"
-            || expected_table == "registered_missing"
-            || doc.rows[0]
-                .fields
-                .iter()
-                .any(|field| field.key.starts_with("public_"))
-        {
-            V3_SCHEMA
-        } else {
-            V2_SCHEMA
-        };
+            .any(|field| field.key.starts_with("public_"))
+    {
+        V3_SCHEMA
+    } else {
+        V2_SCHEMA
+    };
     let versioned = format!("schema = \"{schema}\"\n{request}");
     if versioned.len() > MAX_OPERATION_BYTES {
         return Err(invalid(
@@ -164,6 +168,18 @@ pub enum Command {
         target: super::plant::Target,
         author_role: String,
         time_basis: String,
+    },
+    /// Register an explicitly reviewed correction as a distinct prospective forecast.
+    RegisterCorrection {
+        journal: PathBuf,
+        head: Digest32,
+        id: String,
+        forecast: String,
+        assessments: Vec<Digest32>,
+        series: bool,
+        expected_proposal: Digest32,
+        model_key: String,
+        author_role: String,
     },
     Freeze {
         journal: PathBuf,
@@ -224,6 +240,13 @@ pub enum Command {
         assessment: Digest32,
         forecast: String,
     },
+    /// Fit one correction to complete populations from explicitly selected saved assessments.
+    CorrectionSeries {
+        journal: PathBuf,
+        head: Option<Digest32>,
+        assessments: Vec<Digest32>,
+        forecast: String,
+    },
 }
 
 impl Command {
@@ -232,6 +255,7 @@ impl Command {
             Self::Init { .. } => "init",
             Self::Register { .. } => "register",
             Self::RegisterPlant { .. } => "register-plant",
+            Self::RegisterCorrection { .. } => "register-correction",
             Self::Freeze { .. } => "freeze",
             Self::Outcome { .. } => "outcome",
             Self::Resolve { .. } => "resolve",
@@ -240,7 +264,7 @@ impl Command {
             Self::Inspect { .. } => "inspect",
             Self::Report { .. } => "report",
             Self::Compare { .. } => "compare",
-            Self::Correction { .. } => "correction",
+            Self::Correction { .. } | Self::CorrectionSeries { .. } => "correction",
         }
     }
 }
@@ -289,7 +313,7 @@ fn perform(
             let mut state = replay(&journal)?;
             persisted_report(&mut state, *assessment)?;
             let target = state.forecast_id(forecast)?;
-            let report = state.ledger.correction_proposal(*assessment, target)?;
+            let report = super::correction::proposal(&state, &[*assessment], false, target)?;
             let head_digest = journal
                 .records()
                 .last()
@@ -299,9 +323,35 @@ fn perform(
                 "{{\"operation\":\"correction\",\"head\":{},\"head_pinned\":{},\"correction\":{}}}",
                 js(&head_digest.to_hex()),
                 head.is_some(),
-                super::correction::json(&state, &report)?,
+                report.json(&state)?,
             );
-            return Ok((payload, super::correction::markdown(&state, &report)));
+            return Ok((payload, report.markdown(&state)));
+        }
+        Command::CorrectionSeries {
+            journal,
+            head,
+            assessments,
+            forecast,
+        } => {
+            let journal = Journal::open_read(&root.join(journal), *head)?;
+            let mut state = replay(&journal)?;
+            for assessment in assessments {
+                persisted_report(&mut state, *assessment)?;
+            }
+            let target = state.forecast_id(forecast)?;
+            let report = super::correction::proposal(&state, assessments, true, target)?;
+            let head_digest = journal
+                .records()
+                .last()
+                .ok_or_else(|| absent("journal genesis missing"))?
+                .chain_head()?;
+            let payload = format!(
+                "{{\"operation\":\"correction\",\"head\":{},\"head_pinned\":{},\"correction\":{}}}",
+                js(&head_digest.to_hex()),
+                head.is_some(),
+                report.json(&state)?,
+            );
+            return Ok((payload, report.markdown(&state)));
         }
         Command::Compare {
             journal,
@@ -385,6 +435,7 @@ fn perform(
     let (path, head) = match command {
         Command::Register { journal, head, .. }
         | Command::RegisterPlant { journal, head, .. }
+        | Command::RegisterCorrection { journal, head, .. }
         | Command::Freeze { journal, head, .. }
         | Command::Outcome { journal, head, .. }
         | Command::Resolve { journal, head, .. }
@@ -397,6 +448,31 @@ fn perform(
     let mut plant_evidence = None;
     let (request, table, selected) = match command {
         Command::Register { request, .. } => (read_request(&root.join(request))?, "forecast", None),
+        Command::RegisterCorrection {
+            id,
+            forecast,
+            assessments,
+            series,
+            expected_proposal,
+            model_key,
+            author_role,
+            ..
+        } => (
+            super::correction::registration::prepare(
+                &mut state,
+                &super::correction::registration::Registration {
+                    id: id.clone(),
+                    forecast: forecast.clone(),
+                    assessments: assessments.clone(),
+                    series: *series,
+                    expected_proposal: *expected_proposal,
+                    model_key: model_key.clone(),
+                    author_role: author_role.clone(),
+                },
+            )?,
+            "corrected_forecast",
+            None,
+        ),
         Command::RegisterPlant {
             input,
             grinding,
@@ -541,7 +617,10 @@ fn perform(
         .map_err(Into::into)
 }
 
-fn persisted_report(state: &mut Replay, digest: Digest32) -> Result<Assessment, Refusal> {
+pub(super) fn persisted_report(
+    state: &mut Replay,
+    digest: Digest32,
+) -> Result<Assessment, Refusal> {
     let (cohort, as_of_ns, selector) = state
         .checkpoints
         .iter()
@@ -1195,7 +1274,7 @@ fn apply(
     let event_log_declared = row.get("event_log_floor").is_some();
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
     let vintage_declared = row.get("public_vintages").is_some();
-    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10};
+    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11};
     // A feature's accepted schemas and each schema's required operation are separate constraints.
     // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
     let features: &[(bool, &[OperationVersion], &str)] = &[
@@ -1214,6 +1293,11 @@ fn apply(
             &[V9],
             "plant source registration",
         ),
+        (
+            row.table == "corrected_forecast",
+            &[V11],
+            "prospective correction registration",
+        ),
     ];
     for (declared, allowed, feature) in features {
         if *declared && !allowed.contains(&version) {
@@ -1230,6 +1314,7 @@ fn apply(
         V8 => row.table == "cohort" && cusum_declared,
         V9 => row.table == "plant_forecast" && metadata_declared,
         V10 => row.table == "registered_missing" && status_declared,
+        V11 => row.table == "corrected_forecast",
         _ => true,
     };
     if !required {
@@ -1258,6 +1343,9 @@ fn apply(
     };
     let row = Row(row);
     match row.0.table.as_str() {
+        "corrected_forecast" => {
+            super::correction::registration::apply(state, row, authority_ns)?;
+        }
         "plant_forecast" => {
             let start = super::plant::registration_start(&row, request)?;
             if upper >= start {
@@ -1283,7 +1371,8 @@ fn apply(
             state.forecast_at(row, Some(authority_ns))?;
         }
         "cohort" => {
-            toml_string(row.string("name")?)?;
+            let name = row.string("name")?.to_string();
+            toml_string(&name)?;
             for alias in row.identifiers("members")? {
                 let id = state.forecast_id(&alias)?;
                 let forecast = state
@@ -1306,6 +1395,7 @@ fn apply(
                 }
             }
             state.cohort_at(row, Some(authority_ns))?;
+            super::correction::registration::validate_cohort(state, &name)?;
         }
         "outcome" => {
             if row.time("available_at")? > lower {
@@ -1348,7 +1438,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 10]);
+struct VersionCounts([usize; 11]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {
@@ -1501,7 +1591,9 @@ fn presentation_at(
         let metadata = super::segments::metadata_field(row.metadata.as_ref());
         let registration_before = state.plant_registration_starts.get(id).map_or_else(String::new, |start| format!(
             ",\"registration_before_ns\":{start},\"registration_before\":{}", utc(*start)));
-        Ok(format!("{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_ns\":{},\"registered_at\":{},\"outcome_due_ns\":{},\"outcome_due\":{},\"payload\":{}{metadata}{registration_before}}}",
+        let correction = state.correction_admissions.get(id).map_or_else(String::new, |admission| format!(
+            ",\"correction\":{}", admission.compact_json()));
+        Ok(format!("{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_ns\":{},\"registered_at\":{},\"outcome_due_ns\":{},\"outcome_due\":{},\"payload\":{}{metadata}{registration_before}{correction}}}",
             js(alias), js(&id.to_string()), js(&row.model_key), row.registered_ns, utc(row.registered_ns), row.freeze_time_ns, utc(row.freeze_time_ns), payload_json(&row.payload)))
     }).collect::<Result<Vec<_>, Refusal>>()?.join(",");
     let cohorts = state
@@ -1547,6 +1639,19 @@ fn presentation_at(
         })
         .collect::<Vec<_>>()
         .join(",");
+    let correction_admissions = if state.correction_admissions.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\"correction_admissions\":[{}]",
+            state
+                .correction_admissions
+                .values()
+                .map(|admission| admission.full_json())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     let report = assessment
         .map(|a| -> Result<String, Refusal> {
             let origin = report_origin
@@ -1585,7 +1690,7 @@ fn presentation_at(
         String::new()
     };
     let payload = format!(
-        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"{external_time_proof}\",\"timestamp_commitment\":{timestamp_commitment},\"timestamp_verification\":{timestamp_verification},\"source_citations\":{},\"source_admissions\":[{source_admissions}],\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
+        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"{external_time_proof}\",\"timestamp_commitment\":{timestamp_commitment},\"timestamp_verification\":{timestamp_verification},\"source_citations\":{},\"source_admissions\":[{source_admissions}],\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval}{correction_admissions},\"report\":{report}}}",
         js(operation),
         js(&head.to_hex()),
         js(&header.cell_id),
@@ -1645,6 +1750,17 @@ fn markdown(
     );
     if state.temporal_validation.is_some() {
         out.push_str("\nDeclared ancestry was checked at each forecast's registration. Supplied time metadata is not independently verified; generator replay was not performed. JSON includes the provenance-file hash and per-forecast cone digests.\n");
+    }
+    for (id, admission) in &state.correction_admissions {
+        if assessment.is_none_or(|report| {
+            report
+                .per_member
+                .iter()
+                .any(|member| member.forecast_id == *id)
+        }) {
+            out.push('\n');
+            out.push_str(admission.markdown());
+        }
     }
     if !state.source_admissions.is_empty() {
         out.push_str("\n## Registered source admissions\n\nSource files were verified at admission. Replay checks retained Claim evidence without reopening those files.\n\n| Forecast | Exact printed value | Source Claim | Publication |\n|---|---|---|---|\n");

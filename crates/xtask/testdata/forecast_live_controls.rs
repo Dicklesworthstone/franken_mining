@@ -329,7 +329,7 @@ fn monitor_markdown_displays_original_intervals_and_the_missing_reason() {
         "assess",
         Some(&assessment),
         4,
-        VersionCounts([0, 0, 0, 0, 1, 0, 0, 0, 0, 0]),
+        VersionCounts([0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]),
     )
     .expect("readable saved assessment");
     let monitor = rendered

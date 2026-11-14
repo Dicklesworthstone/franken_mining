@@ -440,6 +440,15 @@ The public lane of M0 (`fmine assure public`).
   and the next actions (`PublicAssuranceReport::next_actions`) are envelope fields, which `fmine-cli` prints.
 
 ## 4. Public API Surface
+
+- DESIGN (BD-355): `fmine compare` reuses registered issuer profiles and the existing authenticated
+  transcription loader. Its bindings file contains only issuer/document/quantity selectors and must
+  match the full selected population. The metrics kernel returns exact ranks and comparative-claim
+  verdicts through canonical source/result Claims with JSON and Markdown provenance, without
+  changing existing assurance identity totals or denominators. Two readers, document hashes, FACT
+  publication evidence, annual period, units and matching definitions are prerequisites; a refusal
+  retains the complete declared population. This bounded same-definition comparison supplies no
+  transferred bridge, automated free-prose interpretation or proprietary cost-curve claim.
 - `sources::{SourceKind, RegisteredSource, RegisteredReconstruction, RegisteredShare, RegisteredMissingFact,
   IssuerProfile, load_issuer_profile, registry_path, registered_issuers, is_issuer_name, is_through_bound}`;
   `IssuerProfile::{from_registry, through}`; `IssuerProfile::{regions, shares}` (BD-331.S3);
