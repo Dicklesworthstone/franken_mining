@@ -31,7 +31,10 @@ impl WallClock for NoClock {
 }
 
 fn ns(utc: &str) -> i64 {
-    parse_utc(utc).unwrap().checked_mul(1_000_000_000).unwrap()
+    parse_utc(utc)
+        .expect("valid fixture timestamp")
+        .checked_mul(1_000_000_000)
+        .expect("fixture timestamp fits nanoseconds")
 }
 
 fn field<'a>(value: &'a Json, keys: &[&str]) -> &'a Json {
@@ -43,7 +46,10 @@ fn field<'a>(value: &'a Json, keys: &[&str]) -> &'a Json {
 }
 
 fn digest(value: &Json, keys: &[&str]) -> Digest32 {
-    Digest32(parse_hex32(field(value, keys).as_str().unwrap()).unwrap())
+    Digest32(
+        parse_hex32(field(value, keys).as_str().expect("digest string"))
+            .expect("32-byte hexadecimal digest"),
+    )
 }
 
 fn near(value: &Json, expected: f64) {
@@ -57,7 +63,7 @@ fn workspace() -> PathBuf {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed),
     ));
-    fs::create_dir(&root).unwrap();
+    fs::create_dir(&root).expect("create isolated weighted forecast workspace");
     root
 }
 
@@ -95,10 +101,10 @@ impl Fixture {
     fn request(&mut self, text: &str) -> Command {
         let request = PathBuf::from(format!("request-{}.toml", self.requests));
         self.requests += 1;
-        fs::write(self.root.join(&request), text).unwrap();
+        fs::write(self.root.join(&request), text).expect("write journal request fixture");
         let journal = JOURNAL.into();
         let head = self.head;
-        match text.lines().next().unwrap() {
+        match text.lines().next().expect("nonempty journal request") {
             "[[forecast]]" => Command::Register {
                 journal,
                 head,
@@ -138,13 +144,13 @@ impl Fixture {
     }
 
     fn bytes(&self) -> Vec<u8> {
-        fs::read(self.root.join(JOURNAL)).unwrap()
+        fs::read(self.root.join(JOURNAL)).expect("read saved journal bytes")
     }
 }
 
 fn checked(envelope: Envelope) -> Json {
     assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
-    parse(envelope.payload_json.as_bytes()).unwrap()
+    parse(envelope.payload_json.as_bytes()).expect("valid successful payload JSON")
 }
 
 fn forecast(id: &str, samples: &str, weights: &str) -> String {
@@ -172,7 +178,7 @@ fn outcome(id: &str, value: &str, date: &str, restated: bool) -> String {
 }
 
 fn offline(root: &Path, text: &str) -> Json {
-    fs::write(root.join("transcript.toml"), text).unwrap();
+    fs::write(root.join("transcript.toml"), text).expect("write offline forecast transcript");
     let args = [
         "forecast",
         "assess",
@@ -378,7 +384,7 @@ fn binary(root: &Path, args: &[&str]) -> Json {
         .args(["forecast", "journal"])
         .args(args)
         .output()
-        .unwrap();
+        .expect("run forecast journal binary");
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -386,7 +392,7 @@ fn binary(root: &Path, args: &[&str]) -> Json {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let envelope = parse(&output.stdout).unwrap();
+    let envelope = parse(&output.stdout).expect("valid binary envelope JSON");
     field(&envelope, &["payload"]).clone()
 }
 

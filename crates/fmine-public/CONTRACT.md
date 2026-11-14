@@ -801,7 +801,10 @@ The public lane of M0 (`fmine assure public`).
     changing gross-cost row names never creates an alias or an assumed-zero component. Cost uncertainty
     sums the exact displayed half-steps of all components; the TCC aggregate sums its block-1 half-steps.
     These reduce to `k/2` and `k1/2` for integer displays. Negative amounts retain positive rounding radii,
-    while literal placeholder zeros contribute no radius.
+    while literal placeholder zeros contribute no radius. This adapter arithmetic does not widen the AISC
+    identity ledger's whole-display admission rule: an amount shown with decimals still produces state (v)
+    and refuses the full-assurance bridge. The decimal precision regression exercises the adapter below that
+    boundary and separately verifies the end-to-end refusal.
     Every bar carries its input citations, rounding enclosure and `sign_not_determined`; endpoint gaps and
     their change are separate exact quantities. Public bridges are descriptive and non-identifying.
   - Derived USD/oz endpoint fields use `waterfall.rate_reconciliation`; the measured residual uses

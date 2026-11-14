@@ -322,6 +322,8 @@ fn monitor_markdown_displays_original_intervals_and_the_missing_reason() {
         cell_id: "synthetic".into(),
         clock_skew_ns: 0,
     };
+    let mut versions = VersionCounts::default();
+    versions.record(OperationVersion::V5);
     let rendered = markdown(
         &header,
         Digest32::default(),
@@ -329,7 +331,7 @@ fn monitor_markdown_displays_original_intervals_and_the_missing_reason() {
         "assess",
         Some(&assessment),
         4,
-        VersionCounts([0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]),
+        versions,
     )
     .expect("readable saved assessment");
     let monitor = rendered

@@ -427,7 +427,7 @@ fn test_displayed_precision_and_explicit_percent_scaling() {
 #[test]
 fn test_component_rounding_uses_each_displayed_precision() {
     let base = run(|_, _| {});
-    let decimal = run(|file, sheets| {
+    let (profile, sources) = fixture(|file, sheets| {
         if file.ends_with("aisc.xlsx") {
             let later = file.starts_with("2031");
             let (sheet, columns, gross, sustaining) = if later {
@@ -441,9 +441,32 @@ fn test_component_rounding_uses_each_displayed_precision() {
             }
         }
     });
+    let assessed = assess(&profile, Lane::Synthetic, sources);
+    // The AISC identity ledger currently declares whole displayed amounts only. Its state-v
+    // admission guard must remain effective even though the waterfall adapter reads decimals.
+    for name in ["Lmdi Site", "Heap Site"] {
+        assert!(
+            site(&assessed.waterfall, name)
+                .outcome
+                .as_ref()
+                .unwrap_err()
+                .what
+                .contains("operand_state_v")
+        );
+    }
+    // Isolate the existing source adapter's arithmetic from identity-ledger admission. This is
+    // not an end-to-end assurance result; values, claims and digests come from the synthetic XLSX files.
+    let decimal = pair_sites(
+        &profile,
+        &assessed.sources,
+        &assessed.mine_stats,
+        &assessed.public_claims,
+        &[],
+        &assessed.mine_ledger,
+    );
     // Hand intervals: gross and sustaining display two decimals (h = 0.005), while the signed
     // NCI line displays integers (h = 0.5). TCC therefore has h = 0.505, and AISC has h = 0.51.
-    let fallback = bridge(&decimal.waterfall, "Heap Site");
+    let fallback = bridge(&decimal, "Heap Site");
     let cash = fallback
         .bars()
         .iter()
@@ -466,18 +489,18 @@ fn test_component_rounding_uses_each_displayed_precision() {
     // Formatting changes the uncertainty and source identity, never the nominal bridge or gap.
     for name in ["Lmdi Site", "Heap Site"] {
         let original = bridge(&base.waterfall, name);
-        let precise = bridge(&decimal.waterfall, name);
+        let precise = bridge(&decimal, name);
         assert_eq!(original.gap(), precise.gap());
         for (a, b) in original.bars().iter().zip(precise.bars()) {
             assert_eq!(a.point, b.point);
         }
     }
     let original = bridge(&base.waterfall, "Lmdi Site");
-    let precise = bridge(&decimal.waterfall, "Lmdi Site");
+    let precise = bridge(&decimal, "Lmdi Site");
     let a = original.bars().iter().find(|b| b.id == "cost").unwrap();
     let b = precise.bars().iter().find(|b| b.id == "cost").unwrap();
     assert!(b.enclosure[0] > a.enclosure[0] && b.enclosure[1] < a.enclosure[1]);
-    assert_ne!(base.waterfall.digest(), decimal.waterfall.digest());
+    assert_ne!(base.waterfall.digest(), decimal.digest());
 }
 
 #[test]

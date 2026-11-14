@@ -1000,7 +1000,7 @@ impl Predictions {
                 head: self.head,
                 cohort: cohort.into(),
                 as_of: cut.into(),
-                selector: "first_published".into(),
+                selector: "first-published".into(),
                 expected_digest: None,
             },
             at,
@@ -1233,7 +1233,7 @@ fn decision_review_requires_a_persisted_score_digest_and_original_complete_membe
 
     // Legacy checkpoints replay, but an omitted original result digest does not certify a saved score.
     let mut forecast = Journal::open_write(&p.journal, p.head).unwrap();
-    forecast.append("[[assessment]]\ncohort = \"primary\"\nas_of = \"1970-01-01T00:00:05Z\"\nselector = \"first_published\"\n", &Clock(6_000_000_000), |_, _| Ok(())).unwrap();
+    forecast.append("[[assessment]]\ncohort = \"primary\"\nas_of = \"1970-01-01T00:00:05Z\"\nselector = \"first-published\"\n", &Clock(6_000_000_000), |_, _| Ok(())).unwrap();
     p.head = forecast.head();
     drop(forecast);
     let inspected = successful(forecast_with_clock(

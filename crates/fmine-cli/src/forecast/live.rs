@@ -1307,7 +1307,11 @@ fn apply(
     // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
     let features: &[(bool, &[OperationVersion], &str)] = &[
         (metadata_declared, &[V7, V9, V13, V14], "forecast metadata"),
-        (weighted_declared, &[V13, V14], "weighted empirical distribution"),
+        (
+            weighted_declared,
+            &[V13, V14],
+            "weighted empirical distribution",
+        ),
         (cusum_declared, &[V8], "CUSUM policy"),
         (gaussian_bounds_declared, &[V6, V8], "Gaussian CRPS bounds"),
         (

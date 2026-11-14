@@ -1,3 +1,5 @@
+//! Determinism: DeterministicPerIsa (exact probabilities with floating-point score comparisons).
+
 use super::*;
 
 fn q(num: i128, den: i128) -> ExactQty {

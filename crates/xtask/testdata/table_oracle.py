@@ -413,9 +413,10 @@ def cost_bridge_workspace(copper=True, mode="normal"):
         file = f"Cost_{identity}.pdf"
         contents = f"%PDF-1.7 invented independent cost and sales assertion: {identity}".encode()
         (root / "documents" / file).write_bytes(contents)
+        # Exercise the same required provenance enum as workspace(); all metadata is invented.
         source += (
             f'\n[[document]]\nfile = "{file}"\ndir = "documents"\nkind = "mda"\n'
-            f'url = "https://example.invalid/{file}"\nurl_basis = "DESIGN: invented fixture"\n'
+            f'url = "https://example.invalid/{file}"\nurl_basis = "W1 table"\n'
             f'published_at = "{published}"\npublished_at_basis = "FACT: invented fixture date"\n'
             f'pages = 1\nbytes = {len(contents)}\nsha256 = "{digest(contents)}"\n'
         )
@@ -699,11 +700,14 @@ class CostRateScenarios(unittest.TestCase):
                 self.assertIn("sales", markdown.stdout.lower())
 
     def test_cost_bridge_refuses_incompatible_or_incomplete_evidence(self):
-        for mode in ("changed_share", "unknown_basis", "zero_sold", "conflicting_rate", "pending_cost"):
+        for mode, code in (("changed_share", "FMINE-REF-105"), ("unknown_basis", "FMINE-REF-105"),
+                           ("zero_sold", "FMINE-REF-208"), ("conflicting_rate", "FMINE-REF-104"),
+                           ("pending_cost", "FMINE-REF-208")):
             with self.subTest(mode=mode):
                 envelope, raw = invoke(cost_bridge_workspace(mode=mode), ["--cost-bridge", "before,after"])
                 self.assertNotEqual(envelope["exit_code"], 0, raw)
                 self.assertIsNotNone(envelope["refusal"], raw)
+                self.assertEqual(envelope["refusal"]["code"], code, raw)
                 self.assertIsNone(envelope["payload"], raw)
 
     def test_cost_bridge_keeps_publication_cuts_and_source_hashes_mandatory(self):
