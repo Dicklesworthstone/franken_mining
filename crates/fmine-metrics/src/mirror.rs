@@ -7,6 +7,7 @@
 //! authenticates source bytes, availability, readership and the stated ownership/perimeter context.
 
 mod capex;
+pub mod cost;
 pub mod transcriptions;
 
 pub use capex::{CapexJointReport, CapexReport, compare_capex};
@@ -559,7 +560,7 @@ fn validate(claim: &Claim<MirrorReading>) -> Result<()> {
     Ok(())
 }
 
-fn derived<T>(metric: &str, value: T, tag: &str, sources: &[&Claim<MirrorReading>]) -> Claim<T> {
+fn derived<T, S>(metric: &str, value: T, tag: &str, sources: &[&Claim<S>]) -> Claim<T> {
     let mut evidence = EvidenceClass::Derived;
     let mut epistemic = EpistemicStatus::KnownKnown;
     let mut state = KnowledgeState::Known;

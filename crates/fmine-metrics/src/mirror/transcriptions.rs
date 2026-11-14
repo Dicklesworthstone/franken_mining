@@ -78,10 +78,10 @@ fn date(s: &str) -> Result<CivilDate> {
 }
 
 #[derive(Debug, Clone)]
-struct Context {
-    mode: String,
-    perimeter: Perimeter,
-    anchor: SourceAnchor,
+pub(super) struct Context {
+    pub(super) mode: String,
+    pub(super) perimeter: Perimeter,
+    pub(super) anchor: SourceAnchor,
     capex_basis: Option<CapexBasis>,
     basis_source: Option<SourceAnchor>,
 }
@@ -101,7 +101,7 @@ fn digest_bytes(s: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
-fn anchor(document: &DocumentRow, locator: String) -> Result<SourceAnchor> {
+pub(super) fn anchor(document: &DocumentRow, locator: String) -> Result<SourceAnchor> {
     Ok(SourceAnchor::new(
         format!("{}/{}", document.dir, document.file),
         digest_bytes(&document.sha256)?,
@@ -110,7 +110,7 @@ fn anchor(document: &DocumentRow, locator: String) -> Result<SourceAnchor> {
 }
 
 /// The two readers agree on both the complete perimeter and the separate page that states its scope.
-fn context(
+pub(super) fn context(
     row: &Accepted,
     document: &DocumentRow,
     capex_scope: Option<CapexScope>,
@@ -275,7 +275,7 @@ fn decimal(d: Decimal) -> Result<(Rat, Rat)> {
     Ok((exact(Rat::new(d.mantissa, n))?, exact(Rat::new(1, n))?))
 }
 
-fn point(row: &Accepted) -> Result<(Rat, Rat)> {
+pub(super) fn point(row: &Accepted) -> Result<(Rat, Rat)> {
     if row.readers.iter().collect::<BTreeSet<_>>().len() < 2
         || parse_token(&row.token).ok() != Some(row.value)
     {
@@ -293,7 +293,7 @@ fn point(row: &Accepted) -> Result<(Rat, Rat)> {
     decimal(d)
 }
 
-fn new_claim<T>(
+pub(super) fn new_claim<T>(
     metric: &str,
     value: T,
     tag: &str,
@@ -321,7 +321,7 @@ fn new_claim<T>(
     )
 }
 
-fn share(
+pub(super) fn share(
     row: &Accepted,
     document: &DocumentRow,
     period: Period,

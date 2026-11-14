@@ -27,6 +27,14 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation"]`
 
 ## 2. Inputs
+
+- DESIGN (BD-346.S5): `mirror::cost::compare` accepts canonical `Claim<CostReading>`s for cash costs,
+  AISC or cost of sales in USD millions. Each original and signed adjustment retains its raw printed
+  token, agreeing reader IDs, exact half-step bounds, own-document definition locator, publication
+  evidence, fixed ownership and complete dated asset perimeter. All eight definition dimensions are
+  explicit: primary metal, sold/produced denominator, by-/co-product allocation, credit location,
+  inventory, G&A, reclamation and accounting treatment. `mirror::cost::bind::bind` consumes already
+  agreed source rows; authenticity, complete reader agreement and source availability remain the caller's duty.
 - DESIGN (BD-273): `consolidation::compare` accepts one bound `Claim<Table>` with complete named
   component rows, one aggregate column, explicitly matched member columns and membership rules. Each
   amount retains its signed exact value and display step; numerator components are USD millions and sold
@@ -65,6 +73,12 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
 ## 3. Outputs
+
+- DESIGN (BD-346.S5): `CostReport` keeps all source Claims, one exact adjusted full-basis Claim per
+  reporter, and a common interval Claim when the intervals intersect. The status is `consistent`
+  without adjustments and `explained` with them. Disjoint intervals produce `conflict`, no common
+  Claim, and a rational separation certificate naming the greater lower bound and lesser upper bound.
+  This is an arithmetic compatibility report, not an accounting reconciliation or an implied per-ounce rate.
 - DESIGN (bd-srqc): `recovery::sensitivity::assess` returns a derived `Claim<Sensitivity>` retaining the
   model, subject, full-site calendar quarter, signed copper difference in kt and exact signed USD-million
   value enclosure under the named price. The conversion uses the statutory avoirdupois gram/pound ratio
@@ -125,6 +139,15 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`mirror::compare`** gives a `MirrorReport` with a `MirrorVerdict`. `Consistent` carries a checked source-basis witness and a common full-basis Claim. `Conflict` carries the checked certificate/digest, blame status and inclusion-minimal source sets. `Indeterminate` has no common quantity. **`compare_capex`** gives a `CapexReport`: independent single-line checks in `lines`, and the separate `ComponentSum` assessment in `joint`. `fmine-cli`'s `mirror.rs` calls both.
 
 ## 4. Invariants
+
+- DESIGN (BD-346.S5): each dollar adjustment field needs both reporters' own signed amount and the
+  same target treatment; absence never becomes zero. All adjustments share their reporter's original
+  source document, definition and ownership basis. Metal, denominator and allocation policies cannot
+  be bridged with a dollar amount. Accounting adjustments apply only to cost of sales, never AISC or
+  cash costs. Duplicate source rows, competing original totals and cross-asset or cross-period bridges
+  refuse. Exact source boxes are summed before positive ownership division, without a zero clamp.
+  Source tags bind raw tokens and readers; the kernel rechecks the token's half-step interval. Derived
+  Claims preserve source parents, anchors, weaker evidence/knowledge and the complete UU-term union.
 - DESIGN: cost and GEO declared worksheets share strict quoted-field, exact-quantity and calendar-period
   parsing, input-envelope admission, immutable receipt storage, derived Claim metadata and JSON rendering
   in the private `definitions::declared` module.
@@ -285,7 +308,7 @@ The other modules have local errors with no refusal code:
 - **Reserve replacement** is not reserve validation. Actual file authentication and independent reader agreement remain the caller's duty.
 - **The additive quarter kernel and the quarter sums** authenticate no workbook bytes, publication dates or ownership registry. The caller must admit all eligible evidence first. They give no probabilistic confidence, source ranking, implicit unit conversion, subtraction of non-additive rates, or permission to disclose. A non-obvious arithmetic consequence can itself be new information. These are exact arithmetic enclosures, not forecasts or confidence intervals.
 - **`reserves`** is a projection, not a durable append-only store, a complete filing census or an `EstimateStatement`. A `reserves::geo` finding is conditional on the supplied candidate set.
-- **The mirror** authenticates no filing bytes, human readership, publication date or issuer affiliation; its caller must bind those facts before supplying source Claims. It does not infer missing perimeters, aggregate incomparable operations, select vintages, invent an absent partner share, adjust capital definitions or bridge cost lines, transfer bridges between assets, or decide which reporter is physically correct. The independent total check and the joint total can differ, because `ComponentSum` uses the components' rounding bounds. Its transcription binding consumes already-agreed S0 rows, without authenticating bytes or publication availability; accepted rows alone cannot prove that an omitted rejection did not exist.
+- **The mirror** authenticates no filing bytes, human readership, publication date or issuer affiliation; its caller must bind those facts before supplying source Claims. It does not infer missing perimeters, aggregate incomparable operations, select vintages, invent an absent partner share, adjust capital definitions, infer cost-line bridges, transfer bridges between assets, or decide which reporter is physically correct. The independent total check and the joint total can differ, because `ComponentSum` uses the components' rounding bounds. Its transcription binding consumes already-agreed S0 rows, without authenticating bytes or publication availability; accepted rows alone cannot prove that an omitted rejection did not exist.
 
 ## 9. Oracles
 - **Exact hand known answers**, all synthetic:
@@ -314,6 +337,12 @@ The other modules have local errors with no refusal code:
 - **No fixture** under `fixtures/`.
 
 ## 10. Known gaps
+
+- DESIGN (BD-346.S5): the bounded dollar-cost bridge has synthetic exact and source-loader controls in
+  `metrics_mirror_cost_controls.rs` and `mirror_cost_oracle.py`. Authentic partner filings, complete
+  accounting-definition equivalence, general policy bridges and the full BD-346 power/data gates
+  remain separate work. Supplied common allocation policies are conditional inputs, not independently
+  established equivalence, and bridges are never transferred between assets.
 - DESIGN (BD-060/BD-061): the exact cost worksheet also admits copper pounds sold under the
   issuer-specific Q2 2026 C1 and copper AISC table definitions. Reconciliation deductions remain
   separate from by-product credits; co-product allocation removes only by-product credits.

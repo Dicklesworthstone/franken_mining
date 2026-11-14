@@ -1072,6 +1072,20 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   partially withheld annual outcomes remain unresolved; later releases cannot erase the original reason.
 
 ## 5. Guards & Typed Refusals
+
+- DESIGN (BD-346.S5): `mirror --metric cash-costs|aisc|cost-of-sales` reuses the two-issuer verified
+  document loader and exact evidence cut. It selects original `_100_usd_m`/`_attr_usd_m` rows and all
+  named adjustment rows, retaining reader disagreements at selected locators. Exactly one original
+  cost assertion per reporter is required. Every amount has explicit metal, denominator, allocation,
+  credits, inventory, G&A, reclamation and accounting fields plus its own definition-page citation.
+  Adjustments use `_<field>_adjustment_<100|attr>_usd_m`, retain the original definition and append a
+  `target` treatment. The kernel requires both reporters' own source amounts for every applied layer;
+  primary-metal, denominator and allocation differences refuse, and accounting layers apply only to
+  cost of sales. Source tokens/readers enter canonical source Claims and the receipt. JSON includes
+  complete source/derived Claim views and exact compatibility or separation; Markdown retains signed
+  readings and citations. Arithmetic conflicts have exit zero; missing/changed documents, disputed
+  readings and incompatible definitions keep typed refusals. No per-ounce rate, accounting
+  reconciliation, disclosure authority or authentic partner-corpus acceptance is asserted.
 - DESIGN (BD-346): `mirror` selects two distinct issuer profiles and explicit documents, without default
   partners, shares or asset boundaries. Documents-only profiles use the existing sources/transcription
   schemas and required `[[subject]]`; workbook consumers retain their no-workbook refusal. Selected documents

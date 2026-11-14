@@ -74,6 +74,23 @@ fn source_bound_matrix_passes_independent_python_oracle() {
 }
 
 #[test]
+fn source_bound_cost_mirrors_preserve_exact_bridges_and_reject_missing_evidence() {
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(workspace_root().join("crates/xtask/testdata/mirror_cost_oracle.py"))
+        .arg("--binary")
+        .arg(executable())
+        .output()
+        .expect("run source-bound cost mirror cases against the actual executable");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn synthetic_binary_emits_readable_markdown() {
     let output = Command::new(executable())
         .args(["mirror", "--synthetic", "--format", "markdown"])

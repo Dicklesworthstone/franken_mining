@@ -2684,8 +2684,64 @@ zero; unusable sources or incompatible bases retain their nonzero refusal exits.
 Real partner-filing coverage for NGM, Pueblo Viejo and Kibali remains open, including independently read
 ownership, capital definitions and dated perimeter evidence. The unresolved NGM vend-in dates and shares
 are not supplied by defaults. The current capex adapter reads agreed registered document transcriptions;
-automatic workbook-to-partner pairing, cited definition bridges, cost/accounting bridges and full BD-346
-acceptance remain open.
+automatic workbook-to-partner pairing, general cost/accounting bridges and full BD-346 acceptance remain open.
+
+#### Compare dollar costs with cited definition bridges
+
+DESIGN (BD-346.S5): `--metric cash-costs`, `--metric aisc` and `--metric cost-of-sales` compare extensive
+USD-million totals from the two selected filings. Use the same document selectors and evidence cut:
+
+```bash
+cargo run -p fmine-cli -- mirror --asset example-jv --period 2025 --as-of 2026-02-01 \
+  --left-issuer issuer_a --left-document Left.pdf \
+  --right-issuer issuer_b --right-document Right.pdf --metric aisc --format markdown
+```
+
+The source keys are `mirror_example_jv_2025fy_aisc_attr_usd_m` or `_aisc_100_usd_m`; substitute
+`cash_costs` or `cost_of_sales` for `aisc`. Each reporter supplies exactly one original cost total;
+competing full and attributable assertions refuse. Entries use `unit = "USD_m"`, `period = "2025FY"`
+and the ordinary two-reader document transcription schema. Attributable amounts require the existing
+separate equity-percent row on the same complete dated perimeter. That equity row keeps its original
+physical-context grammar, without cost-definition fields.
+
+Every cost total and adjustment appends the following explicit definition fields and its own document's
+definition-page locator to the perimeter grammar above:
+
+| Field | Supported values |
+| --- | --- |
+| `metal` | `gold`, `copper`, `silver`, `tin` |
+| `denominator` | `sold`, `produced` |
+| `allocation` | `by_product`, `co_product` |
+| `credits` | `separate_line`, `inside_selling_costs`, `excluded` |
+| `inventory`, `ga` | `included`, `excluded` |
+| `reclamation` | `operating_only`, `all_sites`, `excluded` |
+| `accounting` | `as_reported`, `historical_cost`, `purchase_price_allocation` |
+
+For example, this invented original AISC reading has a complete interpretation; the document, locator,
+token and independent reader entries still come from the surrounding transcription record:
+
+```toml
+quantity = "mirror_example_jv_2025fy_aisc_attr_usd_m"
+unit = "USD_m"
+period = "2025FY"
+basis = "attributable;perimeter=group;members=mine-a+mine-b;valid=2025-01-01/2025-12-31;scope_page=2;scope_table=Scope;scope_row=Operations;scope_col=2025;metal=gold;denominator=sold;allocation=by_product;credits=separate_line;inventory=included;ga=included;reclamation=operating_only;accounting=as_reported;definition_page=2;definition_table=Cost policy;definition_row=Cost definition;definition_col=2025"
+```
+
+An adjustment uses, for example, `mirror_example_jv_2025fy_aisc_ga_adjustment_attr_usd_m`, repeats that
+reporter's **original** definition and ownership basis, and appends `;target=included`. Its printed signed
+amount is added to the original total. Every applied field needs a cited adjustment in **both** reporters'
+own filings, including a printed zero where applicable; an absent row never becomes zero. Only `credits`,
+`inventory`, `ga`, `reclamation` and `accounting` admit dollar adjustments. Accounting adjustments are
+restricted to cost of sales; AISC and cash-cost accounting adjustments refuse. Primary-metal, denominator or allocation
+differences cannot be bridged with a dollar row.
+
+The exact calculation retains each token's half-last-place interval, adds the signed layers, divides by
+the cited share, and intersects the resulting full-basis intervals. Results are `consistent`, `explained`
+or `conflict`; a conflict includes the exact separating bounds and no common Claim. Missing definitions,
+one-sided bridges, conflicting readings, changed files and unsupported bases retain typed refusals.
+JSON preserves the source and derived canonical Claims, raw readings, reader identities and source hashes;
+Markdown shows the same signed source evidence. These are conditional dollar-cost comparisons: no per-ounce
+rate, accounting reconciliation, bridge transfer or authentic partner-corpus coverage is established.
 
 ### Assess a frozen forecast cohort
 

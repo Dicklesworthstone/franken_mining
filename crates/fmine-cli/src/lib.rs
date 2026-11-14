@@ -84,7 +84,7 @@ pub enum CliCommand {
     RecoveryBounds { model: PathBuf },
     /// Construct affordable static project bundles on shared declared scenarios (BD-229).
     CapitalProgram { model: PathBuf },
-    /// Compare explicitly selected public JV production/sales assertions on a common dated perimeter.
+    /// Compare public JV production, sales, capital and cost assertions on a common dated perimeter.
     Mirror(mirror::Command),
     /// Local issuance status, recall and owner-authorized journal events (BD-347).
     RelianceExplicit(reliance_explicit::Command),
@@ -2313,6 +2313,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "recall --journal <path> (--revision <build-revision> | --claim <id>) [--head <hex>]",
                 "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--capacity-document <registered file>]",
                 "guidance completion --synthetic",
+                "mirror --asset <asset> --period <period> --as-of YYYY-MM-DD --left-issuer <issuer> --left-document <file> --right-issuer <issuer> --right-document <file> --metric cash-costs|aisc|cost-of-sales",
                 "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]",
                 "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD [--price-subject <subject>]",
                 "track-record --issuer <issuer> --cohort-as-of YYYY-MM-DD [--site <site>] [--through YYYYQn]",

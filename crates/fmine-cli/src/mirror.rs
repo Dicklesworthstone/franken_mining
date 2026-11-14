@@ -11,6 +11,7 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_core::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{EvidenceClass, Refusal, RefusalCode};
 use fmine_metrics::guidance::{Ownership, Period};
+use fmine_metrics::mirror::cost::CostMetric;
 use fmine_metrics::mirror::transcriptions::{self, keys, period_label as period};
 use fmine_metrics::mirror::{
     self, CapexBasis, CapexReport, CapexScope, MirrorMetric, MirrorReading, MirrorReport,
@@ -25,6 +26,8 @@ use fmine_time::{CivilDate, days_in_month};
 
 use crate::guidance_capacity::{interval, rational as rat};
 use crate::{Envelope, NextAction, json_string as j};
+
+mod cost;
 
 pub const NO_CLAIM: &str = "Conditional compatibility of selected public assertions under their stated ownership and common dated perimeter. Agreement does not establish physical truth or select a correct reporter. No cost bridge, valuation, disclosure permission or partner affiliation is implied.";
 const SCHEMA: &str = "fmine.jv_mirror.v1";
@@ -41,6 +44,7 @@ pub struct ReporterSelection {
 pub enum MetricSelection {
     Single(MirrorMetric),
     Capex,
+    Cost(CostMetric),
 }
 
 impl MetricSelection {
@@ -52,6 +56,7 @@ impl MetricSelection {
                 MirrorMetric::Capex(CapexScope::Project),
                 MirrorMetric::Capex(CapexScope::Total),
             ],
+            Self::Cost(_) => Vec::new(),
         }
     }
 
@@ -59,10 +64,14 @@ impl MetricSelection {
         match self {
             Self::Single(kind) => metric_name(kind),
             Self::Capex => "capex_usd_m",
+            Self::Cost(kind) => kind.as_str(),
         }
     }
 
     fn keys(self, asset: &str, period: Period) -> Vec<String> {
+        if let Self::Cost(kind) = self {
+            return fmine_metrics::mirror::cost::bind::keys(asset, period, kind);
+        }
         let mut selected: Vec<_> = self
             .kinds()
             .into_iter()
@@ -219,9 +228,12 @@ pub fn parse(args: &[String]) -> std::result::Result<Command, String> {
         "capex-project" => MetricSelection::Single(MirrorMetric::Capex(CapexScope::Project)),
         "capex-total" => MetricSelection::Single(MirrorMetric::Capex(CapexScope::Total)),
         "capex" => MetricSelection::Capex,
+        "cash-costs" => MetricSelection::Cost(CostMetric::CashCosts),
+        "aisc" => MetricSelection::Cost(CostMetric::Aisc),
+        "cost-of-sales" => MetricSelection::Cost(CostMetric::CostOfSales),
         _ => {
             return Err(
-                "mirror --metric supports production, sold, copper-production, copper-sold, capex-sustaining, capex-project, capex-total or capex".into(),
+                "mirror --metric supports production, sold, copper-production, copper-sold, capex-sustaining, capex-project, capex-total, capex, cash-costs, aisc or cost-of-sales".into(),
             );
         }
     };
@@ -311,6 +323,21 @@ fn load_side(
     selected: &Selection,
     reporter: &ReporterSelection,
 ) -> Result<(Source, Vec<Claim<MirrorReading>>)> {
+    let (document, rows) = load_rows(root, selected, reporter)?;
+    bind_rows(
+        selected,
+        &reporter.issuer,
+        document,
+        rows,
+        EvidenceClass::ISSUER,
+    )
+}
+
+fn load_rows(
+    root: &Path,
+    selected: &Selection,
+    reporter: &ReporterSelection,
+) -> Result<(DocumentRow, Vec<Accepted>)> {
     let profile = load_issuer_profile(root, &reporter.issuer)?;
     let document = profile
         .documents
@@ -371,13 +398,7 @@ fn load_side(
             "every selected locator needs complete independent reader agreement",
         ));
     }
-    bind_rows(
-        selected,
-        &reporter.issuer,
-        document,
-        report.agreement.accepted,
-        EvidenceClass::ISSUER,
-    )
+    Ok((document, report.agreement.accepted))
 }
 
 struct Card {
@@ -421,6 +442,12 @@ fn public(root: &Path, selection: &Selection) -> Result<Card> {
         report: match selection.metric {
             MetricSelection::Single(_) => Report::Single(Box::new(mirror::compare(&inputs)?)),
             MetricSelection::Capex => Report::Capex(Box::new(mirror::compare_capex(&inputs)?)),
+            MetricSelection::Cost(_) => {
+                return Err(fail(
+                    RefusalCode::BasisMismatch105,
+                    "costs require the cost-definition comparator",
+                ));
+            }
         },
         synthetic: false,
     })
@@ -539,12 +566,23 @@ fn synthetic(metric: MetricSelection) -> Result<Card> {
         report: match metric {
             MetricSelection::Single(_) => Report::Single(Box::new(mirror::compare(&inputs)?)),
             MetricSelection::Capex => Report::Capex(Box::new(mirror::compare_capex(&inputs)?)),
+            MetricSelection::Cost(_) => {
+                return Err(fail(
+                    RefusalCode::BasisMismatch105,
+                    "costs require source-bound definition readings",
+                ));
+            }
         },
         synthetic: true,
     })
 }
 
 pub fn execute(command: &Command, root: &Path) -> Envelope {
+    if let Command::Public(selected) = command
+        && let MetricSelection::Cost(kind) = selected.metric
+    {
+        return cost::execute(root, selected, kind);
+    }
     let actions = vec![NextAction::new(
         "fmine robot-docs",
         "Inspect the registered public mirror command.",
