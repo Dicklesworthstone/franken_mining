@@ -2,21 +2,27 @@
 
 fn basis(metric: Metric) -> String {
     let base = format!(
-        "metric={};scope=company;ownership=attributable;operations=all;metal=gold;denominator={}",
+        "metric={};scope=company;ownership=attributable;operations=all;metal={};denominator={}",
         metric.as_str(),
-        if metric == Metric::Aisc {
-            "sold"
-        } else {
+        metric.metal(),
+        if metric.is_production() {
             "produced"
+        } else {
+            "sold"
         }
     );
-    let cost = if metric == Metric::Aisc {
+    let cost = if !metric.is_production() {
         ";allocation=by_product;credits=separate_line;inventory=included;ga=included;sustaining_leases=included;minesite_exploration=included;reclamation=operating_only;stripping=included;accounting=as_reported"
     } else {
         ""
     };
+    let royalties = match metric {
+        Metric::CopperC1 => ";royalties=excluded",
+        Metric::CopperAisc => ";royalties=included",
+        _ => "",
+    };
     format!(
-        "{base}{cost};definition_page=2;definition_table=Invented reconciliation;definition_row=Metric definition;definition_col=2030"
+        "{base}{cost}{royalties};definition_page=2;definition_table=Invented reconciliation;definition_row=Metric definition;definition_col=2030"
     )
 }
 
@@ -382,5 +388,146 @@ fn peer_gold_production_and_ordering_have_a_positive_path() {
     assert_eq!(
         compare(&req, &reversed).unwrap().claim.claim_id,
         report.claim.claim_id
+    );
+}
+
+#[test]
+fn copper_peer_ranks_preserve_signed_costs_zero_production_and_exact_precision() {
+    for metric in [
+        Metric::CopperProduction,
+        Metric::CopperC1,
+        Metric::CopperAisc,
+    ] {
+        let first = if metric.is_production() {
+            "400.00"
+        } else {
+            "-0.50"
+        };
+        let inputs = vec![
+            supplied("a", metric, first),
+            supplied("b", metric, "0.00"),
+            supplied("c", metric, "2.75"),
+        ];
+        let mut req = request(&inputs);
+        req.claim = Some(RankClaim {
+            issuer: "a".into(),
+            order: if metric.is_production() {
+                RankOrder::Highest
+            } else {
+                RankOrder::Lowest
+            },
+            at_most: 1,
+        });
+        let report = compare(&req, &inputs).unwrap();
+        assert_eq!(report.claim.value.verdict, Some(Verdict::Supported));
+        assert_eq!(report.claim.parents.len(), 3);
+        assert_eq!(report.claim.value.definition.fields["metal"], "copper");
+        assert_eq!(inputs[1].value.interval.lo, Rat::new(-1, 200).unwrap());
+        assert_eq!(inputs[1].value.interval.hi, Rat::new(1, 200).unwrap());
+        if !metric.is_production() {
+            assert_eq!(inputs[0].value.interval.lo, Rat::new(-101, 200).unwrap());
+            assert_eq!(inputs[0].value.interval.hi, Rat::new(-99, 200).unwrap());
+        }
+        let mut reversed = inputs.clone();
+        reversed.reverse();
+        req.issuers.reverse();
+        assert_eq!(
+            compare(&req, &reversed).unwrap().claim.claim_id,
+            report.claim.claim_id
+        );
+        assert!(
+            compare(&req, &inputs[..2])
+                .unwrap_err()
+                .what
+                .contains("missing=[c]")
+        );
+        req.as_of = "2031-01-31".into();
+        assert!(
+            compare(&req, &inputs)
+                .unwrap_err()
+                .what
+                .contains("after the selected evidence cut")
+        );
+    }
+}
+
+#[test]
+fn copper_peer_sources_never_infer_metal_units_denominator_or_c1_identity() {
+    for metric in [
+        Metric::CopperProduction,
+        Metric::CopperC1,
+        Metric::CopperAisc,
+    ] {
+        let original = row("a", metric, "2.50");
+        let mut wrong_unit = original.clone();
+        wrong_unit.unit = if metric.is_production() {
+            "Mlb"
+        } else {
+            "USD/oz"
+        }
+        .into();
+        let mut wrong_metal = original.clone();
+        wrong_metal.basis = wrong_metal.basis.replace("metal=copper", "metal=gold");
+        let mut wrong_denominator = original.clone();
+        wrong_denominator.basis = if metric.is_production() {
+            wrong_denominator
+                .basis
+                .replace("denominator=produced", "denominator=sold")
+        } else {
+            wrong_denominator
+                .basis
+                .replace("denominator=sold", "denominator=produced")
+        };
+        for wrong in [wrong_unit, wrong_metal, wrong_denominator] {
+            assert!(
+                source::bind(
+                    "a",
+                    metric,
+                    2030,
+                    &document("a"),
+                    &wrong,
+                    EvidenceClass::Assumed
+                )
+                .is_err()
+            );
+        }
+    }
+    let c1 = supplied("a", Metric::CopperC1, "2.50");
+    let aisc = supplied("b", Metric::CopperAisc, "2.50");
+    assert!(compare(&request(&[c1.clone(), aisc.clone()]), &[c1.clone(), aisc]).is_err());
+    let unprinted = row("a", Metric::CopperProduction, "-0.01");
+    assert!(
+        source::bind(
+            "a",
+            Metric::CopperProduction,
+            2030,
+            &document("a"),
+            &unprinted,
+            EvidenceClass::Assumed
+        )
+        .is_err()
+    );
+    let mut peers = vec![c1, supplied("b", Metric::CopperC1, "2.00")];
+    let req = request(&peers);
+    let mut value = peers[1].value.clone();
+    value
+        .definition
+        .fields
+        .insert("royalties".into(), "included".into());
+    peers[1] = rebind(&peers[1], value);
+    assert!(
+        compare(&req, &peers)
+            .unwrap_err()
+            .what
+            .contains("definition mismatch royalties")
+    );
+    let mut value = peers[1].value.clone();
+    value.definition.fields.remove("royalties");
+    peers[1] = rebind(&peers[1], value);
+    assert!(
+        compare(&req, &peers)
+            .unwrap_err()
+            .what
+            .contains("missing definition field royalties")
     );
 }

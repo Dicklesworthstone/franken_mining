@@ -30,11 +30,14 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 ## 2. Inputs
 
 - DESIGN (BD-355): `comparison::compare` takes a complete declared set of 2–64 issuer Claims on
-  identical annual AISC or gold-production definitions. Each input retains its agreed metric,
+  identical annual gold AISC/production or copper C1/AISC/production definitions. Each input retains its agreed metric,
   company scope, ownership, operations, metal, denominator, own-document definition citation,
-  source SHA-256, publication evidence and readers. AISC also requires allocation, credit location,
+  source SHA-256, publication evidence and readers. Costs also require allocation, credit location,
   inventory, G&A, sustaining leases, minesite exploration, reclamation, stripping and accounting
-  treatment. Missing, extra or duplicate peers and differing fields refuse; no bridge or conversion
+  treatment. Copper C1 and AISC additionally require explicit matching royalty treatment. Copper
+  production is kt on a produced basis; copper costs are USD/lb on a sold basis. Signed cost readings
+  remain admissible, while production has a nonnegative domain. Existing gold bindings are unchanged.
+  Missing, extra or duplicate peers and differing fields refuse; no bridge or conversion
   is inferred. `comparison::source::bind` admits two-reader-agreed printed actuals from a selected
   registered financial or annual filing. The I/O owner authenticates bytes and complete reader agreement.
 - DESIGN (BD-346.S5): `mirror::cost::compare` accepts canonical `Claim<CostReading>`s for cash costs,

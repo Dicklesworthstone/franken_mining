@@ -2565,8 +2565,8 @@ outcomes separately.
 
 ### Compare a complete public peer set
 
-DESIGN (BD-355): `compare` checks annual AISC or gold production using each issuer's own registered
-financial filing, an agreed two-reader transcription, authenticated document bytes and publication
+DESIGN (BD-355): `compare` checks annual gold or copper production and costs using each issuer's own
+registered financial filing, an agreed two-reader transcription, authenticated document bytes and publication
 evidence available by the chosen cut:
 
 ```bash
@@ -2587,10 +2587,11 @@ quantity = "agreed-company-aisc"
 ```
 
 Include exactly one row per declared issuer. The agreed transcription basis must explicitly identify
-the metric, company scope, full or attributable ownership, operations, gold denominator and a definition
-locator in that same document. AISC additionally requires matching allocation, credit location,
+the metric, company scope, full or attributable ownership, operations, metal, denominator and a definition
+locator in that same document. Costs additionally require matching allocation, credit location,
 inventory, G&A, sustaining leases, minesite exploration, reclamation, stripping and accounting treatment.
-`robot-docs` lists the exact supported basis fields. The binding cannot supply values, replace a
+Copper C1 and AISC also require explicit matching `royalties=included|excluded` treatment. Existing gold
+bindings retain their original fields. `robot-docs` lists the exact supported basis fields. The binding cannot supply values, replace a
 definition or transfer one issuer's reconciliation to another.
 
 The report retains all source Claims and shows ascending and descending competition-rank ranges over
@@ -2598,10 +2599,20 @@ the exact printed rounding intervals. Equal values share rank; overlapping inter
 indeterminate. `lowest:N` and `highest:N` mean competition rank at most N, including ties. A comparative
 claim is supported only if it holds throughout the admitted intervals, unsupported if it cannot hold,
 and otherwise indeterminate. Missing or incompatible peers refuse the entire comparison and keep the
-full requested issuer list visible. `--metric gold-production` supplies the same workflow for compatible
-company gold production in koz. No industry coverage, probability, proprietary quartile or automatically
-interpreted prose claim is inferred. The current controls use explicitly invented filings; real peer
-filing reproduction remains a separate source-data gate.
+full requested issuer list visible. The same workflow supports these explicit metric definitions:
+
+| `--metric` | Unit | Metal and denominator |
+|---|---|---|
+| `aisc` | USD/oz | Gold sold |
+| `gold-production` | koz | Gold produced |
+| `copper-c1` | USD/lb | Copper sold |
+| `copper-aisc` | USD/lb | Copper sold |
+| `copper-production` | kt | Copper produced |
+
+Copper costs may be zero or negative; production has a nonnegative domain. Units and denominator bases
+must already agree in the source readings. No industry coverage, probability, proprietary quartile or
+automatically interpreted prose claim is inferred. The current controls use explicitly invented filings;
+real peer filing reproduction remains a separate source-data gate.
 
 ### Mirror two reporters' gold, copper and capital expenditure
 

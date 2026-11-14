@@ -10,7 +10,8 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
-- DESIGN (BD-355): `compare --metric aisc|gold-production --issuers a,b,... --period YYYYFY
+- DESIGN (BD-355): `compare --metric aisc|gold-production|copper-production|copper-c1|copper-aisc
+  --issuers a,b,... --period YYYYFY
   --as-of YYYY-MM-DD --bindings <path>` admits each issuer's own registered financial filing and agreed
   actual point, authenticating bytes, two readers and FACT publication evidence. The selector file has
   no numeric or semantic overrides. Every issuer remains required. Identical source-declared definitions
@@ -18,8 +19,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   is imposed. Optional `--claim-issuer` and `--claim lowest|highest|lowest:N|highest:N` report whether the
   declared rank-at-most-N assertion is supported, unsupported or indeterminate. JSON and Markdown retain
   source/result Claims, locators, publication dates and all rank directions. Missing peers or differing
-  definitions refuse with the complete requested population visible. Source-backed synthetic integration
-  controls do not establish real peer-filing reproduction or arbitrary prose interpretation.
+  definitions refuse with the complete requested population visible. Copper production requires kt,
+  copper metal and produced denominator; C1/AISC require USD/lb, sold denominator and explicit matching
+  royalty treatment alongside all other cost fields. Signed copper costs are retained without unit
+  conversion or substitution of gold definitions. Source-backed synthetic integration controls do not
+  establish real peer-filing reproduction or arbitrary prose interpretation.
 
 - DESIGN (BD-176/181/182): `plant production --input <coupling> --grinding <worksheet> --recovery <worksheet>`
   reads three bounded source snapshots, delegates admission to their existing plant owners, and exposes

@@ -35,6 +35,9 @@ fn checked<T>(value: std::result::Result<T, fmine_units::UnitsError>) -> Result<
 pub enum Metric {
     Aisc,
     GoldProduction,
+    CopperProduction,
+    CopperC1,
+    CopperAisc,
 }
 
 impl Metric {
@@ -43,6 +46,9 @@ impl Metric {
         match self {
             Self::Aisc => "aisc",
             Self::GoldProduction => "gold-production",
+            Self::CopperProduction => "copper-production",
+            Self::CopperC1 => "copper-c1",
+            Self::CopperAisc => "copper-aisc",
         }
     }
 
@@ -51,13 +57,29 @@ impl Metric {
         match self {
             Self::Aisc => "USD/oz",
             Self::GoldProduction => "koz",
+            Self::CopperProduction => "kt",
+            Self::CopperC1 | Self::CopperAisc => "USD/lb",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_production(self) -> bool {
+        matches!(self, Self::GoldProduction | Self::CopperProduction)
+    }
+
+    #[must_use]
+    pub const fn metal(self) -> &'static str {
+        match self {
+            Self::Aisc | Self::GoldProduction => "gold",
+            Self::CopperProduction | Self::CopperC1 | Self::CopperAisc => "copper",
         }
     }
 
     const fn additivity(self) -> AdditivityClass {
-        match self {
-            Self::Aisc => AdditivityClass::IntensiveWeighted,
-            Self::GoldProduction => AdditivityClass::ExtensiveAdditive,
+        if self.is_production() {
+            AdditivityClass::ExtensiveAdditive
+        } else {
+            AdditivityClass::IntensiveWeighted
         }
     }
 }
@@ -97,7 +119,12 @@ impl Definition {
                 COST_FIELDS
                     .iter()
                     .copied()
-                    .filter(|_| metric == Metric::Aisc),
+                    .filter(|_| !metric.is_production()),
+            )
+            .chain(
+                ["royalties"]
+                    .into_iter()
+                    .filter(|_| matches!(metric, Metric::CopperC1 | Metric::CopperAisc)),
             )
             .collect();
         for field in &required {
@@ -112,13 +139,13 @@ impl Definition {
                 "scope" => value == "company",
                 "ownership" => matches!(value.as_str(), "full" | "attributable"),
                 "operations" => matches!(value.as_str(), "all" | "continuing"),
-                "metal" => value == "gold",
+                "metal" => value == metric.metal(),
                 "denominator" => {
                     value
-                        == if metric == Metric::Aisc {
-                            "sold"
-                        } else {
+                        == if metric.is_production() {
                             "produced"
+                        } else {
+                            "sold"
                         }
                 }
                 "allocation" => matches!(value.as_str(), "by_product" | "co_product"),
@@ -126,7 +153,12 @@ impl Definition {
                     value.as_str(),
                     "separate_line" | "inside_selling_costs" | "excluded"
                 ),
-                "inventory" | "ga" | "sustaining_leases" | "minesite_exploration" | "stripping" => {
+                "inventory"
+                | "ga"
+                | "sustaining_leases"
+                | "minesite_exploration"
+                | "stripping"
+                | "royalties" => {
                     matches!(value.as_str(), "included" | "excluded")
                 }
                 "reclamation" => {
@@ -396,10 +428,10 @@ fn validate(input: &Claim<PeerReading>, request: &Request) -> Result<()> {
             "comparison requires nonempty closed bounds",
         ));
     }
-    if request.metric == Metric::GoldProduction && reading.interval.hi.signum() < 0 {
+    if request.metric.is_production() && reading.interval.hi.signum() < 0 {
         return Err(fail(
             RefusalCode::BasisMismatch105,
-            "gold production cannot be wholly negative",
+            "reported metal production cannot be wholly negative",
         ));
     }
     for anchor in [&reading.source, &reading.definition_source] {

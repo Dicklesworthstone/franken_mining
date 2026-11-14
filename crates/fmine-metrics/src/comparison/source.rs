@@ -78,10 +78,10 @@ pub fn bind(
             "peer actual requires a printed point, not a range or bound",
         ));
     };
-    if metric == Metric::GoldProduction && point.mantissa < 0 {
+    if metric.is_production() && point.mantissa < 0 {
         return Err(fail(
             RefusalCode::BasisMismatch105,
-            "reported gold production cannot be negative",
+            "reported metal production cannot be negative",
         ));
     }
     let denominator = 10_i128.checked_pow(point.scale).ok_or_else(|| {
