@@ -22,6 +22,7 @@ use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 use crate::json_string as js;
 
 pub(crate) mod comparison;
+mod correction;
 mod cusum;
 mod diagnostics;
 pub mod live;
@@ -40,6 +41,7 @@ pub const EVENT_LOG_JSON: &str = r#"{"cohort_field":"event_log_floor","declarati
 pub const METADATA_JSON: &str = segments::ROBOT_DOCS_JSON;
 pub const DIAGNOSTICS_JSON: &str = diagnostics::ROBOT_DOCS_JSON;
 pub const CUSUM_MONITOR_JSON: &str = cusum::ROBOT_DOCS_JSON;
+pub const CORRECTION_JSON: &str = correction::ROBOT_DOCS_JSON;
 
 const MONITOR_FIELDS: [&str; 4] = [
     "monitor_alarm_alpha",

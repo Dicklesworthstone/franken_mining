@@ -23,6 +23,7 @@ use crate::{
 
 pub mod binding;
 pub mod comparison;
+pub mod correction;
 pub mod coverage;
 pub mod cusum;
 pub mod diagnostics;

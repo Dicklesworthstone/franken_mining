@@ -859,6 +859,22 @@ information sets may differ, and the output supplies no significance or predicti
 read-only replay and publication-evidence checks are in `xtask/testdata/forecast_saved_comparison.rs`, loaded
 by `xtask/tests/forecast_registered_outcome.rs`; this is synthetic test evidence.
 
+### Explicit forecast correction proposals (BD-049, plan §10.3)
+
+`forecast journal correction --journal <path> --assessment <digest> --forecast <alias> [--head <hex>]`
+reads an already persisted complete training assessment and a later unresolved raw Gaussian forecast.
+The kernel requires the same model and every prospectively declared segment dimension, strictly positive
+training values, compatible alpha and chronological separation. JSON and Markdown retain the raw and
+corrected distributions, dimensionless geometric-bias factor and empirical scale inflation that cannot
+narrow the bias-rescaled width (a factor below one can still shrink absolute raw width),
+sample log dispersion, complete selected source evidence and the separate COR1/v1 digest. Fitted coverage
+is labelled in-sample only; every output says unissued and uncalibrated. The command neither samples a clock
+nor appends, re-registers or replaces any forecast. Optional `--head` pins the journal history; the existing
+saved-assessment check rejects unknown report digests. No source reread or retrospective outcome selection
+is introduced. This provides a visible proposal, not a hierarchical correction, external time proof or
+automatic calibration. Independent known-answer and refusal tests live in the calibration module; the
+existing forecast-live integration suite verifies saved-journal replay, source rendering and unchanged bytes.
+
 ### Issued-output reliance (BD-347)
 
 `assure public --output <new-path>` requires `--journal`, `--head`, `--release-key`, `--trust-host-clock`,

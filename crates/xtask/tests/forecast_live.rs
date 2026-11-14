@@ -218,6 +218,145 @@ fn gaussian_cohort(opt_in: bool) -> String {
     request
 }
 
+#[test]
+fn saved_correction_exposes_raw_fit_and_proposal_without_sampling_clock_or_appending() {
+    struct NoCorrectionClock;
+    impl WallClock for NoCorrectionClock {
+        fn now_ns(&self) -> Result<i64, ClockError> {
+            panic!("a correction proposal reads existing history without sampling a clock")
+        }
+    }
+    fn declared_gaussian(alias: &str, mean: i64, due: &str) -> String {
+        format!(
+            "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:correction-v1\"\noutcome_due = \"{due}\"\nkind = \"gaussian\"\nmean = \"{mean}\"\nstd_dev = \"1\"\nfamily = \"synthetic-production\"\nauthor_role = \"model-role\"\ndomain = \"one-domain\"\nhorizon = \"quarter\"\nsite = \"one-site\"\nquantity = \"gold-production-100pct\"\nunit = \"koz\"\n"
+        )
+    }
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    journal.append(
+        &declared_gaussian("f1", 10, DUE),
+        ns("2030-01-02T00:00:00Z"),
+    );
+    journal.append(
+        &declared_gaussian("f2", 20, DUE),
+        ns("2030-01-03T00:00:00Z"),
+    );
+    journal.append(&cohort("f1,f2"), ns("2030-01-04T00:00:00Z"));
+    journal.append(
+        &outcome("f1", 20, "2031-01-01T00:00:00Z", false),
+        ns("2031-01-02T00:00:00Z"),
+    );
+    journal.append(
+        &outcome("f2", 40, "2031-01-01T00:00:00Z", false),
+        ns("2031-01-03T00:00:00Z"),
+    );
+    let saved = journal.assess(CUT, "first-published", None, ns(CUT));
+    let training = assessment_digest(&saved);
+    journal.append(
+        &declared_gaussian("future", 50, "2032-01-01T00:00:00Z"),
+        ns("2031-01-11T00:00:00Z"),
+    );
+    let command = Command::Correction {
+        journal: journal.path.clone(),
+        head: Some(journal.head),
+        assessment: training,
+        forecast: "future".into(),
+    };
+    let before = fs::read(&journal.path).expect("journal before proposal");
+    let result = execute_with_clock(&command, &journal.root, &NoCorrectionClock);
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    assert!(
+        result
+            .payload_json
+            .contains("\"schema\":\"fmine.forecast-correction.v1\"")
+    );
+    assert!(
+        result
+            .payload_json
+            .contains("\"status\":\"unissued_proposal\",\"uncalibrated\":true")
+    );
+    assert!(
+        result
+            .payload_json
+            .contains("\"raw\":{\"kind\":\"gaussian\",\"mean\":50,\"std_dev\":1}")
+    );
+    assert!(result.payload_json.contains("\"n_training\":2"));
+    assert!(
+        result
+            .payload_json
+            .contains("\"raw_training_hits\":0,\"corrected_training_hits\":2")
+    );
+    assert!(result.payload_json.contains("Invented!A1"));
+    assert!(result.payload_json.contains(&"11".repeat(32)));
+    let factor = result
+        .payload_json
+        .split_once("\"bias_factor\":")
+        .unwrap()
+        .1
+        .split(',')
+        .next()
+        .unwrap()
+        .parse::<f64>()
+        .unwrap();
+    assert!((factor - 2.0).abs() < 1e-12);
+    let markdown = result
+        .rendered_markdown
+        .as_deref()
+        .expect("Markdown proposal");
+    assert!(markdown.contains("Unissued and uncalibrated"));
+    assert!(markdown.contains("Unchanged raw Gaussian"));
+    assert!(markdown.contains("Selected source evidence"));
+    assert!(markdown.contains("do not demonstrate calibrated future coverage"));
+    assert_eq!(
+        fs::read(&journal.path).expect("journal after proposal"),
+        before
+    );
+    let rerun = execute_with_clock(&command, &journal.root, &NoCorrectionClock);
+    assert_eq!(result.to_json(), rerun.to_json());
+    let args = [
+        "forecast".to_string(),
+        "journal".into(),
+        "correction".into(),
+        "--journal".into(),
+        journal.path.to_str().expect("fixture path").into(),
+        "--assessment".into(),
+        training.to_hex(),
+        "--forecast".into(),
+        "future".into(),
+        "--head".into(),
+        journal.head.to_hex(),
+    ];
+    let routed = fmine_cli::invoke(&args, &journal.root).0;
+    assert_eq!(
+        routed.to_json(),
+        result.to_json(),
+        "normal CLI routing agrees with the fixed-clock adapter"
+    );
+    let unknown = Command::Correction {
+        journal: journal.path.clone(),
+        head: Some(journal.head),
+        assessment: Digest32([9; 32]),
+        forecast: "future".into(),
+    };
+    assert_ne!(
+        execute_with_clock(&unknown, &journal.root, &NoCorrectionClock).exit_code,
+        0
+    );
+    let source = Command::Correction {
+        journal: journal.path.clone(),
+        head: Some(journal.head),
+        assessment: training,
+        forecast: "f1".into(),
+    };
+    assert_ne!(
+        execute_with_clock(&source, &journal.root, &NoCorrectionClock).exit_code,
+        0
+    );
+    assert_eq!(
+        fs::read(&journal.path).expect("journal after refusals"),
+        before
+    );
+}
+
 fn cusum_policy(order: &str) -> String {
     format!(
         "cusum_reference_value = \"0.5\"\ncusum_threshold = \"3\"\ncusum_support = \"Synthetic ordered output\"\ncusum_reference_assumption = \"Declared Gaussian residual reference\"\ncusum_tuning_basis = \"Illustrative only; no ARL validation\"\ncusum_order = \"{order}\"\n"

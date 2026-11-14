@@ -213,6 +213,12 @@ mutates_authority = false
 description = "Compare two saved public forecast assessments on identical selected outcomes, retaining missing subjects and exact full-population loss-difference bounds"
 
 [[verb]]
+path = "forecast journal correction"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Propose an explicit prospective bias and coverage correction from one saved assessment while retaining the raw forecast and every training member"
+
+[[verb]]
 path = "reliance init"
 subsystem = "Adit"
 mutates_authority = true

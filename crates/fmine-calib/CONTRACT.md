@@ -94,6 +94,24 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   existing forecast, cohort, assessment and journal identities remain unchanged. Registration times and
   information sets may differ. These completion bounds are not confidence intervals or a predictive-skill
   claim. Independent examples and source-selection controls are in `xtask/tests/forecast_comparison.rs`.
+- DESIGN (BD-049, plan §10.3): `correction_proposal(saved_digest, raw_forecast_id)` makes an explicit,
+  unissued correction for a later unresolved Gaussian forecast from one complete saved assessment.
+  At least two positive forecast/outcome pairs are required; every model, family, author, domain, horizon,
+  site, quantity and unit must match. No unresolved or incompatible member can be silently excluded.
+  The target registration must follow the saved cut and all training outcome boundaries; any target outcome
+  event or conflicting target-cohort alpha refuses. Selected observations are copied from the saved report,
+  never reselected after later publications. The factor is `exp(mean(log(actual/raw_mean)))`; sample log-ratio
+  dispersion is descriptive. At the frozen alpha, inflation is the inverse empirical `(1-alpha)` quantile
+  of `abs(actual-factor*mean)/(factor*std*z)`, floored explicitly at one and rounded outward when inflated.
+  Corrected Gaussian mean is `factor*raw_mean` and standard deviation is `factor*inflation*raw_std`.
+  Finite positive products, noncollapsed Gaussian interval endpoints and actual fitted interval coverage
+  are checked; no arithmetic success is fabricated.
+  Zero log dispersion preserves scaled predictive width. Inflation never narrows the bias-rescaled width;
+  a bias factor below one can still reduce absolute width relative to the raw forecast.
+  COR1/v1 binds the method and no-claim text, parent report, full segment,
+  unchanged raw forecast, selected source outcomes, corrections and proposal. No existing record is changed.
+  This is a pooled within-segment proposal, not hierarchical fitting, calibration attainment or independent
+  coverage evidence; prospective registration and later scoring remain separate.
 - DESIGN (BD-048/049, plan §10.2): `assessment_diagnostics(saved_digest)` derives Gaussian PIT values and
   fixed-decile histograms, Bernoulli reliability bins, and exact empirical CDF rank intervals from the
   selected outcomes in an immutable saved assessment. Every member and event/source identity is retained.

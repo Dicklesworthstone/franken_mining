@@ -3346,6 +3346,38 @@ are arithmetic bounds, not confidence intervals. Registration times and informat
 comparison does not establish independent forecasting skill. JSON is available with `--format json`, including
 both source admissions, exact numerator/denominator strings and a separate comparison digest.
 
+### Inspect an explicit forecast correction
+
+DESIGN (BD-049, plan §10.3): a complete saved assessment can propose a visible bias and interval
+correction for a later, unresolved Gaussian forecast in the same model and declared segment:
+
+```bash
+cargo run -p fmine-cli -- forecast journal correction \
+  --journal runs/forecast-demo/history --assessment ASSESSMENT_DIGEST \
+  --forecast LATER_RAW_FORECAST_ALIAS --head LATEST_RETAINED_HEAD --format markdown
+```
+
+The report keeps the raw forecast, every selected training outcome, the fitted correction and the
+corrected proposal together. It fits the mean of `log(actual / raw_mean)`, uses its exponential as the
+bias factor, and chooses a scale inflation from the complete empirical residual population at the
+assessment's frozen interval level. The inflation floor applies after bias rescaling; a bias factor
+below one can reduce absolute interval width. The report shows sample log dispersion and both raw and
+corrected training hit counts. These reused training outcomes are not evidence of future calibration.
+
+At least two resolved, strictly positive Gaussian forecast/outcome pairs are required. Model, family,
+author role, domain, horizon, site, quantity and unit must match the target exactly. The target must have
+been registered after the assessment's evidence cut and must have no recorded outcome. Missing members,
+mixed segments, incompatible interval levels, signed/zero outcomes and unrepresentable arithmetic refuse.
+
+This first correction path trains on one homogeneous, prospectively frozen batch. It does not pool
+rolling public forecasts across separate assessments or estimate hierarchical corrections. A public
+cohort containing different sites or quantities therefore cannot supply this correction's training set.
+
+The command reads the saved assessment, leaves the journal unchanged, and supplies no host-clock or
+external-time proof. Its JSON schema is `fmine.forecast-correction.v1`, with a separate digest and explicit
+`unissued_proposal` and `uncalibrated` status. A proposal needs separate prospective registration and
+later scoring before it can become part of a forecasting track record.
+
 ### Issue reports with explicit time and build identity
 
 DESIGN (BD-347): `assure issue` produces the same verified JSON envelope as `assure public`, including its

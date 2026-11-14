@@ -217,6 +217,13 @@ pub enum Command {
         left: Digest32,
         right: Digest32,
     },
+    /// Propose a visible correction from saved training outcomes without changing any record.
+    Correction {
+        journal: PathBuf,
+        head: Option<Digest32>,
+        assessment: Digest32,
+        forecast: String,
+    },
 }
 
 impl Command {
@@ -233,6 +240,7 @@ impl Command {
             Self::Inspect { .. } => "inspect",
             Self::Report { .. } => "report",
             Self::Compare { .. } => "compare",
+            Self::Correction { .. } => "correction",
         }
     }
 }
@@ -271,6 +279,30 @@ fn perform(
     clock: &dyn WallClock,
 ) -> Result<(String, String), AssessmentFailure> {
     match command {
+        Command::Correction {
+            journal,
+            head,
+            assessment,
+            forecast,
+        } => {
+            let journal = Journal::open_read(&root.join(journal), *head)?;
+            let mut state = replay(&journal)?;
+            persisted_report(&mut state, *assessment)?;
+            let target = state.forecast_id(forecast)?;
+            let report = state.ledger.correction_proposal(*assessment, target)?;
+            let head_digest = journal
+                .records()
+                .last()
+                .ok_or_else(|| absent("journal genesis missing"))?
+                .chain_head()?;
+            let payload = format!(
+                "{{\"operation\":\"correction\",\"head\":{},\"head_pinned\":{},\"correction\":{}}}",
+                js(&head_digest.to_hex()),
+                head.is_some(),
+                super::correction::json(&state, &report)?,
+            );
+            return Ok((payload, super::correction::markdown(&state, &report)));
+        }
         Command::Compare {
             journal,
             head,
