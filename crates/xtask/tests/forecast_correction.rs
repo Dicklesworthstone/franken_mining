@@ -14,3 +14,6 @@ use fmine_core::{Digest32, ObjectId};
 
 #[path = "../../fmine-calib/src/ledger/correction/tests.rs"]
 mod tests;
+
+#[path = "../../fmine-calib/src/ledger/correction/series/tests.rs"]
+mod series_tests;

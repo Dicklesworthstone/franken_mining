@@ -11,6 +11,11 @@ use super::{
     MemberOutcome, OutcomeSelector, absent, domain, floats, late, score_refusal,
 };
 
+mod series;
+pub use series::{
+    CorrectionSeriesProposal, CorrectionTrainingAssessment, SERIES_METHOD, SERIES_NO_CLAIM,
+};
+
 pub const METHOD: &str = "pooled-log-bias-gaussian-inflation-v1";
 pub const NO_CLAIM: &str = "Unissued correction proposal fitted on one complete saved assessment, not a registered forecast, hierarchical fit or calibration result. The same model and full declared segment are required. All selected historical outcomes remain visible. Fitted coverage reuses training outcomes and is not out-of-sample evidence. No original forecast, outcome, assessment or journal record is changed; separate prospective registration and later scoring are required.";
 
@@ -48,6 +53,20 @@ pub struct CorrectionProposal {
     pub corrected: ForecastPayload,
     pub corrected_interval: (f64, f64),
     pub digest: Digest32,
+}
+
+struct FittedCorrection {
+    members: Vec<CorrectionMember>,
+    mean_log_ratio: f64,
+    sample_log_std_dev: f64,
+    bias_factor: f64,
+    inflation: f64,
+    required_training_hits: usize,
+    raw_training_hits: usize,
+    corrected_training_hits: usize,
+    raw_interval: (f64, f64),
+    corrected: ForecastPayload,
+    corrected_interval: (f64, f64),
 }
 
 fn numeric(value: f64) -> Result<f64, Refusal> {
@@ -165,9 +184,50 @@ impl ForecastLedger {
                 "correction needs at least two resolved members and no unresolved member in the complete frozen cohort",
             ));
         }
+        let fit = self.fit_correction(raw, metadata, alpha, &assessment.per_member)?;
+        let mut report = CorrectionProposal {
+            assessment_digest,
+            cohort_digest: cohort.digest,
+            training_as_of_ns: assessment.as_of_ns,
+            selector: assessment.selector,
+            alpha,
+            metadata: metadata.clone(),
+            members: fit.members,
+            mean_log_ratio: fit.mean_log_ratio,
+            sample_log_std_dev: fit.sample_log_std_dev,
+            bias_factor: fit.bias_factor,
+            inflation: fit.inflation,
+            required_training_hits: fit.required_training_hits,
+            raw_training_hits: fit.raw_training_hits,
+            corrected_training_hits: fit.corrected_training_hits,
+            raw: raw.clone(),
+            raw_interval: fit.raw_interval,
+            corrected: fit.corrected,
+            corrected_interval: fit.corrected_interval,
+            digest: Digest32([0; 32]),
+        };
+        report.digest = digest(&report);
+        Ok(report)
+    }
+
+    // Both proposal paths fit the same complete population in its declared canonical order. Keeping
+    // the arithmetic here preserves the original single-assessment calculation and COR1 bytes.
+    fn fit_correction(
+        &self,
+        raw: &FrozenForecast,
+        metadata: &ForecastMetadata,
+        alpha: f64,
+        selected_members: &[MemberAssessment],
+    ) -> Result<FittedCorrection, Refusal> {
+        let n = selected_members.len();
+        if n < 2 {
+            return Err(domain(
+                "correction needs at least two resolved training members",
+            ));
+        }
         let mut members = Vec::with_capacity(n);
         let mut mean_log_ratio = 0.0;
-        for selected in &assessment.per_member {
+        for selected in selected_members {
             let forecast = self
                 .records
                 .get(&selected.forecast_id)
@@ -256,13 +316,7 @@ impl ForecastLedger {
             ));
         }
         let corrected = corrected(&raw.payload, bias_factor, inflation)?;
-        let mut report = CorrectionProposal {
-            assessment_digest,
-            cohort_digest: cohort.digest,
-            training_as_of_ns: assessment.as_of_ns,
-            selector: assessment.selector,
-            alpha,
-            metadata: metadata.clone(),
+        Ok(FittedCorrection {
             members,
             mean_log_ratio,
             sample_log_std_dev,
@@ -271,14 +325,10 @@ impl ForecastLedger {
             required_training_hits,
             raw_training_hits,
             corrected_training_hits,
-            raw: raw.clone(),
             raw_interval: interval(&raw.payload, alpha)?,
             corrected_interval: interval(&corrected, alpha)?,
             corrected,
-            digest: Digest32([0; 32]),
-        };
-        report.digest = digest(&report);
-        Ok(report)
+        })
     }
 }
 

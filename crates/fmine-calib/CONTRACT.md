@@ -112,6 +112,19 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   unchanged raw forecast, selected source outcomes, corrections and proposal. No existing record is changed.
   This is a pooled within-segment proposal, not hierarchical fitting, calibration attainment or independent
   coverage evidence; prospective registration and later scoring remain separate.
+- DESIGN (BD-049, plan §10.3): `correction_series_proposal(saved_digests, raw_forecast_id)` applies that same
+  fitting arithmetic to an explicitly selected series of complete saved assessments. COR2/v1 binds every
+  parent report/cohort, every selected member and source event, and all frozen target cohorts. Repeated
+  reports, cohorts/revisions, forecasts or identical cited observations refuse; no member is filtered out.
+  Selectors, exact alpha, model and all segment labels must match. Public series additionally require one
+  issuer, metric, ownership, vintage permission and calendar period kind, with advancing non-overlapping
+  training supports and a later compatible frozen public target. Quarter/year lengths may differ with the
+  calendar; cumulative and quarterly supports are never pooled. Supplied series require the same resolution
+  rule and eligible sources. Target registration must follow every training cut, forecast deadline and
+  retained outcome's availability/record time, with no target outcome event. Canonical parent ordering makes
+  input-list permutations identical. Later restatements cannot alter earlier selected reports. The original
+  single-assessment API and COR1/v1 bytes are unchanged. The series retains unissued/uncalibrated status and
+  does not establish independence, a complete historical record, hierarchical fitting or future coverage.
 - DESIGN (BD-048/049, plan §10.2): `assessment_diagnostics(saved_digest)` derives Gaussian PIT values and
   fixed-decile histograms, Bernoulli reliability bins, and exact empirical CDF rank intervals from the
   selected outcomes in an immutable saved assessment. Every member and event/source identity is retained.
