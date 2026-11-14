@@ -42,6 +42,7 @@ const V9_SCHEMA: &str = "fmine.forecast-operation.v9";
 const V10_SCHEMA: &str = "fmine.forecast-operation.v10";
 const V11_SCHEMA: &str = "fmine.forecast-operation.v11";
 const V12_SCHEMA: &str = "fmine.forecast-operation.v12";
+const V13_SCHEMA: &str = "fmine.forecast-operation.v13";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +67,7 @@ enum OperationVersion {
     V10 = 9,
     V11 = 10,
     V12 = 11,
+    V13 = 12,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -86,6 +88,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V10_SCHEMA => Ok(OperationVersion::V10),
             V11_SCHEMA => Ok(OperationVersion::V11),
             V12_SCHEMA => Ok(OperationVersion::V12),
+            V13_SCHEMA => Ok(OperationVersion::V13),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -100,7 +103,11 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if expected_table == "corrected_forecast" {
+    let schema = if expected_table == "forecast"
+        && matches!(doc.rows[0].get("kind").map(|field| &field.value), Some(TomlValue::Str(kind)) if kind == "weighted_empirical")
+    {
+        V13_SCHEMA
+    } else if expected_table == "corrected_forecast" {
         if doc.rows[0].get("correction_method").is_some() {
             V12_SCHEMA
         } else {
@@ -353,8 +360,7 @@ fn perform(
                 persisted_report(&mut state, *assessment)?;
             }
             let target = state.forecast_id(forecast)?;
-            let report =
-                super::correction::proposal(&state, assessments, true, target, *method)?;
+            let report = super::correction::proposal(&state, assessments, true, target, *method)?;
             let head_digest = journal
                 .records()
                 .last()
@@ -1291,11 +1297,13 @@ fn apply(
     let event_log_declared = row.get("event_log_floor").is_some();
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
     let vintage_declared = row.get("public_vintages").is_some();
-    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12};
+    let weighted_declared = matches!(row.get("kind").map(|field| &field.value), Some(TomlValue::Str(kind)) if kind == "weighted_empirical");
+    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13};
     // A feature's accepted schemas and each schema's required operation are separate constraints.
     // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
     let features: &[(bool, &[OperationVersion], &str)] = &[
-        (metadata_declared, &[V7, V9], "forecast metadata"),
+        (metadata_declared, &[V7, V9, V13], "forecast metadata"),
+        (weighted_declared, &[V13], "weighted empirical distribution"),
         (cusum_declared, &[V8], "CUSUM policy"),
         (gaussian_bounds_declared, &[V6, V8], "Gaussian CRPS bounds"),
         (
@@ -1338,6 +1346,7 @@ fn apply(
         V10 => row.table == "registered_missing" && status_declared,
         V11 => row.table == "corrected_forecast",
         V12 => row.table == "corrected_forecast" && row.get("correction_method").is_some(),
+        V13 => row.table == "forecast" && weighted_declared,
         _ => true,
     };
     if !required {
@@ -1461,7 +1470,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 12]);
+struct VersionCounts([usize; 13]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {

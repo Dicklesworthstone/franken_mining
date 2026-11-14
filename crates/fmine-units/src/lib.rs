@@ -404,7 +404,9 @@ impl ExactQty {
                 .and_then(|n| n.checked_add(i128::from(b - b'0')))
                 .ok_or_else(bad)?;
         }
-        let scale = exponent - i32::try_from(frac.len()).map_err(|_| bad())?;
+        let scale = exponent
+            .checked_sub(i32::try_from(frac.len()).map_err(|_| bad())?)
+            .ok_or_else(bad)?;
         let pow = 10_i128.checked_pow(scale.unsigned_abs()).ok_or_else(bad)?;
         let q = if scale >= 0 {
             Self::new(n.checked_mul(pow).ok_or_else(bad)?, 1)?
@@ -1323,6 +1325,18 @@ mod tests {
                 Err(UnitsError::Overflow),
                 "{text:?}"
             );
+        }
+    }
+
+    #[test]
+    fn decimal_exponent_capacity_refuses_without_wrapping_or_panicking() {
+        for text in [
+            "1.0e-2147483648",
+            "0.25e-2147483647",
+            "1e2147483647",
+            "1e-2147483648",
+        ] {
+            assert_eq!(ExactQty::from_decimal_str(text), Err(UnitsError::Overflow));
         }
     }
 

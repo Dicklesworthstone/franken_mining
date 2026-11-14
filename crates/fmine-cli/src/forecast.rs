@@ -18,6 +18,7 @@ use fmine_core::hash::{Digest32, sha256};
 use fmine_core::id::ObjectId;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
+use fmine_units::ExactQty;
 
 use crate::json_string as js;
 
@@ -35,7 +36,7 @@ mod segments;
 mod source;
 
 const SCHEMA: &str = "fmine.forecast-ledger.v1";
-pub const DISTRIBUTIONS_JSON: &str = r#"{"kinds":["gaussian","interval","quantiles","bernoulli","empirical"],"empirical":{"samples":"Quoted comma-separated finite numbers, from one through 4096 samples; the live journal also limits each operation to 64 KiB","weights":"Uniform; repeated samples retain their probability mass","quantiles":"Inverse empirical CDF without interpolation","scoring":"CRPS and central interval score; mixed Gaussian/empirical cohorts retain a common CRPS denominator","identity":"Original sample order is frozen; reordering keeps the distribution scores but changes its record identity","scope":"Univariate predictive distribution; no joint realization join or calibration claim","example":"tests/forecasts/empirical_synthetic.toml"}}"#;
+pub const DISTRIBUTIONS_JSON: &str = r#"{"kinds":["gaussian","interval","quantiles","bernoulli","empirical","weighted_empirical"],"empirical":{"samples":"Quoted comma-separated finite numbers, from one through 4096 samples; the live journal also limits each operation to 64 KiB","weights":"Uniform; repeated samples retain their probability mass","quantiles":"Inverse empirical CDF without interpolation","scoring":"CRPS and central interval score; mixed Gaussian/empirical cohorts retain a common CRPS denominator","identity":"Original sample order is frozen; reordering keeps the distribution scores but changes its record identity","scope":"Univariate predictive distribution; no joint realization join or calibration claim","example":"tests/forecasts/empirical_synthetic.toml"},"weighted_empirical":{"samples":"Quoted comma-separated finite values; one through 4096 atoms","weights":"Matching quoted comma-separated positive exact decimal or numerator/denominator probabilities summing to exactly one; never normalized or replaced by member counts","quantiles":"Inverse exact weighted CDF without interpolation; alpha is interpreted as the exact rational represented by its canonical shortest decimal spelling","scoring":"Full-distribution CRPS, central interval score and unresolved-outcome completion bounds; descriptive only","identity":"Supplied atom order, value bits and reduced exact weights are frozen","journal":"Opt-in operation v13; earlier operation versions retain their original meanings"}}"#;
 pub const COVERAGE_MONITOR_JSON: &str = r#"{"cohort_fields":["monitor_alarm_alpha","monitor_support","monitor_conditional_null","monitor_order"],"declaration":"All four fields are required together; monitor_order is the comma-separated complete permutation of forecast aliases","null":"Exact conditional P(interval hit | past) = 1-alpha at the declared support; not a claim that marginal coverage or effective sample size establishes this assumption","payloads":"Gaussian, explicitly probability-bearing intervals and exact central quantiles; Bernoulli and empirical forecasts refuse","sequence":"Original publications only; stop at the first unresolved member and retain deferred counts even under latest-as-of scoring","evidence":"Finite log evidence, running maximum, first alarm, original values, citations and event digests; an alarm does not recalibrate","journal":"Monitor freezes use operation v5 and retain the existing bounded host-clock policy"}"#;
 pub const EVENT_LOG_JSON: &str = r#"{"cohort_field":"event_log_floor","declaration":"A quoted finite probability strictly between zero and 0.5, frozen before outcomes in an all-Bernoulli cohort","loss":"-ln(max(P(observed outcome), probability_floor)) in nats; the forecast probability is unchanged","interpretation":"The explicit floor caps extreme losses and removes strict propriety in the floored tails; the unchanged proper Brier score is also reported","missing":"Every unresolved member contributes both possible binary losses to whole-cohort completion bounds; no missing outcome leaves the denominator","journal":"Opt-in freezes use operation v5; omission preserves existing record identities and output","scope":"Descriptive scoring, not a calibration claim; continuous coverage monitoring cannot be enabled on the same cohort"}"#;
 pub const METADATA_JSON: &str = segments::ROBOT_DOCS_JSON;
@@ -170,6 +171,7 @@ impl Replay {
             "quantiles" => &["levels", "values"],
             "bernoulli" => &["probability"],
             "empirical" => &["samples"],
+            "weighted_empirical" => &["samples", "weights"],
             _ => return Err(invalid(format!("unknown forecast kind {kind:?}"))),
         };
         row.allowed(
@@ -216,6 +218,10 @@ impl Replay {
             },
             "empirical" => ForecastPayload::Empirical {
                 samples: row.numbers("samples")?,
+            },
+            "weighted_empirical" => ForecastPayload::WeightedEmpirical {
+                samples: row.numbers("samples")?,
+                weights: row.exact_weights()?,
             },
             _ => return Err(invalid("unsupported forecast kind")),
         };
@@ -816,6 +822,28 @@ impl<'a> Row<'a> {
             .map(|s| number(s.trim()))
             .collect()
     }
+    fn exact_weights(&self) -> Result<Vec<ExactQty>, Refusal> {
+        self.string("weights")?
+            .split(',')
+            .map(|text| {
+                let text = text.trim();
+                if let Some((num, den)) = text.split_once('/') {
+                    let num = num
+                        .parse::<i128>()
+                        .map_err(|_| invalid("invalid weight numerator"))?;
+                    let den = den
+                        .parse::<i128>()
+                        .map_err(|_| invalid("invalid weight denominator"))?;
+                    ExactQty::new(num, den)
+                } else {
+                    ExactQty::from_decimal_str(text)
+                }
+                .map_err(|error| {
+                    invalid(format!("invalid exact forecast weight {text:?}: {error}"))
+                })
+            })
+            .collect()
+    }
     fn identifiers(&self, key: &str) -> Result<Vec<String>, Refusal> {
         self.string(key)?
             .split(',')
@@ -1034,6 +1062,19 @@ fn payload_json(payload: &ForecastPayload) -> String {
                 .map(f64::to_string)
                 .collect::<Vec<_>>()
                 .join(",")
+        ),
+        ForecastPayload::WeightedEmpirical { samples, weights } => format!(
+            "{{\"kind\":\"weighted_empirical\",\"weight_kind\":\"exact_probability\",\"quantile_rule\":\"inverse_exact_cdf_decimal_alpha\",\"samples\":[{}],\"weights\":[{}]}}",
+            samples
+                .iter()
+                .map(f64::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            weights
+                .iter()
+                .map(|weight| js(&format!("{}/{}", weight.num(), weight.den())))
+                .collect::<Vec<_>>()
+                .join(","),
         ),
     }
 }

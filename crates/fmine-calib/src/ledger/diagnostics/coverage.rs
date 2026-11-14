@@ -12,7 +12,7 @@ use super::super::{
     ForecastLedger, ForecastPayload, MemberAssessment, MemberOutcome, OutcomeSelector, absent,
     floats, score_refusal,
 };
-use crate::scoring::SortedEmpirical;
+use crate::scoring::{SortedEmpirical, SortedWeightedEmpirical};
 
 pub const METHOD: &str = "Central 50/80/95 percent intervals use the frozen Gaussian distribution or inverse empirical CDF; explicit intervals and quantiles require exactly matching declared levels. Bounds are inclusive. Empirical ties may give more than the nominal mass. Completion bounds use all supported members, including unresolved outcomes; unsupported levels are counted separately. These are descriptive arithmetic bounds, not confidence intervals, calibration verdicts or independence claims.";
 const LEVELS: [(u8, f64); 3] = [(50, 0.5), (80, 0.2), (95, 0.05)];
@@ -90,6 +90,7 @@ pub struct CoverageDiagnostics {
 fn interval(
     payload: &ForecastPayload,
     empirical: Option<&SortedEmpirical>,
+    weighted: Option<&SortedWeightedEmpirical>,
     outcome: Option<f64>,
     (percent, alpha): (u8, f64),
 ) -> CoverageInterval {
@@ -115,6 +116,7 @@ fn interval(
             }
         }
         ForecastPayload::Empirical { .. } => empirical.and_then(|e| e.interval(alpha).ok()),
+        ForecastPayload::WeightedEmpirical { .. } => weighted.and_then(|e| e.interval(alpha).ok()),
         ForecastPayload::Gaussian { .. } => payload.interval(alpha).ok().flatten(),
     };
     let Some((lo, hi)) = bounds.filter(|(lo, hi)| lo.is_finite() && hi.is_finite()) else {
@@ -167,8 +169,21 @@ impl ForecastLedger {
                 }
                 _ => None,
             };
-            let intervals =
-                LEVELS.map(|level| interval(payload, empirical.as_ref(), outcome, level));
+            let weighted = match payload {
+                ForecastPayload::WeightedEmpirical { samples, weights } => {
+                    Some(SortedWeightedEmpirical::new(samples, weights).map_err(score_refusal)?)
+                }
+                _ => None,
+            };
+            let intervals = LEVELS.map(|level| {
+                interval(
+                    payload,
+                    empirical.as_ref(),
+                    weighted.as_ref(),
+                    outcome,
+                    level,
+                )
+            });
             for (summary, value) in levels.iter_mut().zip(intervals) {
                 summary.n_supported += usize::from(value.bounds.is_some());
                 summary.n_unsupported += usize::from(value.bounds.is_none());

@@ -370,6 +370,35 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   Standardized bias remains Gaussian-only. These are floating-point completion bounds, not confidence
   intervals, calibrated predictive coverage or shared-realization portfolio semantics. Empirical scoring
   is `DeterministicPerIsa`; this slice supplies no cross-host empirical-score digest.
+- DESIGN (BD-047/BD-048, plan §10.1–§10.2): `ForecastPayload::WeightedEmpirical { samples, weights }`
+  retains 1–4,096 finite univariate scenario values with corresponding `fmine_units::ExactQty` probabilities.
+  Every weight must be strictly positive and their exact sum must be one. Mismatched lengths, invalid mass,
+  nonfinite values and checked rational capacity failures refuse before registration changes authority state.
+  There is no normalization, resampling, inferred equal weighting or omission. Duplicate values retain their
+  probability mass. New payload tag 5 encodes the supplied order, exact value bits and reduced i128 weight
+  numerators/denominators; all prior payload tags and forecast/cohort/assessment frames keep their bytes.
+- DESIGN: `scoring::{weighted_empirical_crps, weighted_empirical_interval}` uses one scratch sort, exact
+  cumulative and remaining probability masses, and compensated positive-gap CRPS integration. Remaining mass
+  is subtracted exactly before floating projection, retaining a small tail even when its complementary CDF
+  rounds to one. Losses are floating-point `DeterministicPerIsa` quantities, not rational certificates.
+  Weighted central quantiles interpret the frozen `alpha` through its canonical shortest decimal spelling:
+  `0.2` means exact 1/5, giving levels 1/10 and 9/10. The first sorted value whose exact CDF reaches a level
+  wins, including equality. No interpolation or tolerance selects an adjacent jump. Rational capacity
+  failures remain explicit. This rule applies only to the new weighted payload; legacy uniform empirical
+  interval semantics and identities are unchanged.
+- DESIGN: weighted, uniform empirical and Gaussian forecasts can share a complete CRPS assessment.
+  Every unresolved weighted member contributes its minimum at a weighted median or the nearest frozen-domain
+  endpoint; a finite outcome domain also supplies a maximum at an endpoint. No missing member is dropped,
+  and any interval-only/quantile-only member still prevents a partial CRPS mean. Coverage diagnostics expose
+  central 50/80/95% intervals under the exact-weight rule. Discrete inclusive intervals need not carry exactly
+  the nominal mass, so any assessment containing the new weighted payload remains `Descriptive` or `Unscored`
+  and conditional coverage monitoring refuses it. Weighted CDF-rank and supplied-quantile diagnostics remain
+  explicitly unavailable. This is a marginal distribution, not a shared-realization portfolio, probability
+  calibration or independent-observation claim.
+  Direct controls in `scoring::weighted::tests` compare 567 cases against the independent pairwise CRPS
+  definition, exact jump boundaries, tiny tails, repeated values, permutations, affine changes, domain extrema
+  and arithmetic/domain refusals. `ledger::tests::weighted_*` checks complete mixed-population denominators,
+  exact identities, unchanged historical reports, descriptive status and transactional refusals.
 - `golden_digest_gaussian_crps_10k`, `golden_digest_gaussian_log_score_10k` (bd-hp2j.3): BLAKE3 over the score bits
   on 10,000 `SCORE_DIGEST_KEY` triples (|z| up to 12).
 - `golden_digest_calib_rest_10k` (bd-hp2j.3): the rest of `lib.rs`, so one class covers the file: Winkler scores,

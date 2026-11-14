@@ -1,10 +1,14 @@
-//! DESIGN (BD-048): univariate uniform empirical forecasts and explicitly floored event log scores.
+//! DESIGN (BD-048): uniform/exact-weight empirical forecasts and explicitly floored event log scores.
 //! Sorted scratch values determine empirical scores; callers retain original draws in frozen records.
-//! This module supplies no shared realization-space, weighting, or calibration claim.
+//! This module supplies no shared realization-space or calibration claim; weighting must be explicit.
 //! Determinism: DeterministicPerIsa (no cross-host empirical-score digest has been established).
 
 use crate::ScoreError;
 use fmine_core::det;
+
+mod weighted;
+pub(crate) use weighted::{SortedWeightedEmpirical, validate_weighted};
+pub use weighted::{weighted_empirical_crps, weighted_empirical_interval};
 
 /// DESIGN (BD-048/BD-343): Gaussian CRPS extrema over a prospectively frozen finite outcome domain.
 /// Its derivative in the outcome is `2 * Phi((y - mean) / std_dev) - 1`, so the minimum is at the

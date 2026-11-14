@@ -321,6 +321,7 @@ impl ForecastLedger {
                 ForecastPayload::Interval { .. } => ("interval", Vec::new()),
                 ForecastPayload::Bernoulli { .. } => ("bernoulli", Vec::new()),
                 ForecastPayload::Empirical { .. } => ("empirical", Vec::new()),
+                ForecastPayload::WeightedEmpirical { .. } => ("weighted_empirical", Vec::new()),
             };
             members.push(QuantileLossMember {
                 member: member.clone(),

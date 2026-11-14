@@ -164,7 +164,9 @@ pub(super) fn monitor_interval(
                 Err(domain("coverage monitor interval is not finite"))
             };
         }
-        ForecastPayload::Bernoulli { .. } | ForecastPayload::Empirical { .. } => {
+        ForecastPayload::Bernoulli { .. }
+        | ForecastPayload::Empirical { .. }
+        | ForecastPayload::WeightedEmpirical { .. } => {
             return Err(domain(
                 "coverage monitoring's exact conditional point null does not support discrete or empirical forecasts",
             ));

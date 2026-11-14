@@ -239,6 +239,9 @@ impl ForecastLedger {
                 }
                 ForecastPayload::Interval { .. } => DiagnosticValue::Unsupported("interval"),
                 ForecastPayload::Quantiles { .. } => DiagnosticValue::Unsupported("quantiles"),
+                ForecastPayload::WeightedEmpirical { .. } => {
+                    DiagnosticValue::Unsupported("weighted_empirical")
+                }
                 ForecastPayload::Empirical { samples } => {
                     empirical_n += 1;
                     let counts = outcome.map(|y| {

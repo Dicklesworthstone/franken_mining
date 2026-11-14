@@ -1427,6 +1427,17 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Registered gold/copper source resolution and immutable assessment retrieval use the existing target and
   receipt checks unchanged. The 64 KiB live operation limit applies independently of the sample-count limit.
   This representation is univariate and supplies neither joint-realization semantics nor calibration evidence.
+- DESIGN (BD-047/BD-048): `kind = "weighted_empirical"` also freezes a matching `weights` list of
+  positive exact decimal or numerator/denominator probabilities. The complete mass must sum to exactly
+  one; invalid, missing or overflowed weights refuse without normalization. JSON preserves every atom
+  and its reduced rational weight. CRPS and central intervals use the full supplied distribution, and
+  unresolved members remain in completion bounds. Weighted inverse-CDF levels interpret policy alpha
+  through its canonical shortest decimal spelling, so alpha 0.2 uses exact 1/10 and 9/10 endpoints.
+  The kernel retains original atom order in the identity and sorts only for evaluation. Discrete
+  intervals do not assert exactly nominal coverage or qualify for the continuous coverage monitor.
+  Durable registration uses operation v13, with or without prospective metadata; v1-v12 cannot admit
+  this new kind. Existing payload encodings, operation meanings and saved assessments stay unchanged.
+  Direct controls: `crates/xtask/testdata/weighted_forecast_journal_contract.rs`.
 - DESIGN (BD-076): `forecast record score` binds the manifest, forecast CSV and rules to their exact framed
   SHA-256 digests and verifies both timestamp signatures through `fmine_io::forecast::timestamp`. Complete
   proof intervals enforce rules-before-record, the frozen registration deadline, the scored-year boundary

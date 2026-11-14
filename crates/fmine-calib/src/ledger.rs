@@ -12,10 +12,11 @@ use fmine_core::hash::{Digest32, blake3_hash};
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::norm_inv;
+use fmine_units::ExactQty;
 
 use crate::scoring::{
-    MAX_EMPIRICAL_SAMPLES, SortedEmpirical, bernoulli_log_score, empirical_interval,
-    gaussian_crps_bounds,
+    MAX_EMPIRICAL_SAMPLES, SortedEmpirical, SortedWeightedEmpirical, bernoulli_log_score,
+    empirical_interval, gaussian_crps_bounds, validate_weighted, weighted_empirical_interval,
 };
 use crate::{
     CalibrationFlag, CalibrationReport, ScoreError, gaussian_crps, winkler_interval_score,
@@ -62,6 +63,12 @@ pub enum ForecastPayload {
     Empirical {
         samples: Vec<f64>,
     },
+    /// Complete univariate scenarios with strictly positive exact probabilities summing to one.
+    /// Supplied order and exact probabilities are frozen; no normalization or resampling is implied.
+    WeightedEmpirical {
+        samples: Vec<f64>,
+        weights: Vec<ExactQty>,
+    },
 }
 
 impl ForecastPayload {
@@ -96,6 +103,10 @@ impl ForecastPayload {
                 !samples.is_empty()
                     && samples.len() <= MAX_EMPIRICAL_SAMPLES
                     && samples.iter().all(|x| x.is_finite())
+            }
+            Self::WeightedEmpirical { samples, weights } => {
+                validate_weighted(samples, weights).map_err(score_refusal)?;
+                true
             }
         };
         if ok {
@@ -140,6 +151,9 @@ impl ForecastPayload {
             }
             Self::Bernoulli { .. } => return Ok(None),
             Self::Empirical { samples } => empirical_interval(samples, alpha)?,
+            Self::WeightedEmpirical { samples, weights } => {
+                weighted_empirical_interval(samples, weights, alpha)?
+            }
         };
         if pair.0.is_finite() && pair.1.is_finite() && (pair.1 - pair.0).is_finite() {
             Ok(Some(pair))
@@ -174,6 +188,15 @@ impl ForecastPayload {
                 enc.put_u8(4);
                 enc.put_u64(samples.len() as u64);
                 floats(enc, samples);
+            }
+            Self::WeightedEmpirical { samples, weights } => {
+                enc.put_u8(5);
+                enc.put_u64(samples.len() as u64);
+                for (&sample, weight) in samples.iter().zip(weights) {
+                    floats(enc, &[sample]);
+                    enc.put_i128(weight.num());
+                    enc.put_i128(weight.den());
+                }
             }
         }
     }
@@ -823,7 +846,9 @@ impl ForecastLedger {
             if spec.policy.gaussian_crps_bounds
                 && !matches!(
                     rec.payload,
-                    ForecastPayload::Gaussian { .. } | ForecastPayload::Empirical { .. }
+                    ForecastPayload::Gaussian { .. }
+                        | ForecastPayload::Empirical { .. }
+                        | ForecastPayload::WeightedEmpirical { .. }
                 )
             {
                 return Err(domain(
@@ -1308,7 +1333,9 @@ fn summarize(
         && records.iter().all(|r| {
             matches!(
                 r.payload,
-                ForecastPayload::Gaussian { .. } | ForecastPayload::Empirical { .. }
+                ForecastPayload::Gaussian { .. }
+                    | ForecastPayload::Empirical { .. }
+                    | ForecastPayload::WeightedEmpirical { .. }
             )
         });
     let events = n > 0
@@ -1318,6 +1345,9 @@ fn summarize(
     let has_nominal = records
         .iter()
         .all(|r| !matches!(r.payload, ForecastPayload::Interval { nominal: None, .. }));
+    let has_weighted = records
+        .iter()
+        .any(|r| matches!(r.payload, ForecastPayload::WeightedEmpirical { .. }));
     for (rec, member) in records.iter().zip(members) {
         let y = match &member.outcome {
             MemberOutcome::Resolved { value, .. } => {
@@ -1334,8 +1364,16 @@ fn summarize(
         } else {
             None
         };
+        let weighted = if let ForecastPayload::WeightedEmpirical { samples, weights } = &rec.payload
+        {
+            Some(SortedWeightedEmpirical::new(samples, weights)?)
+        } else {
+            None
+        };
         let forecast_interval = if let Some(empirical) = &empirical {
             Some(empirical.interval(policy.alpha)?)
+        } else if let Some(weighted) = &weighted {
+            Some(weighted.interval(policy.alpha)?)
         } else {
             rec.payload.interval(policy.alpha)?
         };
@@ -1393,6 +1431,15 @@ fn summarize(
             };
             crps.add(score, bounds)?;
         }
+        if let Some(weighted) = weighted {
+            let score = y.map(|value| weighted.crps(value)).transpose()?;
+            let bounds = if let Some(score) = score {
+                (score, Some(score))
+            } else {
+                weighted.bounds(policy.outcome_bounds)?
+            };
+            crps.add(score, bounds)?;
+        }
         if let ForecastPayload::Bernoulli { probability: p } = rec.payload {
             let loss0 = p * p;
             let loss1 = (1.0 - p) * (1.0 - p);
@@ -1437,6 +1484,9 @@ fn summarize(
     let flag = if resolved == 0 {
         CalibrationFlag::Unscored
     } else if events
+        // Declared discrete mass does not establish calibrated scenario probabilities, and inclusive
+        // interval coverage need not equal 1-alpha. Keep the new scenario capability descriptive.
+        || has_weighted
         || !has_nominal
         || n_unresolved > 0
         || effective_n.lower < policy.min_calibration_n as f64
@@ -3145,6 +3195,241 @@ mod tests {
                 ForecastPayload::Empirical { samples: vec![0.0] },
             )
             .expect("refused arithmetic neither seals nor advances the assessment cut");
+    }
+
+    fn weighted(samples: Vec<f64>, numerators: &[i128], denominator: i128) -> ForecastPayload {
+        ForecastPayload::WeightedEmpirical {
+            samples,
+            weights: numerators
+                .iter()
+                .map(|n| ExactQty::new(*n, denominator).unwrap())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn weighted_crps_and_missing_members_share_the_complete_mixed_population() {
+        let (mut ledger, cohort, ids) = make_cohort(
+            vec![
+                ForecastPayload::Gaussian {
+                    mean: 0.0,
+                    std_dev: 1.0,
+                },
+                weighted(vec![0.0, 4.0], &[1, 3], 4),
+                ForecastPayload::Empirical {
+                    samples: vec![0.0, 2.0],
+                },
+                weighted(vec![0.0, 4.0], &[1, 3], 4),
+            ],
+            AssessmentPolicy {
+                outcome_bounds: Some((-2.0, 6.0)),
+                gaussian_crps_bounds: true,
+                ..AssessmentPolicy::default()
+            },
+        );
+        for id in &ids[..2] {
+            ledger.append_outcome(*id, 101, 101, published(0.0)).unwrap();
+        }
+        let report = ledger
+            .assess(cohort, 102, OutcomeSelector::FirstPublished)
+            .unwrap();
+        let summary = &report.summary;
+        let score = summary.crps.unwrap();
+        let observed = gaussian_crps(0.0, 1.0, 0.0).unwrap() + 2.25;
+        assert_eq!(
+            (summary.n_members, summary.n_resolved, summary.n_unresolved),
+            (4, 2, 2)
+        );
+        assert_eq!(score.n_scored, 2);
+        assert!((score.observed_mean.unwrap() - observed / 2.0).abs() < 1e-14);
+        assert!((score.whole_cohort.lower - (observed + 0.5 + 0.25) / 4.0).abs() < 1e-14);
+        assert!((score.whole_cohort.upper.unwrap() - (observed + 4.5 + 4.25) / 4.0).abs() < 1e-14);
+        assert_eq!(summary.flag, CalibrationFlag::Descriptive);
+        assert_eq!(summary.mean_standardized_bias, None);
+
+        let (mut ledger, cohort, _) = make_cohort(
+            vec![weighted(vec![0.0, 4.0], &[1, 3], 4)],
+            AssessmentPolicy::default(),
+        );
+        let report = ledger
+            .assess(cohort, 102, OutcomeSelector::FirstPublished)
+            .unwrap();
+        assert_eq!(
+            report.summary.crps.unwrap().whole_cohort,
+            ScoreBounds {
+                lower: 0.25,
+                upper: None
+            }
+        );
+        assert_eq!(report.summary.flag, CalibrationFlag::Unscored);
+        let (mut ledger, cohort, _) = make_cohort(
+            vec![weighted(vec![0.0, 4.0], &[1, 3], 4), interval()],
+            AssessmentPolicy::default(),
+        );
+        assert!(
+            ledger
+                .assess(cohort, 102, OutcomeSelector::FirstPublished)
+                .unwrap()
+                .summary
+                .crps
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn weighted_exact_mass_and_supplied_order_are_frozen_without_rewriting_old_reports() {
+        let mut identities = Vec::new();
+        let mut summaries = Vec::new();
+        for payload in [
+            weighted(vec![0.0, 4.0], &[1, 3], 4),
+            weighted(vec![4.0, 0.0], &[3, 1], 4),
+        ] {
+            let (mut ledger, cohort, ids) =
+                make_cohort(vec![payload.clone()], AssessmentPolicy::default());
+            assert_eq!(ledger.forecast(ids[0]).unwrap().payload, payload);
+            ledger.append_outcome(ids[0], 101, 101, published(1.0)).unwrap();
+            let original = ledger
+                .assess(cohort, 102, OutcomeSelector::FirstPublished)
+                .unwrap()
+                .clone();
+            identities.push((ids[0], cohort, original.digest));
+            summaries.push(original.summary.clone());
+            ledger
+                .append_outcome(
+                    ids[0],
+                    103,
+                    103,
+                    OutcomeKind::Restated {
+                        value: 4.0,
+                        citation: citation("v2"),
+                        supersedes: 1,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                ledger
+                    .assess(cohort, 102, OutcomeSelector::FirstPublished)
+                    .unwrap(),
+                &original
+            );
+            let revised = ledger
+                .assess(cohort, 104, OutcomeSelector::LatestAsOf)
+                .unwrap();
+            assert_eq!(revised.summary.crps.unwrap().observed_mean, Some(0.25));
+        }
+        assert_ne!(identities[0], identities[1]);
+        assert_eq!(summaries[0], summaries[1]);
+        assert_eq!(summaries[0].crps.unwrap().observed_mean, Some(1.75));
+
+        let denominator = 100_000_000_000_000_000_000;
+        let mut ids = Vec::new();
+        for numerators in [
+            [denominator / 2, denominator / 2],
+            [denominator / 2 - 1, denominator / 2 + 1],
+        ] {
+            let payload = weighted(vec![0.0, 1.0], &numerators, denominator);
+            let ForecastPayload::WeightedEmpirical { weights, .. } = &payload else {
+                unreachable!()
+            };
+            assert_eq!(
+                weights.iter().map(|w| w.to_f64()).collect::<Vec<_>>(),
+                vec![0.5, 0.5]
+            );
+            ids.push(
+                ForecastLedger::new()
+                    .register_payload("same", 1, 100, payload)
+                    .unwrap(),
+            );
+        }
+        assert_ne!(
+            ids[0], ids[1],
+            "exact mass changes cannot disappear in floating-point identity"
+        );
+    }
+
+    #[test]
+    fn weighted_diagnostics_use_exact_central_levels_without_implied_calibration() {
+        let payload = weighted(vec![0.0, 1.0, 2.0], &[1, 8, 1], 10);
+        assert!(coverage::monitor_interval(&payload, 0.2).is_err());
+        let (mut ledger, cohort, ids) =
+            make_cohort(vec![payload.clone()], AssessmentPolicy::default());
+        ledger.append_outcome(ids[0], 101, 101, published(2.0)).unwrap();
+        let digest = ledger
+            .assess(cohort, 102, OutcomeSelector::FirstPublished)
+            .unwrap()
+            .digest;
+        let report = ledger.coverage_diagnostics(digest).unwrap();
+        assert_eq!(
+            report.members[0].intervals.map(|i| i.bounds),
+            [Some((1.0, 1.0)), Some((0.0, 1.0)), Some((0.0, 2.0))]
+        );
+        assert_eq!(
+            report
+                .levels
+                .map(|l| (l.n_supported, l.inside, l.above)),
+            [(1, 0, 1), (1, 0, 1), (1, 1, 0)]
+        );
+        let diagnostics = ledger.assessment_diagnostics(digest).unwrap();
+        assert_eq!(
+            diagnostics.members[0].value,
+            diagnostics::DiagnosticValue::Unsupported("weighted_empirical")
+        );
+        let quantiles = ledger.quantile_diagnostics(digest).unwrap();
+        assert_eq!(quantiles.members[0].distribution, "weighted_empirical");
+        assert!(quantiles.members[0].quantiles.is_empty());
+
+        let (mut ledger, cohort, ids) = make_cohort(
+            vec![payload; 35],
+            AssessmentPolicy {
+                correlation_range: (0.0, 0.0),
+                ..AssessmentPolicy::default()
+            },
+        );
+        for (i, id) in ids.into_iter().enumerate() {
+            ledger
+                .append_outcome(id, 101, 101, published(if i < 28 { 1.0 } else { 2.0 }))
+                .unwrap();
+        }
+        let report = ledger
+            .assess(cohort, 102, OutcomeSelector::FirstPublished)
+            .unwrap();
+        assert_eq!(report.summary.coverage.unwrap().observed_fraction, Some(0.8));
+        assert_eq!(report.summary.flag, CalibrationFlag::Descriptive);
+    }
+
+    #[test]
+    fn weighted_refusals_leave_registration_and_assessment_authority_unchanged() {
+        let mut ledger = ForecastLedger::new();
+        for payload in [
+            weighted(vec![1.0, 2.0], &[1], 1),
+            weighted(vec![1.0, 2.0], &[1, 1], 3),
+            weighted(vec![1.0, 2.0], &[0, 1], 1),
+            weighted(vec![1.0, 2.0], &[-1, 2], 1),
+        ] {
+            assert!(
+                ledger
+                    .register_payload("invalid", 200, 300, payload)
+                    .is_err()
+            );
+        }
+        ledger
+            .register_payload("valid", 1, 100, weighted(vec![0.0], &[1], 1))
+            .unwrap();
+        let (mut ledger, cohort, ids) = make_cohort(
+            vec![weighted(vec![-f64::MAX], &[1], 1)],
+            AssessmentPolicy::default(),
+        );
+        ledger
+            .append_outcome(ids[0], 101, 101, published(f64::MAX))
+            .unwrap();
+        assert!(
+            ledger
+                .assess(cohort, 102, OutcomeSelector::FirstPublished)
+                .is_err()
+        );
+        ledger
+            .register_payload("after failed score", 102, 200, weighted(vec![0.0], &[1], 1))
+            .unwrap();
     }
 
     #[test]
