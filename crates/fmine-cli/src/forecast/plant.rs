@@ -1,22 +1,25 @@
-//! DESIGN (BD-181): admit conditional plant quantiles through the existing forecast writer.
+//! DESIGN (BD-181): admit complete weighted plant scenarios through the existing forecast writer.
 //! The complete source receipt remains in the hashed operation as admission evidence. Replay verifies
 //! those retained bytes and the forecast transitions; it does not re-evaluate the plant calculation.
 
 use std::path::Path;
 
-use fmine_calib::ledger::ForecastMetadata;
+use fmine_calib::ledger::{ForecastMetadata, ForecastPayload};
 use fmine_calib::record::format_utc;
 use fmine_claim::forecast_journal::MAX_OPERATION_BYTES;
 use fmine_evidence::Refusal;
-use fmine_plant::production::ProductionReceipt;
+use fmine_plant::production::{ProductionPoint, ProductionReceipt};
 
 use super::{Row, hex, identifier, invalid, js, time};
 
 const NS_PER_SECOND: i64 = 1_000_000_000;
-const EVIDENCE_PREFIX: &str = "# fmine.plant-forecast-admission.v1 ";
-const FAMILY: &str = "conditional-plant-production-quantiles/1";
-pub const NO_CLAIM: &str = "Conditional plant-model quantiles from declared weighted joint scenarios, not calibrated probabilities or measured production. Only p10, p50 and p90 are registered; interval scoring is available at alpha 0.2, not CRPS or full-distribution scoring. The complete source receipt is retained as admission evidence in the journal operation. Replay verifies the retained bytes, not the original calculation or current source files. Outcomes remain supplied and unverified; registering a prediction neither freezes a cohort nor authorizes operation.";
-pub const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal register-plant --journal <path> --head <hex> --input <production.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target <target> --author-role <role> --time-basis utc-unix-ns --trust-host-clock","targets":["recovery","throughput","dry-tonnes","contained-metal","recovered-metal"],"source":"Admits the complete joint production calculation through its grinding, recovery and explicit grade/exposure worksheets; source IDs, exact scenario weights, physical support, units and element are retained","payload":"Weighted p10, p50 and p90 only; central interval scoring at alpha 0.2, no CRPS or full-distribution scoring","time":"Whole-second UTC Unix-nanosecond physical support is explicitly declared, never inferred or rounded; registration and cohort membership clock upper bounds must precede physical start; supplied outcomes must become available after physical end","journal":"Opt-in operation v9 retains separate registration_before=start and outcome_due=end boundaries and complete source admission evidence; both boundaries are checked on replay; v1-v8 meanings remain unchanged","size":"The complete versioned operation must fit the existing 64 KiB cap; oversized evidence is refused, never truncated","interpretation":"Conditional model outputs and supplied unverified outcomes; no calibration, measured-production or control-authority claim. Replay authenticates retained bytes and transitions, not the original plant calculation or current source files"}"#;
+const LEGACY_EVIDENCE_PREFIX: &str = "# fmine.plant-forecast-admission.v1 ";
+const LEGACY_FAMILY: &str = "conditional-plant-production-quantiles/1";
+const LEGACY_NO_CLAIM: &str = "Conditional plant-model quantiles from declared weighted joint scenarios, not calibrated probabilities or measured production. Only p10, p50 and p90 are registered; interval scoring is available at alpha 0.2, not CRPS or full-distribution scoring. The complete source receipt is retained as admission evidence in the journal operation. Replay verifies the retained bytes, not the original calculation or current source files. Outcomes remain supplied and unverified; registering a prediction neither freezes a cohort nor authorizes operation.";
+const EVIDENCE_PREFIX: &str = "# fmine.plant-forecast-admission.v2 ";
+const FAMILY: &str = "conditional-plant-production-weighted/2";
+pub const NO_CLAIM: &str = "Conditional plant-model distribution from the complete declared weighted joint scenarios, not calibrated probabilities or measured production. Every selected target value and its exact probability are registered without normalization or resampling; CRPS and central interval scoring retain that marginal distribution. Weighted central levels interpret alpha through its canonical shortest decimal spelling, with exact cumulative mass and no interpolation. The complete source receipt and scenario identities remain admission evidence in the journal operation. Replay verifies retained bytes and transitions, not the original calculation or current source files. Outcomes remain supplied and unverified; registering a prediction neither freezes a cohort nor authorizes operation. No joint forecast scoring or calibrated scenario probabilities are inferred.";
+pub const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal register-plant --journal <path> --head <hex> --input <production.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target <target> --author-role <role> --time-basis utc-unix-ns --trust-host-clock","targets":["recovery","throughput","dry-tonnes","contained-metal","recovered-metal"],"source":"Admits the complete joint production calculation through its grinding, recovery and explicit grade/exposure worksheets; scenario identities and order, exact probabilities, physical support, units and element are retained","payload":"Complete weighted empirical marginal distribution, with every target value and exact positive probability; CRPS and central interval scoring, no normalization or resampling. Weighted interval alpha uses its canonical shortest decimal spelling and exact inverse-CDF comparisons; no interpolation","time":"Whole-second UTC Unix-nanosecond physical support is explicitly declared, never inferred or rounded; registration and cohort membership clock upper bounds must precede physical start; supplied outcomes must become available after physical end","journal":"Opt-in operation v14 retains the complete weighted payload, separate registration_before=start and outcome_due=end boundaries and complete source admission evidence; both boundaries are checked on replay; legacy v9 quantile evidence and identities retain their original interpretation","size":"The complete versioned operation must fit the existing 64 KiB cap; oversized evidence is refused, never truncated","interpretation":"Conditional model outputs and supplied unverified outcomes; no calibration, measured-production, joint-distribution scoring or control-authority claim. Replay authenticates retained bytes and transitions, not the original plant calculation or current source files"}"#;
 
 /// A physical target is fixed by the adapter, never inferred from a caller-supplied unit label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +74,17 @@ impl Target {
         }
     }
 
+    fn sample(self, point: &ProductionPoint) -> f64 {
+        match self {
+            Self::Recovery => point.recovery_fraction.value(),
+            Self::Throughput => point.throughput.value(),
+            Self::DryTonnes => point.dry_tonnes.value(),
+            Self::ContainedMetal => point.contained_metal.value(),
+            Self::RecoveredMetal => point.recovered_metal.value(),
+        }
+    }
+
+    #[cfg(test)]
     fn quantiles(self, receipt: &ProductionReceipt) -> [f64; 3] {
         let summary = receipt.summary();
         match self {
@@ -139,6 +153,37 @@ fn from_receipt(
     receipt: &ProductionReceipt,
     source_json: &str,
 ) -> Result<Prepared, Refusal> {
+    let payload = ForecastPayload::WeightedEmpirical {
+        samples: receipt
+            .points()
+            .iter()
+            .map(|point| registration.target.sample(point))
+            .collect(),
+        weights: receipt.points().iter().map(|point| point.weight).collect(),
+    };
+    from_projection(registration, receipt, source_json, payload)
+}
+
+/// Preserve the original request bytes for legacy durable replay controls.
+#[cfg(test)]
+fn legacy_from_receipt(
+    registration: &Registration<'_>,
+    receipt: &ProductionReceipt,
+    source_json: &str,
+) -> Result<Prepared, Refusal> {
+    let payload = ForecastPayload::Quantiles {
+        levels: vec![0.1, 0.5, 0.9],
+        values: registration.target.quantiles(receipt).to_vec(),
+    };
+    from_projection(registration, receipt, source_json, payload)
+}
+
+fn from_projection(
+    registration: &Registration<'_>,
+    receipt: &ProductionReceipt,
+    source_json: &str,
+    payload: ForecastPayload,
+) -> Result<Prepared, Refusal> {
     let summary = receipt.summary();
     let scope = &summary.grinding_scope;
     let interval = scope.interval;
@@ -158,19 +203,42 @@ fn from_receipt(
         ));
     }
     let target = registration.target;
-    let [lo, median, hi] = target.quantiles(receipt);
-    if [lo, median, hi].iter().any(|v| !v.is_finite() || *v < 0.0)
-        || lo > median
-        || median > hi
-        || (target == Target::Recovery && hi > 1.0)
-    {
-        return Err(invalid(
-            "plant forecast quantiles violate the target's physical domain",
-        ));
-    }
+    validate_projection(target, &payload)?;
+    let (prefix, family, payload_fields) = match &payload {
+        ForecastPayload::WeightedEmpirical { samples, weights } => (
+            EVIDENCE_PREFIX,
+            FAMILY,
+            format!(
+                "kind = \"weighted_empirical\"\nsamples = {}\nweights = {}\n",
+                js(&samples
+                    .iter()
+                    .map(f64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")),
+                js(&weights
+                    .iter()
+                    .map(|weight| format!("{}/{}", weight.num(), weight.den()))
+                    .collect::<Vec<_>>()
+                    .join(",")),
+            ),
+        ),
+        ForecastPayload::Quantiles { values, .. } => (
+            LEGACY_EVIDENCE_PREFIX,
+            LEGACY_FAMILY,
+            format!(
+                "kind = \"quantiles\"\nlevels = \"0.1,0.5,0.9\"\nvalues = {}\n",
+                js(&values
+                    .iter()
+                    .map(f64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")),
+            ),
+        ),
+        _ => return Err(invalid("unsupported plant forecast projection")),
+    };
     hex(receipt.digest())?;
     let metadata = ForecastMetadata {
-        family: FAMILY.into(),
+        family: family.into(),
         author_role: registration.author_role.into(),
         domain: format!("{}/{}", scope.circuit, scope.blend),
         horizon: format!("UTC [{start},{end})"),
@@ -189,18 +257,18 @@ fn from_receipt(
     }
     let evidence_json = format!(
         "{}{source_json}}}",
-        evidence_header(
+        projection_header(
             receipt.digest(),
             target,
             interval.start_ns,
             interval.end_ns,
-            [lo, median, hi]
-        ),
+            &payload,
+        )?,
     );
-    // DESIGN: v9 retains two distinct boundaries. Registration and cohort membership precede START;
+    // DESIGN: both versions retain distinct boundaries. Registration and cohort membership precede START;
     // the unchanged core ledger requires outcome availability after END. Neither boundary is rounded.
     let request = format!(
-        "{EVIDENCE_PREFIX}{evidence_json}\n[[plant_forecast]]\nid = {}\nmodel_key = {}\nregistration_before = {}\noutcome_due = {}\nkind = \"quantiles\"\nlevels = \"0.1,0.5,0.9\"\nvalues = {}\nfamily = {}\nauthor_role = {}\ndomain = {}\nhorizon = {}\nsite = {}\nquantity = {}\nunit = {}\n",
+        "{prefix}{evidence_json}\n[[plant_forecast]]\nid = {}\nmodel_key = {}\nregistration_before = {}\noutcome_due = {}\n{payload_fields}family = {}\nauthor_role = {}\ndomain = {}\nhorizon = {}\nsite = {}\nquantity = {}\nunit = {}\n",
         js(registration.id),
         js(&format!(
             "plant-production:{}:{}",
@@ -209,7 +277,6 @@ fn from_receipt(
         )),
         js(&start),
         js(&end),
-        js(&format!("{lo},{median},{hi}")),
         js(&metadata.family),
         js(&metadata.author_role),
         js(&metadata.domain),
@@ -229,18 +296,84 @@ fn from_receipt(
     })
 }
 
-fn evidence_header(digest: &str, target: Target, start: i64, end: i64, values: [f64; 3]) -> String {
+fn validate_projection(target: Target, payload: &ForecastPayload) -> Result<(), Refusal> {
+    let values = match payload {
+        ForecastPayload::WeightedEmpirical { samples, weights } => {
+            if samples.is_empty() || samples.len() != weights.len() {
+                return Err(invalid(
+                    "plant forecast must retain every scenario and its probability",
+                ));
+            }
+            samples
+        }
+        ForecastPayload::Quantiles { levels, values } => {
+            if levels != &[0.1, 0.5, 0.9]
+                || values.len() != 3
+                || values.windows(2).any(|pair| pair[0] > pair[1])
+            {
+                return Err(invalid(
+                    "legacy plant forecast requires its original p10/p50/p90 projection",
+                ));
+            }
+            values
+        }
+        _ => return Err(invalid("unsupported plant forecast projection")),
+    };
+    if values.iter().any(|value| {
+        !value.is_finite() || *value < 0.0 || (target == Target::Recovery && *value > 1.0)
+    }) {
+        return Err(invalid(
+            "plant forecast values violate the target's physical domain",
+        ));
+    }
+    Ok(())
+}
+
+fn legacy_evidence_header(
+    digest: &str,
+    target: Target,
+    start: i64,
+    end: i64,
+    values: [f64; 3],
+) -> String {
     let [lo, median, hi] = values;
     format!(
         "{{\"schema\":\"fmine.plant-forecast-admission.v1\",\"receipt_digest\":{},\"target\":{},\"unit\":{},\"time_basis\":\"utc-unix-ns\",\"physical_start_ns\":{start},\"physical_end_ns\":{end},\"levels\":[0.1,0.5,0.9],\"values\":[{lo},{median},{hi}],\"no_claim\":{},\"source_receipt\":",
         js(digest),
         js(target.as_str()),
         js(target.unit()),
-        js(NO_CLAIM),
+        js(LEGACY_NO_CLAIM),
     )
 }
 
-/// Validate v9's typed projection and chronology without claiming to re-evaluate retained source bytes.
+fn projection_header(
+    digest: &str,
+    target: Target,
+    start: i64,
+    end: i64,
+    payload: &ForecastPayload,
+) -> Result<String, Refusal> {
+    match payload {
+        ForecastPayload::WeightedEmpirical { .. } => Ok(format!(
+            "{{\"schema\":\"fmine.plant-forecast-admission.v2\",\"receipt_digest\":{},\"target\":{},\"unit\":{},\"time_basis\":\"utc-unix-ns\",\"physical_start_ns\":{start},\"physical_end_ns\":{end},\"payload\":{},\"no_claim\":{},\"source_receipt\":",
+            js(digest),
+            js(target.as_str()),
+            js(target.unit()),
+            super::payload_json(payload),
+            js(NO_CLAIM),
+        )),
+        ForecastPayload::Quantiles { values, .. } => {
+            let values: [f64; 3] = values
+                .as_slice()
+                .try_into()
+                .map_err(|_| invalid("legacy plant projection requires three quantiles"))?;
+            Ok(legacy_evidence_header(digest, target, start, end, values))
+        }
+        _ => Err(invalid("unsupported plant forecast projection")),
+    }
+}
+
+/// Validate legacy v9 or weighted v14 projection and chronology without re-evaluating retained source bytes.
 pub(super) fn registration_start(row: &Row<'_>, operation: &str) -> Result<i64, Refusal> {
     let model = row
         .string("model_key")?
@@ -255,15 +388,36 @@ pub(super) fn registration_start(row: &Row<'_>, operation: &str) -> Result<i64, 
     let end_text = row.string("outcome_due")?;
     let start = time(start_text)?;
     let end = time(end_text)?;
+    let (prefix, family, payload) = match row.string("kind")? {
+        "quantiles" => (
+            LEGACY_EVIDENCE_PREFIX,
+            LEGACY_FAMILY,
+            ForecastPayload::Quantiles {
+                levels: row.numbers("levels")?,
+                values: row.numbers("values")?,
+            },
+        ),
+        "weighted_empirical" => (
+            EVIDENCE_PREFIX,
+            FAMILY,
+            ForecastPayload::WeightedEmpirical {
+                samples: row.numbers("samples")?,
+                weights: row.exact_weights()?,
+            },
+        ),
+        _ => {
+            return Err(invalid(
+                "plant registration requires a supported source projection",
+            ));
+        }
+    };
     if start >= end
-        || row.string("family")? != FAMILY
+        || row.string("family")? != family
         || row.string("horizon")? != format!("UTC [{start_text},{end_text})")
         || row.string("unit")? != target.unit()
-        || row.string("kind")? != "quantiles"
-        || row.numbers("levels")? != [0.1, 0.5, 0.9]
     {
         return Err(invalid(
-            "plant registration target, support or quantile metadata is inconsistent",
+            "plant registration target, support or projection metadata is inconsistent",
         ));
     }
     let quantity = row.string("quantity")?;
@@ -283,33 +437,20 @@ pub(super) fn registration_start(row: &Row<'_>, operation: &str) -> Result<i64, 
             "plant registration quantity does not match its target",
         ));
     }
-    let values = row.numbers("values")?;
-    if values.len() != 3
-        || values
-            .iter()
-            .any(|v| *v < 0.0 || (target == Target::Recovery && *v > 1.0))
-        || values.windows(2).any(|pair| pair[0] > pair[1])
-    {
-        return Err(invalid(
-            "plant registration quantiles violate the target's physical domain",
-        ));
-    }
-    let mut evidence = operation
-        .lines()
-        .filter_map(|line| line.strip_prefix(EVIDENCE_PREFIX));
-    let Some(retained) = evidence.next() else {
+    validate_projection(target, &payload)?;
+    let mut evidence = operation.lines().filter_map(|line| {
+        [LEGACY_EVIDENCE_PREFIX, EVIDENCE_PREFIX]
+            .into_iter()
+            .find_map(|candidate| line.strip_prefix(candidate).map(|value| (candidate, value)))
+    });
+    let Some((retained_prefix, retained)) = evidence.next() else {
         return Err(invalid(
             "plant registration is missing retained admission evidence",
         ));
     };
-    let expected = evidence_header(
-        digest,
-        target,
-        start,
-        end,
-        [values[0], values[1], values[2]],
-    );
-    if evidence.next().is_some()
+    let expected = projection_header(digest, target, start, end, &payload)?;
+    if retained_prefix != prefix
+        || evidence.next().is_some()
         || retained
             .strip_prefix(&expected)
             .is_none_or(|source| !source.starts_with('{') || !source.ends_with("}}"))
@@ -334,7 +475,13 @@ pub(super) fn attach_evidence(
     presentation
         .1
         .push_str("\n## Conditional plant forecast\n\n");
-    presentation.1.push_str(NO_CLAIM);
+    presentation.1.push_str(
+        if evidence.starts_with("{\"schema\":\"fmine.plant-forecast-admission.v1\",") {
+            LEGACY_NO_CLAIM
+        } else {
+            NO_CLAIM
+        },
+    );
     presentation.1.push_str(" Registration and cohort membership must precede registration_before, the physical interval's start. Supplied outcomes must become available after outcome_due, the physical interval's end. Both boundaries and the complete target support remain frozen.\n");
     Ok(())
 }

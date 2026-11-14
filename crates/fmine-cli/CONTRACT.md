@@ -32,18 +32,23 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   parser likewise lives in `fmine_plant::raw_measurements::worksheet`; `plant transfer` keeps its existing
   IO/envelope behavior and exact schemas while the pure adapter becomes reusable without a CLI dependency.
 - DESIGN (BD-181): `forecast journal register-plant` consumes that same admitted calculation for an explicit
-  recovery, throughput, dry-tonnage, contained-metal or recovered-metal target. Exact-weight p10/p50/p90
-  become the existing quantile payload, with explicit quantity/unit, element, author role and complete
-  physical support. The opt-in v9 `plant_forecast` operation retains a separate prestart registration bound
+  recovery, throughput, dry-tonnage, contained-metal or recovered-metal target. Every receipt point's
+  target value and exact probability become a weighted empirical payload, with explicit quantity/unit,
+  element, author role and complete physical support. The opt-in v14 `plant_forecast` operation retains
+  a separate prestart registration bound
   and period-end outcome bound. Registration and cohort freeze use the writer's latest possible time;
-  replay rechecks both boundaries and preserves existing v1–v8 semantics. Plant source evidence is retained
+  replay rechecks both boundaries and preserves existing operation semantics. Legacy v9 records retain
+  their original evidence header, family and quantile-only scoring. Plant source evidence is retained
   as one hashed admission snapshot, bounded by the existing 64 KiB operation limit. Failed model, time,
   size or presentation admission does not append or advance the journal. Whole-second UTC Unix-nanosecond
   interpretation requires explicit acceptance; no rounding of arbitrary plant clock axes occurs.
-  Existing cohort, supplied-outcome and assessment owners provide the lifecycle. Only 80% interval scoring
-  is supported by these three quantiles, with no empirical CRPS, external time proof, source re-evaluation
-  on replay, validated plant outcomes or calibration/field-gate claim. Complete source and binary controls
-  live in `xtask/testdata/forecast_plant_controls.rs` and `plant_production_contract.rs`.
+  Existing cohort, supplied-outcome and assessment owners provide the lifecycle. New registrations
+  support full marginal-distribution CRPS, central interval scores and unresolved-outcome bounds. The
+  original scenario IDs and sample order remain in the complete source receipt, with exact probabilities
+  beside every frozen sample; no uniform resampling or quantile surrogate is introduced. This supplies no
+  joint-distribution score, external time proof, source re-evaluation on replay, validated plant outcomes
+  or calibration/field-gate claim. Complete source and binary controls live in
+  `xtask/testdata/forecast_plant_controls.rs` and `plant_forecast_command.rs`.
 
 - DESIGN (BD-225/227): `decide journal init|record|show` retains explicit act-now choices or information
   options with an explicit expected-value or downside-optimized contingent policy, and their rationales,

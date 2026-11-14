@@ -88,7 +88,7 @@ fn head(root: &Path) -> String {
 }
 
 #[test]
-fn binary_registers_source_bound_plant_quantiles_and_reopens_both_time_boundaries() {
+fn binary_registers_complete_weighted_plant_population_and_reopens_both_time_boundaries() {
     let (root, start, sources) = fixture();
     run(
         &root,
@@ -167,6 +167,10 @@ fn binary_registers_source_bound_plant_quantiles_and_reopens_both_time_boundarie
     let payload = field(&registered, &["payload"]);
     let admission = field(payload, &["plant_admission"]);
     assert_eq!(
+        field(admission, &["schema"]).as_str(),
+        Some("fmine.plant-forecast-admission.v2")
+    );
+    assert_eq!(
         field(admission, &["target"]).as_str(),
         Some("recovered-metal")
     );
@@ -235,20 +239,27 @@ fn binary_registers_source_bound_plant_quantiles_and_reopens_both_time_boundarie
     );
     assert_eq!(
         field(forecast, &["payload", "kind"]).as_str(),
-        Some("quantiles")
+        Some("weighted_empirical")
     );
-    for (key, expected) in [
-        ("levels", [0.1, 0.5, 0.9]),
-        ("values", [0.192, 0.192, 0.288]),
-    ] {
-        let values = field(forecast, &["payload", key])
-            .as_array()
-            .expect("quantile coordinates");
-        assert_eq!(values.len(), 3);
-        for (actual, expected) in values.iter().zip(expected) {
-            assert!((actual.f64().expect("number") - expected).abs() < 1e-12);
-        }
+    let samples = field(forecast, &["payload", "samples"])
+        .as_array()
+        .expect("complete scenario values");
+    assert_eq!(samples.len(), 2);
+    for (actual, expected) in samples.iter().zip([0.288, 0.192]) {
+        assert!((actual.f64().expect("number") - expected).abs() < 1e-12);
     }
+    assert_eq!(
+        field(forecast, &["payload", "weights"]),
+        &parse(br#"["1/2","1/2"]"#).unwrap()
+    );
+    assert_eq!(
+        field(forecast, &["payload", "weight_kind"]).as_str(),
+        Some("exact_probability")
+    );
+    assert_eq!(
+        field(forecast, &["metadata", "family"]).as_str(),
+        Some("conditional-plant-production-weighted/2")
+    );
     assert_eq!(field(payload, &["n_cohorts"]).u64(), Some(0));
     assert_eq!(field(payload, &["n_outcomes"]).u64(), Some(0));
 
@@ -274,7 +285,7 @@ fn binary_registers_source_bound_plant_quantiles_and_reopens_both_time_boundarie
         field(payload, &["forecasts"])
     );
     assert_eq!(
-        field(&inspected, &["payload", "operation_version_counts", "v9"]).u64(),
+        field(&inspected, &["payload", "operation_version_counts", "v14"]).u64(),
         Some(1)
     );
     assert_eq!(
@@ -286,10 +297,10 @@ fn binary_registers_source_bound_plant_quantiles_and_reopens_both_time_boundarie
     let Entry::Operation(operation) = &journal.records()[1].entry else {
         panic!("plant operation")
     };
-    assert!(operation.starts_with("schema = \"fmine.forecast-operation.v9\"\n"));
+    assert!(operation.starts_with("schema = \"fmine.forecast-operation.v14\"\n"));
     let retained = operation
         .lines()
-        .find_map(|line| line.strip_prefix("# fmine.plant-forecast-admission.v1 "))
+        .find_map(|line| line.strip_prefix("# fmine.plant-forecast-admission.v2 "))
         .expect("retained admission");
     assert_eq!(
         &parse(retained.as_bytes()).expect("retained JSON"),

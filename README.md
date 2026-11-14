@@ -109,13 +109,25 @@ paths plus `--journal`, `--head`, `--id`, `--target`, `--author-role`,
 `--time-basis utc-unix-ns` and `--trust-host-clock`. The explicit time basis requires whole-second UTC
 Unix nanoseconds; the demonstration's relative times must not be treated as future calendar dates.
 Registration and subsequent cohort freeze must precede the physical interval's start, while supplied
-outcomes cannot be available before its end. The v9 operation retains both bounds and rechecks them on
-replay. It records p10/p50/p90 with their exact-weight inverse-CDF interpretation, enabling the existing
-80% interval score. It does not claim full-distribution CRPS or calibrated probabilities. Complete source
+outcomes cannot be available before its end. The v14 operation retains both bounds and rechecks them on
+replay. It registers every target value and its exact probability from the joint scenario population,
+enabling full-distribution CRPS, central interval scores and completion bounds for missing outcomes.
+Weights must sum to exactly one; they are never normalized or replaced by equal member counts.
+Inverse-CDF intervals use exact cumulative mass and the canonical decimal interpretation of alpha.
+Older v9 records retain their original p10/p50/p90 interpretation and interval-only scoring. Complete source
 evidence is retained in the hashed operation; an operation exceeding 64 KiB refuses without advancing the
 journal. Existing `freeze`, `outcome` and `assess` commands handle cohort membership, explicitly supplied
 observations and scoring. Supplied plant outcomes remain unverified; this is no external timestamp proof
 or claim that a real monthly forecasting gate has passed. `fmine robot-docs` documents the fields.
+
+Declared forecasts can also use `kind = "weighted_empirical"`, with comma-separated `samples` and
+exact decimal or rational `weights`. The synthetic example below scores atoms 0 and 2 with probabilities
+1/4 and 3/4 at an outcome of 1. Its CRPS is 5/8; treating the same two atoms as equally likely would give
+1/2. These scores assess the declared distribution and do not establish calibrated probabilities.
+
+```bash
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/weighted_synthetic.toml --cohort weighted-demo --as-of 2031-02-17T00:00:00Z
+```
 
 `plant trajectory` links 2–32 contiguous periods for one conserved elemental inventory. Adjacent periods
 share one boundary stock; every stock is either measured once or explicitly unmeasured. The declared full

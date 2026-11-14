@@ -1,4 +1,4 @@
-//! FACT: synthetic source worksheets exercise real admission, durable replay and interval scoring.
+//! FACT: synthetic worksheets exercise source admission, durable replay and weighted-distribution scoring.
 //! The declared host-clock bound and supplied outcome are not external evidence or plant validation.
 
 use super::*;
@@ -9,6 +9,7 @@ use fmine_calib::ledger::ForecastPayload;
 use fmine_claim::forecast_journal::Entry;
 use fmine_io::forecast::Journal;
 use fmine_runtime::{ClockError, WallClock};
+use fmine_units::ExactQty;
 
 use super::super::live::{Command, execute_with_clock};
 use super::super::{Replay, Row, parse_subset};
@@ -85,14 +86,13 @@ fn registered(root: &Path, target: Target, registered_ns: i64) -> (Prepared, Rep
     (prepared, state)
 }
 
-fn values(state: &Replay) -> &[f64] {
+fn population(state: &Replay) -> (&[f64], &[ExactQty]) {
     let id = state.forecasts["production-1"];
     let row = state.ledger.forecast(id).expect("registered forecast");
-    let ForecastPayload::Quantiles { levels, values } = &row.payload else {
-        panic!("weighted populations must not become uniform empirical draws")
+    let ForecastPayload::WeightedEmpirical { samples, weights } = &row.payload else {
+        panic!("complete weighted populations must not become three quantiles or uniform draws")
     };
-    assert_eq!(levels, &[0.1, 0.5, 0.9]);
-    values
+    (samples, weights)
 }
 
 fn near(actual: f64, expected: f64) {
@@ -100,7 +100,7 @@ fn near(actual: f64, expected: f64) {
 }
 
 #[test]
-fn source_quantiles_preserve_physical_target_element_units_and_entire_receipt() {
+fn source_populations_preserve_every_physical_target_element_units_and_entire_receipt() {
     let start = time("2030-01-02T00:00:00Z").expect("UTC");
     let root = fixture(start);
     let loaded = crate::plant::production::load(
@@ -113,38 +113,50 @@ fn source_quantiles_preserve_physical_target_element_units_and_entire_receipt() 
     let cases = [
         (
             Target::Recovery,
-            [0.6, 0.6, 0.9],
+            [0.9, 0.6],
             "fraction",
             "model_recovery_fraction:Au",
         ),
         (
             Target::Throughput,
-            [80.0, 80.0, 320.0],
+            [80.0, 320.0],
             "dry_metric_tonnes_per_hour",
             "dry_feed_throughput",
         ),
         (
             Target::DryTonnes,
-            [80.0, 80.0, 320.0],
+            [80.0, 320.0],
             "dry_metric_tonnes",
             "dry_feed_mass",
         ),
         (
             Target::ContainedMetal,
-            [0.32, 0.32, 0.32],
+            [0.32, 0.32],
             "kg",
             "contained_feed_metal:Au",
         ),
         (
             Target::RecoveredMetal,
-            [0.192, 0.192, 0.288],
+            [0.288, 0.192],
             "kg",
             "model_recovered_metal:Au",
         ),
     ];
+    assert_eq!(
+        loaded
+            .receipt()
+            .points()
+            .iter()
+            .map(|point| point.scenario_id.as_str())
+            .collect::<Vec<_>>(),
+        ["hard", "soft"],
+    );
     for (target, expected, unit, quantity) in cases {
         let (prepared, state) = registered(&root, target, start - 10);
-        for (actual, expected) in values(&state).iter().zip(expected) {
+        let (samples, weights) = population(&state);
+        assert_eq!(samples.len(), expected.len());
+        assert_eq!(weights, &[ExactQty::new(1, 2).unwrap(); 2]);
+        for (actual, expected) in samples.iter().zip(expected) {
             near(*actual, expected);
         }
         let row = state
@@ -156,6 +168,7 @@ fn source_quantiles_preserve_physical_target_element_units_and_entire_receipt() 
         assert_eq!(metadata.unit, unit);
         assert_eq!(metadata.quantity, quantity);
         assert_eq!(metadata.site, "synthetic-plant/v1");
+        assert_eq!(metadata.family, FAMILY);
         assert_eq!(
             metadata.horizon,
             "UTC [2030-01-02T00:00:00Z,2030-01-02T01:00:00Z)"
@@ -185,29 +198,66 @@ fn source_quantiles_preserve_physical_target_element_units_and_entire_receipt() 
             .code,
         "FMINE-REF-107",
     );
+    // Both altered populations are otherwise physically valid. The retained receipt must still bind
+    // the registered projection, rather than lending provenance to a caller's replacement distribution.
+    for (field, replacement) in [("samples", "0.1,0.2"), ("weights", "1/4,3/4")] {
+        let old = prepared
+            .request
+            .lines()
+            .find(|line| line.starts_with(&format!("{field} = ")))
+            .unwrap();
+        let changed = prepared
+            .request
+            .replacen(old, &format!("{field} = \"{replacement}\""), 1);
+        let doc = parse_subset(&changed).unwrap();
+        assert_eq!(
+            registration_start(&Row(&doc.rows[0]), &changed)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-107",
+        );
+    }
+}
+
+fn weights(root: &Path, soft: &str, hard: &str) {
+    for path in ["production.toml", "grinding.toml", "recovery.toml"] {
+        let text = std::fs::read_to_string(root.join(path)).unwrap();
+        let text = text
+            .replace(
+                "id = \"soft\"\nweight = \"1/2\"",
+                &format!("id = \"soft\"\nweight = \"{soft}\""),
+            )
+            .replace(
+                "id = \"hard\"\nweight = \"1/2\"",
+                &format!("id = \"hard\"\nweight = \"{hard}\""),
+            );
+        std::fs::write(root.join(path), text).unwrap();
+    }
 }
 
 #[test]
 fn arbitrary_exact_probability_mass_is_not_replaced_by_uniform_member_counts() {
     let start = time("2030-01-02T00:00:00Z").unwrap();
     let root = fixture(start);
-    for path in ["production.toml", "grinding.toml", "recovery.toml"] {
-        let text = std::fs::read_to_string(root.join(path)).unwrap();
-        let text = text
-            .replace(
-                "id = \"soft\"\nweight = \"1/2\"",
-                "id = \"soft\"\nweight = \"1/20\"",
-            )
-            .replace(
-                "id = \"hard\"\nweight = \"1/2\"",
-                "id = \"hard\"\nweight = \"19/20\"",
-            );
-        std::fs::write(root.join(path), text).unwrap();
-    }
+    weights(&root, "1/20", "19/20");
     let (prepared, state) = registered(&root, Target::RecoveredMetal, start - 10);
-    for actual in values(&state) {
-        near(*actual, 0.288);
-    }
+    let (samples, weights) = population(&state);
+    assert_eq!(samples.len(), 2);
+    near(samples[0], 0.288);
+    near(samples[1], 0.192);
+    assert_eq!(
+        weights,
+        &[ExactQty::new(19, 20).unwrap(), ExactQty::new(1, 20).unwrap()]
+    );
+    let (lo, hi) = fmine_calib::scoring::weighted_empirical_interval(samples, weights, 0.2)
+        .expect("exact weighted interval");
+    near(lo, 0.288);
+    near(hi, 0.288);
+    near(
+        fmine_calib::scoring::weighted_empirical_crps(samples, weights, 0.3)
+            .expect("full weighted distribution CRPS"),
+        0.01224,
+    );
     assert!(
         prepared.evidence_json.contains("19/20")
             || prepared.evidence_json.contains("\"numerator\":\"19\"")
@@ -215,7 +265,7 @@ fn arbitrary_exact_probability_mass_is_not_replaced_by_uniform_member_counts() {
     assert!(
         prepared
             .evidence_json
-            .contains("not CRPS or full-distribution scoring")
+            .contains("fmine.plant-forecast-admission.v2")
     );
 }
 
@@ -255,56 +305,86 @@ fn init(root: &Path, now: i64) {
 #[test]
 fn plant_registration_reopens_and_scores_with_full_admission_evidence_retained() {
     let start = time("2030-01-02T00:00:00Z").unwrap();
-    let root = fixture(start);
-    init(&root, start - 1_000);
-    let prepared = prepare(&registration(Target::RecoveredMetal), &root).unwrap();
-    let admitted = execute_with_clock(
-        &command(&root, Target::RecoveredMetal),
-        &root,
-        &Clock(start - 100),
-    );
-    assert_eq!(admitted.exit_code, 0, "{:?}", admitted.refusal);
-    assert!(admitted.payload_json.contains(&prepared.evidence_json));
-    assert!(admitted.payload_json.contains("\"v9\":1"));
-    assert!(
-        admitted
-            .payload_json
-            .contains(&format!("\"registration_before_ns\":{start}"))
-    );
-    let saved = Journal::open_read(&root.join("history"), None).unwrap();
-    let Entry::Operation(operation) = &saved.records()[1].entry else {
-        panic!("forecast operation")
-    };
-    assert!(operation.starts_with("schema = \"fmine.forecast-operation.v9\"\n"));
-    assert!(operation.contains(&prepared.evidence_json));
-    let saved_head = saved.head();
-    drop(saved);
+    for (soft, hard, interval_score, crps) in [
+        ("1/2", "1/2", 0.216, 0.036),
+        ("1/20", "19/20", 0.12, 0.01224),
+    ] {
+        let root = fixture(start);
+        weights(&root, soft, hard);
+        init(&root, start - 1_000);
+        let prepared = prepare(&registration(Target::RecoveredMetal), &root).unwrap();
+        let admitted = execute_with_clock(
+            &command(&root, Target::RecoveredMetal),
+            &root,
+            &Clock(start - 100),
+        );
+        assert_eq!(admitted.exit_code, 0, "{:?}", admitted.refusal);
+        assert!(admitted.payload_json.contains(&prepared.evidence_json));
+        assert!(admitted.payload_json.contains("\"v14\":1"));
+        assert!(
+            admitted
+                .payload_json
+                .contains(&format!("\"registration_before_ns\":{start}"))
+        );
+        let saved = Journal::open_read(&root.join("history"), None).unwrap();
+        let Entry::Operation(operation) = &saved.records()[1].entry else {
+            panic!("forecast operation")
+        };
+        assert!(operation.starts_with("schema = \"fmine.forecast-operation.v14\"\n"));
+        assert!(operation.contains(&prepared.evidence_json));
+        let saved_head = saved.head();
+        drop(saved);
 
-    std::fs::write(root.join("grinding.toml"), "changed after registration").unwrap();
-    let inspected = execute_with_clock(
-        &Command::Inspect {
-            journal: "history".into(),
-            head: Some(saved_head),
-        },
-        &root,
-        &NoClock,
-    );
-    assert_eq!(inspected.exit_code, 0);
-    assert_eq!(head(&root), saved_head);
-    assert!(inspected.payload_json.contains("\"kind\":\"quantiles\""));
+        std::fs::write(root.join("grinding.toml"), "changed after registration").unwrap();
+        let inspected = execute_with_clock(
+            &Command::Inspect {
+                journal: "history".into(),
+                head: Some(saved_head),
+            },
+            &root,
+            &NoClock,
+        );
+        assert_eq!(inspected.exit_code, 0);
+        assert_eq!(head(&root), saved_head);
+        assert!(
+            inspected
+                .payload_json
+                .contains("\"kind\":\"weighted_empirical\"")
+        );
 
+        score_registered(&root, start, interval_score, Some(crps));
+        let reopened = Journal::open_read(&root.join("history"), None).unwrap();
+        let Entry::Operation(original) = &reopened.records()[1].entry else {
+            panic!("operation")
+        };
+        assert_eq!(
+            original,
+            &format!(
+                "schema = \"fmine.forecast-operation.v14\"\n{}",
+                prepared.request
+            )
+        );
+    }
+}
+
+fn score_registered(
+    root: &Path,
+    start: i64,
+    expected_interval: f64,
+    expected_crps: Option<f64>,
+) {
     std::fs::write(root.join("cohort.toml"), "[[cohort]]\nname = \"synthetic-production\"\nmembers = \"production-1\"\nresolution_rule = \"Supplied elemental production for the frozen complete physical interval\"\neligible_sources = \"synthetic:mill-report\"\noutcome_lo = \"0\"\noutcome_hi = \"1\"\n").unwrap();
     let frozen = execute_with_clock(
         &Command::Freeze {
             journal: "history".into(),
-            head: head(&root),
+            head: head(root),
             request: "cohort.toml".into(),
         },
-        &root,
+        root,
         &Clock(start - 50),
     );
     assert_eq!(frozen.exit_code, 0, "{:?}", frozen.refusal);
-    let frozen_head = head(&root);
+    let frozen_head = head(root);
     std::fs::write(root.join("early.toml"), format!("[[outcome]]\nforecast = \"production-1\"\navailable_at = \"2030-01-02T00:30:00Z\"\nkind = \"published\"\nvalue = \"0.3\"\nsource = \"synthetic:mill-report\"\nvintage = \"invented-partial-period\"\nlocator = \"Synthetic!A1\"\nsha256 = \"{}\"\n", "a".repeat(64))).unwrap();
     let early = execute_with_clock(
         &Command::Outcome {
@@ -312,32 +392,32 @@ fn plant_registration_reopens_and_scores_with_full_admission_evidence_retained()
             head: frozen_head,
             request: "early.toml".into(),
         },
-        &root,
+        root,
         &Clock(start + HOUR / 2 + NS_PER_SECOND),
     );
     assert_eq!(early.refusal.unwrap().code, "FMINE-REF-206");
-    assert_eq!(head(&root), frozen_head);
+    assert_eq!(head(root), frozen_head);
     std::fs::write(root.join("outcome.toml"), format!("[[outcome]]\nforecast = \"production-1\"\navailable_at = \"2030-01-02T01:00:01Z\"\nkind = \"published\"\nvalue = \"0.3\"\nsource = \"synthetic:mill-report\"\nvintage = \"invented-period\"\nlocator = \"Synthetic!A1\"\nsha256 = \"{}\"\n", "a".repeat(64))).unwrap();
     let observed = execute_with_clock(
         &Command::Outcome {
             journal: "history".into(),
-            head: head(&root),
+            head: head(root),
             request: "outcome.toml".into(),
         },
-        &root,
+        root,
         &Clock(start + HOUR + 2 * NS_PER_SECOND),
     );
     assert_eq!(observed.exit_code, 0, "{:?}", observed.refusal);
     let assessment = execute_with_clock(
         &Command::Assess {
             journal: "history".into(),
-            head: head(&root),
+            head: head(root),
             cohort: "synthetic-production".into(),
             as_of: "2030-01-02T01:00:03Z".into(),
             selector: "first-published".into(),
             expected_digest: None,
         },
-        &root,
+        root,
         &Clock(start + HOUR + 4 * NS_PER_SECOND),
     );
     assert_eq!(assessment.exit_code, 0, "{:?}", assessment.refusal);
@@ -352,24 +432,114 @@ fn plant_registration_reopens_and_scores_with_full_admission_evidence_retained()
         .unwrap()
         .parse::<f64>()
         .unwrap();
-    near(mean, 0.216);
-    assert!(assessment.payload_json.contains("\"crps\":null"));
+    near(mean, expected_interval);
+    if let Some(expected) = expected_crps {
+        let marker = "\"crps\":{\"n_scored\":1,\"observed_mean\":";
+        let mean = assessment
+            .payload_json
+            .split_once(marker)
+            .expect("weighted CRPS")
+            .1
+            .split(',')
+            .next()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+        near(mean, expected);
+    } else {
+        assert!(assessment.payload_json.contains("\"crps\":null"));
+    }
+    assert!(
+        assessment
+            .payload_json
+            .contains("\"calibration_flag\":\"descriptive\"")
+    );
     assert!(
         assessment
             .payload_json
             .contains("\"source_citations\":\"supplied_not_verified\"")
     );
+}
+
+#[test]
+fn legacy_v9_plant_records_replay_original_quantiles_without_acquiring_crps() {
+    let start = time("2030-01-02T00:00:00Z").unwrap();
+    let root = fixture(start);
+    init(&root, start - 1_000);
+    let loaded = crate::plant::production::load(
+        Path::new("production.toml"),
+        Path::new("grinding.toml"),
+        Path::new("recovery.toml"),
+        &root,
+    )
+    .unwrap();
+    let prepared = legacy_from_receipt(
+        &registration(Target::RecoveredMetal),
+        loaded.receipt(),
+        &loaded.to_json(),
+    )
+    .expect("preserved original v9 source-bound request");
+    assert!(
+        prepared
+            .request
+            .starts_with("# fmine.plant-forecast-admission.v1 ")
+    );
+    assert!(
+        prepared
+            .request
+            .contains("kind = \"quantiles\"\nlevels = \"0.1,0.5,0.9\"")
+    );
+    assert!(
+        prepared
+            .evidence_json
+            .contains("Only p10, p50 and p90 are registered")
+    );
+    assert!(prepared.evidence_json.contains(&loaded.to_json()));
+    let operation = format!(
+        "schema = \"fmine.forecast-operation.v9\"\n{}",
+        prepared.request
+    );
+    let doc = parse_subset(&operation).unwrap();
+    assert_eq!(
+        registration_start(&Row(&doc.rows[0]), &operation).unwrap(),
+        start
+    );
+    let mut journal = Journal::open_write(&root.join("history"), head(&root)).unwrap();
+    // The byte store retains the original operation; the fresh semantic replay below validates it.
+    journal
+        .append(&operation, &Clock(start - 100), |_, _| Ok(()))
+        .unwrap();
+    let saved_head = journal.head();
+    drop(journal);
+    let before = std::fs::read(root.join("history")).unwrap();
+    std::fs::write(
+        root.join("grinding.toml"),
+        "changed after legacy registration",
+    )
+    .unwrap();
+    let inspected = execute_with_clock(
+        &Command::Inspect {
+            journal: "history".into(),
+            head: Some(saved_head),
+        },
+        &root,
+        &NoClock,
+    );
+    assert_eq!(inspected.exit_code, 0, "{:?}", inspected.refusal);
+    assert!(inspected.payload_json.contains("\"v9\":1"));
+    assert!(inspected.payload_json.contains("\"kind\":\"quantiles\""));
+    assert!(
+        !inspected
+            .payload_json
+            .contains("\"kind\":\"weighted_empirical\"")
+    );
+    assert_eq!(std::fs::read(root.join("history")).unwrap(), before);
+    score_registered(&root, start, 0.216, None);
     let reopened = Journal::open_read(&root.join("history"), None).unwrap();
     let Entry::Operation(original) = &reopened.records()[1].entry else {
-        panic!("operation")
+        panic!("legacy operation")
     };
-    assert_eq!(
-        original,
-        &format!(
-            "schema = \"fmine.forecast-operation.v9\"\n{}",
-            prepared.request
-        )
-    );
+    assert_eq!(original, &operation);
 }
 
 #[test]

@@ -43,6 +43,7 @@ const V10_SCHEMA: &str = "fmine.forecast-operation.v10";
 const V11_SCHEMA: &str = "fmine.forecast-operation.v11";
 const V12_SCHEMA: &str = "fmine.forecast-operation.v12";
 const V13_SCHEMA: &str = "fmine.forecast-operation.v13";
+const V14_SCHEMA: &str = "fmine.forecast-operation.v14";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +69,7 @@ enum OperationVersion {
     V11 = 10,
     V12 = 11,
     V13 = 12,
+    V14 = 13,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -89,6 +91,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V11_SCHEMA => Ok(OperationVersion::V11),
             V12_SCHEMA => Ok(OperationVersion::V12),
             V13_SCHEMA => Ok(OperationVersion::V13),
+            V14_SCHEMA => Ok(OperationVersion::V14),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -116,7 +119,7 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
     } else if expected_table == "registered_missing" && doc.rows[0].get("status_kind").is_some() {
         V10_SCHEMA
     } else if expected_table == "plant_forecast" {
-        V9_SCHEMA
+        V14_SCHEMA
     } else if super::cusum::FIELDS
         .iter()
         .any(|key| doc.rows[0].get(key).is_some())
@@ -172,7 +175,7 @@ pub enum Command {
         head: Digest32,
         request: PathBuf,
     },
-    /// Register conditional plant quantiles from the admitted shared-scenario production receipt.
+    /// Register a complete conditional weighted forecast from the shared-scenario production receipt.
     RegisterPlant {
         journal: PathBuf,
         head: Digest32,
@@ -1298,12 +1301,12 @@ fn apply(
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
     let vintage_declared = row.get("public_vintages").is_some();
     let weighted_declared = matches!(row.get("kind").map(|field| &field.value), Some(TomlValue::Str(kind)) if kind == "weighted_empirical");
-    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13};
+    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14};
     // A feature's accepted schemas and each schema's required operation are separate constraints.
     // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
     let features: &[(bool, &[OperationVersion], &str)] = &[
-        (metadata_declared, &[V7, V9, V13], "forecast metadata"),
-        (weighted_declared, &[V13], "weighted empirical distribution"),
+        (metadata_declared, &[V7, V9, V13, V14], "forecast metadata"),
+        (weighted_declared, &[V13, V14], "weighted empirical distribution"),
         (cusum_declared, &[V8], "CUSUM policy"),
         (gaussian_bounds_declared, &[V6, V8], "Gaussian CRPS bounds"),
         (
@@ -1315,7 +1318,7 @@ fn apply(
         (status_declared, &[V10], "subject-status interpretation"),
         (
             row.table == "plant_forecast",
-            &[V9],
+            &[V9, V14],
             "plant source registration",
         ),
         (
@@ -1347,6 +1350,7 @@ fn apply(
         V11 => row.table == "corrected_forecast",
         V12 => row.table == "corrected_forecast" && row.get("correction_method").is_some(),
         V13 => row.table == "forecast" && weighted_declared,
+        V14 => row.table == "plant_forecast" && weighted_declared && metadata_declared,
         _ => true,
     };
     if !required {
@@ -1470,7 +1474,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 13]);
+struct VersionCounts([usize; 14]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {

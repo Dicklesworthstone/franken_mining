@@ -838,8 +838,9 @@ feedback, payable-metal or monetary conversion, empirically validated model unce
 forecast, calibration verdict or operating authority. The broader BD-176/181/182 field gates remain open.
 
 DESIGN: the CLI now exposes this owner as `plant production`, retaining all three source snapshots.
-The separate forecast-journal adapter can prospectively register its conditional quantiles; that upper
-layer owns clocks, durable history and later scoring. The plant kernel itself remains pure and read-only.
+The separate forecast-journal adapter can prospectively register every conditional target value and exact
+scenario probability for full marginal-distribution scoring; legacy quantile records retain their meaning.
+That upper layer owns clocks, durable history and later scoring. The plant kernel itself remains pure and read-only.
 Raw-transfer worksheet parsing and presentation also live with their existing owner through
 `raw_measurements::worksheet::evaluate(text, source)`. This pure boundary verifies source size and SHA-256,
 preserves existing transfer schemas and rejected diagnostics, and performs no file IO. The CLI wrapper
