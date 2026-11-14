@@ -131,7 +131,9 @@ pub(crate) fn parse(
                     policy: PolicySelection::parse(&take(&mut fields, "--policy")?)?,
                 },
                 _ => {
-                    return Err("record requires exactly one --action or --information-option".into());
+                    return Err(
+                        "record requires exactly one --action or --information-option".into(),
+                    );
                 }
             };
             Command::Record {

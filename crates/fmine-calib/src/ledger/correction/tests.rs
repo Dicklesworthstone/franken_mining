@@ -1,3 +1,5 @@
+//! Determinism: DeterministicPerIsa
+
 use super::*;
 use crate::ledger::{AssessmentPolicy, CohortSpec, MissingReason, OutcomeCitation, OutcomeKind};
 

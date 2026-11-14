@@ -1104,7 +1104,11 @@ mod tests {
         assert_eq!(report.totals.comparisons, 2);
         assert_eq!(ledger.entries.len(), 2);
         assert_eq!(ledger.instances(), 2);
-        assert_eq!(ledger.count("iv"), 1, "unassessed disclosure is undecidable");
+        assert_eq!(
+            ledger.count("iv"),
+            1,
+            "unassessed disclosure is undecidable"
+        );
         assert_eq!(
             ledger.count("i"),
             1,
@@ -1112,7 +1116,10 @@ mod tests {
         );
         assert_eq!(ledger.count("ii"), 0);
         for (index, entry) in ledger.entries.iter().enumerate() {
-            assert_eq!(entry.first[0].claim_id, claims[0].claim.claim_id.to_string());
+            assert_eq!(
+                entry.first[0].claim_id,
+                claims[0].claim.claim_id.to_string()
+            );
             assert_eq!(entry.first[0].at, claims[0].locator);
             assert_eq!(
                 entry.current[0].claim_id,
@@ -1187,7 +1194,10 @@ mod tests {
             observation("2032Q1", "A3", number("0")),
         ];
         let report = compare_vintages(&claims);
-        assert_eq!(report.cross_vintage.entries.len(), report.totals.comparisons);
+        assert_eq!(
+            report.cross_vintage.entries.len(),
+            report.totals.comparisons
+        );
         assert_eq!(report.cross_vintage.instances(), 0);
         assert!(
             report
@@ -1197,7 +1207,11 @@ mod tests {
                 .all(|entry| entry.exclusion == Some("non_numeric_comparison")
                     && entry.state.is_none())
         );
-        assert!(report.cross_vintage.entries[0].comparison.token_glyph_changed);
+        assert!(
+            report.cross_vintage.entries[0]
+                .comparison
+                .token_glyph_changed
+        );
         let mut regions = [
             observation("2030Q1", "B1", number("100")),
             observation("2031Q1", "C1", number("100")),
@@ -1248,16 +1262,10 @@ mod tests {
                 .iter()
                 .map(|source| &source.at)
                 .collect::<BTreeSet<_>>(),
-            claims[..3]
-                .iter()
-                .map(|source| &source.locator)
-                .collect()
+            claims[..3].iter().map(|source| &source.locator).collect()
         );
-        assert!(
-            report
-                .cross_vintage
-                .to_json()
-                .contains("No true vintage, arithmetic certificate or minimal conflict set is inferred.")
-        );
+        assert!(report.cross_vintage.to_json().contains(
+            "No true vintage, arithmetic certificate or minimal conflict set is inferred."
+        ));
     }
 }

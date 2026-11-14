@@ -184,7 +184,11 @@ fn retained_policy(f: &Fixture, pin: Digest32, sequence: usize) -> String {
     let policy = if let Some((_, value)) = fields.iter().find(|(key, _)| key == "policy_json") {
         value.clone()
     } else {
-        let value = &fields.iter().find(|(key, _)| key == "policy_hex").unwrap().1;
+        let value = &fields
+            .iter()
+            .find(|(key, _)| key == "policy_hex")
+            .unwrap()
+            .1;
         let bytes: Vec<u8> = (0..value.len())
             .step_by(2)
             .map(|index| u8::from_str_radix(&value[index..index + 2], 16).unwrap())
@@ -250,11 +254,7 @@ fn information_policy_and_exact_costs_survive_mixed_v1_v3_history_and_source_edi
             .payload_json
             .contains("\"schema\":\"fmine.decision-journal.v2\"")
     );
-    assert!(
-        before
-            .payload_json
-            .contains("\"selected_action\":\"hold\"")
-    );
+    assert!(before.payload_json.contains("\"selected_action\":\"hold\""));
     assert!(
         before
             .payload_json
@@ -356,7 +356,10 @@ fn downside_optimized_selection_retains_its_distinct_policy_and_declared_screen(
     assert!(!fields.iter().any(|(key, _)| key == "policy_hex"));
     let fixed_policy = retained_policy(&f, head(&fixed), 1);
     assert!(fixed_policy.contains("\"nominal_mean\":\"34/1\""));
-    assert!(fixed_policy.contains("\"signal_id\":\"medium\",\"probability\":\"19/100\",\"action_id\":\"act\""));
+    assert!(
+        fixed_policy
+            .contains("\"signal_id\":\"medium\",\"probability\":\"19/100\",\"action_id\":\"act\"")
+    );
     let optimized = successful(execute_with_clock(
         &f.information(
             head(&fixed),
@@ -390,7 +393,9 @@ fn expected_value_selection_keeps_posterior_ties_and_unreachable_signals() {
     let tied = INFORMATION
         .replace("300000000.0000", "0.0000")
         .replace("-200000000.0000", "0.0000");
-    let tied = format!("{tied}\n[[signal]]\noption = \"met_test\"\nid = \"unreachable\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"high\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"low\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n");
+    let tied = format!(
+        "{tied}\n[[signal]]\noption = \"met_test\"\nid = \"unreachable\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"high\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n\n[[likelihood]]\noption = \"met_test\"\nstate = \"low\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n"
+    );
     fs::write(&f.model, tied).unwrap();
     let saved = successful(execute_with_clock(
         &f.information(

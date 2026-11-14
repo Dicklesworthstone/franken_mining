@@ -1,5 +1,7 @@
 //! DESIGN: pure binding of independently agreed cost rows to their own registered document.
 //! Source bytes, full reader agreement and publication eligibility are checked by the caller.
+//! Determinism: Exact
+
 use super::super::transcriptions as source;
 use super::*;
 
