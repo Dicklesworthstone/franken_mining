@@ -5,7 +5,7 @@
 
 use fmine_calib::ledger::diagnostics::{
     AssessmentDiagnostics, BIN_RULE, DiagnosticMember, DiagnosticValue, EmpiricalRankCounts,
-    PIT_METHOD, SCOPE, coverage,
+    EMPIRICAL_METHOD, PIT_METHOD, SCOPE, WeightedRankMasses, coverage,
 };
 use fmine_calib::{
     AssessmentPolicy, CohortSpec, ForecastLedger, ForecastPayload, MemberOutcome, MissingReason,
@@ -14,6 +14,7 @@ use fmine_calib::{
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash};
 use fmine_core::id::ObjectId;
+use fmine_units::ExactQty;
 
 fn build_ledger(payloads: Vec<ForecastPayload>) -> (ForecastLedger, Vec<ObjectId>, Digest32) {
     build_ledger_at(payloads, 0.2)
@@ -96,6 +97,200 @@ fn member(report: &AssessmentDiagnostics, id: ObjectId) -> &DiagnosticMember {
         .iter()
         .find(|item| item.member.forecast_id == id)
         .unwrap()
+}
+
+
+fn weighted(samples: Vec<f64>, numerators: &[i128], denominator: i128) -> ForecastPayload {
+    ForecastPayload::WeightedEmpirical {
+        samples,
+        weights: numerators
+            .iter()
+            .map(|n| ExactQty::new(*n, denominator).unwrap())
+            .collect(),
+    }
+}
+
+#[test]
+fn weighted_ranks_keep_exact_ties_missing_members_and_separate_populations() {
+    let mut payloads = vec![weighted(vec![-2.0, 0.0, 0.0, 4.0], &[1, 2, 5, 2], 10); 8];
+    payloads.extend([
+        ForecastPayload::Empirical {
+            samples: vec![0.0, 4.0],
+        },
+        gaussian(),
+    ]);
+    let (mut ledger, ids, cohort) = build_ledger(payloads);
+    for (id, outcome) in ids.iter().zip([-3.0, -2.0, -1.0, 0.0, 4.0, 5.0]) {
+        publish(&mut ledger, *id, outcome);
+    }
+    ledger
+        .append_outcome(
+            ids[6],
+            100,
+            100,
+            OutcomeKind::Missing {
+                reason: MissingReason::NotPublished,
+            },
+        )
+        .unwrap();
+    let parent = ledger
+        .assess(cohort, 101, OutcomeSelector::FirstPublished)
+        .unwrap()
+        .clone();
+    let parent_bytes = parent.canonical_bytes();
+    let report = ledger.assessment_diagnostics(parent.digest).unwrap();
+    let ranks = report.weighted_empirical_rank.as_ref().unwrap();
+    assert_eq!(report.version(), 3);
+    assert_eq!(report.members.len(), 10);
+    assert_eq!(report.empirical_rank.as_ref().unwrap().n_members, 1);
+    assert_eq!(report.gaussian_pit.as_ref().unwrap().n_members, 1);
+    assert_eq!(
+        (ranks.n_members, ranks.n_resolved, ranks.n_unresolved),
+        (8, 6, 2)
+    );
+    assert_eq!(
+        ranks.bins.map(|b| b.definite_count),
+        [1, 1, 0, 0, 0, 0, 0, 0, 0, 1]
+    );
+    assert_eq!(
+        ranks.bins.map(|b| b.possible_count),
+        [2, 3, 1, 1, 1, 1, 1, 1, 2, 2]
+    );
+    for (i, [below, equal, above]) in [
+        [0, 0, 10],
+        [0, 1, 9],
+        [1, 0, 9],
+        [1, 7, 2],
+        [8, 2, 0],
+        [10, 0, 0],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            member(&report, ids[i]).value,
+            DiagnosticValue::WeightedEmpiricalRank {
+                n_samples: 4,
+                masses: Some(WeightedRankMasses {
+                    below: ExactQty::new(below, 10).unwrap(),
+                    equal: ExactQty::new(equal, 10).unwrap(),
+                    above: ExactQty::new(above, 10).unwrap(),
+                }),
+            }
+        );
+    }
+    for id in &ids[6..8] {
+        assert_eq!(
+            member(&report, *id).value,
+            DiagnosticValue::WeightedEmpiricalRank {
+                n_samples: 4,
+                masses: None,
+            }
+        );
+    }
+    assert_eq!(report.digest, blake3_hash(&report.canonical_bytes()));
+    ledger
+        .append_outcome(
+            ids[0],
+            102,
+            102,
+            OutcomeKind::Restated {
+                value: 4.0,
+                citation: citation("restated"),
+                supersedes: 1,
+            },
+        )
+        .unwrap();
+    let changed = diagnostics(&mut ledger, cohort, 103, OutcomeSelector::LatestAsOf);
+    assert_ne!(changed.digest, report.digest);
+    assert_ne!(member(&changed, ids[0]).value, member(&report, ids[0]).value);
+    assert_eq!(ledger.assessment_diagnostics(parent.digest).unwrap(), report);
+    assert_eq!(
+        ledger
+            .assess(cohort, 101, OutcomeSelector::FirstPublished)
+            .unwrap()
+            .canonical_bytes(),
+        parent_bytes
+    );
+}
+
+#[test]
+fn weighted_permutations_preserve_ranks_and_sub_float_probability_changes_move_bins() {
+    let reports = [
+        weighted(vec![-2.0, 0.0, 0.0, 4.0], &[1, 2, 5, 2], 10),
+        weighted(vec![0.0, 4.0, -2.0, 0.0], &[5, 2, 1, 2], 10),
+    ]
+    .map(|payload| {
+        let (mut ledger, ids, cohort) = build_ledger(vec![payload]);
+        publish(&mut ledger, ids[0], 0.0);
+        diagnostics(&mut ledger, cohort, 101, OutcomeSelector::FirstPublished)
+    });
+    assert_eq!(reports[0].members[0].value, reports[1].members[0].value);
+    assert_eq!(
+        reports[0].weighted_empirical_rank,
+        reports[1].weighted_empirical_rank
+    );
+    assert_ne!(reports[0].digest, reports[1].digest);
+    let denominator = 100_000_000_000_000_000_000;
+    for (below, expected_bin) in [
+        (denominator / 10 - 1, 0),
+        (denominator / 10, 1),
+        (denominator / 10 + 1, 1),
+    ] {
+        let (mut ledger, ids, cohort) = build_ledger(vec![weighted(
+            vec![0.0, 2.0],
+            &[below, denominator - below],
+            denominator,
+        )]);
+        publish(&mut ledger, ids[0], 1.0);
+        let report = diagnostics(&mut ledger, cohort, 101, OutcomeSelector::FirstPublished);
+        let ranks = report.weighted_empirical_rank.unwrap();
+        for (i, bin) in ranks.bins.into_iter().enumerate() {
+            assert_eq!(bin.definite_count, usize::from(i == expected_bin));
+            assert_eq!(bin.possible_count, usize::from(i == expected_bin));
+        }
+    }
+}
+
+#[test]
+fn uniform_empirical_diagnostics_keep_the_prior_v2_wire_layout() {
+    let (mut ledger, ids, cohort) = build_ledger(vec![ForecastPayload::Empirical {
+        samples: vec![0.0, 4.0],
+    }]);
+    let parent = ledger
+        .assess(cohort, 3, OutcomeSelector::FirstPublished)
+        .unwrap()
+        .digest;
+    let report = ledger.assessment_diagnostics(parent).unwrap();
+    // FACT: the DGN1/v2 wire layout at afe028d, with no weighted-presence marker.
+    let mut expected = Encoder::new_frame(*b"DGN1", 2);
+    for rule in [SCOPE, BIN_RULE, PIT_METHOD, EMPIRICAL_METHOD] {
+        expected.put_str(rule);
+    }
+    expected.put_fixed(&parent.0);
+    expected.put_fixed(&cohort.0);
+    expected.put_i64(3);
+    expected.put_u8(0);
+    expected.put_u64(1);
+    expected.put_fixed(&ids[0].bytes);
+    for tag in [0, 1, 0, 3] {
+        expected.put_u8(tag);
+    }
+    expected.put_u64(2);
+    for tag in [0, 0, 0] {
+        expected.put_u8(tag);
+    }
+    for count in [1, 0, 1] {
+        expected.put_u64(count);
+    }
+    for lower in 0..10 {
+        expected.put_u8(lower);
+        expected.put_u8(lower + 1);
+        expected.put_u64(0);
+        expected.put_u64(0);
+    }
+    assert_eq!(report.canonical_bytes(), expected.finish());
+    assert!(report.weighted_empirical_rank.is_none());
 }
 
 #[test]

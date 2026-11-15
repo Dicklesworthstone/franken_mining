@@ -5,13 +5,14 @@ use std::fmt::Write as _;
 
 use fmine_calib::Assessment;
 use fmine_calib::ledger::diagnostics::{
-    BIN_RULE, DiagnosticValue, EMPIRICAL_METHOD, PIT_METHOD, SCOPE,
+    BIN_RULE, DiagnosticValue, EMPIRICAL_METHOD, PIT_METHOD, SCOPE, WEIGHTED_METHOD,
 };
 use fmine_evidence::Refusal;
+use fmine_units::ExactQty;
 
 use super::{Replay, display_or, js, optional_number, pair, selector_name, utc};
 
-pub(super) const ROBOT_DOCS_JSON: &str = r#"{"scope":"Read-only descriptive projection of a saved assessment; no new outcomes or authority time","gaussian":"Per-member PIT and fixed-decile histogram via the existing normal CDF, retaining approximate values and tail saturation","bernoulli":"Fixed probability bins with full and resolved mean probabilities, observed event frequencies and unresolved-outcome completion bounds","empirical":"Exact below/equal/above sample counts and closed CDF bounds [below/n,(below+equal)/n]; separate definite/possible decile counts retain ties and missing outcomes without randomized PIT or a uniformity claim","coverage":"Separate CVG1/v1 projection of central 50/80/95 percent interval coverage; exact declared levels, per-member bounds and miss sides, supported/unresolved/unsupported populations and count-fraction completion bounds","quantile_losses":"Separate QNT1/v1 supplemental twice-pinball loss at every supplied level; exact checked rationals of frozen binary values, per-level populations and frozen-domain completion bounds; arithmetic indeterminacy never drops members or changes the parent interval score; JSON rational integers are strings","bins":"[lower,upper), with 1 included in the final bin; exact edges go right; empirical fractions and bin tests use integers","missing":"Every unresolved and unsupported member remains explicit; empty-bin averages are null, never zero","identity":"Separate DGN1/v2 when empirical members exist, otherwise unchanged DGN1/v1; binds the exact parent assessment and diagnostic results without changing prior journal/cohort/assessment bytes","interpretation":"Descriptive only; no calibration verdict, independence estimate, confidence interval or predictive-skill claim"}"#;
+pub(super) const ROBOT_DOCS_JSON: &str = r#"{"scope":"Read-only descriptive projection of a saved assessment; no new outcomes or authority time","gaussian":"Per-member PIT and fixed-decile histogram via the existing normal CDF, retaining approximate values and tail saturation","bernoulli":"Fixed probability bins with full and resolved mean probabilities, observed event frequencies and unresolved-outcome completion bounds","empirical":"Exact below/equal/above sample counts and closed CDF bounds [below/n,(below+equal)/n]; separate definite/possible decile counts retain ties and missing outcomes without randomized PIT or a uniformity claim","weighted_empirical":"Exact declared probability masses below/equal/above the outcome and closed CDF bounds, with a separate definite/possible decile population; rational numerator/denominator integers are strings, no resampling or probability rounding","coverage":"Separate CVG1/v1 projection of central 50/80/95 percent interval coverage; exact declared levels, per-member bounds and miss sides, supported/unresolved/unsupported populations and count-fraction completion bounds","quantile_losses":"Separate QNT1/v1 supplemental twice-pinball loss at every supplied level; exact checked rationals of frozen binary values, per-level populations and frozen-domain completion bounds; arithmetic indeterminacy never drops members or changes the parent interval score; JSON rational integers are strings","bins":"[lower,upper), with 1 included in the final bin; exact edges go right; empirical fractions and bin tests use integers","missing":"Every unresolved and unsupported member remains explicit; empty-bin averages are null, never zero","identity":"Separate DGN1/v3 when weighted empirical members exist; otherwise unchanged DGN1/v2 for uniform empirical or DGN1/v1; binds the exact parent assessment and diagnostic results without changing prior journal/cohort/assessment bytes","interpretation":"Descriptive only; no calibration verdict, independence estimate, confidence interval or predictive-skill claim"}"#;
 
 fn fraction(numerator: usize, denominator: usize) -> String {
     format!("{{\"num\":{numerator},\"den\":{denominator}}}")
@@ -22,6 +23,14 @@ fn fraction_bounds(lower: usize, upper: usize, denominator: usize) -> String {
         "{{\"lower\":{},\"upper\":{}}}",
         fraction(lower, denominator),
         fraction(upper, denominator)
+    )
+}
+
+fn exact_fraction(value: ExactQty) -> String {
+    format!(
+        "{{\"num\":\"{}\",\"den\":\"{}\"}}",
+        value.num(),
+        value.den()
     )
 }
 
@@ -63,6 +72,19 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
                     );
                     format!("{{\"kind\":\"empirical_rank\",\"n_samples\":{n_samples},{fields}}}")
                 }
+                DiagnosticValue::WeightedEmpiricalRank { n_samples, masses } => {
+                    let fields = if let Some(masses) = masses {
+                        let (lower, upper) = masses.cdf_bounds()?;
+                        format!(
+                            "\"below_mass\":{},\"equal_mass\":{},\"above_mass\":{},\"cdf_bounds\":{{\"lower\":{},\"upper\":{}}}",
+                            exact_fraction(masses.below), exact_fraction(masses.equal),
+                            exact_fraction(masses.above), exact_fraction(lower), exact_fraction(upper),
+                        )
+                    } else {
+                        "\"below_mass\":null,\"equal_mass\":null,\"above_mass\":null,\"cdf_bounds\":null".into()
+                    };
+                    format!("{{\"kind\":\"weighted_empirical_rank\",\"n_samples\":{n_samples},{fields}}}")
+                }
                 DiagnosticValue::Unsupported(kind) => format!(
                     "{{\"kind\":\"unsupported\",\"distribution\":{},\"value\":null}}",
                     js(kind)
@@ -101,8 +123,17 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
         format!(",\"empirical_rank\":{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"method\":{},\"bins\":[{bins}]}}", ranks.n_members, ranks.n_resolved, ranks.n_unresolved, js(EMPIRICAL_METHOD))
     });
     let version = diagnostics.version();
+    let weighted = diagnostics.weighted_empirical_rank.as_ref().map_or_else(String::new, |ranks| {
+        let bins = ranks.bins.iter().map(|bin| format!(
+            "{{\"lower\":{},\"upper\":{},\"upper_inclusive\":{},\"resolved_definite_count\":{},\"resolved_possible_count\":{},\"whole_population_fraction\":{}}}",
+            fraction(usize::from(bin.lower_decile), 10), fraction(usize::from(bin.upper_decile), 10),
+            bin.upper_decile == 10, bin.definite_count, bin.possible_count,
+            fraction_bounds(bin.definite_count, bin.possible_count + ranks.n_unresolved, ranks.n_members),
+        )).collect::<Vec<_>>().join(",");
+        format!(",\"weighted_empirical_rank\":{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"method\":{},\"bins\":[{bins}]}}", ranks.n_members, ranks.n_resolved, ranks.n_unresolved, js(WEIGHTED_METHOD))
+    });
     Ok(format!(
-        ",\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v{version}\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli}{empirical},\"members\":[{members}]}},\"interval_coverage\":{coverage},\"quantile_losses\":{quantiles}",
+        ",\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v{version}\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli}{empirical}{weighted},\"members\":[{members}]}},\"interval_coverage\":{coverage},\"quantile_losses\":{quantiles}",
         js(&diagnostics.assessment_digest.to_hex()),
         js(&diagnostics.cohort.to_hex()),
         js(&diagnostics.digest.to_hex()),
@@ -194,6 +225,28 @@ pub(super) fn assessment_markdown(
             );
         }
     }
+    if let Some(ranks) = &diagnostics.weighted_empirical_rank {
+        let _ = writeln!(
+            out,
+            "\n### Weighted empirical CDF rank intervals\n\n{WEIGHTED_METHOD}\n\nWeighted population: {}; resolved: {}; unresolved: {}. Each forecast counts once; its scenario probabilities define its CDF interval.\n\n| Rank bin | Definite resolved | Possible resolved | Whole-population completion bounds |\n|---|---:|---:|---|\n",
+            ranks.n_members, ranks.n_resolved, ranks.n_unresolved
+        );
+        for bin in &ranks.bins {
+            let _ = writeln!(
+                out,
+                "| [{}/10, {}/10{} | {} | {} | [{}/{}, {}/{}] |",
+                bin.lower_decile,
+                bin.upper_decile,
+                if bin.upper_decile == 10 { "]" } else { ")" },
+                bin.definite_count,
+                bin.possible_count,
+                bin.definite_count,
+                ranks.n_members,
+                bin.possible_count + ranks.n_unresolved,
+                ranks.n_members
+            );
+        }
+    }
     out.push_str("\n### Diagnostic membership\n\nEach forecast retains the exact selected outcome and source shown in the parent assessment. Unsupported distributions are not dropped or assigned an invented CDF.\n\n| Forecast | Diagnostic | Value |\n|---|---|---|\n");
     for item in &diagnostics.members {
         let (kind, value) = match &item.value {
@@ -221,6 +274,27 @@ pub(super) fn assessment_markdown(
             ),
             DiagnosticValue::Unsupported(kind) => {
                 (format!("unsupported ({kind})"), "unavailable".into())
+            }
+            DiagnosticValue::WeightedEmpiricalRank { n_samples, masses } => {
+                let value = if let Some(masses) = masses {
+                    let (lower, upper) = masses.cdf_bounds()?;
+                    format!(
+                        "[{}/{}, {}/{}] (mass below {}/{}; equal {}/{}; above {}/{})",
+                        lower.num(),
+                        lower.den(),
+                        upper.num(),
+                        upper.den(),
+                        masses.below.num(),
+                        masses.below.den(),
+                        masses.equal.num(),
+                        masses.equal.den(),
+                        masses.above.num(),
+                        masses.above.den(),
+                    )
+                } else {
+                    format!("unavailable (n={n_samples})")
+                };
+                ("Weighted empirical CDF bounds".into(), value)
             }
         };
         let alias = state.alias(item.member.forecast_id);

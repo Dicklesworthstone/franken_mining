@@ -6,6 +6,23 @@ on:
   pull_request:
 
 jobs:
+  # Keep the focused product regressions executable even when an independent workspace gate fails.
+  forecast-and-production:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Calibration and valuation known answers
+        run: cargo test -p fmine-calib -p fmine-metrics --lib --locked
+      - name: Saved forecast diagnostics and disclosure derivations
+        run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test public_lint_derivations --locked
+      - name: Plant command and journal integration
+        run: cargo test -p fmine-cli --locked
+
   # AGENTS.md "Compiler Checks" (bd-l736): formatting and clippy, warnings denied. One OS is enough; lints do
   # not depend on the target here.
   lint:

@@ -681,8 +681,15 @@ fn score_registered(root: &Path, start: i64, expected_interval: f64, expected_cr
             .parse::<f64>()
             .unwrap();
         near(mean, expected);
+        assert!(
+            assessment.payload_json.contains("\"schema\":\"fmine.forecast-diagnostics.v3\"")
+        );
+        assert!(assessment.payload_json.contains("\"kind\":\"weighted_empirical_rank\""));
+        assert!(assessment.payload_json.contains("\"below_mass\":{\"num\":\"1\",\"den\":\"1\"}"));
+        assert!(assessment.payload_json.contains("\"equal_mass\":{\"num\":\"0\",\"den\":\"1\"}"));
     } else {
         assert!(assessment.payload_json.contains("\"crps\":null"));
+        assert!(!assessment.payload_json.contains("\"weighted_empirical_rank\""));
     }
     assert!(
         assessment

@@ -1791,6 +1791,47 @@ mod diagnostic_rendering {
     }
 
     #[test]
+    fn weighted_renderers_reopen_exact_masses_ties_and_missing_population() {
+        let (state, report) = fixture(
+            "weighted",
+            "synthetic continuous outcome",
+            "synthetic:weighted-outcome",
+            &[
+                (
+                    "tied",
+                    1,
+                    "kind = \"weighted_empirical\"\nsamples = \"8,10,10,12\"\nweights = \"1/10,2/10,5/10,2/10\"",
+                ),
+                (
+                    "pending",
+                    2,
+                    "kind = \"weighted_empirical\"\nsamples = \"8,12\"\nweights = \"1/4,3/4\"",
+                ),
+                ("uniform", 1, "kind = \"empirical\"\nsamples = \"8,10,10,12\""),
+            ],
+            &[("tied", "10"), ("uniform", "10")],
+        );
+        let (json, markdown) = render(&state, &report);
+        assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v3\""));
+        assert!(json.contains("\"weighted_empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"));
+        assert!(json.contains("\"empirical_rank\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"));
+        assert!(json.contains(concat!(
+            "\"below_mass\":{\"num\":\"1\",\"den\":\"10\"},",
+            "\"equal_mass\":{\"num\":\"7\",\"den\":\"10\"},",
+            "\"above_mass\":{\"num\":\"1\",\"den\":\"5\"},",
+            "\"cdf_bounds\":{\"lower\":{\"num\":\"1\",\"den\":\"10\"},",
+            "\"upper\":{\"num\":\"4\",\"den\":\"5\"}}",
+        )));
+        assert!(json.contains("\"n_samples\":2,\"below_mass\":null,\"equal_mass\":null,\"above_mass\":null,\"cdf_bounds\":null"));
+        assert!(json.contains("synthetic:weighted-outcome"));
+        assert!(markdown.contains("### Weighted empirical CDF rank intervals"));
+        assert!(markdown.contains("Weighted population: 2; resolved: 1; unresolved: 1."));
+        assert!(markdown.contains("[1/10, 4/5] (mass below 1/10; equal 7/10; above 1/5)"));
+        assert!(markdown.contains("unavailable (n=2)"));
+        assert!(markdown.contains("No resampling, normalization or floating-point probability conversion"));
+    }
+
+    #[test]
     fn renderers_retain_sources_missing_members_and_descriptive_boundaries() {
         let (state, report) = fixture(
             "events",

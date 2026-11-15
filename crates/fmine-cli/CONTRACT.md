@@ -170,8 +170,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   members retain exact below/equal/above counts and closed CDF fractions; unresolved counts remain null.
   Their decile bins show definite/possible counts and complete-population fraction bounds separately from
   Gaussian PIT. JSON fractions carry integer numerator/denominator pairs and Markdown prints those ratios.
-  Reports containing empirical members use `fmine.forecast-diagnostics.v2` and DGN1/v2; other diagnostic
-  reports retain their v1 bytes and shape. Parent forecast/cohort/assessment identities remain unchanged.
+  Weighted empirical members retain exact below/equal/above probability masses, closed CDF bounds and
+  a separate definite/possible decile population in `fmine.forecast-diagnostics.v3` and DGN1/v3. Their
+  rational numerators and denominators are JSON strings; no scenario resampling or probability rounding
+  occurs. Reports without weighted members retain their v1/v2 bytes and shape. Parent forecast/cohort/
+  assessment identities remain unchanged. Saved-journal JSON and Markdown exercise exact ties and
+  missing weighted members in `xtask/tests/forecast_live.rs`; plant registration controls use the same path.
   Missing members remain in full-population completion bounds; resolved and full probability averages are
   separate. Empty bins have absent averages, and unsupported distributions remain explicit.
   A sibling `interval_coverage` object (`fmine.forecast-coverage.v1`, CVG1/v1) adds central 50/80/95%

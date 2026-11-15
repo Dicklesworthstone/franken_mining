@@ -7,6 +7,7 @@ use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash};
 use fmine_evidence::Refusal;
 use fmine_numerics::norm_cdf;
+use fmine_units::ExactQty;
 
 use super::{
     ForecastLedger, ForecastPayload, MemberAssessment, MemberOutcome, OutcomeSelector, absent,
@@ -20,6 +21,7 @@ pub const SCOPE: &str = "Descriptive diagnostics within one frozen cohort, not c
 pub const BIN_RULE: &str = "Fixed deciles [lower, upper), with the final bin including 1; exact edge values enter the bin on their right. Completion bounds retain every unresolved member and are not simultaneous confidence intervals.";
 pub const PIT_METHOD: &str = "Gaussian Phi((outcome-mean)/std_dev), using fmine_numerics::norm_cdf; approximate CDF values and floating-point tail saturation are retained without clipping or randomization.";
 pub const EMPIRICAL_METHOD: &str = "Uniform empirical CDF bounds [F(y-),F(y)] = [below/n,(below+equal)/n], retaining exact sample counts and ties. Closed rank intervals are counted in each fixed decile as definite when wholly contained, and possible when intersecting. Every unresolved member contributes to each whole-population upper bound. Integer comparisons determine bin membership; no randomized PIT, uniformity or calibration is inferred.";
+pub const WEIGHTED_METHOD: &str = "Weighted empirical CDF bounds [F(y-),F(y)] retain the exact declared probability mass below, equal to and above the selected outcome. No resampling, normalization or floating-point probability conversion occurs. Closed intervals have definite/possible decile membership; every unresolved forecast remains in whole-population completion bounds. This population is separate from uniform empirical and Gaussian diagnostics. No randomized PIT, uniformity or calibration is inferred.";
 const EDGES: [f64; 11] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,6 +35,11 @@ pub enum DiagnosticValue {
         n_samples: usize,
         counts: Option<EmpiricalRankCounts>,
     },
+    /// Exact declared probability masses, rather than counts of unequally weighted scenarios.
+    WeightedEmpiricalRank {
+        n_samples: usize,
+        masses: Option<WeightedRankMasses>,
+    },
     /// A distribution without a supported diagnostic; no CDF is invented from sparse quantiles.
     Unsupported(&'static str),
 }
@@ -42,6 +49,23 @@ pub struct EmpiricalRankCounts {
     pub below: usize,
     pub equal: usize,
     pub above: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WeightedRankMasses {
+    pub below: ExactQty,
+    pub equal: ExactQty,
+    pub above: ExactQty,
+}
+
+impl WeightedRankMasses {
+    /// Closed CDF interval, preserving all mass tied at the observed value.
+    pub fn cdf_bounds(self) -> Result<(ExactQty, ExactQty), Refusal> {
+        let upper = ExactQty::from_integer(1)
+            .checked_sub(self.above)
+            .map_err(|_| domain("exact weighted diagnostic CDF capacity"))?;
+        Ok((self.below, upper))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +147,8 @@ pub struct AssessmentDiagnostics {
     pub gaussian_pit: Option<PitHistogram>,
     pub bernoulli_reliability: Option<ReliabilityDiagram>,
     pub empirical_rank: Option<EmpiricalRankDiagram>,
+    /// Counts of forecasts in each rank bin; scenario probabilities are retained per member.
+    pub weighted_empirical_rank: Option<EmpiricalRankDiagram>,
     pub digest: Digest32,
 }
 
@@ -159,6 +185,42 @@ fn empirical_bin(numerator: usize, n_samples: usize) -> usize {
     (10 * numerator / n_samples).min(9)
 }
 
+fn weighted_masses(
+    samples: &[f64],
+    weights: &[ExactQty],
+    outcome: f64,
+) -> Result<WeightedRankMasses, Refusal> {
+    let mut masses = WeightedRankMasses {
+        below: ExactQty::from_integer(0),
+        equal: ExactQty::from_integer(0),
+        above: ExactQty::from_integer(0),
+    };
+    // Admission checked finite samples and positive masses summing exactly to one. Comparing values
+    // needs no subtraction, sorting or interpolation, including signed zero and extreme outcomes.
+    for (&sample, &weight) in samples.iter().zip(weights) {
+        let mass = if sample < outcome {
+            &mut masses.below
+        } else if sample == outcome {
+            &mut masses.equal
+        } else {
+            &mut masses.above
+        };
+        *mass = mass
+            .checked_add(weight)
+            .map_err(|_| domain("exact weighted diagnostic mass capacity"))?;
+    }
+    Ok(masses)
+}
+
+fn weighted_bin(mass: ExactQty) -> usize {
+    // Compare n/d to i/10 as n < ceil(i*d/10). Splitting d before multiplication keeps every
+    // intermediate representable even at i128::MAX; a probability that rounds onto an edge stays
+    // on its exact side. Admission guarantees 0 <= n <= d, d > 0.
+    (1_i128..10)
+        .position(|i| mass.num() < (mass.den() / 10) * i + (mass.den() % 10 * i + 9) / 10)
+        .unwrap_or(9)
+}
+
 impl ForecastLedger {
     /// Derive diagnostics only from a saved assessment's selected publications and missing outcomes.
     /// Cohort admission already keeps declared family, quantity and unit compatible. The dimensionless
@@ -176,12 +238,14 @@ impl ForecastLedger {
         let mut pit_counts = [0; 10];
         let (mut gaussian_n, mut gaussian_resolved) = (0, 0);
         let (mut empirical_n, mut empirical_resolved) = (0, 0);
+        let (mut weighted_n, mut weighted_resolved) = (0, 0);
         let mut rank_bins = std::array::from_fn(|i| EmpiricalRankBin {
             lower_decile: i as u8,
             upper_decile: (i + 1) as u8,
             definite_count: 0,
             possible_count: 0,
         });
+        let mut weighted_bins = rank_bins;
         let mut reliability = std::array::from_fn(|i| ReliabilityBin {
             lower: EDGES[i],
             upper: EDGES[i + 1],
@@ -239,8 +303,27 @@ impl ForecastLedger {
                 }
                 ForecastPayload::Interval { .. } => DiagnosticValue::Unsupported("interval"),
                 ForecastPayload::Quantiles { .. } => DiagnosticValue::Unsupported("quantiles"),
-                ForecastPayload::WeightedEmpirical { .. } => {
-                    DiagnosticValue::Unsupported("weighted_empirical")
+                ForecastPayload::WeightedEmpirical { samples, weights } => {
+                    weighted_n += 1;
+                    let masses = outcome
+                        .map(|y| {
+                            let masses = weighted_masses(samples, weights, y)?;
+                            let (lower, upper) = masses.cdf_bounds()?;
+                            let (lower, upper) = (weighted_bin(lower), weighted_bin(upper));
+                            for bin in &mut weighted_bins[lower..=upper] {
+                                bin.possible_count += 1;
+                            }
+                            if lower == upper {
+                                weighted_bins[lower].definite_count += 1;
+                            }
+                            weighted_resolved += 1;
+                            Ok(masses)
+                        })
+                        .transpose()?;
+                    DiagnosticValue::WeightedEmpiricalRank {
+                        n_samples: samples.len(),
+                        masses,
+                    }
                 }
                 ForecastPayload::Empirical { samples } => {
                     empirical_n += 1;
@@ -320,6 +403,12 @@ impl ForecastLedger {
                 n_unresolved: empirical_n - empirical_resolved,
                 bins: rank_bins,
             }),
+            weighted_empirical_rank: (weighted_n > 0).then_some(EmpiricalRankDiagram {
+                n_members: weighted_n,
+                n_resolved: weighted_resolved,
+                n_unresolved: weighted_n - weighted_resolved,
+                bins: weighted_bins,
+            }),
             digest: Digest32::default(),
         };
         report.digest = blake3_hash(&report.canonical_bytes());
@@ -329,11 +418,17 @@ impl ForecastLedger {
 
 impl AssessmentDiagnostics {
     pub fn version(&self) -> u16 {
-        if self.empirical_rank.is_some() { 2 } else { 1 }
+        if self.weighted_empirical_rank.is_some() {
+            3
+        } else if self.empirical_rank.is_some() {
+            2
+        } else {
+            1
+        }
     }
 
-    /// DGN1/v2 adds exact empirical ranks only when present. Other reports retain their DGN1/v1 bytes.
-    /// Both bind the saved parent, complete member partition, result values and diagnostic rules.
+    /// DGN1/v3 adds weighted ranks only when present; other reports retain DGN1/v1-v2 bytes.
+    /// Each version binds the saved parent, complete member partition, values and diagnostic rules.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let version = self.version();
@@ -341,8 +436,11 @@ impl AssessmentDiagnostics {
         for rule in [SCOPE, BIN_RULE, PIT_METHOD] {
             enc.put_str(rule);
         }
-        if version == 2 {
+        if version >= 2 {
             enc.put_str(EMPIRICAL_METHOD);
+        }
+        if version == 3 {
+            enc.put_str(WEIGHTED_METHOD);
         }
         enc.put_fixed(&self.assessment_digest.0);
         enc.put_fixed(&self.cohort.0);
@@ -374,6 +472,17 @@ impl AssessmentDiagnostics {
                     if let Some(counts) = counts {
                         for count in [counts.below, counts.equal, counts.above] {
                             enc.put_u64(count as u64);
+                        }
+                    }
+                }
+                DiagnosticValue::WeightedEmpiricalRank { n_samples, masses } => {
+                    enc.put_u8(4);
+                    enc.put_u64(*n_samples as u64);
+                    enc.put_u8(u8::from(masses.is_some()));
+                    if let Some(masses) = masses {
+                        for mass in [masses.below, masses.equal, masses.above] {
+                            enc.put_i128(mass.num());
+                            enc.put_i128(mass.den());
                         }
                     }
                 }
@@ -423,7 +532,16 @@ impl AssessmentDiagnostics {
                 }
             }
         }
-        if let Some(ranks) = &self.empirical_rank {
+        if version == 3 {
+            enc.put_u8(u8::from(self.empirical_rank.is_some()));
+        }
+        for ranks in [
+            self.empirical_rank.as_ref(),
+            self.weighted_empirical_rank.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             for count in [ranks.n_members, ranks.n_resolved, ranks.n_unresolved] {
                 enc.put_u64(count as u64);
             }
@@ -441,6 +559,46 @@ impl AssessmentDiagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weighted_edges_keep_sub_float_mass_and_the_largest_denominator_exact() {
+        let denominator = 100_000_000_000_000_000_000_i128;
+        for edge in 1..10 {
+            for offset in [-1, 0, 1] {
+                let mass = ExactQty::new(denominator / 10 * edge + offset, denominator).unwrap();
+                assert_eq!(mass.to_f64(), edge as f64 / 10.0);
+                assert_eq!(weighted_bin(mass), (edge - i128::from(offset < 0)) as usize);
+            }
+        }
+        for (n, expected) in [(0, 0), (1, 0), (i128::MAX / 2, 4), (i128::MAX, 9)] {
+            assert_eq!(weighted_bin(ExactQty::new(n, i128::MAX).unwrap()), expected);
+        }
+        let half_up = ExactQty::new(i128::MAX / 2 + 1, i128::MAX).unwrap();
+        assert_eq!(weighted_bin(half_up), 5);
+    }
+
+    #[test]
+    fn weighted_ties_signed_zero_and_extremes_require_no_value_arithmetic() {
+        let samples = [-f64::MAX, -0.0, 0.0, f64::MAX];
+        let weights = [1, 2, 5, 2].map(|n| ExactQty::new(n, 10).unwrap());
+        for zero in [-0.0, 0.0] {
+            let mass = weighted_masses(&samples, &weights, zero).unwrap();
+            assert_eq!(mass.below, weights[0]);
+            assert_eq!(mass.equal, ExactQty::new(7, 10).unwrap());
+            assert_eq!(mass.above, weights[3]);
+            assert_eq!(
+                mass.cdf_bounds().unwrap(),
+                (weights[0], ExactQty::new(4, 5).unwrap())
+            );
+        }
+        assert_eq!(
+            weighted_masses(&samples, &weights, f64::MAX)
+                .unwrap()
+                .cdf_bounds()
+                .unwrap(),
+            (ExactQty::new(4, 5).unwrap(), ExactQty::from_integer(1)),
+        );
+    }
 
     #[test]
     fn empirical_edges_signed_zero_extremes_and_degenerate_samples_need_no_interpolation() {

@@ -3376,7 +3376,14 @@ mod tests {
         let diagnostics = ledger.assessment_diagnostics(digest).unwrap();
         assert_eq!(
             diagnostics.members[0].value,
-            diagnostics::DiagnosticValue::Unsupported("weighted_empirical")
+            diagnostics::DiagnosticValue::WeightedEmpiricalRank {
+                n_samples: 3,
+                masses: Some(diagnostics::WeightedRankMasses {
+                    below: ExactQty::new(9, 10).unwrap(),
+                    equal: ExactQty::new(1, 10).unwrap(),
+                    above: ExactQty::from_integer(0),
+                }),
+            }
         );
         let quantiles = ledger.quantile_diagnostics(digest).unwrap();
         assert_eq!(quantiles.members[0].distribution, "weighted_empirical");

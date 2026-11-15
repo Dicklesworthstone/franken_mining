@@ -153,8 +153,13 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   and right-exclusive except at 1; exact edge points go right. Whole-population bounds use definite counts as
   lower numerators and possible plus unresolved counts as upper numerators over every empirical member.
   No randomized PIT, continuous interpolation, uniformity claim or pooling with Gaussian PIT is introduced.
-  Sparse quantiles and standalone intervals remain unsupported for this diagnostic projection. DGN1/v2 binds
-  empirical counts, bounds and rules when empirical members exist; all other reports retain DGN1/v1 bytes.
+  Weighted empirical forecasts have a separate rank population and retain exact probability mass below,
+  equal to and above the selected outcome. Their CDF bounds are `[below, 1-above]`; weights are never
+  replaced with counts or floating-point probabilities. Exact decile comparisons avoid multiplication
+  overflow even at the largest admitted denominator. Rational summation capacity failures refuse the
+  projection without modifying its saved parent. DGN1/v3 binds these weighted masses, populations and
+  rules only when weighted members exist. Reports without them retain their DGN1/v1-v2 bytes.
+  Sparse quantiles and standalone intervals remain unsupported for this diagnostic projection.
   Forecast, cohort and assessment identities are unchanged. The projection supplies no calibration verdict,
   independence estimate, confidence interval or retrospective outcome selection.
 - DESIGN (BD-048/049): `coverage_diagnostics(saved_digest)` separately reports central 50%, 80% and 95%
