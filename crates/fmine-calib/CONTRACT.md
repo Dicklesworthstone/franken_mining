@@ -511,7 +511,10 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     `aisc_usd_per_lb` require `q4_qtd`. It supplies the exact unit, guidance quantity key and cost-definition
     suffix. All five fields also accept `quarter_qtd`, meaning the original next-quarter QTD value.
     `RecordRules::outcome_quarter` requires one common persistence point and refuses mixed annual/quarterly
-    targets; annual records retain their Q3-to-Q4 meaning. `Quarter::end_utc` supplies the exclusive calendar
+    targets; annual records retain their Q3-to-Q4 meaning. Rules parsing, CSV admission and both direct
+    scoring APIs enforce that shared horizon whenever a target uses `quarter_qtd`; constructing or mutating
+    typed rules cannot bypass it. Legacy annual numerical admission is unchanged.
+    `Quarter::end_utc` supplies the exclusive calendar
     boundary, including year rollover, and rejects invalid or unrepresentable quarters. Shared persistence
     pool validation is reused by the candidate and public source adapter.
     Production is additive on the 100% basis; sold-metal cost rates are neither subtracted nor

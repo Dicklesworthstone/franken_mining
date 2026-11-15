@@ -847,6 +847,15 @@ impl RecordRules {
             .ok_or_else(|| invalid("scored quarter is outside the supported UTC calendar"))?;
         Ok(outcome)
     }
+
+    // Quarterly rules share one horizon even when callers construct structs directly. The older
+    // annual numerical APIs retain their existing admission behavior.
+    fn validate_quarterly_period(&self) -> Result<(), RecordError> {
+        if self.targets.iter().any(|t| t.outcome == Outcome::QuarterQtd) {
+            self.outcome_quarter()?;
+        }
+        Ok(())
+    }
 }
 
 const RULES_PROSE_KEYS: [&str; 5] = [
@@ -1091,7 +1100,7 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
         unit_decimal(s, true).filter(|x| x.checked_cmp(rho_low).ok() != Some(Ordering::Less))
     })?;
     let utc = "a time YYYY-MM-DDTHH:MM:SSZ";
-    Ok(RecordRules {
+    let rules = RecordRules {
         rules_id: top.text("rules_id")?.0.to_string(),
         record_id: top.text("record_id")?.0.to_string(),
         issuer: top.text("issuer")?.0.to_string(),
@@ -1119,7 +1128,9 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
         basis_rules,
         baselines,
         sites,
-    })
+    };
+    rules.validate_quarterly_period()?;
+    Ok(rules)
 }
 
 /// The interval `[lower_utc, upper_utc]` a time proof places the record's digest in: an RFC 3161 `genTime` ±
@@ -1448,6 +1459,7 @@ pub fn forecasts_header(rules: &RecordRules) -> Result<String, RecordError> {
 /// `uncalibrated` = `true`, since one period cannot calibrate (plan §21.6).
 /// Lines end in `\n`; no field holds a comma, quote or surrounding space.
 pub fn parse_forecasts(csv: &[u8], rules: &RecordRules) -> Result<Vec<ForecastRow>, RecordError> {
+    rules.validate_quarterly_period()?;
     let bad = |line: usize, reason: String| RecordError::Forecast { line, reason };
     let text = std::str::from_utf8(csv).map_err(|_| bad(0, "not UTF-8".to_string()))?;
     let body = text

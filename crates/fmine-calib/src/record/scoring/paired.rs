@@ -330,6 +330,7 @@ pub(super) fn forecast_index<'a>(
     rules: &RecordRules,
     forecasts: &'a [ForecastRow],
 ) -> Result<super::ForecastIndex<'a>, Refusal> {
+    rules.validate_quarterly_period().map_err(invalid)?;
     let site_names: BTreeSet<_> = rules.sites.iter().map(|s| s.name.as_str()).collect();
     let target_ids: BTreeSet<_> = rules.targets.iter().map(|t| t.id.as_str()).collect();
     if site_names.is_empty()
@@ -941,6 +942,89 @@ mod tests {
         })
         .collect();
         (rules, forecasts, outcomes, baselines)
+    }
+
+    #[test]
+    fn quarterly_typed_consumers_reject_mutated_periods_without_the_rules_parser() {
+        let (mut rules, mut forecasts, mut outcomes, mut baselines) = fixture();
+        rules.targets[0].outcome = Outcome::QuarterQtd;
+        let mut cost = rules.targets[0].clone();
+        cost.id = "cost".into();
+        cost.field = "aisc_usd_per_oz".into();
+        rules.targets.push(cost);
+        for mut row in rules.baselines.clone() {
+            row.target = "cost".into();
+            rules.baselines.push(row);
+        }
+        for mut row in forecasts.clone() {
+            row.target = "cost".into();
+            forecasts.push(row);
+        }
+        for mut row in outcomes.clone() {
+            row.target = "cost".into();
+            outcomes.push(row);
+        }
+        for mut row in baselines.clone() {
+            row.target = "cost".into();
+            baselines.push(row);
+        }
+        let csv = format!(
+            "site,target,point,p10,p90,uncalibrated\n{}",
+            forecasts
+                .iter()
+                .map(|f| format!(
+                    "{},{},{},{},{},true\n",
+                    f.site,
+                    f.target,
+                    f.point.num(),
+                    f.lo.num(),
+                    f.hi.num()
+                ))
+                .collect::<String>()
+        );
+        let numeric = outcomes
+            .iter()
+            .filter(|o| o.site != "D")
+            .map(|o| super::super::OutcomeRow {
+                site: o.site.clone(),
+                target: o.target.clone(),
+                value: o.value.available().copied(),
+            })
+            .collect::<Vec<_>>();
+        assert!(crate::record::parse_forecasts(csv.as_bytes(), &rules).is_ok());
+        assert!(super::super::assess(&rules, &forecasts, &numeric).is_ok());
+        assert!(assess(&rules, &forecasts, &outcomes, &baselines).is_ok());
+        let refused = |rules: &RecordRules, why: &str| {
+            assert!(
+                crate::record::parse_forecasts(csv.as_bytes(), rules)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(why)
+            );
+            assert!(
+                super::super::assess(rules, &forecasts, &numeric)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(why)
+            );
+            assert!(
+                assess(rules, &forecasts, &outcomes, &baselines)
+                    .unwrap_err()
+                    .what
+                    .contains(why)
+            );
+        };
+        rules.targets[1].outcome = Outcome::Q4Qtd;
+        refused(&rules, "targets must share one persistence point and outcome mode");
+        rules.targets[1].outcome = Outcome::QuarterQtd;
+        for baseline in &mut rules.baselines {
+            if baseline.target == "cost"
+                && let BaselineKind::Persistence { point, .. } = &mut baseline.kind
+            {
+                *point = Quarter { year: 2026, q: 4 };
+            }
+        }
+        refused(&rules, "targets must share one persistence point and outcome mode");
     }
 
     #[test]

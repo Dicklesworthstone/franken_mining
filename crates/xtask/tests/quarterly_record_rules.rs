@@ -100,6 +100,29 @@ fn quarterly_rules_bind_one_next_quarter_and_preserve_the_annual_contract() {
 }
 
 #[test]
+fn quarterly_rules_parser_rejects_mixed_modes_and_conflicting_points() {
+    let quarterly = ANNUAL
+        .replace("fy_minus_9m", "quarter_qtd")
+        .replace("q4_qtd", "quarter_qtd");
+    assert!(parse_rules(&quarterly).is_ok());
+    for rules in [
+        quarterly.replacen("outcome = \"quarter_qtd\"", "outcome = \"fy_minus_9m\"", 1),
+        quarterly.replacen(
+            "point_quarter = \"2026Q3\"",
+            "point_quarter = \"2026Q4\"",
+            1,
+        ),
+    ] {
+        assert!(
+            parse_rules(&rules)
+                .unwrap_err()
+                .to_string()
+                .contains("targets must share one persistence point and outcome mode")
+        );
+    }
+}
+
+#[test]
 fn quarter_qtd_candidates_keep_exact_bounds_units_and_signed_cost_domains() {
     let mut rules = quarterly("2026Q4");
     rules.targets.truncate(1);
