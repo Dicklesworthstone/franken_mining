@@ -4155,3 +4155,35 @@ fn gold_cost_of_sales_never_infers_sources_ownership_or_sold_units() {
         "ambiguous"
     );
 }
+
+#[test]
+fn gold_aisc_cost_of_sales_refuses_conflicting_formula_notes_but_allows_identical_repeats() {
+    const STATED: &str = "Cost of sales per ounce is calculated as cost of sales divided by ounces sold, both on an attributable basis using the ownership share.";
+    const CONFLICT: &str = "For Example Mine, cost of sales per ounce is calculated as cost of sales divided by ounces sold on a 100% basis; the attributable basis using the ownership share does not apply.";
+    for (note, expected) in [(STATED, "derived"), (CONFLICT, "refused")] {
+        let root = derivation_workspace();
+        let mut sheet = reconciled_gold_cos("100", number("-40"), "0");
+        sheet
+            .cells
+            .push(("A21".into(), MinimalCell::Text(note.into())));
+        cost_source(&root, "Costs.xlsx", Some("2030-05-01"), "0", sheet);
+        source(
+            &root,
+            "Ownership.xlsx",
+            "2030Q1",
+            Some("2030-05-01"),
+            "0",
+            &[gold_share_summary("Example Mine (60%)")],
+        );
+        let report = assess(&root, RECONCILED_COS_DRAFT, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(string_field(rate, "status"), expected, "{}", report.to_json());
+        if expected == "refused" {
+            assert!(rate.contains("competing cost-of-sales formula footnotes"));
+            assert!(rate.contains("FMINE-REF-105"));
+            assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+        } else {
+            assert!(rate.contains("\"factor\":\"3/5\""));
+        }
+    }
+}

@@ -395,6 +395,29 @@ fn aisc_numerator_basis(
     let (factor, rule) = if nonzero_nci {
         let footnote = aisc::find_share_footnote(sheet)
             .ok_or_else(|| bad("the attributable cost-of-sales formula footnote is missing"))?;
+        // The shared locator returns the first match. Distinct matching statements cannot choose
+        // an ownership interpretation by cell order; identical repeated notes add no ambiguity.
+        let statements: BTreeSet<_> = sheet
+            .cells_by_coord
+            .keys()
+            .filter_map(|&(row, col)| aisc::cell_text(sheet, row, col))
+            .map(|text| text.to_lowercase())
+            .filter(|text| {
+                [
+                    "is calculated as cost of sales",
+                    "divided by ounces sold",
+                    "attributable basis using",
+                    "ownership share",
+                ]
+                .iter()
+                .all(|phrase| text.contains(phrase))
+            })
+            .collect();
+        if statements.len() > 1 {
+            return Err(bad(
+                "competing cost-of-sales formula footnotes leave the ownership basis ambiguous",
+            ));
+        }
         witnesses.push(format!("{}:{}!{footnote}", source.file_name, sheet.name));
         let OwnershipBasis::Attributable { num, den, .. } = basis.basis else {
             return Err(bad(
