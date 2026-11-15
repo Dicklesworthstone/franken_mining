@@ -1398,6 +1398,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   UU terms, parents, supersedes and recorded flags even when the numerical Claim ID is unchanged. Canonical
   export failures remain structured refusals. Generic Claim inspection and typed recovery codecs live with
   their owning Claim/metrics crates; the CLI retains source selection and domain-specific interpretation.
+  DESIGN: direct-publication and cumulative-difference checks retain conflicting copies of one Claim ID
+  in deterministic order and mark every copy unusable. A stale, differently supported or different-UU copy
+  cannot disappear through ID deduplication. Exact duplicate bodies deduplicate normally, and an independent
+  dated assertion may still establish a disclosure while the conflicting identity remains visible.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
   displayed percentage-point interval while retaining the stored fraction. Bare/mined grade and circuit recovery

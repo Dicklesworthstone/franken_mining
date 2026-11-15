@@ -107,6 +107,227 @@ mod tests {
         assess(text, &lint_cited(text, cells), cells, profile, dates, cut).expect("assessment")
     }
 
+    fn metadata_conflict(source: &KeyedCell, variant: u8) -> KeyedCell {
+        let mut other = source.clone();
+        match variant {
+            0 => other.claim.stale = true,
+            1 => other.claim.support = SpatialSupport::PointCore,
+            2 => other.claim.uu_terms.push(fmine_claim::UuTerm {
+                scenario_id: "retained-exposure".into(),
+                description: "Different uncertainty under the same numerical identity".into(),
+                downside_exposure_usd_m: 7.0,
+                trigger_indicator: "Source metadata conflict".into(),
+            }),
+            _ => unreachable!("three admission-field controls"),
+        }
+        assert_ne!(&other, source);
+        assert_eq!(other.claim.claim_id, source.claim.claim_id);
+        other
+            .claim
+            .check_id()
+            .expect("identity excludes these fields");
+        other
+    }
+
+    #[test]
+    fn direct_publicness_preserves_same_id_metadata_conflicts_and_exact_duplicates() {
+        let (profile, cells, dates) = fixture(&["1250"]);
+        let text = draft(&cells[0], "$1,250/oz", "ownership basis unprinted");
+        let baseline = evaluate(&text, &cells, &profile, &dates, "2030-06-01");
+        assert_eq!(baseline.findings[0].status, "disclosed");
+        let duplicates = vec![cells[0].clone(), cells[0].clone()];
+        let identical = evaluate(&text, &duplicates, &profile, &dates, "2030-06-01");
+        assert_eq!(identical.findings[0].status, "disclosed");
+        assert_eq!(identical.findings[0].evidence.len(), 1);
+        let mut digests = BTreeSet::new();
+        for variant in 0..3 {
+            let mut inputs = vec![cells[0].clone(), metadata_conflict(&cells[0], variant)];
+            let forward = evaluate(&text, &inputs, &profile, &dates, "2030-06-01");
+            inputs.reverse();
+            let reverse = evaluate(&text, &inputs, &profile, &dates, "2030-06-01");
+            assert_eq!(forward.to_json(), reverse.to_json(), "variant {variant}");
+            let finding = &forward.findings[0];
+            assert_eq!(finding.status, "ambiguous", "variant {variant}");
+            assert_eq!(
+                finding.reason,
+                "same_source_identity_has_conflicting_claim_metadata"
+            );
+            assert!(finding.first_registered_disclosure.is_none());
+            assert_eq!(finding.evidence.len(), 2);
+            assert!(finding.evidence.iter().all(|e| {
+                e.admission == "unusable"
+                    && e.reason == "same_source_identity_has_conflicting_claim_metadata"
+            }));
+            assert_ne!(forward.digest(), baseline.digest());
+            assert!(digests.insert(forward.digest()));
+            assert!(forward.to_markdown().contains(finding.reason));
+            let discovery_text =
+                "Site A Q1 2030 ownership basis unprinted AISC per ounce sold is $1,250/oz.";
+            let discover = |inputs: &[KeyedCell]| {
+                assess(
+                    discovery_text,
+                    &fmine_public::lint::lint_discover(discovery_text, inputs),
+                    inputs,
+                    &profile,
+                    &dates,
+                    "2030-06-01",
+                )
+                .expect("discovered assessment")
+            };
+            let discovered = discover(&inputs);
+            inputs.reverse();
+            assert_eq!(discovered.to_json(), discover(&inputs).to_json());
+            assert_eq!(discovered.findings[0].status, "ambiguous");
+            assert_eq!(discovered.findings[0].evidence.len(), 2);
+        }
+    }
+
+    #[test]
+    fn duplicate_collapse_uses_source_equality_when_metadata_rendering_collides() {
+        let (profile, cells, dates) = fixture(&["1250"]);
+        let mut positive = metadata_conflict(&cells[0], 2);
+        positive.claim.uu_terms[0].downside_exposure_usd_m = f64::INFINITY;
+        let mut negative = positive.clone();
+        negative.claim.uu_terms[0].downside_exposure_usd_m = f64::NEG_INFINITY;
+        assert_ne!(positive, negative);
+        let publications = publication_map(&profile, &dates).unwrap();
+        let render = |c| source_evidence(c, &profile, &publications, "2030-06-01").to_json();
+        assert_eq!(render(&positive), render(&negative));
+        let text = draft(&cells[0], "$1,250/oz", "ownership basis unprinted");
+        let mut reference = None;
+        for sources in [
+            vec![positive.clone(), negative.clone(), positive.clone()],
+            vec![positive.clone(), positive.clone(), negative.clone()],
+            vec![negative.clone(), positive.clone(), positive.clone()],
+            vec![positive.clone(), negative.clone()],
+        ] {
+            let report = evaluate(&text, &sources, &profile, &dates, "2030-06-01");
+            let finding = &report.findings[0];
+            assert_eq!(finding.status, "ambiguous");
+            assert_eq!(finding.evidence.len(), 2);
+            assert!(finding.evidence.iter().any(|e| e.source == positive));
+            assert!(finding.evidence.iter().any(|e| e.source == negative));
+            let rendered = evidence_json(&finding.evidence);
+            if let Some(expected) = &reference {
+                assert_eq!(&rendered, expected);
+            } else {
+                reference = Some(rendered);
+            }
+        }
+    }
+
+    #[test]
+    fn conflicting_identity_cannot_hide_an_independent_dated_disclosure() {
+        let (profile, mut cells, dates) = fixture(&["1250", "1250"]);
+        let text = draft(&cells[0], "$1,250/oz", "ownership basis unprinted");
+        cells.push(metadata_conflict(&cells[0], 0));
+        let result = evaluate(&text, &cells, &profile, &dates, "2030-09-01");
+        let finding = &result.findings[0];
+        assert_eq!(finding.status, "disclosed");
+        assert_eq!(
+            finding.first_registered_disclosure.as_deref(),
+            Some(cells[1].claim.claim_id.to_string().as_str())
+        );
+        assert_eq!(finding.evidence.len(), 3);
+        assert_eq!(
+            finding
+                .evidence
+                .iter()
+                .filter(|e| e.admission == "unusable")
+                .count(),
+            2
+        );
+        cells.reverse();
+        assert_eq!(
+            result.to_json(),
+            evaluate(&text, &cells, &profile, &dates, "2030-09-01").to_json()
+        );
+    }
+
+    #[test]
+    fn cumulative_publicness_never_selects_a_same_id_metadata_copy() {
+        let (profile, mut cells, dates) = fixture(&["100.0", "300.0"]);
+        for (i, c) in cells.iter_mut().enumerate() {
+            c.key.unit = "koz".into();
+            c.key.line.label = "summary:au_prod_100_koz".into();
+            c.key.valid_period.kind = if i == 0 {
+                PeriodKind::Quarter(1)
+            } else {
+                PeriodKind::H1
+            };
+            c.key.ownership_basis = OwnershipBasis::Consolidated100;
+            c.printed_basis = OwnershipBasis::Consolidated100;
+            c.claim = Claim::new(
+                &c.key.line.label,
+                c.claim.value.clone(),
+                &canonical_value_tag(&c.key, &c.claim.value),
+                Representation::Deterministic,
+                SpatialSupport::PeriodAggregate,
+                AdditivityClass::ExtensiveAdditive,
+                c.claim.evidence,
+                c.claim.epistemic,
+                c.claim.state,
+                c.claim.confidentiality.clone(),
+                vec![],
+                vec![],
+                c.claim.anchors.clone(),
+            );
+        }
+        let text = "Site A Q2 2030 100% basis gold production is 200 koz.";
+        let baseline = evaluate(text, &cells, &profile, &dates, "2030-09-01");
+        assert_eq!(baseline.findings[0].status, "derivable");
+        assert_eq!(
+            baseline.findings[0]
+                .derivation
+                .as_ref()
+                .unwrap()
+                .report
+                .status,
+            Status::Derived
+        );
+        let mut identical = cells.clone();
+        identical.push(cells[0].clone());
+        let duplicates = evaluate(text, &identical, &profile, &dates, "2030-09-01");
+        assert_eq!(duplicates.findings[0].status, "derivable");
+        assert_eq!(
+            duplicates.findings[0]
+                .derivation
+                .as_ref()
+                .unwrap()
+                .evidence
+                .len(),
+            2
+        );
+        let mut digests = BTreeSet::new();
+        for variant in 0..3 {
+            let mut inputs = cells.clone();
+            inputs.push(metadata_conflict(&cells[0], variant));
+            let forward = evaluate(text, &inputs, &profile, &dates, "2030-09-01");
+            inputs.reverse();
+            let reverse = evaluate(text, &inputs, &profile, &dates, "2030-09-01");
+            assert_eq!(forward.to_json(), reverse.to_json(), "variant {variant}");
+            assert_ne!(forward.findings[0].status, "derivable");
+            let derivation = forward.findings[0].derivation.as_ref().unwrap();
+            assert_eq!(derivation.report.status, Status::Refused);
+            assert!(derivation.report.pairs.is_empty());
+            assert_eq!(derivation.evidence.len(), 3);
+            assert_eq!(
+                derivation
+                    .evidence
+                    .iter()
+                    .filter(|e| {
+                        e.reason == "same_source_identity_has_conflicting_claim_metadata"
+                            && e.admission == "unusable"
+                            && e.relation == "unusable_cumulative_input"
+                    })
+                    .count(),
+                2
+            );
+            assert_ne!(forward.digest(), baseline.digest());
+            assert!(digests.insert(forward.digest()));
+        }
+    }
+
     #[test]
     fn ownership_scaling_never_discards_conflicting_metadata_with_the_same_source_id() {
         let (profile, mut cells, dates) = fixture(&["100"]);

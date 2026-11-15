@@ -251,14 +251,49 @@ fn source_evidence(
 }
 
 fn sort_evidence(evidence: &mut Vec<SourceEvidence>) {
-    evidence.sort_by(|a, b| {
-        (&a.published_at, &a.source.locator, a.source.claim.claim_id).cmp(&(
-            &b.published_at,
-            &b.source.locator,
-            b.source.claim.claim_id,
-        ))
+    // Claim identity does not bind every admission field. Keep conflicting copies of one identity
+    // visible, and never choose its usable-looking copy by input order before checking the evidence.
+    evidence.sort_by_cached_key(|e| (e.source.claim.claim_id, e.to_json()));
+    // Nonfinite metadata can have equal render keys despite different bodies. Equality searches
+    // the whole identity group, not just adjacent rows after presentation sorting.
+    let mut distinct: Vec<SourceEvidence> = Vec::with_capacity(evidence.len());
+    let mut group_start = 0;
+    for e in evidence.drain(..) {
+        if distinct
+            .last()
+            .is_some_and(|last| last.source.claim.claim_id != e.source.claim.claim_id)
+        {
+            group_start = distinct.len();
+        }
+        if !distinct[group_start..].iter().any(|old| old.source == e.source) {
+            distinct.push(e);
+        }
+    }
+    *evidence = distinct;
+    let mut start = 0;
+    while start < evidence.len() {
+        let id = evidence[start].source.claim.claim_id;
+        let mut end = start + 1;
+        while end < evidence.len() && evidence[end].source.claim.claim_id == id {
+            end += 1;
+        }
+        if end > start + 1 {
+            for e in &mut evidence[start..end] {
+                e.admission = "unusable";
+                e.reason = "same_source_identity_has_conflicting_claim_metadata";
+                e.relation = "conflicting_source_metadata";
+            }
+        }
+        start = end;
+    }
+    evidence.sort_by_cached_key(|e| {
+        (
+            e.published_at.clone(),
+            e.source.locator.clone(),
+            e.source.claim.claim_id,
+            e.to_json(),
+        )
     });
-    evidence.dedup_by(|a, b| a.source.claim.claim_id == b.source.claim.claim_id);
 }
 
 fn quantity(c: &KeyedCell) -> Option<Quantity> {
@@ -551,17 +586,27 @@ pub(super) fn assess(
     }
     let publications = publication_map(profile, publications)?;
     let mut index: BTreeMap<Family, Vec<&KeyedCell>> = BTreeMap::new();
+    let mut identities: BTreeMap<String, Vec<&KeyedCell>> = BTreeMap::new();
     for c in cells {
         index.entry(family(c)).or_default().push(c);
+        identities
+            .entry(c.claim.claim_id.to_string())
+            .or_default()
+            .push(c);
     }
     let mut findings = Vec::with_capacity(lint.findings.len());
     for f in &lint.findings {
-        let keys: BTreeSet<_> = f
+        let mut keys: BTreeSet<_> = f
             .source
             .iter()
             .chain(f.candidates.iter())
             .map(family)
             .collect();
+        // The equality checker cannot select a duplicated link identity. Publicness still inspects
+        // every copy, so identical duplicates work and conflicting metadata cannot disappear.
+        if let Some(linked) = f.claim_id.as_ref().and_then(|id| identities.get(id)) {
+            keys.extend(linked.iter().map(|c| family(c)));
+        }
         let mut result = Finding {
             span: f.span,
             status: "not_assessed",
@@ -624,6 +669,13 @@ pub(super) fn assess(
             {
                 result.status = "not_in_public_record";
                 result.reason = "relevant_registered_assertions_are_published_after_the_cut";
+            } else if result
+                .evidence
+                .iter()
+                .any(|e| e.reason == "same_source_identity_has_conflicting_claim_metadata")
+            {
+                result.status = "ambiguous";
+                result.reason = "same_source_identity_has_conflicting_claim_metadata";
             } else if result.evidence.iter().any(|e| e.admission == "unusable") {
                 result.status = "evidence_unusable";
                 result.reason = "source_identity_or_evidence_admission_failed";
