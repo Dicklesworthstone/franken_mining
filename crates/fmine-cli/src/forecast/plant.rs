@@ -7,7 +7,9 @@ use std::path::Path;
 use fmine_calib::ledger::{ForecastMetadata, ForecastPayload};
 use fmine_calib::record::format_utc;
 use fmine_claim::forecast_journal::MAX_OPERATION_BYTES;
-use fmine_evidence::Refusal;
+use fmine_core::anchor::SourceAnchor;
+use fmine_evidence::{Refusal, RefusalCode};
+use fmine_io::omf::json::{Json, parse as parse_json};
 use fmine_plant::production::{ProductionPoint, ProductionReceipt};
 
 use super::{Row, hex, identifier, invalid, js, time};
@@ -19,6 +21,8 @@ const LEGACY_NO_CLAIM: &str = "Conditional plant-model quantiles from declared w
 const EVIDENCE_PREFIX: &str = "# fmine.plant-forecast-admission.v2 ";
 const FAMILY: &str = "conditional-plant-production-weighted/2";
 pub const NO_CLAIM: &str = "Conditional plant-model distribution from the complete declared weighted joint scenarios, not calibrated probabilities or measured production. Every selected target value and its exact probability are registered without normalization or resampling; CRPS and central interval scoring retain that marginal distribution. Weighted central levels interpret alpha through its canonical shortest decimal spelling, with exact cumulative mass and no interpolation. The complete source receipt and scenario identities remain admission evidence in the journal operation. Replay verifies retained bytes and transitions, not the original calculation or current source files. Outcomes remain supplied and unverified; registering a prediction neither freezes a cohort nor authorizes operation. No joint forecast scoring or calibrated scenario probabilities are inferred.";
+pub const VERIFICATION_NO_CLAIM: &str = "Offline recomputation uses the current plant implementation and only the three retained worksheets. Source SHA-256, complete calculated receipt and original forecast projection must match exactly. This is conditional numerical reproduction in the DeterministicPerIsa class, not an independent model oracle, external source audit, calibrated forecast, timestamp proof or plant validation. The journal and its historical interpretation remain unchanged; an unpinned self-consistent replacement history cannot be authenticated by this check.";
+pub const VERIFICATION_DOCS_JSON: &str = r#"{"command":"forecast journal verify-plant --journal <path> --forecast <alias> [--head <hex>]","input":"One saved plant registration, weighted v14 or legacy quantile v9; all three exact worksheets and their original source anchors must be retained","verification":"Recompute grinding, recovery and joint production; compare every retained source and result field, receipt digest, scenario identity/order, exact probability, physical support and forecast projection","io":"Read-only journal lock; no clock sample, current worksheet reads or journal writes; retained paths are provenance only","compatibility":"Ordinary replay and durable operation bytes are unchanged. Explicit verification uses current numerical implementations in DeterministicPerIsa class; differences refuse instead of rewriting historical values","limits":"Source/model declarations remain assumed and uncalibrated. No independent oracle, external timestamp or authenticity proof for an unpinned replacement history"}"#;
 pub const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal register-plant --journal <path> --head <hex> --input <production.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target <target> --author-role <role> --time-basis utc-unix-ns --trust-host-clock","targets":["recovery","throughput","dry-tonnes","contained-metal","recovered-metal"],"source":"Admits the complete joint production calculation through its grinding, recovery and explicit grade/exposure worksheets; scenario identities and order, exact probabilities, physical support, units and element are retained","payload":"Complete weighted empirical marginal distribution, with every target value and exact positive probability; CRPS and central interval scoring, no normalization or resampling. Weighted interval alpha uses its canonical shortest decimal spelling and exact inverse-CDF comparisons; no interpolation","time":"Whole-second UTC Unix-nanosecond physical support is explicitly declared, never inferred or rounded; registration and cohort membership clock upper bounds must precede physical start; supplied outcomes must become available after physical end","journal":"Opt-in operation v14 retains the complete weighted payload, separate registration_before=start and outcome_due=end boundaries and complete source admission evidence; both boundaries are checked on replay; legacy v9 quantile evidence and identities retain their original interpretation","size":"The complete versioned operation must fit the existing 64 KiB cap; oversized evidence is refused, never truncated","interpretation":"Conditional model outputs and supplied unverified outcomes; no calibration, measured-production, joint-distribution scoring or control-authority claim. Replay authenticates retained bytes and transitions, not the original plant calculation or current source files"}"#;
 
 /// A physical target is fixed by the adapter, never inferred from a caller-supplied unit label.
@@ -84,7 +88,6 @@ impl Target {
         }
     }
 
-    #[cfg(test)]
     fn quantiles(self, receipt: &ProductionReceipt) -> [f64; 3] {
         let summary = receipt.summary();
         match self {
@@ -164,8 +167,7 @@ fn from_receipt(
     from_projection(registration, receipt, source_json, payload)
 }
 
-/// Preserve the original request bytes for legacy durable replay controls.
-#[cfg(test)]
+/// Preserve the original quantile projection for explicit verification and durable replay controls.
 fn legacy_from_receipt(
     registration: &Registration<'_>,
     receipt: &ProductionReceipt,
@@ -460,6 +462,124 @@ pub(super) fn registration_start(row: &Row<'_>, operation: &str) -> Result<i64, 
         ));
     }
     Ok(start)
+}
+
+fn retained_field<'a>(value: &'a Json, name: &str) -> Result<&'a Json, Refusal> {
+    value
+        .get(name)
+        .ok_or_else(|| invalid(format!("plant verification requires retained {name}")))
+}
+
+fn retained_text<'a>(value: &'a Json, name: &str) -> Result<&'a str, Refusal> {
+    retained_field(value, name)?
+        .as_str()
+        .ok_or_else(|| invalid(format!("plant verification requires text for {name}")))
+}
+
+fn snapshot(value: &Json, input: bool) -> Result<(String, SourceAnchor), Refusal> {
+    let text = retained_text(value, "submitted_worksheet")?;
+    let source = retained_field(value, "source")?;
+    let locator = retained_text(if input { source } else { value }, "locator")?;
+    if !input && retained_field(source, "bytes")?.u64() != Some(text.len() as u64) {
+        return Err(invalid(
+            "plant verification source length differs from retained bytes",
+        ));
+    }
+    Ok((
+        text.to_string(),
+        SourceAnchor::new(
+            retained_text(source, "path")?,
+            hex(retained_text(source, "sha256")?)?.0,
+            locator,
+        ),
+    ))
+}
+
+/// DESIGN: opt-in numerical replay never changes historical v9/v14 admission semantics. The complete
+/// machine-generated receipt is compared, so a valid hash chain cannot lend provenance to an altered
+/// displayed result, replacement scenario population or invented forecast distribution.
+pub(super) fn verify(row: &Row<'_>, operation: &str) -> Result<(String, String), Refusal> {
+    if row.0.table != "plant_forecast" || operation.len() > MAX_OPERATION_BYTES {
+        return Err(invalid(
+            "plant verification requires one bounded plant registration",
+        ));
+    }
+    registration_start(row, operation)?;
+    let evidence = operation
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix(EVIDENCE_PREFIX)
+                .or_else(|| line.strip_prefix(LEGACY_EVIDENCE_PREFIX))
+        })
+        .ok_or_else(|| invalid("plant admission evidence missing"))?;
+    let retained = parse_json(evidence.as_bytes()).map_err(invalid)?;
+    let source = retained_field(&retained, "source_receipt")?;
+    let sources = retained_field(source, "sources")?;
+    let loaded = crate::plant::production::from_snapshots(
+        snapshot(retained_field(source, "production")?, true)?,
+        snapshot(retained_field(sources, "grinding")?, false)?,
+        snapshot(retained_field(sources, "recovery")?, false)?,
+    )?;
+    let recalculated = loaded.to_json();
+    let mismatch = |what| {
+        Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            format!(
+                "retained plant {what} does not reproduce under the current numerical implementation"
+            ),
+        )
+    };
+    if parse_json(recalculated.as_bytes()).map_err(invalid)? != *source {
+        return Err(mismatch("source/result receipt"));
+    }
+    let registration = Registration {
+        input: Path::new(""),
+        grinding: Path::new(""),
+        recovery: Path::new(""),
+        id: row.string("id")?,
+        target: Target::parse(retained_text(&retained, "target")?)?,
+        author_role: row.string("author_role")?,
+        time_basis: "utc-unix-ns",
+    };
+    let expected = if row.string("kind")? == "quantiles" {
+        legacy_from_receipt(&registration, loaded.receipt(), &recalculated)?
+    } else {
+        from_receipt(&registration, loaded.receipt(), &recalculated)?
+    };
+    let document = super::parse_subset(&expected.request).map_err(|e| invalid(e.to_string()))?;
+    let expected_row = document
+        .rows
+        .first()
+        .ok_or_else(|| invalid("recomputed plant registration missing"))?;
+    if row.0.fields.len() != expected_row.fields.len()
+        || expected_row.fields.iter().any(|field| {
+            row.0
+                .get(&field.key)
+                .is_none_or(|saved| saved.value != field.value)
+        })
+        || parse_json(expected.evidence_json.as_bytes()).map_err(invalid)? != retained
+    {
+        return Err(mismatch("forecast projection or metadata"));
+    }
+    let receipt = loaded.receipt();
+    let json = format!(
+        "{{\"schema\":\"fmine.plant-forecast-verification.v1\",\"status\":\"verified\",\"forecast\":{},\"target\":{},\"receipt_digest\":{},\"scenario_count\":{},\"source_files_opened\":false,\"determinism\":\"DeterministicPerIsa\",\"admission\":{},\"no_claim\":{}}}",
+        js(registration.id),
+        js(registration.target.as_str()),
+        js(receipt.digest()),
+        receipt.points().len(),
+        expected.evidence_json,
+        js(VERIFICATION_NO_CLAIM),
+    );
+    let markdown = format!(
+        "# Plant forecast numerical verification\n\nVerified all three retained source worksheets, the complete production receipt and the original forecast projection.\n\nForecast: {}. Target: {}. Scenarios: {}. Receipt: `{}`.\n\n{VERIFICATION_NO_CLAIM}\n\n{}",
+        js(registration.id),
+        registration.target.as_str(),
+        receipt.points().len(),
+        receipt.digest(),
+        loaded.to_markdown(),
+    );
+    Ok((json, markdown))
 }
 
 /// Render before the append is committed, so a presentation refusal cannot follow a successful write.

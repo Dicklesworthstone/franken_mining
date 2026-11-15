@@ -292,6 +292,51 @@ fn binary_registers_complete_weighted_plant_population_and_reopens_both_time_bou
         std::fs::read(root.join("journal")).expect("read-only bytes"),
         committed
     );
+    for name in ["production", "grinding", "recovery"] {
+        std::fs::rename(
+            root.join(format!("{name}.toml")),
+            root.join(format!("{name}.saved")),
+        )
+        .unwrap();
+    }
+    let verification_args = [
+        "verify-plant",
+        "--journal",
+        "journal",
+        "--forecast",
+        "joint-1",
+        "--head",
+        &registered_head,
+    ];
+    let verified = run(&root, &verification_args, 0);
+    let verification = field(&verified, &["payload", "verification"]);
+    assert_eq!(field(verification, &["status"]).as_str(), Some("verified"));
+    assert_eq!(
+        field(verification, &["source_files_opened"]).as_bool(),
+        Some(false)
+    );
+    assert_eq!(field(verification, &["admission"]), admission);
+    let mut forbidden_clock = verification_args.to_vec();
+    forbidden_clock.push("--trust-host-clock");
+    run(&root, &forbidden_clock, 2);
+    let markdown = Command::new(env!("CARGO_BIN_EXE_fmine"))
+        .current_dir(&root)
+        .args(["forecast", "journal"])
+        .args(verification_args)
+        .args(["--format", "markdown"])
+        .output()
+        .unwrap();
+    assert!(
+        markdown.status.success(),
+        "{}",
+        String::from_utf8_lossy(&markdown.stderr)
+    );
+    assert!(
+        String::from_utf8(markdown.stdout)
+            .unwrap()
+            .contains("Plant forecast numerical verification")
+    );
+    assert_eq!(std::fs::read(root.join("journal")).unwrap(), committed);
     let journal = Journal::open_read(&root.join("journal"), None).expect("reopened records");
     assert_eq!(journal.records().len(), 2);
     let Entry::Operation(operation) = &journal.records()[1].entry else {

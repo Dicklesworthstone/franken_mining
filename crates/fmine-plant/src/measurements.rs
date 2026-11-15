@@ -5,6 +5,8 @@
 //! No sampling extrapolation, chemical conversion or error covariance is inferred.
 //! Determinism: Exact
 
+pub mod worksheet;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};

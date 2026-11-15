@@ -60,12 +60,31 @@ pub(crate) fn load(
         "plant grinding worksheet",
         grinding::worksheet::MAX_BYTES,
     )?;
-    let grinding_result = grinding::worksheet::evaluate(&grinding_text, &grinding_source)?;
     let (recovery_text, recovery_source) = worksheet_input::read(
         &root.join(recovery),
         "plant recovery worksheet",
         cards::worksheet::MAX_BYTES,
     )?;
+    let input = worksheet_input::read(
+        &root.join(input),
+        "plant production worksheet",
+        worksheet::MAX_BYTES,
+    )?;
+    from_snapshots(
+        input,
+        (grinding_text, grinding_source),
+        (recovery_text, recovery_source),
+    )
+}
+
+/// DESIGN: admission and explicit offline verification use the same pure owners. Source paths are
+/// provenance here; no retained path is opened when recomputing a saved calculation.
+pub(crate) fn from_snapshots(
+    (text, source): (String, SourceAnchor),
+    (grinding_text, grinding_source): (String, SourceAnchor),
+    (recovery_text, recovery_source): (String, SourceAnchor),
+) -> Result<LoadedProduction, Refusal> {
+    let grinding_result = grinding::worksheet::evaluate(&grinding_text, &grinding_source)?;
     let recovery_result = cards::worksheet::evaluate(&recovery_text, &recovery_source)?;
     if let Some(refusal) = recovery_result.refusal() {
         return Err(refusal.clone());
@@ -76,11 +95,6 @@ pub(crate) fn load(
             "plant production requires a complete declared recovery scenario population",
         )
     })?;
-    let (text, source) = worksheet_input::read(
-        &root.join(input),
-        "plant production worksheet",
-        worksheet::MAX_BYTES,
-    )?;
     let result = worksheet::evaluate(&text, &source, grinding_result.receipt(), ensemble)?;
     Ok(LoadedProduction {
         result,

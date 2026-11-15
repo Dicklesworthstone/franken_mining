@@ -28,6 +28,13 @@ stocktakes are instants at its endpoints. `PeriodAggregate` identifies their com
 Each input has a source artifact SHA-256 and locator, deterministic nominal representation, correct
 additivity, usable state and a matching semantic value tag. The kernel performs no IO.
 
+`inventory::worksheet::evaluate(text, source, Mode)` exposes the strict inventory worksheet admission
+as a pure library API for exact balance or conditional Gaussian reconciliation. The supplied UTF-8 text
+must fit the 1 MiB limit and match the source SHA-256 before parsing. `WorksheetResult` retains the
+existing result JSON, source Claims and any refusal with available reconciliation diagnostics; rejected
+results never acquire an admitted Claim. Submitted observations and error policies remain Assumed,
+Internal and uncalibrated. This API reads no files and supplies no independent measurement audit.
+
 `flowsheet::account_flowsheet` accepts `Claim<FlowsheetInput>` values: one complete declaration of units,
 directed streams and elemental measurands; one integrated observation for every declared stream; and
 opening and closing stocktakes for every unit. Explicit zero amounts are required. Each observation
@@ -244,6 +251,10 @@ source mutations, input-order determinism, exact overflow and physical/support r
 
 `fmine plant project --input tests/plant/material_projection.toml` exposes this nominal owner. Its
 strict worksheet requires an explicit total-element assay basis and whole-material support declaration.
+The CLI delegates parsing and presentation to `measurements::worksheet::evaluate(text, source)`, a pure
+API that verifies the 1 MiB bound and exact source SHA-256 before constructing the original Claims.
+Its `WorksheetResult` preserves the existing JSON schema, exact amounts, refusal details and evidence
+labels. Source paths remain provenance; the owner performs no file IO or implicit assay conversion.
 Inputs remain Assumed, Internal and uncalibrated; the exact submitted bytes are hashed. Site source
 auditing, sampled-support conversion, full P754 qualification and the complete BD-177/336 gates remain open.
 

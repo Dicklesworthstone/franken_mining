@@ -304,6 +304,244 @@ fn init(root: &Path, now: i64) {
     assert_eq!(envelope.exit_code, 0, "{:?}", envelope.refusal);
 }
 
+fn verification(root: &Path) -> Command {
+    Command::VerifyPlant {
+        journal: "history".into(),
+        head: Some(head(root)),
+        forecast: "production-1".into(),
+    }
+}
+
+#[test]
+fn offline_verification_recomputes_all_targets_after_original_source_paths_disappear() {
+    let start = time("2030-01-02T00:00:00Z").unwrap();
+    for target in [
+        Target::Recovery,
+        Target::Throughput,
+        Target::DryTonnes,
+        Target::ContainedMetal,
+        Target::RecoveredMetal,
+    ] {
+        let root = fixture(start);
+        init(&root, start - 1_000);
+        let admitted = execute_with_clock(&command(&root, target), &root, &Clock(start - 100));
+        assert_eq!(admitted.exit_code, 0, "{:?}", admitted.refusal);
+        for name in ["production", "grinding", "recovery"] {
+            std::fs::rename(
+                root.join(format!("{name}.toml")),
+                root.join(format!("{name}.saved")),
+            )
+            .unwrap();
+        }
+        let before = std::fs::read(root.join("history")).unwrap();
+        let checked = execute_with_clock(&verification(&root), &root, &NoClock);
+        assert_eq!(checked.exit_code, 0, "{:?}", checked.refusal);
+        let json = parse_json(checked.payload_json.as_bytes()).unwrap();
+        let result = json.get("verification").unwrap();
+        assert_eq!(result.get("status").unwrap().as_str(), Some("verified"));
+        assert_eq!(
+            result.get("target").unwrap().as_str(),
+            Some(target.as_str())
+        );
+        assert_eq!(
+            result.get("source_files_opened").unwrap().as_bool(),
+            Some(false)
+        );
+        assert_eq!(result.get("scenario_count").unwrap().u64(), Some(2));
+        let production = result
+            .get("admission")
+            .unwrap()
+            .get("source_receipt")
+            .unwrap()
+            .get("production")
+            .unwrap();
+        near(
+            production
+                .get("summary")
+                .unwrap()
+                .get("recovered_metal_kg")
+                .unwrap()
+                .get("mean")
+                .unwrap()
+                .f64()
+                .unwrap(),
+            0.24,
+        );
+        assert_eq!(std::fs::read(root.join("history")).unwrap(), before);
+        assert!(
+            checked
+                .rendered_markdown
+                .unwrap()
+                .contains("Verified all three retained source worksheets")
+        );
+    }
+}
+
+/// The byte store deliberately accepts a self-consistent chain. Ordinary semantic replay must also
+/// accept it, demonstrating that explicit recomputation catches more than a broken journal hash.
+fn forged_history(root: &Path, start: i64, request: &str) {
+    init(root, start - 1_000);
+    let mut journal = Journal::open_write(&root.join("history"), head(root)).unwrap();
+    journal
+        .append(
+            &format!("schema = \"fmine.forecast-operation.v14\"\n{request}"),
+            &Clock(start - 100),
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    drop(journal);
+    let inspected = execute_with_clock(
+        &Command::Inspect {
+            journal: "history".into(),
+            head: Some(head(root)),
+        },
+        root,
+        &NoClock,
+    );
+    assert_eq!(inspected.exit_code, 0, "{:?}", inspected.refusal);
+}
+
+#[test]
+fn offline_verification_rejects_self_consistent_forged_populations_receipts_and_metadata() {
+    let start = time("2030-01-02T00:00:00Z").unwrap();
+    for alteration in [
+        "samples",
+        "weights",
+        "truncation",
+        "order",
+        "scenario",
+        "mean",
+        "site",
+        "element",
+    ] {
+        let root = fixture(start);
+        let loaded = crate::plant::production::load(
+            Path::new("production.toml"),
+            Path::new("grinding.toml"),
+            Path::new("recovery.toml"),
+            &root,
+        )
+        .unwrap();
+        let mut samples: Vec<_> = loaded
+            .receipt()
+            .points()
+            .iter()
+            .map(|p| p.recovered_metal.value())
+            .collect();
+        let mut weights: Vec<_> = loaded.receipt().points().iter().map(|p| p.weight).collect();
+        let mut source = loaded.to_json();
+        match alteration {
+            "samples" => samples = vec![0.1, 0.2],
+            "weights" => weights = vec![ExactQty::new(1, 4).unwrap(), ExactQty::new(3, 4).unwrap()],
+            "truncation" => {
+                samples.truncate(1);
+                weights = vec![ExactQty::from_integer(1)];
+            }
+            "order" => samples.reverse(),
+            "scenario" => {
+                source = source.replacen("\"id\":\"hard\"", "\"id\":\"invented-hard\"", 1)
+            }
+            "mean" => {
+                source = source.replace(
+                    &format!(
+                        "\"mean\":{}",
+                        loaded.receipt().summary().recovered_metal.mean.value()
+                    ),
+                    "\"mean\":0.375",
+                )
+            }
+            _ => {}
+        }
+        let prepared = from_projection(
+            &registration(Target::RecoveredMetal),
+            loaded.receipt(),
+            &source,
+            ForecastPayload::WeightedEmpirical { samples, weights },
+        )
+        .unwrap();
+        let request = match alteration {
+            "site" => prepared.request.replacen(
+                "site = \"synthetic-plant/v1\"",
+                "site = \"unrelated-plant/v1\"",
+                1,
+            ),
+            "element" => prepared.request.replacen(
+                "quantity = \"model_recovered_metal:Au\"",
+                "quantity = \"model_recovered_metal:Ag\"",
+                1,
+            ),
+            _ => prepared.request,
+        };
+        forged_history(&root, start, &request);
+        let before = std::fs::read(root.join("history")).unwrap();
+        let checked = execute_with_clock(&verification(&root), &root, &NoClock);
+        assert_eq!(
+            checked.refusal.unwrap().code,
+            "FMINE-REF-207",
+            "{alteration}"
+        );
+        assert_eq!(std::fs::read(root.join("history")).unwrap(), before);
+    }
+}
+
+#[test]
+fn offline_verification_checks_source_bytes_and_recomputes_even_after_sha_is_updated() {
+    let start = time("2030-01-02T00:00:00Z").unwrap();
+    for update_hash in [false, true] {
+        let root = fixture(start);
+        let loaded = crate::plant::production::load(
+            Path::new("production.toml"),
+            Path::new("grinding.toml"),
+            Path::new("recovery.toml"),
+            &root,
+        )
+        .unwrap();
+        let original = std::fs::read_to_string(root.join("production.toml")).unwrap();
+        let changed = original.replace("scheduled_hours = \"1\"", "scheduled_hours = \"1/2\"");
+        assert_ne!(changed, original);
+        let source = loaded.to_json().replace(
+            &crate::escape_json("scheduled_hours = \"1\""),
+            &crate::escape_json("scheduled_hours = \"1/2\""),
+        );
+        let parsed = parse_json(source.as_bytes()).unwrap();
+        assert_eq!(
+            parsed
+                .get("production")
+                .unwrap()
+                .get("submitted_worksheet")
+                .unwrap()
+                .as_str(),
+            Some(changed.as_str())
+        );
+        let source = if update_hash {
+            source.replace(
+                &fmine_core::hash::sha256(original.as_bytes()).to_hex(),
+                &fmine_core::hash::sha256(changed.as_bytes()).to_hex(),
+            )
+        } else {
+            source
+        };
+        let prepared = from_receipt(
+            &registration(Target::RecoveredMetal),
+            loaded.receipt(),
+            &source,
+        )
+        .unwrap();
+        forged_history(&root, start, &prepared.request);
+        let before = std::fs::read(root.join("history")).unwrap();
+        let checked = execute_with_clock(&verification(&root), &root, &NoClock);
+        assert_eq!(
+            checked.refusal.unwrap().code,
+            if update_hash {
+                "FMINE-REF-207"
+            } else {
+                "FMINE-REF-505"
+            }
+        );
+        assert_eq!(std::fs::read(root.join("history")).unwrap(), before);
+    }
+}
+
 #[test]
 fn plant_registration_reopens_and_scores_with_full_admission_evidence_retained() {
     let start = time("2030-01-02T00:00:00Z").unwrap();
@@ -529,6 +767,14 @@ fn legacy_v9_plant_records_replay_original_quantiles_without_acquiring_crps() {
         !inspected
             .payload_json
             .contains("\"kind\":\"weighted_empirical\"")
+    );
+    assert_eq!(std::fs::read(root.join("history")).unwrap(), before);
+    let verified = execute_with_clock(&verification(&root), &root, &NoClock);
+    assert_eq!(verified.exit_code, 0, "{:?}", verified.refusal);
+    assert!(
+        verified
+            .payload_json
+            .contains("fmine.plant-forecast-admission.v1")
     );
     assert_eq!(std::fs::read(root.join("history")).unwrap(), before);
     score_registered(&root, start, 0.216, None);

@@ -120,6 +120,22 @@ journal. Existing `freeze`, `outcome` and `assess` commands handle cohort member
 observations and scoring. Supplied plant outcomes remain unverified; this is no external timestamp proof
 or claim that a real monthly forecasting gate has passed. `fmine robot-docs` documents the fields.
 
+DESIGN: a saved plant forecast can also be numerically verified from its retained worksheets:
+
+```bash
+cargo run -p fmine-cli -- forecast journal verify-plant \
+  --journal forecasts.journal --forecast plant-recovered-metal --head <retained-head>
+```
+
+This read-only command rebuilds grinding, recovery and joint production without opening the original
+worksheet files. It checks the complete calculated receipt, source hashes, scenario identities, exact
+probabilities and the original target distribution. It accepts both weighted and legacy quantile
+registrations, with each retaining its original semantics. JSON and Markdown expose the reconstructed
+calculation. The command takes no clock sample and leaves the journal unchanged. Numerical verification
+uses the current implementation in the `DeterministicPerIsa` class; it is separate from ordinary historical
+replay and does not establish independent source authenticity, calibration or timestamp authority.
+The optional `--head` must come from an independently retained record to detect a replacement history.
+
 Declared forecasts can also use `kind = "weighted_empirical"`, with comma-separated `samples` and
 exact decimal or rational `weights`. The synthetic example below scores atoms 0 and 2 with probabilities
 1/4 and 3/4 at an outcome of 1. Its CRPS is 5/8; treating the same two atoms as equally likely would give

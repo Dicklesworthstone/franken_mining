@@ -6,6 +6,8 @@
 //! full physical boundary (not an ownership-attributed share).
 //! Determinism: Exact
 
+pub mod worksheet;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};

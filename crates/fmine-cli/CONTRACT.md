@@ -49,6 +49,17 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   joint-distribution score, external time proof, source re-evaluation on replay, validated plant outcomes
   or calibration/field-gate claim. Complete source and binary controls live in
   `xtask/testdata/forecast_plant_controls.rs` and `plant_forecast_command.rs`.
+- DESIGN (BD-181/047): `forecast journal verify-plant --journal <path> --forecast <alias> [--head <hex>]`
+  explicitly recomputes the three retained worksheets through the same pure grinding, recovery and
+  joint-production owners used at admission. It checks the complete source/result receipt and the
+  original forecast projection, including scenario identities, exact weights, target, support and
+  metadata. Both legacy v9 quantiles and v14 weighted distributions retain their original interpretation.
+  The command reads only the journal, takes no clock sample and appends nothing; archived source paths
+  are provenance and are never reopened. Ordinary replay remains unchanged. Verification uses the current
+  implementation in the `DeterministicPerIsa` class, so numerical differences refuse instead of rewriting
+  historical values. This is conditional numerical reproduction, not an independent model oracle,
+  externally authenticated source, calibrated prediction or timestamp proof. An independently retained
+  head can authenticate the selected history; an unpinned, self-consistent replacement history cannot.
 
 - DESIGN (BD-225/227): `decide journal init|record|show` retains explicit act-now choices or information
   options with an explicit expected-value or downside-optimized contingent policy, and their rationales,
@@ -258,7 +269,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     `tests/plant/flowsheet_reconcile.toml` and real-binary tests live in
     `crates/xtask/testdata/plant_network_contract.rs`.
   - DESIGN (BD-177/336): `plant project --input <worksheet.toml>` binds the actual bytes of a bounded
-    `fmine.plant-material.v1` declaration, then calls `fmine-plant::measurements::project_material`.
+    `fmine.plant-material.v1` declaration, then calls the pure `fmine-plant::measurements::worksheet`
+    adapter over `measurements::project_material`. The owner verifies the supplied bytes and source SHA
+    before parsing; the CLI owns bounded file IO and the command envelope. Existing source Claim
+    locators, exact results, refusal details and JSON schemas remain unchanged.
     Explicit kg/metric-tonne masses, wet-basis moisture and fraction/percent/g-per-tonne assays become
     exact extensive kg. The worksheet must declare total-element assays over all non-water dry matter
     and common whole-material support. Original tokens, declared units, source locators, Claims and

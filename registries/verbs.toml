@@ -408,7 +408,13 @@ description = "Compose matched grinding, grade, exposure and recovery scenarios 
 path = "forecast journal register-plant"
 subsystem = "Plumb"
 mutates_authority = true
-description = "Register source-bound conditional plant quantiles before their physical period and retain both time boundaries and complete input evidence"
+description = "Register a source-bound weighted plant forecast before its physical period and retain both time boundaries and complete input evidence"
+
+[[verb]]
+path = "forecast journal verify-plant"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Recompute retained plant worksheets and verify the original receipt and forecast projection without modifying journal history"
 
 [[verb]]
 path = "robot schema"

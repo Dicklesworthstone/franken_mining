@@ -238,6 +238,12 @@ pub enum Command {
         journal: PathBuf,
         head: Option<Digest32>,
     },
+    /// Recompute a saved plant registration from retained worksheets without changing its history.
+    VerifyPlant {
+        journal: PathBuf,
+        head: Option<Digest32>,
+        forecast: String,
+    },
     /// Retrieve an existing persisted assessment without sampling a clock or extending the journal.
     Report {
         journal: PathBuf,
@@ -284,6 +290,7 @@ impl Command {
             Self::Restate { .. } => "restate",
             Self::Assess { .. } => "assess",
             Self::Inspect { .. } => "inspect",
+            Self::VerifyPlant { .. } => "verify-plant",
             Self::Report { .. } => "report",
             Self::Compare { .. } => "compare",
             Self::Correction { .. } | Self::CorrectionSeries { .. } => "correction",
@@ -305,7 +312,11 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
     match perform(command, root, clock) {
         Ok((payload, markdown)) => {
             let mut envelope = Envelope::ok(&verb, payload, actions);
-            envelope.no_claim = Some(NO_CLAIM);
+            envelope.no_claim = Some(if matches!(command, Command::VerifyPlant { .. }) {
+                super::plant::VERIFICATION_NO_CLAIM
+            } else {
+                NO_CLAIM
+            });
             envelope.rendered_markdown = Some(markdown);
             envelope
         }
@@ -423,6 +434,36 @@ fn perform(
                 None,
             )
             .map_err(Into::into);
+        }
+        Command::VerifyPlant {
+            journal,
+            head,
+            forecast,
+        } => {
+            let journal = Journal::open_read(&root.join(journal), *head)?;
+            let state = replay(&journal)?;
+            let id = state.forecast_id(forecast)?;
+            for record in journal.records() {
+                let Entry::Operation(operation) = &record.entry else {
+                    continue;
+                };
+                let doc = parse_subset(operation).map_err(|e| invalid(e.to_string()))?;
+                if let [row] = doc.rows.as_slice()
+                    && row.table == "plant_forecast"
+                    && Row(row).string("id")? == forecast
+                {
+                    let (report, markdown) = super::plant::verify(&Row(row), operation)?;
+                    let payload = format!(
+                        "{{\"operation\":\"verify-plant\",\"head\":{},\"head_pinned\":{},\"forecast_id\":{},\"registration_head\":{},\"verification\":{report}}}",
+                        js(&journal.head().to_hex()),
+                        head.is_some(),
+                        js(&id.to_string()),
+                        js(&record.chain_head()?.to_hex()),
+                    );
+                    return Ok((payload, markdown));
+                }
+            }
+            return Err(invalid("selected forecast has no retained plant registration").into());
         }
         Command::Report {
             journal,
