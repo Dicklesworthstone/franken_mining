@@ -2550,6 +2550,79 @@ fn gold_aisc_cost_of_sales_derives_from_dated_share_footnote_and_operating_nci()
 }
 
 #[test]
+fn gold_aisc_cost_of_sales_scales_decimal_value_and_rounding_step_exactly_once() {
+    for (cost, nci, sustaining, factor, step, lower, upper) in [
+        (
+            "250.004",
+            "-100",
+            "-20",
+            "3/5",
+            "3/500",
+            ("9999800", "6667"),
+            ("4285800", "2857"),
+        ),
+        (
+            "150.004",
+            "0",
+            "-60",
+            "1/1",
+            "1/100",
+            ("29999000", "20001"),
+            ("30001000", "19999"),
+        ),
+    ] {
+        let root = derivation_workspace();
+        let mut sheet = reconciled_gold_cos(cost, number(nci), sustaining);
+        for (at, value) in &mut sheet.cells {
+            if at == "B13" {
+                *value = number("100.004");
+            }
+        }
+        cost_source(&root, "Costs.xlsx", Some("2030-05-01"), "0.00", sheet);
+        source(
+            &root,
+            "Ownership.xlsx",
+            "2030Q1",
+            Some("2030-05-01"),
+            "0.00",
+            &[gold_share_summary("Example Mine (60%)")],
+        );
+        let draft = RECONCILED_COS_DRAFT.replace("$0.6k/oz", "$1.5k/oz");
+        let report = assess(&root, &draft, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(
+            string_field(rate, "status"),
+            "derived",
+            "{}",
+            report.to_json()
+        );
+        // Independent boxes: 1000 * f * [N - 0.005, N + 0.005] / [99.995, 100.005].
+        assert!(rate.contains(&format!("\"factor\":\"{factor}\"")));
+        assert!(rate.contains(&format!("\"value\":\"150/1\",\"step\":\"{step}\"")));
+        assert!(rate.contains(&format!(
+            "\"lo\":{{\"num\":\"{}\",\"den\":\"{}\"}}",
+            lower.0, lower.1
+        )));
+        assert!(rate.contains(&format!(
+            "\"hi\":{{\"num\":\"{}\",\"den\":\"{}\"}}",
+            upper.0, upper.1
+        )));
+        assert!(rate.contains("\"stored\":\"100.004\",\"displayed\":\"100.00\""));
+        assert!(report.payload_json.contains("\"status\":\"derivable\""));
+        let precise = assess(
+            &root,
+            &draft.replace("$1.5k/oz", "$1,500.00/oz"),
+            "2030-05-01",
+        );
+        assert_eq!(
+            string_field(cost_rate_report(&precise), "status"),
+            "precision_not_established"
+        );
+        assert!(!precise.payload_json.contains("\"status\":\"derivable\""));
+    }
+}
+
+#[test]
 fn gold_aisc_cost_of_sales_preserves_signed_costs_and_ignores_sustaining_nci_for_scaling() {
     for (cost, nci, sustaining, draft, factor, lower, upper) in [
         (

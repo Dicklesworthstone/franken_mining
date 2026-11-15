@@ -851,7 +851,11 @@ impl RecordRules {
     // Quarterly rules share one horizon even when callers construct structs directly. The older
     // annual numerical APIs retain their existing admission behavior.
     fn validate_quarterly_period(&self) -> Result<(), RecordError> {
-        if self.targets.iter().any(|t| t.outcome == Outcome::QuarterQtd) {
+        if self
+            .targets
+            .iter()
+            .any(|t| t.outcome == Outcome::QuarterQtd)
+        {
             self.outcome_quarter()?;
         }
         Ok(())

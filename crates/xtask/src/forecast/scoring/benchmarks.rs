@@ -1139,22 +1139,25 @@ mod tests {
         ));
         std::fs::create_dir_all(root.join("corpus")).unwrap();
         std::fs::create_dir_all(root.join("registries/transcriptions")).unwrap();
-        let document = b"Invented quarterly guidance: Example Mine production 90 - 110 koz at 100%.";
+        let document =
+            b"Invented quarterly guidance: Example Mine production 90 - 110 koz at 100%.";
         let digest = fmine_core::hash::sha256(document).to_hex();
         std::fs::write(root.join("corpus/Guidance.pdf"), document).unwrap();
         profile.documents.clear();
-        profile.documents.push(fmine_registry::sources::DocumentRow {
-            file: "Guidance.pdf".into(),
-            dir: "corpus".into(),
-            kind: "mda".into(),
-            url: "https://example.invalid/Guidance.pdf".into(),
-            url_basis: "synthetic test".into(),
-            published_at: "2030-12-15".into(),
-            published_at_basis: "FACT: invented test date".into(),
-            pages: 1,
-            bytes: document.len() as u64,
-            sha256: digest.clone(),
-        });
+        profile
+            .documents
+            .push(fmine_registry::sources::DocumentRow {
+                file: "Guidance.pdf".into(),
+                dir: "corpus".into(),
+                kind: "mda".into(),
+                url: "https://example.invalid/Guidance.pdf".into(),
+                url_basis: "synthetic test".into(),
+                published_at: "2030-12-15".into(),
+                published_at_basis: "FACT: invented test date".into(),
+                pages: 1,
+                bytes: document.len() as u64,
+                sha256: digest.clone(),
+            });
         let mut transcript = format!(
             "schema = \"fmine.transcriptions.v1\"\nissuer = \"{}\"\n",
             profile.issuer
@@ -1185,11 +1188,18 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("\"missing_issuer_guidance\":false,\"missing_run_rate_persistence\":true"),
+            report.contains(concat!(
+                "\"missing_issuer_guidance\":false,",
+                "\"missing_run_rate_persistence\":true"
+            )),
             "{report}"
         );
         assert!(
-            report.contains("\"issuer_guidance_completion\":{\"kind\":\"arithmetic_completion_bounds\",\"status\":\"bounded\""),
+            report.contains(concat!(
+                "\"issuer_guidance_completion\":{",
+                "\"kind\":\"arithmetic_completion_bounds\",",
+                "\"status\":\"bounded\""
+            )),
             "{report}"
         );
         assert_eq!(

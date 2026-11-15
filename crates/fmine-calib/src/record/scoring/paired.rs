@@ -1015,7 +1015,10 @@ mod tests {
             );
         };
         rules.targets[1].outcome = Outcome::Q4Qtd;
-        refused(&rules, "targets must share one persistence point and outcome mode");
+        refused(
+            &rules,
+            "targets must share one persistence point and outcome mode",
+        );
         rules.targets[1].outcome = Outcome::QuarterQtd;
         for baseline in &mut rules.baselines {
             if baseline.target == "cost"
@@ -1024,7 +1027,10 @@ mod tests {
                 *point = Quarter { year: 2026, q: 4 };
             }
         }
-        refused(&rules, "targets must share one persistence point and outcome mode");
+        refused(
+            &rules,
+            "targets must share one persistence point and outcome mode",
+        );
     }
 
     #[test]
