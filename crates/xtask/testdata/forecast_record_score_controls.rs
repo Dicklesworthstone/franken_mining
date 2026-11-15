@@ -76,4 +76,154 @@ mod tests {
             require_pre_outcome_proof(&annual, parse_utc("2027-01-01T00:00:00Z").unwrap()).is_err()
         );
     }
+
+    #[test]
+    fn markdown_preserves_exact_signed_zero_missing_and_not_published_members() {
+        use record::scoring::paired::{Availability, BaselineRow, Bounds, OutcomeRow, assess};
+        use record::{Rat, RulesSite, SiteStatus};
+
+        let mut rules =
+            record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+        rules.targets.retain(|t| t.id == "unit_cost");
+        rules.baselines.retain(|b| b.target == "unit_cost");
+        rules.sites = ["Credit", "Zero", "Pending", "Excluded"]
+            .into_iter()
+            .map(|site| RulesSite {
+                name: site.into(),
+                status: if site == "Excluded" {
+                    SiteStatus::NotPublished
+                } else {
+                    SiteStatus::Live
+                },
+                locator: format!("synthetic:{site}"),
+                reason: (site == "Excluded").then(|| "frozen exclusion".into()),
+            })
+            .collect();
+        let forecasts = [
+            ("Credit", -125, -123, -115),
+            ("Zero", -1, 0, 1),
+            ("Pending", -6, -4, -2),
+        ]
+        .into_iter()
+        .map(|(site, lo, point, hi)| ForecastRow {
+            site: site.into(),
+            target: "unit_cost".into(),
+            lo: Rat::from_integer(lo),
+            point: Rat::from_integer(point),
+            hi: Rat::from_integer(hi),
+        })
+        .collect::<Vec<_>>();
+        let outcomes = [
+            ("Credit", Availability::Available(Rat::from_integer(-120))),
+            ("Zero", Availability::Available(Rat::from_integer(0))),
+            (
+                "Pending",
+                Availability::Unavailable("pending\nrelease".into()),
+            ),
+            (
+                "Excluded",
+                Availability::Unavailable("frozen exclusion".into()),
+            ),
+        ]
+        .into_iter()
+        .map(|(site, value)| OutcomeRow {
+            site: site.into(),
+            target: "unit_cost".into(),
+            value,
+        })
+        .collect::<Vec<_>>();
+        let bounds = |lo, hi| {
+            Availability::Available(Bounds {
+                lo: Rat::from_integer(lo),
+                hi: Rat::from_integer(hi),
+            })
+        };
+        let baselines = [
+            ("Credit", "issuer_guidance", bounds(-130, -110)),
+            ("Credit", "run_rate_persistence", bounds(-125, -115)),
+            (
+                "Zero",
+                "issuer_guidance",
+                Availability::Unavailable("missing | guidance\nrelease".into()),
+            ),
+            (
+                "Zero",
+                "run_rate_persistence",
+                Availability::Available(Bounds {
+                    lo: Rat::new(-1, 2).unwrap(),
+                    hi: Rat::new(1, 2).unwrap(),
+                }),
+            ),
+            ("Pending", "issuer_guidance", bounds(-6, -2)),
+            ("Pending", "run_rate_persistence", bounds(-5, -3)),
+            (
+                "Excluded",
+                "issuer_guidance",
+                Availability::Unavailable("frozen exclusion".into()),
+            ),
+            (
+                "Excluded",
+                "run_rate_persistence",
+                Availability::Unavailable("frozen exclusion".into()),
+            ),
+        ]
+        .into_iter()
+        .map(|(site, baseline, value)| BaselineRow {
+            site: site.into(),
+            target: "unit_cost".into(),
+            baseline: baseline.into(),
+            value,
+        })
+        .collect::<Vec<_>>();
+        for (field, unit) in [
+            ("aisc_usd_per_oz", "usd_per_oz"),
+            ("c1_usd_per_lb", "usd_per_lb"),
+            ("aisc_usd_per_lb", "usd_per_lb"),
+        ] {
+            rules.targets[0].field = field.into();
+            let assessment = assess(&rules, &forecasts, &outcomes, &baselines).unwrap();
+            // Both resolved outcomes are inside: losses equal the registered widths, even at zero.
+            assert_eq!(
+                assessment.members[0].forecast_score.unwrap().interval_score,
+                Rat::from_integer(10)
+            );
+            assert_eq!(
+                assessment.members[1].forecast_score.unwrap().interval_score,
+                Rat::from_integer(2)
+            );
+            assert_eq!(
+                assessment.members[0].baselines[0]
+                    .score
+                    .unwrap()
+                    .interval_score,
+                Rat::from_integer(20)
+            );
+            assert_eq!(
+                assessment.members[1].baselines[1]
+                    .score
+                    .unwrap()
+                    .interval_score,
+                Rat::from_integer(1)
+            );
+            assert_eq!(assessment.targets[0].n_paired, 1);
+            let markdown = scores_markdown(&assessment, &rules);
+            assert!(markdown.contains(&format!("Metric: `{field}`. Unit: `{unit}`.")));
+            assert!(markdown.contains("| Site | Frozen status | Outcome | Forecast point | Forecast bounds | Baseline bounds | Paired |"));
+            let table = markdown.split_once("Frozen member inputs;").unwrap().1;
+            let rows = table
+                .lines()
+                .filter(|line| line.starts_with("| "))
+                .skip(1)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rows,
+                [
+                    "| Credit | live | -120 | -123 | [-125, -115] | issuer guidance: [-130, -110]; run rate persistence: [-125, -115] | yes |",
+                    "| Zero | live | 0 | 0 | [-1, 1] | issuer guidance: unavailable: missing \\| guidance release; run rate persistence: [-1/2, 1/2] | no |",
+                    "| Pending | live | unavailable: pending release | -4 | [-6, -2] | issuer guidance: [-6, -2]; run rate persistence: [-5, -3] | no |",
+                    "| Excluded | not published | unavailable: frozen exclusion | not published | not published | issuer guidance: unavailable: frozen exclusion; run rate persistence: unavailable: frozen exclusion | no |",
+                ]
+            );
+        }
+    }
 }

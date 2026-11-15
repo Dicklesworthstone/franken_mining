@@ -1530,6 +1530,9 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   conditional iid reference and rho sensitivity separately. The assessment digest binds record/rules hashes,
   proof metadata, source evidence and scores. All authority flags remain false, anchor/certificate stay null,
   and no sample size promotes the descriptive report to a calibration claim.
+  Markdown retains every frozen member in a per-target table with its exact point, interval, outcome,
+  named baseline bounds, publication status and paired membership. Missing values carry explicit reasons;
+  signed and zero values retain their declared units, and the point is never reconstructed from the bounds.
 - DESIGN (BD-067/076): a separate `quarter_qtd` record uses the original next-quarter QTD value for
   every supported gold/copper production or sold-metal cost target. A common frozen persistence point
   determines the quarter, including year rollover. Quarterly guidance must name that exact period;

@@ -3323,6 +3323,9 @@ the common-population mean comparison, whole-live-cohort completion bounds, the 
 and correlation sensitivity. Missing outcomes and missing comparators cannot change the population used by
 only one method. Source cells, canonical Claim IDs, raw values, document hashes, baseline calculations and
 unavailable reasons accompany the scores. The assessment digest binds this evidence and the proof metadata.
+Markdown also gives each target a complete member table: the frozen point and interval, exact outcome,
+named baseline bounds, frozen publication status and membership in the common comparison. Signed and zero
+values remain exact; unavailable outcomes or comparators carry their reasons in the same row.
 The report is descriptive or unscored, with null authority fields and no claim of forecasting skill or calibration.
 It does not generate the own-model forecasts still required for the final FY2026 record.
 

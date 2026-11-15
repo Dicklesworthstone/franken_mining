@@ -357,9 +357,9 @@ fn scores_markdown(
 ) -> String {
     use record::scoring::paired::Availability;
     let value = |v: Option<record::Rat>| v.map_or_else(|| "unavailable".into(), rational);
-    let bounds = |v: fmine_numerics::exact_feas::Interval| {
-        format!("[{}, {}]", rational(v.lo), rational(v.hi))
-    };
+    let pair = |lo, hi| format!("[{}, {}]", rational(lo), rational(hi));
+    let bounds = |v: fmine_numerics::exact_feas::Interval| pair(v.lo, v.hi);
+    let unavailable = |reason: &str| format!("unavailable: {}", markdown_text(reason));
     let mut out = format!(
         "Calibration status: {}. Interval-score alpha: {}. Binomial reference coverage level: {}. All fractions are exact.\n\nPaired means use the same sites with an outcome, a forecast and every registered baseline. Issuer-guidance bounds carry no inferred nominal probability. Completion bounds concern unresolved members; they are not confidence intervals. Effective sample ranges are sensitivity to the frozen correlation range, not estimated dependence.\n",
         if scores.targets.iter().any(|t| t.n_resolved > 0) {
@@ -432,36 +432,40 @@ fn scores_markdown(
                 bounds(method.effective_n),
             );
         }
-    }
-    out.push_str("\n## Unavailable members and baselines\n\n");
-    let mut missing = 0;
-    for member in &scores.members {
-        if let Availability::Unavailable(reason) = &member.outcome {
+        out.push_str("\nFrozen member inputs; bounds are [lower, upper]. The point is the registered forecast point.\n\n| Site | Frozen status | Outcome | Forecast point | Forecast bounds | Baseline bounds | Paired |\n|---|---|---:|---:|---|---|---|\n");
+        for member in scores.members.iter().filter(|m| m.target == target.target) {
+            let outcome = match &member.outcome {
+                Availability::Available(v) => rational(*v),
+                Availability::Unavailable(reason) => unavailable(reason),
+            };
+            let status = if member.status == record::SiteStatus::Live {
+                "live"
+            } else {
+                "not published"
+            };
+            let (point, forecast) = member.forecast.as_ref().map_or_else(
+                || ("not published".into(), "not published".into()),
+                |f| (rational(f.point), pair(f.lo, f.hi)),
+            );
+            let baselines = member
+                .baselines
+                .iter()
+                .map(|baseline| {
+                    let bounds = match &baseline.value {
+                        Availability::Available(v) => pair(v.lo, v.hi),
+                        Availability::Unavailable(reason) => unavailable(reason),
+                    };
+                    format!("{}: {bounds}", markdown_text(&baseline.baseline))
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
             let _ = writeln!(
                 out,
-                "- {} / {} outcome: {}.",
+                "| {} | {status} | {outcome} | {point} | {forecast} | {baselines} | {} |",
                 markdown_text(&member.site),
-                markdown_text(&member.target),
-                markdown_text(reason)
+                if member.paired { "yes" } else { "no" },
             );
-            missing += 1;
         }
-        for baseline in &member.baselines {
-            if let Availability::Unavailable(reason) = &baseline.value {
-                let _ = writeln!(
-                    out,
-                    "- {} / {} / {}: {}.",
-                    markdown_text(&member.site),
-                    markdown_text(&member.target),
-                    markdown_text(&baseline.baseline),
-                    markdown_text(reason)
-                );
-                missing += 1;
-            }
-        }
-    }
-    if missing == 0 {
-        out.push_str("All frozen live members and their baselines are available.\n");
     }
     out
 }
