@@ -1,15 +1,15 @@
 //! Source-bound outcomes for externally timestamped public forecast records.
 //! Determinism: Exact (frozen bytes, canonical source Claims and rational arithmetic).
 //!
-//! Q4 production is the original FY total less the original nine-month total. Q4 AISC/C1 is the original
-//! three-month rate; subtracting annual and nine-month rates is forbidden. Later comparatives are never
-//! substituted. A missing release or cell remains an explicit unresolved member of the frozen universe.
+//! Annual Q4 production is the original FY total less the original nine-month total. Quarterly rules
+//! use original QTD production and rates; subtracting annual and nine-month rates is forbidden. Later
+//! comparatives never substitute. Missing releases remain unresolved members of the frozen universe.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use fmine_calib::record::{
-    BaselineKind, Outcome, Rat, RecordRules, SiteStatus, Target, TargetMetric,
+    BaselineKind, Outcome, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
     scoring::{self, OutcomeRow, TargetScore},
 };
 use fmine_public::LoadedSource;
@@ -19,7 +19,7 @@ use fmine_public::key::{
 };
 use fmine_public::sources::{IssuerProfile, SourceKind};
 
-use super::{Res, exact_text, fail, load, parse_utc, verify_loaded};
+use super::{Res, exact_text, fail, load, verify_loaded};
 
 mod benchmarks;
 
@@ -51,29 +51,8 @@ fn names(values: &[String]) -> String {
     )
 }
 
-fn year(rules: &RecordRules) -> Res<u16> {
-    if rules
-        .targets
-        .iter()
-        .any(|t| t.outcome == Outcome::QuarterQtd)
-    {
-        return fail("quarter_qtd records require fmine forecast record score; this legacy scorer supports annual outcomes only".into());
-    }
-    let mut years = BTreeSet::new();
-    for baseline in &rules.baselines {
-        if let BaselineKind::Persistence { point, .. } = baseline.kind {
-            if point.q != 3 {
-                return fail("outcome scoring requires Q3 persistence point quarters".into());
-            }
-            years.insert(point.year);
-        }
-    }
-    let [year] = years.into_iter().collect::<Vec<_>>()[..] else {
-        return fail(
-            "outcome scoring requires one common Q3 point year in the frozen baseline rules".into(),
-        );
-    };
-    u16::try_from(year).map_err(|_| vec!["outcome year is outside the supported calendar".into()])
+fn scored_quarter(rules: &RecordRules) -> Res<Quarter> {
+    rules.outcome_quarter().map_err(|e| vec![e.to_string()])
 }
 
 /// Every adapter shares the frozen production and sold-unit cost meanings. Unsupported fields refuse;
@@ -120,6 +99,8 @@ fn original<'a>(
             && c.key.reporting_vintage.release == release
             && c.key.reporting_vintage.file_sha256 == source.sha256_hex
             && c.key.line.label == label
+            && (target.outcome != Outcome::QuarterQtd
+                || c.locator.starts_with(&format!("{}:QTD!", source.file_name)))
     });
     let first = hits.next();
     if hits.next().is_some() {
@@ -150,7 +131,7 @@ fn original<'a>(
                 cell.locator
             ));
         }
-        if target.outcome == Outcome::FyMinus9m
+        if TargetMetric::from_target(target).is_some_and(TargetMetric::is_production)
             && cell.key.ownership_basis != OwnershipBasis::Consolidated100
         {
             return fail(format!(
@@ -158,7 +139,8 @@ fn original<'a>(
                 cell.locator
             ));
         }
-        if target.outcome == Outcome::Q4Qtd && cell.key.ownership_basis == OwnershipBasis::Unprinted
+        if !TargetMetric::from_target(target).is_some_and(TargetMetric::is_production)
+            && cell.key.ownership_basis == OwnershipBasis::Unprinted
         {
             return fail(format!(
                 "{}: a cost rate requires its explicitly printed ownership basis",
@@ -280,13 +262,15 @@ struct BoundOutcome<'a> {
 fn resolve<'a>(
     profile: &IssuerProfile,
     cells: &'a [KeyedCell],
-    year: u16,
+    quarter: Quarter,
     site: &str,
     target: &Target,
     basis_reference: Option<&'a KeyedCell>,
     reported: &ReportedNumbers,
 ) -> Res<BoundOutcome<'a>> {
     expected_unit(target)?;
+    let year = u16::try_from(quarter.year)
+        .map_err(|_| vec!["outcome year is outside the supported calendar".into()])?;
     let mut row = BoundOutcome {
         site: site.into(),
         target: target.id.clone(),
@@ -299,9 +283,7 @@ fn resolve<'a>(
     let needed: &[u8] = match target.outcome {
         Outcome::FyMinus9m => &[3, 4],
         Outcome::Q4Qtd => &[4],
-        Outcome::QuarterQtd => {
-            return fail("quarter_qtd requires fmine forecast record score".into());
-        }
+        Outcome::QuarterQtd => std::slice::from_ref(&quarter.q),
     };
     if needed.iter().any(|q| {
         !profile
@@ -340,20 +322,34 @@ fn resolve<'a>(
                 row.value = Some(fy.checked_sub(nine).map_err(|e| vec![e.to_string()])?);
             }
         }
-        Outcome::Q4Qtd => {
+        Outcome::Q4Qtd | Outcome::QuarterQtd => {
             if let Some(cell) = original(
                 profile,
                 cells,
                 year,
-                4,
-                PeriodKind::Quarter(4),
+                quarter.q,
+                PeriodKind::Quarter(quarter.q),
                 site,
                 target,
             )? {
-                row.sources.push(("q4_rate_original", cell));
+                row.sources.push((
+                    if target.outcome == Outcome::QuarterQtd {
+                        "quarter_qtd_original"
+                    } else {
+                        "q4_rate_original"
+                    },
+                    cell,
+                ));
                 row.value = numeric(cell, reported)?;
                 if let Some(reference) = basis_reference {
-                    row.sources.push(("frozen_q2_basis_reference", reference));
+                    row.sources.push((
+                        if target.outcome == Outcome::QuarterQtd {
+                            "frozen_point_basis_reference"
+                        } else {
+                            "frozen_q2_basis_reference"
+                        },
+                        reference,
+                    ));
                     if cell.printed_basis != OwnershipBasis::Unprinted
                         && reference.printed_basis != OwnershipBasis::Unprinted
                     {
@@ -364,9 +360,6 @@ fn resolve<'a>(
                     }
                 }
             }
-        }
-        Outcome::QuarterQtd => {
-            return fail("quarter_qtd requires fmine forecast record score".into());
         }
     }
     if row.value.is_some() {
@@ -453,21 +446,39 @@ pub(super) fn observations(
 pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
     let loaded = load(root, dir)?;
     let (verification, proof) = verify_loaded(root, dir, &loaded)?;
-    let year = year(&loaded.rules)?;
-    let end = parse_utc(&format!("{}-01-01T00:00:00Z", u32::from(year) + 1))
-        .ok_or_else(|| vec!["unsupported outcome calendar year".into()])?;
-    if proof.upper_utc >= end {
-        return fail("record proof must precede the end of the forecast year; an old outcome cannot be registered retrospectively".into());
-    }
+    let quarter = scored_quarter(&loaded.rules)?;
+    super::proof_before_outcome_end(&loaded.rules, proof)?;
     for target in &loaded.rules.targets {
         expected_unit(target)?;
     }
     let full_profile = fmine_public::load_issuer_profile(root, &loaded.rules.issuer)
         .map_err(|e| vec![e.to_string()])?;
     let mut profile = full_profile.clone();
+    let point = loaded
+        .rules
+        .baselines
+        .iter()
+        .find_map(|b| match b.kind {
+            BaselineKind::Persistence { point, .. } => Some(point),
+            BaselineKind::IssuerGuidance => None,
+        })
+        .ok_or_else(|| vec!["a frozen persistence point is required".into()])?;
+    let quarterly = loaded
+        .rules
+        .targets
+        .iter()
+        .all(|t| t.outcome == Outcome::QuarterQtd);
+    let reference_quarter = if quarterly {
+        point
+    } else {
+        Quarter {
+            year: quarter.year,
+            q: 2,
+        }
+    };
     let reference_is_frozen = profile.sources.iter().any(|s| {
         s.kind == SourceKind::MineStats
-            && s.quarter == format!("{year}Q2")
+            && s.quarter == reference_quarter.to_string()
             && loaded.manifest.inputs.iter().any(|i| {
                 i.doc_id == s.file_name
                     && i.bytes == s.bytes
@@ -475,13 +486,14 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
                     && i.url == s.url
             })
     });
-    // Only original outcomes and a manifest-bound Q2 ownership reference can affect this report.
+    // Annual outcomes require Q3; quarterly point releases are optional benchmark evidence.
+    // Only original outcomes and a manifest-bound ownership reference are opened here.
     // Later comparative workbooks are not even opened, and cannot fill a missing original.
     profile.sources.retain(|s| {
         s.kind == SourceKind::MineStats
-            && (s.quarter == format!("{year}Q3")
-                || s.quarter == format!("{year}Q4")
-                || (reference_is_frozen && s.quarter == format!("{year}Q2")))
+            && ((!quarterly && s.quarter == point.to_string())
+                || s.quarter == quarter.to_string()
+                || (reference_is_frozen && s.quarter == reference_quarter.to_string()))
     });
     let (keyed, reported) = observations(&profile, root)?;
     let mut bound = Vec::new();
@@ -502,13 +514,17 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
                     basis_changed: None,
                 }
             } else {
-                let reference = if target.outcome == Outcome::Q4Qtd && reference_is_frozen {
+                let reference = if !TargetMetric::from_target(target)
+                    .is_some_and(TargetMetric::is_production)
+                    && reference_is_frozen
+                {
                     original(
                         &profile,
                         &keyed.claims,
-                        year,
-                        2,
-                        PeriodKind::Quarter(2),
+                        u16::try_from(reference_quarter.year)
+                            .map_err(|_| vec!["unsupported reference year".into()])?,
+                        reference_quarter.q,
+                        PeriodKind::Quarter(reference_quarter.q),
                         &site.name,
                         target,
                     )?
@@ -518,7 +534,7 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
                 let row = resolve(
                     &profile,
                     &keyed.claims,
-                    year,
+                    quarter,
                     &site.name,
                     target,
                     reference,
@@ -593,9 +609,14 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
         })
         .collect::<Vec<_>>()
         .join(",");
+    let outcome_quarter = if quarterly {
+        format!(",\"outcome_quarter\":{}", js(&quarter.to_string()))
+    } else {
+        String::new()
+    };
     let body = format!(
         "{{\"schema\":\"fmine.forecast-record-assessment.v1\",\"record_id\":{},\"issuer\":{},\
-         \"label\":{},\"record_sha256\":{},\"rules_sha256\":{},\"source_claims_digest\":{},\
+         \"label\":{}{outcome_quarter},\"record_sha256\":{},\"rules_sha256\":{},\"source_claims_digest\":{},\
          \"proof_lower_utc\":{},\"proof_upper_utc\":{},\"verification\":{},\
          \"verification_scope\":\"authenticated frozen record and rules, external proof ordering, declared input metadata and registered digest checks; consumed evidence bodies verified separately; forecast generation and input use are not replayed\",\
          \"outcome_vintage\":\"first_published\",\"numeric_basis\":\"source_workbook_displayed_decimal\",\
@@ -694,11 +715,13 @@ mod tests {
         let text = |s: &str| MinimalCell::Text(s.into());
         let q = release.as_bytes()[5] - b'0';
         let ytd = match q {
+            1 => "For the three months ended March 31,",
             2 => "For the six months ended June 30,",
             3 => "For the nine months ended September 30,",
             _ => "For the twelve months ended December 31,",
         };
         let qtd = match q {
+            1 => "For the three months ended March 31,",
             2 => "For the three months ended June 30,",
             3 => "For the three months ended September 30,",
             _ => "For the three months ended December 31,",
@@ -790,7 +813,15 @@ mod tests {
     }
 
     fn row<'a>(d: &'a Data, site: &str, target: &Target) -> Res<BoundOutcome<'a>> {
-        resolve(&d.profile, &d.cells, 2030, site, target, None, &d.reported)
+        resolve(
+            &d.profile,
+            &d.cells,
+            Quarter { year: 2030, q: 4 },
+            site,
+            target,
+            None,
+            &d.reported,
+        )
     }
 
     #[test]
@@ -817,6 +848,90 @@ mod tests {
             source.claim.check_id().unwrap();
             assert!(!source.claim.anchors.is_empty());
         }
+    }
+
+    #[test]
+    fn quarterly_q1_uses_original_qtd_despite_duplicate_ytd_and_later_comparatives() {
+        let mut d = empty_data();
+        for target in &mut d.rules.targets {
+            target.outcome = Outcome::QuarterQtd;
+        }
+        for baseline in &mut d.rules.baselines {
+            if let BaselineKind::Persistence { point, .. } = &mut baseline.kind {
+                *point = Quarter { year: 2030, q: 4 };
+            }
+        }
+        let quarter = scored_quarter(&d.rules).unwrap();
+        assert_eq!(quarter, Quarter { year: 2031, q: 1 });
+        d.cells.extend(fixture(
+            &mut d.profile,
+            &mut d.reported,
+            "2031Q1",
+            2031,
+            42.0,
+            -20.0,
+        ));
+        d.cells.extend(fixture(
+            &mut d.profile,
+            &mut d.reported,
+            "2032Q1",
+            2031,
+            800.0,
+            900.0,
+        ));
+        for (target, expected) in d.rules.targets.iter().zip([999, -20]) {
+            let actual = resolve(
+                &d.profile,
+                &d.cells,
+                quarter,
+                "Example Mine",
+                target,
+                None,
+                &d.reported,
+            )
+            .unwrap();
+            assert_eq!(actual.value, Some(Rat::from_integer(expected)));
+            assert_eq!(actual.sources.len(), 1);
+            assert!(
+                actual.sources[0]
+                    .1
+                    .locator
+                    .contains("invented_2031Q1.xlsx:QTD!")
+            );
+        }
+        // YTD is not an alternative quarterly source, even when Q1 makes its period identical.
+        let qtd_missing: Vec<_> = d
+            .cells
+            .iter()
+            .filter(|cell| !cell.locator.contains(":QTD!"))
+            .cloned()
+            .collect();
+        let actual = resolve(
+            &d.profile,
+            &qtd_missing,
+            quarter,
+            "Example Mine",
+            &d.rules.targets[0],
+            None,
+            &d.reported,
+        )
+        .unwrap();
+        assert_eq!(actual.value, None);
+        d.profile
+            .sources
+            .retain(|source| source.quarter != "2031Q1");
+        let actual = resolve(
+            &d.profile,
+            &d.cells,
+            quarter,
+            "Example Mine",
+            &d.rules.targets[0],
+            None,
+            &d.reported,
+        )
+        .unwrap();
+        assert_eq!(actual.status, "release_not_registered");
+        assert_eq!(actual.value, None);
     }
 
     #[test]
@@ -984,7 +1099,7 @@ mod tests {
                 resolve(
                     &d.profile,
                     &changed,
-                    2030,
+                    Quarter { year: 2030, q: 4 },
                     "Example Mine",
                     &d.rules.targets[0],
                     None,
@@ -1120,7 +1235,7 @@ mod tests {
         let actual = resolve(
             &d.profile,
             &d.cells,
-            2030,
+            Quarter { year: 2030, q: 4 },
             "Example Mine",
             target,
             Some(reference),
@@ -1317,20 +1432,6 @@ mod tests {
             errors
                 .iter()
                 .any(|error| error.contains("missing_original_2030Q4.xlsx"))
-        );
-    }
-
-    #[test]
-    fn legacy_scorer_routes_quarterly_records_to_the_source_bound_cli() {
-        let mut data = empty_data();
-        for target in &mut data.rules.targets {
-            target.outcome = Outcome::QuarterQtd;
-        }
-        assert!(
-            year(&data.rules)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.contains("fmine forecast record score"))
         );
     }
 }

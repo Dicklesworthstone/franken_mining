@@ -25,8 +25,8 @@ mod scoring;
 pub use scoring::record_score;
 
 use fmine_calib::record::{
-    self, BaselineKind, ProofTimes, Quarter, Rat, RecordDates, RecordManifest, RecordRules,
-    RegisteredDigest, SiteStatus, format_utc, parse_hex32, parse_utc,
+    self, BaselineKind, Outcome, ProofTimes, Quarter, Rat, RecordDates, RecordManifest,
+    RecordRules, RegisteredDigest, SiteStatus, format_utc, parse_hex32, parse_utc,
 };
 use fmine_core::hash::Digest32;
 pub use fmine_io::forecast::timestamp::proof_times_from_text;
@@ -584,6 +584,19 @@ fn trusted_timestamp(
     Err(failures)
 }
 
+/// The entire authenticated interval must precede completion of the scored physical quarter.
+fn proof_before_outcome_end(rules: &RecordRules, proof: ProofTimes) -> Res<()> {
+    let end = rules
+        .outcome_quarter()
+        .map_err(|e| vec![e.to_string()])?
+        .end_utc()
+        .ok_or_else(|| vec!["unsupported outcome calendar quarter".into()])?;
+    if proof.upper_utc >= end {
+        return fail("record proof must precede the end of the scored quarter; an old outcome cannot be registered retrospectively".into());
+    }
+    Ok(())
+}
+
 /// Verifies the exact already-loaded manifest, forecasts and rules. Both verify and score use this path;
 /// scoring never rereads mutable record payloads after establishing their frozen digest.
 fn verify_loaded(root: &Path, dir: &Path, loaded: &Loaded) -> Res<(Vec<String>, ProofTimes)> {
@@ -602,6 +615,14 @@ fn verify_loaded(root: &Path, dir: &Path, loaded: &Loaded) -> Res<(Vec<String>, 
         return fail("rules.sha256 differs from the rules bound by the frozen manifest".into());
     }
     let (proof, authority) = trusted_timestamp(root, dir, "record.tsr", &loaded.digest)?;
+    if loaded
+        .rules
+        .targets
+        .iter()
+        .any(|target| target.outcome == Outcome::QuarterQtd)
+    {
+        proof_before_outcome_end(&loaded.rules, proof)?;
+    }
     let found = findings(
         &loaded.manifest,
         &loaded.registered,
@@ -659,6 +680,43 @@ pub fn record_verify(root: &Path, dir: &Path) -> Res<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quarterly_proof_requires_its_entire_accuracy_interval_before_quarter_completion() {
+        let mut rules =
+            record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+        for target in &mut rules.targets {
+            target.outcome = Outcome::QuarterQtd;
+        }
+        for baseline in &mut rules.baselines {
+            if let BaselineKind::Persistence { point, .. } = &mut baseline.kind {
+                *point = Quarter { year: 2030, q: 4 };
+            }
+        }
+        let end = parse_utc("2031-04-01T00:00:00Z").unwrap();
+        assert!(
+            proof_before_outcome_end(
+                &rules,
+                ProofTimes {
+                    lower_utc: end - 2,
+                    upper_utc: end - 1,
+                }
+            )
+            .is_ok()
+        );
+        for upper_utc in [end, end + 1] {
+            assert!(
+                proof_before_outcome_end(
+                    &rules,
+                    ProofTimes {
+                        lower_utc: end - 2,
+                        upper_utc,
+                    }
+                )
+                .is_err()
+            );
+        }
+    }
     use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
 
     const REPLY: &str = "Status info:\nStatus: Granted.\n\nTST info:\nVersion: 1\nSerial number: 0x02\n\

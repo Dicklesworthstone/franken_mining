@@ -22,6 +22,11 @@ jobs:
         run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test public_lint_derivations --test production_valuation --locked
       - name: Plant command and journal integration
         run: cargo test -p fmine-cli --locked
+      - name: Quarterly forecast records and source controls
+        run: |
+          cargo test -p fmine-public --lib --locked
+          cargo test -p xtask --lib forecast:: --locked
+          cargo test -p xtask --test quarterly_record_rules --test forecast_record_score --locked
 
   # AGENTS.md "Compiler Checks" (bd-l736): formatting and clippy, warnings denied. One OS is enough; lints do
   # not depend on the target here.

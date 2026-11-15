@@ -3181,7 +3181,8 @@ scoring a reviewed forecast. Synthetic source fixtures are explicitly labelled i
 
 DESIGN (BD-067): separate rules can declare `outcome = "quarter_qtd"` on every target to forecast the
 quarter immediately after their common persistence point. A `2026Q4` point therefore targets `2027Q1`.
-The same candidate builder and robot-CLI record scorer support gold production in 100%-basis koz,
+The candidate builder, robot-CLI record scorer and `xtask forecast-record-score` support gold production
+in 100%-basis koz,
 copper production in 100%-basis kt, gold AISC per ounce sold, and copper C1 or AISC per pound sold.
 Quarterly production resolves directly to the original scored-quarter QTD cell; it is not an annual
 or year-to-date subtraction. The sealed FY2026 rules retain their existing meanings and bytes.
@@ -3195,8 +3196,11 @@ nowcasts are outside this supported slice and refuse explicitly.
 The guidance comparator uses only agreed guidance for that exact quarter, available before the frozen
 information cut. Annual guidance, later guidance and later comparative actuals never substitute.
 Unavailable originals or comparators remain visible in the complete cohort. The historical-ratio model,
-exact probabilities, signed cost handling and uncalibrated interpretation are unchanged. The older
-`xtask forecast-score` adapter remains annual-only and directs quarterly records to the robot CLI.
+exact probabilities, signed cost handling and uncalibrated interpretation are unchanged.
+`xtask forecast-record-verify` enforces the same quarter-end proof boundary; `xtask forecast-record-score`
+uses original QTD outcomes and exact quarterly guidance, including Q4-to-Q1 year rollover. An unavailable
+optional persistence-point workbook leaves the model result and any usable guidance comparison intact,
+with the comparator's source error reported explicitly.
 
 ### Compute the frozen issuer-guidance baseline
 

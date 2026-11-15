@@ -1,6 +1,6 @@
 //! Registered comparator information sets for the authenticated forecast-record assessment.
 //! Determinism: Exact. Comparator evidence is optional: a refusal preserves the model's outcome scores.
-//! Fixed Q3 observations and historical persistence pools need not be forecast-manifest inputs. Guidance,
+//! Frozen point observations and historical persistence pools need not be forecast-manifest inputs. Guidance,
 //! however, must precede the frozen cutoff. These different information sets are disclosed, not equated.
 
 use std::cmp::Ordering;
@@ -259,8 +259,7 @@ fn scaled_interval(
 fn persistence(
     loaded: &Loaded,
     profile: &IssuerProfile,
-    points: &KeyedClaims,
-    point_numbers: &ReportedNumbers,
+    points: Result<(&KeyedClaims, &ReportedNumbers), &Vec<String>>,
     baseline: &BaselineRule,
     historical: Result<&History, &Vec<String>>,
 ) -> Res<Persistence> {
@@ -369,6 +368,7 @@ fn persistence(
                 .unwrap_or_else(|| "excluded by frozen site universe".into());
         } else {
             let result = (|| -> Res<()> {
+                let (points, point_numbers) = points.map_err(Clone::clone)?;
                 let year =
                     u16::try_from(point.year).map_err(|_| vec!["unsupported point year".into()])?;
                 let cell = original(
@@ -574,7 +574,35 @@ pub(super) fn assess(
     points: &KeyedClaims,
     point_numbers: &ReportedNumbers,
 ) -> Res<String> {
-    let year = super::year(&loaded.rules)?;
+    let quarter = super::scored_quarter(&loaded.rules)?;
+    let year = u16::try_from(quarter.year).map_err(|_| vec!["unsupported guidance year".into()])?;
+    // A quarterly point is comparator evidence, not an outcome operand. Loading it inside this
+    // optional adapter preserves unconditional model scores if an unbound point body is unavailable.
+    let quarterly_points = if loaded
+        .rules
+        .targets
+        .iter()
+        .any(|target| target.outcome == record::Outcome::QuarterQtd)
+    {
+        let target = &loaded.rules.targets[0];
+        let point = loaded
+            .rules
+            .persistence_pool(&target.id)
+            .map_err(|e| vec![e.to_string()])?
+            .2;
+        let mut point_profile = profile.clone();
+        point_profile.sources.retain(|source| {
+            source.kind == SourceKind::MineStats && source.quarter == point.to_string()
+        });
+        Some(observations(&point_profile, root))
+    } else {
+        None
+    };
+    let persistence_points = match &quarterly_points {
+        Some(Ok((claims, numbers))) => Ok((claims, numbers)),
+        Some(Err(errors)) => Err(errors),
+        None => Ok((points, point_numbers)),
+    };
     let date_bound = guidance_date_bound(loaded.manifest.information_cutoff_utc);
     let transcripts = load_transcription_prefixes(profile, root, &["guidance_"], Some(&date_bound))
         .map_err(|e| vec![e.to_string()]);
@@ -616,8 +644,7 @@ pub(super) fn assess(
             persistence_rows.push(persistence(
                 loaded,
                 profile,
-                points,
-                point_numbers,
+                persistence_points,
                 baseline,
                 history.as_ref(),
             )?);
@@ -641,8 +668,18 @@ pub(super) fn assess(
         })
         .collect();
     let comparisons = comparisons(loaded, outcomes, &rows);
+    let (gate, point_label) = if loaded
+        .rules
+        .targets
+        .iter()
+        .any(|target| target.outcome == record::Outcome::QuarterQtd)
+    {
+        ("quarter_nowcast_gate", "point")
+    } else {
+        ("q3_release_gate", "Q3")
+    };
     Ok(format!(
-        "{{\"guidance_information_cutoff_utc\":{},\"guidance_document_date_bound\":{},\"guidance_errors\":{},\"guidance_nominal_probability\":null,\"score_alpha\":{},\"information_sets\":\"guidance is strictly pre-cut; the frozen original Q3 observations and historical persistence pool are separate registered benchmark inputs, with manifest membership disclosed\",\"q3_release_gate_utc\":{},\"q3_release_gate_after_cutoff\":{},\"release_gate_basis\":\"frozen_rules_schedule_not_observed_publication_timestamp\",\"same_information_set_claim\":false,\"skill_claim\":false,\"calibration_claim\":false,\"guidance\":[{}],\"persistence\":[{}],\"comparisons\":[{}]}}",
+        "{{\"guidance_information_cutoff_utc\":{},\"guidance_document_date_bound\":{},\"guidance_errors\":{},\"guidance_nominal_probability\":null,\"score_alpha\":{},\"information_sets\":\"guidance is strictly pre-cut; the frozen original {point_label} observations and historical persistence pool are separate registered benchmark inputs, with manifest membership disclosed\",\"{gate}_utc\":{},\"{gate}_after_cutoff\":{},\"release_gate_basis\":\"frozen_rules_schedule_not_observed_publication_timestamp\",\"same_information_set_claim\":false,\"skill_claim\":false,\"calibration_claim\":false,\"guidance\":[{}],\"persistence\":[{}],\"comparisons\":[{}]}}",
         js(&format_utc(loaded.manifest.information_cutoff_utc)),
         js(&date_bound),
         names(&guidance_errors),
@@ -666,6 +703,101 @@ pub(super) fn assess(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quarterly_guidance_scales_production_without_subtracting_or_using_annual_ranges() {
+        use fmine_public::transcribe::TranscriptionReport;
+        use fmine_registry::transcriptions::{Accepted, Agreement, Locator, parse_token};
+        for (production_field, cost_field) in [
+            ("au_prod_100_koz", "aisc_usd_per_oz"),
+            ("cu_prod_100_kt", "c1_usd_per_lb"),
+            ("cu_prod_100_kt", "aisc_usd_per_lb"),
+        ] {
+            let mut loaded = loaded();
+            for (target, field) in loaded
+                .rules
+                .targets
+                .iter_mut()
+                .zip([production_field, cost_field])
+            {
+                target.field = field.into();
+                target.outcome = record::Outcome::QuarterQtd;
+            }
+            for baseline in &mut loaded.rules.baselines {
+                if let BaselineKind::Persistence { point, .. } = &mut baseline.kind {
+                    *point = Quarter { year: 2030, q: 4 };
+                }
+            }
+            let document = document("2030-12-15");
+            let mut report = TranscriptionReport {
+                registry: "invented-quarterly-guidance".into(),
+                documents: vec![document.clone()],
+                entries: 8,
+                agreement: Agreement::default(),
+                tie: None,
+            };
+            for target in &loaded.rules.targets {
+                let metric = record::TargetMetric::from_target(target).unwrap();
+                for period in ["2031Q1", "2031FY"] {
+                    let token = if period == "2031FY" {
+                        "1000"
+                    } else if metric.is_production() {
+                        "24 - 30"
+                    } else {
+                        "-5"
+                    };
+                    report.agreement.accepted.push(Accepted {
+                        locator: Locator {
+                            doc: document.file.clone(),
+                            page: 1,
+                            table: "Invented guidance".into(),
+                            row: "Example Mine".into(),
+                            col: format!("{} {period}", target.id),
+                        },
+                        doc_sha256: document.sha256.clone(),
+                        token: token.into(),
+                        value: parse_token(token).unwrap(),
+                        quantity: format!("guidance_example_mine_{}", metric.guidance_quantity()),
+                        unit: metric.unit().into(),
+                        basis: format!(
+                            "attributable:3/5{}",
+                            metric.guidance_basis_suffix().unwrap_or("")
+                        ),
+                        period: period.into(),
+                        readers: vec!["reader-a".into(), "reader-b".into()],
+                    });
+                }
+            }
+            let bind = |report: &TranscriptionReport| {
+                guidance::bind_rows(
+                    &loaded.rules,
+                    2031,
+                    Some(report),
+                    &[],
+                    |_| panic!("quarterly guidance must never request nine-month actuals"),
+                    |_| Ok(()),
+                )
+                .unwrap()
+            };
+            let rows = bind(&report);
+            assert_eq!(
+                rows[0].interval,
+                Some((Rat::from_integer(40), Rat::from_integer(50)))
+            );
+            assert_eq!(
+                rows[1].interval,
+                Some((Rat::from_integer(-5), Rat::from_integer(-5)))
+            );
+            assert!(rows.iter().all(|row| row.actuals.is_empty()
+                && row.guidance[0].reading.period == "2031Q1"));
+            report
+                .agreement
+                .accepted
+                .retain(|reading| reading.period == "2031FY");
+            assert!(bind(&report).iter().all(|row| row.interval.is_none()));
+        }
+    }
+
     use fmine_io::xlsx::{
         MinimalCell, MinimalSheet, MinimalStyles, Workbook, build_minimal_xlsx_styled,
     };
@@ -866,8 +998,7 @@ mod tests {
             let result = persistence(
                 &loaded,
                 &profile,
-                &point.0,
-                &point.1,
+                Ok((&point.0, &point.1)),
                 baseline,
                 Ok(&historical),
             )
@@ -944,6 +1075,129 @@ mod tests {
             model
         );
     }
+    #[test]
+    fn unavailable_quarterly_point_keeps_original_outcomes_and_model_scores() {
+        let mut loaded = loaded();
+        for target in &mut loaded.rules.targets {
+            target.outcome = record::Outcome::QuarterQtd;
+        }
+        for baseline in &mut loaded.rules.baselines {
+            if let BaselineKind::Persistence { point, .. } = &mut baseline.kind {
+                *point = Quarter { year: 2030, q: 4 };
+            }
+        }
+        let quarter = loaded.rules.outcome_quarter().unwrap();
+        let mut profile = profile();
+        let (claims, numbers) = workbook(&mut profile, "2031Q1", "120");
+        let outcomes: Vec<_> = loaded
+            .rules
+            .targets
+            .iter()
+            .map(|target| {
+                let outcome = super::super::resolve(
+                    &profile,
+                    &claims.claims,
+                    quarter,
+                    "Example Mine",
+                    target,
+                    None,
+                    &numbers,
+                )
+                .unwrap();
+                OutcomeRow {
+                    site: outcome.site,
+                    target: outcome.target,
+                    value: outcome.value,
+                }
+            })
+            .collect();
+        let model = scoring::assess(&loaded.rules, &loaded.forecasts, &outcomes).unwrap();
+        assert_eq!(outcomes[0].value, Some(Rat::from_integer(120)));
+        assert_eq!(
+            model.targets[0].observed_mean_interval_score,
+            Some(Rat::from_integer(120))
+        );
+        profile.sources.push(RegisteredSource {
+            retrieved_utc: None,
+            published_at: None,
+            published_at_basis: None,
+            file_name: "invented_missing_2030Q4.xlsx".into(),
+            kind: SourceKind::MineStats,
+            quarter: "2030Q4".into(),
+            url: "https://example.invalid/invented_missing_2030Q4.xlsx".into(),
+            url_basis: "synthetic test".into(),
+            bytes: 123,
+            sha256_hex: Digest32([8; 32]).to_hex(),
+        });
+        let root = std::env::temp_dir().join(format!(
+            "fmine-quarterly-point-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("corpus")).unwrap();
+        std::fs::create_dir_all(root.join("registries/transcriptions")).unwrap();
+        let document = b"Invented quarterly guidance: Example Mine production 90 - 110 koz at 100%.";
+        let digest = fmine_core::hash::sha256(document).to_hex();
+        std::fs::write(root.join("corpus/Guidance.pdf"), document).unwrap();
+        profile.documents.clear();
+        profile.documents.push(fmine_registry::sources::DocumentRow {
+            file: "Guidance.pdf".into(),
+            dir: "corpus".into(),
+            kind: "mda".into(),
+            url: "https://example.invalid/Guidance.pdf".into(),
+            url_basis: "synthetic test".into(),
+            published_at: "2030-12-15".into(),
+            published_at_basis: "FACT: invented test date".into(),
+            pages: 1,
+            bytes: document.len() as u64,
+            sha256: digest.clone(),
+        });
+        let mut transcript = format!(
+            "schema = \"fmine.transcriptions.v1\"\nissuer = \"{}\"\n",
+            profile.issuer
+        );
+        for reader in ["reader-a", "reader-b"] {
+            transcript.push_str(&format!(
+                "\n[[entry]]\ndoc = \"Guidance.pdf\"\ndoc_sha256 = \"{digest}\"\n\
+                 page = 1\ntable = \"Invented guidance\"\nrow = \"Example Mine\"\n\
+                 col = \"Production\"\ntoken = \"90 - 110\"\n\
+                 quantity = \"guidance_example_mine_production_koz\"\n\
+                 unit = \"koz\"\nbasis = \"100%\"\nperiod = \"2031Q1\"\nreader = \"{reader}\"\n"
+            ));
+        }
+        std::fs::write(
+            root.join(format!("registries/transcriptions/{}.toml", profile.issuer)),
+            transcript,
+        )
+        .unwrap();
+        loaded.manifest.information_cutoff_utc = parse_utc("2030-12-31T00:00:00Z").unwrap();
+        let report = assess(&root, &loaded, &profile, &outcomes, &claims, &numbers).unwrap();
+        assert!(report.contains("invented_missing_2030Q4.xlsx"), "{report}");
+        assert!(report.contains("\"status\":\"not_available\""), "{report}");
+        assert!(report.contains("\"missing_actual\":false"), "{report}");
+        assert!(report.contains("\"quarter_nowcast_gate_utc\":"), "{report}");
+        assert!(!report.contains("q3_release_gate"), "{report}");
+        assert!(
+            report.contains("\"target\":\"production\",\"status\":\"available\""),
+            "{report}"
+        );
+        assert!(
+            report.contains("\"missing_issuer_guidance\":false,\"missing_run_rate_persistence\":true"),
+            "{report}"
+        );
+        assert!(
+            report.contains("\"issuer_guidance_completion\":{\"kind\":\"arithmetic_completion_bounds\",\"status\":\"bounded\""),
+            "{report}"
+        );
+        assert_eq!(
+            scoring::assess(&loaded.rules, &loaded.forecasts, &outcomes).unwrap(),
+            model
+        );
+    }
+
     #[test]
     fn comparator_overflow_preserves_population_and_the_other_target() {
         let loaded = loaded();

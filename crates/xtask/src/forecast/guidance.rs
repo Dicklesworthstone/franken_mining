@@ -6,7 +6,9 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use fmine_calib::record::{self, BaselineKind, Rat, RecordRules, SiteStatus, Target, TargetMetric};
+use fmine_calib::record::{
+    self, BaselineKind, Outcome, Rat, RecordRules, SiteStatus, Target, TargetMetric,
+};
 use fmine_core::hash::{Digest32, sha256};
 use fmine_public::key::{self, KeyedCell, OwnershipBasis, PeriodKind, Scope};
 use fmine_public::sources::{IssuerProfile, SourceKind};
@@ -360,7 +362,18 @@ pub(super) fn bind_rows(
     mut number: impl FnMut(&KeyedCell) -> Result<Rat, String>,
     mut eligible: impl FnMut(&GuidanceEvidence) -> Result<(), String>,
 ) -> Res<Vec<BaselineRow>> {
-    let period = format!("{year}FY");
+    let period = if rules
+        .targets
+        .iter()
+        .any(|target| target.outcome == Outcome::QuarterQtd)
+    {
+        rules
+            .outcome_quarter()
+            .map_err(|e| vec![e.to_string()])?
+            .to_string()
+    } else {
+        format!("{year}FY")
+    };
     let original_release = format!("{year}Q3");
     let mut rows = Vec::new();
     for baseline in rules
@@ -411,7 +424,7 @@ pub(super) fn bind_rows(
                 }
                 let (mut lo, mut hi, basis) = endpoints(a, metric)?;
                 row.basis = basis;
-                if metric.is_production() {
+                if target.outcome == Outcome::FyMinus9m {
                     let label = format!("summary:{}", target.field);
                     row.actuals = cells
                         .iter()
