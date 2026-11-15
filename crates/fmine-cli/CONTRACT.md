@@ -7,6 +7,21 @@
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
 - **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
+- DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
+  compares two to sixteen complete source-bound production/valuation alternatives plus one common
+  do-nothing action. The strict `fmine.production-comparison.v1` manifest declares common scenario meaning,
+  model/question and physical/commercial support, and names all four source files per action. Paths
+  resolve against the workspace root. This form is mutually exclusive with the existing individual
+  source flags, whose command output remains unchanged. All alternatives must have identical states,
+  exact weights, commercial bridge, rounding and unrounded do-nothing cash; unmatched support or any
+  rejected member refuses the whole comparison. The metrics owner recomputes the complete joint ranking,
+  regret, quantiles, signed-loss CVaR and ties. JSON retains the complete manifest, source worksheets,
+  original valuations and losing alternatives; Markdown reports the same conditional comparison and
+  source ancestry. Shared scenario meaning remains an explicit assumption. This does not combine actions
+  into a portfolio or supply calibration, physical authorization, causal identification or project NPV.
+  The runnable example is `tests/decisions/production_comparison.toml`; direct binary, renderer, source
+  retention and refusal controls are in `fmine-cli/tests/production_comparison.rs`.
+
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 

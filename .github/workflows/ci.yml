@@ -19,7 +19,7 @@ jobs:
       - name: Calibration and valuation known answers
         run: cargo test -p fmine-calib -p fmine-metrics --lib --locked
       - name: Saved forecast diagnostics and disclosure derivations
-        run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test public_lint_derivations --locked
+        run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test public_lint_derivations --test production_valuation --locked
       - name: Plant command and journal integration
         run: cargo test -p fmine-cli --locked
 

@@ -124,6 +124,26 @@ and immediate settlement are declared assumptions; the result supplies no projec
 actual sales evidence or operating authorization. Missing states, changed probabilities, incompatible
 physical support and undeclared monetary conversion refuse the entire comparison.
 
+DESIGN (BD-225): compare several declared operating modes without copying their calculated payoffs into
+a separate decision worksheet. The manifest names two to sixteen complete source bundles and explicitly
+declares their shared scenario meaning and physical/commercial support:
+
+```bash
+cargo run -p fmine-cli -- decide production \
+  --manifest tests/decisions/production_comparison.toml --format markdown
+```
+
+The supplied synthetic higher-power alternative has an expected immediate margin of $9,123.20 versus
+$5,061.60 for the original mode, but its worst state loses $384 while the original gains $808. The joint
+card shows this expected-return/downside tradeoff, recomputes regret across all alternatives, and keeps
+ties and losing alternatives visible. These are conditional synthetic arithmetic expectations, not
+observed operating results. State IDs and exact probabilities must agree, and do-nothing cash must match
+before rounding. Changed support, missing states or conflicting uncertainty definitions refuse the whole
+comparison. Every original worksheet, physical calculation and commercial assumption remains in JSON;
+source paths are relative to the workspace root. The result compares individual alternatives and does
+not establish a combined portfolio, causal counterfactual, calibrated forecast, project NPV or authority
+to operate the plant.
+
 `forecast journal register-plant` registers a selected recovery, throughput, dry-tonnage, contained-metal
 or recovered-metal target through the existing durable forecast journal. It takes the same three source
 paths plus `--journal`, `--head`, `--id`, `--target`, `--author-role`,

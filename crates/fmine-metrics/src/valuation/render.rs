@@ -4,7 +4,7 @@
 use super::*;
 use std::fmt::Write as _;
 
-fn js(value: &str) -> String {
+pub(super) fn js(value: &str) -> String {
     let mut out = String::from("\"");
     for c in value.chars() {
         match c {
@@ -19,7 +19,7 @@ fn js(value: &str) -> String {
     out.push('"');
     out
 }
-fn md(value: &str) -> String {
+pub(super) fn md(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -35,14 +35,14 @@ fn rat(value: Rat) -> String {
         value.den()
     )
 }
-fn shown(value: Rat) -> String {
+pub(super) fn shown(value: Rat) -> String {
     if value.den() == 1 {
         value.num().to_string()
     } else {
         format!("{}/{}", value.num(), value.den())
     }
 }
-fn monetary(value: Money) -> String {
+pub(super) fn monetary(value: Money) -> String {
     let n = value.minor.unsigned_abs();
     format!(
         "{}{}.{:04}",

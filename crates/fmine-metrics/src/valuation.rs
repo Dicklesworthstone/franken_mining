@@ -19,6 +19,7 @@ use fmine_evidence::{
 use fmine_plant::production::ProductionReceipt;
 use fmine_units::{Currency, ExactQty as Rat, Money, UnitsError};
 
+pub mod comparison;
 mod render;
 #[cfg(test)]
 mod tests;

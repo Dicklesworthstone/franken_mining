@@ -1,0 +1,29 @@
+# SYNTHETIC paired operating-mode comparison. Paths are relative to the workspace root.
+# Higher power wins by mean (9,123.2 vs 5,061.6 USD) but loses 384 USD in the soft state,
+# where the original mode gains 808 USD. All three choices share one state population.
+schema = "fmine.production-comparison.v1"
+model_key = "synthetic-operating-modes"
+question = "Use the original mode, the declared higher-power mode, or do nothing this shift?"
+shared_scenario_basis = "SYNTHETIC counterfactuals of the same soft or hard ore and market state; only the declared power and operating charges change by action"
+boundary = "synthetic-plant/v1"
+circuit = "synthetic-ball-mill"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+start_ns = "0"
+end_ns = "3600000000000"
+commercial_support = "Synthetic payable Au from exactly this one-hour recovered-metal population"
+
+[[alternative]]
+id = "process"
+input = "tests/plant/production_joint.toml"
+grinding = "tests/plant/grinding_joint.toml"
+recovery = "tests/plant/production_recovery.toml"
+terms = "tests/decisions/production_valuation.toml"
+
+[[alternative]]
+id = "higher-power"
+input = "tests/plant/production_joint.toml"
+grinding = "tests/plant/grinding_higher_power.toml"
+recovery = "tests/plant/production_recovery.toml"
+terms = "tests/decisions/production_valuation_higher_power.toml"

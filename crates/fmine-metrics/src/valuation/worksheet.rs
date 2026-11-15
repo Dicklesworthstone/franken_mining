@@ -7,16 +7,16 @@ use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
 pub const SCHEMA: &str = "fmine.production-valuation.v1";
 pub const MAX_BYTES: u64 = 1024 * 1024;
 pub const NO_CLAIM: &str = super::NO_CLAIM;
-type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
+pub(super) type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
 
-fn invalid(line: usize, message: impl AsRef<str>) -> Refusal {
+pub(super) fn invalid(line: usize, message: impl AsRef<str>) -> Refusal {
     bad(
         RefusalCode::InputMissingOrUnreadable506,
         format!("worksheet line {line}: {}", message.as_ref()),
     )
 }
 
-fn fields<'a>(input: &'a [TomlField], required: &[&str], line: usize) -> Result<Fields<'a>> {
+pub(super) fn fields<'a>(input: &'a [TomlField], required: &[&str], line: usize) -> Result<Fields<'a>> {
     let mut result = BTreeMap::new();
     for field in input {
         if !required.contains(&field.key.as_str()) {
@@ -49,7 +49,7 @@ fn fields<'a>(input: &'a [TomlField], required: &[&str], line: usize) -> Result<
     Ok(result)
 }
 
-fn get<'a>(fields: &Fields<'a>, key: &str) -> Result<(&'a str, usize)> {
+pub(super) fn get<'a>(fields: &Fields<'a>, key: &str) -> Result<(&'a str, usize)> {
     fields
         .get(key)
         .copied()

@@ -7,6 +7,14 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
 - conditional immediate one-period cash margins from the complete shared plant production population,
   with explicit payable-metal, price, cost and royalty assumptions, fed directly to the existing decision
   evaluator (`valuation`, BD-061/225, plan §§9.5, 21.6, 23.4);
+  `valuation::comparison` admits two to sixteen complete alternatives under a separately source-bound
+  common scenario/support declaration and recomputes one joint DecisionCard, retaining every original
+  valuation and its source ancestry. Identical state IDs, exact probabilities, commercial bridge,
+  rounding rule and unrounded do-nothing cash are required; all physical/commercial support dimensions
+  must match. The bounded manifest parser is pure and retains the original submitted bytes. No portfolio
+  combination, causal identification or physical feasibility is inferred. Conditional synthetic known
+  answers and refusal controls live in `valuation/comparison/tests.rs`; actual command checks live in
+  `fmine-cli/tests/production_comparison.rs`;
 - complete source-bound annual peer comparisons with exact competition-rank ranges and explicit comparative claims (`comparison`, BD-355);
 - cut-off grades: the reference rows of `registries/published_cutoffs.toml` recomputed from their registered tokens (`cutoff`), and cut-offs bound to the readings of one registered technical report (`cutoff::source`, BD-274);
 - an AISC accounting waterfall, as a legacy float LMDI and as a typed exact kernel with an additive fallback (`lmdi`, `lmdi::waterfall`);

@@ -1,0 +1,47 @@
+# SYNTHETIC immediate commercial terms for the higher-power operating alternative.
+# Soft: 0.384 kg * 0.9 * 50,000 = 17,280 revenue; less 864 royalty, 12,800 variable
+# and 4,000 fixed = -384 USD. Hard: 0.576 kg * 0.8 * 70,000 = 32,256 revenue;
+# less 3,225.6 royalty, 6,400 variable and 4,000 fixed = 18,630.4 USD.
+# Equal-weight mean 9,123.2 USD; signed-loss CVaR95 is +384 USD.
+schema = "fmine.production-valuation.v1"
+model_key = "synthetic-higher-power-cash-margin"
+question = "Run the declared higher-power mode or retain do-nothing cash?"
+valuation_basis = "immediate_one_period_cash_margin"
+action_id = "higher-power"
+action_label = "Higher power with explicit operating charges"
+boundary = "synthetic-plant/v1"
+circuit = "synthetic-ball-mill"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+start_ns = "0"
+end_ns = "3600000000000"
+commercial_support = "Synthetic payable Au from exactly this one-hour recovered-metal population"
+physical_to_commercial_basis = "Assume the declared fraction of recovered Au is paid immediately at the scenario price, with no opening stock, lag or additional deductions"
+monetary_rounding = "nearest_ties_even_0_0001_usd"
+
+[[scenario]]
+id = "soft"
+weight = "1/2"
+payable_fraction = "0.9"
+usd_per_kg = "50000"
+variable_usd_per_dry_t = "20"
+fixed_usd = "4000"
+royalty_fraction = "0.05"
+do_nothing_usd = "0"
+
+[[scenario]]
+id = "hard"
+weight = "1/2"
+payable_fraction = "0.8"
+usd_per_kg = "70000"
+variable_usd_per_dry_t = "40"
+fixed_usd = "4000"
+royalty_fraction = "0.1"
+do_nothing_usd = "0"
+
+[[uu]]
+id = "UU-example-commercial-settlement"
+description = "Invented unmodelled product deductions or delayed payment"
+trigger = "Product acceptance or settlement differs from the explicit immediate-payability assumption"
+downside_usd_m = "0.02"
