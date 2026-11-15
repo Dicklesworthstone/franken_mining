@@ -257,6 +257,52 @@ already assessed outcome vectors, and transport is not repeated within bootstrap
 
 ## 3. Authority, Epistemics & Representation
 
+DESIGN (BD-229, §23.6): `robustness::kpi::evaluate` admits one source-bound KPI `Design` beside an
+immutable evaluated static program. Its complete named state and candidate component matrices describe
+already-reconciled additive economic definitions: gold AISC (USD/troy oz Au), copper AISC (USD/lb Cu),
+ROCE (USD/USD fraction), or GEO production (GEO ounces). No safety or arbitrary hard constraint can be
+declared as a priced metric. Each constraint supplies its own basis, inclusive calendar period, upper or
+lower inclusive limit, and explicit `ratio_of_expected_totals` or `every_state` aggregation.
+
+Every bundle sums its baseline and selected numerator/denominator increments before division. Expected
+aggregation divides the weighted total numerator by the weighted total denominator, never averaging
+candidate ratios or state ratios. `every_state` uses the maximum ratio for an upper bound and the minimum
+for a lower bound. GEO denominators must be exactly one with explicitly zero candidate increments. Every
+original structurally and nominally risk-feasible bundle must have positive denominators in every state;
+an undefined ratio refuses the complete KPI comparison instead of silently dropping that alternative.
+Already excluded bundles retain all component rows and an unavailable ratio where necessary.
+
+The result retains the original comparison, all bundle KPI assessments and rejections, all economic
+co-winners before and after KPI limits, and the exact primary-objective opportunity cost. Funding, debt,
+capital calls, share validity and all primary/secondary nominal tail-risk limits remain binding. Equity
+models retain the exact USD per actual share objective; other models use USD. If no bundle survives,
+winners are empty and the objective/opportunity cost is unavailable, not measured against a fictional zero.
+
+Each KPI also receives a complete finite threshold frontier, ordered from tighter to looser limits, with
+every other KPI fixed. It contains every attainable threshold and the declared limit, feasible counts,
+all exact economic co-winners and the opportunity cost relative to the original eligible maximum. Exact
+ties cost zero when any original winner remains. These are finite portfolio differences, not LP duals,
+derivatives, causal estimates or a single hidden score. Each frontier uses the same original finite
+population, so loosening a metric never resurrects a structurally or risk-rejected bundle.
+
+`model::evaluate` accepts `kpi_constraint`, `kpi_baseline` and `kpi_increment` tables in the existing capital
+worksheet and returns `EvaluatedModel::Kpi`. The constraint's `reporting_period` is an inclusive date range,
+distinct from cash-row `period` identifiers; its output `period` retains that range. Components and limits are quoted exact signed `n/d`
+fractions. Missing/duplicate/unknown state or candidate rows refuse; zero increments must be supplied.
+`model::parse` continues to return a plain static `ProgramInputs` and refuses KPI tables rather than
+discarding them. This slice refuses combinations with recourse, bootstrap selection stability or
+Wasserstein declarations; those models need their own explicitly constrained reevaluation.
+
+The public result is `fmine.capital-kpi.v1`, with immutable design, original program, summary and Claim
+accessors plus JSON/Markdown renderers. The digest binds the original program digest, complete KPI Claim
+metadata, all components, every assessment and frontier. Evidence, sources, parents, confidentiality,
+UU terms and calibration-failure flags are retained. No metric is automatically reconciled or approved
+by an issuer. The implementation admits at most eight constraints and 1,048,576 component additions;
+arithmetic overflow refuses. `tests/capital/kpi_constraints.toml` is synthetic and prices a declared AISC
+cap at 20 USD; exact cap equality restores the higher-value growth choice. Unit tests separately cover
+ratio aggregation, joint constraints, equality/ties, empty feasible sets, risk/cash exclusions, USD/share,
+source binding, malformed declarations, denominator refusals and scale invariance.
+
 All imported values remain Assumed, Internal, Estimated and parametrically uncertain. A complete input
 snapshot includes separate policy, shared-weight and candidate Claims, including every losing candidate,
 plus the complete aggregate funding or scheduled funding Claim when declared. Funding values, cash

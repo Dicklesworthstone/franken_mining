@@ -97,7 +97,11 @@ fn strict_parser_refuses_orphans_missing_pairs_duplicates_unknowns_and_invalid_m
 #[test]
 fn staged_source_dispatch_reaches_policy_stress_and_retains_independent_static_comparison() {
     let text = format!("{STAGED}{}", geometry(&["good", "bad"]));
-    let (program, information) = parse_model(&text, source(&text), true).unwrap();
+    let ParsedModel {
+        program,
+        information,
+        ..
+    } = parse_model(&text, source(&text), true).unwrap();
     let design = program.robustness.as_ref().unwrap().clone();
     let direct = crate::recourse::evaluate(&RecourseInputs {
         program,
@@ -142,7 +146,11 @@ fn staged_source_dispatch_reaches_policy_stress_and_retains_independent_static_c
 
 #[test]
 fn adaptive_stress_does_not_admit_a_geometry_from_another_model() {
-    let (mut program, information) = parse_model(STAGED, source(STAGED), true).unwrap();
+    let ParsedModel {
+        mut program,
+        information,
+        ..
+    } = parse_model(STAGED, source(STAGED), true).unwrap();
     let declared = parse(
         &format!("{STATIC}{}", geometry(&["base", "delay"])),
         source(&format!("{STATIC}{}", geometry(&["base", "delay"]))),

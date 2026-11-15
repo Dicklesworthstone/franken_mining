@@ -14,6 +14,7 @@ use crate::recourse::{
 
 mod entity;
 mod entity_valuation;
+mod kpi;
 mod robustness;
 mod stability;
 #[cfg(test)]
@@ -224,7 +225,7 @@ fn assumed<T>(
 /// A candidate requires id/label/cost/reference_class_basis and may name one exclusion_group.
 /// Costs constrain spending only; candidate payoff values are already net delta-NAV in major USD.
 pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
-    parse_model(text, source, false).map(|(program, _)| program)
+    parse_model(text, source, false).map(|model| model.program)
 }
 
 /// An evaluated model keeps static and explicitly staged decision objects distinct.
@@ -232,6 +233,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
 pub enum EvaluatedModel {
     Static(Box<EvaluatedProgram>),
     Recourse(Box<EvaluatedRecourseProgram>),
+    Kpi(Box<crate::robustness::kpi::EvaluatedKpiProgram>),
 }
 
 impl EvaluatedModel {
@@ -240,6 +242,7 @@ impl EvaluatedModel {
         match self {
             Self::Static(program) => program.to_json(),
             Self::Recourse(program) => program.to_json(),
+            Self::Kpi(program) => program.to_json(),
         }
     }
 
@@ -248,6 +251,7 @@ impl EvaluatedModel {
         match self {
             Self::Static(program) => program.to_markdown(),
             Self::Recourse(program) => program.to_markdown(),
+            Self::Kpi(program) => program.to_markdown(),
         }
     }
 
@@ -256,6 +260,7 @@ impl EvaluatedModel {
         match self {
             Self::Static(program) => program.no_claim(),
             Self::Recourse(program) => program.no_claim(),
+            Self::Kpi(_) => crate::robustness::kpi::NO_CLAIM,
         }
     }
 
@@ -264,6 +269,7 @@ impl EvaluatedModel {
         match self {
             Self::Static(_) => "declared_static_capital_comparison",
             Self::Recourse(_) => "declared_two_stage_capital_comparison",
+            Self::Kpi(_) => "declared_kpi_capital_comparison",
         }
     }
 }
@@ -271,22 +277,34 @@ impl EvaluatedModel {
 /// Evaluates the exact source bytes, dispatching to recourse only when explicitly declared.
 /// The static-only `parse` entry point continues to reject every recourse table.
 pub fn evaluate(text: &str, source: SourceAnchor) -> Result<EvaluatedModel> {
-    let (program, information) = parse_model(text, source, true)?;
-    match information {
-        Some(information) => crate::recourse::evaluate(&RecourseInputs {
+    let ParsedModel { program, information, kpis } = parse_model(text, source, true)?;
+    if kpis.is_some() && (program.robustness.is_some() || program.selection_stability.is_some()) {
+        return Err(input(1, "KPI constraints currently require a static program without robustness or selection_stability; those diagnostics must be evaluated separately"));
+    }
+    match (information, kpis) {
+        (Some(_), Some(_)) => Err(input(1, "KPI constraints currently require a static program; adaptive policy KPI components are not declared by this schema")),
+        (Some(information), None) => crate::recourse::evaluate(&RecourseInputs {
             program,
             information,
         })
         .map(|program| EvaluatedModel::Recourse(Box::new(program))),
-        None => super::evaluate(&program).map(|program| EvaluatedModel::Static(Box::new(program))),
+        (None, Some(kpis)) => crate::robustness::kpi::evaluate(&super::evaluate(&program)?, &kpis)
+            .map(|program| EvaluatedModel::Kpi(Box::new(program))),
+        (None, None) => super::evaluate(&program).map(|program| EvaluatedModel::Static(Box::new(program))),
     }
+}
+
+struct ParsedModel {
+    program: ProgramInputs,
+    information: Option<Claim<RecourseBasis>>,
+    kpis: Option<Claim<crate::robustness::kpi::Design>>,
 }
 
 fn parse_model(
     text: &str,
     source: SourceAnchor,
     allow_recourse: bool,
-) -> Result<(ProgramInputs, Option<Claim<RecourseBasis>>)> {
+) -> Result<ParsedModel> {
     if text.len() > MAX_BYTES {
         return Err(input(1, "model exceeds the 4 MiB parser limit"));
     }
@@ -371,10 +389,12 @@ fn parse_model(
     let mut information_anchors = Vec::new();
     let mut stability_row = None;
     let mut robustness_rows = robustness::Rows::default();
+    let mut kpi_rows = kpi::Rows::default();
     let mut entity_rows = entity::EntityRows::default();
     let mut valuation_rows = entity_valuation::ValuationRows::default();
     for row in &doc.rows {
         match row.table.as_str() {
+            "kpi_constraint" | "kpi_baseline" | "kpi_increment" if allow_recourse => kpi_rows.push(row)?,
             "robustness" | "transport_distance" => robustness_rows.push(row, model_key)?,
             "selection_stability" => {
                 if stability_row.is_some() {
@@ -1065,6 +1085,7 @@ fn parse_model(
     let selection_stability =
         stability::finish(stability_row, &source, &doc.top, &unknowns, &uu_anchors);
     let robustness = robustness_rows.finish(&states, &source, &doc.top, &unknowns, &uu_anchors)?;
+    let kpis = kpi_rows.finish(model_key, &source, &doc.top, &unknowns, &uu_anchors)?;
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()
@@ -1124,5 +1145,5 @@ fn parse_model(
         robustness,
     };
     validate(&inputs)?;
-    Ok((inputs, information))
+    Ok(ParsedModel { program: inputs, information, kpis })
 }

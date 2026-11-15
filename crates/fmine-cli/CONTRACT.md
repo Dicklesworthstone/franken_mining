@@ -502,6 +502,21 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     At most four observations, 256 policies and 65,536 combined static/policy checkpoints are admitted.
     `tests/capital/recourse.toml` chooses study followed by issuance and construction only in Good,
     abandoning in Bad, at exactly 19/120 USD/share expected improvement and USD 120 total expected NAV change.
+    Optional `kpi_constraint`, `kpi_baseline` and `kpi_increment` tables compare declared gold/copper AISC,
+    ROCE and GEO limits over the original static population (plan §23.6). Every metric names its `reporting_period`,
+    additive numerator/denominator basis, upper or lower threshold and aggregation rule, with complete
+    baseline/state and candidate/state pairs as exact quoted `n/d`. Ratios use whole-bundle totals;
+    `ratio_of_expected_totals` divides weighted totals, while `every_state` tests the worst state for the
+    declared direction. Equality passes; an undefined denominator never supplies a ratio. Original cash,
+    share-count, structural and risk failures remain binding. The `declared_kpi_capital_comparison` mode
+    uses program schema `fmine.capital-kpi.v1`, retains the original static report and all KPI ledgers,
+    and shows constrained co-winners and exact economic opportunity cost in USD or USD/share. Each
+    threshold frontier holds all other KPI limits fixed; these discrete changes are not continuous dual
+    prices. `tests/capital/kpi_constraints.toml` independently gives growth value 100, efficient value 80,
+    a 20 USD opportunity cost at the 3/2 AISC cap and growth admissible at a relaxed cap of 2. Combining
+    this initial KPI slice with recourse, scenario-weight robustness or selection stability refuses.
+    Definitions remain supplied assumptions: no issuer reconciliation, calibration, safety pricing,
+    automatic pay-rule adjustment or execution authority is inferred.
   - `lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]`
     (BD-059/BD-345): checks only the mapped, registered HTML Claims through the existing exact equality
     kernel. The receipt retains full value, label, mapping and registry evidence. A separate source-publication

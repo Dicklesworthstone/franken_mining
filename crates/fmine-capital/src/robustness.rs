@@ -7,6 +7,7 @@ use fmine_numerics::risk::transport::{
     CvarCertificate, MAX_CVAR_ORACLE_CALLS, TransportCertificate, TransportPlan,
 };
 
+pub mod kpi;
 mod render;
 #[cfg(test)]
 mod tests;

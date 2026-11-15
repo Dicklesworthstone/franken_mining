@@ -6,6 +6,7 @@ use super::*;
 mod capital_call;
 mod debt;
 mod entity_valuation;
+mod kpi;
 mod robustness;
 mod stability;
 

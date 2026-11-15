@@ -92,6 +92,55 @@ fn capital_program_library_and_binary_render_identically() {
 }
 
 #[test]
+fn capital_kpi_example_prices_the_constraint_and_preserves_binary_rendering() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root");
+    let args = ["decide", "program", "tests/capital/kpi_constraints.toml"].map(str::to_owned);
+    let (envelope, _) = fmine_cli::invoke(&args, &root);
+    assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+    let json = envelope.to_json();
+    assert_eq!(json, fmine_cli::invoke(&args, &root).0.to_json());
+    // Independent hand calculation: growth gives 100 USD and AISC 400/200 = 2;
+    // efficient gives 80 USD and AISC 200/200 = 1. The 3/2 cap costs 20 USD.
+    for expected in [
+        "\"mode\":\"declared_kpi_capital_comparison\"",
+        "\"schema\":\"fmine.capital-kpi.v1\"",
+        "\"baseline_winners\":[\"bundle_02\"]",
+        "\"baseline_objective\":\"100/1\"",
+        "\"constrained_winners\":[\"bundle_01\"]",
+        "\"constrained_objective\":\"80/1\"",
+        "\"opportunity_cost\":\"20/1\"",
+        "\"objective_unit\":\"USD\"",
+        "\"limit\":\"2/1\"",
+    ] {
+        assert!(json.contains(expected), "missing {expected}");
+    }
+    let markdown = envelope
+        .rendered_markdown
+        .as_deref()
+        .expect("KPI comparison Markdown");
+    assert!(markdown.contains("# KPI-constrained capital comparison"));
+    for (format, expected) in [("json", json.as_str()), ("markdown", markdown)] {
+        let output = Command::new(binary())
+            .args(&args)
+            .args(["--format", format, "--workspace"])
+            .arg(&root)
+            .output()
+            .expect("execute actual KPI capital command");
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("UTF-8 KPI report"),
+            format!("{expected}\n")
+        );
+    }
+    let (docs, _) = fmine_cli::invoke(&["robot-docs".to_owned()], &root);
+    assert!(docs.payload_json.contains("kpi_constraints.toml"));
+    assert!(docs.payload_json.contains("ratio_of_expected_totals"));
+}
+
+#[test]
 fn capital_program_cash_schedule_renders_every_bundle_timeline_in_library_and_binary() {
     let envelope = assert_render_parity("--schedule-fixture-only");
     assert!(

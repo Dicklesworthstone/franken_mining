@@ -1563,6 +1563,178 @@ class CapitalProgramScenarios(unittest.TestCase):
         self.assertEqual(Fraction(self.rows(changed)[("project",)]["per_share_statistics"]["mean"]), Fraction(1, 2))
 
 
+class CapitalKpiScenarios(unittest.TestCase):
+    envelope = CapitalProgramScenarios.envelope
+
+    @staticmethod
+    def rational(value):
+        value = Fraction(value)
+        return f"{value.numerator}/{value.denominator}"
+
+    def test_kpi_selection_and_frontiers_match_exact_subset_enumeration(self):
+        for case in range(8):
+            with self.subTest(case=case):
+                spec = specification(
+                    {"a": [-8 + case, 70], "b": [10, 30 + case], "c": [5, 60]},
+                    states=[("low", "1/3"), ("high", "2/3")],
+                    budget="2", cap="0" if case % 2 else None, tail="1/2",
+                )
+                constraints = [
+                    {
+                        "id": "cost", "metric": "gold_aisc", "direction": "upper",
+                        "aggregation": "every_state" if case % 2 else "ratio_of_expected_totals",
+                        "limit": Fraction(7) + Fraction(case, 3),
+                        "baseline": {"low": (80, 10), "high": (90, 15)},
+                        "increments": {
+                            "a": {"low": (30 + case, 2), "high": (80, 6)},
+                            "b": {"low": (-4, 5), "high": (6, 1)},
+                            "c": {"low": (150, 10), "high": (40, 3)},
+                        },
+                    },
+                    {
+                        "id": "return", "metric": "roce", "direction": "lower",
+                        "aggregation": "every_state" if case % 3 else "ratio_of_expected_totals",
+                        "limit": Fraction(10 + case, 100),
+                        "baseline": {"low": (20, 100), "high": (30, 100)},
+                        "increments": {
+                            "a": {"low": (-15, 70), "high": (10, 100)},
+                            "b": {"low": (10, 0), "high": (4, 0)},
+                            "c": {"low": (-5, 5), "high": (20, 80)},
+                        },
+                    },
+                ]
+                text = model(spec)
+                for constraint in constraints:
+                    text += block(
+                        "kpi_constraint",
+                        {key: constraint[key] for key in ("id", "metric", "direction", "aggregation")}
+                        | {
+                            "limit": self.rational(constraint["limit"]),
+                            "reporting_period": "2030-01-01/2030-12-31",
+                            "basis": "Invented reconciled additive metric totals with common support",
+                        },
+                    )
+                    for state, (numerator, denominator) in constraint["baseline"].items():
+                        text += block("kpi_baseline", {
+                            "constraint": constraint["id"], "state": state,
+                            "numerator": self.rational(numerator),
+                            "denominator": self.rational(denominator),
+                        })
+                    for name, states in constraint["increments"].items():
+                        for state, (numerator, denominator) in states.items():
+                            text += block("kpi_increment", {
+                                "constraint": constraint["id"], "candidate": name, "state": state,
+                                "numerator": self.rational(numerator),
+                                "denominator": self.rational(denominator),
+                            })
+                root = fixture(text)
+                envelope = self.envelope(root)
+                self.assertEqual(envelope["exit_code"], 0, envelope)
+                self.assertEqual(envelope["payload"]["mode"], "declared_kpi_capital_comparison")
+                self.assertEqual(
+                    envelope["payload"]["source"]["sha256"],
+                    hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                )
+                report = envelope["payload"]["program"]
+                self.assertEqual(report["schema"], "fmine.capital-kpi.v1")
+                summary = report["summary"]
+                self.assertEqual(summary["objective_unit"], "USD")
+                expected, weights, _, _, _ = enumerate_expected(spec)
+                names = sorted(row["id"] for row in spec["candidates"])
+                eligible, thresholds = {}, {}
+                for selected, choice in expected.items():
+                    mask = sum(1 << names.index(name) for name in selected)
+                    bundle = f"bundle_{mask:02x}"
+                    if not choice["reasons"] and not choice["risk_rejected"]:
+                        eligible[bundle] = choice["mean"]
+                    thresholds[bundle] = {}
+                    for constraint in constraints:
+                        totals = {}
+                        for state in weights:
+                            base_numerator, base_denominator = constraint["baseline"][state]
+                            numerator = Fraction(base_numerator) + sum((
+                                Fraction(constraint["increments"][name][state][0]) for name in selected
+                            ), Fraction(0))
+                            denominator = Fraction(base_denominator) + sum((
+                                Fraction(constraint["increments"][name][state][1]) for name in selected
+                            ), Fraction(0))
+                            totals[state] = (numerator, denominator)
+                        if constraint["aggregation"] == "ratio_of_expected_totals":
+                            value = (
+                                sum(weights[state] * numerator for state, (numerator, _) in totals.items())
+                                / sum(weights[state] * denominator for state, (_, denominator) in totals.items())
+                            )
+                        else:
+                            ratios = [numerator / denominator for numerator, denominator in totals.values()]
+                            value = max(ratios) if constraint["direction"] == "upper" else min(ratios)
+                        thresholds[bundle][constraint["id"]] = value
+
+                def selection(limits):
+                    feasible = {
+                        bundle: value for bundle, value in eligible.items()
+                        if all(
+                            thresholds[bundle][constraint["id"]] <= limits[constraint["id"]]
+                            if constraint["direction"] == "upper"
+                            else thresholds[bundle][constraint["id"]] >= limits[constraint["id"]]
+                            for constraint in constraints
+                        )
+                    }
+                    mean = max(feasible.values()) if feasible else None
+                    winners = sorted(bundle for bundle, value in feasible.items() if value == mean)
+                    return feasible, winners, mean
+
+                baseline = max(eligible.values()) if eligible else None
+                self.assertEqual(summary["baseline_winners"], sorted(
+                    bundle for bundle, value in eligible.items() if value == baseline
+                ))
+                self.assertEqual(
+                    summary["baseline_objective"],
+                    None if baseline is None else self.rational(baseline),
+                )
+                limits = {constraint["id"]: constraint["limit"] for constraint in constraints}
+                feasible, winners, mean = selection(limits)
+                self.assertEqual(summary["constrained_winners"], winners)
+                self.assertEqual(summary["constrained_objective"], None if mean is None else self.rational(mean))
+                self.assertEqual(
+                    summary["opportunity_cost"],
+                    None if mean is None else self.rational(baseline - mean),
+                )
+                self.assertEqual(len(summary["choices"]), len(expected))
+                for choice in summary["choices"]:
+                    bundle = choice["bundle_id"]
+                    self.assertEqual(choice["base_eligible"], bundle in eligible)
+                    self.assertEqual(choice["feasible"], bundle in feasible)
+                    for metric in choice["metrics"]:
+                        self.assertEqual(
+                            Fraction(metric["threshold_value"]),
+                            thresholds[bundle][metric["constraint_id"]],
+                        )
+                self.assertEqual(len(summary["frontiers"]), len(constraints))
+                for frontier in summary["frontiers"]:
+                    key = frontier["constraint_id"]
+                    declared = [point for point in frontier["points"] if point["at_declared_limit"]]
+                    self.assertEqual(len(declared), 1)
+                    self.assertEqual(Fraction(declared[0]["limit"]), limits[key])
+                    for point in frontier["points"]:
+                        point_feasible, point_winners, point_mean = selection(
+                            limits | {key: Fraction(point["limit"])}
+                        )
+                        self.assertEqual(point["feasible_count"], len(point_feasible))
+                        self.assertEqual(point["winners"], point_winners)
+                        self.assertEqual(
+                            point["objective_mean"],
+                            None if point_mean is None else self.rational(point_mean),
+                        )
+                        self.assertEqual(
+                            point["opportunity_cost"],
+                            None if point_mean is None else self.rational(baseline - point_mean),
+                        )
+                (root / FILE).write_text(text + "\n# New source receipt\n", encoding="utf-8")
+                changed = self.envelope(root)["payload"]["program"]
+                self.assertEqual(changed["summary"], summary)
+                self.assertNotEqual(changed["digest"], report["digest"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)

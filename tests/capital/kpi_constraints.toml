@@ -1,0 +1,77 @@
+# DESIGN (BD-229, plan section 23.6): invented, exact KPI opportunity-cost exercise.
+# Both alternatives fit the USD 1 budget. Growth adds USD 100 of net NAV, efficient
+# adds USD 80. Their whole-portfolio AISC ratios are 2 and 1 USD/oz respectively.
+# A cap of 3/2 selects efficient and sacrifices USD 20. Relaxing it to 2 admits
+# growth at equality. No issuer formula, actual mine or calibrated forecast is used.
+schema = "fmine.capital-program.v1"
+model_key = "invented-kpi-capital-program"
+question = "What net NAV does the declared gold AISC cap cost?"
+currency = "USD"
+valuation_basis = "Invented nominal USD net delta NAV at a single valuation date and full economic ownership; costs already included in payoffs"
+budget = "1"
+tail_mass = "1/1"
+payoff_convention = "additive_net_delta_nav"
+reference_class_basis = "Unadjusted invented assumptions, without fitted reference-class calibration"
+
+[[state]]
+id = "base"
+weight = "1/1"
+
+[[candidate]]
+id = "efficient"
+label = "Invented efficient option"
+cost = "1"
+exclusion_group = "plant_option"
+reference_class_basis = "Invented unadjusted efficient-option payoff"
+
+[[candidate]]
+id = "growth"
+label = "Invented growth option"
+cost = "1"
+exclusion_group = "plant_option"
+reference_class_basis = "Invented unadjusted growth-option payoff"
+
+[[payoff]]
+candidate = "efficient"
+state = "base"
+value = "80"
+
+[[payoff]]
+candidate = "growth"
+state = "base"
+value = "100"
+
+[[kpi_constraint]]
+id = "gold_aisc_cap"
+metric = "gold_aisc"
+basis = "Invented additive gold AISC numerator in USD and attributable sold troy ounces, same ownership and period, with no overlapping cost pools"
+reporting_period = "2030-01-01/2030-12-31"
+aggregation = "ratio_of_expected_totals"
+direction = "upper"
+limit = "3/2"
+
+[[kpi_baseline]]
+constraint = "gold_aisc_cap"
+state = "base"
+numerator = "100/1"
+denominator = "100/1"
+
+[[kpi_increment]]
+constraint = "gold_aisc_cap"
+candidate = "efficient"
+state = "base"
+numerator = "100/1"
+denominator = "100/1"
+
+[[kpi_increment]]
+constraint = "gold_aisc_cap"
+candidate = "growth"
+state = "base"
+numerator = "300/1"
+denominator = "100/1"
+
+[[uu]]
+id = "UU-outside-declared-model"
+description = "Actual costs, production or interactions may fall outside the invented additive inputs"
+trigger = "A material cost or production interaction is absent from the declared state"
+downside_usd_m = "1"
