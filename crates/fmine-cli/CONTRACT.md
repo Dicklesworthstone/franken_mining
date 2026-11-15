@@ -1389,14 +1389,15 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   before `derivable` is reported. Direct disclosures and contradictions retain priority, while missing
   quarters, unknown dates, insufficient precision and arithmetic refusals remain visible. These Claims
   establish arithmetic over source assertions, never an additional issuer disclosure or permission.
-  DESIGN (bounded BD-345.S4): `lint_publicness::ownership` binds one dated full-mine production/sales
+  DESIGN (bounded BD-345.S4): `lint_publicness::ownership` binds one dated full-mine or attributable production/sales
   amount to printed ownership witnesses from that exact source vintage, subject, period and perimeter.
-  It delegates full-mine-to-attributable scaling to the Claim-typed exact metrics kernel. The
+  It delegates conversion in either direction to the Claim-typed exact metrics kernel. Inverse conversion
+  requires the amount's declared share to match every witness and retains its own printed basis as evidence. The
   `ownership_scaling` object retains every candidate, admitted amount/share Claims, exact enclosure,
   derived Claim and refusal; same-fraction witnesses keep their individual ancestry. Competing amounts
   or conflicting shares stay ambiguous, and future, undated, unusable or registry-corrected witnesses
   cannot authorize scaling. The full enclosure must fit the draft precision; direct disclosures and
-  contradictions retain priority. Reverse scaling and scaling of intensive rates remain unsupported. Source-to-command
+  contradictions retain priority. Scaling of intensive rates remains unsupported. Source-to-command
   and kernel regressions live in `xtask/tests/public_lint_derivations.rs`; share-parser boundary regressions
   in `xtask/tests/public_key_contract.rs` keep 0.100% distinct from 100% and reject 1100%.
   DESIGN (bounded BD-345.S4): `lint_publicness::rates` derives gold AISC and explicitly by-product TCC

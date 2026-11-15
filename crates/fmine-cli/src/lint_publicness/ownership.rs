@@ -8,6 +8,7 @@ use fmine_public::key::ShareSource;
 
 #[derive(Debug, Clone)]
 pub(super) struct Assessment {
+    rule: &'static str,
     pub(super) status: &'static str,
     reason: &'static str,
     pub(super) evidence: Vec<SourceEvidence>,
@@ -25,23 +26,31 @@ pub(super) fn assess(
     publications: &BTreeMap<(String, String), &Publication>,
     as_of: &str,
 ) -> Option<Assessment> {
-    let (prototype, target, kind) = cells.iter().find_map(|c| {
+    let (prototype, target, kind, to_full_mine) = cells.iter().find_map(|c| {
         let kind = quantity(c)?;
-        if c.key.ownership_basis != OwnershipBasis::Consolidated100
-            || !matches!(c.key.scope, Scope::Site | Scope::JointVenture)
-        {
+        if !matches!(c.key.scope, Scope::Site | Scope::JointVenture) {
             return None;
         }
         // Only the basis category parses the prose. This prototype is never used as source evidence.
         let mut p = c.clone();
-        p.key.ownership_basis = OwnershipBasis::Attributable {
-            num: 1,
-            den: 1,
-            source: ShareSource::Printed,
+        let to_full_mine = match c.key.ownership_basis {
+            OwnershipBasis::Consolidated100 => {
+                p.key.ownership_basis = OwnershipBasis::Attributable {
+                    num: 1,
+                    den: 1,
+                    source: ShareSource::Printed,
+                };
+                false
+            }
+            OwnershipBasis::Attributable { .. } => {
+                p.key.ownership_basis = OwnershipBasis::Consolidated100;
+                true
+            }
+            _ => return None,
         };
         p.printed_basis = p.key.ownership_basis;
         p.basis_evidence = None;
-        Some((c, equality_target(draft, f.span, &p)?, kind))
+        Some((c, equality_target(draft, f.span, &p)?, kind, to_full_mine))
     })?;
     let mut evidence: Vec<_> = cells
         .iter()
@@ -57,8 +66,17 @@ pub(super) fn assess(
         .collect();
     evidence.sort_by_cached_key(|e| (e.source.claim.claim_id, e.to_json()));
     let mut out = Assessment {
+        rule: if to_full_mine {
+            kernel::OWNERSHIP_UNSCALE_RULE
+        } else {
+            kernel::OWNERSHIP_SCALE_RULE
+        },
         status: "not_available",
-        reason: "unique_full_mine_amount_and_same_source_printed_share_required",
+        reason: if to_full_mine {
+            "unique_attributable_amount_and_same_source_printed_share_required"
+        } else {
+            "unique_full_mine_amount_and_same_source_printed_share_required"
+        },
         evidence,
         amount: None,
         shares: Vec::new(),
@@ -79,13 +97,24 @@ pub(super) fn assess(
             .iter()
             .filter(|e| {
                 quantity(&e.source) == Some(kind)
-                    && e.source.key.ownership_basis == OwnershipBasis::Consolidated100
+                    && if to_full_mine {
+                        matches!(
+                            e.source.key.ownership_basis,
+                            OwnershipBasis::Attributable { .. }
+                        )
+                    } else {
+                        e.source.key.ownership_basis == OwnershipBasis::Consolidated100
+                    }
                     && e.admission != "after_cut"
             })
             .collect();
         if amounts.len() > 1 {
             out.status = "ambiguous";
-            out.reason = "competing_full_mine_assertions_are_not_selected_by_amount";
+            out.reason = if to_full_mine {
+                "competing_attributable_assertions_are_not_selected_by_amount"
+            } else {
+                "competing_full_mine_assertions_are_not_selected_by_amount"
+            };
             return Ok(());
         }
         let [source] = amounts.as_slice() else {
@@ -99,7 +128,11 @@ pub(super) fn assess(
         let mut fractions = BTreeSet::new();
         for e in &mut out.evidence {
             if e.source.claim.claim_id == source.claim.claim_id {
-                e.relation = "full_mine_operand";
+                e.relation = if to_full_mine {
+                    "attributable_operand"
+                } else {
+                    "full_mine_operand"
+                };
             }
             let OwnershipBasis::Attributable {
                 num,
@@ -123,13 +156,18 @@ pub(super) fn assess(
             }
             if origin != ShareSource::Printed
                 || e.source.basis_evidence.is_some()
+                || e.source.printed_basis != e.source.key.ownership_basis
                 || e.source.key.scope != source.key.scope
                 || e.source.key.line.occurrence != source.key.line.occurrence
             {
                 out.reason = "ownership_requires_uncorrected_printed_share_on_the_same_perimeter";
                 return Ok(());
             }
-            e.relation = "printed_ownership_witness";
+            e.relation = if to_full_mine && e.source.claim.claim_id == source.claim.claim_id {
+                "attributable_amount_and_printed_ownership"
+            } else {
+                "printed_ownership_witness"
+            };
             let value = OwnershipShare {
                 issuer: source.key.issuer.clone(),
                 subject: source.key.subject.clone(),
@@ -169,7 +207,11 @@ pub(super) fn assess(
         if out.shares.is_empty() {
             return Ok(());
         }
-        let derived = kernel::ownership_scale(&amount, &out.shares)?;
+        let derived = if to_full_mine {
+            kernel::ownership_unscale(&amount, &out.shares)?
+        } else {
+            kernel::ownership_scale(&amount, &out.shares)?
+        };
         let bounds = derived.value.interval;
         let bad = || {
             Refusal::new(
@@ -180,6 +222,9 @@ pub(super) fn assess(
         let interval = sums::draft_interval(target).map_err(|_| bad())?;
         out.status = sums::compare(interval, bounds).map_err(|_| bad())?;
         out.reason = match out.status {
+            "derived" if to_full_mine => {
+                "dated_attributable_amount_and_printed_share_support_the_draft_precision"
+            }
             "derived" => "dated_full_mine_amount_and_printed_share_support_the_draft_precision",
             "contradicted" => "ownership_scaled_amount_is_disjoint_from_the_draft",
             _ => "ownership_scaled_rounding_exceeds_the_draft_precision",
@@ -203,7 +248,7 @@ impl Assessment {
         }).collect::<Vec<_>>().join(",");
         format!(
             "{{\"rule\":{},\"status\":{},\"reason\":{},\"warning\":{},\"amount_claim\":{},\"share_claims\":[{}],\"derived_claim\":{},\"evidence\":[{}],\"refusal\":{}}}",
-            js(kernel::OWNERSHIP_SCALE_RULE),
+            js(self.rule),
             js(self.status),
             js(self.reason),
             js(kernel::WARNING),
@@ -225,7 +270,7 @@ impl Assessment {
     pub(super) fn to_markdown(&self) -> String {
         let mut out = format!(
             "  - Ownership scaling `{}`: **{}**; {}. {}\n",
-            kernel::OWNERSHIP_SCALE_RULE,
+            self.rule,
             self.status,
             self.reason,
             kernel::WARNING

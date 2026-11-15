@@ -2,8 +2,8 @@
 //! Determinism: Exact
 //!
 //! DESIGN: closed rational intervals propagate the printed precision of source assertions. They are
-//! neither forecasts nor confidence intervals. Complete quarter sums and full-mine amounts scaled by
-//! explicitly evidenced ownership are admitted here, alongside cost-per-sold-unit enclosures with an
+//! neither forecasts nor confidence intervals. Complete quarter sums and ownership conversions with
+//! explicitly evidenced shares are admitted here, alongside cost-per-sold-unit enclosures with an
 //! explicit scale. Publication admission belongs to the source adapter; cumulative differences use
 //! the existing `roll_forward::quarter` identity.
 
@@ -19,6 +19,7 @@ type Result<T> = std::result::Result<T, Refusal>;
 pub const INPUT_METRIC: &str = "public_disclosure.period_amount";
 pub const SHARE_METRIC: &str = "public_disclosure.ownership_share";
 pub const OWNERSHIP_SCALE_RULE: &str = "public-disclosure.ownership-scale/1";
+pub const OWNERSHIP_UNSCALE_RULE: &str = "public-disclosure.ownership-unscale/1";
 pub const WARNING: &str = "Arithmetic over dated public assertions does not make the derived figure an issuer disclosure. A non-obvious derived figure can itself be new information; obtain appropriate disclosure review.";
 
 /// Explicit sold-metal scale for a US$M cost numerator. No mass or ownership conversion is inferred.
@@ -394,11 +395,35 @@ pub fn ownership_scale(
     amount: &Claim<Amount>,
     shares: &[Claim<OwnershipShare>],
 ) -> Result<Claim<Amount>> {
+    ownership_convert(amount, shares, false)
+}
+
+/// Attributable to full-mine production/sales. The amount's declared attributable fraction must
+/// equal every explicit ownership witness. Division preserves the full printed rounding enclosure;
+/// it does not create additional precision or assert that the inferred amount was directly disclosed.
+pub fn ownership_unscale(
+    amount: &Claim<Amount>,
+    shares: &[Claim<OwnershipShare>],
+) -> Result<Claim<Amount>> {
+    ownership_convert(amount, shares, true)
+}
+
+fn ownership_convert(
+    amount: &Claim<Amount>,
+    shares: &[Claim<OwnershipShare>],
+    to_full_mine: bool,
+) -> Result<Claim<Amount>> {
     validate(amount)?;
-    if amount.value.ownership != Ownership::Full {
+    if !to_full_mine && amount.value.ownership != Ownership::Full {
         return Err(refusal(
             RefusalCode::BasisMismatch105,
             "ownership scaling requires a full-mine source amount",
+        ));
+    }
+    if to_full_mine && !matches!(amount.value.ownership, Ownership::Attributable { .. }) {
+        return Err(refusal(
+            RefusalCode::BasisMismatch105,
+            "ownership unscaling requires an attributable source amount",
         ));
     }
     let Some(first) = shares.first() else {
@@ -431,6 +456,12 @@ pub fn ownership_scale(
             ));
         }
     }
+    if to_full_mine && a.ownership != (Ownership::Attributable { share: fraction }) {
+        return Err(refusal(
+            RefusalCode::BasisMismatch105,
+            "printed ownership witnesses do not match the amount's attributable basis",
+        ));
+    }
     let mut ordered: Vec<_> = shares.iter().collect();
     ordered.sort_by_key(|c| c.claim_id);
     if ordered
@@ -444,9 +475,15 @@ pub fn ownership_scale(
     }
     ordered.dedup_by_key(|c| c.claim_id);
     let mut value = a.clone();
-    value.ownership = Ownership::Attributable { share: fraction };
-    value.interval.lo = checked(value.interval.lo.checked_mul(fraction))?;
-    value.interval.hi = checked(value.interval.hi.checked_mul(fraction))?;
+    let factor = if to_full_mine {
+        value.ownership = Ownership::Full;
+        checked(Rat::from_integer(1).checked_div(fraction))?
+    } else {
+        value.ownership = Ownership::Attributable { share: fraction };
+        fraction
+    };
+    value.interval.lo = checked(value.interval.lo.checked_mul(factor))?;
+    value.interval.hi = checked(value.interval.hi.checked_mul(factor))?;
     let mut evidence = amount.evidence.meet(EvidenceClass::Derived);
     let mut epistemic = amount.epistemic;
     let mut state = amount.state;
@@ -471,7 +508,11 @@ pub fn ownership_scale(
     anchors.dedup();
     let tag = value.canonical_tag();
     Ok(Claim::new(
-        OWNERSHIP_SCALE_RULE,
+        if to_full_mine {
+            OWNERSHIP_UNSCALE_RULE
+        } else {
+            OWNERSHIP_SCALE_RULE
+        },
         value,
         &tag,
         Representation::Deterministic,

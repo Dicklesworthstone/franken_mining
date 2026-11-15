@@ -220,9 +220,13 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   `Claim<OwnershipShare>` witnesses for the same issuer, subject, perimeter and physical period. Every
   exact share must agree and lie in (0, 1]. The result multiplies both closed amount bounds by that share,
   preserves every independent witness, source anchor and inherited Claim metadata, and never scales a rate.
+  `ownership_unscale` accepts an attributable amount with the same witnesses, requires their fraction to
+  match the amount's declared share, and divides both bounds to produce the full-mine enclosure. Its rule
+  is distinct, and checked arithmetic refuses overflow. The inverse retains the input's rounding uncertainty.
   The CLI ownership adapter admits only printed shares from the amount's own dated source, retains other
   vintages as context, and rejects competing amounts or conflicting shares without selecting by draft value.
-  These are arithmetic enclosures; no disclosure permission, reverse ownership conversion or gate pass is claimed.
+  These are arithmetic enclosures; no disclosure permission or gate pass is claimed. Exact inverse controls
+  and source-to-CLI tests are in `crates/xtask/tests/public_lint_derivations.rs`.
 - **`reserves::assess`** gives a `ReserveReport`: every admitted or refused `IssuerReserveRow`, the `CurrentSelection`, each `VintageComparison`, the `ReserveDeck` prices, the document metadata and `geo_checks`, with JSON, Markdown and digests over all of them. Each `reserves::geo::GeoCheckReport` gives the stated-deck result, the exact converted and reported bounds, every strict-convention fit, the declared and candidate sources and content digests. `fmine-cli`'s `tables.rs` calls it.
 - **`mirror::compare`** gives a `MirrorReport` with a `MirrorVerdict`. `Consistent` carries a checked source-basis witness and a common full-basis Claim. `Conflict` carries the checked certificate/digest, blame status and inclusion-minimal source sets. `Indeterminate` has no common quantity. **`compare_capex`** gives a `CapexReport`: independent single-line checks in `lines`, and the separate `ComponentSum` assessment in `joint`. `fmine-cli`'s `mirror.rs` calls both.
 
@@ -506,7 +510,7 @@ The other modules have local errors with no refusal code:
   Canonical APIs: `ClaimBasis`, `InputRole`, `InputClaim`, `ReplacementValue`, `ReplacementClaims::to_json`,
   `SeriesResult::{claims, check_claims}` and `ReplacementReport::claims`.
 - **`roll_forward::quarter`:** `WARNING`, `Quantity`, `Printed`, `Observation`, `Status`, `Pair`, `Report` and `assess` (BD-345.S4).
-- **`public_derivation`:** `INPUT_METRIC`, `SHARE_METRIC`, `OWNERSHIP_SCALE_RULE`, `WARNING`, `AmountKind`, `Amount`, `OwnershipShare`, `Rule`, `derive` and `ownership_scale` (BD-345.S4).
+- **`public_derivation`:** `INPUT_METRIC`, `SHARE_METRIC`, `OWNERSHIP_SCALE_RULE`, `OWNERSHIP_UNSCALE_RULE`, `WARNING`, `AmountKind`, `Amount`, `OwnershipShare`, `Rule`, `derive`, `ownership_scale` and `ownership_unscale` (BD-345.S4).
 - **`reserves`:** `NO_CLAIM`, `ReserveKey`, `SourceRole`, `ReserveDeck`, `IssuerReserveRow`, `ReserveRefusal`, `CurrentSelection`, `VintageComparison`, `ReserveReport` and `assess` (BD-335). `reserves::geo`: `NO_CLAIM`, `GeoAmount`, `GeoDeckInput` and `GeoCheckReport` with `digest`, `to_json` and `to_markdown` (BD-340.S4, BD-070).
 - **`mirror`:** `READING_METRIC`, `NO_CLAIM`, `Perimeter`, `MirrorMetric`, `MirrorQuantity`, `MirrorReading`, `MirrorCommon`, `MirrorReport`, `MirrorVerdict` and `compare` (BD-346). Capital (BD-346.S4): `CapexScope`, `CapexTiming`, `LeaseTreatment`, `CapexBasis`, `CapexReport`, `CapexJointReport` and `compare_capex`. `mirror::transcriptions`: `BoundReadings`, `bind`, `keys` and `period_label`. `bind(subject, period, kind, issuer, document, rows, evidence)` returns the separately cited ownership Claim, when needed, and source reading Claims. Capital keys are `capex_sustaining`, `capex_project` or `capex_total` with `_100_usd_m` or `_attr_usd_m`, the source unit is exactly `USD_m`, and the context needs `timing`, `leases` and the definition's own page, table, row and column.
 
