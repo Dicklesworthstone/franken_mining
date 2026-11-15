@@ -171,6 +171,37 @@ fn jointly_changes_period_and_destination_when_each_separate_move_loses() {
 }
 
 #[test]
+fn planner_builds_a_profitable_two_sided_blend_from_an_empty_start() {
+    let mut m = model(
+        &[[10, 8], [-3, -5]],
+        &[[2, 3], [-2, -3]],
+        &[0, 0],
+        "1",
+        &[vec![], vec![]],
+    );
+    m.uses.push(vec![-2, -3, 2, 3]);
+    m.limits.push(vec![0, 0]);
+    let before = solve(&m, options(0), None).unwrap();
+    assert_eq!(before.discounted_numerator, 0);
+    assert!(before.schedule.assignments().is_empty());
+    let plan = solve(&m, options(8), None).unwrap();
+    assert_eq!(
+        plan.discounted_numerator,
+        7_000 * i128::from(DISCOUNT_SCALE)
+    );
+    assert_eq!(
+        candidate::write_solution(&plan.schedule),
+        "0 0 0 1\n1 0 0 1\n"
+    );
+    assert_eq!(
+        plan.discounted_numerator / 1_000,
+        exhaustive_whole(&m, &plan.factors)
+    );
+    assert_certificate(&m, &plan);
+    assert_eq!(solve(&m, options(8), None).unwrap(), plan);
+}
+
+#[test]
 fn exact_split_beats_every_whole_destination_and_is_retained_without_rounding() {
     // One block: dump value 0/use 0, mill value 10/use 2, capacity 1.
     // Every feasible whole-block plan is worth 0; a half-mill split is worth 5.
@@ -280,33 +311,40 @@ fn infeasible_outside_candidate_is_reported_and_cannot_replace_the_incumbent() {
 
 #[test]
 fn whole_candidate_seeds_destination_search_that_the_greedy_start_cannot_reach() {
-    // The two blocks mutually require one another. They can legally be mined
-    // together, but Kahn's greedy has no starting node. The outside plan supplies
-    // that feasible mining period; destination search improves its value 2 to 10.
+    // The three blocks form a precedence cycle. They can legally be mined
+    // together, but neither Kahn's greedy nor an atomic pair has a starting set.
+    // The outside plan supplies that period; destination search raises 3 to 15.
     let m = model(
-        &[[1, 5], [1, 5]],
-        &[[0, 0], [0, 0]],
+        &[[1, 5], [1, 5], [1, 5]],
+        &[[0, 0], [0, 0], [0, 0]],
         &[0],
         "0",
-        &[vec![1], vec![0]],
+        &[vec![1], vec![2], vec![0]],
     );
-    let external = candidate::parse_solution("0 0 0 1\n1 0 0 1\n", &m, 3).unwrap();
+    let external = candidate::parse_solution("0 0 0 1\n1 0 0 1\n2 0 0 1\n", &m, 3).unwrap();
     let without_whole_search = solve(&m, options(0), Some(&external)).unwrap();
     assert_eq!(without_whole_search.origin, "fractional_candidate");
     assert_eq!(
         without_whole_search.discounted_numerator,
-        10_000 * i128::from(DISCOUNT_SCALE)
+        15_000 * i128::from(DISCOUNT_SCALE)
     );
     let p = solve(&m, options(8), Some(&external)).unwrap();
     assert_eq!(p.origin, "improved_candidate");
     assert_eq!(p.heuristic.after, 0);
-    assert_eq!(p.discounted_numerator, 10_000 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(p.discounted_numerator, 15_000 * i128::from(DISCOUNT_SCALE));
     assert_eq!(
         p.candidate.as_ref().unwrap().discounted_numerator,
-        2_000 * i128::from(DISCOUNT_SCALE)
+        3_000 * i128::from(DISCOUNT_SCALE)
     );
-    assert_eq!(candidate::write_solution(&p.schedule), "0 1 0 1\n1 1 0 1\n");
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 1 0 1\n1 1 0 1\n2 1 0 1\n"
+    );
     assert_certificate(&m, &p);
+    assert_eq!(
+        p.discounted_numerator / 1_000,
+        exhaustive_whole(&m, &p.factors)
+    );
 }
 
 #[test]

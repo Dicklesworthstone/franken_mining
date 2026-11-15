@@ -53,7 +53,10 @@
 //! left MineLib's w23 9.9% lower. When those moves stop, a joint pass can change both a block's period and its
 //! destination, or insert an unmined block at a feasible destination other than its most valuable one. Each
 //! strictly profitable move checks both periods' signed resource totals and both sides of precedence. Ordinary
-//! moves then resume. It ends with [`check`] and refuses rather than return a schedule that fails it or is worth
+//! moves then resume. If single-block joint moves also stop, a bounded pair pass can insert or retime two blocks
+//! together and choose both destinations. This admits complementary two-sided blends even when neither block
+//! can enter alone. Pair trials include the resources released from both old periods before checking the new one.
+//! It ends with [`check`] and refuses rather than return a schedule that fails it or is worth
 //! less than the one it was given.
 
 use fmine_evidence::Refusal;
@@ -67,11 +70,18 @@ use crate::pitflow::minelib::{MAX_DECIMALS, Rounding, bad, lines, number, parse_
 pub mod candidate;
 pub mod fractional;
 pub mod lp;
+mod pairs;
 pub mod planning;
 pub mod price;
 
 /// The most destinations a PCPSP file may declare.
 pub const MAX_DESTINATIONS: usize = 16;
+
+/// At most this many following block IDs are tried as partners for each anchor.
+pub const PAIR_SCAN: usize = 64;
+/// Shared per-pass budget for pairs, target periods and destination-pair trials.
+/// Exhaustion retains the feasible incumbent; it is not an optimality claim.
+pub const PAIR_WORK: usize = 262_144;
 
 /// A parsed PCPSP pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -879,6 +889,16 @@ fn joint_destinations(
             moved += 1;
         }
     }
+    if moved == 0 {
+        moved = pairs::improve(
+            model,
+            schedule,
+            destination,
+            factors,
+            &mut used,
+            (&offsets, &dependents),
+        );
+    }
     Ok(moved)
 }
 
@@ -900,13 +920,15 @@ pub struct PcpspImprovement {
     pub moves: Moves,
     /// Destination moves, from [`destinations`].
     pub destination_moves: DestinationMoves,
-    /// Joint period/destination changes and feasible-route insertions.
+    /// Joint block moves and insertions; a pair counts two, including a member left in place.
     pub joint_moves: usize,
 }
 
 /// Period and destination moves in turn, followed by joint moves when both
 /// neighborhoods stop (see the module notes). `max_rounds` limits the cycles and
-/// each period search's rounds; a joint pass visits each block once per cycle.
+/// each period search's rounds; a single-block joint pass visits each block once
+/// per cycle. Stalled single-block moves are followed by a pair pass bounded by
+/// [`PAIR_SCAN`] and [`PAIR_WORK`].
 ///
 /// # Errors
 /// `FMINE-REF-207` (proposed) when the schedule and destinations given fail [`check`] or do not fit the model, when
@@ -1025,7 +1047,7 @@ mod tests {
         }
     }
 
-    fn factors(periods: usize) -> Vec<i64> {
+    pub(super) fn factors(periods: usize) -> Vec<i64> {
         discount_factors(100_000_000, RATE_SCALE, periods).unwrap()
     }
 
@@ -1291,6 +1313,115 @@ mod tests {
         }
     }
 
+    pub(super) fn complementary_blend_model() -> PcpspModel {
+        PcpspModel {
+            name: "two-sided complementary blend".into(),
+            periods: 2,
+            destinations: 2,
+            values: vec![10, 8, -3, -5],
+            // Destination 0 of either block alone violates one blend bound.
+            // Their joint use is [0, 0]. Destination 1 cannot rescue a single.
+            uses: vec![vec![2, 3, -2, -3], vec![-2, -3, 2, 3]],
+            limits: vec![vec![0, 0], vec![0, 0]],
+            requires: vec![vec![], vec![]],
+            discount_rate: 100_000_000,
+            rounded_values: 0,
+            rounded_uses: 0,
+            rounded_limits: 0,
+        }
+    }
+
+    #[test]
+    fn complementary_pair_enters_when_neither_blend_member_is_feasible_alone() {
+        let m = complementary_blend_model();
+        let f = factors(2);
+        let (s, d) = super::greedy(&m, &[Some(0), Some(1)], &[0, 0]).unwrap();
+        assert_eq!(s, vec![None, None]);
+        assert_eq!(worth(&m, &[Some(0), None], &[0, 0], &f), None);
+        assert_eq!(worth(&m, &[None, Some(0)], &[0, 0], &f), None);
+        let improved = improve(&m, &s, &d, &f, 8).unwrap();
+        assert_eq!(improved.schedule, vec![Some(0), Some(0)]);
+        assert_eq!(improved.destination, vec![0, 0]);
+        assert_eq!(improved.after, 7 * i128::from(f[0]));
+        assert_eq!(improved.after, optimum(&m, &f));
+        assert_eq!(improved.joint_moves, 2);
+    }
+
+    #[test]
+    fn complementary_pair_moves_both_blend_members_earlier_atomically() {
+        let m = complementary_blend_model();
+        let f = factors(2);
+        let start = vec![Some(1), Some(1)];
+        let improved = improve(&m, &start, &[0, 0], &f, 8).unwrap();
+        assert_eq!(improved.before, 7 * i128::from(f[1]));
+        assert_eq!(improved.schedule, vec![Some(0), Some(0)]);
+        assert_eq!(improved.after, optimum(&m, &f));
+        assert_eq!(improved.joint_moves, 2);
+    }
+
+    #[test]
+    fn complementary_pair_changes_both_routes_and_time_when_separate_moves_cannot() {
+        let mut m = complementary_blend_model();
+        m.uses.push(vec![1, 0, 1, 0]);
+        m.limits.push(vec![0, 2]);
+        let f = [100, 25];
+        let improved = improve(&m, &[Some(1), Some(1)], &[0, 0], &f, 8).unwrap();
+        assert_eq!(improved.before, 175);
+        assert_eq!(improved.after, 300);
+        assert_eq!(improved.schedule, vec![Some(0), Some(0)]);
+        assert_eq!(improved.destination, vec![1, 1]);
+        assert_eq!(improved.after, optimum(&m, &f));
+    }
+
+    #[test]
+    fn complementary_pair_preserves_external_precedence_and_admits_internal_arcs() {
+        let mut m = complementary_blend_model();
+        m.values.extend([0, 0]);
+        for row in &mut m.uses {
+            row.extend([0, 0]);
+        }
+        m.requires = vec![vec![2], vec![], vec![]];
+        let f = factors(2);
+        let unmined = improve(&m, &[None; 3], &[0; 3], &f, 8).unwrap();
+        assert_eq!(unmined.schedule, vec![None; 3]);
+        let delayed = improve(&m, &[None, None, Some(1)], &[0; 3], &f, 8).unwrap();
+        assert_eq!(delayed.schedule, vec![Some(1); 3]);
+        assert_eq!(delayed.after, 7 * i128::from(f[1]));
+
+        // A pair may move neither member past a mined dependent, even when
+        // postponing both negative-value blending credits would raise value.
+        m.values = vec![-2, -2, -3, -3, 10, 10];
+        m.requires = vec![vec![], vec![], vec![0]];
+        let pinned = improve(&m, &[Some(0); 3], &[0; 3], &f, 8).unwrap();
+        assert_eq!(pinned.schedule, vec![Some(0); 3]);
+        assert_eq!(pinned.after, 5 * i128::from(f[0]));
+
+        let mut mutual = complementary_blend_model();
+        mutual.requires = vec![vec![0, 1], vec![0, 1]];
+        let joined = improve(&mutual, &[None; 2], &[0; 2], &f, 8).unwrap();
+        assert_eq!(joined.schedule, vec![Some(0); 2]);
+        assert_eq!(joined.after, optimum(&mutual, &f));
+    }
+
+    #[test]
+    fn complementary_pair_cannot_remove_credit_needed_by_material_left_behind() {
+        let mut m = complementary_blend_model();
+        m.destinations = 1;
+        m.values = vec![3, 4, 0];
+        m.uses = vec![vec![-1, -1, 2]];
+        m.limits = vec![vec![0, 0]];
+        m.requires = vec![vec![]; 3];
+        let f = factors(2);
+        let start = vec![Some(1); 3];
+        let result = improve(&m, &start, &[0; 3], &f, 8).unwrap();
+        assert_eq!(result.schedule, start);
+        assert_eq!(result.after, 7 * i128::from(f[1]));
+        assert_eq!(
+            worth(&m, &result.schedule, &result.destination, &f),
+            Some(result.after)
+        );
+    }
+
     #[test]
     fn joint_move_can_mine_earlier_at_a_lower_value_destination() {
         let m = joint_timing_model();
@@ -1346,10 +1477,12 @@ mod tests {
         m.limits.push(vec![0, 0]);
         m.requires.push(vec![]);
         let improved = improve(&m, &[Some(1), Some(1)], &[0, 0], &[10, 8], 8).unwrap();
-        // The low-grade block cannot leave the period that needs its blending
-        // credit. The high-grade block cannot enter an unblended period.
-        assert_eq!((improved.before, improved.after), (240, 240));
-        assert_eq!(improved.schedule, [Some(1), Some(1)]);
+        // Neither block may move alone, but moving both together keeps the
+        // credit beside the consuming material in each affected period.
+        assert_eq!((improved.before, improved.after), (240, 290));
+        assert_eq!(improved.schedule, [Some(0), Some(0)]);
+        assert_eq!(improved.destination, [1, 0]);
+        assert_eq!(improved.after, optimum(&m, &[10, 8]));
 
         let mut m = joint_timing_model();
         m.uses.push(vec![0, 1]);
@@ -1366,7 +1499,8 @@ mod tests {
         m.uses[0].extend([0, 0]);
         m.requires = vec![vec![1], vec![]];
         let improved = improve(&m, &[Some(1), Some(1)], &[0, 0], &[10, 8], 8).unwrap();
-        assert_eq!((improved.before, improved.after), (80, 80));
+        assert_eq!((improved.before, improved.after), (80, 90));
+        assert_eq!(improved.schedule, [Some(0), Some(0)]);
 
         m.values = vec![10, 8, 20, 20];
         m.requires = vec![vec![], vec![0]];
@@ -1376,7 +1510,8 @@ mod tests {
         m.values = vec![10, 9, 0, 0];
         m.requires = vec![vec![1], vec![0]];
         let improved = improve(&m, &[Some(1), Some(1)], &[0, 0], &[10, 8], 8).unwrap();
-        assert_eq!((improved.before, improved.after), (80, 80));
+        assert_eq!((improved.before, improved.after), (80, 90));
+        assert_eq!(improved.schedule, [Some(0), Some(0)]);
 
         // A self arc alone permits a move: the block moves with itself.
         let mut m = joint_timing_model();
@@ -1480,6 +1615,55 @@ mod tests {
             })
             .max()
             .unwrap_or(0)
+    }
+
+    #[test]
+    fn paired_search_is_sound_from_every_feasible_three_period_state() {
+        let f = [100, 90, 80];
+        let mut starts = 0;
+        for seed in 0..48 {
+            let mut m = random_signed_model(seed);
+            if m.blocks() > 3 {
+                continue;
+            }
+            m.periods = 3;
+            for row in &mut m.limits {
+                row.resize(3, 2);
+            }
+            let best = optimum(&m, &f);
+            let choices = 1 + m.periods() * m.destinations();
+            for mut code in 0..choices.pow(m.blocks() as u32) {
+                let mut schedule = vec![None; m.blocks()];
+                let mut destination = vec![0; m.blocks()];
+                for b in 0..m.blocks() {
+                    let choice = code % choices;
+                    code /= choices;
+                    if choice > 0 {
+                        schedule[b] = Some(((choice - 1) / m.destinations()) as u32);
+                        destination[b] = ((choice - 1) % m.destinations()) as u32;
+                    }
+                }
+                let Some(before) = worth(&m, &schedule, &destination, &f) else {
+                    continue;
+                };
+                starts += 1;
+                let problem = m.with_destinations(&destination).unwrap();
+                let mut used = check(&problem, &schedule).unwrap().used;
+                let (offsets, dependents) = crate::toposort::dependents(problem.blocks()).unwrap();
+                super::pairs::improve(
+                    &m,
+                    &mut schedule,
+                    &mut destination,
+                    &f,
+                    &mut used,
+                    (&offsets, &dependents),
+                );
+                let after = worth(&m, &schedule, &destination, &f)
+                    .unwrap_or_else(|| panic!("pair made an infeasible schedule in case {seed}"));
+                assert!(before <= after && after <= best, "case {seed}");
+            }
+        }
+        assert!(starts > 200);
     }
 
     /// Greedy under random destinations and ranks, then [`improve`]: feasible and valued as the definition says,
