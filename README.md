@@ -2430,8 +2430,8 @@ identity basis, exact derived Claim and both original source Claims. The derived
 issuer-assertion evidence class. Stored workbook values remain visible, while displayed values determine
 the rounding bounds. Signed costs stay signed; zero, negative, missing or nonnumeric sales cannot provide
 a denominator. Competing operands remain ambiguous, and direct disclosed matches or contradictions retain
-priority. Co-product TCC, cost-of-sales bridges and produced-ounce denominators require their own explicit
-constructions and are outside this rule.
+priority. Co-product TCC and produced-ounce denominators require their own explicit constructions and
+are outside this rule.
 
 Copper **AISC, C1 cash cost and cost of sales per pound sold** use the separate `N/Q` identity when the same dated table
 explicitly supplies a cost numerator in US$ millions and sales in millions of pounds. Both operands must
@@ -2448,8 +2448,18 @@ can be checked against the same column's printed `Costs ($ millions): Cost of sa
 `Sales (millions of pounds)` rows. Printed values of `300.00` and `100.00` imply the exact enclosure
 `[59999/20001, 60001/19999] USD/lb`, which supports the draft's cent precision. The output identifies
 the `cos_per_lb` family and retains both source locators, hashes and original printed values.
-Gold cost-of-sales derivation still requires an explicit bridge between its consolidated numerator
-and attributable sales; the copper rule does not supply that bridge.
+DESIGN: gold reconciliation-table cost of sales uses its own explicit ownership bridge. For an original
+site-quarter, a nonzero operating noncontrolling-interest line selects the share confirmed by the
+same-release ownership label and cost-of-sales formula footnote. The derived rate is `1000 * share * N / Q`.
+An explicitly zero operating NCI line keeps the numerator unchanged; sustaining NCI does not select or
+change the factor. The calculation retains the unmodified cost and sold-ounce Claims, an interpreted
+numerator Claim, and the title, units, share and footnote witnesses with their publication dates and hashes.
+
+For synthetic displayed values of US$100M, a confirmed 60% share and 100 thousand attributable ounces sold,
+the exact enclosure is `[39800/67, 120600/199] USD/oz`, approximately $594.03–$606.03 per ounce. Those inputs
+support a suitably coarse `$0.6k/oz` assertion, while a `$600/oz` assertion needs more precision. Missing or
+ambiguous ownership evidence, mixed regional ownership and comparative-period share assumptions refuse.
+This is arithmetic over cited public assertions; it grants no disclosure permission or calibration claim.
 
 Nine-month cumulative disclosures can also be checked directly in cited or discovery mode. The grammar
 recognizes `9M 2030`, `20309M`, and `nine months of 2030`, keeping them distinct from Q3, H1, and FY.

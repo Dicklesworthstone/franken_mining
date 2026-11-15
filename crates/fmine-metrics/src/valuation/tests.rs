@@ -1,4 +1,4 @@
-//! FACT: source-bound synthetic known answers; no issuer prices or operating observations.
+//! Determinism: DeterministicPerIsa (FACT: synthetic known answers, no issuer prices or operating observations).
 
 use super::*;
 use fmine_plant::{cards, grinding, production};

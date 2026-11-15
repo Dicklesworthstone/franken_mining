@@ -25,7 +25,7 @@ mod ownership;
 mod rates;
 mod sums;
 
-pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences, complete quarter sums, full-mine and attributable amount conversions and gold AISC/by-product TCC/cost-of-sales or copper AISC/C1/cost-of-sales rates against dated, registered public sources at the requested cut. Ownership scaling in either direction requires the same source's explicit printed share for the same physical period. Cost rates require US$M and sold-metal operands from the same source file, sheet and column under their declared identity basis: attributable koz for gold AISC/TCC, explicitly same-ownership koz for gold cost of sales or millions of pounds for copper. Each operand retains its own displayed decimal precision; no tonne/pound or ownership conversion is inferred for a cost rate. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
+pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences, complete quarter sums, full-mine and attributable amount conversions and gold AISC/by-product TCC/cost-of-sales or copper AISC/C1/cost-of-sales rates against dated, registered public sources at the requested cut. Ownership scaling in either direction requires the same source's explicit printed share for the same physical period. Cost rates require US$M and sold-metal operands from the same source file, sheet and column under their declared identity basis: attributable koz for gold AISC/TCC, explicitly same-ownership koz for Mine Stats gold cost of sales or millions of pounds for copper. Gold AISC-table cost of sales additionally requires the original quarter's dated share label and operating NCI evidence; a nonzero operating NCI requires the attributable-formula footnote and an explicit numerator bridge. Original source Claims keep their printed bases. Each operand retains its own displayed decimal precision; no tonne/pound conversion is inferred. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
 
 #[derive(Debug, Clone)]
 pub(super) struct Publication {
@@ -562,6 +562,7 @@ pub(super) fn assess(
     profile: &IssuerProfile,
     publications: &[Publication],
     as_of: &str,
+    sources: &[fmine_public::LoadedSource],
 ) -> Result<PublicnessReport, Refusal> {
     if !is_date(as_of) {
         return Err(Refusal::new(
@@ -687,7 +688,7 @@ pub(super) fn assess(
         result.derivation = derivation(draft, f, cells, profile, &publications, as_of);
         result.quarter_sum = sums::assess(draft, f, cells, profile, &publications, as_of);
         result.ownership = ownership::assess(draft, f, cells, profile, &publications, as_of);
-        result.cost_rate = rates::assess(draft, f, cells, profile, &publications, as_of);
+        result.cost_rate = rates::assess(draft, f, cells, profile, &publications, as_of, sources);
         let derived_reason = [
             (
                 result.derivation.as_ref().map(|d| d.report.status) == Some(Status::Derived),
@@ -792,7 +793,7 @@ impl PublicnessReport {
             )
         }).collect::<Vec<_>>().join(",");
         format!(
-            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"gold_aisc_table_cost_of_sales_and_co_product_rates\",\"implicit_copper_tonne_to_pound_conversion\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
+            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"co_product_rate_derivations\",\"gold_aisc_mixed_region_or_comparative_ownership_bridges\",\"implicit_copper_tonne_to_pound_conversion\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
             js(&self.as_of),
             js(&self.draft_digest.to_hex()),
             js(&self.claims_digest.to_hex()),

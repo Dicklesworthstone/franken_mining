@@ -142,7 +142,15 @@ pub(super) fn execute(
     };
     let public_record = match (as_of, registered.as_ref()) {
         (Some(cut), Some((profile, publications))) => {
-            match lint_publicness::assess(&draft, &lint, &claims, profile, publications, cut) {
+            match lint_publicness::assess(
+                &draft,
+                &lint,
+                &claims,
+                profile,
+                publications,
+                cut,
+                &snapshot.sources,
+            ) {
                 Ok(report) => Some(report),
                 Err(refusal) => return Envelope::refused("lint", refusal, actions()),
             }

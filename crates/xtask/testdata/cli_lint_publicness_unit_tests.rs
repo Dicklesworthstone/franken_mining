@@ -104,7 +104,16 @@ mod tests {
         dates: &[Publication],
         cut: &str,
     ) -> PublicnessReport {
-        assess(text, &lint_cited(text, cells), cells, profile, dates, cut).expect("assessment")
+        assess(
+            text,
+            &lint_cited(text, cells),
+            cells,
+            profile,
+            dates,
+            cut,
+            &[],
+        )
+        .expect("assessment")
     }
 
     fn metadata_conflict(source: &KeyedCell, variant: u8) -> KeyedCell {
@@ -171,6 +180,7 @@ mod tests {
                     &profile,
                     &dates,
                     "2030-06-01",
+                    &[],
                 )
                 .expect("discovered assessment")
             };
@@ -530,8 +540,8 @@ mod tests {
         let text = "Site A Q1 2030 ownership basis unprinted AISC per ounce sold is $1,250/oz.";
         let lint = fmine_public::lint::lint_discover(text, &cells);
         assert_eq!(lint.findings[0].verdict, Verdict::Ambiguous);
-        let report =
-            assess(text, &lint, &cells, &profile, &dates, "2030-06-01").expect("dated appearances");
+        let report = assess(text, &lint, &cells, &profile, &dates, "2030-06-01", &[])
+            .expect("dated appearances");
         assert_eq!(report.findings[0].status, "disclosed");
         assert_eq!(report.findings[0].evidence.len(), 2);
         assert_eq!(
@@ -579,7 +589,7 @@ mod tests {
                 lint.findings[0].reason,
                 "multiple_claims_matching_stated_keys"
             );
-            let report = assess(text, &lint, &cells, &profile, &dates, "2030-09-01")
+            let report = assess(text, &lint, &cells, &profile, &dates, "2030-09-01", &[])
                 .expect("ambiguous shares");
             assert_eq!(report.findings[0].status, "not_assessed");
             assert_eq!(report.findings[0].reason, "attributable_share_unspecified");
@@ -601,8 +611,8 @@ mod tests {
         let text = "Site A Q1 2030 attributable AISC per ounce sold is $1,250/oz.";
         let lint = fmine_public::lint::lint_discover(text, &cells);
         assert_eq!(lint.findings[0].verdict, Verdict::Ambiguous);
-        let report =
-            assess(text, &lint, &cells, &profile, &dates, "2030-09-01").expect("equivalent shares");
+        let report = assess(text, &lint, &cells, &profile, &dates, "2030-09-01", &[])
+            .expect("equivalent shares");
         assert_eq!(report.findings[0].status, "disclosed");
         assert_eq!(report.findings[0].evidence.len(), 2);
         assert_eq!(
@@ -624,7 +634,7 @@ mod tests {
         let text = draft(&cells[0], "$1,250/oz", "ownership basis unprinted");
         let lint = lint_cited(&text, &cells);
         assert_eq!(
-            assess(&text, &lint, &[], &profile, &dates, "2030-06-01")
+            assess(&text, &lint, &[], &profile, &dates, "2030-06-01", &[])
                 .expect_err("snapshot mismatch")
                 .code,
             "FMINE-REF-507"
@@ -643,7 +653,8 @@ mod tests {
                 &cells,
                 &profile,
                 &dates,
-                "2030-06-01"
+                "2030-06-01",
+                &[]
             )
             .is_err()
         );
@@ -654,7 +665,8 @@ mod tests {
                 &cells,
                 &profile,
                 &[],
-                "2030-06-01"
+                "2030-06-01",
+                &[]
             )
             .is_err()
         );

@@ -1415,8 +1415,17 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   separately uses detailed Mine Stats `Costs ($ millions)` and `Sales (thousands of ounces)` rows from
   the same file, sheet and column, with identical explicit printed ownership on both operands. Its
   `cos_per_oz` family uses `1000*N/Q` and admits full or attributable figures without scaling either.
-  AISC-reconciliation cost-of-sales numerators with unresolved ownership, co-product rates and
-  produced-metal denominators remain outside these rules. Synthetic XLSX regression
+  Gold AISC-reconciliation cost of sales also admits an explicit same-release site ownership bridge.
+  The existing AISC owner authenticates the source title, attributable ounces, printed ownership and
+  formula footnote. Nonzero operating NCI selects the confirmed share as numerator factor; explicitly
+  zero operating NCI preserves the printed numerator. Sustaining NCI never changes this factor. The
+  original numeric Claims remain unchanged; an interpreted numerator Claim retains their parents,
+  evidence, UU terms and all dated basis-witness anchors. The exact kernel evaluates `1000*f*N/Q` with
+  each amount's displayed half-step interval. JSON and Markdown expose the factor, rule, original
+  operands, interpreted Claim, witness text, publication dates and source hashes. Missing operating NCI,
+  mixed regional ownership, comparative-period ownership and ambiguous or unavailable witnesses refuse.
+  Unresolved ownership, co-product rates and produced-metal denominators remain outside these rules.
+  Synthetic XLSX regression
   cases exercise the source-to-command path; they do not establish actual issuer numerator coverage.
   Every public-record source now retains its keyed projection and checked canonical Claim companion, binding
   UU terms, parents, supersedes and recorded flags even when the numerical Claim ID is unchanged. Canonical

@@ -2425,6 +2425,430 @@ fn cost_rate_report(report: &Envelope) -> &str {
         .1
 }
 
+fn reconciled_gold_cos(
+    cost: &str,
+    operating_nci: MinimalCell,
+    sustaining_nci: &str,
+) -> MinimalSheet {
+    let mut sheet = cost_sheet("150", number("100"), None);
+    for (at, value) in &mut sheet.cells {
+        *value = match at.as_str() {
+            "A1" => MinimalCell::Text("Reconciliation of gold cost of sales to total cash costs and all-in sustaining costs".into()),
+            "B5" => number(cost),
+            "B7" => operating_nci.clone(),
+            "A9" => MinimalCell::Text("Non-controlling interests".into()),
+            "B9" => number(sustaining_nci),
+            "B14" => MinimalCell::Text("—".into()),
+            _ => continue,
+        };
+    }
+    sheet.cells.push(("A20".into(), MinimalCell::Text(
+        "Cost of sales per ounce is calculated as cost of sales divided by ounces sold, both on an attributable basis using the ownership share.".into()
+    )));
+    sheet
+}
+
+fn gold_share_summary(subject: &str) -> MinimalSheet {
+    let text = |value: &str| MinimalCell::Text(value.into());
+    MinimalSheet {
+        name: "QTD".into(),
+        hidden: false,
+        cells: vec![
+            ("A1".into(), text("Summary of Operations")),
+            ("A2".into(), text("For the three months ended March 31,")),
+            ("B2".into(), MinimalCell::Number(2030.0)),
+            ("B3".into(), text(SALES)),
+            ("A4".into(), text(subject)),
+            ("B4".into(), number("100")),
+        ],
+    }
+}
+
+const RECONCILED_COS_DRAFT: &str =
+    "Example Mine Q1 2030 attributable cost of sales per ounce sold is $0.6k/oz.";
+
+#[test]
+fn gold_aisc_cost_of_sales_derives_from_dated_share_footnote_and_operating_nci() {
+    let root = derivation_workspace();
+    let cost_hash = cost_source(
+        &root,
+        "Costs.xlsx",
+        Some("2030-05-01"),
+        "0",
+        reconciled_gold_cos("100", number("-40"), "0"),
+    );
+    let share_hash = source(
+        &root,
+        "Ownership.xlsx",
+        "2030Q1",
+        Some("2030-05-02"),
+        "0",
+        &[gold_share_summary("Example Mine (60%)")],
+    );
+    let report = assess(&root, RECONCILED_COS_DRAFT, "2030-05-02");
+    let rate = cost_rate_report(&report);
+    assert_eq!(
+        string_field(rate, "status"),
+        "derived",
+        "{}",
+        report.to_json()
+    );
+    assert!(report.payload_json.contains("\"status\":\"derivable\""));
+    // Independent box: 1000 * (3/5) * [99.5,100.5] / [99.5,100.5].
+    assert!(rate.contains("\"lo\":{\"num\":\"39800\",\"den\":\"67\"}"));
+    assert!(rate.contains("\"hi\":{\"num\":\"120600\",\"den\":\"199\"}"));
+    for required in [
+        "\"factor\":\"3/5\"",
+        "nonzero_operating_nci_apply_confirmed_share",
+        "\"formula\":\"1000*f*N/Q\"",
+        "Costs.xlsx:Q1 2030!B5",
+        "Costs.xlsx:Q1 2030!B7",
+        "Costs.xlsx:Q1 2030!B13",
+        "Q1 2030!A20",
+        "QTD!A4",
+        "\"kind\":\"unprinted\"",
+        "\"source\":\"registry\"",
+        "interpreted_gold_cost_numerator_usd_m",
+        &cost_hash,
+        &share_hash,
+    ] {
+        assert!(rate.contains(required), "missing {required}: {rate}");
+    }
+    assert_eq!(report, assess(&root, RECONCILED_COS_DRAFT, "2030-05-02"));
+    let before = assess(&root, RECONCILED_COS_DRAFT, "2030-05-01");
+    assert_eq!(string_field(cost_rate_report(&before), "status"), "refused");
+    assert!(!before.payload_json.contains("\"status\":\"derivable\""));
+    for (value, status) in [
+        ("$600/oz", "precision_not_established"),
+        ("$1.0k/oz", "contradicted"),
+    ] {
+        let result = assess(
+            &root,
+            &RECONCILED_COS_DRAFT.replace("$0.6k/oz", value),
+            "2030-05-02",
+        );
+        assert_eq!(string_field(cost_rate_report(&result), "status"), status);
+    }
+    let (markdown, exit) = run(
+        &args(&[
+            "lint",
+            "derived.md",
+            "--issuer",
+            DERIVATION_ISSUER,
+            "--discover",
+            "--as-of",
+            "2030-05-02",
+            "--format",
+            "markdown",
+        ]),
+        &root,
+    );
+    assert_eq!(exit, 0);
+    assert!(markdown.contains("Numerator factor 3/5"));
+    assert!(markdown.contains("Ownership.xlsx:QTD!A4"));
+    assert!(markdown.contains("Costs.xlsx:Q1 2030!A20"));
+}
+
+#[test]
+fn gold_aisc_cost_of_sales_preserves_signed_costs_and_ignores_sustaining_nci_for_scaling() {
+    for (cost, nci, sustaining, draft, factor, lower, upper) in [
+        (
+            "100",
+            "0",
+            "-20",
+            "$1.0k/oz",
+            "1/1",
+            ("199000", "201"),
+            ("201000", "199"),
+        ),
+        (
+            "-100",
+            "40",
+            "0",
+            "-$0.6k/oz",
+            "3/5",
+            ("-120600", "199"),
+            ("-39800", "67"),
+        ),
+        (
+            "0",
+            "-40",
+            "0",
+            "$0.0k/oz",
+            "3/5",
+            ("-600", "199"),
+            ("600", "199"),
+        ),
+    ] {
+        let root = derivation_workspace();
+        cost_source(
+            &root,
+            "Costs.xlsx",
+            Some("2030-05-01"),
+            "0",
+            reconciled_gold_cos(cost, number(nci), sustaining),
+        );
+        source(
+            &root,
+            "Ownership.xlsx",
+            "2030Q1",
+            Some("2030-05-01"),
+            "0",
+            &[gold_share_summary("Example Mine (60%)")],
+        );
+        let report = assess(
+            &root,
+            &RECONCILED_COS_DRAFT.replace("$0.6k/oz", draft),
+            "2030-05-01",
+        );
+        let rate = cost_rate_report(&report);
+        assert_eq!(
+            string_field(rate, "status"),
+            "derived",
+            "{}",
+            report.to_json()
+        );
+        assert!(rate.contains(&format!("\"factor\":\"{factor}\"")));
+        assert!(rate.contains(&format!(
+            "\"lo\":{{\"num\":\"{}\",\"den\":\"{}\"}}",
+            lower.0, lower.1
+        )));
+        assert!(rate.contains(&format!(
+            "\"hi\":{{\"num\":\"{}\",\"den\":\"{}\"}}",
+            upper.0, upper.1
+        )));
+        if nci == "0" {
+            assert!(rate.contains("zero_operating_nci_preserve_printed_numerator"));
+        }
+    }
+}
+
+#[test]
+fn gold_aisc_cost_of_sales_refuses_missing_or_mixed_ownership_evidence() {
+    for fault in [
+        "footnote",
+        "unknown_date",
+        "wrong_share",
+        "no_nci",
+        "nil_nci",
+        "currency",
+        "region",
+        "comparative",
+        "competing_share_source",
+    ] {
+        let root = derivation_workspace();
+        let mut sheet = reconciled_gold_cos("100", number("-40"), "0");
+        for (at, value) in &mut sheet.cells {
+            if (fault == "footnote" && at == "A20") || (fault == "no_nci" && at == "A7") {
+                *value = MinimalCell::Text("unrelated statement".into());
+            } else if fault == "nil_nci" && at == "B7" {
+                *value = MinimalCell::Text("—".into());
+            } else if fault == "currency" && at == "A3" {
+                *value = MinimalCell::Text("(Canadian dollars millions)".into());
+            }
+        }
+        if fault == "comparative" {
+            sheet.name = "Q1 2029".into();
+        }
+        cost_source(&root, "Costs.xlsx", Some("2030-05-01"), "0", sheet);
+        let date = if fault == "unknown_date" {
+            None
+        } else {
+            Some("2030-05-01")
+        };
+        let subject = match fault {
+            "wrong_share" => "Example Mine (50%)",
+            "region" => "Example Mine",
+            _ => "Example Mine (60%)",
+        };
+        source(
+            &root,
+            "Ownership.xlsx",
+            "2030Q1",
+            date,
+            "0",
+            &[gold_share_summary(subject)],
+        );
+        if fault == "competing_share_source" {
+            source(
+                &root,
+                "OtherOwnership.xlsx",
+                "2030Q1",
+                date,
+                "0",
+                &[
+                    gold_share_summary(subject),
+                    MinimalSheet {
+                        name: "Publication note".into(),
+                        hidden: false,
+                        cells: vec![(
+                            "A1".into(),
+                            MinimalCell::Text("Invented second ownership publication".into()),
+                        )],
+                    },
+                ],
+            );
+        }
+        if fault == "region" {
+            let path = registry_path(&root, DERIVATION_ISSUER);
+            let registry = std::fs::read_to_string(&path).unwrap();
+            let mut registry = registry
+                .replace(
+                    "name = \"Example Mine\"",
+                    "name = \"Example Mine\"\nkind = \"region\"",
+                )
+                .replace(
+                    "[[share]]\nsubject = \"Example Mine\"",
+                    "[[share]]\nsubject = \"Other Mine\"",
+                );
+            registry.push_str(
+                "\n[[subject]]\nname = \"Third Mine\"\n\
+                 [[share]]\nsubject = \"Third Mine\"\nnum = 4\nden = 5\n\
+                 evidence = \"FACT: invented second member ownership\"\n\
+                 [[region_member]]\nregion = \"Example Mine\"\nmember = \"Other Mine\"\nfirst = \"2030Q1\"\n\
+                 [[region_member]]\nregion = \"Example Mine\"\nmember = \"Third Mine\"\nfirst = \"2030Q1\"\n",
+            );
+            std::fs::write(path, registry).unwrap();
+        }
+        let draft = if fault == "comparative" {
+            RECONCILED_COS_DRAFT.replace("2030", "2029")
+        } else {
+            RECONCILED_COS_DRAFT.into()
+        };
+        let report = assess(&root, &draft, "2030-05-01");
+        assert!(
+            !report.payload_json.contains("\"status\":\"derivable\""),
+            "{fault}: {}",
+            report.to_json()
+        );
+        let rate = cost_rate_report(&report);
+        if fault == "region" {
+            // Mixed member ownership supplies no scalar regional share. The source denominator
+            // remains unprinted, so no attributable rate prototype or numerator bridge is admitted.
+            assert!(rate.starts_with("null"), "{}", report.to_json());
+            assert!(!report.payload_json.contains("\"basis_bridge\":"));
+            continue;
+        }
+        assert_eq!(
+            string_field(rate, "status"),
+            "refused",
+            "{fault}: {}",
+            report.to_json()
+        );
+    }
+}
+
+#[test]
+fn gold_aisc_cost_of_sales_reacts_to_each_operand_and_keeps_direct_disclosure_priority() {
+    let mut digests = std::collections::BTreeSet::new();
+    for (cost, sold, nci, expected_lo, expected_hi) in [
+        ("100", "100", "-40", ("39800", "67"), ("120600", "199")),
+        ("150", "100", "-40", ("59800", "67"), ("180600", "199")),
+        ("100", "200", "-40", ("119400", "401"), ("40200", "133")),
+        ("100", "100", "0", ("199000", "201"), ("201000", "199")),
+    ] {
+        let root = derivation_workspace();
+        let mut sheet = reconciled_gold_cos(cost, number(nci), "0");
+        for (at, value) in &mut sheet.cells {
+            if at == "B13" {
+                *value = number(sold);
+            }
+        }
+        cost_source(&root, "Costs.xlsx", Some("2030-05-01"), "0", sheet);
+        source(
+            &root,
+            "Ownership.xlsx",
+            "2030Q1",
+            Some("2030-05-01"),
+            "0",
+            &[gold_share_summary("Example Mine (60%)")],
+        );
+        let report = assess(&root, RECONCILED_COS_DRAFT, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(
+            string_field(rate, "status"),
+            if cost == "100" && sold == "100" && nci == "-40" {
+                "derived"
+            } else {
+                "contradicted"
+            }
+        );
+        assert!(rate.contains(&format!(
+            "\"lo\":{{\"num\":\"{}\",\"den\":\"{}\"}}",
+            expected_lo.0, expected_lo.1
+        )));
+        assert!(rate.contains(&format!(
+            "\"hi\":{{\"num\":\"{}\",\"den\":\"{}\"}}",
+            expected_hi.0, expected_hi.1
+        )));
+        assert!(digests.insert(
+            public_record_component_digest(&report.payload_json, "public_record").to_string()
+        ));
+    }
+    for (direct_rate, status) in [("600", "disclosed"), ("1000", "contradicts_disclosed")] {
+        let root = derivation_workspace();
+        cost_source(
+            &root,
+            "Costs.xlsx",
+            Some("2030-05-01"),
+            "0",
+            reconciled_gold_cos("100", number("-40"), "0"),
+        );
+        let direct = MinimalSheet {
+            name: "Minestats1".into(),
+            hidden: false,
+            cells: vec![
+                ("B1".into(), MinimalCell::Text("Example Mine (60%)".into())),
+                (
+                    "A2".into(),
+                    MinimalCell::Text("For the three months ended March 31,".into()),
+                ),
+                ("B2".into(), MinimalCell::Number(2030.0)),
+                ("A3".into(), MinimalCell::Text("Costs per ounce".into())),
+                ("A4".into(), MinimalCell::Text("Cost of sales".into())),
+                ("B4".into(), number(direct_rate)),
+            ],
+        };
+        source(
+            &root,
+            "Ownership.xlsx",
+            "2030Q1",
+            Some("2030-05-01"),
+            "0",
+            &[gold_share_summary("Example Mine (60%)"), direct],
+        );
+        // Cost of sales is a registered child of the per-ounce section, not one of the
+        // fallback reader's built-in child rows. Its unit comes from that exact context.
+        let path = registry_path(&root, DERIVATION_ISSUER);
+        let mut registry = std::fs::read_to_string(&path).unwrap();
+        registry.push_str(
+            "\n[[mine_stats_label]]\nsection = \"Costs per ounce\"\nlabel = \"Cost of sales\"\n",
+        );
+        std::fs::write(path, registry).unwrap();
+        let report = assess(&root, RECONCILED_COS_DRAFT, "2030-05-01");
+        assert_eq!(
+            string_field(cost_rate_report(&report), "status"),
+            "derived",
+            "{}",
+            report.to_json()
+        );
+        let public = report
+            .payload_json
+            .split_once("\"public_record\":")
+            .unwrap()
+            .1;
+        assert_eq!(
+            string_field(public, "status"),
+            status,
+            "{}",
+            report.to_json()
+        );
+        assert!(public.contains("Ownership.xlsx:Minestats1!B4"));
+        assert!(public.contains("\"line\":\"site:costs per ounce:cost of sales\""));
+        assert!(public.contains("\"admission\":\"published_by_cut\""));
+    }
+}
+
 #[test]
 fn coproduct_aisc_is_disclosed_from_its_own_dated_source_rate() {
     let root = derivation_workspace();
@@ -2588,7 +3012,6 @@ fn cost_rate_rounding_and_definition_controls_never_invent_precision_or_a_denomi
         "Example Mine Q1 2030 attributable co-product TCC per ounce sold is $1.0k/oz.",
         "Example Mine Q1 2030 attributable TCC per ounce sold is $1.0k/oz.",
         "Example Mine Q1 2030 attributable C1 per pound sold is $1.5/lb.",
-        "Example Mine Q1 2030 attributable cost of sales per ounce sold is $1.0k/oz.",
     ] {
         let report = assess(&root, draft, "2030-05-01");
         assert!(
@@ -2598,6 +3021,20 @@ fn cost_rate_rounding_and_definition_controls_never_invent_precision_or_a_denomi
         );
         assert!(!report.payload_json.contains("\"status\":\"derivable\""));
     }
+    let unsupported_basis = assess(
+        &root,
+        "Example Mine Q1 2030 attributable cost of sales per ounce sold is $1.0k/oz.",
+        "2030-05-01",
+    );
+    assert_eq!(
+        string_field(cost_rate_report(&unsupported_basis), "status"),
+        "refused"
+    );
+    assert!(
+        !unsupported_basis
+            .payload_json
+            .contains("\"status\":\"derivable\"")
+    );
 }
 
 #[test]
