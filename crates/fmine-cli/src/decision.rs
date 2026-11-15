@@ -9,6 +9,7 @@ use fmine_evidence::Refusal;
 use crate::{Envelope, NextAction, worksheet_input};
 
 pub mod journal;
+pub mod production;
 
 pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.decision-model.v1\",\"mode\":\"declared_model_comparison\",",

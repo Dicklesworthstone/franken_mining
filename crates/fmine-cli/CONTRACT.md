@@ -10,6 +10,15 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>
+  --recovery <worksheet> --terms <worksheet>` values each complete shared physical/commercial state
+  before comparison, preserving price/production correlation and explicit do-nothing cash. Commercial
+  support, element, interval, unknown exposures and final monetary rounding must be declared. Exact
+  represented physical quantities feed rational revenue, royalty and cost arithmetic; unrounded cash
+  margins and rounding deltas remain visible. The existing decision evaluator supplies the comparison.
+  Authenticated source snapshots, Claims and weakest evidence are retained under an uncalibrated
+  modelling cap. The scope is immediate one-period USD cash margin; no NPV is inferred.
+
 - DESIGN (BD-355): `compare --metric aisc|gold-production|copper-production|copper-c1|copper-aisc
   --issuers a,b,... --period YYYYFY
   --as-of YYYY-MM-DD --bindings <path>` admits each issuer's own registered financial filing and agreed

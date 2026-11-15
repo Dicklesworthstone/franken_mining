@@ -103,6 +103,27 @@ marginal means would incorrectly produce 0.375 kg recovered Au. The output prese
 worksheets, source hashes, model receipt identities and Claim ancestry. `--format markdown` shows the
 same results. Mismatched populations, weights, scopes or linked model inputs refuse the whole calculation.
 
+DESIGN (BD-176/181/225): `decide production` connects that physical calculation to the existing decision
+engine. Explicit per-state payability, USD/kg prices, revenue-linked royalties, dry-tonnage costs, fixed
+costs and a do-nothing cash outcome produce an immediate one-period cash-margin comparison:
+
+```bash
+cargo run -p fmine-cli -- decide production \
+  --input tests/plant/production_joint.toml \
+  --grinding tests/plant/grinding_joint.toml \
+  --recovery tests/plant/production_recovery.toml \
+  --terms tests/decisions/production_valuation.toml --format markdown
+```
+
+The synthetic example has state margins of $808 and $9,315.20, giving an equal-weight expected margin
+of $5,061.60. Prices and commercial terms stay paired with the original production states. The output
+retains all four source worksheets and hashes, exact represented physical quantities, each cash component,
+unrounded margins, and explicit nearest-even rounding adjustments at the final $0.0001 money boundary.
+The existing decision evaluator supplies quantiles, signed-loss CVaR95, regret and tied choices. Payability
+and immediate settlement are declared assumptions; the result supplies no project NPV, forecast calibration,
+actual sales evidence or operating authorization. Missing states, changed probabilities, incompatible
+physical support and undeclared monetary conversion refuse the entire comparison.
+
 `forecast journal register-plant` registers a selected recovery, throughput, dry-tonnage, contained-metal
 or recovered-metal target through the existing durable forecast journal. It takes the same three source
 paths plus `--journal`, `--head`, `--id`, `--target`, `--author-role`,

@@ -22,6 +22,7 @@ pub mod recovery;
 pub mod reserve_replacement;
 pub mod reserves;
 pub mod roll_forward;
+pub mod valuation;
 
 use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{Refusal, RefusalCode};

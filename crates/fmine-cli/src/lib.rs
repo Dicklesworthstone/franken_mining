@@ -81,6 +81,8 @@ pub enum CliCommand {
     ReserveReplacement(reserve::Command),
     /// Compare explicit monetary alternatives on one declared finite scenario set (BD-225).
     DecideCard { model: PathBuf },
+    /// Derive immediate cash-margin alternatives from matched plant and commercial scenarios.
+    DecideProduction(decision::production::Command),
     /// Retain an explicit choice, rationale and exact evaluated artifact in a local append-only history.
     DecisionJournal(decision_journal::Command),
     /// Bound recovery for explicit tested and untested strata on one additive route (BD-351.S1).
@@ -529,6 +531,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--json" => next += 1,
                         "program" => return "decide program",
                         "journal" => return "decide journal",
+                        "production" => return "decide production",
                         "recovery-bounds" => return "decide recovery-bounds",
                         _ => return "decide card",
                     }
@@ -1031,6 +1034,7 @@ pub fn parse_args(
         verb,
         "metrics cost"
             | "metrics geo"
+            | "decide production"
             | "compare"
             | "plan pit"
             | "plan schedule"
@@ -1043,6 +1047,9 @@ pub fn parse_args(
         let command = match verb {
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
+            "decide production" => {
+                CliCommand::DecideProduction(decision::production::parse(&words)?)
+            }
             "compare" => CliCommand::Compare(compare::parse(&words)?),
             "plan pit" => CliCommand::PlanPit(pit::parse(&words)?),
             "plan schedule" if words.iter().any(|word| word == "--omf" || word == "--spec") => {
@@ -2013,6 +2020,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
         CliCommand::DecideCard { model } => decision::execute(model, workspace_root, false),
+        CliCommand::DecideProduction(command) => {
+            decision::production::execute(command, workspace_root)
+        }
         CliCommand::DecisionJournal(command) => decision_journal::execute(command, workspace_root),
         CliCommand::RecoveryBounds { model } => decision::execute(model, workspace_root, true),
         CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root),
@@ -2424,6 +2434,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::TRAJECTORY_USAGE,
                 html::USAGE,
                 "decide card <model-file>",
+                decision::production::USAGE,
                 decision_journal::INIT_USAGE,
                 decision_journal::RECORD_USAGE,
                 decision_journal::SHOW_USAGE,
@@ -2513,6 +2524,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.pop();
             payload.push_str(",\"decision\":");
             payload.push_str(decision::ROBOT_DOCS_JSON);
+            payload.push_str(",\"production_decision\":");
+            payload.push_str(decision::production::ROBOT_DOCS_JSON);
             payload.push_str(",\"decision_journal\":");
             payload.push_str(decision_journal::ROBOT_DOCS_JSON);
             payload.push_str(",\"recovery_bounds\":");

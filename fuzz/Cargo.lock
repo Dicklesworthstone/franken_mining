@@ -182,8 +182,10 @@ version = "0.1.0"
 dependencies = [
  "fmine-claim",
  "fmine-core",
+ "fmine-decide",
  "fmine-evidence",
  "fmine-numerics",
+ "fmine-plant",
  "fmine-registry",
  "fmine-time",
  "fmine-units",

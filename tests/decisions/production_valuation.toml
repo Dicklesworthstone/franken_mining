@@ -1,0 +1,48 @@
+# SYNTHETIC commercial assumptions for tests/plant/production_joint.toml.
+# Soft: 0.192 kg * 0.9 payable * 50,000 USD/kg = 8,640 USD revenue.
+# Less 5% royalty, 320 dry t * 20 USD/t and 1,000 USD fixed = 808 USD.
+# Hard: 0.288 kg * 0.8 payable * 70,000 USD/kg = 16,128 USD revenue.
+# Less 10% royalty, 80 dry t * 40 USD/t and 2,000 USD fixed = 9,315.2 USD.
+# Rounded state margins have a 5,061.6 USD equal-weight mean. No issuer or actual price claim.
+schema = "fmine.production-valuation.v1"
+model_key = "synthetic-shift-cash-margin"
+question = "Process this declared shift or retain the separately declared do-nothing cash position?"
+valuation_basis = "immediate_one_period_cash_margin"
+action_id = "process"
+action_label = "Process the declared shift"
+boundary = "synthetic-plant/v1"
+circuit = "synthetic-ball-mill"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+start_ns = "0"
+end_ns = "3600000000000"
+commercial_support = "Synthetic payable Au from exactly this one-hour recovered-metal population"
+physical_to_commercial_basis = "Assume the declared fraction of recovered Au is paid immediately at the scenario price, with no opening stock, lag or additional deductions"
+monetary_rounding = "nearest_ties_even_0_0001_usd"
+
+[[scenario]]
+id = "soft"
+weight = "1/2"
+payable_fraction = "0.9"
+usd_per_kg = "50000"
+variable_usd_per_dry_t = "20"
+fixed_usd = "1000"
+royalty_fraction = "0.05"
+do_nothing_usd = "0"
+
+[[scenario]]
+id = "hard"
+weight = "1/2"
+payable_fraction = "0.8"
+usd_per_kg = "70000"
+variable_usd_per_dry_t = "40"
+fixed_usd = "2000"
+royalty_fraction = "0.1"
+do_nothing_usd = "0"
+
+[[uu]]
+id = "UU-example-commercial-settlement"
+description = "Invented unmodelled product deductions or delayed payment"
+trigger = "Product acceptance or settlement differs from the explicit immediate-payability assumption"
+downside_usd_m = "0.02"

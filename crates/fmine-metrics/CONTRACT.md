@@ -4,6 +4,9 @@
 The public-lane metric kernels. Each one takes supplied numbers and computes a mining metric or a check on one:
 - AISC and AIC per ounce under a definition read from `registries/metrics.toml` (`definitions`), and as an exact cost receipt over declared Claims or a strict cost worksheet (`definitions::claims`, `definitions::worksheet`, BD-061);
 - exact production GEO under two to sixty-four named price decks, from declared Claims or a strict worksheet (`definitions::geo`, BD-062, GB-27);
+- conditional immediate one-period cash margins from the complete shared plant production population,
+  with explicit payable-metal, price, cost and royalty assumptions, fed directly to the existing decision
+  evaluator (`valuation`, BD-061/225, plan §§9.5, 21.6, 23.4);
 - complete source-bound annual peer comparisons with exact competition-rank ranges and explicit comparative claims (`comparison`, BD-355);
 - cut-off grades: the reference rows of `registries/published_cutoffs.toml` recomputed from their registered tokens (`cutoff`), and cut-offs bound to the readings of one registered technical report (`cutoff::source`, BD-274);
 - an AISC accounting waterfall, as a legacy float LMDI and as a typed exact kernel with an additive fallback (`lmdi`, `lmdi::waterfall`);
@@ -27,9 +30,48 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Layer:** E
 - **Subsystem:** Bullion
 - **LOC budget:** 18,000 planned / 21,000 ceiling
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation", "comparison"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation", "comparison", "valuation"]`
 
 ## 2. Inputs
+
+- DESIGN (BD-061/225): `valuation::evaluate` takes an immutable `fmine-plant::ProductionReceipt`
+  and a source-bound `Claim<ValuationTerms>`. Boundary, circuit, material domain, dry basis, element
+  and complete physical interval must match. Every production scenario has exactly one commercial row
+  with the same exact positive probability. The declaration supplies payable fraction, USD per kg,
+  variable USD per dry metric tonne, fixed USD, royalty fraction on gross revenue, and a signed
+  do-nothing USD outcome. It explicitly states the commercial support, the physical-to-commercial
+  bridge, `immediate_one_period_cash_margin` basis and `nearest_ties_even_0_0001_usd` policy.
+  Commercial terms require their own positive named UU exposure and trigger. Fractions lie in [0,1];
+  prices/costs are nonnegative. Zero production, zero payability and negative final margins remain valid.
+  `valuation::worksheet::evaluate` reads authenticated `fmine.production-valuation.v1` text up to 1 MiB,
+  with strict quoted fields, at most 4,096 scenarios and 64 UU rows. It retains the submitted worksheet
+  and per-field source locators. Imported assumptions remain Assumed, Internal and uncalibrated.
+
+  DESIGN: exact represented binary64 dry tonnes and recovered kilograms become bounded i128 rationals.
+  Each state's payable metal, revenue, royalty and cost is formed before any aggregation. Only the two
+  final action payoffs round to Money's 0.0001 USD, with signed ties to even; the receipt retains their
+  unrounded rationals and rounded-minus-unrounded deltas. Out-of-range conversion or arithmetic refuses
+  instead of rounding an intermediate, clipping a margin or dropping a state. The existing
+  `fmine-decide::card::evaluate` owns the expected value, quantiles, signed-loss CVaR and same-state regret.
+  The deterministic vector of rounded payoffs is distinct from an exact physical measurement.
+
+  DESIGN: `ValuationReceipt` retains original physical and commercial inputs, all component values,
+  the complete decision inputs/result and a digest. Derived Claims inherit both source Claims as
+  parents, union their anchors and UU terms, meet their evidence with ModelledUncalibrated, and join
+  confidentiality. Incompatible definitions for the same UU scenario refuse. The receipt hash binds
+  metadata omitted from CLM1, including support, representation, UU terms and supersession, as well
+  as the decision receipt and unrounded arithmetic. JSON and Markdown expose the same paired result;
+  the human view labels signed loss as minus immediate cash margin, without calling it project NPV.
+  No sales or inventory timing, ownership conversion, fiscal regime, discounting, calibrated probability,
+  project valuation or authority is inferred. These are conditional known-answer calculations, not
+  GATE-HELM or GATE-CAP acceptance.
+
+  FACT: `valuation::tests::paired_cash_margins_retain_components_and_use_the_existing_decision_engine`
+  checks the synthetic worksheet's 808 and 9,315.2 USD state margins and 5,061.6 USD mean.
+  `price_and_production_are_paired_before_averaging` distinguishes joint from marginal calculations;
+  `exact_binary64_conversion_and_signed_ties_even_are_explicit` checks positive/negative half ties
+  and representability boundaries. The adjoining ordering, source/UU/supersession mutation, scope,
+  population, evidence, negative-margin and strict-parser tests cover the direct refusal boundaries.
 
 - DESIGN: roll_forward::cost_bridge::assess takes a TableReport and two explicit identity IDs.
   Both must be sold-metal cost-rate identities with the same metal, family, semantic quantity IDs,

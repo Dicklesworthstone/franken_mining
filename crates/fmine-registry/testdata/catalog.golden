@@ -73,8 +73,9 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 72
+[verbs] 74
 decide card
+decide production
 decide journal init
 decide journal record
 decide journal show
@@ -142,6 +143,7 @@ plant grinding
 plant trajectory
 plant production
 forecast journal register-plant
+forecast journal verify-plant
 robot schema
 assure issue
 reliance export
