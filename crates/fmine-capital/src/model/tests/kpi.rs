@@ -1,5 +1,5 @@
 //! Strict source-model integration of finite KPI threshold comparisons.
-//! Determinism: Exact.
+//! Determinism: Exact
 
 use super::*;
 

@@ -1,5 +1,5 @@
 //! Independent known answers for exact threshold economics and ratio aggregation.
-//! Determinism: Exact.
+//! Determinism: Exact
 
 use super::*;
 use crate::tests::{claim, inputs, r, with_equity};

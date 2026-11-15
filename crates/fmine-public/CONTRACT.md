@@ -529,7 +529,7 @@ The public lane of M0 (`fmine assure public`).
   from `AVDP_LB_TO_GRAMS_NUM`) are tried on those numbers alone, apart from the registered alias. The section
   holds counts only and is not in the state root.
 - `transcribe::{load_transcription_report, load_transcription_report_as_of, load_transcription_quantities_as_of,
-  load_transcription_prefixes, load_guidance_transcription_report,
+  load_transcription_prefixes, load_transcription_prefixes_for_period, load_guidance_transcription_report,
   transcription_json, TranscriptionReport, CheckedDocument,
   TieOutcome}`, `sources::{DocumentRow, transcriptions_path}`, `IssuerProfile::documents` and
   `PublicAssuranceReport::transcriptions` (bd-plx1, bd-4wvl.4 part 2). When
@@ -556,6 +556,11 @@ The public lane of M0 (`fmine assure public`).
   - `load_transcription_prefixes` uses the same single-parse selection, with an optional as-of date. Explicit-cut
     track record selects `guidance_`. Unsupported guidance remains visible while unrelated technical sources
     are excluded before byte checks and agreement. Every reader at each selected locator remains.
+  - DESIGN (bd-067.1): `load_transcription_prefixes_for_period` selects an exact period at that same raw-locator
+    boundary. Quarterly forecast scoring can use a filing containing both quarterly and annual guidance
+    without unrelated annual quantities or pending readers suppressing its quarterly comparator. Every reader
+    at a selected locator remains, so period or quantity disagreements still refuse. Registry syntax and
+    document identities remain globally checked; selected source bytes and information-cut checks still apply.
   - DESIGN (BD-341.S5): `load_guidance_transcription_report` explicitly scopes the agreement gate to
     guidance, selecting the union of `guidance_`, `aisc_price_assumption_` and `realized_price_` quantities
     for retrospective track record. Rejected optional price readings remain in the returned report and cannot

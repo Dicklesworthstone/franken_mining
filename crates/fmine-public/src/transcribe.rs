@@ -256,14 +256,33 @@ pub fn load_transcription_prefixes(
         profile,
         root,
         as_of,
-        Some(QuantitySelection::Prefixes(prefixes)),
+        Some(QuantitySelection::Prefixes(prefixes, None)),
+        false,
+    )
+}
+
+/// Selects prefix-matching quantities at one exact period before agreement. Every reader at a
+/// selected locator remains, including a reader who disagrees about its period or quantity.
+/// Registry syntax and document identities are checked globally before this selection.
+pub fn load_transcription_prefixes_for_period(
+    profile: &IssuerProfile,
+    root: &Path,
+    prefixes: &[&str],
+    period: &str,
+    as_of: Option<&str>,
+) -> Result<Option<TranscriptionReport>, Refusal> {
+    load_report(
+        profile,
+        root,
+        as_of,
+        Some(QuantitySelection::Prefixes(prefixes, Some(period))),
         false,
     )
 }
 
 enum QuantitySelection<'a> {
     Keys(&'a [String], Option<&'a str>),
-    Prefixes(&'a [&'a str]),
+    Prefixes(&'a [&'a str], Option<&'a str>),
 }
 
 /// Loads guidance and its optional price inputs, retaining incomplete prices as unaccepted evidence.
@@ -278,11 +297,10 @@ pub fn load_guidance_transcription_report(
         profile,
         root,
         as_of,
-        Some(QuantitySelection::Prefixes(&[
-            "guidance_",
-            "aisc_price_assumption_",
-            "realized_price_",
-        ])),
+        Some(QuantitySelection::Prefixes(
+            &["guidance_", "aisc_price_assumption_", "realized_price_"],
+            None,
+        )),
         true,
     )
 }
@@ -323,9 +341,12 @@ fn load_report(
                 QuantitySelection::Keys(keys, document) => {
                     keys.contains(&e.quantity) && document.is_none_or(|doc| e.locator.doc == doc)
                 }
-                QuantitySelection::Prefixes(prefixes) => prefixes
-                    .iter()
-                    .any(|prefix| e.quantity.starts_with(*prefix)),
+                QuantitySelection::Prefixes(prefixes, period) => {
+                    period.is_none_or(|period| e.period == period)
+                        && prefixes
+                            .iter()
+                            .any(|prefix| e.quantity.starts_with(*prefix))
+                }
             })
             .map(|e| e.locator.clone())
             .collect();

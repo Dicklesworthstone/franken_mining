@@ -224,6 +224,9 @@ Not applicable: no Claims are emitted.
     and sold-metal cost rates remain unscaled. Quarterly verification and scoring require the complete
     signed proof interval to precede quarter completion. An unavailable quarterly point workbook refuses
     its persistence members while original outcome scores and independent quarterly guidance remain visible.
+    Quarterly guidance locators are selected before reader agreement, retaining every reader at each selected
+    locator. Annual rows elsewhere in the same filing cannot create a quarterly quantity clash or pending-reader
+    veto; same-locator disagreements and globally invalid registry identities still refuse.
     The existing annual rules and frames are unchanged.
   - Every frozen site/target remains visible, with unresolved and not-forecast states. The deterministic JSON assessment includes exact losses, observed and full-cohort coverage/loss bounds, the declared iid reference interval and rho sensitivity, source Claims/digests/locators, proof bounds and an assessment digest. It creates no forecast or timestamp and claims no calibration.
   - `forecast::scoring::benchmarks` supplies the frozen issuer-guidance and persistence comparators to `fmine_calib::record::scoring::compare`. Guidance uses the latest agreed pre-cut document; same-day publication metadata needs exact manifest-bound bytes and an earlier declared retrieval, whose declared status is retained. No older guidance substitutes for an uncertain latest candidate. Original nine-month displayed production supplies the signed annual-guidance remainder; cost rates are never subtracted.

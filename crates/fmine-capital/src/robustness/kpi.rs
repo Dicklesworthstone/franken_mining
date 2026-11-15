@@ -1,5 +1,5 @@
 //! DESIGN (BD-229, §23.6): exact economic sacrifice of declared KPI constraints on static portfolios.
-//! Determinism: Exact. Whole-bundle components are summed before ratios or scenario aggregation.
+//! Determinism: Exact (whole-bundle components are summed before ratios or scenario aggregation).
 
 use crate::*;
 

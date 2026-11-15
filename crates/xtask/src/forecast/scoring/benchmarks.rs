@@ -17,7 +17,9 @@ use fmine_core::hash::Digest32;
 use fmine_public::key::mine_stats::KeyedClaims;
 use fmine_public::key::{KeyedCell, PeriodKind};
 use fmine_public::sources::{IssuerProfile, SourceKind};
-use fmine_public::transcribe::{CheckedDocument, load_transcription_prefixes};
+use fmine_public::transcribe::{
+    CheckedDocument, load_transcription_prefixes, load_transcription_prefixes_for_period,
+};
 
 use super::super::{Loaded, Res, format_utc, guidance, parse_utc};
 use super::{ReportedNumbers, js, names, numeric, observations, original, rational};
@@ -576,14 +578,14 @@ pub(super) fn assess(
 ) -> Res<String> {
     let quarter = super::scored_quarter(&loaded.rules)?;
     let year = u16::try_from(quarter.year).map_err(|_| vec!["unsupported guidance year".into()])?;
-    // A quarterly point is comparator evidence, not an outcome operand. Loading it inside this
-    // optional adapter preserves unconditional model scores if an unbound point body is unavailable.
-    let quarterly_points = if loaded
+    let quarterly = loaded
         .rules
         .targets
         .iter()
-        .any(|target| target.outcome == record::Outcome::QuarterQtd)
-    {
+        .any(|target| target.outcome == record::Outcome::QuarterQtd);
+    // A quarterly point is comparator evidence, not an outcome operand. Loading it inside this
+    // optional adapter preserves unconditional model scores if an unbound point body is unavailable.
+    let quarterly_points = if quarterly {
         let target = &loaded.rules.targets[0];
         let point = loaded
             .rules
@@ -604,8 +606,18 @@ pub(super) fn assess(
         None => Ok((points, point_numbers)),
     };
     let date_bound = guidance_date_bound(loaded.manifest.information_cutoff_utc);
-    let transcripts = load_transcription_prefixes(profile, root, &["guidance_"], Some(&date_bound))
-        .map_err(|e| vec![e.to_string()]);
+    let transcripts = if quarterly {
+        load_transcription_prefixes_for_period(
+            profile,
+            root,
+            &["guidance_"],
+            &quarter.to_string(),
+            Some(&date_bound),
+        )
+    } else {
+        load_transcription_prefixes(profile, root, &["guidance_"], Some(&date_bound))
+    }
+    .map_err(|e| vec![e.to_string()]);
     let bound_guidance = transcripts
         .as_ref()
         .map_err(Clone::clone)
@@ -668,12 +680,7 @@ pub(super) fn assess(
         })
         .collect();
     let comparisons = comparisons(loaded, outcomes, &rows);
-    let (gate, point_label) = if loaded
-        .rules
-        .targets
-        .iter()
-        .any(|target| target.outcome == record::Outcome::QuarterQtd)
-    {
+    let (gate, point_label) = if quarterly {
         ("quarter_nowcast_gate", "point")
     } else {
         ("q3_release_gate", "Q3")
@@ -972,6 +979,146 @@ mod tests {
         profile.sources.clear();
         profile.subject_statuses.clear();
         profile
+    }
+
+    /// Real registry rows: reader, column, period, and displayed token. Each period has its own
+    /// reader roles because the global registry forbids duplicate reader/document/quantity entries.
+    fn quarterly_guidance_workspace(
+        entries: &[(&str, &str, &str, &str)],
+    ) -> (std::path::PathBuf, Loaded, IssuerProfile) {
+        let mut loaded = loaded();
+        for target in &mut loaded.rules.targets {
+            target.outcome = record::Outcome::QuarterQtd;
+        }
+        for baseline in &mut loaded.rules.baselines {
+            if let BaselineKind::Persistence { point, .. } = &mut baseline.kind {
+                *point = Quarter { year: 2030, q: 4 };
+            }
+        }
+        loaded.manifest.information_cutoff_utc = parse_utc("2030-12-31T00:00:00Z").unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "fmine-quarterly-guidance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("corpus")).unwrap();
+        std::fs::create_dir_all(root.join("registries/transcriptions")).unwrap();
+        let document = b"Invented Example Mine guidance: Q1 2031 production 90 - 110 koz; FY2031 production 1000 koz, both at 100%.";
+        let digest = fmine_core::hash::sha256(document).to_hex();
+        std::fs::write(root.join("corpus/Guidance.pdf"), document).unwrap();
+        let mut profile = profile();
+        profile.documents = vec![fmine_registry::sources::DocumentRow {
+            file: "Guidance.pdf".into(),
+            dir: "corpus".into(),
+            kind: "mda".into(),
+            url: "https://example.invalid/Guidance.pdf".into(),
+            url_basis: "synthetic test".into(),
+            published_at: "2030-12-15".into(),
+            published_at_basis: "FACT: invented test date".into(),
+            pages: 1,
+            bytes: document.len() as u64,
+            sha256: digest.clone(),
+        }];
+        let mut transcript = format!(
+            "schema = \"fmine.transcriptions.v1\"\nissuer = \"{}\"\n",
+            profile.issuer
+        );
+        for &(reader, column, period, token) in entries {
+            transcript.push_str(&format!(
+                "\n[[entry]]\ndoc = \"Guidance.pdf\"\ndoc_sha256 = \"{digest}\"\n\
+                 page = 1\ntable = \"Invented guidance\"\nrow = \"Example Mine\"\n\
+                 col = \"{column}\"\ntoken = \"{token}\"\n\
+                 quantity = \"guidance_example_mine_production_koz\"\n\
+                 unit = \"koz\"\nbasis = \"100%\"\nperiod = \"{period}\"\nreader = \"{reader}\"\n"
+            ));
+        }
+        std::fs::write(
+            root.join(format!("registries/transcriptions/{}.toml", profile.issuer)),
+            transcript,
+        )
+        .unwrap();
+        (root, loaded, profile)
+    }
+
+    #[test]
+    fn quarterly_guidance_scopes_real_registry_periods_before_agreement() {
+        for annual_readers in [1, 2] {
+            let mut entries = vec![
+                ("quarter-a", "Q1 production", "2031Q1", "90 - 110"),
+                ("quarter-b", "Q1 production", "2031Q1", "90 - 110"),
+                ("annual-a", "FY production", "2031FY", "1000"),
+            ];
+            if annual_readers == 2 {
+                entries.push(("annual-b", "FY production", "2031FY", "1000"));
+            }
+            let (root, loaded, profile) = quarterly_guidance_workspace(&entries);
+            // Preserve the existing unscoped loader's duplicate/pending semantics.
+            let unscoped = load_transcription_prefixes(&profile, &root, &["guidance_"], None);
+            if annual_readers == 2 {
+                assert!(unscoped.is_err());
+            } else {
+                assert_eq!(unscoped.unwrap().unwrap().agreement.single_reader.len(), 1);
+            }
+            let (claims, numbers) = observations(&profile, &root).unwrap();
+            let outcomes = loaded
+                .forecasts
+                .iter()
+                .map(|forecast| OutcomeRow {
+                    site: forecast.site.clone(),
+                    target: forecast.target.clone(),
+                    value: Some(Rat::from_integer(100)),
+                })
+                .collect::<Vec<_>>();
+            let report = assess(&root, &loaded, &profile, &outcomes, &claims, &numbers).unwrap();
+            assert!(report.contains("\"guidance_errors\":[]"), "{report}");
+            assert!(
+                report.contains("\"target\":\"production\",\"status\":\"available\""),
+                "{report}"
+            );
+            assert!(
+                report.contains("\"interval\":{\"lower\":\"90\",\"upper\":\"110\"}"),
+                "{report}"
+            );
+            assert!(report.contains("\"period\":\"2031Q1\""), "{report}");
+            assert!(!report.contains("2031FY"), "{report}");
+        }
+    }
+
+    #[test]
+    fn quarterly_guidance_scope_retains_disagreeing_readers_and_global_identity_checks() {
+        let (root, _, profile) = quarterly_guidance_workspace(&[
+            ("reader-a", "Q1 production", "2031Q1", "90 - 110"),
+            ("reader-b", "Q1 production", "2031FY", "90 - 110"),
+        ]);
+        let error =
+            load_transcription_prefixes_for_period(&profile, &root, &["guidance_"], "2031Q1", None)
+                .unwrap_err();
+        assert!(error.what.contains("period"), "{error}");
+        assert!(error.what.contains("reader-a, reader-b"), "{error}");
+
+        let (root, _, profile) = quarterly_guidance_workspace(&[
+            ("quarter-a", "Q1 production", "2031Q1", "90 - 110"),
+            ("quarter-b", "Q1 production", "2031Q1", "90 - 110"),
+            ("annual-a", "FY production", "2031FY", "1000"),
+        ]);
+        let path = root.join(format!("registries/transcriptions/{}.toml", profile.issuer));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (quarter_rows, annual_row) = text.rsplit_once("\n[[entry]]").unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "{quarter_rows}\n[[entry]]{}",
+                annual_row.replace(&profile.documents[0].sha256, &"0".repeat(64))
+            ),
+        )
+        .unwrap();
+        let error =
+            load_transcription_prefixes_for_period(&profile, &root, &["guidance_"], "2031Q1", None)
+                .unwrap_err();
+        assert!(error.what.contains("registered digest"), "{error}");
     }
 
     #[test]
