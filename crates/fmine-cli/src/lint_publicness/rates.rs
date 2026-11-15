@@ -393,31 +393,7 @@ fn aisc_numerator_basis(
         ));
     }
     let (factor, rule) = if nonzero_nci {
-        let footnote = aisc::find_share_footnote(sheet)
-            .ok_or_else(|| bad("the attributable cost-of-sales formula footnote is missing"))?;
-        // The shared locator returns the first match. Distinct matching statements cannot choose
-        // an ownership interpretation by cell order; identical repeated notes add no ambiguity.
-        let statements: BTreeSet<_> = sheet
-            .cells_by_coord
-            .keys()
-            .filter_map(|&(row, col)| aisc::cell_text(sheet, row, col))
-            .map(|text| text.to_lowercase())
-            .filter(|text| {
-                [
-                    "is calculated as cost of sales",
-                    "divided by ounces sold",
-                    "attributable basis using",
-                    "ownership share",
-                ]
-                .iter()
-                .all(|phrase| text.contains(phrase))
-            })
-            .collect();
-        if statements.len() > 1 {
-            return Err(bad(
-                "competing cost-of-sales formula footnotes leave the ownership basis ambiguous",
-            ));
-        }
+        let footnote = cost_formula_footnote(sheet, &source.file_name, &profile.issuer)?;
         witnesses.push(format!("{}:{}!{footnote}", source.file_name, sheet.name));
         let OwnershipBasis::Attributable { num, den, .. } = basis.basis else {
             return Err(bad(
@@ -505,6 +481,106 @@ fn aisc_numerator_basis(
         witnesses,
         numerator,
     })
+}
+
+/// The supported complete affirmative statement, not a bag of words that a denial can also contain.
+/// Prefixes and the optional operations clause are the recorded issuer/synthetic forms. Arbitrary
+/// qualifiers, reordered clauses and extra sentences remain outside this source interpretation.
+fn cost_formula_owner(mut text: &str) -> Option<&str> {
+    text = text.strip_suffix('.').unwrap_or(text);
+    if let Some((marker, rest)) = text.split_once(". ")
+        && marker.len() == 1
+        && marker.as_bytes()[0].is_ascii_lowercase()
+    {
+        text = rest;
+    }
+    text = [
+        "cost of sales per ounce: ",
+        "cost of sales per ounce - ",
+        "cos/oz: ",
+        "cos/oz - ",
+    ]
+    .into_iter()
+    .find_map(|prefix| text.strip_prefix(prefix))
+    .unwrap_or(text);
+    text = text.strip_prefix("gold ").unwrap_or(text);
+    text = ["cost of sales per ounce", "cos/oz"]
+        .into_iter()
+        .find_map(|prefix| text.strip_prefix(prefix))?
+        .strip_prefix(" is calculated as cost of sales ")?;
+    if let Some(rest) = text.strip_prefix("across our gold operations ") {
+        text = rest
+            .strip_prefix("(excluding sites in closure or care and maintenance) ")
+            .unwrap_or(rest);
+    }
+    text = text.strip_prefix("divided by ounces sold")?;
+    let basis = if let Some(rest) = text.strip_prefix(" (both on an attributable basis using ") {
+        rest.strip_suffix(')')?
+    } else {
+        text.strip_prefix(", both on an attributable basis using ")?
+    };
+    basis.strip_suffix(" ownership share")
+}
+
+fn cost_formula_footnote(
+    sheet: &fmine_io::xlsx::Sheet,
+    file: &str,
+    issuer: &str,
+) -> Result<String, Refusal> {
+    let bad = |what| Refusal::new(RefusalCode::BasisMismatch105, what);
+    let mut statements = BTreeMap::new();
+    for &(row, col) in sheet.cells_by_coord.keys() {
+        let Some(text) = aisc::cell_text(sheet, row, col).map(|s| s.to_lowercase()) else {
+            continue;
+        };
+        // Basis/applicability exceptions need not repeat the positive formula's words. Only
+        // explicit same-rate statements participate; plain labels and other metrics do not.
+        if !["cost of sales per ounce", "cos/oz"]
+            .iter()
+            .any(|rate| text.contains(rate))
+            || ![
+                "calculated as",
+                "basis",
+                "ownership",
+                "attributable",
+                "100%",
+                "100 %",
+                "apply",
+                "applies",
+                "applicable",
+                "applicability",
+            ]
+            .iter()
+            .any(|claim| text.contains(claim))
+        {
+            continue;
+        }
+        statements
+            .entry(text)
+            .or_insert_with(|| format!("{}{row}", fmine_io::xlsx::col_index_to_letters(col)));
+    }
+    let mut statements = statements.into_iter();
+    let Some((statement, at)) = statements.next() else {
+        return Err(bad(
+            "the attributable cost-of-sales formula footnote is missing".to_string(),
+        ));
+    };
+    if let Some((_, other)) = statements.next() {
+        return Err(bad(format!(
+            "competing cost-of-sales formula footnotes at {file}:{}!{at} and {file}:{}!{other} leave the ownership basis ambiguous",
+            sheet.name, sheet.name
+        )));
+    }
+    let issuer_owner = format!("{}'s", issuer.to_lowercase());
+    if !cost_formula_owner(&statement)
+        .is_some_and(|owner| matches!(owner, "the" | "the issuer's") || owner == issuer_owner)
+    {
+        return Err(bad(format!(
+            "cost-of-sales formula note at {file}:{}!{at} is not a supported complete affirmative attributable formula",
+            sheet.name
+        )));
+    }
+    Ok(at)
 }
 
 fn basis_witness(

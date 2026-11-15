@@ -2474,6 +2474,10 @@ same-release ownership label and cost-of-sales formula footnote. The derived rat
 An explicitly zero operating NCI line keeps the numerator unchanged; sustaining NCI does not select or
 change the factor. The calculation retains the unmodified cost and sold-ounce Claims, an interpreted
 numerator Claim, and the title, units, share and footnote witnesses with their publication dates and hashes.
+When scaling requires a formula footnote, the complete supported affirmative statement must be present.
+Case and whitespace variations are normalized; recognized same-rate denials, ownership exceptions,
+unsupported formula qualifications and competing notes refuse with their source locators. This bounded
+interpretation does not infer a formula from unrestricted prose or cross-cell references.
 
 For synthetic displayed values of US$100M, a confirmed 60% share and 100 thousand attributable ounces sold,
 the exact enclosure is `[39800/67, 120600/199] USD/oz`, approximately $594.03–$606.03 per ounce. Those inputs

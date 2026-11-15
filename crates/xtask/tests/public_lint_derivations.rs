@@ -4250,13 +4250,141 @@ fn gold_aisc_cost_of_sales_refuses_conflicting_formula_notes_but_allows_identica
         );
         let report = assess(&root, RECONCILED_COS_DRAFT, "2030-05-01");
         let rate = cost_rate_report(&report);
-        assert_eq!(string_field(rate, "status"), expected, "{}", report.to_json());
+        assert_eq!(
+            string_field(rate, "status"),
+            expected,
+            "{}",
+            report.to_json()
+        );
         if expected == "refused" {
             assert!(rate.contains("competing cost-of-sales formula footnotes"));
             assert!(rate.contains("FMINE-REF-105"));
             assert!(!report.payload_json.contains("\"status\":\"derivable\""));
         } else {
             assert!(rate.contains("\"factor\":\"3/5\""));
+        }
+    }
+}
+
+#[test]
+fn gold_aisc_cost_of_sales_requires_complete_affirmative_formula_notes() {
+    const STATED: &str = "Cost of sales per ounce is calculated as cost of sales divided by ounces sold, both on an attributable basis using the ownership share.";
+    const DENIED: &str = "For Example Mine, cost of sales per ounce is calculated as cost of sales divided by ounces sold on a 100% basis; the attributable basis using the ownership share does not apply.";
+    const OTHER_METRIC: &str = "All-in sustaining costs per ounce is calculated as cost of sales divided by ounces sold, both on an attributable basis using the ownership share.";
+    // Recorded issuer wording, with the invented fixture issuer in its ownership clause.
+    let abbreviated = format!(
+        "g. COS/oz - Gold COS/oz is calculated as cost of sales across our gold operations \
+         (excluding sites in closure or care and maintenance) divided by ounces sold \
+         (both on an attributable basis using {DERIVATION_ISSUER}'s ownership share)."
+    );
+    let normalized_repeat = STATED.to_uppercase().replace(' ', " \n\t ");
+    let appended = format!("{STATED} This does not apply to Example Mine.");
+    let prefixed = format!("The following formula does not apply to Example Mine: {STATED}");
+    let other_owner = STATED.replace("the ownership share", "another issuer's ownership share");
+    for (case, note, additional, expected) in [
+        (
+            "documented synthetic wording",
+            fmine_public::synthetic::SYNTHETIC_SHARE_FOOTNOTE,
+            None,
+            "derived",
+        ),
+        (
+            "documented abbreviation",
+            abbreviated.as_str(),
+            None,
+            "derived",
+        ),
+        (
+            "case and whitespace repeat",
+            STATED,
+            Some(normalized_repeat.as_str()),
+            "derived",
+        ),
+        ("sole denial", DENIED, None, "refused"),
+        ("appended denial", appended.as_str(), None, "refused"),
+        ("prefixed denial", prefixed.as_str(), None, "refused"),
+        ("other issuer", other_owner.as_str(), None, "refused"),
+        (
+            "same-rate full-mine exception",
+            STATED,
+            Some("For Example Mine, cost of sales per ounce is stated on a 100% basis."),
+            "refused",
+        ),
+        (
+            "abbreviated full-mine exception",
+            STATED,
+            Some("For Example Mine, gold COS/oz is on a 100% basis."),
+            "refused",
+        ),
+        (
+            "ownership exception",
+            STATED,
+            Some("Cost of sales per ounce excludes ownership adjustments."),
+            "refused",
+        ),
+        (
+            "attribution denial",
+            STATED,
+            Some("Cost of sales per ounce is not attributable."),
+            "refused",
+        ),
+        (
+            "applicability denial",
+            STATED,
+            Some("For Example Mine, cost of sales per ounce does not apply."),
+            "refused",
+        ),
+        ("other metric alone", OTHER_METRIC, None, "refused"),
+        (
+            "unrelated metric note",
+            STATED,
+            Some(OTHER_METRIC),
+            "derived",
+        ),
+        (
+            "plain rate row label",
+            STATED,
+            Some("Cost of sales per ounce"),
+            "derived",
+        ),
+    ] {
+        let root = derivation_workspace();
+        let mut sheet = reconciled_gold_cos("100", number("-40"), "0");
+        let (_, text) = sheet.cells.iter_mut().find(|(at, _)| at == "A20").unwrap();
+        *text = MinimalCell::Text(note.into());
+        if let Some(additional) = additional {
+            sheet
+                .cells
+                .push(("A21".into(), MinimalCell::Text(additional.into())));
+        }
+        cost_source(&root, "Costs.xlsx", Some("2030-05-01"), "0", sheet);
+        source(
+            &root,
+            "Ownership.xlsx",
+            "2030Q1",
+            Some("2030-05-01"),
+            "0",
+            &[gold_share_summary("Example Mine (60%)")],
+        );
+        let report = assess(&root, RECONCILED_COS_DRAFT, "2030-05-01");
+        let rate = cost_rate_report(&report);
+        assert_eq!(
+            string_field(rate, "status"),
+            expected,
+            "{case}: {}",
+            report.to_json()
+        );
+        if expected == "refused" {
+            assert!(rate.contains("FMINE-REF-105"), "{case}: {rate}");
+            assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+            assert!(!rate.contains("\"basis_bridge\":"));
+            if case != "other metric alone" {
+                assert!(rate.contains("Costs.xlsx:Q1 2030!A20"), "{case}: {rate}");
+            }
+        } else {
+            assert!(report.payload_json.contains("\"status\":\"derivable\""));
+            assert!(rate.contains("\"factor\":\"3/5\""));
+            assert!(rate.contains("\"locator\":\"Q1 2030!A20\""));
         }
     }
 }

@@ -1458,6 +1458,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   each amount's displayed half-step interval. JSON and Markdown expose the factor, rule, original
   operands, interpreted Claim, witness text, publication dates and source hashes. Missing operating NCI,
   mixed regional ownership, comparative-period ownership and ambiguous or unavailable witnesses refuse.
+  Share scaling requires a complete supported affirmative formula statement, with only recorded heading,
+  footnote-marker and clause forms. Recognized same-rate denials, ownership/basis/applicability exceptions
+  and unsupported formula qualifications refuse with exact note locators; case/whitespace-identical repeats
+  remain admissible. Unrestricted source prose and cross-cell references are outside this interpretation.
   Unresolved ownership, co-product rates and produced-metal denominators remain outside these rules.
   Synthetic XLSX regression
   cases exercise the source-to-command path; they do not establish actual issuer numerator coverage.
@@ -1555,8 +1559,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   source hashes and exact printed precision retain the existing scoring policies. Mixed annual/quarterly
   outcomes, conflicting points and a complete timestamp interval reaching quarter end refuse. The JSON
   adds `outcome_quarter` only for these records. The annual FY2026 rules, frame tags and output fields
-  retain their original interpretation. The older xtask scoring adapter explicitly rejects quarterly
-  rules and directs callers to the robot CLI. This extends the protocol without issuing any actual
+  retain their original interpretation. The xtask record verifier and scorer enforce the same quarterly
+  proof boundary and original-QTD source policy. This extends the protocol without issuing any actual
   forecasts, providing an external timestamp or establishing calibration.
 - DESIGN (BD-344): `--provenance` reads a strict `fmine.forecast-provenance.v1` bundle, binds exact forecast
   IDs, and checks every cohort member's complete declared ancestry at its registration time. The scoring
