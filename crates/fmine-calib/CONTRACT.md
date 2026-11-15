@@ -43,7 +43,7 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - DESIGN (BD-067/BD-334): `record::candidate::build_candidate` generates a complete draft live-site × target
   record from already selected quarterly observations. The named `pooled-quarterly-ratio-empirical-v1` model
   uses each target's frozen persistence pool and inverse empirical CDF: the latest observation times
-  the pooled median, with ordered scaled tail bounds. Only the canonical Q4 gold AISC and copper C1/AISC
+  the pooled median, with ordered scaled tail bounds. Only the canonical gold AISC and copper C1/AISC
   cost targets admit signed or zero live observations; production and unsupported targets still require a
   positive point. Negative multipliers reverse the tail endpoints, while the point remains the multiplier
   times the ratio-pool median. Its exact interval equals that comparator's interval on identical
@@ -497,21 +497,26 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     (2026-11-09T11:00Z) and the 31 Dec 2026 deadline;
   - `parse_rules` → `RecordRules` (BD-334.S2): α, the quantile estimator, the n_eff correlation range, the
     coverage level, the dates, the targets (each with its Mine Stats summary field id and its `Outcome`,
-    `fy_minus_9m` or `q4_qtd`), basis rules, baselines (each on a declared target, every target with one; the id
+    `fy_minus_9m`, `q4_qtd` or `quarter_qtd`), basis rules, baselines (each on a declared target, every target with one; the id
     decides the `BaselineKind`, and `run_rate_persistence` carries its pool's `Quarter`s and the point quarter
     after them) and the named site universe (`live`/`not_published`, never dropped); refuses an `OPEN` marker in
     any value, a duplicate id, an unknown baseline id and every malformed or missing key;
   - `TargetMetric::from_target` gives candidate and scoring adapters one explicit source interpretation:
     `au_prod_100_koz` and `cu_prod_100_kt` require `fy_minus_9m`; `aisc_usd_per_oz`, `c1_usd_per_lb` and
     `aisc_usd_per_lb` require `q4_qtd`. It supplies the exact unit, guidance quantity key and cost-definition
-    suffix. Production is additive on the 100% basis; sold-metal cost rates are neither subtracted nor
+    suffix. All five fields also accept `quarter_qtd`, meaning the original next-quarter QTD value.
+    `RecordRules::outcome_quarter` requires one common persistence point and refuses mixed annual/quarterly
+    targets; annual records retain their Q3-to-Q4 meaning. `Quarter::end_utc` supplies the exclusive calendar
+    boundary, including year rollover, and rejects invalid or unrepresentable quarters. Shared persistence
+    pool validation is reused by the candidate and public source adapter.
+    Production is additive on the 100% basis; sold-metal cost rates are neither subtracted nor
     ownership-scaled. Unsupported field/outcome pairs have no interpretation. This adds no durable tags
     or changes to existing rules/record frames;
   - `parse_forecasts(csv, rules)` → `Vec<ForecastRow>` (BD-334.S3): the header `forecasts_header` derives from α
     (`site,target,point,p10,p90,uncalibrated` at 0.2), exactly one row per live site × target, none for a
     `not_published` site, exact decimals with lower ≤ point ≤ upper, and `uncalibrated` = `true`.
     Gold AISC and copper C1/AISC sold-metal cost targets admit signed forecasts, including credit-only and
-    cross-zero ranges. The exact field and `q4_qtd` outcome rule authorize this domain, never the target ID
+    cross-zero ranges. The exact field and `q4_qtd` or `quarter_qtd` outcome rule authorize this domain, never the target ID
     or prose. Production, unknown fields and incompatible field/outcome pairs retain nonnegative bounds.
     Both direct scoring APIs enforce the same target domain; signed costs are not clamped or excluded.
   - `interval_score` on exact rationals (refuses α outside (0, 1) and l > u), `quantile` (Hyndman–Fan types 1

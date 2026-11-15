@@ -566,6 +566,20 @@ impl Quarter {
         }
     }
 
+    /// The exclusive UTC end of this quarter; invalid or unrepresentable dates are unavailable.
+    #[must_use]
+    pub fn end_utc(self) -> Option<i64> {
+        if !(1..=9_999).contains(&self.year) || !(1..=4).contains(&self.q) {
+            return None;
+        }
+        let next = self.next();
+        parse_utc(&format!(
+            "{:04}-{:02}-01T00:00:00Z",
+            next.year,
+            3 * (next.q - 1) + 1
+        ))
+    }
+
     /// The quarters from `self` to `last`, both included; empty when `last` is earlier.
     #[must_use]
     pub fn through(self, last: Self) -> Vec<Self> {
@@ -593,6 +607,9 @@ pub enum Outcome {
     FyMinus9m,
     /// `q4_qtd`: the Q4 value as printed (QTD sheet, Q4 release); a per-unit rate, which is not additive.
     Q4Qtd,
+    /// `quarter_qtd`: the original QTD value for the quarter immediately following the common persistence
+    /// point. Production and sold-metal costs retain their own units and ownership semantics.
+    QuarterQtd,
 }
 
 /// A forecast target: what is forecast and what is scored.
@@ -633,11 +650,15 @@ impl TargetMetric {
     #[must_use]
     pub fn from_target(target: &Target) -> Option<Self> {
         match (target.field.as_str(), target.outcome) {
-            ("au_prod_100_koz", Outcome::FyMinus9m) => Some(Self::GoldProduction),
-            ("aisc_usd_per_oz", Outcome::Q4Qtd) => Some(Self::GoldAisc),
-            ("cu_prod_100_kt", Outcome::FyMinus9m) => Some(Self::CopperProduction),
-            ("c1_usd_per_lb", Outcome::Q4Qtd) => Some(Self::CopperC1),
-            ("aisc_usd_per_lb", Outcome::Q4Qtd) => Some(Self::CopperAisc),
+            ("au_prod_100_koz", Outcome::FyMinus9m | Outcome::QuarterQtd) => {
+                Some(Self::GoldProduction)
+            }
+            ("aisc_usd_per_oz", Outcome::Q4Qtd | Outcome::QuarterQtd) => Some(Self::GoldAisc),
+            ("cu_prod_100_kt", Outcome::FyMinus9m | Outcome::QuarterQtd) => {
+                Some(Self::CopperProduction)
+            }
+            ("c1_usd_per_lb", Outcome::Q4Qtd | Outcome::QuarterQtd) => Some(Self::CopperC1),
+            ("aisc_usd_per_lb", Outcome::Q4Qtd | Outcome::QuarterQtd) => Some(Self::CopperAisc),
             _ => None,
         }
     }
@@ -753,6 +774,81 @@ pub struct RecordRules {
     pub sites: Vec<RulesSite>,
 }
 
+impl RecordRules {
+    /// The unique declared pool and point for one target, with a valid historical ordering.
+    pub fn persistence_pool(
+        &self,
+        target: &str,
+    ) -> Result<(Quarter, Quarter, Quarter), RecordError> {
+        let invalid = || RecordError::Forecast {
+            line: 0,
+            reason: format!(
+                "{target} requires one valid run_rate_persistence pool before its point"
+            ),
+        };
+        let mut pools = self.baselines.iter().filter_map(|b| match b.kind {
+            BaselineKind::Persistence {
+                pool_from,
+                pool_through,
+                point,
+            } if b.target == target => Some((b.id.as_str(), pool_from, pool_through, point)),
+            _ => None,
+        });
+        let (Some(("run_rate_persistence", first, last, point)), None) =
+            (pools.next(), pools.next())
+        else {
+            return Err(invalid());
+        };
+        if first >= last
+            || last >= point
+            || [first, last, point]
+                .iter()
+                .any(|q| !(0..=9_999).contains(&q.year) || !(1..=4).contains(&q.q))
+        {
+            return Err(invalid());
+        }
+        Ok((first, last, point))
+    }
+
+    /// Source adapters derive the scored quarter from a single frozen persistence point. The original
+    /// annual rules retain their Q3-to-Q4 meaning. New quarterly records use original QTD values only;
+    /// mixing those meanings or issuing a post-quarter nowcast is outside this protocol slice.
+    pub fn outcome_quarter(&self) -> Result<Quarter, RecordError> {
+        let invalid = |reason: &str| RecordError::Forecast {
+            line: 0,
+            reason: reason.into(),
+        };
+        let (first, remaining) = self
+            .targets
+            .split_first()
+            .ok_or_else(|| invalid("record has no targets"))?;
+        let quarterly = first.outcome == Outcome::QuarterQtd;
+        let (_, _, point) = self.persistence_pool(&first.id)?;
+        if point.year == 0 {
+            return Err(invalid("persistence point requires a positive year"));
+        }
+        for target in remaining {
+            if (target.outcome == Outcome::QuarterQtd) != quarterly
+                || self.persistence_pool(&target.id)?.2 != point
+            {
+                return Err(invalid(
+                    "targets must share one persistence point and outcome mode",
+                ));
+            }
+        }
+        if !quarterly && point.q != 3 {
+            return Err(invalid(
+                "annual outcome rules require a Q3 persistence point",
+            ));
+        }
+        let outcome = point.next();
+        outcome
+            .end_utc()
+            .ok_or_else(|| invalid("scored quarter is outside the supported UTC calendar"))?;
+        Ok(outcome)
+    }
+}
+
 const RULES_PROSE_KEYS: [&str; 5] = [
     "interval_score",
     "report",
@@ -852,11 +948,16 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
                             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
                             .then(|| s.to_string())
                     })?,
-                    outcome: r.parsed("outcome", "\"fy_minus_9m\" or \"q4_qtd\"", |s| match s {
-                        "fy_minus_9m" => Some(Outcome::FyMinus9m),
-                        "q4_qtd" => Some(Outcome::Q4Qtd),
-                        _ => None,
-                    })?,
+                    outcome: r.parsed(
+                        "outcome",
+                        "\"fy_minus_9m\", \"q4_qtd\" or \"quarter_qtd\"",
+                        |s| match s {
+                            "fy_minus_9m" => Some(Outcome::FyMinus9m),
+                            "q4_qtd" => Some(Outcome::Q4Qtd),
+                            "quarter_qtd" => Some(Outcome::QuarterQtd),
+                            _ => None,
+                        },
+                    )?,
                 });
             }
             "basis_rule" => {
@@ -1364,19 +1465,6 @@ pub fn parse_forecasts(csv: &[u8], rules: &RecordRules) -> Result<Vec<ForecastRo
         let [site, target, point, lo, hi, flag] = cells[..] else {
             return Err(bad(n, format!("{} fields, not 6", cells.len())));
         };
-        match rules.sites.iter().find(|s| s.name == site) {
-            None => return Err(bad(n, format!("{site:?} is not a site of the rules"))),
-            Some(s) if s.status == SiteStatus::NotPublished => {
-                return Err(bad(
-                    n,
-                    format!("{site} is not_published: it is listed, not forecast"),
-                ));
-            }
-            Some(_) => {}
-        }
-        let Some(target_rule) = rules.targets.iter().find(|t| t.id == target) else {
-            return Err(bad(n, format!("{target:?} is not a target of the rules")));
-        };
         if rows.iter().any(|r| r.site == site && r.target == target) {
             return Err(bad(n, format!("a second {target} forecast for {site}")));
         }
@@ -1388,27 +1476,18 @@ pub fn parse_forecasts(csv: &[u8], rules: &RecordRules) -> Result<Vec<ForecastRo
                 .ok()
                 .ok_or_else(|| bad(n, format!("{s:?} is not a decimal")))
         };
-        let (point, lo, hi) = (number(point)?, number(lo)?, number(hi)?);
-        if lo.signum() < 0 && !target_rule.permits_signed_forecast() {
-            return Err(bad(
-                n,
-                format!("{target:?} requires a nonnegative forecast lower bound"),
-            ));
-        }
-        let le = |a: Rat, b: Rat| exact(a.checked_cmp(b)).map(|o| o != Ordering::Greater);
-        if !(le(lo, point)? && le(point, hi)?) {
-            return Err(bad(
-                n,
-                "the bounds must satisfy lower <= point <= upper".to_string(),
-            ));
-        }
-        rows.push(ForecastRow {
+        let row = ForecastRow {
             site: site.to_string(),
             target: target.to_string(),
-            point,
-            lo,
-            hi,
-        });
+            point: number(point)?,
+            lo: number(lo)?,
+            hi: number(hi)?,
+        };
+        scoring::paired::validate_forecast_row(rules, &row).map_err(|error| match error.code {
+            "FMINE-REF-207" => RecordError::Overflow,
+            _ => bad(n, error.what),
+        })?;
+        rows.push(row);
     }
     for s in rules.sites.iter().filter(|s| s.status == SiteStatus::Live) {
         for t in &rules.targets {
@@ -2004,6 +2083,8 @@ mod tests {
             assert_eq!(metric.guidance_quantity(), guidance);
             assert_eq!(metric.guidance_basis_suffix(), suffix);
             assert_eq!(metric.is_production(), outcome == Outcome::FyMinus9m);
+            target.outcome = Outcome::QuarterQtd;
+            assert_eq!(TargetMetric::from_target(&target), Some(metric));
             target.outcome = if outcome == Outcome::FyMinus9m {
                 Outcome::Q4Qtd
             } else {

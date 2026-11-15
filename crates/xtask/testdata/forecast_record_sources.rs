@@ -37,6 +37,17 @@ fn observation(
     token: &str,
     disposed: bool,
 ) -> Observation {
+    observation_on_sheet(release, period, target, token, disposed, None)
+}
+
+fn observation_on_sheet(
+    release: &str,
+    period: Period,
+    target: &Target,
+    token: &str,
+    disposed: bool,
+    sheet_override: Option<&str>,
+) -> Observation {
     let (sheet, months, date) = match period.kind {
         PeriodKind::Quarter(1) => ("QTD", "three", "March 31"),
         PeriodKind::Quarter(2) => ("QTD", "three", "June 30"),
@@ -46,6 +57,7 @@ fn observation(
         PeriodKind::FullYear => ("YTD", "twelve", "December 31"),
         PeriodKind::H1 => ("YTD", "six", "June 30"),
     };
+    let sheet = sheet_override.unwrap_or(sheet);
     let file = format!("invented-{release}-{}-{}.xlsx", period.code(), target.id);
     let bytes = build_minimal_xlsx(&[MinimalSheet {
         name: sheet.into(),
@@ -136,6 +148,83 @@ fn copper_target(field: &str) -> Target {
 }
 
 #[test]
+fn quarterly_outcomes_select_only_the_scored_original_qtd_for_every_metric() {
+    for quarter in [Quarter { year: 2031, q: 1 }, Quarter { year: 2031, q: 2 }] {
+        for field in [
+            "au_prod_100_koz",
+            "cu_prod_100_kt",
+            "aisc_usd_per_oz",
+            "c1_usd_per_lb",
+            "aisc_usd_per_lb",
+        ] {
+            let mut target = match field {
+                "au_prod_100_koz" => target(true),
+                "aisc_usd_per_oz" => target(false),
+                _ => copper_target(field),
+            };
+            target.outcome = Outcome::QuarterQtd;
+            let period = Period {
+                year: 2031,
+                kind: PeriodKind::Quarter(quarter.q),
+            };
+            let release = quarter.to_string();
+            let later = Quarter {
+                year: quarter.year + 1,
+                q: quarter.q,
+            }
+            .to_string();
+            let comparative = observation(&later, period, &target, "999", false);
+            assert_eq!(comparative.raw.period, period.code());
+            let mut sources = inventory(vec![
+                observation(&release, period, &target, "12.5", false),
+                observation(
+                    &release,
+                    Period {
+                        year: if quarter.q == 1 { 2030 } else { 2031 },
+                        kind: if quarter.q == 1 {
+                            PeriodKind::FullYear
+                        } else {
+                            PeriodKind::H1
+                        },
+                    },
+                    &target,
+                    "777",
+                    false,
+                ),
+                comparative,
+            ]);
+            if quarter.q == 1 {
+                sources.observations.push(observation_on_sheet(
+                    &release,
+                    period,
+                    &target,
+                    "888",
+                    false,
+                    Some("YTD"),
+                ));
+            }
+            let resolved = infer_outcome(&mut sources, "Site A", &target, quarter).unwrap();
+            assert_eq!(number(&resolved.value), Some(Rat::new(25, 2).unwrap()));
+            assert_eq!(resolved.locators.len(), 1);
+            assert!(resolved.locators[0].contains(&release));
+            assert!(resolved.locators[0].contains(":QTD!"));
+            sources
+                .observations
+                .retain(|o| !(o.release == quarter && o.raw.sheet == "QTD"));
+            assert!(
+                matches!(
+                    infer_outcome(&mut sources, "Site A", &target, quarter)
+                        .unwrap()
+                        .value,
+                    Availability::Unavailable(_)
+                ),
+                "neither a cumulative cell nor a later comparative substitutes for {release} {field}"
+            );
+        }
+    }
+}
+
+#[test]
 fn copper_outcomes_select_original_cumulative_tonnes_and_printed_per_pound_rates() {
     let fy = Period {
         year: 2030,
@@ -165,7 +254,8 @@ fn copper_outcomes_select_original_cumulative_tonnes_and_printed_per_pound_rates
         observation("2030Q3", nine, &aisc, "2.2", false),
     ]);
     for (target, expected) in [(&production, "30.25"), (&c1, "2.25"), (&aisc, "3")] {
-        let result = infer_outcome(&mut sources, "Site A", target, 2030).unwrap();
+        let result =
+            infer_outcome(&mut sources, "Site A", target, Quarter { year: 2030, q: 4 }).unwrap();
         assert_eq!(
             number(&result.value),
             Some(Rat::from_decimal_str(expected).unwrap())
@@ -186,9 +276,14 @@ fn copper_outcomes_select_original_cumulative_tonnes_and_printed_per_pound_rates
     });
     assert!(
         matches!(
-            infer_outcome(&mut sources, "Site A", &production, 2030)
-                .unwrap()
-                .value,
+            infer_outcome(
+                &mut sources,
+                "Site A",
+                &production,
+                Quarter { year: 2030, q: 4 }
+            )
+            .unwrap()
+            .value,
             Availability::Unavailable(_)
         ),
         "a later comparative and original QTD cannot replace the frozen FY-minus-9M outcome"
@@ -198,9 +293,14 @@ fn copper_outcomes_select_original_cumulative_tonnes_and_printed_per_pound_rates
         .push(observation("2030Q4", fy, &production, "65", false));
     assert_eq!(
         number(
-            &infer_outcome(&mut sources, "Site A", &production, 2030)
-                .unwrap()
-                .value
+            &infer_outcome(
+                &mut sources,
+                "Site A",
+                &production,
+                Quarter { year: 2030, q: 4 }
+            )
+            .unwrap()
+            .value
         ),
         Some(Rat::from_integer(-5))
     );
@@ -317,7 +417,7 @@ fn copper_guidance_uses_its_own_share_and_requires_each_sold_pound_definition() 
                 &mut sources,
                 "Site A",
                 &target,
-                2030,
+                Quarter { year: 2030, q: 4 },
             )
             .unwrap();
         assert_eq!(
@@ -327,6 +427,53 @@ fn copper_guidance_uses_its_own_share_and_requires_each_sold_pound_definition() 
                 hi: Rat::from_decimal_str(expected.1).unwrap()
             })
         );
+        let mut quarterly = target.clone();
+        quarterly.outcome = Outcome::QuarterQtd;
+        let quarter = Quarter { year: 2031, q: 1 };
+        let missing = guidance
+            .resolve(
+                &root,
+                &profile,
+                &frozen,
+                &mut sources,
+                "Site A",
+                &quarterly,
+                quarter,
+            )
+            .unwrap();
+        assert!(
+            matches!(missing, Availability::Unavailable(ref why) if why.contains("annual guidance is ineligible"))
+        );
+        for entry in &mut guidance.registry.as_mut().unwrap().entries {
+            entry.period = "2031Q1".into();
+        }
+        let quarterly_range = guidance
+            .resolve(
+                &root,
+                &profile,
+                &frozen,
+                &mut sources,
+                "Site A",
+                &quarterly,
+                quarter,
+            )
+            .unwrap();
+        let expected_quarter = if field == "cu_prod_100_kt" {
+            ("120", "140")
+        } else {
+            expected
+        };
+        assert_eq!(
+            quarterly_range,
+            Availability::Available(Bounds {
+                lo: Rat::from_decimal_str(expected_quarter.0).unwrap(),
+                hi: Rat::from_decimal_str(expected_quarter.1).unwrap(),
+            }),
+            "quarterly production retains its complete 100% guidance range; rates retain their denominator"
+        );
+        for entry in &mut guidance.registry.as_mut().unwrap().entries {
+            entry.period = "2030FY".into();
+        }
         assert!(
             sources
                 .evidence
@@ -346,7 +493,7 @@ fn copper_guidance_uses_its_own_share_and_requires_each_sold_pound_definition() 
                     &mut sources,
                     "Site A",
                     &target,
-                    2030
+                    Quarter { year: 2030, q: 4 }
                 )
                 .unwrap(),
             Availability::Unavailable(_)
@@ -370,7 +517,7 @@ fn copper_guidance_uses_its_own_share_and_requires_each_sold_pound_definition() 
                             &mut sources,
                             "Site A",
                             &target,
-                            2030
+                            Quarter { year: 2030, q: 4 }
                         )
                         .unwrap(),
                     Availability::Unavailable(_)
@@ -404,12 +551,18 @@ fn original_release_selection_never_substitutes_comparatives_or_subtracts_rates(
         observation("2030Q4", fy, &cost, "900", false),
         observation("2030Q3", nine, &cost, "800", false),
     ]);
-    let outcome = infer_outcome(&mut sources, "Site A", &production, 2030).unwrap();
+    let outcome = infer_outcome(
+        &mut sources,
+        "Site A",
+        &production,
+        Quarter { year: 2030, q: 4 },
+    )
+    .unwrap();
     assert_eq!(number(&outcome.value), Some(Rat::from_integer(52)));
     assert_eq!(outcome.locators.len(), 2);
     assert_eq!(
         number(
-            &infer_outcome(&mut sources, "Site A", &cost, 2030)
+            &infer_outcome(&mut sources, "Site A", &cost, Quarter { year: 2030, q: 4 })
                 .unwrap()
                 .value
         ),
@@ -419,15 +572,26 @@ fn original_release_selection_never_substitutes_comparatives_or_subtracts_rates(
         .observations
         .retain(|o| !(o.release.to_string() == "2030Q4" && o.raw.label == production.field));
     assert!(matches!(
-        infer_outcome(&mut sources, "Site A", &production, 2030)
-            .unwrap()
-            .value,
+        infer_outcome(
+            &mut sources,
+            "Site A",
+            &production,
+            Quarter { year: 2030, q: 4 }
+        )
+        .unwrap()
+        .value,
         Availability::Unavailable(_)
     ));
     sources
         .observations
         .push(observation("2030Q4", fy, &production, "190", false));
-    let signed = infer_outcome(&mut sources, "Site A", &production, 2030).unwrap();
+    let signed = infer_outcome(
+        &mut sources,
+        "Site A",
+        &production,
+        Quarter { year: 2030, q: 4 },
+    )
+    .unwrap();
     assert_eq!(number(&signed.value), Some(Rat::from_integer(-10)));
     assert_eq!(signed.locators.len(), 2);
     assert!(
@@ -449,7 +613,13 @@ fn original_release_selection_never_substitutes_comparatives_or_subtracts_rates(
             observation("2030Q4", fy, &production, annual, false),
             observation("2030Q3", nine, &production, nine_months, false),
         ];
-        let signed = infer_outcome(&mut sources, "Site A", &production, 2030).unwrap();
+        let signed = infer_outcome(
+            &mut sources,
+            "Site A",
+            &production,
+            Quarter { year: 2030, q: 4 },
+        )
+        .unwrap();
         assert_eq!(number(&signed.value), Some(Rat::from_integer(expected)));
         assert!(
             sources
@@ -476,7 +646,7 @@ fn numeric_zero_survives_status_nil_while_dash_remains_unresolved() {
     let mut sources = inventory(vec![zero]);
     assert_eq!(
         number(
-            &infer_outcome(&mut sources, "Site A", &cost, 2030)
+            &infer_outcome(&mut sources, "Site A", &cost, Quarter { year: 2030, q: 4 })
                 .unwrap()
                 .value
         ),
@@ -491,7 +661,7 @@ fn numeric_zero_survives_status_nil_while_dash_remains_unresolved() {
     );
     sources.observations = vec![observation("2030Q4", q4, &cost, "—", true)];
     assert!(matches!(
-        infer_outcome(&mut sources, "Site A", &cost, 2030)
+        infer_outcome(&mut sources, "Site A", &cost, Quarter { year: 2030, q: 4 })
             .unwrap()
             .value,
         Availability::Unavailable(_)
@@ -499,7 +669,7 @@ fn numeric_zero_survives_status_nil_while_dash_remains_unresolved() {
     sources.observations = vec![observation("2030Q4", q4, &cost, "-5", false)];
     assert_eq!(
         number(
-            &infer_outcome(&mut sources, "Site A", &cost, 2030)
+            &infer_outcome(&mut sources, "Site A", &cost, Quarter { year: 2030, q: 4 })
                 .unwrap()
                 .value
         ),
@@ -812,7 +982,7 @@ fn latest_guidance_requires_agreement_and_converts_its_own_share_before_subtract
                     &mut sources,
                     "Site A",
                     &production,
-                    2030
+                    Quarter { year: 2030, q: 4 }
                 )
                 .unwrap(),
             Availability::Unavailable(_)
@@ -833,7 +1003,7 @@ fn latest_guidance_requires_agreement_and_converts_its_own_share_before_subtract
             &mut sources,
             "Site A",
             &production,
-            2030,
+            Quarter { year: 2030, q: 4 },
         )
         .unwrap();
     assert_eq!(
@@ -865,7 +1035,7 @@ fn latest_guidance_requires_agreement_and_converts_its_own_share_before_subtract
                     &mut sources,
                     "Site A",
                     &production,
-                    2030
+                    Quarter { year: 2030, q: 4 }
                 )
                 .unwrap(),
             Availability::Available(Bounds {
@@ -886,7 +1056,7 @@ fn latest_guidance_requires_agreement_and_converts_its_own_share_before_subtract
                 &mut sources,
                 "Site A",
                 &production,
-                2030
+                Quarter { year: 2030, q: 4 }
             )
             .unwrap_err()
             .code,

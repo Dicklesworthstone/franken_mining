@@ -110,6 +110,10 @@ fn workspace_with_copper_candidate(copper: bool) -> PathBuf {
 }
 
 fn workspace_with_signed_cost_forecast(copper: bool, signed_cost: bool) -> PathBuf {
+    workspace_with_quarterly_candidate(copper, signed_cost, false)
+}
+
+fn workspace_with_quarterly_candidate(copper: bool, signed_cost: bool, quarterly: bool) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "fmine-record-score-{}-{}",
         std::process::id(),
@@ -176,7 +180,9 @@ fn workspace_with_signed_cost_forecast(copper: bool, signed_cost: bool) -> PathB
             writeln!(registry, "retrieved_utc = \"{published}T12:00:00Z\"").unwrap();
         }
     }
-    let doc: &[u8] = if copper {
+    let doc: &[u8] = if quarterly {
+        b"Explicitly synthetic Q4 guidance: Site A production 50 - 60 kt; C1 105 - 115 USD per sold copper pound."
+    } else if copper {
         b"Explicitly synthetic guidance: Site A production 140 - 160 kt; C1 105 - 115 USD per sold copper pound."
     } else {
         b"Explicitly synthetic guidance: Site A production 140 - 160 koz; AISC 105 - 115 USD per sold ounce."
@@ -200,6 +206,12 @@ fn workspace_with_signed_cost_forecast(copper: bool, signed_cost: bool) -> PathB
             "100%;aisc=issuer-reported-per-sold-oz",
         ),
     ] {
+        let token = if quarterly && metric == "production_koz" {
+            "50 - 60"
+        } else {
+            token
+        };
+        let period = if quarterly { "2026Q4" } else { "2026FY" };
         let (metric, unit, basis) = if copper {
             if metric == "production_koz" {
                 ("production_kt", "kt", "100%")
@@ -214,7 +226,7 @@ fn workspace_with_signed_cost_forecast(copper: bool, signed_cost: bool) -> PathB
             (metric, unit, basis)
         };
         for reader in ["reader-a", "reader-b"] {
-            writeln!(transcriptions, "\n[[entry]]\ndoc = \"Guidance.pdf\"\ndoc_sha256 = \"{hash}\"\npage = 1\ntable = \"Synthetic guidance\"\nrow = \"Site A\"\ncol = \"{metric}\"\ntoken = \"{token}\"\nquantity = \"guidance_site_a_{metric}\"\nunit = \"{unit}\"\nbasis = \"{basis}\"\nperiod = \"2026FY\"\nreader = \"{reader}\"").unwrap();
+            writeln!(transcriptions, "\n[[entry]]\ndoc = \"Guidance.pdf\"\ndoc_sha256 = \"{hash}\"\npage = 1\ntable = \"Synthetic guidance\"\nrow = \"Site A\"\ncol = \"{metric}\"\ntoken = \"{token}\"\nquantity = \"guidance_site_a_{metric}\"\nunit = \"{unit}\"\nbasis = \"{basis}\"\nperiod = \"{period}\"\nreader = \"{reader}\"").unwrap();
         }
     }
     fs::write(
@@ -228,6 +240,13 @@ fn workspace_with_signed_cost_forecast(copper: bool, signed_cost: bool) -> PathB
             .replace("aisc_usd_per_oz", "c1_usd_per_lb")
     } else {
         rules()
+    };
+    let rules = if quarterly {
+        rules
+            .replace("fy_minus_9m", "quarter_qtd")
+            .replace("q4_qtd", "quarter_qtd")
+    } else {
+        rules
     };
     let cut = if copper { "2026-10-03T00:00:00Z" } else { CUT };
     fs::write(root.join("record/rules.toml"), &rules).unwrap();
@@ -258,6 +277,12 @@ fn workspace_with_signed_cost_forecast(copper: bool, signed_cost: bool) -> PathB
         assert_eq!(exit, 0, "{json}");
         let json = fmine_io::omf::json::parse(json.as_bytes()).unwrap();
         let payload = json.get("payload").unwrap();
+        if quarterly {
+            assert_eq!(
+                payload.get("outcome_quarter").unwrap().as_str(),
+                Some("2026Q4")
+            );
+        }
         for source in payload.get("input_manifest").unwrap().as_array().unwrap() {
             let s = |key| source.get(key).unwrap().as_str().unwrap();
             let len = source.get("bytes").unwrap().i64().unwrap();
@@ -495,6 +520,78 @@ fn copper_candidate_is_frozen_and_scores_original_outcomes_with_both_baselines()
     assert_eq!(exit, 8, "{changed}");
     assert!(changed.contains("FMINE-REF-505"));
     eprintln!("copper_forecast_record_score_fixture={}", root.display());
+}
+
+#[test]
+#[ignore = "requires OpenSSL 3.x and host clock from 2026-10-03 through 2026-12-31; real TSA time is never backdated"]
+fn quarterly_candidate_freezes_and_scores_original_qtd_with_matching_guidance_only() {
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    assert!(
+        (parse_utc("2026-10-03T00:00:00Z").unwrap()..parse_utc("2026-12-31T23:59:45Z").unwrap())
+            .contains(&now)
+    );
+    let root = workspace_with_quarterly_candidate(true, false, true);
+    let (json, exit) = run(&root, AS_OF, "tsa/ca.pem", "json");
+    assert_eq!(exit, 0, "{json}");
+    assert!(json.contains("\"outcome_quarter\":\"2026Q4\""));
+    for (target, outcome, model_score, guidance_score) in
+        [("production", 53, 90, 10), ("unit_cost", 120, 100, 60)]
+    {
+        let item = member(&json, "Site A", target);
+        assert!(item.contains(&format!("\"outcome\":{{\"status\":\"available\",\"value\":{{\"num\":\"{outcome}\",\"den\":\"1\"}}}}")), "{item}");
+        assert_score(item.split("\"baselines\":").next().unwrap(), model_score);
+        for (baseline, expected) in [
+            ("issuer_guidance", guidance_score),
+            ("run_rate_persistence", model_score),
+        ] {
+            assert_score(
+                item.split(&format!("\"baseline\":\"{baseline}\""))
+                    .nth(1)
+                    .unwrap()
+                    .split("{\"baseline\":")
+                    .next()
+                    .unwrap(),
+                expected,
+            );
+        }
+        assert!(member(&json, "Site B", target).contains("\"forecast_score\":null"));
+        assert!(member(&json, "Site C", target).starts_with("\"not_published\""));
+    }
+    let (markdown, exit) = run(&root, AS_OF, "tsa/ca.pem", "markdown");
+    assert_eq!(exit, 0, "{markdown}");
+    assert!(markdown.contains("original QTD"));
+    let transcriptions = root.join("registries/transcriptions/synthetic.toml");
+    let quarterly = fs::read_to_string(&transcriptions).unwrap();
+    fs::write(
+        &transcriptions,
+        quarterly.replace("period = \"2026Q4\"", "period = \"2026FY\""),
+    )
+    .unwrap();
+    let (annual_only, exit) = run(&root, AS_OF, "tsa/ca.pem", "json");
+    assert_eq!(exit, 0, "{annual_only}");
+    assert!(annual_only.contains("annual guidance is ineligible"));
+    for target in ["production", "unit_cost"] {
+        let item = member(&annual_only, "Site A", target);
+        let guidance = item
+            .split("\"baseline\":\"issuer_guidance\"")
+            .nth(1)
+            .unwrap()
+            .split("{\"baseline\":")
+            .next()
+            .unwrap();
+        assert!(
+            guidance.contains("\"status\":\"unavailable\""),
+            "{guidance}"
+        );
+        assert!(item.contains("\"baseline\":\"run_rate_persistence\""));
+    }
+    eprintln!("quarterly_forecast_record_score_fixture={}", root.display());
 }
 
 #[test]

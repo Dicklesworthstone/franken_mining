@@ -21,10 +21,14 @@ The public lane of M0 (`fmine assure public`).
 
 - DESIGN (BD-067/BD-334): `forecast::build(workspace, rules_bytes, as_of, decimal_places)` produces an
   unissued quarterly-ratio candidate through `fmine_calib::record::candidate`. It reads only the original
-  Mine Stats releases required by the declared historical pools and their common Q3 point. The supported
+  Mine Stats releases required by the declared historical pools and their common persistence point. The supported
   target meanings are 100%-basis gold production in koz and copper production in kt (`fy_minus_9m`),
   printed gold AISC per ounce sold, and copper C1 or AISC per pound sold (`q4_qtd`). Rates are never
-  differenced across cumulative periods. `fmine_calib::record::TargetMetric` supplies the same exact
+  differenced across cumulative periods. Explicit `quarter_qtd` targets support those same five metrics
+  for the immediately following quarter, including Q4-to-next-year-Q1. Every target in a quarterly record
+  uses that outcome and the same point quarter. The candidate cut must precede the scored quarter's end;
+  post-quarter nowcasts refuse. Original FY rules keep their common Q3 point and existing output bytes.
+  `fmine_calib::record::TargetMetric` supplies the same exact
   field/outcome/unit interpretation used by the record scorers; metal quantities and cost families are
   separate pools. Every input uses the exact displayed
   decimal and the canonical source Claim. A missing original release, ambiguous cell, unreadable or changed

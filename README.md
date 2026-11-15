@@ -3147,6 +3147,27 @@ jq -ej '.payload.forecasts_csv' candidate.json > forecasts.csv
 The existing record-hash, external timestamp and record-score workflow remains responsible for freezing and
 scoring a reviewed forecast. Synthetic source fixtures are explicitly labelled in JSON and Markdown.
 
+#### Recurring quarterly records
+
+DESIGN (BD-067): separate rules can declare `outcome = "quarter_qtd"` on every target to forecast the
+quarter immediately after their common persistence point. A `2026Q4` point therefore targets `2027Q1`.
+The same candidate builder and robot-CLI record scorer support gold production in 100%-basis koz,
+copper production in 100%-basis kt, gold AISC per ounce sold, and copper C1 or AISC per pound sold.
+Quarterly production resolves directly to the original scored-quarter QTD cell; it is not an annual
+or year-to-date subtraction. The sealed FY2026 rules retain their existing meanings and bytes.
+
+Use the reviewed quarterly rules with the existing `forecast record build` and externally timestamped
+`forecast record score` workflow. Every target must use the quarterly outcome and the same persistence
+point; mixed annual/quarterly rules and competing point quarters refuse. The candidate information cut
+and the complete external timestamp interval must both precede the scored quarter's end. Post-quarter
+nowcasts are outside this supported slice and refuse explicitly.
+
+The guidance comparator uses only agreed guidance for that exact quarter, available before the frozen
+information cut. Annual guidance, later guidance and later comparative actuals never substitute.
+Unavailable originals or comparators remain visible in the complete cohort. The historical-ratio model,
+exact probabilities, signed cost handling and uncalibrated interpretation are unchanged. The older
+`xtask forecast-score` adapter remains annual-only and directs quarterly records to the robot CLI.
+
 ### Compute the frozen issuer-guidance baseline
 
 DESIGN (BD-334): the forecast record fixes two comparators. The existing `forecast-baseline` command computes

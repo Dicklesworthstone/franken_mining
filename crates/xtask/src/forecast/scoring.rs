@@ -52,6 +52,13 @@ fn names(values: &[String]) -> String {
 }
 
 fn year(rules: &RecordRules) -> Res<u16> {
+    if rules
+        .targets
+        .iter()
+        .any(|t| t.outcome == Outcome::QuarterQtd)
+    {
+        return fail("quarter_qtd records require fmine forecast record score; this legacy scorer supports annual outcomes only".into());
+    }
     let mut years = BTreeSet::new();
     for baseline in &rules.baselines {
         if let BaselineKind::Persistence { point, .. } = baseline.kind {
@@ -292,6 +299,9 @@ fn resolve<'a>(
     let needed: &[u8] = match target.outcome {
         Outcome::FyMinus9m => &[3, 4],
         Outcome::Q4Qtd => &[4],
+        Outcome::QuarterQtd => {
+            return fail("quarter_qtd requires fmine forecast record score".into());
+        }
     };
     if needed.iter().any(|q| {
         !profile
@@ -354,6 +364,9 @@ fn resolve<'a>(
                     }
                 }
             }
+        }
+        Outcome::QuarterQtd => {
+            return fail("quarter_qtd requires fmine forecast record score".into());
         }
     }
     if row.value.is_some() {
@@ -1304,6 +1317,20 @@ mod tests {
             errors
                 .iter()
                 .any(|error| error.contains("missing_original_2030Q4.xlsx"))
+        );
+    }
+
+    #[test]
+    fn legacy_scorer_routes_quarterly_records_to_the_source_bound_cli() {
+        let mut data = empty_data();
+        for target in &mut data.rules.targets {
+            target.outcome = Outcome::QuarterQtd;
+        }
+        assert!(
+            year(&data.rules)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("fmine forecast record score"))
         );
     }
 }

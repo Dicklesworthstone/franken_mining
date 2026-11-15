@@ -161,6 +161,33 @@ struct Loaded {
     rules_digest: Digest32,
 }
 
+fn require_pre_outcome_proof(
+    rules: &RecordRules,
+    upper_utc: i64,
+) -> Result<record::Quarter, Refusal> {
+    let quarter = rules
+        .outcome_quarter()
+        .map_err(|e| invalid(e.to_string()))?;
+    let end = quarter
+        .end_utc()
+        .ok_or_else(|| invalid("outcome quarter is outside the supported calendar"))?;
+    if upper_utc >= end {
+        let quarterly = rules
+            .targets
+            .iter()
+            .any(|t| t.outcome == record::Outcome::QuarterQtd);
+        return Err(Refusal::new(
+            RefusalCode::LateRegistration206,
+            if quarterly {
+                "the complete external proof interval must precede the end of the scored quarter; post-quarter nowcasts are unsupported"
+            } else {
+                "the record's complete external proof interval must precede the end of the scored year"
+            },
+        ));
+    }
+    Ok(quarter)
+}
+
 fn load(dir: &Path) -> Result<Loaded, Refusal> {
     let rules_bytes = read(&dir.join("rules.toml"))?;
     let manifest_bytes = read(&dir.join("manifest.toml"))?;
@@ -244,26 +271,29 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
                 .join("; "),
         ));
     }
+    require_pre_outcome_proof(&loaded.rules, record_proof.times.upper_utc)?;
     let resolved = record_sources::resolve(root, &loaded.rules, &loaded.manifest, as_of)?;
-    let end = parse_utc(&format!(
-        "{}-01-01T00:00:00Z",
-        u32::from(resolved.outcome_year) + 1
-    ))
-    .ok_or_else(|| invalid("outcome year is outside the supported calendar"))?;
-    if record_proof.times.upper_utc >= end {
-        return Err(Refusal::new(
-            RefusalCode::LateRegistration206,
-            "the record's complete external proof interval must precede the end of the scored year",
-        ));
-    }
     let assessment = record::scoring::paired::assess(
         &loaded.rules,
         &loaded.forecasts,
         &resolved.outcomes,
         &resolved.baselines,
     )?;
+    let horizon = if loaded
+        .rules
+        .targets
+        .iter()
+        .any(|t| t.outcome == record::Outcome::QuarterQtd)
+    {
+        format!(
+            ",\"outcome_quarter\":{}",
+            js(&resolved.outcome_quarter.to_string())
+        )
+    } else {
+        String::new()
+    };
     let body = format!(
-        "\"schema\":{schema},\"lane\":{lane},\"gate_eligible\":false,\"record_id\":{id},\"label\":{label},\"contact\":{contact},\"author_attestation\":{attestation},\"information_cutoff_utc\":{cut},\"as_of\":{as_of},\"outcome_year\":{year},\"record_sha256\":{record_digest},\"rules_sha256\":{rules_digest},\"rules_timestamp\":{rules_proof},\"record_timestamp\":{record_proof},\"source_availability_basis\":\"frozen_manifest_and_registered_publication_or_retrieval_bound\",\"scores\":{scores},\"evidence\":{evidence}",
+        "\"schema\":{schema},\"lane\":{lane},\"gate_eligible\":false,\"record_id\":{id},\"label\":{label},\"contact\":{contact},\"author_attestation\":{attestation},\"information_cutoff_utc\":{cut},\"as_of\":{as_of},\"outcome_year\":{year}{horizon},\"record_sha256\":{record_digest},\"rules_sha256\":{rules_digest},\"rules_timestamp\":{rules_proof},\"record_timestamp\":{record_proof},\"source_availability_basis\":\"frozen_manifest_and_registered_publication_or_retrieval_bound\",\"scores\":{scores},\"evidence\":{evidence}",
         schema = js(SCHEMA),
         lane = js(if resolved.synthetic {
             "synthetic"
@@ -279,7 +309,7 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
         attestation = js(&loaded.manifest.attestation),
         cut = js(&record::format_utc(loaded.manifest.information_cutoff_utc)),
         as_of = js(&command.as_of),
-        year = resolved.outcome_year,
+        year = resolved.outcome_quarter.year,
         record_digest = js(&loaded.record_digest.to_hex()),
         rules_digest = js(&loaded.rules_digest.to_hex()),
         rules_proof = proof_json(&rules_proof),

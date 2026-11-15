@@ -8,8 +8,8 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    BaselineKind, Estimator, ForecastRow, Quarter, Rat, RecordError, RecordRules, SiteStatus,
-    exact, forecasts_header, parse_forecasts, quantile, ratio_quantiles,
+    Estimator, ForecastRow, Quarter, Rat, RecordError, RecordRules, SiteStatus, exact,
+    forecasts_header, parse_forecasts, quantile, ratio_quantiles,
 };
 
 pub const MODEL_ID: &str = "pooled-quarterly-ratio-empirical-v1";
@@ -81,15 +81,6 @@ fn csv_label(value: &str) -> bool {
             .any(|c| c.is_control() || matches!(c, ',' | '"'))
 }
 
-fn quarter_index(q: Quarter) -> Result<i32, RecordError> {
-    if !(0..=9_999).contains(&q.year) || !(1..=4).contains(&q.q) {
-        return Err(invalid(
-            "pool and point quarters require valid YYYYQ1..4 dates",
-        ));
-    }
-    Ok(q.year * 4 + i32::from(q.q) - 1)
-}
-
 /// Build all live site × target forecasts or refuse the request. The model assumes the pooled historical
 /// multiplicative changes apply to each site's latest observation. Production points must be positive;
 /// explicitly supported sold-metal cost targets may be zero or signed. It supplies no calibrated
@@ -105,6 +96,13 @@ pub fn build_candidate(
     series: &[CandidateSeries],
     decimal_places: u32,
 ) -> Result<Candidate, RecordError> {
+    if rules
+        .targets
+        .iter()
+        .any(|t| t.outcome == super::Outcome::QuarterQtd)
+    {
+        rules.outcome_quarter()?;
+    }
     if decimal_places > MAX_DECIMAL_PLACES {
         return Err(invalid("decimal_places must be between zero and twelve"));
     }
@@ -201,39 +199,7 @@ pub fn build_candidate(
     }
     let mut pools = Vec::with_capacity(rules.targets.len());
     for target in &rules.targets {
-        let mut baselines = rules.baselines.iter().filter(|b| {
-            b.target == target.id && matches!(b.kind, BaselineKind::Persistence { .. })
-        });
-        let baseline = baselines.next().ok_or_else(|| {
-            invalid(format!(
-                "{} needs one frozen run_rate_persistence pool",
-                target.id
-            ))
-        })?;
-        if baseline.id != "run_rate_persistence" || baselines.next().is_some() {
-            return Err(invalid(format!(
-                "{} needs exactly one persistence rule",
-                target.id
-            )));
-        }
-        let BaselineKind::Persistence {
-            pool_from,
-            pool_through,
-            point,
-        } = baseline.kind
-        else {
-            return Err(invalid("a persistence rule must declare its pool"));
-        };
-        let (first, last, latest) = (
-            quarter_index(pool_from)?,
-            quarter_index(pool_through)?,
-            quarter_index(point)?,
-        );
-        if first >= last || last >= latest {
-            return Err(invalid(
-                "pool_from < pool_through < point_quarter is required",
-            ));
-        }
+        let (pool_from, pool_through, point) = rules.persistence_pool(&target.id)?;
         let quarters = pool_from.through(pool_through);
         let mut ratios = Vec::new();
         let mut excluded_pairs = Vec::new();

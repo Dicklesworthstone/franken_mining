@@ -5,7 +5,7 @@
 //! and binds original-release observations before calling it. An absent observation remains a member.
 //! Coverage confidence bounds are an explicitly iid Bernoulli reference, never a calibration certificate.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use fmine_numerics::exact_feas::Interval;
@@ -27,6 +27,7 @@ impl fmt::Display for AssessmentError {
 impl std::error::Error for AssessmentError {}
 
 type Result<T> = std::result::Result<T, AssessmentError>;
+type ForecastIndex<'a> = BTreeMap<(&'a str, &'a str), &'a ForecastRow>;
 
 fn exact<T, E: fmt::Display>(value: std::result::Result<T, E>) -> Result<T> {
     value.map_err(|e| AssessmentError(e.to_string()))
@@ -126,39 +127,8 @@ pub fn assess(
     forecasts: &[ForecastRow],
     outcomes: &[OutcomeRow],
 ) -> Result<RecordScore> {
-    let site_names: BTreeSet<_> = rules.sites.iter().map(|s| s.name.as_str()).collect();
-    let target_ids: BTreeSet<_> = rules.targets.iter().map(|t| t.id.as_str()).collect();
-    if site_names.is_empty()
-        || site_names.iter().any(|name| name.trim().is_empty())
-        || site_names.len() != rules.sites.len()
-        || target_ids.iter().any(|id| id.trim().is_empty())
-        || target_ids.is_empty()
-        || target_ids.len() != rules.targets.len()
-    {
-        return Err(AssessmentError(
-            "the frozen universe needs nonempty, unique site names and target IDs".into(),
-        ));
-    }
-    let mut fs = BTreeMap::new();
+    let fs = exact(paired::forecast_index(rules, forecasts))?;
     let mut ys = BTreeMap::new();
-    for f in forecasts {
-        let target = rules.targets.iter().find(|t| t.id == f.target);
-        if !rules
-            .sites
-            .iter()
-            .any(|s| s.name == f.site && s.status == SiteStatus::Live)
-            || target.is_none()
-            || (f.lo.signum() < 0 && !target.is_some_and(super::Target::permits_signed_forecast))
-            || !le(f.lo, f.point)?
-            || !le(f.point, f.hi)?
-            || fs.insert((f.site.as_str(), f.target.as_str()), f).is_some()
-        {
-            return Err(AssessmentError(format!(
-                "invalid or duplicate forecast for {} / {}",
-                f.site, f.target
-            )));
-        }
-    }
     for y in outcomes {
         if !fs.contains_key(&(y.site.as_str(), y.target.as_str()))
             || ys
@@ -451,14 +421,10 @@ fn compare_assessment(
         .iter()
         .map(|f| ((f.site.as_str(), f.target.as_str()), f))
         .collect();
-    let forecast_keys: BTreeSet<_> = forecasts
-        .iter()
-        .map(|f| (f.site.as_str(), f.target.as_str()))
-        .collect();
     let mut by_member = BTreeMap::new();
     for benchmark in benchmarks {
         let key = (benchmark.site.as_str(), benchmark.target.as_str());
-        if !forecast_keys.contains(&key) || by_member.insert(key, benchmark).is_some() {
+        if !by_forecast.contains_key(&key) || by_member.insert(key, benchmark).is_some() {
             return Err(AssessmentError(format!(
                 "unknown or duplicate benchmark row for {} / {}",
                 benchmark.site, benchmark.target
@@ -478,7 +444,7 @@ fn compare_assessment(
             }
         }
     }
-    for (site, target) in forecast_keys {
+    for &(site, target) in by_forecast.keys() {
         if !by_member.contains_key(&(site, target)) {
             return Err(AssessmentError(format!(
                 "missing explicit benchmark row for {site} / {target}"

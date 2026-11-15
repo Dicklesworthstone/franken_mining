@@ -256,7 +256,7 @@ pub struct GuidanceSummary {
     pub flag: CalibrationFlag,
 }
 
-fn rat_json(value: Rat) -> String {
+pub(crate) fn rat_json(value: Rat) -> String {
     format!(
         "{{\"num\":\"{}\",\"den\":\"{}\"}}",
         value.num(),
@@ -264,11 +264,11 @@ fn rat_json(value: Rat) -> String {
     )
 }
 
-fn optional_rat(value: Option<Rat>) -> String {
+pub(crate) fn optional_rat(value: Option<Rat>) -> String {
     value.map_or_else(|| "null".to_owned(), rat_json)
 }
 
-fn interval_json(value: Option<Interval>) -> String {
+pub(crate) fn interval_json(value: Option<Interval>) -> String {
     value.map_or_else(
         || "null".to_owned(),
         |i| {

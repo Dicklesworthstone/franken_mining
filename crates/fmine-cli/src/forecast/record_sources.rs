@@ -35,7 +35,7 @@ pub(super) struct Resolved {
     pub(super) evidence_json: String,
     pub(super) evidence_markdown: String,
     pub(super) synthetic: bool,
-    pub(super) outcome_year: u16,
+    pub(super) outcome_quarter: Quarter,
 }
 
 fn refusal(code: RefusalCode, detail: impl Into<String>) -> Refusal {
@@ -84,36 +84,6 @@ fn basis(basis: OwnershipBasis) -> String {
     }
 }
 
-/// The record schema has no year field. Its typed Q3 persistence points fix the supported outcome year.
-fn outcome_year(rules: &RecordRules) -> Result<u16> {
-    let points: BTreeSet<_> = rules
-        .baselines
-        .iter()
-        .filter_map(|b| match b.kind {
-            BaselineKind::Persistence { point, .. } => Some(point),
-            BaselineKind::IssuerGuidance => None,
-        })
-        .collect();
-    if points.len() != 1 {
-        return Err(invalid(
-            "all persistence baselines must name one common Q3 point quarter",
-        ));
-    }
-    let point = points
-        .into_iter()
-        .next()
-        .ok_or_else(|| invalid("persistence point is absent"))?;
-    if point.q != 3 {
-        return Err(invalid(
-            "the supported annual record requires a Q3 persistence point",
-        ));
-    }
-    u16::try_from(point.year)
-        .ok()
-        .filter(|y| *y > 0)
-        .ok_or_else(|| invalid("outcome year is outside the supported calendar"))
-}
-
 fn target_unit(target: &Target) -> Result<&'static str> {
     TargetMetric::from_target(target)
         .map(TargetMetric::unit)
@@ -126,13 +96,9 @@ fn target_unit(target: &Target) -> Result<&'static str> {
 }
 
 fn after_quarter(quarter: Quarter) -> Result<i64> {
-    let next = quarter.next();
-    parse_utc(&format!(
-        "{:04}-{:02}-01T00:00:00Z",
-        next.year,
-        3 * (next.q - 1) + 1
-    ))
-    .ok_or_else(|| invalid("quarter completion is outside the UTC calendar"))
+    quarter
+        .end_utc()
+        .ok_or_else(|| invalid("quarter completion is outside the UTC calendar"))
 }
 
 /// Accept an exact UTC instant or an explicit retrieval interval, including a same-day HH:MM:SSZ end.
@@ -392,7 +358,7 @@ impl Inventory {
         manifest: &RecordManifest,
         wanted: &BTreeSet<Quarter>,
         publications: &BTreeMap<String, Publication>,
-        outcome_year: u16,
+        outcome_quarters: &BTreeSet<Quarter>,
         as_of: i64,
     ) -> Result<Self> {
         let vocabulary = profile
@@ -467,8 +433,7 @@ impl Inventory {
                 )),
                 None => Some("original release has no parsed availability evidence".into()),
             };
-            let outcome = if quarter.year != i32::from(outcome_year) || ![3, 4].contains(&quarter.q)
-            {
+            let outcome = if !outcome_quarters.contains(quarter) {
                 Some("historical pool release is not a target outcome release".into())
             } else {
                 benchmark.clone()
@@ -618,6 +583,7 @@ impl Inventory {
             .filter(|o| {
                 o.release == release
                     && o.raw.period == period.code()
+                    && (!matches!(period.kind, PeriodKind::Quarter(_)) || o.raw.sheet == "QTD")
                     && o.raw.label == target.field
                     && o.keyed
                         .as_ref()
@@ -667,7 +633,7 @@ impl Inventory {
                     )
                 } else if cell.key.ownership_basis == OwnershipBasis::Unprinted {
                     unavailable("source ownership basis is unprinted")
-                } else if target.outcome == Outcome::FyMinus9m
+                } else if TargetMetric::from_target(target).is_some_and(TargetMetric::is_production)
                     && cell.key.ownership_basis != OwnershipBasis::Consolidated100
                 {
                     unavailable("production must use the printed 100% basis")
@@ -676,7 +642,10 @@ impl Inventory {
                     // public projection calls it a status-dependent Nil. The raw source type remains visible.
                     match (&observation.raw.value, &observation.printed) {
                         (MineStatsCell::Number { .. }, Ok(n)) => {
-                            if target.outcome == Outcome::FyMinus9m && n.signum() < 0 {
+                            if TargetMetric::from_target(target)
+                                .is_some_and(TargetMetric::is_production)
+                                && n.signum() < 0
+                            {
                                 self.evidence.bindings.push(format!("{{\"role\":\"reported_signed_production\",\"locator\":{},\"value\":{},\"interpretation\":\"reported_signed_number_retained_under_frozen_rule;not_physical_endorsement\"}}", js(&observation.locator()), rat(*n)));
                                 self.evidence.notes.push(format!("{}: reported signed production {}/{} is retained under the frozen numeric rule; this is not a physical endorsement.", observation.locator(), n.num(), n.den()));
                             }
@@ -712,20 +681,18 @@ fn infer_outcome(
     inventory: &mut Inventory,
     site: &str,
     target: &Target,
-    year: u16,
+    quarter: Quarter,
 ) -> Result<Lookup> {
-    let q4 = Quarter {
-        year: i32::from(year),
-        q: 4,
-    };
-    if target.outcome == Outcome::Q4Qtd {
+    let year = u16::try_from(quarter.year)
+        .map_err(|_| invalid("outcome year is outside the supported calendar"))?;
+    if matches!(target.outcome, Outcome::Q4Qtd | Outcome::QuarterQtd) {
         return inventory.lookup(
             site,
             target,
-            q4,
+            quarter,
             Period {
                 year,
-                kind: PeriodKind::Quarter(4),
+                kind: PeriodKind::Quarter(quarter.q),
             },
             false,
         );
@@ -733,7 +700,7 @@ fn infer_outcome(
     let annual = inventory.lookup(
         site,
         target,
-        q4,
+        quarter,
         Period {
             year,
             kind: PeriodKind::FullYear,
@@ -992,7 +959,7 @@ impl Guidance {
         inventory: &mut Inventory,
         site: &str,
         target: &Target,
-        year: u16,
+        quarter: Quarter,
     ) -> Result<Availability<Bounds>> {
         let Some(registry) = &self.registry else {
             return Ok(unavailable("two-reader guidance registry is absent"));
@@ -1007,7 +974,13 @@ impl Guidance {
         let metric = TargetMetric::from_target(target)
             .ok_or_else(|| invalid("guidance target has no supported source interpretation"))?;
         let quantity = format!("guidance_{slug}_{}", metric.guidance_quantity());
-        let period = format!("{year}FY");
+        let year = u16::try_from(quarter.year)
+            .map_err(|_| invalid("guidance year is outside the supported calendar"))?;
+        let period = if target.outcome == Outcome::QuarterQtd {
+            quarter.to_string()
+        } else {
+            format!("{year}FY")
+        };
         // At midnight that day's guidance cannot strictly precede the cut. Within a day retain the
         // latest candidate even when its timing is uncertain, so it cannot be replaced by older guidance.
         let cut_day = manifest
@@ -1030,9 +1003,11 @@ impl Guidance {
             .max()
             .map(str::to_string)
         else {
-            return Ok(unavailable(
-                "no registered annual guidance before the frozen information cut",
-            ));
+            return Ok(unavailable(if target.outcome == Outcome::QuarterQtd {
+                "no registered guidance for the scored quarter before the frozen information cut; annual guidance is ineligible"
+            } else {
+                "no registered annual guidance before the frozen information cut"
+            }));
         };
         let documents = candidates
             .into_iter()
@@ -1127,9 +1102,11 @@ impl Guidance {
                 "guidance ownership basis is unprinted or unsupported",
             ));
         };
-        if target.outcome == Outcome::FyMinus9m {
+        if metric.is_production() {
             lo = exact(lo.checked_div(share))?;
             hi = exact(hi.checked_div(share))?;
+        }
+        if target.outcome == Outcome::FyMinus9m {
             let nine = inventory.lookup(
                 site,
                 target,
@@ -1194,7 +1171,19 @@ pub(super) fn resolve(
             "assessment cut precedes frozen information cut",
         ));
     }
-    let year = outcome_year(rules)?;
+    let outcome_quarter = rules
+        .outcome_quarter()
+        .map_err(|e| invalid(e.to_string()))?;
+    let quarterly = rules
+        .targets
+        .iter()
+        .any(|t| t.outcome == Outcome::QuarterQtd);
+    if quarterly && manifest.information_cutoff_utc >= after_quarter(outcome_quarter)? {
+        return Err(refusal(
+            RefusalCode::LateRegistration206,
+            "quarterly record information cut must precede quarter end; post-quarter nowcasts are unsupported",
+        ));
+    }
     for target in &rules.targets {
         target_unit(target)?;
     }
@@ -1264,16 +1253,15 @@ pub(super) fn resolve(
             }
         }
     }
-    let mut wanted = BTreeSet::from([
-        Quarter {
-            year: i32::from(year),
+    let mut outcome_quarters = BTreeSet::from([outcome_quarter]);
+    // Annual records retain their original two-release inventory, including rate-only records.
+    if !quarterly {
+        outcome_quarters.insert(Quarter {
+            year: outcome_quarter.year,
             q: 3,
-        },
-        Quarter {
-            year: i32::from(year),
-            q: 4,
-        },
-    ]);
+        });
+    }
+    let mut wanted = outcome_quarters.clone();
     for baseline in &rules.baselines {
         if let BaselineKind::Persistence {
             pool_from,
@@ -1299,7 +1287,7 @@ pub(super) fn resolve(
         manifest,
         &wanted,
         &publications,
-        year,
+        &outcome_quarters,
         as_of_utc,
     )?;
     let mut guidance = Guidance::load(root, &profile)?;
@@ -1315,9 +1303,11 @@ pub(super) fn resolve(
                         .unwrap_or("record universe exclusion")
                 ))
             } else {
-                infer_outcome(&mut inventory, &site.name, target, year)?
+                infer_outcome(&mut inventory, &site.name, target, outcome_quarter)?
             };
-            if target.outcome == Outcome::Q4Qtd && site.status == SiteStatus::Live {
+            if TargetMetric::from_target(target).is_some_and(|m| !m.is_production())
+                && site.status == SiteStatus::Live
+            {
                 let reference = rules.baselines.iter().find_map(|b| match b.kind {
                     BaselineKind::Persistence { pool_through, .. } if b.target == target.id => {
                         Some(pool_through)
@@ -1380,7 +1370,7 @@ pub(super) fn resolve(
                             &mut inventory,
                             &site.name,
                             target,
-                            year,
+                            outcome_quarter,
                         )?,
                     }
                 };
@@ -1395,8 +1385,13 @@ pub(super) fn resolve(
         }
     }
     let evidence = inventory.evidence;
+    let point_name = if quarterly {
+        "original QTD persistence-point"
+    } else {
+        "Q3"
+    };
     let evidence_markdown = format!(
-        "## Source bindings\n\nOriginal releases supply outcomes and the fixed benchmark observations by the assessment cut. Guidance itself must be strictly before the forecast information cutoff; same-day guidance requires an earlier retrieval declared in the exact frozen manifest. Fixed Q3 and historical benchmark observations may follow that cutoff and need not be forecast inputs. The methods are not asserted to have the same information set. New source availability uses an explicit registered publication date when available (conservatively through the end of that day), otherwise the registry retrieval bound. Retrieval is never relabelled as publication. Printed zero remains numeric under the frozen record rule.\n\n| Source locator | Claim or reader | SHA-256 | Raw token | Unit, basis and interpretation |\n|---|---|---|---|---|\n{}\n\n{}\n",
+        "## Source bindings\n\nOriginal releases supply outcomes and the fixed benchmark observations by the assessment cut. Guidance itself must be strictly before the forecast information cutoff; same-day guidance requires an earlier retrieval declared in the exact frozen manifest. Fixed {point_name} and historical benchmark observations may follow that cutoff and need not be forecast inputs. The methods are not asserted to have the same information set. New source availability uses an explicit registered publication date when available (conservatively through the end of that day), otherwise the registry retrieval bound. Retrieval is never relabelled as publication. Printed zero remains numeric under the frozen record rule.\n\n| Source locator | Claim or reader | SHA-256 | Raw token | Unit, basis and interpretation |\n|---|---|---|---|---|\n{}\n\n{}\n",
         evidence
             .markdown
             .values()
@@ -1410,8 +1405,20 @@ pub(super) fn resolve(
             .collect::<Vec<_>>()
             .join("\n\n")
     );
+    let outcome_policy = if quarterly {
+        "original_scored_quarter_QTD_for_production_and_unit_cost;never_cumulative_or_later_comparatives"
+    } else {
+        "original_yearQ4_FY_minus_original_yearQ3_9M_for_production;original_yearQ4_QTD_for_unit_cost;never_later_comparatives"
+    };
+    let baseline_policy = if quarterly {
+        "matching_quarter_guidance_strictly_before_forecast_cut;annual_guidance_ineligible;fixed_original_point_and_history_by_assessment_cut_may_be_outside_forecast_manifest"
+    } else {
+        "guidance_strictly_before_forecast_cut;fixed_original_Q3_and_history_by_assessment_cut_may_be_outside_forecast_manifest"
+    };
     let evidence_json = format!(
-        "{{\"outcome_policy\":\"original_yearQ4_FY_minus_original_yearQ3_9M_for_production;original_yearQ4_QTD_for_unit_cost;never_later_comparatives\",\"baseline_policy\":\"guidance_strictly_before_forecast_cut;fixed_original_Q3_and_history_by_assessment_cut_may_be_outside_forecast_manifest\",\"same_information_set_claim\":false,\"verification_scope\":\"all matching manifest hashes checked against registry; only selected source bytes re-read\",\"printed_zero_policy\":\"numeric_zero_is_an_outcome_or_persistence_point_even_when_generic_projection_has_status_nil\",\"sources\":[{}],\"cells\":[{}],\"documents\":[{}],\"bindings\":[{}],\"persistence_pools\":[{}]}}",
+        "{{\"outcome_policy\":{},\"baseline_policy\":{},\"same_information_set_claim\":false,\"verification_scope\":\"all matching manifest hashes checked against registry; only selected source bytes re-read\",\"printed_zero_policy\":\"numeric_zero_is_an_outcome_or_persistence_point_even_when_generic_projection_has_status_nil\",\"sources\":[{}],\"cells\":[{}],\"documents\":[{}],\"bindings\":[{}],\"persistence_pools\":[{}]}}",
+        js(outcome_policy),
+        js(baseline_policy),
         evidence.sources.join(","),
         evidence.cells.into_values().collect::<Vec<_>>().join(","),
         evidence
@@ -1428,7 +1435,7 @@ pub(super) fn resolve(
         evidence_json,
         evidence_markdown,
         synthetic: profile.issuer == "synthetic",
-        outcome_year: year,
+        outcome_quarter,
     })
 }
 

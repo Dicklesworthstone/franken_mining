@@ -1,7 +1,7 @@
 //! Determinism: Exact
 
 use super::*;
-use crate::record::{parse_rules, persistence_interval};
+use crate::record::{BaselineKind, parse_rules, persistence_interval};
 
 fn i(n: i128) -> Rat {
     Rat::from_integer(n)

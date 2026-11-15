@@ -13,10 +13,8 @@ use fmine_numerics::exact_feas::Interval;
 
 use super::ComparisonCompletion;
 use crate::CalibrationFlag;
-use crate::guidance_scores::clopper_pearson_exact;
-use crate::record::{
-    BaselineKind, ForecastRow, Quarter, Rat, RecordRules, RulesSite, SiteStatus, Target,
-};
+use crate::guidance_scores::{clopper_pearson_exact, optional_rat, rat_json};
+use crate::record::{BaselineKind, ForecastRow, Rat, RecordRules, RulesSite, SiteStatus, Target};
 
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
@@ -201,24 +199,17 @@ fn validate_rules(rules: &RecordRules) -> Result<(), Refusal> {
             "correlation range must satisfy 0 <= rho_low <= rho_high < 1",
         ));
     }
-    let mut targets = BTreeSet::new();
     for target in &rules.targets {
-        if target.id.trim().is_empty()
-            || target.field.trim().is_empty()
+        if target.field.trim().is_empty()
             || target.quantity.trim().is_empty()
             || target.scored_quantity.trim().is_empty()
-            || !targets.insert(target.id.as_str())
         {
-            return Err(invalid("rules contain an empty or duplicate target"));
+            return Err(invalid("target metadata must be nonempty"));
         }
     }
-    let mut sites = BTreeSet::new();
     for site in &rules.sites {
-        if site.name.trim().is_empty()
-            || site.locator.trim().is_empty()
-            || !sites.insert(site.name.as_str())
-        {
-            return Err(invalid("rules contain an empty or duplicate site"));
+        if site.locator.trim().is_empty() {
+            return Err(invalid("site locator must be nonempty"));
         }
         match (site.status, site.reason.as_deref()) {
             (SiteStatus::Live, None) => {}
@@ -231,43 +222,31 @@ fn validate_rules(rules: &RecordRules) -> Result<(), Refusal> {
             }
         }
     }
-    let mut baselines = BTreeSet::new();
-    for baseline in &rules.baselines {
-        if !targets.contains(baseline.target.as_str())
-            || !baselines.insert((baseline.target.as_str(), baseline.id.as_str()))
+    // Two unique canonical kinds per target account for every baseline row; no extra or foreign
+    // row can hide behind the per-target checks. The shared pool owner validates its dates and ID.
+    if rules.targets.len().checked_mul(2) != Some(rules.baselines.len()) {
+        return Err(invalid(
+            "every target must declare exactly issuer_guidance and run_rate_persistence baselines",
+        ));
+    }
+    for target in &rules.targets {
+        let (first, last, point) = rules.persistence_pool(&target.id).map_err(invalid)?;
+        // Preserve this scorer's historical four-digit displayed-year admission.
+        if [first, last, point]
+            .iter()
+            .any(|quarter| quarter.year < 1000)
         {
+            return Err(invalid("persistence quarters must have four-digit years"));
+        }
+        if !rules.baselines.iter().any(|baseline| {
+            baseline.target == target.id
+                && baseline.id == "issuer_guidance"
+                && matches!(baseline.kind, BaselineKind::IssuerGuidance)
+        }) {
             return Err(invalid(
-                "rules contain a duplicate baseline or an unknown baseline target",
+                "each target requires one issuer_guidance baseline of that kind",
             ));
         }
-        match baseline.kind {
-            BaselineKind::IssuerGuidance if baseline.id == "issuer_guidance" => {}
-            BaselineKind::Persistence {
-                pool_from,
-                pool_through,
-                point,
-            } if baseline.id == "run_rate_persistence" => {
-                if !(pool_from < pool_through && pool_through < point)
-                    || [pool_from, pool_through, point]
-                        .iter()
-                        .any(|q| Quarter::parse(&q.to_string()) != Some(*q))
-                {
-                    return Err(invalid(
-                        "persistence quarters must be valid and satisfy pool_from < pool_through < point",
-                    ));
-                }
-            }
-            _ => return Err(invalid("baseline id does not match its declared kind")),
-        }
-    }
-    if targets.iter().any(|target| {
-        !["issuer_guidance", "run_rate_persistence"]
-            .iter()
-            .all(|id| baselines.contains(&(*target, *id)))
-    }) {
-        return Err(invalid(
-            "every target must declare issuer_guidance and run_rate_persistence baselines",
-        ));
     }
     Ok(())
 }
@@ -322,6 +301,64 @@ fn score(interval: Bounds, alpha: Rat, outcome: Rat) -> Result<Score, Refusal> {
     })
 }
 
+/// Common membership and signed-domain admission for parsed and directly constructed forecasts.
+pub(in crate::record) fn validate_forecast_row(
+    rules: &RecordRules,
+    row: &ForecastRow,
+) -> Result<(), Refusal> {
+    let (site, target) = member(rules, &row.site, &row.target)?;
+    if site.status != SiteStatus::Live {
+        return Err(invalid(format!(
+            "{}: no forecast is permitted for a frozen NotPublished site",
+            row.site
+        )));
+    }
+    if (row.lo.signum() < 0 && !target.permits_signed_forecast())
+        || !le(row.lo, row.point)?
+        || !le(row.point, row.hi)?
+    {
+        return Err(domain(format!(
+            "{} / {}: forecast needs lower <= point <= upper within the target's domain",
+            row.site, row.target
+        )));
+    }
+    Ok(())
+}
+
+/// One admission path for both forecast-only and paired scoring, including direct struct callers.
+pub(super) fn forecast_index<'a>(
+    rules: &RecordRules,
+    forecasts: &'a [ForecastRow],
+) -> Result<super::ForecastIndex<'a>, Refusal> {
+    let site_names: BTreeSet<_> = rules.sites.iter().map(|s| s.name.as_str()).collect();
+    let target_ids: BTreeSet<_> = rules.targets.iter().map(|t| t.id.as_str()).collect();
+    if site_names.is_empty()
+        || site_names.iter().any(|name| name.trim().is_empty())
+        || site_names.len() != rules.sites.len()
+        || target_ids.iter().any(|id| id.trim().is_empty())
+        || target_ids.is_empty()
+        || target_ids.len() != rules.targets.len()
+    {
+        return Err(invalid(
+            "the frozen universe needs nonempty, unique site names and target IDs",
+        ));
+    }
+    let mut forecast_map = BTreeMap::new();
+    for row in forecasts {
+        validate_forecast_row(rules, row)?;
+        if forecast_map
+            .insert((row.site.as_str(), row.target.as_str()), row)
+            .is_some()
+        {
+            return Err(invalid(format!(
+                "duplicate forecast for {} / {}",
+                row.site, row.target
+            )));
+        }
+    }
+    Ok(forecast_map)
+}
+
 /// Score exactly the declared population. A missing input row refuses: unavailable data must have its own
 /// named row. Forecasts cover live members only; every site/target has an outcome and each declared baseline.
 /// Signed FY-minus-9M residuals, net unit-cost credits and negative implied guidance bounds are retained.
@@ -334,34 +371,7 @@ pub fn assess(
     baselines: &[BaselineRow],
 ) -> Result<RecordAssessment, Refusal> {
     validate_rules(rules)?;
-    let mut forecast_map = BTreeMap::new();
-    for row in forecasts {
-        let (site, target) = member(rules, &row.site, &row.target)?;
-        if site.status != SiteStatus::Live {
-            return Err(invalid(format!(
-                "{}: no forecast is permitted for a frozen NotPublished site",
-                row.site
-            )));
-        }
-        if (row.lo.signum() < 0 && !target.permits_signed_forecast())
-            || !le(row.lo, row.point)?
-            || !le(row.point, row.hi)?
-        {
-            return Err(domain(format!(
-                "{} / {}: forecast needs lower <= point <= upper within the target's domain",
-                row.site, row.target
-            )));
-        }
-        if forecast_map
-            .insert((row.site.as_str(), row.target.as_str()), row)
-            .is_some()
-        {
-            return Err(invalid(format!(
-                "duplicate forecast for {} / {}",
-                row.site, row.target
-            )));
-        }
-    }
+    let forecast_map = forecast_index(rules, forecasts)?;
     let mut outcome_map = BTreeMap::new();
     for row in outcomes {
         let (site, _) = member(rules, &row.site, &row.target)?;
@@ -499,15 +509,6 @@ pub fn assess(
         &model,
         &benchmarks,
     ))?;
-    let paired_members: BTreeSet<_> = comparisons
-        .iter()
-        .flat_map(|comparison| {
-            comparison
-                .common_members
-                .iter()
-                .map(move |site| (site.as_str(), comparison.target.as_str()))
-        })
-        .collect();
     let model_members: BTreeMap<_, _> = model
         .members
         .iter()
@@ -525,7 +526,11 @@ pub fn assess(
             (None, None) => None,
             _ => return Err(invalid("model assessment has an incomplete score")),
         };
-        member.paired = paired_members.contains(&(member.site.as_str(), member.target.as_str()));
+        member.paired = member.forecast_score.is_some()
+            && member
+                .baselines
+                .iter()
+                .all(|baseline| baseline.score.is_some());
     }
     let mut targets = Vec::new();
     for target in &rules.targets {
@@ -686,22 +691,8 @@ fn quote(value: &str) -> String {
     out
 }
 
-fn rat_json(value: Rat) -> String {
-    format!(
-        "{{\"num\":\"{}\",\"den\":\"{}\"}}",
-        value.num(),
-        value.den()
-    )
-}
-fn optional_rat(value: Option<Rat>) -> String {
-    value.map_or_else(|| "null".into(), rat_json)
-}
 fn interval_json(value: Interval) -> String {
-    format!(
-        "{{\"lo\":{},\"hi\":{},\"lo_strict\":false,\"hi_strict\":false}}",
-        rat_json(value.lo),
-        rat_json(value.hi)
-    )
+    crate::guidance_scores::interval_json(Some(closed(value.lo, value.hi)))
 }
 fn optional_interval(value: Option<Interval>) -> String {
     value.map_or_else(|| "null".into(), interval_json)
@@ -818,7 +809,7 @@ impl RecordAssessment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::record::{BaselineRule, Estimator, Outcome, RecordDates};
+    use crate::record::{BaselineRule, Estimator, Outcome, Quarter, RecordDates};
 
     fn r(n: i128, d: i128) -> Rat {
         Rat::new(n, d).expect("rational")

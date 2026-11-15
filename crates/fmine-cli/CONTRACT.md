@@ -1114,7 +1114,7 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   synthetic inputs. The receipt binds rules and registry bytes, source observations and the information cut.
   The command writes no files and leaves attestation, timestamp proof, certificate and issuance absent.
   A missing or unusable required original release or point observation refuses instead of shrinking the
-  candidate. Positive production observations remain required; supported Q4 cost targets also admit signed
+  candidate. Positive production observations remain required; supported cost targets also admit signed
   or zero printed live observations with verified ownership and no overlapping site status. The historical
   ratio pool still uses positive adjacent observations only. Negative live costs reverse the two tail products;
   the point remains the live cost times the pooled-ratio median. CSV decimal precision is explicit (0–12,
@@ -1502,6 +1502,16 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   conditional iid reference and rho sensitivity separately. The assessment digest binds record/rules hashes,
   proof metadata, source evidence and scores. All authority flags remain false, anchor/certificate stay null,
   and no sample size promotes the descriptive report to a calibration claim.
+- DESIGN (BD-067/076): a separate `quarter_qtd` record uses the original next-quarter QTD value for
+  every supported gold/copper production or sold-metal cost target. A common frozen persistence point
+  determines the quarter, including year rollover. Quarterly guidance must name that exact period;
+  annual guidance never substitutes. Original releases, matching pre-cut guidance, missing members,
+  source hashes and exact printed precision retain the existing scoring policies. Mixed annual/quarterly
+  outcomes, conflicting points and a complete timestamp interval reaching quarter end refuse. The JSON
+  adds `outcome_quarter` only for these records. The annual FY2026 rules, frame tags and output fields
+  retain their original interpretation. The older xtask scoring adapter explicitly rejects quarterly
+  rules and directs callers to the robot CLI. This extends the protocol without issuing any actual
+  forecasts, providing an external timestamp or establishing calibration.
 - DESIGN (BD-344): `--provenance` reads a strict `fmine.forecast-provenance.v1` bundle, binds exact forecast
   IDs, and checks every cohort member's complete declared ancestry at its registration time. The scoring
   `--as-of` time cannot admit later evidence. Forecast roots must be derived, name inputs and have a performed

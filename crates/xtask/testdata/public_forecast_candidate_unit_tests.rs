@@ -129,18 +129,45 @@ fn sheet(q: u8) -> MinimalSheet {
 }
 
 fn fixture(edit: impl Fn(u8, &mut MinimalSheet)) -> (String, Vec<LoadedSource>) {
-    let mut registry = String::from(
+    fixture_quarters(
+        ["2030Q1", "2030Q2", "2030Q3"],
+        "2030-10-02T10:00:00Z/10:01:00Z",
+        false,
+        edit,
+    )
+}
+
+fn fixture_quarters(
+    quarters: [&str; 3],
+    retrieval: &str,
+    include_q1_ytd: bool,
+    edit: impl Fn(u8, &mut MinimalSheet),
+) -> (String, Vec<LoadedSource>) {
+    let mut registry = format!(
         "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"invented\"\n\
-         retrieved_utc = \"2030-10-02T10:00:00Z/10:01:00Z\"\nurl_prefix = \"https://example.invalid/\"\n",
+         retrieved_utc = \"{retrieval}\"\nurl_prefix = \"https://example.invalid/\"\n",
     );
     let mut sources = Vec::new();
     for q in 1..=3 {
         let file_name = format!("Synthetic_Q{q}.xlsx");
-        let quarter = format!("2030Q{q}");
+        let quarter = quarters[usize::from(q - 1)].to_string();
         let mut s = sheet(q);
         edit(q, &mut s);
+        replace_cell(
+            &mut s,
+            "B1",
+            MinimalCell::Number(f64::from(Quarter::parse(&quarter).unwrap().year)),
+        );
+        let mut sheets = vec![s];
+        if include_q1_ytd && quarter.ends_with("Q1") {
+            let mut ytd = sheets[0].clone();
+            ytd.name = "YTD".into();
+            replace_cell(&mut ytd, "B3", MinimalCell::Number(999.0));
+            replace_cell(&mut ytd, "C3", MinimalCell::Number(888.0));
+            sheets.push(ytd);
+        }
         let bytes = build_minimal_xlsx_styled(
-            &[s],
+            &sheets,
             Some(&MinimalStyles {
                 num_fmts: vec![],
                 xfs: vec![0, 1],
@@ -166,6 +193,121 @@ fn fixture(edit: impl Fn(u8, &mut MinimalSheet)) -> (String, Vec<LoadedSource>) 
     }
     registry.push_str("\n[[subject]]\nname = \"Site A\"\n[[subject]]\nname = \"Site B\"\n");
     (registry, sources)
+}
+
+#[test]
+fn quarterly_candidates_bind_following_q1_and_q2_to_original_sources_for_all_five_metrics() {
+    for (quarters, retrieval, cut, outcome, end) in [
+        (
+            ["2030Q2", "2030Q3", "2030Q4"],
+            "2031-01-02T00:00:00Z",
+            "2031-01-03T00:00:00Z",
+            "2031Q1",
+            "2031-04-01T00:00:00Z",
+        ),
+        (
+            ["2030Q3", "2030Q4", "2031Q1"],
+            "2031-04-02T00:00:00Z",
+            "2031-04-03T00:00:00Z",
+            "2031Q2",
+            "2031-07-01T00:00:00Z",
+        ),
+    ] {
+        for copper in [false, true] {
+            let legacy = if copper { copper_rules() } else { RULES.into() };
+            let rules = legacy
+                .replace("fy_minus_9m", "quarter_qtd")
+                .replace("q4_qtd", "quarter_qtd")
+                .replace(
+                    "pool_from = \"2030Q1\"",
+                    &format!("pool_from = \"{}\"", quarters[0]),
+                )
+                .replace(
+                    "pool_through = \"2030Q2\"",
+                    &format!("pool_through = \"{}\"", quarters[1]),
+                )
+                .replace(
+                    "point_quarter = \"2030Q3\"",
+                    &format!("point_quarter = \"{}\"", quarters[2]),
+                );
+            let (registry, sources) = fixture_quarters(quarters, retrieval, true, |q, s| {
+                if copper {
+                    copper_sheet(q, s);
+                }
+            });
+            let report = finish(
+                prepare(rules.as_bytes(), registry.as_bytes(), cut).unwrap(),
+                sources,
+                2,
+            )
+            .unwrap();
+            assert_eq!(report.rules.outcome_quarter().unwrap().to_string(), outcome);
+            assert_eq!(
+                report
+                    .sources
+                    .iter()
+                    .map(|s| s.release.as_str())
+                    .collect::<Vec<_>>(),
+                quarters
+            );
+            assert!(
+                report
+                    .candidate
+                    .pools
+                    .iter()
+                    .all(|p| p.point_quarter.to_string() == quarters[2])
+            );
+            assert_eq!(
+                report.candidate.exact_rows.len(),
+                if copper { 6 } else { 4 }
+            );
+            for observation in &report.observations {
+                assert!(
+                    observation
+                        .claim
+                        .as_ref()
+                        .unwrap()
+                        .locator
+                        .contains(":QTD!")
+                );
+                assert!(quarters.contains(&observation.quarter.to_string().as_str()));
+            }
+            assert_eq!(
+                prepare(rules.as_bytes(), registry.as_bytes(), end)
+                    .err()
+                    .unwrap()
+                    .code,
+                "FMINE-REF-206"
+            );
+            let mixed = rules.replacen("outcome = \"quarter_qtd\"", "outcome = \"fy_minus_9m\"", 1);
+            assert_eq!(
+                prepare(mixed.as_bytes(), registry.as_bytes(), cut)
+                    .err()
+                    .unwrap()
+                    .code,
+                "FMINE-REF-107"
+            );
+            if quarters[2].ends_with("Q1") {
+                let (registry, sources) = fixture_quarters(quarters, retrieval, false, |q, s| {
+                    if copper {
+                        copper_sheet(q, s);
+                    }
+                    if q == 3 {
+                        s.name = "YTD".into();
+                    }
+                });
+                assert!(
+                    finish(
+                        prepare(rules.as_bytes(), registry.as_bytes(), cut).unwrap(),
+                        sources,
+                        2
+                    )
+                    .is_err(),
+                    "a Q1 YTD sheet cannot replace the declared QTD persistence point"
+                );
+            }
+        }
+    }
 }
 
 fn run(registry: &str, sources: Vec<LoadedSource>) -> Result<PublicCandidate> {

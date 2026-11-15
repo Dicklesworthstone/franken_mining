@@ -8,7 +8,7 @@ use std::io::Read;
 use std::path::Path;
 
 use fmine_calib::record::{
-    self, BaselineKind, Outcome, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
+    self, Outcome, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
     candidate::{Candidate, CandidateSeries, build_candidate},
 };
 use fmine_core::codec::Encoder;
@@ -106,13 +106,8 @@ fn read_registry(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn after_quarter(q: Quarter) -> Result<i64> {
-    let next = q.next();
-    record::parse_utc(&format!(
-        "{:04}-{:02}-01T00:00:00Z",
-        next.year,
-        3 * (next.q - 1) + 1
-    ))
-    .ok_or_else(|| invalid("source quarter is outside the supported UTC calendar"))
+    q.end_utc()
+        .ok_or_else(|| invalid("source quarter is outside the supported UTC calendar"))
 }
 
 fn expected_unit(target: &Target) -> Result<&'static str> {
@@ -122,24 +117,9 @@ fn expected_unit(target: &Target) -> Result<&'static str> {
 }
 
 fn pool(rules: &RecordRules, target: &str) -> Result<(Quarter, Quarter, Quarter)> {
-    let mut matches = rules
-        .baselines
-        .iter()
-        .filter(|b| b.target == target)
-        .filter_map(|b| match b.kind {
-            BaselineKind::Persistence {
-                pool_from,
-                pool_through,
-                point,
-            } => Some((pool_from, pool_through, point)),
-            BaselineKind::IssuerGuidance => None,
-        });
-    let (Some(value), None) = (matches.next(), matches.next()) else {
-        return Err(invalid(format!(
-            "{target} needs exactly one declared persistence pool"
-        )));
-    };
-    Ok(value)
+    rules
+        .persistence_pool(target)
+        .map_err(|e| invalid(e.to_string()))
 }
 
 struct Prepared {
@@ -161,27 +141,31 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     let rules = record::parse_rules(rules_text).map_err(|e| invalid(e.to_string()))?;
     let cut = record::parse_utc(as_of)
         .ok_or_else(|| invalid("information cut requires YYYY-MM-DDTHH:MM:SSZ"))?;
+    let outcome = rules
+        .outcome_quarter()
+        .map_err(|e| invalid(e.to_string()))?;
+    if rules
+        .targets
+        .iter()
+        .any(|t| t.outcome == Outcome::QuarterQtd)
+        && cut >= after_quarter(outcome)?
+    {
+        return Err(refuse(
+            RefusalCode::LateRegistration206,
+            "quarterly candidates require an information cut before quarter end; post-quarter nowcasts are unsupported",
+        ));
+    }
     let registry =
         parse_sources_registry(utf8(registry_bytes)?).map_err(|e| invalid(e.to_string()))?;
     if registry.issuer != rules.issuer {
         return Err(invalid("source registry issuer differs from the rules"));
     }
     let mut wanted = BTreeSet::new();
-    let mut points = BTreeSet::new();
     for target in &rules.targets {
         expected_unit(target)?;
         let (first, last, point) = pool(&rules, &target.id)?;
-        if first >= last || last >= point || point.q != 3 {
-            return Err(invalid(
-                "Q4 candidates require an earlier pool of consecutive quarters and a Q3 point",
-            ));
-        }
-        points.insert(point);
         wanted.extend(first.through(last));
         wanted.insert(point);
-    }
-    if points.len() != 1 {
-        return Err(invalid("all targets must name the same Q3 point year"));
     }
     let mut sources = Vec::new();
     for q in &wanted {
@@ -302,6 +286,7 @@ fn observation(
             .find(|s| s.label == v.site)
             .map_or(v.site.as_str(), |s| s.subject.as_str());
         v.view == View::Summary
+            && v.sheet == "QTD"
             && v.months == 3
             && v.period == period.code()
             && subject == site
@@ -341,7 +326,7 @@ fn observation(
         || claim.key.line.label != format!("summary:{}", target.field)
         || claim.key.line.occurrence != 0
         || claim.key.ownership_basis == OwnershipBasis::Unprinted
-        || (target.outcome == Outcome::FyMinus9m
+        || (TargetMetric::from_target(target).is_some_and(TargetMetric::is_production)
             && claim.key.ownership_basis != OwnershipBasis::Consolidated100)
     {
         return Err(refuse(
@@ -523,7 +508,7 @@ fn finish(
             let point_row = observations
                 .last()
                 .ok_or_else(|| source_error("missing point observation"))?;
-            if target.outcome == Outcome::Q4Qtd {
+            if TargetMetric::from_target(target).is_some_and(|m| !m.is_production()) {
                 let mut bases = BTreeSet::new();
                 for row in &observations[start..] {
                     if row
