@@ -648,12 +648,26 @@ downstream reads the alarm yet: no claim is downgraded by it, and no Investigati
 ## 10. Non-Goals & Scope Boundary
 Pure calibration and scoring kernel; does not perform file I/O (`L-3`).
 
+DESIGN (BD-341.S4): `guidance_scores::clusters` is a separate opt-in projection. It preserves exact
+year/site membership, observed range means, rounding bounds and missing-outcome hit bounds. The caller
+explicitly selects the assumed independent axis. The 1,999 keyed Philox block replicates estimate the
+equally weighted mean of cluster means, distinct from the legacy observation-weighted mean. Inverse-ECDF
+5th/95th percentiles have a nominal, approximate 90% interpretation conditional on independent,
+exchangeable selected clusters; no two-way robustness or dependence estimate is implied. Twenty clusters
+is a declared admission floor, not a coverage theorem. Incomplete eligible populations, clusters without
+range targets, sparse populations and zero between-cluster variation have no sampling interval. Both
+partitions and every unresolved member remain available. Exact integer-coordinate overflow refuses.
+Direct controls live in `guidance_scores::clusters::tests`, including exact equal-cluster weighting,
+whole-block replication invariance, unit invariance, rounding separation and a 200-panel-per-scenario
+synthetic comparison of correct and deliberately misspecified axes. The broad BD-341.S4 gate remains open.
+
 The cohort store is in memory. Its canonical assessment bytes can be retained by an adapter; this slice adds no
 durable ledger or external timestamp authority. Caller-supplied times are ordering inputs, not time proofs
 (BD-047/BD-068). It does not infer a fallback after a target's definition changes, estimate correlation, or claim
 calibration for an issuer guidance range with no stated level. Guidance's IID Clopper–Pearson reference interval
-does not account for common shocks. Clustered bias confidence intervals, an empirically justified effective
-sample-size rule and BD-341's three-scenario coverage study remain open. The exact guidance scorer consumes
+does not account for common shocks. The opt-in block projection above supplies conditional one-axis
+intervals; simultaneous site/year inference, an empirically justified effective sample-size rule and the
+full BD-341 coverage qualification remain open. The exact guidance scorer consumes
 already selected, citation-bound outcomes: it does not freeze forecasts, authenticate a publication date or
 select a vintage. Its rational payloads and one-sided guidance do not extend the ledger's durable floating-point
 forecast format. Adapters must retain the frozen membership and selector separately; completion bounds do not

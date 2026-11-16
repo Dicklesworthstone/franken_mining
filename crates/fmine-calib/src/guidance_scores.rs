@@ -17,6 +17,8 @@ use crate::CalibrationFlag;
 
 /// Canonical Claim validation and provenance around the exact numerical primitives.
 pub mod claims;
+/// Opt-in, explicitly conditioned block-bootstrap projection of site/year clusters.
+pub mod clusters;
 pub mod price;
 
 mod certified;
