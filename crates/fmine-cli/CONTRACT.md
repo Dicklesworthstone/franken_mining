@@ -78,6 +78,26 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   joint-distribution score, external time proof, source re-evaluation on replay, validated plant outcomes
   or calibration/field-gate claim. Complete source and binary controls live in
   `xtask/testdata/forecast_plant_controls.rs` and `plant_forecast_command.rs`.
+- DESIGN (BD-276): `forecast journal register-assumption --journal <path> --head <hex> --input <path>
+  --trust-host-clock` admits one `fmine.report-assumption.v1` request from a registered technical report.
+  Hash/size-verified source bytes and complete two-reader agreement supply the printed point or finite
+  range; request values cannot override it or invent a nominal probability. The source period, unit and
+  basis must match exactly, calendar periods must match their entire UTC support, and noncalendar periods
+  require the explicit `UTC [start,end)` source label. The full writer-clock interval must follow source
+  publication and precede physical start. The v15 operation retains the raw token, source and registry
+  hashes, locators, readers, input digest, target boundaries and immutable future document/quantity selector.
+  Its canonical source Claim identifies the quoted assertion, not measured performance or calibrated belief.
+  Cohorts freeze before physical start, contain only report assumptions, use
+  `technical-report-assumptions/v1`, and declare their sole issuer as the eligible source.
+  `resolve-assumption --journal <path> --head <hex> --forecast <alias> --trust-host-clock` admits exactly that
+  source's later agreed point reading, with matching period/unit/basis and publication after target end.
+  Missing or disputed readings leave the member unresolved. Caller-supplied outcomes, changed selectors,
+  duplicate resolutions and schema downgrades refuse without appending. Source Claims and resolution
+  evidence remain visible on replay without reopening source files. Unstated-level ranges remain intervals
+  with `nominal: null`; generic interval scores are descriptive penalties under the frozen alpha, not proper
+  probability scores. This slice supplies neither retrospective preregistration, restatement substitution,
+  reader independence, external source authentication nor the real BD-276 longitudinal reproduction gate.
+  Synthetic source/writer controls live in `xtask/tests/forecast_report_assumptions.rs`.
 - DESIGN (BD-181/047): `forecast journal verify-plant --journal <path> --forecast <alias> [--head <hex>]`
   explicitly recomputes the three retained worksheets through the same pure grinding, recovery and
   joint-production owners used at admission. It checks the complete source/result receipt and the
@@ -915,7 +935,8 @@ holds the journal's shared lock, locates the exact retained prefix, authenticate
 the existing offline RFC 3161 verifier and replays that prefix with its original operation-version semantics.
 The selected assessment's exact cohort and every member must exist there, with no selected-member outcome
 events (including Missing) yet recorded. The authenticated upper bound must strictly precede all frozen-member
-deadlines and all current recorded Published/Restated availability times, including events beyond the saved
+registration deadlines, including a retained physical start for plant/report-assumption admissions, and all
+current recorded Published/Restated availability times, including events beyond the saved
 assessment cut. Comparisons retain nanosecond precision through i128; equality refuses `FMINE-REF-206`.
 An absent prefix refuses `FMINE-REF-502`; invalid receipt/imprint/trust fails `FMINE-REF-505`. Explicit proof
 failure never falls back to success without proof.

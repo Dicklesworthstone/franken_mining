@@ -2,7 +2,7 @@
 //! This checks source Claims and operands behind the four AISC derived-number rules.
 //! It does not certify every JSON number, historical source completeness or issuer truth.
 //!
-//! Determinism: Exact. Ordered source projections yield sorted, deduplicated findings.
+//! Determinism: Exact (ordered source projections yield sorted, deduplicated findings).
 
 use std::collections::{BTreeMap, BTreeSet};
 

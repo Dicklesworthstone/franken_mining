@@ -1,7 +1,7 @@
 //! DESIGN (BD-047, BD-068): externally timestamped existence of a selected cohort's exact prefix.
 //! This checks current journal declarations under caller-selected roots, not source truth or host time.
 
-use fmine_calib::ledger::OutcomeKind;
+use fmine_calib::ledger::{FrozenForecast, OutcomeKind};
 use fmine_calib::record::format_utc;
 use fmine_io::forecast::prefix::{self, PrefixCommitment, VerifiedPrefix};
 
@@ -37,6 +37,26 @@ fn strictly_before(upper_seconds: i64, boundary_ns: i64, boundary: &str) -> Resu
         )));
     }
     Ok(())
+}
+
+fn registration_deadline(state: &Replay, forecast: &FrozenForecast) -> i64 {
+    // A bounded host-clock admission cannot establish external existence before physical start.
+    // Plant forecasts (including inherited corrections) and report assumptions retain that
+    // earlier boundary separately from the end at which their outcomes can become available.
+    let id = &forecast.forecast_id;
+    let plant_start = state
+        .plant_registration_starts
+        .get(id)
+        .copied()
+        .unwrap_or(forecast.freeze_time_ns);
+    let assumption_start = state
+        .assumption_admissions
+        .get(id)
+        .map_or(forecast.freeze_time_ns, |admission| admission.start);
+    forecast
+        .freeze_time_ns
+        .min(plant_start)
+        .min(assumption_start)
 }
 
 pub(super) fn verify(
@@ -81,7 +101,7 @@ pub(super) fn verify(
                 "timestamped prefix already records an outcome for cohort member {id}"
             )));
         }
-        earliest_deadline_ns = earliest_deadline_ns.min(forecast.freeze_time_ns);
+        earliest_deadline_ns = earliest_deadline_ns.min(registration_deadline(&frozen, forecast));
         for event in state.ledger.outcomes(*id) {
             if matches!(
                 event.kind,
@@ -98,7 +118,7 @@ pub(super) fn verify(
     strictly_before(
         verified.timestamp.times.upper_utc,
         earliest_deadline_ns,
-        "every frozen member's outcome deadline",
+        "every frozen member's registration deadline",
     )?;
     if let Some(publication) = earliest_publication_ns {
         strictly_before(

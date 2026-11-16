@@ -45,6 +45,7 @@ const V11_SCHEMA: &str = "fmine.forecast-operation.v11";
 const V12_SCHEMA: &str = "fmine.forecast-operation.v12";
 const V13_SCHEMA: &str = "fmine.forecast-operation.v13";
 const V14_SCHEMA: &str = "fmine.forecast-operation.v14";
+const V15_SCHEMA: &str = "fmine.forecast-operation.v15";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +72,7 @@ enum OperationVersion {
     V12 = 11,
     V13 = 12,
     V14 = 13,
+    V15 = 14,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -93,6 +95,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V12_SCHEMA => Ok(OperationVersion::V12),
             V13_SCHEMA => Ok(OperationVersion::V13),
             V14_SCHEMA => Ok(OperationVersion::V14),
+            V15_SCHEMA => Ok(OperationVersion::V15),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -107,7 +110,9 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if expected_table == "forecast"
+    let schema = if matches!(expected_table, "assumption_forecast" | "assumption_outcome") {
+        V15_SCHEMA
+    } else if expected_table == "forecast"
         && matches!(doc.rows[0].get("kind").map(|field| &field.value), Some(TomlValue::Str(kind)) if kind == "weighted_empirical")
     {
         V13_SCHEMA
@@ -175,6 +180,18 @@ pub enum Command {
         journal: PathBuf,
         head: Digest32,
         request: PathBuf,
+    },
+    /// Freeze a cited technical-report point/range and its exact future outcome selector.
+    RegisterAssumption {
+        journal: PathBuf,
+        head: Digest32,
+        input: PathBuf,
+    },
+    /// Admit the frozen document/quantity from agreed, hash-verified outcome transcriptions.
+    ResolveAssumption {
+        journal: PathBuf,
+        head: Digest32,
+        forecast: String,
     },
     /// Register a complete conditional weighted forecast from the shared-scenario production receipt.
     RegisterPlant {
@@ -282,6 +299,8 @@ impl Command {
         match self {
             Self::Init { .. } => "init",
             Self::Register { .. } => "register",
+            Self::RegisterAssumption { .. } => "register-assumption",
+            Self::ResolveAssumption { .. } => "resolve-assumption",
             Self::RegisterPlant { .. } => "register-plant",
             Self::RegisterCorrection { .. } => "register-correction",
             Self::Freeze { .. } => "freeze",
@@ -314,6 +333,11 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
             let mut envelope = Envelope::ok(&verb, payload, actions);
             envelope.no_claim = Some(if matches!(command, Command::VerifyPlant { .. }) {
                 super::plant::VERIFICATION_NO_CLAIM
+            } else if matches!(
+                command,
+                Command::RegisterAssumption { .. } | Command::ResolveAssumption { .. }
+            ) {
+                super::assumption::NO_CLAIM
             } else {
                 NO_CLAIM
             });
@@ -500,6 +524,8 @@ fn perform(
     }
     let (path, head) = match command {
         Command::Register { journal, head, .. }
+        | Command::RegisterAssumption { journal, head, .. }
+        | Command::ResolveAssumption { journal, head, .. }
         | Command::RegisterPlant { journal, head, .. }
         | Command::RegisterCorrection { journal, head, .. }
         | Command::Freeze { journal, head, .. }
@@ -514,6 +540,16 @@ fn perform(
     let mut plant_evidence = None;
     let (request, table, selected) = match command {
         Command::Register { request, .. } => (read_request(&root.join(request))?, "forecast", None),
+        Command::RegisterAssumption { input, .. } => (
+            super::assumption::prepare(root, input)?,
+            "assumption_forecast",
+            None,
+        ),
+        Command::ResolveAssumption { forecast, .. } => (
+            super::assumption::prepare_outcome(root, &state, forecast)?,
+            "assumption_outcome",
+            None,
+        ),
         Command::RegisterCorrection {
             id,
             forecast,
@@ -728,7 +764,7 @@ fn digest_is_bound(state: &Replay, digest: Digest32) -> bool {
         .is_some_and(|checkpoint| checkpoint.expected == Some(digest))
 }
 
-fn read_request(path: &Path) -> Result<String, Refusal> {
+pub(super) fn read_request(path: &Path) -> Result<String, Refusal> {
     let failure = |e| {
         Refusal::new(
             RefusalCode::InputMissingOrUnreadable506,
@@ -1343,11 +1379,23 @@ fn apply(
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
     let vintage_declared = row.get("public_vintages").is_some();
     let weighted_declared = matches!(row.get("kind").map(|field| &field.value), Some(TomlValue::Str(kind)) if kind == "weighted_empirical");
-    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14};
+    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15};
     // A feature's accepted schemas and each schema's required operation are separate constraints.
     // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
     let features: &[(bool, &[OperationVersion], &str)] = &[
-        (metadata_declared, &[V7, V9, V13, V14], "forecast metadata"),
+        (
+            matches!(
+                row.table.as_str(),
+                "assumption_forecast" | "assumption_outcome"
+            ),
+            &[V15],
+            "technical-report assumption",
+        ),
+        (
+            metadata_declared,
+            &[V7, V9, V13, V14, V15],
+            "forecast metadata",
+        ),
         (
             weighted_declared,
             &[V13, V14],
@@ -1397,6 +1445,10 @@ fn apply(
         V12 => row.table == "corrected_forecast" && row.get("correction_method").is_some(),
         V13 => row.table == "forecast" && weighted_declared,
         V14 => row.table == "plant_forecast" && weighted_declared && metadata_declared,
+        V15 => matches!(
+            row.table.as_str(),
+            "assumption_forecast" | "assumption_outcome"
+        ),
         _ => true,
     };
     if !required {
@@ -1425,6 +1477,12 @@ fn apply(
     };
     let row = Row(row);
     match row.0.table.as_str() {
+        "assumption_forecast" => {
+            super::assumption::apply_forecast(state, row, lower, upper)?;
+        }
+        "assumption_outcome" => {
+            super::assumption::apply_outcome(state, row, lower, upper)?;
+        }
         "corrected_forecast" => {
             super::correction::registration::apply(state, row, authority_ns, version == V12)?;
         }
@@ -1478,6 +1536,7 @@ fn apply(
             }
             state.cohort_at(row, Some(authority_ns))?;
             super::correction::registration::validate_cohort(state, &name)?;
+            super::assumption::validate_cohort(state, &name, upper)?;
         }
         "outcome" => {
             if row.time("available_at")? > lower {
@@ -1520,7 +1579,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 14]);
+struct VersionCounts([usize; 15]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {
@@ -1675,7 +1734,11 @@ fn presentation_at(
             ",\"registration_before_ns\":{start},\"registration_before\":{}", utc(*start)));
         let correction = state.correction_admissions.get(id).map_or_else(String::new, |admission| format!(
             ",\"correction\":{}", admission.compact_json()));
-        Ok(format!("{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_ns\":{},\"registered_at\":{},\"outcome_due_ns\":{},\"outcome_due\":{},\"payload\":{}{metadata}{registration_before}{correction}}}",
+        let assumption = state.assumption_admissions.get(id).map_or_else(String::new, |admission| format!(
+            ",\"report_assumption\":{}", admission.to_json()));
+        let assumption_outcome = state.assumption_outcomes.get(id).map_or_else(String::new, |outcome| format!(
+            ",\"report_assumption_outcome\":{outcome}"));
+        Ok(format!("{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_ns\":{},\"registered_at\":{},\"outcome_due_ns\":{},\"outcome_due\":{},\"payload\":{}{metadata}{registration_before}{correction}{assumption}{assumption_outcome}}}",
             js(alias), js(&id.to_string()), js(&row.model_key), row.registered_ns, utc(row.registered_ns), row.freeze_time_ns, utc(row.freeze_time_ns), payload_json(&row.payload)))
     }).collect::<Result<Vec<_>, Refusal>>()?.join(",");
     let cohorts = state

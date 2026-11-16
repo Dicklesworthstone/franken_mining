@@ -189,6 +189,18 @@ mutates_authority = true
 description = "Register a forecast before its outcome deadline using runtime-assigned admission time under the journal writer lock"
 
 [[verb]]
+path = "forecast journal register-assumption"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Freeze an agreed technical-report point or range and its exact future source selector before the physical period begins"
+
+[[verb]]
+path = "forecast journal resolve-assumption"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Resolve a report assumption from its frozen document and quantity with verified bytes, two-reader agreement and matching target scope"
+
+[[verb]]
 path = "forecast journal freeze"
 subsystem = "Plumb"
 mutates_authority = true

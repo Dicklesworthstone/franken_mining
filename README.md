@@ -534,6 +534,30 @@ There is no implicit unit conversion or rounding. Direct and driver rows cannot 
 item. These are supplied planning assumptions, with source locators for every operand; no rate is fitted from
 historical accounts or promoted to calibrated evidence.
 
+To estimate one cost line from observed driver/cost pairs, supply an explicit fitted-driver worksheet:
+
+```bash
+cargo run -p fmine-cli -- metrics cost \
+  --input tests/costs/fitted_costs.toml --definition aisc@wgc-2018 \
+  --fit-driver tests/costs/fitted_driver.toml --format markdown
+```
+
+The invented example fits `cost = 150 + (9/5) * tonnes_mined`. At 250 dry tonnes it supplies USD 600
+to the declared `on_site_mining_costs` line, yielding USD 6 per sold ounce in the accompanying worksheet.
+The receipt retains every observation and accounting-certificate declaration, exact coefficients and
+signed residuals, the full coefficient covariance, and separate fitted-mean and new-observation variances.
+For this example those variances are 2,250 and 11,250 USD². They are conditional on the explicitly declared
+independent, equal-variance error model with fixed drivers; they are not calibrated prediction intervals.
+
+Schema `fmine.cost-driver.v1` accepts 3–128 disjoint observations of equal period duration. It requires an
+information cut before the target, explicit observation availability, a supported driver/unit pair, matching
+issuer/site/ownership/accounting scope, and a validity domain inside the observed driver range. Constant
+drivers, overlapping history, information after the cut, extrapolation and duplicate fitted/direct cost lines
+refuse. Signed costs and fitted coefficients remain signed. Arithmetic stays exact through fitting; the
+declared `nearest_ties_even_0_0001_usd` policy applies only where the fitted amount enters the existing Money
+type, with the exact amount and rounding delta retained. Certificate identifiers are declarations, not
+authenticated accounting certificates. Without `--fit-driver`, the existing worksheet output is unchanged.
+
 The worksheet's cost classification and completeness remain **Assumed, Internal and uncalibrated**. Declaring
 a complete population is not independent evidence that omitted costs are zero. This command calculates the
 chosen rule; it does not verify issuer filings or close the broader metric-reproduction work.
@@ -3376,6 +3400,97 @@ named baseline bounds, frozen publication status and membership in the common co
 values remain exact; unavailable outcomes or comparators carry their reasons in the same row.
 The report is descriptive or unscored, with null authority fields and no claim of forecasting skill or calibration.
 It does not generate the own-model forecasts still required for the final FY2026 record.
+
+### Register and later score a technical-report assumption
+
+DESIGN (BD-276): the live journal can freeze an agreed technical-report point or finite range, together with
+the **exact future document and quantity** that will resolve it. The source must be a registered
+`technical_report`, its local bytes must match the registry, and its quantity must have complete two-reader
+agreement. The adapter takes values from that reading; callers do not supply replacement forecast numbers
+or a confidence level.
+
+Create an input such as the following, replacing the invented identifiers with registered sources:
+
+```toml
+schema = "fmine.report-assumption.v1"
+
+[[assumption]]
+id = "example-2030-cost"
+issuer = "example"
+document = "Technical-report.pdf"
+quantity = "planned_cost"
+subject = "Example Mine"
+period = "2030FY"
+unit = "usd_per_oz"
+basis = "100%"
+physical_start = "2030-01-01T00:00:00Z"
+physical_end = "2031-01-01T00:00:00Z"
+outcome_document = "Annual-results-2030.pdf"
+outcome_quantity = "reported_cost"
+author_role = "analyst"
+lane = "public"
+```
+
+`period`, `unit` and `basis` must exactly match the agreed source reading. Calendar periods must match
+their full UTC interval. A noncalendar life-of-mine window instead uses the literal period
+`UTC [<physical_start>,<physical_end>)` in both the input and transcription. Historical periods cannot be
+redated. `lane = "synthetic"` marks invented evidence; the public lane retains an issuer assertion, not
+independent verification of the mine's performance. The outcome document may be registered later, but its
+name and quantity selector cannot be changed after admission.
+
+After initializing a live journal as below, register the assumption and freeze its cohort **before the
+physical period begins**, using each returned head for the next mutation:
+
+```bash
+cargo run -p fmine-cli -- forecast journal register-assumption \
+  --journal runs/report-history --head HEAD_FROM_INIT \
+  --input assumption.toml --trust-host-clock
+cargo run -p fmine-cli -- forecast journal freeze \
+  --journal runs/report-history --head HEAD_FROM_REGISTRATION \
+  --request assumption-cohort.toml --trust-host-clock
+```
+
+The cohort request must use the exact assumption rule and its sole issuer. For the invented example:
+
+```toml
+[[cohort]]
+name = "example-2030-costs"
+members = "example-2030-cost"
+resolution_rule = "technical-report-assumptions/v1"
+eligible_sources = "example"
+alpha = "0.2"
+min_calibration_n = 35
+rho_low = "0"
+rho_high = "0.5"
+outcome_lo = "0"
+outcome_hi = "5000"
+```
+
+The bounds and scoring policy are explicit declarations for this example. A published range keeps
+`probability_level: null`; its interval score at the declared alpha is a descriptive penalty, not a proper
+probabilistic score or a claim that the source supplied an 80% interval. A published point remains a point.
+The local clock's complete uncertainty interval must follow source publication and precede physical start.
+Retained input, source and registry hashes, locators and reader roles make each admission inspectable.
+
+Once the frozen outcome document has been registered with an agreed **point** reading for the same period,
+unit and basis, resolve and assess it through the existing journal workflow:
+
+```bash
+cargo run -p fmine-cli -- forecast journal resolve-assumption \
+  --journal runs/report-history --head HEAD_FROM_FREEZE \
+  --forecast example-2030-cost --trust-host-clock
+cargo run -p fmine-cli -- forecast journal assess \
+  --journal runs/report-history --head HEAD_FROM_RESOLUTION \
+  --cohort example-2030-costs --as-of 2031-03-01T00:00:00Z \
+  --selector first-published --trust-host-clock
+```
+
+Missing or disputed source evidence leaves the member unresolved; a generic supplied outcome cannot bypass
+the frozen selector. This slice accepts one source-bound outcome per assumption and does not infer unit
+conversions, interpolate missing years or substitute later reports. Reopening the journal uses retained
+evidence without rereading source files. Publication declarations and local clock times do not authenticate
+historical preregistration; external timestamp verification additionally requires a bound before physical
+start. The real technical-report reproduction and longitudinal validation gates remain open.
 
 ### Register forecasts with a live durable journal
 

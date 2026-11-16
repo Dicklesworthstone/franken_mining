@@ -1,3 +1,5 @@
+//! Determinism: Exact (rational fitting and monetary-boundary known answers).
+
 use super::*;
 use fmine_core::{anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{EvidenceClass, KnowledgeState};

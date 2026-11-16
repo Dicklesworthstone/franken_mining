@@ -1,4 +1,5 @@
 //! Known answers and invented panels; no issuer data or calibrated-forecast claim.
+//! Determinism: Exact (keyed integer panels and exact rational assertions).
 
 use super::*;
 

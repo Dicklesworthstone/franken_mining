@@ -22,6 +22,7 @@ use fmine_units::ExactQty;
 
 use crate::json_string as js;
 
+pub mod assumption;
 pub(crate) mod comparison;
 mod correction;
 mod cusum;
@@ -114,6 +115,9 @@ struct Replay {
     plant_registration_starts: BTreeMap<ObjectId, i64>,
     /// Prefix-verified raw/correction/corrected lineage, retained independently of later outcomes.
     correction_admissions: BTreeMap<ObjectId, correction::registration::Admission>,
+    /// Source-bound technical-report assumptions; supplied outcomes cannot bypass their resolution rule.
+    assumption_admissions: BTreeMap<ObjectId, assumption::Admission>,
+    assumption_outcomes: BTreeMap<ObjectId, String>,
 }
 
 impl Replay {
@@ -428,6 +432,9 @@ impl Replay {
     }
 
     fn public_bound(&self, forecast: ObjectId) -> Result<bool, Refusal> {
+        if self.assumption_admissions.contains_key(&forecast) {
+            return Ok(true);
+        }
         if self
             .correction_admissions
             .get(&forecast)
@@ -454,6 +461,14 @@ impl Replay {
     }
 
     fn outcome_at(&mut self, row: Row<'_>, observed_ns: Option<i64>) -> Result<(), Refusal> {
+        if self
+            .assumption_admissions
+            .contains_key(&self.forecast_id(row.string("forecast")?)?)
+        {
+            return Err(invalid(
+                "a report assumption requires forecast journal resolve-assumption; caller-supplied outcomes cannot replace its frozen source selector",
+            ));
+        }
         if self.public_bound(self.forecast_id(row.string("forecast")?)?)? {
             return Err(invalid(
                 "this forecast has a frozen public target; use forecast journal resolve or restate, not caller-supplied outcomes",

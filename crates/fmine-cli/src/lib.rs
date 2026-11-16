@@ -809,6 +809,16 @@ fn parse_forecast_journal(
                 },
             }
         }
+        "register-assumption" => Command::RegisterAssumption {
+            journal,
+            head: digest(&take(&mut fields, "--head")?)?,
+            input: PathBuf::from(take(&mut fields, "--input")?),
+        },
+        "resolve-assumption" => Command::ResolveAssumption {
+            journal,
+            head: digest(&take(&mut fields, "--head")?)?,
+            forecast: take(&mut fields, "--forecast")?,
+        },
         "register-plant" => Command::RegisterPlant {
             journal,
             head: digest(&take(&mut fields, "--head")?)?,
@@ -2501,6 +2511,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]",
                 "forecast journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]",
                 "forecast journal register --journal <path> --head <hex> --request <path> --trust-host-clock",
+                "forecast journal register-assumption --journal <path> --head <hex> --input <assumption.toml> --trust-host-clock",
+                "forecast journal resolve-assumption --journal <path> --head <hex> --forecast <alias> --trust-host-clock",
                 "forecast journal register-plant --journal <path> --head <hex> --input <coupling.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target recovery|throughput|dry-tonnes|contained-metal|recovered-metal --author-role <role> --time-basis utc-unix-ns --trust-host-clock",
                 "forecast journal verify-plant --journal <path> --forecast <alias> [--head <hex>]",
                 "forecast journal register-correction --journal <path> --head <hex> --id <new-alias> --forecast <raw-alias> (--assessment <digest> | --assessments <digests>) --expected-proposal <digest> --model-key <corrected-model> --author-role <role> --trust-host-clock",
