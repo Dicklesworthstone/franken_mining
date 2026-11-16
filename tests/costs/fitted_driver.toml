@@ -1,0 +1,50 @@
+# Synthetic known answer, not issuer data: OLS y = 150 + (9/5)x.
+# At x=250: mean cost=600 USD, residual variance=9000 USD²,
+# fitted-mean variance=2250 USD², new-observation variance=11250 USD².
+# fmine metrics cost --input tests/costs/fitted_costs.toml --definition aisc@wgc-2018 --fit-driver tests/costs/fitted_driver.toml
+schema = "fmine.cost-driver.v1"
+issuer = "invented"
+subject = "Example Mine"
+basis = "nominal USD accrual"
+ownership = "full"
+currency = "USD"
+item = "on_site_mining_costs"
+driver = "tonnes_mined"
+unit = "dry_t"
+period = "2030FY"
+quantity = "250"
+domain_min = "100"
+domain_max = "400"
+valid_from = "2030FY"
+valid_through = "2031FY"
+information_cut = "2029FY"
+error_basis = "iid_homoskedastic_cost_errors_fixed_driver"
+monetary_rounding = "nearest_ties_even_0_0001_usd"
+
+[[observation]]
+period = "2026FY"
+quantity = "100"
+usd = "300"
+available = "2026FY"
+accounting_certificate = "synthetic-register-2026"
+
+[[observation]]
+period = "2027FY"
+quantity = "200"
+usd = "600"
+available = "2027FY"
+accounting_certificate = "synthetic-register-2027"
+
+[[observation]]
+period = "2028FY"
+quantity = "300"
+usd = "600"
+available = "2028FY"
+accounting_certificate = "synthetic-register-2028"
+
+[[observation]]
+period = "2029FY"
+quantity = "400"
+usd = "900"
+available = "2029FY"
+accounting_certificate = "synthetic-register-2029"

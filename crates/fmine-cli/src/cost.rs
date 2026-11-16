@@ -6,18 +6,21 @@ use std::path::{Path, PathBuf};
 
 use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::Refusal;
-use fmine_metrics::definitions::{claims, worksheet};
+use fmine_metrics::definitions::{claims, driver, worksheet};
 
 use crate::{Envelope, NextAction, worksheet_input};
 
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
-pub const USAGE: &str = "metrics cost --input <worksheet.toml> --definition <registered-id>";
-pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.cost-worksheet.v1","input":"Regular UTF-8 TOML, at most 4 MiB; actual worksheet and workspace metric registry bytes are SHA-256 bound","fields":["schema","issuer","subject","period","ownership","basis","currency","complete"],"sold_quantity":"Exactly one of ounces_sold (gold) or pounds_sold (copper); actual sold units, never thousands, tonnes or produced units","optional_fields":["ownership_share","gold_share","copper_share"],"cost_rows":["item","usd"],"uu_rows":["id","description","trigger","downside_usd_m"],"values":"Quoted strings; complete must be true; period YYYYFY/YYYYQn/YYYYHn; full or attributable ownership; USD amounts at most four fractional digits; quantities and shares exact decimals or n/d","definition":"Explicit registered gold AISC/AIC or copper C1/AISC ID; inherited lines, exclusions, deductions and successor retained; co-product allocations name the same metal as the denominator","output":"Exact numerator, gold ounces or copper pounds sold, USD/oz or USD/lb, signed contribution per input and complete canonical Claim receipts","evidence":"Assumed, Internal, uncalibrated; completeness is a declared assumption","example":"tests/costs/declared_aisc.toml","copper_example":"tests/costs/declared_copper.toml","driver_rows":{"required":["item","driver","unit","quantity","usd_per_unit"],"optional":["fixed_usd"]},"driver_units":{"tonnes_mined":["dry_t","wet_t"],"tonnes_milled":["dry_t","wet_t"],"haulage":["dry_t_km","wet_t_km"],"electricity":["kWh"],"reagent":["kg"],"labour":["hour"]},"driver_arithmetic":"Nonnegative exact quantity times USD rate plus nonnegative fixed_usd (defaults explicitly to zero); result must fit USD 0.0001 units exactly; no rounding, implicit conversion or duplicate direct/driver item","driver_example":"tests/costs/planned_drivers.toml"}"#;
+pub const USAGE: &str = "metrics cost --input <worksheet.toml> --definition <registered-id> [--fit-driver <history.toml>]";
+pub const ROBOT_DOCS_JSON: &str = concat!(
+    r#"{"schema":"fmine.cost-worksheet.v1","input":"Regular UTF-8 TOML, at most 4 MiB; actual worksheet and workspace metric registry bytes are SHA-256 bound","fields":["schema","issuer","subject","period","ownership","basis","currency","complete"],"sold_quantity":"Exactly one of ounces_sold (gold) or pounds_sold (copper); actual sold units, never thousands, tonnes or produced units","optional_fields":["ownership_share","gold_share","copper_share"],"cost_rows":["item","usd"],"uu_rows":["id","description","trigger","downside_usd_m"],"values":"Quoted strings; complete must be true; period YYYYFY/YYYYQn/YYYYHn; full or attributable ownership; USD amounts at most four fractional digits; quantities and shares exact decimals or n/d","definition":"Explicit registered gold AISC/AIC or copper C1/AISC ID; inherited lines, exclusions, deductions and successor retained; co-product allocations name the same metal as the denominator","output":"Exact numerator, gold ounces or copper pounds sold, USD/oz or USD/lb, signed contribution per input and complete canonical Claim receipts","evidence":"Assumed, Internal, uncalibrated; completeness is a declared assumption","example":"tests/costs/declared_aisc.toml","copper_example":"tests/costs/declared_copper.toml","driver_rows":{"required":["item","driver","unit","quantity","usd_per_unit"],"optional":["fixed_usd"]},"driver_units":{"tonnes_mined":["dry_t","wet_t"],"tonnes_milled":["dry_t","wet_t"],"haulage":["dry_t_km","wet_t_km"],"electricity":["kWh"],"reagent":["kg"],"labour":["hour"]},"driver_arithmetic":"Nonnegative exact quantity times USD rate plus nonnegative fixed_usd (defaults explicitly to zero); result must fit USD 0.0001 units exactly; no rounding, implicit conversion or duplicate direct/driver item","driver_example":"tests/costs/planned_drivers.toml","fit_driver":{"option":"--fit-driver <history.toml>","schema":"fmine.cost-driver.v1","limit":"1 MiB and 3..128 observation rows","fields":["schema","issuer","subject","basis","ownership","currency","item","driver","unit","period","quantity","domain_min","domain_max","valid_from","valid_through","information_cut","error_basis","monetary_rounding"],"optional_fields":["ownership_share"],"observation_fields":["period","quantity","usd","available","accounting_certificate"],"error_basis":"iid_homoskedastic_cost_errors_fixed_driver","monetary_rounding":"nearest_ties_even_0_0001_usd","rules":"Disjoint equally long calendar periods on the same issuer, site, ownership and accounting basis. Training availability is declared at a period end and must precede the target; constant drivers refuse. Target is inside declared driver/calendar validity; driver domain must lie within observed extrema. Signed OLS coefficients and residuals remain signed. Exactly one final rounding produces the cost line; exact mean and rounding delta retained. Remove that item from direct/driver rows because duplicate items refuse.","output":"Original Claim population and accounting references, fixed cost, variable rate, all residuals, coefficient covariance, fitted-mean and new-observation variance; uncalibrated, with no confidence interpretation","history_example":"tests/costs/fitted_driver.toml","cost_example":"tests/costs/fitted_costs.toml"}}"#,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
     pub input: PathBuf,
     pub definition: String,
+    pub fit_driver: Option<PathBuf>,
 }
 
 /// Common output/workspace options are removed by the main router.
@@ -31,7 +34,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     let mut i = 2;
     while i < args.len() {
         let flag = args[i].as_str();
-        if !matches!(flag, "--input" | "--definition") {
+        if !matches!(flag, "--input" | "--definition" | "--fit-driver") {
             return Err(format!("metrics cost: unsupported option {flag}; {USAGE}"));
         }
         let value = args
@@ -54,6 +57,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             .get("--definition")
             .ok_or("metrics cost requires --definition")?)
         .clone(),
+        fit_driver: fields
+            .get("--fit-driver")
+            .map(|path| PathBuf::from(path.as_str())),
     })
 }
 
@@ -65,24 +71,57 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) = read(&root.join(&command.input))?;
         let (metrics, registry) = read(&root.join("registries/metrics.toml"))?;
-        let receipt = worksheet::evaluate(
-            &text,
-            source.clone(),
-            &metrics,
-            registry.clone(),
-            &command.definition,
-        )?;
+        let fitted = command
+            .fit_driver
+            .as_ref()
+            .map(|path| {
+                let (text, source) =
+                    worksheet_input::read(&root.join(path), "cost driver", 1024 * 1024)?;
+                driver::worksheet::evaluate(&text, source)
+            })
+            .transpose()?;
+        let receipt = if let Some(fit) = &fitted {
+            worksheet::evaluate_with_fitted_driver(
+                &text,
+                source.clone(),
+                &metrics,
+                registry.clone(),
+                &command.definition,
+                fit,
+            )?
+        } else {
+            worksheet::evaluate(
+                &text,
+                source.clone(),
+                &metrics,
+                registry.clone(),
+                &command.definition,
+            )?
+        };
+        let model_json = fitted.as_ref().map_or_else(String::new, |fit| {
+            format!(",\"fitted_driver\":{}", fit.to_json())
+        });
         let payload = format!(
-            "{{\"schema\":\"{}\",\"mode\":\"declared_cost_worksheet\",\"source\":{},\"registry\":{},\"receipt\":{}}}",
+            "{{\"schema\":\"{}\",\"mode\":\"declared_cost_worksheet\",\"source\":{},\"registry\":{},\"receipt\":{}{model_json}}}",
             worksheet::SCHEMA,
             worksheet_input::source_json(&source, text.len()),
             worksheet_input::source_json(&registry, metrics.len()),
             receipt.to_json()
         );
         let mut envelope = Envelope::ok("metrics cost", payload, Vec::new());
-        envelope.no_claim = Some(claims::NO_CLAIM);
+        envelope.no_claim = Some(if fitted.is_some() {
+            driver::NO_CLAIM
+        } else {
+            claims::NO_CLAIM
+        });
         envelope.warnings.push("Declared costs, classification and completeness are Assumed, Internal and uncalibrated.".into());
-        envelope.rendered_markdown = Some(receipt.to_markdown());
+        let mut markdown = receipt.to_markdown();
+        if let Some(fit) = fitted {
+            envelope.warnings.push("Cost-driver variances are conditional OLS estimates; fitted coefficients and forecast costs are uncalibrated.".into());
+            markdown = markdown.replace(claims::NO_CLAIM, driver::NO_CLAIM);
+            markdown.push_str(&fit.to_markdown());
+        }
+        envelope.rendered_markdown = Some(markdown);
         Ok(envelope)
     };
     run().unwrap_or_else(|refusal| {

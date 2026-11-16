@@ -1,0 +1,19 @@
+# Complete declared synthetic population, including the fitted mining line supplied by --fit-driver.
+# AISC=(600 fitted mining + 100 leases - 100 by-product credits)/100 sold oz = 6 USD/oz.
+schema = "fmine.cost-worksheet.v1"
+issuer = "invented"
+subject = "Example Mine"
+period = "2030FY"
+ownership = "full"
+basis = "nominal USD accrual"
+currency = "USD"
+complete = "true"
+ounces_sold = "100"
+
+[[cost]]
+item = "lease_payments"
+usd = "100"
+
+[[cost]]
+item = "by_product_credits"
+usd = "100"

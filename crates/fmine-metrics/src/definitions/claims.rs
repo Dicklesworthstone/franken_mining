@@ -78,7 +78,7 @@ fn put_qty(enc: &mut Encoder, value: ExactQty) {
     enc.put_i128(value.den());
 }
 
-fn put_scope(enc: &mut Encoder, scope: &Scope) {
+pub(super) fn put_scope(enc: &mut Encoder, scope: &Scope) {
     enc.put_str(&scope.issuer);
     enc.put_str(&scope.subject);
     enc.put_u16(scope.period.year);
@@ -338,7 +338,7 @@ impl DeclaredDriver {
         )
     }
 
-    fn amount(&self) -> Result<Money> {
+    pub(super) fn amount(&self) -> Result<Money> {
         if !matches!(
             (self.kind.as_str(), self.unit.as_str()),
             ("tonnes_mined" | "tonnes_milled", "dry_t" | "wet_t")
@@ -372,7 +372,7 @@ impl DeclaredDriver {
     }
 }
 
-fn put_envelope(enc: &mut Encoder, claim: &Claim<CostInput>) {
+pub(super) fn put_envelope<T>(enc: &mut Encoder, claim: &Claim<T>) {
     enc.put_bytes(&claim.canonical_body());
     // These fields are not all present in generic Claim canonical bodies; bind them explicitly.
     enc.put_str(&format!("{:?}", claim.representation));

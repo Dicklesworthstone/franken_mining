@@ -13,6 +13,7 @@ use fmine_units::{ExactQty, UnitsError};
 
 pub mod claims;
 mod declared;
+pub mod driver;
 pub mod geo;
 pub mod worksheet;
 

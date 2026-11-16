@@ -43,6 +43,41 @@ impl<I, O> Receipt<I, O> {
         &self.digest
     }
 
+    /// A fitted model cannot inherit measurement status or calibration from its observations.
+    pub(super) fn from_modelled(
+        inputs: Vec<Claim<I>>,
+        metric: &str,
+        value: O,
+        digest: String,
+        bad: fn(RefusalCode, &str) -> Refusal,
+    ) -> Result<Self, Refusal> {
+        let mut receipt = Self::from_admitted(
+            inputs,
+            metric,
+            value,
+            digest,
+            AdditivityClass::NonAdditive,
+            bad,
+        )?;
+        let prior = receipt.claim;
+        receipt.claim = Claim::new(
+            metric,
+            prior.value,
+            &receipt.digest,
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::NonAdditive,
+            EvidenceClass::ModelledUncalibrated.meet(prior.evidence),
+            EpistemicStatus::KnownUnknown(KuKind::Parametric).and(prior.epistemic),
+            KnowledgeState::Estimated.and(prior.state),
+            prior.confidentiality,
+            prior.uu_terms,
+            prior.parents,
+            prior.anchors,
+        );
+        Ok(receipt)
+    }
+
     pub(super) fn from_admitted(
         inputs: Vec<Claim<I>>,
         metric: &str,

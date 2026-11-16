@@ -15,6 +15,64 @@ const REGISTRY: &str = include_str!("../../../registries/metrics.toml");
 const SOURCE: &str = "worksheet.toml";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn fitted_driver_cost_reaches_registered_aisc_with_its_full_model_receipt() {
+    let history = include_str!("../../../tests/costs/fitted_driver.toml");
+    let fixture = Fixture::new(include_str!("../../../tests/costs/fitted_costs.toml"));
+    fs::write(fixture.0.join("driver.toml"), history).unwrap();
+    let mut args = Fixture::args("aisc@wgc-2018");
+    args.extend(["--fit-driver".into(), "driver.toml".into()]);
+    let (result, _) = invoke(&args, &fixture.0);
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    assert_eq!(string_field(&result.payload_json, "usd_per_oz"), "6");
+    for expected in [
+        "\"fitted_driver\":{",
+        "fmine.cost-driver-result.v1",
+        "\"fixed_usd\":\"150\"",
+        "\"usd_per_unit\":\"9/5\"",
+        "\"mean_variance_usd2\":\"2250\"",
+        "\"observation_variance_usd2\":\"11250\"",
+        "synthetic-register-2026",
+        "\"calibrated\":false",
+    ] {
+        assert!(result.payload_json.contains(expected), "{expected}");
+    }
+    assert!(
+        result
+            .payload_json
+            .contains(&sha256(history.as_bytes()).to_hex())
+    );
+    assert!(
+        result
+            .rendered_markdown
+            .as_ref()
+            .unwrap()
+            .contains("Observed minus fitted")
+    );
+    assert_eq!(invoke(&args, &fixture.0).0.to_json(), result.to_json());
+    fs::write(
+        fixture.0.join("driver.toml"),
+        history.replace("quantity = \"250\"", "quantity = \"300\""),
+    )
+    .unwrap();
+    let changed = invoke(&args, &fixture.0).0;
+    assert_eq!(changed.exit_code, 0, "{}", changed.to_json());
+    assert_eq!(string_field(&changed.payload_json, "usd_per_oz"), "69/10");
+    assert_ne!(
+        string_field(&changed.payload_json, "digest"),
+        string_field(&result.payload_json, "digest")
+    );
+    fs::write(
+        fixture.0.join("driver.toml"),
+        history.replace("quantity = \"250\"", "quantity = \"401\""),
+    )
+    .unwrap();
+    assert_eq!(
+        invoke(&args, &fixture.0).0.refusal.unwrap().code,
+        "FMINE-REF-203"
+    );
+}
+
 fn worksheet(lines: &[(&str, &str)]) -> String {
     let mut text = String::from(
         "schema = \"fmine.cost-worksheet.v1\"\nissuer = \"invented\"\nsubject = \"Site A\"\n\

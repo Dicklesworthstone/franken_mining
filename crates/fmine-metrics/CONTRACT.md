@@ -489,8 +489,9 @@ The other modules have local errors with no refusal code:
 - **Two GEO paths and two reserve-replacement paths.** The root `PriceDeck` and `compute_geo` are float and unchecked beside the exact `definitions::geo`. `ReserveReplacementBridge` is float beside `reserve_replacement` and `assess_with_metrics`.
 - **Much of plan §21.6 remains open.** The copper C1 table rule and the shared exact cost calculation
   accept supplied plans or actuals, including declared quantity/rate/fixed-cost drivers, but do not fit rates
-  or authenticate accounting inputs. ROCE, broader definition flags (credit location and inventory
-  adjustments) and a fitted `CostDriverCard` remain absent.
+  or authenticate accounting inputs. ROCE and broader definition flags (credit location and inventory
+  adjustments) remain absent. The bounded single-driver fit below does not authenticate FA registers,
+  infer driver measurement error, learn price-linked lines or establish prospective calibration.
 - **Code with no caller outside this crate's tests:**
   - `AiscConsolidationBridge`, `PriceDeck`, `compute_geo` and `ReserveReplacementBridge`;
   - `is_non_sustaining` (`all_in_cost_per_oz` is reached through `definitions::claims` and `fmine metrics cost`);
@@ -503,6 +504,36 @@ The other modules have local errors with no refusal code:
 - **The quarter work does not close the wider gates.** The additive quarter kernel and the quarter sums do not close the general derived-identity or the independently labelled disclosure-lint assessment gates.
 
 ## 11. Public API
+
+DESIGN (BD-061, plan §21.6): `definitions::driver::fit` estimates one cost pool as fixed USD plus
+USD per declared driver unit × quantity, using exact centered OLS on 3..128 disjoint equal-duration
+periods. Each observation is a source-bound Claim with an explicit accounting certificate reference
+and declared availability period. Issuer, site, ownership and accounting basis must agree; observations
+must be available by the declared information cut, before the target. Constant drivers refuse 104.
+Target quantities must lie inside declared nonnegative driver limits, themselves inside observed extrema;
+calendar extrapolation refuses too. Unsupported units, stale or mutated Claims and arithmetic overflow
+refuse. Signed observed costs, fitted intercepts, rates and residuals are preserved, never clipped.
+
+The immutable receipt retains every observation, fitted value and residual, residual degrees of freedom,
+SSE, residual variance, full intercept/rate covariance and fitted-mean/new-observation variances. These are
+algebraic estimates conditional on declared iid homoskedastic cost errors and fixed driver quantities,
+not calibrated uncertainty or empirical coverage; zero SSE is not proof of certainty. Model evidence is
+capped by ModelledUncalibrated and knowledge by Estimated, with source confidentiality and ancestry retained.
+Exact mean costs cross the existing Money boundary once under explicitly declared nearest-even rounding;
+both the unrounded mean and rounding difference remain in the receipt. `predicted_line` supplies the
+existing cost-definition evaluator with a source-bound signed line, without changing classification rules.
+
+`definitions::driver::worksheet::evaluate` admits source-hashed `fmine.cost-driver.v1` text up to 1 MiB;
+all worksheet observations remain Assumed and Internal. The existing CLI exposes it through
+`metrics cost --fit-driver FILE`. `worksheet::evaluate_with_fitted_driver` includes the resulting line
+in the declared complete cost population and refuses duplicate items or incompatible scopes. JSON retains
+the model receipt and original inputs; Markdown shows the fit, validity, covariance and source references.
+Synthetic `tests/costs/fitted_driver.toml` fits fixed USD 150 and rate 9/5, predicts USD 600 at 250 dry tonnes,
+and has residual variance 9000, mean variance 2250 and new-observation variance 11250 USD². Focused exact
+known-answer, source-mutation, sign, monetary-rounding, rank/domain and scope/time tests accompany this
+owner; `xtask/tests/cost_worksheet.rs` exercises the CLI-to-AISC path. This slice supplies no certified
+accounting data, multivariate/price-linked fit, driver-error model or frozen prospective forecast.
+
 - **`consolidation`:** `RATE_RULES_VERSION`, `Printed`, `Column`, `Table`, `Difference`,
   `RateComparison`, `Comparison` and `compare`. `Table` and `Comparison` expose `canonical_tag`;
   comparisons cross the API in a Claim. Direct known-answer and signed source-box enclosure tests are

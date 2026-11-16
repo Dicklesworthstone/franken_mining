@@ -44,7 +44,7 @@ fn quantity(value: &str, line: usize) -> Result<ExactQty, Refusal> {
     })
 }
 
-fn money(value: &str, line: usize) -> Result<Money, Refusal> {
+pub(super) fn money(value: &str, line: usize) -> Result<Money, Refusal> {
     let fail = || {
         bad(
             line,
@@ -94,6 +94,37 @@ pub fn evaluate(
     metrics_text: &str,
     metrics_source: SourceAnchor,
     definition: &str,
+) -> Result<CostReceipt, Refusal> {
+    evaluate_inner(text, source, metrics_text, metrics_source, definition, None)
+}
+
+/// Add an admitted fitted cost line to the explicitly complete population. A duplicated
+/// item, mismatched period, basis or ownership is refused by the same definition owner.
+pub fn evaluate_with_fitted_driver(
+    text: &str,
+    source: SourceAnchor,
+    metrics_text: &str,
+    metrics_source: SourceAnchor,
+    definition: &str,
+    driver: &super::driver::DriverReceipt,
+) -> Result<CostReceipt, Refusal> {
+    evaluate_inner(
+        text,
+        source,
+        metrics_text,
+        metrics_source,
+        definition,
+        Some(driver),
+    )
+}
+
+fn evaluate_inner(
+    text: &str,
+    source: SourceAnchor,
+    metrics_text: &str,
+    metrics_source: SourceAnchor,
+    definition: &str,
+    driver: Option<&super::driver::DriverReceipt>,
 ) -> Result<CostReceipt, Refusal> {
     for (bytes, anchor) in [(text, &source), (metrics_text, &metrics_source)] {
         if sha256(bytes.as_bytes()).0 != anchor.artifact_sha256 {
@@ -293,7 +324,7 @@ pub fn evaluate(
         complete_line,
     ));
     let uu: Vec<_> = unknowns.into_values().collect();
-    let inputs = values
+    let mut inputs = values
         .into_iter()
         .map(|(value, line)| {
             let mut anchors = vec![anchored(
@@ -326,10 +357,13 @@ pub fn evaluate(
             )
         })
         .collect::<Vec<_>>();
+    if let Some(driver) = driver {
+        inputs.push(driver.predicted_line());
+    }
     claims::evaluate(&registry, &inputs)
 }
 
-fn scope_json(scope: &Scope) -> String {
+pub(super) fn scope_json(scope: &Scope) -> String {
     let ownership = super::declared::ownership_json(scope.ownership);
     format!(
         "{{\"issuer\":{},\"subject\":{},\"period\":{{\"year\":{},\"first_month\":{},\"last_month\":{}}},\"ownership\":{ownership},\"basis\":{}}}",
