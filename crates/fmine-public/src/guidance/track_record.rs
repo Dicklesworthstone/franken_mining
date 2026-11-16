@@ -24,6 +24,9 @@ use crate::sources::{
 use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_prefixes};
 use crate::{js, mine_ledger::rat_text};
 
+/// Separately versioned dependence projection; legacy report bytes and digest remain unchanged.
+pub mod clusters;
+
 pub const NO_CLAIM: &str = "Descriptive comparison of registered issuer guidance and reported outcomes; no forecast, calibration verdict, site ranking or proof of historical forecast registration. From public filings; no affiliation implied. Capital comparisons use the declared issuer-reported line only; cash/accrual, lease treatment and cross-definition reconciliation are not established.";
 const METRICS: [&str; 9] = [
     "production_koz",

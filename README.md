@@ -2670,6 +2670,27 @@ whole-cohort completion bounds. Rounding-aware bounds additionally preserve boun
 has no normalized range position. Exact rational IID reference bounds are retained alongside display projections;
 they do not estimate dependence, effective sample size, bias confidence intervals or forecasting skill.
 
+For a separate comparison that treats a declared year or site as the independent sampling unit, use:
+
+```bash
+cargo run -p fmine-cli -- track-record clusters --issuer barrick --as-of 2026-11-16 --axis year
+cargo run -p fmine-cli -- track-record clusters --synthetic --axis site --format markdown
+```
+
+This opt-in projection retains the complete dated report, original and latest outcome populations, both
+year/site partitions, exact rounding bounds, and missing-member completion bounds. It estimates the
+**equally weighted mean of cluster means**, so a larger cluster does not silently receive greater weight.
+With at least 20 complete, varying clusters it also reports a nominal 90% block-bootstrap interval using
+1,999 keyed Philox resamples. Sparse, incomplete or degenerate populations retain descriptive results and
+an explicit reason why sampling inference is unavailable. The included small synthetic example deliberately
+shows that unavailable state.
+
+The selected axis is an assumption: year clustering does not handle persistent site shocks, and site
+clustering does not handle common year shocks. Neither is a two-way robust or empirically calibrated result.
+Independent, year-dominant and site-dominant synthetic controls exercise that distinction; their 200-panel
+coverage checks use 399 resamples per panel and do not establish real issuer coverage or the full BD-341 gate.
+Ordinary `track-record` output keeps its existing schema and meaning.
+
 Inclusive one-sided guidance is also accepted from agreed printed tokens: `<= 120`, `≤120`,
 `at most 120`, `>= 120`, `≥120` and `at least 120`. Hit and miss counts include these targets, with
 exact inclusive-boundary and printed-rounding ambiguity checks. They have no midpoint, normalized deviation,

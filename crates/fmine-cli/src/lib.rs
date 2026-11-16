@@ -31,6 +31,7 @@ mod tables;
 mod track_record;
 mod track_record_as_of;
 pub mod track_record_binding;
+pub mod track_record_clusters;
 mod track_record_data;
 mod track_record_price;
 mod worksheet_input;
@@ -161,6 +162,8 @@ pub enum CliCommand {
     },
     /// Invented guidance, missing outcomes and restatements through the same cohort adapter.
     TrackRecordCohortAsOfSynthetic { as_of: String },
+    /// Explicit one-axis cluster inference beside a source-bound dated track record.
+    TrackRecordClusters(track_record_clusters::Command),
     /// Descriptive recovery comparison against an agreed historical grade/tails relation.
     RecoveryGap {
         issuer: String,
@@ -569,7 +572,18 @@ fn verb_hint(args: &[String]) -> &'static str {
             "mirror" => return "mirror",
             "reserve" => return "reserve replacement",
             "check" => return "check tables",
-            "track-record" => return "track-record",
+            "track-record" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--json" | "--synthetic" => next += 1,
+                        flag if flag.starts_with("--") => next += 2,
+                        "clusters" => return "track-record clusters",
+                        _ => return "track-record",
+                    }
+                }
+                return "track-record";
+            }
             "recovery" => return "recovery gap",
             "lint" => return "lint",
             "forecast" => {
@@ -1026,6 +1040,14 @@ pub fn parse_args(
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
     let verb = verb_hint(args);
+    if verb == "track-record clusters" {
+        let (words, format, root) = common_options(args, default_root)?;
+        return Ok((
+            CliCommand::TrackRecordClusters(track_record_clusters::parse(&words, &root)?),
+            format,
+            root,
+        ));
+    }
     if verb == "recovery gap" && args.iter().any(|arg| arg == "--price") {
         let (options, format, root) = recovery::parse(args, default_root)?;
         return Ok((CliCommand::RecoverySensitivity(options), format, root));
@@ -2148,6 +2170,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             fmine_public::guidance::run_synthetic(),
             "Invented synthetic evidence; this example is not an issuer finding.",
         ),
+        CliCommand::TrackRecordClusters(command) => {
+            track_record_clusters::execute(command, workspace_root)
+        }
         CliCommand::TrackRecord {
             issuer,
             site,
@@ -2465,6 +2490,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "track-record --issuer <issuer> --cohort-as-of YYYY-MM-DD [--site <site>] [--through YYYYQn]",
                 "track-record --synthetic --cohort-as-of YYYY-MM-DD",
                 "track-record --synthetic [--json]",
+                "track-record clusters --issuer <issuer> --as-of YYYY-MM-DD --axis year|site [--site <site>]",
+                "track-record clusters --synthetic --axis year|site",
                 "recovery gap --issuer <issuer> [--through YYYYQn] [--price SCENARIO=USD_PER_LB]...",
                 "recovery gap --synthetic [--price SCENARIO=USD_PER_LB]...",
                 "lint <draft> --issuer <issuer> [--through YYYYQn] [--discover] [--as-of YYYY-MM-DD]",
@@ -2551,6 +2578,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(reserve::ROBOT_DOCS_JSON);
             payload.push_str(",\"cost_worksheet\":");
             payload.push_str(cost::ROBOT_DOCS_JSON);
+            payload.push_str(",\"guidance_clusters\":");
+            payload.push_str(track_record_clusters::ROBOT_DOCS_JSON);
             payload.push_str(",\"production_geo\":");
             payload.push_str(geo::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_pit\":");

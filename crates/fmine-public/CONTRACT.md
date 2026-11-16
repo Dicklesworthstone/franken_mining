@@ -1162,6 +1162,15 @@ The public lane of M0 (`fmine assure public`).
   their implementations. The integration groups preserve the original fixtures, assertions and ignore rules.
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-341.S4): `guidance::track_record::clusters` wraps the unchanged dated comparison in
+  `fmine.guidance.track-record.clusters.v1` / `GTCL` v1. Its digest binds the entire original report,
+  both first-published and latest-registered selectors, every guidance/source link, both exact cluster
+  partitions and the explicitly selected bootstrap axis. Earliest-guidance ties remain one unresolved
+  site-year, with all competing readings retained; a cached numerical outcome cannot override its bound
+  score. Compatible metric/unit/basis families stay separate. Missing originals never acquire a later
+  outcome in their place. The kernel's independent-cluster assumption is unverified, its equal-cluster
+  estimand differs from the existing pooled mean, and it supplies no two-way robustness, automatic
+  effective sample size, calibration or site ranking. Legacy report bytes and digests are unchanged.
 - DESIGN (BD-329.S2, bounded runtime citation integrity): both public and synthetic assurance entry points
   validate canonical source Claims and the AISC ledger's emitted source operands and registered derivations
   before returning a report. Missing or mismatched source identity, locator, digest, value or derivation
@@ -1191,10 +1200,12 @@ The public lane of M0 (`fmine assure public`).
   no historical exclusion establishes that a mine cannot meet guidance.
   The separately selected explicit-limit interface lives in `fmine-cli::guidance_capacity` and delegates to
   the same exact production-ceiling kernel; it retains its distinct input schema and report.
-- The guidance track record does not establish a complete historical population, authentic prior forecast
-  registration, calibrated coverage, independence, effective sample size, a bias confidence interval or a
-  site ranking. Cost scores are unconditional; gold-price adjustments and attribution to controllable
-  operations remain unimplemented. This useful report slice does not close the full BD-341 data gate.
+- The ordinary guidance track record does not establish a complete historical population, authentic prior
+  forecast registration, calibrated coverage, independence, effective sample size, a bias sampling interval or
+  a site ranking. Its separate `clusters` projection supplies nominal 90% one-axis sampling intervals under
+  explicit unverified assumptions; simultaneous site/year inference and empirical qualification remain open.
+  Ordinary cost scores remain unconditional, with separate price sensitivities rather than attribution to
+  controllable operations. These report slices do not close the full BD-341 data gate.
 - Recovery comparison is descriptive and non-identifying. Ore type, grind, throughput, concentrate mass
   pull and annual-to-quarter support remain explicit model limitations. Signed differences do not establish
   causation, recoverable production, investment value or forecasting skill. This slice emits no dollar

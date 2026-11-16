@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "geo", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common
@@ -1689,6 +1689,15 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`, `fmine-optimize` (`pitflow`, for `plan pit`).
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-341.S4): `track-record clusters --issuer <issuer> --as-of YYYY-MM-DD --axis year|site`
+  optionally selects one site and delegates to the registered evidence-cut loader plus the separate
+  cluster projection. `--synthetic --axis year|site` uses explicitly invented evidence. The axis is
+  mandatory; `both`, implicit axis selection, through/cohort/price selectors and duplicate options refuse
+  as usage errors. JSON retains the complete unchanged source report, both outcome vintages, citations,
+  year/site partitions, nominal 90% conditional bootstrap intervals and explicit unavailable reasons;
+  Markdown exposes the same counts, source comparison and digests. Sparse, incomplete and degenerate
+  populations are successful descriptive reports without a sampling interval. Selected source tampering
+  retains its typed refusal. No authority flag is enabled, and legacy track-record commands are unchanged.
 - DESIGN (BD-063): `reserve replacement --issuer <issuer> --bindings <path> [--as-of YYYY-MM-DD]`
   authenticates explicitly selected PDF operands and delegates complete annual-window arithmetic to
   `fmine-metrics::reserve_replacement`. Exact ratios of sums retain independently printed aggregate points,
@@ -1839,9 +1848,11 @@ None: every failure is a usage error or a typed refusal.
   remains mandatory; mixed guidance/price identity disagreements and unknown rejection identities refuse.
   Missing or altered selected guidance/price document bytes still refuse before either report can be produced.
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
-- Track records are descriptive projections. They do not issue forecasts, authenticate an external time proof,
-  estimate dependence or effective sample size, provide bias confidence intervals, or satisfy the full BD-341
-  data/coverage gates. Conditional binomial intervals are labelled with their independence assumption. Sparse
+- Track records retain descriptive projections. They do not issue forecasts, authenticate an external time proof,
+  estimate dependence or effective sample size, or satisfy the full BD-341 data/coverage gates. Ordinary and
+  cohort reports retain source-rounding bounds for bias; the separately selected `clusters` path adds nominal
+  90% sampling intervals conditional on its declared independent axis and equal-cluster estimand. Ordinary
+  binomial intervals retain their IID reference label. Sparse
   evidence and unprinted outcome bases remain explicit; real guidance transcriptions are local inputs.
   Point and one-sided targets have no normalized range position. Agreed inclusive `AtMost`/`AtLeast`
   transcriptions retain their original token and direction in canonical Claims and JSON/Markdown, and use
@@ -1872,5 +1883,6 @@ None: every failure is a usage error or a typed refusal.
   issuer census. Guidance has no inferred probability level. The binomial reference interval is conditional
   on independent trials; source-rounding and missing-outcome bounds have separate meanings. Evidence-cut
   reports retain their unconditional scores alongside separate first-published and latest-registered price
-  sensitivities. Causal cost attribution, cluster inference, forecast registration and the full
-  guidance data gate remain open.
+  sensitivities. The opt-in `clusters` projection adds conditional one-axis inference; simultaneous site/year
+  inference, empirical qualification and the full guidance data gate remain open. These track-record paths
+  neither attribute controllable cost causes nor register forecasts.

@@ -453,6 +453,47 @@ fn same_date_guidance_and_duplicate_outcomes_are_explicit_ambiguities() {
 }
 
 #[test]
+fn cluster_projection_retains_tied_guidance_without_arbitrarily_choosing_its_range() {
+    use fmine_public::guidance::track_record::clusters::{self, Axis};
+    let (mut profile, mut transcriptions, cells) = fixture();
+    add_guidance(
+        &mut profile,
+        &mut transcriptions,
+        "same-date.txt",
+        "2030-01-15",
+        "120 - 130",
+        "attributable:4/5",
+    );
+    let source = run(&profile, &transcriptions, &cells);
+    let projected = clusters::assess(source.clone(), Axis::Year).unwrap();
+    assert_eq!(projected.source().to_json(), source.to_json());
+    for group in projected.groups() {
+        assert_eq!(group.assessment.n_members, 2);
+        assert_eq!(group.assessment.n_unresolved, 2);
+        assert_eq!(group.assessment.years[0].unknown_guidance, 1);
+        assert_eq!(
+            group.assessment.bias.unavailable,
+            Some("unresolved_members")
+        );
+        assert!(
+            group
+                .sources
+                .iter()
+                .any(|s| s.guidance.len() == 2 && s.status == "ambiguous_earliest_guidance")
+        );
+    }
+    transcriptions.agreement.accepted.reverse();
+    profile.documents.reverse();
+    transcriptions.documents.reverse();
+    assert_eq!(
+        projected.to_json(),
+        clusters::assess(run(&profile, &transcriptions, &cells), Axis::Year)
+            .unwrap()
+            .to_json()
+    );
+}
+
+#[test]
 fn altered_projection_unregistered_digest_and_pending_reading_cannot_score() {
     let (p, mut t, c) = fixture();
     let mut altered = c.clone();

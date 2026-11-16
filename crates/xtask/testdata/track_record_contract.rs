@@ -301,6 +301,72 @@ mod tests {
         root
     }
 
+    #[test]
+    fn registered_cluster_command_preserves_sources_missing_originals_and_legacy_reports() {
+        let root = dated_workspace("clusters");
+        let words = [
+            "track-record",
+            "clusters",
+            "--issuer",
+            "synthetic",
+            "--as-of",
+            "2026-02-01",
+            "--axis",
+            "year",
+        ];
+        let arguments: Vec<_> = words.iter().map(|s| s.to_string()).collect();
+        let (envelope, _) = fmine_cli::invoke(&arguments, &root);
+        assert_eq!(envelope.exit_code, 0, "{envelope:?}");
+        let payload = &envelope.payload_json;
+        assert!(payload.contains("fmine.guidance.track-record.clusters.v1"));
+        assert!(payload.contains("\"first_published\""));
+        assert!(payload.contains("\"latest_registered\""));
+        assert!(payload.contains("\"inference_unavailable\":\"unresolved_members\""));
+        assert!(payload.contains("\"effective_sample_size\":null"));
+        assert!(payload.contains(&sha256(DOCUMENT).to_hex()));
+        assert_eq!(envelope, fmine_cli::invoke(&arguments, &root).0);
+        let base =
+            fmine_public::guidance::track_record::run(&root, "synthetic", None, "2026-02-01")
+                .unwrap();
+        assert!(
+            payload.contains(&base.to_json()),
+            "complete unchanged legacy report is retained"
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .args(words)
+            .args([
+                "--workspace",
+                root.to_str().unwrap(),
+                "--format",
+                "markdown",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let markdown = String::from_utf8(output.stdout).unwrap();
+        assert!(markdown.contains("Equal-cluster mean"));
+        assert!(markdown.contains("Complete source comparison"));
+        assert!(markdown.contains(&base.digest.to_hex()));
+        let public = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .args(words)
+            .args(["--workspace", root.to_str().unwrap(), "--json"])
+            .output()
+            .unwrap();
+        assert!(public.status.success());
+        let public = String::from_utf8(public.stdout).unwrap();
+        assert!(public.contains("\"regulatory_compliance_claim\":false"));
+        assert!(public.contains("\"execution_authorized\":false"));
+        assert_eq!(public.lines().count(), 1);
+        std::fs::write(root.join("documents/Guidance2023.pdf"), b"changed source").unwrap();
+        let refused = fmine_cli::invoke(&arguments, &root).0;
+        assert_ne!(refused.exit_code, 0);
+        assert_eq!(refused.refusal.unwrap().code, "FMINE-REF-505");
+    }
+
     fn capex_sheet(year: u16, metal: &str, current: [f64; 3], prior: [f64; 3]) -> MinimalSheet {
         let mut cells = vec![
             text("A1", &format!("Mine Statistics ({metal})")),

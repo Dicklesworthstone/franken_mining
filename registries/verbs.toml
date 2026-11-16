@@ -141,6 +141,12 @@ mutates_authority = false
 description = "Compare agreed issuer guidance with original annual outcomes, preserving missing members, comparative vintages and later appearances"
 
 [[verb]]
+path = "track-record clusters"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Report source-bound year and site clusters with explicit one-axis block-bootstrap uncertainty and retained missing members"
+
+[[verb]]
 path = "recovery gap"
 subsystem = "Crucible"
 mutates_authority = false
