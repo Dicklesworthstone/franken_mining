@@ -2,7 +2,8 @@
 //! Determinism: Exact
 //!
 //! DESIGN: each source quarter keeps its original support. Its sales/numerator wedge is exact:
-//! `rate_lo * sold <= 1000 * spend <= rate_hi * sold`. The existing exact Sum/Ratio solver combines
+//! `rate_lo * sold <= d * spend <= rate_hi * sold`, with d = 1000 for gold and 1 for copper.
+//! The existing exact Sum/Ratio solver combines
 //! those wedges, the explicit remaining-sales scenario and both annual targets. Aggregate rate/sales
 //! intervals are display projections only; they never replace the quarter constraints in a verdict.
 
@@ -23,22 +24,24 @@ pub struct QuarterlyHistory {
 /// Marginal projections of one window. Source support is explicit even for a cross-year window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowTotals {
+    pub family: GuidanceFamily,
     pub first_period: Period,
     pub last_period: Period,
-    pub production_koz: Interval,
-    pub sold_koz: Interval,
-    pub aisc_usd_per_oz: Interval,
+    pub production: Interval,
+    pub sold: Interval,
+    pub aisc: Interval,
     pub aisc_spend_usd_m: Interval,
 }
 
 /// One point inside a source quarter's rounding boxes, with its hypothetical replay support kept separate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuarterWitness {
+    pub family: GuidanceFamily,
     pub source_period: Period,
     pub replay_period: Period,
-    pub production_koz: Rat,
-    pub sold_koz: Rat,
-    pub aisc_usd_per_oz: Rat,
+    pub production: Rat,
+    pub sold: Rat,
+    pub aisc: Rat,
     pub spend_usd_m: Rat,
 }
 
@@ -80,6 +83,7 @@ fn validate<'a>(
     h: &'a QuarterlyHistory,
 ) -> Result<Vec<&'a HistoricalContinuation>> {
     let remaining = validate_inputs(i)?;
+    let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
     if h.id.trim().is_empty() || h.quarters.is_empty() {
         return refuse(
             RefusalCode::NoClaimInDomain201,
@@ -107,14 +111,10 @@ fn validate<'a>(
             (
                 &q.production,
                 "historical quarter production",
-                QuantityKind::ProductionKoz,
+                family.production_kind(),
             ),
-            (&q.sold, "historical quarter sold", QuantityKind::SoldKoz),
-            (
-                &q.aisc,
-                "historical quarter AISC",
-                QuantityKind::AiscUsdPerSoldOz,
-            ),
+            (&q.sold, "historical quarter sold", family.sold_kind()),
+            (&q.aisc, "historical quarter AISC", family.rate_kind()),
         ] {
             validate_claim(claim, role, kind)?;
             same_basis(&i.production_guidance.value, &claim.value, role)?;
@@ -161,10 +161,12 @@ fn sum_ranges(ranges: impl IntoIterator<Item = Interval>) -> Exact<Interval> {
     Ok(total)
 }
 
-fn spend(s: Interval, r: Interval) -> Exact<Interval> {
+fn spend(s: Interval, r: Interval, family: GuidanceFamily) -> Exact<Interval> {
     Ok(closed(
-        s.lo.checked_mul(r.lo)?.checked_div(THOUSAND)?,
-        s.hi.checked_mul(r.hi)?.checked_div(THOUSAND)?,
+        s.lo.checked_mul(r.lo)?
+            .checked_div(family.spend_divisor())?,
+        s.hi.checked_mul(r.hi)?
+            .checked_div(family.spend_divisor())?,
     ))
 }
 
@@ -193,6 +195,7 @@ fn totals(quarters: &[&HistoricalContinuation]) -> Result<Claim<WindowTotals>> {
     let last = quarters
         .last()
         .ok_or_else(|| Refusal::new(RefusalCode::NoClaimInDomain201, "no historical quarters"))?;
+    let family = GuidanceFamily::from_production_kind(first.production.value.kind)?;
     let mut rates = Vec::new();
     // A positive sold-weighted ratio reaches an extremum at sales endpoints. Rates are monotone,
     // so all lower (respectively upper) rate endpoints suffice. At most three quarters: <=16 points.
@@ -218,29 +221,30 @@ fn totals(quarters: &[&HistoricalContinuation]) -> Result<Claim<WindowTotals>> {
     }
     let spend_ranges = quarters
         .iter()
-        .map(|q| spend(q.sold.value.interval, q.aisc.value.interval))
+        .map(|q| spend(q.sold.value.interval, q.aisc.value.interval, family))
         .collect::<Exact<Vec<_>>>()
         .map_err(|e| Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string()))?;
     let value = WindowTotals {
+        family,
         first_period: first.production.value.period,
         last_period: last.production.value.period,
-        production_koz: exact(sum_ranges(
+        production: exact(sum_ranges(
             quarters.iter().map(|q| q.production.value.interval),
         ))?,
-        sold_koz: exact(sum_ranges(quarters.iter().map(|q| q.sold.value.interval)))?,
-        aisc_usd_per_oz: exact(hull(rates))?,
+        sold: exact(sum_ranges(quarters.iter().map(|q| q.sold.value.interval)))?,
+        aisc: exact(hull(rates))?,
         aisc_spend_usd_m: exact(sum_ranges(spend_ranges))?,
     };
-    let mut enc = Encoder::new_frame(*b"GQWT", 1);
+    let mut enc = Encoder::new_frame(*b"GQWT", family.frame_version());
     for p in [value.first_period, value.last_period] {
         enc.put_u16(p.year);
         enc.put_u8(p.first_month);
         enc.put_u8(p.last_month);
     }
     for r in [
-        value.production_koz,
-        value.sold_koz,
-        value.aisc_usd_per_oz,
+        value.production,
+        value.sold,
+        value.aisc,
         value.aisc_spend_usd_m,
     ] {
         put_rat(&mut enc, r.lo);
@@ -273,6 +277,7 @@ struct Model {
     identities: Vec<xf::Identity>,
     rules: xf::Rules,
     binding: String,
+    family: GuidanceFamily,
 }
 
 impl Model {
@@ -321,7 +326,7 @@ impl Model {
                 rate: rate.into(),
                 num: num.into(),
                 den: den.into(),
-                factor: THOUSAND,
+                factor: self.family.spend_divisor(),
             },
         );
     }
@@ -332,6 +337,7 @@ fn model(
     quarters: &[&HistoricalContinuation],
     total: &WindowTotals,
 ) -> Result<Model> {
+    let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
     let mut bindings: Vec<_> = source_parents(i, quarters)
         .into_iter()
         .map(|c| format!("{}:{}", c.claim_id, c.value.canonical_tag()))
@@ -345,6 +351,7 @@ fn model(
         rules: xf::Rules::new(Convention::Closed)
             .with("guidance-quarter-replay", xf::Construction::RoundedOnce),
         binding: sha256(bindings.join("\n").as_bytes()).to_hex(),
+        family,
     };
     let mut productions = vec!["ytd.production".into()];
     let mut sales = Vec::new();
@@ -365,7 +372,10 @@ fn model(
             ("production", p.value.interval),
             ("sold", s.value.interval),
             ("rate", r.value.interval),
-            ("spend", exact(spend(s.value.interval, r.value.interval))?),
+            (
+                "spend",
+                exact(spend(s.value.interval, r.value.interval, family))?,
+            ),
         ] {
             m.variable(&format!("{prefix}.{suffix}"), range)?;
         }
@@ -400,7 +410,11 @@ fn model(
     m.variable(
         "annual.spend",
         exact(sum_ranges([
-            exact(spend(i.ytd_sold.value.interval, i.ytd_aisc.value.interval))?,
+            exact(spend(
+                i.ytd_sold.value.interval,
+                i.ytd_aisc.value.interval,
+                family,
+            ))?,
             total.aisc_spend_usd_m,
         ]))?,
     )?;
@@ -422,6 +436,7 @@ fn witness_from(
     quarters: &[&HistoricalContinuation],
     values: &BTreeMap<String, Rat>,
 ) -> Result<QuarterlyWitness> {
+    let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
     let get = |name: &str| {
         values
             .get(name)
@@ -436,18 +451,19 @@ fn witness_from(
         .zip((i.remaining_sold.value.period.first_month..=12).step_by(3))
     {
         let p = QuarterWitness {
+            family,
             source_period: q.production.value.period,
             replay_period: Period {
                 year: i.remaining_sold.value.period.year,
                 first_month,
                 last_month: first_month + 2,
             },
-            production_koz: get(&format!("q{n}.production"))?,
-            sold_koz: get(&format!("q{n}.sold"))?,
-            aisc_usd_per_oz: get(&format!("q{n}.rate"))?,
+            production: get(&format!("q{n}.production"))?,
+            sold: get(&format!("q{n}.sold"))?,
+            aisc: get(&format!("q{n}.rate"))?,
             spend_usd_m: get(&format!("q{n}.spend"))?,
         };
-        production = exact(production.checked_add(p.production_koz))?;
+        production = exact(production.checked_add(p.production))?;
         spend = exact(spend.checked_add(p.spend_usd_m))?;
         points.push(p);
     }
@@ -455,16 +471,17 @@ fn witness_from(
     Ok(QuarterlyWitness {
         quarters: points,
         completion: CompletionWitness {
-            ytd_production_koz: get("ytd.production")?,
-            remaining_production_koz: production,
-            ytd_sold_koz: get("ytd.sold")?,
-            remaining_sold_koz: sold,
-            ytd_aisc_usd_per_oz: get("ytd.rate")?,
-            remaining_aisc_usd_per_oz: exact(
-                exact(spend.checked_mul(THOUSAND))?.checked_div(sold),
+            family,
+            ytd_production: get("ytd.production")?,
+            remaining_production: production,
+            ytd_sold: get("ytd.sold")?,
+            remaining_sold: sold,
+            ytd_aisc: get("ytd.rate")?,
+            remaining_aisc: exact(
+                exact(spend.checked_mul(family.spend_divisor()))?.checked_div(sold),
             )?,
-            annual_production_koz: get("annual.production")?,
-            annual_aisc_usd_per_oz: get("annual.rate")?,
+            annual_production: get("annual.production")?,
+            annual_aisc: get("annual.rate")?,
             remaining_spend_usd_m: spend,
         },
     })
@@ -478,7 +495,8 @@ pub fn check_quarter_witness(
     w: &QuarterlyWitness,
 ) -> Result<bool> {
     let quarters = validate(i, h)?;
-    if w.quarters.len() != quarters.len() {
+    let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
+    if w.quarters.len() != quarters.len() || w.completion.family != family {
         return Ok(false);
     }
     exact((|| {
@@ -493,46 +511,43 @@ pub fn check_quarter_witness(
                 first_month,
                 last_month: first_month + 2,
             };
-            if point.source_period != q.production.value.period
+            if point.family != family
+                || point.source_period != q.production.value.period
                 || point.replay_period != replay
-                || !q.production.value.interval.contains(point.production_koz)?
-                || !q.sold.value.interval.contains(point.sold_koz)?
-                || !q.aisc.value.interval.contains(point.aisc_usd_per_oz)?
-                || point.spend_usd_m.checked_mul(THOUSAND)?
-                    != point.sold_koz.checked_mul(point.aisc_usd_per_oz)?
+                || !q.production.value.interval.contains(point.production)?
+                || !q.sold.value.interval.contains(point.sold)?
+                || !q.aisc.value.interval.contains(point.aisc)?
+                || point.spend_usd_m.checked_mul(family.spend_divisor())?
+                    != point.sold.checked_mul(point.aisc)?
             {
                 return Ok(false);
             }
-            p = p.checked_add(point.production_koz)?;
-            s = s.checked_add(point.sold_koz)?;
+            p = p.checked_add(point.production)?;
+            s = s.checked_add(point.sold)?;
             n = n.checked_add(point.spend_usd_m)?;
         }
         let c = &w.completion;
         for (range, value) in [
-            (i.ytd_production.value.interval, c.ytd_production_koz),
-            (i.ytd_sold.value.interval, c.ytd_sold_koz),
-            (i.ytd_aisc.value.interval, c.ytd_aisc_usd_per_oz),
-            (i.remaining_sold.value.interval, c.remaining_sold_koz),
-            (
-                i.production_guidance.value.interval,
-                c.annual_production_koz,
-            ),
-            (i.aisc_guidance.value.interval, c.annual_aisc_usd_per_oz),
+            (i.ytd_production.value.interval, c.ytd_production),
+            (i.ytd_sold.value.interval, c.ytd_sold),
+            (i.ytd_aisc.value.interval, c.ytd_aisc),
+            (i.remaining_sold.value.interval, c.remaining_sold),
+            (i.production_guidance.value.interval, c.annual_production),
+            (i.aisc_guidance.value.interval, c.annual_aisc),
         ] {
             if !range.contains(value)? {
                 return Ok(false);
             }
         }
-        Ok(c.remaining_production_koz == p
-            && c.remaining_sold_koz == s
+        Ok(c.remaining_production == p
+            && c.remaining_sold == s
             && c.remaining_spend_usd_m == n
-            && c.ytd_production_koz.checked_add(p)? == c.annual_production_koz
-            && c.remaining_aisc_usd_per_oz.checked_mul(s)? == n.checked_mul(THOUSAND)?
-            && c.annual_aisc_usd_per_oz
-                .checked_mul(c.ytd_sold_koz.checked_add(s)?)?
-                == c.ytd_aisc_usd_per_oz
-                    .checked_mul(c.ytd_sold_koz)?
-                    .checked_add(n.checked_mul(THOUSAND)?)?)
+            && c.ytd_production.checked_add(p)? == c.annual_production
+            && c.remaining_aisc.checked_mul(s)? == n.checked_mul(family.spend_divisor())?
+            && c.annual_aisc.checked_mul(c.ytd_sold.checked_add(s)?)?
+                == c.ytd_aisc
+                    .checked_mul(c.ytd_sold)?
+                    .checked_add(n.checked_mul(family.spend_divisor())?)?)
     })())
 }
 
@@ -633,7 +648,7 @@ fn compare_with_caps(
             if !check_quarter_witness(i, h, &witness)? {
                 return Err(certificate_error("original-quarter witness check failed"));
             }
-            let mut enc = Encoder::new_frame(*b"GQWP", 1);
+            let mut enc = Encoder::new_frame(*b"GQWP", witness.completion.family.frame_version());
             enc.put_str(&witness.completion.canonical_tag(&h.id));
             for q in &witness.quarters {
                 for period in [q.source_period, q.replay_period] {
@@ -641,12 +656,7 @@ fn compare_with_caps(
                     enc.put_u8(period.first_month);
                     enc.put_u8(period.last_month);
                 }
-                for v in [
-                    q.production_koz,
-                    q.sold_koz,
-                    q.aisc_usd_per_oz,
-                    q.spend_usd_m,
-                ] {
+                for v in [q.production, q.sold, q.aisc, q.spend_usd_m] {
                     put_rat(&mut enc, v);
                 }
             }
@@ -707,7 +717,10 @@ mod tests {
             period,
             ownership: Ownership::Full,
             kind,
-            definition: if kind == QuantityKind::AiscUsdPerSoldOz {
+            definition: if matches!(
+                kind,
+                QuantityKind::AiscUsdPerSoldOz | QuantityKind::AiscUsdPerSoldLb
+            ) {
                 "invented/sold".into()
             } else {
                 String::new()
@@ -770,6 +783,118 @@ mod tests {
         }
     }
 
+    fn copper_case() -> (CompletionInputs, QuarterlyHistory) {
+        let i = CompletionInputs {
+            production_guidance: claim(QuantityKind::ProductionKt, p(2026, 1, 12), 110, 110),
+            aisc_guidance: claim(QuantityKind::AiscUsdPerSoldLb, p(2026, 1, 12), 3, 3),
+            ytd_production: claim(QuantityKind::ProductionKt, p(2026, 1, 6), 40, 40),
+            ytd_sold: claim(QuantityKind::SoldMillionLb, p(2026, 1, 6), 80, 80),
+            ytd_aisc: claim(QuantityKind::AiscUsdPerSoldLb, p(2026, 1, 6), 4, 4),
+            remaining_sold: claim(QuantityKind::SoldMillionLb, p(2026, 7, 12), 100, 100),
+        };
+        let quarters = [(7, 30, 80, 2), (10, 40, 20, 3)]
+            .into_iter()
+            .map(|(month, production, sold, aisc)| {
+                let period = p(2025, month, month + 2);
+                HistoricalContinuation {
+                    id: format!("synthetic-copper-{month}"),
+                    production: claim(QuantityKind::ProductionKt, period, production, production),
+                    sold: claim(QuantityKind::SoldMillionLb, period, sold, sold),
+                    aisc: claim(QuantityKind::AiscUsdPerSoldLb, period, aisc, aisc),
+                }
+            })
+            .collect();
+        (
+            i,
+            QuarterlyHistory {
+                id: "synthetic-copper-window".into(),
+                quarters,
+            },
+        )
+    }
+
+    #[test]
+    fn copper_quarters_keep_original_pound_costs_and_joint_witness_units() {
+        let (i, h) = copper_case();
+        let report = compare_quarters(&i, std::slice::from_ref(&h)).unwrap();
+        assert_eq!(report.verdict, HistoryVerdict::WithinEnvelope);
+        let check = &report.checks[0];
+        let totals = &check.totals.value;
+        assert_eq!(totals.family, GuidanceFamily::Copper);
+        assert_eq!(totals.production, point(n(70)));
+        assert_eq!(totals.sold, point(n(100)));
+        assert_eq!(totals.aisc, point(Rat::new(11, 5).unwrap()));
+        assert_eq!(totals.aisc_spend_usd_m, point(n(220)));
+        let w = &check.witness.as_ref().unwrap().value;
+        // Independent source equations: 80 Mlb * USD2/lb = USD160m; 20*3 = USD60m.
+        // Adding YTD 80*4 = USD320m gives annual 540/180 = USD3/lb.
+        assert_eq!(w.completion.family, GuidanceFamily::Copper);
+        assert_eq!(w.completion.annual_production, n(110));
+        assert_eq!(w.completion.annual_aisc, n(3));
+        assert_eq!(w.completion.remaining_spend_usd_m, n(220));
+        assert_eq!(w.quarters[0].spend_usd_m, n(160));
+        assert_eq!(w.quarters[1].spend_usd_m, n(60));
+        assert!(
+            w.quarters
+                .iter()
+                .all(|q| q.family == GuidanceFamily::Copper)
+        );
+        assert!(check_quarter_witness(&i, &h, w).unwrap());
+        let mut forged = w.clone();
+        forged.quarters[0].spend_usd_m = Rat::new(160, 1000).unwrap();
+        assert!(!check_quarter_witness(&i, &h, &forged).unwrap());
+        let mut forged = w.clone();
+        forged.quarters[0].family = GuidanceFamily::Gold;
+        assert!(!check_quarter_witness(&i, &h, &forged).unwrap());
+        let mut forged = w.clone();
+        forged.completion.family = GuidanceFamily::Gold;
+        assert!(!check_quarter_witness(&i, &h, &forged).unwrap());
+
+        let mut reversed = h.clone();
+        reversed.quarters.reverse();
+        assert_eq!(report, compare_quarters(&i, &[reversed]).unwrap());
+        let mut mixed = h;
+        mixed.quarters[0].sold.value.kind = QuantityKind::SoldKoz;
+        assert_eq!(
+            compare_quarters(&i, &[mixed]).unwrap_err().code,
+            "FMINE-REF-105"
+        );
+    }
+
+    #[test]
+    fn copper_marginal_rate_sales_boxes_do_not_override_original_quarter_constraints() {
+        let (mut i, mut h) = copper_case();
+        i.ytd_sold.value.interval = point(ONE);
+        i.ytd_aisc.value.interval = point(n(4));
+        i.remaining_sold.value.interval = point(n(2));
+        i.aisc_guidance.value.interval = point(n(4));
+        for (q, rate) in h.quarters.iter_mut().zip([2, 8]) {
+            q.sold.value.interval = closed(ONE, n(2));
+            q.aisc.value.interval = point(n(rate));
+        }
+        let total = aggregate_quarters(&i, &h).unwrap();
+        assert_eq!(total.value.sold, closed(n(2), n(4)));
+        assert_eq!(total.value.aisc, closed(n(4), n(6)));
+        let independent_boxes = HistoricalContinuation {
+            id: "copper-independent-marginal-boxes".into(),
+            production: claim(QuantityKind::ProductionKt, p(2025, 7, 12), 70, 70),
+            sold: claim(QuantityKind::SoldMillionLb, p(2025, 7, 12), 2, 4),
+            aisc: claim(QuantityKind::AiscUsdPerSoldLb, p(2025, 7, 12), 4, 6),
+        };
+        assert_eq!(
+            compare_history(&i, &[independent_boxes]).unwrap().verdict,
+            HistoryVerdict::WithinEnvelope
+        );
+        // At total sales 2 both quarters must sell 1. Their spend is 2+8=10, so annual
+        // AISC is (4+10)/(1+2)=14/3; no original-quarter witness can meet the target 4.
+        let report = compare_quarters(&i, &[h]).unwrap();
+        assert_eq!(report.verdict, HistoryVerdict::ExceedsEnvelope);
+        assert_eq!(report.checks[0].production_possible, Some(true));
+        assert_eq!(report.checks[0].cost_possible, Some(false));
+        assert!(report.checks[0].witness.is_none());
+        assert_eq!(report.checks[0].certificates.len(), 1);
+    }
+
     #[test]
     fn quarter_witness_reaches_both_targets_and_checks_every_original_source() {
         let (i, h) = (inputs(), history());
@@ -784,7 +909,7 @@ mod tests {
             (c.production_possible, c.cost_possible),
             (Some(true), Some(true))
         );
-        assert_eq!(c.totals.value.aisc_usd_per_oz, point(n(100)));
+        assert_eq!(c.totals.value.aisc, point(n(100)));
         assert_eq!(c.totals.value.aisc_spend_usd_m, point(n(10)));
         let w = c.witness.as_ref().unwrap();
         assert_eq!(w.evidence, EvidenceClass::Assumed);
@@ -794,8 +919,8 @@ mod tests {
         assert_eq!(w.value.quarters[1].spend_usd_m, n(6));
         assert_eq!(w.value.quarters[0].source_period, p(2024, 7, 9));
         assert_eq!(w.value.quarters[0].replay_period, p(2026, 7, 9));
-        assert_eq!(w.value.completion.annual_production_koz, n(200));
-        assert_eq!(w.value.completion.annual_aisc_usd_per_oz, n(100));
+        assert_eq!(w.value.completion.annual_production, n(200));
+        assert_eq!(w.value.completion.annual_aisc, n(100));
         assert!(check_quarter_witness(&i, &h, &w.value).unwrap());
         let mut corrupt = w.value.clone();
         corrupt.quarters[0].spend_usd_m = n(5);
@@ -821,8 +946,8 @@ mod tests {
             q.aisc.value.interval = point(n(rate));
         }
         let total = aggregate_quarters(&i, &h).unwrap();
-        assert_eq!(total.value.sold_koz, closed(n(2), n(4)));
-        assert_eq!(total.value.aisc_usd_per_oz, closed(n(40), n(70)));
+        assert_eq!(total.value.sold, closed(n(2), n(4)));
+        assert_eq!(total.value.aisc, closed(n(40), n(70)));
         // An independently supplied aggregate box admits sales=2/rate=40. But source sales=2 forces
         // each quarter's sales to 1 and the true remaining rate to 55. The quarter model retains that link.
         let box_only = HistoricalContinuation {

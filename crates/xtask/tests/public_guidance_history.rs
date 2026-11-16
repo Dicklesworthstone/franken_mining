@@ -112,8 +112,8 @@ mod tests {
         let check = &report.history.checks[0];
         assert_eq!(check.id, "2029Q3..2029Q4");
         assert!(check.same_season);
-        assert_eq!(check.totals.value.production_koz.lo, Rat::from_integer(139));
-        assert_eq!(check.totals.value.production_koz.hi, Rat::from_integer(141));
+        assert_eq!(check.totals.value.production.lo, Rat::from_integer(139));
+        assert_eq!(check.totals.value.production.hi, Rat::from_integer(141));
         let w = check.witness.as_ref().unwrap();
         assert_eq!(w.evidence, EvidenceClass::Assumed);
         let original = quarters::QuarterlyHistory {

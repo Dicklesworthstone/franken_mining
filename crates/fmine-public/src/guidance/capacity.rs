@@ -343,6 +343,14 @@ pub(super) fn assess(
     as_of: &str,
     synthetic: bool,
 ) -> TechnicalAssessment {
+    if required.value.kind != QuantityKind::ProductionKoz {
+        return TechnicalAssessment::Indeterminate {
+            reason: refuse(
+                RefusalCode::NoClaimInDomain201,
+                "copper technical production scenarios are unavailable in this version; the gold grade/ounce capacity model cannot establish a copper limit",
+            ),
+        };
+    }
     let result = source
         .and_then(|report| {
             report.ok_or_else(|| {

@@ -556,6 +556,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     with optional `--capacity-document <registered file>`, or `--synthetic`:
     cited remaining-production and AISC requirements plus joint historical-window comparisons under an explicit
     historical-sales scenario, in JSON or readable `--format markdown` (BD-342);
+    gold displays koz and USD per sold oz; copper displays production kt, sales million lb and USD per sold lb,
+    including correctly labelled original-quarter witnesses. Source-declared copper sales in kt retain their
+    exact conversion and source ancestry. Copper technical capacity stays T3/indeterminate, and explicitly
+    selected gold capacity documents refuse copper rather than applying a gold grade/ounce model;
   - `track-record --issuer <issuer> [--site <site>] [--through YYYYQn | --as-of YYYY-MM-DD] [--price-subject <subject>]` or `--synthetic`: cited issuer
     guidance against first-published annual outcomes, with separate comparative assessments, retained missing
     members, exact descriptive scores and JSON or readable Markdown output (BD-341);

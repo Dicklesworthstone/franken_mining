@@ -133,6 +133,14 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`cutoff::source`.** Cut-off declarations from the table registry, agreed point readings from one registered `technical_report`, and the document metadata. The caller authenticates the document bytes and complete reader agreement.
 - **`lmdi`.** Two `LmdiState` periods of bare `f64`, or two `WaterfallPeriod`s. A `WaterfallPeriod` holds `PrintedQty { value, half_step, at }` cells (an exact value, half its last printed digit, and a source locator), `Factor::Value` or `Factor::NotPublished`, and a `BasisTag`.
 - **`guidance`.** `CompletionInputs`: six `Claim<Quantity>`, for the production and AISC guidance, the YTD production, sales and AISC, and a separately declared remaining-sales scenario. `compare_history` takes `HistoricalContinuation`s; `quarters::compare_quarters` takes `QuarterlyHistory` windows.
+  DESIGN (BD-342): `GuidanceFamily` fixes gold production/sales in koz and AISC USD per sold oz, or copper
+  production in kt, sales in million lb and AISC USD per sold lb. Production never supplies sales.
+  Gold rate times sold divides by 1000 to yield USD millions; copper rate times million lb already yields
+  USD millions. Historical quarter constraints and independently checked witnesses retain the same family
+  and conversion. Mixed families, inconsistent definitions/ownership and nonpositive sales/rate bounds
+  refuse; computed signed requirements remain signed. Generic witness/totals fields carry explicit family
+  metadata. Gold canonical bytes retain their v1 layouts; copper quantities have distinct kind tags and
+  witness/total frames use v2. Known answers live in `guidance::tests` and `guidance::quarters::tests`.
 - **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
 - **`recovery`.** `TrainingRow`s and an `OperatingRow` of `Claim<recovery::Quantity>`, in percent and kt units.
   DESIGN (bd-srqc): `recovery::sensitivity` accepts a canonical quarterly `Claim<ModelProjection>`

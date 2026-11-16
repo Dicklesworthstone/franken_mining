@@ -6,7 +6,9 @@ use std::fmt::Write as _;
 use fmine_claim::Claim;
 use fmine_core::Digest32;
 use fmine_metrics::capacity::{CapacityVerdict, PhysicalLimit};
-use fmine_metrics::guidance::{EnvelopeTier, HistoryVerdict, Ownership, Period, Quantity};
+use fmine_metrics::guidance::{
+    EnvelopeTier, HistoryVerdict, Ownership, Period, Quantity, QuantityKind,
+};
 use fmine_numerics::exact_feas::{Interval, Rat};
 use fmine_public::guidance::capacity::{TechnicalAssessment, TechnicalScenarioKind};
 use fmine_public::guidance::{GuidanceCompletionReport, NO_CLAIM};
@@ -72,6 +74,17 @@ fn possibility(value: Option<bool>) -> &'static str {
         Some(true) => "Yes",
         Some(false) => "No",
         None => "Indeterminate",
+    }
+}
+
+fn quantity_unit(kind: QuantityKind) -> &'static str {
+    match kind {
+        QuantityKind::ProductionKoz | QuantityKind::SoldKoz => "koz",
+        QuantityKind::ProductionKt => "kt",
+        QuantityKind::SoldMillionLb => "million lb",
+        QuantityKind::AiscUsdPerSoldOz => "USD per sold oz",
+        QuantityKind::AiscUsdPerSoldLb => "USD per sold lb",
+        QuantityKind::AiscSpendUsdMillion => "USD million",
     }
 }
 
@@ -201,6 +214,14 @@ fn render_inner(
         NO_CLAIM
     };
     let inputs = &report.inputs;
+    let production_unit = quantity_unit(inputs.production_guidance.value.kind);
+    let sold_unit = quantity_unit(inputs.remaining_sold.value.kind);
+    let rate_unit = quantity_unit(inputs.aisc_guidance.value.kind);
+    let sold_metal = if inputs.remaining_sold.value.kind == QuantityKind::SoldMillionLb {
+        "sold copper in millions of pounds"
+    } else {
+        "sold ounces"
+    };
     let tier = match report.history.tier {
         EnvelopeTier::T1 => "T1 — finite historical windows",
         EnvelopeTier::T3 => "T3 — historical joint comparison unavailable",
@@ -224,7 +245,7 @@ fn render_inner(
     };
     let mut out = format!(
         "# Guidance completion: {}\n\n{}\n\n{}\n\n**{tier}.** {verdict}\n\n{}; remaining support: {}.\n\n\
-         **Sales assumption:** repeat the preceding year's FY-minus-YTD sold ounces for the remaining months. \
+         **Sales assumption:** repeat the preceding year's FY-minus-YTD {sold_metal} for the remaining months. \
          This assumption remains separate from production. Every historical comparison is conditional on that sales interval.\n\n\
          Report BLAKE3: `{}`. No forecast registration or ledger certificate is created.\n\n\
          ## Requirements\n\n| Quantity | Exact bounds | Evidence | Claim |\n|---|---|---|---|\n",
@@ -235,30 +256,23 @@ fn render_inner(
         period(inputs.remaining_sold.value.period),
         report.digest.to_hex()
     );
-    for (name, claim, unit) in [
+    for (name, claim) in [
         (
             "Remaining production",
             &report.completion.remaining_production,
-            "koz",
         ),
-        ("Assumed remaining sales", &inputs.remaining_sold, "koz"),
-        (
-            "YTD AISC spending",
-            &report.completion.ytd_aisc_spend,
-            "USD million",
-        ),
+        ("Assumed remaining sales", &inputs.remaining_sold),
+        ("YTD AISC spending", &report.completion.ytd_aisc_spend),
         (
             "Required remaining AISC spending",
             &report.completion.remaining_aisc_spend,
-            "USD million",
         ),
         (
             "Required remaining AISC",
             &report.completion.remaining_aisc_rate,
-            "USD per sold oz",
         ),
     ] {
-        row(&mut out, name, claim, unit);
+        row(&mut out, name, claim, quantity_unit(claim.value.kind));
     }
     out.push_str("\nClosed bounds retain printed rounding uncertainty. Approximate decimal displays are marked ≈; the accompanying fractions remain exact. Signed requirements are retained. The Evidence column preserves the weakest input evidence; it does not mean the issuer asserted the computed requirement or the replay assumption.\n\n");
     technical(&mut out, &report.technical);
@@ -288,10 +302,10 @@ fn render_inner(
                 let value = &witness.value;
                 let _ = writeln!(
                     out,
-                    "### Checked replay: {}\n\nAnnual production: {} koz; annual AISC: {} USD per sold oz.\n\n| Original support | Hypothetical replay | Production (koz) | Sales (koz) | AISC (USD per sold oz) |\n|---|---|---|---|---|",
+                    "### Checked replay: {}\n\nAnnual production: {} {production_unit}; annual AISC: {} {rate_unit}.\n\n| Original support | Hypothetical replay | Production ({production_unit}) | Sales ({sold_unit}) | AISC ({rate_unit}) |\n|---|---|---|---|---|",
                     text(&check.id),
-                    number(value.completion.annual_production_koz),
-                    number(value.completion.annual_aisc_usd_per_oz)
+                    number(value.completion.annual_production),
+                    number(value.completion.annual_aisc)
                 );
                 for quarter in &value.quarters {
                     let _ = writeln!(
@@ -299,9 +313,9 @@ fn render_inner(
                         "| {} | {} | {} | {} | {} |",
                         period(quarter.source_period),
                         period(quarter.replay_period),
-                        number(quarter.production_koz),
-                        number(quarter.sold_koz),
-                        number(quarter.aisc_usd_per_oz)
+                        number(quarter.production),
+                        number(quarter.sold),
+                        number(quarter.aisc)
                     );
                 }
                 out.push('\n');
@@ -322,22 +336,14 @@ fn render_inner(
         out.push('\n');
     }
     out.push_str("## Guidance and actuals\n\n| Quantity | Exact bounds | Evidence | Claim |\n|---|---|---|---|\n");
-    for (name, claim, unit) in [
-        (
-            "Annual production guidance",
-            &inputs.production_guidance,
-            "koz",
-        ),
-        (
-            "Annual AISC guidance",
-            &inputs.aisc_guidance,
-            "USD per sold oz",
-        ),
-        ("YTD production", &inputs.ytd_production, "koz"),
-        ("YTD sales", &inputs.ytd_sold, "koz"),
-        ("YTD AISC", &inputs.ytd_aisc, "USD per sold oz"),
+    for (name, claim) in [
+        ("Annual production guidance", &inputs.production_guidance),
+        ("Annual AISC guidance", &inputs.aisc_guidance),
+        ("YTD production", &inputs.ytd_production),
+        ("YTD sales", &inputs.ytd_sold),
+        ("YTD AISC", &inputs.ytd_aisc),
     ] {
-        row(&mut out, name, claim, unit);
+        row(&mut out, name, claim, quantity_unit(claim.value.kind));
     }
     let mut anchors = BTreeSet::new();
     for claim in [

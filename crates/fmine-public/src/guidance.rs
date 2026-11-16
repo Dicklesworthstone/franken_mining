@@ -1,9 +1,12 @@
 //! Public guidance completion (BD-342): source selection for the exact metric kernel.
 //!
-//! DESIGN: accepted two-reader quantities are `guidance_<site>_production_koz` and
-//! `guidance_<site>_aisc_usd_per_oz`, with hyphens in the site key replaced by underscores, period `YYYYFY`,
-//! and units `koz` / `usd_per_oz`. Basis is `100%` or `attributable:n/d`; the AISC basis additionally ends in
-//! `;aisc=issuer-reported-per-sold-oz`. That explicit assertion compares the issuer's reported metric, never
+//! DESIGN: accepted two-reader quantities pair `guidance_<site>_production_koz` with
+//! `guidance_<site>_aisc_usd_per_oz` for gold, or `production_kt` with `aisc_usd_per_lb` for copper.
+//! Hyphens in the site key become underscores; period is `YYYYFY`. Basis is `100%` or `attributable:n/d`;
+//! AISC additionally declares `;aisc=issuer-reported-per-sold-oz` or `-lb`. Copper sales use an explicit
+//! million-pound row or a source-bound exact conversion of a declared kt sales row; production is never
+//! substituted for sales. The assertion compares
+//! the issuer's reported metric, never
 //! an adjusted metric or an inferred WGC definition. Guidance limits are exact; actual cells use closed
 //! half-last-place rounding intervals. Source publication dates are not guessed from workbook quarters.
 //!
@@ -26,7 +29,8 @@ use fmine_evidence::{
     EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
 use fmine_metrics::guidance::{
-    self as kernel, CompletionInputs, CompletionReport, Ownership, Period, Quantity, QuantityKind,
+    self as kernel, CompletionInputs, CompletionReport, GuidanceFamily, Ownership, Period,
+    Quantity, QuantityKind,
 };
 use fmine_numerics::exact_feas::{Convention, Interval, Rat};
 use fmine_registry::sources::{is_date, is_quarter};
@@ -45,6 +49,13 @@ pub mod history;
 pub mod track_record;
 
 const COST_BASIS: &str = "issuer-reported-per-sold-oz";
+const COPPER_SALES: [&str; 2] = [
+    "site::sales (millions of pounds)",
+    "site::sales (thousands of tonnes)",
+];
+const COPPER_SALES_RULE: &str = "guidance.copper-sales.kt-to-million-lb/1";
+const COPPER_SALES_DEFINITION: &str =
+    "Exact mass conversion: kt * 100000000/45359237 = million lb (international avoirdupois pound)";
 pub const NO_CLAIM: &str = "Arithmetic and finite historical-window comparisons under a declared sales assumption; no forecast, probability of meeting guidance, mine-wide physical-capacity conclusion or regulatory claim.";
 
 type Result<T> = std::result::Result<T, Refusal>;
@@ -206,12 +217,67 @@ fn site_key(subject: &str) -> String {
         .join("-")
 }
 
-fn guidance_quantities(site: &str) -> [String; 2] {
+fn family_quantities(site: &str, family: GuidanceFamily) -> [String; 2] {
     let stem = format!("guidance_{}", site.replace('-', "_"));
-    [
-        format!("{stem}_production_koz"),
-        format!("{stem}_aisc_usd_per_oz"),
-    ]
+    let suffixes = match family {
+        GuidanceFamily::Gold => ["production_koz", "aisc_usd_per_oz"],
+        GuidanceFamily::Copper => ["production_kt", "aisc_usd_per_lb"],
+    };
+    suffixes.map(|suffix| format!("{stem}_{suffix}"))
+}
+
+fn guidance_quantities(site: &str) -> Vec<String> {
+    [GuidanceFamily::Gold, GuidanceFamily::Copper]
+        .into_iter()
+        .flat_map(|family| family_quantities(site, family))
+        .collect()
+}
+
+fn rate_definition(kind: QuantityKind) -> Option<&'static str> {
+    match kind {
+        QuantityKind::AiscUsdPerSoldOz => Some(COST_BASIS),
+        QuantityKind::AiscUsdPerSoldLb => Some("issuer-reported-per-sold-lb"),
+        _ => None,
+    }
+}
+
+fn quantity_unit(kind: QuantityKind) -> &'static str {
+    match kind {
+        QuantityKind::ProductionKoz | QuantityKind::SoldKoz => "koz",
+        QuantityKind::ProductionKt => "kt",
+        QuantityKind::SoldMillionLb => "Mlb",
+        QuantityKind::AiscUsdPerSoldOz => "usd_per_oz",
+        QuantityKind::AiscUsdPerSoldLb => "usd_per_lb",
+        QuantityKind::AiscSpendUsdMillion => "usd_m",
+    }
+}
+
+fn source_lines(family: GuidanceFamily, ownership: Ownership) -> [&'static str; 2] {
+    match family {
+        GuidanceFamily::Gold => [
+            if ownership == Ownership::Full {
+                "summary:au_prod_100_koz"
+            } else {
+                "summary:au_prod_attr_koz"
+            },
+            "summary:aisc_usd_per_oz",
+        ],
+        GuidanceFamily::Copper => [
+            if ownership == Ownership::Full {
+                "summary:cu_prod_100_kt"
+            } else {
+                "summary:cu_prod_attr_kt"
+            },
+            "summary:aisc_usd_per_lb",
+        ],
+    }
+}
+
+fn sales_lines(family: GuidanceFamily) -> &'static [&'static str] {
+    match family {
+        GuidanceFamily::Gold => &["summary:au_sold_attr_koz"],
+        GuidanceFamily::Copper => &COPPER_SALES,
+    }
 }
 
 fn guidance_rows<'a>(
@@ -219,7 +285,7 @@ fn guidance_rows<'a>(
     site: &str,
     year: u16,
     as_of: &str,
-) -> Result<([&'a Accepted; 2], &'a CheckedDocument)> {
+) -> Result<([&'a Accepted; 2], &'a CheckedDocument, GuidanceFamily)> {
     let keys = guidance_quantities(site);
     let period = format!("{year}FY");
     if !report.agreement.is_consistent() {
@@ -273,6 +339,23 @@ fn guidance_rows<'a>(
         ));
     };
     let doc = *doc;
+    let families: Vec<_> = [GuidanceFamily::Gold, GuidanceFamily::Copper]
+        .into_iter()
+        .filter(|family| {
+            let keys = family_quantities(site, *family);
+            report.agreement.accepted.iter().any(|a| {
+                a.locator.doc == doc.file && a.period == period && keys.contains(&a.quantity)
+            })
+        })
+        .collect();
+    let [family] = families.as_slice() else {
+        return Err(refuse(
+            RefusalCode::NonIdentifiableAttribution104,
+            "latest guidance must identify one gold or copper production/AISC family",
+        ));
+    };
+    let family = *family;
+    let keys = family_quantities(site, family);
     let row = |key: &str| -> Result<&Accepted> {
         let rows: Vec<_> = report
             .agreement
@@ -300,7 +383,7 @@ fn guidance_rows<'a>(
         }
         Ok(*a)
     };
-    Ok(([row(&keys[0])?, row(&keys[1])?], doc))
+    Ok(([row(&keys[0])?, row(&keys[1])?], doc, family))
 }
 
 fn sha_bytes(hex: &str) -> Result<[u8; 32]> {
@@ -332,7 +415,7 @@ fn quantity_claim(
     parents: Vec<fmine_claim::ClaimId>,
     anchors: Vec<SourceAnchor>,
 ) -> Claim<Quantity> {
-    let additivity = if value.kind == QuantityKind::AiscUsdPerSoldOz {
+    let additivity = if rate_definition(value.kind).is_some() {
         AdditivityClass::IntensiveWeighted
     } else {
         AdditivityClass::ExtensiveAdditive
@@ -371,28 +454,21 @@ fn guidance_claim(
             ),
         ));
     }
-    let (basis, definition) = if kind == QuantityKind::AiscUsdPerSoldOz {
+    let (basis, definition) = if let Some(definition) = rate_definition(kind) {
         let basis = a
             .basis
-            .strip_suffix(&format!(";aisc={COST_BASIS}"))
+            .strip_suffix(&format!(";aisc={definition}"))
             .ok_or_else(|| {
                 refuse(
                     RefusalCode::UndeclaredUnitBasisOrTz107,
-                    format!(
-                        "{} must explicitly match the issuer-reported AISC per sold ounce",
-                        a.locator
-                    ),
+                    format!("{} must explicitly match {definition}", a.locator),
                 )
             })?;
-        (basis, COST_BASIS)
+        (basis, definition)
     } else {
         (a.basis.as_str(), "")
     };
-    let expected_unit = if kind == QuantityKind::ProductionKoz {
-        "koz"
-    } else {
-        "usd_per_oz"
-    };
+    let expected_unit = quantity_unit(kind);
     if a.unit != expected_unit {
         return Err(refuse(
             RefusalCode::BasisMismatch105,
@@ -437,16 +513,27 @@ fn select_cell<'a>(
     period: &str,
     line: &str,
 ) -> Result<&'a KeyedCell> {
+    select_lines(cells, subject, release, period, &[line])
+}
+
+fn select_lines<'a>(
+    cells: &'a [KeyedCell],
+    subject: &str,
+    release: &str,
+    period: &str,
+    lines: &[&str],
+) -> Result<&'a KeyedCell> {
     let matches: Vec<_> = cells
         .iter()
         .filter(|c| {
             c.key.subject == subject
                 && c.key.reporting_vintage.release == release
                 && c.key.valid_period.code() == period
-                && c.key.line.label == line
+                && lines.contains(&c.key.line.label.as_str())
                 && matches!(c.key.scope, Scope::Site)
         })
         .collect();
+    let line = lines.join(" or ");
     match matches.as_slice() {
         [one] => Ok(one),
         [] => Err(refuse(
@@ -501,7 +588,7 @@ fn actual_claim(c: &KeyedCell, kind: QuantityKind) -> Result<Claim<Quantity>> {
             "actual needs period-aggregate support",
         ));
     }
-    let additivity = if kind == QuantityKind::AiscUsdPerSoldOz {
+    let additivity = if rate_definition(kind).is_some() {
         AdditivityClass::IntensiveWeighted
     } else {
         AdditivityClass::ExtensiveAdditive
@@ -550,12 +637,15 @@ fn actual_claim(c: &KeyedCell, kind: QuantityKind) -> Result<Claim<Quantity>> {
             ),
         ));
     };
-    let unit = if kind == QuantityKind::AiscUsdPerSoldOz {
-        "usd_per_oz"
-    } else {
-        "koz"
-    };
-    if c.key.unit != unit {
+    let unit = quantity_unit(kind);
+    let convert_copper_sales = kind == QuantityKind::SoldMillionLb
+        && c.key.line.label == COPPER_SALES[1]
+        && c.key.unit == "kt";
+    if (c.key.unit != unit && !convert_copper_sales)
+        || (kind == QuantityKind::SoldMillionLb
+            && !convert_copper_sales
+            && c.key.line.label != COPPER_SALES[0])
+    {
         return Err(refuse(
             RefusalCode::BasisMismatch105,
             format!("{}: expected {unit}, found {}", c.locator, c.key.unit),
@@ -567,9 +657,24 @@ fn actual_claim(c: &KeyedCell, kind: QuantityKind) -> Result<Claim<Quantity>> {
             format!("{}: {e}", c.locator),
         )
     })?;
+    let mut interval = token_interval(token, true)?;
+    if convert_copper_sales {
+        // One kt is 10^9 grams; divide by the statutory grams/lb and by 10^6 for million lb.
+        // Scale both displayed half-step endpoints before any FY/YTD subtraction or cost product.
+        let factor = exact(Rat::new(
+            1000 * fmine_units::AVDP_LB_TO_GRAMS_DEN,
+            fmine_units::AVDP_LB_TO_GRAMS_NUM,
+        ))?;
+        interval.lo = exact(interval.lo.checked_mul(factor))?;
+        interval.hi = exact(interval.hi.checked_mul(factor))?;
+    }
     let ((year, first_month), (_, last_month)) = c.key.valid_period.months();
     Ok(quantity_claim(
-        &c.key.line.label,
+        if convert_copper_sales {
+            COPPER_SALES_RULE
+        } else {
+            &c.key.line.label
+        },
         Quantity {
             subject: c.key.subject.clone(),
             period: Period {
@@ -579,14 +684,19 @@ fn actual_claim(c: &KeyedCell, kind: QuantityKind) -> Result<Claim<Quantity>> {
             },
             ownership: cell_ownership(c.key.ownership_basis)?,
             kind,
-            definition: if kind == QuantityKind::AiscUsdPerSoldOz {
-                COST_BASIS.into()
+            definition: if convert_copper_sales {
+                COPPER_SALES_DEFINITION
             } else {
-                String::new()
-            },
-            interval: token_interval(token, true)?,
+                rate_definition(kind).unwrap_or("")
+            }
+            .into(),
+            interval,
         },
-        c.claim.evidence,
+        if convert_copper_sales {
+            c.claim.evidence.meet(EvidenceClass::Derived)
+        } else {
+            c.claim.evidence
+        },
         c.claim.epistemic,
         c.claim.state,
         c.claim.uu_terms.clone(),
@@ -637,48 +747,39 @@ fn assemble(
             ));
         }
     };
-    let (guidance, doc) = guidance_rows(transcripts, site, year, as_of)?;
+    let (guidance, doc, family) = guidance_rows(transcripts, site, year, as_of)?;
     let production_guidance = guidance_claim(
         guidance[0],
         subject,
         year,
-        QuantityKind::ProductionKoz,
+        family.production_kind(),
         synthetic,
     )?;
-    let aisc_guidance = guidance_claim(
-        guidance[1],
-        subject,
-        year,
-        QuantityKind::AiscUsdPerSoldOz,
-        synthetic,
-    )?;
-    let prod_line = if production_guidance.value.ownership == Ownership::Full {
-        "summary:au_prod_100_koz"
-    } else {
-        "summary:au_prod_attr_koz"
-    };
+    let aisc_guidance = guidance_claim(guidance[1], subject, year, family.rate_kind(), synthetic)?;
+    let [prod_line, rate_line] = source_lines(family, production_guidance.value.ownership);
+    let sold_lines = sales_lines(family);
     let ytd = period_code(year, months);
     let production = select_cell(cells, subject, through, &ytd, prod_line)?;
-    let sold = select_cell(cells, subject, through, &ytd, "summary:au_sold_attr_koz")?;
-    let aisc = select_cell(cells, subject, through, &ytd, "summary:aisc_usd_per_oz")?;
+    let sold = select_lines(cells, subject, through, &ytd, sold_lines)?;
+    let aisc = select_cell(cells, subject, through, &ytd, rate_line)?;
     let prior = year - 1;
-    let historic_ytd = select_cell(
+    let historic_ytd = select_lines(
         cells,
         subject,
         &format!("{prior}Q{}", months / 3),
         &period_code(prior, months),
-        "summary:au_sold_attr_koz",
+        sold_lines,
     )?;
-    let historic_fy = select_cell(
+    let historic_fy = select_lines(
         cells,
         subject,
         &format!("{prior}Q4"),
         &format!("{prior}FY"),
-        "summary:au_sold_attr_koz",
+        sold_lines,
     )?;
     let (fy, hytd) = (
-        actual_claim(historic_fy, QuantityKind::SoldKoz)?,
-        actual_claim(historic_ytd, QuantityKind::SoldKoz)?,
+        actual_claim(historic_fy, family.sold_kind())?,
+        actual_claim(historic_ytd, family.sold_kind())?,
     );
     if fy.value.ownership != hytd.value.ownership
         || fy.value.ownership != production_guidance.value.ownership
@@ -706,7 +807,7 @@ fn assemble(
                 last_month: 12,
             },
             ownership: fy.value.ownership,
-            kind: QuantityKind::SoldKoz,
+            kind: family.sold_kind(),
             definition: String::new(),
             interval: bounds(
                 exact(fy.value.interval.lo.checked_sub(hytd.value.interval.hi))?,
@@ -725,9 +826,9 @@ fn assemble(
     let inputs = CompletionInputs {
         production_guidance,
         aisc_guidance,
-        ytd_production: actual_claim(production, QuantityKind::ProductionKoz)?,
-        ytd_sold: actual_claim(sold, QuantityKind::SoldKoz)?,
-        ytd_aisc: actual_claim(aisc, QuantityKind::AiscUsdPerSoldOz)?,
+        ytd_production: actual_claim(production, family.production_kind())?,
+        ytd_sold: actual_claim(sold, family.sold_kind())?,
+        ytd_aisc: actual_claim(aisc, family.rate_kind())?,
         remaining_sold,
     };
     let completion = kernel::complete(&inputs)?;
@@ -759,8 +860,16 @@ fn assemble(
         })
         .collect::<Vec<_>>()
         .join(",");
+    let sales_scenario = match family {
+        GuidanceFamily::Gold => {
+            "ASSUMPTION: repeat preceding-year FY-minus-YTD sold ounces, using that year's corresponding registered releases; not a forecast"
+        }
+        GuidanceFamily::Copper => {
+            "ASSUMPTION: repeat preceding-year FY-minus-YTD copper sales in millions of pounds, using that year's corresponding registered releases; not a forecast"
+        }
+    };
     let body = format!(
-        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"source_availability\":{},\"availability_basis\":\"declared publication where cited; retrieval upper bound otherwise; no proof of historical registry existence\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":\"ASSUMPTION: repeat preceding-year FY-minus-YTD sold ounces, using that year's corresponding registered releases; not a forecast\",\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_rate\":{},\"remaining_aisc_spend\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"technical\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical joint tests and technical production comparisons retain separate tiers and assumptions; no technical input supplies a joint production-cost witness.\"],\"no_claim\":{}",
+        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"source_availability\":{},\"availability_basis\":\"declared publication where cited; retrieval upper bound otherwise; no proof of historical registry existence\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":{},\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_rate\":{},\"remaining_aisc_spend\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"technical\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical joint tests and technical production comparisons retain separate tiers and assumptions; no technical input supplies a joint production-cost witness.\"],\"no_claim\":{}",
         js(if synthetic { "synthetic" } else { "public" }),
         js(issuer),
         js(site),
@@ -775,6 +884,7 @@ fn assemble(
         js(&doc.published_at_basis),
         js(history::tier(&historical.comparison)),
         js(history::verdict(&historical.comparison)),
+        js(sales_scenario),
         quantity_json(&inputs.production_guidance),
         quantity_json(&inputs.aisc_guidance),
         quantity_json(&inputs.ytd_production),
@@ -855,8 +965,16 @@ fn quantity_json(c: &Claim<Quantity>) -> String {
             format!("{{\"kind\":\"attributable\",\"share\":{}}}", rat(share))
         }
     };
+    let conversion = if c.metric_key == COPPER_SALES_RULE {
+        format!(
+            ",\"conversion\":{{\"rule\":{},\"source_unit\":\"kt\",\"target_unit\":\"Mlb\",\"factor\":\"100000000/45359237\"}}",
+            js(COPPER_SALES_RULE)
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{{{},\"subject\":{},\"year\":{},\"first_month\":{},\"last_month\":{},\"ownership_basis\":{},\"kind\":{},\"definition\":{},\"interval\":{{\"lo\":{},\"hi\":{},\"closed\":true}}}}",
+        "{{{},\"subject\":{},\"year\":{},\"first_month\":{},\"last_month\":{},\"ownership_basis\":{},\"kind\":{},\"definition\":{}{conversion},\"interval\":{{\"lo\":{},\"hi\":{},\"closed\":true}}}}",
         claim_fields(c),
         js(&q.subject),
         q.period.year,
@@ -868,6 +986,9 @@ fn quantity_json(c: &Claim<Quantity>) -> String {
             QuantityKind::SoldKoz => "sold_koz",
             QuantityKind::AiscUsdPerSoldOz => "aisc_usd_per_sold_oz",
             QuantityKind::AiscSpendUsdMillion => "aisc_spend_usd_m",
+            QuantityKind::ProductionKt => "production_kt",
+            QuantityKind::SoldMillionLb => "sold_million_lb",
+            QuantityKind::AiscUsdPerSoldLb => "aisc_usd_per_sold_lb",
         }),
         js(&q.definition),
         rat(q.interval.lo),

@@ -44,35 +44,21 @@ fn window(
     count: u32,
 ) -> Result<HistorySourceWindow> {
     let subject = &inputs.production_guidance.value.subject;
-    let prod = if inputs.production_guidance.value.ownership == Ownership::Full {
-        "summary:au_prod_100_koz"
-    } else {
-        "summary:au_prod_attr_koz"
-    };
+    let family = GuidanceFamily::from_production_kind(inputs.production_guidance.value.kind)?;
+    let [prod, rate] = source_lines(family, inputs.production_guidance.value.ownership);
+    let sold = sales_lines(family);
     let mut source_claims = Vec::new();
     let mut history = Vec::new();
     for serial in start..start + count {
         let release = quarter(serial)?;
         let p = select_cell(cells, subject, &release, &release, prod)?;
-        let s = select_cell(
-            cells,
-            subject,
-            &release,
-            &release,
-            "summary:au_sold_attr_koz",
-        )?;
-        let r = select_cell(
-            cells,
-            subject,
-            &release,
-            &release,
-            "summary:aisc_usd_per_oz",
-        )?;
+        let s = select_lines(cells, subject, &release, &release, sold)?;
+        let r = select_cell(cells, subject, &release, &release, rate)?;
         history.push(HistoricalContinuation {
             id: release,
-            production: actual_claim(p, QuantityKind::ProductionKoz)?,
-            sold: actual_claim(s, QuantityKind::SoldKoz)?,
-            aisc: actual_claim(r, QuantityKind::AiscUsdPerSoldOz)?,
+            production: actual_claim(p, family.production_kind())?,
+            sold: actual_claim(s, family.sold_kind())?,
+            aisc: actual_claim(r, family.rate_kind())?,
         });
         source_claims.extend([p.clone(), s.clone(), r.clone()]);
     }
@@ -195,20 +181,28 @@ fn period(p: Period) -> String {
     )
 }
 
+fn units(family: GuidanceFamily) -> (&'static str, &'static str, &'static str) {
+    match family {
+        GuidanceFamily::Gold => ("koz", "koz", "usd_per_oz"),
+        GuidanceFamily::Copper => ("kt", "million_lb", "usd_per_lb"),
+    }
+}
+
 fn witness(c: &Claim<quarters::QuarterlyWitness>) -> String {
     let p = &c.value.completion;
-    let qs = c.value.quarters.iter().map(|q| format!("{{\"source_period\":{},\"replay_period\":{},\"production_koz\":{},\"sold_koz\":{},\"aisc_usd_per_oz\":{},\"spend_usd_m\":{}}}", period(q.source_period), period(q.replay_period), rational(q.production_koz), rational(q.sold_koz), rational(q.aisc_usd_per_oz), rational(q.spend_usd_m))).collect::<Vec<_>>().join(",");
+    let (production, sold, rate) = units(p.family);
+    let qs = c.value.quarters.iter().map(|q| format!("{{\"source_period\":{},\"replay_period\":{},\"production_{production}\":{},\"sold_{sold}\":{},\"aisc_{rate}\":{},\"spend_usd_m\":{}}}", period(q.source_period), period(q.replay_period), rational(q.production), rational(q.sold), rational(q.aisc), rational(q.spend_usd_m))).collect::<Vec<_>>().join(",");
     format!(
-        "{{{},\"independently_checked\":true,\"completion\":{{\"ytd_production_koz\":{},\"remaining_production_koz\":{},\"ytd_sold_koz\":{},\"remaining_sold_koz\":{},\"ytd_aisc_usd_per_oz\":{},\"remaining_aisc_usd_per_oz\":{},\"annual_production_koz\":{},\"annual_aisc_usd_per_oz\":{},\"remaining_spend_usd_m\":{}}},\"quarters\":[{}]}}",
+        "{{{},\"independently_checked\":true,\"completion\":{{\"ytd_production_{production}\":{},\"remaining_production_{production}\":{},\"ytd_sold_{sold}\":{},\"remaining_sold_{sold}\":{},\"ytd_aisc_{rate}\":{},\"remaining_aisc_{rate}\":{},\"annual_production_{production}\":{},\"annual_aisc_{rate}\":{},\"remaining_spend_usd_m\":{}}},\"quarters\":[{}]}}",
         claim_fields(c),
-        rational(p.ytd_production_koz),
-        rational(p.remaining_production_koz),
-        rational(p.ytd_sold_koz),
-        rational(p.remaining_sold_koz),
-        rational(p.ytd_aisc_usd_per_oz),
-        rational(p.remaining_aisc_usd_per_oz),
-        rational(p.annual_production_koz),
-        rational(p.annual_aisc_usd_per_oz),
+        rational(p.ytd_production),
+        rational(p.remaining_production),
+        rational(p.ytd_sold),
+        rational(p.remaining_sold),
+        rational(p.ytd_aisc),
+        rational(p.remaining_aisc),
+        rational(p.annual_production),
+        rational(p.annual_aisc),
         rational(p.remaining_spend_usd_m),
         qs
     )
@@ -244,7 +238,8 @@ fn certificate(c: &quarters::CheckedCertificate) -> String {
 pub(super) fn to_json(e: &HistoricalEnvelope) -> String {
     let checks = e.comparison.checks.iter().map(|c| {
         let t = &c.totals.value;
-        format!("{{\"id\":{},\"same_season\":{},\"totals\":{{{},\"marginal_projections_only\":true,\"first_period\":{},\"last_period\":{},\"production_koz\":{},\"sold_koz\":{},\"aisc_usd_per_oz\":{},\"aisc_spend_usd_m\":{}}},\"production_possible\":{},\"cost_possible\":{},\"witness\":{},\"certificates\":[{}],\"indeterminate\":[{}]}}", js(&c.id), c.same_season, claim_fields(&c.totals), period(t.first_period), period(t.last_period), interval(t.production_koz), interval(t.sold_koz), interval(t.aisc_usd_per_oz), interval(t.aisc_spend_usd_m), c.production_possible.map_or("null".into(), |v| v.to_string()), c.cost_possible.map_or("null".into(), |v| v.to_string()), c.witness.as_ref().map_or("null".into(), witness), c.certificates.iter().map(certificate).collect::<Vec<_>>().join(","), c.indeterminate.iter().map(|s| js(s)).collect::<Vec<_>>().join(","))
+        let (production, sold, rate) = units(t.family);
+        format!("{{\"id\":{},\"same_season\":{},\"totals\":{{{},\"marginal_projections_only\":true,\"first_period\":{},\"last_period\":{},\"production_{production}\":{},\"sold_{sold}\":{},\"aisc_{rate}\":{},\"aisc_spend_usd_m\":{}}},\"production_possible\":{},\"cost_possible\":{},\"witness\":{},\"certificates\":[{}],\"indeterminate\":[{}]}}", js(&c.id), c.same_season, claim_fields(&c.totals), period(t.first_period), period(t.last_period), interval(t.production), interval(t.sold), interval(t.aisc), interval(t.aisc_spend_usd_m), c.production_possible.map_or("null".into(), |v| v.to_string()), c.cost_possible.map_or("null".into(), |v| v.to_string()), c.witness.as_ref().map_or("null".into(), witness), c.certificates.iter().map(certificate).collect::<Vec<_>>().join(","), c.indeterminate.iter().map(|s| js(s)).collect::<Vec<_>>().join(","))
     }).collect::<Vec<_>>().join(",");
     let sources = e
         .sources

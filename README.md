@@ -3950,15 +3950,26 @@ cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara
 ```
 
 DESIGN (BD-342): the public command requires registered, hash-verified documents and two agreeing reader
-entries in the local, ignored `registries/transcriptions/<issuer>.toml`. Use the existing transcription schema
-with quantities `guidance_<site_key_with_underscores>_production_koz` and
-`guidance_<site_key_with_underscores>_aisc_usd_per_oz`, an annual period such as `2026FY`, units `koz` and
-`usd_per_oz`, and an explicit ownership basis (`100%` or `attributable:n/d`). The AISC basis must also carry
-`;aisc=issuer-reported-per-sold-oz`. Both guidance rows must come from the same latest eligible registered
-document. Missing or conflicting evidence refuses; no real guidance values are bundled in the code.
+entries in the local, ignored `registries/transcriptions/<issuer>.toml`. Use the existing transcription schema,
+an annual period such as `2026FY`, and an explicit ownership basis (`100%` or `attributable:n/d`). Supported
+quantity suffixes after `guidance_<site_key_with_underscores>_` are:
+
+| Metal | Production suffix and unit | AISC suffix and unit | Additional AISC basis |
+|---|---|---|---|
+| Gold | `production_koz`, `koz` | `aisc_usd_per_oz`, `usd_per_oz` | `;aisc=issuer-reported-per-sold-oz` |
+| Copper | `production_kt`, `kt` | `aisc_usd_per_lb`, `usd_per_lb` | `;aisc=issuer-reported-per-sold-lb` |
+
+Both guidance rows must come from the same latest eligible registered document and identify one metal family.
+Missing, conflicting or mixed-family evidence refuses; no real guidance values are bundled in the code.
+For a copper site with this evidence, use the same command with its site key, such as `--site lumwana`.
 
 The result reports exact remaining production and an AISC spending/rate frontier. AISC uses summed costs and
-sold ounces; it never averages quarterly rates or treats production as sales. Remaining sales explicitly assume
+sold metal; it never averages quarterly rates or treats production as sales. Copper production stays in kt;
+sales use million lb and rates use USD per sold lb. Explicitly labelled copper sales in kt are converted by
+the declared exact rule `million_lb = kt × 100000000 / 45359237`, retaining the original source Claim and
+the complete displayed rounding interval. The adapter accepts the registered site-sales labels only and
+refuses competing sales rows. Consequently USD/lb times million lb gives USD millions directly; gold's
+USD/oz times koz retains its separate division by 1000. Remaining sales explicitly assume
 the preceding year's sales for the same remaining months, with source Claims and rounding intervals retained.
 The report also tests completion jointly against every usable contiguous historical quarter window of the
 remaining duration, including windows crossing a year boundary. Production, sales and AISC come from each
@@ -3969,7 +3980,7 @@ replay; an exclusion includes checked certificates and applies only to those his
 declared sales assumption. Missing or incompatible windows have explicit reasons, and no usable history stays
 **T3 for the historical comparison**. Solver limits remain indeterminate.
 
-A separate **T2 technical production comparison** binds the remaining requirement to a registered
+A separate **T2 technical production comparison for gold** binds the remaining requirement to a registered
 `technical_report` PDF and three agreed, page-cited inputs. Use these quantity keys and units, with site
 hyphens written as underscores:
 
@@ -3990,6 +4001,9 @@ citations. Plan/nameplate comparisons remain conditional, and no T2 result suppl
 witness. Missing, altered, disputed or inapplicable optional technical evidence gives a named **T3 technical
 result** while preserving the arithmetic requirements and historical comparison. Newer incomplete inputs
 cannot silently fall back to an older complete report. The synthetic command exercises the positive T2 path.
+Copper retains an explicit T3 technical result until a copper-specific capacity model is supplied; its
+arithmetic requirements and T1 historical comparison remain available. Explicit `--capacity-document`
+requests also require gold. C1 completion is outside this AISC slice.
 
 The report includes the guidance vintage, as-of selection and all source hashes. Each workbook uses its cited
 publication date, with the registered retrieval upper date as a fallback where publication is unstated. Later

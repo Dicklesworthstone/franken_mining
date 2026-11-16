@@ -285,7 +285,13 @@ The public lane of M0 (`fmine assure public`).
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
 - `guidance` (BD-342): selects an agreed production/AISC guidance pair from the latest eligible registered
   document at the explicit as-of date, verifies its bytes and connects it to the requested Mine Stats YTD
-  Claims. Units, period, ownership and the issuer-reported per-sold-ounce AISC definition must agree. A pending
+  Claims. Units, period, ownership and the issuer-reported per-sold-unit AISC definition must agree. Gold
+  uses production/sales in koz and AISC in USD/oz; copper uses production in kt, sales in million lb and
+  AISC in USD/lb. Copper requires exactly one declared site sales row: million lb directly, or kt converted
+  by the exact factor 100000000/45359237, including its full displayed rounding interval. The original
+  source key, token, unit interpretation and anchors remain cited beside the derived conversion rule.
+  Registered stale-label corrections remain visible; production and summary rows cannot replace site sales.
+  The latest guidance must identify one complete gold or copper pair, with no mixed-metal selection. A pending
   row in an equally recent or later eligible document prevents silent fallback to an older agreed pair.
   Remaining sales explicitly assume the preceding year's same remaining-month sales, derived from its original
   FY and YTD releases. Production is never substituted for sales. Dated completion selects Mine Stats by
@@ -309,6 +315,9 @@ The public lane of M0 (`fmine assure public`).
   implicit wet/dry, grade-average or ownership conversion is allowed. Missing, changed, disputed, pending or
   inapplicable optional technical evidence becomes a typed technical T3 without discarding the requirements
   or historical assessment. Selection never falls back over a newer incomplete or inapplicable document.
+  Copper completion retains its arithmetic and T1 history but reports technical T3 explicitly: the
+  gold grade/ounce capacity model is not applicable to copper. These source-to-report tests use invented
+  public-format evidence and do not establish authentic issuer acceptance or prospective calibration.
 - `guidance::track_record` (BD-341): `run(workspace, issuer, site, as_of)` verifies the source registry,
   workbook bytes and two-reader document transcriptions before comparing registered annual guidance with
   same-site, same-year Mine Stats full-year outcomes. `assess` accepts already authenticated projections;

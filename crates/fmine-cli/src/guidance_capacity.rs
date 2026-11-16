@@ -15,7 +15,7 @@ use fmine_metrics::capacity::{
     CapacityLimits, CapacityReport, CapacityVerdict, PhysicalKind, PhysicalLimit,
     compare_production,
 };
-use fmine_metrics::guidance::{Ownership, Period, Quantity};
+use fmine_metrics::guidance::{Ownership, Period, Quantity, QuantityKind};
 use fmine_numerics::exact_feas::{Interval, Rat};
 use fmine_public::guidance::GuidanceCompletionReport;
 use fmine_public::sources::{DocumentRow, load_issuer_profile};
@@ -289,6 +289,12 @@ pub(crate) fn assess(
         return Err(refuse(
             RefusalCode::FrozenRecordMutation507,
             "remaining-production value does not match its canonical Claim",
+        ));
+    }
+    if required.value.kind != QuantityKind::ProductionKoz {
+        return Err(refuse(
+            RefusalCode::BasisMismatch105,
+            "explicit capacity comparisons currently require gold production in koz; copper needs its own declared grade and recovery model",
         ));
     }
     if key(&required.value.subject) != site || !is_quarter(through) {
