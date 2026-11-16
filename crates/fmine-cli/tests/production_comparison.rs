@@ -100,7 +100,9 @@ fn actual_binary_compares_both_modes_with_exact_regret_and_complete_source_snaps
         field(summary, &["expected_value_primary"]).as_str(),
         Some("higher-power")
     );
-    let choices = field(summary, &["alternatives"]).as_array().expect("choices");
+    let choices = field(summary, &["alternatives"])
+        .as_array()
+        .expect("choices");
     assert_eq!(choices.len(), 3);
     for (id, mean, tail, regret) in [
         ("process", "25308/5", "-808/1", "23288/5"),
@@ -151,7 +153,10 @@ fn actual_binary_compares_both_modes_with_exact_regret_and_complete_source_snaps
         &["payload", "comparison", "decision", "output_claim"],
     );
     assert_eq!(field(claim, &["evidence"]).as_str(), Some("assumed"));
-    assert_eq!(field(claim, &["confidentiality"]).as_str(), Some("Internal"));
+    assert_eq!(
+        field(claim, &["confidentiality"]).as_str(),
+        Some("Internal")
+    );
     let mut markdown_args = args;
     markdown_args.extend(["--format".into(), "markdown".into()]);
     let markdown = binary(&root, &markdown_args);
@@ -186,10 +191,7 @@ fn a_bad_alternative_refuses_the_whole_command_without_partial_rankings() {
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(!text.contains("\"expected_value_primary\""));
         let json = parse(&output.stdout).expect("refusal envelope");
-        assert_eq!(
-            field(&json, &["verb"]).as_str(),
-            Some("decide production")
-        );
+        assert_eq!(field(&json, &["verb"]).as_str(), Some("decide production"));
     }
 }
 
@@ -217,4 +219,123 @@ fn manifest_options_are_exclusive_and_the_comparison_schema_is_discoverable() {
         .as_str(),
         Some("fmine.production-comparison.v1")
     );
+}
+
+#[test]
+fn actual_binary_applies_source_bound_downside_limits_without_replacing_nominal_rankings() {
+    let root = fixture();
+    let args = arguments();
+    let text = format!(
+        "{MANIFEST}\n[[downside_limit]]\nfloor_usd = \"0\"\nmax_breach_probability = \"1/4\"\n"
+    );
+    std::fs::write(
+        root.join("tests/decisions/production_comparison.toml"),
+        &text,
+    )
+    .expect("declared synthetic downside limit");
+    let output = binary(&root, &args);
+    assert!(output.status.success());
+    let (library, _) = invoke(&args, &root);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        library.to_json()
+    );
+    assert_eq!(output.stdout, binary(&root, &args).stdout);
+    let json = parse(&output.stdout).expect("JSON comparison");
+    let summary = field(&json, &["payload", "comparison", "decision", "summary"]);
+    assert_eq!(
+        field(summary, &["expected_value_primary"]).as_str(),
+        Some("higher-power")
+    );
+    let screen = field(summary, &["downside"]);
+    let winners = field(screen, &["nominal", "winners"])
+        .as_array()
+        .expect("eligible winners");
+    assert_eq!(winners.len(), 1);
+    assert_eq!(field(&winners[0], &["id"]).as_str(), Some("process"));
+    assert_eq!(
+        field(screen, &["nominal", "expected_value_cost_of_limit"]).as_str(),
+        Some("20308/5")
+    );
+    let choices = field(screen, &["choices"])
+        .as_array()
+        .expect("complete choices");
+    assert_eq!(choices.len(), 3);
+    let higher = choices
+        .iter()
+        .find(|choice| field(choice, &["id"]).as_str() == Some("higher-power"))
+        .expect("rejected mode retained");
+    assert_eq!(
+        field(higher, &["nominal_breach_probability"]).as_str(),
+        Some("1/2")
+    );
+    assert_eq!(field(higher, &["nominal_eligible"]).as_bool(), Some(false));
+    assert_eq!(
+        field(&json, &["payload", "manifest", "submitted_worksheet"]).as_str(),
+        Some(text.as_str())
+    );
+    assert_eq!(
+        field(&json, &["payload", "manifest", "source", "sha256"]).as_str(),
+        Some(sha256(text.as_bytes()).to_hex().as_str())
+    );
+    let mut markdown_args = args;
+    markdown_args.extend(["--format".into(), "markdown".into()]);
+    let markdown = binary(&root, &markdown_args);
+    assert!(markdown.status.success());
+    let shown = String::from_utf8_lossy(&markdown.stdout);
+    assert!(shown.contains("**Downside-eligible expected-value co-winners:** process"));
+    assert!(shown.contains("| higher-power | 1/2 | rejected |"));
+    assert!(shown.contains("**Expected-value co-winners:** higher-power"));
+}
+
+#[test]
+fn all_failed_downside_screen_has_no_fallback_and_invalid_limits_refuse_atomically() {
+    let root = fixture();
+    let args = arguments();
+    let text = format!(
+        "{MANIFEST}\n[[downside_limit]]\nfloor_usd = \"20000\"\nmax_breach_probability = \"0\"\n"
+    );
+    let path = root.join("tests/decisions/production_comparison.toml");
+    std::fs::write(&path, &text).expect("synthetic impossible downside limit");
+    let output = binary(&root, &args);
+    assert!(output.status.success());
+    let json = parse(&output.stdout).expect("complete assessment");
+    let screen = field(
+        &json,
+        &[
+            "payload",
+            "comparison",
+            "decision",
+            "summary",
+            "downside",
+            "nominal",
+        ],
+    );
+    assert_eq!(
+        field(screen, &["status"]).as_str(),
+        Some("no_eligible_choice")
+    );
+    assert!(
+        field(screen, &["winners"])
+            .as_array()
+            .expect("empty winners")
+            .is_empty()
+    );
+    assert_eq!(field(screen, &["best_expected_value"]), &Json::Null);
+    for invalid in [
+        text.replace("floor_usd = \"20000\"", "floor_usd = \"0.00001\""),
+        text.replace(
+            "max_breach_probability = \"0\"",
+            "max_breach_probability = \"-1/4\"",
+        ),
+        text.replace(
+            "max_breach_probability = \"0\"",
+            "max_breach_probability = \"5/4\"",
+        ),
+    ] {
+        std::fs::write(&path, invalid).expect("invalid declared limit");
+        let output = binary(&root, &args);
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("\"expected_value_primary\""));
+    }
 }

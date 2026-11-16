@@ -15,6 +15,15 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
   combination, causal identification or physical feasibility is inferred. Conditional synthetic known
   answers and refusal controls live in `valuation/comparison/tests.rs`; actual command checks live in
   `fmine-cli/tests/production_comparison.rs`;
+  DESIGN (BD-225): an optional source-bound `[[downside_limit]]` declares `floor_usd` and
+  `max_breach_probability` as exact decimal or rational strings. The floor must fit Money exactly at
+  0.0001 USD; no threshold rounding is permitted. The existing decision owner screens complete rounded
+  cash-margin populations for payoff strictly below that floor, with an inclusive probability cap.
+  Every original alternative and the unconstrained ranking remain visible alongside eligible co-winners
+  and the expected-value cost of the limit. An empty eligible set has no fallback. The risk Claim retains
+  manifest SHA-256 and field locators, and limit/model/currency/basis changes bind receipt identity or
+  refuse. No information policy, safety constraint or calibrated risk estimate is supplied. Manifests
+  without a limit preserve their original canonical bytes and behavior;
 - complete source-bound annual peer comparisons with exact competition-rank ranges and explicit comparative claims (`comparison`, BD-355);
 - cut-off grades: the reference rows of `registries/published_cutoffs.toml` recomputed from their registered tokens (`cutoff`), and cut-offs bound to the readings of one registered technical report (`cutoff::source`, BD-274);
 - an AISC accounting waterfall, as a legacy float LMDI and as a typed exact kernel with an additive fallback (`lmdi`, `lmdi::waterfall`);

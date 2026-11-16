@@ -21,6 +21,11 @@
   into a portfolio or supply calibration, physical authorization, causal identification or project NPV.
   The runnable example is `tests/decisions/production_comparison.toml`; direct binary, renderer, source
   retention and refusal controls are in `fmine-cli/tests/production_comparison.rs`.
+  An optional single `[[downside_limit]]` section declares exact `floor_usd` and
+  `max_breach_probability` values. The source-bound limit passes through the existing decision engine;
+  every action, including do-nothing, retains its strict-below-floor breach probability and eligibility.
+  Nominal and eligible winners, ties and the expected-value cost of the limit remain separate. No eligible
+  action yields no fallback. The screen adds no calibration or operating authority.
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).

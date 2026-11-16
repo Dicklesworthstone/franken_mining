@@ -16,7 +16,11 @@ pub(super) fn invalid(line: usize, message: impl AsRef<str>) -> Refusal {
     )
 }
 
-pub(super) fn fields<'a>(input: &'a [TomlField], required: &[&str], line: usize) -> Result<Fields<'a>> {
+pub(super) fn fields<'a>(
+    input: &'a [TomlField],
+    required: &[&str],
+    line: usize,
+) -> Result<Fields<'a>> {
     let mut result = BTreeMap::new();
     for field in input {
         if !required.contains(&field.key.as_str()) {
@@ -56,7 +60,7 @@ pub(super) fn get<'a>(fields: &Fields<'a>, key: &str) -> Result<(&'a str, usize)
         .ok_or_else(|| invalid(1, format!("missing {key}")))
 }
 
-fn number(fields: &Fields<'_>, key: &str) -> Result<Rat> {
+pub(super) fn number(fields: &Fields<'_>, key: &str) -> Result<Rat> {
     let (value, line) = get(fields, key)?;
     let result = if let Some((n, d)) = value.split_once('/') {
         n.parse::<i128>()

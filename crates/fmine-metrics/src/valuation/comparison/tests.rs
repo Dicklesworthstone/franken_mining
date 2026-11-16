@@ -37,12 +37,8 @@ fn alternative(high: bool, change: impl Fn(&str) -> String) -> ValuationReceipt 
     )
     .unwrap();
     let text = change(if high { HIGH_TERMS } else { LOW_TERMS });
-    crate::valuation::worksheet::evaluate(
-        &text,
-        &source(&text, "terms.toml"),
-        physical.receipt(),
-    )
-    .unwrap()
+    crate::valuation::worksheet::evaluate(&text, &source(&text, "terms.toml"), physical.receipt())
+        .unwrap()
 }
 fn manifest() -> worksheet::Manifest {
     worksheet::parse(MANIFEST, &source(MANIFEST, "comparison.toml")).unwrap()
@@ -246,7 +242,9 @@ fn order_and_ties_are_preserved_but_every_source_and_assumption_binds_identity()
         receipt,
         input.evaluate(&[high.clone(), low.clone()]).unwrap()
     );
-    let changed_low = alternative(false, |s| format!("# Additional synthetic source note\n{s}"));
+    let changed_low = alternative(false, |s| {
+        format!("# Additional synthetic source note\n{s}")
+    });
     let changed = input.evaluate(&[changed_low, high]).unwrap();
     assert_eq!(receipt.decision().summary(), changed.decision().summary());
     assert_ne!(receipt.digest(), changed.digest());
@@ -302,7 +300,10 @@ fn manifest_is_strict_bounded_and_binds_complete_source_bytes() {
         MANIFEST.replace("shared_scenario_basis", "undeclared_scenario_basis"),
         MANIFEST.replace("id = \"higher-power\"", "id = \"process\""),
         MANIFEST.replace("id = \"higher-power\"", "id = \"do-nothing\""),
-        MANIFEST.replace("fmine.production-comparison.v1", "fmine.production-comparison.v2"),
+        MANIFEST.replace(
+            "fmine.production-comparison.v1",
+            "fmine.production-comparison.v2",
+        ),
         MANIFEST.replace("[[alternative]]", "[[other]]"),
         MANIFEST.replace("end_ns = \"3600000000000\"", "end_ns = \"0\""),
         MANIFEST.replace("input =", "unknown_path ="),
@@ -323,4 +324,220 @@ fn manifest_is_strict_bounded_and_binds_complete_source_bytes() {
         parsed.declaration().anchors[0].artifact_sha256,
         source.artifact_sha256
     );
+}
+
+fn limited_manifest(floor: &str, maximum: &str) -> worksheet::Manifest {
+    let text = format!(
+        "{MANIFEST}\n[[downside_limit]]\nfloor_usd = \"{floor}\"\nmax_breach_probability = \"{maximum}\"\n"
+    );
+    worksheet::parse(&text, &source(&text, "comparison.toml")).unwrap()
+}
+
+#[test]
+fn declared_downside_screen_selects_the_eligible_mode_without_hiding_the_nominal_winner() {
+    let alternatives = [
+        alternative(false, str::to_owned),
+        alternative(true, str::to_owned),
+    ];
+    let plain = manifest().evaluate(&alternatives).unwrap();
+    let input = limited_manifest("0", "1/4");
+    let receipt = input.evaluate(&alternatives).unwrap();
+    let summary = receipt.decision().summary();
+    assert_eq!(
+        summary.alternatives,
+        plain.decision().summary().alternatives
+    );
+    assert_eq!(summary.expected_value_winners, ["higher-power"]);
+    let screen = summary.downside.as_ref().unwrap();
+    assert_eq!(screen.choices.len(), 3);
+    assert_eq!(screen.nominal.winners[0].id, "process");
+    assert_eq!(screen.nominal.best_expected_value, Some(q(25_308, 5)));
+    assert_eq!(
+        screen.nominal.expected_value_cost_of_limit,
+        Some(q(20_308, 5))
+    );
+    for choice in &screen.choices {
+        let risky = choice.choice.id == "higher-power";
+        assert_eq!(
+            choice.nominal_breach_probability,
+            if risky { q(1, 2) } else { ZERO }
+        );
+        assert_eq!(choice.nominal_eligible, !risky);
+    }
+    let claim = receipt.decision().inputs().downside_limit.as_ref().unwrap();
+    assert_eq!(claim.evidence, EvidenceClass::Assumed);
+    assert_eq!(claim.confidentiality, Confidentiality::internal());
+    assert!(claim.parents.contains(&input.declaration().claim_id));
+    for key in [
+        "downside_limit.floor_usd",
+        "downside_limit.max_breach_probability",
+    ] {
+        assert!(claim.anchors.iter().any(|anchor| {
+            anchor.artifact_sha256 == input.declaration().anchors[0].artifact_sha256
+                && anchor.locator.ends_with(key)
+        }));
+    }
+    assert_eq!(
+        *receipt.decision(),
+        card::evaluate(receipt.decision().inputs()).unwrap()
+    );
+    assert!(
+        receipt
+            .to_json()
+            .contains("\"max_breach_probability\":\"1/4\"")
+    );
+    let markdown = receipt.to_markdown();
+    assert!(markdown.contains("**Downside-eligible expected-value co-winners:** process"));
+    assert!(markdown.contains("| higher-power | 1/2"));
+    assert!(markdown.contains("Expected-value co-winners:** higher-power"));
+}
+
+#[test]
+fn downside_floor_and_probability_equalities_are_inclusive_and_all_failed_has_no_fallback() {
+    let alternatives = [
+        alternative(false, str::to_owned),
+        alternative(true, str::to_owned),
+    ];
+    for (floor, maximum, winners) in [
+        ("808", "0", vec!["process"]),
+        ("0", "1/2", vec!["higher-power"]),
+        ("-384", "0", vec!["higher-power"]),
+        ("20000", "1", vec!["higher-power"]),
+        ("20000", "0", vec![]),
+    ] {
+        let receipt = limited_manifest(floor, maximum)
+            .evaluate(&alternatives)
+            .unwrap();
+        let summary = receipt.decision().summary();
+        assert_eq!(summary.expected_value_winners, ["higher-power"]);
+        let screen = summary.downside.as_ref().unwrap();
+        assert_eq!(
+            screen
+                .nominal
+                .winners
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            winners,
+        );
+        if winners.is_empty() {
+            assert_eq!(
+                screen.nominal.status,
+                card::downside::DownsideStatus::NoEligibleChoice
+            );
+            assert!(screen.nominal.eligible_order.is_empty());
+            assert_eq!(screen.nominal.best_expected_value, None);
+            assert_eq!(screen.nominal.expected_value_cost_of_limit, None);
+            assert!(receipt.to_markdown().contains("no fallback is selected"));
+        }
+    }
+    let tied = alternative(false, |s| {
+        s.replace("action_id = \"process\"", "action_id = \"higher-power\"")
+    });
+    let receipt = limited_manifest("808", "0")
+        .evaluate(&[alternatives[0].clone(), tied])
+        .unwrap();
+    assert_eq!(
+        receipt
+            .decision()
+            .summary()
+            .downside
+            .as_ref()
+            .unwrap()
+            .nominal
+            .winners
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        ["higher-power", "process"],
+    );
+}
+
+#[test]
+fn downside_limits_bind_source_identity_and_admit_the_same_model_currency_and_basis() {
+    let alternatives = [
+        alternative(false, str::to_owned),
+        alternative(true, str::to_owned),
+    ];
+    let original = manifest();
+    let limited = limited_manifest("0", "0.25");
+    let mut without_limit = limited.declaration().value.clone();
+    without_limit.downside_limit = None;
+    assert_eq!(
+        without_limit.canonical_tag(),
+        original.declaration().value.canonical_tag()
+    );
+    assert_ne!(
+        limited.declaration().claim_id,
+        original.declaration().claim_id
+    );
+    let first = limited.evaluate(&alternatives).unwrap();
+    let changed = limited_manifest("0/1", "1/4")
+        .evaluate(&alternatives)
+        .unwrap();
+    assert_eq!(first.decision().summary(), changed.decision().summary());
+    assert_ne!(first.digest(), changed.digest());
+    let relaxed = limited_manifest("0", "1/2")
+        .evaluate(&alternatives)
+        .unwrap();
+    assert_ne!(first.digest(), relaxed.digest());
+    let mut tampered = limited.declaration().clone();
+    tampered
+        .value
+        .downside_limit
+        .as_mut()
+        .unwrap()
+        .max_breach_probability = q(1, 2);
+    assert_eq!(
+        evaluate(&tampered, &alternatives).unwrap_err().code,
+        "FMINE-REF-507"
+    );
+    for field in ["model", "basis", "currency", "probability"] {
+        let mut spec = limited.declaration().value.clone();
+        let limit = spec.downside_limit.as_mut().unwrap();
+        match field {
+            "model" => limit.model_key.push_str("-foreign"),
+            "basis" => limit.valuation_basis = "project_npv".into(),
+            "currency" => limit.floor.ccy = Currency::CAD,
+            _ => limit.max_breach_probability = q(3, 2),
+        }
+        assert_eq!(
+            evaluate(&bind(spec, limited.declaration()), &alternatives)
+                .unwrap_err()
+                .code,
+            if field == "probability" {
+                "FMINE-REF-109"
+            } else {
+                "FMINE-REF-105"
+            },
+        );
+    }
+}
+
+#[test]
+fn manifest_limits_refuse_lossy_money_invalid_probabilities_duplicates_and_unknown_fields() {
+    let valid = "\n[[downside_limit]]\nfloor_usd = \"-1/8\"\nmax_breach_probability = \"1/3\"\n";
+    let text = format!("{MANIFEST}{valid}");
+    let parsed = worksheet::parse(&text, &source(&text, "comparison.toml")).unwrap();
+    let limit = parsed.declaration().value.downside_limit.as_ref().unwrap();
+    assert_eq!(limit.floor, Money::from_minor(Currency::USD, -1250));
+    assert_eq!(limit.max_breach_probability, q(1, 3));
+    for invalid_limit in [
+        valid.replace("-1/8", "0.00001"),
+        valid.replace("-1/8", "1/3"),
+        valid.replace("-1/8", "170141183460469231731687303715884105727"),
+        valid.replace("1/3", "-1/3"),
+        valid.replace("1/3", "4/3"),
+        valid.replace("1/3", "NaN"),
+        valid.replace("1/3", "1/0"),
+        valid.replace("max_breach_probability", "unknown_probability"),
+        format!("{valid}\nmax_breach_probability = \"1/2\""),
+        format!("{valid}{valid}"),
+    ] {
+        let text = format!("{MANIFEST}{invalid_limit}");
+        assert!(
+            worksheet::parse(&text, &source(&text, "comparison.toml")).is_err(),
+            "{invalid_limit}"
+        );
+    }
 }

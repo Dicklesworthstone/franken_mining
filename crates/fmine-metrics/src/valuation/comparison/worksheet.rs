@@ -3,7 +3,7 @@
 //! Determinism: Exact
 
 use super::*;
-use crate::valuation::worksheet::{fields, get, invalid};
+use crate::valuation::worksheet::{fields, get, invalid, number};
 use fmine_registry::toml_subset::parse_subset;
 
 pub const SCHEMA: &str = "fmine.production-comparison.v1";
@@ -57,10 +57,10 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| invalid(e.line, e.reason))?;
-    if !(2..=MAX_ALTERNATIVES).contains(&doc.rows.len()) {
+    if doc.rows.len() > MAX_ALTERNATIVES + 1 {
         return Err(invalid(
             1,
-            "two to sixteen alternative source bundles required",
+            "at most sixteen alternative source bundles and one downside limit are supported",
         ));
     }
     let top = fields(
@@ -86,40 +86,86 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
     }
     let mut anchors = vec![source.clone()];
     let mut sources = BTreeMap::new();
+    let mut downside_limit = None;
     for row in &doc.rows {
-        if row.table != "alternative" {
-            return Err(invalid(
-                row.line,
-                "only [[alternative]] tables are supported",
-            ));
-        }
-        let f = fields(
-            &row.fields,
-            &["id", "input", "grinding", "recovery", "terms"],
-            row.line,
-        )?;
-        let alternative = AlternativeSources {
-            id: get(&f, "id")?.0.into(),
-            input: get(&f, "input")?.0.into(),
-            grinding: get(&f, "grinding")?.0.into(),
-            recovery: get(&f, "recovery")?.0.into(),
-            terms: get(&f, "terms")?.0.into(),
-        };
-        if alternative.id == DO_NOTHING
-            || sources.insert(alternative.id.clone(), alternative).is_some()
-        {
-            return Err(invalid(
-                row.line,
-                "unique action ids separate from do-nothing required",
-            ));
+        match row.table.as_str() {
+            "alternative" => {
+                let f = fields(
+                    &row.fields,
+                    &["id", "input", "grinding", "recovery", "terms"],
+                    row.line,
+                )?;
+                let alternative = AlternativeSources {
+                    id: get(&f, "id")?.0.into(),
+                    input: get(&f, "input")?.0.into(),
+                    grinding: get(&f, "grinding")?.0.into(),
+                    recovery: get(&f, "recovery")?.0.into(),
+                    terms: get(&f, "terms")?.0.into(),
+                };
+                if alternative.id == DO_NOTHING
+                    || sources
+                        .insert(alternative.id.clone(), alternative)
+                        .is_some()
+                {
+                    return Err(invalid(
+                        row.line,
+                        "unique action ids separate from do-nothing required",
+                    ));
+                }
+            }
+            "downside_limit" => {
+                if downside_limit.is_some() {
+                    return Err(invalid(row.line, "at most one downside limit is supported"));
+                }
+                let f = fields(
+                    &row.fields,
+                    &["floor_usd", "max_breach_probability"],
+                    row.line,
+                )?;
+                let minor = number(&f, "floor_usd")?
+                    .checked_mul(Rat::from_integer(Money::SCALE))
+                    .map_err(|_| invalid(row.line, "downside floor exceeds Money range"))?;
+                if minor.den() != 1 {
+                    return Err(invalid(
+                        get(&f, "floor_usd")?.1,
+                        "downside floor must be exactly representable in 0.0001 USD; no rounding is applied",
+                    ));
+                }
+                let maximum = number(&f, "max_breach_probability")?;
+                if maximum.num() < 0 || maximum.num() > maximum.den() {
+                    return Err(invalid(
+                        get(&f, "max_breach_probability")?.1,
+                        "maximum breach probability must lie in [0,1]",
+                    ));
+                }
+                downside_limit = Some(DownsideLimit {
+                    model_key: get(&top, "model_key")?.0.into(),
+                    valuation_basis: VALUATION_BASIS.into(),
+                    floor: Money::from_minor(Currency::USD, minor.num()),
+                    max_breach_probability: maximum,
+                    policy_optimization: None,
+                });
+            }
+            _ => {
+                return Err(invalid(
+                    row.line,
+                    "only [[alternative]] and [[downside_limit]] tables are supported",
+                ));
+            }
         }
         for field in &row.fields {
             anchors.push(SourceAnchor::new(
                 &source.artifact_path,
                 source.artifact_sha256,
-                format!("line {}: alternative.{}", field.line, field.key),
+                format!("line {}: {}.{}", field.line, row.table, field.key),
             ));
         }
+    }
+    if !(2..=MAX_ALTERNATIVES).contains(&sources.len()) {
+        return Err(invalid(
+            1,
+            "two to sixteen alternative source bundles required",
+        ));
     }
     for field in &doc.top {
         anchors.push(SourceAnchor::new(
@@ -147,9 +193,13 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         end_ns: time("end_ns")?,
         commercial_support: get(&top, "commercial_support")?.0.into(),
         action_ids: sources.keys().cloned().collect(),
+        downside_limit,
     };
     if spec.start_ns >= spec.end_ns {
-        return Err(invalid(1, "comparison interval must have positive duration"));
+        return Err(invalid(
+            1,
+            "comparison interval must have positive duration",
+        ));
     }
     let tag = spec.canonical_tag();
     let declaration = Claim::new(

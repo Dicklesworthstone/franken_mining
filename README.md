@@ -144,6 +144,25 @@ source paths are relative to the workspace root. The result compares individual 
 not establish a combined portfolio, causal counterfactual, calibrated forecast, project NPV or authority
 to operate the plant.
 
+An optional source-bound downside limit screens every alternative, including do-nothing, against the
+same declared cash floor and maximum probability of falling strictly below it. Add this section to
+the comparison manifest:
+
+```toml
+[[downside_limit]]
+floor_usd = "0"
+max_breach_probability = "1/4"
+```
+
+DESIGN (BD-225): values accept exact decimals or rational fractions; the floor must be exactly representable
+at the existing $0.0001 money boundary. The example retains the higher-power mode as the nominal
+expected-value winner while selecting the original mode among the eligible choices: the higher-power
+mode loses cash in one of two equally weighted states, exceeding the declared one-quarter limit.
+Equality with the floor does not count as a breach, and equality with the probability limit passes.
+JSON and Markdown retain each mode's breach probability, the eligible winners and the expected-value cost
+of the limit. If every action fails, the card reports no eligible winner. These probabilities apply to
+the final money-rounded cash margins under the supplied, uncalibrated scenarios.
+
 `forecast journal register-plant` registers a selected recovery, throughput, dry-tonnage, contained-metal
 or recovered-metal target through the existing durable forecast journal. It takes the same three source
 paths plus `--journal`, `--head`, `--id`, `--target`, `--author-role`,

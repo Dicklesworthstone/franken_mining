@@ -4,6 +4,7 @@
 //! Determinism: DeterministicPerIsa (inherits the physical calculation).
 
 use super::*;
+use fmine_decide::card::downside::DownsideLimit;
 use std::fmt::Write as _;
 
 #[cfg(test)]
@@ -30,6 +31,7 @@ pub struct ComparisonSpec {
     pub end_ns: i64,
     pub commercial_support: String,
     pub action_ids: Vec<String>,
+    pub downside_limit: Option<DownsideLimit>,
 }
 
 impl ComparisonSpec {
@@ -55,6 +57,10 @@ impl ComparisonSpec {
         enc.put_u64(ids.len() as u64);
         for id in ids {
             enc.put_str(id);
+        }
+        // Existing declarations retain their canonical bytes when no limit is declared.
+        if let Some(limit) = &self.downside_limit {
+            enc.put_str(&limit.canonical_tag());
         }
         format!("production-comparison/v1:{}", sha256(&enc.finish()))
     }
@@ -122,6 +128,16 @@ pub fn evaluate(
             "explicit shared-scenario interpretation and complete common support required",
         ));
     }
+    if spec
+        .downside_limit
+        .as_ref()
+        .is_some_and(|limit| limit.policy_optimization.is_some())
+    {
+        return Err(bad(
+            RefusalCode::NoClaimInDomain201,
+            "production comparisons screen act-now choices; no information policies are declared",
+        ));
+    }
     if !(2..=MAX_ALTERNATIVES).contains(&alternatives.len())
         || alternatives.len() != spec.action_ids.len()
     {
@@ -177,10 +193,12 @@ pub fn evaluate(
         check_claim(receipt.decision.claim())?;
         all_meta.include(receipt.decision.claim())?;
     }
-    let first = ordered
-        .values()
-        .next()
-        .ok_or_else(|| bad(RefusalCode::NoClaimInDomain201, "no production alternatives"))?;
+    let first = ordered.values().next().ok_or_else(|| {
+        bad(
+            RefusalCode::NoClaimInDomain201,
+            "no production alternatives",
+        )
+    })?;
     for receipt in ordered.values() {
         if receipt.points.len() != first.points.len()
             || receipt.terms.value.physical_to_commercial_basis
@@ -260,12 +278,20 @@ pub fn evaluate(
         &tag,
         AdditivityClass::ExtensiveAdditive,
     ));
+    let downside_limit = spec.downside_limit.as_ref().map(|limit| {
+        all_meta.claim(
+            "production.comparison.downside_limit/1",
+            limit.clone(),
+            &limit.canonical_tag(),
+            AdditivityClass::NonAdditive,
+        )
+    });
     let decision = card::evaluate(&DecisionInputs {
         weights,
         actions,
         information_options: Vec::new(),
         robustness: None,
-        downside_limit: None,
+        downside_limit,
     })?;
     let mut enc = Encoder::new_frame(*b"PVCR", 1);
     enc.put_str(&render::claim(declaration));
@@ -287,7 +313,11 @@ impl ComparisonReceipt {
     pub fn to_json(&self) -> String {
         use render::js;
         let spec = &self.declaration.value;
-        let mut ids = spec.action_ids.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut ids = spec
+            .action_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         ids.sort();
         let scope = format!(
             "{{\"boundary\":{},\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"commercial_support\":{}}}",
@@ -362,6 +392,47 @@ impl ComparisonReceipt {
             md(&summary.minimax_regret_winners.join(", ")),
             card::TIE_RULE
         );
+        if let Some(screen) = &summary.downside {
+            let _ = writeln!(
+                out,
+                "\n## Downside probability limit\n\n**Breach:** rounded immediate cash margin < **{} USD**; equality is not a breach. **Maximum probability:** **{}**, inclusive. Probabilities remain conditional on the declared uncalibrated scenarios; the unconstrained ranking above is unchanged. This is not a safety limit or a bound on loss severity.\n\n| Action | Breach probability | Eligibility |\n|---|---:|---|",
+                monetary(screen.limit.floor),
+                shown(screen.limit.max_breach_probability),
+            );
+            for choice in &screen.choices {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} |",
+                    md(&choice.choice.id),
+                    shown(choice.nominal_breach_probability),
+                    if choice.nominal_eligible {
+                        "eligible"
+                    } else {
+                        "rejected"
+                    },
+                );
+            }
+            if screen.nominal.winners.is_empty() {
+                out.push_str("\n**No eligible choice.** Every declared action fails this probability limit; no fallback is selected.\n");
+            } else {
+                let winners = screen
+                    .nominal
+                    .winners
+                    .iter()
+                    .map(|choice| choice.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(
+                    out,
+                    "\n**Downside-eligible expected-value co-winners:** {}. **Expected-value cost of the limit:** {} USD. All exact ties remain.\n",
+                    md(&winners),
+                    screen
+                        .nominal
+                        .expected_value_cost_of_limit
+                        .map_or_else(|| "unavailable".into(), shown),
+                );
+            }
+        }
         out.push_str("\n## Retained alternative calculations\n\nMoney is rounded once to 0.0001 USD with ties to even; delta means rounded minus unrounded USD. All original worksheets and full unrounded component calculations remain in JSON.\n\n| Action | State | Weight | Dry tonnes | Recovered kg | Revenue USD | Royalty USD | Variable USD | Fixed USD | Margin USD | Rounding delta USD | Do-nothing USD |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
         for receipt in &self.alternatives {
             for p in receipt.points() {
