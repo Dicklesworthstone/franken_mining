@@ -11,6 +11,9 @@
 use crate::aisc::{Calc, IdentityInstance, Operand, OperandRole, OperandValue, implied_rate_text};
 use crate::js;
 
+mod validation;
+pub use validation::{CitationFinding, report_findings, validate_report};
+
 /// The version of the derivation rules below. A change to any rule's arithmetic bumps it.
 pub const RULES_VERSION: &str = "m0-ledger/1";
 

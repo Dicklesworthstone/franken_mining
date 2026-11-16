@@ -16,10 +16,12 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
-      - name: Calibration and valuation known answers
-        run: cargo test -p fmine-calib -p fmine-metrics --lib --locked
+      - name: Calibration, plant and valuation known answers
+        run: cargo test -p fmine-calib -p fmine-plant -p fmine-metrics --lib --locked
       - name: Saved forecast diagnostics and disclosure derivations
         run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test public_lint_derivations --test production_valuation --locked
+      - name: Source-bound journals, RTD inversion and citation integrity
+        run: cargo test -p xtask --test decision_journal --test plant_rtd_inverse --test public_report_contract --test public_citations --locked
       - name: Plant command and journal integration
         run: cargo test -p fmine-cli --locked
       - name: Quarterly forecast records and source controls

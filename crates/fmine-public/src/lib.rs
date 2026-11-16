@@ -2338,6 +2338,7 @@ pub fn run_public_assurance(
         &report.mine_stats_claims.claims,
     )?;
     report.transcriptions = transcriptions;
+    citation::validate_report(&report)?;
     Ok(report)
 }
 
@@ -2352,11 +2353,13 @@ pub fn run_synthetic_assurance(
     edits: &[(String, fmine_io::xlsx::MinimalCell)],
 ) -> Result<PublicAssuranceReport, Refusal> {
     let sources = load_synthetic(synthetic::synthetic_workbooks(edits))?;
-    Ok(assess(
+    let report = assess(
         &synthetic::synthetic_profile(),
         Lane::Synthetic,
         sources,
-    ))
+    );
+    citation::validate_report(&report)?;
+    Ok(report)
 }
 
 /// Parses in-memory synthetic workbooks `(file, kind, quarter, bytes)` into loaded sources.

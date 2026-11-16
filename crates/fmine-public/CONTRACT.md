@@ -1153,6 +1153,12 @@ The public lane of M0 (`fmine assure public`).
   their implementations. The integration groups preserve the original fixtures, assertions and ignore rules.
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-329.S2, bounded runtime citation integrity): both public and synthetic assurance entry points
+  validate canonical source Claims and the AISC ledger's emitted source operands and registered derivations
+  before returning a report. Missing or mismatched source identity, locator, digest, value or derivation
+  ancestry is a structured `FMINE-REF-208` refusal with the affected report path. Existing valid report bytes
+  and state roots are unchanged. This is a typed source/derivation check, not the full all-verb JSON
+  uncited-number validator; that broader acceptance gate remains open.
 - DESIGN (BD-331.S8): the cross-vintage ledger projects each later source appearance against its earliest
   registered release into a separate numeric denominator. Unchanged numbers are state i; verified stated
   and reconstructed silent restatements are distinct state ii explanations; source assertion conflicts
