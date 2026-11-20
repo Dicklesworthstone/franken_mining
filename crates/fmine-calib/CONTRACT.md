@@ -94,6 +94,21 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   existing forecast, cohort, assessment and journal identities remain unchanged. Registration times and
   information sets may differ. These completion bounds are not confidence intervals or a predictive-skill
   claim. Independent examples and source-selection controls are in `xtask/tests/forecast_comparison.rs`.
+- DESIGN (BD-048/049, plan §10.2): `compare_assessments_crps(left_digest, right_digest)` uses the same
+  immutable public-target and selected-publication pairing to compare complete empirical or exactly
+  weighted empirical distributions. Gaussian, quantile-only and interval-only payloads refuse, including
+  on unmatched subjects; no supported subset is silently selected. CRPS differences use checked exact
+  rationals of the frozen binary support values and original exact weights. Uniform draws retain mass
+  `1/n`, duplicates retain their probability, and weights are never normalized or resampled. Sorting
+  and two linear CDF sweeps compute each pair in O(n log n) time and O(n) space. The derivative of the
+  left-minus-right difference is `2(F_left-F_right)`, so it is linear between the union's support atoms
+  and constant in both tails. Its exact global extrema supply unresolved-pair completion bounds without
+  an invented outcome domain. The complete union, arithmetic failures, source mismatches and missing
+  forecasts retain the original comparison semantics. PCRP/v1 binds the parent assessments, method,
+  member results and aggregates separately; default interval PAIR/v1 bytes are unchanged. These are
+  descriptive arithmetic bounds, not confidence intervals, prospective model-race evidence, independence,
+  calibration or predictive skill. Direct analytical, pair-distance-oracle, invariance, unsupported-payload
+  and source/capacity controls are in `xtask/tests/forecast_comparison.rs`.
 - DESIGN (BD-049, plan §10.3): `correction_proposal(saved_digest, raw_forecast_id)` makes an explicit,
   unissued correction for a later unresolved Gaussian forecast from one complete saved assessment.
   At least two positive forecast/outcome pairs are required; every model, family, author, domain, horizon,

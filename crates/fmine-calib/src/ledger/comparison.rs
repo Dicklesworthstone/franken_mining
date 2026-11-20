@@ -16,7 +16,26 @@ use super::{
 };
 use crate::record::{interval_score, scoring::interval_score_difference_bounds};
 
+mod crps;
+
 pub const METHOD: &str = "Paired central-interval loss, left minus right, at the identical frozen alpha. Negative values favor the left cohort. Subjects, target, unit, ownership, calendar period, outcome selector and assessment cut must agree; paired observations require the identical citation and numeric value. The union of frozen subjects remains visible. Observed means use only identical selected publications, with every excluded subject named. Whole-population bounds exist only when all subjects have both forecasts and compatible outcome selections; unresolved pairs use exact global loss-difference extrema at the four interval endpoints. These bounds are arithmetic completion bounds, not confidence intervals. Forecast registration times and information sets may differ. No model-race significance, calibration, independence or predictive-skill claim is supplied.";
+
+pub const CRPS_METHOD: &str = "Paired full-distribution CRPS, left minus right, for finite empirical or exactly weighted empirical forecasts. Negative values favor the left cohort. Frozen binary support values and exact probability masses are retained without interpolation, resampling or normalization. Public target, ownership, vintage permission, alpha, assessment cut and outcome selector must agree; resolved pairs require identical numeric outcomes and complete citations. The union of frozen subjects remains visible. Observed means use identical-publication pairs only. Unresolved pairs use exact global CRPS-difference extrema at the union of forecast support atoms: the difference is linear between atoms and constant in both tails because both distributions have total mass one. Whole-population bounds require both forecasts and compatible selections for every subject. Checked rational capacity failures invalidate affected results without dropping members. These are arithmetic completion bounds, not confidence intervals. Registration times and information sets may differ. No sequential significance, independence, calibration or predictive-skill claim is supplied.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairedScore {
+    Interval,
+    Crps,
+}
+
+impl PairedScore {
+    pub const fn method(self) -> &'static str {
+        match self {
+            Self::Interval => METHOD,
+            Self::Crps => CRPS_METHOD,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairStatus {
@@ -55,6 +74,7 @@ pub struct PairedMember {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PairedAssessment {
+    pub score: PairedScore,
     pub left_assessment: Digest32,
     pub right_assessment: Digest32,
     pub left_cohort: Digest32,
@@ -164,6 +184,25 @@ impl ForecastLedger {
         left_digest: Digest32,
         right_digest: Digest32,
     ) -> Result<PairedAssessment, Refusal> {
+        self.compare_with_score(left_digest, right_digest, PairedScore::Interval)
+    }
+
+    /// Compare complete finite predictive distributions using the same saved public-source matching.
+    /// Unsupported distributions refuse even for unmatched subjects; no population is silently selected.
+    pub fn compare_assessments_crps(
+        &self,
+        left_digest: Digest32,
+        right_digest: Digest32,
+    ) -> Result<PairedAssessment, Refusal> {
+        self.compare_with_score(left_digest, right_digest, PairedScore::Crps)
+    }
+
+    fn compare_with_score(
+        &self,
+        left_digest: Digest32,
+        right_digest: Digest32,
+        score: PairedScore,
+    ) -> Result<PairedAssessment, Refusal> {
         let (left, right) = (saved(self, left_digest)?, saved(self, right_digest)?);
         let ((lp, lv, la), (rp, rv, ra)) = (policy(self, left)?, policy(self, right)?);
         if left.as_of_ns != right.as_of_ns || left.selector != right.selector {
@@ -188,6 +227,15 @@ impl ForecastLedger {
         for subject in names {
             let l = ls.get(&subject).copied();
             let r = rs.get(&subject).copied();
+            if score == PairedScore::Crps {
+                for member in [l, r].into_iter().flatten() {
+                    let forecast = self
+                        .records
+                        .get(&member.forecast_id)
+                        .ok_or_else(|| absent("paired CRPS forecast is unavailable"))?;
+                    crps::admit(&forecast.payload)?;
+                }
+            }
             let (status, value) = match (l, r) {
                 (None, _) => (PairStatus::LeftForecastMissing, None),
                 (_, None) => (PairStatus::RightForecastMissing, None),
@@ -210,11 +258,22 @@ impl ForecastLedger {
                     _ => (PairStatus::OutcomeSelectionMismatch, None),
                 },
             };
-            let left_interval = l.and_then(|member| bounds(self, member, la));
-            let right_interval = r.and_then(|member| bounds(self, member, la));
+            let left_interval = (score == PairedScore::Interval)
+                .then(|| l.and_then(|member| bounds(self, member, la)))
+                .flatten();
+            let right_interval = (score == PairedScore::Interval)
+                .then(|| r.and_then(|member| bounds(self, member, la)))
+                .flatten();
             let eligible = matches!(status, PairStatus::Paired | PairStatus::Unresolved);
             let completion = eligible
-                .then(|| scores(left_interval, right_interval, la, value))
+                .then(|| match score {
+                    PairedScore::Interval => scores(left_interval, right_interval, la, value),
+                    PairedScore::Crps => crps::scores(
+                        &self.records.get(&l?.forecast_id)?.payload,
+                        &self.records.get(&r?.forecast_id)?.payload,
+                        value,
+                    ),
+                })
                 .flatten();
             members.push(PairedMember {
                 subject,
@@ -270,6 +329,7 @@ impl ForecastLedger {
                 })
         };
         let mut result = PairedAssessment {
+            score,
             left_assessment: left.digest,
             right_assessment: right.digest,
             left_cohort: left.cohort,
@@ -309,10 +369,14 @@ impl PairedAssessment {
             }
         }
         // Each immutable parent already binds full membership, distributions, policies and citations.
-        let mut enc = Encoder::new_frame(*b"PAIR", 1);
+        let tag = match self.score {
+            PairedScore::Interval => *b"PAIR",
+            PairedScore::Crps => *b"PCRP",
+        };
+        let mut enc = Encoder::new_frame(tag, 1);
         enc.put_fixed(&self.left_assessment.0);
         enc.put_fixed(&self.right_assessment.0);
-        enc.put_str(METHOD);
+        enc.put_str(self.score.method());
         enc.put_u64(self.members.len() as u64);
         for member in &self.members {
             enc.put_str(&member.subject);

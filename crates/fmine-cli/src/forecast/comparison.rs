@@ -2,13 +2,14 @@
 
 use std::fmt::Write as _;
 
-use fmine_calib::ledger::comparison::{METHOD, PairedAssessment};
+use fmine_calib::ForecastPayload;
+use fmine_calib::ledger::comparison::{PairedAssessment, PairedScore};
 use fmine_numerics::exact_feas::Rat;
 
-use super::{Replay, js, selector_name, utc};
+use super::{Replay, absent, js, selector_name, utc};
 use fmine_evidence::Refusal;
 
-pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--head <hex>]","inputs":"Two already persisted assessments in the same journal; no clock sampling, new assessment, outcome selection or journal append","compatibility":"Same frozen public issuer, metric, unit, ownership, calendar period, vintage permission, alpha, as-of cut and outcome selector","pairing":"Union of frozen subjects, with paired numeric scores only for identical outcome values and citations; missing forecasts, unresolved outcomes and selection mismatches stay visible","score":"Exact rational interval loss, left minus right, from the saved binary values and central-interval endpoints; negative favors left; observed mean on the identical-publication pairs only","completion":"Exact global finite loss-difference bounds for unresolved pairs with common alpha; whole-union average absent if any subject lacks a forecast or compatible selection, or arithmetic is unrepresentable","interpretation":"Descriptive only, no predictive-skill claim or guarantee of identical model information sets; original assessments and registration identities remain unchanged"}"#;
+pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps] [--head <hex>]","inputs":"Two already persisted assessments in the same journal; no clock sampling, new assessment, outcome selection or journal append","compatibility":"Same frozen public issuer, metric, unit, ownership, calendar period, vintage permission, alpha, as-of cut and outcome selector","pairing":"Union of frozen subjects, with paired numeric scores only for identical outcome values and citations; missing forecasts, unresolved outcomes and selection mismatches stay visible","score":"Default interval: unchanged exact rational interval loss and PAIR/v1 identity. Opt-in crps: exact full-distribution CRPS for empirical and weighted_empirical forecasts only; other distributions refuse even for unmatched subjects. Both use left minus right, with negative favoring left, and observed means on identical-publication pairs only","completion":"Exact global finite loss-difference bounds for unresolved pairs. CRPS sweeps the union of support atoms: the difference is linear between atoms and constant outside both supports, without outcome-domain assumptions. Exact weights are never normalized or resampled. Whole-union averages are absent if any subject lacks a forecast or compatible selection, or checked arithmetic is unrepresentable","identity":"CRPS uses fmine.forecast-crps-comparison.v1 and PCRP/v1, retaining every frozen distribution and exact weight, selected event and source citation. Default interval schema and digests remain unchanged","interpretation":"Descriptive arithmetic bounds, not confidence intervals, sequential significance, calibration or predictive skill; model information sets may differ; original assessments and registration identities remain unchanged"}"#;
 
 fn rat(value: Rat) -> String {
     format!(
@@ -57,15 +58,23 @@ pub(super) fn json(state: &Replay, report: &PairedAssessment) -> Result<String, 
     let members = report.members.iter().map(|member| {
         let left = member.left.as_ref().map(|m| state.member_json(m)).transpose()?.unwrap_or_else(|| "null".into());
         let right = member.right.as_ref().map(|m| state.member_json(m)).transpose()?.unwrap_or_else(|| "null".into());
+        let intervals = if report.score == PairedScore::Interval {
+            format!(",\"left_interval\":{},\"right_interval\":{}", interval(member.left_interval), interval(member.right_interval))
+        } else {
+            String::new()
+        };
         Ok(format!(
-            "{{\"subject\":{},\"status\":{},\"left\":{left},\"right\":{right},\"left_interval\":{},\"right_interval\":{},\"difference\":{},\"completion\":{},\"arithmetic_indeterminate\":{}}}",
-            js(&member.subject), js(member.status.as_str()), interval(member.left_interval),
-            interval(member.right_interval), optional(member.difference), bounds(member.completion),
+            "{{\"subject\":{},\"status\":{},\"left\":{left},\"right\":{right}{intervals},\"difference\":{},\"completion\":{},\"arithmetic_indeterminate\":{}}}",
+            js(&member.subject), js(member.status.as_str()), optional(member.difference), bounds(member.completion),
             member.arithmetic_indeterminate,
         ))
     }).collect::<Result<Vec<_>, Refusal>>()?.join(",");
+    let schema = match report.score {
+        PairedScore::Interval => "fmine.forecast-comparison.v1",
+        PairedScore::Crps => "fmine.forecast-crps-comparison.v1",
+    };
     Ok(format!(
-        "{{\"schema\":\"fmine.forecast-comparison.v1\",\"digest\":{},\"left_assessment\":{},\"right_assessment\":{},\"left_cohort\":{},\"right_cohort\":{},\"issuer\":{},\"metric\":{},\"unit\":{},\"ownership\":{},\"period\":{},\"alpha\":{},\"as_of\":{},\"selector\":{},\"method\":{},\"n_members\":{},\"n_paired\":{},\"n_unresolved\":{},\"n_unmatched\":{},\"n_arithmetic_indeterminate\":{},\"observed_status\":{},\"observed_mean_difference\":{},\"completion_status\":{},\"whole_population\":{},\"members\":[{members}]}}",
+        "{{\"schema\":\"{schema}\",\"digest\":{},\"left_assessment\":{},\"right_assessment\":{},\"left_cohort\":{},\"right_cohort\":{},\"issuer\":{},\"metric\":{},\"unit\":{},\"ownership\":{},\"period\":{},\"alpha\":{},\"as_of\":{},\"selector\":{},\"method\":{},\"n_members\":{},\"n_paired\":{},\"n_unresolved\":{},\"n_unmatched\":{},\"n_arithmetic_indeterminate\":{},\"observed_status\":{},\"observed_mean_difference\":{},\"completion_status\":{},\"whole_population\":{},\"members\":[{members}]}}",
         js(&report.digest.to_hex()),
         js(&report.left_assessment.to_hex()),
         js(&report.right_assessment.to_hex()),
@@ -79,7 +88,7 @@ pub(super) fn json(state: &Replay, report: &PairedAssessment) -> Result<String, 
         report.alpha,
         utc(report.as_of_ns),
         js(selector_name(report.selector)),
-        js(METHOD),
+        js(report.score.method()),
         report.members.len(),
         report.n_paired,
         report.n_unresolved,
@@ -102,8 +111,17 @@ fn display(value: Rat) -> String {
 
 pub(super) fn markdown(report: &PairedAssessment) -> String {
     let text = crate::guidance::text;
+    let title = match report.score {
+        PairedScore::Interval => "Paired forecast assessment",
+        PairedScore::Crps => "Paired full-distribution CRPS assessment",
+    };
+    let method = report.score.method();
+    let alpha_label = match report.score {
+        PairedScore::Interval => "Interval alpha",
+        PairedScore::Crps => "Frozen alpha (compatibility only; CRPS uses all probability mass)",
+    };
     let mut out = format!(
-        "# Paired forecast assessment\n\n{METHOD}\n\nComparison: `{}`\n\nLeft assessment: `{}`\n\nRight assessment: `{}`\n\nTarget: {} / {} / {} / {} / {}.\n\nAssessment cut: {}. Outcome selector: {}. Interval alpha: {}.\n\nPaired outcomes: {}. Unresolved pairs: {}. Unmatched subjects or selections: {}.\n\nObserved mean difference: {} ({}).\n\nWhole-population completion: {} ({}).\n\n| Subject | Status | Left minus right | Completion |\n|---|---|---:|---|\n",
+        "# {title}\n\n{method}\n\nComparison: `{}`\n\nLeft assessment: `{}`\n\nRight assessment: `{}`\n\nTarget: {} / {} / {} / {} / {}.\n\nAssessment cut: {}. Outcome selector: {}. {alpha_label}: {}.\n\nPaired outcomes: {}. Unresolved pairs: {}. Unmatched subjects or selections: {}.\n\nObserved mean difference: {} ({}).\n\nWhole-population completion: {} ({}).\n\n| Subject | Status | Left minus right | Completion |\n|---|---|---:|---|\n",
         report.digest,
         report.left_assessment,
         report.right_assessment,
@@ -167,4 +185,40 @@ pub(super) fn markdown(report: &PairedAssessment) -> String {
         }
     }
     out
+}
+
+pub(super) fn markdown_crps(state: &Replay, report: &PairedAssessment) -> Result<String, Refusal> {
+    let mut out = markdown(report);
+    out.push_str("\n## Frozen predictive distributions\n");
+    for member in &report.members {
+        for (side, selected) in [("Left", &member.left), ("Right", &member.right)] {
+            let Some(selected) = selected else {
+                continue;
+            };
+            let forecast = state
+                .ledger
+                .forecast(selected.forecast_id)
+                .ok_or_else(|| absent("paired CRPS forecast missing"))?;
+            let _ = writeln!(
+                out,
+                "\n### {side} {}\n\nForecast `{}`; original atom order and exact probability mass.\n\n| Value | Probability |\n|---:|---:|",
+                crate::guidance::text(&member.subject),
+                selected.forecast_id
+            );
+            match &forecast.payload {
+                ForecastPayload::Empirical { samples } => {
+                    for value in samples {
+                        let _ = writeln!(out, "| {value} | 1/{} |", samples.len());
+                    }
+                }
+                ForecastPayload::WeightedEmpirical { samples, weights } => {
+                    for (value, weight) in samples.iter().zip(weights) {
+                        let _ = writeln!(out, "| {value} | {} |", display(*weight));
+                    }
+                }
+                _ => return Err(super::invalid("paired CRPS distribution is unsupported")),
+            }
+        }
+    }
+    Ok(out)
 }

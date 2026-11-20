@@ -908,15 +908,29 @@ fn parse_forecast_journal(
                 .transpose()?,
             forecast: take(&mut fields, "--forecast")?,
         },
-        "compare" => Command::Compare {
-            journal,
-            head: fields
+        "compare" => {
+            let head = fields
                 .remove("--head")
                 .map(|value| digest(&value))
-                .transpose()?,
-            left: digest(&take(&mut fields, "--left")?)?,
-            right: digest(&take(&mut fields, "--right")?)?,
-        },
+                .transpose()?;
+            let left = digest(&take(&mut fields, "--left")?)?;
+            let right = digest(&take(&mut fields, "--right")?)?;
+            match fields.remove("--score").as_deref().unwrap_or("interval") {
+                "interval" => Command::Compare {
+                    journal,
+                    head,
+                    left,
+                    right,
+                },
+                "crps" => Command::CompareCrps {
+                    journal,
+                    head,
+                    left,
+                    right,
+                },
+                _ => return Err("compare --score must be interval or crps".into()),
+            }
+        }
         "correction" => {
             let head = fields
                 .remove("--head")
@@ -2522,7 +2536,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal restate --journal <path> --head <hex> --cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
-                "forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--head <hex>]",
+                "forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps] [--head <hex>]",
                 "forecast journal correction --journal <path> (--assessment <digest> | --assessments <digests>) --forecast <alias> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 forecast_candidate::USAGE,

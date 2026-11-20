@@ -276,6 +276,13 @@ pub enum Command {
         left: Digest32,
         right: Digest32,
     },
+    /// Compare complete finite distributions using exact CRPS on the same saved public outcomes.
+    CompareCrps {
+        journal: PathBuf,
+        head: Option<Digest32>,
+        left: Digest32,
+        right: Digest32,
+    },
     /// Propose a visible correction from saved training outcomes without changing any record.
     Correction {
         journal: PathBuf,
@@ -311,7 +318,7 @@ impl Command {
             Self::Inspect { .. } => "inspect",
             Self::VerifyPlant { .. } => "verify-plant",
             Self::Report { .. } => "report",
-            Self::Compare { .. } => "compare",
+            Self::Compare { .. } | Self::CompareCrps { .. } => "compare",
             Self::Correction { .. } | Self::CorrectionSeries { .. } => "correction",
         }
     }
@@ -418,12 +425,23 @@ fn perform(
             head,
             left,
             right,
+        }
+        | Command::CompareCrps {
+            journal,
+            head,
+            left,
+            right,
         } => {
             let journal = Journal::open_read(&root.join(journal), *head)?;
             let mut state = replay(&journal)?;
             persisted_report(&mut state, *left)?;
             persisted_report(&mut state, *right)?;
-            let report = state.ledger.compare_assessments(*left, *right)?;
+            let crps = matches!(command, Command::CompareCrps { .. });
+            let report = if crps {
+                state.ledger.compare_assessments_crps(*left, *right)?
+            } else {
+                state.ledger.compare_assessments(*left, *right)?
+            };
             let head_digest = journal
                 .records()
                 .last()
@@ -435,7 +453,12 @@ fn perform(
                 head.is_some(),
                 super::comparison::json(&state, &report)?,
             );
-            return Ok((payload, super::comparison::markdown(&report)));
+            let markdown = if crps {
+                super::comparison::markdown_crps(&state, &report)?
+            } else {
+                super::comparison::markdown(&report)
+            };
+            return Ok((payload, markdown));
         }
         Command::Init {
             journal,

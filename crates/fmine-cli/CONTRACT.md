@@ -966,6 +966,20 @@ information sets may differ, and the output supplies no significance or predicti
 read-only replay and publication-evidence checks are in `xtask/testdata/forecast_saved_comparison.rs`, loaded
 by `xtask/tests/forecast_registered_outcome.rs`; this is synthetic test evidence.
 
+The opt-in `--score crps` compares complete empirical and weighted empirical distributions on that same
+saved public-source pairing. Default and explicit `--score interval` retain their existing output and
+digest. The distinct `fmine.forecast-crps-comparison.v1` / PCRP/v1 projection keeps each forecast's original
+support values, exact weights, selected events and source admissions. JSON and Markdown expose exact
+left-minus-right CRPS differences, observed means and full-union completion bounds. Unresolved pairs
+use global extrema at the union of support atoms; both tails are constant because both distributions
+have total mass one. No outcome range, density, resampling or probability normalization is invented.
+Unsupported distributions refuse even when their subjects are unmatched. Rational capacity failures stay
+explicit and prevent affected means; compatible members are never dropped to manufacture a result.
+The command still samples no clock, rereads no original workbook and appends nothing. These bounds are
+arithmetic results, not confidence intervals or sequential evidence of model superiority. The existing
+source-to-journal fixture includes analytical weighted/uniform results, missing-outcome bounds, retained
+sources, offline replay, CLI selection/refusal and legacy-default checks.
+
 ### Explicit forecast correction proposals (BD-049, plan §10.3)
 
 `forecast journal correction --journal <path> --assessment <digest> --forecast <alias> [--head <hex>]`
