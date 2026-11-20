@@ -112,6 +112,27 @@ fn claim_json<T>(claim: &Claim<T>) -> String {
     )
 }
 
+fn supply_use_json(value: Option<&SupplyUse>) -> String {
+    let Some(value) = value else {
+        return String::new();
+    };
+    format!(
+        concat!(
+            ",\"supply_use\":{{\"available_dry_tonnes\":{},\"capacity_dry_tonnes\":{},",
+            "\"unused_dry_tonnes\":{},\"unused_capacity_dry_tonnes\":{},",
+            "\"used_scheduled_hours\":{},\"effective_throughput_dry_t_per_hour\":{},",
+            "\"binding_constraint\":{}}}"
+        ),
+        exact(value.available_dry_tonnes),
+        value.capacity_dry_tonnes.value(),
+        value.unused_dry_tonnes.value(),
+        value.unused_capacity_dry_tonnes.value(),
+        value.used_scheduled_hours.value(),
+        value.effective_throughput.value(),
+        quoted(value.binding_constraint.as_str()),
+    )
+}
+
 pub(super) fn worksheet_json(
     submitted: &str,
     source: &SourceAnchor,
@@ -121,26 +142,44 @@ pub(super) fn worksheet_json(
     let scope = &summary.grinding_scope;
     let recovery_scope = &summary.recovery_scope;
     let inputs = &receipt.inputs().value;
+    let supply = receipt.supply().map_or_else(String::new, |source| {
+        format!(
+            concat!(
+                ",\"supply\":{{\"basis\":{},\"claim\":{},",
+                "\"unit\":\"dry_metric_tonnes\",\"timing\":\"available_at_start\",",
+                "\"curtailment_policy\":\"reduce_exposure_at_declared_operating_point\",",
+                "\"throughput_meaning\":\"operating capacity; effective rate over scheduled exposure is separate\"}}"
+            ),
+            quoted(&source.value.supply_basis),
+            claim_json(source),
+        )
+    });
+    let schema = if receipt.supply().is_some() {
+        "fmine.plant-production-result.v2"
+    } else {
+        "fmine.plant-production-result.v1"
+    };
     let members = receipt.points().iter().map(|point| format!(
         concat!(
             "{{\"id\":{},\"weight\":{},\"grade_g_per_dry_t\":{},\"scheduled_hours\":{},",
             "\"grinding_source\":{},\"recovery_source\":{},\"throughput_dry_t_per_hour\":{},",
-            "\"recovery_fraction\":{},\"dry_tonnes\":{},\"contained_metal_kg\":{},\"recovered_metal_kg\":{}}}"
+            "\"recovery_fraction\":{},\"dry_tonnes\":{},\"contained_metal_kg\":{},\"recovered_metal_kg\":{}{}}}"
         ),
         quoted(&point.scenario_id), exact(point.weight), exact(point.grade_g_per_dry_t),
         exact(point.scheduled_hours), quoted(&point.grinding_source.to_string()),
         quoted(&point.recovery_source.to_string()), point.throughput.value(),
         point.recovery_fraction.value(), point.dry_tonnes.value(),
         point.contained_metal.value(), point.recovered_metal.value(),
+        supply_use_json(point.supply_use.as_ref()),
     )).collect::<Vec<_>>().join(",");
     format!(
         concat!(
-            "{{\"schema\":\"fmine.plant-production-result.v1\",\"submitted_worksheet\":{},\"source\":{},",
+            "{{\"schema\":{},\"submitted_worksheet\":{},\"source\":{},",
             "\"scope\":{{\"boundary\":{},\"circuit\":{},\"blend\":{},\"material_domain\":{},",
             "\"dry_basis\":{},\"element\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\"}},",
             "\"coupling_basis\":{},\"grade_coordinate\":{},\"product_size_coordinate\":{},",
             "\"grinding_receipt_digest\":{},\"recovery_receipt_digest\":{},",
-            "\"inputs_claim\":{},\"admitted_claim\":{},\"receipt_digest\":{},",
+            "\"inputs_claim\":{},\"admitted_claim\":{},\"receipt_digest\":{}{supply},",
             "\"summary\":{{\"scenario_count\":{},\"throughput_dry_t_per_hour\":{},\"recovery_fraction\":{},",
             "\"dry_tonnes\":{},\"contained_metal_kg\":{},\"recovered_metal_kg\":{}}},",
             "\"scenarios\":[{members}],\"calibration\":\"uncalibrated\",",
@@ -148,6 +187,7 @@ pub(super) fn worksheet_json(
             "\"quantile_convention\":\"inverse CDF with exact cumulative weights; no interpolation\",",
             "\"no_claim\":{}}}"
         ),
+        quoted(schema),
         quoted(submitted),
         source_json(source),
         quoted(&scope.boundary),
@@ -174,6 +214,7 @@ pub(super) fn worksheet_json(
         distribution(&summary.recovered_metal),
         quoted(NO_CLAIM),
         members = members,
+        supply = supply,
     )
 }
 
@@ -232,6 +273,32 @@ pub(super) fn worksheet_markdown(receipt: &ProductionReceipt) -> String {
             point.contained_metal.value(),
             point.recovered_metal.value(),
         );
+    }
+    if let Some(supply) = receipt.supply() {
+        let _ = writeln!(
+            out,
+            "\n## Available feed and binding constraints\n\nSupply basis: {}. Supply Claim: {}. Feed is available at processing start. Processing uses the minimum of feed and grinding capacity over scheduled exposure. Curtailment shortens exposure at the declared operating point, retaining grade, P80, utilization and recovery. The throughput above is operating capacity; the effective rate below is processed tonnes divided by the original scheduled exposure. Neither unused feed nor spare capacity implies a storage or downstream-flow model.\n\n| Scenario | Available dry t | Capacity dry t | Processed dry t | Unused feed dry t | Unused capacity dry t | Used scheduled hours | Effective dry t/h | Binding constraint |\n|---|---:|---:|---:|---:|---:|---:|---:|---|",
+            markdown(&supply.value.supply_basis),
+            supply.claim_id,
+        );
+        for point in receipt.points() {
+            if let Some(use_) = &point.supply_use {
+                let _ = writeln!(
+                    out,
+                    "| {} | {}/{} | {} | {} | {} | {} | {} | {} | {} |",
+                    markdown(&point.scenario_id),
+                    use_.available_dry_tonnes.num(),
+                    use_.available_dry_tonnes.den(),
+                    use_.capacity_dry_tonnes.value(),
+                    point.dry_tonnes.value(),
+                    use_.unused_dry_tonnes.value(),
+                    use_.unused_capacity_dry_tonnes.value(),
+                    use_.used_scheduled_hours.value(),
+                    use_.effective_throughput.value(),
+                    use_.binding_constraint.as_str(),
+                );
+            }
+        }
     }
     let _ = write!(
         out,

@@ -42,6 +42,30 @@ fn input_claim(value: ProductionInputs) -> Claim<ProductionInputs> {
     let tag = value.canonical_tag();
     source(INPUT_METRIC, value, tag)
 }
+fn supply_claim(value: ProductionSupply) -> Claim<ProductionSupply> {
+    let tag = value.canonical_tag();
+    source(SUPPLY_METRIC, value, tag)
+}
+fn supplied(inputs: &Claim<ProductionInputs>, tonnes: [ExactQty; 2]) -> Claim<ProductionSupply> {
+    supply_claim(ProductionSupply {
+        grinding_scope: inputs.value.grinding_scope.clone(),
+        recovery_scope: inputs.value.recovery_scope.clone(),
+        supply_basis: "Synthetic complete feed available before this exposure".into(),
+        available_at_start: true,
+        unchanged_operating_point: true,
+        scenarios: inputs
+            .value
+            .scenarios
+            .iter()
+            .zip(tonnes)
+            .map(|(state, available)| SupplyScenario {
+                id: state.id.clone(),
+                weight: state.weight,
+                available_dry_tonnes: available,
+            })
+            .collect(),
+    })
+}
 fn scope() -> GrindingScope {
     GrindingScope {
         boundary: "synthetic-mill-boundary".into(),
@@ -560,6 +584,241 @@ fn extreme_products_refuse_instead_of_emitting_nonfinite_or_silent_zero() {
 }
 
 #[test]
+fn explicit_supply_preserves_joint_states_and_reports_capacity_and_unused_feed() {
+    let (grinding, recovery, inputs) = fixture();
+    let supply = supplied(&inputs, [q(100, 1), q(120, 1)]);
+    let receipt = evaluate_supply_limited(&grinding, &recovery, &inputs, &supply).unwrap();
+    // Independent min(160,100), min(80,120); grade 2, recovery .9/.5.
+    close(receipt.summary().dry_tonnes.mean.value(), 90.0);
+    close(receipt.summary().contained_metal.mean.value(), 0.18);
+    close(receipt.summary().recovered_metal.mean.value(), 0.13);
+    close(receipt.summary().throughput.mean.value(), 120.0);
+    let a = receipt.points()[0].supply_use.as_ref().unwrap();
+    let b = receipt.points()[1].supply_use.as_ref().unwrap();
+    assert_eq!(a.binding_constraint, BindingConstraint::OreSupply);
+    assert_eq!(b.binding_constraint, BindingConstraint::GrindingCapacity);
+    close(a.capacity_dry_tonnes.value(), 160.0);
+    close(a.unused_capacity_dry_tonnes.value(), 60.0);
+    close(a.unused_dry_tonnes.value(), 0.0);
+    close(a.used_scheduled_hours.value(), 0.625);
+    close(a.effective_throughput.value(), 100.0);
+    close(b.unused_dry_tonnes.value(), 40.0);
+    close(b.unused_capacity_dry_tonnes.value(), 0.0);
+    close(b.used_scheduled_hours.value(), 1.0);
+    assert_eq!(receipt.supply(), Some(&supply));
+    assert!(receipt.claim().parents.contains(&supply.claim_id));
+    assert_eq!(receipt.claim().metric_key, SUPPLY_OUTPUT_METRIC);
+    assert_eq!(receipt.claim().evidence, EvidenceClass::Assumed);
+    let legacy = evaluate(&grinding, &recovery, &inputs).unwrap();
+    assert!(legacy.supply().is_none());
+    assert!(
+        legacy
+            .points()
+            .iter()
+            .all(|point| point.supply_use.is_none())
+    );
+    assert_eq!(legacy.claim().metric_key, OUTPUT_METRIC);
+    close(legacy.summary().recovered_metal.mean.value(), 0.184);
+    assert_ne!(receipt.digest(), legacy.digest());
+}
+
+#[test]
+fn supply_zero_exposure_shutdown_and_exact_capacity_ties_keep_all_states() {
+    let (grinding, recovery, inputs) = fixture();
+    let supply = supplied(&inputs, [ZERO, q(80, 1)]);
+    let receipt = evaluate_supply_limited(&grinding, &recovery, &inputs, &supply).unwrap();
+    assert_eq!(receipt.points().len(), 2);
+    assert_eq!(receipt.points()[0].dry_tonnes.value(), 0.0);
+    let a = receipt.points()[0].supply_use.as_ref().unwrap();
+    assert_eq!(a.binding_constraint, BindingConstraint::OreSupply);
+    assert_eq!(a.used_scheduled_hours.value(), 0.0);
+    assert_eq!(a.effective_throughput.value(), 0.0);
+    assert_eq!(
+        receipt.points()[1]
+            .supply_use
+            .as_ref()
+            .unwrap()
+            .binding_constraint,
+        BindingConstraint::Both
+    );
+
+    let no_hours = declarations([q(2, 1); 2], [ZERO; 2]);
+    let supply = supplied(&no_hours, [ZERO, q(100, 1)]);
+    let receipt = evaluate_supply_limited(&grinding, &recovery, &no_hours, &supply).unwrap();
+    for point in receipt.points() {
+        assert_eq!(point.dry_tonnes.value(), 0.0);
+        let use_ = point.supply_use.as_ref().unwrap();
+        assert_eq!(use_.used_scheduled_hours.value(), 0.0);
+        assert_eq!(use_.effective_throughput.value(), 0.0);
+    }
+    assert_eq!(
+        receipt.points()[0]
+            .supply_use
+            .as_ref()
+            .unwrap()
+            .binding_constraint,
+        BindingConstraint::Both
+    );
+    let stopped = self::grinding([0.0, 0.8]);
+    let supply = supplied(&inputs, [q(100, 1); 2]);
+    let receipt = evaluate_supply_limited(&stopped, &recovery, &inputs, &supply).unwrap();
+    let a = receipt.points()[0].supply_use.as_ref().unwrap();
+    assert_eq!(a.binding_constraint, BindingConstraint::GrindingCapacity);
+    assert_eq!(a.unused_dry_tonnes.value(), 100.0);
+    assert_eq!(a.used_scheduled_hours.value(), 0.0);
+}
+
+#[test]
+fn available_feed_requires_complete_matching_sources_and_explicit_physical_assumptions() {
+    let (grinding, recovery, inputs) = fixture();
+    let supply = supplied(&inputs, [q(100, 1); 2]);
+    let run = |value: ProductionSupply| {
+        evaluate_supply_limited(&grinding, &recovery, &inputs, &supply_claim(value))
+            .unwrap_err()
+            .code
+    };
+    let mut changed = supply.value.clone();
+    changed.scenarios.pop();
+    assert_eq!(run(changed), "FMINE-REF-105");
+    let mut changed = supply.value.clone();
+    changed.scenarios[0].id = "b".into();
+    assert_eq!(run(changed), "FMINE-REF-105");
+    let mut changed = supply.value.clone();
+    changed.scenarios[0].id = "other".into();
+    assert_eq!(run(changed), "FMINE-REF-105");
+    let mut changed = supply.value.clone();
+    changed.scenarios[0].weight = q(1, 3);
+    assert_eq!(run(changed), "FMINE-REF-105");
+    let mut changed = supply.value.clone();
+    changed.scenarios[0].available_dry_tonnes = q(-1, 1);
+    assert_eq!(run(changed), "FMINE-REF-109");
+    let mut changed = supply.value.clone();
+    changed.grinding_scope.blend = "another-feed".into();
+    assert_eq!(run(changed), "FMINE-REF-102");
+    let mut changed = supply.value.clone();
+    changed.recovery_scope.dry_basis = "unmatched-moisture-state".into();
+    assert_eq!(run(changed), "FMINE-REF-102");
+    let mut changed = supply.value.clone();
+    changed.available_at_start = false;
+    assert_eq!(run(changed), "FMINE-REF-201");
+    let mut changed = supply.value.clone();
+    changed.unchanged_operating_point = false;
+    assert_eq!(run(changed), "FMINE-REF-201");
+    let mut changed = supply.value.clone();
+    changed.supply_basis.clear();
+    assert_eq!(run(changed), "FMINE-REF-201");
+    let mut tampered = supply.clone();
+    tampered.value.scenarios[0].available_dry_tonnes = q(99, 1);
+    assert_eq!(
+        evaluate_supply_limited(&grinding, &recovery, &inputs, &tampered)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-507"
+    );
+    let mut stale = supply.clone();
+    stale.stale = true;
+    assert_eq!(
+        evaluate_supply_limited(&grinding, &recovery, &inputs, &stale)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-502"
+    );
+    let mut failed = supply;
+    failed.calibration_failed = true;
+    assert_eq!(
+        evaluate_supply_limited(&grinding, &recovery, &inputs, &failed)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-205"
+    );
+    // Rounding must not silently turn unequal exact supply/capacity into a tie.
+    assert_eq!(
+        supply_use(
+            q(1_600_000_000_000_000_001, 10_000_000_000_000_000),
+            160.0,
+            160.0,
+            ONE
+        )
+        .unwrap_err()
+        .code,
+        "FMINE-REF-207"
+    );
+}
+
+#[test]
+fn supply_population_order_and_full_source_envelope_bind_the_receipt() {
+    let (grinding, recovery, inputs) = fixture();
+    let supply = supplied(&inputs, [q(100, 1); 2]);
+    let first = evaluate_supply_limited(&grinding, &recovery, &inputs, &supply).unwrap();
+    let mut value = supply.value.clone();
+    value.scenarios.reverse();
+    let second =
+        evaluate_supply_limited(&grinding, &recovery, &inputs, &supply_claim(value)).unwrap();
+    assert_eq!(first.digest(), second.digest());
+    assert_eq!(first.points(), second.points());
+    let mut restricted = Claim::new(
+        SUPPLY_METRIC,
+        supply.value.clone(),
+        supply.value_tag(),
+        Representation::Deterministic,
+        SpatialSupport::PeriodAggregate,
+        AdditivityClass::NonAdditive,
+        EvidenceClass::Assumed,
+        EpistemicStatus::KnownKnown,
+        KnowledgeState::Known,
+        Confidentiality::internal(),
+        vec![],
+        vec![],
+        supply.anchors.clone(),
+    );
+    restricted.uu_terms.push(UuTerm {
+        scenario_id: "feed-readiness".into(),
+        description: "Declared feed may arrive late".into(),
+        downside_exposure_usd_m: 1.0,
+        trigger_indicator: "Ore unavailable when scheduled processing starts".into(),
+    });
+    let changed = evaluate_supply_limited(&grinding, &recovery, &inputs, &restricted).unwrap();
+    assert_ne!(first.digest(), changed.digest());
+    assert_eq!(changed.points(), first.points());
+    assert_eq!(changed.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(changed.claim().uu_terms.len(), 1);
+}
+
+#[test]
+fn supply_conversion_cannot_reverse_a_binding_constraint() {
+    // Independent rational comparison to binary64 0.1 = 3602879701896397/2^55.
+    // Casting this numerator/denominator separately rounds the ratio upward
+    // across capacity, even though the exact source is strictly below it.
+    let below = q(
+        2_294_532_357_039_142_209_280,
+        22_945_323_570_391_420_819_079,
+    );
+    assert!(
+        below
+            .checked_cmp(crate::reconciliation::represented_rational(0.1).unwrap())
+            .unwrap()
+            .is_lt()
+    );
+    assert!(below.to_f64() > 0.1);
+    assert_eq!(
+        supply_use(below, 0.1, 0.1, ONE).unwrap_err().code,
+        "FMINE-REF-207"
+    );
+    let above = q(375_569_884_728_771_033, 3_755_698_847_287_710_121);
+    assert!(
+        above
+            .checked_cmp(crate::reconciliation::represented_rational(0.1).unwrap())
+            .unwrap()
+            .is_gt()
+    );
+    assert!(above.to_f64() < 0.1);
+    assert_eq!(
+        supply_use(above, 0.1, 0.1, ONE).unwrap_err().code,
+        "FMINE-REF-207"
+    );
+}
+
+#[test]
 fn source_bound_worksheets_join_both_models_and_preserve_the_tonne_grade_trap() {
     let grinding_text = include_str!("../../../../tests/plant/grinding_joint.toml");
     let recovery_text = include_str!("../../../../tests/plant/production_recovery.toml");
@@ -660,4 +919,113 @@ fn source_bound_worksheets_join_both_models_and_preserve_the_tonne_grade_trap() 
         .code,
         "FMINE-REF-105"
     );
+}
+
+#[test]
+fn supply_worksheet_is_opt_in_strict_and_source_bound_with_legacy_output_preserved() {
+    let grinding_text = include_str!("../../../../tests/plant/grinding_joint.toml");
+    let recovery_text = include_str!("../../../../tests/plant/production_recovery.toml");
+    let legacy_text = include_str!("../../../../tests/plant/production_joint.toml");
+    let supplied_text = include_str!("../../../../tests/plant/production_supply_limited.toml");
+    let anchor = |name: &str, text: &str| {
+        SourceAnchor::new(
+            name,
+            sha256(text.as_bytes()).0,
+            "authored synthetic worksheet",
+        )
+    };
+    let grinding =
+        grinding::worksheet::evaluate(grinding_text, &anchor("grinding", grinding_text)).unwrap();
+    let recovery =
+        cards::worksheet::evaluate(recovery_text, &anchor("recovery", recovery_text)).unwrap();
+    let ensemble = recovery.ensemble_receipt().unwrap();
+    let run = |text: &str| {
+        worksheet::evaluate(
+            text,
+            &anchor("production", text),
+            grinding.receipt(),
+            ensemble,
+        )
+    };
+    let supplied = run(supplied_text).unwrap();
+    close(supplied.receipt().summary().dry_tonnes.mean.value(), 90.0);
+    close(
+        supplied.receipt().summary().contained_metal.mean.value(),
+        0.21,
+    );
+    close(
+        supplied.receipt().summary().recovered_metal.mean.value(),
+        0.174,
+    );
+    assert!(
+        supplied
+            .to_json()
+            .contains("fmine.plant-production-result.v2")
+    );
+    assert!(
+        supplied
+            .to_json()
+            .contains("\"binding_constraint\":\"ore_supply\"")
+    );
+    assert!(
+        supplied
+            .to_markdown()
+            .contains("Available feed and binding constraints")
+    );
+
+    let legacy = run(legacy_text).unwrap();
+    assert!(
+        legacy
+            .to_json()
+            .contains("fmine.plant-production-result.v1")
+    );
+    assert!(!legacy.to_json().contains("\"supply\":"));
+    assert!(!legacy.to_json().contains("\"supply_use\":"));
+    assert!(legacy.receipt().supply().is_none());
+    close(
+        legacy.receipt().summary().recovered_metal.mean.value(),
+        0.24,
+    );
+
+    for text in [
+        supplied_text.replace("supply_unit = \"dry_metric_tonnes\"\n", ""),
+        supplied_text.replace(
+            "supply_unit = \"dry_metric_tonnes\"",
+            "supply_unit = \"wet_metric_tonnes\"",
+        ),
+        supplied_text.replace("available_at_start", "arrives_during_shift"),
+        supplied_text.replace(
+            "reduce_exposure_at_declared_operating_point",
+            "throttle_circuit",
+        ),
+        supplied_text.replacen("available_dry_tonnes = \"100\"\n", "", 1),
+        supplied_text.replace(worksheet::SUPPLY_SCHEMA, worksheet::SCHEMA),
+        legacy_text.replace(
+            "scheduled_hours = \"1\"",
+            "scheduled_hours = \"1\"\navailable_dry_tonnes = \"100\"",
+        ),
+    ] {
+        assert_eq!(run(&text).err().unwrap().code, "FMINE-REF-506", "{text}");
+    }
+    let changed = supplied_text.replace(
+        "available_dry_tonnes = \"100\"",
+        "available_dry_tonnes = \"-1\"",
+    );
+    assert_eq!(run(&changed).err().unwrap().code, "FMINE-REF-109");
+    assert_eq!(
+        worksheet::evaluate(
+            &changed,
+            &anchor("production", supplied_text),
+            grinding.receipt(),
+            ensemble
+        )
+        .err()
+        .unwrap()
+        .code,
+        "FMINE-REF-505"
+    );
+    let changed = format!("{supplied_text}\n# same calculation, distinct retained source bytes\n");
+    let changed = run(&changed).unwrap();
+    assert_eq!(supplied.receipt().points(), changed.receipt().points());
+    assert_ne!(supplied.receipt().digest(), changed.receipt().digest());
 }

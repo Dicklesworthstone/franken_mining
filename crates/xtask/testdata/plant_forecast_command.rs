@@ -352,3 +352,133 @@ fn binary_registers_complete_weighted_plant_population_and_reopens_both_time_bou
         admission
     );
 }
+
+#[test]
+fn supply_limited_forecasts_replay_retained_sources_and_keep_operating_rate_semantics() {
+    let (root, start, _) = fixture();
+    let supply = include_str!("../../../tests/plant/production_supply_limited.toml")
+        .replace("start_ns = \"0\"", &format!("start_ns = \"{start}\""))
+        .replace(
+            "end_ns = \"3600000000000\"",
+            &format!("end_ns = \"{}\"", start + HOUR),
+        );
+    std::fs::write(root.join("production.toml"), &supply).expect("supply-limited source");
+    run(
+        &root,
+        &[
+            "init",
+            "--journal",
+            "journal",
+            "--cell",
+            "synthetic-plant",
+            "--max-clock-skew-ms",
+            "1",
+            "--trust-host-clock",
+        ],
+        0,
+    );
+    let targets = [
+        ("limited-metal", "recovered-metal", [0.288, 0.06]),
+        ("limited-tonnes", "dry-tonnes", [80.0, 100.0]),
+        ("operating-rate", "throughput", [80.0, 320.0]),
+    ];
+    for (id, target, expected) in targets {
+        let previous = head(&root);
+        let registered = run(
+            &root,
+            &[
+                "register-plant",
+                "--journal",
+                "journal",
+                "--head",
+                &previous,
+                "--input",
+                "production.toml",
+                "--grinding",
+                "grinding.toml",
+                "--recovery",
+                "recovery.toml",
+                "--id",
+                id,
+                "--target",
+                target,
+                "--author-role",
+                "synthetic-model-role",
+                "--time-basis",
+                "utc-unix-ns",
+                "--trust-host-clock",
+            ],
+            0,
+        );
+        let receipt = field(
+            &registered,
+            &["payload", "plant_admission", "source_receipt", "production"],
+        );
+        assert_eq!(
+            field(receipt, &["schema"]).as_str(),
+            Some("fmine.plant-production-result.v2")
+        );
+        assert_eq!(
+            field(receipt, &["submitted_worksheet"]).as_str(),
+            Some(supply.as_str())
+        );
+        let forecast = field(&registered, &["payload", "forecasts"])
+            .as_array()
+            .expect("forecasts")
+            .iter()
+            .find(|row| field(row, &["alias"]).as_str() == Some(id))
+            .expect("registered target");
+        let samples = field(forecast, &["payload", "samples"])
+            .as_array()
+            .expect("all weighted states");
+        assert_eq!(samples.len(), 2);
+        for (sample, expected) in samples.iter().zip(expected) {
+            assert!((sample.f64().expect("number") - expected).abs() < 1e-12);
+        }
+        assert_eq!(
+            field(forecast, &["payload", "weights"]),
+            &parse(br#"["1/2","1/2"]"#).unwrap()
+        );
+    }
+    let retained_head = head(&root);
+    let before = std::fs::read(root.join("journal")).expect("retained journal");
+    for name in ["production", "grinding", "recovery"] {
+        std::fs::rename(
+            root.join(format!("{name}.toml")),
+            root.join(format!("{name}.saved")),
+        )
+        .unwrap();
+    }
+    for (id, _, _) in targets {
+        let verified = run(
+            &root,
+            &[
+                "verify-plant",
+                "--journal",
+                "journal",
+                "--forecast",
+                id,
+                "--head",
+                &retained_head,
+            ],
+            0,
+        );
+        let verification = field(&verified, &["payload", "verification"]);
+        assert_eq!(field(verification, &["status"]).as_str(), Some("verified"));
+        assert_eq!(
+            field(verification, &["source_files_opened"]).as_bool(),
+            Some(false)
+        );
+        let receipt = field(verification, &["admission", "source_receipt", "production"]);
+        assert_eq!(
+            field(receipt, &["submitted_worksheet"]).as_str(),
+            Some(supply.as_str())
+        );
+        assert_eq!(
+            field(receipt, &["schema"]).as_str(),
+            Some("fmine.plant-production-result.v2")
+        );
+    }
+    assert_eq!(head(&root), retained_head);
+    assert_eq!(std::fs::read(root.join("journal")).unwrap(), before);
+}

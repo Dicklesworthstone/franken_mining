@@ -10,6 +10,7 @@ use fmine_io::omf::json::{Json, parse};
 const GRINDING: &str = include_str!("../../../tests/plant/grinding_joint.toml");
 const RECOVERY: &str = include_str!("../../../tests/plant/production_recovery.toml");
 const PRODUCTION: &str = include_str!("../../../tests/plant/production_joint.toml");
+const SUPPLY: &str = include_str!("../../../tests/plant/production_supply_limited.toml");
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 fn scratch() -> PathBuf {
@@ -141,6 +142,83 @@ fn executable_keeps_dependence_source_bytes_units_and_claim_ancestry() {
 }
 
 #[test]
+fn executable_applies_declared_supply_and_retains_each_binding_constraint() {
+    let root = scratch();
+    std::fs::write(root.join("production.toml"), SUPPLY).expect("declared supply worksheet");
+    let (code, output) = run(&root, &[]);
+    assert_eq!(code, 0, "{output}");
+    assert_eq!(run(&root, &[]), (code, output.clone()));
+    let json = parse(output.as_bytes()).expect("JSON envelope");
+    let p = field(&json, &["payload", "production"]);
+    assert_eq!(
+        field(p, &["schema"]).as_str(),
+        Some("fmine.plant-production-result.v2")
+    );
+    assert_eq!(field(p, &["submitted_worksheet"]).as_str(), Some(SUPPLY));
+    assert_eq!(
+        field(p, &["source", "sha256"]).as_str(),
+        Some(sha256(SUPPLY.as_bytes()).to_hex().as_str())
+    );
+    for (quantity, expected) in [
+        ("dry_tonnes", 90.0),
+        ("contained_metal_kg", 0.21),
+        ("recovered_metal_kg", 0.174),
+    ] {
+        close(field(p, &["summary", quantity, "mean"]), expected);
+    }
+    let states = field(p, &["scenarios"]).as_array().expect("all states");
+    for (id, capacity, processed, spare, unused, constraint) in [
+        ("soft", 320.0, 100.0, 220.0, 0.0, "ore_supply"),
+        ("hard", 80.0, 80.0, 0.0, 20.0, "grinding_capacity"),
+    ] {
+        let state = states
+            .iter()
+            .find(|row| field(row, &["id"]).as_str() == Some(id))
+            .expect("state");
+        close(field(state, &["dry_tonnes"]), processed);
+        let supply = field(state, &["supply_use"]);
+        close(field(supply, &["capacity_dry_tonnes"]), capacity);
+        close(field(supply, &["unused_capacity_dry_tonnes"]), spare);
+        close(field(supply, &["unused_dry_tonnes"]), unused);
+        close(
+            field(supply, &["effective_throughput_dry_t_per_hour"]),
+            processed,
+        );
+        assert_eq!(
+            field(supply, &["binding_constraint"]).as_str(),
+            Some(constraint)
+        );
+    }
+    assert_eq!(
+        field(p, &["admitted_claim", "parents"])
+            .as_array()
+            .expect("parents")
+            .len(),
+        4
+    );
+    let (code, markdown) = run(&root, &["--format", "markdown"]);
+    assert_eq!(code, 0);
+    assert!(markdown.contains("Available feed and binding constraints"));
+    assert!(markdown.contains("ore_supply"));
+    assert!(markdown.contains("grinding_capacity"));
+
+    for changed in [
+        SUPPLY.replacen("available_dry_tonnes = \"100\"\n", "", 1),
+        SUPPLY.replace(
+            "available_dry_tonnes = \"100\"",
+            "available_dry_tonnes = \"-1\"",
+        ),
+        SUPPLY.replace("dry_metric_tonnes", "wet_metric_tonnes"),
+    ] {
+        std::fs::write(root.join("production.toml"), changed).expect("invalid supply");
+        let (code, output) = run(&root, &[]);
+        assert_ne!(code, 0, "{output}");
+        assert!(output.contains("FMINE-REF-"));
+        assert!(!output.contains("fmine.plant-production-result.v2"));
+    }
+}
+
+#[test]
 fn executable_refuses_mismatched_grade_grind_scope_and_probability_without_partial_output() {
     let cases = [
         (
@@ -241,6 +319,14 @@ fn parser_requires_all_three_unique_inputs_and_robot_docs_explain_the_model() {
     assert_eq!(
         field(&json, &["payload", "plant_production", "schema"]).as_str(),
         Some("fmine.plant-production.v1")
+    );
+    assert_eq!(
+        field(
+            &json,
+            &["payload", "plant_production", "supply_limited", "schema"]
+        )
+        .as_str(),
+        Some("fmine.plant-production.v2")
     );
     assert!(text.contains("forecast journal register-plant"));
 }

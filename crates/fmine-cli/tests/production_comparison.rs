@@ -170,6 +170,114 @@ fn actual_binary_compares_both_modes_with_exact_regret_and_complete_source_snaps
 }
 
 #[test]
+fn a_common_ore_supply_limit_reverses_the_preferred_grind_through_actual_valuation() {
+    let root = fixture();
+    let grinding = include_str!("../../../tests/plant/grinding_joint.toml")
+        .replace("p80_microns = \"100\"", "p80_microns = \"144\"");
+    let recovery = include_str!("../../../tests/plant/production_recovery.toml")
+        .replace("value = \"100\"", "value = \"144\"");
+    let terms = include_str!("../../../tests/decisions/production_valuation.toml")
+        .replace("action_id = \"process\"", "action_id = \"coarse\"")
+        .replace(
+            "action_label = \"Process the declared shift\"",
+            "action_label = \"Coarser grind\"",
+        );
+    let manifest = MANIFEST
+        .replace("higher-power", "coarse")
+        .replace("grinding_higher_power.toml", "grinding_coarse.toml")
+        .replace("production_valuation_higher_power.toml", "production_valuation_coarse.toml")
+        .replace(
+            "grinding = \"tests/plant/grinding_coarse.toml\"\nrecovery = \"tests/plant/production_recovery.toml\"",
+            "grinding = \"tests/plant/grinding_coarse.toml\"\nrecovery = \"tests/plant/production_recovery_coarse.toml\"",
+        )
+        .replace(
+            "only the declared power and operating charges change by action",
+            "only P80 and its declared recovery response change by action; available ore and commercial terms are common",
+        );
+    for (path, text) in [
+        ("tests/plant/grinding_coarse.toml", grinding),
+        ("tests/plant/production_recovery_coarse.toml", recovery),
+        ("tests/decisions/production_valuation_coarse.toml", terms),
+        ("tests/decisions/production_comparison.toml", manifest),
+    ] {
+        std::fs::write(root.join(path), text).expect("authored coarse-grind alternative");
+    }
+    let summary = |output: &std::process::Output| {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        parse(&output.stdout).expect("decision JSON")
+    };
+    let first = summary(&binary(&root, &arguments()));
+    let first = field(&first, &["payload", "comparison", "decision", "summary"]);
+    assert_eq!(
+        field(first, &["expected_value_primary"]).as_str(),
+        Some("coarse")
+    );
+    let mean = |value: &Json, id: &str| {
+        let row = field(value, &["alternatives"])
+            .as_array()
+            .expect("alternatives")
+            .iter()
+            .find(|row| field(row, &["action_id"]).as_str() == Some(id))
+            .expect("action");
+        field(row, &["mean"])
+            .as_str()
+            .expect("exact mean")
+            .to_owned()
+    };
+    // Independent Bond/response arithmetic: P80 144 gives Q 480/120 t/h and
+    // recovery .556/.856. The same commercial terms give $809.12/$13,908.352.
+    assert_eq!(mean(first, "process"), "25308/5");
+    assert_eq!(mean(first, "coarse"), "919842/125");
+
+    let supply = include_str!("../../../tests/plant/production_supply_limited.toml")
+        .replace(
+            "available_dry_tonnes = \"100\"",
+            "available_dry_tonnes = \"50\"",
+        )
+        .replace("100 dry metric tonnes", "50 dry metric tonnes");
+    std::fs::write(root.join("tests/plant/production_joint.toml"), &supply)
+        .expect("same 50 t supply for both alternatives");
+    let second = summary(&binary(&root, &arguments()));
+    let decision = field(&second, &["payload", "comparison", "decision", "summary"]);
+    assert_eq!(
+        field(decision, &["expected_value_primary"]).as_str(),
+        Some("process")
+    );
+    // Both states and modes now process 50 t. Fine margins are -717.50/5072;
+    // coarse margins are -811.55/4628.48. Do-nothing remains in the comparison.
+    assert_eq!(mean(decision, "process"), "8709/4");
+    assert_eq!(mean(decision, "coarse"), "381693/200");
+    for alternative in field(&second, &["payload", "alternatives"])
+        .as_array()
+        .expect("sources")
+    {
+        let production = field(alternative, &["production", "production"]);
+        assert_eq!(
+            field(production, &["submitted_worksheet"]).as_str(),
+            Some(supply.as_str())
+        );
+        assert_eq!(
+            field(production, &["schema"]).as_str(),
+            Some("fmine.plant-production-result.v2")
+        );
+        for state in field(production, &["scenarios"])
+            .as_array()
+            .expect("states")
+        {
+            assert_eq!(field(state, &["dry_tonnes"]).f64(), Some(50.0));
+            assert_eq!(
+                field(state, &["supply_use", "binding_constraint"]).as_str(),
+                Some("ore_supply")
+            );
+        }
+    }
+}
+
+#[test]
 fn a_bad_alternative_refuses_the_whole_command_without_partial_rankings() {
     let root = fixture();
     for terms in [

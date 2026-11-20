@@ -2,7 +2,9 @@
 //! The worksheet declares the physical bridge and preserves every simultaneous state.
 //! Determinism: DeterministicPerIsa
 
-use super::{ProductionInputs, ProductionReceipt, ProductionScenario};
+use super::{
+    ProductionInputs, ProductionReceipt, ProductionScenario, ProductionSupply, SupplyScenario,
+};
 use crate::cards::{RecoveryScope, ensemble::RecoveryEnsembleReceipt};
 use crate::grinding::{GrindingReceipt, GrindingScope};
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
@@ -14,6 +16,7 @@ use fmine_units::ExactQty;
 use std::collections::BTreeMap;
 
 pub const SCHEMA: &str = "fmine.plant-production.v1";
+pub const SUPPLY_SCHEMA: &str = "fmine.plant-production.v2";
 pub const MAX_BYTES: u64 = 1024 * 1024;
 pub const NO_CLAIM: &str = "Conditional production from explicitly coupled grinding, grade, exposure and recovery scenarios. Probabilities, physical scope, coupling and model applicability remain declared, Assumed, Internal and uncalibrated. Scheduled hours include downtime through the grinding utilization exactly once. No physical blending rule, circuit feedback, inventory timing, payable-metal conversion, calibrated forecast or operating authorization is established.";
 pub const ROBOT_DOCS_JSON: &str = concat!(
@@ -29,7 +32,15 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"values\":\"Quoted trimmed strings; exact decimals or n/d with positive denominator for weights, grades and hours; signed integer nanoseconds for times\",",
     "\"output\":\"Retains three submitted worksheets, source identities, admitted parent receipts, every coupled row, typed distributions and Claim ancestry; invalid members refuse the complete calculation\",",
     "\"quantiles\":\"Inverse CDF under exact supplied weights, without interpolation; descriptive conditional distribution, not confidence or calibration\",",
-    "\"examples\":[\"tests/plant/production_joint.toml\",\"tests/plant/grinding_joint.toml\",\"tests/plant/production_recovery.toml\"]}"
+    "\"examples\":[\"tests/plant/production_joint.toml\",\"tests/plant/grinding_joint.toml\",\"tests/plant/production_recovery.toml\"],",
+    "\"supply_limited\":{\"schema\":\"fmine.plant-production.v2\",",
+    "\"additional_fields\":[\"supply_basis\",\"supply_unit\",\"supply_timing\",\"curtailment_policy\"],",
+    "\"additional_scenario_field\":\"available_dry_tonnes\",",
+    "\"declarations\":\"supply_unit=dry_metric_tonnes; supply_timing=available_at_start; curtailment_policy=reduce_exposure_at_declared_operating_point\",",
+    "\"calculation\":\"Within each shared state, processed dry tonnes are the minimum of declared available feed and grinding throughput times scheduled hours. Feed is present before processing starts; curtailment shortens exposure at unchanged operating throughput, utilization, grade, P80 and recovery\",",
+    "\"output\":\"Operating throughput retains its v1 capacity meaning. Each scenario separately exposes available and capacity tonnes, processed tonnes, unused feed/capacity, used scheduled hours, effective throughput over scheduled exposure and the binding constraint. No arrival curve, storage model or downstream bottleneck is inferred\",",
+    "\"compatibility\":\"V1 input, result and receipt encodings retain their original meaning and bytes; v2 emits a separate result schema and receipt frame\",",
+    "\"example\":\"tests/plant/production_supply_limited.toml\"}}"
 );
 
 type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
@@ -160,28 +171,44 @@ pub fn evaluate(
     if doc.rows.is_empty() || doc.rows.len() > 256 {
         return Err(bad(1, "requires 1..256 complete scenario rows"));
     }
-    let top = fields(
-        &doc.top,
-        &[
-            "schema",
-            "boundary",
-            "circuit",
-            "blend",
-            "material_domain",
-            "dry_basis",
-            "element",
-            "start_ns",
-            "end_ns",
-            "grade_unit",
-            "duration_unit",
-            "coupling_basis",
-            "grade_coordinate",
-            "product_size_coordinate",
-        ],
-        1,
-    )?;
+    let supply_limited = doc.top.iter().any(|field| {
+        field.key == "schema"
+            && matches!(&field.value, TomlValue::Str(value) if value == SUPPLY_SCHEMA)
+    });
+    let mut top_fields = vec![
+        "schema",
+        "boundary",
+        "circuit",
+        "blend",
+        "material_domain",
+        "dry_basis",
+        "element",
+        "start_ns",
+        "end_ns",
+        "grade_unit",
+        "duration_unit",
+        "coupling_basis",
+        "grade_coordinate",
+        "product_size_coordinate",
+    ];
+    if supply_limited {
+        top_fields.extend([
+            "supply_basis",
+            "supply_unit",
+            "supply_timing",
+            "curtailment_policy",
+        ]);
+    }
+    let top = fields(&doc.top, &top_fields, 1)?;
     for (key, expected) in [
-        ("schema", SCHEMA),
+        (
+            "schema",
+            if supply_limited {
+                SUPPLY_SCHEMA
+            } else {
+                SCHEMA
+            },
+        ),
         ("grade_unit", "g_per_dry_t"),
         ("duration_unit", "hours"),
     ] {
@@ -190,27 +217,50 @@ pub fn evaluate(
             return Err(bad(value.1, format!("{key} must be {expected}")));
         }
     }
+    if supply_limited {
+        for (key, expected) in [
+            ("supply_unit", "dry_metric_tonnes"),
+            ("supply_timing", "available_at_start"),
+            (
+                "curtailment_policy",
+                "reduce_exposure_at_declared_operating_point",
+            ),
+        ] {
+            let value = get(&top, key)?;
+            if value.0 != expected {
+                return Err(bad(value.1, format!("{key} must be {expected}")));
+            }
+        }
+    }
     let interval = ValidTime {
         start_ns: time(get(&top, "start_ns")?)?,
         end_ns: time(get(&top, "end_ns")?)?,
     };
     let circuit = get(&top, "circuit")?.0.to_owned();
     let mut scenarios = Vec::with_capacity(doc.rows.len());
+    let mut supplied = Vec::new();
+    let mut row_fields = vec!["id", "weight", "grade_g_per_dry_t", "scheduled_hours"];
+    if supply_limited {
+        row_fields.push("available_dry_tonnes");
+    }
     for row in &doc.rows {
         if row.table != "scenario" {
             return Err(bad(row.line, format!("unsupported table {}", row.table)));
         }
-        let values = fields(
-            &row.fields,
-            &["id", "weight", "grade_g_per_dry_t", "scheduled_hours"],
-            row.line,
-        )?;
+        let values = fields(&row.fields, &row_fields, row.line)?;
         scenarios.push(ProductionScenario {
             id: get(&values, "id")?.0.to_owned(),
             weight: exact(get(&values, "weight")?)?,
             grade_g_per_dry_t: exact(get(&values, "grade_g_per_dry_t")?)?,
             scheduled_hours: exact(get(&values, "scheduled_hours")?)?,
         });
+        if supply_limited {
+            supplied.push(SupplyScenario {
+                id: get(&values, "id")?.0.to_owned(),
+                weight: exact(get(&values, "weight")?)?,
+                available_dry_tonnes: exact(get(&values, "available_dry_tonnes")?)?,
+            });
+        }
     }
     let value = ProductionInputs {
         grinding_scope: GrindingScope {
@@ -246,7 +296,35 @@ pub fn evaluate(
         vec![],
         vec![source.clone()],
     );
-    let receipt = super::evaluate(grinding, recovery, &inputs)?;
+    let receipt = if supply_limited {
+        let value = ProductionSupply {
+            grinding_scope: inputs.value.grinding_scope.clone(),
+            recovery_scope: inputs.value.recovery_scope.clone(),
+            supply_basis: get(&top, "supply_basis")?.0.to_owned(),
+            available_at_start: true,
+            unchanged_operating_point: true,
+            scenarios: supplied,
+        };
+        let tag = value.canonical_tag();
+        let supply = Claim::new(
+            super::SUPPLY_METRIC,
+            value,
+            &tag,
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::NonAdditive,
+            EvidenceClass::Assumed,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
+            Confidentiality::internal(),
+            vec![],
+            vec![],
+            vec![source.clone()],
+        );
+        super::evaluate_supply_limited(grinding, recovery, &inputs, &supply)?
+    } else {
+        super::evaluate(grinding, recovery, &inputs)?
+    };
     Ok(WorksheetResult {
         submitted: text.to_owned(),
         source: source.clone(),

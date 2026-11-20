@@ -857,3 +857,37 @@ Raw-transfer worksheet parsing and presentation also live with their existing ow
 preserves existing transfer schemas and rejected diagnostics, and performs no file IO. The CLI wrapper
 continues to supply bounded source reads and envelopes; the underlying projection and covariance
 calculation, Claims and receipts are unchanged.
+
+### Explicit available feed (DESIGN; BD-176/181/182, plan §17 GB-19)
+
+`production::evaluate_supply_limited` adds a separate source-bound `Claim<ProductionSupply>` to the
+same shared-state join. Each state declares available dry metric tonnes of the identical blend and dry
+state, with the same exact probability as its grinding, recovery and production inputs. Available feed
+must already be present at processing start. The source explicitly adopts curtailment by reducing
+exposure at the unchanged operating point; recovery, utilization, grade and P80 are not refitted.
+
+Processed tonnes are `min(available feed, grinding throughput × scheduled hours)` in each state.
+Contained and recovered kg and the existing commercial valuation then use those processed tonnes.
+Operating throughput retains its capacity meaning, including for the existing throughput forecast
+target. Per-state diagnostics separately retain capacity, available and unused dry tonnes, spare
+capacity, used scheduled hours, effective production rate over the original scheduled exposure and
+whether ore supply, grinding capacity or both bind. Zero supply, zero exposure and shutdown states
+stay in the population. Effective rate and used exposure are zero when no material is processed.
+An exact supply/capacity distinction below binary64 resolution refuses instead of becoming a tie.
+
+`fmine.plant-production.v2` requires `supply_basis`, `supply_unit = "dry_metric_tonnes"`,
+`supply_timing = "available_at_start"`,
+`curtailment_policy = "reduce_exposure_at_declared_operating_point"`, and an
+`available_dry_tonnes` field in every scenario. The original three-file `plant production` and
+`decide production` commands accept it. Source evidence, assumptions and diagnostics are retained in
+the v2 result and JPRD frame version 2; existing v1 input, result and receipt bytes are unchanged.
+No missing supply, moisture conversion, arrival curve, stock carryover, downstream bottleneck or
+rate-dependent recovery change is inferred.
+
+The synthetic `production_supply_limited.toml` example caps each state's available feed at 100 t,
+giving 90 t, 0.21 kg contained Au and 0.174 kg recovered Au as conditional means. Independent
+kernel tests exercise both binding constraints, ties, zero supply/exposure, shutdown, exact weights,
+source/scope changes and confidentiality. The actual command regression compares P80 100 and 144 µm:
+the coarser mode wins with unconstrained feed, while the finer mode wins with common 50 t availability.
+It verifies the monetary means through the existing valuation and decision owners. These calculations
+remain declared and uncalibrated; they do not establish a real mine's ore availability or plant validity.

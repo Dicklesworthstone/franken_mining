@@ -1,0 +1,37 @@
+# SYNTHETIC feed-limited extension of production_joint.toml.
+# Feed is present at the start; processing shortens exposure at unchanged operating conditions.
+# Soft: min(320, 100) dry t * 1 g/t * 0.60 / 1000 = 0.06 kg Au.
+# Hard: min(80, 100) dry t * 4 g/t * 0.90 / 1000 = 0.288 kg Au.
+# Equal probabilities give 90 dry t, 0.21 kg contained and 0.174 kg recovered.
+schema = "fmine.plant-production.v2"
+boundary = "synthetic-plant/v1"
+circuit = "synthetic-ball-mill"
+blend = "synthetic-shift-blend"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+start_ns = "0"
+end_ns = "3600000000000"
+grade_unit = "g_per_dry_t"
+duration_unit = "hours"
+coupling_basis = "SYNTHETIC simultaneous states of this processing blend; declared recovery domain and dry state apply to this grinding feed"
+grade_coordinate = "Au"
+product_size_coordinate = "P80"
+supply_basis = "SYNTHETIC 100 dry metric tonnes of the named blend available before this scheduled shift in each state"
+supply_unit = "dry_metric_tonnes"
+supply_timing = "available_at_start"
+curtailment_policy = "reduce_exposure_at_declared_operating_point"
+
+[[scenario]]
+id = "soft"
+weight = "1/2"
+grade_g_per_dry_t = "1"
+scheduled_hours = "1"
+available_dry_tonnes = "100"
+
+[[scenario]]
+id = "hard"
+weight = "1/2"
+grade_g_per_dry_t = "4"
+scheduled_hours = "1"
+available_dry_tonnes = "100"
