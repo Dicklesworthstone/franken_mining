@@ -15,6 +15,12 @@ mutates_authority = false
 description = "Derive an immediate cash-margin comparison from matched plant production and explicit commercial scenarios, preserving sources, exact economics and declared monetary rounding"
 
 [[verb]]
+path = "decide investment"
+subsystem = "Helm"
+mutates_authority = false
+description = "Compare source-derived multi-period production cash flows under explicit discount factors and initial capital, retaining paired scenarios and exact incremental economics"
+
+[[verb]]
 path = "decide journal init"
 subsystem = "Helm"
 mutates_authority = true

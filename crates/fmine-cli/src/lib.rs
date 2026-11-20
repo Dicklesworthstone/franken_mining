@@ -11,6 +11,7 @@ pub mod geo;
 mod guidance;
 mod guidance_capacity;
 pub mod html;
+mod investment;
 pub mod issued;
 mod lint;
 mod lint_guidance;
@@ -84,6 +85,8 @@ pub enum CliCommand {
     DecideCard { model: PathBuf },
     /// Derive immediate cash-margin alternatives from matched plant and commercial scenarios.
     DecideProduction(decision::production::Command),
+    /// Compare discounted incremental production cash flows and explicit initial investment.
+    DecideInvestment { manifest: PathBuf },
     /// Retain an explicit choice, rationale and exact evaluated artifact in a local append-only history.
     DecisionJournal(decision_journal::Command),
     /// Bound recovery for explicit tested and untested strata on one additive route (BD-351.S1).
@@ -535,6 +538,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "program" => return "decide program",
                         "journal" => return "decide journal",
                         "production" => return "decide production",
+                        "investment" => return "decide investment",
                         "recovery-bounds" => return "decide recovery-bounds",
                         _ => return "decide card",
                     }
@@ -1081,6 +1085,7 @@ pub fn parse_args(
         "metrics cost"
             | "metrics geo"
             | "decide production"
+            | "decide investment"
             | "compare"
             | "plan pit"
             | "plan schedule"
@@ -1095,6 +1100,22 @@ pub fn parse_args(
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
             "decide production" => {
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
+            }
+            "decide investment" => {
+                let [decide, investment, flag, path] = words.as_slice() else {
+                    return Err(format!("expected 'fmine {}'", investment::USAGE));
+                };
+                if decide != "decide"
+                    || investment != "investment"
+                    || flag != "--manifest"
+                    || path.trim().is_empty()
+                    || path.starts_with("--")
+                {
+                    return Err(format!("expected 'fmine {}'", investment::USAGE));
+                }
+                CliCommand::DecideInvestment {
+                    manifest: PathBuf::from(path),
+                }
             }
             "compare" => CliCommand::Compare(compare::parse(&words)?),
             "plan pit" => CliCommand::PlanPit(pit::parse(&words)?),
@@ -2069,6 +2090,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::DecideProduction(command) => {
             decision::production::execute(command, workspace_root)
         }
+        CliCommand::DecideInvestment { manifest } => investment::execute(manifest, workspace_root),
         CliCommand::DecisionJournal(command) => decision_journal::execute(command, workspace_root),
         CliCommand::RecoveryBounds { model } => decision::execute(model, workspace_root, true),
         CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root),
@@ -2484,6 +2506,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 html::USAGE,
                 "decide card <model-file>",
                 decision::production::USAGE,
+                investment::USAGE,
                 decision_journal::INIT_USAGE,
                 decision_journal::RECORD_USAGE,
                 decision_journal::SHOW_USAGE,
@@ -2579,6 +2602,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(decision::ROBOT_DOCS_JSON);
             payload.push_str(",\"production_decision\":");
             payload.push_str(decision::production::ROBOT_DOCS_JSON);
+            payload.push_str(",\"investment_decision\":");
+            payload.push_str(investment::ROBOT_DOCS_JSON);
             payload.push_str(",\"decision_journal\":");
             payload.push_str(decision_journal::ROBOT_DOCS_JSON);
             payload.push_str(",\"recovery_bounds\":");

@@ -144,9 +144,42 @@ source paths are relative to the workspace root. The result compares individual 
 not establish a combined portfolio, causal counterfactual, calibrated forecast, project NPV or authority
 to operate the plant.
 
-An optional source-bound downside limit screens every alternative, including do-nothing, against the
-same declared cash floor and maximum probability of falling strictly below it. Add this section to
-the comparison manifest:
+DESIGN (BD-176/181): the opt-in `fmine.plant-production.v2` worksheet declares available dry ore for
+every shared scenario. It processes the lesser of that supply and the grinding capacity over the scheduled
+exposure, retaining both quantities, unused feed and capacity, used exposure and the binding constraint:
+
+```bash
+cargo run -p fmine-cli -- plant production \
+  --input tests/plant/production_supply_limited.toml \
+  --grinding tests/plant/grinding_joint.toml \
+  --recovery tests/plant/production_recovery.toml --format markdown
+```
+
+The declaration requires feed to be available at the interval start and curtailment to shorten the run
+at the unchanged operating point. Operating throughput and effective throughput over scheduled exposure
+are reported separately. The same constrained tonnes and recovered metal flow into `decide production`
+and saved plant forecasts. Supply must cover every state with identical exact probabilities; it is never
+guessed from capacity. Existing v1 worksheets retain their original unlimited-feed assumption.
+
+DESIGN (BD-225/229): compare investments directly from several periods of retained production and
+commercial calculations:
+
+```bash
+cargo run -p fmine-cli -- decide investment \
+  --manifest tests/decisions/production_investment.toml --format markdown
+```
+
+The manifest names every alternative-period source bundle, nonoverlapping operating periods, explicit
+discount factors and initial capital paid at the declared valuation time. Each state's unrounded cash
+margin is reduced by its same-period do-nothing cash, discounted, summed and charged initial capital once.
+Only the resulting total crosses the declared monetary rounding boundary. Shared state IDs, probabilities
+and physical/commercial support must match, and every original worksheet and exact cash component remains
+available. The card compares mutually exclusive investments with zero incremental value for do-nothing;
+it values only the declared cash window, with no inferred terminal value, tax, financing or project lifetime.
+
+The `decide production --manifest` comparison also supports a source-bound downside limit. It screens
+every alternative, including do-nothing, against the same declared cash floor and maximum probability of
+falling strictly below it. Add this section to the production comparison manifest:
 
 ```toml
 [[downside_limit]]
@@ -3770,6 +3803,15 @@ mismatch or unrepresentable calculation makes the corresponding aggregate unavai
 are arithmetic bounds, not confidence intervals. Registration times and information sets may differ; this
 comparison does not establish independent forecasting skill. JSON is available with `--format json`, including
 both source admissions, exact numerator/denominator strings and a separate comparison digest.
+
+DESIGN (BD-048/049): add `--score crps` to compare the complete empirical or weighted-empirical predictive
+distributions. This retains their exact scenario probabilities and can distinguish forecasts with identical
+central interval endpoints. Unsupported distribution types refuse rather than acquire an inferred finite
+approximation. For unresolved pairs, exact completion bounds follow from a sweep over the combined support
+atoms: the CRPS difference is linear between atoms and constant beyond both supports. The complete frozen
+subject population and identical-publication matching rules still apply. JSON retains the frozen forecasts
+and exact weights under a separate CRPS comparison schema and digest. The default interval comparison and
+its existing identities are unchanged; neither mode supplies a significance or calibration claim.
 
 ### Inspect an explicit forecast correction
 

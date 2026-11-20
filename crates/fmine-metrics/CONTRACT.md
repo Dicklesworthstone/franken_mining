@@ -24,6 +24,13 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
   manifest SHA-256 and field locators, and limit/model/currency/basis changes bind receipt identity or
   refuse. No information policy, safety constraint or calibrated risk estimate is supplied. Manifests
   without a limit preserve their original canonical bytes and behavior;
+- DESIGN (BD-225/229): `valuation::investment` derives mutually exclusive investment comparisons
+  from complete, already evaluated operating cash receipts over explicitly declared periods. Initial
+  capex is charged once; each period's unrounded same-state operating cash minus its do-nothing cash
+  is multiplied by the explicit discount factor. The existing decision evaluator compares the final
+  incremental cash distributions with zero-increment do-nothing. It does not infer a project lifetime,
+  terminal value or NAV. `fmine decide investment --manifest` exposes the calculation, retaining all
+  physical/commercial worksheets, source hashes, exact components and original receipt ancestry;
 - complete source-bound annual peer comparisons with exact competition-rank ranges and explicit comparative claims (`comparison`, BD-355);
 - cut-off grades: the reference rows of `registries/published_cutoffs.toml` recomputed from their registered tokens (`cutoff`), and cut-offs bound to the readings of one registered technical report (`cutoff::source`, BD-274);
 - an AISC accounting waterfall, as a legacy float LMDI and as a typed exact kernel with an additive fallback (`lmdi`, `lmdi::waterfall`);
@@ -50,6 +57,49 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation", "comparison", "valuation"]`
 
 ## 2. Inputs
+
+- DESIGN (BD-225/229): `valuation::investment::evaluate` admits a source-bound
+  `Claim<InvestmentSpec>` and one `PeriodValuation` for every investment/period pair. The strict
+  `fmine.production-investment.v1` manifest declares USD, valuation time, a common physical/commercial
+  scope, shared scenario meaning across alternatives and time, an explicit discount basis, and
+  `cashflow_basis = "incremental_operating_cash_excludes_initial_capex"`. Each alternative has its
+  own nonnegative initial capex at valuation time. Each period has a positive-duration half-open
+  physical interval and positive exact discount multiplier. Multipliers above one are accepted as
+  explicit assumptions; no interest rate or annualization convention is inferred. Periods cannot
+  overlap or precede valuation time. Gaps and cash outside the declared periods are not valued.
+
+  One through eight investments and one through sixteen periods are supported, with at most 65,536
+  total bundle/state rows and a 64-KiB manifest. Every bundle must match its alternative id and period
+  support. All periods share the complete named state population, exact probabilities and commercial
+  bridge. Same-period do-nothing cash must agree across investments before rounding; it may differ
+  between periods. The declaration requires its own positive named UU exposure and trigger. Inputs
+  retain Assumed/Internal status and inherited uncertainty. Incompatible UU definitions refuse.
+
+  Source resolution belongs to the caller: `Manifest::evaluate` requires receipts loaded from every
+  declared `Manifest::sources` bundle under the caller's workspace root. The pure metrics API checks
+  the supplied receipts and their semantic support; it does not resolve paths or prove that they came
+  from the manifest's named files. The CLI performs those exact reads before evaluation and retains
+  their original bytes and anchors. Relative manifest paths and absolute anchors are not guessed or
+  matched by suffix. Retaining a manifest through the pure API does not itself prove source resolution.
+
+  The kernel uses the original unrounded cash margins and baseline cash, never their earlier Money
+  rounding. It sums discounted increments, subtracts initial capex exactly once and rounds only the
+  final investment value to 0.0001 USD under explicit ties-to-even conversion, retaining the exact
+  result and rounding delta. Zero incremental do-nothing remains available when every investment
+  loses money. The immutable receipt retains all original valuations, period components, outcome
+  paths and the existing card's means, quantiles, signed-loss CVaR95, regrets and exact ties. Its
+  digest binds complete declaration metadata, source receipts and final comparison. All arithmetic
+  overflow, missing bundles, changed state weights and incompatible supports refuse the whole request.
+
+  Synthetic example: `tests/decisions/production_investment.toml` uses two periods and factors 1 and
+  1/2. Initial capex of 1,000/8,000 USD reverses the operating-margin ranking: the original mode's mean
+  incremental value is 6,592.40 USD versus 5,684.80 USD for higher power. A second-period factor of one
+  reverses the choice again. Direct tests cover these independent known answers, complete paths,
+  one final rounding boundary, nonoverlap, exact baseline equality, source binding and all-negative
+  alternatives. Actual-binary tests in `fmine-cli/tests/investment.rs` exercise JSON/Markdown and source
+  retention. These conditional calculations supply no full-project valuation, portfolio combination,
+  tax, financing, ownership conversion, calibration or investment/operating authorization; broad
+  BD-225/229 and the corresponding gates remain open.
 
 - DESIGN (BD-061/225): `valuation::evaluate` takes an immutable `fmine-plant::ProductionReceipt`
   and a source-bound `Claim<ValuationTerms>`. Boundary, circuit, material domain, dry basis, element
