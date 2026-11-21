@@ -1,0 +1,16 @@
+[package]
+name = "fmine-authz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "First-party macaroons (S3 b/c), MNPI and venture walls, fail-closed data residency registry, and single-use HumanAuthorityTokens (§31)."
+
+[dependencies]
+fmine-claim = { path = "../fmine-claim" }
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+
+[lints]
+workspace = true

@@ -1,0 +1,752 @@
+# registries/residency.toml — source: planning/research/W3_data_residency.md (E501–E549), as of 2026-10-29.
+# rule ∈ {in_country_only, aggregates_exportable, exportable}. Any pair not listed → in_country_only.
+# status: FACT = primary text read and rule follows directly; FACT[U] = rests on secondary/unverified text;
+#         INFERENCE = our reading where law is silent or ambiguous. Not legal advice.
+schema = "fmine.residency/1"
+residency_epoch = 1
+as_of = "2026-10-29"
+default_rule = "in_country_only"
+
+# ---------------- PK — Pakistan (Reko Diq: mineral agreement + BMR 2002 per BMMA 2025 s.3(2), s.122(4)) ----------------
+[[row]]
+country = "PK"
+data_class = "personal"
+rule = "in_country_only"
+basis = "No PD statute in force; PDP Bill 2023 (draft) s.31(2) localises critical personal data; Cloud First Policy 2022 Annex D/E"
+status = "INFERENCE"
+confidence = 0.60
+review_by = "2027-01-31"
+evidence = ["E510", "E511", "E512"]
+
+[[row]]
+country = "PK"
+data_class = "geoscience"
+rule = "aggregates_exportable"
+basis = "BMR 2002 r.56(1) records kept at an address in Balochistan; r.71(1)-(3) State exclusive data right, disclosure only in connection with mining ops; BMMA 2025 s.122(4)"
+status = "INFERENCE"
+confidence = 0.55
+review_by = "2027-01-31"
+requires = "Counsel reading of r.71(3)(i) + Reko Diq mineral agreement data clause"
+evidence = ["E502", "E503", "E504", "E505", "E506", "E513"]
+
+[[row]]
+country = "PK"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "BMR 2002 r.56(1)(a) production/metallurgical records in Balochistan; r.71(1) 'production data' vested in Government"
+status = "INFERENCE"
+confidence = 0.55
+review_by = "2027-01-31"
+evidence = ["E504", "E505", "E506"]
+
+[[row]]
+country = "PK"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "Companies Act 2017 s.220(1) books at registered office or other place in Pakistan; s.220(3) copies of info held abroad; BMR r.56(1)(a)(ix)"
+status = "FACT"
+confidence = 0.75
+review_by = "2027-04-30"
+evidence = ["E508", "E504"]
+
+[[row]]
+country = "PK"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "PECA 2016 s.2(j), s.7 (critical infrastructure data); Official Secrets Act 1923 (not fetched)"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = ["E509"]
+
+[[row]]
+country = "PK"
+data_class = "aggregate"
+rule = "exportable"
+basis = "BMR 2002 r.71(3)(i)-(ii): disclosure in connection with mining ops or as required by law (issuer disclosure); anonymised KPIs not personal data"
+status = "INFERENCE"
+confidence = 0.60
+review_by = "2027-01-31"
+evidence = ["E506"]
+
+# ---------------- ZM — Zambia (Lumwana; M2 pilot) ----------------
+[[row]]
+country = "ZM"
+data_class = "personal"
+rule = "in_country_only"
+basis = "Data Protection Act 2021 s.70(1),(3); s.71 conditional transfers; sensitive incl. sex, biometric, health"
+status = "FACT"
+confidence = 0.90
+review_by = "2027-01-31"
+requires = "s.70(2) SI, or consent + ODPC-approved standard contract/intragroup scheme (s.71(1)(a)(i)); sensitive data: counsel on s.70(3) vs s.71(4)(b)"
+evidence = ["E514", "E515", "E516", "E517", "E518", "E519"]
+
+[[row]]
+country = "ZM"
+data_class = "geoscience"
+rule = "aggregates_exportable"
+basis = "MRC Act 2024 s.12(2)(c) registered office in Republic for storage of records, s.54; Cyber Security Act 2025 s.8(j), s.9, s.12 (mining CII once designated)"
+status = "INFERENCE"
+confidence = 0.60
+review_by = "2027-01-31"
+evidence = ["E520", "E521", "E522", "E523", "E524", "E525"]
+
+[[row]]
+country = "ZM"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "Cyber Security Act 2025 s.12 (information needed to operate CII must be hosted in Zambia once designated); MRC Act 2024 records at registered office"
+status = "INFERENCE"
+confidence = 0.60
+review_by = "2027-01-31"
+evidence = ["E520", "E521", "E522", "E523"]
+
+[[row]]
+country = "ZM"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "Companies Act 2017 (Act 10 of 2017) accounting-records location — not read (403)"
+status = "FACT[U]"
+confidence = 0.55
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "ZM"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "Cyber Security Act 2025 s.12(1) designated critical information hosted within the Republic; State Security Act (not fetched)"
+status = "FACT"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = ["E520"]
+
+[[row]]
+country = "ZM"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates are outside DPA 2021; no CSA 2025 designation found"
+status = "INFERENCE"
+confidence = 0.75
+review_by = "2027-01-31"
+evidence = ["E522"]
+
+# ---------------- TZ — Tanzania (North Mara, Bulyanhulu) ----------------
+[[row]]
+country = "TZ"
+data_class = "personal"
+rule = "in_country_only"
+basis = "PDPA 2022 s.31-32; PDP (Collection and Processing) Regs 2023 reg.20-22 (PDPC transfer permit)"
+status = "FACT"
+confidence = 0.85
+review_by = "2027-04-30"
+requires = "PDPC permit (Form No. 8) naming recipient and purpose"
+evidence = ["E529", "E530"]
+
+[[row]]
+country = "TZ"
+data_class = "geoscience"
+rule = "in_country_only"
+basis = "Mining Act Cap 123 R.E. 2023 s.35(2) data owned by Government; s.35(6) no export of core or 'any other data collected' without GST written authorisation; s.125(1)"
+status = "FACT"
+confidence = 0.90
+review_by = "2027-04-30"
+requires = "GST written authorisation under s.35(6)"
+evidence = ["E526", "E527", "E528"]
+
+[[row]]
+country = "TZ"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "Mining Act s.125(1) records kept in Tanzania; s.35(6) 'any other data collected' scope unclear for production telemetry"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-01-31"
+evidence = ["E527", "E528"]
+
+[[row]]
+country = "TZ"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "Tax Administration Act Cap 438 s.35(1) maintain documents within the United Republic"
+status = "FACT"
+confidence = 0.75
+review_by = "2027-04-30"
+evidence = ["E531"]
+
+[[row]]
+country = "TZ"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "National security/secrecy statute (not fetched); class definition"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "TZ"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised KPIs are not personal data; not 'data collected' under s.35(6) (our reading)"
+status = "INFERENCE"
+confidence = 0.65
+review_by = "2027-01-31"
+evidence = ["E527"]
+
+# ---------------- CD — DRC (Kibali) ----------------
+[[row]]
+country = "CD"
+data_class = "personal"
+rule = "in_country_only"
+basis = "Code du numérique (ordonnance-loi 13 Mar 2023) art. 201: stored/hosted in DRC; APD adequacy + prior authorisation (ARPTC interim)"
+status = "FACT"
+confidence = 0.85
+review_by = "2027-04-30"
+requires = "APD/ARPTC transfer authorisation"
+evidence = ["E532", "E533"]
+
+[[row]]
+country = "CD"
+data_class = "geoscience"
+rule = "aggregates_exportable"
+basis = "Code minier art. 50 (samples State property; export visa), art. 216 registers per Règlement minier, art. 324 confidentiality; no digital-data location rule found"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = ["E534", "E535", "E536"]
+
+[[row]]
+country = "CD"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "Code minier art. 216 registers + monthly publication of quantities produced/sold/exported"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = ["E535"]
+
+[[row]]
+country = "CD"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "OHADA AUDCIF / DRC tax procedure book-location rules — not read"
+status = "FACT[U]"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "CD"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "National secrecy statute (not fetched); class definition"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "CD"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates outside Code du numérique Livre on personal data; production totals published monthly (art. 216)"
+status = "INFERENCE"
+confidence = 0.70
+review_by = "2027-04-30"
+evidence = ["E535"]
+
+# ---------------- ML — Mali (Loulo-Gounkoto) ----------------
+[[row]]
+country = "ML"
+data_class = "personal"
+rule = "in_country_only"
+basis = "Loi 2013-015 art. 11: transfer only on APDP adequacy finding or APDP decision (contract clauses/internal rules)"
+status = "FACT"
+confidence = 0.80
+review_by = "2027-04-30"
+requires = "APDP decision"
+evidence = ["E537"]
+
+[[row]]
+country = "ML"
+data_class = "geoscience"
+rule = "aggregates_exportable"
+basis = "Code minier 2023 art. 24 (assays in Mali unless written authorisation), art. 194-195; no digital-data export rule found; regime for Loulo-Gounkoto unverified"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = ["E538"]
+
+[[row]]
+country = "ML"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "Code minier 2023 art. 194 site registers; art. 210 sanctions for not keeping extraction/sales/shipping registers"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = ["E538"]
+
+[[row]]
+country = "ML"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "OHADA AUDCIF / Code général des impôts book-location rules — not read"
+status = "FACT[U]"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "ML"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "National secrecy statute (not fetched); class definition"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "ML"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates outside Loi 2013-015"
+status = "INFERENCE"
+confidence = 0.70
+review_by = "2027-04-30"
+evidence = []
+
+# ---------------- PG — Papua New Guinea (Porgera) ----------------
+[[row]]
+country = "PG"
+data_class = "personal"
+rule = "in_country_only"
+basis = "No PD statute in force; DGDP Bill 2026 (5th draft) s.81 transfer controls, s.60(4) raw biometrics never offshore"
+status = "INFERENCE"
+confidence = 0.55
+review_by = "2026-12-31"
+evidence = ["E540"]
+
+[[row]]
+country = "PG"
+data_class = "geoscience"
+rule = "aggregates_exportable"
+basis = "Mining Act 1992 s.161-163 (no location rule); DGDP draft s.82(1)(c) strategic-significance designation; NPL 51% PNG-owned"
+status = "INFERENCE"
+confidence = 0.55
+review_by = "2026-12-31"
+evidence = ["E539", "E540"]
+
+[[row]]
+country = "PG"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "DGDP draft s.82(1)(c); no statute in force"
+status = "INFERENCE"
+confidence = 0.55
+review_by = "2026-12-31"
+evidence = ["E540"]
+
+[[row]]
+country = "PG"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "Companies Act 1997 / Income Tax Act record-location rules — not read"
+status = "FACT[U]"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "PG"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "Class definition; DGDP draft s.82(1)(a)-(b)"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = ["E540"]
+
+[[row]]
+country = "PG"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates; no statute in force"
+status = "INFERENCE"
+confidence = 0.70
+review_by = "2026-12-31"
+evidence = []
+
+# ---------------- DO — Dominican Republic (Pueblo Viejo) ----------------
+[[row]]
+country = "DO"
+data_class = "personal"
+rule = "in_country_only"
+basis = "Ley 172-13: transfer abroad only with consent or listed exceptions (article no. not verified)"
+status = "FACT[U]"
+confidence = 0.60
+review_by = "2027-04-30"
+requires = "Data-subject consent or Ley 172-13 exception"
+evidence = ["E546"]
+
+[[row]]
+country = "DO"
+data_class = "geoscience"
+rule = "aggregates_exportable"
+basis = "Ley Minera 146-71 and Pueblo Viejo Special Lease Agreement not read (R3)"
+status = "INFERENCE"
+confidence = 0.45
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "DO"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "As geoscience (R3)"
+status = "INFERENCE"
+confidence = 0.45
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "DO"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "Código Tributario Ley 11-92 book-keeping duties — location not read"
+status = "FACT[U]"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "DO"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "Class definition"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "DO"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates outside Ley 172-13"
+status = "INFERENCE"
+confidence = 0.70
+review_by = "2027-04-30"
+evidence = []
+
+# ---------------- AR — Argentina (Veladero) ----------------
+[[row]]
+country = "AR"
+data_class = "personal"
+rule = "in_country_only"
+basis = "Ley 25.326 art. 12; Disp. 60-E/2016 art. 3 as replaced by Res. AAIP 34/2019 (Canada private sector adequate)"
+status = "FACT[U]"
+confidence = 0.70
+review_by = "2027-04-30"
+allow_destinations = ["CA"]
+requires = "Destination on AAIP adequacy list, or Disp. 60-E/2016 model clauses"
+evidence = ["E545"]
+
+[[row]]
+country = "AR"
+data_class = "geoscience"
+rule = "aggregates_exportable"
+basis = "Código de Minería / provincial (San Juan) reporting rules not read (R3)"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "AR"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "As geoscience (R3)"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "AR"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "Código Civil y Comercial arts. 320-331 accounting books — location not read"
+status = "FACT[U]"
+confidence = 0.55
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "AR"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "Class definition"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "AR"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates outside Ley 25.326"
+status = "INFERENCE"
+confidence = 0.75
+review_by = "2027-04-30"
+evidence = []
+
+# ---------------- CL — Chile (Zaldívar) ----------------
+[[row]]
+country = "CL"
+data_class = "personal"
+rule = "in_country_only"
+basis = "Ley 19.628 arts. 27-28 as reformed by Ley 21.719 (in force 2026-12-01); model clauses Res. Ex. RAEX202503748 (2025-12-11)"
+status = "FACT"
+confidence = 0.80
+review_by = "2026-12-01"
+requires = "Executed model clauses / BCR (art. 27 b) or adequacy (art. 28)"
+evidence = ["E542", "E543"]
+
+[[row]]
+country = "CL"
+data_class = "geoscience"
+rule = "exportable"
+basis = "DS 9/2024 Min. Minería: submission duty to Sernageomin, no location rule; Ley 21.663 no localisation"
+status = "INFERENCE"
+confidence = 0.65
+review_by = "2027-04-30"
+evidence = ["E544"]
+
+[[row]]
+country = "CL"
+data_class = "production"
+rule = "exportable"
+basis = "No location rule found (Ley 21.663; Código de Minería not exhaustively read)"
+status = "INFERENCE"
+confidence = 0.65
+review_by = "2027-04-30"
+evidence = ["E544"]
+
+[[row]]
+country = "CL"
+data_class = "financial"
+rule = "exportable"
+basis = "Código Tributario art. 17: Spanish, conservation, SII-approved systems; no location rule"
+status = "INFERENCE"
+confidence = 0.60
+review_by = "2027-04-30"
+evidence = ["E544"]
+
+[[row]]
+country = "CL"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "Class definition"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "CL"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised data outside Ley 19.628"
+status = "INFERENCE"
+confidence = 0.80
+review_by = "2027-04-30"
+evidence = []
+
+# ---------------- SA — Saudi Arabia (Jabal Sayid) ----------------
+[[row]]
+country = "SA"
+data_class = "personal"
+rule = "in_country_only"
+basis = "PDPL art. 29 + Transfer Regulation (amended Sep 2024): SCCs/BCRs/certification"
+status = "FACT[U]"
+confidence = 0.75
+review_by = "2027-04-30"
+requires = "SDAIA SCCs (unmodified) or BCR; risk assessment for sensitive/continuous transfers"
+evidence = ["E547"]
+
+[[row]]
+country = "SA"
+data_class = "geoscience"
+rule = "aggregates_exportable"
+basis = "Mining Investment Law not read; NDMO localisation may apply if JV is a government-affiliated company (ECC-2:2024 scope)"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = ["E547"]
+
+[[row]]
+country = "SA"
+data_class = "production"
+rule = "aggregates_exportable"
+basis = "As geoscience (R3)"
+status = "INFERENCE"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = ["E547"]
+
+[[row]]
+country = "SA"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "Saudi Companies Law / ZATCA record rules — not read"
+status = "FACT[U]"
+confidence = 0.50
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "SA"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "Class definition; NDMO data-classification controls"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = ["E547"]
+
+[[row]]
+country = "SA"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates outside PDPL"
+status = "INFERENCE"
+confidence = 0.65
+review_by = "2027-04-30"
+evidence = []
+
+# ---------------- US — USA (Nevada) ----------------
+[[row]]
+country = "US"
+data_class = "personal"
+rule = "exportable"
+basis = "No general localisation; 28 CFR Part 202 bars bulk sensitive personal data to countries of concern"
+status = "FACT[U]"
+confidence = 0.75
+review_by = "2027-04-30"
+deny_destinations = ["CN", "HK", "MO", "RU", "IR", "KP", "CU", "VE"]
+evidence = ["E548"]
+
+[[row]]
+country = "US"
+data_class = "geoscience"
+rule = "exportable"
+basis = "No federal/Nevada data-location rule identified"
+status = "INFERENCE"
+confidence = 0.75
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "US"
+data_class = "production"
+rule = "exportable"
+basis = "No federal/Nevada data-location rule identified"
+status = "INFERENCE"
+confidence = 0.75
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "US"
+data_class = "financial"
+rule = "exportable"
+basis = "IRS requires availability, not location (not re-verified)"
+status = "INFERENCE"
+confidence = 0.70
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "US"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "Classified national security information (EO 13526) — class definition"
+status = "FACT[U]"
+confidence = 0.95
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "US"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates"
+status = "INFERENCE"
+confidence = 0.85
+review_by = "2027-04-30"
+evidence = []
+
+# ---------------- CA — Canada (head office) ----------------
+[[row]]
+country = "CA"
+data_class = "personal"
+rule = "exportable"
+basis = "PIPEDA: no localisation (accountability for transfers); Quebec private-sector Act s.17 PIA for Quebec PI (not fetched)"
+status = "FACT[U]"
+confidence = 0.75
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "CA"
+data_class = "geoscience"
+rule = "exportable"
+basis = "No federal/Ontario data-location rule identified"
+status = "INFERENCE"
+confidence = 0.75
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "CA"
+data_class = "production"
+rule = "exportable"
+basis = "No federal/Ontario data-location rule identified"
+status = "INFERENCE"
+confidence = 0.75
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "CA"
+data_class = "financial"
+rule = "aggregates_exportable"
+basis = "Income Tax Act s.230(1): records at place of business or residence in Canada or Minister-designated place"
+status = "FACT"
+confidence = 0.80
+review_by = "2027-04-30"
+evidence = ["E549"]
+
+[[row]]
+country = "CA"
+data_class = "state_secret"
+rule = "in_country_only"
+basis = "Security of Information Act — class definition (not fetched)"
+status = "FACT[U]"
+confidence = 0.90
+review_by = "2027-04-30"
+evidence = []
+
+[[row]]
+country = "CA"
+data_class = "aggregate"
+rule = "exportable"
+basis = "Anonymised aggregates"
+status = "INFERENCE"
+confidence = 0.85
+review_by = "2027-04-30"
+evidence = []
