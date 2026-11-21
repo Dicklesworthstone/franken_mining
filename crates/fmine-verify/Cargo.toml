@@ -16,3 +16,7 @@ fmine-evidence = { path = "../fmine-evidence" }
 fmine-ledger = { path = "../fmine-ledger" }
 fmine-object = { path = "../fmine-object" }
 fmine-sync = { path = "../fmine-sync" }
+
+[dev-dependencies]
+fmine-gen = { path = "../fmine-gen" }
+fmine-units = { path = "../fmine-units" }

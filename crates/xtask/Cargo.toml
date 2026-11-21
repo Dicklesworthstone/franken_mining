@@ -19,6 +19,7 @@ fmine-time = { path = "../fmine-time" }
 fmine-claim = { path = "../fmine-claim" }
 fmine-cli = { path = "../fmine-cli" }
 fmine-evidence = { path = "../fmine-evidence" }
+fmine-gen = { path = "../fmine-gen" }
 fmine-lp = { path = "../fmine-lp" }
 fmine-metrics = { path = "../fmine-metrics" }
 fmine-numerics = { path = "../fmine-numerics" }

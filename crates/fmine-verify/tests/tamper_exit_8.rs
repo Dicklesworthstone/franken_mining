@@ -268,3 +268,36 @@ fn test_fmine_verify_segment_and_tamper_exits_8() {
     assert_eq!(code, 8, "torn segment must exit 8: {stdout}");
     assert!(stdout.contains("FMINE-REF-505"), "{stdout}");
 }
+
+#[test]
+fn test_metamorphic_laws_shared_in_fmine_verify() {
+    // Crate #2 consuming fmine-gen::metamorphic (BD-143).
+    use fmine_gen::metamorphic::{
+        LotSpec, assert_exact_statutory_unit_roundtrips, assert_permutation_digest_invariance,
+        assert_split_merge_lot_invariance,
+    };
+    use fmine_units::ExactQty;
+
+    let lots = [
+        LotSpec {
+            dry_tonnes: 4_500.0,
+            grade_g_per_t: 2.35,
+        },
+        LotSpec {
+            dry_tonnes: 11_200.0,
+            grade_g_per_t: 1.15,
+        },
+    ];
+    assert_split_merge_lot_invariance(&lots, 0.25, 1e-12).expect("split/merge");
+    assert_permutation_digest_invariance(&[
+        ("cert", b"fmt-cert-1"),
+        ("seg", b"fmt-seg-1"),
+        ("cas", b"fmt-cas-1"),
+    ])
+    .expect("permutation");
+    let qty = [
+        ExactQty::new(311, 10).unwrap(),
+        ExactQty::new(10_000, 7).unwrap(),
+    ];
+    assert_exact_statutory_unit_roundtrips(&qty).expect("unit roundtrips");
+}

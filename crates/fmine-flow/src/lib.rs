@@ -3,6 +3,7 @@
 //! plan §20.1–§20.2, `INV-005`, `PO-BED-6`, `G-TOUCH-3`).
 
 pub mod balance;
+pub mod ffactors;
 pub mod graph;
 
 use core::fmt;

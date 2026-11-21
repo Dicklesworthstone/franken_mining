@@ -9,7 +9,7 @@ Touchstone K1 material-flow graph and exact extensive conservation kernel (`BD-1
 - **Layer:** K1
 - **Subsystem:** Touchstone
 - **LOC budget:** 20,000 planned / 23,000 ceiling
-- **Allowed Module Families:** `["graph", "balance"]`
+- **Allowed Module Families:** `["graph", "balance", "ffactors"]`
 
 ## 2. Inputs
 - Pure in-memory `FlowNode` and `FlowStream` declarations validated into a `FlowGraph`.
@@ -52,6 +52,7 @@ Not applicable: pure structural graph and exact conservation law checker; caller
 - `FlowError`
 - `graph::{NodeClass, StockpileMixingModel, FlowNode, FlowStream, FlowGraph}`
 - `balance::{ExtensiveQuantities, StreamFlow, InventoryDelta, BalanceTolerance, NodeResidual, BalanceReport, verify_period_balance, derive_grade}`
+- `ffactors::{FFactorFamily, FFactorDefinition, ExactPosteriorTriplet, PosteriorFFactor, F3Decomposition, parse_ffactor_registry, compute_posterior_ffactor, decompose_f3}` (`BD-148`, `registries/ffactors.toml`)
 
 ## 12. Proof obligations
 - `PO-BED-6` / `INV-005` (exact extensive conservation at commit, no plugs): `balance::tests::test_exact_conservation_closure_and_refusal_no_plug`, `balance::tests::test_stockpile_split_merge_metamorphic_conservation`.

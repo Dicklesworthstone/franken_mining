@@ -1,0 +1,71 @@
+# registries/ffactors.toml — Site-Profile F-Factor Definitions Registry (BD-148, plan §20.3–§20.5)
+# Registries are data: every F-factor names its exact numerator/denominator nodes, quantity basis,
+# stockpile adjustment requirement (G-TOUCH-3), and mutual-compensation threshold.
+
+schema_version = 1
+
+[[ffactor]]
+id = "F1_tonnes"
+family = "F1"
+site_profile = "open_pit_standard"
+numerator_node = "grade_control"
+denominator_node = "resource_model"
+quantity_basis = "dry_tonnes"
+requires_stockpile_adjustment = false
+mutual_comp_tol_bps = 500
+description = "Grade-control vs. resource-model dry tonnage ratio over mined polygon volume"
+
+[[ffactor]]
+id = "F1_metal_au"
+family = "F1"
+site_profile = "open_pit_standard"
+numerator_node = "grade_control"
+denominator_node = "resource_model"
+quantity_basis = "contained_au"
+requires_stockpile_adjustment = false
+mutual_comp_tol_bps = 500
+description = "Grade-control vs. resource-model contained Au metal ratio over mined polygon volume"
+
+[[ffactor]]
+id = "F2_tonnes"
+family = "F2"
+site_profile = "open_pit_standard"
+numerator_node = "mill_feed"
+denominator_node = "grade_control"
+quantity_basis = "dry_tonnes"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+description = "Mill-feed vs. grade-control dry tonnage ratio (must adjust for intervening ROM stockpile delta per G-TOUCH-3)"
+
+[[ffactor]]
+id = "F2_metal_au"
+family = "F2"
+site_profile = "open_pit_standard"
+numerator_node = "mill_feed"
+denominator_node = "grade_control"
+quantity_basis = "contained_au"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+description = "Mill-feed vs. grade-control contained Au ratio (must adjust for intervening ROM stockpile delta per G-TOUCH-3)"
+
+[[ffactor]]
+id = "F3_metal_au"
+family = "F3"
+site_profile = "open_pit_standard"
+numerator_node = "mill_feed"
+denominator_node = "resource_model"
+quantity_basis = "contained_au"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+description = "Mine-to-mill composite ratio F3 = F1 * F2 (must inspect F1 and F2 separately to prevent mutual compensation)"
+
+[[ffactor]]
+id = "MCF_au"
+family = "MCF"
+site_profile = "underground_stoping"
+numerator_node = "plant_accounted_au"
+denominator_node = "mine_call_au"
+quantity_basis = "contained_au"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 400
+description = "Mine Call Factor: plant-accounted Au (recovered + tails) divided by stope mine-call Au"

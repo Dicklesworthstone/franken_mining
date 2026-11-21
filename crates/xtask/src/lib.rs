@@ -1616,14 +1616,14 @@ mod tests {
             .sum();
         assert_eq!(report.files, expected, "{report:?}");
         // fmine-core's eight (including cert.rs, BD-096), fmine-claim's representation.rs (BD-041), plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's eight
-        // (bd-193, bd-191, bd-192, bd-wq34), fmine-flow's three (lib, graph, balance; BD-146), fmine-optimize's fifteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
+        // (bd-193, bd-191, bd-192, bd-wq34), fmine-flow's four (lib, graph, balance, ffactors; BD-146/148), fmine-optimize's fifteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
         // bd-5lxu, bd-2rne, bd-rbxh, bd-ubzs, pcpsp/price.rs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs
         // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and mps.rs (bd-j2ay), fmine-ledger's mmr.rs, batch.rs, cell.rs, l0.rs, as_of_replay.rs (BD-053/080/081/083/084),
         // and fmine-object's merkle.rs, cas.rs (BD-090), fmine-authz's five modules (BD-092..095),
         // fmine-io's dialects.rs and redact.rs (BD-186, BD-292), and fmine-sync's seven portable modules
         // (lib, manifest, transport, version_vector, sync_cert, residency_plan, gluing; BD-102..108),
-        // and fmine-gen's four BitwisePortable modules (lib, seal, worlds, harness; BD-127).
-        assert_eq!(report.bitwise_files, 67, "{report:?}");
+        // and fmine-gen's eight BitwisePortable modules (lib, seal, worlds, harness, geology, drillholes, fa_book, metamorphic; BD-127/128/131/134/143).
+        assert_eq!(report.bitwise_files, 72, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
@@ -2258,5 +2258,38 @@ mod tests {
             "unresolved test_* references in CONTRACT.md:\n{}",
             missing.join("\n")
         );
+    }
+
+    #[test]
+    fn test_metamorphic_laws_shared_in_xtask() {
+        // Crate #3 consuming fmine-gen::metamorphic (BD-143).
+        use fmine_gen::metamorphic::{
+            LotSpec, assert_exact_statutory_unit_roundtrips, assert_permutation_digest_invariance,
+            assert_split_merge_lot_invariance,
+        };
+        use fmine_units::ExactQty;
+
+        let lots = [
+            LotSpec {
+                dry_tonnes: 8_000.0,
+                grade_g_per_t: 3.2,
+            },
+            LotSpec {
+                dry_tonnes: 16_000.0,
+                grade_g_per_t: 0.9,
+            },
+        ];
+        assert_split_merge_lot_invariance(&lots, 0.4, 1e-12).expect("split/merge");
+        assert_permutation_digest_invariance(&[
+            ("verbs", b"verbs.toml"),
+            ("ffactors", b"ffactors.toml"),
+            ("refusals", b"refusals.toml"),
+        ])
+        .expect("permutation");
+        let vals = [
+            ExactQty::new(1_000, 3).unwrap(),
+            ExactQty::new(25, 4).unwrap(),
+        ];
+        assert_exact_statutory_unit_roundtrips(&vals).expect("unit roundtrips");
     }
 }

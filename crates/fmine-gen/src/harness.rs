@@ -8,6 +8,7 @@ use fmine_core::det::sqrt;
 use fmine_core::hash::Digest32;
 
 use crate::GenError;
+use crate::geology::{OpenPitAuGeologySpec, OpenPitAuGeologyTruth, generate_geology_truth};
 use crate::seal::{SealKey, SealedTruth};
 use crate::worlds::{
     OpenPitAuConfig, OpenPitAuObservations, OpenPitAuTruth, WorldCondition,
@@ -92,6 +93,23 @@ impl ScoringHarness {
         let bytes = truth.canonical_bytes();
         let sealed = SealedTruth::seal(&cfg.world_id, seed_root, &bytes, &self.key, truth);
         Ok((obs, sealed))
+    }
+
+    /// Generate a sealed 3D Open-Pit Au geological block model (`BD-128`).
+    pub fn generate_open_pit_au_geology(
+        &self,
+        seed_root: u64,
+        spec: &OpenPitAuGeologySpec,
+    ) -> Result<SealedTruth<OpenPitAuGeologyTruth>, GenError> {
+        generate_geology_truth(seed_root, spec, &self.key)
+    }
+
+    /// Open a sealed 3D Open-Pit Au geology truth with this harness's private key (`GATE-GEN-01`).
+    pub fn open_geology_truth<'a>(
+        &self,
+        sealed: &'a SealedTruth<OpenPitAuGeologyTruth>,
+    ) -> Result<&'a OpenPitAuGeologyTruth, GenError> {
+        Ok(sealed.open(&self.key)?)
     }
 
     /// Open `sealed_truth` with this harness's private key and score `pred` post-hoc.

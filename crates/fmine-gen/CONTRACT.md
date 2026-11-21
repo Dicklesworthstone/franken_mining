@@ -10,7 +10,7 @@ Testpit T-layer synthetic-truth world generator and sealed scoring harness (`BD-
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** 20,000 planned / 23,000 ceiling
-- **Allowed Module Families:** `["seal", "worlds", "harness"]`
+- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "drillholes", "fa_book", "metamorphic"]`
 
 ## 2. Inputs
 - Deterministic `seed_root: u64`, `WorldCondition` (`CorrectlySpecified`, `Misspecified`, `IdentifiabilityProbe`), and world configuration (`OpenPitAuConfig`).
@@ -52,6 +52,10 @@ Synthetic only (`EvidenceClass::ModelledUncalibrated` / synthetic test harness);
 - `seal::{SealError, SealKey, SealedTruth}`
 - `worlds::{WorldCondition, MisspecKind, BiasVector, OpenPitAuConfig, PeriodObservation, OpenPitAuObservations, PeriodTruth, OpenPitAuTruth}`
 - `harness::{ScoringHarness, IntervalPrediction, OpenPitAuPrediction, ScoreCard}`
+- `geology::{AuDomain, DomainSpec, OpenPitAuGeologySpec, GeologyBlock, DomainStats, GradeTonnagePoint, OpenPitAuGeologyTruth}` (`BD-128`)
+- `drillholes::{DrillholeCampaignConfig, DrillholeCollar, CampaignManifestSummary, generate_collar, generate_interval_chunk, stream_campaign_summary}` (`BD-131`, `10^5` holes / `10^7` intervals)
+- `fa_book::{MiningAccount, EntrySide, PostingLine, JournalEntry, LocalAccountingBook, generate_synthetic_mining_book}` (`BD-134`)
+- `metamorphic::{LotSpec, assert_split_merge_lot_invariance, canonical_set_digest, assert_permutation_digest_invariance, assert_exact_statutory_unit_roundtrips}` (`BD-143`)
 
 ## 12. Proof obligations
 - `GATE-GEN-01` (sealed truth inaccessible outside scoring harness): `seal.rs` `compile_fail` doctests + `harness::tests::test_sealed_truth_isolation_and_deterministic_replay`.

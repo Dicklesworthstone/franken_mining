@@ -124,6 +124,7 @@ dependencies = [
 name = "fmine-gen"
 version = "0.1.0"
 dependencies = [
+ "fmine-array",
  "fmine-claim",
  "fmine-core",
  "fmine-evidence",
@@ -286,9 +287,11 @@ version = "0.1.0"
 dependencies = [
  "fmine-core",
  "fmine-evidence",
+ "fmine-gen",
  "fmine-ledger",
  "fmine-object",
  "fmine-sync",
+ "fmine-units",
 ]
 
 [[package]]
@@ -300,6 +303,7 @@ dependencies = [
  "fmine-cli",
  "fmine-core",
  "fmine-evidence",
+ "fmine-gen",
  "fmine-io",
  "fmine-lp",
  "fmine-metrics",
