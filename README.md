@@ -4158,7 +4158,7 @@ replay; an exclusion includes checked certificates and applies only to those his
 declared sales assumption. Missing or incompatible windows have explicit reasons, and no usable history stays
 **T3 for the historical comparison**. Solver limits remain indeterminate.
 
-A separate **T2 technical production comparison for gold** binds the remaining requirement to a registered
+A separate **T2 technical production comparison for gold or copper** binds the remaining requirement to a registered
 `technical_report` PDF and three agreed, page-cited inputs. Use these quantity keys and units, with site
 hyphens written as underscores:
 
@@ -4166,10 +4166,14 @@ hyphens written as underscores:
 |---|---|---|
 | `technical_<site>_remaining_dry_feed_mt` | `dry_mt` | Million dry metric tonnes over the remaining months |
 | `technical_<site>_head_grade_g_per_t` | `g_per_dry_t` | Gold head grade per dry metric tonne |
-| `technical_<site>_recovery_percent` | `percent` | Gold recovery in explicit percent units |
+| `technical_<site>_head_grade_percent` | `percent_dry_mass` | Copper mass as a percentage of dry feed; use instead of the gold grade row |
+| `technical_<site>_recovery_percent` | `percent` | Recovery of the selected metal in explicit percent units |
 
 All three rows must come from the same latest eligible document and declare the same basis:
 `100%;scenario=declared_upper_bound`, `100%;scenario=plan`, or `100%;scenario=nameplate`.
+For copper, append `;metal=copper` to every row's basis. Copper grade and recovery percentages divide by
+100 explicitly; dry Mt times both fractions times 1000 gives copper kt. The gold calculation retains
+the statutory troy-ounce conversion and produces koz. Physical factors from different metals cannot mix.
 Their period must be the exact remaining support: `YYYYQ2-Q4` after Q1, `YYYYH2` after Q2, or `YYYYQ4`
 after Q3. Full-mine inputs are converted exactly; the guidance ownership share scales production only.
 No annual rate, average grade or life-of-mine figure is silently converted into a remaining-period bound.
@@ -4179,9 +4183,10 @@ citations. Plan/nameplate comparisons remain conditional, and no T2 result suppl
 witness. Missing, altered, disputed or inapplicable optional technical evidence gives a named **T3 technical
 result** while preserving the arithmetic requirements and historical comparison. Newer incomplete inputs
 cannot silently fall back to an older complete report. The synthetic command exercises the positive T2 path.
-Copper retains an explicit T3 technical result until a copper-specific capacity model is supplied; its
-arithmetic requirements and T1 historical comparison remain available. Explicit `--capacity-document`
-requests also require gold. C1 completion is outside this AISC slice.
+Copper reports its ceiling in kt and its optimistic required grade as a fraction of dry feed mass.
+DESIGN known answer: 10 Mt at 0.5% copper and 90% recovery yields a 45 kt full-mine ceiling, or 36 kt at
+an explicit 80% ownership share. These invented values illustrate the conversion; they are not issuer data.
+C1 completion is outside this AISC slice.
 
 The report includes the guidance vintage, as-of selection and all source hashes. Each workbook uses its cited
 publication date, with the registered retrieval upper date as a fallback where publication is unstated. Later
@@ -4213,15 +4218,18 @@ calendar-month period (for example `2026-07/2026-12`):
 | `remaining_dry_feed_mt` | `dry_mt` | Maximum remaining dry feed, in million metric tonnes |
 | `head_grade_g_per_t` | `g_per_dry_t` | Upper gold head grade, grams per dry metric tonne |
 | `recovery_fraction` | `fraction` | Upper gold recovery, greater than zero and at most one |
+| `head_grade_percent` | `percent_dry_mass` | Upper copper dry-mass grade; replaces the gold grade row |
+| `recovery_percent` | `percent` | Upper copper recovery; replaces the gold recovery row |
 
-Each row requires basis `100%;bound=explicit-upper;metal=gold`, a single explicitly stated upper value,
+Gold rows require basis `100%;bound=explicit-upper;metal=gold`; copper rows require
+`100%;bound=explicit-upper;metal=copper`. Each row has a single explicitly stated upper value,
 and a printed locator label identifying a maximum, upper limit or at-most bound. Ordinary forecasts,
-average grades, percent values, wet tonnes and annual nameplate values are not silently converted into
+average grades, undeclared percentages, wet tonnes and annual nameplate values are not silently converted into
 remaining-period physical limits. Missing, conflicting, incompatible or late evidence refuses the requested
 capacity comparison.
 
-The **T2 production-ceiling comparison** multiplies the explicit full-mine limits, uses the exact statutory
-troy-ounce conversion and applies the guidance's stated attributable share when needed. It reports the
+The **T2 production-ceiling comparison** multiplies the explicit full-mine limits, uses the exact gold
+troy-ounce or copper Mt-to-kt conversion and applies the guidance's stated attributable share when needed. It reports the
 optimistic maximum production and required head-grade interval, with canonical Claims and citations.
 A requirement above that optimistic ceiling is excluded by the stated limits. **Not excluded** establishes
 neither simultaneous attainability of the maxima nor production-cost feasibility. Already delivered

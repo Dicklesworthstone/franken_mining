@@ -192,6 +192,12 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   metadata. Gold canonical bytes retain their v1 layouts; copper quantities have distinct kind tags and
   witness/total frames use v2. Known answers live in `guidance::tests` and `guidance::quarters::tests`.
 - **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
+  DESIGN (BD-342): gold uses dry Mt, gold g/t and a recovery fraction, producing koz. Copper uses
+  separately typed dry Mt, copper dry-mass grade fraction and copper recovery fraction, producing kt
+  through the exact factor 1000 kt/Mt. Every physical factor must match the production's metal,
+  full-mine basis, subject and remaining months. Copper input grade and recovery fractions cannot
+  exceed one. Gold canonical frames remain unchanged; copper physical frames bind their distinct metal
+  and quantity kinds. Public adapters explicitly convert copper percent readings to fractions.
 - **`recovery`.** `TrainingRow`s and an `OperatingRow` of `Claim<recovery::Quantity>`, in percent and kt units.
   DESIGN (bd-srqc): `recovery::sensitivity` accepts a canonical quarterly `Claim<ModelProjection>`
   and a separately declared `Claim<CopperPrice>`. The named, nonnegative USD/lb price is an exact constant
@@ -470,6 +476,9 @@ The other modules have local errors with no refusal code:
 - **The typed waterfall** fixes its units: $M, koz, thousand tonnes, g/t and a fraction. It checks that both periods carry the same basis tag, but cannot authenticate that basis. Its enclosures treat inputs as independent, so they over-enclose shared ones.
 - **Guidance** works on closed intervals, with sales and AISC strictly positive and production at least zero. Its results are necessary arithmetic conditions, not forecasts or probabilities. `T1` is the supplied history only. `ExceedsEnvelope` says nothing about physical capacity.
 - **Capacity** multiplies the three maxima. That gives an optimistic ceiling, not a plan. `NotExcluded` is not a feasibility witness.
+  The copper required-grade result retains signed values and values above one: these describe an
+  already-delivered requirement or an excluded scenario, not a proposed physical grade. The optimistic
+  maximum need not be jointly attainable. Neither metal supplies a joint production/AISC witness.
 - **Recovery** fits two descriptive annual models and applies them to quarters. Its enclosures cover input rounding, not sampling error. An extrapolated recovery outside 0–100% is kept as computed.
 - **The PDF identity adapter (`roll_forward`, BD-340.S5)** verifies declared arithmetic of issuer assertions, not their truth or completeness. It never emits reserve classifications, selects a preferred filing/deck vintage, silently changes a printed sign, or supplies an issuer-attributed corrected figure. Synthetic E692-shaped arithmetic is a known-answer test of the binding; the authentic historical transcription and independent census gates remain open. Closed intervals are agnostic about ties; a named half-open convention is never changed to rescue a row. No file I/O occurs here: callers authenticate actual registered bytes and reader agreement before public use.
 - **Reserve replacement** is not reserve validation. Actual file authentication and independent reader agreement remain the caller's duty.

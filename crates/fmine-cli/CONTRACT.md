@@ -578,8 +578,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     historical-sales scenario, in JSON or readable `--format markdown` (BD-342);
     gold displays koz and USD per sold oz; copper displays production kt, sales million lb and USD per sold lb,
     including correctly labelled original-quarter witnesses. Source-declared copper sales in kt retain their
-    exact conversion and source ancestry. Copper technical capacity stays T3/indeterminate, and explicitly
-    selected gold capacity documents refuse copper rather than applying a gold grade/ounce model;
+    exact conversion and source ancestry. Copper technical capacity accepts explicitly declared copper
+    dry-feed, dry-mass grade and recovery inputs, with kt ceilings and fraction-valued required grades.
+    Selected gold factors refuse in copper calculations, and missing technical evidence stays T3;
   - `track-record --issuer <issuer> [--site <site>] [--through YYYYQn | --as-of YYYY-MM-DD] [--price-subject <subject>]` or `--synthetic`: cited issuer
     guidance against first-published annual outcomes, with separate comparative assessments, retained missing
     members, exact descriptive scores and JSON or readable Markdown output (BD-341);
@@ -1402,7 +1403,11 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   retaining every reader at each selected locator; unrelated technical inputs cannot block that comparison.
   The full-mine gold limits must explicitly state maximum remaining dry feed,
   grade and recovery, with exact units and `100%;bound=explicit-upper;metal=gold` basis; ordinary averages or
-  annual nameplate values do not qualify. The adapter delegates ceiling and required-grade arithmetic to
+  annual nameplate values do not qualify. DESIGN (BD-342): copper declares the analogous
+  `100%;bound=explicit-upper;metal=copper` basis, with `head_grade_percent` in `percent_dry_mass`
+  alongside dry Mt and recovery percent. Grade and recovery convert to distinct copper fraction types;
+  the exact production ceiling is in kt and the required grade is a fraction of dry feed mass.
+  The adapter delegates ceiling and required-grade arithmetic to
   `fmine_metrics::capacity`. The T2 result is a production-only exclusion test; NotExcluded supplies no
   feasibility witness or probability. Its Claims retain source anchors and interpretation. A composite digest
   binds both the arithmetic/history and capacity reports; the envelope still has no authority certificate.

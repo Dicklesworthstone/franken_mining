@@ -315,8 +315,14 @@ The public lane of M0 (`fmine assure public`).
   implicit wet/dry, grade-average or ownership conversion is allowed. Missing, changed, disputed, pending or
   inapplicable optional technical evidence becomes a typed technical T3 without discarding the requirements
   or historical assessment. Selection never falls back over a newer incomplete or inapplicable document.
-  Copper completion retains its arithmetic and T1 history but reports technical T3 explicitly: the
-  gold grade/ounce capacity model is not applicable to copper. These source-to-report tests use invented
+  DESIGN (BD-342): copper uses the same feed/recovery quantity suffixes, with `head_grade_percent`
+  instead of `head_grade_g_per_t`, units `dry_mt`, `percent_dry_mass` and `percent`, and an explicit
+  `;metal=copper` suffix on all three common scenario bases. Both percentages convert exactly to
+  fractions; dry Mt times grade times recovery times 1000 yields kt before ownership scaling.
+  JSON and Markdown retain the copper units, required dry-mass grade fraction, and source evidence.
+  Gold factors cannot enter a copper calculation. Both grade keys participate in source selection so
+  an incomplete or wrong-metal newer report cannot silently select older complete inputs.
+  These source-to-report tests use invented
   public-format evidence and do not establish authentic issuer acceptance or prospective calibration.
 - `guidance::track_record` (BD-341): `run(workspace, issuer, site, as_of)` verifies the source registry,
   workbook bytes and two-reader document transcriptions before comparing registered annual guidance with

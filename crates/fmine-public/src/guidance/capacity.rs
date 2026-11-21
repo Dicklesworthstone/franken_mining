@@ -1,6 +1,8 @@
 //! Page-cited technical production scenarios (BD-342). A plan or nameplate is not a physical maximum.
 //! All three inputs must explicitly apply to the exact remaining months, on a full-mine dry metric-tonne
 //! basis. Annual rates, life-of-mine averages and reserve grades are not silently repurposed or prorated.
+//! Copper additionally declares `metal=copper`; its dry-mass grade and recovery percentages are converted
+//! explicitly to distinct copper fractions before the exact physical calculation.
 
 use fmine_metrics::capacity::{
     self as physical, CapacityLimits, CapacityReport, CapacityVerdict, PhysicalKind, PhysicalLimit,
@@ -66,14 +68,30 @@ impl TechnicalAssessment {
     }
 }
 
-pub(super) fn quantities(site: &str) -> [String; 3] {
+pub(super) fn quantities(site: &str) -> [String; 4] {
     let stem = format!("technical_{}", site.replace('-', "_"));
     [
         "remaining_dry_feed_mt",
         "head_grade_g_per_t",
+        "head_grade_percent",
         "recovery_percent",
     ]
     .map(|suffix| format!("{stem}_{suffix}"))
+}
+
+fn family_quantities(site: &str, required: QuantityKind) -> Result<[String; 3]> {
+    let [feed, gold_grade, copper_grade, recovery] = quantities(site);
+    let grade = match required {
+        QuantityKind::ProductionKoz => gold_grade,
+        QuantityKind::ProductionKt => copper_grade,
+        _ => {
+            return Err(refuse(
+                RefusalCode::BasisMismatch105,
+                "technical comparison requires gold production in koz or copper production in kt",
+            ));
+        }
+    };
+    Ok([feed, grade, recovery])
 }
 
 fn support(p: Period) -> Result<String> {
@@ -91,7 +109,17 @@ fn support(p: Period) -> Result<String> {
     Ok(format!("{}{suffix}", p.year))
 }
 
-fn kind(basis: &str) -> Result<TechnicalScenarioKind> {
+fn kind(basis: &str, required: QuantityKind) -> Result<TechnicalScenarioKind> {
+    let basis = if required == QuantityKind::ProductionKt {
+        basis.strip_suffix(";metal=copper").ok_or_else(|| {
+            refuse(
+                RefusalCode::BasisMismatch105,
+                "copper technical inputs must explicitly declare metal=copper",
+            )
+        })?
+    } else {
+        basis
+    };
     match basis {
         "100%;scenario=declared_upper_bound" => Ok(TechnicalScenarioKind::DeclaredUpperBound),
         "100%;scenario=plan" => Ok(TechnicalScenarioKind::Plan),
@@ -107,6 +135,7 @@ fn rows<'a>(
     report: &'a TranscriptionReport,
     site: &str,
     as_of: &str,
+    required: QuantityKind,
 ) -> Result<([&'a Accepted; 3], &'a CheckedDocument)> {
     if !is_date(as_of) {
         return Err(refuse(
@@ -120,7 +149,8 @@ fn rows<'a>(
             "technical-input readers disagree",
         ));
     }
-    let keys = quantities(site);
+    let keys = family_quantities(site, required)?;
+    let selection_keys = quantities(site);
     let candidates: Vec<_> = report
         .documents
         .iter()
@@ -131,7 +161,7 @@ fn rows<'a>(
                     .agreement
                     .accepted
                     .iter()
-                    .any(|a| a.locator.doc == d.file && keys.contains(&a.quantity))
+                    .any(|a| a.locator.doc == d.file && selection_keys.contains(&a.quantity))
                     || report
                         .agreement
                         .single_reader
@@ -232,7 +262,7 @@ fn limit(
             ),
         ));
     }
-    if kind(&a.basis)? != scenario {
+    if kind(&a.basis, required.kind)? != scenario {
         return Err(refuse(
             RefusalCode::BasisMismatch105,
             "technical feed, grade and recovery must declare one common scenario kind",
@@ -241,7 +271,12 @@ fn limit(
     let rounded =
         scenario != TechnicalScenarioKind::DeclaredUpperBound && matches!(a.value, Token::Point(_));
     let mut interval = token_interval(a.value, rounded)?;
-    if physical_kind == PhysicalKind::RecoveryFraction {
+    if matches!(
+        physical_kind,
+        PhysicalKind::RecoveryFraction
+            | PhysicalKind::CopperHeadGradeFraction
+            | PhysicalKind::CopperRecoveryFraction
+    ) {
         interval.lo = exact(interval.lo.checked_div(Rat::from_integer(100)))?;
         interval.hi = exact(interval.hi.checked_div(Rat::from_integer(100)))?;
     }
@@ -260,7 +295,10 @@ fn limit(
         &tag,
         Representation::Deterministic,
         SpatialSupport::PeriodAggregate,
-        if physical_kind == PhysicalKind::RemainingDryFeedMt {
+        if matches!(
+            physical_kind,
+            PhysicalKind::RemainingDryFeedMt | PhysicalKind::RemainingCopperDryFeedMt
+        ) {
             AdditivityClass::ExtensiveAdditive
         } else {
             AdditivityClass::IntensiveWeighted
@@ -298,14 +336,30 @@ fn compare(
     as_of: &str,
     synthetic: bool,
 ) -> Result<TechnicalComparison> {
-    let (selected, document) = rows(report, site, as_of)?;
-    let scenario = kind(&selected[0].basis)?;
+    let (selected, document) = rows(report, site, as_of, required.value.kind)?;
+    let scenario = kind(&selected[0].basis, required.value.kind)?;
+    let (feed_kind, grade_kind, grade_unit, recovery_kind) =
+        if required.value.kind == QuantityKind::ProductionKt {
+            (
+                PhysicalKind::RemainingCopperDryFeedMt,
+                PhysicalKind::CopperHeadGradeFraction,
+                "percent_dry_mass",
+                PhysicalKind::CopperRecoveryFraction,
+            )
+        } else {
+            (
+                PhysicalKind::RemainingDryFeedMt,
+                PhysicalKind::HeadGradeGPerT,
+                "g_per_dry_t",
+                PhysicalKind::RecoveryFraction,
+            )
+        };
     let limits = CapacityLimits {
         feed: limit(
             selected[0],
             &required.value,
             scenario,
-            PhysicalKind::RemainingDryFeedMt,
+            feed_kind,
             "dry_mt",
             synthetic,
         )?,
@@ -313,15 +367,15 @@ fn compare(
             selected[1],
             &required.value,
             scenario,
-            PhysicalKind::HeadGradeGPerT,
-            "g_per_dry_t",
+            grade_kind,
+            grade_unit,
             synthetic,
         )?,
         recovery: limit(
             selected[2],
             &required.value,
             scenario,
-            PhysicalKind::RecoveryFraction,
+            recovery_kind,
             "percent",
             synthetic,
         )?,
@@ -343,14 +397,6 @@ pub(super) fn assess(
     as_of: &str,
     synthetic: bool,
 ) -> TechnicalAssessment {
-    if required.value.kind != QuantityKind::ProductionKoz {
-        return TechnicalAssessment::Indeterminate {
-            reason: refuse(
-                RefusalCode::NoClaimInDomain201,
-                "copper technical production scenarios are unavailable in this version; the gold grade/ounce capacity model cannot establish a copper limit",
-            ),
-        };
-    }
     let result = source
         .and_then(|report| {
             report.ok_or_else(|| {
@@ -381,6 +427,9 @@ fn physical_json(c: &Claim<PhysicalLimit>) -> String {
             PhysicalKind::RemainingDryFeedMt => "remaining_dry_metric_feed_mt",
             PhysicalKind::HeadGradeGPerT => "gold_head_grade_g_per_dry_metric_t",
             PhysicalKind::RecoveryFraction => "gold_recovery_fraction",
+            PhysicalKind::RemainingCopperDryFeedMt => "remaining_copper_dry_metric_feed_mt",
+            PhysicalKind::CopperHeadGradeFraction => "copper_head_grade_fraction_of_dry_mass",
+            PhysicalKind::CopperRecoveryFraction => "copper_recovery_fraction",
         }),
         rat(p.interval.lo),
         rat(p.interval.hi)
@@ -410,7 +459,7 @@ pub(super) fn to_json(assessment: &TechnicalAssessment) -> String {
     };
     let rows = c.sources.iter().map(|a| format!("{{\"locator\":{},\"sha256\":{},\"token\":{},\"quantity\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}}", js(&a.locator.to_string()), js(&a.doc_sha256), js(&a.token), js(&a.quantity), js(&a.unit), js(&a.basis), js(&a.period), a.readers.len())).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"tier\":\"T2\",\"scope\":\"production_only\",\"status\":{},\"scenario_kind\":{},\"interpretation\":{},\"applicability\":\"Exact remaining months only; annual rates and life-of-mine averages are not prorated.\",\"rounding\":{},\"conversion\":\"Explicit recovery percent divided by 100; all physical factors are full-mine dry metric-tonne quantities; ownership scales production only.\",\"document\":{{\"file\":{},\"kind\":{},\"sha256\":{},\"published_at\":{},\"published_at_basis\":{}}},\"sources\":[{}],\"limits\":{{\"feed\":{},\"grade\":{},\"recovery\":{}}},\"maximum_production\":{},\"optimistic_required_grade\":{},\"physical_impossibility_claim\":false,\"joint_cost_feasibility_claim\":false}}",
+        "{{\"tier\":\"T2\",\"scope\":\"production_only\",\"status\":{},\"scenario_kind\":{},\"interpretation\":{},\"applicability\":\"Exact remaining months only; annual rates and life-of-mine averages are not prorated.\",\"rounding\":{},\"conversion\":{},\"document\":{{\"file\":{},\"kind\":{},\"sha256\":{},\"published_at\":{},\"published_at_basis\":{}}},\"sources\":[{}],\"limits\":{{\"feed\":{},\"grade\":{},\"recovery\":{}}},\"maximum_production\":{},\"optimistic_required_grade\":{},\"physical_impossibility_claim\":false,\"joint_cost_feasibility_claim\":false}}",
         js(&status),
         js(c.kind.as_str()),
         js(c.kind.interpretation()),
@@ -419,6 +468,13 @@ pub(super) fn to_json(assessment: &TechnicalAssessment) -> String {
         } else {
             "Printed plan/nameplate points retain half-last-place rounding; stated ranges retain their exact endpoints. The upper product is a conditional scenario bound, not a physical maximum."
         }),
+        js(
+            if c.result.maximum_production.value.kind == QuantityKind::ProductionKt {
+                "Explicit copper dry-mass grade percent and recovery percent divided by 100; Mt multiplied by grade fraction, recovery fraction and 1000 gives kt; ownership scales production only."
+            } else {
+                "Explicit recovery percent divided by 100; all physical factors are full-mine dry metric-tonne quantities; ownership scales production only."
+            }
+        ),
         js(&c.document.file),
         js(&c.document.kind),
         js(&c.document.sha256),
@@ -443,7 +499,7 @@ pub(super) fn synthetic_report() -> Result<TranscriptionReport> {
         sha256: digest.to_hex(),
     };
     let mut accepted = Vec::new();
-    for ((quantity, token), unit) in quantities("example-mine")
+    for ((quantity, token), unit) in family_quantities("example-mine", QuantityKind::ProductionKoz)?
         .into_iter()
         .zip(["10", "2", "90"])
         .zip(["dry_mt", "g_per_dry_t", "percent"])

@@ -5,6 +5,8 @@ mod tests {
     use fmine_core::anchor::SourceAnchor;
     use fmine_evidence::EpistemicStatus;
 
+    use crate::guidance::QuantityKind;
+
     fn r(n: i128, d: i128) -> Rat {
         Rat::new(n, d).unwrap()
     }
@@ -84,6 +86,244 @@ mod tests {
                 closed(r(9, 10), r(9, 10)),
             ),
         }
+    }
+
+    fn copper_requirement(bounds: Interval, ownership: Ownership) -> Claim<Quantity> {
+        let mut q = requirement(bounds, ownership).value;
+        q.kind = QuantityKind::ProductionKt;
+        cited(
+            "remaining_copper_production",
+            q.clone(),
+            &q.canonical_tag(),
+            AdditivityClass::ExtensiveAdditive,
+        )
+    }
+
+    fn copper_limits() -> CapacityLimits {
+        let mut l = limits();
+        for (c, kind, interval) in [
+            (
+                &mut l.feed,
+                PhysicalKind::RemainingCopperDryFeedMt,
+                point(10),
+            ),
+            (
+                &mut l.grade,
+                PhysicalKind::CopperHeadGradeFraction,
+                closed(r(1, 200), r(1, 200)),
+            ),
+            (
+                &mut l.recovery,
+                PhysicalKind::CopperRecoveryFraction,
+                closed(r(9, 10), r(9, 10)),
+            ),
+        ] {
+            let mut value = c.value.clone();
+            value.kind = kind;
+            value.interval = interval;
+            *c = cited(
+                &format!("copper_{}", c.metric_key),
+                value.clone(),
+                &value.canonical_tag(),
+                kind.additivity(),
+            );
+        }
+        l
+    }
+
+    #[test]
+    fn copper_ceiling_uses_dry_mass_and_explicit_ownership_without_gold_conversion() {
+        // Independent mass balance: 10 million dry t at 0.5% Cu contains 50,000 t of Cu;
+        // 90% recovery gives 45,000 t = 45 kt. An 80% share gives 36 kt.
+        let l = copper_limits();
+        let required = copper_requirement(closed(r(40, 1), r(60, 1)), Ownership::Full);
+        let report = compare_production(&required, &l).unwrap();
+        assert_eq!(
+            report.maximum_production.value.kind,
+            QuantityKind::ProductionKt
+        );
+        assert_eq!(report.maximum_production.value.interval, point(45));
+        assert_eq!(report.verdict, CapacityVerdict::NotExcluded);
+        assert_eq!(
+            report.optimistic_required_grade.value.kind,
+            PhysicalKind::CopperHeadGradeFraction
+        );
+        assert_eq!(
+            report.optimistic_required_grade.value.interval,
+            closed(r(1, 225), r(1, 150))
+        );
+        let attributable = compare_production(
+            &copper_requirement(
+                closed(r(40, 1), r(60, 1)),
+                Ownership::Attributable { share: r(4, 5) },
+            ),
+            &l,
+        )
+        .unwrap();
+        assert_eq!(attributable.maximum_production.value.interval, point(36));
+        assert_eq!(
+            attributable.optimistic_required_grade.value.interval,
+            closed(r(1, 180), r(1, 120))
+        );
+        assert_eq!(
+            attributable.verdict,
+            CapacityVerdict::ExceedsStatedProductionCeiling
+        );
+        assert_eq!(report, compare_production(&required, &l).unwrap());
+        assert_eq!(report.maximum_production.parents.len(), 4);
+        assert_eq!(report.maximum_production.anchors.len(), 4);
+        assert_eq!(
+            report.optimistic_required_grade.parents,
+            report.maximum_production.parents
+        );
+        assert_eq!(report.maximum_production.evidence, EvidenceClass::ISSUER);
+    }
+
+    #[test]
+    fn copper_bounds_preserve_rounding_signs_and_closed_ceiling_boundary() {
+        let mut l = copper_limits();
+        l.feed.value.interval = closed(r(19, 2), r(21, 2));
+        l.grade.value.interval = closed(r(9, 2000), r(11, 2000));
+        l.recovery.value.interval = closed(r(89, 100), r(91, 100));
+        // 10.5 Mt * 0.55% * 91% = 52.5525 kt. Lower corners cannot raise this bound.
+        let expected = r(21021, 400);
+        let at_boundary = compare_production(
+            &copper_requirement(closed(expected, expected), Ownership::Full),
+            &l,
+        )
+        .unwrap();
+        assert_eq!(
+            at_boundary.maximum_production.value.interval,
+            closed(expected, expected)
+        );
+        assert_eq!(at_boundary.verdict, CapacityVerdict::NotExcluded);
+        assert_eq!(
+            at_boundary.optimistic_required_grade.value.interval,
+            closed(r(11, 2000), r(11, 2000))
+        );
+        assert_eq!(
+            compare_production(&copper_requirement(point(53), Ownership::Full), &l)
+                .unwrap()
+                .verdict,
+            CapacityVerdict::ExceedsStatedProductionCeiling
+        );
+        let satisfied = compare_production(
+            &copper_requirement(closed(r(-18, 1), r(-9, 1)), Ownership::Full),
+            &copper_limits(),
+        )
+        .unwrap();
+        assert_eq!(satisfied.verdict, CapacityVerdict::AlreadySatisfied);
+        assert_eq!(
+            satisfied.optimistic_required_grade.value.interval,
+            closed(r(-1, 500), r(-1, 1000))
+        );
+        // Required grade may exceed 100%: retain the contradiction instead of clamping the result.
+        let impossible = compare_production(
+            &copper_requirement(point(10000), Ownership::Full),
+            &copper_limits(),
+        )
+        .unwrap();
+        assert_eq!(
+            impossible.optimistic_required_grade.value.interval,
+            closed(r(10, 9), r(10, 9))
+        );
+        assert_eq!(
+            impossible.verdict,
+            CapacityVerdict::ExceedsStatedProductionCeiling
+        );
+    }
+
+    #[test]
+    fn copper_refuses_cross_metal_factors_and_invalid_mass_fractions() {
+        let copper = copper_requirement(point(45), Ownership::Full);
+        let gold = requirement(point(45), Ownership::Full);
+        assert_eq!(
+            compare_production(&copper, &limits()).unwrap_err().code,
+            "FMINE-REF-105"
+        );
+        assert_eq!(
+            compare_production(&gold, &copper_limits())
+                .unwrap_err()
+                .code,
+            "FMINE-REF-105"
+        );
+        for position in 0..3 {
+            let mut l = copper_limits();
+            let old = limits();
+            match position {
+                0 => l.feed = old.feed,
+                1 => l.grade = old.grade,
+                _ => l.recovery = old.recovery,
+            }
+            assert_eq!(
+                compare_production(&copper, &l).unwrap_err().code,
+                "FMINE-REF-105"
+            );
+        }
+        for bad in [closed(r(-1, 100), ZERO), closed(ZERO, r(101, 100))] {
+            let mut l = copper_limits();
+            l.grade.value.interval = bad;
+            assert_eq!(
+                compare_production(&copper, &l).unwrap_err().code,
+                "FMINE-REF-109"
+            );
+        }
+        let mut l = copper_limits();
+        l.grade.value.interval = closed(ZERO, ONE);
+        assert_eq!(
+            compare_production(&copper, &l)
+                .unwrap()
+                .maximum_production
+                .value
+                .interval,
+            point(9000)
+        );
+        l.grade.value.interval = point(0);
+        assert_eq!(
+            compare_production(&copper, &l)
+                .unwrap()
+                .maximum_production
+                .value
+                .interval,
+            point(0)
+        );
+        let mut sold = copper.clone();
+        sold.value.kind = QuantityKind::SoldMillionLb;
+        assert_eq!(
+            compare_production(&sold, &l).unwrap_err().code,
+            "FMINE-REF-105"
+        );
+    }
+
+    #[test]
+    fn copper_physical_claim_identity_keeps_metal_and_fraction_units_distinct() {
+        let gold = limits();
+        let copper = copper_limits();
+        assert_ne!(
+            gold.feed.value.canonical_tag(),
+            copper.feed.value.canonical_tag()
+        );
+        assert_ne!(
+            gold.recovery.value.canonical_tag(),
+            copper.recovery.value.canonical_tag()
+        );
+        let mut same_number = gold.grade.value.clone();
+        same_number.interval = copper.grade.value.interval;
+        assert_ne!(
+            same_number.canonical_tag(),
+            copper.grade.value.canonical_tag()
+        );
+        let mut required = copper_requirement(point(45), Ownership::Full);
+        required.evidence = EvidenceClass::Assumed;
+        let report = compare_production(&required, &copper).unwrap();
+        assert_eq!(
+            report.maximum_production.evidence,
+            EvidenceClass::Assumed.meet(EvidenceClass::ISSUER)
+        );
+        assert_eq!(
+            report.maximum_production.parents,
+            report.optimistic_required_grade.parents
+        );
     }
 
     #[test]

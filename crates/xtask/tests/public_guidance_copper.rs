@@ -9,12 +9,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_core::hash::sha256;
+use fmine_evidence::{KnowledgeState, Refusal};
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
+use fmine_metrics::capacity::{CapacityVerdict, PhysicalKind};
 use fmine_metrics::guidance::{
     EnvelopeTier, GuidanceFamily, HistoryVerdict, QuantityKind, quarters,
 };
 use fmine_numerics::exact_feas::{Interval, Rat};
-use fmine_public::guidance::{self, GuidanceCompletionReport, capacity::TechnicalAssessment};
+use fmine_public::guidance::{
+    self, GuidanceCompletionReport,
+    capacity::{TechnicalAssessment, TechnicalComparison, TechnicalScenarioKind},
+};
 use fmine_public::sources::{registry_path, transcriptions_path};
 
 const ISSUER: &str = "copper_completion_fixture";
@@ -61,6 +66,71 @@ fn guidance_entries(file: &str, basis: &str) -> String {
         ));
     }
     out
+}
+
+fn technical_entries(file: &str, scenario: &str, explicit: bool) -> String {
+    let mut out = String::new();
+    let basis = if explicit {
+        "100%;bound=explicit-upper;metal=copper".to_string()
+    } else {
+        format!("100%;scenario={scenario};metal=copper")
+    };
+    for (suffix, token, unit) in [
+        ("remaining_dry_feed_mt", "10", "dry_mt"),
+        ("head_grade_percent", "2", "percent_dry_mass"),
+        ("recovery_percent", "90", "percent"),
+    ] {
+        for reader in ["reader-a", "reader-b"] {
+            out.push_str(
+                &entry(file, suffix, token, unit, &basis, reader)
+                    .replace(
+                        "guidance_copper_mine_",
+                        if explicit {
+                            "capacity_copper_mine_"
+                        } else {
+                            "technical_copper_mine_"
+                        },
+                    )
+                    .replace(
+                        "Invented annual guidance",
+                        if explicit {
+                            "Explicit maximum limits"
+                        } else {
+                            "Invented technical scenario"
+                        },
+                    )
+                    .replace(
+                        "2030FY",
+                        if explicit {
+                            "2030-07/2030-12"
+                        } else {
+                            "2030H2"
+                        },
+                    ),
+            );
+        }
+    }
+    out
+}
+
+fn technical_comparison(report: &GuidanceCompletionReport) -> &TechnicalComparison {
+    let TechnicalAssessment::Compared(comparison) = &report.technical else {
+        panic!(
+            "expected a source-bound T2 copper comparison: {:?}",
+            report.technical
+        );
+    };
+    comparison
+}
+
+fn technical_refusal(report: &GuidanceCompletionReport) -> &Refusal {
+    let TechnicalAssessment::Indeterminate { reason } = &report.technical else {
+        panic!(
+            "expected an indeterminate technical comparison: {:?}",
+            report.technical
+        );
+    };
+    reason
 }
 
 fn write_entries(root: &Path, entries: &str) {
@@ -358,7 +428,7 @@ fn copper_source_completion_keeps_exact_units_rounding_and_checked_history() {
             report.technical,
             TechnicalAssessment::Indeterminate { .. }
         ));
-        assert!(json.contains("copper technical production scenarios are unavailable"));
+        assert!(json.contains("no registered technical"));
         assert_eq!(json, run(&root).unwrap().to_json());
     }
 }
@@ -672,5 +742,256 @@ fn copper_completion_cli_renders_truthful_units_and_keeps_technical_limits_unava
     explicit.extend(["--capacity-document".into(), "Technical.pdf".into()]);
     let (refused, _) = fmine_cli::invoke(&explicit, &root);
     assert_eq!(refused.exit_code, 3, "{}", refused.to_json());
-    assert!(refused.to_json().contains("FMINE-REF-105"));
+    assert!(refused.to_json().contains("FMINE-REF-202"));
+}
+
+#[test]
+fn copper_technical_scenarios_and_explicit_limits_preserve_exact_units_and_sources() {
+    for (share, basis, maximum, grade_denominator) in [
+        ("50%", "attributable:1/2", 90, 900_000),
+        ("100%", "100%", 180, 1_800_000),
+    ] {
+        let root = workspace("technical-positive", share, "");
+        let arithmetic = run(&root).unwrap();
+        register_document(&root, "Technical.pdf", "2030-07-01", "technical_report");
+        let rows = format!(
+            "{}{}{}",
+            guidance_entries("Guidance.pdf", basis),
+            technical_entries("Technical.pdf", "declared_upper_bound", false),
+            technical_entries("Technical.pdf", "declared_upper_bound", true),
+        );
+        write_entries(&root, &rows);
+        let report = run(&root).unwrap();
+        assert_eq!(report.completion, arithmetic.completion);
+        assert_eq!(report.history, arithmetic.history);
+        let c = technical_comparison(&report);
+        assert_eq!(c.kind, TechnicalScenarioKind::DeclaredUpperBound);
+        assert_eq!(c.result.verdict, CapacityVerdict::NotExcluded);
+        // Independent dimensional answer: 10 Mt * (2/100) * (90/100) * 1000 kt/Mt * share.
+        assert_eq!(
+            c.result.maximum_production.value.kind,
+            QuantityKind::ProductionKt
+        );
+        assert_eq!(
+            c.result.maximum_production.value.interval,
+            interval((maximum, 1), (maximum, 1))
+        );
+        assert_eq!(
+            c.result.optimistic_required_grade.value.interval,
+            interval((11999, grade_denominator), (16001, grade_denominator))
+        );
+        assert_eq!(
+            c.limits.feed.value.kind,
+            PhysicalKind::RemainingCopperDryFeedMt
+        );
+        assert_eq!(
+            c.limits.grade.value.kind,
+            PhysicalKind::CopperHeadGradeFraction
+        );
+        assert_eq!(
+            c.limits.recovery.value.kind,
+            PhysicalKind::CopperRecoveryFraction
+        );
+        assert_eq!(c.limits.grade.value.interval, interval((1, 50), (1, 50)));
+        assert_eq!(c.limits.recovery.value.interval, interval((9, 10), (9, 10)));
+        assert_eq!(c.sources.len(), 3);
+        for input in [&c.limits.feed, &c.limits.grade, &c.limits.recovery] {
+            input.check_id().unwrap();
+            assert!(
+                c.result
+                    .maximum_production
+                    .parents
+                    .contains(&input.claim_id)
+            );
+            assert_eq!(
+                input.anchors[0].artifact_sha256,
+                sha256(&document("Technical.pdf")).0
+            );
+        }
+        let json = report.to_json();
+        assert!(json.contains("\"copper_head_grade_fraction_of_dry_mass\""));
+        assert!(json.contains("\"physical_impossibility_claim\":false"));
+        assert!(!json.contains("_koz") && !json.contains("gold_head_grade"));
+        assert_eq!(json, run(&root).unwrap().to_json());
+
+        let mut args = arguments();
+        args.extend(["--capacity-document".into(), "Technical.pdf".into()]);
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+        let json = envelope.to_json();
+        assert!(json.contains("\"scope\":\"copper_production_ceiling_only\""));
+        assert!(json.contains("\"unit\":\"kt\""));
+        assert!(json.contains("\"unit\":\"copper_fraction_dry_mass\""));
+        assert!(json.contains("\"bounds_unit\":\"copper_fraction_dry_mass\""));
+        assert!(json.contains("\"bounds_unit\":\"fraction\""));
+        assert!(json.contains("\"bounds_conversion\":\"source percent divided by 100\""));
+        assert!(json.contains(&format!("\"num\":\"{maximum}\",\"den\":\"1\"")));
+        assert!(!json.contains("koz") && !json.contains("gold-production"));
+        assert_eq!(json, fmine_cli::invoke(&args, &root).0.to_json());
+        args.extend(["--format".into(), "markdown".into()]);
+        let (markdown, exit) = fmine_cli::run(&args, &root);
+        assert_eq!(exit, 0, "{markdown}");
+        for expected in [
+            "T2",
+            "copper mass fraction of dry feed",
+            "percent",
+            "kt",
+            "USD per sold lb",
+        ] {
+            assert!(
+                markdown.contains(expected),
+                "missing {expected}: {markdown}"
+            );
+        }
+        assert!(!markdown.contains("koz") && !markdown.contains("g per dry"));
+    }
+}
+
+#[test]
+fn copper_plan_rounding_and_strict_source_admission_keep_indeterminate_distinct_from_excluded() {
+    let root = workspace("technical-admission", "50%", "");
+    register_document(&root, "Technical.pdf", "2030-07-01", "technical_report");
+    let guidance = guidance_entries("Guidance.pdf", "attributable:1/2");
+    let limits = technical_entries("Technical.pdf", "declared_upper_bound", false);
+    write_entries(&root, &format!("{guidance}{limits}"));
+    let original = run(&root).unwrap();
+    for (scenario, expected_kind) in [
+        ("plan", TechnicalScenarioKind::Plan),
+        ("nameplate", TechnicalScenarioKind::Nameplate),
+    ] {
+        write_entries(
+            &root,
+            &format!(
+                "{guidance}{}",
+                technical_entries("Technical.pdf", scenario, false)
+            ),
+        );
+        let rounded = run(&root).unwrap();
+        let c = technical_comparison(&rounded);
+        assert_eq!(c.kind, expected_kind);
+        assert_eq!(c.limits.feed.state, KnowledgeState::Estimated);
+        assert_eq!(c.limits.grade.value.interval, interval((3, 200), (1, 40)));
+        assert_eq!(
+            c.limits.recovery.value.interval,
+            interval((179, 200), (181, 200))
+        );
+        // 10.5 * 0.025 * 0.905 * 1000 * 1/2 = 118.78125 kt, not 2.5 or 90.5 as fractions.
+        assert_eq!(
+            c.result.maximum_production.value.interval.hi,
+            Rat::new(3801, 32).unwrap()
+        );
+        assert_eq!(rounded.completion, original.completion);
+        assert_eq!(rounded.history, original.history);
+    }
+    let excluded = limits.replace("token = \"10\"", "token = \"1\"");
+    write_entries(&root, &format!("{guidance}{excluded}"));
+    let excluded = run(&root).unwrap();
+    assert_eq!(
+        technical_comparison(&excluded).result.verdict,
+        CapacityVerdict::ExceedsStatedProductionCeiling
+    );
+    assert_eq!(excluded.completion, original.completion);
+    for (old, new, code) in [
+        (";metal=copper", "", "FMINE-REF-105"),
+        ("percent_dry_mass", "percent", "FMINE-REF-105"),
+        ("dry_mt", "wet_mt", "FMINE-REF-105"),
+        ("2030H2", "2030FY", "FMINE-REF-102"),
+        ("token = \"2\"", "token = \"101\"", "FMINE-REF-109"),
+        ("token = \"90\"", "token = \"101\"", "FMINE-REF-109"),
+    ] {
+        write_entries(&root, &format!("{guidance}{}", limits.replace(old, new)));
+        let bad = run(&root).unwrap();
+        assert_eq!(technical_refusal(&bad).code, code, "{old} -> {new}");
+        assert_eq!(bad.completion, original.completion);
+        assert_eq!(bad.history, original.history);
+    }
+    register_document(&root, "Updated.pdf", "2030-07-20", "technical_report");
+    let pending = entry(
+        "Updated.pdf",
+        "head_grade_percent",
+        "1.5",
+        "percent_dry_mass",
+        "100%;scenario=plan;metal=copper",
+        "reader-a",
+    )
+    .replace("guidance_copper_mine_", "technical_copper_mine_")
+    .replace("2030FY", "2030H2");
+    write_entries(&root, &format!("{guidance}{limits}{pending}"));
+    let pending = run(&root).unwrap();
+    assert_eq!(technical_refusal(&pending).code, "FMINE-REF-202");
+    assert!(technical_refusal(&pending).what.contains("Updated.pdf"));
+    assert_eq!(pending.completion, original.completion);
+    assert_eq!(pending.history, original.history);
+    // A newer agreed gold-grade-only row is still a latest technical document for this site.
+    // It cannot make the selector resurrect the older complete copper limits.
+    let mut wrong_family = String::new();
+    for reader in ["reader-a", "reader-b"] {
+        wrong_family.push_str(
+            &entry(
+                "Updated.pdf",
+                "head_grade_g_per_t",
+                "2",
+                "g_per_dry_t",
+                "100%;scenario=plan",
+                reader,
+            )
+            .replace("guidance_copper_mine_", "technical_copper_mine_")
+            .replace("2030FY", "2030H2"),
+        );
+    }
+    write_entries(&root, &format!("{guidance}{limits}{wrong_family}"));
+    let wrong_family = run(&root).unwrap();
+    assert_eq!(technical_refusal(&wrong_family).code, "FMINE-REF-202");
+    assert!(
+        technical_refusal(&wrong_family)
+            .what
+            .contains("Updated.pdf")
+    );
+    assert_eq!(wrong_family.completion, original.completion);
+    assert_eq!(wrong_family.history, original.history);
+}
+
+#[test]
+fn explicit_copper_limits_reject_wrong_metal_unit_period_and_changed_source_bytes() {
+    let root = workspace("explicit-copper-admission", "50%", "");
+    register_document(&root, "Technical.pdf", "2030-07-01", "technical_report");
+    let guidance = guidance_entries("Guidance.pdf", "attributable:1/2");
+    let limits = technical_entries("Technical.pdf", "declared_upper_bound", true);
+    let mut args = arguments();
+    args.extend(["--capacity-document".into(), "Technical.pdf".into()]);
+    for (old, new, code) in [
+        (";metal=copper", ";metal=gold", "FMINE-REF-107"),
+        ("percent_dry_mass", "fraction", "FMINE-REF-105"),
+        ("unit = \"percent\"", "unit = \"fraction\"", "FMINE-REF-105"),
+        ("2030-07/2030-12", "2030FY", "FMINE-REF-102"),
+        (
+            "Explicit maximum limits",
+            "Nameplate estimate",
+            "FMINE-REF-107",
+        ),
+        ("token = \"90\"", "token = \"101\"", "FMINE-REF-109"),
+    ] {
+        write_entries(&root, &format!("{guidance}{}", limits.replace(old, new)));
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_ne!(envelope.exit_code, 0);
+        assert!(
+            envelope.to_json().contains(code),
+            "{old} -> {new}: {}",
+            envelope.to_json()
+        );
+    }
+    write_entries(&root, &format!("{guidance}{limits}"));
+    assert_eq!(fmine_cli::invoke(&args, &root).0.exit_code, 0);
+    std::fs::write(
+        root.join("corpus/Technical.pdf"),
+        b"SYNTHETIC altered technical-report bytes",
+    )
+    .unwrap();
+    let (envelope, _) = fmine_cli::invoke(&args, &root);
+    assert_ne!(envelope.exit_code, 0);
+    assert!(
+        envelope.to_json().contains("FMINE-REF-505"),
+        "{}",
+        envelope.to_json()
+    );
 }

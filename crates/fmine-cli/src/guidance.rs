@@ -138,6 +138,12 @@ fn technical(out: &mut String, assessment: &TechnicalAssessment) {
             "The production requirement is already satisfied across the supplied bounds."
         }
     };
+    let copper = comparison.result.maximum_production.value.kind == QuantityKind::ProductionKt;
+    let grade_unit = if copper {
+        "copper mass fraction of dry feed"
+    } else {
+        "g per dry tonne"
+    };
     let _ = writeln!(
         out,
         "**T2 — {scenario}.** {verdict}\n\nSource: {}; published {}; date basis: {}.\n\n\
@@ -154,11 +160,7 @@ fn technical(out: &mut String, assessment: &TechnicalAssessment) {
             &comparison.limits.feed,
             "Mt",
         ),
-        (
-            "Feed head grade",
-            &comparison.limits.grade,
-            "g per dry tonne",
-        ),
+        ("Feed head grade", &comparison.limits.grade, grade_unit),
         ("Recovery", &comparison.limits.recovery, "fraction"),
     ] {
         physical_row(out, name, claim, unit);
@@ -167,13 +169,17 @@ fn technical(out: &mut String, assessment: &TechnicalAssessment) {
         out,
         "Maximum production under supplied limits",
         &comparison.result.maximum_production,
-        "koz, on the guidance ownership basis",
+        if copper {
+            "kt, on the guidance ownership basis"
+        } else {
+            "koz, on the guidance ownership basis"
+        },
     );
     physical_row(
         out,
         "Optimistic required head grade",
         &comparison.result.optimistic_required_grade,
-        "g per dry tonne",
+        grade_unit,
     );
     out.push_str("\nThe required grade uses the highest supplied dry-feed and recovery bounds. A signed requirement is retained; the separate AISC frontier and historical tests still apply.\n\n\
                   | Page citation | Printed token | Unit | Basis | Period |\n|---|---|---|---|---|\n");

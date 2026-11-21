@@ -1,6 +1,7 @@
 //! Optional registered technical-report upper bounds for guidance completion (BD-342).
 //! DESIGN: only explicitly asserted upper limits over the exact remaining months enter this adapter.
-//! Annual rates, averages, nominal nameplates and percentages are never converted into physical ceilings.
+//! Annual rates, averages and nominal nameplates never become physical ceilings. Copper dry-mass grade
+//! and recovery percentages are explicitly converted to fractions, with the metal declared on every input.
 //! Determinism: DeterministicPerIsa (exact canonical values; approximate Markdown displays).
 
 use std::collections::BTreeSet;
@@ -24,7 +25,9 @@ use fmine_registry::sources::{is_date, is_quarter};
 use fmine_registry::transcriptions::{Accepted, Token};
 
 const BASIS: &str = "100%;bound=explicit-upper;metal=gold";
-pub(crate) const NO_CLAIM: &str = "Conditional gold-production upper bound from explicitly stated limits; no physical feasibility, joint production-cost witness, probability, mine-impossibility or regulatory claim.";
+const COPPER_BASIS: &str = "100%;bound=explicit-upper;metal=copper";
+const NO_CLAIM: &str = "Conditional gold-production upper bound from explicitly stated limits; no physical feasibility, joint production-cost witness, probability, mine-impossibility or regulatory claim.";
+const COPPER_NO_CLAIM: &str = "Conditional copper-production upper bound from explicitly stated limits; no physical feasibility, joint production-cost witness, probability, mine-impossibility or regulatory claim.";
 type Result<T> = std::result::Result<T, Refusal>;
 
 #[derive(Debug, Clone)]
@@ -138,12 +141,17 @@ fn limit(
     let explicit_label = ["maximum", "upper limit", "at most"]
         .iter()
         .any(|s| labels.contains(s));
-    if row.basis != BASIS || !explicit_label {
+    let basis = if required.value.kind == QuantityKind::ProductionKt {
+        COPPER_BASIS
+    } else {
+        BASIS
+    };
+    if row.basis != basis || !explicit_label {
         return Err(refuse(
             RefusalCode::UndeclaredUnitBasisOrTz107,
             format!(
-                "{} needs the explicit-upper basis and a printed maximum, upper limit or at most label; an estimate is not a limit",
-                row.locator
+                "{} needs basis {basis} and a printed maximum, upper limit or at most label; an estimate is not a limit",
+                row.locator,
             ),
         ));
     }
@@ -169,12 +177,23 @@ fn limit(
             "limit decimal scale overflow",
         )
     })?;
-    let upper = Rat::new(value.mantissa, denominator).map_err(|_| {
+    let mut upper = Rat::new(value.mantissa, denominator).map_err(|_| {
         refuse(
             RefusalCode::NumericalCertificateFailed207,
             "limit decimal overflow",
         )
     })?;
+    if matches!(
+        kind,
+        PhysicalKind::CopperHeadGradeFraction | PhysicalKind::CopperRecoveryFraction
+    ) {
+        upper = upper.checked_div(Rat::from_integer(100)).map_err(|_| {
+            refuse(
+                RefusalCode::NumericalCertificateFailed207,
+                "copper percentage conversion overflow",
+            )
+        })?;
+    }
     let value = PhysicalLimit {
         subject: required.value.subject.clone(),
         period: required.value.period,
@@ -194,7 +213,10 @@ fn limit(
         &tag,
         Representation::Deterministic,
         SpatialSupport::PeriodAggregate,
-        if kind == PhysicalKind::RemainingDryFeedMt {
+        if matches!(
+            kind,
+            PhysicalKind::RemainingDryFeedMt | PhysicalKind::RemainingCopperDryFeedMt
+        ) {
             AdditivityClass::ExtensiveAdditive
         } else {
             AdditivityClass::IntensiveWeighted
@@ -213,6 +235,46 @@ fn limit(
     ))
 }
 
+fn input_specs(kind: QuantityKind) -> [(&'static str, PhysicalKind, &'static str); 3] {
+    if kind == QuantityKind::ProductionKt {
+        [
+            (
+                "remaining_dry_feed_mt",
+                PhysicalKind::RemainingCopperDryFeedMt,
+                "dry_mt",
+            ),
+            (
+                "head_grade_percent",
+                PhysicalKind::CopperHeadGradeFraction,
+                "percent_dry_mass",
+            ),
+            (
+                "recovery_percent",
+                PhysicalKind::CopperRecoveryFraction,
+                "percent",
+            ),
+        ]
+    } else {
+        [
+            (
+                "remaining_dry_feed_mt",
+                PhysicalKind::RemainingDryFeedMt,
+                "dry_mt",
+            ),
+            (
+                "head_grade_g_per_t",
+                PhysicalKind::HeadGradeGPerT,
+                "g_per_dry_t",
+            ),
+            (
+                "recovery_fraction",
+                PhysicalKind::RecoveryFraction,
+                "fraction",
+            ),
+        ]
+    }
+}
+
 fn limits_from_rows(
     rows: &[Accepted],
     document: &DocumentRow,
@@ -220,26 +282,9 @@ fn limits_from_rows(
     evidence: EvidenceClass,
 ) -> Result<(CapacityLimits, Vec<Accepted>)> {
     let site = key(&required.value.subject).replace('-', "_");
-    let specs = [
-        (
-            "remaining_dry_feed_mt",
-            PhysicalKind::RemainingDryFeedMt,
-            "dry_mt",
-        ),
-        (
-            "head_grade_g_per_t",
-            PhysicalKind::HeadGradeGPerT,
-            "g_per_dry_t",
-        ),
-        (
-            "recovery_fraction",
-            PhysicalKind::RecoveryFraction,
-            "fraction",
-        ),
-    ];
     let mut values = Vec::new();
     let mut sources = Vec::new();
-    for (suffix, kind, unit) in specs {
+    for (suffix, kind, unit) in input_specs(required.value.kind) {
         let quantity = format!("capacity_{site}_{suffix}");
         let matching: Vec<_> = rows
             .iter()
@@ -291,10 +336,13 @@ pub(crate) fn assess(
             "remaining-production value does not match its canonical Claim",
         ));
     }
-    if required.value.kind != QuantityKind::ProductionKoz {
+    if !matches!(
+        required.value.kind,
+        QuantityKind::ProductionKoz | QuantityKind::ProductionKt
+    ) {
         return Err(refuse(
             RefusalCode::BasisMismatch105,
-            "explicit capacity comparisons currently require gold production in koz; copper needs its own declared grade and recovery model",
+            "explicit capacity comparisons require gold production in koz or copper production in kt",
         ));
     }
     if key(&required.value.subject) != site || !is_quarter(through) {
@@ -332,12 +380,8 @@ pub(crate) fn assess(
         })?
         .clone();
     document_admitted(&document, as_of)?;
-    let quantities = [
-        "remaining_dry_feed_mt",
-        "head_grade_g_per_t",
-        "recovery_fraction",
-    ]
-    .map(|role| format!("capacity_{}_{role}", site.replace('-', "_")));
+    let quantities = input_specs(required.value.kind)
+        .map(|(role, _, _)| format!("capacity_{}_{role}", site.replace('-', "_")));
     let transcript = load_transcription_quantities_as_of(
         &profile,
         root,
@@ -446,6 +490,18 @@ fn provenance<T>(c: &Claim<T>) -> String {
 }
 
 impl GuidanceCapacityReport {
+    fn is_copper(&self) -> bool {
+        self.comparison.maximum_production.value.kind == QuantityKind::ProductionKt
+    }
+
+    fn no_claim(&self) -> &'static str {
+        if self.is_copper() {
+            COPPER_NO_CLAIM
+        } else {
+            NO_CLAIM
+        }
+    }
+
     fn verdict(&self) -> &'static str {
         match self.comparison.verdict {
             CapacityVerdict::ExceedsStatedProductionCeiling => "exceeds_stated_production_ceiling",
@@ -457,14 +513,21 @@ impl GuidanceCapacityReport {
     fn body(&self) -> String {
         let sources = self.sources.iter().zip([
             &self.limits.feed, &self.limits.grade, &self.limits.recovery,
-        ]).map(|(row, claim)| format!(
+        ]).map(|(row, claim)| {
+            let bounds_unit = match claim.value.kind {
+                PhysicalKind::RemainingCopperDryFeedMt => ",\"bounds_unit\":\"dry_mt\"",
+                PhysicalKind::CopperHeadGradeFraction => ",\"bounds_unit\":\"copper_fraction_dry_mass\",\"bounds_conversion\":\"source percent divided by 100\"",
+                PhysicalKind::CopperRecoveryFraction => ",\"bounds_unit\":\"fraction\",\"bounds_conversion\":\"source percent divided by 100\"",
+                _ => "",
+            };
+            format!(
             "{{\"quantity\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"locator\":{},\
-             \"sha256\":{},\"readers\":[{}],\"bounds\":{},{}}}",
+             \"sha256\":{},\"readers\":[{}],\"bounds\":{}{bounds_unit},{}}}",
             j(&row.quantity), j(&row.token), j(&row.unit), j(&row.basis), j(&row.period),
             j(&row.locator.to_string()), j(&row.doc_sha256),
             row.readers.iter().map(|r| j(r)).collect::<Vec<_>>().join(","),
             interval(claim.value.interval), provenance(claim),
-        )).collect::<Vec<_>>().join(",");
+        )}).collect::<Vec<_>>().join(",");
         let maximum = &self.comparison.maximum_production;
         let grade = &self.comparison.optimistic_required_grade;
         let ownership = match maximum.value.ownership {
@@ -474,12 +537,17 @@ impl GuidanceCapacityReport {
             }
         };
         format!(
-            "\"schema\":\"fmine.guidance.capacity.v1\",\"tier\":\"T2\",\"scope\":\"gold_production_ceiling_only\",\
+            "\"schema\":\"fmine.guidance.capacity.v1\",\"tier\":\"T2\",\"scope\":{},\
              \"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"guidance_digest\":{},\
              \"document\":{{\"file\":{},\"url\":{},\"published_at\":{},\"published_at_basis\":{},\"sha256\":{}}},\
-             \"limits\":[{}],\"verdict\":{},\"maximum_production\":{{\"unit\":\"koz\",\"ownership\":{},\
-             \"period\":{},\"value\":{},\"rule\":{},{}}},\"optimistic_required_grade\":{{\"unit\":\"g_per_dry_t\",\
+             \"limits\":[{}],\"verdict\":{},\"maximum_production\":{{\"unit\":{},\"ownership\":{},\
+             \"period\":{},\"value\":{},\"rule\":{},{}}},\"optimistic_required_grade\":{{\"unit\":{},\
              \"ownership\":\"100%\",\"period\":{},\"value\":{},\"rule\":{},{}}},\"no_claim\":{}",
+            j(if self.is_copper() {
+                "copper_production_ceiling_only"
+            } else {
+                "gold_production_ceiling_only"
+            }),
             j(&self.issuer),
             j(&self.site),
             j(&self.through),
@@ -492,16 +560,22 @@ impl GuidanceCapacityReport {
             j(&self.document.sha256),
             sources,
             j(self.verdict()),
+            j(if self.is_copper() { "kt" } else { "koz" }),
             ownership,
             j(&period(maximum.value.period)),
             interval(maximum.value.interval),
             j(&maximum.metric_key),
             provenance(maximum),
+            j(if self.is_copper() {
+                "copper_fraction_dry_mass"
+            } else {
+                "g_per_dry_t"
+            }),
             j(&period(grade.value.period)),
             interval(grade.value.interval),
             j(&grade.metric_key),
             provenance(grade),
-            j(NO_CLAIM),
+            j(self.no_claim()),
         )
     }
 
@@ -518,19 +592,25 @@ impl GuidanceCapacityReport {
         let mut out = format!(
             "## T2: explicit technical-report production limits\n\n{}\n\n\
              Remaining support: {}. Selected document: {} (published {}).\n\n\
-             **Result:** {}. Maximum production: {} koz, on the guidance ownership basis. \
-             Required full-mine head grade at maximum feed and recovery: {} g per dry metric tonne.\n\n\
+             **Result:** {}. Maximum production: {} {}, on the guidance ownership basis. \
+             Required full-mine head grade at maximum feed and recovery: {} {}.\n\n\
              These upper limits do not establish that the maxima are simultaneously attainable. \
              The T1 historical joint production-cost comparison remains separate.\n\n\
              | Explicit upper limit | Stated value | Unit | Page and table locator | SHA-256 |\n\
              |---|---|---|---|---|\n",
-            NO_CLAIM,
+            self.no_claim(),
             period(self.limits.feed.value.period),
             text(&self.document.file),
             self.document.published_at,
             self.verdict(),
             display(self.comparison.maximum_production.value.interval),
+            if self.is_copper() { "kt" } else { "koz" },
             display(self.comparison.optimistic_required_grade.value.interval),
+            if self.is_copper() {
+                "copper mass fraction of dry feed"
+            } else {
+                "g per dry metric tonne"
+            },
         );
         for row in &self.sources {
             let _ = writeln!(
