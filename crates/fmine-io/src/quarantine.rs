@@ -25,6 +25,7 @@ use fmine_units::UNREGISTERED_UNIT;
 
 use crate::dialects::{DialectError, IoDialectRegistry, ResolvedColumn, ResolvedUnit};
 use crate::redact::{RedactionSummary, redact_row_on_ingest};
+use crate::xlsx::{CellValue, Workbook};
 
 /// Hard quarantine byte cap (32 MiB) preventing unbounded allocation on adversarial inputs (`PO-PORT-1`).
 pub const MAX_QUARANTINE_BYTES: usize = 32 * 1024 * 1024;
@@ -75,6 +76,8 @@ pub enum QuarantineError {
     ByteBudgetExceeded { actual: usize, limit: usize },
     RowBudgetExceeded { limit: usize },
     CsvSyntax { line: usize, detail: String },
+    XlsxParse { detail: String },
+    SheetNotFound { sheet: String },
     EmptyInput,
     Dialect(DialectError),
     Cas(CasError),
@@ -104,6 +107,12 @@ impl fmt::Display for QuarantineError {
             }
             Self::CsvSyntax { line, detail } => {
                 write!(f, "CSV syntax error at line {line}: {detail}")
+            }
+            Self::XlsxParse { detail } => {
+                write!(f, "XLSX parse error: {detail}")
+            }
+            Self::SheetNotFound { sheet } => {
+                write!(f, "visible worksheet '{sheet}' not found in workbook")
             }
             Self::EmptyInput => write!(f, "import contains no header row"),
             Self::Dialect(e) => write!(f, "dialect error: {e}"),
@@ -151,7 +160,153 @@ pub fn import_csv_through_quarantine(
     let Some((header_row, data_rows)) = rows.split_first() else {
         return Err(QuarantineError::EmptyInput);
     };
+    let numbered_rows: Vec<(usize, Vec<String>)> = data_rows
+        .iter()
+        .enumerate()
+        .map(|(idx, row)| (idx + 2, row.clone()))
+        .collect();
 
+    classify_tabular_rows(
+        dialects,
+        dialect_id,
+        manifest.root_digest,
+        source_sha256,
+        manifest.total_bytes,
+        header_row,
+        &numbered_rows,
+        registered_units,
+        registered_crs,
+        privacy_officer_key,
+    )
+}
+
+/// Runs the §32.1 quarantine-on-import pipeline over raw `.xlsx` workbook bytes (`BD-187`),
+/// persisting the original workbook bytes into `store` (`FMT-CAS-1`, root-last) and classifying
+/// every row of the named visible worksheet (or the first visible worksheet when `sheet_name` is
+/// `None`) through the exact same dialect/validation/redaction pipeline as CSV.
+#[allow(clippy::too_many_arguments)]
+pub fn import_xlsx_sheet_through_quarantine(
+    store: &CasStore,
+    dialects: &IoDialectRegistry,
+    dialect_id: &str,
+    raw_bytes: &[u8],
+    sheet_name: Option<&str>,
+    registered_units: &BTreeSet<String>,
+    registered_crs: &BTreeSet<String>,
+    privacy_officer_key: Option<&[u8; 32]>,
+) -> Result<ImportReport, QuarantineError> {
+    if raw_bytes.len() > MAX_QUARANTINE_BYTES {
+        return Err(QuarantineError::ByteBudgetExceeded {
+            actual: raw_bytes.len(),
+            limit: MAX_QUARANTINE_BYTES,
+        });
+    }
+
+    // Step 1: persist immutable original .xlsx bytes into FMT-CAS-1 BEFORE parsing.
+    let source_sha256 = sha256(raw_bytes).to_hex();
+    let staged = store
+        .stage_object(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            raw_bytes,
+            DEFAULT_CHUNK_BYTES,
+        )
+        .map_err(QuarantineError::Cas)?;
+    let manifest = store
+        .publish_staged(&staged)
+        .map_err(QuarantineError::Cas)?;
+
+    // Step 2: parse workbook via own pure-Rust OOXML reader (no fp-io; BD-187).
+    let wb = Workbook::from_bytes("quarantine.xlsx", raw_bytes).map_err(|e| {
+        QuarantineError::XlsxParse {
+            detail: e.to_string(),
+        }
+    })?;
+    let sheet = match sheet_name {
+        Some(name) => wb.sheets.iter().find(|s| s.name == name).ok_or_else(|| {
+            QuarantineError::SheetNotFound {
+                sheet: name.to_string(),
+            }
+        })?,
+        None => wb.sheets.first().ok_or(QuarantineError::EmptyInput)?,
+    };
+
+    // Group non-empty rows by 1-based worksheet row number (BTreeMap keeps deterministic row order).
+    let mut rows_by_num: std::collections::BTreeMap<u32, Vec<(u32, String)>> =
+        std::collections::BTreeMap::new();
+    for (&(r, c), cell) in &sheet.cells_by_coord {
+        let rendered = match &cell.value {
+            CellValue::Number(v) => cell.number_text.clone().unwrap_or_else(|| format!("{v}")),
+            CellValue::Placeholder(s) | CellValue::FormulaError(s) | CellValue::Text(s) => {
+                s.clone()
+            }
+        };
+        rows_by_num.entry(r).or_default().push((c, rendered));
+    }
+
+    let mut row_iter = rows_by_num.into_iter();
+    let Some((_hdr_row_num, hdr_cells)) = row_iter.next() else {
+        return Err(QuarantineError::EmptyInput);
+    };
+    let header_width = hdr_cells
+        .iter()
+        .map(|(c, _)| *c as usize)
+        .max()
+        .unwrap_or(0);
+    if header_width == 0 {
+        return Err(QuarantineError::EmptyInput);
+    }
+    let mut header_row = vec![String::new(); header_width];
+    for (c, val) in hdr_cells {
+        if let Some(slot) = header_row.get_mut((c as usize).saturating_sub(1)) {
+            *slot = val;
+        }
+    }
+
+    let mut numbered_rows = Vec::new();
+    for (row_num, cells) in row_iter {
+        if numbered_rows.len() >= MAX_QUARANTINE_ROWS {
+            return Err(QuarantineError::RowBudgetExceeded {
+                limit: MAX_QUARANTINE_ROWS,
+            });
+        }
+        let max_col = cells.iter().map(|(c, _)| *c as usize).max().unwrap_or(0);
+        let row_width = max_col.max(header_width);
+        let mut row_vec = vec![String::new(); row_width];
+        for (c, val) in cells {
+            if let Some(slot) = row_vec.get_mut((c as usize).saturating_sub(1)) {
+                *slot = val;
+            }
+        }
+        numbered_rows.push((row_num as usize, row_vec));
+    }
+
+    classify_tabular_rows(
+        dialects,
+        dialect_id,
+        manifest.root_digest,
+        source_sha256,
+        manifest.total_bytes,
+        &header_row,
+        &numbered_rows,
+        registered_units,
+        registered_crs,
+        privacy_officer_key,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn classify_tabular_rows(
+    dialects: &IoDialectRegistry,
+    dialect_id: &str,
+    source_cas_root: Digest32,
+    source_sha256: String,
+    source_bytes: u64,
+    header_row: &[String],
+    data_rows: &[(usize, Vec<String>)],
+    registered_units: &BTreeSet<String>,
+    registered_crs: &BTreeSet<String>,
+    privacy_officer_key: Option<&[u8; 32]>,
+) -> Result<ImportReport, QuarantineError> {
     // Step 3: resolve every header column via io_dialects.toml (Undeclared -> UNREGISTERED).
     let resolved_columns = dialects
         .resolve_headers(dialect_id, header_row, registered_units, registered_crs)
@@ -172,8 +327,8 @@ pub fn import_csv_through_quarantine(
     let mut total_inline_pii_scrubbed = 0usize;
 
     // Step 4 & 5: validate each row against dialect rules, redact PII on ingest, never drop silently.
-    for (idx, raw_row) in data_rows.iter().enumerate() {
-        let row_index = idx + 2; // 1-based CSV row (header is row 1)
+    for (row_index_ref, raw_row) in data_rows {
+        let row_index = *row_index_ref;
         if raw_row.len() != header_row.len() {
             let r = Refusal::new(
                 RefusalCode::SourceCellUnusable208,
@@ -325,7 +480,7 @@ pub fn import_csv_through_quarantine(
 
     let report_digest = compute_report_digest(
         dialect_id,
-        &manifest.root_digest,
+        &source_cas_root,
         &source_sha256,
         admitted_rows.len(),
         &rejected_rows,
@@ -333,9 +488,9 @@ pub fn import_csv_through_quarantine(
 
     Ok(ImportReport {
         dialect_id: dialect_id.to_string(),
-        source_cas_root: manifest.root_digest,
+        source_cas_root,
         source_sha256,
-        source_bytes: manifest.total_bytes,
+        source_bytes,
         resolved_columns,
         unregistered_columns,
         total_data_rows: data_rows.len(),
@@ -585,6 +740,139 @@ DDH-01,7.5,9.0\n";
         .expect("rerun");
         assert_eq!(report2.source_cas_root, report.source_cas_root);
         assert_eq!(report2.report_digest, report.report_digest);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// BD-187 done-when: own CSV and Excel (.xlsx) readers achieve exact fixture parity over
+    /// valid numeric cells, `<DL` placeholders, negative physical quantities (`FMINE-REF-109`),
+    /// formula error residues (`#REF!`, `FMINE-REF-208`), non-numeric tokens (`FMINE-REF-208`),
+    /// and column-count mismatches (`FMINE-REF-208`).
+    #[test]
+    fn test_csv_and_xlsx_quarantine_fixture_parity() {
+        use crate::xlsx::{MinimalCell, MinimalSheet, build_minimal_xlsx};
+
+        let root = workspace_root();
+        let catalog = RegistryCatalog::load_from_root(&root).expect("catalog");
+        let reg_units: BTreeSet<String> = catalog.unit_symbols.iter().cloned().collect();
+        let reg_crs: BTreeSet<String> = catalog.crs_codes.iter().cloned().collect();
+        let dialects = IoDialectRegistry::load_from_root(&root).expect("dialects");
+
+        let dir =
+            std::env::temp_dir().join(format!("fmine-io-csv-xlsx-parity-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = CasStore::open(&dir).expect("open cas");
+
+        let csv = b"HOLEID,FROM,TO,AU_GPT,CU_PCT\n\
+DDH-01,0,1.5,2.45,0.82\n\
+DDH-01,1.5,3,<DL,0.4\n\
+DDH-01,3,4.5,-1.2,0.5\n\
+DDH-01,4.5,6,#REF!,0.5\n\
+DDH-01,6,7.5,1.1,BAD_NUM\n\
+DDH-01,7.5,9,1.2,0.3,EXTRA\n";
+
+        let xlsx_bytes = build_minimal_xlsx(&[MinimalSheet {
+            name: "Assays".to_string(),
+            hidden: false,
+            cells: vec![
+                ("A1".to_string(), MinimalCell::Text("HOLEID".to_string())),
+                ("B1".to_string(), MinimalCell::Text("FROM".to_string())),
+                ("C1".to_string(), MinimalCell::Text("TO".to_string())),
+                ("D1".to_string(), MinimalCell::Text("AU_GPT".to_string())),
+                ("E1".to_string(), MinimalCell::Text("CU_PCT".to_string())),
+                // Row 2: valid numeric row
+                ("A2".to_string(), MinimalCell::Text("DDH-01".to_string())),
+                ("B2".to_string(), MinimalCell::Number(0.0)),
+                ("C2".to_string(), MinimalCell::Number(1.5)),
+                ("D2".to_string(), MinimalCell::Number(2.45)),
+                ("E2".to_string(), MinimalCell::Number(0.82)),
+                // Row 3: <DL placeholder
+                ("A3".to_string(), MinimalCell::Text("DDH-01".to_string())),
+                ("B3".to_string(), MinimalCell::Number(1.5)),
+                ("C3".to_string(), MinimalCell::Number(3.0)),
+                ("D3".to_string(), MinimalCell::Text("<DL".to_string())),
+                ("E3".to_string(), MinimalCell::Number(0.4)),
+                // Row 4: negative Au grade (FMINE-REF-109)
+                ("A4".to_string(), MinimalCell::Text("DDH-01".to_string())),
+                ("B4".to_string(), MinimalCell::Number(3.0)),
+                ("C4".to_string(), MinimalCell::Number(4.5)),
+                ("D4".to_string(), MinimalCell::Number(-1.2)),
+                ("E4".to_string(), MinimalCell::Number(0.5)),
+                // Row 5: Excel formula error (#REF!, FMINE-REF-208)
+                ("A5".to_string(), MinimalCell::Text("DDH-01".to_string())),
+                ("B5".to_string(), MinimalCell::Number(4.5)),
+                ("C5".to_string(), MinimalCell::Number(6.0)),
+                ("D5".to_string(), MinimalCell::Error("#REF!".to_string())),
+                ("E5".to_string(), MinimalCell::Number(0.5)),
+                // Row 6: non-numeric token in Cu column (FMINE-REF-208)
+                ("A6".to_string(), MinimalCell::Text("DDH-01".to_string())),
+                ("B6".to_string(), MinimalCell::Number(6.0)),
+                ("C6".to_string(), MinimalCell::Number(7.5)),
+                ("D6".to_string(), MinimalCell::Number(1.1)),
+                ("E6".to_string(), MinimalCell::Text("BAD_NUM".to_string())),
+                // Row 7: extra column overflow (FMINE-REF-208)
+                ("A7".to_string(), MinimalCell::Text("DDH-01".to_string())),
+                ("B7".to_string(), MinimalCell::Number(7.5)),
+                ("C7".to_string(), MinimalCell::Number(9.0)),
+                ("D7".to_string(), MinimalCell::Number(1.2)),
+                ("E7".to_string(), MinimalCell::Number(0.3)),
+                ("F7".to_string(), MinimalCell::Text("EXTRA".to_string())),
+            ],
+        }]);
+
+        let csv_report = import_csv_through_quarantine(
+            &store,
+            &dialects,
+            "acquire_assay_v1",
+            csv,
+            &reg_units,
+            &reg_crs,
+            None,
+        )
+        .expect("csv import");
+
+        let xlsx_report = import_xlsx_sheet_through_quarantine(
+            &store,
+            &dialects,
+            "acquire_assay_v1",
+            &xlsx_bytes,
+            Some("Assays"),
+            &reg_units,
+            &reg_crs,
+            None,
+        )
+        .expect("xlsx import");
+
+        assert_eq!(xlsx_report.resolved_columns, csv_report.resolved_columns);
+        assert_eq!(
+            xlsx_report.unregistered_columns,
+            csv_report.unregistered_columns
+        );
+        assert_eq!(xlsx_report.total_data_rows, csv_report.total_data_rows);
+        assert_eq!(xlsx_report.admitted_rows, csv_report.admitted_rows);
+        assert_eq!(xlsx_report.rejected_rows, csv_report.rejected_rows);
+        assert_eq!(xlsx_report.admitted_rows.len(), 2);
+        assert_eq!(xlsx_report.rejected_rows.len(), 4);
+        assert_eq!(
+            store
+                .read_object(&xlsx_report.source_cas_root)
+                .expect("xlsx cas bytes"),
+            xlsx_bytes
+        );
+
+        // Missing worksheet name is refused explicitly.
+        let missing = import_xlsx_sheet_through_quarantine(
+            &store,
+            &dialects,
+            "acquire_assay_v1",
+            &xlsx_bytes,
+            Some("NoSuchSheet"),
+            &reg_units,
+            &reg_crs,
+            None,
+        )
+        .expect_err("missing sheet must refuse");
+        assert!(matches!(missing, QuarantineError::SheetNotFound { .. }));
 
         let _ = fs::remove_dir_all(&dir);
     }

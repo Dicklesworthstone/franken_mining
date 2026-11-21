@@ -4,6 +4,7 @@
 pub mod cas_ingest;
 pub mod dialects;
 pub mod forecast;
+pub mod import_rules;
 pub mod minelib_report;
 pub mod numfmt;
 pub mod numtok;
@@ -12,6 +13,7 @@ pub mod quarantine;
 pub mod redact;
 pub mod reliance;
 pub mod source;
+pub mod strings;
 pub mod styles;
 pub mod xlsx;
 pub mod zip_inflate;
