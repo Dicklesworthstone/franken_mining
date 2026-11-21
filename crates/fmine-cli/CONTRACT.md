@@ -30,6 +30,14 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-225/229): `decide investment --manifest <investment.toml>` optionally screens final
+  discounted incremental cash after initial capex using one `[[downside_limit]]` with `floor_usd`
+  and `max_breach_probability`. The exact floor must fit 0.0001 USD without rounding. JSON and Markdown
+  retain nominal and eligible winners, every rejection, probability-cap equality and an explicit empty
+  selection with no fallback. This horizon-wide loss-probability screen does not imply interim cash
+  sufficiency, calibrated scenarios or a bound on loss severity. The shared source loader recomputes and
+  retains every declared physical/commercial bundle before returning any investment receipt.
+
 - DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>
   --recovery <worksheet> --terms <worksheet>` values each complete shared physical/commercial state
   before comparison, preserving price/production correlation and explicit do-nothing cash. Commercial
@@ -553,6 +561,16 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     mapping. Future source bytes are excluded before reads. HTML cost-credit treatment is unstated, so an
     explicit by-product or co-product assertion remains unchecked. This source selector is exclusive with
     `--synthetic` and `--through`; ordinary workbook lint remains available through its existing selector.
+    A separate `fmine.html_period_arithmetic.v1` receipt derives H1−Q1, 9M−H1 and FY−9M quarters and
+    complete Q1-based H1/9M/FY sums for explicit gold/copper production and gold sales. Exact printed
+    half-step bounds propagate through the existing quarter and public-derivation kernels; source Claims,
+    dates, label/mapping/registry anchors and typed intermediate/result Claims remain inspectable.
+    Every required period must have one admitted assertion on the same site, unit and ownership basis.
+    Competing vintages remain ambiguous; missing, status-marked or placeholder operands never become zero.
+    Direct assertions and explicit citations retain their equality verdicts. No rate subtraction, unit or
+    ownership conversion, historical mapping proof or issuer disclosure is inferred. The receipt binds
+    the draft digest, complete selected Claim population and arithmetic findings. Independent exact
+    source/CLI cases extend `xtask/tests/html_lint.rs` and its Python Fraction oracle.
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;

@@ -1117,6 +1117,16 @@ An optional date filters future filings before their bytes are read and reports 
 from numeric agreement. It does not prove that the current mapping or registry existed on that date.
 This selector reads only the mapped HTML population and cannot be combined with `--through` or `--synthetic`.
 
+The same report now includes a separate `source_arithmetic` receipt for extensive quantities: gold and
+copper production, and gold sales. It derives Q2 from H1−Q1, Q3 from 9M−H1 and Q4 from FY−9M, or H1/9M/FY
+from complete Q1-based quarter sums. Exact printed rounding bounds propagate through every operation;
+the result distinguishes a supported draft enclosure, a contradiction and precision the sources do not
+establish. Every operand must match the site, year, unit and ownership basis, with one eligible source per
+required period. Missing periods, unusable values and competing vintages remain explicit. The receipt keeps
+the full source ancestry and publication evidence, and its digest binds both the draft and selected sources.
+An arithmetic result is a derived Claim, not a new issuer disclosure; direct assertions and explicit citation
+verdicts remain visible, and intensive rates are not subtracted or summed.
+
 ### Select affordable capital bundles under shared scenario risk
 
 DESIGN (BD-229, plan section 23): `decide program` constructs and compares static combinations of declared
