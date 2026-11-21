@@ -41,6 +41,10 @@ pub const MAX_CASH_CHECKPOINTS: usize = 65_536;
 pub const MAX_TEXT_BYTES: usize = 4096;
 pub const MAX_IDENTIFIER_BYTES: usize = 128;
 pub const PAYOFF_CONVENTION: &str = "additive_net_delta_nav";
+/// DESIGN: bounded source-derived cash windows are not full project NAV.
+pub const CASH_PAYOFF_CONVENTION: &str = "additive_discounted_incremental_cash";
+pub const CASH_VALUATION_BASIS: &str = "declared_periods_discounted_incremental_cash";
+pub const CASH_NO_CLAIM: &str = "Static comparison of additive discounted incremental cash over explicitly declared periods and complete shared scenarios. Candidate values already subtract initial capital once; spending constrains the budget and is not charged again. Only the declared cash window is valued. No omitted cash, terminal value, tax, financing, ownership, full project NAV, project interactions, liquidity schedule, adaptive recourse, calibration or execution authorization is inferred. The selected set is optimal only among the declared binary subsets under their budget, prerequisites, exclusions and joint signed-loss CVaR limit. Input probabilities and additivity remain source assumptions.";
 pub const EQUITY_PAYOFF_CONVENTION: &str = "additive_equity_nav_with_share_changes";
 pub const NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Optional funding checks cover only the explicitly declared cash window and basis; they do not guarantee every intra-period balance or a feasible staged schedule. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and scenario cash requirements constrain funding and are not deducted again from net delta-NAV.";
 pub const CASH_SCHEDULE_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Cash checks cover the opening and period-end checkpoints of the declared cash schedule and basis; they do not guarantee intra-period balances or adaptive staged decisions. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash flows constrain funding and are not charged to net delta-NAV again.";
@@ -268,6 +272,9 @@ pub struct ProgramInputs {
 }
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
+    if inputs.policy.value.payoff_convention == CASH_PAYOFF_CONVENTION {
+        return CASH_NO_CLAIM;
+    }
     if inputs.selection_stability.is_some() {
         return stability::NO_CLAIM;
     }
@@ -1049,6 +1056,22 @@ fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>)>
         )?;
     }
     let policy = &inputs.policy.value;
+    let cash = policy.payoff_convention == CASH_PAYOFF_CONVENTION;
+    if cash
+        && (policy.valuation_basis != CASH_VALUATION_BASIS
+            || inputs.funding.is_some()
+            || inputs.funding_schedule.is_some()
+            || inputs.entity_funding.is_some()
+            || inputs.equity.is_some()
+            || !inputs.entity_valuations.is_empty()
+            || inputs.selection_stability.is_some()
+            || inputs.robustness.is_some())
+    {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "declared-period cash supports only the static total-USD subset comparison; NAV, equity, funding, recourse and additional robustness modes require their own declared semantics",
+        ));
+    }
     admit(
         &inputs.policy,
         &policy.canonical_tag(),
@@ -1067,6 +1090,8 @@ fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>)>
         || policy.payoff_convention
             != if inputs.equity.is_some() {
                 EQUITY_PAYOFF_CONVENTION
+            } else if cash {
+                CASH_PAYOFF_CONVENTION
             } else {
                 PAYOFF_CONVENTION
             }
@@ -2129,7 +2154,11 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             };
             let tag = action.canonical_tag();
             actions.push(metadata.claim(
-                "capital.bundle.net-delta-nav/1",
+                if policy.payoff_convention == CASH_PAYOFF_CONVENTION {
+                    "capital.bundle.discounted-incremental-cash/1"
+                } else {
+                    "capital.bundle.net-delta-nav/1"
+                },
                 action,
                 &tag,
                 AdditivityClass::ExtensiveAdditive,

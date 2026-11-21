@@ -342,6 +342,55 @@ fn checkpoint<'a>(
 }
 
 #[test]
+fn declared_cash_portfolios_keep_joint_risk_without_recharging_spending_or_claiming_nav() {
+    let mut i = inputs(
+        &[("A", 2, &[7, -3]), ("B", 3, &[-2, 8])],
+        &[r(1, 2), r(1, 2)],
+        5,
+        r(1, 2),
+        Some(0),
+    );
+    let mut policy = i.policy.value.clone();
+    policy.payoff_convention = CASH_PAYOFF_CONVENTION.into();
+    policy.valuation_basis = CASH_VALUATION_BASIS.into();
+    i.policy = policy_claim(policy);
+    for c in &mut i.candidates {
+        let mut value = c.value.clone();
+        value.valuation_basis = CASH_VALUATION_BASIS.into();
+        *c = candidate_claim(value);
+    }
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["A", "B"]]);
+    let both = row(&report, &["A", "B"]);
+    assert_eq!(both.statistics.as_ref().unwrap().mean.major, r(5, 1));
+    assert_eq!(both.spend.major, r(5, 1));
+    assert_eq!(both.tail_loss.unwrap().major, r(-5, 1));
+    assert!(row(&report, &["A"]).risk_rejected);
+    assert!(row(&report, &["B"]).risk_rejected);
+    assert_eq!(report.no_claim(), CASH_NO_CLAIM);
+    assert!(
+        report
+            .to_json()
+            .contains("expected_discounted_incremental_cash")
+    );
+    assert!(
+        report
+            .to_markdown()
+            .contains("Mean discounted incremental cash")
+    );
+    assert!(!report.to_markdown().contains("Mean net delta-NAV"));
+    assert!(evaluate(&with_schedule(i.clone())).is_err());
+    let mut equity = with_equity(i.clone(), &[100, 100], r(10, 1));
+    equity.policy = i.policy.clone();
+    assert!(evaluate(&equity).is_err());
+    let mut wrong = i;
+    let mut policy = wrong.policy.value.clone();
+    policy.valuation_basis = "full project NAV".into();
+    wrong.policy = policy_claim(policy);
+    assert!(evaluate(&wrong).is_err());
+}
+
+#[test]
 fn gb30_uses_displayed_inputs_exactly_and_joint_tail_risk_changes_the_selection() {
     let a = [
         -60_000_000,

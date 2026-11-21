@@ -38,6 +38,19 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   sufficiency, calibrated scenarios or a bound on loss severity. The shared source loader recomputes and
   retains every declared physical/commercial bundle before returning any investment receipt.
 
+- DESIGN (BD-225/229): `decide program <model-file>` also accepts the source-bound
+  `fmine.capital-investments.v1` schema. Candidate mappings name an investment manifest and alternative;
+  the shared loader recomputes complete underlying production/commercial receipts before deriving costs
+  and state returns. Explicit shared-scenario and additivity declarations, identical state IDs/weights and
+  valuation periods/discounts, and same-operation exclusion groups govern admission. Exact initial capex
+  constrains the budget without being deducted again from already-net cash returns. Exhaustive subsets,
+  dependencies, exclusions and joint signed-loss CVaR use the existing capital engine, preserving every
+  source alternative, rejection, full source bytes/hash and Claim ancestry. The distinct
+  `additive_discounted_incremental_cash` convention identifies a declared cash window; source-local
+  downside screens and unsupported funding, equity, entity, robustness, resampling and recourse modes
+  refuse. No lifetime NAV, terminal value, liquidity path, independence or interaction model is inferred.
+  Controls: `xtask/tests/capital_investments.rs`; example: `tests/capital/production_investments.toml`.
+
 - DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>
   --recovery <worksheet> --terms <worksheet>` values each complete shared physical/commercial state
   before comparison, preserving price/production correlation and explicit do-nothing cash. Commercial

@@ -7,10 +7,17 @@ use fmine_evidence::Refusal;
 
 use crate::{Envelope, NextAction, worksheet_input};
 
+mod investment;
+
 pub(super) const USAGE: &str = "decide program <model-file>";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
     "\"schema\":\"fmine.capital-program.v1\",",
+    "\"investment_schema\":\"fmine.capital-investments.v1\",",
+    "\"investment_fields\":[\"schema\",\"model_key\",\"question\",\"currency (USD)\",\"budget\",\"tail_mass\",\"max_tail_loss (optional)\",\"payoff_convention (additive_discounted_incremental_cash)\",\"shared_scenario_basis\",\"additivity_basis\",\"reference_class_basis\"],",
+    "\"investment_tables\":{\"candidate\":[\"id\",\"label\",\"investment (source investment manifest path)\",\"alternative (source alternative id)\",\"exclusion_group (optional)\"],\"requires\":[\"candidate\",\"prerequisite\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"]},",
+    "\"investment_sources\":\"Use decide program <manifest>. Recompute and retain every original investment and physical/commercial source; paths are workspace-relative. At most eight candidates, 64 dependencies, 16 UU rows, 64-KiB manifest and 64-MiB retained source snapshots. Sources must share exact state IDs/weights, the declared shared_scenario_basis, valuation time, period IDs/windows/discount factors, discount basis and cash/rounding convention. Distinct operations may combine only under explicit additivity; candidates sharing a boundary and circuit require one shared exclusion group. Initial capex must fit exact USD minor units and constrains budget without being charged twice. Full same-state candidate returns feed the existing subset/dependency/exclusion/CVaR kernel; standalone winners or risk values are not combined. Source downside limits refuse; declare portfolio tail risk here. No NAV, interactions, financing, cash schedule, equity or staged policy is inferred. Complete sources and separate operating supports remain in JSON\",",
+    "\"investment_example\":\"tests/capital/production_investments.toml\",",
     "\"modes\":[\"declared_static_capital_comparison\",\"declared_two_stage_capital_comparison\",\"declared_kpi_capital_comparison\"],",
     "\"kpi_example\":\"tests/capital/kpi_constraints.toml\",",
     "\"kpi_tables\":{\"kpi_constraint\":[\"id\",\"metric (gold_aisc, copper_aisc, roce or geo)\",\"basis\",\"reporting_period (inclusive YYYY-MM-DD/YYYY-MM-DD)\",\"aggregation (ratio_of_expected_totals or every_state)\",\"direction (upper or lower)\",\"limit (exact rational)\"],\"kpi_baseline\":[\"constraint\",\"state\",\"numerator (exact rational)\",\"denominator (exact rational)\"],\"kpi_increment\":[\"constraint\",\"candidate\",\"state\",\"numerator (exact rational)\",\"denominator (exact rational)\"]},",
@@ -38,6 +45,9 @@ pub(super) fn execute(model: &Path, root: &Path) -> Envelope {
             "capital program",
             "declared static capital program",
         )?;
+        if investment::matches(&text) {
+            return investment::execute(&text, &source, root);
+        }
         let evaluated = fmine_capital::model::evaluate(&text, source.clone())?;
         let payload = format!(
             "{{\"mode\":\"{}\",\"source\":{},\"program\":{}}}",

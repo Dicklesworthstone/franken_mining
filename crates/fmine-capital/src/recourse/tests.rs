@@ -9,6 +9,25 @@ use crate::tests::{
 
 mod robustness;
 
+#[test]
+fn declared_period_cash_refuses_a_staged_policy_at_the_public_entry_point() {
+    let mut i = staged(
+        inputs(
+            &[("study", 1, &[-1, -1]), ("expand", 4, &[10, -5])],
+            &[r(1, 2), r(1, 2)],
+            5,
+            r(1, 2),
+            None,
+        ),
+        &["low", "high"],
+    );
+    let mut policy = i.program.policy.value.clone();
+    policy.payoff_convention = CASH_PAYOFF_CONVENTION.into();
+    policy.valuation_basis = CASH_VALUATION_BASIS.into();
+    i.program.policy = policy_claim(policy);
+    assert!(evaluate(&i).unwrap_err().what.contains("static comparison"));
+}
+
 fn information_claim(value: RecourseBasis) -> Claim<RecourseBasis> {
     let tag = value.canonical_tag();
     claim(

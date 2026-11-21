@@ -1,5 +1,6 @@
 //! DESIGN (BD-048/049): Gaussian log-density losses from an immutable saved assessment.
-//! Determinism: DeterministicPerIsa, using the existing Gaussian scoring kernel.
+//! Determinism: DeterministicPerIsa
+//! Uses the existing Gaussian scoring kernel.
 
 use std::fmt::Write as _;
 

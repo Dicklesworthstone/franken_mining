@@ -762,6 +762,20 @@ kernel in `fmine-numerics::risk::exact` for per-share statistics. No IO, spawnin
 
 ## 10. Non-Goals & Scope Boundary
 
+DESIGN (BD-225/229): the static kernel also admits the explicit
+`additive_discounted_incremental_cash` convention with valuation basis
+`declared_periods_discounted_incremental_cash`. These are source-derived bounded-window
+cash returns, never full project NAV. Initial capital is already deducted from each
+candidate's return and independently constrains budget without a second charge. All subsets,
+dependencies, exclusions, same-state regret and joint signed-loss CVaR use the existing exact
+owner. This convention refuses equity/entity valuation, funding, staged recourse, bootstrap
+and scenario-stress extensions until their cash semantics are declared. Existing NAV modes
+retain their original input and rendering bytes. The CLI's `fmine.capital-investments.v1`
+adapter admits complete retained investment sources under explicit common-scenario and
+additivity assumptions; it refuses overlapping operating supports without shared exclusion.
+Direct known-answer control:
+`declared_cash_portfolios_keep_joint_risk_without_recharging_spending_or_claiming_nav`.
+
 Static declared net-NAV comparison with optional aggregate or dated-checkpoint funding and exact equity NAV
 per-share optimization, entity-specific cash/ownership distributions, and bounded two-stage policies with
 purchased declared information. No additional

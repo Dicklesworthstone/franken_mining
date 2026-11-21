@@ -1157,6 +1157,31 @@ from summed payoffs within each shared state, including fractional tail-boundary
 in the calculation. Full input/output Claims, source bytes, constraints and adjustment bases bind the receipt,
 including candidates that never win.
 
+#### Build a portfolio directly from operating investment sources
+
+`decide program` also accepts `fmine.capital-investments.v1`. Each candidate names an investment manifest
+and one of its alternatives; the command recomputes every underlying physical and commercial bundle and
+derives the capital cost and state returns. Run the source-based example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/production_investments.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/production_investments.toml --json
+```
+
+The manifest declares a shared scenario interpretation, an additivity basis, the budget and tail-risk policy.
+All source investments must use identical named states, exact weights, valuation dates, period windows and
+discount factors. Candidates on the same physical boundary and circuit must share an exclusion group,
+including when separate manifest paths describe the same operation. Prerequisites and exclusions apply
+before ranking; the source alternative need not have won its standalone comparison.
+
+The `additive_discounted_incremental_cash` convention values the declared cash periods. Initial capex
+constrains the budget and is already deducted in each source return. The engine sums returns within each
+shared state before calculating portfolio risk and regret, retaining every bundle, rejection and tied winner.
+JSON includes the complete source receipts and original bytes, with hashes binding the full calculation.
+Source-local downside screens are refused here: the portfolio's joint risk policy is declared explicitly.
+This comparison does not establish full lifetime NAV, terminal value, financing capacity, interim liquidity
+or project interactions; those require additional source models.
+
 #### Stress capital choices under declared scenario-weight shifts
 
 DESIGN (BD-229, plan sections 22.5 and 23.3): an optional `[[robustness]]` declaration compares every

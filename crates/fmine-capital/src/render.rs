@@ -734,8 +734,13 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
     } else {
         "unavailable_static_declared_model"
     };
+    let cash_objective = if s.policy.payoff_convention == CASH_PAYOFF_CONVENTION {
+        ",\"objective\":\"expected_discounted_incremental_cash\",\"objective_unit\":\"USD\""
+    } else {
+        ""
+    };
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"{robustness}}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"{robustness}{cash_objective}}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
@@ -790,6 +795,12 @@ impl EvaluatedProgram {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let s = self.summary();
+        let cash = s.policy.payoff_convention == CASH_PAYOFF_CONVENTION;
+        let payoff_name = if cash {
+            "discounted incremental cash"
+        } else {
+            "net delta-NAV"
+        };
         let selection_note = if s.selection_stability.is_some() {
             "Conditional selection stability is reported below."
         } else {
@@ -818,11 +829,15 @@ impl EvaluatedProgram {
                 "USD",
                 shown(s.expected_value_cost_of_risk_limit),
                 "All monetary values below are exact rational major USD.",
-                "## Every declared subset\n\n| Bundle | Candidates | Spend | Budget slack | Mean net delta-NAV | Tail loss | CVaR95 loss | Mean regret | Max regret | Status |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n",
+                if cash {
+                    "## Every declared subset\n\n| Bundle | Candidates | Spend | Budget slack | Mean discounted incremental cash | Tail loss | CVaR95 loss | Mean regret | Max regret | Status |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n"
+                } else {
+                    "## Every declared subset\n\n| Bundle | Candidates | Spend | Budget slack | Mean net delta-NAV | Tail loss | CVaR95 loss | Mean regret | Max regret | Status |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n"
+                },
             )
         };
         let mut out = format!(
-            "# Static capital program comparison\n\n{}\n\n**Declared model:** `{}`. **Evidence:** {}. **Confidentiality:** {}. **Digest:** `{}`.\n\n{}\n\n**Valuation basis:** {}. **Reference-class basis:** {}.\n\nBudget: {} USD. Upper loss tail mass: {}. Maximum tail loss: {tail_limit} {risk_unit}. Candidate net delta-NAV already includes spending; the cost column constrains the budget only.\n\n**Expected-value co-winners before risk limit:** {}. **Risk-feasible co-winners:** {}. **Expected-value cost of the risk limit:** {risk_cost} {risk_unit}.\n\n{selection_note} Regret compares every structurally feasible subset before the tail-loss limit. {measurement_note}\n\n{comparison_table}",
+            "# Static capital program comparison\n\n{}\n\n**Declared model:** `{}`. **Evidence:** {}. **Confidentiality:** {}. **Digest:** `{}`.\n\n{}\n\n**Valuation basis:** {}. **Reference-class basis:** {}.\n\nBudget: {} USD. Upper loss tail mass: {}. Maximum tail loss: {tail_limit} {risk_unit}. Candidate {payoff_name} already includes spending; the cost column constrains the budget only.\n\n**Expected-value co-winners before risk limit:** {}. **Risk-feasible co-winners:** {}. **Expected-value cost of the risk limit:** {risk_cost} {risk_unit}.\n\n{selection_note} Regret compares every structurally feasible subset before the tail-loss limit. {measurement_note}\n\n{comparison_table}",
             md(&s.question),
             md(&s.model_key),
             evidence(self.claim.evidence),
@@ -1019,7 +1034,10 @@ impl EvaluatedProgram {
                     .map_or_else(|| "none".into(), md)
             );
             claim_markdown(&mut out, candidate);
-            out.push_str("\n| State | Declared net delta-NAV (USD) |\n|---|---:|\n");
+            let _ = writeln!(
+                out,
+                "\n| State | Declared {payoff_name} (USD) |\n|---|---:|"
+            );
             for (state, value) in &c.payoffs {
                 let _ = writeln!(out, "| {} | {} |", md(state), mq(*value).trim_matches('"'));
             }
