@@ -6,6 +6,7 @@ mod claim_inspection;
 mod compare;
 pub mod cost;
 mod decision;
+mod doctor;
 mod forecast;
 pub mod geo;
 mod guidance;
@@ -26,7 +27,9 @@ pub mod recovery;
 pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
+mod repair;
 pub mod reserve;
+mod robot;
 pub mod schedule;
 mod tables;
 mod track_record;
@@ -51,7 +54,6 @@ use fmine_public::sources::{
     is_issuer_name, is_through_bound, load_issuer_profile, registered_issuers, registry_path,
 };
 use fmine_public::{run_public_assurance, run_synthetic_assurance};
-use fmine_registry::RegistryCatalog;
 
 /// Output serialization format (`BD-111`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +241,12 @@ pub enum CliCommand {
         through: Option<String>,
         synthetic: bool,
     },
+    /// `fmine doctor --segment ... --journal ...` (`BD-117`).
+    DoctorInspect(doctor::Command),
+    /// `fmine robot schema [target]` (`BD-116`).
+    RobotSchema(robot::Command),
+    /// `fmine repair plan|apply ...` (`BD-118`, `PO-ADIT-3`).
+    Repair(repair::Command),
     /// `fmine robot-docs` (`BD-117`).
     RobotDocs,
 }
@@ -636,6 +644,31 @@ fn verb_hint(args: &[String]) -> &'static str {
                 return "claim show";
             }
             "doctor" => return "doctor",
+            "robot" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--json" => next += 1,
+                        flag if flag.starts_with("--") => next += 2,
+                        "schema" => return "robot schema",
+                        _ => return "robot",
+                    }
+                }
+                return "robot";
+            }
+            "repair" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--json" => next += 1,
+                        flag if flag.starts_with("--") => next += 2,
+                        "plan" => return "repair plan",
+                        "apply" => return "repair apply",
+                        _ => return "repair",
+                    }
+                }
+                return "repair";
+            }
             "robot-docs" => return "robot-docs",
             _ => return "unknown",
         }
@@ -1093,6 +1126,12 @@ pub fn parse_args(
             | "plan design"
             | "html claims"
             | "plant"
+            | "doctor"
+            | "robot schema"
+            | "robot"
+            | "repair plan"
+            | "repair apply"
+            | "repair"
     ) {
         let (words, format, root) = common_options(args, default_root)?;
         let command = match verb {
@@ -1125,6 +1164,16 @@ pub fn parse_args(
             "plan shells" | "plan design" => CliCommand::PlanOmf(schedule::omf::parse(&words)?),
             "plan schedule" => CliCommand::PlanSchedule(schedule::parse(&words)?),
             "plant" => CliCommand::Plant(plant::parse(&words)?),
+            "doctor" => {
+                let parsed = doctor::parse(&words)?;
+                if parsed.segments.is_empty() && parsed.journals.is_empty() {
+                    CliCommand::Doctor
+                } else {
+                    CliCommand::DoctorInspect(parsed)
+                }
+            }
+            "robot schema" | "robot" => CliCommand::RobotSchema(robot::parse(&words)?),
+            "repair plan" | "repair apply" | "repair" => CliCommand::Repair(repair::parse(&words)?),
             _ => CliCommand::HtmlClaims(html::parse(&words)?),
         };
         return Ok((command, format, root));
@@ -2320,81 +2369,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 }
             }
         }
-        CliCommand::Doctor => match RegistryCatalog::load_from_root(workspace_root) {
-            Ok(cat) => {
-                // One entry per registries/sources/<issuer>.toml: registered, present and verified counts with
-                // one row per file (BD-339.S2), or the registry's refusal (file and line) when it does not load.
-                // A file whose bytes differ from the registry is reported, never refused: doctor diagnoses.
-                let issuers: Vec<String> = registered_issuers(workspace_root)
-                    .iter()
-                    .map(|name| match load_issuer_profile(workspace_root, name) {
-                        Ok(p) => {
-                            let dir = workspace_root.join(&p.corpus_dir);
-                            let checks: Vec<(&str, [bool; 3])> = p
-                                .sources
-                                .iter()
-                                .map(|s| {
-                                    let check = match std::fs::read(dir.join(&s.file_name)) {
-                                        Ok(bytes) => [
-                                            true,
-                                            bytes.len() as u64 == s.bytes,
-                                            sha256(&bytes).to_hex() == s.sha256_hex,
-                                        ],
-                                        Err(_) => [false; 3],
-                                    };
-                                    (s.file_name.as_str(), check)
-                                })
-                                .collect();
-                            let count = |i: usize| checks.iter().filter(|(_, c)| c[i]).count();
-                            let rows: Vec<String> = checks
-                                .iter()
-                                .map(|(file, [present, bytes_ok, digest_ok])| {
-                                    format!(
-                                        "{{\"file\":\"{}\",\"present\":{present},\"bytes_ok\":{bytes_ok},\"digest_ok\":{digest_ok}}}",
-                                        escape_json(file)
-                                    )
-                                })
-                                .collect();
-                            format!(
-                                "{{\"issuer\":\"{}\",\"registry_ok\":true,\"sources_registered\":{},\"sources_present\":{},\"sources_verified\":{},\"sources\":[{}]}}",
-                                escape_json(name),
-                                p.sources.len(),
-                                count(0),
-                                count(2),
-                                rows.join(",")
-                            )
-                        }
-                        Err(r) => format!(
-                            "{{\"issuer\":\"{}\",\"registry_ok\":false,\"error\":\"{}\"}}",
-                            escape_json(name),
-                            escape_json(&r.what)
-                        ),
-                    })
-                    .collect();
-                let payload = format!(
-                    "{{\"registries_ok\":true,\"units_count\":{},\"crs_count\":{},\"refusals_count\":{},\"verbs_count\":{},\"issuers\":[{}]}}",
-                    cat.unit_symbols.len(),
-                    cat.crs_codes.len(),
-                    cat.refusal_codes.len(),
-                    cat.verb_names.len(),
-                    issuers.join(",")
-                );
-                Envelope::ok(
-                    "doctor",
-                    payload,
-                    vec![NextAction::new(
-                        "fmine assure public --synthetic",
-                        "known-answer run on synthetic workbooks that exercises every ledger state",
-                    )],
-                )
-            }
-            // The registries could not be read: foundation I/O, never a stale anchor or a digest code.
-            Err(e) => Envelope::refused(
-                "doctor",
-                Refusal::new(RefusalCode::InputMissingOrUnreadable506, e.to_string()),
-                vec![NextAction::new("fmine robot-docs", ROBOT_DOCS_WHY)],
-            ),
-        },
+        CliCommand::Doctor => doctor::execute(&doctor::Command::default(), workspace_root),
+        CliCommand::DoctorInspect(cmd) => doctor::execute(cmd, workspace_root),
+        CliCommand::RobotSchema(cmd) => robot::execute(cmd, workspace_root),
+        CliCommand::Repair(cmd) => repair::execute(cmd, workspace_root),
         CliCommand::ClaimShow {
             id,
             issuer,
@@ -2564,12 +2542,15 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 forecast_candidate::USAGE,
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
-                "doctor",
+                doctor::USAGE,
+                repair::PLAN_USAGE,
+                repair::APPLY_USAGE,
                 reserve::VERB_USAGE,
                 "claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "robot-docs",
+                robot::USAGE,
             ].map(|verb| format!("\"{}\"", escape_json(verb))).join(",");
             let reliance_verbs = reliance::VERBS_JSON;
             let reliance_docs = reliance::ROBOT_DOCS_JSON;
@@ -2693,6 +2674,12 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(compare::ROBOT_DOCS_JSON);
             payload.push_str(",\"capital_program\":");
             payload.push_str(capital::ROBOT_DOCS_JSON);
+            payload.push_str(",\"doctor\":");
+            payload.push_str(doctor::ROBOT_DOCS_JSON);
+            payload.push_str(",\"robot_schema\":");
+            payload.push_str(robot::ROBOT_DOCS_JSON);
+            payload.push_str(",\"repair\":");
+            payload.push_str(repair::ROBOT_DOCS_JSON);
             payload.push_str(concat!(
                 ",\"html_lint\":{\"selection\":\"Explicit --html-definitions selects only mapped registered HTML Claims\",",
                 "\"equality\":\"Exact existing equality, precision, vintage and ambiguity checks; printed credit treatment is not inferred\",",

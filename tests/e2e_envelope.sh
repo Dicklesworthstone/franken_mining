@@ -23,12 +23,20 @@ flags = {"reserve_disclosure_claim": False, "execution_authorized": False,
 problems = []
 if len(out.splitlines()) != 1:
     problems.append(f"{len(out.splitlines())} stdout lines")
+def no_dup_pairs(pairs):
+    obj = {}
+    for k, v in pairs:
+        if k in obj:
+            raise ValueError(f"duplicate JSON key {k!r}")
+        obj[k] = v
+    return obj
+
 try:
-    env = json.loads(out)
+    env = json.loads(out, object_pairs_hook=no_dup_pairs)
 except ValueError as e:
     env = {}
     problems.append(f"not JSON: {e}")
-flags_ok = env.get("flags") == flags and out.count('"flags":{') == 1
+flags_ok = env.get("flags") == flags
 has_certificate = isinstance(env.get("certificate"), str)
 has_warnings = isinstance(env.get("warnings"), list)
 actions = env.get("next_actions")
@@ -80,6 +88,11 @@ run() {
 run "assure public" 0 ok 1 - -- assure public --synthetic
 run "doctor" 0 ok 0 - -- doctor
 run "robot-docs" 0 ok 0 - -- robot-docs
+run "robot schema" 0 ok 0 - -- robot schema
+run "robot schema" 0 ok 0 - -- robot schema envelope
+run "robot schema" 2 usage_error 0 - -- robot schema bogus
+run "repair plan" 2 usage_error 0 - -- repair plan
+run "repair apply" 2 usage_error 0 - -- repair apply
 run "claim show" 3 refused 0 FMINE-REF-201 -- claim show clm_0001
 run "claim why" 3 refused 0 FMINE-REF-201 -- claim why clm_0001
 run "claim trace" 3 refused 0 FMINE-REF-201 -- claim trace clm_0001

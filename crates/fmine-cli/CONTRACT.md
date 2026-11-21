@@ -1,11 +1,13 @@
 # CONTRACT.md — `fmine-cli`
 
-## 1. Charter & Layer
+## 1. Purpose
+The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-118`, `BD-071`), implementing all 78 registered verbs in `registries/verbs.toml` over the `FMT-ENV-1` response envelope, `doctor` diagnostics, `robot-docs` / `robot schema`, and `repair plan` / `repair apply <digest>` (`PO-ADIT-1`..`PO-ADIT-3`).
+
 - **Crate:** `fmine-cli`
-- **Layer:** `U` (User Surfaces & CLI)
-- **Subsystem:** `Surfaces`
-- **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "geo", "investment", "pit", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Layer:** U
+- **Subsystem:** Adit
+- **LOC budget:** 40,000 planned / 46,000 ceiling
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "repair", "robot", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common
@@ -27,7 +29,8 @@
   Nominal and eligible winners, ties and the expected-value cost of the limit remain separate. No eligible
   action yields no fallback. The screen adds no calibration or operating authority.
 
-## 2. Mathematical & Domain Formulation
+## 2. Inputs
+### Command grammars and domain formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
 - DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>
@@ -1095,7 +1098,8 @@ FACT (BD-347, `tests/reliance.rs`): actual-binary regressions exercise exact rep
 withdrawal and replacement, refused current reuse, stale heads, wrong keys, tampered artifacts, private file modes,
 and a FIFO that must refuse before it can hold a journal lock indefinitely.
 
-## 3. Authority, Epistemics & Representation
+## 3. Outputs
+### `FMT-ENV-1` envelope, authority, epistemics & representation
 - Every JSON invocation prints exactly one `FMT-ENV-1` envelope on stdout, a usage error included (`BD-329.S3`).
   Markdown wraps that envelope in a JSON fence, except successful challenge exports, which render the cited
   packets as readable sections with the source root, packet-set digest and internal-review boundary. Successful
@@ -1177,7 +1181,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 - Field names are this crate's. Renaming them to FMT-ENV-1's (`v`, `event`, `node`, `anchor`, `data`) and
   bumping `schema_version` are open for the FMT-ENV-1 owner.
 
-## 4. Public API Surface
+## 4. Invariants
+### Surface API contracts and adapter invariants
 - `OutputFormat`, `CliCommand`, `Envelope`, `NextAction`
 - `run` (what `fmine` prints, and its exit code), `invoke`, `parse_args`, `execute_command`
 - `forecast_journal::{Command, execute, execute_with_clock}`: the actual host-clock adapter or an explicitly
@@ -1245,7 +1250,7 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   rows. Unmatched document hashes and conflicting guidance readers refuse. Unusable, ambiguous, divested or
   partially withheld annual outcomes remain unresolved; later releases cannot erase the original reason.
 
-## 5. Guards & Typed Refusals
+## 5. Refusals
 
 - DESIGN (BD-346.S5): `mirror --metric cash-costs|aisc|cost-of-sales` reuses the two-issuer verified
   document loader and exact evidence cut. It selects original `_100_usd_m`/`_attr_usd_m` rows and all
@@ -1636,7 +1641,36 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
-## 6. Proof Obligations (`PO-*`)
+## 6. Determinism class
+Every JSON envelope, `robot schema` document, `repair plan` digest, and delegated public/synthetic assurance run is byte-identical across reruns on identical inputs (`INV-010`). Local journal and segment commands read/write local files under advisory locks (`LockedFile`).
+
+## 7. Evidence class of outputs
+Preserves the delegated kernel's evidence class and knowledge state without promotion (`NL-1`, `NL-2`). Every envelope pins all four `INV-002` authority flags (`reserve_disclosure_claim`, `execution_authorized`, `geotechnical_signoff`, `regulatory_compliance_claim`) to `false` via one constant `FLAGS_JSON`.
+
+## 8. Validity domain
+Every failure is a usage error (exit 2) or a typed `Refusal` (exits 3–9). Unknown flags, unknown verbs, missing mandatory selectors, or mismatched `repair apply` plan digests refuse without mutating state. Depends strictly downward (`U → V/E/K/S1/S0`) on workspace crates including `fmine-ledger` for `FMT-SEG-1` verification and `F7` repair.
+
+## 9. Oracles
+- `tests/e2e_envelope.sh` (`PO-ADIT-1` envelope verification across verbs).
+- `crates/fmine-cli/tests/*` and `crates/xtask/tests/cli_*` (including Python `Fraction` independent binary oracles for capital, decision, valuation, reserve replacement, mirror, and cutoff verbs).
+- `fuzz/fuzz_targets/{cli,cli_run}.rs` (`PO-ADIT-4`).
+
+## 10. Known gaps
+- `fmined` daemon HWMs, durable obligations, and Little's-law queue monitors are reported honestly as `"not_deployed"` in `fmine doctor` until the daemon lands (`WP-05`/`WP-06`).
+- `FMT-ENV-1` wire field names (`schema_version`/`verb`/`payload`) vs plan §30.1 (`v`/`event`/`node`/`anchor`/`data`) remain open under `BD-111`.
+- Complete `GATE-BULL-01` corpus acceptance and FY2026 forecast timestamped record issuance remain open.
+
+## 11. Public API
+- `OutputFormat`, `CliCommand`, `Envelope`, `NextAction`, `run`, `invoke`, `parse_args`, `execute_command`
+- `doctor` (`fmine doctor [--segment <path>]... [--journal <path>]...`), `robot` (`fmine robot schema [target]`), `repair` (`fmine repair plan|apply ...`), `robot-docs`
+- All delegated surface modules (`assure_report`, `capital`, `compare`, `cost`, `decision`, `forecast`, `geo`, `guidance`, `html`, `investment`, `issued`, `lint`, `mirror`, `packet`, `pit`, `plant`, `recovery`, `reliance`, `reserve`, `schedule`, `tables`, `track_record`).
+
+## 12. Proof obligations
+- `PO-ADIT-1`: `Envelope` pins all four `INV-002` flags `false` (`tests/e2e_envelope.sh`, `test_po_adit_1_golden_every_verb`).
+- `PO-ADIT-3`: `repair apply` refuses any mismatched `plan_digest` (`FMINE-REF-505`, exit 8) with zero bytes written, archives full original torn bytes before truncating, and re-verifies from byte 0 (`repair::tests::test_po_adit_3_repair_plan_and_apply_on_torn_segment_and_journal`).
+- `BD-116`: `robot schema` emits Draft 2020-12 JSON Schema pinning all four `INV-002` flags `const: false` and enumerating live `CATALOG` refusals and `registries/verbs.toml` (`robot::tests::test_robot_schema_emits_all_targets_pins_inv_002_and_includes_live_catalogs`).
+
+### Detailed command proof controls (`PO-*`)
 - FACT (BD-345.S4, `xtask/tests/public_lint_derivations.rs`): actual minimal workbook bytes and registered
   source metadata exercise quarter differences, exact displayed rounding, all competing vintages, date cuts,
   unknown dates, tampering, signed/zero/placeholder behavior, direct contradictions and ownership/perimeter
@@ -1709,21 +1743,12 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   machine-readable command discovery. Source binding is checked in `tests/track_record_binding.rs`; numerical
   known answers remain in the calibration crate.
 
-## 7. Failure Modes & Deterministic Fallbacks
+### Failure modes, dependencies and detailed scope notes
 None: every failure is a usage error or a typed refusal.
-
-## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-BULL-01`
-
-## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-calib::guidance_scores::claims` for Claim-typed descriptive range scores and summaries
-  (BD-341); `track_record_binding` supplies publication selection, source/basis interpretation and citations.
 - Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-crs`, `fmine-evidence`, `fmine-claim`,
-  `fmine-runtime` (explicit host-clock boundary),
-  `fmine-registry`, `fmine-array`, `fmine-numerics`, `fmine-calib`, `fmine-decide`, `fmine-io`, `fmine-public`,
-  `fmine-metrics`, `fmine-optimize` (`pitflow`, for `plan pit`).
-
-## 10. Non-Goals & Scope Boundary
+  `fmine-ledger`, `fmine-runtime`, `fmine-registry`, `fmine-array`, `fmine-numerics`, `fmine-calib`,
+  `fmine-decide`, `fmine-capital`, `fmine-io`, `fmine-public`, `fmine-metrics`, `fmine-optimize`, `fmine-lp`, `fmine-plant`.
 - DESIGN (BD-341.S4): `track-record clusters --issuer <issuer> --as-of YYYY-MM-DD --axis year|site`
   optionally selects one site and delegates to the registered evidence-cut loader plus the separate
   cluster projection. `--synthetic --axis year|site` uses explicitly invented evidence. The axis is

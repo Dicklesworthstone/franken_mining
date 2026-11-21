@@ -555,7 +555,8 @@ fn encode_line(record: &JournalRecord) -> Result<Vec<u8>, Refusal> {
     Ok(line)
 }
 
-fn decode_journal(bytes: &[u8]) -> Result<RelianceLedger, Refusal> {
+/// Decode and hash-chain-verify a serialized `RLJ1` reliance journal byte buffer.
+pub fn decode_journal(bytes: &[u8]) -> Result<RelianceLedger, Refusal> {
     if bytes.len() as u64 > MAX_JOURNAL_BYTES {
         return Err(integrity("reliance journal exceeds its byte bound"));
     }
