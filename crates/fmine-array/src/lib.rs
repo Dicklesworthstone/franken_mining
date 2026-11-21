@@ -1,9 +1,13 @@
 //! Dense 2D/3D grids (`BD-036`), 64-byte SIMD-aligned columnar interval buffers (`FMT-COL-1`),
 //! and zero-allocation sweep-line interval compositing (`BD-310`).
 
+pub mod col;
+
 use std::fmt;
 
-/// Errors raised by `Grid2D`, `Grid3D`, or `ColumnarIntervalTable`.
+use fmine_core::codec::CodecError;
+
+/// Errors raised by `Grid2D`, `Grid3D`, `ColumnarIntervalTable`, or `ColumnarIntervalChunk`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArrayError {
     /// Grid index `(i, j, k)` out of bounds `(nx, ny, nz)`.
@@ -23,6 +27,20 @@ pub enum ArrayError {
     InvalidTargetLength { target_length_m: f64 },
     /// Caller-provided output slice is too small for the generated composites.
     OutputBufferTooSmall { required: usize, capacity: usize },
+    /// Invalid `HoleId` dictionary entry.
+    InvalidHoleId { row: usize, detail: String },
+    /// Measurand ID exceeds 12-bit packing range (`0..=4095`).
+    InvalidMeasurandId(u16),
+    /// Qualifier mask sets reserved bits outside `0..=0b111`.
+    InvalidQualifierBits(u8),
+    /// Underlying `FMNE` canonical binary codec error.
+    Codec(CodecError),
+}
+
+impl From<CodecError> for ArrayError {
+    fn from(value: CodecError) -> Self {
+        Self::Codec(value)
+    }
 }
 
 impl fmt::Display for ArrayError {
@@ -52,6 +70,16 @@ impl fmt::Display for ArrayError {
                     "output composite buffer too small (required {required}, capacity {capacity})"
                 )
             }
+            Self::InvalidHoleId { row, detail } => {
+                write!(f, "invalid HoleId at row {row}: {detail}")
+            }
+            Self::InvalidMeasurandId(id) => {
+                write!(f, "measurand_id {id} exceeds 12-bit maximum 4095")
+            }
+            Self::InvalidQualifierBits(bits) => {
+                write!(f, "qualifier bitmask {bits:#04x} sets reserved bits")
+            }
+            Self::Codec(err) => write!(f, "FMT-COL-1 codec error: {err}"),
         }
     }
 }
