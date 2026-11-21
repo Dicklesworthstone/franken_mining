@@ -20,6 +20,7 @@ fmine-registry = { path = "../crates/fmine-registry" }
 fmine-calib = { path = "../crates/fmine-calib" }
 fmine-cli = { path = "../crates/fmine-cli" }
 fmine-evidence = { path = "../crates/fmine-evidence" }
+fmine-ledger = { path = "../crates/fmine-ledger" }
 fmine-optimize = { path = "../crates/fmine-optimize" }
 
 [workspace]
@@ -122,6 +123,13 @@ bench = false
 [[bin]]
 name = "omf"
 path = "fuzz_targets/omf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ledger"
+path = "fuzz_targets/ledger.rs"
 test = false
 doc = false
 bench = false

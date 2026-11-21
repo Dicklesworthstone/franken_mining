@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
-description = "FrankenMining S1 ledger: the Merkle Mountain Range over batch digests, with RFC 6962 inclusion and consistency proofs."
+description = "FrankenMining S1 ledger (Bedrock): FMT-LEDGER-1 batches, FMT-SEG-1 segments, RFC 6962 MMR proofs, cell leases/fencing, and F7 hash-chain verification."
 
 [dependencies]
 fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
 
 [lints]
 workspace = true
