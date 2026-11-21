@@ -20,9 +20,10 @@ use crate::rtd::{
 };
 
 use super::{
-    ERROR_MODEL_METRIC, INPUT_METRIC, InverseErrorModel, InverseInterval, InverseOutcome,
-    MAX_COORDINATES, MAX_INTERVALS, ObservationRole, OpeningTreatment, deconvolve,
-    observation_order_with_opening,
+    ERROR_MODEL_METRIC, INPUT_METRIC, InverseErrorModel, InverseInterval, InverseOpening,
+    InverseOutcome, MAX_COORDINATES, MAX_INTERVALS, ObservationRole, OpeningTreatment,
+    UNMEASURED_OPENING_METRIC, UnmeasuredOpening, deconvolve, deconvolve_unmeasured_opening,
+    observation_order, observation_order_with_opening,
 };
 
 type Result<T> = std::result::Result<T, Refusal>;
@@ -30,14 +31,17 @@ type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
 
 pub const SCHEMA: &str = "fmine.plant-rtd-inverse.v1";
 pub const MEASURED_OPENING_SCHEMA: &str = "fmine.plant-rtd-inverse.v2";
+pub const UNMEASURED_OPENING_SCHEMA: &str = "fmine.plant-rtd-inverse.v3";
 pub const MAX_BYTES: u64 = 1024 * 1024;
 pub const NO_CLAIM: &str = "Conditional deconvolution of one conservative elemental channel under a fixed declared tank-train response and integrated slurry volumes. Active opening stocks are explicitly fixed or measured with the declared joint covariance; dead stock remains fixed. Only genuine opening, outlet and optional feed measurements enter that covariance. Unmeasured feeds have no invented observation or regularization prior. Submitted values and Gaussian error assumptions remain Assumed, Internal and uncalibrated. No RTD parameter fitting, kernel uncertainty, reactive recovery, sensor-bias identification, empirical calibration, P754 compliance, ledger commit or operating authorization is supplied.";
+pub const UNMEASURED_NO_CLAIM: &str = "Conditional inference of active opening elemental stocks and feed history under a fixed declared tank-train response and integrated slurry volumes. Every active opening stock is explicitly unmeasured; no active-stock amount, observation, covariance or prior is supplied. Only genuine outlet and optional feed measurements enter the covariance. Identifiability is required without regularization; dead inventory remains fixed. Submitted values and Gaussian error assumptions remain Assumed, Internal and uncalibrated. No RTD parameter fitting, kernel uncertainty, reactive recovery, sensor-bias identification, empirical calibration, P754 compliance, ledger commit or operating authorization is supplied.";
 pub const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.plant-rtd-inverse.v1\",\"command\":\"plant rtd-infer --input <worksheet.toml>\",",
     "\"input\":\"Regular UTF-8 TOML, at most 1 MiB; exact bytes SHA-256 bound\",",
     "\"fields\":[\"schema\",\"boundary\",\"element\",\"measurand\",\"mass_basis\",\"start_ns\",\"end_ns\",\"opening_ns\",\"tanks\",\"volume_m3\",\"bypass_fraction\",\"dead_fraction\",\"min_flow_m3_per_s\",\"max_flow_m3_per_s\",\"common_conservative_transport\",\"piecewise_constant_feed_per_volume\",\"dry_tolerance_kg\",\"water_tolerance_kg\",\"element_tolerance_kg\",\"max_kernel_steps\",\"error_model_basis\",\"fixed_transport_and_opening\",\"unbiased_gaussian_errors\",\"global_chi_square_limit\",\"closure_tolerance_kg\"],",
     "\"optional_fields\":[\"normalized_adjustment_limit\"],",
     "\"measured_opening_schema\":\"fmine.plant-rtd-inverse.v2 replaces fixed_transport_and_opening with fixed_transport=true and opening_treatment=measured; every active opening stock is a genuine observation in the full covariance, dead stock stays fixed\",",
+    "\"unmeasured_opening_schema\":\"fmine.plant-rtd-inverse.v3 requires fixed_transport=true and opening_treatment=unmeasured; all active opening stocks are inferred without priors; only the tank=dead opening row is supplied; active opening covariance rows are forbidden\",",
     "\"mass_basis\":\"kg-total/all-phases/full-physical-boundary\",",
     "\"opening_rows\":[\"tank\",\"dry_kg\",\"water_kg\",\"element_kg\"],",
     "\"opening\":\"Exactly one explicit stock for each tank in 1..tanks and one tank=dead row; opening_ns equals start_ns\",",
@@ -50,7 +54,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"values\":\"Quoted trimmed strings; masses exact decimals or n/d with a positive denominator; finite model/error parameters\",",
     "\"output\":\"Original source Claims, feed and opening response matrices, fitted opening/feed/outlet masses, full joint covariance, individual adjustments, inventory and conservation residuals\",",
     "\"diagnostics\":\"Zero degrees of freedom means no_redundancy with null chi_square; negative fitted mass and gross-error failure reject while retaining available diagnostics\",",
-    "\"examples\":[\"tests/plant/rtd_inverse.toml\",\"tests/plant/rtd_inverse_opening.toml\"]}"
+    "\"examples\":[\"tests/plant/rtd_inverse.toml\",\"tests/plant/rtd_inverse_opening.toml\",\"tests/plant/rtd_inverse_unmeasured_opening.toml\"]}"
 );
 
 fn fail(code: RefusalCode, detail: impl Into<String>) -> Refusal {
@@ -289,10 +293,26 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
                 boolean(get(&top, "fixed_transport")?)?,
             )
         }
+        UNMEASURED_OPENING_SCHEMA => {
+            if top.contains_key("fixed_transport_and_opening")
+                || get(&top, "opening_treatment")?.0 != "unmeasured"
+            {
+                return Err(bad(
+                    1,
+                    "v3 requires opening_treatment=unmeasured and fixed_transport, without the v1 policy",
+                ));
+            }
+            (
+                OpeningTreatment::Unmeasured,
+                boolean(get(&top, "fixed_transport")?)?,
+            )
+        }
         _ => {
             return Err(bad(
                 1,
-                format!("schema must be {SCHEMA} or {MEASURED_OPENING_SCHEMA}"),
+                format!(
+                    "schema must be {SCHEMA}, {MEASURED_OPENING_SCHEMA} or {UNMEASURED_OPENING_SCHEMA}"
+                ),
             ));
         }
     };
@@ -381,6 +401,12 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
                         return Err(bad(row.line, "duplicate dead opening stock"));
                     }
                 } else {
+                    if opening_treatment == OpeningTreatment::Unmeasured {
+                        return Err(bad(
+                            row.line,
+                            "v3 active opening stocks are unmeasured; no active-stock amount may be supplied",
+                        ));
+                    }
                     let index = count(tank)?;
                     if !(1..=tanks).contains(&index) {
                         return Err(bad(row.line, "opening tank must be in 1..tanks or dead"));
@@ -425,32 +451,53 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
             _ => return Err(bad(row.line, format!("unsupported table {}", row.table))),
         }
     }
-    if opening_rows.len() != tanks {
+    if opening_treatment != OpeningTreatment::Unmeasured && opening_rows.len() != tanks {
         return Err(bad(
             1,
             "every tank opening stock is required, including explicit zero totals",
         ));
     }
-    let opening = RtdOpening {
-        boundary: scope.boundary.clone(),
-        at_ns: integer(get(&top, "opening_ns")?)?,
-        tanks: opening_rows.into_values().collect(),
-        dead: dead.ok_or_else(|| {
-            bad(
-                1,
-                "an explicit dead opening stock is required, including zeros",
-            )
-        })?,
+    let dead = dead.ok_or_else(|| {
+        bad(
+            1,
+            "an explicit dead opening stock is required, including zeros",
+        )
+    })?;
+    let at_ns = integer(get(&top, "opening_ns")?)?;
+    let opening = if opening_treatment == OpeningTreatment::Unmeasured {
+        let opening = UnmeasuredOpening {
+            boundary: scope.boundary.clone(),
+            at_ns,
+            element: element.clone(),
+            tanks,
+            dead,
+        };
+        let tag = opening.canonical_tag();
+        InverseOpening::Unmeasured(source_claim(
+            opening,
+            &tag,
+            UNMEASURED_OPENING_METRIC,
+            AdditivityClass::NonAdditive,
+            source,
+            "unmeasured active elemental opening stocks, fixed dead stock and opening_ns",
+        ))
+    } else {
+        let opening = RtdOpening {
+            boundary: scope.boundary.clone(),
+            at_ns,
+            tanks: opening_rows.into_values().collect(),
+            dead,
+        };
+        let tag = opening.canonical_tag();
+        InverseOpening::Specified(source_claim(
+            opening,
+            &tag,
+            OPENING_METRIC,
+            AdditivityClass::ExtensiveAdditive,
+            source,
+            "all opening stocks and opening_ns",
+        ))
     };
-    let tag = opening.canonical_tag();
-    let opening = source_claim(
-        opening,
-        &tag,
-        OPENING_METRIC,
-        AdditivityClass::ExtensiveAdditive,
-        source,
-        "all opening stocks and opening_ns",
-    );
     intervals.sort_by_key(|c| {
         (
             c.value.scope.interval.start_ns,
@@ -458,7 +505,7 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
         )
     });
     if 2 * intervals.len()
-        + if opening_treatment == OpeningTreatment::Measured {
+        + if opening_treatment != OpeningTreatment::Fixed {
             tanks
         } else {
             0
@@ -467,7 +514,12 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
     {
         return Err(bad(1, "at most 128 fitted opening/feed/outlet coordinates"));
     }
-    let observations = observation_order_with_opening(&opening, &intervals, opening_treatment)?;
+    let observations = match &opening {
+        InverseOpening::Specified(value) => {
+            observation_order_with_opening(value, &intervals, opening_treatment)?
+        }
+        InverseOpening::Unmeasured(_) => observation_order(&intervals)?,
+    };
     let mut keys = BTreeMap::new();
     for (i, observation) in observations.iter().enumerate() {
         let time = match observation.role {
@@ -519,7 +571,7 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
         scope,
         element,
         model_source: model.claim_id,
-        opening_source: opening.claim_id,
+        opening_source: opening.claim_id(),
         observations,
         covariance,
         error_model_basis: get(&top, "error_model_basis")?.0.into(),
@@ -546,7 +598,14 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
     Ok(WorksheetResult {
         submitted: text.into(),
         source: source.clone(),
-        outcome: deconvolve(&model, &opening, &intervals, &errors, || false)?,
+        outcome: match &opening {
+            InverseOpening::Specified(value) => {
+                deconvolve(&model, value, &intervals, &errors, || false)?
+            }
+            InverseOpening::Unmeasured(value) => {
+                deconvolve_unmeasured_opening(&model, value, &intervals, &errors, || false)?
+            }
+        },
     })
 }
 
@@ -710,22 +769,35 @@ impl WorksheetResult {
     pub fn refusal(&self) -> Option<&Refusal> {
         self.outcome.refusal()
     }
+    pub fn no_claim(&self) -> &'static str {
+        if self.outcome.error_model().value.opening_treatment == OpeningTreatment::Unmeasured {
+            UNMEASURED_NO_CLAIM
+        } else {
+            NO_CLAIM
+        }
+    }
 
     pub fn to_json(&self) -> String {
         let outcome = &self.outcome;
         let d = outcome.diagnostics();
         let e = &outcome.error_model().value;
         let model = &outcome.model().value;
-        let measured_opening = e.opening_treatment == OpeningTreatment::Measured;
-        let result_schema = if measured_opening {
-            "fmine.plant-rtd-inverse-result.v2"
-        } else {
-            "fmine.plant-rtd-inverse-result.v1"
+        let fitted_opening = e.opening_treatment != OpeningTreatment::Fixed;
+        let result_schema = match e.opening_treatment {
+            OpeningTreatment::Fixed => "fmine.plant-rtd-inverse-result.v1",
+            OpeningTreatment::Measured => "fmine.plant-rtd-inverse-result.v2",
+            OpeningTreatment::Unmeasured => "fmine.plant-rtd-inverse-result.v3",
         };
-        let opening_policy = if measured_opening {
-            "\"fixed_transport\":true,\"opening_treatment\":\"measured\""
-        } else {
-            "\"fixed_transport_and_opening\":true,\"opening_treatment\":\"fixed\""
+        let opening_policy = match e.opening_treatment {
+            OpeningTreatment::Fixed => {
+                "\"fixed_transport_and_opening\":true,\"opening_treatment\":\"fixed\""
+            }
+            OpeningTreatment::Measured => {
+                "\"fixed_transport\":true,\"opening_treatment\":\"measured\""
+            }
+            OpeningTreatment::Unmeasured => {
+                "\"fixed_transport\":true,\"opening_treatment\":\"unmeasured\""
+            }
         };
         let opening_indices = d
             .opening_coordinate_indices
@@ -763,6 +835,13 @@ impl WorksheetResult {
                             quoted(&id.to_string())
                         )
                     })
+            }))
+            .chain(d.opening_coordinate_indices.iter().enumerate().filter(|(_, index)| **index >= d.observations.len()).map(|(tank, _)| {
+                format!(
+                    "{{\"key\":{},\"source_claim_id\":null,\"declaration_claim_id\":{},\"unmeasured\":true}}",
+                    quoted(&coordinate_key(ObservationRole::OpeningTank(tank), d.scope.interval)),
+                    quoted(&outcome.opening().claim_id().to_string()),
+                )
             }))
             .collect::<Vec<_>>()
             .join(",");
@@ -809,7 +888,10 @@ impl WorksheetResult {
             number(model.bypass_fraction),
             number(model.dead_fraction),
             model.max_kernel_steps,
-            claim_json(outcome.opening()),
+            match outcome.opening() {
+                InverseOpening::Specified(value) => claim_json(value),
+                InverseOpening::Unmeasured(value) => claim_json(value),
+            },
             d.observations.len(),
             claim_json(outcome.error_model()),
             quoted(&e.error_model_basis),
@@ -829,7 +911,7 @@ impl WorksheetResult {
             numbers(d.raw_observed_residual_kg.iter().map(|v| v.value())),
             numbers(d.fitted_opening_kg.iter().map(|v| v.value())),
             numbers(d.opening_response_matrix.iter().copied()),
-            if measured_opening {
+            if fitted_opening {
                 outcome.intervals().len()
             } else {
                 0
@@ -845,7 +927,7 @@ impl WorksheetResult {
                 .refusal()
                 .map_or_else(|| "null".into(), refusal_value),
             quoted(outcome.digest()),
-            quoted(NO_CLAIM),
+            quoted(self.no_claim()),
             inputs = inputs,
             order = order,
             periods = periods,
@@ -860,8 +942,9 @@ impl WorksheetResult {
         let outcome = &self.outcome;
         let d = outcome.diagnostics();
         let n = d.estimates_kg.len();
+        let no_claim = self.no_claim();
         let mut out = format!(
-            "# Conditional residence-time deconvolution\n\n{NO_CLAIM}\n\nBoundary: {}. Measurand: {} ({}).\n\n",
+            "# Conditional residence-time deconvolution\n\n{no_claim}\n\nBoundary: {}. Measurand: {} ({}).\n\n",
             escaped(&d.scope.boundary),
             escaped(&d.element.measurand),
             escaped(&d.element.element),
@@ -875,13 +958,19 @@ impl WorksheetResult {
             );
         }
         if !d.opening_coordinate_indices.is_empty() {
-            out.push_str("## Measured opening stocks\n\nActive-tank stock observations participate in the joint fit, including every declared stock/flow correlation. The dead stock remains fixed.\n\n| Tank | Observed stock (kg) | Fitted stock (kg) | Conditional standard deviation (kg) |\n|---|---:|---:|---:|\n");
+            if outcome.error_model().value.opening_treatment == OpeningTreatment::Unmeasured {
+                out.push_str("## Unmeasured opening stocks\n\nActive-tank elemental stocks are inferred from the observed flows without an opening-stock observation or prior. The dead stock remains fixed.\n\n| Tank | Observed stock (kg) | Fitted stock (kg) | Conditional standard deviation (kg) |\n|---|---:|---:|---:|\n");
+            } else {
+                out.push_str("## Measured opening stocks\n\nActive-tank stock observations participate in the joint fit, including every declared stock/flow correlation. The dead stock remains fixed.\n\n| Tank | Observed stock (kg) | Fitted stock (kg) | Conditional standard deviation (kg) |\n|---|---:|---:|---:|\n");
+            }
             for (tank, &index) in d.opening_coordinate_indices.iter().enumerate() {
                 let _ = writeln!(
                     out,
                     "| {} | {} | {} | {} |",
                     tank + 1,
-                    number(d.observed_kg[index].value()),
+                    d.observed_kg
+                        .get(index)
+                        .map_or_else(|| "Unmeasured, inferred".into(), |v| number(v.value())),
                     number(d.fitted_opening_kg[tank].value()),
                     number(d.posterior_covariance[index * n + index].value().sqrt())
                 );
@@ -941,9 +1030,24 @@ impl WorksheetResult {
             number(d.whole_window_residual_kg.value())
         );
         match d.gross_error {
-            GrossErrorDiagnostic::NoRedundancy => out.push_str("No redundant measurement remains after fitting the unknown feeds. A gross-error test is unavailable; this is not a passed test.\n"),
-            GrossErrorDiagnostic::Available { chi_square, degrees_of_freedom } => {
-                let _ = writeln!(out, "Conditional chi-square: {}; degrees of freedom: {}; declared limit: {}. Correlated adjustment diagnostics do not identify a uniquely faulty sensor.\n", number(chi_square), degrees_of_freedom, number(outcome.error_model().value.global_chi_square_limit));
+            GrossErrorDiagnostic::NoRedundancy => {
+                if outcome.error_model().value.opening_treatment == OpeningTreatment::Unmeasured {
+                    out.push_str("No redundant measurement remains after fitting the unknown feeds and opening stocks. A gross-error test is unavailable; this is not a passed test.\n");
+                } else {
+                    out.push_str("No redundant measurement remains after fitting the unknown feeds. A gross-error test is unavailable; this is not a passed test.\n");
+                }
+            }
+            GrossErrorDiagnostic::Available {
+                chi_square,
+                degrees_of_freedom,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "Conditional chi-square: {}; degrees of freedom: {}; declared limit: {}. Correlated adjustment diagnostics do not identify a uniquely faulty sensor.\n",
+                    number(chi_square),
+                    degrees_of_freedom,
+                    number(outcome.error_model().value.global_chi_square_limit)
+                );
             }
         }
         out.push_str("\nThe response matrix and full joint posterior covariance are retained in JSON.\n\n## Source and receipt\n\n");

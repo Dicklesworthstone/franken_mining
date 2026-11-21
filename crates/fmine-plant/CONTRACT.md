@@ -157,8 +157,9 @@ BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18), 
 input populations propagated per realization (§20); report ingestion, source-box qualification,
 fitting and calibration remain. BD-313 now has source-bound forward RTD
 transport and conditional lag alignment (§19), plus bounded known-kernel noisy inverse reconciliation
-(§24), including measured active-opening stock uncertainty; kernel fitting, uncertain transport parameters
-and unmeasured initial stocks remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
+(§24), including measured active-opening stock uncertainty and identifiable entirely unmeasured active
+opening stocks; kernel fitting, uncertain transport parameters and mixed measured/unmeasured active
+openings remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
 worksheets expose nominal material conversion, elemental inventory accounting/reconciliation and joint flowsheet reconciliation;
 their byte-bound declarations remain Assumed rather than verified plant measurements.
@@ -809,9 +810,42 @@ inverse recovery and full correlated covariance, mixed measured/missing feeds, g
 negative-fit rejection, correlated measured openings, separate tank-stock responses, throughput-clock
 equivalence, complete bypass, dead stocks, shutdown, weak
 transfer, source binding, work bounds and cancellation. This conditional slice does not fit RTD parameters,
-infer unmeasured initial stocks, model flow/kernel uncertainty, identify sensor biases, separate transport from reaction,
+model flow/kernel uncertainty, identify sensor biases, separate transport from reaction,
 calibrate recovery cards or establish empirical P754/plant gates. BD-313 remains open for those broader
 requirements.
+
+### Explicitly unmeasured active opening stocks (DESIGN; BD-313)
+
+`rtd::inverse::deconvolve_unmeasured_opening` accepts a separate
+`Claim<UnmeasuredOpening>` naming the element, boundary, opening instant, active tank count and fixed
+nonexchanging dead inventory. It contains no active-stock amount, observation, covariance or prior.
+`OpeningTreatment::Unmeasured` adds one latent coordinate per active tank to the same partial GLS
+solve used for missing feeds. Only genuine feed/outlet observations enter the supplied full covariance.
+The latent order is missing feeds chronologically, then active opening stocks in flow order; the
+original declaration, all measured sources, full joint covariance and fitted tank-stock response remain
+in the immutable result. `InverseOutcome::opening()` returns an `InverseOpening` source enum with
+`specified()` and `unmeasured()` accessors; the existing `deconvolve` entry point remains available.
+
+An unobservable startup history, including complete bypass or more unknown stocks/feeds than independent
+interval constraints, refuses `FMINE-REF-104`. No pseudo-observation or regularizer repairs the rank.
+Negative fitted stock rejects with the full diagnostic candidate retained. The scalar forward replay
+starts from the fitted active stocks and checks each interval and the whole-window elemental balance.
+Zero residual degrees of freedom remains `NoRedundancy`, not a passed gross-error test.
+
+`fmine.plant-rtd-inverse.v3` requires `fixed_transport = "true"` and
+`opening_treatment = "unmeasured"`. Every active tank is unmeasured; only the explicit `tank = "dead"`
+opening row is supplied. Active-opening amounts or covariance rows refuse rather than becoming known
+zeros. In the v3 JSON result, inferred opening coordinates have null `source_claim_id` and an explicit
+`declaration_claim_id`; Markdown distinguishes them from observed stocks. RTIE/RTIR frame version 3
+binds this treatment while the v1/v2 source and receipt encodings retain their previous bytes.
+
+The synthetic `tests/plant/rtd_inverse_unmeasured_opening.toml` declares one tank, observed first feed
+10 kg and two integrated outlets. Independent one-tank closed forms identify an initial 2 kg stock and
+the unmeasured second feed of 4 kg, retaining all correlations in the resulting 5×5 covariance.
+Kernel tests additionally compare a redundant fit against an independently eliminated one-row GLS
+system and recover two distinct tank stocks from Erlang survival formulas. These are conditional
+known answers; they supply no real-plant validation, uncertain transport parameters, mixed measured
+and unmeasured opening tanks, or inferred dead inventory.
 
 ## 25. Shared-scenario processing production (DESIGN; BD-176/181/182, plan §17.4)
 

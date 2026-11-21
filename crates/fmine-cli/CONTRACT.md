@@ -164,12 +164,16 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Inputs remain Assumed and Internal; synthetic fixtures and direct CLI-library checks are in
   `tests/plant/rtd_*.toml` and `xtask/tests/plant_rtd.rs`.
 - DESIGN (BD-313): `plant rtd-infer --input <worksheet.toml>` reads strict
-  `fmine.plant-rtd-inverse.v1` or `.v2` declarations and calls the pure known-kernel inverse adapter.
+  `fmine.plant-rtd-inverse.v1`, `.v2` or `.v3` declarations and calls the pure known-kernel inverse adapter.
   Up to 32 contiguous intervals declare outlet elemental kilograms and either a genuine measured
   feed or explicit `unmeasured`; unknown feeds receive no invented observation or prior variance.
   The complete covariance of genuine observations includes every cross-period pair. The declared
   RTD and throughput volumes are fixed and source-bound. V1 fixes opening inventory; v2 requires
   measured active-opening stocks and their complete covariance, including stock/flow correlations.
+  V3 requires `opening_treatment = "unmeasured"` and only the fixed dead-stock opening row. It forbids
+  active opening amounts and observation/covariance rows for unknown stocks. Identifiable opening stocks
+  and missing feeds are inferred jointly without priors; unresolved attribution refuses `FMINE-REF-104`.
+  Inferred coordinates retain null observation-source IDs and their distinct declaration Claim reference.
   Dead stock remains fixed. JSON and Markdown
   retain conditional opening/feed estimates, full joint covariance, response matrices, independent forward
   replay, conservation and gross-error diagnostics. No redundancy is reported as unavailable,

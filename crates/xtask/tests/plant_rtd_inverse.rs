@@ -13,6 +13,8 @@ use fmine_io::omf::json::{Json, parse};
 
 const TEXT: &str = include_str!("../../../tests/plant/rtd_inverse.toml");
 const MEASURED_OPENING: &str = include_str!("../../../tests/plant/rtd_inverse_opening.toml");
+const UNMEASURED_OPENING: &str =
+    include_str!("../../../tests/plant/rtd_inverse_unmeasured_opening.toml");
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 fn scratch() -> PathBuf {
@@ -476,4 +478,134 @@ fn throughput_time_and_source_identity_are_preserved_by_the_command() {
     assert_eq!(docs.exit_code, 0);
     assert!(docs.payload_json.contains("plant rtd-infer"));
     assert!(docs.payload_json.contains("fmine.plant-rtd-inverse.v1"));
+}
+
+#[test]
+fn unmeasured_opening_command_recovers_stock_and_feed_with_full_correlated_covariance() {
+    let (envelope, value) = evaluate(UNMEASURED_OPENING);
+    assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+    assert_eq!(
+        at(&value, &["schema"]).as_str(),
+        Some("fmine.plant-rtd-inverse-result.v3")
+    );
+    assert_eq!(
+        at(&value, &["error_model", "opening_treatment"]).as_str(),
+        Some("unmeasured")
+    );
+    assert_eq!(at(&value, &["measured_coordinate_count"]).i64(), Some(3));
+    close(estimate(&value, "opening/1"), 2.0);
+    close(estimate(&value, "feed/1000000000/2000000000"), 4.0);
+    let a = (-1.0_f64).exp();
+    let g = 1.0 - a;
+    let t = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [2.0 - 1.0 / a, -1.0, 1.0 / a],
+        [-a / g, 1.0 / g, 0.0],
+    ];
+    let v = [
+        [0.04, 0.01, -0.005],
+        [0.01, 0.09, 0.02],
+        [-0.005, 0.02, 0.16],
+    ];
+    let keys = [
+        "feed/0/1000000000",
+        "outlet/0/1000000000",
+        "outlet/1000000000/2000000000",
+        "feed/1000000000/2000000000",
+        "opening/1",
+    ];
+    for (i, left) in keys.iter().enumerate() {
+        for (j, right) in keys.iter().enumerate() {
+            let expected: f64 = (0..3)
+                .map(|k| (0..3).map(|l| t[i][k] * v[k][l] * t[j][l]).sum::<f64>())
+                .sum();
+            close(covariance(&value, left, right), expected);
+        }
+    }
+    let coordinate = &array(at(&value, &["coordinate_order"]))[index(&value, "opening/1")];
+    assert_eq!(at(coordinate, &["source_claim_id"]), &Json::Null);
+    assert_eq!(
+        at(coordinate, &["declaration_claim_id"]),
+        at(&value, &["opening", "id"])
+    );
+    assert_eq!(at(coordinate, &["unmeasured"]).as_bool(), Some(true));
+    assert_eq!(array(at(&value, &["result", "observed_kg"])).len(), 3);
+    assert_eq!(
+        array(at(&value, &["error_model", "covariance_kg2"])).len(),
+        9
+    );
+    assert_eq!(
+        at(&value, &["result", "gross_error", "status"]).as_str(),
+        Some("no_redundancy")
+    );
+    assert_eq!(
+        at(&value, &["source", "sha256"]).as_str(),
+        Some(sha256(UNMEASURED_OPENING.as_bytes()).to_hex().as_str())
+    );
+    assert_eq!(
+        at(&value, &["admitted_claim", "evidence"]).as_str(),
+        Some("Assumed")
+    );
+    assert_eq!(
+        at(&value, &["admitted_claim", "confidentiality"]).as_str(),
+        Some("Internal")
+    );
+    let markdown = envelope.rendered_markdown.expect("Markdown");
+    assert!(markdown.contains("## Unmeasured opening stocks"));
+    assert!(markdown.contains("Unmeasured, inferred"));
+    assert!(
+        envelope
+            .no_claim
+            .expect("boundary")
+            .contains("no active-stock amount")
+    );
+}
+
+#[test]
+fn unmeasured_opening_command_refuses_fabricated_observations_and_retains_negative_diagnostics() {
+    refused(
+        &format!(
+            "{UNMEASURED_OPENING}\n[[opening]]\ntank = \"1\"\ndry_kg = \"10\"\nwater_kg = \"20\"\nelement_kg = \"0\"\n"
+        ),
+        "FMINE-REF-506",
+    );
+    refused(
+        &changed(
+            UNMEASURED_OPENING,
+            "left = \"feed/0/1000000000\"",
+            "left = \"opening/1\"",
+        ),
+        "FMINE-REF-506",
+    );
+    refused(
+        &changed(
+            UNMEASURED_OPENING,
+            "opening_ns = \"0\"",
+            "opening_ns = \"1\"",
+        ),
+        "FMINE-REF-102",
+    );
+    let negative = changed(
+        UNMEASURED_OPENING,
+        "outlet_kg = \"4.943035529371538572764190161\"",
+        "outlet_kg = \"0\"",
+    );
+    let (_, value) = refused(&negative, "FMINE-REF-109");
+    assert!(estimate(&value, "opening/1") < 0.0);
+    assert!(at(&value, &["receipt_digest"]).as_str().is_some());
+    assert_eq!(
+        at(&value, &["schema"]).as_str(),
+        Some("fmine.plant-rtd-inverse-result.v3")
+    );
+    // With complete bypass, outlet values carry no information about initial tank stocks.
+    refused(
+        &changed(
+            UNMEASURED_OPENING,
+            "bypass_fraction = \"0\"",
+            "bypass_fraction = \"1\"",
+        ),
+        "FMINE-REF-104",
+    );
 }

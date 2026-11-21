@@ -66,10 +66,11 @@ pub(super) fn execute_inverse(input: &Path, root: &Path) -> Envelope {
         };
         envelope.payload_json = result.to_json();
         envelope.rendered_markdown = Some(result.to_markdown());
+        envelope.no_claim = Some(result.no_claim());
         Ok(envelope)
     };
     let mut envelope =
         run().unwrap_or_else(|refusal| Envelope::refused("plant rtd-infer", refusal, actions()));
-    envelope.no_claim = Some(worksheet::NO_CLAIM);
+    envelope.no_claim.get_or_insert(worksheet::NO_CLAIM);
     envelope
 }

@@ -1,7 +1,8 @@
 //! DESIGN: bounded, known-kernel inverse residence-time transport (BD-313).
 //! Genuine opening/feed/outlet observations retain their full declared covariance;
 //! explicitly unmeasured feeds receive no invented observation or prior.
-//! Active opening stocks are explicitly fixed or measured with uncertainty.
+//! Active opening stocks are explicitly fixed, measured with uncertainty, or
+//! declared unmeasured and inferred only when the observations identify them.
 //! Integrated volumes, dead stock and the passive kernel remain fixed conditional
 //! inputs. No parameter fitting or inverse regularization occurs.
 //! Determinism: DeterministicPerIsa
@@ -20,22 +21,118 @@ pub const MAX_INTERVALS: usize = 32;
 pub const INPUT_METRIC: &str = "plant.rtd.inverse_interval/1";
 pub const ERROR_MODEL_METRIC: &str = "plant.rtd.inverse_error_model/1";
 pub const OUTPUT_METRIC: &str = "plant.rtd.inverse_reconciliation/1";
+pub const UNMEASURED_OPENING_METRIC: &str = "plant.rtd.inverse_unmeasured_opening/1";
 /// Bounds response construction as well as the scalar replay, before work begins.
 pub const MAX_RESPONSE_WORK: usize = 4_194_304;
 pub const MAX_COORDINATES: usize = 128;
 
-/// DESIGN: measured active stocks join the same GLS observation population as
-/// flows. Dead stock does not exchange with the train and remains fixed.
+/// DESIGN: measured stocks join the observation population; unmeasured stocks
+/// are latent coordinates. Dead stock does not exchange and remains fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpeningTreatment {
     Fixed,
     Measured,
+    Unmeasured,
 }
 impl OpeningTreatment {
     fn frame_version(self) -> u16 {
         match self {
             Self::Fixed => 1,
             Self::Measured => 2,
+            Self::Unmeasured => 3,
+        }
+    }
+}
+
+/// DESIGN: all active opening stocks of the selected elemental channel are
+/// unknown. This declaration contains no active-stock amount, observation,
+/// covariance or prior. The nonexchanging dead inventory remains explicitly fixed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmeasuredOpening {
+    pub boundary: String,
+    pub at_ns: i64,
+    pub element: ElementKey,
+    pub tanks: usize,
+    pub dead: MaterialAmounts,
+}
+impl UnmeasuredOpening {
+    pub fn canonical_tag(&self) -> String {
+        let mut enc = Encoder::new_frame(*b"RTIU", 1);
+        enc.put_str(&self.boundary);
+        enc.put_i64(self.at_ns);
+        put_element(&mut enc, &self.element);
+        enc.put_u64(self.tanks as u64);
+        put_amounts(&mut enc, &self.dead);
+        blake3_hash(&enc.finish()).to_hex()
+    }
+}
+
+/// Immutable original opening source; a missing stock never becomes a zero-valued
+/// `RtdOpening` or a genuine observation in the measurement covariance.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InverseOpening {
+    Specified(Claim<RtdOpening>),
+    Unmeasured(Claim<UnmeasuredOpening>),
+}
+impl InverseOpening {
+    pub fn specified(&self) -> Option<&Claim<RtdOpening>> {
+        match self {
+            Self::Specified(value) => Some(value),
+            Self::Unmeasured(_) => None,
+        }
+    }
+    pub fn unmeasured(&self) -> Option<&Claim<UnmeasuredOpening>> {
+        match self {
+            Self::Specified(_) => None,
+            Self::Unmeasured(value) => Some(value),
+        }
+    }
+    pub fn claim_id(&self) -> ClaimId {
+        match self {
+            Self::Specified(value) => value.claim_id,
+            Self::Unmeasured(value) => value.claim_id,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OpeningRef<'a> {
+    Specified(&'a Claim<RtdOpening>),
+    Unmeasured(&'a Claim<UnmeasuredOpening>),
+}
+impl<'a> OpeningRef<'a> {
+    fn claim_id(self) -> ClaimId {
+        match self {
+            Self::Specified(value) => value.claim_id,
+            Self::Unmeasured(value) => value.claim_id,
+        }
+    }
+    fn specified(self) -> Option<&'a Claim<RtdOpening>> {
+        match self {
+            Self::Specified(value) => Some(value),
+            Self::Unmeasured(_) => None,
+        }
+    }
+    fn scope(self) -> (&'a str, i64, usize, &'a MaterialAmounts) {
+        match self {
+            Self::Specified(value) => (
+                &value.value.boundary,
+                value.value.at_ns,
+                value.value.tanks.len(),
+                &value.value.dead,
+            ),
+            Self::Unmeasured(value) => (
+                &value.value.boundary,
+                value.value.at_ns,
+                value.value.tanks,
+                &value.value.dead,
+            ),
+        }
+    }
+    fn into_owned(self) -> InverseOpening {
+        match self {
+            Self::Specified(value) => InverseOpening::Specified(value.clone()),
+            Self::Unmeasured(value) => InverseOpening::Unmeasured(value.clone()),
         }
     }
 }
@@ -140,7 +237,8 @@ pub struct InverseReconciliation {
     pub unmeasured_feeds: Vec<ClaimId>,
     pub observed_kg: Vec<Kilograms>,
     /// Genuine measured coordinates first (opening stocks, when measured, then
-    /// interval flows), followed by missing feeds chronologically.
+    /// interval flows), followed by missing feeds chronologically and, when
+    /// explicitly unmeasured, active opening stocks in tank order.
     pub estimates_kg: Vec<Kilograms>,
     pub measured_adjustments_kg: Vec<Kilograms>,
     /// Full row-major covariance in `estimates_kg` order; correlated, not diagonal.
@@ -149,7 +247,7 @@ pub struct InverseReconciliation {
     pub normalized_adjustments: Vec<Option<f64>>,
     pub feed_coordinate_indices: Vec<usize>,
     pub outlet_coordinate_indices: Vec<usize>,
-    /// Empty for fixed opening stocks; otherwise one measured coordinate per tank.
+    /// Empty for fixed stocks; otherwise one measured or inferred coordinate per tank.
     pub opening_coordinate_indices: Vec<usize>,
     pub fitted_opening_kg: Vec<Kilograms>,
     /// Causal N-by-N outlet response to integrated interval feed masses.
@@ -177,7 +275,7 @@ pub struct InverseReconciliation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InverseReceipt {
     model: Claim<RtdModel>,
-    opening: Claim<RtdOpening>,
+    opening: InverseOpening,
     intervals: Vec<Claim<InverseInterval>>,
     error_model: Claim<InverseErrorModel>,
     claim: Claim<InverseReconciliation>,
@@ -186,7 +284,7 @@ pub struct InverseReceipt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RejectedInverse {
     model: Claim<RtdModel>,
-    opening: Claim<RtdOpening>,
+    opening: InverseOpening,
     intervals: Vec<Claim<InverseInterval>>,
     error_model: Claim<InverseErrorModel>,
     diagnostics: InverseReconciliation,
@@ -205,7 +303,7 @@ impl InverseOutcome {
             Self::Rejected(r) => &r.model,
         }
     }
-    pub fn opening(&self) -> &Claim<RtdOpening> {
+    pub fn opening(&self) -> &InverseOpening {
         match self {
             Self::Admitted(r) => &r.opening,
             Self::Rejected(r) => &r.opening,
@@ -325,6 +423,12 @@ pub fn observation_order_with_opening(
     intervals: &[Claim<InverseInterval>],
     treatment: OpeningTreatment,
 ) -> Result<Vec<InverseObservation>> {
+    if treatment == OpeningTreatment::Unmeasured {
+        return Err(fail(
+            RefusalCode::BasisMismatch105,
+            "unmeasured active stocks require their separate opening declaration; only interval observations enter covariance",
+        ));
+    }
     let mut result = Vec::new();
     if treatment == OpeningTreatment::Measured {
         if opening.value.tanks.is_empty() || opening.value.tanks.len() > 64 {
@@ -352,7 +456,7 @@ struct Response {
     matrix: Vec<f64>,
     opening_matrix: Vec<f64>,
     initial_outlet: Vec<f64>,
-    initial_stocks: Vec<f64>,
+    initial_stocks: Option<Vec<f64>>,
     dead: f64,
     transitions: Vec<Transition>,
     steps: usize,
@@ -360,7 +464,7 @@ struct Response {
 
 fn response(
     model: &RtdModel,
-    opening: &RtdOpening,
+    opening: OpeningRef<'_>,
     intervals: &[&Claim<InverseInterval>],
     element: &ElementKey,
     precision: f64,
@@ -370,7 +474,7 @@ fn response(
     let count = intervals.len();
     let opening_columns = match treatment {
         OpeningTreatment::Fixed => 1,
-        OpeningTreatment::Measured => model.tanks,
+        OpeningTreatment::Measured | OpeningTreatment::Unmeasured => model.tanks,
     };
     let keys = admit_model(model)?;
     let channel = keys
@@ -382,9 +486,10 @@ fn response(
                 "inverse element is absent from transport model",
             )
         })?;
-    if opening.boundary != model.scope.boundary
-        || opening.at_ns != model.scope.interval.start_ns
-        || opening.tanks.len() != model.tanks
+    let (boundary, at_ns, tanks, dead_stock) = opening.scope();
+    if boundary != model.scope.boundary
+        || at_ns != model.scope.interval.start_ns
+        || tanks != model.tanks
     {
         return Err(fail(
             RefusalCode::SupportMismatch102,
@@ -403,19 +508,33 @@ fn response(
         }
         Ok(value)
     };
-    let initial_stocks = opening
-        .tanks
-        .iter()
-        .map(selected)
-        .collect::<Result<Vec<_>>>()?;
-    let all_dead = convert(&opening.dead, model, count + model.tanks + 1)?;
+    let initial_stocks = match opening {
+        OpeningRef::Specified(value) => Some(
+            value
+                .value
+                .tanks
+                .iter()
+                .map(selected)
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        OpeningRef::Unmeasured(value) => {
+            if value.value.element != *element {
+                return Err(fail(
+                    RefusalCode::BasisMismatch105,
+                    "unmeasured opening declaration must name the inferred elemental channel",
+                ));
+            }
+            None
+        }
+    };
+    let all_dead = convert(dead_stock, model, count + model.tanks + 1)?;
     if model.dead_fraction == 0.0 && all_dead.iter().any(|value| *value != 0.0) {
         return Err(fail(
             RefusalCode::OutsidePhysicalDomain109,
             "nonzero dead stock requires nonzero dead volume",
         ));
     }
-    let dead = selected(&opening.dead)?;
+    let dead = selected(dead_stock)?;
     let tank_volume = quotient(
         product(1.0 - model.dead_fraction, model.volume_m3.value())?,
         model.tanks as f64,
@@ -505,19 +624,25 @@ fn response(
             "inverse observations omit the final interval",
         ));
     }
-    let mut stocks = initial_stocks
-        .iter()
-        .enumerate()
-        .map(|(tank, &q)| {
+    let mut stocks = (0..model.tanks)
+        .map(|tank| {
             let mut row = vec![0.0; count + opening_columns];
             if treatment == OpeningTreatment::Fixed {
-                row[0] = q;
+                row[0] = *initial_stocks
+                    .as_ref()
+                    .and_then(|v| v.get(tank))
+                    .ok_or_else(|| {
+                        fail(
+                            RefusalCode::BasisMismatch105,
+                            "fixed opening stock is missing",
+                        )
+                    })?;
             } else {
                 row[tank] = 1.0;
             }
-            row
+            Ok(row)
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     let mut matrix = Vec::with_capacity(count * count);
     let mut initial_outlet = Vec::with_capacity(count);
     let mut opening_matrix = Vec::new();
@@ -552,11 +677,13 @@ fn response(
                 .iter()
                 .map(Sum::finish)
                 .collect::<Result<Vec<_>>>()?;
-            initial_outlet.push(sum(coefficients
-                .iter()
-                .zip(&initial_stocks)
-                .map(|(&a, &q)| product(a, q))
-                .collect::<Result<Vec<_>>>()?)?);
+            if let Some(stocks) = &initial_stocks {
+                initial_outlet.push(sum(coefficients
+                    .iter()
+                    .zip(stocks)
+                    .map(|(&a, &q)| product(a, q))
+                    .collect::<Result<Vec<_>>>()?)?);
+            }
             opening_matrix.extend(coefficients);
         }
         matrix.extend(
@@ -640,6 +767,41 @@ pub fn deconvolve(
     opening: &Claim<RtdOpening>,
     intervals: &[Claim<InverseInterval>],
     error_model: &Claim<InverseErrorModel>,
+    cancelled: impl FnMut() -> bool,
+) -> Result<InverseOutcome> {
+    deconvolve_inner(
+        model,
+        OpeningRef::Specified(opening),
+        intervals,
+        error_model,
+        cancelled,
+    )
+}
+
+/// Infer active opening stocks jointly with the measured and missing feed
+/// history. Only data-identifiable initial states are admitted; no initial-stock
+/// amount, pseudo-observation, finite prior or regularizer is supplied.
+pub fn deconvolve_unmeasured_opening(
+    model: &Claim<RtdModel>,
+    opening: &Claim<UnmeasuredOpening>,
+    intervals: &[Claim<InverseInterval>],
+    error_model: &Claim<InverseErrorModel>,
+    cancelled: impl FnMut() -> bool,
+) -> Result<InverseOutcome> {
+    deconvolve_inner(
+        model,
+        OpeningRef::Unmeasured(opening),
+        intervals,
+        error_model,
+        cancelled,
+    )
+}
+
+fn deconvolve_inner(
+    model: &Claim<RtdModel>,
+    opening: OpeningRef<'_>,
+    intervals: &[Claim<InverseInterval>],
+    error_model: &Claim<InverseErrorModel>,
     mut cancelled: impl FnMut() -> bool,
 ) -> Result<InverseOutcome> {
     poll(&mut cancelled)?;
@@ -649,21 +811,43 @@ pub fn deconvolve(
         &model.value.canonical_tag(),
         AdditivityClass::NonAdditive,
     )?;
-    admit_source(
-        opening,
-        OPENING_METRIC,
-        &opening.value.canonical_tag(),
-        AdditivityClass::ExtensiveAdditive,
-    )?;
-    let rows = ordered(intervals)?;
     let e = &error_model.value;
-    let observations = observation_order_with_opening(opening, intervals, e.opening_treatment)?;
+    let observations = match opening {
+        OpeningRef::Specified(value) => {
+            admit_source(
+                value,
+                OPENING_METRIC,
+                &value.value.canonical_tag(),
+                AdditivityClass::ExtensiveAdditive,
+            )?;
+            observation_order_with_opening(value, intervals, e.opening_treatment)?
+        }
+        OpeningRef::Unmeasured(value) => {
+            admit_source(
+                value,
+                UNMEASURED_OPENING_METRIC,
+                &value.value.canonical_tag(),
+                AdditivityClass::NonAdditive,
+            )?;
+            if e.opening_treatment != OpeningTreatment::Unmeasured {
+                return Err(fail(
+                    RefusalCode::BasisMismatch105,
+                    "unmeasured opening source requires explicit unmeasured treatment",
+                ));
+            }
+            observation_order(intervals)?
+        }
+    };
+    let rows = ordered(intervals)?;
     let n = observations.len();
     let periods = rows.len();
     let opening_count = match e.opening_treatment {
         OpeningTreatment::Fixed => 0,
-        OpeningTreatment::Measured => opening.value.tanks.len(),
+        OpeningTreatment::Measured | OpeningTreatment::Unmeasured => opening.scope().2,
     };
+    if opening_count > 64 {
+        return Err(numerical("inverse opening exceeds its 64-tank work bound"));
+    }
     let p = 2 * periods + opening_count - n;
     if n + p > MAX_COORDINATES {
         return Err(numerical("inverse exceeds its fitted-coordinate budget"));
@@ -671,7 +855,7 @@ pub fn deconvolve(
     if e.observations.len() != n || e.covariance.len() != n * n {
         return Err(fail(
             RefusalCode::BasisMismatch105,
-            "inverse covariance must cover every genuine opening/feed/outlet observation and no unmeasured feed",
+            "inverse covariance must cover every genuine opening/feed/outlet observation and no unmeasured quantity",
         ));
     }
     admit_source(
@@ -683,7 +867,7 @@ pub fn deconvolve(
     if e.scope != model.value.scope
         || e.element != rows[0].value.element
         || e.model_source != model.claim_id
-        || e.opening_source != opening.claim_id
+        || e.opening_source != opening.claim_id()
         || e.observations != observations
     {
         return Err(fail(
@@ -707,8 +891,17 @@ pub fn deconvolve(
             "inverse requires a declared error basis, fixed transport, unbiased Gaussian errors and finite diagnostic limits",
         ));
     }
+    if p > periods {
+        return Err(fail(
+            RefusalCode::NonIdentifiableAttribution104,
+            "more unmeasured opening stocks and feeds than independent interval constraints",
+        ));
+    }
     let mut exact = Vec::with_capacity(n);
-    for stock in opening.value.tanks.iter().take(opening_count) {
+    let measured_opening = opening
+        .specified()
+        .filter(|_| e.opening_treatment == OpeningTreatment::Measured);
+    for stock in measured_opening.into_iter().flat_map(|c| &c.value.tanks) {
         let amount = stock.elements_kg.get(&e.element).copied().ok_or_else(|| {
             fail(
                 RefusalCode::BasisMismatch105,
@@ -737,6 +930,13 @@ pub fn deconvolve(
         outlet_indices.push(exact.len());
         exact.push(row.value.outlet_kg);
     }
+    let opening_indices: Vec<_> = match e.opening_treatment {
+        OpeningTreatment::Fixed => Vec::new(),
+        OpeningTreatment::Measured => (0..opening_count).collect(),
+        OpeningTreatment::Unmeasured => {
+            (n + missing.len()..n + missing.len() + opening_count).collect()
+        }
+    };
     let mut observed = Vec::with_capacity(n);
     let mut precision = Vec::with_capacity(n);
     for (i, &q) in exact.iter().enumerate() {
@@ -752,7 +952,7 @@ pub fn deconvolve(
     let allowance = precision.iter().copied().fold(f64::INFINITY, f64::min);
     let response = response(
         &model.value,
-        &opening.value,
+        opening,
         &rows,
         &e.element,
         allowance,
@@ -763,8 +963,13 @@ pub fn deconvolve(
     let mut latent = vec![0.0; periods * p];
     for t in 0..periods {
         measured[t * n + outlet_indices[t]] = 1.0;
-        for tank in 0..opening_count {
-            measured[t * n + tank] = -response.opening_matrix[t * opening_count + tank];
+        for (tank, &coordinate) in opening_indices.iter().enumerate() {
+            let coefficient = -response.opening_matrix[t * opening_count + tank];
+            if coordinate < n {
+                measured[t * n + coordinate] = coefficient;
+            } else {
+                latent[t * p + coordinate - n] = coefficient;
+            }
         }
         for (j, &coordinate) in feed_indices.iter().enumerate() {
             let coefficient = -response.matrix[t * periods + j];
@@ -818,9 +1023,14 @@ pub fn deconvolve(
     let feed: Vec<_> = feed_indices.iter().map(|&i| fitted[i]).collect();
     let out: Vec<_> = outlet_indices.iter().map(|&i| fitted[i]).collect();
     let fitted_opening = if opening_count == 0 {
-        response.initial_stocks.clone()
+        response.initial_stocks.clone().ok_or_else(|| {
+            fail(
+                RefusalCode::BasisMismatch105,
+                "fixed opening stock is missing",
+            )
+        })?
     } else {
-        fitted[..opening_count].to_vec()
+        opening_indices.iter().map(|&i| fitted[i]).collect()
     };
     let opening_outlet = if opening_count == 0 {
         response.initial_outlet.clone()
@@ -922,7 +1132,7 @@ pub fn deconvolve(
         normalized_adjustments: fit.normalized_adjustments,
         feed_coordinate_indices: feed_indices,
         outlet_coordinate_indices: outlet_indices,
-        opening_coordinate_indices: (0..opening_count).collect(),
+        opening_coordinate_indices: opening_indices,
         fitted_opening_kg: masses(fitted_opening),
         response_matrix: response.matrix,
         opening_response_matrix: response.opening_matrix,
@@ -942,8 +1152,16 @@ pub fn deconvolve(
     let mut enc = Encoder::new_frame(*b"RTIR", e.opening_treatment.frame_version());
     put_source_envelope(&mut enc, model, 0);
     metadata.include(model)?;
-    put_source_envelope(&mut enc, opening, 1);
-    metadata.include(opening)?;
+    match opening {
+        OpeningRef::Specified(value) => {
+            put_source_envelope(&mut enc, value, 1);
+            metadata.include(value)?;
+        }
+        OpeningRef::Unmeasured(value) => {
+            put_source_envelope(&mut enc, value, 1);
+            metadata.include(value)?;
+        }
+    }
     enc.put_u64(rows.len() as u64);
     for row in &rows {
         put_source_envelope(&mut enc, *row, 2);
@@ -953,8 +1171,9 @@ pub fn deconvolve(
     metadata.include(error_model)?;
     put_diagnostics(&mut enc, &diagnostics);
     // DESIGN: preserve every fixed-opening v1 receipt byte. Measured opening
-    // semantics and their source/coordinate binding use a distinct v2 frame.
-    if e.opening_treatment == OpeningTreatment::Measured {
+    // semantics and their source/coordinate binding use a distinct v2 frame;
+    // inferred opening stocks use v3 without altering either older encoding.
+    if e.opening_treatment != OpeningTreatment::Fixed {
         enc.put_u64(diagnostics.opening_coordinate_indices.len() as u64);
         for &index in &diagnostics.opening_coordinate_indices {
             enc.put_u64(index as u64);
@@ -978,7 +1197,7 @@ pub fn deconvolve(
     if let Some(refusal) = rejection {
         Ok(InverseOutcome::Rejected(Box::new(RejectedInverse {
             model: model.clone(),
-            opening: opening.clone(),
+            opening: opening.into_owned(),
             intervals,
             error_model: error_model.clone(),
             diagnostics,
@@ -989,7 +1208,7 @@ pub fn deconvolve(
         let claim = metadata.into_claim(OUTPUT_METRIC, diagnostics, &digest);
         Ok(InverseOutcome::Admitted(Box::new(InverseReceipt {
             model: model.clone(),
-            opening: opening.clone(),
+            opening: opening.into_owned(),
             intervals,
             error_model: error_model.clone(),
             claim,

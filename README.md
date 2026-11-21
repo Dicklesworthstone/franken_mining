@@ -337,13 +337,21 @@ outlet observations under a declared transport model:
 ```sh
 cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse.toml --json
 cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_opening.toml --format markdown
+cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_unmeasured_opening.toml --json
 ```
 
 DESIGN: the v1 worksheet fixes initial stocks. The v2 worksheet instead declares every active tank's
 opening elemental stock as a measurement, with its variance and all opening/flow correlations. Opening
 stocks, measured feeds and outlet masses are fitted jointly; absent feeds receive no invented observation
-or prior. Dead stock and transport parameters remain fixed. Both modes keep original source Claims,
+or prior. Dead stock and transport parameters remain fixed. All modes keep original source Claims,
 the full joint covariance, source bytes, adjustment diagnostics and independently replayed conservation.
+
+The v3 worksheet declares `opening_treatment = "unmeasured"` and supplies only the fixed dead-stock row.
+It jointly infers active opening stocks and missing interval feeds when the genuine observations identify
+them. It admits no invented opening quantity, variance or prior. The synthetic v3 example uses a measured
+first feed of **10 kg** and two outlet measurements to recover **2 kg** of opening stock and a **4 kg**
+second feed, with their joint covariance. Unknown coordinates retain null observation-source IDs and a
+separate declaration reference. Unidentifiable histories refuse rather than selecting an arbitrary split.
 
 The synthetic measured-opening example starts with a **2 kg** stock measurement and reconstructs
 **10 kg and 4 kg** interval feeds. Its declared correlated errors give feed variances of approximately
