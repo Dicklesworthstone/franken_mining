@@ -9,17 +9,42 @@ fn design(program: &EvaluatedProgram, limit: Rat) -> Design {
     Design {
         model_key: program.inputs().policy.value.model_key.clone(),
         constraints: vec![Constraint {
-            id: "aisc".into(), metric: Metric::GoldAisc,
-            basis: "Synthetic declared reconciled AISC numerator on attributable sold gold ounces".into(),
-            period: "2030-01-01/2030-12-31".into(), aggregation: Aggregation::RatioOfExpectedTotals,
-            direction: Direction::Upper, limit,
-            baseline: states.iter().map(|(state, _)| Baseline { state_id: state.clone(), numerator: r(100, 1), denominator: r(100, 1) }).collect(),
-            increments: program.inputs().candidates.iter().flat_map(|candidate| {
-                states.iter().map(move |(state, _)| Increment {
-                    candidate_id: candidate.value.candidate_id.clone(), state_id: state.clone(),
-                    numerator: r(if candidate.value.candidate_id == "growth" { 300 } else { 100 }, 1), denominator: r(100, 1),
+            id: "aisc".into(),
+            metric: Metric::GoldAisc,
+            basis: "Synthetic declared reconciled AISC numerator on attributable sold gold ounces"
+                .into(),
+            period: "2030-01-01/2030-12-31".into(),
+            aggregation: Aggregation::RatioOfExpectedTotals,
+            direction: Direction::Upper,
+            limit,
+            baseline: states
+                .iter()
+                .map(|(state, _)| Baseline {
+                    state_id: state.clone(),
+                    numerator: r(100, 1),
+                    denominator: r(100, 1),
                 })
-            }).collect(),
+                .collect(),
+            increments: program
+                .inputs()
+                .candidates
+                .iter()
+                .flat_map(|candidate| {
+                    states.iter().map(move |(state, _)| Increment {
+                        candidate_id: candidate.value.candidate_id.clone(),
+                        state_id: state.clone(),
+                        numerator: r(
+                            if candidate.value.candidate_id == "growth" {
+                                300
+                            } else {
+                                100
+                            },
+                            1,
+                        ),
+                        denominator: r(100, 1),
+                    })
+                })
+                .collect(),
         }],
     }
 }
@@ -30,11 +55,23 @@ fn source(value: Design) -> Claim<Design> {
 }
 
 fn example() -> EvaluatedProgram {
-    crate::evaluate(&inputs(&[("efficient", 1, &[80]), ("growth", 1, &[100])], &[ONE], 1, r(1, 5), None)).unwrap()
+    crate::evaluate(&inputs(
+        &[("efficient", 1, &[80]), ("growth", 1, &[100])],
+        &[ONE],
+        1,
+        r(1, 5),
+        None,
+    ))
+    .unwrap()
 }
 
 fn row<'a>(result: &'a EvaluatedKpiProgram, bundle: &str) -> &'a Choice {
-    result.summary().choices.iter().find(|r| r.bundle_id == bundle).unwrap()
+    result
+        .summary()
+        .choices
+        .iter()
+        .find(|r| r.bundle_id == bundle)
+        .unwrap()
 }
 
 #[test]
@@ -48,11 +85,20 @@ fn kpi_cap_changes_the_choice_and_prices_every_exact_threshold() {
     assert_eq!(s.baseline_objective, Some(r(100, 1)));
     assert_eq!(s.constrained_objective, Some(r(80, 1)));
     assert_eq!(s.opportunity_cost, Some(r(20, 1)));
-    assert_eq!(row(&report, "bundle_02").metrics[0].threshold_value, Some(r(2, 1)));
-    assert_eq!(row(&report, "bundle_03").metrics[0].threshold_value, Some(r(5, 3)));
+    assert_eq!(
+        row(&report, "bundle_02").metrics[0].threshold_value,
+        Some(r(2, 1))
+    );
+    assert_eq!(
+        row(&report, "bundle_03").metrics[0].threshold_value,
+        Some(r(5, 3))
+    );
     assert!(!row(&report, "bundle_03").base_eligible);
     let f = &s.frontiers[0];
-    assert_eq!(f.points.iter().map(|p| p.limit).collect::<Vec<_>>(), [ONE, r(3, 2), r(2, 1)]);
+    assert_eq!(
+        f.points.iter().map(|p| p.limit).collect::<Vec<_>>(),
+        [ONE, r(3, 2), r(2, 1)]
+    );
     assert_eq!(f.points[2].winners, ["bundle_02"]);
     assert_eq!(f.points[2].opportunity_cost, Some(ZERO));
     assert_eq!(program.to_json(), original);
@@ -62,7 +108,14 @@ fn kpi_cap_changes_the_choice_and_prices_every_exact_threshold() {
 
 #[test]
 fn ratio_of_expected_totals_is_not_the_average_of_state_ratios() {
-    let program = crate::evaluate(&inputs(&[("growth", 1, &[100, 100])], &[r(1, 2), r(1, 2)], 1, r(1, 5), None)).unwrap();
+    let program = crate::evaluate(&inputs(
+        &[("growth", 1, &[100, 100])],
+        &[r(1, 2), r(1, 2)],
+        1,
+        r(1, 5),
+        None,
+    ))
+    .unwrap();
     let mut d = design(&program, r(2, 1));
     d.constraints[0].baseline[0].denominator = r(10, 1);
     d.constraints[0].baseline[1].denominator = r(100, 1);
@@ -71,11 +124,17 @@ fn ratio_of_expected_totals_is_not_the_average_of_state_ratios() {
         delta.denominator = ZERO;
     }
     let expected = evaluate(&program, &source(d.clone())).unwrap();
-    assert_eq!(row(&expected, "bundle_01").metrics[0].threshold_value, Some(r(20, 11)));
+    assert_eq!(
+        row(&expected, "bundle_01").metrics[0].threshold_value,
+        Some(r(20, 11))
+    );
     assert_eq!(expected.summary().constrained_winners, ["bundle_01"]);
     d.constraints[0].aggregation = Aggregation::EveryState;
     let every = evaluate(&program, &source(d)).unwrap();
-    assert_eq!(row(&every, "bundle_01").metrics[0].threshold_value, Some(r(10, 1)));
+    assert_eq!(
+        row(&every, "bundle_01").metrics[0].threshold_value,
+        Some(r(10, 1))
+    );
     assert!(every.summary().constrained_winners.is_empty());
     assert_eq!(every.summary().opportunity_cost, None);
 }
@@ -91,7 +150,14 @@ fn frontiers_hold_other_kpis_fixed_and_empty_sets_never_invent_zero_cost() {
     roce.limit = r(1, 5);
     roce.baseline[0].numerator = r(10, 1);
     for delta in &mut roce.increments {
-        delta.numerator = r(if delta.candidate_id == "growth" { 50 } else { 10 }, 1);
+        delta.numerator = r(
+            if delta.candidate_id == "growth" {
+                50
+            } else {
+                10
+            },
+            1,
+        );
     }
     d.constraints.push(roce);
     let report = evaluate(&program, &source(d)).unwrap();
@@ -102,27 +168,57 @@ fn frontiers_hold_other_kpis_fixed_and_empty_sets_never_invent_zero_cost() {
     assert_eq!(cap.points.last().unwrap().winners, ["bundle_02"]);
     let floor = &report.summary().frontiers[1];
     assert_eq!(floor.points.last().unwrap().winners, ["bundle_01"]);
-    assert_eq!(floor.points.last().unwrap().opportunity_cost, Some(r(20, 1)));
-    assert!(floor.points.windows(2).all(|w| exact_compare(w[0].limit, w[1].limit).is_gt()));
+    assert_eq!(
+        floor.points.last().unwrap().opportunity_cost,
+        Some(r(20, 1))
+    );
+    assert!(
+        floor
+            .points
+            .windows(2)
+            .all(|w| exact_compare(w[0].limit, w[1].limit).is_gt())
+    );
 }
 
 #[test]
 fn ties_keep_every_winner_and_the_minimum_economic_sacrifice() {
-    let program = crate::evaluate(&inputs(&[("efficient", 1, &[100]), ("growth", 1, &[100])], &[ONE], 1, r(1, 5), None)).unwrap();
+    let program = crate::evaluate(&inputs(
+        &[("efficient", 1, &[100]), ("growth", 1, &[100])],
+        &[ONE],
+        1,
+        r(1, 5),
+        None,
+    ))
+    .unwrap();
     let tight = evaluate(&program, &source(design(&program, r(3, 2)))).unwrap();
     assert_eq!(tight.summary().baseline_winners, ["bundle_01", "bundle_02"]);
     assert_eq!(tight.summary().constrained_winners, ["bundle_01"]);
     assert_eq!(tight.summary().opportunity_cost, Some(ZERO));
     let relaxed = evaluate(&program, &source(design(&program, r(2, 1)))).unwrap();
-    assert_eq!(relaxed.summary().constrained_winners, ["bundle_01", "bundle_02"]);
+    assert_eq!(
+        relaxed.summary().constrained_winners,
+        ["bundle_01", "bundle_02"]
+    );
 }
 
 #[test]
 fn nominal_risk_rejections_and_cash_failures_cannot_be_resurrected_by_kpis() {
-    let program = crate::evaluate(&inputs(&[("efficient", 1, &[80, 80]), ("growth", 1, &[-100, 400])], &[r(1, 2), r(1, 2)], 1, r(1, 2), Some(50))).unwrap();
+    let program = crate::evaluate(&inputs(
+        &[("efficient", 1, &[80, 80]), ("growth", 1, &[-100, 400])],
+        &[r(1, 2), r(1, 2)],
+        1,
+        r(1, 2),
+        Some(50),
+    ))
+    .unwrap();
     let report = evaluate(&program, &source(design(&program, r(5, 1)))).unwrap();
     assert!(!row(&report, "bundle_02").base_eligible);
-    assert!(report.summary().frontiers[0].points.iter().all(|p| p.winners == ["bundle_01"]));
+    assert!(
+        report.summary().frontiers[0]
+            .points
+            .iter()
+            .all(|p| p.winners == ["bundle_01"])
+    );
     let mut i = crate::tests::with_schedule(program.inputs().clone());
     let mut schedule = i.funding_schedule.take().unwrap().value;
     crate::tests::set_candidate_flow(&mut schedule, "start", "efficient", "s0", -200);
@@ -149,16 +245,28 @@ fn complete_state_admission_and_positive_denominators_never_drop_a_portfolio() {
     let good = design(&program, r(3, 2));
     let mut d = good.clone();
     d.constraints[0].increments.pop();
-    assert_eq!(evaluate(&program, &source(d)).unwrap_err().code, "FMINE-REF-201");
+    assert_eq!(
+        evaluate(&program, &source(d)).unwrap_err().code,
+        "FMINE-REF-201"
+    );
     let mut d = good.clone();
     d.constraints[0].increments[0].state_id = "missing".into();
-    assert_eq!(evaluate(&program, &source(d)).unwrap_err().code, "FMINE-REF-105");
+    assert_eq!(
+        evaluate(&program, &source(d)).unwrap_err().code,
+        "FMINE-REF-105"
+    );
     let mut d = good.clone();
     d.constraints[0].increments[0].denominator = r(-100, 1);
-    assert_eq!(evaluate(&program, &source(d)).unwrap_err().code, "FMINE-REF-107");
+    assert_eq!(
+        evaluate(&program, &source(d)).unwrap_err().code,
+        "FMINE-REF-107"
+    );
     let mut d = good.clone();
     d.model_key = "other-model".into();
-    assert_eq!(evaluate(&program, &source(d)).unwrap_err().code, "FMINE-REF-105");
+    assert_eq!(
+        evaluate(&program, &source(d)).unwrap_err().code,
+        "FMINE-REF-105"
+    );
     let mut d = source(good);
     d.value.constraints[0].limit = r(2, 1);
     assert_eq!(evaluate(&program, &d).unwrap_err().code, "FMINE-REF-507");
@@ -172,12 +280,20 @@ fn geo_requires_declared_fixed_denominators_and_fractional_threshold_equality_pa
     c.metric = Metric::Geo;
     c.direction = Direction::Lower;
     c.baseline[0].denominator = ONE;
-    for delta in &mut c.increments { delta.denominator = ZERO; }
+    for delta in &mut c.increments {
+        delta.denominator = ZERO;
+    }
     let report = evaluate(&program, &source(d.clone())).unwrap();
     assert_eq!(report.summary().constrained_winners, ["bundle_02"]);
-    assert_eq!(row(&report, "bundle_02").metrics[0].threshold_value, Some(r(400, 1)));
+    assert_eq!(
+        row(&report, "bundle_02").metrics[0].threshold_value,
+        Some(r(400, 1))
+    );
     d.constraints[0].increments[0].denominator = ONE;
-    assert_eq!(evaluate(&program, &source(d)).unwrap_err().code, "FMINE-REF-107");
+    assert_eq!(
+        evaluate(&program, &source(d)).unwrap_err().code,
+        "FMINE-REF-107"
+    );
 }
 
 #[test]
@@ -189,21 +305,58 @@ fn metadata_and_sources_bind_the_result_without_promoting_evidence() {
     assert_eq!(report.claim().confidentiality, Confidentiality::internal());
     assert!(report.claim().parents.contains(&program.claim().claim_id));
     assert!(report.claim().parents.contains(&design.claim_id));
-    assert!(design.anchors.iter().all(|a| report.claim().anchors.contains(a)));
+    assert!(
+        design
+            .anchors
+            .iter()
+            .all(|a| report.claim().anchors.contains(a))
+    );
     let mut edited = design.clone();
     edited.uu_terms[0].downside_exposure_usd_m += 1.0;
     // The original and KPI inputs cannot silently disagree about one UU scenario.
-    assert_eq!(evaluate(&program, &edited).unwrap_err().code, "FMINE-REF-204");
-    let mut edited = design;
+    assert_eq!(
+        evaluate(&program, &edited).unwrap_err().code,
+        "FMINE-REF-204"
+    );
+    // NL-4/NL-8: failed calibration is refused at admission rather than carried into a capital comparison.
+    let mut edited = design.clone();
     edited.calibration_failed = true;
-    let changed = evaluate(&program, &edited).unwrap();
-    assert!(changed.claim().calibration_failed);
-    assert_ne!(changed.digest(), report.digest());
+    assert_eq!(
+        evaluate(&program, &edited).unwrap_err().code,
+        "FMINE-REF-205"
+    );
     let mut failed_base = program.inputs().clone();
     failed_base.candidates[0].calibration_failed = true;
-    let failed_base = crate::evaluate(&failed_base).unwrap();
-    let inherited = evaluate(&failed_base, report.design()).unwrap();
-    assert!(inherited.claim().calibration_failed);
+    assert_eq!(
+        crate::evaluate(&failed_base).unwrap_err().code,
+        "FMINE-REF-205"
+    );
+    let mut extra_anchor = design.anchors.clone();
+    extra_anchor.push(SourceAnchor {
+        artifact_path: "tests/capital/kpi_extra.toml".into(),
+        artifact_sha256: [7; 32],
+        locator: "line 99".into(),
+    });
+    let tag = design.value_tag().to_owned();
+    let anchored = Claim::new(
+        design.metric_key.clone(),
+        design.value.clone(),
+        &tag,
+        design.representation.clone(),
+        design.support,
+        design.additivity,
+        design.evidence,
+        design.epistemic,
+        design.state,
+        design.confidentiality.clone(),
+        design.uu_terms.clone(),
+        design.parents.clone(),
+        extra_anchor,
+    );
+    assert_ne!(
+        evaluate(&program, &anchored).unwrap().digest(),
+        report.digest()
+    );
 }
 
 #[test]
@@ -222,7 +375,10 @@ fn numerator_and_denominator_rescaling_preserves_every_threshold_choice() {
     }
     let scaled = evaluate(&program, &source(scaled)).unwrap();
     assert_eq!(scaled.summary().frontiers, original.summary().frontiers);
-    assert_eq!(scaled.summary().constrained_winners, original.summary().constrained_winners);
+    assert_eq!(
+        scaled.summary().constrained_winners,
+        original.summary().constrained_winners
+    );
 }
 
 #[test]
@@ -230,12 +386,22 @@ fn unrepresentable_component_sums_refuse_instead_of_saturating_or_dropping_bundl
     let program = example();
     let mut d = design(&program, r(3, 2));
     d.constraints[0].baseline[0].numerator = Rat::from_integer(i128::MAX);
-    assert_eq!(evaluate(&program, &source(d)).unwrap_err().code, "FMINE-REF-207");
+    assert_eq!(
+        evaluate(&program, &source(d)).unwrap_err().code,
+        "FMINE-REF-207"
+    );
 }
 
 #[test]
 fn component_row_order_never_changes_the_canonical_report() {
-    let program = crate::evaluate(&inputs(&[("efficient", 1, &[80, 80]), ("growth", 1, &[100, 100])], &[r(1, 2), r(1, 2)], 1, r(1, 5), None)).unwrap();
+    let program = crate::evaluate(&inputs(
+        &[("efficient", 1, &[80, 80]), ("growth", 1, &[100, 100])],
+        &[r(1, 2), r(1, 2)],
+        1,
+        r(1, 5),
+        None,
+    ))
+    .unwrap();
     let original = source(design(&program, r(3, 2)));
     let mut reordered = original.clone();
     reordered.value.constraints[0].baseline.reverse();
