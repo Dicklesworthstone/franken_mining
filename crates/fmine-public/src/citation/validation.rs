@@ -33,7 +33,10 @@ fn resolve<'a>(
     let (file, rest) = at.split_once(':').ok_or("invalid_locator")?;
     let (sheet_name, cell_ref) = rest.rsplit_once('!').ok_or("invalid_locator")?;
     let source = *sources.get(file).ok_or("unregistered_source")?;
-    let sheet = source.workbook.sheet(sheet_name).ok_or("unavailable_sheet")?;
+    let sheet = source
+        .workbook
+        .sheet(sheet_name)
+        .ok_or("unavailable_sheet")?;
     let (row, col) = parse_a1_ref(cell_ref).ok_or("invalid_locator")?;
     if format!("{}{row}", col_index_to_letters(col)) != cell_ref {
         return Err("invalid_locator");
@@ -46,8 +49,7 @@ fn claim_issue(
     issuer: &str,
     cell: &KeyedCell,
 ) -> Result<(), (&'static str, &'static str)> {
-    let (source, sheet, row, col) =
-        resolve(sources, &cell.locator).map_err(|kind| ("at", kind))?;
+    let (source, sheet, row, col) = resolve(sources, &cell.locator).map_err(|kind| ("at", kind))?;
     if cell.key.issuer != issuer || cell.key.reporting_vintage.release != source.quarter {
         return Err(("vintage", "source_identity_mismatch"));
     }
@@ -153,9 +155,9 @@ fn calculation_matches(sources: &Sources<'_>, instance: &IdentityInstance) -> bo
                 .filter(|o| matches!(o.value, OperandValue::Int(_)))
                 .count();
             !inputs.is_empty()
-                && inputs.iter().all(|o| {
-                    matches!(o.value, OperandValue::Int(_)) || placeholder(sources, o)
-                })
+                && inputs
+                    .iter()
+                    .all(|o| matches!(o.value, OperandValue::Int(_)) || placeholder(sources, o))
                 && i64::try_from(count).ok() == Some(rate.k)
                 && one(OperandRole::Numerator) == Some(rate.n)
                 && one(OperandRole::Ounces) == Some(rate.q)
@@ -182,10 +184,7 @@ pub fn report_findings(report: &PublicAssuranceReport) -> Vec<CitationFinding> {
     };
     let mut sources = Sources::new();
     for (index, source) in report.sources.iter().enumerate() {
-        if sources
-            .insert(source.file_name.as_str(), source)
-            .is_some()
-        {
+        if sources.insert(source.file_name.as_str(), source).is_some() {
             add(
                 format!("$.sources[{index}].file"),
                 "duplicate_source",
@@ -193,8 +192,7 @@ pub fn report_findings(report: &PublicAssuranceReport) -> Vec<CitationFinding> {
             );
         }
     }
-    if (report.lane == Lane::Synthetic) != (report.issuer == crate::synthetic::SYNTHETIC_ISSUER)
-    {
+    if (report.lane == Lane::Synthetic) != (report.issuer == crate::synthetic::SYNTHETIC_ISSUER) {
         add("$.lane".into(), "lane_issuer_mismatch", &report.issuer);
     }
     for (index, (at, cell)) in report.public_claims.cells.iter().enumerate() {
@@ -260,8 +258,7 @@ pub fn report_findings(report: &PublicAssuranceReport) -> Vec<CitationFinding> {
             );
         }
     }
-    if key::claims_digest(&report.mine_stats_claims.claims) != report.mine_stats_claims.digest
-    {
+    if key::claims_digest(&report.mine_stats_claims.claims) != report.mine_stats_claims.digest {
         add(
             "$.mine_stats_claims.digest".into(),
             "projection_digest_mismatch",

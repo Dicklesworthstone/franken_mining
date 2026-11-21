@@ -2353,11 +2353,7 @@ pub fn run_synthetic_assurance(
     edits: &[(String, fmine_io::xlsx::MinimalCell)],
 ) -> Result<PublicAssuranceReport, Refusal> {
     let sources = load_synthetic(synthetic::synthetic_workbooks(edits))?;
-    let report = assess(
-        &synthetic::synthetic_profile(),
-        Lane::Synthetic,
-        sources,
-    );
+    let report = assess(&synthetic::synthetic_profile(), Lane::Synthetic, sources);
     citation::validate_report(&report)?;
     Ok(report)
 }

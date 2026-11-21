@@ -1807,14 +1807,24 @@ mod diagnostic_rendering {
                     2,
                     "kind = \"weighted_empirical\"\nsamples = \"8,12\"\nweights = \"1/4,3/4\"",
                 ),
-                ("uniform", 1, "kind = \"empirical\"\nsamples = \"8,10,10,12\""),
+                (
+                    "uniform",
+                    1,
+                    "kind = \"empirical\"\nsamples = \"8,10,10,12\"",
+                ),
             ],
             &[("tied", "10"), ("uniform", "10")],
         );
         let (json, markdown) = render(&state, &report);
         assert!(json.contains("\"schema\":\"fmine.forecast-diagnostics.v3\""));
-        assert!(json.contains("\"weighted_empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"));
-        assert!(json.contains("\"empirical_rank\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"));
+        assert!(json.contains(
+            "\"weighted_empirical_rank\":{\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"
+        ));
+        assert!(
+            json.contains(
+                "\"empirical_rank\":{\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"
+            )
+        );
         assert!(json.contains(concat!(
             "\"below_mass\":{\"num\":\"1\",\"den\":\"10\"},",
             "\"equal_mass\":{\"num\":\"7\",\"den\":\"10\"},",
@@ -1828,7 +1838,10 @@ mod diagnostic_rendering {
         assert!(markdown.contains("Weighted population: 2; resolved: 1; unresolved: 1."));
         assert!(markdown.contains("[1/10, 4/5] (mass below 1/10; equal 7/10; above 1/5)"));
         assert!(markdown.contains("unavailable (n=2)"));
-        assert!(markdown.contains("No resampling, normalization or floating-point probability conversion"));
+        assert!(
+            markdown
+                .contains("No resampling, normalization or floating-point probability conversion")
+        );
     }
 
     #[test]

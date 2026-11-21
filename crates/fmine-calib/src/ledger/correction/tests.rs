@@ -460,7 +460,12 @@ fn additive_constant_residual_keeps_signed_and_zero_values_and_predictive_width(
             .expect("immutable saved assessment"),
         &saved_before
     );
-    assert!(proposal.method.no_claim().contains("target's declared unit"));
+    assert!(
+        proposal
+            .method
+            .no_claim()
+            .contains("target's declared unit")
+    );
     assert!(proposal.method.no_claim().contains("not out-of-sample"));
 }
 
@@ -572,10 +577,7 @@ fn additive_still_refuses_incomplete_non_gaussian_and_unrepresentable_proposals(
         assert_eq!(ledger.forecast(target), Some(&before));
     }
     let (ledger, assessment, target, _) = setup(
-        &[
-            (0.0, 1e307, Some(1e307)),
-            (0.0, 1e307, Some(1e307)),
-        ],
+        &[(0.0, 1e307, Some(1e307)), (0.0, 1e307, Some(1e307))],
         gaussian_payload(f64::MAX / 1.005, 1e303),
         metadata(),
     );

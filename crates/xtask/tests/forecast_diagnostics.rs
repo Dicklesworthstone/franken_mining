@@ -4,8 +4,8 @@
 #![cfg(test)]
 
 use fmine_calib::ledger::diagnostics::{
-    AssessmentDiagnostics, BIN_RULE, DiagnosticMember, DiagnosticValue, EmpiricalRankCounts,
-    EMPIRICAL_METHOD, PIT_METHOD, SCOPE, WeightedRankMasses, coverage,
+    AssessmentDiagnostics, BIN_RULE, DiagnosticMember, DiagnosticValue, EMPIRICAL_METHOD,
+    EmpiricalRankCounts, PIT_METHOD, SCOPE, WeightedRankMasses, coverage,
 };
 use fmine_calib::{
     AssessmentPolicy, CohortSpec, ForecastLedger, ForecastPayload, MemberOutcome, MissingReason,
@@ -98,7 +98,6 @@ fn member(report: &AssessmentDiagnostics, id: ObjectId) -> &DiagnosticMember {
         .find(|item| item.member.forecast_id == id)
         .unwrap()
 }
-
 
 fn weighted(samples: Vec<f64>, numerators: &[i128], denominator: i128) -> ForecastPayload {
     ForecastPayload::WeightedEmpirical {
@@ -203,8 +202,14 @@ fn weighted_ranks_keep_exact_ties_missing_members_and_separate_populations() {
         .unwrap();
     let changed = diagnostics(&mut ledger, cohort, 103, OutcomeSelector::LatestAsOf);
     assert_ne!(changed.digest, report.digest);
-    assert_ne!(member(&changed, ids[0]).value, member(&report, ids[0]).value);
-    assert_eq!(ledger.assessment_diagnostics(parent.digest).unwrap(), report);
+    assert_ne!(
+        member(&changed, ids[0]).value,
+        member(&report, ids[0]).value
+    );
+    assert_eq!(
+        ledger.assessment_diagnostics(parent.digest).unwrap(),
+        report
+    );
     assert_eq!(
         ledger
             .assess(cohort, 101, OutcomeSelector::FirstPublished)

@@ -277,12 +277,22 @@ impl EvaluatedModel {
 /// Evaluates the exact source bytes, dispatching to recourse only when explicitly declared.
 /// The static-only `parse` entry point continues to reject every recourse table.
 pub fn evaluate(text: &str, source: SourceAnchor) -> Result<EvaluatedModel> {
-    let ParsedModel { program, information, kpis } = parse_model(text, source, true)?;
+    let ParsedModel {
+        program,
+        information,
+        kpis,
+    } = parse_model(text, source, true)?;
     if kpis.is_some() && (program.robustness.is_some() || program.selection_stability.is_some()) {
-        return Err(input(1, "KPI constraints currently require a static program without robustness or selection_stability; those diagnostics must be evaluated separately"));
+        return Err(input(
+            1,
+            "KPI constraints currently require a static program without robustness or selection_stability; those diagnostics must be evaluated separately",
+        ));
     }
     match (information, kpis) {
-        (Some(_), Some(_)) => Err(input(1, "KPI constraints currently require a static program; adaptive policy KPI components are not declared by this schema")),
+        (Some(_), Some(_)) => Err(input(
+            1,
+            "KPI constraints currently require a static program; adaptive policy KPI components are not declared by this schema",
+        )),
         (Some(information), None) => crate::recourse::evaluate(&RecourseInputs {
             program,
             information,
@@ -290,7 +300,9 @@ pub fn evaluate(text: &str, source: SourceAnchor) -> Result<EvaluatedModel> {
         .map(|program| EvaluatedModel::Recourse(Box::new(program))),
         (None, Some(kpis)) => crate::robustness::kpi::evaluate(&super::evaluate(&program)?, &kpis)
             .map(|program| EvaluatedModel::Kpi(Box::new(program))),
-        (None, None) => super::evaluate(&program).map(|program| EvaluatedModel::Static(Box::new(program))),
+        (None, None) => {
+            super::evaluate(&program).map(|program| EvaluatedModel::Static(Box::new(program)))
+        }
     }
 }
 
@@ -300,11 +312,7 @@ struct ParsedModel {
     kpis: Option<Claim<crate::robustness::kpi::Design>>,
 }
 
-fn parse_model(
-    text: &str,
-    source: SourceAnchor,
-    allow_recourse: bool,
-) -> Result<ParsedModel> {
+fn parse_model(text: &str, source: SourceAnchor, allow_recourse: bool) -> Result<ParsedModel> {
     if text.len() > MAX_BYTES {
         return Err(input(1, "model exceeds the 4 MiB parser limit"));
     }
@@ -394,7 +402,9 @@ fn parse_model(
     let mut valuation_rows = entity_valuation::ValuationRows::default();
     for row in &doc.rows {
         match row.table.as_str() {
-            "kpi_constraint" | "kpi_baseline" | "kpi_increment" if allow_recourse => kpi_rows.push(row)?,
+            "kpi_constraint" | "kpi_baseline" | "kpi_increment" if allow_recourse => {
+                kpi_rows.push(row)?
+            }
             "robustness" | "transport_distance" => robustness_rows.push(row, model_key)?,
             "selection_stability" => {
                 if stability_row.is_some() {
@@ -1145,5 +1155,9 @@ fn parse_model(
         robustness,
     };
     validate(&inputs)?;
-    Ok(ParsedModel { program: inputs, information, kpis })
+    Ok(ParsedModel {
+        program: inputs,
+        information,
+        kpis,
+    })
 }

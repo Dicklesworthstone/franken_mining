@@ -93,10 +93,10 @@ fn paired_period_cash_and_capex_reverse_the_operating_choice_without_transcribin
     let summary = receipt.decision().summary();
     assert_eq!(summary.expected_value_winners, ["process"]);
     for (id, state, value) in [
-        ("process", "hard", 12972_8000),
-        ("process", "soft", 212_0000),
-        ("higher-power", "hard", 19945_6000),
-        ("higher-power", "soft", -8576_0000),
+        ("process", "hard", 129_728_000),
+        ("process", "soft", 2_120_000),
+        ("higher-power", "hard", 199_456_000),
+        ("higher-power", "soft", -85_760_000),
     ] {
         let row = receipt
             .outcomes()

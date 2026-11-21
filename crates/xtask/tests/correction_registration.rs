@@ -563,9 +563,7 @@ fn signed_additive_corrections_register_score_and_replay_without_rewriting_histo
         assert_eq!(number_field(report, "bias_shift"), 2.0);
         assert_eq!(string_field(report, "adjustment_unit"), "USD");
         assert!(!report.contains("bias_factor") && !report.contains("log_ratio"));
-        assert!(report.contains(
-            "\"raw\":{\"kind\":\"gaussian\",\"mean\":-5,\"std_dev\":1}"
-        ));
+        assert!(report.contains("\"raw\":{\"kind\":\"gaussian\",\"mean\":-5,\"std_dev\":1}"));
         assert!(report.contains("\"mean\":-3,\"std_dev\":1"));
         assert!(report.contains("\"status\":\"unissued_proposal\",\"uncalibrated\":true"));
         assert_eq!(number_field(report, "raw_training_hits"), 0.0);
@@ -632,17 +630,14 @@ fn signed_additive_corrections_register_score_and_replay_without_rewriting_histo
                 .1,
         )
         .to_string();
-        assert!(admission.contains(
-            "\"schema\":\"fmine.forecast-correction-admission.v2\""
-        ));
+        assert!(admission.contains("\"schema\":\"fmine.forecast-correction-admission.v2\""));
         assert!(
             admission.contains(report),
             "the exact reviewed signed proposal survives registration"
         );
         {
             let durable =
-                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head))
-                    .unwrap();
+                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
             let Entry::Operation(operation) = &durable.records().last().unwrap().entry else {
                 panic!("registered operation")
             };
@@ -694,12 +689,7 @@ fn signed_additive_corrections_register_score_and_replay_without_rewriting_histo
 
 #[test]
 fn additive_public_registration_retains_source_policy_and_citations() {
-    let mut fixture = Fixture::series_method(
-        true,
-        0,
-        true,
-        CorrectionMethod::AdditiveResidual,
-    );
+    let mut fixture = Fixture::series_method(true, 0, true, CorrectionMethod::AdditiveResidual);
     let proposal = fixture.proposal();
     let report = correction(&proposal.payload_json);
     let expected = digest_field(report, "digest");
@@ -1407,12 +1397,11 @@ fn check_correction_replay(mut fixture: Fixture) {
                             format!("{line}\ncorrection_method = \"additive-residual\"")
                         }
                         "retagged-method" if line.starts_with("schema = ") => {
-                            let version =
-                                if fixture.method == CorrectionMethod::AdditiveResidual {
-                                    11
-                                } else {
-                                    12
-                                };
+                            let version = if fixture.method == CorrectionMethod::AdditiveResidual {
+                                11
+                            } else {
+                                12
+                            };
                             format!("schema = \"fmine.forecast-operation.v{version}\"")
                         }
                         "retagged-method" if line.starts_with("correction_method = ") => {

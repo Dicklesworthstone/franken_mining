@@ -373,10 +373,9 @@ impl ForecastLedger {
                     positive(mean * adjustment)?,
                     positive(positive(std_dev * adjustment)? * z)?,
                 ),
-                CorrectionMethod::AdditiveResidual => (
-                    numeric(mean + adjustment)?,
-                    positive(std_dev * z)?,
-                ),
+                CorrectionMethod::AdditiveResidual => {
+                    (numeric(mean + adjustment)?, positive(std_dev * z)?)
+                }
             };
             required_inflations.push(numeric((value - center).abs() / radius)?);
         }

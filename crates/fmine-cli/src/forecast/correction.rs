@@ -213,8 +213,14 @@ pub(super) fn markdown(state: &Replay, report: &CorrectionProposal) -> String {
     let metadata = &report.metadata;
     let no_claim = report.method.no_claim();
     let method = report.method.single_name();
-    let [mean_label, spread_label, adjustment_label, inflation_label, error_label, explanation] =
-        method_text(report.method);
+    let [
+        mean_label,
+        spread_label,
+        adjustment_label,
+        inflation_label,
+        error_label,
+        explanation,
+    ] = method_text(report.method);
     let mut out = format!(
         "# Forecast correction proposal\n\n**Unissued and uncalibrated.** {no_claim}\n\nMethod: `{method}`. Correction digest: `{}`.\n\nSaved assessment: `{}`. Training cut: {}; selector: {}.\n\nModel: {}. Family: {}. Author role: {}. Domain: {}. Horizon: {}. Site: {}. Quantity: {}. Unit: {}.\n\n## Raw, correction and corrected proposal\n\nTarget: {} (`{}`), registered {}, outcome due {}.\n\n| Quantity | Value |\n|---|---|\n| Unchanged raw Gaussian | {} |\n| Raw central interval | {} |\n| {mean_label} | {} |\n| {spread_label} | {} |\n| {adjustment_label} | {} |\n| {inflation_label} | {} |\n| Corrected Gaussian proposal | {} |\n| Corrected central interval | {} |\n\nIntervals use alpha {}. {explanation}\n\n## Complete training population\n\nRaw hits: {}/{}. Fitted corrected hits: {}/{}; required empirical rank: {}. These are in-sample counts and do not demonstrate calibrated future coverage.\n\n| Forecast | Raw Gaussian | {error_label} | Raw hit | Corrected interval | Corrected hit |\n|---|---|---:|---|---|---|\n",
         report.digest,
@@ -386,8 +392,14 @@ fn series_markdown(state: &Replay, report: &CorrectionSeriesProposal) -> String 
     let no_claim = report.method.series_no_claim();
     let method = report.method.series_name();
     let version = version(report.method);
-    let [mean_label, spread_label, adjustment_label, inflation_label, error_label, explanation] =
-        method_text(report.method);
+    let [
+        mean_label,
+        spread_label,
+        adjustment_label,
+        inflation_label,
+        error_label,
+        explanation,
+    ] = method_text(report.method);
     let mut out = format!(
         "# Forecast correction series proposal\n\n**Unissued and uncalibrated.** {no_claim}\n\nMethod: `{method}`. Correction digest (COR2/v{version}): `{}`.\n\nSaved assessments: {}. Latest training cut: {}; selector: {}.\n\nModel: {}. Family: {}. Author role: {}. Domain: {}. Horizon: {}. Site: {}. Quantity: {}. Unit: {}.\n\n## Raw, correction and corrected proposal\n\nTarget: {} (`{}`), registered {}, outcome due {}.\n\n| Quantity | Value |\n|---|---|\n| Unchanged raw Gaussian | {} |\n| Raw central interval | {} |\n| {mean_label} | {} |\n| {spread_label} | {} |\n| {adjustment_label} | {} |\n| {inflation_label} | {} |\n| Corrected Gaussian proposal | {} |\n| Corrected central interval | {} |\n\nIntervals use alpha {}. {explanation}\n\n## Complete selected training population\n\nRaw hits: {}/{}. Fitted corrected hits: {}/{}; required empirical rank: {}. These are in-sample counts and do not demonstrate calibrated future coverage. Every member of each selected assessment is retained; the selected assessments do not claim to be a complete historical record.\n\n| Forecast | Raw Gaussian | {error_label} | Raw hit | Corrected interval | Corrected hit |\n|---|---|---:|---|---|---|\n",
         report.digest,
