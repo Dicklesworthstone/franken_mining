@@ -14,6 +14,7 @@ members = [
     "crates/fmine-authz",
     "crates/fmine-ledger",
     "crates/fmine-object",
+    "crates/fmine-sync",
     "crates/fmine-numerics",
     "crates/fmine-geom",
     "crates/fmine-optimize",

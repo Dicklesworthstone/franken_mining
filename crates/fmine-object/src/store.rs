@@ -145,15 +145,57 @@ impl CasStore {
     /// Verify EVERY chunk referenced by `staged.manifest` on disk and, ONLY if 100% pass,
     /// atomically publish the manifest root (`PO-BED-3` root-last) and clear the `OB-SEAL` marker.
     pub fn publish_staged(&self, staged: &StagedObject) -> Result<CasManifest, CasError> {
-        staged.manifest.validate()?;
-        for cref in &staged.manifest.chunks {
+        let published = self.publish_manifest_if_complete(&staged.manifest)?;
+        let _ = fs::remove_file(&staged.staging_marker);
+        Ok(published)
+    }
+
+    /// Persist one chunk into the content-addressed chunk pool after verifying `sha256(data) == expected`
+    /// (`BD-106` streaming drain). Never publishes any manifest root (`PO-BED-3`).
+    pub fn put_verified_chunk(&self, expected: Digest32, data: &[u8]) -> Result<bool, CasError> {
+        let actual = sha256(data);
+        if actual != expected {
+            return Err(CasError::ChunkDigestMismatch { expected, actual });
+        }
+        let path = self.chunk_path(&expected);
+        if path.is_file() {
+            let existing = fs::read(&path).map_err(|e| CasError::Io {
+                operation: "read_existing_chunk",
+                detail: format!("{}: {e}", path.display()),
+            })?;
+            let disk_actual = sha256(&existing);
+            if disk_actual != expected {
+                return Err(CasError::ChunkDigestMismatch {
+                    expected,
+                    actual: disk_actual,
+                });
+            }
+            return Ok(false);
+        }
+        write_atomic(&path, data)?;
+        Ok(true)
+    }
+
+    /// Verify EVERY chunk referenced by `manifest` on disk and, ONLY if 100% pass, atomically
+    /// publish the manifest root (`PO-BED-3` root-last).
+    pub fn publish_manifest_if_complete(
+        &self,
+        manifest: &CasManifest,
+    ) -> Result<CasManifest, CasError> {
+        manifest.validate()?;
+        for cref in &manifest.chunks {
             self.verify_chunk_on_disk(cref)?;
         }
-        let manifest_bytes = staged.manifest.to_bytes()?;
-        let final_path = self.manifest_path(&staged.manifest.root_digest);
+        let manifest_bytes = manifest.to_bytes()?;
+        let final_path = self.manifest_path(&manifest.root_digest);
         write_atomic(&final_path, &manifest_bytes)?;
-        let _ = fs::remove_file(&staged.staging_marker);
-        Ok(staged.manifest.clone())
+        Ok(manifest.clone())
+    }
+
+    /// Returns `true` iff `root` has been published root-last into `manifests/`.
+    #[must_use]
+    pub fn has_manifest(&self, root: &Digest32) -> bool {
+        self.manifest_path(root).is_file()
     }
 
     /// Stage all chunks and publish root-last in one call (`PO-BED-3`).

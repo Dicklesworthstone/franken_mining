@@ -1,0 +1,18 @@
+[package]
+name = "fmine-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Bedrock S1 replication: chunk want/have manifests, QUIC/TLS ATP transport policy, version vectors, SyncCert, residency planner, gluing gate, and OB-SEAL receipts (§26)."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-authz = { path = "../fmine-authz" }
+fmine-ledger = { path = "../fmine-ledger" }
+fmine-object = { path = "../fmine-object" }
+
+[lints]
+workspace = true

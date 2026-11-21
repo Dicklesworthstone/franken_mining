@@ -83,7 +83,19 @@ to = "fmine-core"
 from = "fmine-array"
 to = "fmine-units"
 
-# Permitted intra-layer edges inside K0 / V / U / E (strict DAG):
+# Permitted intra-layer edges inside S1 / K0 / V / U / E (strict DAG):
+[[allowed_same_layer_edge]]
+from = "fmine-sync"
+to = "fmine-object"
+
+[[allowed_same_layer_edge]]
+from = "fmine-sync"
+to = "fmine-authz"
+
+[[allowed_same_layer_edge]]
+from = "fmine-sync"
+to = "fmine-ledger"
+
 [[allowed_same_layer_edge]]
 from = "fmine-calib"
 to = "fmine-numerics"
