@@ -51,7 +51,7 @@ fn fixture() -> PathBuf {
     ] {
         std::fs::write(root.join(path), text).expect("synthetic source");
     }
-    root
+    std::fs::canonicalize(&root).expect("canonical temp root")
 }
 
 fn arguments() -> Vec<String> {

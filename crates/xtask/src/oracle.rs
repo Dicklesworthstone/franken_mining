@@ -115,6 +115,9 @@ fn files_under(dir: &Path) -> Result<Vec<PathBuf>, Vec<String>> {
                 .path();
             if path.is_dir() {
                 stack.push(path);
+            } else if path.file_name().is_some_and(|n| n == ".DS_Store") {
+                // macOS Finder metadata is not an oracle fixture.
+                continue;
             } else {
                 out.push(path);
             }
@@ -781,6 +784,9 @@ mod tests {
             "{err:?}"
         );
         write(&dir.join("small.upit"), "abc");
+        // OS metadata files such as macOS .DS_Store are ignored, while real fixtures still need records.
+        write(&root.join(FIXTURES_DIR).join(".DS_Store"), "finder");
+        assert_eq!(check_capture_records(&root), Ok(1));
         // A fixture with no record, and a record with no fixture.
         write(&dir.join("big.upit"), "abc");
         write(

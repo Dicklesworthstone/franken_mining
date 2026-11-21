@@ -1,6 +1,8 @@
 //! BD-329.S2 slice: source-to-report citation integrity with explicit mutation controls.
 //! Invented workbook answers establish implementation behavior, not an issuer-data gate.
 
+#![allow(clippy::expect_used)]
+
 use fmine_core::hash::Digest32;
 use fmine_io::xlsx::MinimalCell;
 use fmine_public::aisc::{Calc, OperandRole, OperandValue};
@@ -38,7 +40,12 @@ fn numeric_cell(report: &PublicAssuranceReport) -> (usize, String) {
 fn valid_source_claims_and_existing_refusals_are_preserved() {
     let report = fixture();
     assert!(!report.public_claims.cells.is_empty());
-    assert!(report.instances.iter().any(|i| matches!(i.calc, Calc::None)));
+    assert!(
+        report
+            .instances
+            .iter()
+            .any(|i| matches!(i.calc, Calc::None))
+    );
     assert!(report.instances.iter().any(|i| i.state.code() == "v"));
     assert!(
         report
@@ -57,8 +64,15 @@ fn raw_and_displayed_numeric_mutations_name_the_exact_payload_path() {
     for displayed_only in [false, true] {
         let mut report = fixture();
         let (index, at) = numeric_cell(&report);
-        let cell = report.public_claims.cells.get_mut(&at).expect("numeric cell");
-        if let PublicValue::Number { stored, displayed, .. } = &mut cell.claim.value {
+        let cell = report
+            .public_claims
+            .cells
+            .get_mut(&at)
+            .expect("numeric cell");
+        if let PublicValue::Number {
+            stored, displayed, ..
+        } = &mut cell.claim.value
+        {
             if displayed_only {
                 *displayed = Ok("999999".into());
             } else {
@@ -78,7 +92,11 @@ fn missing_digest_anchor_and_rebound_vintage_refuse() {
     for case in 0..3 {
         let mut report = fixture();
         let (index, at) = numeric_cell(&report);
-        let cell = report.public_claims.cells.get_mut(&at).expect("numeric cell");
+        let cell = report
+            .public_claims
+            .cells
+            .get_mut(&at)
+            .expect("numeric cell");
         let (field, kind) = match case {
             0 => {
                 cell.key.reporting_vintage.file_sha256.clear();
@@ -105,7 +123,13 @@ fn missing_digest_anchor_and_rebound_vintage_refuse() {
 fn a_semantic_key_cannot_reuse_another_claims_content_address() {
     let mut report = fixture();
     let (index, at) = numeric_cell(&report);
-    report.public_claims.cells.get_mut(&at).expect("cell").key.subject = "Another site".into();
+    report
+        .public_claims
+        .cells
+        .get_mut(&at)
+        .expect("cell")
+        .key
+        .subject = "Another site".into();
     has(
         &report,
         &format!("$.public_claims.cells[{index}].claim_id"),
@@ -117,8 +141,12 @@ fn a_semantic_key_cannot_reuse_another_claims_content_address() {
 fn missing_unregistered_and_duplicate_source_locators_refuse() {
     let mut report = fixture();
     let (index, at) = numeric_cell(&report);
-    report.public_claims.cells.get_mut(&at).expect("cell").locator =
-        "unregistered.xlsx:S!A1".into();
+    report
+        .public_claims
+        .cells
+        .get_mut(&at)
+        .expect("cell")
+        .locator = "unregistered.xlsx:S!A1".into();
     has(
         &report,
         &format!("$.public_claims.cells[{index}].at"),
@@ -129,7 +157,11 @@ fn missing_unregistered_and_duplicate_source_locators_refuse() {
     let source = report.sources[0].clone();
     let index = report.sources.len();
     report.sources.push(source);
-    has(&report, &format!("$.sources[{index}].file"), "duplicate_source");
+    has(
+        &report,
+        &format!("$.sources[{index}].file"),
+        "duplicate_source",
+    );
 
     let mut report = fixture();
     report.sources.clear();
@@ -198,7 +230,9 @@ fn cached_sums_and_numeric_line_counts_need_their_original_ancestry() {
         .iter()
         .position(|i| matches!(i.calc, Calc::Footing { .. }))
         .expect("footing");
-    report.instances[index].operands.retain(|o| o.role != OperandRole::Line);
+    report.instances[index]
+        .operands
+        .retain(|o| o.role != OperandRole::Line);
     has(
         &report,
         &format!("$.instances[{index}].cited.derived"),
@@ -212,28 +246,78 @@ fn missing_source_cells_are_retained_as_missing_without_fabricating_a_number() {
     let (_, at) = numeric_cell(&report);
     let mut key = report.public_claims.cells[&at].key.clone();
     let file = at.split_once(':').expect("source locator").0;
-    let source = report.sources.iter().find(|s| s.file_name == file).expect("source");
+    let source = report
+        .sources
+        .iter()
+        .find(|s| s.file_name == file)
+        .expect("source");
     let sheet = &source.workbook.sheets[0];
     assert!(sheet.cell(999, 26).is_none());
     key.line.label = "declared missing observation".into();
-    let missing = key::public_claim(&source.workbook, &sheet.name, "Z999", key, PublicValue::Missing);
-    report.public_claims.cells.insert(missing.locator.clone(), missing);
+    let missing = key::public_claim(
+        &source.workbook,
+        &sheet.name,
+        "Z999",
+        key,
+        PublicValue::Missing,
+    );
+    report
+        .public_claims
+        .cells
+        .insert(missing.locator.clone(), missing);
     validate_report(&report).expect("a supported missing value remains a missing value");
 }
 
 #[test]
 fn copied_mine_stats_claims_and_their_digest_are_checked() {
-    let mut report = fixture();
-    assert!(!report.mine_stats_claims.claims.is_empty());
+    let text = |s: &str| MinimalCell::Text(s.into());
+    let bytes = fmine_io::xlsx::build_minimal_xlsx(&[fmine_io::xlsx::MinimalSheet {
+        name: "Minestats1".into(),
+        hidden: false,
+        cells: vec![
+            ("A1".into(), text("Mine Statistics (Gold)")),
+            ("B2".into(), text("Site A (61.5%)1")),
+            ("A3".into(), text("For the three months ended March 31,")),
+            ("B3".into(), MinimalCell::Number(2030.0)),
+            ("A4".into(), text("Recovery rate (percent)")),
+            ("B4".into(), MinimalCell::Number(88.5)),
+        ],
+    }]);
+    let workbook = fmine_io::xlsx::Workbook::from_bytes("Synthetic_Mine_Stats.xlsx", &bytes)
+        .expect("workbook");
+    let source = fmine_public::LoadedSource {
+        file_name: "Synthetic_Mine_Stats.xlsx".into(),
+        kind: fmine_public::sources::SourceKind::MineStats,
+        quarter: "2030Q1".into(),
+        url: "https://example.invalid/Synthetic_Mine_Stats.xlsx".into(),
+        url_basis: "synthetic".into(),
+        bytes: bytes.len() as u64,
+        census: workbook.cell_census(),
+        workbook,
+    };
+    let mut profile = fmine_public::synthetic::synthetic_profile();
+    profile.subjects = vec!["Site A".into()];
+    profile.reconstructions.clear();
+    profile.shares.clear();
+    profile.regions.clear();
+    let base = fmine_public::assess(&profile, fmine_public::Lane::Synthetic, vec![source]);
+    validate_report(&base).expect("valid synthetic Mine Stats report");
+    assert!(!base.mine_stats_claims.claims.is_empty());
+
+    let mut report = base.clone();
     report.mine_stats_claims.claims[0].key.subject = "Unbound copy".into();
     has(
         &report,
         "$.mine_stats_claims.claims[0]",
         "noncanonical_mine_stats_claim",
     );
-    let mut report = fixture();
+    let mut report = base;
     report.mine_stats_claims.digest = Digest32([0; 32]);
-    has(&report, "$.mine_stats_claims.digest", "projection_digest_mismatch");
+    has(
+        &report,
+        "$.mine_stats_claims.digest",
+        "projection_digest_mismatch",
+    );
 }
 
 #[test]
@@ -265,21 +349,24 @@ fn additional_interpretation_anchors_survive_the_primary_source_check() {
 fn every_loader_placeholder_token_preserves_the_existing_arithmetic() {
     let denominator = fixture().instances.len();
     for token in ["-", "–", "—", "n/a", "N/A", "NA", "na", " NA "] {
-        let report = run_synthetic_assurance(&[(
-            "B7".into(),
-            MinimalCell::Text(token.into()),
-        )])
-        .expect("a loader-recognized placeholder is an exact zero line");
+        let report = run_synthetic_assurance(&[("B7".into(), MinimalCell::Text(token.into()))])
+            .expect("a loader-recognized placeholder is an exact zero line");
         assert_eq!(report.instances.len(), denominator);
         assert!(report.instances.iter().any(|instance| {
             instance.subject == "Site A" && matches!(instance.calc, Calc::Footing { .. })
         }));
-        assert!(report.instances.iter().flat_map(|i| &i.operands).any(|operand| {
-            operand.file == "Synthetic_AISC.xlsx"
-                && operand.sheet == "Q1 2030"
-                && operand.cell == "B7"
-                && matches!(&operand.value, OperandValue::Token(stored) if stored == token)
-        }));
+        assert!(
+            report
+                .instances
+                .iter()
+                .flat_map(|i| &i.operands)
+                .any(|operand| {
+                    operand.file == "Synthetic_AISC.xlsx"
+                        && operand.sheet == "Q1 2030"
+                        && operand.cell == "B7"
+                        && matches!(&operand.value, OperandValue::Token(stored) if stored == token)
+                })
+        );
         validate_report(&report).expect("placeholder semantics agree with the loader");
     }
 }

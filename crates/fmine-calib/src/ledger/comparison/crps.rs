@@ -1,8 +1,8 @@
 //! DESIGN: exact paired CRPS and global missing-outcome bounds for finite distributions.
-//! With total mass one on each side, d/dy(CRPS(F,y)-CRPS(G,y)) = 2(F(y)-G(y)).
-//! This derivative vanishes outside their combined support. Between atoms it is constant, so
-//! every global extremum is attained at an atom. Sorting plus two linear sweeps avoids an
-//! O(n²) pair-distance calculation or rescoring the distributions at every candidate outcome.
+//! Determinism: Exact
+//! With unit mass on each side, d/dy(CRPS(F,y)-CRPS(G,y)) = 2(F(y)-G(y)), constant between atoms
+//! and zero outside their combined support, so every global extremum occurs at an atom; sorting
+//! plus two linear sweeps avoids O(n²) pair distances or rescoring at candidate outcomes.
 
 use fmine_evidence::Refusal;
 use fmine_units::{ExactQty, UnitsError};

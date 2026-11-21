@@ -73,9 +73,10 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 74
+[verbs] 78
 decide card
 decide production
+decide investment
 decide journal init
 decide journal record
 decide journal show
@@ -97,6 +98,7 @@ reserve replacement
 guidance completion
 mirror
 track-record
+track-record clusters
 recovery gap
 lint
 forecast assess
@@ -104,6 +106,8 @@ forecast record build
 forecast record score
 forecast journal init
 forecast journal register
+forecast journal register-assumption
+forecast journal resolve-assumption
 forecast journal freeze
 forecast journal outcome
 forecast journal resolve

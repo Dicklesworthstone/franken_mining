@@ -2,6 +2,8 @@
 //! Determinism: Exact
 //! The exact expected bounds below come from displayed half-step arithmetic, independently of the kernel.
 
+#![allow(clippy::unwrap_used)]
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -412,7 +414,7 @@ fn copper_kt_sales_and_registered_label_corrections_use_exact_source_bound_conve
             for (quarter, sources) in window
                 .quarters
                 .iter()
-                .zip(window.source_claims.chunks_exact(3))
+                .zip(window.source_claims.as_chunks::<3>().0)
             {
                 let original = &sources[1];
                 original.claim.check_id().unwrap();
