@@ -844,8 +844,36 @@ The synthetic `tests/plant/rtd_inverse_unmeasured_opening.toml` declares one tan
 the unmeasured second feed of 4 kg, retaining all correlations in the resulting 5×5 covariance.
 Kernel tests additionally compare a redundant fit against an independently eliminated one-row GLS
 system and recover two distinct tank stocks from Erlang survival formulas. These are conditional
-known answers; they supply no real-plant validation, uncertain transport parameters, mixed measured
-and unmeasured opening tanks, or inferred dead inventory.
+known answers; they supply no real-plant validation, uncertain transport parameters or inferred dead inventory.
+
+### Mixed measured and unmeasured active opening stocks (DESIGN; BD-313)
+
+`rtd::inverse::deconvolve_mixed_opening` accepts `Claim<MixedOpening>` with one
+`Option<MaterialAmounts>` per active tank. `Some` retains a genuine stock observation; `None` declares
+an unmeasured stock without an amount, covariance entry or prior. Both kinds must be present.
+`OpeningTreatment::Mixed` uses the same partial GLS and scalar replay as the other inference modes.
+Measured stocks enter the genuine observation population in tank order before the chronological flows;
+the latent order is missing feeds followed by unmeasured stocks in tank order. Every opening/flow
+correlation remains in the supplied full covariance and the fitted joint covariance. Separate response
+columns preserve each tank's physical position even when the measured tanks are not a leading group.
+
+The strict `fmine.plant-rtd-inverse.v4` worksheet requires `fixed_transport = "true"`,
+`opening_treatment = "mixed"` and a row for every active tank. An unmeasured row contains only `tank`
+and `element_kg = "unmeasured"`; measured and dead rows require exact `dry_kg`, `water_kg` and
+`element_kg`. Covariance keys `opening/<one-based-tank>` are admissible only for measured tanks.
+The `RTIM/1` source declaration binds the complete measured/unmeasured pattern, its genuine amounts,
+element, boundary, opening time and fixed dead inventory. `RTIE/4` and `RTIR/4` bind the mixed treatment
+without changing v1–v3 source or receipt encodings. `InverseOpening::mixed()` exposes the immutable
+original source; inferred JSON coordinates keep null observation-source IDs and a declaration Claim ID.
+
+`tests/plant/rtd_inverse_mixed_opening.toml` is a synthetic two-tank example with measured second stock
+3 kg and first feed 10 kg. Independent Erlang equations recover first stock 2 kg and missing second feed
+4 kg; kernel regressions compare every entry of the 6×6 covariance with the analytical linear map.
+A separate redundant example checks the full GLS posterior and gross-error statistic after analytic
+elimination of the unknown stock. Rank deficiency refuses 104; negative fitted mass and gross-error
+failures retain rejected diagnostics. Missing stocks never acquire zero observations or priors.
+This remains conditional on fixed transport and the submitted error model; it does not infer dead
+inventory, qualify a plant response or establish recovery calibration. Broader BD-313 gates remain open.
 
 ## 25. Shared-scenario processing production (DESIGN; BD-176/181/182, plan §17.4)
 

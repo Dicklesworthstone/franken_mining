@@ -194,7 +194,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Inputs remain Assumed and Internal; synthetic fixtures and direct CLI-library checks are in
   `tests/plant/rtd_*.toml` and `xtask/tests/plant_rtd.rs`.
 - DESIGN (BD-313): `plant rtd-infer --input <worksheet.toml>` reads strict
-  `fmine.plant-rtd-inverse.v1`, `.v2` or `.v3` declarations and calls the pure known-kernel inverse adapter.
+  `fmine.plant-rtd-inverse.v1`, `.v2`, `.v3` or `.v4` declarations and calls the pure known-kernel inverse adapter.
   Up to 32 contiguous intervals declare outlet elemental kilograms and either a genuine measured
   feed or explicit `unmeasured`; unknown feeds receive no invented observation or prior variance.
   The complete covariance of genuine observations includes every cross-period pair. The declared
@@ -203,12 +203,19 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   V3 requires `opening_treatment = "unmeasured"` and only the fixed dead-stock opening row. It forbids
   active opening amounts and observation/covariance rows for unknown stocks. Identifiable opening stocks
   and missing feeds are inferred jointly without priors; unresolved attribution refuses `FMINE-REF-104`.
+  V4 requires `fixed_transport = "true"`, `opening_treatment = "mixed"` and an explicit row for every
+  active tank, with both measured and unmeasured stocks present. An unmeasured row contains only `tank`
+  and `element_kg = "unmeasured"`; measured and fixed dead rows carry all exact mass fields. Only measured
+  tanks receive `opening/<one-based-tank>` covariance coordinates, preceding the chronological flows.
+  The mixed source and full correlated solve retain each tank's identity, with missing feeds and then
+  unmeasured stocks in latent order. V4 has separate source/receipt encodings; v1–v3 remain unchanged.
   Inferred coordinates retain null observation-source IDs and their distinct declaration Claim reference.
   Dead stock remains fixed. JSON and Markdown
   retain conditional opening/feed estimates, full joint covariance, response matrices, independent forward
   replay, conservation and gross-error diagnostics. No redundancy is reported as unavailable,
   never a passing test. Negative or gross-error fits retain rejected diagnostics and no admitted
-  Claim. Assumptions remain Assumed, Internal and uncalibrated. Synthetic independent analytic
+  Claim. Assumptions remain Assumed, Internal and uncalibrated; no uncertain-kernel fit, inferred dead
+  inventory or empirical plant/recovery qualification is supplied. Synthetic independent analytic
   answers and strict refusal checks live in `tests/plant/rtd_inverse*.toml` and
   `xtask/tests/plant_rtd_inverse.rs`.
 

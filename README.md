@@ -345,6 +345,7 @@ outlet observations under a declared transport model:
 cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse.toml --json
 cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_opening.toml --format markdown
 cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_unmeasured_opening.toml --json
+cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_mixed_opening.toml --json
 ```
 
 DESIGN: the v1 worksheet fixes initial stocks. The v2 worksheet instead declares every active tank's
@@ -359,6 +360,16 @@ them. It admits no invented opening quantity, variance or prior. The synthetic v
 first feed of **10 kg** and two outlet measurements to recover **2 kg** of opening stock and a **4 kg**
 second feed, with their joint covariance. Unknown coordinates retain null observation-source IDs and a
 separate declaration reference. Unidentifiable histories refuse rather than selecting an arbitrary split.
+
+DESIGN: v4 supports a mixture of measured and unmeasured opening tanks with
+`opening_treatment = "mixed"`. Every active tank has a row. A measured tank supplies its exact masses;
+an unmeasured tank supplies only `tank` and `element_kg = "unmeasured"`. Both kinds must be present,
+and covariance entries name only genuine measurements. The synthetic two-tank example measures the
+second opening stock at **3 kg** and the first feed at **10 kg**. Independent Erlang equations give an
+unmeasured first opening stock of **2 kg** and second feed of **4 kg**, with a full **6×6 joint covariance**.
+Measured stocks retain their source Claims; inferred stocks retain their declaration references without
+becoming observations. No missing stock is replaced by zero or a prior, and non-identifiable histories
+still refuse. Existing v1–v3 input and receipt formats remain available.
 
 The synthetic measured-opening example starts with a **2 kg** stock measurement and reconstructs
 **10 kg and 4 kg** interval feeds. Its declared correlated errors give feed variances of approximately

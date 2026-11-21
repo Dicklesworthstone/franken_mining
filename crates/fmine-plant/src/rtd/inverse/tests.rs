@@ -1141,3 +1141,301 @@ fn unmeasured_opening_source_policy_taint_and_cancellation_are_binding() {
             .contains("cancelled")
     );
 }
+
+fn mixed_opening_claim(value: MixedOpening) -> Claim<MixedOpening> {
+    let tag = value.canonical_tag();
+    source(
+        MIXED_OPENING_METRIC,
+        value,
+        tag,
+        AdditivityClass::NonAdditive,
+    )
+}
+
+fn mixed_input(
+    feeds: &[Option<&str>],
+    outlets: &[&str],
+    covariance: &[f64],
+) -> (Inputs, Claim<MixedOpening>, Claim<InverseErrorModel>) {
+    let mut input = setup(feeds, outlets);
+    let mut model = input.0.value.clone();
+    model.tanks = 2;
+    model.volume_m3 = CubicMetres::new(2.0);
+    input.0 = model_claim(model);
+    let opening = mixed_opening_claim(MixedOpening {
+        boundary: input.0.value.scope.boundary.clone(),
+        at_ns: 0,
+        element: element(),
+        tanks: vec![None, Some(masses("3"))],
+        dead: input.1.value.dead.clone(),
+    });
+    let mut errors = input.3.value.clone();
+    errors.opening_treatment = OpeningTreatment::Mixed;
+    errors.opening_source = opening.claim_id;
+    errors.model_source = input.0.claim_id;
+    errors.observations = observation_order_with_mixed_opening(&opening, &input.2).unwrap();
+    errors.covariance = covariance
+        .iter()
+        .copied()
+        .map(KilogramsSquared::new)
+        .collect();
+    (input, opening, error_claim(errors))
+}
+
+#[test]
+fn mixed_opening_and_missing_feed_preserve_the_full_analytic_joint_covariance() {
+    // Independent two-tank closed forms, a=exp(-1):
+    // O0=(1-2a)S0+(1-a)S1+(3a-1)F0;
+    // O1=(2a-3a²)S0+(a-a²)S1+(2-6a+4a²)F0+(3a-1)F1.
+    // Only S1 is measured. Exact outlet decimals are evaluated from S=[2,3], F=[10,4].
+    let v = [
+        [0.25, 0.01, -0.02, 0.005],
+        [0.01, 0.04, 0.006, -0.003],
+        [-0.02, 0.006, 0.09, 0.012],
+        [0.005, -0.003, 0.012, 0.16],
+    ];
+    let (mut input, opening, errors) = mixed_input(
+        &[Some("10"), None],
+        &[
+            "3.461227146943173396697046714",
+            "5.112336692305858263297509768",
+        ],
+        &v.into_iter().flatten().collect::<Vec<_>>(),
+    );
+    let result = deconvolve_mixed_opening(&input.0, &opening, &input.2, &errors, || false).unwrap();
+    let r = &result.admitted_claim().unwrap().value;
+    assert_eq!(r.observations.len(), 4);
+    assert_eq!(r.opening_coordinate_indices, [5, 0]);
+    assert_eq!(r.feed_coordinate_indices, [1, 4]);
+    assert_eq!(r.outlet_coordinate_indices, [2, 3]);
+    assert_eq!(r.observations[0].role, ObservationRole::OpeningTank(1));
+    assert!(
+        !r.observations
+            .iter()
+            .any(|o| o.role == ObservationRole::OpeningTank(0))
+    );
+    assert_eq!(r.observations[0].source, opening.claim_id);
+    close(r.fitted_opening_kg[0].value(), 2.0, 3e-13);
+    close(r.fitted_opening_kg[1].value(), 3.0, 3e-13);
+    close(r.fitted_feed_kg[1].value(), 4.0, 3e-13);
+    assert_eq!(r.gross_error, GrossErrorDiagnostic::NoRedundancy);
+    let a = (-1.0_f64).exp();
+    let g0 = 1.0 - 2.0 * a;
+    let g1 = 1.0 - a;
+    let h = 3.0 * a - 1.0;
+    let next0 = 2.0 * a - 3.0 * a * a;
+    let next1 = a - a * a;
+    let lag = 2.0 - 6.0 * a + 4.0 * a * a;
+    let s = [-g1 / g0, -h / g0, 1.0 / g0, 0.0];
+    let f = [
+        (-next0 * s[0] - next1) / h,
+        (-next0 * s[1] - lag) / h,
+        -next0 * s[2] / h,
+        1.0 / h,
+    ];
+    let t = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+        f,
+        s,
+    ];
+    for (i, row) in t.iter().enumerate() {
+        for (j, column) in t.iter().enumerate() {
+            let expected: f64 = (0..4)
+                .map(|k| (0..4).map(|l| row[k] * v[k][l] * column[l]).sum::<f64>())
+                .sum();
+            close(r.posterior_covariance[i * 6 + j].value(), expected, 2e-12);
+        }
+    }
+    close(r.whole_window_residual_kg.value(), 0.0, 3e-14);
+    assert_eq!(result.opening().mixed(), Some(&opening));
+    assert!(
+        result
+            .admitted_claim()
+            .unwrap()
+            .parents
+            .contains(&opening.claim_id)
+    );
+    input.2.reverse();
+    assert_eq!(
+        result,
+        deconvolve_mixed_opening(&input.0, &opening, &input.2, &errors, || false).unwrap()
+    );
+}
+
+#[test]
+fn mixed_opening_redundant_fit_matches_an_independently_eliminated_constraint() {
+    let diagonal = [0.25, 0.04, 0.09, 0.16, 0.25];
+    let u = [0.1, 0.05, -0.08, 0.03, 0.09];
+    let v: Vec<_> = (0..25)
+        .map(|i| u[i / 5] * u[i % 5] + if i / 5 == i % 5 { diagonal[i / 5] } else { 0.0 })
+        .collect();
+    let (input, opening, errors) = mixed_input(
+        &[Some("10"), Some("4")],
+        &[
+            "3.561227146943173396697046714",
+            "5.042336692305858263297509768",
+        ],
+        &v,
+    );
+    let result = deconvolve_mixed_opening(&input.0, &opening, &input.2, &errors, || false).unwrap();
+    let r = &result.admitted_claim().unwrap().value;
+    let a = (-1.0_f64).exp();
+    let g0 = 1.0 - 2.0 * a;
+    let g1 = 1.0 - a;
+    let h = 3.0 * a - 1.0;
+    let ratio = (2.0 * a - 3.0 * a * a) / g0;
+    // Eliminate the unknown first tank from the two balance equations. One
+    // measured-only GLS constraint remains on [S1,F0,O0,F1,O1].
+    let b = [
+        ratio * g1 - (a - a * a),
+        ratio * h - (2.0 - 6.0 * a + 4.0 * a * a),
+        -ratio,
+        -h,
+        1.0,
+    ];
+    let w: Vec<_> = (0..5)
+        .map(|i| (0..5).map(|j| v[i * 5 + j] * b[j]).sum::<f64>())
+        .collect();
+    let variance: f64 = b.iter().zip(&w).map(|(b, w)| b * w).sum();
+    let residual: f64 = b
+        .iter()
+        .zip(&r.observed_kg)
+        .map(|(b, y)| b * y.value())
+        .sum();
+    let mut posterior = [0.0; 25];
+    for i in 0..5 {
+        close(
+            r.measured_adjustments_kg[i].value(),
+            -w[i] * residual / variance,
+            3e-14,
+        );
+        close(
+            r.estimates_kg[i].value(),
+            r.observed_kg[i].value() - w[i] * residual / variance,
+            3e-14,
+        );
+        for j in 0..5 {
+            posterior[i * 5 + j] = v[i * 5 + j] - w[i] * w[j] / variance;
+            close(
+                r.posterior_covariance[i * 6 + j].value(),
+                posterior[i * 5 + j],
+                3e-14,
+            );
+            close(
+                r.measured_adjustment_covariance[i * 5 + j].value(),
+                w[i] * w[j] / variance,
+                3e-14,
+            );
+        }
+    }
+    let s = [-g1 / g0, -h / g0, 1.0 / g0, 0.0, 0.0];
+    let stock_variance: f64 = (0..5)
+        .map(|i| {
+            (0..5)
+                .map(|j| s[i] * posterior[i * 5 + j] * s[j])
+                .sum::<f64>()
+        })
+        .sum();
+    close(r.posterior_covariance[35].value(), stock_variance, 1e-13);
+    for j in 0..5 {
+        let cross: f64 = (0..5).map(|i| s[i] * posterior[i * 5 + j]).sum();
+        close(r.posterior_covariance[30 + j].value(), cross, 5e-14);
+        close(r.posterior_covariance[j * 6 + 5].value(), cross, 5e-14);
+    }
+    let GrossErrorDiagnostic::Available {
+        chi_square,
+        degrees_of_freedom,
+    } = r.gross_error
+    else {
+        panic!("one redundant constraint");
+    };
+    assert_eq!(degrees_of_freedom, 1);
+    close(chi_square, residual * residual / variance, 3e-14);
+    let mut strict = errors.value.clone();
+    strict.global_chi_square_limit = chi_square / 2.0;
+    let rejected =
+        deconvolve_mixed_opening(&input.0, &opening, &input.2, &error_claim(strict), || false)
+            .unwrap();
+    assert_eq!(rejected.refusal().unwrap().code, "FMINE-REF-101");
+    assert!(rejected.admitted_claim().is_err());
+    assert_eq!(rejected.diagnostics().estimates_kg, r.estimates_kg);
+}
+
+#[test]
+fn mixed_opening_refuses_unobservable_stocks_and_retains_negative_fit_diagnostics() {
+    let covariance = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    let (mut input, opening, errors) = mixed_input(&[Some("10")], &["0"], &covariance);
+    let negative =
+        deconvolve_mixed_opening(&input.0, &opening, &input.2, &errors, || false).unwrap();
+    assert_eq!(negative.refusal().unwrap().code, "FMINE-REF-109");
+    assert!(negative.diagnostics().fitted_opening_kg[0].value() < 0.0);
+    assert!(negative.admitted_claim().is_err());
+    let mut model = input.0.value.clone();
+    model.bypass_fraction = 1.0;
+    input.0 = model_claim(model);
+    let mut bypass_errors = errors.value.clone();
+    bypass_errors.model_source = input.0.claim_id;
+    assert_eq!(
+        deconvolve_mixed_opening(
+            &input.0,
+            &opening,
+            &input.2,
+            &error_claim(bypass_errors),
+            || false
+        )
+        .unwrap_err()
+        .code,
+        "FMINE-REF-104"
+    );
+    let (input, opening, errors) = mixed_input(&[None], &["5"], &[1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(
+        deconvolve_mixed_opening(&input.0, &opening, &input.2, &errors, || false)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-104"
+    );
+}
+
+#[test]
+fn mixed_opening_population_source_and_treatment_are_bound_without_filling_missing_stocks() {
+    let (input, opening, errors) = mixed_input(
+        &[Some("10")],
+        &["4"],
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    );
+    let mut changed = opening.clone();
+    changed.value.tanks[0] = Some(masses("0"));
+    assert_eq!(
+        deconvolve_mixed_opening(&input.0, &changed, &input.2, &errors, || false)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-507"
+    );
+    for tanks in [vec![None, None], vec![Some(masses("0")), Some(masses("3"))]] {
+        let mut value = opening.value.clone();
+        value.tanks = tanks;
+        assert_eq!(
+            observation_order_with_mixed_opening(&mixed_opening_claim(value), &input.2)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-105"
+        );
+    }
+    let mut wrong = errors.value.clone();
+    wrong.opening_treatment = OpeningTreatment::Measured;
+    assert_eq!(
+        deconvolve_mixed_opening(&input.0, &opening, &input.2, &error_claim(wrong), || false)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-105"
+    );
+    assert!(
+        deconvolve_mixed_opening(&input.0, &opening, &input.2, &errors, || true)
+            .unwrap_err()
+            .what
+            .contains("cancelled")
+    );
+}

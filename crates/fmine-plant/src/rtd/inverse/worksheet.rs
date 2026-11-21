@@ -21,9 +21,10 @@ use crate::rtd::{
 
 use super::{
     ERROR_MODEL_METRIC, INPUT_METRIC, InverseErrorModel, InverseInterval, InverseOpening,
-    InverseOutcome, MAX_COORDINATES, MAX_INTERVALS, ObservationRole, OpeningTreatment,
-    UNMEASURED_OPENING_METRIC, UnmeasuredOpening, deconvolve, deconvolve_unmeasured_opening,
-    observation_order, observation_order_with_opening,
+    InverseOutcome, MAX_COORDINATES, MAX_INTERVALS, MIXED_OPENING_METRIC, MixedOpening,
+    ObservationRole, OpeningTreatment, UNMEASURED_OPENING_METRIC, UnmeasuredOpening, deconvolve,
+    deconvolve_mixed_opening, deconvolve_unmeasured_opening, observation_order,
+    observation_order_with_mixed_opening, observation_order_with_opening,
 };
 
 type Result<T> = std::result::Result<T, Refusal>;
@@ -32,9 +33,11 @@ type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
 pub const SCHEMA: &str = "fmine.plant-rtd-inverse.v1";
 pub const MEASURED_OPENING_SCHEMA: &str = "fmine.plant-rtd-inverse.v2";
 pub const UNMEASURED_OPENING_SCHEMA: &str = "fmine.plant-rtd-inverse.v3";
+pub const MIXED_OPENING_SCHEMA: &str = "fmine.plant-rtd-inverse.v4";
 pub const MAX_BYTES: u64 = 1024 * 1024;
 pub const NO_CLAIM: &str = "Conditional deconvolution of one conservative elemental channel under a fixed declared tank-train response and integrated slurry volumes. Active opening stocks are explicitly fixed or measured with the declared joint covariance; dead stock remains fixed. Only genuine opening, outlet and optional feed measurements enter that covariance. Unmeasured feeds have no invented observation or regularization prior. Submitted values and Gaussian error assumptions remain Assumed, Internal and uncalibrated. No RTD parameter fitting, kernel uncertainty, reactive recovery, sensor-bias identification, empirical calibration, P754 compliance, ledger commit or operating authorization is supplied.";
 pub const UNMEASURED_NO_CLAIM: &str = "Conditional inference of active opening elemental stocks and feed history under a fixed declared tank-train response and integrated slurry volumes. Every active opening stock is explicitly unmeasured; no active-stock amount, observation, covariance or prior is supplied. Only genuine outlet and optional feed measurements enter the covariance. Identifiability is required without regularization; dead inventory remains fixed. Submitted values and Gaussian error assumptions remain Assumed, Internal and uncalibrated. No RTD parameter fitting, kernel uncertainty, reactive recovery, sensor-bias identification, empirical calibration, P754 compliance, ledger commit or operating authorization is supplied.";
+pub const MIXED_NO_CLAIM: &str = "Conditional joint inference of measured and explicitly unmeasured active opening elemental stocks and feed history under a fixed declared tank-train response and integrated slurry volumes. Only genuine opening, outlet and optional feed observations enter the full covariance. Unmeasured stocks and feeds have no invented amount, observation, covariance or prior; identifiability is required without regularization. Dead inventory remains fixed. Submitted values and Gaussian error assumptions remain Assumed, Internal and uncalibrated. No RTD parameter fitting, kernel uncertainty, reactive recovery, sensor-bias identification, empirical calibration, P754 compliance, ledger commit or operating authorization is supplied.";
 pub const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.plant-rtd-inverse.v1\",\"command\":\"plant rtd-infer --input <worksheet.toml>\",",
     "\"input\":\"Regular UTF-8 TOML, at most 1 MiB; exact bytes SHA-256 bound\",",
@@ -42,6 +45,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"optional_fields\":[\"normalized_adjustment_limit\"],",
     "\"measured_opening_schema\":\"fmine.plant-rtd-inverse.v2 replaces fixed_transport_and_opening with fixed_transport=true and opening_treatment=measured; every active opening stock is a genuine observation in the full covariance, dead stock stays fixed\",",
     "\"unmeasured_opening_schema\":\"fmine.plant-rtd-inverse.v3 requires fixed_transport=true and opening_treatment=unmeasured; all active opening stocks are inferred without priors; only the tank=dead opening row is supplied; active opening covariance rows are forbidden\",",
+    "\"mixed_opening_schema\":\"fmine.plant-rtd-inverse.v4 requires fixed_transport=true and opening_treatment=mixed; every active tank has an explicit row, with both measured and unmeasured stocks present; unmeasured rows contain only tank and element_kg=unmeasured, measured/dead rows require dry_kg, water_kg and exact element_kg; only measured tanks enter covariance as opening/<one-based-tank>\",",
     "\"mass_basis\":\"kg-total/all-phases/full-physical-boundary\",",
     "\"opening_rows\":[\"tank\",\"dry_kg\",\"water_kg\",\"element_kg\"],",
     "\"opening\":\"Exactly one explicit stock for each tank in 1..tanks and one tank=dead row; opening_ns equals start_ns\",",
@@ -54,7 +58,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"values\":\"Quoted trimmed strings; masses exact decimals or n/d with a positive denominator; finite model/error parameters\",",
     "\"output\":\"Original source Claims, feed and opening response matrices, fitted opening/feed/outlet masses, full joint covariance, individual adjustments, inventory and conservation residuals\",",
     "\"diagnostics\":\"Zero degrees of freedom means no_redundancy with null chi_square; negative fitted mass and gross-error failure reject while retaining available diagnostics\",",
-    "\"examples\":[\"tests/plant/rtd_inverse.toml\",\"tests/plant/rtd_inverse_opening.toml\",\"tests/plant/rtd_inverse_unmeasured_opening.toml\"]}"
+    "\"examples\":[\"tests/plant/rtd_inverse.toml\",\"tests/plant/rtd_inverse_opening.toml\",\"tests/plant/rtd_inverse_unmeasured_opening.toml\",\"tests/plant/rtd_inverse_mixed_opening.toml\"]}"
 );
 
 fn fail(code: RefusalCode, detail: impl Into<String>) -> Refusal {
@@ -307,11 +311,25 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
                 boolean(get(&top, "fixed_transport")?)?,
             )
         }
+        MIXED_OPENING_SCHEMA => {
+            if top.contains_key("fixed_transport_and_opening")
+                || get(&top, "opening_treatment")?.0 != "mixed"
+            {
+                return Err(bad(
+                    1,
+                    "v4 requires opening_treatment=mixed and fixed_transport, without the v1 policy",
+                ));
+            }
+            (
+                OpeningTreatment::Mixed,
+                boolean(get(&top, "fixed_transport")?)?,
+            )
+        }
         _ => {
             return Err(bad(
                 1,
                 format!(
-                    "schema must be {SCHEMA}, {MEASURED_OPENING_SCHEMA} or {UNMEASURED_OPENING_SCHEMA}"
+                    "schema must be {SCHEMA}, {MEASURED_OPENING_SCHEMA}, {UNMEASURED_OPENING_SCHEMA} or {MIXED_OPENING_SCHEMA}"
                 ),
             ));
         }
@@ -381,22 +399,40 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
     for row in &doc.rows {
         match row.table.as_str() {
             "opening" => {
-                let values = fields(
-                    &row.fields,
-                    &["tank", "dry_kg", "water_kg", "element_kg"],
-                    &[],
-                    row.line,
-                )?;
-                let stock = MaterialAmounts {
-                    dry_solids_kg: quantity(get(&values, "dry_kg")?)?,
-                    water_kg: quantity(get(&values, "water_kg")?)?,
-                    elements_kg: BTreeMap::from([(
-                        element.clone(),
-                        quantity(get(&values, "element_kg")?)?,
-                    )]),
-                };
+                let (required, optional): (&[&str], &[&str]) =
+                    if opening_treatment == OpeningTreatment::Mixed {
+                        (&["tank", "element_kg"], &["dry_kg", "water_kg"])
+                    } else {
+                        (&["tank", "dry_kg", "water_kg", "element_kg"], &[])
+                    };
+                let values = fields(&row.fields, required, optional, row.line)?;
                 let tank = get(&values, "tank")?;
+                let stock = if opening_treatment == OpeningTreatment::Mixed
+                    && get(&values, "element_kg")?.0 == "unmeasured"
+                {
+                    if tank.0 == "dead"
+                        || values.contains_key("dry_kg")
+                        || values.contains_key("water_kg")
+                    {
+                        return Err(bad(
+                            row.line,
+                            "an unmeasured active stock has no supplied amounts; dead stock must remain fixed",
+                        ));
+                    }
+                    None
+                } else {
+                    Some(MaterialAmounts {
+                        dry_solids_kg: quantity(get(&values, "dry_kg")?)?,
+                        water_kg: quantity(get(&values, "water_kg")?)?,
+                        elements_kg: BTreeMap::from([(
+                            element.clone(),
+                            quantity(get(&values, "element_kg")?)?,
+                        )]),
+                    })
+                };
                 if tank.0 == "dead" {
+                    let stock =
+                        stock.ok_or_else(|| bad(row.line, "dead stock must remain fixed"))?;
                     if dead.replace(stock).is_some() {
                         return Err(bad(row.line, "duplicate dead opening stock"));
                     }
@@ -481,11 +517,31 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
             source,
             "unmeasured active elemental opening stocks, fixed dead stock and opening_ns",
         ))
+    } else if opening_treatment == OpeningTreatment::Mixed {
+        let opening = MixedOpening {
+            boundary: scope.boundary.clone(),
+            at_ns,
+            element: element.clone(),
+            tanks: opening_rows.into_values().collect(),
+            dead,
+        };
+        let tag = opening.canonical_tag();
+        InverseOpening::Mixed(source_claim(
+            opening,
+            &tag,
+            MIXED_OPENING_METRIC,
+            AdditivityClass::NonAdditive,
+            source,
+            "measured and explicitly unmeasured active elemental opening stocks, fixed dead stock and opening_ns",
+        ))
     } else {
         let opening = RtdOpening {
             boundary: scope.boundary.clone(),
             at_ns,
-            tanks: opening_rows.into_values().collect(),
+            tanks: opening_rows
+                .into_values()
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| bad(1, "every specified opening stock requires its amounts"))?,
             dead,
         };
         let tag = opening.canonical_tag();
@@ -519,6 +575,7 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
             observation_order_with_opening(value, &intervals, opening_treatment)?
         }
         InverseOpening::Unmeasured(_) => observation_order(&intervals)?,
+        InverseOpening::Mixed(value) => observation_order_with_mixed_opening(value, &intervals)?,
     };
     let mut keys = BTreeMap::new();
     for (i, observation) in observations.iter().enumerate() {
@@ -604,6 +661,9 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
             }
             InverseOpening::Unmeasured(value) => {
                 deconvolve_unmeasured_opening(&model, value, &intervals, &errors, || false)?
+            }
+            InverseOpening::Mixed(value) => {
+                deconvolve_mixed_opening(&model, value, &intervals, &errors, || false)?
             }
         },
     })
@@ -770,10 +830,10 @@ impl WorksheetResult {
         self.outcome.refusal()
     }
     pub fn no_claim(&self) -> &'static str {
-        if self.outcome.error_model().value.opening_treatment == OpeningTreatment::Unmeasured {
-            UNMEASURED_NO_CLAIM
-        } else {
-            NO_CLAIM
+        match self.outcome.error_model().value.opening_treatment {
+            OpeningTreatment::Unmeasured => UNMEASURED_NO_CLAIM,
+            OpeningTreatment::Mixed => MIXED_NO_CLAIM,
+            _ => NO_CLAIM,
         }
     }
 
@@ -787,6 +847,7 @@ impl WorksheetResult {
             OpeningTreatment::Fixed => "fmine.plant-rtd-inverse-result.v1",
             OpeningTreatment::Measured => "fmine.plant-rtd-inverse-result.v2",
             OpeningTreatment::Unmeasured => "fmine.plant-rtd-inverse-result.v3",
+            OpeningTreatment::Mixed => "fmine.plant-rtd-inverse-result.v4",
         };
         let opening_policy = match e.opening_treatment {
             OpeningTreatment::Fixed => {
@@ -798,6 +859,7 @@ impl WorksheetResult {
             OpeningTreatment::Unmeasured => {
                 "\"fixed_transport\":true,\"opening_treatment\":\"unmeasured\""
             }
+            OpeningTreatment::Mixed => "\"fixed_transport\":true,\"opening_treatment\":\"mixed\"",
         };
         let opening_indices = d
             .opening_coordinate_indices
@@ -891,6 +953,7 @@ impl WorksheetResult {
             match outcome.opening() {
                 InverseOpening::Specified(value) => claim_json(value),
                 InverseOpening::Unmeasured(value) => claim_json(value),
+                InverseOpening::Mixed(value) => claim_json(value),
             },
             d.observations.len(),
             claim_json(outcome.error_model()),
@@ -960,6 +1023,8 @@ impl WorksheetResult {
         if !d.opening_coordinate_indices.is_empty() {
             if outcome.error_model().value.opening_treatment == OpeningTreatment::Unmeasured {
                 out.push_str("## Unmeasured opening stocks\n\nActive-tank elemental stocks are inferred from the observed flows without an opening-stock observation or prior. The dead stock remains fixed.\n\n| Tank | Observed stock (kg) | Fitted stock (kg) | Conditional standard deviation (kg) |\n|---|---:|---:|---:|\n");
+            } else if outcome.error_model().value.opening_treatment == OpeningTreatment::Mixed {
+                out.push_str("## Measured and unmeasured opening stocks\n\nGenuine active-tank observations participate in the full correlated fit; explicitly unmeasured tanks are inferred without stock observations or priors. The dead stock remains fixed.\n\n| Tank | Observed stock (kg) | Fitted stock (kg) | Conditional standard deviation (kg) |\n|---|---:|---:|---:|\n");
             } else {
                 out.push_str("## Measured opening stocks\n\nActive-tank stock observations participate in the joint fit, including every declared stock/flow correlation. The dead stock remains fixed.\n\n| Tank | Observed stock (kg) | Fitted stock (kg) | Conditional standard deviation (kg) |\n|---|---:|---:|---:|\n");
             }
@@ -1031,7 +1096,10 @@ impl WorksheetResult {
         );
         match d.gross_error {
             GrossErrorDiagnostic::NoRedundancy => {
-                if outcome.error_model().value.opening_treatment == OpeningTreatment::Unmeasured {
+                if matches!(
+                    outcome.error_model().value.opening_treatment,
+                    OpeningTreatment::Unmeasured | OpeningTreatment::Mixed
+                ) {
                     out.push_str("No redundant measurement remains after fitting the unknown feeds and opening stocks. A gross-error test is unavailable; this is not a passed test.\n");
                 } else {
                     out.push_str("No redundant measurement remains after fitting the unknown feeds. A gross-error test is unavailable; this is not a passed test.\n");
