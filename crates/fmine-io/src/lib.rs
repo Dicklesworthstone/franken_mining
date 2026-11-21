@@ -2,11 +2,14 @@
 //! with SHA-256 provenance and `G-BULL-1` / `G-BULL-2` quarantine (`WP-03`, `BD-056`, `BD-057`, `BD-271`).
 
 pub mod cas_ingest;
+pub mod dialects;
 pub mod forecast;
 pub mod minelib_report;
 pub mod numfmt;
 pub mod numtok;
 pub mod omf;
+pub mod quarantine;
+pub mod redact;
 pub mod reliance;
 pub mod source;
 pub mod styles;

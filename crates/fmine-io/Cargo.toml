@@ -8,6 +8,7 @@ publish = false
 description = "Label-anchored .xlsx and HTML filing table extractors with SHA-256 provenance and G-BULL-1/G-BULL-2 quarantine."
 
 [dependencies]
+fmine-authz = { path = "../fmine-authz" }
 fmine-calib = { path = "../fmine-calib" }
 fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
@@ -16,7 +17,9 @@ fmine-geom = { path = "../fmine-geom" }
 fmine-lp = { path = "../fmine-lp" }
 fmine-object = { path = "../fmine-object" }
 fmine-optimize = { path = "../fmine-optimize" }
+fmine-registry = { path = "../fmine-registry" }
 fmine-runtime = { path = "../fmine-runtime" }
+fmine-units = { path = "../fmine-units" }
 
 [lints]
 workspace = true

@@ -1,0 +1,233 @@
+# registries/io_dialects.toml — Vendor & Portal Column Semantics Registry (schema fmine.io_dialects.v1; §32.1, BD-186)
+# Every imported column must declare its unit, basis, support and CRS, or it stays UNREGISTERED (PO-PORT-3).
+# Header text is never treated as semantics (E240).
+
+schema = "fmine.io_dialects.v1"
+
+[[dialect]]
+id = "acquire_assay_v1"
+vendor = "acQuire"
+format = "csv"
+description = "acQuire drillhole assay interval export"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "HOLEID"
+unit = "none"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "FROM"
+unit = "m"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "TO"
+unit = "m"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "AU_GPT"
+unit = "g_per_t"
+basis = "dry"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "CU_PCT"
+unit = "wt_pct"
+basis = "dry"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[dialect]]
+id = "datamine_string_v1"
+vendor = "Datamine"
+format = "csv"
+description = "Datamine exported string / collar coordinate table"
+
+[[column]]
+dialect = "datamine_string_v1"
+column = "XP"
+unit = "m"
+basis = "none"
+support = "mining_polygon"
+crs = "EPSG:32611"
+pii_class = "none"
+
+[[column]]
+dialect = "datamine_string_v1"
+column = "YP"
+unit = "m"
+basis = "none"
+support = "mining_polygon"
+crs = "EPSG:32611"
+pii_class = "none"
+
+[[column]]
+dialect = "datamine_string_v1"
+column = "ZP"
+unit = "m"
+basis = "none"
+support = "mining_polygon"
+crs = "EPSG:32611"
+pii_class = "none"
+
+[[dialect]]
+id = "surpac_string_v1"
+vendor = "Surpac"
+format = "str"
+description = "Surpac ASCII .str string file coordinates (string_id, Y, X, Z, desc)"
+
+[[column]]
+dialect = "surpac_string_v1"
+column = "Y"
+unit = "m"
+basis = "none"
+support = "mining_polygon"
+crs = "EPSG:32735"
+pii_class = "none"
+
+[[column]]
+dialect = "surpac_string_v1"
+column = "X"
+unit = "m"
+basis = "none"
+support = "mining_polygon"
+crs = "EPSG:32735"
+pii_class = "none"
+
+[[column]]
+dialect = "surpac_string_v1"
+column = "Z"
+unit = "m"
+basis = "none"
+support = "mining_polygon"
+crs = "EPSG:32735"
+pii_class = "none"
+
+[[dialect]]
+id = "met_balance_shift_v1"
+vendor = "GenericPlant"
+format = "csv"
+description = "Shift metallurgical balance feed/concentrate/tailings export"
+
+[[column]]
+dialect = "met_balance_shift_v1"
+column = "DRY_TONNES"
+unit = "t"
+basis = "dry"
+support = "plant_lot"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "met_balance_shift_v1"
+column = "MOISTURE_PCT"
+unit = "wt_pct"
+basis = "wet"
+support = "plant_lot"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "met_balance_shift_v1"
+column = "HEAD_CU_PCT"
+unit = "wt_pct"
+basis = "dry"
+support = "plant_lot"
+crs = "none"
+pii_class = "none"
+
+[[dialect]]
+id = "esia_stakeholder_v1"
+vendor = "ESIA"
+format = "csv"
+description = "Public ESIA stakeholder consultation and grievance log (redact-on-ingest, §31.2, BD-292)"
+
+[[column]]
+dialect = "esia_stakeholder_v1"
+column = "RECORD_ID"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "esia_stakeholder_v1"
+column = "FULL_NAME"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "personal_redact"
+
+[[column]]
+dialect = "esia_stakeholder_v1"
+column = "PHONE"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "personal_redact"
+
+[[column]]
+dialect = "esia_stakeholder_v1"
+column = "EMAIL"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "personal_redact"
+
+[[column]]
+dialect = "esia_stakeholder_v1"
+column = "HOUSE_LOCATION"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "EPSG:4326"
+pii_class = "personal_redact"
+
+[[column]]
+dialect = "esia_stakeholder_v1"
+column = "SIGNATURE"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "personal_redact"
+
+[[column]]
+dialect = "esia_stakeholder_v1"
+column = "TOPIC"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "esia_stakeholder_v1"
+column = "SUMMARY"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "none"
