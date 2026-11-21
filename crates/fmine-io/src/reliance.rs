@@ -109,11 +109,35 @@ fn private_key_file(metadata: &std::fs::Metadata) -> Result<(), Refusal> {
     }
 }
 
+/// An open file holding a POSIX/OS lock that explicitly unlocks on drop so a concurrently
+/// forked child process cannot pin the open file description's lock past this handle's drop.
+#[derive(Debug)]
+struct LockedFile(File);
+
+impl Drop for LockedFile {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+impl std::ops::Deref for LockedFile {
+    type Target = File;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for LockedFile {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// A fully replayed journal whose shared or exclusive OS lock remains held until this handle is dropped.
 /// The ledger is immutable to callers. No method promotes an unpinned read to consumer trust.
 #[derive(Debug)]
 pub struct Journal {
-    file: File,
+    file: LockedFile,
     ledger: RelianceLedger,
     byte_len: u64,
     writable: bool,
@@ -145,10 +169,10 @@ impl Journal {
             use std::os::unix::fs::OpenOptionsExt as _;
             options.mode(0o600);
         }
-        let mut file = options
+        let file = options
             .open(path)
             .map_err(|e| io_refusal("create reliance journal", path, &e))?;
-        acquire(&file, true)?;
+        let mut file = acquire(file, true)?;
         file.write_all(&line)
             .map_err(|e| io_refusal("write reliance genesis", path, &e))?;
         file.sync_all()
@@ -188,18 +212,18 @@ impl Journal {
         let metadata = std::fs::symlink_metadata(path)
             .map_err(|e| io_refusal("read reliance-journal metadata", path, &e))?;
         regular_journal(&metadata)?;
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .append(writable)
             .open(path)
             .map_err(|e| io_refusal("open reliance journal", path, &e))?;
-        acquire(&file, writable)?;
+        let mut file = acquire(file, writable)?;
         let opened = file
             .metadata()
             .map_err(|e| io_refusal("read opened reliance-journal metadata", path, &e))?;
         regular_journal(&opened)?;
         let mut bytes = Vec::new();
-        Read::by_ref(&mut file)
+        Read::by_ref(&mut *file)
             .take(MAX_JOURNAL_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| io_refusal("read reliance journal", path, &e))?;
@@ -502,13 +526,13 @@ fn regular_journal(metadata: &std::fs::Metadata) -> Result<(), Refusal> {
     Ok(())
 }
 
-fn acquire(file: &File, exclusive: bool) -> Result<(), Refusal> {
+fn acquire(file: File, exclusive: bool) -> Result<LockedFile, Refusal> {
     let result = if exclusive {
         file.try_lock()
     } else {
         file.try_lock_shared()
     };
-    result.map_err(|e| match e {
+    result.map(|()| LockedFile(file)).map_err(|e| match e {
         TryLockError::WouldBlock => {
             integrity("reliance journal is locked; retry with the current head")
         }
@@ -1241,7 +1265,8 @@ mod tests {
         let mut journal = Journal::create(&path, header()).expect("create");
         let head = journal.head();
         let before = std::fs::read(&path).expect("genesis");
-        journal.file = File::open(&path).expect("real read-only descriptor forces append failure");
+        journal.file =
+            LockedFile(File::open(&path).expect("real read-only descriptor forces append failure"));
         assert!(
             journal
                 .issue_bytes(&output, b"synthetic output\n", issuance(), &key(), time(10))
@@ -1464,7 +1489,7 @@ mod tests {
         let head = journal.head();
         let before = std::fs::read(&path).expect("before");
         // A real read-only descriptor forces write_all to fail before the state can be published.
-        journal.file = File::open(&path).expect("read-only descriptor");
+        journal.file = LockedFile(File::open(&path).expect("read-only descriptor"));
         assert!(journal.append(refresh(10), &key(), time(10)).is_err());
         assert!(journal.poisoned);
         assert_eq!(journal.head(), head);

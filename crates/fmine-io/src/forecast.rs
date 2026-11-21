@@ -20,10 +20,34 @@ pub const MAX_JOURNAL_BYTES: u64 = forecast_journal::MAX_JOURNAL_BYTES as u64;
 pub const MAX_JOURNAL_RECORDS: usize = forecast_journal::MAX_RECORDS;
 pub const MAX_REQUEST_BYTES: usize = forecast_journal::MAX_OPERATION_BYTES;
 
-/// The committed snapshot and its OS lock. Dropping the handle releases the lock.
+/// An open file holding a POSIX/OS lock that explicitly unlocks on drop so a concurrently
+/// forked child process cannot pin the open file description's lock past this handle's drop.
+#[derive(Debug)]
+struct LockedFile(File);
+
+impl Drop for LockedFile {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+impl std::ops::Deref for LockedFile {
+    type Target = File;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for LockedFile {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+/// The committed snapshot and its OS lock. Dropping the handle unlocks and closes the file.
 #[derive(Debug)]
 pub struct Journal {
-    file: File,
+    file: LockedFile,
     header: Header,
     records: Vec<Record>,
     head: Digest32,
@@ -54,10 +78,10 @@ impl Journal {
             use std::os::unix::fs::OpenOptionsExt as _;
             options.mode(0o600);
         }
-        let mut file = options
+        let file = options
             .open(path)
             .map_err(|e| io_refusal("create", path, e))?;
-        acquire(&file, true)?;
+        let mut file = acquire(file, true)?;
         let observed_ns = read_clock(clock)?;
         header.time_bounds(observed_ns)?;
         let record = Record {
@@ -108,18 +132,18 @@ impl Journal {
         let before =
             std::fs::symlink_metadata(path).map_err(|e| io_refusal("read metadata", path, e))?;
         regular(&before)?;
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .append(writable)
             .open(path)
             .map_err(|e| io_refusal("open", path, e))?;
-        acquire(&file, writable)?;
+        let mut file = acquire(file, writable)?;
         let metadata = file
             .metadata()
             .map_err(|e| io_refusal("read opened metadata", path, e))?;
         regular(&metadata)?;
         let mut bytes = Vec::new();
-        Read::by_ref(&mut file)
+        Read::by_ref(&mut *file)
             .take(MAX_JOURNAL_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| io_refusal("read", path, e))?;
@@ -260,16 +284,18 @@ fn regular(metadata: &std::fs::Metadata) -> Result<(), Refusal> {
     Ok(())
 }
 
-fn acquire(file: &File, exclusive: bool) -> Result<(), Refusal> {
+fn acquire(file: File, exclusive: bool) -> Result<LockedFile, Refusal> {
     let result = if exclusive {
         file.try_lock()
     } else {
         file.try_lock_shared()
     };
-    result.map_err(|error| match error {
-        TryLockError::WouldBlock => integrity("journal is locked; retry with the current head"),
-        TryLockError::Error(e) => integrity(format!("file locking unavailable: {e}")),
-    })
+    result
+        .map(|()| LockedFile(file))
+        .map_err(|error| match error {
+            TryLockError::WouldBlock => integrity("journal is locked; retry with the current head"),
+            TryLockError::Error(e) => integrity(format!("file locking unavailable: {e}")),
+        })
 }
 
 fn read_clock(clock: &dyn WallClock) -> Result<i64, Refusal> {
@@ -454,7 +480,7 @@ mod tests {
         let head = journal.head();
         let bytes = std::fs::read(&path).unwrap();
         // A real read-only descriptor exercises write failure without a test-only writer framework.
-        journal.file = File::open(&path).unwrap();
+        journal.file = LockedFile(File::open(&path).unwrap());
         assert!(journal.append("first", &Clock(2), |_, _| Ok(())).is_err());
         assert!(journal.poisoned);
         assert_eq!(journal.head(), head);
