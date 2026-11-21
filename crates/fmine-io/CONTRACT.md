@@ -7,7 +7,7 @@ Pure-Rust ZIP/DEFLATE, XLSX workbook, HTML table, OMF 2 / Parquet subset, draft 
 - **Layer:** V
 - **Subsystem:** Portal
 - **LOC budget:** 40,000 planned / 46,000 ceiling
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report", "source"]`
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report", "source", "cas_ingest"]`
 
 ## 2. Inputs
 ### Mathematical & Domain Formulation
