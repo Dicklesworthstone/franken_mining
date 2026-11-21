@@ -12,7 +12,7 @@ The ledger is Bedrock's L1 authority store (plan §26). It provides:
 - **Layer:** S1
 - **Subsystem:** Bedrock
 - **LOC budget:** 24,000 planned / 28,000 ceiling
-- **Allowed Module Families:** `["mmr", "batch", "segment", "cell", "verify", "l0"]`
+- **Allowed Module Families:** `["mmr", "batch", "segment", "cell", "verify", "l0", "as_of_replay"]`
 
 ## 2. Inputs
 - **MMR:** batch digests via `Mmr::push(&[u8])`, plus sizes, indices, roots, and proofs (`Digest32`).
@@ -28,7 +28,8 @@ The ledger is Bedrock's L1 authority store (plan §26). It provides:
 - `segment::{SegmentHeader, SegmentFooter, SegmentWriter, SegmentReader, SegmentInspection, SegmentState, inspect_segment_bytes}`.
 - `cell::{CellLease, CellAuthority, ConflictRecord, AdmitOutcome, GluingIssue, GluingReport, check_gluing}`.
 - `verify::{SegmentVerification, RepairAction, SegmentRepairPlan, SegmentRepairReceipt, verify_segment, plan_segment_repair, apply_segment_repair}`
-- `l0::{L0Ledger, L0Error, KeyVersion, CellSnapshot}` (`BD-080`: L0 in-memory reference ledger and semantic oracle for L1 parity).
+- `l0::{L0Ledger, L0Error, KeyVersion, CellSnapshot}` (`BD-080`: L0 in-memory reference ledger and semantic oracle for L1 parity)
+- `as_of_replay::{AsOfReplayError, ReplayRun, run_as_of, assert_bit_identical_replay}` (`BD-053`: bit-identical as-of replay harness bound by `FMT-CERT-1`).
 
 ## 4. Invariants
 - **RFC 6962 MMR parity:** all 196 `transparency-dev/merkle` inclusion/consistency probes, 64-leaf exhaustive verification, and bit-flip tampering refusals pass.
@@ -72,6 +73,7 @@ Not applicable: Bedrock emits authority storage, proofs, and verification receip
 - `cell::{CellLease, CellAuthority, ConflictRecord, AdmitOutcome, GluingIssue, GluingReport, check_gluing, TAG_CELL_LEASE, FMT_LEASE_V1}`
 - `verify::{SegmentVerification, RepairAction, SegmentRepairPlan, SegmentRepairReceipt, verify_segment, plan_segment_repair, apply_segment_repair}`
 - `l0::{L0Ledger, L0Error, KeyVersion, CellSnapshot}` (`BD-080`: L0 in-memory reference ledger and semantic oracle for L1 parity)
+- `as_of_replay::{AsOfReplayError, ReplayRun, run_as_of, assert_bit_identical_replay}` (`BD-053`: bit-identical as-of replay harness bound by `FMT-CERT-1`)
 
 ## 12. Proof obligations
 - `PO-BED-1` (single-writer fencing + lower-epoch quarantine): unit-tested in `cell::tests::test_po_bed_1_lease_transfer_fencing_and_split_brain_quarantine` (LabRuntime DPOR remains open under `BD-101`).

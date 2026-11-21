@@ -112,6 +112,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-flow"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-units",
+]
+
+[[package]]
+name = "fmine-gen"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-units",
+]
+
+[[package]]
 name = "fmine-geom"
 version = "0.1.0"
 dependencies = [

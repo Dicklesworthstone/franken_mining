@@ -1,0 +1,16 @@
+[package]
+name = "fmine-flow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Touchstone K1 material-flow graph, stockpiles, and exact extensive conservation laws (BD-146, plan §20.1–§20.2, INV-005)."
+
+[lints]
+workspace = true
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-units = { path = "../fmine-units" }

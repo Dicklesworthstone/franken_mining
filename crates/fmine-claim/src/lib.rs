@@ -72,6 +72,7 @@ pub mod inspection;
 mod label;
 pub mod reliance;
 pub mod render;
+pub mod representation;
 
 pub use label::{Confidentiality, LabelError, LabelRegistry, VentureId, WallId};
 

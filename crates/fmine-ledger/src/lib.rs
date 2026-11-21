@@ -7,6 +7,7 @@
 //! - [`cell`] (`BD-084`): single-writer cell leases, monotonic fencing epochs (`PO-BED-1`, `F6`), and gluing check (`F12`);
 //! - [`verify`] (`BD-088`): hash-chain verification and digest-bound `F7` torn-tail repair plan/apply (`PO-ADIT-3`).
 
+pub mod as_of_replay;
 pub mod batch;
 pub mod cell;
 pub mod l0;

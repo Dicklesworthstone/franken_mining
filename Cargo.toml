@@ -16,6 +16,7 @@ members = [
     "crates/fmine-object",
     "crates/fmine-sync",
     "crates/fmine-numerics",
+    "crates/fmine-flow",
     "crates/fmine-geom",
     "crates/fmine-optimize",
     "crates/fmine-lp",
@@ -27,6 +28,7 @@ members = [
     "crates/fmine-public",
     "crates/fmine-metrics",
     "crates/fmine-cli",
+    "crates/fmine-gen",
     "crates/fmine-verify",
 ]
 
