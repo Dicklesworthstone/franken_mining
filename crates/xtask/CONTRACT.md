@@ -14,7 +14,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** not budgeted (dev-only tool; no row in registries/loc_budget.toml)
-- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "int_as", "beads", "contracts", "sbom"]`
+- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "verbs", "int_as", "beads", "contracts", "sbom"]`
 
 ## 2. Inputs
 - **The tree.** Member `Cargo.toml` files, `crates/**/*.rs` and `crates/*/CONTRACT.md`. Also:
@@ -208,6 +208,9 @@ Not applicable: no Claims are emitted.
     - (b) each exit code follows the §30.1 family rule or a listed exception (504→7, 506→5), and no exception is unused;
     - (c) every `FMINE-REF-nnn` token in `crates/**/*.rs` and `crates/*/CONTRACT.md` is a registry code, named `path:line`;
     - (d) no fix text says "clamp".
+- `verbs::{check_verbs, gen_verbs}` (BD-113). The commands are `check-verbs` and `gen-verbs`; `check-all` runs `check-verbs` and prints `{"check":"check-verbs","rows","mutating","read_only"}`.
+  - `gen-verbs` renders `registries/verbs.toml` (schema 1) into `crates/fmine-cli/src/verb_catalog.rs` (`VerbSpec`, `VERB_CATALOG`, `lookup_verb`), writing only when bytes change.
+  - `check-verbs` validates schema, unique lowercase paths, plan §0.5 subsystems, boolean `mutates_authority`, and byte-for-byte parity with the committed catalogue.
 - `check_all(root: &Path) -> Result<LocReport, Vec<String>>` (BD-015): every check above (including `check-beads`, BD-324, and `contracts`, BD-327) except `check-lifts --upstream`, `check-lift-drift` and the forecast commands.
 - `forecast::{rules_hash, record_hash, record_verify}` (BD-334.S1). The commands are `forecast-rules-hash <rules.toml>`, `forecast-record-hash <dir>` and `forecast-record-verify <dir>`: the IO around the pure `fmine_calib::record`.
   - They write `rules.sha256` and `record.sha256`, and replace a different digest only while no proof (`.tsr`, `.ots`) stands beside it.

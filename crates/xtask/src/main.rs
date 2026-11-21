@@ -209,6 +209,17 @@ fn main() -> ExitCode {
                 println!("{what} {}", xtask::refusals::CATALOG_PATH);
             }),
         ),
+        "check-verbs" => run_one(
+            "check-verbs",
+            xtask::verbs::check_verbs(&root).map(|r| println!("{}", r.log_line())),
+        ),
+        "gen-verbs" => run_one(
+            "gen-verbs",
+            xtask::verbs::gen_verbs(&root).map(|wrote| {
+                let what = if wrote { "wrote" } else { "unchanged:" };
+                println!("{what} {}", xtask::verbs::CATALOG_PATH);
+            }),
+        ),
         "registry-check" => run_one(
             "registry-check",
             xtask::check_sources_registry(&root).map(|lines| {
@@ -328,6 +339,9 @@ fn main() -> ExitCode {
                     for w in &report.warnings {
                         println!("WARN [check-refusals]: {w}");
                     }
+                }
+                if let Ok(report) = xtask::verbs::check_verbs(&root) {
+                    println!("{}", report.log_line());
                 }
                 if let Ok((report, lock)) = xtask::int_as::check_int_as_001a(&root) {
                     println!("{}", report.status_line(&lock));

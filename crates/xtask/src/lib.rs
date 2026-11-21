@@ -14,6 +14,7 @@ pub mod loc;
 pub mod oracle;
 pub mod refusals;
 pub mod sbom;
+pub mod verbs;
 
 /// Summary row for a single crate's LOC budget (`BD-003`, `BD-012`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -950,6 +951,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
         all_errors.extend(e);
     }
     if let Err(e) = refusals::check_refusals(root) {
+        all_errors.extend(e);
+    }
+    if let Err(e) = verbs::check_verbs(root) {
         all_errors.extend(e);
     }
     if let Err(e) = int_as::check_int_as_001a(root) {

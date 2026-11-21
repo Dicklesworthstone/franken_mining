@@ -38,6 +38,7 @@ pub mod track_record_binding;
 pub mod track_record_clusters;
 mod track_record_data;
 mod track_record_price;
+pub mod verb_catalog;
 mod worksheet_input;
 
 pub use decision::journal as decision_journal;
@@ -2678,6 +2679,20 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(doctor::ROBOT_DOCS_JSON);
             payload.push_str(",\"robot_schema\":");
             payload.push_str(robot::ROBOT_DOCS_JSON);
+            payload.push_str(",\"verb_catalog\":[");
+            for (idx, spec) in verb_catalog::VERB_CATALOG.iter().enumerate() {
+                if idx > 0 {
+                    payload.push(',');
+                }
+                payload.push_str(&format!(
+                    "{{\"path\":\"{}\",\"subsystem\":\"{}\",\"mutates_authority\":{},\"description\":\"{}\"}}",
+                    escape_json(spec.path),
+                    escape_json(spec.subsystem),
+                    spec.mutates_authority,
+                    escape_json(spec.description),
+                ));
+            }
+            payload.push(']');
             payload.push_str(",\"repair\":");
             payload.push_str(repair::ROBOT_DOCS_JSON);
             payload.push_str(concat!(
