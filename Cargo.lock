@@ -262,6 +262,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-verify"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-ledger",
+ "fmine-object",
+ "fmine-sync",
+]
+
+[[package]]
 name = "xtask"
 version = "0.1.0"
 dependencies = [

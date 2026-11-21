@@ -27,6 +27,7 @@ members = [
     "crates/fmine-public",
     "crates/fmine-metrics",
     "crates/fmine-cli",
+    "crates/fmine-verify",
 ]
 
 [workspace.package]

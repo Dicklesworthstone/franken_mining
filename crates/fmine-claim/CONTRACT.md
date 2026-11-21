@@ -11,6 +11,9 @@ The universal Claim and the checks around it:
 - `forecast_journal` is the forecast-operation journal codec, independent of reliance's business ledger (BD-047).
 - `inspection` renders checked public Claim metadata and diagnostic guard outcomes for source and derived
   evidence. Domain value codecs and interpretation remain with the caller (BD-040, BD-115).
+- `render` (`BD-052`, plan §30.5) renders checked `FmClaimRow`s in `level1`, `markdown`, and multi-row FM tables
+  with G-EXEC numeric suppression, clickable `fmine:clm_...` links, plain-sentence executive summaries, and the
+  `INV-002` `NO_CLAIM_BANNER`.
 
 It does no I/O. Storage, locking and key custody belong to the callers in `fmine-io` and `fmine-cli`.
 
@@ -18,7 +21,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **Layer:** S0
 - **Subsystem:** Plumb
 - **LOC budget:** 16,000 planned / 18,000 ceiling
-- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal", "inspection"]`
+- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal", "inspection", "render"]`
 
 ## 2. Inputs
 - **`Claim::new`** takes 13 arguments: metric key, value, canonical value tag, representation, support, additivity, evidence class, epistemic status, knowledge state, label, UU terms, parents and anchors. It takes the evidence class and parents as given. Nothing checks that they agree. `stale`, `calibration_failed` and `supersedes` start false or `None`. They are `pub` fields that callers set afterwards.

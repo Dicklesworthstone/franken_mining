@@ -9,6 +9,7 @@
 
 pub mod batch;
 pub mod cell;
+pub mod l0;
 pub mod mmr;
 pub mod segment;
 pub mod verify;

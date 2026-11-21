@@ -71,6 +71,7 @@ pub mod forecast_journal;
 pub mod inspection;
 mod label;
 pub mod reliance;
+pub mod render;
 
 pub use label::{Confidentiality, LabelError, LabelRegistry, VentureId, WallId};
 

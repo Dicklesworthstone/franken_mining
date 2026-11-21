@@ -1615,14 +1615,14 @@ mod tests {
             .map(|e| walk(&e.path().join("src")))
             .sum();
         assert_eq!(report.files, expected, "{report:?}");
-        // fmine-core's seven, plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's eight
+        // fmine-core's eight (including cert.rs, BD-096), plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's eight
         // (bd-193, bd-191, bd-192, bd-wq34), fmine-optimize's fifteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
         // bd-5lxu, bd-2rne, bd-rbxh, bd-ubzs, pcpsp/price.rs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs
-        // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and mps.rs (bd-j2ay), fmine-ledger's mmr.rs, batch.rs, cell.rs (BD-081/083/084),
+        // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and mps.rs (bd-j2ay), fmine-ledger's mmr.rs, batch.rs, cell.rs, l0.rs (BD-080/081/083/084),
         // and fmine-object's merkle.rs, cas.rs (BD-090), fmine-authz's five modules (BD-092..095),
         // fmine-io's dialects.rs and redact.rs (BD-186, BD-292), and fmine-sync's seven portable modules
         // (lib, manifest, transport, version_vector, sync_cert, residency_plan, gluing; BD-102..108).
-        assert_eq!(report.bitwise_files, 56, "{report:?}");
+        assert_eq!(report.bitwise_files, 58, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

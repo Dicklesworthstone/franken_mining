@@ -2,6 +2,7 @@
 //! Determinism: BitwisePortable
 
 pub mod anchor;
+pub mod cert;
 pub mod codec;
 pub mod det;
 pub mod hash;
@@ -9,6 +10,10 @@ pub mod id;
 pub mod rand;
 
 pub use anchor::{FMT_ANCHOR_V1, LedgerAnchor, SourceAnchor};
+pub use cert::{
+    CertError, Certificate, DeterminismClass, FMT_CERT_MIN_VERSION, FMT_CERT_V1, InputDigest,
+    TAG_CERT,
+};
 pub use codec::{CodecError, Decoder, Encoder, MAGIC_FMNE, crc32c};
 pub use hash::{Blake3, Digest32, blake3_hash, sha256};
 pub use id::{IdParseError, ObjectId, PrefixKind};
