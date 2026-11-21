@@ -156,6 +156,11 @@ fn sheets(
     };
     let heading = format!("For the {months} months ended {end},");
     let subject = format!("Copper Mine ({share})");
+    let rate = match fault {
+        "signed_cost" => format!("-{}", values[2]),
+        "zero_cost" => "0".into(),
+        _ => values[2].into(),
+    };
     let full = values[0].parse::<u64>().unwrap() * if share == "50%" { 2 } else { 1 };
     let sales_label = match fault {
         "unsupported_sales_unit" => "Sales (kilograms)",
@@ -186,7 +191,7 @@ fn sheets(
                 ("D4".into(), text("All-in sustaining costs ($/lb)")),
                 ("B5".into(), number(&full.to_string())),
                 ("C5".into(), number(values[0])),
-                ("D5".into(), number(values[2])),
+                ("D5".into(), number(&rate)),
             ],
         },
         MinimalSheet {
@@ -236,7 +241,14 @@ fn workspace(tag: &str, share: &str, fault: &str) -> PathBuf {
     let mut registry = format!(
         "schema = \"fmine.sources.v1\"\nissuer = \"{ISSUER}\"\ncorpus_dir = \"corpus\"\nretrieved_utc = \"2030-07-31T00:00:00Z\"\nurl_prefix = \"https://example.invalid/\"\n[[subject]]\nname = \"Copper Mine\"\n"
     );
-    let historical_fault = if ["sales_kt", "aliased_sales_kt", "mixed_sales_units"].contains(&fault)
+    let historical_fault = if [
+        "sales_kt",
+        "aliased_sales_kt",
+        "mixed_sales_units",
+        "signed_cost",
+        "zero_cost",
+    ]
+    .contains(&fault)
     {
         fault
     } else {
@@ -309,17 +321,20 @@ fn workspace(tag: &str, share: &str, fault: &str) -> PathBuf {
     }
     std::fs::write(registry_path(&root, ISSUER), registry).unwrap();
     register_document(&root, "Guidance.pdf", "2030-01-15", "mda");
-    write_entries(
-        &root,
-        &guidance_entries(
-            "Guidance.pdf",
-            if share == "50%" {
-                "attributable:1/2"
-            } else {
-                "100%"
-            },
-        ),
+    let entries = guidance_entries(
+        "Guidance.pdf",
+        if share == "50%" {
+            "attributable:1/2"
+        } else {
+            "100%"
+        },
     );
+    let entries = match fault {
+        "signed_cost" => entries.replace("3.00 - 3.50", "-3.50 - -3.00"),
+        "zero_cost" => entries.replace("3.00 - 3.50", "-0.50 - 0.50"),
+        _ => entries,
+    };
+    write_entries(&root, &entries);
     root
 }
 
@@ -430,6 +445,69 @@ fn copper_source_completion_keeps_exact_units_rounding_and_checked_history() {
         ));
         assert!(json.contains("no registered technical"));
         assert_eq!(json, run(&root).unwrap().to_json());
+    }
+}
+
+#[test]
+fn signed_and_zero_copper_costs_reach_the_cli_with_exact_bounds_and_historical_witnesses() {
+    for (case, ytd, spend, rate, shown) in [
+        (
+            "signed_cost",
+            interval((-9612801, 40000), (-9587201, 40000)),
+            interval((-12813499, 40000), (-9586599, 40000)),
+            interval((-12813499, 4000400), (-9586599, 3999600)),
+            "−320.337475",
+        ),
+        (
+            "zero_cost",
+            interval((-12001, 40000), (12001, 40000)),
+            interval((-3212301, 40000), (3212301, 40000)),
+            interval((-2891, 3600), (2891, 3600)),
+            "−80.307525",
+        ),
+    ] {
+        let root = workspace(case, "50%", case);
+        let report = run(&root).unwrap();
+        // Independent half-step arithmetic: signed_cost reverses the prior known-answer rate
+        // signs; zero_cost has r=[-0.005,0.005], A=[-0.5,0.5], S=[59.995,60.005], R=[99.99,100.01].
+        assert_eq!(report.completion.ytd_aisc_spend.value.interval, ytd);
+        assert_eq!(report.completion.remaining_aisc_spend.value.interval, spend);
+        assert_eq!(report.completion.remaining_aisc_rate.value.interval, rate);
+        assert_eq!(report.history.verdict, HistoryVerdict::WithinEnvelope);
+        assert_eq!(report.history_sources.len(), 1);
+        let source = &report.history_sources[0];
+        let history = quarters::QuarterlyHistory {
+            id: source.id.clone(),
+            quarters: source.quarters.clone(),
+        };
+        let witness = &report.history.checks[0].witness.as_ref().unwrap().value;
+        assert!(quarters::check_quarter_witness(&report.inputs, &history, witness).unwrap());
+        assert!(report.inputs.ytd_aisc.value.interval.lo.signum() < 0);
+        assert!(
+            !report
+                .history_exclusions
+                .iter()
+                .any(|e| e.code == "FMINE-REF-109")
+        );
+
+        let (envelope, _) = fmine_cli::invoke(&arguments(), &root);
+        assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+        assert_eq!(envelope.payload_json, report.to_json());
+        for source in ["Guidance.pdf", "2030Q2.xlsx:YTD!D5", "2029Q3.xlsx:QTD!D5"] {
+            assert!(envelope.payload_json.contains(source));
+        }
+        assert!(
+            envelope
+                .payload_json
+                .contains(&format!("\"num\":\"{}\"", spend.lo.num()))
+        );
+        let mut markdown = arguments();
+        markdown.extend(["--format".into(), "markdown".into()]);
+        let (text, code) = fmine_cli::run(&markdown, &root);
+        assert_eq!(code, 0, "{text}");
+        assert!(text.contains(shown), "{text}");
+        assert!(text.contains("USD per sold lb") && text.contains("Checked witness"));
+        assert_eq!(report.to_json(), run(&root).unwrap().to_json());
     }
 }
 

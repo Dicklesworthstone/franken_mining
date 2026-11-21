@@ -187,8 +187,10 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   production in kt, sales in million lb and AISC USD per sold lb. Production never supplies sales.
   Gold rate times sold divides by 1000 to yield USD millions; copper rate times million lb already yields
   USD millions. Historical quarter constraints and independently checked witnesses retain the same family
-  and conversion. Mixed families, inconsistent definitions/ownership and nonpositive sales/rate bounds
-  refuse; computed signed requirements remain signed. Generic witness/totals fields carry explicit family
+  and conversion. Mixed families, inconsistent definitions/ownership and nonpositive sales bounds
+  refuse. Net cost rates may be signed, zero or cross zero. Exact corner products retain signed YTD and
+  quarter spending; original-quarter constraints still govern every joint witness or exclusion.
+  Computed signed requirements remain signed. Generic witness/totals fields carry explicit family
   metadata. Gold canonical bytes retain their v1 layouts; copper quantities have distinct kind tags and
   witness/total frames use v2. Known answers live in `guidance::tests` and `guidance::quarters::tests`.
 - **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
@@ -474,7 +476,12 @@ The other modules have local errors with no refusal code:
 - **The legacy cut-off section** is source-unverified arithmetic over registered tokens: neither the report bytes nor independent readings are authenticated. **`cutoff::source`** reproduces stated technical-report assumptions. It is not an optimal operating cut-off, a reserve classification or completion of the real-data gate.
 - **The legacy LMDI** is float. Its spend and sold ounces must share a scale. It encodes no units or basis, and its closure tolerance is 1e-9 USD/oz absolute.
 - **The typed waterfall** fixes its units: $M, koz, thousand tonnes, g/t and a fraction. It checks that both periods carry the same basis tag, but cannot authenticate that basis. Its enclosures treat inputs as independent, so they over-enclose shared ones.
-- **Guidance** works on closed intervals, with sales and AISC strictly positive and production at least zero. Its results are necessary arithmetic conditions, not forecasts or probabilities. `T1` is the supplied history only. `ExceedsEnvelope` says nothing about physical capacity.
+- **Guidance** works on closed intervals, with sales strictly positive, production at least zero and net AISC
+  signed or zero. Its results are necessary arithmetic conditions, not forecasts or probabilities. `T1` is the
+  supplied history only. `ExceedsEnvelope` says nothing about physical capacity. Signed product/frontier
+  extrema, zero-crossing bounds and unchanged sales-domain refusals are checked in `guidance::tests`;
+  `quarters::tests::signed_quarter_costs_preserve_spend_bounds_and_checked_joint_witnesses` checks the
+  signed historical witnesses and exclusions against the original quarter equations.
 - **Capacity** multiplies the three maxima. That gives an optimistic ceiling, not a plan. `NotExcluded` is not a feasibility witness.
   The copper required-grade result retains signed values and values above one: these describe an
   already-delivered requirement or an excluded scenario, not a proposed physical grade. The optimistic

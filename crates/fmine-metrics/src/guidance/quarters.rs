@@ -161,15 +161,6 @@ fn sum_ranges(ranges: impl IntoIterator<Item = Interval>) -> Exact<Interval> {
     Ok(total)
 }
 
-fn spend(s: Interval, r: Interval, family: GuidanceFamily) -> Exact<Interval> {
-    Ok(closed(
-        s.lo.checked_mul(r.lo)?
-            .checked_div(family.spend_divisor())?,
-        s.hi.checked_mul(r.hi)?
-            .checked_div(family.spend_divisor())?,
-    ))
-}
-
 fn source_parents<'a>(
     i: &'a CompletionInputs,
     quarters: &[&'a HistoricalContinuation],
@@ -197,8 +188,9 @@ fn totals(quarters: &[&HistoricalContinuation]) -> Result<Claim<WindowTotals>> {
         .ok_or_else(|| Refusal::new(RefusalCode::NoClaimInDomain201, "no historical quarters"))?;
     let family = GuidanceFamily::from_production_kind(first.production.value.kind)?;
     let mut rates = Vec::new();
-    // A positive sold-weighted ratio reaches an extremum at sales endpoints. Rates are monotone,
-    // so all lower (respectively upper) rate endpoints suffice. At most three quarters: <=16 points.
+    // A ratio with positive sales reaches an extremum at sales endpoints, even for signed costs.
+    // Rates are monotone, so all lower (respectively upper) rate endpoints suffice. At most three
+    // quarters: <=16 points.
     for mask in 0..(1_usize << quarters.len()) {
         for upper in [false, true] {
             let (mut sold, mut numerator) = (ZERO, ZERO);
@@ -221,7 +213,7 @@ fn totals(quarters: &[&HistoricalContinuation]) -> Result<Claim<WindowTotals>> {
     }
     let spend_ranges = quarters
         .iter()
-        .map(|q| spend(q.sold.value.interval, q.aisc.value.interval, family))
+        .map(|q| spend_bounds(q.sold.value.interval, q.aisc.value.interval, family))
         .collect::<Exact<Vec<_>>>()
         .map_err(|e| Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string()))?;
     let value = WindowTotals {
@@ -374,7 +366,7 @@ fn model(
             ("rate", r.value.interval),
             (
                 "spend",
-                exact(spend(s.value.interval, r.value.interval, family))?,
+                exact(spend_bounds(s.value.interval, r.value.interval, family))?,
             ),
         ] {
             m.variable(&format!("{prefix}.{suffix}"), range)?;
@@ -410,7 +402,7 @@ fn model(
     m.variable(
         "annual.spend",
         exact(sum_ranges([
-            exact(spend(
+            exact(spend_bounds(
                 i.ytd_sold.value.interval,
                 i.ytd_aisc.value.interval,
                 family,
@@ -859,6 +851,50 @@ mod tests {
             compare_quarters(&i, &[mixed]).unwrap_err().code,
             "FMINE-REF-105"
         );
+    }
+
+    #[test]
+    fn signed_quarter_costs_preserve_spend_bounds_and_checked_joint_witnesses() {
+        let (mut i, mut h) = copper_case();
+        i.ytd_aisc.value.interval = point(n(-4));
+        i.aisc_guidance.value.interval = point(n(-3));
+        h.quarters[0].sold.value.interval = closed(n(79), n(81));
+        h.quarters[0].aisc.value.interval = closed(n(-3), n(-2));
+        h.quarters[1].sold.value.interval = closed(n(19), n(21));
+        h.quarters[1].aisc.value.interval = closed(ZERO, ONE);
+        let report = compare_quarters(&i, std::slice::from_ref(&h)).unwrap();
+        assert_eq!(report.verdict, HistoryVerdict::WithinEnvelope);
+        let check = &report.checks[0];
+        // First-quarter net cost spans [-3*81, -2*79]; the second spans [0, 1*21].
+        assert_eq!(
+            check.totals.value.aisc_spend_usd_m,
+            closed(n(-243), n(-137))
+        );
+        let witness = &check.witness.as_ref().unwrap().value;
+        assert_eq!(witness.completion.remaining_spend_usd_m, n(-220));
+        assert_eq!(witness.completion.annual_aisc, n(-3));
+        assert!(check_quarter_witness(&i, &h, witness).unwrap());
+        let mut forged = witness.clone();
+        forged.quarters[0].spend_usd_m = n(220);
+        assert!(!check_quarter_witness(&i, &h, &forged).unwrap());
+
+        // Signed costs do not relax the original sales/rate dependence into marginal boxes.
+        i.ytd_sold.value.interval = point(ONE);
+        i.remaining_sold.value.interval = point(n(2));
+        i.aisc_guidance.value.interval = point(n(-4));
+        for (quarter, rate) in h.quarters.iter_mut().zip([-2, -8]) {
+            quarter.sold.value.interval = closed(ONE, n(2));
+            quarter.aisc.value.interval = point(n(rate));
+        }
+        let report = compare_quarters(&i, &[h]).unwrap();
+        let check = &report.checks[0];
+        assert_eq!(check.totals.value.aisc, closed(n(-6), n(-4)));
+        assert_eq!(check.totals.value.aisc_spend_usd_m, closed(n(-20), n(-10)));
+        // Total remaining sales 2 force each quarter to sell 1: annual rate is -14/3, not -4.
+        assert_eq!(report.verdict, HistoryVerdict::ExceedsEnvelope);
+        assert_eq!(check.cost_possible, Some(false));
+        assert!(check.witness.is_none());
+        assert_eq!(check.certificates.len(), 1);
     }
 
     #[test]

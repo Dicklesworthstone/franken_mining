@@ -1388,6 +1388,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
   guidance, incompatible ownership/support, future evidence and unusable sales refuse; synthetic evidence is
   available only through the explicit synthetic lane.
+  Signed and zero net AISC, including zero-crossing rounding intervals, are admitted under the unchanged
+  explicit gold/copper cost definition. YTD and historical spending bounds use exact four-corner products;
+  physical production stays nonnegative and every sales interval stays strictly positive. The quarterly
+  solver retains each signed cost/sales wedge and independently checks any completion witness.
   T1 output retains exact source-quarter/replay-quarter points and checked exclusion certificates under the
   separately declared sales scenario. No usable historical window remains T3. Markdown retains exact fractions
   when a decimal would round, labels display approximations and escapes source text; it never adds authority.

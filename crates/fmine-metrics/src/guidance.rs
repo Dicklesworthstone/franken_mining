@@ -5,7 +5,8 @@
 //!
 //! DESIGN: target bounds are exact guidance limits; closed input intervals describe rounding or an explicitly
 //! stated scenario, not probabilities. All inputs carry a subject, period, ownership basis and source anchors.
-//! The positive-rate slice refuses zero/negative AISC and sold intervals touching zero. Production may be zero.
+//! AISC retains signed net costs, including zero-crossing rounding boxes. Sold intervals must stay strictly
+//! positive, and physical production must be nonnegative.
 //! Computed remainders and spending requirements remain signed: a negative requirement is not clamped into a
 //! plausible physical continuation. Historical checks consider each cited period's joint rounding box separately;
 //! failure of that finite envelope says nothing about the mine's physical capacity.
@@ -279,6 +280,18 @@ fn hull(values: impl IntoIterator<Item = Rat>) -> Exact<Interval> {
     Ok(closed(lo, hi))
 }
 
+/// The four corner products enclose signed net cost rates without assuming that rate and sales endpoints
+/// have the same order. All callers validate strictly positive sales and the family's explicit unit scale.
+fn spend_bounds(sold: Interval, rate: Interval, family: GuidanceFamily) -> Exact<Interval> {
+    let product = |s: Rat, r: Rat| s.checked_mul(r)?.checked_div(family.spend_divisor());
+    hull([
+        product(sold.lo, rate.lo)?,
+        product(sold.lo, rate.hi)?,
+        product(sold.hi, rate.lo)?,
+        product(sold.hi, rate.hi)?,
+    ])
+}
+
 fn validate_claim(c: &Claim<Quantity>, role: &str, kind: QuantityKind) -> Result<()> {
     if matches!(c.representation, Representation::Placeholder { .. }) {
         return refuse(
@@ -382,15 +395,18 @@ fn validate_claim(c: &Claim<Quantity>, role: &str, kind: QuantityKind) -> Result
             format!("{role}: reversed interval"),
         );
     }
-    let strictly_positive = !matches!(
-        kind,
-        QuantityKind::ProductionKoz | QuantityKind::ProductionKt
-    );
-    if q.interval.lo.signum() < 0 || (strictly_positive && q.interval.lo == ZERO) {
+    let outside_domain = match kind {
+        QuantityKind::ProductionKoz | QuantityKind::ProductionKt => q.interval.lo.signum() < 0,
+        QuantityKind::SoldKoz | QuantityKind::SoldMillionLb => q.interval.lo.signum() <= 0,
+        QuantityKind::AiscUsdPerSoldOz
+        | QuantityKind::AiscUsdPerSoldLb
+        | QuantityKind::AiscSpendUsdMillion => false,
+    };
+    if outside_domain {
         return refuse(
             RefusalCode::OutsidePhysicalDomain109,
             format!(
-                "{role}: production must be nonnegative; this slice needs strictly positive sales and AISC throughout their intervals"
+                "{role}: production must be nonnegative and sales strictly positive throughout their intervals; net AISC may be signed"
             ),
         );
     }
@@ -582,14 +598,7 @@ pub fn complete(i: &CompletionInputs) -> Result<CompletionReport> {
             production.interval.hi.checked_sub(p.lo)?,
         ))
     })())?;
-    let ytd_spend = exact((|| {
-        Ok(closed(
-            r.lo.checked_mul(s.lo)?
-                .checked_div(family.spend_divisor())?,
-            r.hi.checked_mul(s.hi)?
-                .checked_div(family.spend_divisor())?,
-        ))
-    })())?;
+    let ytd_spend = exact(spend_bounds(s, r, family))?;
     let cost_parents = [
         &i.aisc_guidance,
         &i.ytd_aisc,
@@ -1435,6 +1444,52 @@ mod tests {
     }
 
     #[test]
+    fn signed_and_zero_net_costs_keep_exact_spend_and_remaining_rate_bounds() {
+        for mut i in [inputs(), copper_inputs()] {
+            let family =
+                GuidanceFamily::from_production_kind(i.production_guidance.value.kind).unwrap();
+            let scale = family.spend_divisor();
+            i.aisc_guidance.value.interval = closed(n(-1), ONE);
+            i.ytd_aisc.value.interval = closed(n(-2), n(-1));
+            i.ytd_sold.value.interval = closed(n(10), n(20));
+            i.remaining_sold.value.interval = closed(n(5), n(10));
+            let report = complete(&i).unwrap();
+            // Independent extrema: YTD net cost is [-2*20, -1*10]; remaining net cost is
+            // A*R+(A-r)*S, with minimum -1*10+0*S and maximum 1*10+3*20.
+            assert_eq!(
+                report.ytd_aisc_spend.value.interval,
+                closed(
+                    n(-40).checked_div(scale).unwrap(),
+                    n(-10).checked_div(scale).unwrap()
+                )
+            );
+            assert_eq!(
+                report.remaining_aisc_spend.value.interval,
+                closed(
+                    n(-10).checked_div(scale).unwrap(),
+                    n(70).checked_div(scale).unwrap()
+                )
+            );
+            assert_eq!(
+                report.remaining_aisc_rate.value.interval,
+                closed(n(-1), n(13))
+            );
+            assert_eq!(
+                report.spending_requirement,
+                SpendingRequirement::IncludesNegative
+            );
+            assert_eq!(report.remaining_aisc_spend.parents.len(), 4);
+
+            i.aisc_guidance.value.interval = point(ZERO);
+            i.ytd_aisc.value.interval = point(ZERO);
+            let report = complete(&i).unwrap();
+            assert_eq!(report.ytd_aisc_spend.value.interval, point(ZERO));
+            assert_eq!(report.remaining_aisc_spend.value.interval, point(ZERO));
+            assert_eq!(report.remaining_aisc_rate.value.interval, point(ZERO));
+        }
+    }
+
+    #[test]
     fn rounding_extrema_enclose_every_small_interior_combination() {
         let target = closed(n(4), n(8));
         let rate = closed(n(2), n(6));
@@ -1465,6 +1520,54 @@ mod tests {
     }
 
     #[test]
+    fn signed_frontiers_and_spend_enclose_all_sign_combinations_and_attain_their_bounds() {
+        for family in [GuidanceFamily::Gold, GuidanceFamily::Copper] {
+            let scale = family.spend_divisor();
+            for (a0, a1) in [(-4, -2), (-1, 1), (2, 4)] {
+                for (r0, r1) in [(-4, -2), (-1, 1), (2, 4)] {
+                    let (ns, rs) = frontier_bounds(
+                        closed(n(a0), n(a1)),
+                        closed(n(r0), n(r1)),
+                        closed(ONE, n(3)),
+                        closed(ONE, n(4)),
+                        family,
+                    )
+                    .unwrap();
+                    let ys = spend_bounds(closed(ONE, n(3)), closed(n(r0), n(r1)), family).unwrap();
+                    let mut reached = [false; 6];
+                    for a in a0..=a1 {
+                        for r in r0..=r1 {
+                            for s in 1..=3 {
+                                for rem in 1..=4 {
+                                    // Direct annual accounting, independently of the corner implementation.
+                                    let ytd = n(r * s).checked_div(scale).unwrap();
+                                    let spend =
+                                        n(a * (s + rem) - r * s).checked_div(scale).unwrap();
+                                    let rate = q(a * (s + rem) - r * s, rem);
+                                    assert!(ys.contains(ytd).unwrap());
+                                    assert!(ns.contains(spend).unwrap());
+                                    assert!(rs.contains(rate).unwrap());
+                                    for (seen, equal) in reached.iter_mut().zip([
+                                        ytd == ys.lo,
+                                        ytd == ys.hi,
+                                        spend == ns.lo,
+                                        spend == ns.hi,
+                                        rate == rs.lo,
+                                        rate == rs.hi,
+                                    ]) {
+                                        *seen |= equal;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    assert!(reached.into_iter().all(|seen| seen));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn signed_derived_requirements_are_never_clamped() {
         let mut i = inputs();
         i.production_guidance.value.interval = closed(n(20), n(30));
@@ -1489,18 +1592,27 @@ mod tests {
 
     #[test]
     fn unsupported_domains_and_zero_denominators_refuse_by_name() {
-        for role in ["ytd_sold", "remaining_sold", "ytd_aisc", "aisc_guidance"] {
+        for role in ["ytd_sold", "remaining_sold"] {
             let mut i = inputs();
             let c = match role {
                 "ytd_sold" => &mut i.ytd_sold,
-                "remaining_sold" => &mut i.remaining_sold,
-                "ytd_aisc" => &mut i.ytd_aisc,
-                _ => &mut i.aisc_guidance,
+                _ => &mut i.remaining_sold,
             };
             c.value.interval.lo = ZERO;
             let refusal = complete(&i).unwrap_err();
             assert_eq!(refusal.code, "FMINE-REF-109");
             assert!(refusal.what.contains(role));
+        }
+        for role in ["ytd_aisc", "aisc_guidance"] {
+            let mut i = inputs();
+            let c = match role {
+                "ytd_aisc" => &mut i.ytd_aisc,
+                _ => &mut i.aisc_guidance,
+            };
+            c.value.interval = closed(ONE, n(-1));
+            let refusal = complete(&i).unwrap_err();
+            assert_eq!(refusal.code, "FMINE-REF-109");
+            assert!(refusal.what.contains(role) && refusal.what.contains("reversed"));
         }
         let mut i = inputs();
         i.ytd_production.value.interval.lo = n(-1);

@@ -304,6 +304,10 @@ The public lane of M0 (`fmine assure public`).
   scenario before making a joint comparison. Checked witnesses preserve original and hypothetical supports;
   checked exclusion certificates apply only to the supplied finite windows. No usable window stays T3, and
   solver caps remain indeterminate.
+  Net AISC rates retain their printed sign, including zero-crossing rounding boxes, through exact YTD
+  spending, remaining requirements and joint historical comparisons. Sales must remain strictly positive.
+  `xtask/tests/public_guidance_copper.rs` checks negative and printed-zero costs from authenticated invented
+  filings through JSON/Markdown output, with independently calculated bounds and checked quarterly witnesses.
   `guidance::capacity` independently selects the latest eligible registered `technical_report` with agreed
   `technical_<site>_remaining_dry_feed_mt`, `technical_<site>_head_grade_g_per_t` and
   `technical_<site>_recovery_percent` rows. Units must be `dry_mt` (million dry metric tonnes),

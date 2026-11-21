@@ -280,7 +280,7 @@ fn render_inner(
     ] {
         row(&mut out, name, claim, quantity_unit(claim.value.kind));
     }
-    out.push_str("\nClosed bounds retain printed rounding uncertainty. Approximate decimal displays are marked ≈; the accompanying fractions remain exact. Signed requirements are retained. The Evidence column preserves the weakest input evidence; it does not mean the issuer asserted the computed requirement or the replay assumption.\n\n");
+    out.push_str("\nClosed bounds retain printed rounding uncertainty. Approximate decimal displays are marked ≈; the accompanying fractions remain exact. Signed net costs and requirements are retained, including rounding bounds that cross zero; sales remain strictly positive. The Evidence column preserves the weakest input evidence; it does not mean the issuer asserted the computed requirement or the replay assumption.\n\n");
     technical(&mut out, &report.technical);
     out.push_str("## Historical joint comparison\n\nA marginal production success and a marginal cost success do not establish joint feasibility. Only a checked joint witness does. Exclusion is limited to the supplied finite historical windows; it is not a mine-capacity conclusion or a forecast.\n\n");
     if report.history.checks.is_empty() {

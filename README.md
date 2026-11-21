@@ -4149,6 +4149,9 @@ the complete displayed rounding interval. The adapter accepts the registered sit
 refuses competing sales rows. Consequently USD/lb times million lb gives USD millions directly; gold's
 USD/oz times koz retains its separate division by 1000. Remaining sales explicitly assume
 the preceding year's sales for the same remaining months, with source Claims and rounding intervals retained.
+Net AISC may be negative, zero or cross zero within its rounding interval. The exact spending bounds consider
+every sales/rate endpoint combination, including by-product credits. Physical production remains nonnegative,
+and every sales interval must stay strictly above zero. Signed costs keep their declared metric definition.
 The report also tests completion jointly against every usable contiguous historical quarter window of the
 remaining duration, including windows crossing a year boundary. Production, sales and AISC come from each
 quarter's own original release before the guidance year; later comparatives cannot replace a missing original.
