@@ -527,8 +527,8 @@ mod tests {
             name: "fmine-cli".to_string(),
             layer: "U".to_string(),
             subsystem: "Adit".to_string(),
-            planned_loc: 26_000,
-            ceiling_loc: 30_000,
+            planned_loc: 40_000,
+            ceiling_loc: 46_000,
             actual_loc: 0,
             warn_80_pct: false,
             over_planned: false,
@@ -852,7 +852,7 @@ mod tests {
                 .replace("- **Subsystem:** `Surfaces`", "- **Subsystem:** Adit")
                 .replace(
                     "- **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)",
-                    "- **LOC budget:** 26,000 planned / 30,000 ceiling"
+                    "- **LOC budget:** 40,000 planned / 46,000 ceiling",
                 )
         );
         let f = findings("fmine-cli", &cli_text, Some(&cli_row()), &codes());

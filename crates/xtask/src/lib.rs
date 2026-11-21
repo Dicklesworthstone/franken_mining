@@ -958,6 +958,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     if let Err(e) = check_stack_lock(root) {
         all_errors.extend(e);
     }
+    if let Err(e) = beads::check_beads(root) {
+        all_errors.extend(e);
+    }
     // §28.4.3 over what is about to be committed; CI runs `check-amend --base` over the pushed range.
     if loc_report.is_some()
         && let Err(e) = loc::check_amend(root, "HEAD", false)
@@ -1597,10 +1600,10 @@ mod tests {
             .sum();
         assert_eq!(report.files, expected, "{report:?}");
         // fmine-core's seven, plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's eight
-        // (bd-193, bd-191, bd-192, bd-wq34), fmine-optimize's fourteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
-        // bd-5lxu, bd-2rne, bd-rbxh, bd-ubzs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs
+        // (bd-193, bd-191, bd-192, bd-wq34), fmine-optimize's fifteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
+        // bd-5lxu, bd-2rne, bd-rbxh, bd-ubzs, pcpsp/price.rs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs
         // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and mps.rs (bd-j2ay), and fmine-ledger's mmr.rs (BD-083).
-        assert_eq!(report.bitwise_files, 37, "{report:?}");
+        assert_eq!(report.bitwise_files, 38, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

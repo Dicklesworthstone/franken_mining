@@ -332,6 +332,12 @@ fn main() -> ExitCode {
                 if let Ok((report, lock)) = xtask::int_as::check_int_as_001a(&root) {
                     println!("{}", report.status_line(&lock));
                 }
+                if let Ok(report) = xtask::beads::check_beads(&root) {
+                    println!("{}", report.log_line());
+                    for w in &report.warnings {
+                        println!("WARN [check-beads]: {w}");
+                    }
+                }
                 if let Ok(report) = xtask::loc::check_amend(&root, "HEAD", false) {
                     println!("{}", report.log_line());
                     for w in &report.warnings {
