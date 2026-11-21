@@ -204,6 +204,14 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   Computed signed requirements remain signed. Generic witness/totals fields carry explicit family
   metadata. Gold canonical bytes retain their v1 layouts; copper quantities have distinct kind tags and
   witness/total frames use v2. Known answers live in `guidance::tests` and `guidance::quarters::tests`.
+  DESIGN (BD-342): explicit `CostMetric::C1` admits copper C1 per sold lb through the same exact
+  arithmetic and original-quarter constraints, with distinct C1 rate/spend kinds and derived metric keys.
+  It cannot substitute for AISC or accept gold. Every cost input and historical quarter must share the
+  selected metric and definition. Compound results retain `cost_metric`; C1 witness/totals frames use v3,
+  preserving all prior AISC frames. Legacy Rust `aisc_*` member names hold the explicitly typed selected
+  metric. Signed/zero costs, exact witnesses, checked exclusions and AISC-substitution refusals have direct
+  known-answer controls in the same test modules. This conditional arithmetic does not reproduce issuer
+  filings, authenticate the selected accounting definition or establish calibrated guidance probabilities.
 - **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
   DESIGN (BD-342): gold uses dry Mt, gold g/t and a recovery fraction, producing koz. Copper uses
   separately typed dry Mt, copper dry-mass grade fraction and copper recovery fraction, producing kt

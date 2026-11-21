@@ -83,8 +83,8 @@ fn quantity_unit(kind: QuantityKind) -> &'static str {
         QuantityKind::ProductionKt => "kt",
         QuantityKind::SoldMillionLb => "million lb",
         QuantityKind::AiscUsdPerSoldOz => "USD per sold oz",
-        QuantityKind::AiscUsdPerSoldLb => "USD per sold lb",
-        QuantityKind::AiscSpendUsdMillion => "USD million",
+        QuantityKind::AiscUsdPerSoldLb | QuantityKind::C1UsdPerSoldLb => "USD per sold lb",
+        QuantityKind::AiscSpendUsdMillion | QuantityKind::C1SpendUsdMillion => "USD million",
     }
 }
 
@@ -223,6 +223,11 @@ fn render_inner(
     let production_unit = quantity_unit(inputs.production_guidance.value.kind);
     let sold_unit = quantity_unit(inputs.remaining_sold.value.kind);
     let rate_unit = quantity_unit(inputs.aisc_guidance.value.kind);
+    let cost = if inputs.aisc_guidance.value.kind == QuantityKind::C1UsdPerSoldLb {
+        "C1"
+    } else {
+        "AISC"
+    };
     let sold_metal = if inputs.remaining_sold.value.kind == QuantityKind::SoldMillionLb {
         "sold copper in millions of pounds"
     } else {
@@ -264,21 +269,27 @@ fn render_inner(
     );
     for (name, claim) in [
         (
-            "Remaining production",
+            "Remaining production".to_string(),
             &report.completion.remaining_production,
         ),
-        ("Assumed remaining sales", &inputs.remaining_sold),
-        ("YTD AISC spending", &report.completion.ytd_aisc_spend),
         (
-            "Required remaining AISC spending",
+            "Assumed remaining sales".to_string(),
+            &inputs.remaining_sold,
+        ),
+        (
+            format!("YTD {cost} spending"),
+            &report.completion.ytd_aisc_spend,
+        ),
+        (
+            format!("Required remaining {cost} spending"),
             &report.completion.remaining_aisc_spend,
         ),
         (
-            "Required remaining AISC",
+            format!("Required remaining {cost}"),
             &report.completion.remaining_aisc_rate,
         ),
     ] {
-        row(&mut out, name, claim, quantity_unit(claim.value.kind));
+        row(&mut out, &name, claim, quantity_unit(claim.value.kind));
     }
     out.push_str("\nClosed bounds retain printed rounding uncertainty. Approximate decimal displays are marked ≈; the accompanying fractions remain exact. Signed net costs and requirements are retained, including rounding bounds that cross zero; sales remain strictly positive. The Evidence column preserves the weakest input evidence; it does not mean the issuer asserted the computed requirement or the replay assumption.\n\n");
     technical(&mut out, &report.technical);
@@ -308,7 +319,7 @@ fn render_inner(
                 let value = &witness.value;
                 let _ = writeln!(
                     out,
-                    "### Checked replay: {}\n\nAnnual production: {} {production_unit}; annual AISC: {} {rate_unit}.\n\n| Original support | Hypothetical replay | Production ({production_unit}) | Sales ({sold_unit}) | AISC ({rate_unit}) |\n|---|---|---|---|---|",
+                    "### Checked replay: {}\n\nAnnual production: {} {production_unit}; annual {cost}: {} {rate_unit}.\n\n| Original support | Hypothetical replay | Production ({production_unit}) | Sales ({sold_unit}) | {cost} ({rate_unit}) |\n|---|---|---|---|---|",
                     text(&check.id),
                     number(value.completion.annual_production),
                     number(value.completion.annual_aisc)
@@ -343,13 +354,16 @@ fn render_inner(
     }
     out.push_str("## Guidance and actuals\n\n| Quantity | Exact bounds | Evidence | Claim |\n|---|---|---|---|\n");
     for (name, claim) in [
-        ("Annual production guidance", &inputs.production_guidance),
-        ("Annual AISC guidance", &inputs.aisc_guidance),
-        ("YTD production", &inputs.ytd_production),
-        ("YTD sales", &inputs.ytd_sold),
-        ("YTD AISC", &inputs.ytd_aisc),
+        (
+            "Annual production guidance".to_string(),
+            &inputs.production_guidance,
+        ),
+        (format!("Annual {cost} guidance"), &inputs.aisc_guidance),
+        ("YTD production".to_string(), &inputs.ytd_production),
+        ("YTD sales".to_string(), &inputs.ytd_sold),
+        (format!("YTD {cost}"), &inputs.ytd_aisc),
     ] {
-        row(&mut out, name, claim, quantity_unit(claim.value.kind));
+        row(&mut out, &name, claim, quantity_unit(claim.value.kind));
     }
     let mut anchors = BTreeSet::new();
     for claim in [

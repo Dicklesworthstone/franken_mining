@@ -22,9 +22,11 @@ pub struct QuarterlyHistory {
 }
 
 /// Marginal projections of one window. Source support is explicit even for a cross-year window.
+/// Legacy `aisc` members retain their spelling; `cost_metric` identifies their actual cost definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowTotals {
     pub family: GuidanceFamily,
+    pub cost_metric: CostMetric,
     pub first_period: Period,
     pub last_period: Period,
     pub production: Interval,
@@ -34,9 +36,11 @@ pub struct WindowTotals {
 }
 
 /// One point inside a source quarter's rounding boxes, with its hypothetical replay support kept separate.
+/// The `aisc` rate uses the selected `cost_metric`, which the independent checker verifies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuarterWitness {
     pub family: GuidanceFamily,
+    pub cost_metric: CostMetric,
     pub source_period: Period,
     pub replay_period: Period,
     pub production: Rat,
@@ -84,6 +88,8 @@ fn validate<'a>(
 ) -> Result<Vec<&'a HistoricalContinuation>> {
     let remaining = validate_inputs(i)?;
     let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
+    let metric = i.cost_metric()?;
+    let rate_kind = metric.rate_kind(family)?;
     if h.id.trim().is_empty() || h.quarters.is_empty() {
         return refuse(
             RefusalCode::NoClaimInDomain201,
@@ -114,7 +120,11 @@ fn validate<'a>(
                 family.production_kind(),
             ),
             (&q.sold, "historical quarter sold", family.sold_kind()),
-            (&q.aisc, "historical quarter AISC", family.rate_kind()),
+            (
+                &q.aisc,
+                metric.select("historical quarter AISC", "historical quarter C1"),
+                rate_kind,
+            ),
         ] {
             validate_claim(claim, role, kind)?;
             same_basis(&i.production_guidance.value, &claim.value, role)?;
@@ -130,8 +140,9 @@ fn validate<'a>(
             return refuse(
                 RefusalCode::SupportMismatch102,
                 format!(
-                    "{}: quarters must be consecutive, with production, sales and AISC on the same support",
-                    h.id
+                    "{}: quarters must be consecutive, with production, sales and {} on the same support",
+                    h.id,
+                    metric.select("AISC", "C1")
                 ),
             );
         }
@@ -144,7 +155,10 @@ fn validate<'a>(
         if q.aisc.value.definition != i.aisc_guidance.value.definition {
             return refuse(
                 RefusalCode::BasisMismatch105,
-                "historical quarter and guidance AISC definitions differ",
+                metric.select(
+                    "historical quarter and guidance AISC definitions differ",
+                    "historical quarter and guidance C1 definitions differ",
+                ),
             );
         }
         next_month = Some(serial + 3);
@@ -187,6 +201,7 @@ fn totals(quarters: &[&HistoricalContinuation]) -> Result<Claim<WindowTotals>> {
         .last()
         .ok_or_else(|| Refusal::new(RefusalCode::NoClaimInDomain201, "no historical quarters"))?;
     let family = GuidanceFamily::from_production_kind(first.production.value.kind)?;
+    let cost_metric = CostMetric::from_rate_kind(first.aisc.value.kind)?;
     let mut rates = Vec::new();
     // A ratio with positive sales reaches an extremum at sales endpoints, even for signed costs.
     // Rates are monotone, so all lower (respectively upper) rate endpoints suffice. At most three
@@ -218,6 +233,7 @@ fn totals(quarters: &[&HistoricalContinuation]) -> Result<Claim<WindowTotals>> {
         .map_err(|e| Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string()))?;
     let value = WindowTotals {
         family,
+        cost_metric,
         first_period: first.production.value.period,
         last_period: last.production.value.period,
         production: exact(sum_ranges(
@@ -227,7 +243,7 @@ fn totals(quarters: &[&HistoricalContinuation]) -> Result<Claim<WindowTotals>> {
         aisc: exact(hull(rates))?,
         aisc_spend_usd_m: exact(sum_ranges(spend_ranges))?,
     };
-    let mut enc = Encoder::new_frame(*b"GQWT", family.frame_version());
+    let mut enc = Encoder::new_frame(*b"GQWT", cost_metric.frame_version(family));
     for p in [value.first_period, value.last_period] {
         enc.put_u16(p.year);
         enc.put_u8(p.first_month);
@@ -429,6 +445,7 @@ fn witness_from(
     values: &BTreeMap<String, Rat>,
 ) -> Result<QuarterlyWitness> {
     let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
+    let cost_metric = i.cost_metric()?;
     let get = |name: &str| {
         values
             .get(name)
@@ -444,6 +461,7 @@ fn witness_from(
     {
         let p = QuarterWitness {
             family,
+            cost_metric,
             source_period: q.production.value.period,
             replay_period: Period {
                 year: i.remaining_sold.value.period.year,
@@ -464,6 +482,7 @@ fn witness_from(
         quarters: points,
         completion: CompletionWitness {
             family,
+            cost_metric,
             ytd_production: get("ytd.production")?,
             remaining_production: production,
             ytd_sold: get("ytd.sold")?,
@@ -488,7 +507,11 @@ pub fn check_quarter_witness(
 ) -> Result<bool> {
     let quarters = validate(i, h)?;
     let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
-    if w.quarters.len() != quarters.len() || w.completion.family != family {
+    let cost_metric = i.cost_metric()?;
+    if w.quarters.len() != quarters.len()
+        || w.completion.family != family
+        || w.completion.cost_metric != cost_metric
+    {
         return Ok(false);
     }
     exact((|| {
@@ -504,6 +527,7 @@ pub fn check_quarter_witness(
                 last_month: first_month + 2,
             };
             if point.family != family
+                || point.cost_metric != cost_metric
                 || point.source_period != q.production.value.period
                 || point.replay_period != replay
                 || !q.production.value.interval.contains(point.production)?
@@ -640,7 +664,13 @@ fn compare_with_caps(
             if !check_quarter_witness(i, h, &witness)? {
                 return Err(certificate_error("original-quarter witness check failed"));
             }
-            let mut enc = Encoder::new_frame(*b"GQWP", witness.completion.family.frame_version());
+            let mut enc = Encoder::new_frame(
+                *b"GQWP",
+                witness
+                    .completion
+                    .cost_metric
+                    .frame_version(witness.completion.family),
+            );
             enc.put_str(&witness.completion.canonical_tag(&h.id));
             for q in &witness.quarters {
                 for period in [q.source_period, q.replay_period] {
@@ -711,7 +741,9 @@ mod tests {
             kind,
             definition: if matches!(
                 kind,
-                QuantityKind::AiscUsdPerSoldOz | QuantityKind::AiscUsdPerSoldLb
+                QuantityKind::AiscUsdPerSoldOz
+                    | QuantityKind::AiscUsdPerSoldLb
+                    | QuantityKind::C1UsdPerSoldLb
             ) {
                 "invented/sold".into()
             } else {
@@ -803,6 +835,112 @@ mod tests {
                 quarters,
             },
         )
+    }
+
+    fn c1_case() -> (CompletionInputs, QuarterlyHistory) {
+        let (mut i, mut h) = copper_case();
+        i.aisc_guidance = claim(QuantityKind::C1UsdPerSoldLb, p(2026, 1, 12), 3, 3);
+        i.ytd_aisc = claim(QuantityKind::C1UsdPerSoldLb, p(2026, 1, 6), 4, 4);
+        h.quarters[0].aisc = claim(QuantityKind::C1UsdPerSoldLb, p(2025, 7, 9), 2, 2);
+        h.quarters[1].aisc = claim(QuantityKind::C1UsdPerSoldLb, p(2025, 10, 12), 3, 3);
+        (i, h)
+    }
+
+    #[test]
+    fn c1_quarters_bind_selected_metric_and_retain_exact_joint_certificates() {
+        let (i, h) = c1_case();
+        let report = compare_quarters(&i, std::slice::from_ref(&h)).unwrap();
+        assert_eq!(report.verdict, HistoryVerdict::WithinEnvelope);
+        let check = &report.checks[0];
+        assert_eq!(check.totals.value.cost_metric, CostMetric::C1);
+        // USD320m YTD + (80 Mlb * USD2/lb + 20 Mlb * USD3/lb) = USD540m;
+        // 180 Mlb annual sales make USD3/lb. Production remains 40+30+40=110 kt.
+        assert_eq!(check.totals.value.aisc_spend_usd_m, point(n(220)));
+        assert_eq!(check.totals.value.aisc, point(Rat::new(11, 5).unwrap()));
+        let witness = &check.witness.as_ref().unwrap().value;
+        assert_eq!(witness.completion.cost_metric, CostMetric::C1);
+        assert_eq!(witness.completion.annual_aisc, n(3));
+        assert_eq!(witness.completion.annual_production, n(110));
+        assert!(
+            witness
+                .quarters
+                .iter()
+                .all(|q| q.cost_metric == CostMetric::C1)
+        );
+        assert!(check_quarter_witness(&i, &h, witness).unwrap());
+        let mut forged = witness.clone();
+        forged.completion.cost_metric = CostMetric::Aisc;
+        assert!(!check_quarter_witness(&i, &h, &forged).unwrap());
+        let mut forged = witness.clone();
+        forged.quarters[0].cost_metric = CostMetric::Aisc;
+        assert!(!check_quarter_witness(&i, &h, &forged).unwrap());
+        let (aisc_i, aisc_h) = copper_case();
+        let aisc = compare_quarters(&aisc_i, std::slice::from_ref(&aisc_h)).unwrap();
+        assert_ne!(check.totals.claim_id, aisc.checks[0].totals.claim_id);
+        assert_ne!(
+            check.witness.as_ref().unwrap().claim_id,
+            aisc.checks[0].witness.as_ref().unwrap().claim_id
+        );
+        assert_eq!(
+            compare_quarters(&i, &[aisc_h]).unwrap_err().code,
+            "FMINE-REF-105"
+        );
+
+        let mut impossible = i;
+        impossible.aisc_guidance.value.interval = point(n(2));
+        let excluded = compare_quarters(&impossible, &[h]).unwrap();
+        assert_eq!(excluded.verdict, HistoryVerdict::ExceedsEnvelope);
+        assert_eq!(excluded.checks[0].cost_possible, Some(false));
+        assert!(excluded.checks[0].witness.is_none());
+        assert_eq!(excluded.checks[0].certificates.len(), 1);
+    }
+
+    #[test]
+    fn signed_c1_quarters_keep_negative_credits_zero_targets_and_original_sales_coupling() {
+        let (mut i, mut h) = c1_case();
+        i.ytd_aisc.value.interval = point(n(-4));
+        i.aisc_guidance.value.interval = point(n(-3));
+        h.quarters[0].sold.value.interval = closed(n(79), n(81));
+        h.quarters[0].aisc.value.interval = closed(n(-3), n(-2));
+        h.quarters[1].sold.value.interval = closed(n(19), n(21));
+        h.quarters[1].aisc.value.interval = closed(ZERO, ONE);
+        let report = compare_quarters(&i, std::slice::from_ref(&h)).unwrap();
+        assert_eq!(report.verdict, HistoryVerdict::WithinEnvelope);
+        assert_eq!(
+            report.checks[0].totals.value.aisc_spend_usd_m,
+            closed(n(-243), n(-137))
+        );
+        let witness = &report.checks[0].witness.as_ref().unwrap().value;
+        assert_eq!(witness.completion.remaining_spend_usd_m, n(-220));
+        assert!(check_quarter_witness(&i, &h, witness).unwrap());
+
+        // A zero annual target is possible only with exactly USD320m of remaining cost.
+        i.aisc_guidance.value.interval = point(ZERO);
+        h.quarters[0].sold.value.interval = point(n(80));
+        h.quarters[1].sold.value.interval = point(n(20));
+        h.quarters[0].aisc.value.interval = point(n(3));
+        h.quarters[1].aisc.value.interval = point(n(4));
+        let zero = compare_quarters(&i, std::slice::from_ref(&h)).unwrap();
+        assert_eq!(zero.verdict, HistoryVerdict::WithinEnvelope);
+        let witness = &zero.checks[0].witness.as_ref().unwrap().value;
+        assert_eq!(witness.completion.annual_aisc, ZERO);
+        assert_eq!(witness.completion.remaining_spend_usd_m, n(320));
+        assert!(check_quarter_witness(&i, &h, witness).unwrap());
+
+        // Marginal cost and sales ranges overlap, but original quarter equations exclude the target.
+        i.ytd_sold.value.interval = point(ONE);
+        i.remaining_sold.value.interval = point(n(2));
+        i.aisc_guidance.value.interval = point(n(-4));
+        for (quarter, rate) in h.quarters.iter_mut().zip([-2, -8]) {
+            quarter.sold.value.interval = closed(ONE, n(2));
+            quarter.aisc.value.interval = point(n(rate));
+        }
+        let excluded = compare_quarters(&i, &[h]).unwrap();
+        // Total sales two force one per quarter: annual rate (-4-2-8)/3 = -14/3, not -4.
+        assert_eq!(excluded.verdict, HistoryVerdict::ExceedsEnvelope);
+        assert_eq!(excluded.checks[0].cost_possible, Some(false));
+        assert!(excluded.checks[0].witness.is_none());
+        assert_eq!(excluded.checks[0].certificates.len(), 1);
     }
 
     #[test]

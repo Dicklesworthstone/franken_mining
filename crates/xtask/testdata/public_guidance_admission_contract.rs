@@ -16,6 +16,7 @@ mod tests {
             cells,
             Ok(None),
             true,
+            CostMetric::Aisc,
         )
     }
 

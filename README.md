@@ -4192,17 +4192,31 @@ entries in the local, ignored `registries/transcriptions/<issuer>.toml`. Use the
 an annual period such as `2026FY`, and an explicit ownership basis (`100%` or `attributable:n/d`). Supported
 quantity suffixes after `guidance_<site_key_with_underscores>_` are:
 
-| Metal | Production suffix and unit | AISC suffix and unit | Additional AISC basis |
+| Metal / selected metric | Production suffix and unit | Cost suffix and unit | Additional cost basis |
 |---|---|---|---|
 | Gold | `production_koz`, `koz` | `aisc_usd_per_oz`, `usd_per_oz` | `;aisc=issuer-reported-per-sold-oz` |
 | Copper | `production_kt`, `kt` | `aisc_usd_per_lb`, `usd_per_lb` | `;aisc=issuer-reported-per-sold-lb` |
+| Copper / `--metric c1` | `production_kt`, `kt` | `c1_usd_per_lb`, `usd_per_lb` | `;c1=issuer-reported-per-sold-lb` |
 
 Both guidance rows must come from the same latest eligible registered document and identify one metal family.
 Missing, conflicting or mixed-family evidence refuses; no real guidance values are bundled in the code.
 For a copper site with this evidence, use the same command with its site key, such as `--site lumwana`.
 
-The result reports exact remaining production and an AISC spending/rate frontier. AISC uses summed costs and
-sold metal; it never averages quarterly rates or treats production as sales. Copper production stays in kt;
+DESIGN (BD-342): `--metric aisc` is the default. Select `--metric c1` to calculate copper C1 completion
+from the registered C1 guidance and the Mine Stats C1 row. For example, with the corresponding evidence:
+
+```bash
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site lumwana --through 2026Q3 --as-of 2026-11-20 --metric c1 --format markdown
+```
+
+C1 and AISC remain distinct typed definitions despite sharing USD per sold lb. A missing or disputed C1
+assertion refuses; AISC cannot replace it. Historical windows likewise require original C1 observations.
+The C1 JSON report uses `fmine.guidance.completion.v2`, `cost_metric: "c1"`, and C1-labelled requirements,
+frontiers and historical witnesses. Existing AISC reports retain their v1 schema and interpretation.
+Signed C1 net credits use the same exact endpoint arithmetic and separate sales assumption as AISC.
+
+The result reports exact remaining production and a spending/rate frontier for the selected cost metric.
+Cost rates use summed costs and sold metal; they never average quarterly rates or treat production as sales. Copper production stays in kt;
 sales use million lb and rates use USD per sold lb. Explicitly labelled copper sales in kt are converted by
 the declared exact rule `million_lb = kt × 100000000 / 45359237`, retaining the original source Claim and
 the complete displayed rounding interval. The adapter accepts the registered site-sales labels only and
@@ -4249,7 +4263,8 @@ cannot silently fall back to an older complete report. The synthetic command exe
 Copper reports its ceiling in kt and its optimistic required grade as a fraction of dry feed mass.
 DESIGN known answer: 10 Mt at 0.5% copper and 90% recovery yields a 45 kt full-mine ceiling, or 36 kt at
 an explicit 80% ownership share. These invented values illustrate the conversion; they are not issuer data.
-C1 completion is outside this AISC slice.
+The same production-only technical comparison applies alongside either selected copper cost definition;
+it does not establish joint production/C1 feasibility or a probability of meeting guidance.
 
 The report includes the guidance vintage, as-of selection and all source hashes. Each workbook uses its cited
 publication date, with the registered retrieval upper date as a fallback where publication is unstated. Later

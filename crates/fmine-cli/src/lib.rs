@@ -135,6 +135,8 @@ pub enum CliCommand {
         as_of: String,
         /// Optional registered technical report with three explicit physical upper limits.
         capacity_document: Option<String>,
+        /// Explicit cost definition; C1 is supported only for copper.
+        metric: fmine_metrics::guidance::CostMetric,
     },
     /// Invented evidence exercising the same guidance completion adapter and exact kernel.
     GuidanceSynthetic,
@@ -1171,6 +1173,7 @@ pub fn parse_args(
     let mut cohort = None;
     let mut selector = None;
     let mut capacity_document = None;
+    let mut guidance_metric = None;
     let mut discover = false;
     let mut provenance = None;
     let mut definitions = None;
@@ -1269,6 +1272,17 @@ pub fn parse_args(
                     return Err("--capacity-document requires a registered filename".to_string());
                 }
                 capacity_document = Some(document.clone());
+            }
+            "--metric" => {
+                i += 1;
+                let metric = match args.get(i).map(String::as_str) {
+                    Some("aisc") => fmine_metrics::guidance::CostMetric::Aisc,
+                    Some("c1") => fmine_metrics::guidance::CostMetric::C1,
+                    _ => return Err("guidance completion --metric requires aisc or c1".into()),
+                };
+                if guidance_metric.replace(metric).is_some() {
+                    return Err("--metric may be supplied only once".into());
+                }
             }
             "--provenance" => {
                 i += 1;
@@ -1386,6 +1400,9 @@ pub fn parse_args(
     }
     if positional[0] != "guidance" && capacity_document.is_some() {
         return Err("--capacity-document requires 'guidance completion'".to_string());
+    }
+    if positional[0] != "guidance" && guidance_metric.is_some() {
+        return Err("--metric requires 'guidance completion'".to_string());
     }
     if positional[0] != "forecast"
         && (ledger.is_some() || cohort.is_some() || selector.is_some() || provenance.is_some())
@@ -1548,9 +1565,10 @@ pub fn parse_args(
                     || through.is_some()
                     || as_of.is_some()
                     || capacity_document.is_some()
+                    || guidance_metric.is_some()
                 {
                     return Err(
-                        "guidance --synthetic takes no issuer, site, through, as-of or capacity-document selection"
+                        "guidance --synthetic takes no issuer, site, through, as-of, metric or capacity-document selection"
                             .to_string(),
                     );
                 }
@@ -1575,6 +1593,7 @@ pub fn parse_args(
                     through: through.ok_or("guidance completion requires --through YYYYQn")?,
                     as_of: as_of.ok_or("guidance completion requires --as-of YYYY-MM-DD")?,
                     capacity_document,
+                    metric: guidance_metric.unwrap_or(fmine_metrics::guidance::CostMetric::Aisc),
                 }
             }
         }
@@ -2186,9 +2205,16 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             through,
             as_of,
             capacity_document,
+            metric,
         } => {
-            let result =
-                fmine_public::guidance::run_public(workspace_root, issuer, site, through, as_of);
+            let result = fmine_public::guidance::run_public_with_metric(
+                workspace_root,
+                issuer,
+                site,
+                through,
+                as_of,
+                *metric,
+            );
             let selection =
                 format!("Issuer: {issuer}; actuals through {through}; evidence as of {as_of}.");
             match capacity_document {
@@ -2529,7 +2555,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "reliance refresh --journal <path> --expected-head <hex> --key <path> --now <UTC> --uncertainty-ns <n>",
                 "reliance export <file> --output <path> --journal <path> --head <hex> --now <UTC> --uncertainty-ns <n>",
                 "recall --journal <path> (--revision <build-revision> | --claim <id>) [--head <hex>]",
-                "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--capacity-document <registered file>]",
+                "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--metric aisc|c1] [--capacity-document <registered file>]",
                 "guidance completion --synthetic",
                 "mirror --asset <asset> --period <period> --as-of YYYY-MM-DD --left-issuer <issuer> --left-document <file> --right-issuer <issuer> --right-document <file> --metric cash-costs|aisc|cost-of-sales",
                 "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]",

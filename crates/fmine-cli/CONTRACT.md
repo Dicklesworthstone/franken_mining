@@ -30,6 +30,15 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-342): `guidance completion --metric aisc|c1` defaults to AISC and permits explicit copper
+  C1 completion. The source owner selects matching guidance, YTD actuals and original-quarter history;
+  no AISC/C1 substitution is allowed. JSON uses C1 names and schema `fmine.guidance.completion.v2`
+  for C1, while AISC keeps its existing v1 bytes. Markdown labels C1 requirements and joint witnesses
+  in USD per sold pound. Signed costs, printed rounding, source citations and named missing-history
+  exclusions remain visible. Automatic and explicitly selected technical scenarios remain independent
+  production-only comparisons. Unsupported or repeated metrics and metric selection with the fixed
+  synthetic example are usage errors. No forecast registration or full gate acceptance is supplied.
+
 - DESIGN (BD-225/229): `decide investment --manifest <investment.toml>` optionally screens final
   discounted incremental cash after initial capex using one `[[downside_limit]]` with `floor_usd`
   and `max_breach_probability`. The exact floor must fit 0.0001 USD without rounding. JSON and Markdown

@@ -13,7 +13,7 @@ use fmine_evidence::{KnowledgeState, Refusal};
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
 use fmine_metrics::capacity::{CapacityVerdict, PhysicalKind};
 use fmine_metrics::guidance::{
-    EnvelopeTier, GuidanceFamily, HistoryVerdict, QuantityKind, quarters,
+    CostMetric, EnvelopeTier, GuidanceFamily, HistoryVerdict, QuantityKind, quarters,
 };
 use fmine_numerics::exact_feas::{Interval, Rat};
 use fmine_public::guidance::{
@@ -66,6 +66,26 @@ fn guidance_entries(file: &str, basis: &str) -> String {
         ));
     }
     out
+}
+
+fn c1_entries(file: &str, basis: &str, signed: bool) -> String {
+    ["reader-a", "reader-b"]
+        .into_iter()
+        .map(|reader| {
+            entry(
+                file,
+                "c1_usd_per_lb",
+                if signed {
+                    "-2.00 - -1.50"
+                } else {
+                    "1.50 - 2.00"
+                },
+                "usd_per_lb",
+                &format!("{basis};c1=issuer-reported-per-sold-lb"),
+                reader,
+            )
+        })
+        .collect()
 }
 
 fn technical_entries(file: &str, scenario: &str, explicit: bool) -> String {
@@ -219,6 +239,18 @@ fn sheets(
             ],
         },
     ];
+    if matches!(fault, "c1" | "signed_c1" | "c1_current_only") {
+        let c1 = match (year == "2030", fault == "signed_c1") {
+            (true, false) => "2.00",
+            (false, false) => "1.50",
+            (true, true) => "-2.00",
+            (false, true) => "-1.50",
+        };
+        sheets[0].cells.extend([
+            ("E4".into(), text("C1 cash costs ($/lb)")),
+            ("E5".into(), number(c1)),
+        ]);
+    }
     if fault == "ambiguous_sales" {
         sheets[1].cells.extend([
             ("A4".into(), text("Sales (Thousands of tonnes)")),
@@ -247,6 +279,8 @@ fn workspace(tag: &str, share: &str, fault: &str) -> PathBuf {
         "mixed_sales_units",
         "signed_cost",
         "zero_cost",
+        "c1",
+        "signed_c1",
     ]
     .contains(&fault)
     {
@@ -334,12 +368,30 @@ fn workspace(tag: &str, share: &str, fault: &str) -> PathBuf {
         "zero_cost" => entries.replace("3.00 - 3.50", "-0.50 - 0.50"),
         _ => entries,
     };
+    let entries = if matches!(fault, "c1" | "signed_c1" | "c1_current_only") {
+        entries
+            + &c1_entries(
+                "Guidance.pdf",
+                if share == "50%" {
+                    "attributable:1/2"
+                } else {
+                    "100%"
+                },
+                fault == "signed_c1",
+            )
+    } else {
+        entries
+    };
     write_entries(&root, &entries);
     root
 }
 
 fn run(root: &Path) -> Result<GuidanceCompletionReport, fmine_evidence::Refusal> {
     guidance::run_public(root, ISSUER, "copper-mine", "2030Q2", AS_OF)
+}
+
+fn run_c1(root: &Path) -> Result<GuidanceCompletionReport, fmine_evidence::Refusal> {
+    guidance::run_public_with_metric(root, ISSUER, "copper-mine", "2030Q2", AS_OF, CostMetric::C1)
 }
 
 fn interval(lo: (i128, i128), hi: (i128, i128)) -> Interval {
@@ -508,6 +560,271 @@ fn signed_and_zero_copper_costs_reach_the_cli_with_exact_bounds_and_historical_w
         assert!(text.contains(shown), "{text}");
         assert!(text.contains("USD per sold lb") && text.contains("Checked witness"));
         assert_eq!(report.to_json(), run(&root).unwrap().to_json());
+    }
+}
+
+#[test]
+fn copper_c1_completion_uses_distinct_sources_exact_costs_and_checked_history() {
+    for share in ["50%", "100%"] {
+        let root = workspace("c1-known-answer", share, "c1");
+        let aisc = run(&root).unwrap();
+        let explicit_aisc = guidance::run_public_with_metric(
+            &root,
+            ISSUER,
+            "copper-mine",
+            "2030Q2",
+            AS_OF,
+            CostMetric::Aisc,
+        )
+        .unwrap();
+        assert_eq!(aisc.to_json(), explicit_aisc.to_json());
+        let report = run_c1(&root).unwrap();
+        let i = &report.inputs;
+        assert_eq!(i.ytd_aisc.value.kind, QuantityKind::C1UsdPerSoldLb);
+        assert_eq!(i.ytd_aisc.metric_key, "summary:c1_usd_per_lb");
+        assert_eq!(i.ytd_aisc.value.interval, interval((399, 200), (401, 200)));
+        assert_eq!(
+            aisc.inputs.ytd_aisc.value.interval,
+            interval((799, 200), (801, 200))
+        );
+        assert_eq!(
+            report.completion.remaining_production,
+            aisc.completion.remaining_production
+        );
+        // Independent Fraction corners: r*S, A*R+(A-r)*S, A+(A-r)*S/R. Both cost columns exist.
+        assert_eq!(
+            report.completion.ytd_aisc_spend.value.kind,
+            QuantityKind::C1SpendUsdMillion
+        );
+        assert_eq!(
+            report.completion.ytd_aisc_spend.value.interval,
+            interval((4787601, 40000), (4812401, 40000))
+        );
+        assert_eq!(
+            report.completion.remaining_aisc_spend.value.interval,
+            interval((4787299, 40000), (8012801, 40000))
+        );
+        assert_eq!(
+            report.completion.remaining_aisc_rate.value.interval,
+            interval((4309, 3600), (728291, 363600))
+        );
+        assert_eq!(
+            report.completion.remaining_aisc_rate.value.kind,
+            QuantityKind::C1UsdPerSoldLb
+        );
+        assert_eq!(
+            (report.history.tier, report.history.verdict),
+            (EnvelopeTier::T1, HistoryVerdict::WithinEnvelope)
+        );
+        let source = &report.history_sources[0];
+        let history = quarters::QuarterlyHistory {
+            id: source.id.clone(),
+            quarters: source.quarters.clone(),
+        };
+        let witness = &report.history.checks[0].witness.as_ref().unwrap().value;
+        assert!(quarters::check_quarter_witness(i, &history, witness).unwrap());
+        assert!(!matches!(
+            quarters::check_quarter_witness(&aisc.inputs, &history, witness),
+            Ok(true)
+        ));
+        for quarter in &history.quarters {
+            assert_eq!(quarter.aisc.value.kind, QuantityKind::C1UsdPerSoldLb);
+            assert_eq!(quarter.aisc.metric_key, "summary:c1_usd_per_lb");
+            assert_eq!(
+                quarter.aisc.value.interval,
+                interval((299, 200), (301, 200))
+            );
+        }
+        let json = report.to_json();
+        for expected in [
+            "\"schema\":\"fmine.guidance.completion.v2\"",
+            "\"cost_metric\":\"c1\"",
+            "\"c1_guidance\"",
+            "\"ytd_c1\"",
+            "\"ytd_c1_spend\"",
+            "\"remaining_c1_rate\"",
+            "\"remaining_c1_spend\"",
+            "\"annual_c1\"",
+            "\"c1_usd_per_sold_lb\"",
+            "\"c1_spend_usd_m\"",
+            "2030Q2.xlsx:YTD!E5",
+            "2029Q3.xlsx:QTD!E5",
+        ] {
+            assert!(json.contains(expected), "missing {expected}: {json}");
+        }
+        for wrong in [
+            "\"aisc_guidance\"",
+            "\"ytd_aisc\"",
+            "\"remaining_aisc_rate\"",
+            "\"annual_aisc\"",
+            "2030Q2.xlsx:YTD!D5",
+            "2029Q3.xlsx:QTD!D5",
+        ] {
+            assert!(
+                !json.contains(wrong),
+                "C1 report borrowed AISC {wrong}: {json}"
+            );
+        }
+        assert_ne!(report.digest, aisc.digest);
+        assert_eq!(json, run_c1(&root).unwrap().to_json());
+        let mut args = arguments();
+        args.extend(["--metric".into(), "c1".into()]);
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+        assert_eq!(envelope.payload_json, json);
+        args.extend(["--format".into(), "markdown".into()]);
+        let (markdown, exit) = fmine_cli::run(&args, &root);
+        assert_eq!(exit, 0, "{markdown}");
+        for expected in [
+            "Annual C1 guidance",
+            "YTD C1 spending",
+            "Required remaining C1",
+            "USD per sold lb",
+            "119.682475",
+            "T1",
+        ] {
+            assert!(
+                markdown.contains(expected),
+                "missing {expected}: {markdown}"
+            );
+        }
+        assert!(!markdown.contains("AISC"), "{markdown}");
+    }
+}
+
+#[test]
+fn copper_c1_signed_net_credits_keep_their_exact_requirement_and_history() {
+    let root = workspace("c1-net-credits", "50%", "signed_c1");
+    let report = run_c1(&root).unwrap();
+    assert_eq!(
+        report.completion.ytd_aisc_spend.value.interval,
+        interval((-4812401, 40000), (-4787601, 40000))
+    );
+    assert_eq!(
+        report.completion.remaining_aisc_spend.value.interval,
+        interval((-8012801, 40000), (-4787299, 40000))
+    );
+    assert_eq!(
+        report.completion.remaining_aisc_rate.value.interval,
+        interval((-728291, 363600), (-4309, 3600))
+    );
+    assert_eq!(report.history.verdict, HistoryVerdict::WithinEnvelope);
+    let history = &report.history_sources[0];
+    assert!(
+        quarters::check_quarter_witness(
+            &report.inputs,
+            &quarters::QuarterlyHistory {
+                id: history.id.clone(),
+                quarters: history.quarters.clone()
+            },
+            &report.history.checks[0].witness.as_ref().unwrap().value,
+        )
+        .unwrap()
+    );
+    let mut args = arguments();
+    args.extend([
+        "--metric".into(),
+        "c1".into(),
+        "--format".into(),
+        "markdown".into(),
+    ]);
+    let (markdown, exit) = fmine_cli::run(&args, &root);
+    assert_eq!(exit, 0, "{markdown}");
+    assert!(markdown.contains("−200.320025"), "{markdown}");
+    assert!(markdown.contains("Required remaining C1"));
+    assert!(!markdown.contains("AISC"));
+}
+
+#[test]
+fn copper_c1_missing_or_incompatible_evidence_never_falls_back_to_aisc() {
+    let root = workspace("c1-absent", "50%", "");
+    assert_eq!(run_c1(&root).unwrap_err().code, "FMINE-REF-202");
+    let guidance = guidance_entries("Guidance.pdf", "attributable:1/2");
+    let c1 = c1_entries("Guidance.pdf", "attributable:1/2", false);
+    write_entries(&root, &format!("{guidance}{c1}"));
+    assert_eq!(run_c1(&root).unwrap_err().code, "FMINE-REF-201");
+    assert!(run(&root).is_ok());
+
+    let root = workspace("c1-no-history", "50%", "c1_current_only");
+    let report = run_c1(&root).unwrap();
+    assert_eq!(
+        (report.history.tier, report.history.verdict),
+        (EnvelopeTier::T3, HistoryVerdict::Indeterminate)
+    );
+    assert!(report.history_sources.is_empty());
+    assert_eq!(
+        run(&root).unwrap().history.verdict,
+        HistoryVerdict::WithinEnvelope
+    );
+
+    let root = workspace("c1-definition", "50%", "c1");
+    for (old, new, code) in [
+        (
+            ";c1=issuer-reported-per-sold-lb",
+            ";aisc=issuer-reported-per-sold-lb",
+            "FMINE-REF-107",
+        ),
+        (
+            "issuer-reported-per-sold-lb",
+            "issuer-reported-per-sold-oz",
+            "FMINE-REF-107",
+        ),
+        (
+            "unit = \"usd_per_lb\"",
+            "unit = \"usd_per_oz\"",
+            "FMINE-REF-105",
+        ),
+        ("attributable:1/2", "attributable:3/5", "FMINE-REF-105"),
+    ] {
+        write_entries(&root, &format!("{guidance}{}", c1.replace(old, new)));
+        assert_eq!(run_c1(&root).unwrap_err().code, code, "{old} -> {new}");
+        assert!(
+            run(&root).is_ok(),
+            "unselected C1 must not alter AISC: {old} -> {new}"
+        );
+    }
+    let disputed = c1.replacen("token = \"1.50 - 2.00\"", "token = \"1.60 - 2.10\"", 1);
+    write_entries(&root, &format!("{guidance}{disputed}"));
+    assert_eq!(run_c1(&root).unwrap_err().code, "FMINE-REF-202");
+    write_entries(&root, &format!("{guidance}{c1}"));
+    register_document(&root, "Later.pdf", "2030-07-20", "mda");
+    write_entries(
+        &root,
+        &format!(
+            "{guidance}{c1}{}",
+            guidance_entries("Later.pdf", "attributable:1/2")
+        ),
+    );
+    assert_eq!(run_c1(&root).unwrap_err().code, "FMINE-REF-202");
+}
+
+#[test]
+fn guidance_cost_metric_cli_requires_an_explicit_supported_choice() {
+    let root = workspace("c1-cli-options", "50%", "c1");
+    let (default, _) = fmine_cli::invoke(&arguments(), &root);
+    let mut aisc = arguments();
+    aisc.extend(["--metric".into(), "aisc".into()]);
+    assert_eq!(
+        default.to_json(),
+        fmine_cli::invoke(&aisc, &root).0.to_json()
+    );
+    for values in [
+        vec!["--metric", "c2"],
+        vec!["--metric", "c1", "--metric", "aisc"],
+        vec!["--metric"],
+    ] {
+        let mut args = arguments();
+        args.extend(values.into_iter().map(str::to_string));
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_ne!(envelope.exit_code, 0, "{}", envelope.to_json());
+    }
+    for args in [
+        vec!["guidance", "completion", "--synthetic", "--metric", "c1"],
+        vec!["track-record", "--synthetic", "--metric", "c1"],
+    ] {
+        let args: Vec<_> = args.into_iter().map(str::to_string).collect();
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_ne!(envelope.exit_code, 0, "{}", envelope.to_json());
     }
 }
 

@@ -1172,6 +1172,17 @@ The public lane of M0 (`fmine assure public`).
   their implementations. The integration groups preserve the original fixtures, assertions and ignore rules.
 
 ## 10. Non-Goals & Scope Boundary
+
+- DESIGN (BD-342): `guidance::run_public_with_metric` explicitly selects `CostMetric::Aisc` or copper
+  `CostMetric::C1`. C1 requires agreed `guidance_<site>_c1_usd_per_lb` assertions with
+  `;c1=issuer-reported-per-sold-lb`, the same document's copper-production target, and original-vintage
+  `summary:c1_usd_per_lb` actuals/history. AISC cannot fill any missing C1 observation. Exact signed
+  C1 spending and rate requirements retain their own typed Claims, source hashes, sales assumptions,
+  historical witnesses and refusals. Optional technical scenarios still constrain production only.
+  The C1 report uses `fmine.guidance.completion.v2` with `cost_metric: "c1"` and C1-labelled fields;
+  existing AISC reports keep v1. Synthetic registered-source controls in `public_guidance_copper.rs`
+  exercise both metrics in the same sources, rounding, signed credits, incompatible evidence and CLI
+  selection. Authentic issuer C1 transcription, calibration and full BD-342 acceptance remain separate.
 - DESIGN (BD-341.S4): `guidance::track_record::clusters` wraps the unchanged dated comparison in
   `fmine.guidance.track-record.clusters.v1` / `GTCL` v1. Its digest binds the entire original report,
   both first-published and latest-registered selectors, every guidance/source link, both exact cluster
