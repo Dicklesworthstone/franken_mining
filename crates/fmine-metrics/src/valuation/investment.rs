@@ -2,6 +2,7 @@
 //! Determinism: DeterministicPerIsa (the inherited physical calculations); all new arithmetic is exact.
 
 use super::*;
+use fmine_decide::card::downside::DownsideLimit;
 
 mod render;
 #[cfg(test)]
@@ -49,6 +50,8 @@ pub struct InvestmentSpec {
     pub element: String,
     pub commercial_support: String,
     pub monetary_rounding: MonetaryRounding,
+    /// Screen final discounted incremental value after capex and the declared Money rounding.
+    pub downside_limit: Option<DownsideLimit>,
     pub periods: Vec<InvestmentPeriod>,
     pub alternatives: Vec<InvestmentAlternative>,
 }
@@ -129,6 +132,30 @@ fn invalid(message: &str) -> Refusal {
 }
 
 fn validate_spec(spec: &InvestmentSpec) -> Result<()> {
+    if let Some(limit) = &spec.downside_limit {
+        if limit.model_key != spec.model_key
+            || limit.valuation_basis != VALUATION_BASIS
+            || limit.floor.ccy != spec.currency
+        {
+            return Err(invalid(
+                "investment downside limit must share the model, currency and discounted incremental cash basis",
+            ));
+        }
+        if limit.max_breach_probability.num() < 0
+            || limit.max_breach_probability.num() > limit.max_breach_probability.den()
+        {
+            return Err(bad(
+                RefusalCode::OutsidePhysicalDomain109,
+                "maximum investment downside breach probability must lie in [0,1]",
+            ));
+        }
+        if limit.policy_optimization.is_some() {
+            return Err(bad(
+                RefusalCode::NoClaimInDomain201,
+                "investment comparisons screen complete investment choices; no information policies are declared",
+            ));
+        }
+    }
     if !(1..=MAX_ALTERNATIVES).contains(&spec.alternatives.len())
         || !(1..=MAX_PERIODS).contains(&spec.periods.len())
         || spec.currency != Currency::USD
@@ -405,12 +432,20 @@ pub fn evaluate(
         &tag,
         AdditivityClass::ExtensiveAdditive,
     ));
+    let downside_limit = spec.downside_limit.as_ref().map(|limit| {
+        all_meta.claim(
+            "production.investment.downside_limit/1",
+            limit.clone(),
+            &limit.canonical_tag(),
+            AdditivityClass::NonAdditive,
+        )
+    });
     let decision = card::evaluate(&DecisionInputs {
         weights,
         actions,
         information_options: Vec::new(),
         robustness: None,
-        downside_limit: None,
+        downside_limit,
     })?;
     let mut enc = Encoder::new_frame(*b"PVIR", 1);
     enc.put_str(&super::render::claim(declaration));

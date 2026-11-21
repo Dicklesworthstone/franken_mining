@@ -43,9 +43,13 @@ pub(super) fn spec(s: &InvestmentSpec) -> String {
         })
         .collect::<Vec<_>>()
         .join(",");
+    // Existing declarations retain their bytes and identity when the optional screen is absent.
+    let downside = s.downside_limit.as_ref().map_or_else(String::new, |limit| {
+        format!(",\"downside_limit\":{}", limit.to_json())
+    });
     format!(
         concat!(
-            r#"{{"model_key":{},"question":{},"shared_scenario_basis":{},"discount_basis":{},"cashflow_basis":{},"currency":{},"valuation_time_ns":"{}","boundary":{},"circuit":{},"material_domain":{},"dry_basis":{},"element":{},"commercial_support":{},"monetary_rounding":{},"periods":[{}],"alternatives":[{}]}}"#
+            r#"{{"model_key":{},"question":{},"shared_scenario_basis":{},"discount_basis":{},"cashflow_basis":{},"currency":{},"valuation_time_ns":"{}","boundary":{},"circuit":{},"material_domain":{},"dry_basis":{},"element":{},"commercial_support":{},"monetary_rounding":{},"periods":[{}],"alternatives":[{}]{}}}"#
         ),
         js(&s.model_key),
         js(&s.question),
@@ -62,7 +66,8 @@ pub(super) fn spec(s: &InvestmentSpec) -> String {
         js(&s.commercial_support),
         js(s.monetary_rounding.as_str()),
         periods,
-        alternatives
+        alternatives,
+        downside
     )
 }
 
@@ -179,11 +184,53 @@ impl InvestmentReceipt {
         }
         let _ = writeln!(
             out,
-            "\n**Expected-value co-winners:** {}. **Minimax-regret co-winners:** {}.\n\n{}\n\n## Source ancestry\n",
+            "\n**Expected-value co-winners:** {}. **Minimax-regret co-winners:** {}.\n\n{}\n",
             md(&self.decision.summary().expected_value_winners.join(", ")),
             md(&self.decision.summary().minimax_regret_winners.join(", ")),
             card::TIE_RULE
         );
+        if let Some(screen) = &self.decision.summary().downside {
+            let _ = writeln!(
+                out,
+                "\n## Investment downside probability limit\n\n**Breach:** final rounded discounted incremental value after initial capex < **{} USD**; equality is not a breach. **Maximum probability:** **{}**, inclusive. This screens the complete investment horizon, not individual-period cash. Probabilities remain conditional on the declared uncalibrated scenarios; the unconstrained ranking above is unchanged. The limit does not bound loss severity or funding needs.\n\n| Alternative | Breach probability | Eligibility |\n|---|---:|---|",
+                monetary(screen.limit.floor),
+                shown(screen.limit.max_breach_probability)
+            );
+            for choice in &screen.choices {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} |",
+                    md(&choice.choice.id),
+                    shown(choice.nominal_breach_probability),
+                    if choice.nominal_eligible {
+                        "eligible"
+                    } else {
+                        "rejected"
+                    }
+                );
+            }
+            if screen.nominal.winners.is_empty() {
+                out.push_str("\n**No eligible choice.** Every declared alternative fails this probability limit; no fallback is selected.\n");
+            } else {
+                let winners = screen
+                    .nominal
+                    .winners
+                    .iter()
+                    .map(|c| c.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(
+                    out,
+                    "\n**Downside-eligible expected-value co-winners:** {}. **Expected-value cost of the limit:** {} USD. All exact ties remain.\n",
+                    md(&winners),
+                    screen
+                        .nominal
+                        .expected_value_cost_of_limit
+                        .map_or_else(|| "unavailable".into(), shown)
+                );
+            }
+        }
+        out.push_str("\n## Source ancestry\n");
         let sources = self
             .decision
             .claim()

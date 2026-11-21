@@ -355,3 +355,237 @@ fn declaration_validation_source_binding_and_canonical_order_are_preserved() {
         );
     }
 }
+
+fn limited(text: &str, floor: &str, maximum: &str) -> String {
+    format!(
+        "{text}\n[[downside_limit]]\nfloor_usd = \"{floor}\"\nmax_breach_probability = \"{maximum}\"\n"
+    )
+}
+
+#[test]
+fn loss_probability_selects_a_lower_return_investment_and_preserves_nominal_winners() {
+    let text = MANIFEST.replace("discount_factor = \"1/2\"", "discount_factor = \"1\"");
+    let receipt = manifest(&limited(&text, "0", "0"))
+        .evaluate(&bundles())
+        .unwrap();
+    let summary = receipt.decision().summary();
+    // Independently: 2*9123.2-8000 = 10246.4 versus 2*5061.6-1000 = 9123.2.
+    assert_eq!(summary.expected_value_winners, ["higher-power"]);
+    assert_eq!(summary.alternatives.len(), 3);
+    let screen = summary.downside.as_ref().unwrap();
+    assert_eq!(screen.nominal.winners.len(), 1);
+    assert_eq!(screen.nominal.winners[0].id, "process");
+    assert_eq!(
+        screen.nominal.expected_value_cost_of_limit,
+        Some(q(5616, 5))
+    );
+    for (id, probability, eligible) in [
+        ("higher-power", q(1, 2), false),
+        ("process", ZERO, true),
+        (DO_NOTHING, ZERO, true),
+    ] {
+        let choice = screen.choices.iter().find(|c| c.choice.id == id).unwrap();
+        assert_eq!(choice.nominal_breach_probability, probability);
+        assert_eq!(choice.nominal_eligible, eligible);
+    }
+    let claim = receipt.decision().inputs().downside_limit.as_ref().unwrap();
+    assert_eq!(claim.evidence, EvidenceClass::Assumed);
+    assert!(claim.parents.contains(&receipt.declaration().claim_id));
+    assert!(
+        claim
+            .anchors
+            .iter()
+            .any(|a| a.locator.contains("downside_limit.floor_usd"))
+    );
+    assert!(
+        receipt
+            .to_markdown()
+            .contains("Downside-eligible expected-value co-winners:** process")
+    );
+    assert_eq!(
+        *receipt.decision(),
+        card::evaluate(receipt.decision().inputs()).unwrap()
+    );
+}
+
+#[test]
+fn downside_boundaries_are_inclusive_and_an_empty_selection_has_no_fallback() {
+    let b = bundles();
+    let equal_floor = manifest(&limited(MANIFEST, "212", "0"))
+        .evaluate(&b)
+        .unwrap();
+    let screen = equal_floor.decision().summary().downside.as_ref().unwrap();
+    assert_eq!(screen.nominal.winners[0].id, "process");
+    assert_eq!(
+        screen
+            .choices
+            .iter()
+            .find(|c| c.choice.id == "process")
+            .unwrap()
+            .nominal_breach_probability,
+        ZERO
+    );
+    let above = manifest(&limited(MANIFEST, "212.0001", "0"))
+        .evaluate(&b)
+        .unwrap();
+    let screen = above.decision().summary().downside.as_ref().unwrap();
+    assert_eq!(
+        screen.nominal.status,
+        card::downside::DownsideStatus::NoEligibleChoice
+    );
+    assert!(screen.nominal.winners.is_empty());
+    assert_eq!(screen.nominal.expected_value_cost_of_limit, None);
+    assert_eq!(screen.choices.len(), 3);
+    assert!(above.to_markdown().contains("No eligible choice."));
+    let text = MANIFEST.replace("discount_factor = \"1/2\"", "discount_factor = \"1\"");
+    let equal_probability = manifest(&limited(&text, "0", "1/2")).evaluate(&b).unwrap();
+    assert_eq!(
+        equal_probability
+            .decision()
+            .summary()
+            .downside
+            .as_ref()
+            .unwrap()
+            .nominal
+            .winners[0]
+            .id,
+        "higher-power"
+    );
+}
+
+#[test]
+fn downside_uses_final_discounted_value_after_capex_and_declared_rounding() {
+    let m = manifest(&limited(MANIFEST, "0", "0"));
+    let mut spec = m.declaration().value.clone();
+    spec.alternatives.retain(|a| a.id == "process");
+    spec.alternatives[0].initial_capex_usd = ZERO;
+    for p in &mut spec.periods {
+        p.discount_factor = ONE;
+    }
+    let zero_cash = |s: &str| {
+        s.replace("payable_fraction = \"0.9\"", "payable_fraction = \"0\"")
+            .replace("payable_fraction = \"0.8\"", "payable_fraction = \"0\"")
+            .replace(
+                "variable_usd_per_dry_t = \"20\"",
+                "variable_usd_per_dry_t = \"0\"",
+            )
+            .replace(
+                "variable_usd_per_dry_t = \"40\"",
+                "variable_usd_per_dry_t = \"0\"",
+            )
+            .replace("fixed_usd = \"1000\"", "fixed_usd = \"0\"")
+            .replace("fixed_usd = \"2000\"", "fixed_usd = \"0\"")
+            .replace("do_nothing_usd = \"0\"", "do_nothing_usd = \"0.00002\"")
+    };
+    let b = [
+        bundle(false, false, zero_cash),
+        bundle(false, true, zero_cash),
+    ];
+    let receipt = evaluate(&rebound(spec, m.declaration()), &b).unwrap();
+    assert!(
+        receipt
+            .outcomes()
+            .iter()
+            .all(|p| p.unrounded_value_usd == q(-1, 25_000) && p.value.minor == 0)
+    );
+    assert!(
+        receipt
+            .decision()
+            .summary()
+            .downside
+            .as_ref()
+            .unwrap()
+            .choices
+            .iter()
+            .all(|c| c.nominal_breach_probability == ZERO)
+    );
+    let capex = manifest(&limited(MANIFEST, "500", "0"))
+        .evaluate(&bundles())
+        .unwrap();
+    let process = capex
+        .decision()
+        .summary()
+        .downside
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .find(|c| c.choice.id == "process")
+        .unwrap();
+    // Each period's 808 USD soft-state margin exceeds 500; 808 + 808/2 - 1000 = 212 does not.
+    assert_eq!(process.nominal_breach_probability, q(1, 2));
+}
+
+#[test]
+fn downside_source_identity_and_legacy_declaration_are_stable() {
+    let m = manifest(MANIFEST);
+    assert_eq!(
+        m.declaration().value.canonical_tag(),
+        "production-investment/v1:24da1470520d06afa5c4493a2467ec3985a44d79312403e47aa772acb53d2d04"
+    );
+    let b = bundles();
+    let original = m.evaluate(&b).unwrap();
+    let constrained = manifest(&limited(MANIFEST, "0", "0")).evaluate(&b).unwrap();
+    let changed = manifest(&limited(MANIFEST, "0", "1/2"))
+        .evaluate(&b)
+        .unwrap();
+    assert_ne!(original.digest(), constrained.digest());
+    assert_ne!(constrained.digest(), changed.digest());
+    assert_eq!(constrained.outcomes(), changed.outcomes());
+    assert!(!original.to_json().contains("\"downside_limit\""));
+    let mut tampered = constrained.declaration().clone();
+    tampered.value.downside_limit.as_mut().unwrap().floor.minor += 1;
+    assert!(evaluate(&tampered, &b).is_err());
+    for change in [
+        |l: &mut DownsideLimit| l.model_key.push_str("foreign"),
+        |l: &mut DownsideLimit| l.valuation_basis.push_str("foreign"),
+        |l: &mut DownsideLimit| l.floor.ccy = Currency::CAD,
+        |l: &mut DownsideLimit| l.max_breach_probability = q(3, 2),
+        |l: &mut DownsideLimit| {
+            l.policy_optimization = Some(card::downside::PolicyOptimization {
+                screen: card::downside::PolicyScreen::Nominal,
+                max_policies: 1,
+                max_work: 1,
+            });
+        },
+    ] {
+        let mut spec = constrained.declaration().value.clone();
+        change(spec.downside_limit.as_mut().unwrap());
+        assert!(evaluate(&rebound(spec, constrained.declaration()), &b).is_err());
+    }
+}
+
+#[test]
+fn malformed_or_lossy_investment_limits_refuse_without_defaulting() {
+    for (floor, probability) in [
+        ("0.00001", "0"),
+        ("1/3", "0"),
+        ("0", "-1/2"),
+        ("0", "3/2"),
+        ("0", "1/0"),
+        ("170141183460469231731687303715884105727", "0"),
+    ] {
+        let text = limited(MANIFEST, floor, probability);
+        assert!(worksheet::parse(&text, &source(&text, "manifest.toml")).is_err());
+    }
+    let valid = limited(MANIFEST, "-1/8", "1/3");
+    assert_eq!(
+        manifest(&valid)
+            .declaration()
+            .value
+            .downside_limit
+            .as_ref()
+            .unwrap()
+            .floor
+            .minor,
+        -1250
+    );
+    for text in [
+        limited(&valid, "0", "0"),
+        valid.replace("floor_usd = \"-1/8\"", "floor_eur = \"-1/8\""),
+        valid.replace("max_breach_probability = \"1/3\"", ""),
+        format!("{valid}\n[[policy_optimization]]\nmethod = \"exact_deterministic\"\n"),
+    ] {
+        assert!(worksheet::parse(&text, &source(&text, "manifest.toml")).is_err());
+    }
+}

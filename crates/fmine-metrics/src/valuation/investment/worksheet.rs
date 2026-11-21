@@ -63,7 +63,7 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| parse_error(e.line, e.reason))?;
-    if doc.rows.len() > MAX_ALTERNATIVES + MAX_PERIODS + MAX_ALTERNATIVES * MAX_PERIODS + 16 {
+    if doc.rows.len() > MAX_ALTERNATIVES + MAX_PERIODS + MAX_ALTERNATIVES * MAX_PERIODS + 17 {
         return Err(parse_error(
             1,
             "too many investment, period, bundle or UU rows",
@@ -102,6 +102,7 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
     let mut anchors = vec![source.clone()];
     let (mut periods, mut alternatives, mut sources, mut unknowns) =
         (Vec::new(), Vec::new(), BTreeMap::new(), BTreeMap::new());
+    let mut downside_limit = None;
     let time = |f: &crate::valuation::worksheet::Fields<'_>, key| {
         let (v, line) = get(f, key)?;
         v.parse::<i64>()
@@ -158,6 +159,42 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
                     return Err(parse_error(row.line, "duplicate investment-period bundle"));
                 }
             }
+            "downside_limit" => {
+                if downside_limit.is_some() {
+                    return Err(parse_error(
+                        row.line,
+                        "at most one downside limit is supported",
+                    ));
+                }
+                let f = fields(
+                    &row.fields,
+                    &["floor_usd", "max_breach_probability"],
+                    row.line,
+                )?;
+                let minor = number(&f, "floor_usd")?
+                    .checked_mul(Rat::from_integer(Money::SCALE))
+                    .map_err(|_| parse_error(row.line, "downside floor exceeds Money range"))?;
+                if minor.den() != 1 {
+                    return Err(parse_error(
+                        get(&f, "floor_usd")?.1,
+                        "downside floor must be exactly representable in 0.0001 USD; no rounding is applied",
+                    ));
+                }
+                let maximum = number(&f, "max_breach_probability")?;
+                if maximum.num() < 0 || maximum.num() > maximum.den() {
+                    return Err(parse_error(
+                        get(&f, "max_breach_probability")?.1,
+                        "maximum breach probability must lie in [0,1]",
+                    ));
+                }
+                downside_limit = Some(DownsideLimit {
+                    model_key: get(&top, "model_key")?.0.into(),
+                    valuation_basis: VALUATION_BASIS.into(),
+                    floor: Money::from_minor(Currency::USD, minor.num()),
+                    max_breach_probability: maximum,
+                    policy_optimization: None,
+                });
+            }
             "uu" => {
                 let f = fields(
                     &row.fields,
@@ -190,7 +227,7 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
             _ => {
                 return Err(parse_error(
                     row.line,
-                    "only period, alternative, bundle and uu tables are supported",
+                    "only period, alternative, bundle, downside_limit and uu tables are supported",
                 ));
             }
         }
@@ -224,6 +261,7 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         element: get(&top, "element")?.0.into(),
         commercial_support: get(&top, "commercial_support")?.0.into(),
         monetary_rounding: MonetaryRounding::NearestTiesEvenFourPlaces,
+        downside_limit,
         periods,
         alternatives,
     };

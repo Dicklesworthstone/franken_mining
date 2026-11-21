@@ -177,9 +177,9 @@ and physical/commercial support must match, and every original worksheet and exa
 available. The card compares mutually exclusive investments with zero incremental value for do-nothing;
 it values only the declared cash window, with no inferred terminal value, tax, financing or project lifetime.
 
-The `decide production --manifest` comparison also supports a source-bound downside limit. It screens
+Both `decide production --manifest` and `decide investment --manifest` support a source-bound downside limit. It screens
 every alternative, including do-nothing, against the same declared cash floor and maximum probability of
-falling strictly below it. Add this section to the production comparison manifest:
+falling strictly below it. Add this section to the comparison or investment manifest:
 
 ```toml
 [[downside_limit]]
@@ -188,13 +188,20 @@ max_breach_probability = "1/4"
 ```
 
 DESIGN (BD-225): values accept exact decimals or rational fractions; the floor must be exactly representable
-at the existing $0.0001 money boundary. The example retains the higher-power mode as the nominal
+at the existing $0.0001 money boundary. The production example retains the higher-power mode as the nominal
 expected-value winner while selecting the original mode among the eligible choices: the higher-power
 mode loses cash in one of two equally weighted states, exceeding the declared one-quarter limit.
 Equality with the floor does not count as a breach, and equality with the probability limit passes.
 JSON and Markdown retain each mode's breach probability, the eligible winners and the expected-value cost
 of the limit. If every action fails, the card reports no eligible winner. These probabilities apply to
 the final money-rounded cash margins under the supplied, uncalibrated scenarios.
+
+For investments, the floor applies to final discounted incremental value **after initial capital** across
+the complete declared period path. Individual-period cash is not screened. The original two-period example
+has a positive 212 USD worst-state value for the original mode; a floor of 212 USD admits it, while a floor
+of 212.0001 USD with zero permitted breach probability leaves no eligible alternative. The limit does not
+establish interim funding sufficiency or bound the amount lost. Existing manifests without a downside
+limit retain their prior declaration identities.
 
 `forecast journal register-plant` registers a selected recovery, throughput, dry-tonnage, contained-metal
 or recovered-metal target through the existing durable forecast journal. It takes the same three source

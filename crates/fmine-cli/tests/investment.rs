@@ -224,6 +224,7 @@ fn investment_usage_and_robot_schema_are_discoverable_with_shared_output_flags()
     assert_eq!(docs.exit_code, 0);
     assert!(docs.to_json().contains("fmine.production-investment.v1"));
     assert!(docs.to_json().contains("initial_capex_usd"));
+    assert!(docs.to_json().contains("downside_limit_fields"));
     let words = [
         "--format",
         "markdown",
@@ -236,4 +237,103 @@ fn investment_usage_and_robot_schema_are_discoverable_with_shared_output_flags()
     let (result, format) = invoke(&words, &root());
     assert_eq!(format, OutputFormat::Markdown);
     assert_eq!(result.exit_code, 0);
+}
+
+#[test]
+fn actual_binary_screens_investment_losses_and_preserves_sources_and_nominal_ranking() {
+    let text = format!(
+        "{}\n[[downside_limit]]\nfloor_usd = \"0\"\nmax_breach_probability = \"0\"\n",
+        MANIFEST.replace("discount_factor = \"1/2\"", "discount_factor = \"1\"")
+    );
+    let path = temporary(&text);
+    let arguments = args(&path);
+    let output = binary(&arguments);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(output.stdout, binary(&arguments).stdout);
+    let json = parse(&output.stdout).expect("investment JSON");
+    let summary = field(&json, &["payload", "investment", "decision", "summary"]);
+    assert_eq!(
+        field(summary, &["expected_value_primary"]).as_str(),
+        Some("higher-power")
+    );
+    let screen = field(summary, &["downside"]);
+    let winners = field(screen, &["nominal", "winners"])
+        .as_array()
+        .expect("eligible winners");
+    assert_eq!(winners.len(), 1);
+    assert_eq!(field(&winners[0], &["id"]).as_str(), Some("process"));
+    assert_eq!(
+        field(screen, &["choices"])
+            .as_array()
+            .expect("all choices")
+            .len(),
+        3
+    );
+    assert_eq!(
+        field(&json, &["payload", "manifest", "source", "sha256"]).as_str(),
+        Some(sha256(text.as_bytes()).to_hex().as_str())
+    );
+    assert_eq!(
+        field(&json, &["payload", "manifest", "submitted_worksheet"]).as_str(),
+        Some(text.as_str())
+    );
+    let mut markdown = arguments;
+    markdown.extend(["--format".into(), "markdown".into()]);
+    let output = binary(&markdown);
+    assert!(output.status.success());
+    let rendered = String::from_utf8(output.stdout).expect("markdown");
+    assert!(rendered.contains("final rounded discounted incremental value after initial capex"));
+    assert!(rendered.contains("Expected-value co-winners:** higher-power"));
+    assert!(rendered.contains("Downside-eligible expected-value co-winners:** process"));
+}
+
+#[test]
+fn binary_reports_no_eligible_investment_and_refuses_malformed_limits_atomically() {
+    let text = format!(
+        "{MANIFEST}\n[[downside_limit]]\nfloor_usd = \"212.0001\"\nmax_breach_probability = \"0\"\n"
+    );
+    let output = binary(&args(&temporary(&text)));
+    assert!(output.status.success());
+    let json = parse(&output.stdout).expect("investment JSON");
+    let screen = field(
+        &json,
+        &[
+            "payload",
+            "investment",
+            "decision",
+            "summary",
+            "downside",
+            "nominal",
+        ],
+    );
+    assert_eq!(
+        field(screen, &["status"]).as_str(),
+        Some("no_eligible_choice")
+    );
+    assert!(
+        field(screen, &["winners"])
+            .as_array()
+            .expect("winners")
+            .is_empty()
+    );
+    for text in [
+        text.replace("floor_usd = \"212.0001\"", "floor_usd = \"0.00001\""),
+        text.replace(
+            "max_breach_probability = \"0\"",
+            "max_breach_probability = \"1.0001\"",
+        ),
+        format!("{text}\n[[downside_limit]]\nfloor_usd = \"0\"\nmax_breach_probability = \"0\"\n"),
+    ] {
+        let output = binary(&args(&temporary(&text)));
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("\"expected_value_primary\""));
+        assert_eq!(
+            field(&parse(&output.stdout).expect("refusal"), &["verb"]).as_str(),
+            Some("decide investment")
+        );
+    }
 }

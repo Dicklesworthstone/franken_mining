@@ -91,6 +91,17 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   digest binds complete declaration metadata, source receipts and final comparison. All arithmetic
   overflow, missing bundles, changed state weights and incompatible supports refuse the whole request.
 
+  An optional single `[[downside_limit]]` declares an exactly representable `floor_usd` and an exact
+  `max_breach_probability` in [0,1]. The source-bound screen applies to final rounded discounted
+  incremental value after initial capex, over complete scenario paths. Strictly below the floor is a
+  breach; floor equality passes, and probability-cap equality passes. The existing decision engine
+  retains every alternative, unconstrained winners, eligible co-winners and the expected-value cost of
+  the limit. No eligible choice yields no fallback, including when do-nothing breaches a positive floor.
+  This does not test interim liquidity or bound loss severity; information policies are not admitted.
+  Absent limits preserve existing declaration bytes and identities. The known-answer and actual-binary
+  tests cover a nominal winner rejected for capital-loss probability, boundary equality, final rounding,
+  empty eligibility, unchanged legacy identity, malformed limits and retained source anchors.
+
   Synthetic example: `tests/decisions/production_investment.toml` uses two periods and factors 1 and
   1/2. Initial capex of 1,000/8,000 USD reverses the operating-margin ranking: the original mode's mean
   incremental value is 6,592.40 USD versus 5,684.80 USD for higher power. A second-period factor of one
