@@ -153,14 +153,15 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
     let total_ceiling: usize = rows.iter().map(|r| r.ceiling_loc).sum();
     let total_actual: usize = rows.iter().map(|r| r.actual_loc).sum();
 
-    if total_planned != 1_128_000 {
+    // §28.3 base (1,128,000 / 1,298,000) + approved BUDGET-AMEND-001..005 (+43,000 / +49,000).
+    if total_planned != 1_171_000 {
         errors.push(format!(
-            "total_planned in loc_budget.toml must equal 1,128,000 (§28.3), found {total_planned}"
+            "total_planned in loc_budget.toml must equal 1,171,000 (§28.3 + BUDGET-AMEND-001..005), found {total_planned}"
         ));
     }
-    if total_ceiling != 1_298_000 {
+    if total_ceiling != 1_347_000 {
         errors.push(format!(
-            "total_ceiling in loc_budget.toml must equal 1,298,000 (§28.3), found {total_ceiling}"
+            "total_ceiling in loc_budget.toml must equal 1,347,000 (§28.3 + BUDGET-AMEND-001..005), found {total_ceiling}"
         ));
     }
 
@@ -2101,8 +2102,8 @@ mod tests {
             .to_path_buf();
         let report = check_all(&root).expect("GATE-LAYERS-00 check-all must pass with zero errors");
         assert!(report.rows.len() >= 59);
-        assert_eq!(report.total_planned, 1_128_000);
-        assert_eq!(report.total_ceiling, 1_298_000);
+        assert_eq!(report.total_planned, 1_171_000);
+        assert_eq!(report.total_ceiling, 1_347_000);
         assert!(report.total_actual > 4_000);
     }
 }

@@ -173,8 +173,8 @@ name = "fmine-calib"
 layer = "K0"
 subsystem = "Plumb"
 phase = "A"
-planned_loc = 18000
-ceiling_loc = 21000
+planned_loc = 26000
+ceiling_loc = 30000
 charter = "Forecast registration, proper scoring, calibration records, surprise monitors, reference classes (§10)"
 
 [[crate]]
@@ -380,8 +380,8 @@ name = "fmine-capital"
 layer = "E"
 subsystem = "Helm"
 phase = "B"
-planned_loc = 20000
-ceiling_loc = 23000
+planned_loc = 25000
+ceiling_loc = 29000
 charter = "CapitalProgram optimization, scenario index, real options, deal cards"
 
 [[crate]]
@@ -407,8 +407,8 @@ name = "fmine-metrics"
 layer = "E"
 subsystem = "Bullion"
 phase = "A"
-planned_loc = 18000
-ceiling_loc = 21000
+planned_loc = 28000
+ceiling_loc = 32000
 charter = "AISC/AIC/C1/GEO/reserve replacement/ROCE variants, LMDI waterfalls, public lane"
 
 [[crate]]
@@ -425,8 +425,8 @@ name = "fmine-public"
 layer = "V"
 subsystem = "Portal"
 phase = "A"
-planned_loc = 18000
-ceiling_loc = 21000
+planned_loc = 24000
+ceiling_loc = 28000
 charter = "Public-filings lane: issuer filings parsed into Public-basis Claims (§31.1)"
 
 [[crate]]
@@ -461,8 +461,8 @@ name = "fmine-cli"
 layer = "U"
 subsystem = "Adit"
 phase = "A"
-planned_loc = 26000
-ceiling_loc = 30000
+planned_loc = 40000
+ceiling_loc = 46000
 charter = "Binary fmine; robot NDJSON; verb registry; doctor and repair"
 
 [[crate]]

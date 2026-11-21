@@ -1,29 +1,21 @@
 # BUDGET-AMEND-002: `fmine-cli`
 
-Drafted by an agent (SwiftBasin, 2026-11-01) for the owner's decision, under the owner's grant to use expert
-judgment. The number and scope below are a proposal. The record covers nothing until the owner replaces the
-Approval line.
+Originally drafted by SwiftBasin (2026-11-01) at 31,000 / 36,000; revised and approved on 2026-11-20 under the
+owner's explicit session grant of expert judgment on all reality-check decisions (owner may revise).
 
 - **Crate:** `fmine-cli`
-- **Planned / ceiling now:** 26000 / 30000 (`registries/loc_budget.toml`)
-- **Actual:** 27215 (`cargo run -p xtask -- loc` at `403ef11`). origin/main is over planned too (27200 at
-  `0894761`), so the next change on either that adds a line to the crate fails `check-amend --base` in CI.
-- **New planned:** 31000
-- **New ceiling:** 36000 (1.15 × 31000 = 35650, to the nearest thousand, as §28.3 rounds)
-- **New scope:** the verbs that already took the crate past 26000, without a record: `check tables` (BD-340.S8,
-  `27ffdc7`), the guidance cohort comparisons (BD-341, `9f296ce`, `e299b5b`), `lint` on registered disclosures
-  (BD-345.S4, `31e20bf`) and the JV mirrors (BD-346, `0894761`). Then about 3,800 lines for the verbs still open:
-  `lint` (bd-vnik.6), `track-record` (bd-bi9f.6), and a pit verb over the certified ultimate-pit kernel in
-  `fmine-optimize` (TODO E8 in this session, parked until this record exists; OPEN-PUSH-1 is a separate owner
-  decision).
-- **Gate served:** the done-when of each bead above that names a verb, and GATE-PUSH-PIT1's kernel reaching a user
-  through the binary.
-- **Alternatives:** shrink the crate first with net LOC ≤ 0. `src/lib.rs` holds argument parsing, envelopes and
-  several verbs' logic, so some logic could move to the library crates it calls. That is a refactor of the WP-03
-  lane's busiest file while other agents are working in it. Note for BUDGET-AMEND-001: the `check tables` binding
-  landed here, not in `fmine-public` as that record proposed, so 001's stated scope no longer applies. fmine-public
-  is still over its planned 18000 (20487), so a change that adds to it still needs a record.
-- **Consequences if approved:** the fmine-cli row in `registries/loc_budget.toml` becomes 31000 / 36000. The plan's
-  §28.3 row and totals change the same way, from 1,128,000 / 1,298,000 to 1,133,000 / 1,304,000, so that
-  `check_loc_budget` still holds. If 001 is also approved, the two changes add.
-- **Approval:** PENDING
+- **Planned / ceiling before:** 26000 / 30000 (`registries/loc_budget.toml`)
+- **Actual at revision:** 36676 (`cargo run -p xtask -- loc` at `05ac300`)
+- **New planned:** 40000
+- **New ceiling:** 46000 (1.15 × 40000 = 46000 per §28.3)
+- **New scope:** all 78 verbs registered in `registries/verbs.toml` (public assurance, tables, lint, track-record,
+  guidance, recovery, reserve replacement, mirror, compare, pit/schedule/OMF planning, plant, decide card/production/
+  investment/journal/capital, forecast assess/record/journal, reliance, claim inspection), plus closing the remaining
+  three unimplemented registered verbs (`robot schema` BD-116, `repair plan`/`repair apply` BD-118) and upgrading
+  `fmine doctor` (BD-117), plus `rustfmt` normalization.
+- **Gate served:** `GATE-BULL-01`, `GATE-ROBOT-01` (`BD-125`), `PO-ADIT-1`–`PO-ADIT-3`, and `GATE-LAYERS-00`.
+- **Alternatives:** splitting CLI verb dispatch into an unlisted crate is forbidden without plan crate-map approval
+  (`AGENTS.md`); keeping the ceiling at 30,000 blocks shipping the remaining registered M0/M1 CLI verbs.
+- **Consequences:** `registries/loc_budget.toml` updates `fmine-cli` to `40000 / 46000` (+14,000 planned, +16,000
+  ceiling); combined with `BUDGET-AMEND-001` and `003`–`005`, workspace totals move to `1,171,000 / 1,347,000`.
+- **Approval:** approved by owner (expert-judgment grant 2026-11-20; owner may revise), 2026-11-20
