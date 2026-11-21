@@ -188,6 +188,17 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   forecast/cohort/assessment identities. Pure JSON and Markdown renderers expose this descriptive projection;
   no calibration, independence or confidence claim follows. Public-API acceptance tests live in
   `xtask/tests/forecast_diagnostics.rs`; private bin/count edge tests remain beside the kernel.
+- DESIGN (BD-048/049): `gaussian_log_diagnostics(saved_digest)` exposes the existing Gaussian negative
+  log-density score for each saved Gaussian member, including valid negative losses. Its named Gaussian
+  population retains unresolved members in full-population completion bounds; other distributions remain
+  explicit. The frozen outcome domain determines convex minimum/endpoint maximum bounds; without one the
+  upper bound is unbounded. Arithmetic failure retains the member and invalidates affected averages.
+  Values use the existing floating-point kernel and are not certified outward enclosures. Scores depend on
+  the frozen target unit: scaling it by a positive factor adds that factor's logarithm. GLS1/v1 binds the
+  exact parent, parameters, selected events/sources and projection without changing earlier durable bytes.
+  Assessment JSON and saved-report Markdown expose these descriptive scores without a calibration verdict.
+  Independent density answers, missing/domain controls, numerical failure and immutable replay controls
+  live in `xtask/tests/forecast_diagnostics.rs`.
 - DESIGN (BD-048/049): `quantile_diagnostics(saved_digest)` supplements the saved assessment with twice-pinball
   loss at **every supplied quantile**, including interior levels. The preregistered central interval score
   remains unchanged. At level 1/2 this loss is absolute error; for exactly complementary levels p and 1-p,

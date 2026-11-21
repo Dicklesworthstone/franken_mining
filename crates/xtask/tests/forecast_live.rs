@@ -220,6 +220,87 @@ fn gaussian_cohort(opt_in: bool) -> String {
 }
 
 #[test]
+fn gaussian_log_scores_reopen_negative_losses_missing_members_and_original_sources() {
+    fn projection(json: &str) -> &str {
+        assessment(json)
+            .split_once("\"gaussian_log_scores\":")
+            .unwrap()
+            .1
+            .strip_suffix('}')
+            .unwrap()
+    }
+    struct NoLogReportClock;
+    impl WallClock for NoLogReportClock {
+        fn now_ns(&self) -> Result<i64, ClockError> {
+            panic!("saved log-score reports must not sample the clock")
+        }
+    }
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    journal.append(
+        &gaussian_forecast("f1", DUE).replace("std_dev = \"1\"", "std_dev = \"0.1\""),
+        ns("2030-01-02T00:00:00Z"),
+    );
+    journal.append(&gaussian_forecast("f2", DUE), ns("2030-01-02T00:00:00Z"));
+    journal.append(&forecast("f3", 0, 1, DUE), ns("2030-01-02T00:00:00Z"));
+    let frozen = gaussian_cohort(false).replace("members = \"f1, f2\"", "members = \"f1,f2,f3\"");
+    journal.append(&frozen, ns("2030-01-03T00:00:00Z"));
+    journal.append(
+        &outcome("f1", 0, "2031-01-01T00:00:00Z", false),
+        ns("2031-01-02T00:00:00Z"),
+    );
+    journal.append(
+        "[[outcome]]\nforecast = \"f2\"\nkind = \"missing\"\navailable_at = \"2031-01-01T00:00:00Z\"\nreason = \"not_published\"\n",
+        ns("2031-01-02T00:00:00Z"),
+    );
+    let original = journal.assess(CUT, "latest-as-of", None, ns(CUT));
+    let original_digest = assessment_digest(&original);
+    let scores = projection(&original);
+    assert!(scores.contains("\"schema\":\"fmine.forecast-gaussian-log.v1\""));
+    assert!(scores.contains("\"n_members\":3,\"n_supported\":2,\"n_unsupported\":1,\"n_resolved\":1,\"n_unresolved\":1,\"n_scored\":1,\"n_arithmetic_indeterminate\":0"));
+    assert!(scores.contains("\"loss\":-1.383646"));
+    assert!(scores.contains("\"status\":\"unsupported_distribution\""));
+    assert!(scores.contains("\"status\":\"unresolved\""));
+    journal.append(
+        &outcome("f1", 2, "2031-01-11T00:00:00Z", true),
+        ns("2031-01-11T00:00:00Z"),
+    );
+    journal.append(
+        &outcome("f2", 1, "2031-01-11T00:00:00Z", false),
+        ns("2031-01-11T00:00:00Z"),
+    );
+    let latest = journal.assess(
+        "2031-01-12T00:00:00Z",
+        "latest-as-of",
+        None,
+        ns("2031-01-12T00:00:00Z"),
+    );
+    assert_ne!(projection(&latest), scores);
+    let before = fs::read(&journal.path).unwrap();
+    let reopened = execute_with_clock(
+        &Command::Report {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            assessment: original_digest,
+            provenance: None,
+            timestamp: None,
+        },
+        &journal.root,
+        &NoLogReportClock,
+    );
+    assert_eq!(reopened.exit_code, 0, "{reopened:?}");
+    assert_eq!(projection(&reopened.payload_json), scores);
+    assert_eq!(fs::read(&journal.path).unwrap(), before);
+    let markdown = reopened.rendered_markdown.as_deref().unwrap();
+    assert!(markdown.contains("### Gaussian log-density losses"));
+    assert!(markdown.contains("negative density losses are valid"));
+    assert!(markdown.contains("-1.383646"));
+    assert!(markdown.contains("Supported Gaussian members: 2; unsupported distributions: 1; resolved: 1; unresolved: 1; scored: 1; arithmetic indeterminate: 0."));
+    assert!(markdown.contains("Invented!A1"));
+    assert!(markdown.contains(&"11".repeat(32)));
+    assert!(markdown.contains(&original_digest.to_hex()));
+}
+
+#[test]
 fn saved_correction_exposes_raw_fit_and_proposal_without_sampling_clock_or_appending() {
     struct NoCorrectionClock;
     impl WallClock for NoCorrectionClock {

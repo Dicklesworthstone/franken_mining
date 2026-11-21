@@ -24,6 +24,19 @@ fn build_ledger_at(
     payloads: Vec<ForecastPayload>,
     alpha: f64,
 ) -> (ForecastLedger, Vec<ObjectId>, Digest32) {
+    build_ledger_with_policy(
+        payloads,
+        AssessmentPolicy {
+            alpha,
+            ..AssessmentPolicy::default()
+        },
+    )
+}
+
+fn build_ledger_with_policy(
+    payloads: Vec<ForecastPayload>,
+    policy: AssessmentPolicy,
+) -> (ForecastLedger, Vec<ObjectId>, Digest32) {
     let mut ledger = ForecastLedger::new();
     let ids = payloads
         .into_iter()
@@ -42,10 +55,7 @@ fn build_ledger_at(
             members: ids.clone(),
             resolution_rule: "synthetic fixed population".into(),
             eligible_sources: vec!["synthetic".into()],
-            policy: AssessmentPolicy {
-                alpha,
-                ..AssessmentPolicy::default()
-            },
+            policy,
         })
         .unwrap();
     (ledger, ids, cohort)
@@ -79,6 +89,314 @@ fn gaussian() -> ForecastPayload {
         mean: 10.0,
         std_dev: 2.0,
     }
+}
+
+#[test]
+fn gaussian_log_losses_match_density_answers_and_keep_negative_scores() {
+    // Independent -ln(exp(-z^2/2)/(sigma*sqrt(2*pi))) answers, not candidate outputs.
+    let cases = [
+        (0.0, 1.0, 0.0, 0.918_938_533_204_672_7),
+        (0.0, 1.0, 2.0, 2.918_938_533_204_672_7),
+        (0.0, 0.1, 0.0, -1.383_646_559_789_372_8),
+        (0.0, 0.1, 2.0, 198.616_353_440_210_63),
+        (0.0, 10.0, 20.0, 5.221_523_626_198_719),
+    ];
+    let (mut ledger, ids, cohort) = build_ledger(
+        cases
+            .iter()
+            .map(|&(mean, std_dev, _, _)| ForecastPayload::Gaussian { mean, std_dev })
+            .collect(),
+    );
+    for (id, (_, _, outcome, _)) in ids.iter().zip(cases) {
+        publish(&mut ledger, *id, outcome);
+    }
+    let parent = ledger
+        .assess(cohort, 101, OutcomeSelector::FirstPublished)
+        .unwrap()
+        .clone();
+    let bytes = parent.canonical_bytes();
+    let report = ledger.gaussian_log_diagnostics(parent.digest).unwrap();
+    assert_eq!(
+        (report.n_supported, report.n_resolved, report.n_scored),
+        (5, 5, 5)
+    );
+    for (id, (_, _, _, expected)) in ids.iter().zip(cases) {
+        let member = report
+            .members
+            .iter()
+            .find(|m| m.member.forecast_id == *id)
+            .unwrap();
+        let loss = member.loss.unwrap();
+        assert!((loss - expected).abs() < 1e-12, "{loss} versus {expected}");
+        assert_eq!(member.completion.unwrap().lower, loss);
+        assert_eq!(member.completion.unwrap().upper, Some(loss));
+        assert_eq!(member.status(), "resolved");
+    }
+    let mean = cases.iter().map(|c| c.3).sum::<f64>() / cases.len() as f64;
+    assert!((report.observed_mean.unwrap() - mean).abs() < 1e-12);
+    assert_eq!(
+        report.whole_supported.unwrap().lower,
+        report.observed_mean.unwrap()
+    );
+    assert_eq!(blake3_hash(&report.canonical_bytes()), report.digest);
+    assert_eq!(
+        ledger
+            .assess(cohort, 101, OutcomeSelector::FirstPublished)
+            .unwrap()
+            .canonical_bytes(),
+        bytes
+    );
+    assert!(report.to_json().contains("\"loss\":-1.383646"));
+    assert!(
+        report
+            .to_markdown()
+            .contains("negative density losses are valid")
+    );
+}
+
+#[test]
+fn gaussian_log_completion_uses_frozen_domain_and_retains_unsupported_and_missing_members() {
+    let (mut ledger, ids, cohort) = build_ledger_with_policy(
+        vec![
+            ForecastPayload::Gaussian {
+                mean: 0.0,
+                std_dev: 1.0,
+            },
+            ForecastPayload::Gaussian {
+                mean: 0.0,
+                std_dev: 1.0,
+            },
+            ForecastPayload::Gaussian {
+                mean: 5.0,
+                std_dev: 1.0,
+            },
+            ForecastPayload::Empirical {
+                samples: vec![0.0, 1.0],
+            },
+        ],
+        AssessmentPolicy {
+            outcome_bounds: Some((-1.0, 2.0)),
+            ..AssessmentPolicy::default()
+        },
+    );
+    publish(&mut ledger, ids[0], 0.0);
+    ledger
+        .append_outcome(
+            ids[1],
+            100,
+            100,
+            OutcomeKind::Missing {
+                reason: MissingReason::NotPublished,
+            },
+        )
+        .unwrap();
+    let parent = ledger
+        .assess(cohort, 101, OutcomeSelector::FirstPublished)
+        .unwrap()
+        .digest;
+    let report = ledger.gaussian_log_diagnostics(parent).unwrap();
+    assert_eq!(report.members.len(), 4);
+    assert_eq!(
+        (report.n_supported, report.n_resolved, report.n_scored),
+        (3, 1, 1)
+    );
+    let pending = report
+        .members
+        .iter()
+        .find(|m| m.member.forecast_id == ids[1])
+        .unwrap();
+    assert_eq!(pending.status(), "unresolved");
+    assert!(pending.member.selected_event.is_some());
+    assert_eq!(
+        pending.member.outcome,
+        MemberOutcome::Unresolved {
+            reason: MissingReason::NotPublished
+        }
+    );
+    let c = 0.918_938_533_204_672_7;
+    let bounds = pending.completion.unwrap();
+    assert!((bounds.lower - c).abs() < 1e-14);
+    assert!((bounds.upper.unwrap() - c - 2.0).abs() < 1e-14);
+    let outside = report
+        .members
+        .iter()
+        .find(|m| m.member.forecast_id == ids[2])
+        .unwrap()
+        .completion
+        .unwrap();
+    assert!((outside.lower - c - 4.5).abs() < 1e-14);
+    assert!((outside.upper.unwrap() - c - 18.0).abs() < 1e-14);
+    let whole = report.whole_supported.unwrap();
+    assert!((whole.lower - c - 1.5).abs() < 1e-14);
+    assert!((whole.upper.unwrap() - c - 20.0 / 3.0).abs() < 1e-14);
+    assert_eq!(
+        report
+            .members
+            .iter()
+            .find(|m| m.member.forecast_id == ids[3])
+            .unwrap()
+            .status(),
+        "unsupported_distribution"
+    );
+    let (mut unbounded, _, cohort) = build_ledger(vec![ForecastPayload::Gaussian {
+        mean: 0.0,
+        std_dev: 0.1,
+    }]);
+    let parent = unbounded
+        .assess(cohort, 101, OutcomeSelector::FirstPublished)
+        .unwrap()
+        .digest;
+    let report = unbounded.gaussian_log_diagnostics(parent).unwrap();
+    assert!(report.whole_supported.unwrap().lower < 0.0);
+    assert_eq!(report.whole_supported.unwrap().upper, None);
+    assert_eq!(report.observed_mean, None);
+    assert!(
+        report
+            .to_json()
+            .contains("\"upper\":null,\"upper_unbounded\":true")
+    );
+}
+
+#[test]
+fn gaussian_log_arithmetic_failure_keeps_members_and_does_not_become_an_unbounded_domain() {
+    for resolved in [true, false] {
+        let (mut ledger, ids, cohort) = build_ledger_with_policy(
+            vec![
+                ForecastPayload::Gaussian {
+                    mean: 0.0,
+                    std_dev: 1.0
+                };
+                2
+            ],
+            AssessmentPolicy {
+                outcome_bounds: (!resolved).then_some((0.0, 1e155)),
+                ..AssessmentPolicy::default()
+            },
+        );
+        publish(&mut ledger, ids[0], 0.0);
+        if resolved {
+            publish(&mut ledger, ids[1], 1e155);
+        }
+        let parent = ledger
+            .assess(cohort, 101, OutcomeSelector::FirstPublished)
+            .unwrap()
+            .digest;
+        let report = ledger.gaussian_log_diagnostics(parent).unwrap();
+        assert_eq!(report.members.len(), 2);
+        assert_eq!(report.n_supported, 2);
+        assert_eq!(report.n_scored, 1);
+        assert_eq!(report.n_arithmetic_indeterminate, 1);
+        assert_eq!(report.n_resolved, if resolved { 2 } else { 1 });
+        assert_eq!(report.observed_mean.is_none(), resolved);
+        assert_eq!(report.whole_supported, None);
+        assert_eq!(report.completion_status(), "arithmetic_indeterminate");
+        let failed = report
+            .members
+            .iter()
+            .find(|m| m.member.forecast_id == ids[1])
+            .unwrap();
+        assert_eq!(failed.status(), "arithmetic_indeterminate");
+        assert_eq!(failed.completion, None);
+        assert!(!report.to_json().contains("\"upper_unbounded\":true"));
+    }
+}
+
+#[test]
+fn gaussian_log_projection_preserves_saved_selections_replay_and_existing_diagnostic_bytes() {
+    let (mut ledger, ids, cohort) = build_ledger(vec![gaussian(), gaussian()]);
+    publish(&mut ledger, ids[0], 10.0);
+    let parent = ledger
+        .assess(cohort, 101, OutcomeSelector::LatestAsOf)
+        .unwrap()
+        .clone();
+    let before = ledger.assessment_diagnostics(parent.digest).unwrap();
+    let report = ledger.gaussian_log_diagnostics(parent.digest).unwrap();
+    ledger
+        .append_outcome(
+            ids[0],
+            102,
+            102,
+            OutcomeKind::Restated {
+                value: 20.0,
+                citation: citation("revision"),
+                supersedes: 1,
+            },
+        )
+        .unwrap();
+    ledger
+        .append_outcome(
+            ids[1],
+            102,
+            102,
+            OutcomeKind::Published {
+                value: 12.0,
+                citation: citation("original"),
+            },
+        )
+        .unwrap();
+    let latest = ledger
+        .assess(cohort, 103, OutcomeSelector::LatestAsOf)
+        .unwrap()
+        .digest;
+    assert_ne!(
+        ledger.gaussian_log_diagnostics(latest).unwrap().digest,
+        report.digest
+    );
+    assert_eq!(
+        ledger.gaussian_log_diagnostics(parent.digest).unwrap(),
+        report
+    );
+    assert_eq!(
+        ledger.assessment_diagnostics(parent.digest).unwrap(),
+        before
+    );
+    assert_eq!(
+        ledger
+            .assess(cohort, 101, OutcomeSelector::LatestAsOf)
+            .unwrap(),
+        &parent
+    );
+    assert!(
+        ledger
+            .gaussian_log_diagnostics(Digest32::default())
+            .is_err()
+    );
+    let member = report
+        .members
+        .iter()
+        .find(|m| m.member.forecast_id == ids[0])
+        .unwrap();
+    assert_eq!(
+        member.member.outcome,
+        parent
+            .per_member
+            .iter()
+            .find(|m| m.forecast_id == ids[0])
+            .unwrap()
+            .outcome
+    );
+    let mut changed = report.clone();
+    changed.members[0].loss = Some(0.0);
+    assert_ne!(blake3_hash(&changed.canonical_bytes()), report.digest);
+}
+
+#[test]
+fn gaussian_log_report_marks_an_entirely_unsupported_population_without_an_invented_mean() {
+    let (mut ledger, ids, cohort) = build_ledger(vec![ForecastPayload::Empirical {
+        samples: vec![0.0, 1.0],
+    }]);
+    publish(&mut ledger, ids[0], 0.0);
+    let parent = ledger
+        .assess(cohort, 101, OutcomeSelector::FirstPublished)
+        .unwrap()
+        .digest;
+    let report = ledger.gaussian_log_diagnostics(parent).unwrap();
+    assert_eq!(report.n_supported, 0);
+    assert_eq!(report.members.len(), 1);
+    assert_eq!(report.observed_mean, None);
+    assert_eq!(report.whole_supported, None);
+    assert_eq!(report.completion_status(), "no_supported_members");
+    assert_eq!(report.n_arithmetic_indeterminate, 0);
 }
 
 fn diagnostics(

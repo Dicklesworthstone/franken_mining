@@ -3104,6 +3104,16 @@ Markdown preserve the selected sources and parent assessment digest, so later ou
 rewrite an earlier diagnostic report. These are descriptive diagnostics, not calibration verdicts, confidence
 intervals or claims of independent observations.
 
+The separate `gaussian_log_scores` projection reports **negative log predictive density** for Gaussian
+members, in nats relative to the frozen target unit. Lower scores are better; a negative score is valid for
+a density and is never clamped to zero. The projection retains every selected source, unresolved Gaussian
+and unsupported distribution. Pending outcomes receive completion bounds from the prospectively declared
+domain; an absent domain has an unbounded upper loss. Arithmetic failure stays explicit and prevents a
+partial average. These are floating-point completion bounds, not certified outward enclosures. The
+GLS1/v1 digest binds the saved assessment without changing earlier journal or assessment identities.
+JSON and saved-journal Markdown expose both individual losses and the observed and whole-population
+summaries. Different target units must not be compared directly, and these scores do not imply calibration.
+
 DESIGN (BD-048/049): the sibling `interval_coverage` projection reports central **50%, 80% and 95%** coverage.
 Gaussian and empirical distributions supply their central quantiles; explicit intervals and quantile tables
 contribute only exactly declared levels. Each level shows its supported population, unresolved and unsupported

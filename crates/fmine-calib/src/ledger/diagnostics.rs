@@ -15,6 +15,7 @@ use super::{
 };
 
 pub mod coverage;
+pub mod gaussian_log;
 pub mod quantiles;
 
 pub const SCOPE: &str = "Descriptive diagnostics within one frozen cohort, not calibration verdicts, independence estimates, confidence intervals or predictive-skill claims. Unsupported distributions and unresolved members remain visible.";
