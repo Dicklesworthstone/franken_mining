@@ -999,9 +999,10 @@ mod tests {
         let root = workspace_root();
         check_lifts(&root).expect("committed lifts");
         let (lifts, analogues) = load(&root).expect("registry");
-        // Seven, plus fmine-geom's eft.rs, expansion.rs and predicates.rs (bd-193), vdb.rs (bd-191) and winding.rs
-        // (bd-192). The name keeps the count of eleven because bd-007's close reason cites this test by name.
-        assert_eq!((lifts.len(), analogues.len()), (12, 5));
+        // Seven, plus fmine-geom's eft.rs, expansion.rs and predicates.rs (bd-193), vdb.rs (bd-191), winding.rs
+        // (bd-192), and fmine-evidence's claim_class.rs and useful_bound.rs (BD-037 closure of 3). The name keeps
+        // the count of eleven because bd-007's close reason cites this test by name.
+        assert_eq!((lifts.len(), analogues.len()), (14, 5));
     }
 
     /// Local only: set `FRANKENSIM_PATH` to a frankensim checkout that holds the pinned commit. The shared count
@@ -1019,7 +1020,7 @@ mod tests {
         // row may be flagged.
         let log = check_upstream(&workspace_root(), Path::new(&up))
             .expect_err("precond.rs and winding.rs flagged");
-        assert_eq!(log.len(), 12, "{log:?}");
+        assert_eq!(log.len(), 14, "{log:?}");
         assert!(
             log.iter().all(|l| l.contains("\"sha256_ok\":true")),
             "{log:?}"
@@ -1046,6 +1047,16 @@ mod tests {
         );
         assert!(
             log[3].contains("crates/fs-evidence/src/color.rs"),
+            "{log:?}"
+        );
+        assert!(
+            log[4].contains("crates/fs-evidence/src/claim_class.rs")
+                && log[4].contains("\"not_a_lift\":false"),
+            "{log:?}"
+        );
+        assert!(
+            log[5].contains("crates/fs-evidence/src/useful_bound.rs")
+                && log[5].contains("\"not_a_lift\":false"),
             "{log:?}"
         );
     }

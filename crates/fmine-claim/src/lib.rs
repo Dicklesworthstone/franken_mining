@@ -747,6 +747,57 @@ mod tests {
         assert_eq!(derived.color().map(|c| c.rank()), Ok(ColorRank::Estimated));
     }
 
+    /// BD-044 (`G-UU`, `INV-015`): decision-facing non-KK claims without a `UuTerm` are refused
+    /// with `FMINE-REF-204`, whereas claims carrying an explicit `UuTerm` or `KnownKnown` pass.
+    #[test]
+    fn test_g_uu_decision_facing_claim_without_uu_refused() {
+        let missing_uu = Claim::new(
+            "tailings_freeboard_margin",
+            1.4_f64,
+            "1.4",
+            Representation::Interval { lo: 1.1, hi: 1.7 },
+            SpatialSupport::MiningPolygon,
+            AdditivityClass::NonAdditive,
+            EvidenceClass::ModelledCalibrated,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
+            Confidentiality::internal(),
+            vec![],
+            vec![],
+            vec![sample_anchor()],
+        );
+        let refusal = missing_uu
+            .verify_uu_slot_for_decision()
+            .expect_err("decision-facing claim without UU must refuse");
+        assert_eq!(refusal.code, "FMINE-REF-204");
+        assert_eq!(refusal.exit_code, 3);
+
+        let with_uu = Claim::new(
+            "tailings_freeboard_margin",
+            1.4_f64,
+            "1.4",
+            Representation::Interval { lo: 1.1, hi: 1.7 },
+            SpatialSupport::MiningPolygon,
+            AdditivityClass::NonAdditive,
+            EvidenceClass::ModelledCalibrated,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
+            Confidentiality::internal(),
+            vec![UuTerm {
+                scenario_id: "UU-TSF-01".to_string(),
+                description: "PMP storm exceeding 1:10000 gauge history".to_string(),
+                downside_exposure_usd_m: 150.0,
+                trigger_indicator: "72h catchment rainfall > 240 mm".to_string(),
+            }],
+            vec![],
+            vec![sample_anchor()],
+        );
+        assert!(with_uu.verify_uu_slot_for_decision().is_ok());
+
+        let kk = leaf("statutory_mass_kk", EvidenceClass::Measured);
+        assert!(kk.verify_uu_slot_for_decision().is_ok());
+    }
+
     #[test]
     fn test_with_regime_keeps_a_validated_basis_only_for_a_class_that_may_stand_on_one() {
         let stands = leaf("stands", EvidenceClass::Measured).with_regime(regime(), "qaqc-2026");

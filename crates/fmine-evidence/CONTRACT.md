@@ -11,13 +11,13 @@ The epistemic vocabulary every Claim is built from:
 
 It stores no claim payloads or provenance DAGs; `fmine-claim` holds those and applies these laws. It emits no Claims.
 
-`src/color.rs` is lifted from frankensim `crates/fs-evidence/src/color.rs` at `20463525d9775a18c1b237d2676f364f367175ab`, under `LicenseRef-MIT-OpenAI-Anthropic-Rider` (`registries/lifts.toml`, guard test `color::tests::test_compose_never_promotes`). Its first line lists the changes and what was left out: typed axes and fs-qty among them, and its identity digests differ from upstream's. `src/lattice.rs` is original, an `[[analogue]]` row of `fs-evidence/src/lib.rs`. `src/refusal_catalog.rs` is generated from `registries/refusals.toml` by `cargo run -p xtask -- gen-refusals` and is never edited by hand.
+`src/color.rs`, `src/claim_class.rs` and `src/useful_bound.rs` form the lifted closure of 3 modules from frankensim `crates/fs-evidence` at `20463525d9775a18c1b237d2676f364f367175ab`, under `LicenseRef-MIT-OpenAI-Anthropic-Rider` (`registries/lifts.toml`, guard tests `color::tests::test_compose_never_promotes`, `claim_class::tests::test_claim_class_doctrine_bijection`, `useful_bound::tests::test_no_useful_bound_is_absorbing_on_compose`), paired with the stable-Rust `QuantitySpec` shim in `src/quantity_spec.rs` (`BD-037`). `src/lattice.rs` is original, an `[[analogue]]` row of `fs-evidence/src/lib.rs`. `src/refusal_catalog.rs` is generated from `registries/refusals.toml` by `cargo run -p xtask -- gen-refusals` and is never edited by hand.
 
 - **Crate:** `fmine-evidence`
 - **Layer:** S0
 - **Subsystem:** Plumb
 - **LOC budget:** 14,000 planned / 16,000 ceiling
-- **Allowed Module Families:** `["color", "epistemic", "lattice", "refusal_catalog"]`
+- **Allowed Module Families:** `["color", "claim_class", "useful_bound", "quantity_spec", "epistemic", "lattice", "refusal_catalog"]`
 
 ## 2. Inputs
 - **Values of its own types.** Classes, states and statuses. `HypothesisSetId` wraps an `fmine_core::id::ObjectId`.
@@ -104,7 +104,7 @@ No external oracle or fixture.
   - **NL-5's order.** The plan gives only `unknown ∧ known = unknown` and that `redacted` and `not_observable` persist. The working order, weakest knowledge last, is `NotApplicable`, `Known`, `Estimated`, `Stale`, `Unknown`, `Indeterminate`, `Conflicted`, `NotObservable`, `Redacted`.
   - **Structural hypothesis sets.** Two different `Structural` sets conjoin to the greater id.
 - **Proposed codes.** Eight codes await the plan amendment: bd-h0q1.1.
-- **BD-037 (bd-037) is open.** The plan's lift is fs-evidence's "closure of 3" modules, types only, with a stable `QuantitySpec` shim. Only `color.rs` is lifted, without typed axes or fs-qty, and there is no `QuantitySpec`. bd-037 waits on bd-023.
+- **BD-037 closure of 3 + `QuantitySpec` shim:** `color.rs`, `claim_class.rs`, and `useful_bound.rs` are lifted from `fs-evidence` with provenance headers verified against `registries/lifts.toml`, paired with the stable-Rust `QuantitySpec` shim (`quantity_spec.rs`). Typed-axis integration in `color.rs` uses `check_regime_typed` (`test_quantity_spec_shim_distinguishes_semantic_bases_and_roundtrips`).
 - **Not in the crate.** The registry charter also names `EvidenceRow`/`DecisionRow` schema types, which do not exist yet. NL-1's `weakest_color` for headlines is not here either. No bead covers either.
 - **PO-PLUMB-1 is only partly here.** NL-2 and NL-5 are checked over 10⁵ DAGs. NL-1 is checked over 10⁴ random pairs, not over DAGs. NL-3, NL-4 and NL-6 to NL-8 belong to other crates (Proof obligations).
 

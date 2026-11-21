@@ -47,6 +47,22 @@ target = "crates/fmine-evidence/src/color.rs"
 guard_test = "color::tests::test_compose_never_promotes"
 
 [[lift]]
+source = "crates/fs-evidence/src/claim_class.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "02ca3bce7b0421425ecb69774f6ec9f3d48269a9939f2ca5c16a799ad0825d5f"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-evidence/src/claim_class.rs"
+guard_test = "claim_class::tests::test_claim_class_doctrine_bijection"
+
+[[lift]]
+source = "crates/fs-evidence/src/useful_bound.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "f769185368638eac6d2b6f89f71cb4d8262b428b5c1cc9f0c280aa15a092d8fa"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-evidence/src/useful_bound.rs"
+guard_test = "useful_bound::tests::test_no_useful_bound_is_absorbing_on_compose"
+
+[[lift]]
 source = "crates/fs-sparse/src/lib.rs"
 commit = "20463525d9775a18c1b237d2676f364f367175ab"
 sha256_at_lift = "b7c3aac07ac37695efb7c87b4d14fb78e3e4fb9935c50967c34a060d60e63e5a"

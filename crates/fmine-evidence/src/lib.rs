@@ -1,18 +1,30 @@
 //! Evidence classes, knowledge states, colours (`§7`) and the structured refusal catalog
 //! (`FMINE-REF-*`, `BD-037`–`BD-039`, BD-328).
 
+pub mod claim_class;
 pub mod color;
 pub mod epistemic;
 pub mod lattice;
+pub mod quantity_spec;
 mod refusal_catalog;
+pub mod useful_bound;
 
+pub use claim_class::{ClaimClass, EvidenceRegime};
 pub use color::Color;
 pub use epistemic::{
     AoaStatus, AssertionSource, EpistemicStatus, EvidenceClass, HypothesisSetId, KnowledgeState,
     KuKind,
 };
 pub use lattice::project_color;
+pub use quantity_spec::{
+    Dims, QUANTITY_SPEC_ENCODED_LEN, QUANTITY_SPEC_ENCODING_VERSION, QuantitySpec,
+    QuantitySpecDecodeError, SemanticKind,
+};
 pub use refusal_catalog::{CATALOG, RefusalCode};
+pub use useful_bound::{
+    Bound, BoundInterval, BoundOutcome, NoUsefulBound, NoUsefulBoundCause, UsefulBoundError,
+    UsefulnessCriterion,
+};
 
 use std::fmt;
 
