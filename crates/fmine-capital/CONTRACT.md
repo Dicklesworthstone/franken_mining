@@ -34,6 +34,20 @@ earlier breaches followed by later recovery. All checkpoint rows remain visible 
 There is no implicit within-period payment ordering, discounting, credit facility or adaptive recourse.
 Aggregate funding and scheduled funding are mutually exclusive; neither changes the already-net NAV input.
 
+DESIGN (BD-229, source-derived cash liquidity): the `additive_discounted_incremental_cash` convention
+also admits `FundingSchedule`. In this convention, opening cash is before initial capital: every selected
+candidate's `cost` is paid once at the opening checkpoint, before period receipts. That checkpoint retains
+cash before payment, the negative capital payment, post-payment cash and slack to the first period's floor.
+Subsequent signed flows are nominal undiscounted increments excluding initial capital. Every shared state's
+opening and period-end floor binds, including breaches repaired by later receipts. Costs remain charged
+only once in the separately supplied discounted valuation; cash admission changes feasibility, never the
+net values or joint signed-loss CVaR. Existing NAV schedules retain their declared cash-flow semantics and
+canonical encoding. Aggregate/entity funding, equity and additional robustness modes remain unsupported
+for this cash convention. Known-answer controls in `tests.rs` cover opening-capital insolvency, exact floor
+equality, USD 0.0001 period shortfalls, rare-state rejection, one-time capital payment, preserved
+valuation/tail risk, and deterministic reordering. These synthetic controls do not qualify an actual cash
+forecast or establish intra-period solvency.
+
 DESIGN (BD-314, §23.2): optional `EntityFunding` is a third, mutually exclusive funding mode. Every named
 entity has explicit opening cash in each shared state, a floor for every period, and complete external
 baseline and candidate cash-flow matrices. Fixed funding transfers have two modeled endpoints, one period,

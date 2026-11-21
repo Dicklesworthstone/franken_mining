@@ -45,6 +45,7 @@ pub const PAYOFF_CONVENTION: &str = "additive_net_delta_nav";
 pub const CASH_PAYOFF_CONVENTION: &str = "additive_discounted_incremental_cash";
 pub const CASH_VALUATION_BASIS: &str = "declared_periods_discounted_incremental_cash";
 pub const CASH_NO_CLAIM: &str = "Static comparison of additive discounted incremental cash over explicitly declared periods and complete shared scenarios. Candidate values already subtract initial capital once; spending constrains the budget and is not charged again. Only the declared cash window is valued. No omitted cash, terminal value, tax, financing, ownership, full project NAV, project interactions, liquidity schedule, adaptive recourse, calibration or execution authorization is inferred. The selected set is optimal only among the declared binary subsets under their budget, prerequisites, exclusions and joint signed-loss CVaR limit. Input probabilities and additivity remain source assumptions.";
+pub const CASH_LIQUIDITY_NO_CLAIM: &str = "Static comparison of additive discounted incremental cash over explicitly declared periods and complete shared scenarios. Initial candidate capital constrains the budget and is paid once from nominal opening cash before any period receipts. Complete signed period cash flows exclude that initial capital and discounting. Every shared state must meet the first period's cash floor immediately after the initial payment and each period's floor at its close; later receipts cannot erase an earlier breach. These cash checks do not change the already-net discounted candidate values or their joint signed-loss CVaR. Only the declared cash window is valued and only declared checkpoints constrain liquidity. No intra-period funding guarantee, omitted cash, terminal value, tax, financing, ownership, full project NAV, project interaction, adaptive recourse, calibration or execution authorization is inferred. Probabilities, cash bases and additivity remain source assumptions.";
 pub const EQUITY_PAYOFF_CONVENTION: &str = "additive_equity_nav_with_share_changes";
 pub const NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Optional funding checks cover only the explicitly declared cash window and basis; they do not guarantee every intra-period balance or a feasible staged schedule. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and scenario cash requirements constrain funding and are not deducted again from net delta-NAV.";
 pub const CASH_SCHEDULE_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Cash checks cover the opening and period-end checkpoints of the declared cash schedule and basis; they do not guarantee intra-period balances or adaptive staged decisions. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash flows constrain funding and are not charged to net delta-NAV again.";
@@ -149,9 +150,11 @@ pub struct FundingSchedule {
     pub currency: Currency,
     pub cash_basis: String,
     pub opening_date: String,
+    /// Before initial capital when the policy uses `CASH_PAYOFF_CONVENTION`.
     pub opening_cash: Vec<(String, Money)>,
     pub periods: Vec<CashPeriod>,
     pub baseline_flows: Vec<StateCashFlow>,
+    /// Undiscounted increments excluding initial capital under `CASH_PAYOFF_CONVENTION`.
     pub candidate_flows: Vec<CandidateCashFlow>,
 }
 
@@ -273,7 +276,11 @@ pub struct ProgramInputs {
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
     if inputs.policy.value.payoff_convention == CASH_PAYOFF_CONVENTION {
-        return CASH_NO_CLAIM;
+        return if inputs.funding_schedule.is_some() {
+            CASH_LIQUIDITY_NO_CLAIM
+        } else {
+            CASH_NO_CLAIM
+        };
     }
     if inputs.selection_stability.is_some() {
         return stability::NO_CLAIM;
@@ -1060,7 +1067,6 @@ fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>)>
     if cash
         && (policy.valuation_basis != CASH_VALUATION_BASIS
             || inputs.funding.is_some()
-            || inputs.funding_schedule.is_some()
             || inputs.entity_funding.is_some()
             || inputs.equity.is_some()
             || !inputs.entity_valuations.is_empty()
@@ -1069,7 +1075,7 @@ fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>)>
     {
         return Err(bad(
             RefusalCode::BasisMismatch105,
-            "declared-period cash supports only the static total-USD subset comparison; NAV, equity, funding, recourse and additional robustness modes require their own declared semantics",
+            "declared-period cash supports static total-USD subsets and an optional nominal funding schedule; NAV, equity, aggregate/entity funding, recourse and additional robustness modes require their own declared semantics",
         ));
     }
     admit(
@@ -1383,7 +1389,11 @@ struct FundingScheduleIndex<'a> {
 }
 
 impl FundingScheduleIndex<'_> {
-    fn assess(&self, selected_mask: usize) -> Result<FundingScheduleAssessment> {
+    fn assess(
+        &self,
+        selected_mask: usize,
+        initial_capital_minor: i128,
+    ) -> Result<FundingScheduleAssessment> {
         let schedule = self.declaration;
         let money = |minor| -> Result<ExactMoney> {
             Ok(ExactMoney {
@@ -1403,8 +1413,16 @@ impl FundingScheduleIndex<'_> {
         let mut checkpoints = Vec::with_capacity(state_count * (schedule.periods.len() + 1));
         let mut minimum_slack: Option<i128> = None;
         for (state, opening) in &schedule.opening_cash {
-            let slack = opening
+            let closing = opening
                 .minor
+                .checked_sub(initial_capital_minor)
+                .ok_or_else(|| {
+                    bad(
+                        RefusalCode::NumericalCertificateFailed207,
+                        "initial capital payment overflowed opening cash",
+                    )
+                })?;
+            let slack = closing
                 .checked_sub(first.minimum_cash.minor)
                 .ok_or_else(|| {
                     bad(
@@ -1413,15 +1431,16 @@ impl FundingScheduleIndex<'_> {
                     )
                 })?;
             minimum_slack = Some(minimum_slack.map_or(slack, |old| old.min(slack)));
-            balances.push(opening.minor);
+            balances.push(closing);
             checkpoints.push(CashScheduleCheckpoint {
                 period_id: None,
                 checkpoint_date: schedule.opening_date.clone(),
                 state_id: state.clone(),
                 opening_cash: money(opening.minor)?,
                 baseline_cash_flow: money(0)?,
-                candidate_cash_flow: money(0)?,
-                closing_cash: money(opening.minor)?,
+                // Admission makes costs nonnegative; a subset's checked spend cannot be i128::MIN.
+                candidate_cash_flow: money(-initial_capital_minor)?,
+                closing_cash: money(closing)?,
                 minimum_cash: money(first.minimum_cash.minor)?,
                 slack: money(slack)?,
             });
@@ -2047,7 +2066,16 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         }
         let funding_schedule = schedule_index
             .as_ref()
-            .map(|index| index.assess(mask))
+            .map(|index| {
+                index.assess(
+                    mask,
+                    if policy.payoff_convention == CASH_PAYOFF_CONVENTION {
+                        spend
+                    } else {
+                        0
+                    },
+                )
+            })
             .transpose()?;
         if let Some(schedule) = &funding_schedule {
             for checkpoint in &schedule.checkpoints {

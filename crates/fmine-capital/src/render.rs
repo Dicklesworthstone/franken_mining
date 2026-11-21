@@ -1000,7 +1000,12 @@ impl EvaluatedProgram {
             out.push_str("\nScenario funding: not declared.\n");
         }
         if let Some(funding) = &self.inputs.funding_schedule {
-            funding_schedule_markdown(&mut out, funding, &s.choices);
+            funding_schedule_markdown(
+                &mut out,
+                funding,
+                &s.choices,
+                s.policy.payoff_convention == CASH_PAYOFF_CONVENTION,
+            );
         }
         if let Some(funding) = &self.inputs.entity_funding {
             crate::entity::render::inputs_markdown(&mut out, funding);
@@ -1166,11 +1171,17 @@ fn funding_schedule_markdown(
     out: &mut String,
     funding: &Claim<FundingSchedule>,
     choices: &[ProgramChoice],
+    pays_initial_capital: bool,
 ) {
     let f = &funding.value;
+    let cash_treatment = if pays_initial_capital {
+        "Positive cash flows are receipts; negative cash flows are expenditures. Each shared state starts with its declared opening cash before initial capital. The selected candidates' initial capital is paid once at opening, before any period receipts; that closing opening-checkpoint balance must meet the first period's floor. Complete baseline and incremental candidate flows then change nominal cash period by period, excluding initial capital and discounting. Every period-end balance must meet its declared floor. An earlier breach remains a rejection even when later receipts restore cash.\n\nThese checks cover the post-capital opening and period-end dates, without establishing every intra-period balance or a contingent funding strategy. Cash flows do not change the already-net discounted incremental-cash payoffs or their joint risk. All monetary values are exact rational major USD."
+    } else {
+        "Positive cash flows are receipts; negative cash flows are expenditures. Each shared state starts with its declared opening cash. Baseline flows and the selected candidates' flows then change that balance period by period. The opening balance must meet the first period's floor, and every period-end balance must meet that period's floor. An earlier breach remains a rejection even when later receipts restore cash.\n\nThese checks cover the declared opening and period-end dates. They do not establish every intra-period balance or a contingent funding strategy. Cash flows do not alter the supplied net delta-NAV payoffs. All monetary values are exact rational major USD."
+    };
     let _ = writeln!(
         out,
-        "\n## Funding at declared cash checkpoints\n\n**Opening date:** {}. **Cash basis:** {}.\n\nPositive cash flows are receipts; negative cash flows are expenditures. Each shared state starts with its declared opening cash. Baseline flows and the selected candidates' flows then change that balance period by period. The opening balance must meet the first period's floor, and every period-end balance must meet that period's floor. An earlier breach remains a rejection even when later receipts restore cash.\n\nThese checks cover the declared opening and period-end dates. They do not establish every intra-period balance or a contingent funding strategy. Cash flows do not alter the supplied net delta-NAV payoffs. All monetary values are exact rational major USD.\n",
+        "\n## Funding at declared cash checkpoints\n\n**Opening date:** {}. **Cash basis:** {}.\n\n{cash_treatment}\n",
         md(&f.opening_date),
         md(&f.cash_basis)
     );
