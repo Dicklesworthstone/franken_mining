@@ -76,6 +76,7 @@ fn observation_on_sheet(
                         "cu_prod_100_kt" => "Copper produced (kt 100%)",
                         "c1_usd_per_lb" => "C1 cash costs ($/lb)",
                         "aisc_usd_per_lb" => "All-in sustaining costs ($/lb)",
+                        "tcc_usd_per_oz" => "Total cash costs ($/oz)",
                         _ => "All-in sustaining costs ($/oz)",
                     }
                     .into(),
@@ -154,6 +155,7 @@ fn quarterly_outcomes_select_only_the_scored_original_qtd_for_every_metric() {
             "au_prod_100_koz",
             "cu_prod_100_kt",
             "aisc_usd_per_oz",
+            "tcc_usd_per_oz",
             "c1_usd_per_lb",
             "aisc_usd_per_lb",
         ] {
@@ -222,6 +224,54 @@ fn quarterly_outcomes_select_only_the_scored_original_qtd_for_every_metric() {
             );
         }
     }
+}
+
+#[test]
+fn gold_tcc_outcomes_use_original_qtd_without_aisc_or_cumulative_substitution() {
+    let cost = copper_target("tcc_usd_per_oz");
+    let period = Period {
+        year: 2030,
+        kind: PeriodKind::Quarter(4),
+    };
+    let mut sources = inventory(vec![
+        observation("2030Q4", period, &cost, "-7.25", false),
+        observation("2030Q4", period, &target(false), "999", false),
+        observation(
+            "2030Q4",
+            Period {
+                year: 2030,
+                kind: PeriodKind::FullYear,
+            },
+            &cost,
+            "1200",
+            false,
+        ),
+        observation(
+            "2030Q3",
+            Period {
+                year: 2030,
+                kind: PeriodKind::NineMonths,
+            },
+            &cost,
+            "1000",
+            false,
+        ),
+        observation("2031Q4", period, &cost, "500", false),
+    ]);
+    let quarter = Quarter { year: 2030, q: 4 };
+    let observed = infer_outcome(&mut sources, "Site A", &cost, quarter).unwrap();
+    assert_eq!(number(&observed.value), Some(Rat::new(-29, 4).unwrap()));
+    assert_eq!(observed.locators.len(), 1);
+    assert!(sources.evidence.cells.values().any(|cell| {
+        cell.contains("summary:tcc_usd_per_oz") && cell.contains("\"unit\":\"usd_per_oz\"")
+    }));
+    sources.observations.remove(0);
+    assert!(matches!(
+        infer_outcome(&mut sources, "Site A", &cost, quarter)
+            .unwrap()
+            .value,
+        Availability::Unavailable(_)
+    ));
 }
 
 #[test]
@@ -369,6 +419,14 @@ fn copper_guidance_uses_its_own_share_and_requires_each_sold_pound_definition() 
             "3.1 - 3.3",
             "attributable:3/4;aisc=issuer-reported-per-sold-lb",
             ("3.1", "3.3"),
+        ),
+        (
+            "tcc_usd_per_oz",
+            "tcc_usd_per_oz",
+            "usd_per_oz",
+            "-20 - 10",
+            "attributable:3/4;tcc=issuer-reported-per-sold-oz",
+            ("-20", "10"),
         ),
     ] {
         let target = copper_target(field);

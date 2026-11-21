@@ -30,6 +30,14 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-059/067/076): the frozen forecast-record workflow additionally admits
+  `tcc_usd_per_oz` for `q4_qtd` and `quarter_qtd` targets. Candidate generation, original-release
+  outcomes and persistence all consume the printed gold total cash-cost field. Its guidance comparator
+  requires an agreed `tcc_usd_per_oz` quantity with `;tcc=issuer-reported-per-sold-oz`; gold AISC cannot
+  substitute. Signed and zero costs keep their literal values, subject to existing source, ownership
+  and status checks. Cost rates are not subtracted or scaled by ownership. Existing rule files,
+  canonical records and target interpretations remain unchanged when TCC is absent.
+
 - DESIGN (BD-342): `guidance completion --metric aisc|c1` defaults to AISC and permits explicit copper
   C1 completion. The source owner selects matching guidance, YTD actuals and original-quarter history;
   no AISC/C1 substitution is allowed. JSON uses C1 names and schema `fmine.guidance.completion.v2`

@@ -255,6 +255,61 @@ fn copper_draft_cli_keeps_source_units_and_emits_record_parseable_csv() {
 }
 
 #[test]
+fn gold_tcc_draft_cli_emits_its_own_metric_and_record_parseable_intervals() {
+    for quarterly in [false, true] {
+        let rules = RULES
+            .replace("aisc_usd_per_oz", "tcc_usd_per_oz")
+            .replace("AISC", "total cash costs");
+        let rules = if quarterly {
+            rules
+                .replace("fy_minus_9m", "quarter_qtd")
+                .replace("q4_qtd", "quarter_qtd")
+        } else {
+            rules
+        };
+        let fixture = Fixture::with_metrics(
+            &rules,
+            "Gold produced (000s oz, 100%)",
+            "Total cash costs ($/oz)",
+        );
+        let (exit, value, bytes) = invoke(&fixture.args());
+        assert_eq!(exit, 0, "{bytes}");
+        let report = at(&value, &["payload"]);
+        let parsed = parse_forecasts(
+            at(report, &["forecasts_csv"]).as_str().unwrap().as_bytes(),
+            &parse_rules(&rules).unwrap(),
+        )
+        .unwrap();
+        let cost = parsed
+            .iter()
+            .find(|r| r.site == "Site A" && r.target == "unit_cost")
+            .unwrap();
+        assert_eq!(
+            (cost.lo, cost.point, cost.hi),
+            (
+                Rat::from_integer(1650),
+                Rat::from_integer(1650),
+                Rat::from_integer(1800)
+            )
+        );
+        assert!(bytes.contains("summary:tcc_usd_per_oz"));
+        assert!(!bytes.contains("summary:aisc_usd_per_oz"));
+        let metadata = at(report, &["targets"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| at(t, &["id"]).as_str() == Some("unit_cost"))
+            .unwrap();
+        assert_eq!(at(metadata, &["unit"]).as_str(), Some("usd_per_oz"));
+        assert_eq!(
+            at(metadata, &["basis"]).as_str(),
+            Some("reported_rate_per_ounce_sold")
+        );
+        assert_eq!(invoke(&fixture.args()).2, bytes);
+    }
+}
+
+#[test]
 fn complete_draft_uses_displayed_original_sources_and_independent_quantile_answers() {
     let fixture = Fixture::new();
     let args = fixture.args();

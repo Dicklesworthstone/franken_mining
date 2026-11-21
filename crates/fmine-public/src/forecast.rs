@@ -342,7 +342,12 @@ fn observation(
     let signed_point = role == "point"
         && matches!(
             TargetMetric::from_target(target),
-            Some(TargetMetric::GoldAisc | TargetMetric::CopperC1 | TargetMetric::CopperAisc)
+            Some(
+                TargetMetric::GoldAisc
+                    | TargetMetric::GoldTcc
+                    | TargetMetric::CopperC1
+                    | TargetMetric::CopperAisc
+            )
         );
     let (value, mut reason) = match displayed {
         Some(Ok(display)) => match Rat::from_decimal_str(&display.text()) {

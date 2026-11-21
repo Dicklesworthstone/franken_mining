@@ -449,6 +449,164 @@ fn copper_candidates_keep_kt_and_both_per_pound_costs_in_separate_source_bound_p
 }
 
 #[test]
+fn gold_tcc_candidates_keep_a_distinct_pool_signed_points_and_original_source_claims() {
+    let mut rules = RULES.to_string();
+    rules.push_str(
+        r#"
+[[target]]
+id = "cash_cost"
+quantity = "total cash costs per attributable ounce sold"
+scored_quantity = "printed Q4 total cash costs"
+field = "tcc_usd_per_oz"
+outcome = "q4_qtd"
+[[baseline]]
+id = "run_rate_persistence"
+target = "cash_cost"
+rule = "consecutive positive quarterly ratios"
+source = "invented gold workbooks"
+pool_from = "2030Q1"
+pool_through = "2030Q2"
+point_quarter = "2030Q3"
+"#,
+    );
+    let tcc_sheet = |q: u8, sheet: &mut MinimalSheet| {
+        sheet.cells.push((
+            "D2".into(),
+            MinimalCell::Text("Total cash costs ($/oz)".into()),
+        ));
+        let values = match q {
+            1 => [100.0, 100.0],
+            2 => [50.0, 200.0],
+            _ => [-10.0, 0.0],
+        };
+        for (row, value) in [(3, values[0]), (4, values[1])] {
+            sheet
+                .cells
+                .push((format!("D{row}"), MinimalCell::Number(value)));
+        }
+    };
+    for quarterly in [false, true] {
+        let rules = if quarterly {
+            rules
+                .replace("fy_minus_9m", "quarter_qtd")
+                .replace("q4_qtd", "quarter_qtd")
+        } else {
+            rules.clone()
+        };
+        let (registry, sources) = fixture(tcc_sheet);
+        let report = finish(
+            prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+            sources.clone(),
+            2,
+        )
+        .unwrap();
+        assert_eq!(report.candidate.exact_rows.len(), 6);
+        for (site, expected) in [("Site A", (-20, -5, -5)), ("Site B", (0, 0, 0))] {
+            let row = report
+                .candidate
+                .exact_rows
+                .iter()
+                .find(|r| r.site == site && r.target == "cash_cost")
+                .unwrap();
+            // Independent TCC ratios are 1/2 and 2, distinct from the AISC ratios 11/10 and 6/5.
+            assert_eq!(
+                (row.lo, row.point, row.hi),
+                (
+                    Rat::from_integer(expected.0),
+                    Rat::from_integer(expected.1),
+                    Rat::from_integer(expected.2)
+                )
+            );
+        }
+        for observation in report
+            .observations
+            .iter()
+            .filter(|o| o.target == "cash_cost")
+        {
+            let claim = observation.claim.as_ref().unwrap();
+            assert_eq!(claim.key.line.label, "summary:tcc_usd_per_oz");
+            assert_eq!(claim.key.unit, "usd_per_oz");
+            assert!(claim.locator.contains(":QTD!D"));
+            assert!(matches!(
+                claim.key.ownership_basis,
+                OwnershipBasis::Attributable { .. }
+            ));
+        }
+        assert_eq!(
+            record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+            report.candidate.serialized_rows
+        );
+        assert_eq!(
+            finish(
+                prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+                sources,
+                2
+            )
+            .unwrap()
+            .digest,
+            report.digest
+        );
+        let (registry, sources) = fixture(|q, sheet| {
+            if q < 3 {
+                tcc_sheet(q, sheet);
+            }
+        });
+        assert!(
+            finish(
+                prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+                sources,
+                2
+            )
+            .is_err(),
+            "a published AISC point cannot fill a missing TCC point"
+        );
+    }
+}
+
+#[test]
+fn gold_tcc_points_preserve_ownership_status_and_placeholder_refusals() {
+    let rules = RULES.replace("aisc_usd_per_oz", "tcc_usd_per_oz");
+    for defect in ["ownership", "status", "placeholder"] {
+        let (registry, sources) = fixture(|q, sheet| {
+            replace_cell(
+                sheet,
+                "C2",
+                MinimalCell::Text("Total cash costs ($/oz)".into()),
+            );
+            if q == 3 {
+                replace_cell(sheet, "C3", MinimalCell::Number(0.0));
+                if defect == "ownership" {
+                    replace_cell(sheet, "A3", MinimalCell::Text("Site A (60%)".into()));
+                } else if defect == "placeholder" {
+                    replace_cell(sheet, "C3", MinimalCell::Text("—".into()));
+                }
+            }
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.rules.targets.retain(|t| t.id == "unit_cost");
+        prepared.rules.baselines.retain(|b| b.target == "unit_cost");
+        if defect == "status" {
+            prepared.profile.subject_statuses.push(key::SubjectStatus {
+                subject: "Site A".into(),
+                kind: key::StatusKind::Withheld,
+                first: (2030, 7),
+                last: Some((2030, 9)),
+                evidence: "synthetic withheld TCC source".into(),
+            });
+        }
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(
+            error.code,
+            if defect == "placeholder" {
+                RefusalCode::SourceCellUnusable208.as_str()
+            } else {
+                RefusalCode::BasisMismatch105.as_str()
+            }
+        );
+    }
+}
+
+#[test]
 fn copper_candidate_refuses_unit_aliases_attributable_targets_and_ownership_changes() {
     let rules = copper_rules();
     let (registry, _) = fixture(copper_sheet);

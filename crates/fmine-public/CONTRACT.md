@@ -23,8 +23,8 @@ The public lane of M0 (`fmine assure public`).
   unissued quarterly-ratio candidate through `fmine_calib::record::candidate`. It reads only the original
   Mine Stats releases required by the declared historical pools and their common persistence point. The supported
   target meanings are 100%-basis gold production in koz and copper production in kt (`fy_minus_9m`),
-  printed gold AISC per ounce sold, and copper C1 or AISC per pound sold (`q4_qtd`). Rates are never
-  differenced across cumulative periods. Explicit `quarter_qtd` targets support those same five metrics
+  printed gold AISC or total cash cost per ounce sold, and copper C1 or AISC per pound sold (`q4_qtd`). Rates are never
+  differenced across cumulative periods. Explicit `quarter_qtd` targets support those same six metrics
   for the immediately following quarter, including Q4-to-next-year-Q1. Every target in a quarterly record
   uses that outcome and the same point quarter. The candidate cut must precede the scored quarter's end;
   post-quarter nowcasts refuse. Original FY rules keep their common Q3 point and existing output bytes.
@@ -36,7 +36,7 @@ The public lane of M0 (`fmine assure public`).
   registered site status refuses. No source value is rescaled or filled from a later comparative.
   Historical placeholders, absent rows and nonpositive printed values remain named observations; excluded
   ratio pairs and every `not_published` site remain visible. Live production points must be positive and usable.
-  Canonical gold AISC and copper C1/AISC cost points may be signed or zero, retaining their exact displayed
+  Canonical gold AISC/TCC and copper C1/AISC cost points may be signed or zero, retaining their exact displayed
   value and printed ownership. Their negative multipliers reverse the scaled tail endpoints; zero remains
   a complete zero candidate. The historical positive-ratio pool is unchanged. A live cost point overlapping
   a registered site status refuses even when its raw cell contains zero; status-derived Nil and placeholders

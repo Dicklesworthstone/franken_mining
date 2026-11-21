@@ -3304,6 +3304,7 @@ Candidate generation and record scoring share these explicit target meanings:
 | `au_prod_100_koz` | `koz` | `fy_minus_9m`: original FY gold production minus original nine-month production, both on the 100% basis |
 | `cu_prod_100_kt` | `kt` | `fy_minus_9m`: original FY copper production minus original nine-month production, both on the 100% basis |
 | `aisc_usd_per_oz` | `usd_per_oz` | `q4_qtd`: original Q4 AISC per ounce sold |
+| `tcc_usd_per_oz` | `usd_per_oz` | `q4_qtd`: original Q4 total cash cost per ounce sold |
 | `c1_usd_per_lb` | `usd_per_lb` | `q4_qtd`: original Q4 C1 per copper pound sold |
 | `aisc_usd_per_lb` | `usd_per_lb` | `q4_qtd`: original Q4 AISC per copper pound sold |
 
@@ -3311,6 +3312,12 @@ Copper forecasts require rules that explicitly declare these copper targets, the
 comparators. The sealed `forecasts/fy2026/rules.toml` remains the gold record. This support does not change
 those rules or issue copper forecasts; production quantities are additive, while cost rates retain their
 printed ownership evidence and are neither subtracted nor ownership-scaled.
+
+DESIGN (BD-059/067/076): separate rules may also declare gold total cash cost with
+`field = "tcc_usd_per_oz"`. The candidate, original-release outcome and persistence comparator all use
+that printed TCC field. The issuer-guidance comparator requires its own agreed TCC assertion with
+`;tcc=issuer-reported-per-sold-oz`; AISC cannot stand in for it. TCC supports signed and zero costs under
+the same explicit model and ownership checks. Existing frozen rules and record bytes are unchanged.
 
 The `pooled-quarterly-ratio-empirical-v1` model uses the historical pool fixed by each persistence rule. For
 each target it multiplies a site's latest Q3 observation by the pool's lower, median and upper inverse-ECDF
@@ -3355,7 +3362,8 @@ DESIGN (BD-067): separate rules can declare `outcome = "quarter_qtd"` on every t
 quarter immediately after their common persistence point. A `2026Q4` point therefore targets `2027Q1`.
 The candidate builder, robot-CLI record scorer and `xtask forecast-record-score` support gold production
 in 100%-basis koz,
-copper production in 100%-basis kt, gold AISC per ounce sold, and copper C1 or AISC per pound sold.
+copper production in 100%-basis kt, gold AISC or total cash cost per ounce sold, and copper C1 or AISC
+per pound sold.
 Quarterly production resolves directly to the original scored-quarter QTD cell; it is not an annual
 or year-to-date subtraction. The sealed FY2026 rules retain their existing meanings and bytes.
 

@@ -629,7 +629,12 @@ impl Target {
     fn permits_signed_forecast(&self) -> bool {
         matches!(
             TargetMetric::from_target(self),
-            Some(TargetMetric::GoldAisc | TargetMetric::CopperC1 | TargetMetric::CopperAisc)
+            Some(
+                TargetMetric::GoldAisc
+                    | TargetMetric::GoldTcc
+                    | TargetMetric::CopperC1
+                    | TargetMetric::CopperAisc
+            )
         )
     }
 }
@@ -641,6 +646,7 @@ impl Target {
 pub enum TargetMetric {
     GoldProduction,
     GoldAisc,
+    GoldTcc,
     CopperProduction,
     CopperC1,
     CopperAisc,
@@ -654,6 +660,7 @@ impl TargetMetric {
                 Some(Self::GoldProduction)
             }
             ("aisc_usd_per_oz", Outcome::Q4Qtd | Outcome::QuarterQtd) => Some(Self::GoldAisc),
+            ("tcc_usd_per_oz", Outcome::Q4Qtd | Outcome::QuarterQtd) => Some(Self::GoldTcc),
             ("cu_prod_100_kt", Outcome::FyMinus9m | Outcome::QuarterQtd) => {
                 Some(Self::CopperProduction)
             }
@@ -667,7 +674,7 @@ impl TargetMetric {
     pub const fn unit(self) -> &'static str {
         match self {
             Self::GoldProduction => "koz",
-            Self::GoldAisc => "usd_per_oz",
+            Self::GoldAisc | Self::GoldTcc => "usd_per_oz",
             Self::CopperProduction => "kt",
             Self::CopperC1 | Self::CopperAisc => "usd_per_lb",
         }
@@ -678,6 +685,7 @@ impl TargetMetric {
         match self {
             Self::GoldProduction => "production_koz",
             Self::GoldAisc => "aisc_usd_per_oz",
+            Self::GoldTcc => "tcc_usd_per_oz",
             Self::CopperProduction => "production_kt",
             Self::CopperC1 => "c1_usd_per_lb",
             Self::CopperAisc => "aisc_usd_per_lb",
@@ -689,6 +697,7 @@ impl TargetMetric {
         match self {
             Self::GoldProduction | Self::CopperProduction => None,
             Self::GoldAisc => Some(";aisc=issuer-reported-per-sold-oz"),
+            Self::GoldTcc => Some(";tcc=issuer-reported-per-sold-oz"),
             Self::CopperC1 => Some(";c1=issuer-reported-per-sold-lb"),
             Self::CopperAisc => Some(";aisc=issuer-reported-per-sold-lb"),
         }
@@ -1827,7 +1836,12 @@ mod tests {
     fn signed_forecast_domain_uses_cost_field_and_outcome_not_target_alias() {
         let mut rules = parse_rules(&rules_text()).expect("rules");
         // Keep the alias "production": only the field plus outcome rule establishes the cost domain.
-        for field in ["aisc_usd_per_oz", "c1_usd_per_lb", "aisc_usd_per_lb"] {
+        for field in [
+            "aisc_usd_per_oz",
+            "tcc_usd_per_oz",
+            "c1_usd_per_lb",
+            "aisc_usd_per_lb",
+        ] {
             rules.targets[0].field = field.into();
             rules.targets[0].outcome = Outcome::Q4Qtd;
             for (row, expected) in [
@@ -1858,6 +1872,7 @@ mod tests {
             ("unknown_usd_per_lb", Outcome::Q4Qtd),
             ("c1_usd_per_lb", Outcome::FyMinus9m),
             ("aisc_usd_per_oz", Outcome::FyMinus9m),
+            ("tcc_usd_per_oz", Outcome::FyMinus9m),
             ("aisc_usd_per_lb", Outcome::FyMinus9m),
         ] {
             rules.targets[0].id = "unit_cost".into();
@@ -2064,6 +2079,13 @@ mod tests {
                 "usd_per_oz",
                 "aisc_usd_per_oz",
                 Some(";aisc=issuer-reported-per-sold-oz"),
+            ),
+            (
+                "tcc_usd_per_oz",
+                Outcome::Q4Qtd,
+                "usd_per_oz",
+                "tcc_usd_per_oz",
+                Some(";tcc=issuer-reported-per-sold-oz"),
             ),
             (
                 "cu_prod_100_kt",
