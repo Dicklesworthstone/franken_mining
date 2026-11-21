@@ -1,13 +1,16 @@
 # CONTRACT.md — `fmine-calib`
 
-## 1. Charter & Layer
+## 1. Purpose
+Pure calibration, forecast pre-registration (`INV-008`), strictly proper scoring rules, reference-class priors, spatial front PIT monitoring (`G-CAL-1`), and guidance-score assessment kernel (Plumb, layer `K0`; no I/O per `L-3`).
+
 - **Crate:** `fmine-calib`
-- **Layer:** `K0` (Kernel Foundation)
-- **Subsystem:** `Kernels`
-- **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
+- **Layer:** K0
+- **Subsystem:** Plumb
+- **LOC budget:** 26,000 planned / 30,000 ceiling
 - **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record", "guidance_scores"]`
 
-## 2. Mathematical & Domain Formulation
+## 2. Inputs
+### Mathematical & Domain Formulation
 
 - DESIGN (BD-334/BD-068): `record::scoring::assess` validates the frozen site/target universe and scores each
   live forecast exactly once with exact rational interval loss. Unknown, duplicate and omitted resolutions
@@ -35,10 +38,10 @@
   These arithmetic completion bounds are neither confidence intervals nor predictive-skill claims.
 Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT; plan §10.4's location score `tanh(z/2)` and centred dispersion score `tanh((z^2 - 1)/2) - c0`, each on a `ScoreBettingEProcess` with aGRAPA stakes at alpha/2).
 
-## 3. Authority, Epistemics & Representation
-Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) and monitors spatial front miscalibration (`G-CAL-1`).
+## 3. Outputs
+Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) and monitors spatial front miscalibration (`G-CAL-1`), emitting typed assessment receipts, proper scores, calibration-gate verdicts, and exact rational completion bounds.
 
-## 4. Public API Surface
+## 4. Invariants
 - `FrozenForecast`, `ForecastPayload`, `ForecastLedger`
 - DESIGN (BD-067/BD-334): `record::candidate::build_candidate` generates a complete draft live-site × target
   record from already selected quarterly observations. The named `pooled-quarterly-ratio-empirical-v1` model
@@ -573,7 +576,7 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   reference assumption, without adjustment for missingness, site dependence or rounding. Completion bounds
   and n_eff sensitivity remain separate from this reference interval.
 
-## 5. Guards & Typed Refusals
+## 5. Refusals
 `ForecastLedger` refusals, by condition (`test_ledger_refusals_by_condition`):
 - `FMINE-REF-206` (late registration, exit 3): exact payload registration at or after the outcome time; cohort
   freeze before registration, at or after the outcome time, or after any recorded outcome; an early or backdated
@@ -598,7 +601,53 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 206 and 507 are proposed codes (`docs/adr/ADR-REFUSALS-01.md`).
 
-## 6. Proof Obligations (`PO-*`)
+## 6. Determinism class
+Every module declares its `//! Determinism:` header checked by `xtask check-det`: `lib.rs` and `ledger/binding.rs` are `BitwisePortable`; exact rational scoring/CRPS modules are `Exact`; floating-point scoring/prior/monitor paths are `DeterministicPerIsa`.
+
+## 7. Evidence class of outputs
+Calibration scoring never promotes evidence (`NL-1`, `NL-2`): `apply_calibration_gate` only lowers `ModelledCalibrated` and sets `calibration_failed` on `Overconfident`/`Biased` (irreversibly per `NL-4`). Descriptive guidance scores and completion bounds carry no predictive-skill or calibration verdict.
+
+## 8. Validity domain
+A miscalibrated spatial front alarms when either score's wealth reaches `2 / alpha` (40 at `alpha = 0.05`). Nothing
+downstream reads the alarm yet: no claim is downgraded by it, and no InvestigationCase (plan §10.5) exists. Pure calibration and scoring kernel; does not perform file I/O (`L-3`). Depends on `fmine-core`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, `fmine-registry` (S0), and `fmine-units` (S0).
+
+## 9. Oracles
+- `scripts/oracle/score_known_answers.py`: numerical integration oracle for `gaussian_crps` and `gaussian_log_score` to `1e-12` relative.
+- Independent 90-digit `Decimal` binomial sum oracle (`test_frozen_95_percent_level_against_independent_binomial_sum`), quadratic CRPS oracle over 81 four-sample models, and exhaustive binary completions through 12 members.
+- `GATE-HELM-01` (tracking target; real retrospective cards remain open).
+
+## 10. Known gaps
+- Spatial front alarm does not yet emit an `InvestigationCase` (plan §10.5) or downgrade downstream Claims.
+- Clustered bias interval and its 200-replicate coverage gate (`BD-341.S4`) remain open; `GATE-HELM-01` remains open.
+- Cohort store is in memory; durable storage and external timestamp authority live in `fmine-io`/`fmine-ledger`.
+
+### Scope boundary and cluster projection notes
+Pure calibration and scoring kernel; does not perform file I/O (`L-3`).
+
+DESIGN (BD-341.S4): `guidance_scores::clusters` is a separate opt-in projection. It preserves exact
+year/site membership, observed range means, rounding bounds and missing-outcome hit bounds. The caller
+explicitly selects the assumed independent axis. The 1,999 keyed Philox block replicates estimate the
+equally weighted mean of cluster means, distinct from the legacy observation-weighted mean. Inverse-ECDF
+5th/95th percentiles have a nominal, approximate 90% interpretation conditional on independent,
+exchangeable selected clusters; no two-way robustness or dependence estimate is implied. Twenty clusters
+is a declared admission floor, not a coverage theorem. Incomplete eligible populations, clusters without
+range targets, sparse populations and zero between-cluster variation have no sampling interval. Both
+partitions and every unresolved member remain available. Exact integer-coordinate overflow refuses.
+Direct controls live in `guidance_scores::clusters::tests`, including exact equal-cluster weighting,
+whole-block replication invariance, unit invariance, rounding separation and a 200-panel-per-scenario
+synthetic comparison of correct and deliberately misspecified axes. The broad BD-341.S4 gate remains open.
+
+The cohort store is in memory. Its canonical assessment bytes can be retained by an adapter; this slice adds no
+durable ledger or external timestamp authority. Caller-supplied times are ordering inputs, not time proofs
+
+## 11. Public API
+- `FrozenForecast`, `ForecastPayload`, `ForecastLedger`, `apply_calibration_gate`
+- `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`, `ReferenceClassPrior`, `SpatialFrontPitMonitor`
+- `record::{candidate::build_candidate, scoring::assess, TargetMetric}`
+- `guidance_scores::{clopper_pearson_exact, claims, clusters, price}`
+- `ledger::{binding, comparison::crps, correction}`.
+
+## 12. Proof obligations
 - `PO-CAL-1`: Expected Gaussian CRPS is uniquely minimized at the true data-generating $(\mu_0, \sigma_0)$.
 - `PO-CAL-2`: Retroactive forecast registration (`t_registered >= t_outcome_avail`) is refused with `FMINE-REF-206`.
 - BD-048: `gaussian_crps` and `gaussian_log_score` match eight known answers to 1e-12 relative. The CRPS values are
@@ -648,36 +697,6 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   previous CP90 grid endpoints and a dyadic exact-root case.
 - `public_target_semantics_keep_metal_denominator_and_additivity_distinct` checks all five public target
   interpretations and rejects reversed outcome kinds and an attributable-production alias.
-
-## 7. Failure Modes & Deterministic Fallbacks
-A miscalibrated spatial front alarms when either score's wealth reaches `2 / alpha` (40 at `alpha = 0.05`). Nothing
-downstream reads the alarm yet: no claim is downgraded by it, and no InvestigationCase (plan §10.5) exists.
-
-## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-HELM-01`
-
-## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, `fmine-registry` (S0)
-  for the TOML subset the record's manifest is written in, and `fmine-units` (S0) for the monitor's range.
-
-## 10. Non-Goals & Scope Boundary
-Pure calibration and scoring kernel; does not perform file I/O (`L-3`).
-
-DESIGN (BD-341.S4): `guidance_scores::clusters` is a separate opt-in projection. It preserves exact
-year/site membership, observed range means, rounding bounds and missing-outcome hit bounds. The caller
-explicitly selects the assumed independent axis. The 1,999 keyed Philox block replicates estimate the
-equally weighted mean of cluster means, distinct from the legacy observation-weighted mean. Inverse-ECDF
-5th/95th percentiles have a nominal, approximate 90% interpretation conditional on independent,
-exchangeable selected clusters; no two-way robustness or dependence estimate is implied. Twenty clusters
-is a declared admission floor, not a coverage theorem. Incomplete eligible populations, clusters without
-range targets, sparse populations and zero between-cluster variation have no sampling interval. Both
-partitions and every unresolved member remain available. Exact integer-coordinate overflow refuses.
-Direct controls live in `guidance_scores::clusters::tests`, including exact equal-cluster weighting,
-whole-block replication invariance, unit invariance, rounding separation and a 200-panel-per-scenario
-synthetic comparison of correct and deliberately misspecified axes. The broad BD-341.S4 gate remains open.
-
-The cohort store is in memory. Its canonical assessment bytes can be retained by an adapter; this slice adds no
-durable ledger or external timestamp authority. Caller-supplied times are ordering inputs, not time proofs
 (BD-047/BD-068). It does not infer a fallback after a target's definition changes, estimate correlation, or claim
 calibration for an issuer guidance range with no stated level. Guidance's IID Clopper–Pearson reference interval
 does not account for common shocks. The opt-in block projection above supplies conditional one-axis

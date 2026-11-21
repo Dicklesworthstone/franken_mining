@@ -1,14 +1,16 @@
 # CONTRACT.md — `fmine-capital`
 
-## 1. Charter & Layer
+## 1. Purpose
+E-layer Helm capital-program comparison (`BD-229`, `BD-314`). Enumerates declared static subsets, entity cash/debt/capital-call waterfalls, equity NAV/share valuations, KPI constraint frontiers, Wasserstein transport stress, and two-stage adaptive policies using the permitted `fmine-capital -> fmine-decide` edge. The static kernel lives in the crate root; `recourse` composes its state-level results into complete policies; `entity` supplies separately conserved cash ledgers and declared ownership distributions as feasibility constraints.
 
-E-layer Helm capital-program comparison, with a planned 20k LOC budget and hard 23k LOC ceiling. These bounded BD-229/BD-314 slices
-enumerate declared static subsets and two-stage policies, using the permitted `fmine-capital -> fmine-decide` edge.
+- **Crate:** `fmine-capital`
+- **Layer:** E
+- **Subsystem:** Helm
+- **LOC budget:** 25,000 planned / 29,000 ceiling
 - **Allowed Module Families:** `["model", "render", "recourse", "entity", "stability", "robustness"]`
-The static kernel lives in the crate root; `recourse` composes its state-level results into complete policies.
-`entity` supplies separately conserved cash ledgers and declared ownership distributions as feasibility constraints.
 
-## 2. Mathematical & Domain Formulation
+## 2. Inputs
+### Mathematical & Domain Formulation
 
 For each subset, spending is the exact sum of declared candidate costs. Joint scenario delta-NAV is the sum
 of selected candidates' **net** payoffs at the same named state. Costs constrain spending and are not
@@ -255,7 +257,8 @@ receive zero adversarial mass. Each criterion has its own adversary. No confiden
 unseen regime or adaptive policy is inferred. Bootstrap selection stability may coexist: both consume
 already assessed outcome vectors, and transport is not repeated within bootstrap resamples.
 
-## 3. Authority, Epistemics & Representation
+## 3. Outputs
+### Authority, Epistemics & Representation
 
 DESIGN (BD-229, §23.6): `robustness::kpi::evaluate` admits one source-bound KPI `Design` beside an
 immutable evaluated static program. Its complete named state and candidate component matrices describe
@@ -334,7 +337,8 @@ UU definitions and evidence metadata enter the same complete result binding. Sec
 canonicalized by identifier. When no secondary valuation is declared, all legacy tags, scopes and reports
 remain unchanged.
 
-## 4. Public API Surface
+## 4. Invariants
+### Domain structures and admission invariants
 
 - `ProgramPolicy`, `CapitalCandidate`, `ProgramFunding`, `FundingSchedule`, `ProgramInputs`: typed monetary
   declarations wrapped in Claims; funding is optional and explicit. A schedule uses `CashPeriod`,
@@ -513,7 +517,7 @@ Unknown/duplicate declarations, orphan distances, incomplete or foreign pairs, n
 nonpositive off-diagonal costs, asymmetry and triangle violations refuse. Exact source bytes and all
 geometry locators remain bound. The existing CLI capital-program command reaches this path unchanged.
 
-## 5. Guards & Typed Refusals
+## 5. Refusals
 
 Every candidate is admitted before enumeration, including candidates that cannot be selected. Missing or
 duplicate states, incomplete payoffs, foreign references, prerequisite cycles, duplicate prerequisites,
@@ -559,61 +563,17 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
 - Recourse stress counts both complete static and policy populations against that same bound. A static
   bundle ranking never substitutes for a separately assessed policy ranking or full-policy tail-risk test.
 
-## 6. Proof Obligations
+## 6. Determinism class
+Every module declares `//! Determinism: Exact` (exact rational arithmetic and keyed Philox resampling), checked by `xtask check-det`. No IO, spawning, or time APIs occur in this crate (`L-3`).
 
-- Exhaustive output contains exactly `2^n` subsets; constraint rejection never edits the input population.
-- Joint risk uses the shared scenario index, never marginal risk sums.
-- Every feasible winner satisfies exact budget, dependency, exclusion, declared state-specific liquidity
-  and optional tail-loss constraints. Equality with the cash floor remains feasible.
-- Funding requirements are combined jointly by state, never averaged across states or charged to NAV again.
-- Scheduled cash carries exactly within each same-state trajectory; later recovery never erases an earlier
-  shortfall. Financing and repayment remain signed cash movements distinct from the declared NAV payoff.
-- Equity valuation uses the selected bundle's same-state total NAV and actual shares; changing the declared
-  share-unit scale with compensating counts leaves every per-share result unchanged (PO-CAP-2).
-- USD funding and total-NAV reporting never enter the USD/share risk limit or objective without the explicit
-  equity calculation. Share counts at or below zero remain visible structural rejections.
-- Every secondary NAV/share calculation uses its own same-state numerator and actual-share denominator.
-  All entity constraints share one structural comparison population; risk tests remain entity-specific and
-  apply jointly, with no conversion or blending of denominators. Recourse copies state-specific values and
-  reconstructs whole-policy risk instead of inheriting a subset's aggregate admission result.
-- Feasible-set statistics retain actual negative-NAV survivors, with no invented zero-payoff competitor.
-- All ties survive, and arithmetic risk cost is nonnegative whenever constrained winners exist.
-- Source, losing candidate, constraint, adjustment-basis and evidence metadata changes affect identity.
-- A continuation is constant within each information set, and all first-stage commitments survive in every state.
-- Policy funding and structural constraints hold on each realized path; global risk uses the original state weights.
-- The static feasible set embeds in the policy set, so every available net adaptive value is nonnegative.
-- Cash cannot move between entities except through declared transfers, capital calls and distributions.
-  Ownership alone never creates a funding obligation or credits outside shareholders' cash to the parent.
-- Every period conserves native external cash after explicitly accounting for outside distributions and,
-  when declared, outside call funding, external loan draws, interest, scheduled principal and sweeps.
-  Principal conserves exactly.
-- Every call preserves total ownership at one, carries the exact updated fraction into subsequent calls
-  and dividends, and retains full contributions on underfunded or unaffordable paths. Required-raise
-  shortfalls reject only policies that realize that same call/state, independent of existing JV cash.
-- Coverage uses the declared same-state CFADS and scheduled service; cash reserves, sweeps and loan draws
-  do not silently change that numerator or denominator. Zero service has no numerical ratio.
-- Each entity's sweep consumes eligible child receipts before its own dividend, including roots with no
-  outgoing ownership edge. Mandatory service/floor failures remain after subsequent child receipts.
-- Entity floor failures and their phases remain on the realized policy state; another state's failure
-  cannot reject an otherwise feasible adaptive continuation.
+## 7. Evidence class of outputs
+All imported values remain `Assumed` / `Internal` / `Estimated` and parametrically uncertain. Outputs meet evidence, epistemic, and knowledge states, join confidentiality, retain all input parents/sources/UU definitions, and never promote calibration or authority flags (`INV-002`, `NL-1`, `NL-2`, `NL-4` refuses `calibration_failed` with `FMINE-REF-205`).
 
-- Stress support is canonicalized by state identifier before preparing the transport plan; every primary
-  payoff vector is aligned by named state after complete original admission.
-- Each certificate conserves every nominal source mass, has nonnegative arcs, stays within the radius and
-  satisfies its exact dual constraints with zero gap. Worst-case mean negates the signed-loss objective.
-- Radius zero restores each nominal expected objective and the nominal expected-value winner set.
-  Metric/radius changes can expose ties, and rejected bundles cannot contaminate the stress regret benchmark.
-- Existing nominal choices, risk outcomes and bootstrap resamples remain unchanged by enabling stress;
-  the declared design and both diagnostic results still affect the final identity.
+## 8. Validity domain
+Invalid input and arithmetic overflow refuse the complete comparison (`FMINE-REF-207`, `FMINE-REF-505`, `FMINE-REF-507`, `FMINE-REF-205`). Structural and risk infeasibility are positive report states. Up to 8 candidates (static exhaustive `2^n`), 64 original states, 8 KPI constraints, and bounded work caps (`2,097,152` transport evaluations; `1,048,576` KPI additions). Depends only on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-registry`, `fmine-numerics`, `fmine-decide`.
 
-## 7. Failure Modes & Deterministic Fallbacks
-
-Invalid input and arithmetic overflow refuse the complete comparison. Structural and risk infeasibility
-are positive report states. No omitted candidate, state, cash flow, interaction or adjustment is inferred.
-Internal temporary bundle Claims keep all input parents and one locator per source artifact to avoid
-quadratic duplication of source metadata; the public result retains every original locator and input Claim.
-
-## 8. Gates & Kill Criteria
+## 9. Oracles
+### Independent Python Fraction oracles and GB-30 known answers
 
 Direct GB-30 known answers use the plan's explicitly illustrative, displayed inputs: A+D mean $241.18M
 and risk cost $130.82M before adding streamed E, without treating rounded plan prose as an exact oracle.
@@ -754,14 +714,7 @@ retaining its nominal mean and adaptive value. These are synthetic declared mode
 The existing Python Fraction policy oracle supplies six independent scenarios at four radii through
 the real CLI; an additional integration check compares complete library/binary JSON and Markdown.
 
-## 9. Lifted Code & Foundation Dependencies
-
-No new external dependencies. Reuses the exact units/rational arithmetic, strict registry TOML parser,
-evidence Claim types, `fmine-decide::card` total-USD statistics and the bounded exact weighted-distribution
-kernel in `fmine-numerics::risk::exact` for per-share statistics. No IO, spawning or time APIs occur in this crate.
-
-## 10. Non-Goals & Scope Boundary
-
+## 10. Known gaps
 Static declared net-NAV comparison with optional aggregate or dated-checkpoint funding and exact equity NAV
 per-share optimization, entity-specific cash/ownership distributions, and bounded two-stage policies with
 purchased declared information. No additional
@@ -773,4 +726,17 @@ unadjusted basis; the system does not apply an unnamed adjustment. Conditional s
 the explicit bootstrap declaration; absent declarations remain unavailable. Conditional static and adaptive-policy
 Wasserstein comparisons and stressed declared-tail feasibility require the explicit geometry and radius
 declaration. Dynamic adversarial recourse and empirical model-uncertainty calibration are not supplied.
-Broad BD-229 and production-scale gates remain open.
+Broad BD-229 and production-scale gates (`GATE-CAP-01`, `GATE-CAP-03`, `GATE-CAP-04`) remain open.
+
+## 11. Public API
+- `evaluate`, `ProgramPolicy`, `CapitalCandidate`, `ProgramFunding`, `FundingSchedule`, `ProgramInputs`
+- `model::{parse, evaluate, EvaluatedModel}`
+- `recourse::{evaluate, RecourseSummary}`
+- `entity` (cash, ownership, debt, capital-call waterfalls)
+- `stability::{SelectionStabilityDesign, SelectionStabilitySummary}`
+- `robustness::{kpi::evaluate, RobustnessScope}` and `render` JSON/Markdown formatters.
+
+## 12. Proof obligations
+- `PO-CAP-2`: equity valuation uses the selected bundle's same-state total NAV and actual shares; changing share-unit scale with compensating counts leaves every per-share result unchanged.
+- Exhaustive output contains exactly `2^n` subsets; joint risk uses the shared scenario index; scheduled cash carries within each same-state trajectory; native entity cash and debt principal conserve exactly; static feasible set embeds in the adaptive policy set (nonnegative adaptive value); Wasserstein transport certificates satisfy exact primal/dual conservation with zero gap.
+- `NL-4` / `NL-8`: `calibration_failed` inputs refuse with `FMINE-REF-205` (`robustness::kpi::tests::metadata_and_sources_bind_the_result_without_promoting_evidence`).

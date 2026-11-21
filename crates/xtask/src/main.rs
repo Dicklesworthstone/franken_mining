@@ -338,6 +338,11 @@ fn main() -> ExitCode {
                         println!("WARN [check-beads]: {w}");
                     }
                 }
+                if let Ok(report) = xtask::contracts::check_contracts(&root)
+                    && let Some(summary) = report.lines.last()
+                {
+                    println!("{summary}");
+                }
                 if let Ok(report) = xtask::loc::check_amend(&root, "HEAD", false) {
                     println!("{}", report.log_line());
                     for w in &report.warnings {

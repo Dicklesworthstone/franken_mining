@@ -53,7 +53,7 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Crate:** `fmine-metrics`
 - **Layer:** E
 - **Subsystem:** Bullion
-- **LOC budget:** 18,000 planned / 21,000 ceiling
+- **LOC budget:** 28,000 planned / 32,000 ceiling
 - **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation", "comparison", "valuation"]`
 
 ## 2. Inputs

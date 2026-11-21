@@ -1,13 +1,16 @@
 # CONTRACT.md — `fmine-decide`
 
-## 1. Charter & Layer
+## 1. Purpose
+Enterprise decision-card, VOI campaign ranking, retrospective temporal-cone sealing (`G-HELM-4`), and untested-ore recovery-bound evaluation crate (Helm, plan §§9.6, 17.4, 22). Never actuates physical equipment (`INV-002`) or performs file/network I/O (`L-3`).
+
 - **Crate:** `fmine-decide`
-- **Layer:** `E` (Enterprise & Decision)
-- **Subsystem:** `Helm`
-- **LOC Budget:** `20k planned / 23k ceiling` (`registries/loc_budget.toml`)
+- **Layer:** E
+- **Subsystem:** Helm
+- **LOC budget:** 20,000 planned / 23,000 ceiling
 - **Allowed Module Families:** `["bounds", "card", "voi_rank", "one_pager"]`
 
-## 2. Mathematical & Domain Formulation
+## 2. Inputs
+### Mathematical & Domain Formulation
 Implements `DecisionCard` (`FMT-CARD-1`), `FlipMargin`, `rank_voi_campaigns` (`GATE-HELM-02`), and the
 CEO/CFO/Mine-GM 1-Page Executive Decision Card Markdown renderer (`render_one_pager_markdown`, `§9.6`).
 
@@ -35,10 +38,10 @@ value beneath the displayed decimal precision cannot reuse a proof. Unrendered C
 existing Claim canonical-body limits.
 The projection is an internal versioned replay input (version 2), not a new durable `FMT-CARD-1` encoding.
 
-## 3. Authority, Epistemics & Representation
-`FMINE-REF-204` refuses a non-`KnownKnown` Claim with no UU term. The card type has no `authoritative`, `may_actuate`, `is_safe_certification` or `is_signing_basis` field. Those flags are not enforced here: they are not fields of `DecisionCard`, and this tree does not define them in `fmine-claim` or `fmine-evidence`.
+## 3. Outputs
+`DecisionCard` (`FMT-CARD-1`), `RetrospectiveDecisionCard` (`G-HELM-4`), `EvaluatedCard`, `FlipMargin`, `VoiCampaignRank`, and `RecoveryBoundCard` (JSON and Markdown renderers). `FMINE-REF-204` refuses a non-`KnownKnown` Claim with no UU term. The card type has no `authoritative`, `may_actuate`, `is_safe_certification` or `is_signing_basis` field. Those flags are not enforced here: they are not fields of `DecisionCard`, and this tree does not define them in `fmine-claim` or `fmine-evidence`.
 
-## 4. Public API Surface
+## 4. Invariants
 - DESIGN (BD-225): `card::{WeightSet, ActionRole, ActionPayoffs, DecisionInputs, evaluate, EvaluatedCard}`
   computes a complete finite-scenario draft comparison from exact monetary Claims. Strictly positive named
   state weights sum exactly to one; at least two alternatives, exactly one explicit do-nothing role, complete
@@ -295,7 +298,7 @@ The projection is an internal versioned replay input (version 2), not a new dura
   oracles over 24 distinct finite models. These conditional calculations do not establish calibration,
   physical feasibility, operational authority or completion of GATE-HELM-02.
 
-## 5. Guards & Typed Refusals
+## 5. Refusals
 `rank_voi_campaigns` validates the shared problem once, even for an empty campaign list. Every campaign must
 have a distinct nonempty identifier, a well-formed likelihood matrix and a valid cost. Any failure returns a
 refusal for the entire request; it never returns a partial ranking or substitutes a zero score:
@@ -314,36 +317,25 @@ refusal for the entire request; it never returns a partial ranking or substitute
   or a replay certificate for a different root, timestamp, anchor, cone or output. Missing node times are never
   inferred. Record admissibility uses the per-cell anchor, not wall-clock ordering between cells.
 
-## 6. Proof Obligations (`PO-*`)
-- `PO-DEC-1`: `DecisionCard::build` refuses a card whose claim has an empty `uu_terms` (`FMINE-REF-204`) or no colour
-  (`FMINE-REF-205`).
-- `PO-DEC-2`: `rank_voi_campaigns` relays the validated finite evaluator's `0 <= EVSI <= EVPI` guarantee, retains
-  the posterior action policy and refuses invalid inputs instead of clamping or returning a partial ranking.
-  The GB-29 closed-form test checks EVSI `$41M`, net VOI `$31.2M` with the declared `$9.8M` combined cost, and the
-  high/low observation action switch. This is a finite-model known answer, not the Monte Carlo `GATE-HELM-02`.
-- `PO-DEC-3`: retrospective construction binds the actual NPV Claim and the replayed output; neither an unrelated
-  clean root nor an older certificate for edited output is accepted. The checked snapshot has no mutable accessor.
-  Tests: the four `retrospective_card_*` tests in `lib.rs`, and the `compile_fail` doctest on
-  `RetrospectiveDecisionCard`, which fails to compile an assignment to its private `card` field. This discharges
-  the plan's guard `G-HELM-4` over the declared expected-NPV ancestry only, within the limits in §10.
+## 6. Determinism class
+`DeterministicPerIsa` across `lib.rs` and `Exact` for rational `card` and `bounds` kernels (declared via `//! Determinism:` headers and checked by `xtask check-det`).
 
-## 7. Failure Modes & Deterministic Fallbacks
-Invalid or unanchored decision inputs fail closed with typed `Refusal`.
+## 7. Evidence class of outputs
+`DecisionCard` displays the expected-NPV Claim's evidence class, epistemic status, knowledge state, and colour without promoting them (`NL-1`, `NL-2`). `EvaluatedCard` and `RecoveryBoundCard` meet the weakest input evidence and cap model-derived outputs at `ModelledUncalibrated`.
 
-## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-HELM-02`
-- `GATE-HELM-03`
+## 8. Validity domain
+Invalid or unanchored decision inputs fail closed with typed `Refusal`. Finite-state VOI requires strictly valid discrete probability distributions and nonnegative costs. `card::evaluate` requires at least two alternatives, one explicit do-nothing action, and exact weights summing to 1. Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, `fmine-calib`, and `fmine-registry`.
 
-## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`,
-  `fmine-calib` and the pure `fmine-registry` TOML parser.
+## 9. Oracles
+- `crates/xtask/testdata/decision_card_oracle.py` and `decision_sensitivity_oracle.py`, driven by `crates/xtask/tests/decision_card.rs`.
+- `crates/xtask/tests/recovery_bounds.rs` (Python `Fraction` exact endpoint oracle) and GB-29 closed-form VOI known answers (`EVSI $41M`, net VOI `$31.2M`).
 
-## 10. Non-Goals & Scope Boundary
+## 10. Known gaps
 Never actuates physical equipment (`INV-002`) or performs file/network I/O (`L-3`).
 
 Finite-state VOI is not a Monte Carlo estimator and supplies no Monte Carlo standard error, Bayesian evidence
 for the supplied prior/likelihood, or calibrated predictive probability. The K-problem / 100-seed statistical
-`GATE-HELM-02` and real retrospective cards remain separate requirements. Campaign ranking does not model
+`GATE-HELM-02` and real retrospective cards (`GATE-HELM-01`, `GATE-HELM-03`) remain separate requirements. Campaign ranking does not model
 portfolio interactions; a delay cost affects the result only if included in the supplied campaign cost.
 
 The retrospective proof covers the **declared expected-NPV Claim ancestry**. The existing action text, CVaR,
@@ -355,7 +347,7 @@ two real retrospective cards required by GATE-HELM-01. No cross-host replay resu
 `DeterministicPerIsa` remains the crate's class. Ordinary `build` retains its existing Claim guards; its VOI
 section now renders the retained conditional action policy.
 
-## 11. Limits kept from the local outline
+### Limits kept from the local outline
 
 `registries/loc_budget.toml` gives this crate layer E, subsystem Helm, 20,000 planned lines and a 23,000 ceiling. The `DecisionCard` shows the expected-NPV Claim's evidence class, epistemic status, state and colour. It assigns none of them. The CVaR, flip margins and VOI fields carry no evidence class.
 
@@ -369,7 +361,12 @@ The merge ec60a12 dropped two test families from this list; bd-coro restores the
 
 `registries/l6_allow.toml` in this tree has two `fmine-decide` rows, for `from_linear_sensitivity` and for `build` (`cvar95_loss_usd_m`).
 
-## 12. Untested-ore recovery bounds (DESIGN; BD-351.S1, plan §17.4)
+## 11. Public API
+- `DecisionCard`, `RetrospectiveDecisionCard`, `FlipMargin`, `rank_voi_campaigns`, `render_one_pager_markdown`.
+- `card::{WeightSet, ActionRole, ActionPayoffs, DecisionInputs, evaluate, EvaluatedCard}`.
+- `bounds::{evaluate, model::parse}` (untested-ore recovery bounds).
+
+### Untested-ore recovery bounds (DESIGN; BD-351.S1, plan §17.4)
 
 `bounds::evaluate` accepts one source-bound `Claim<RecoveryBoundModel>`. Tested and untested strata
 have explicit closed recovery intervals, a named route and metal, an additivity basis, an untested-bound
@@ -401,3 +398,16 @@ wiring and the real metallurgical commitment/testwork choice remain open.
 The CLI entry point is `fmine decide recovery-bounds <model-file> [--json|--format markdown]`.
 `crates/xtask/tests/recovery_bounds.rs` independently checks endpoint arithmetic with Python Fraction,
 strict threshold ties, source and UU identity, refusals and real-binary/library output agreement.
+
+## 12. Proof obligations
+- `PO-DEC-1`: `DecisionCard::build` refuses a card whose claim has an empty `uu_terms` (`FMINE-REF-204`) or no colour
+  (`FMINE-REF-205`).
+- `PO-DEC-2`: `rank_voi_campaigns` relays the validated finite evaluator's `0 <= EVSI <= EVPI` guarantee, retains
+  the posterior action policy and refuses invalid inputs instead of clamping or returning a partial ranking.
+  The GB-29 closed-form test checks EVSI `$41M`, net VOI `$31.2M` with the declared `$9.8M` combined cost, and the
+  high/low observation action switch. This is a finite-model known answer, not the Monte Carlo `GATE-HELM-02`.
+- `PO-DEC-3`: retrospective construction binds the actual NPV Claim and the replayed output; neither an unrelated
+  clean root nor an older certificate for edited output is accepted. The checked snapshot has no mutable accessor.
+  Tests: the four `retrospective_card_*` tests in `lib.rs`, and the `compile_fail` doctest on
+  `RetrospectiveDecisionCard`, which fails to compile an assignment to its private `card` field. This discharges
+  the plan's guard `G-HELM-4` over the declared expected-NPV ancestry only, within the limits in §10.

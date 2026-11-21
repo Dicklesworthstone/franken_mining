@@ -1,13 +1,16 @@
 # CONTRACT.md — `fmine-public`
 
-## 1. Charter & Layer
+## 1. Purpose
+The public-filings assurance, five-state identity ledger, keyed public Claim index, cross-vintage comparison, guidance track-record, public waterfall, and disclosure-lint crate (Portal, layer `V`, M0 `fmine assure public`).
+
 - **Crate:** `fmine-public`
-- **Layer:** `V` (Verification, Ingestion & Assurance)
-- **Subsystem:** `Assurance`
-- **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
+- **Layer:** V
+- **Subsystem:** Portal
+- **LOC budget:** 24,000 planned / 28,000 ceiling
 - **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "forecast", "guidance", "waterfall", "recovery", "lint", "html"]`
 
-## 2. Mathematical & Domain Formulation
+## 2. Inputs
+### Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
 
 - DESIGN (BD-273/BD-332): visible company `Total` or `Total Gold` columns in an explicitly labelled gold
@@ -408,7 +411,8 @@ The public lane of M0 (`fmine assure public`).
   - `PublicAssuranceReport::to_json` is the envelope payload;
   - `cell_to_public_claim` is the public-basis `Claim` builder (`BD-058`).
 
-## 3. Authority, Epistemics & Representation
+## 3. Outputs
+### Authority, Epistemics & Representation
 - Every retained numeric issuer assertion is `Assertion { source: Issuer }`, state `Known`, status `KnownKnown`, and every reported
   instance says so (`"evidence":"Assertion","source":"issuer"`). A reproduced figure is `Derived` over assertions,
   so by NL-2 it is still an `Assertion`: its figures agree with each other, which does not show they are true.
@@ -452,7 +456,8 @@ The public lane of M0 (`fmine assure public`).
 - The report payload carries `lane` and `gate_eligible`. The no-claim line (`NO_CLAIM`), the four INV-002 flags
   and the next actions (`PublicAssuranceReport::next_actions`) are envelope fields, which `fmine-cli` prints.
 
-## 4. Public API Surface
+## 4. Invariants
+### Source binding, keying and public-lane invariants
 
 - DESIGN (BD-355): `fmine compare` reuses registered issuer profiles and the existing authenticated
   transcription loader. Its bindings file contains only issuer/document/quantity selectors and must
@@ -833,7 +838,7 @@ The public lane of M0 (`fmine assure public`).
     known answers are in `repro/barrick/waterfall_census.py`. The existing synthetic CLI profile has no
     year-on-year source pair; the four-outcome synthetic bridge fixture is an integration test.
 
-## 5. Guards & Typed Refusals
+## 5. Refusals
 - A run names every registered file that is missing, digest-mismatched or unparseable, and never substitutes
   content. The code is `FMINE-REF-505` (digest mismatch, exit 8) when every file is present and readable, and
   `FMINE-REF-506` (registered input missing or unreadable, exit 5) otherwise (`files_refusal`).
@@ -893,7 +898,31 @@ The public lane of M0 (`fmine assure public`).
 - A stated (ii) whose quote cell no longer starts with the registered prefix is refused as an explanation: the
   instance stays (iv), naming the quote cell and what it reads.
 
-## 6. Proof Obligations (`PO-*`)
+## 6. Determinism class
+Pure report assembly, `M0AS` v8 state-root encoding, `PCLM` v1 keyed-claim encoding, and exact rational identity checks are deterministic and byte-identical on reruns over identical registered inputs (`INV-010`).
+
+## 7. Evidence class of outputs
+Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Known` / `KnownKnown`); derived checks remain `Assertion` (`NL-2`). Placeholders and reserved synthetic issuer inputs remain `Assumed` / `Unknown` (`synthetic`), never acquiring issuer authority.
+
+## 8. Validity domain
+- A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`; an unregistered header becomes an `UnregisteredHeader`; neither is guessed.
+- Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-registry`, `fmine-numerics`, `fmine-calib`, `fmine-io`, and `fmine-metrics`.
+
+## 9. Oracles
+- `crates/xtask/tests/public_exact_feas_oracle.rs` (closed-form rate/footing oracle), `public_exact_feas_blame.rs`, `public_laap_2023.rs`, `public_registry.rs`, `public_mine_stats_inventory.rs`, `public_mine_stats_vintages.rs`, `public_transcriptions.rs`, `public_mine_ledger.rs`, `public_report_contract.rs`, `public_citations.rs`, `public_track_record.rs`.
+- `GATE-BULL-01` (parts 1–3a/3b/3c): Mine Stats population reproduces T16 and all nine known changes with 30 region-map exclusions citing E461.
+
+## 10. Known gaps
+- Complete `GATE-BULL-01` issuer-consistency delivery record and Q3 2026 workbook ingestion remain open.
+- Full all-verb JSON uncited-number validator (`BD-329`), authentic corpus cross-vintage census acceptance (`BD-331.S8`), and two-way cluster inference (`BD-341.S4`) remain open.
+- See scope notes below under Public API / Proof obligations.
+
+## 11. Public API
+- `run_public_assurance`, `run_synthetic_assurance`, `PublicAssuranceReport`, `LoadedSource`, `cell_to_public_claim`
+- `sources`, `aisc`, `mine_stats`, `mine_ledger`, `synthetic`, `live`, `citation`, `key`, `consistency`, `transcribe`, `forecast`, `guidance`, `waterfall`, `recovery`, `lint`, `html`.
+
+## 12. Proof obligations
+### Proof obligations and controls (`PO-*`)
 - `PO-PUB-1` (real files through 2026Q2, ignored test; recorded in MOR_CASE E820–E823): the census and digest of
   every registered workbook equal an independent reader's. The test also checks the run against the last row of
   `repro/barrick/expected.toml` (root, anchor, totals, registry epoch, digest of digests). The root is a
@@ -1128,40 +1157,16 @@ The public lane of M0 (`fmine assure public`).
   refuses an altered cited document. Exact hand-derived scores and completion bounds, deterministic input
   order, site filtering and source-bearing JSON/Markdown are exercised through the public adapter.
 
-## 7. Failure Modes & Deterministic Fallbacks
+### Scope boundary, dependencies and failure modes
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.
 - A header that names no registered subject becomes an `UnregisteredHeader`.
 - Neither stops the run, and neither is ever guessed.
-
-## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a reports AISC and Mine Stats
   first-registered within-vintage counts, and part 3c reports adjacent histories for both. Part 3b compares keyed AISC and Mine Stats
   values with verified registered-note coverage. The Mine Stats population reproduces T16 and all nine
   known changes, with 30 region-map exclusions citing E461. A complete issuer-consistency gate record remains
   outstanding; these projections alone do not establish a full M0 gate pass.
-
-## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` and `fmine-metrics` for exact guidance
-  requirements (BD-342), the typed public waterfall (BD-333) and the recovery comparison (bd-srqc). `fmine-units` and `fmine-time` remain
-  declared in the manifest.
-- Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
-  `crates/xtask/tests/public_exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
-  share, and the (iv) range exactly); `test_property_footings_match_closed_form` does the same for footings.
-- Depends on `fmine-calib::guidance_scores` (BD-341) for validated descriptive guidance scoring and exact
-  IID reference bounds. Source acquisition, chronology and basis compatibility remain this adapter's duty.
-- Depends on `fmine-registry` for source/status/basis registries. Cross-crate oracle and registry tests live in
-  `crates/xtask/tests/public_exact_feas_blame.rs`, `public_exact_feas_oracle.rs`, `public_laap_2023.rs` and
-  `public_registry.rs`; the prior integration entry files retain documentation redirects.
-- Public inventory, vintage-comparison and transcription integration tests also live in
-  `crates/xtask/tests/public_mine_stats_inventory.rs`, `public_mine_stats_vintages.rs` and
-  `public_transcriptions.rs`, preserving the crate's existing LOC ceiling.
-- Thirteen existing public-API mine-ledger integration tests live unchanged in
-  `crates/xtask/tests/public_mine_ledger.rs`; the two private numerical tests remain beside their kernels.
-- Public live-dependency and AISC reader integration tests live in
-  `crates/xtask/tests/public_report_contract.rs`; private leaf-mutation and AISC unit tests remain beside
-  their implementations. The integration groups preserve the original fixtures, assertions and ignore rules.
-
-## 10. Non-Goals & Scope Boundary
+- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io`, `fmine-metrics`, `fmine-numerics`, `fmine-calib`, `fmine-registry`, `fmine-units`, `fmine-time`.
 - DESIGN (BD-341.S4): `guidance::track_record::clusters` wraps the unchanged dated comparison in
   `fmine.guidance.track-record.clusters.v1` / `GTCL` v1. Its digest binds the entire original report,
   both first-published and latest-registered selectors, every guidance/source link, both exact cluster

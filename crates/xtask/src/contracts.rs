@@ -559,7 +559,7 @@ mod tests {
     }
 
     fn good() -> String {
-        contract("- **LOC budget:** 26,000 planned / 30,000 ceiling")
+        contract("- **LOC budget:** 40,000 planned / 46,000 ceiling")
     }
 
     fn check(text: &str) -> (Vec<String>, Vec<String>) {
@@ -678,7 +678,7 @@ mod tests {
             let (errors, _) = check(&contract(line));
             assert!(
                 errors.len() == 1
-                    && errors[0].contains("it must read `26,000 planned / 30,000 ceiling`"),
+                    && errors[0].contains("it must read `40,000 planned / 46,000 ceiling`"),
                 "{line}: {errors:?}"
             );
         }

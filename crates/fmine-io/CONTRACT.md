@@ -1,13 +1,16 @@
 # CONTRACT.md — `fmine-io`
 
-## 1. Charter & Layer
+## 1. Purpose
+Pure-Rust ZIP/DEFLATE, XLSX workbook, HTML table, OMF 2 / Parquet subset, draft tokenizer, MineLib report, local reliance/forecast journal, and OpenSSL RFC 3161 timestamp adapter crate (Portal, layer `V`).
+
 - **Crate:** `fmine-io`
-- **Layer:** `V` (Verification, Ingestion & Assurance)
-- **Subsystem:** `Ingestion`
-- **LOC Budget:** `40k planned / 46k ceiling` (`registries/loc_budget.toml`)
+- **Layer:** V
+- **Subsystem:** Portal
+- **LOC budget:** 40,000 planned / 46,000 ceiling
 - **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report", "source"]`
 
-## 2. Mathematical & Domain Formulation
+## 2. Inputs
+### Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
 (`xlsx`); `G-BULL-1` quarantine of formula errors and hidden sheets; `G-BULL-2` placeholder preservation (`"-"`,
 `"N/A"` become `CellValue::Placeholder`, never `0.0`); byte-bound HTML table extraction (`HtmlDocument`).
@@ -206,7 +209,8 @@ roots and returns its conservative time bounds and receipt/root fingerprints. It
 original host-clock times nor asserts forecast preregistration: the caller must check exact cohort/member
 definitions, absence of selected outcomes in the prefix, and all applicable deadline/availability bounds.
 
-## 3. Authority, Epistemics & Representation
+## 3. Outputs
+### Authority, Epistemics & Representation
 Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a `SourceAnchor`
 (`artifact_path`, sha256, `sheet!cell`).
 
@@ -224,7 +228,8 @@ explicit `TrustedTime` supplied under the owner's policy. The adapter never infe
 system clock, journal timestamp or network service. An independently trusted exact final-head pin is required
 for current reuse; an unpinned replay establishes only internal consistency of the inspected bytes.
 
-## 4. Public API Surface
+## 4. Invariants
+### Reader, journal and OMF invariants
 - `IoError`, `HtmlTable`, `extract_html_tables`
 - `HtmlDocument::{from_bytes, artifact_path, bytes, sha256, tables, make_anchor}`;
   `HtmlSourceTable::{table_index, rows, columns, cells, cell}`;
@@ -347,7 +352,7 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   a chain but never become additional trust anchors. Supplied intermediate fingerprints are checked before
   and after verification as for the explicitly selected root bundle.
 
-## 5. Guards & Typed Refusals
+## 5. Refusals
 - `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are
   parsed into `Workbook::hidden_sheets` (BD-331.S2, for the hidden scope), never into `sheets`, `sheet()`,
   `cell_census` or the numeric digest; their formula errors are not logged.
@@ -457,7 +462,72 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   and leaves covered positions empty. On a refused document it returns an empty vector; consumers requiring
   diagnostics and source evidence must use the fallible `HtmlDocument::from_bytes` API.
 
-## 6. Proof Obligations (`PO-*`)
+## 6. Determinism class
+`forecast/prefix.rs` is `BitwisePortable`. Pure byte-slice parsers (`xlsx`, `html`, `omf`, `numfmt`, `numtok`, `zip_inflate`) produce deterministic outputs for identical input bytes; local journal and TSA adapters perform bounded filesystem or OpenSSL subprocess I/O.
+
+## 7. Evidence class of outputs
+Binds source bytes and SHA-256 digests (`SourceAnchor`) without promoting evidence or interpreting issuer financial semantics (`fmine-public` owns semantic classification).
+
+## 8. Validity domain
+Missing files, corrupt ZIP/DEFLATE streams, malformed workbooks, oversized journals, OMF 1 files, and unsupported Parquet writers fail closed with `IoError` or registered `Refusal`s. Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-runtime`, `fmine-geom`, `fmine-optimize`, `fmine-lp`, and `fmine-calib`.
+
+### Failure modes and deterministic fallbacks
+Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
+Reliance failures return registered `Refusal`s. A caller issuing a new artifact holds the writer lock, validates
+its entry first, creates and syncs the exact artifact with `create_new`, then appends the issuance. If that final
+append fails, a previously unissued digest cannot pass the current-use gate. Failed forwarding of an already
+issued digest adds no recipient record or successful issuance receipt; its existing status remains unchanged.
+A current-use export keeps its
+pinned shared journal handle alive through its exact-byte copy; checking and dropping the handle before copying
+would permit a concurrent withdrawal race.
+
+## 9. Oracles
+- `GATE-BULL-01` (part 1 extraction fidelity) and `KILL-6` (OMF purity, 923-line Parquet subset, 2,877-line OMF reader).
+- `fixtures/fmine-io/omf_section_schedule_highs_{columns,rows}.txt`: HiGHS solution of `testdata/omf_section_schedule.mps` via `scripts/oracle/highs_lp.py` (`scipy 1.18.1`, independent parser).
+- Fuzz targets `fuzz/fuzz_targets/{xlsx,numfmt,html,journal,omf}.rs`.
+
+## 10. Known gaps
+Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute
+metrics (`fmine-metrics`).
+The OMF reader reads; it does not write OMF, decode images, transform geometry into world coordinates, or turn a
+block model into the engines' types beyond the parent grid that block proportions take. It reads OMF 2 only: OMF 1
+files and Parquet from other writers outside the subset are refused, not converted. Block proportions do not handle
+tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the last is not checked).
+OMF pits take block values as given in attributes. They hold no price deck or cost model, do not value sub-blocks,
+and do not write the pit back to OMF. Schedules have no destinations (PCPSP). `schedule` takes the caller's
+ranking; `lp_schedule` searches from the LP's starts and reports its gap to the bound, but proves no schedule best.
+No outside solver runs in CI or at run time: HiGHS ran once in the lab and its output is pinned.
+`plan schedule --omf` exports source-bound MPS and imports named primal/dual values, retaining separate
+binary64-LP and integer-schedule certificates. The command also admits candidate period attributes. A candidate
+comes only as periods per parent block, from an attribute or the caller. Periods as dates, a calendar, vendor
+string files and partial blocks are not read, and a broken candidate is never repaired. The shell-to-design loss is
+geometric: no grade uncertainty over realizations (no geostatistics here), no ramp-induced slope flattening, no
+check of the design against the slopes, and no closing of an open design surface.
+The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
+interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
+anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent
+publication time.
+The draft tokenizer recognises a bounded ASCII-number and lexical-context grammar, not arbitrary mathematical
+notation or prose semantics. It makes no publicness, calibration or legal conclusion. The two-reader issuer
+sentence corpus and its precision/recall study remain separate work; synthetic lexer tests do not stand in for it.
+The reliance file is a bounded local seam until the authority ledger is available. It is not a replicated
+authority service, authentication signature, clock synchronisation service, key manager or notification system.
+It cannot establish that all detached copies were recalled; it records only known issuances.
+The forecast store provides local durable ordering, not external time authenticity, replication or a substitute
+for forecast semantic replay. Its declared host-clock bound is an operator assumption. Advisory locks coordinate
+cooperating processes; independently retained pins detect a changed final head but do not authenticate the writer.
+The separate timestamp adapter authenticates the TSA's assertion under the caller's selected roots. It does
+not select or endorse a TSA, fetch revocation information, perform network verification or establish that a
+local test authority is an independent time witness. Its input fingerprints permit the trust choice to be audited.
+
+## 11. Public API
+- `xlsx::{Workbook, CellValue, MinimalCell, MinimalSheet, build_minimal_xlsx, build_minimal_xlsx_styled}`
+- `HtmlDocument`, `HtmlSourceTable`, `HtmlSourceCell`, `HtmlTable`, `extract_html_tables`, `IoError`
+- `forecast::{Journal, prefix, timestamp}`, `reliance::{Journal, ReleaseKey, ReissueRequest, decode_journal, read_artifact}`
+- `omf` (OMF 2 reader, block proportions, pit/shell/schedule/design adapters), `minelib_report`, `source`, `numfmt`, `numtok`, `styles`, `zip_inflate`.
+
+## 12. Proof obligations
+### Proof obligations and controls (`PO-*`)
 - `PO-IO-1`: on the 18 registered Barrick workbooks, the per-workbook census (visible and hidden sheets; numeric,
   placeholder, error and text cells) and numeric digest equal an independent reader's (MOR_CASE E820; asserted in
   `fmine-public`'s ignored real-file test).
@@ -633,70 +703,3 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - HTML synthetic controls cover merged origins and anchors, exact decimals and UTF-8 byte ranges, one-pass
   entity decoding, fake tables in comments/raw-text contexts, ambiguous numeric markup, malformed spans and
   row groups, hidden content, invalid encodings and global expansion including rectangular padding.
-
-## 7. Failure Modes & Deterministic Fallbacks
-Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
-Reliance failures return registered `Refusal`s. A caller issuing a new artifact holds the writer lock, validates
-its entry first, creates and syncs the exact artifact with `create_new`, then appends the issuance. If that final
-append fails, a previously unissued digest cannot pass the current-use gate. Failed forwarding of an already
-issued digest adds no recipient record or successful issuance receipt; its existing status remains unchanged.
-A current-use export keeps its
-pinned shared journal handle alive through its exact-byte copy; checking and dropping the handle before copying
-would permit a concurrent withdrawal race.
-
-## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-BULL-01` (part 1, extraction fidelity)
-- `KILL-6` (OMF purity, plan §32.2) has not fired. It fires if omf-rust needs banned dependencies and the Parquet
-  subset passes 8,000 lines. The first holds (E858). Measured at BD-194, `omf/parquet.rs` without its test writer
-  and tests is 923 lines (838 of code); the whole reader, `omf.rs` and `omf/` without tests, is 2,877.
-
-## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock
-  and owned bounded subprocesses).
-- `fmine-geom` supplies `volcert`'s certified closed meshes and block proportions (V to K0, bd-aqfl).
-- `fmine-optimize` supplies `pitflow`'s slope arcs, certified ultimate pit and nested shells (V to E, bd-joiv),
-  and `toposort`'s schedules (bd-fr8x, bd-djb7).
-- `fmine-lp` supplies PDLP and its certified dual bound for LP schedules (V to E, bd-djb7), and MPS output and
-  solution files for outside solvers (bd-06kg).
-- Oracle fixtures (§33.2, bd-06kg): `fixtures/fmine-io/omf_section_schedule_highs_{columns,rows}.txt` are HiGHS's
-  solution of `testdata/omf_section_schedule.mps`, from scipy 1.18.1's `linprog(method="highs")` as run by
-  `scripts/oracle/highs_lp.py`, with capture records beside them. The script reads the MPS with its own parser and
-  shares no code with fmine-lp. It was written by the agent that wrote the code under test.
-- `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
-  OpenSSL 1.1 or 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
-- No omf-rust code is lifted. Its schemas, read checks and validator (tree 64d3057) are the specification the
-  `omf` reader follows.
-
-## 10. Non-Goals & Scope Boundary
-Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute
-metrics (`fmine-metrics`).
-The OMF reader reads; it does not write OMF, decode images, transform geometry into world coordinates, or turn a
-block model into the engines' types beyond the parent grid that block proportions take. It reads OMF 2 only: OMF 1
-files and Parquet from other writers outside the subset are refused, not converted. Block proportions do not handle
-tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the last is not checked).
-OMF pits take block values as given in attributes. They hold no price deck or cost model, do not value sub-blocks,
-and do not write the pit back to OMF. Schedules have no destinations (PCPSP). `schedule` takes the caller's
-ranking; `lp_schedule` searches from the LP's starts and reports its gap to the bound, but proves no schedule best.
-No outside solver runs in CI or at run time: HiGHS ran once in the lab and its output is pinned.
-`plan schedule --omf` exports source-bound MPS and imports named primal/dual values, retaining separate
-binary64-LP and integer-schedule certificates. The command also admits candidate period attributes. A candidate
-comes only as periods per parent block, from an attribute or the caller. Periods as dates, a calendar, vendor
-string files and partial blocks are not read, and a broken candidate is never repaired. The shell-to-design loss is
-geometric: no grade uncertainty over realizations (no geostatistics here), no ramp-induced slope flattening, no
-check of the design against the slopes, and no closing of an open design surface.
-The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
-interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
-anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent
-publication time.
-The draft tokenizer recognises a bounded ASCII-number and lexical-context grammar, not arbitrary mathematical
-notation or prose semantics. It makes no publicness, calibration or legal conclusion. The two-reader issuer
-sentence corpus and its precision/recall study remain separate work; synthetic lexer tests do not stand in for it.
-The reliance file is a bounded local seam until the authority ledger is available. It is not a replicated
-authority service, authentication signature, clock synchronisation service, key manager or notification system.
-It cannot establish that all detached copies were recalled; it records only known issuances.
-The forecast store provides local durable ordering, not external time authenticity, replication or a substitute
-for forecast semantic replay. Its declared host-clock bound is an operator assumption. Advisory locks coordinate
-cooperating processes; independently retained pins detect a changed final head but do not authenticate the writer.
-The separate timestamp adapter authenticates the TSA's assertion under the caller's selected roots. It does
-not select or endorse a TSA, fetch revocation information, perform network verification or establish that a
-local test authority is an independent time witness. Its input fingerprints permit the trust choice to be audited.

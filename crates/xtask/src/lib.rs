@@ -958,8 +958,20 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     if let Err(e) = check_stack_lock(root) {
         all_errors.extend(e);
     }
-    if let Err(e) = beads::check_beads(root) {
+    // BD-324: check-beads runs on every real checkout, every CI run, and whenever `.beads` exists.
+    // On a stripped remote RCH worker mirror (where global rch transfer excludes strip both `.git/` and
+    // `.beads/` and `CI` is unset), defer to the local/CI check rather than false-failing remote `cargo test`,
+    // matching `loc::check_amend`'s non-repo behavior.
+    let stripped_rch_mirror = option_env!("RCH_BUILD_SOURCE").is_some()
+        && std::env::var_os("CI").is_none()
+        && !root.join(".git").exists()
+        && !root.join(".beads").exists();
+    if !stripped_rch_mirror && let Err(e) = beads::check_beads(root) {
         all_errors.extend(e);
+    }
+    match contracts::check_contracts(root) {
+        Ok(report) => all_errors.extend(report.errors),
+        Err(e) => all_errors.extend(e),
     }
     // §28.4.3 over what is about to be committed; CI runs `check-amend --base` over the pushed range.
     if loc_report.is_some()
@@ -1602,8 +1614,9 @@ mod tests {
         // fmine-core's seven, plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's eight
         // (bd-193, bd-191, bd-192, bd-wq34), fmine-optimize's fifteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
         // bd-5lxu, bd-2rne, bd-rbxh, bd-ubzs, pcpsp/price.rs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs
-        // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and mps.rs (bd-j2ay), and fmine-ledger's mmr.rs (BD-083).
-        assert_eq!(report.bitwise_files, 38, "{report:?}");
+        // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and mps.rs (bd-j2ay), fmine-ledger's mmr.rs, batch.rs, cell.rs (BD-081/083/084),
+        // and fmine-object's merkle.rs, cas.rs (BD-090).
+        assert_eq!(report.bitwise_files, 42, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
@@ -2108,5 +2121,135 @@ mod tests {
         assert_eq!(report.total_planned, 1_171_000);
         assert_eq!(report.total_ceiling, 1_347_000);
         assert!(report.total_actual > 4_000);
+    }
+
+    /// BD-327.S2: every backticked `test_[a-z0-9_]+` token in every `crates/*/CONTRACT.md`
+    /// resolves to a real `fn <name>(` definition under `crates/`.
+    #[test]
+    fn test_contract_test_names_resolve() {
+        fn collect_fn_names(dir: &Path, out: &mut BTreeSet<String>) {
+            for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_fn_names(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && let Ok(text) = fs::read_to_string(&path)
+                {
+                    let bytes = text.as_bytes();
+                    let mut i = 0;
+                    while i + 3 < bytes.len() {
+                        if &bytes[i..i + 3] == b"fn "
+                            && (i == 0
+                                || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'))
+                        {
+                            let mut j = i + 3;
+                            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                                j += 1;
+                            }
+                            let start = j;
+                            while j < bytes.len()
+                                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
+                            {
+                                j += 1;
+                            }
+                            if j > start {
+                                let mut k = j;
+                                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                                    k += 1;
+                                }
+                                if k < bytes.len() && (bytes[k] == b'(' || bytes[k] == b'<') {
+                                    out.insert(text[start..j].to_string());
+                                }
+                            }
+                            i = j;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        let mut fns = BTreeSet::new();
+        collect_fn_names(&root.join("crates"), &mut fns);
+        assert!(!fns.is_empty());
+
+        let mut missing = Vec::new();
+        let mut checked = 0usize;
+        for entry in fs::read_dir(root.join("crates"))
+            .expect("crates/")
+            .flatten()
+        {
+            let contract_path = entry.path().join("CONTRACT.md");
+            if !contract_path.is_file() {
+                continue;
+            }
+            let text = fs::read_to_string(&contract_path).expect("read CONTRACT.md");
+            let mut in_fence = false;
+            for (line_no, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("```") {
+                    in_fence = !in_fence;
+                    continue;
+                }
+                if in_fence {
+                    continue;
+                }
+                let mut rest = line;
+                while let Some(open) = rest.find('`') {
+                    let after_open = &rest[open + 1..];
+                    let Some(close) = after_open.find('`') else {
+                        break;
+                    };
+                    let span = &after_open[..close];
+                    rest = &after_open[close + 1..];
+                    // Extract standalone or path-qualified `test_[a-z0-9_]+` identifiers inside backticks.
+                    let bytes = span.as_bytes();
+                    let mut i = 0;
+                    while i < bytes.len() {
+                        if bytes[i..].starts_with(b"test_")
+                            && (i == 0
+                                || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'))
+                        {
+                            let mut j = i + 5;
+                            while j < bytes.len()
+                                && (bytes[j].is_ascii_lowercase()
+                                    || bytes[j].is_ascii_digit()
+                                    || bytes[j] == b'_')
+                            {
+                                j += 1;
+                            }
+                            if j > i + 5 {
+                                let name = &span[i..j];
+                                checked += 1;
+                                if !fns.contains(name) {
+                                    missing.push(format!(
+                                        "{}:{}: unresolved `{name}`",
+                                        contract_path.display(),
+                                        line_no + 1
+                                    ));
+                                }
+                            }
+                            i = j;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            checked > 200,
+            "expected >200 contract test refs, got {checked}"
+        );
+        assert!(
+            missing.is_empty(),
+            "unresolved test_* references in CONTRACT.md:\n{}",
+            missing.join("\n")
+        );
     }
 }

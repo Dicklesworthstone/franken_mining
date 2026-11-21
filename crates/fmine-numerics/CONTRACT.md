@@ -407,7 +407,7 @@ variances 1e20 and 1e-20 in either coordinate order.
 - **PO-HELM-1** (VOI ≥ 0 in expectation; the estimator is unbiased on conjugate toys; known-answer tests). Partly here, for finite problems only: `test_gb29_closed_form_known_answers`, the exhaustive policy check (`every_small_discrete_policy_matches_an_independent_exhaustive_oracle`), and GATE-HELM-02's check of the Monte Carlo mean and SE. No conjugate continuous toy is tested.
 - **Mislabelled in the old contract.** It used PO-NUM-1 for `0 ≤ EVSI ≤ EVPI`, PO-NUM-3 for Ville and CVaR subadditivity, and PO-NUM-4 for tropical duality. The plan's PO-NUM-1 and PO-NUM-3 say something else, and it has no PO-NUM-4. Those properties are tested by `test_evpi_non_negative_and_evsi_monotone`, `test_ville_inequality_type1_error_bound`, `test_cvar_coherent_subadditivity_and_monotonicity` and `test_min_plus_longest_path_duality` (Validity domain).
 
-## 13. Observable unmeasured coordinates (DESIGN; BD-149/177)
+### Observable unmeasured coordinates (DESIGN; BD-149/177)
 
 `reconciliation::partial::reconcile_with_unmeasured(y,V,Am,Au,b,p)` jointly estimates measured
 coordinates xm and explicitly unmeasured coordinates xu under `Am*xm+Au*xu=b`. Its objective uses

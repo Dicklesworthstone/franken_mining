@@ -184,7 +184,7 @@ checks public signatures. INV-005 is demonstrated by positive closure and both s
 residual; INV-007 by the label-join/export refusal test. Exact arithmetic establishes no calibration
 or reconciliation proof obligation for a real plant.
 
-## 13. Fully measured elemental inventory reconciliation (DESIGN)
+### 13. Fully measured elemental inventory reconciliation (DESIGN)
 
 `reconciliation::reconcile_inventory` takes the same six `Claim<MetalBalanceInput>` roles plus a
 `Claim<InventoryErrorModel>`. The model binds the exact five observation claim IDs, boundary/element/
@@ -226,7 +226,7 @@ reconciliation of grades as independent extensive totals, or P754 compliance. Jo
 reconciliation is a separate adapter described in §15. Original source families and receiver-side
 permissions remain authoritative.
 
-## 14. Nominal material projection (DESIGN; BD-177/336)
+### 14. Nominal material projection (DESIGN; BD-177/336)
 
 `measurements::project_material` converts Claims over one full physical material and time into exact
 `MaterialAmounts`: all non-water dry matter, H2O and total elemental kilograms. Source masses explicitly
@@ -258,7 +258,7 @@ labels. Source paths remain provenance; the owner performs no file IO or implici
 Inputs remain Assumed, Internal and uncalibrated; the exact submitted bytes are hashed. Site source
 auditing, sampled-support conversion, full P754 qualification and the complete BD-177/336 gates remain open.
 
-## 15. Joint conservative-flowsheet reconciliation (DESIGN; BD-149/175/177)
+### 15. Joint conservative-flowsheet reconciliation (DESIGN; BD-149/175/177)
 
 `flowsheet::reconciliation::observation_order` admits the original complete graph and returns a
 canonical source-bound coordinate order. `reconcile_flowsheet` uses one full kg² covariance over
@@ -308,7 +308,7 @@ It preserves original tokens, line locators, source Claims and explicit covarian
 The CLI retains bounded file reads and response rendering; the existing reconciliation owners evaluate
 the parsed model. The same admission selects v2 endpoint-stock support before later field refusals.
 
-## 16. Lot-to-stream projection with first-order covariance (DESIGN; BD-151/155/177)
+### 16. Lot-to-stream projection with first-order covariance (DESIGN; BD-151/155/177)
 
 `raw_measurements::project_transfer` accepts an explicitly complete, nonoverlapping lot population
 for one physical stream and interval. Each PlantLot supplies exact wet kg M, water/wet-mass fraction w
@@ -354,7 +354,7 @@ The output preserves original observation tokens, canonical model binding, exact
 full first-order covariance and the parent-linked nominal transfer. It does not automatically adopt
 that approximate covariance as a Gaussian reconciliation error model.
 
-## 17. Explicitly unmeasured flows (DESIGN; BD-149/175/177)
+### 17. Explicitly unmeasured flows (DESIGN; BD-149/175/177)
 
 `flowsheet::reconciliation::unmeasured::reconcile_unmeasured_flowsheet` accepts the original graph
 Claims and a separate `Claim<UnmeasuredFlowModel>`. The model binds the complete topology, scope,
@@ -402,7 +402,7 @@ worksheet parser. The separate schema explicitly names unmeasured streams and su
 for observed coordinates. The result retains source Claims, the full joint covariance, observed/inferred
 distinctions and the explicit availability of gross-error testing. No missing stock or prior is invented.
 
-## 18. Versioned nominal recovery cards (DESIGN; BD-176/287)
+### 18. Versioned nominal recovery cards (DESIGN; BD-176/287)
 
 `cards::RecoveryModel::compile` admits four separately sourced layers: a test-work card,
 an ordered sequence of operational factors, a correction with an optional explicit upper cap,
@@ -466,7 +466,7 @@ This completes typed nominal card evaluation, not all of BD-287. Report ingestio
 qualification, parameter estimation, empirical uncertainty/covariance, forecast calibration,
 automatic route selection and plant control remain outside this contract.
 
-## 19. Throughput-volume residence time and lag alignment (DESIGN; bounded BD-313)
+### 19. Throughput-volume residence time and lag alignment (DESIGN; bounded BD-313)
 
 `rtd::propagate` admits a source-bound, equal-active-tank model, every initial tank inventory,
 a declared nonexchanging dead stock and a complete contiguous feed history. Dry matter, water and
@@ -557,7 +557,7 @@ introduces no RTD fitting, inverse deconvolution, reactive-stock inference or pl
 dead stocks, shutdown, changed clock durations at fixed throughput, atomic refusal and source identity.
 The synthetic examples are `tests/plant/rtd_one_tank.toml` and `tests/plant/rtd_shift_pulse.toml`.
 
-## 20. Joint recovery populations (DESIGN; plan §17.4, bounded BD-176/182)
+### 20. Joint recovery populations (DESIGN; plan §17.4, bounded BD-176/182)
 
 `cards::RecoveryModel::evaluate_ensemble` propagates a `Claim<RecoveryPopulation>` through the
 same compiled four-layer recovery model used by nominal evaluation. Each of 1–256 named scenarios
@@ -612,7 +612,7 @@ uncalibrated. Neither population completeness in reality nor uncertain card para
 likelihoods, empirical recovery calibration, sample-to-blend transfer, forecast registration or
 operating permission is established. Authentic source and prospective outcome gates remain open.
 
-## 21. Bond grinding energy and throughput (DESIGN; plan §17.3, PO-CRUC-4; BD-176/181)
+### 21. Bond grinding energy and throughput (DESIGN; plan §17.3, PO-CRUC-4; BD-176/181)
 
 `grinding::evaluate` evaluates a versioned `Claim<BondModel>` and 1–4096 complete simultaneous
 `Claim<GrindingScenario>` rows at one named boundary, circuit, processing blend and positive interval.
@@ -669,7 +669,7 @@ validity, grinding-circuit correction, other bottleneck, calibration, frozen for
 or operating permission. BD-181 still needs actual prospective registration and outcomes; this slice
 does not assert that the broader process-card or uncertainty-propagation gates have passed.
 
-## 22. Unmeasured endpoint inventories (DESIGN; bounded BD-154/177, plan §20.2–20.8)
+### 22. Unmeasured endpoint inventories (DESIGN; bounded BD-154/177, plan §20.2–20.8)
 
 `flowsheet::reconciliation::unmeasured::quantities::reconcile_unmeasured_quantities` extends the
 same partial GLS owner to explicitly unmeasured opening or closing inventories. Its separate
@@ -706,7 +706,7 @@ This single-window conditional estimator supplies no across-period smoothing, la
 stockpile mixing, voxel provenance, leach dynamics or empirical P754 qualification. BD-154 and BD-177
 remain open for those broader capabilities and their evidence gates.
 
-## 23. Multi-period inventory trajectories (DESIGN; bounded BD-154/177, plan §§20.2–20.3, 20.8)
+### 23. Multi-period inventory trajectories (DESIGN; bounded BD-154/177, plan §§20.2–20.3, 20.8)
 
 `trajectory::reconcile_trajectory` jointly estimates one conserved total elemental measurand in kg
 inside one complete physical storage boundary across 2..32 contiguous periods. Each period's total
@@ -751,7 +751,7 @@ shared endpoints, no-redundancy semantics, source tampering and refusals; actual
 robust likelihoods, stockpile mixing, multiple elemental/carrier channels, voxel provenance, leach
 kinetics, empirical state calibration or P754 fixture parity. The broad BD-154/177 gates remain open.
 
-## 24. Known-kernel noisy residence-time inversion (DESIGN; bounded BD-313, plan §17.3)
+### 24. Known-kernel noisy residence-time inversion (DESIGN; bounded BD-313, plan §17.3)
 
 `rtd::inverse::deconvolve` reconstructs one conserved total elemental feed history from complete
 interval-integrated outlet observations and optional genuine feed observations. It reuses the existing
@@ -813,7 +813,7 @@ infer unmeasured initial stocks, model flow/kernel uncertainty, identify sensor 
 calibrate recovery cards or establish empirical P754/plant gates. BD-313 remains open for those broader
 requirements.
 
-## 25. Shared-scenario processing production (DESIGN; BD-176/181/182, plan §17.4)
+### 25. Shared-scenario processing production (DESIGN; BD-176/181/182, plan §17.4)
 
 `production::evaluate` joins immutable admitted Bond-grinding and recovery-ensemble receipts with a
 source-bound `Claim<ProductionInputs>`. All three populations must have the same unique scenario IDs
