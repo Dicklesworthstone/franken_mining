@@ -1,0 +1,15 @@
+[package]
+name = "fmine-object"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "FrankenMining S1 object store (Bedrock): FMT-CAS-1 chunks, manifests, fanout-16 Merkle trees, root-last publication (PO-BED-3), and reachability GC."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+
+[lints]
+workspace = true

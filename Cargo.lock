@@ -57,6 +57,7 @@ dependencies = [
  "fmine-decide",
  "fmine-evidence",
  "fmine-io",
+ "fmine-ledger",
  "fmine-lp",
  "fmine-metrics",
  "fmine-numerics",
@@ -128,6 +129,7 @@ name = "fmine-ledger"
 version = "0.1.0"
 dependencies = [
  "fmine-core",
+ "fmine-evidence",
 ]
 
 [[package]]
