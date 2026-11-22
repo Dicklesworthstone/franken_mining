@@ -1616,17 +1616,17 @@ mod tests {
             .sum();
         assert_eq!(report.files, expected, "{report:?}");
         // fmine-core's eight (including cert.rs, BD-096), fmine-claim's representation.rs (BD-041), plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's eight
-        // (bd-193, bd-191, bd-192, bd-wq34), fmine-materials' three (lib, corpus, cards; BD-241), fmine-flow's seven (lib, graph, balance, ffactors, r0_parity, verbatim_table, compensation; BD-146/148/160/278/279/280), fmine-econ's four (lib, price_deck, fiscal, regime; BD-228/296), fmine-explore's three (lib, model, absence; BD-231), fmine-optimize's fifteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
+        // (bd-193, bd-191, bd-192, bd-wq34), fmine-materials' three (lib, corpus, cards; BD-241), fmine-flow's seven (lib, graph, balance, ffactors, r0_parity, verbatim_table, compensation; BD-146/148/160/278/279/280), fmine-econ's five (lib, price_deck, fiscal, regime, npv; BD-228/296/350.S4), fmine-explore's four (lib, model, absence, three_part; BD-231/235), fmine-optimize's fifteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
         // bd-5lxu, bd-2rne, bd-rbxh, bd-ubzs, pcpsp/price.rs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs
         // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and mps.rs (bd-j2ay), fmine-ledger's mmr.rs, batch.rs, cell.rs, l0.rs, as_of_replay.rs (BD-053/080/081/083/084),
         // and fmine-object's merkle.rs, cas.rs (BD-090), fmine-authz's five modules (BD-092..095),
         // fmine-io's dialects.rs and redact.rs (BD-186, BD-292), fmine-sync's seven portable modules
         // (lib, manifest, transport, version_vector, sync_cert, residency_plan, gluing; BD-102..108),
-        // fmine-telemetry's four portable modules (lib, segment, backpressure, rollup; BD-242),
+        // fmine-telemetry's five portable modules (lib, segment, backpressure, rollup, endurance; BD-242/243),
         // fmine-plant's three BitwisePortable custody/card modules (custody, cards/cu_speciation, cards/preg_rob; BD-179/180/182/288),
         // fmine-view's four BitwisePortable modules (lib, voxel_mesh, gltf, viewer; BD-256),
         // and fmine-gen's fifteen BitwisePortable modules (lib, seal, worlds, harness, geology, cu_au_world, biases, drillholes, dispatch, mill_balance, fa_book, metamorphic, plant_twin, pilot_power, review; BD-127..134, 143, BD-356.S1/S2, BD-357.S1).
-        assert_eq!(report.bitwise_files, 103, "{report:?}");
+        assert_eq!(report.bitwise_files, 106, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

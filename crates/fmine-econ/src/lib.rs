@@ -6,6 +6,7 @@
 //! (zero bare `f64` parameters in public signatures; L-6).
 
 pub mod fiscal;
+pub mod npv;
 pub mod price_deck;
 pub mod regime;
 
@@ -40,6 +41,12 @@ pub enum EconError {
     Overflow,
     /// Malformed registry TOML or duplicate row id (`FMINE-REF-107`).
     RegistryParse { detail: String },
+    /// Discounting convention or multi-root IRR is not uniquely identifiable (`FMINE-REF-104`).
+    NonIdentifiableConvention { detail: String },
+    /// Root finder refused (no sign change, non-finite, or non-convergence; `FMINE-REF-207`).
+    NumericalRootFailed { detail: String },
+    /// After-tax cash-flow replay requested without a tax schedule (`FMINE-REF-107`).
+    MissingTaxSchedule { detail: String },
 }
 
 impl EconError {
@@ -59,8 +66,14 @@ impl EconError {
             Self::InvalidDomain { .. } | Self::Overflow => {
                 Refusal::new(RefusalCode::OutsidePhysicalDomain109, self.to_string())
             }
-            Self::RegistryParse { .. } => {
+            Self::RegistryParse { .. } | Self::MissingTaxSchedule { .. } => {
                 Refusal::new(RefusalCode::UndeclaredUnitBasisOrTz107, self.to_string())
+            }
+            Self::NonIdentifiableConvention { .. } => {
+                Refusal::new(RefusalCode::NonIdentifiableAttribution104, self.to_string())
+            }
+            Self::NumericalRootFailed { .. } => {
+                Refusal::new(RefusalCode::NumericalCertificateFailed207, self.to_string())
             }
         }
     }
@@ -110,6 +123,9 @@ impl fmt::Display for EconError {
             }
             Self::Overflow => write!(f, "FMINE-REF-109: exact arithmetic overflow"),
             Self::RegistryParse { detail } => write!(f, "FMINE-REF-107: registry parse: {detail}"),
+            Self::NonIdentifiableConvention { detail } => write!(f, "FMINE-REF-104: {detail}"),
+            Self::NumericalRootFailed { detail } => write!(f, "FMINE-REF-207: {detail}"),
+            Self::MissingTaxSchedule { detail } => write!(f, "FMINE-REF-107: {detail}"),
         }
     }
 }

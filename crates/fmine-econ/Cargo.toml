@@ -13,4 +13,5 @@ workspace = true
 [dependencies]
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
+fmine-numerics = { path = "../fmine-numerics" }
 fmine-units = { path = "../fmine-units" }

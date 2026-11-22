@@ -10,7 +10,7 @@ Headframe S1 site telemetry segment log, bounded ingest backpressure with mandat
 - **Layer:** S1
 - **Subsystem:** Headframe
 - **LOC budget:** 16,000 planned / 18,000 ceiling
-- **Allowed Module Families:** `["segment", "backpressure", "rollup"]`
+- **Allowed Module Families:** `["segment", "backpressure", "rollup", "endurance"]`
 
 ## 2. Inputs
 - Fixed-point scaled `TelemetrySample` batches (`signal_id`, monotonic `timestamp_ns`, `value_scaled`, `scale_exp10`, `quality_flags`) and validated `IngestPolicy` / `SegmentPolicy` / `RollupConfig` configurations.
@@ -35,7 +35,7 @@ Headframe S1 site telemetry segment log, bounded ingest backpressure with mandat
 - `TelemetryError::DigestMismatch` → `FMINE-REF-505` (exit 8): tampered segment or continuity receipt digest.
 
 ## 6. Determinism class
-All files (`lib.rs`, `segment.rs`, `backpressure.rs`, `rollup.rs`) declare `//! Determinism: BitwisePortable`. Arithmetic uses integer fixed-point (`i64`/`i128`) and exact `ExactQty` rationals over `BTreeMap` collections; hashes use deterministic `fmine_core::hash::sha256`.
+All files (`lib.rs`, `segment.rs`, `backpressure.rs`, `rollup.rs`, `endurance.rs`) declare `//! Determinism: BitwisePortable`. Arithmetic uses integer fixed-point (`i64`/`i128`) and exact `ExactQty` rationals over `BTreeMap` collections; hashes use deterministic `fmine_core::hash::sha256`.
 
 ## 7. Evidence class of outputs
 Not applicable: S1 site telemetry storage/rollup infrastructure; upstream Headframe engines wrap operational summaries in `Claim`s with `EvidenceClass` and provenance.
@@ -54,8 +54,10 @@ Not applicable: S1 site telemetry storage/rollup infrastructure; upstream Headfr
 - `segment::{DEFAULT_SEAL_INTERVAL_NS, DEFAULT_MAX_SEGMENT_BYTES, SealReason, TelemetrySample, SignalColumn, TelemetrySegment, SegmentTraceRef, SegmentPolicy, SegmentLogBuilder, slice_trace}`
 - `backpressure::{DropReason, IngestPolicy, ContinuityReceipt, RawRingBuffer, IngestBatchOutcome, BoundedIngestEdge, ContinuityAuditReport, audit_continuity}`
 - `rollup::{DEFAULT_ROLLUP_WINDOW_NS, RollupConfig, SignalRollup, CompactRollup16, compute_rollups}`
+- `endurance::{PO_BED_7_MAX_UTILIZATION_NUM, PO_BED_7_MAX_UTILIZATION_DEN, GATE_INGEST_01_MAX_P99_LATENCY_NS, QueueStabilityAudit, audit_queue_stability, run_synthetic_ingest_endurance}` (`BD-243`, `PO-BED-7`)
 
 ## 12. Proof obligations
 - `BD-242` / `PO-BED-7` (continuity receipts tested, zero silent drops under overload): `backpressure::tests::test_overload_early_seal_downsampling_ring_retention_and_continuity_receipts`.
 - Segment root tamper resistance & transition-to-trace linkage: `segment::tests::test_segment_sealing_root_verification_and_trace_refs`.
 - 1-minute rollup conservation & scale safety: `rollup::tests::test_one_minute_rollups_exact_means_compact_16b_and_scale_refusal`.
+- `BD-243` / `PO-BED-7` (Little's law queue stability, synthetic 10^5 msg/s stability & zero unreceipted loss): `endurance::tests::test_po_bed_7_synthetic_100k_msg_per_s_queue_stability_and_zero_unreceipted_loss`.

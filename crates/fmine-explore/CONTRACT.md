@@ -9,7 +9,7 @@ Lodestar K1 exploration data model, effort accounting, five-class absence taxono
 - **Layer:** K1
 - **Subsystem:** Lodestar
 - **LOC budget:** 15,000 planned / 17,000 ceiling
-- **Allowed Module Families:** `["model", "absence"]`
+- **Allowed Module Families:** `["model", "absence", "three_part"]`
 
 ## 2. Inputs
 - Exploration deposit records, historical effort records, tract definitions, and elicitation records expressed strictly in `fmine_crs::CrsId`, `fmine_units::ExactQty`, and `fmine_core::{ObjectId, SourceAnchor}` (zero bare `f64` parameters in public K-layer signatures; L-6).
@@ -36,7 +36,7 @@ Lodestar K1 exploration data model, effort accounting, five-class absence taxono
 - `ExploreError::MissingProvenance` → `FMINE-REF-107` (exit 3): empty source locator or missing aggregation rule.
 
 ## 6. Determinism class
-All files (`lib.rs`, `model.rs`, `absence.rs`) declare `//! Determinism: BitwisePortable`. All coordinate, depth, detection, and simplex arithmetic uses exact `i128` rationals (`ExactQty`) over `BTreeMap` collections.
+All files (`lib.rs`, `model.rs`, `absence.rs`, `three_part.rs`) declare `//! Determinism: BitwisePortable`. All coordinate, depth, detection, and simplex arithmetic uses exact `i128` rationals (`ExactQty`) over `BTreeMap` collections.
 
 ## 7. Evidence class of outputs
 Data model and absence-class classifier preserve input provenance without upgrading evidence classes; `AbsenceClass` projects strictly to its §11.3 `KnowledgeState`.
@@ -55,7 +55,9 @@ Data model and absence-class classifier preserve input provenance without upgrad
 - `ExploreError`
 - `model::{ExploreMethod, Ingredient, CoverageConfidence, GeoCoord, DepositTypeProbs, MarkRecord, DiscoveryEvent, DepositRecord, MethodSpec, EffortRecord, ElicitationRecord, Tract, TractMap}` (`BD-231`)
 - `absence::{AbsenceClass, AbsenceAssessment, effective_detection_q, classify_site_absence}` (`BD-231`, plan §11.3)
+- `three_part::{UndiscoveredCountPmf, GradeTonnageDeposit, ThreePartEndowmentSummary, simulate_three_part_endowment, ks_two_sample_exact}` (`BD-235`, N0 MapMark4-degenerate three-part endowment simulator, `PO-LODE-5`)
 
 ## 12. Proof obligations
 - `BD-231` (deposits, effort, elicitation, tract map, CRS enforcement): `model::tests::test_explore_data_model_simplex_crs_and_elicitation`.
 - `BD-231` / §11.3 (all five absence classes `A0..A4` and cover-vs-DOI detection thinning): `absence::tests::test_all_five_absence_classes_and_cover_thinning_law`.
+- `BD-235` / `PO-LODE-5` (N0 three-part endowment Wald mean & exact two-sample KS < 0.02): `three_part::tests::test_three_part_n0_endowment_wald_mean_and_ks_stability`.

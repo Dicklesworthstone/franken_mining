@@ -3,6 +3,7 @@
 //! raw ring-buffer retention, and 1-minute rollups (`BD-242`, plan §26.7–§26.8, `PO-BED-7`).
 
 pub mod backpressure;
+pub mod endurance;
 pub mod rollup;
 pub mod segment;
 

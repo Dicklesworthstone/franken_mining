@@ -10,7 +10,7 @@ Helm K1 economic valuation and fiscal-regime kernel (`BD-228`, `BD-296`, plan §
 - **Layer:** K1
 - **Subsystem:** Helm
 - **LOC budget:** 20,000 planned / 23,000 ceiling
-- **Allowed Module Families:** `["price_deck", "fiscal", "regime"]`
+- **Allowed Module Families:** `["price_deck", "fiscal", "regime", "npv"]`
 
 ## 2. Inputs
 - Versioned `PriceDeck` records carrying `fmine_units::Money` prices and explicit `PriceUnit`.
@@ -36,7 +36,7 @@ Helm K1 economic valuation and fiscal-regime kernel (`BD-228`, `BD-296`, plan §
 - `EconError::RegistryParse` → `FMINE-REF-107` (exit 3): malformed `country_regimes.toml` schema or duplicate row id.
 
 ## 6. Determinism class
-All files (`lib.rs`, `price_deck.rs`, `fiscal.rs`, `regime.rs`) declare `//! Determinism: BitwisePortable`. All arithmetic is exact `i128` rational/fixed-point (`ExactQty` / `Money`) over `BTreeMap` collections.
+All files (`lib.rs`, `price_deck.rs`, `fiscal.rs`, `regime.rs`, `npv.rs`) declare `//! Determinism: BitwisePortable`. All arithmetic is exact `i128` rational/fixed-point (`ExactQty` / `Money`) over `BTreeMap` collections.
 
 ## 7. Evidence class of outputs
 Not applicable: deterministic K1 economic and fiscal arithmetic kernel; callers wrap outputs in `Claim`s carrying source provenance.
@@ -57,7 +57,9 @@ Not applicable: deterministic K1 economic and fiscal arithmetic kernel; callers 
 - `price_deck::{Commodity, PriceUnit, PricePoint, PriceDeck, DeckMixAudit, audit_royalty_deck_mix}` (`BD-228`, `BD-296`)
 - `fiscal::{MetalStreamSpec, RoyaltySchedule, CorporateTaxTerms, SuperProfitsBase, SuperProfitsTax, NsrBreakdown, FiscalBreakdown, compute_metal_nsr, compute_royalty_rate, compute_royalty_amount, compute_fiscal_breakdown, exact_npv}` (`BD-228`)
 - `regime::{RestrictionCause, RegimeState, CountryRegimeRow, RegimeFiscalEvaluation, parse_country_regime_registry, evaluate_regime_fiscal_terms}` (`BD-296`, `registries/country_regimes.toml`)
+- `npv::{DiscountConvention, TaxBasis, ExactInterval, ConventionEvalRow, ConventionDiscovery, ConventionDiscoveryRequest, IrrRoot, IrrScanRequest, sqrt_enclosure, npv_interval, discover_discounting_convention, count_cash_flow_sign_changes, solve_irr_bracketed, find_all_bracketed_irrs}` (`BD-350.S4`)
 
 ## 12. Proof obligations
 - `BD-228` (exact versioned price decks, NSR, royalties, tax known answers): `fiscal::tests::test_versioned_price_decks_nsr_royalties_and_tax_known_answers`.
 - `BD-296` (Kibali & Loulo rows, `Restricted` / `NOT_PUBLISHED`, `$85.5/oz` deck mix flag): `regime::tests::test_country_regimes_kibali_loulo_restricted_not_published_and_deck_mix_flag`.
+- `BD-350.S4` (exact rational half-year enclosures, discounting convention discovery, refusing bracketed IRR): `npv::tests::test_npv_end_year_24_50`, `npv::tests::test_npv_mid_year_all_25_10`, `npv::tests::test_npv_year0_undiscounted_27_57`, `npv::tests::test_printed_25_1_identifies_mid_year_all`, `npv::tests::test_irr_two_sign_changes_never_picks_one`, `npv::tests::test_irr_refuses_not_converged`.

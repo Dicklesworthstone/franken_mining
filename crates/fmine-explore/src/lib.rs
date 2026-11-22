@@ -7,6 +7,7 @@
 
 pub mod absence;
 pub mod model;
+pub mod three_part;
 
 use core::fmt;
 
