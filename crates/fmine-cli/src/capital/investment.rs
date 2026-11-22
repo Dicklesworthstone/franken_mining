@@ -5,9 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
+use fmine_capital::robustness::{MAX_TRANSPORT_STATES, METHOD, RobustnessDesign, StateDistance};
 use fmine_capital::{
-    CandidateCashFlow, CapitalCandidate, CashPeriod, FundingSchedule, ProgramInputs,
-    ProgramPolicy, StateCashFlow,
+    CandidateCashFlow, CapitalCandidate, CashPeriod, FundingSchedule, ProgramInputs, ProgramPolicy,
+    StateCashFlow,
 };
 use fmine_claim::{
     AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
@@ -126,6 +127,7 @@ struct Declaration {
     candidates: Vec<Candidate>,
     funding_schedule: Option<FundingSchedule>,
     cash_rounding: Option<String>,
+    robustness: Option<RobustnessDesign>,
     claim: Claim<()>,
 }
 
@@ -143,7 +145,9 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| invalid(e.to_string()))?;
-    if doc.rows.len() > 8 + 64 + 16 + 1 + 16 + 256 * 17 {
+    if doc.rows.len()
+        > 8 + 64 + 16 + 1 + 16 + 256 * 17 + 1 + MAX_TRANSPORT_STATES * MAX_TRANSPORT_STATES
+    {
         return Err(invalid("capital investment manifest has too many rows"));
     }
     let top = fields(
@@ -174,6 +178,8 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
         (BTreeMap::new(), Vec::new(), BTreeMap::new());
     let mut funding_schedule = None;
     let mut cash_rounding = None;
+    let mut robustness = None;
+    let mut distances = BTreeMap::new();
     let (mut cash_periods, mut opening_cash, mut baseline_flows) =
         (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
     let mut anchors = vec![source.clone()];
@@ -271,7 +277,10 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
             "opening_cash" => {
                 let f = fields(&row.fields, &["state", "value"], &[])?;
                 if opening_cash
-                    .insert(get(&f, "state")?.to_owned(), money(number(get(&f, "value")?)?)?)
+                    .insert(
+                        get(&f, "state")?.to_owned(),
+                        money(number(get(&f, "value")?)?)?,
+                    )
                     .is_some()
                     || opening_cash.len() > fmine_capital::MAX_STATES
                 {
@@ -292,6 +301,60 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
                         > fmine_capital::MAX_CASH_PERIODS * fmine_capital::MAX_STATES
                 {
                     return Err(invalid("baseline cash requires every period/state once"));
+                }
+            }
+            "robustness" => {
+                let f = fields(
+                    &row.fields,
+                    &[
+                        "method",
+                        "radius",
+                        "metric_basis",
+                        "radius_basis",
+                        "support",
+                        "distance_unit",
+                    ],
+                    &[],
+                )?;
+                if robustness.is_some()
+                    || get(&f, "method")? != METHOD
+                    || get(&f, "support")? != "declared_shared_scenarios"
+                    || get(&f, "distance_unit")? != "dimensionless"
+                {
+                    return Err(invalid(
+                        "one wasserstein_1 robustness declaration over declared_shared_scenarios with dimensionless distances required",
+                    ));
+                }
+                let radius = number(get(&f, "radius")?)?;
+                if radius.signum() < 0 {
+                    return Err(invalid("transport radius must be nonnegative"));
+                }
+                robustness = Some(RobustnessDesign {
+                    model_key: get(&top, "model_key")?.into(),
+                    method: METHOD.into(),
+                    radius,
+                    metric_basis: get(&f, "metric_basis")?.into(),
+                    radius_basis: get(&f, "radius_basis")?.into(),
+                    distances: Vec::new(),
+                });
+            }
+            "transport_distance" => {
+                let f = fields(&row.fields, &["from", "to", "value"], &[])?;
+                let distance = number(get(&f, "value")?)?;
+                if distance.signum() < 0 {
+                    return Err(invalid("transport distances must be nonnegative"));
+                }
+                if distances
+                    .insert(
+                        (get(&f, "from")?.to_owned(), get(&f, "to")?.to_owned()),
+                        distance,
+                    )
+                    .is_some()
+                    || distances.len() > MAX_TRANSPORT_STATES * MAX_TRANSPORT_STATES
+                {
+                    return Err(invalid(
+                        "unique transport distances within a 64 by 64 state matrix required",
+                    ));
                 }
             }
             _ => return Err(invalid(format!("unsupported table {}", row.table))),
@@ -315,6 +378,20 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
         schedule.baseline_flows = baseline_flows.into_values().collect();
     } else if !cash_periods.is_empty() || !opening_cash.is_empty() || !baseline_flows.is_empty() {
         return Err(invalid("cash rows require an explicit funding_schedule"));
+    }
+    if let Some(design) = &mut robustness {
+        design.distances = distances
+            .into_iter()
+            .map(|((from_state, to_state), distance)| StateDistance {
+                from_state,
+                to_state,
+                distance,
+            })
+            .collect();
+    } else if !distances.is_empty() {
+        return Err(invalid(
+            "transport distances require an explicit robustness declaration",
+        ));
     }
     for (candidate, prerequisite) in requires {
         if !candidates.contains_key(&prerequisite) {
@@ -363,6 +440,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
         candidates: candidates.into_values().collect(),
         funding_schedule,
         cash_rounding,
+        robustness,
         claim,
     })
 }
@@ -483,7 +561,9 @@ fn derive_funding(
         .checked_mul(states)
         .and_then(|n| n.checked_mul(spec.periods.len() + 1));
     if work.is_none_or(|n| n > fmine_capital::MAX_CASH_CHECKPOINTS) {
-        return Err(invalid("source cash schedules exceed 65536 cash checkpoints"));
+        return Err(invalid(
+            "source cash schedules exceed 65536 cash checkpoints",
+        ));
     }
     if schedule.opening_date != utc_date(spec.valuation_time_ns)
         || schedule.periods.len() != spec.periods.len()
@@ -551,7 +631,9 @@ fn derive_funding(
     );
     let derivation = format!(
         "{{\"schema\":\"fmine.investment-nominal-cash.v1\",\"settlement_convention\":{},\"cash_rounding\":{},\"rows\":[{}]}}",
-        js(CASH_SETTLEMENT), js(rounding), rows.join(",")
+        js(CASH_SETTLEMENT),
+        js(rounding),
+        rows.join(",")
     );
     Ok((Some(claim), derivation))
 }
@@ -699,6 +781,14 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
         AdditivityClass::NonAdditive,
     );
     let (funding_schedule, cash_derivation) = derive_funding(&d, &loaded, reference, &all)?;
+    let robustness = d.robustness.as_ref().map(|design| {
+        all.claim(
+            "capital.investment.robustness/1",
+            design.clone(),
+            &design.canonical_tag(),
+            AdditivityClass::NonAdditive,
+        )
+    });
     let no_claim = if funding_schedule.is_some() {
         LIQUIDITY_NO_CLAIM
     } else {
@@ -714,7 +804,7 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
         equity: None,
         entity_valuations: Vec::new(),
         selection_stability: None,
-        robustness: None,
+        robustness,
     })?;
     let mut enc = Encoder::new_frame(*b"PCIR", 1);
     enc.put_str(text);

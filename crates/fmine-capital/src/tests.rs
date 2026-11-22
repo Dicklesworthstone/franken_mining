@@ -111,7 +111,7 @@ pub(crate) fn with_schedule(mut inputs: ProgramInputs) -> ProgramInputs {
     }));
     inputs
 }
-fn with_cash_valuation(mut inputs: ProgramInputs) -> ProgramInputs {
+pub(crate) fn with_cash_valuation(mut inputs: ProgramInputs) -> ProgramInputs {
     let mut policy = inputs.policy.value.clone();
     policy.payoff_convention = CASH_PAYOFF_CONVENTION.into();
     policy.valuation_basis = CASH_VALUATION_BASIS.into();

@@ -75,7 +75,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   dependencies, exclusions and joint signed-loss CVaR use the existing capital engine, preserving every
   source alternative, rejection, full source bytes/hash and Claim ancestry. The distinct
   `additive_discounted_incremental_cash` convention identifies a declared cash window; source-local
-  downside screens and unsupported aggregate/entity funding, equity, robustness, resampling and recourse
+  downside screens and unsupported aggregate/entity funding, equity, resampling and recourse
   modes refuse. No lifetime NAV, terminal value, independence or interaction model is inferred.
   Controls: `xtask/tests/capital_investments.rs`; example: `tests/capital/production_investments.toml`.
   Optional `[[funding_schedule]]` requires `cash_basis`, `opening_date`,
@@ -96,6 +96,20 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   returns and joint tail risk are unchanged. Complete sources and schedule Claims remain bound. Omitting
   the declaration explicitly reports that liquidity is not assessed. These checks do not establish
   intra-period solvency or infer actual payment terms.
+  Optional `[[robustness]]` requires `method = "wasserstein_1"`, nonnegative exact `radius`,
+  `metric_basis`, `radius_basis`, `support = "declared_shared_scenarios"` and
+  `distance_unit = "dimensionless"`. Supply exactly one `[[transport_distance]]` row with `from`, `to`
+  and `value` for every ordered pair of original shared states, including zero diagonals and both
+  directions. Values accept exact decimals or `n/d`; distances must form a proper metric with positive
+  off-diagonal values, symmetry and the triangle inequality. The existing 64-state and transport work
+  limits apply within the source manifest byte limit. Complete sources and declared geometry remain
+  bound to the robustness Claim. The report retains nominal winners and original cash outcomes while
+  separately comparing worst-case mean and expected regret over nominally feasible bundles. Explicit
+  portfolio tail-loss caps also receive exact worst-CVaR certificates and separate robust-tail eligibility
+  and filtered co-winners; equality passes, and no cap is inferred. Every original state remains subject
+  to all opening and period-close cash floors, including states assigned zero adversarial probability.
+  These source-supported weight stresses do not supply new outcomes, fitted probabilities, confidence
+  coverage or lifetime NAV.
 
 - DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>
   --recovery <worksheet> --terms <worksheet>` values each complete shared physical/commercial state

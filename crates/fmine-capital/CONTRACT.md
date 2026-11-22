@@ -42,11 +42,12 @@ Subsequent signed flows are nominal undiscounted increments excluding initial ca
 opening and period-end floor binds, including breaches repaired by later receipts. Costs remain charged
 only once in the separately supplied discounted valuation; cash admission changes feasibility, never the
 net values or joint signed-loss CVaR. Existing NAV schedules retain their declared cash-flow semantics and
-canonical encoding. Aggregate/entity funding, equity and additional robustness modes remain unsupported
-for this cash convention. Known-answer controls in `tests.rs` cover opening-capital insolvency, exact floor
-equality, USD 0.0001 period shortfalls, rare-state rejection, one-time capital payment, preserved
-valuation/tail risk, and deterministic reordering. These synthetic controls do not qualify an actual cash
-forecast or establish intra-period solvency.
+canonical encoding. Optional finite-support scenario-weight robustness uses these same already-net cash
+values and retains every original state's cash-floor checks. Aggregate/entity funding, equity, recourse
+and selection resampling remain unsupported for this cash convention. Known-answer controls in `tests.rs`
+cover opening-capital insolvency, exact floor equality, USD 0.0001 period shortfalls, rare-state rejection,
+one-time capital payment, preserved valuation/tail risk, and deterministic reordering. These synthetic
+controls do not qualify an actual cash forecast or establish intra-period solvency.
 
 DESIGN (BD-314, §23.2): optional `EntityFunding` is a third, mutually exclusive funding mode. Every named
 entity has explicit opening cash in each shared state, a floor for every period, and complete external
@@ -242,8 +243,9 @@ winners remain in JSON and Markdown, including empty feasible sets.
 
 Opt-in static Wasserstein comparison (§§22.5, 23.3) retains exactly those complete bundles which pass
 the original structural and nominal tail-loss screens, including every secondary entity constraint.
-For each eligible bundle, the primary objective vector is the same-state net NAV in USD, or the exact
-whole-bundle change in NAV per actual share in USD/share. The original nominal winner is retained.
+For each eligible bundle, the primary objective vector is the same-state net NAV in USD, declared-period
+discounted incremental cash in USD, or exact whole-bundle change in NAV per actual share in USD/share,
+according to the admitted payoff convention. The original nominal winner is retained.
 The declared complete dimensionless state metric and a single nonnegative radius define a finite-support
 Wasserstein-1 ambiguity set. The shared exact transport kernel separately maximizes signed loss and
 same-state regret, returning worst-case mean, worst-case expected regret and independent primal/dual
@@ -251,6 +253,17 @@ witnesses. Regret is recomputed against the same nominally feasible bundle popul
 nominal statistics still use all structurally feasible bundles before risk. Every exact maximin/minimax
 co-winner survives. A nonempty population containing only negative survivors keeps signed negative means;
 an empty population retains its geometry and excluded identifiers, with empty comparisons and winners.
+
+For source-derived `fmine.capital-investments.v1` portfolios, the adapter requires an explicit
+`[[robustness]]` declaration with `method = "wasserstein_1"`, nonnegative exact `radius`, `metric_basis`,
+`radius_basis`, `support = "declared_shared_scenarios"` and `distance_unit = "dimensionless"`.
+Every ordered pair of original shared states must have one `[[transport_distance]]` row with `from`, `to`
+and nonnegative exact `value`, including zero diagonals. Distinct-state distances must be positive,
+symmetric and satisfy the triangle inequality. The source adapter accepts exact decimals or `n/d` values
+and retains the declaration, complete geometry and investment ancestry in the robustness Claim.
+No cash is transcribed, discounted again or replaced by an adversarial outcome. Source outcomes remain
+the original jointly derived cash values; only their weights are stressed. These comparisons retain the
+existing 64-state and bounded-work limits and do not infer lifetime NAV or scenarios outside that support.
 
 DESIGN (BD-229): each explicitly declared primary or secondary entity tail-loss limit additionally receives
 its own exact worst-CVaR assessment over the same ambiguity set. The upper-tail mass remains the original

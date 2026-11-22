@@ -467,7 +467,6 @@ fn overlapping_sources_duplicate_fields_and_foreign_constraints_refuse() {
     assert!(docs.payload_json.contains("production_investments.toml"));
 }
 
-
 fn cash_declaration(opening: &str, first_soft: &str, second_soft: &str) -> String {
     let mut text = String::from(
         r#"
@@ -519,14 +518,17 @@ fn derived_nominal_cash_pays_initial_capital_once_and_preserves_discounted_risk(
     let dir = temporary();
     let path = portfolio(&dir);
     let nominal = json(&run(&path));
-    let text = std::fs::read_to_string(&path).expect("portfolio")
-        + &cash_declaration("2500", "0", "0");
+    let text =
+        std::fs::read_to_string(&path).expect("portfolio") + &cash_declaration("2500", "0", "0");
     let path = write(&dir, "funded.toml", &text);
     let envelope = run(&path);
     let payload = json(&envelope);
     let both = choice(&payload, &["aux", "original"]);
     let original = choice(&nominal, &["aux", "original"]);
-    assert_eq!(field(both, &["statistics"]), field(original, &["statistics"]));
+    assert_eq!(
+        field(both, &["statistics"]),
+        field(original, &["statistics"])
+    );
     assert_eq!(field(both, &["tail_loss"]).as_str(), Some("76/1"));
     assert_eq!(
         winners(&payload, "feasible_winners"),
@@ -581,7 +583,12 @@ fn derived_nominal_cash_pays_initial_capital_once_and_preserves_discounted_risk(
             .expect("cash Markdown")
             .contains("Funding at declared cash checkpoints")
     );
-    assert!(run(&portfolio(&dir)).no_claim.expect("scope").contains("Liquidity is not assessed"));
+    assert!(
+        run(&portfolio(&dir))
+            .no_claim
+            .expect("scope")
+            .contains("Liquidity is not assessed")
+    );
 }
 
 #[test]
@@ -591,7 +598,10 @@ fn profitable_source_portfolio_cannot_spend_future_receipts_at_opening() {
     let text = std::fs::read_to_string(path).expect("portfolio")
         + &cash_declaration("2499.9999", "0", "0");
     let payload = json(&run(&write(&dir, "opening-shortfall.toml", &text)));
-    assert_eq!(winners(&payload, "feasible_winners"), vec![vec!["original"]]);
+    assert_eq!(
+        winners(&payload, "feasible_winners"),
+        vec![vec!["original"]]
+    );
     let both = choice(&payload, &["aux", "original"]);
     assert_eq!(
         field(checkpoint(both, "soft", None), &["slack"]).as_str(),
@@ -617,7 +627,10 @@ fn source_cash_floor_breaches_survive_later_recovery_and_exact_equality_passes()
     let source = std::fs::read_to_string(path).expect("portfolio");
     let text = source.clone() + &cash_declaration("2500", "-1616.0001", "5000");
     let payload = json(&run(&write(&dir, "period-shortfall.toml", &text)));
-    assert_eq!(winners(&payload, "feasible_winners"), vec![vec!["original"]]);
+    assert_eq!(
+        winners(&payload, "feasible_winners"),
+        vec![vec!["original"]]
+    );
     let both = choice(&payload, &["aux", "original"]);
     assert_eq!(
         field(checkpoint(both, "soft", Some("first")), &["slack"]).as_str(),
@@ -635,7 +648,11 @@ fn source_cash_floor_breaches_survive_later_recovery_and_exact_equality_passes()
     );
     assert_eq!(
         field(
-            checkpoint(choice(&payload, &["aux", "original"]), "soft", Some("first")),
+            checkpoint(
+                choice(&payload, &["aux", "original"]),
+                "soft",
+                Some("first")
+            ),
             &["slack"]
         )
         .as_str(),
@@ -665,11 +682,7 @@ fn source_funding_requires_complete_exact_declared_cash_and_valid_settlement_tim
             "1970-01-03/1970-01-03",
             "contiguous",
         ),
-        (
-            "id = \"second\"",
-            "id = \"foreign\"",
-            "cash period ids",
-        ),
+        ("id = \"second\"", "id = \"foreign\"", "cash period ids"),
         (
             "cash_rounding = \"nearest_ties_even_0_0001_usd\"",
             "cash_rounding = \"implicit\"",
@@ -719,12 +732,10 @@ fn source_funding_requires_complete_exact_declared_cash_and_valid_settlement_tim
     refused(
         &dir,
         "unrounded-source-cash.toml",
-        &(source
-            + &cash.replace("nearest_ties_even_0_0001_usd", "exact_0_0001_usd")),
+        &(source + &cash.replace("nearest_ties_even_0_0001_usd", "exact_0_0001_usd")),
         "exactly representable",
     );
 }
-
 
 fn fraction(value: &Json) -> Rat {
     let (n, d) = value
@@ -732,8 +743,11 @@ fn fraction(value: &Json) -> Rat {
         .expect("rational string")
         .split_once('/')
         .expect("rational components");
-    Rat::new(n.parse().expect("numerator"), d.parse().expect("denominator"))
-        .expect("exact rational")
+    Rat::new(
+        n.parse().expect("numerator"),
+        d.parse().expect("denominator"),
+    )
+    .expect("exact rational")
 }
 
 #[test]
@@ -742,7 +756,11 @@ fn declared_cash_rounding_keeps_every_original_amount_and_signed_rounding_delta(
     let path = portfolio(&dir);
     let source = std::fs::read_to_string(path).expect("portfolio");
     let cash = cash_declaration("2500", "0", "0");
-    let payload = json(&run(&write(&dir, "rounded-cash.toml", &(source.clone() + &cash))));
+    let payload = json(&run(&write(
+        &dir,
+        "rounded-cash.toml",
+        &(source.clone() + &cash),
+    )));
     assert_eq!(
         field(&payload, &["source_cash", "cash_rounding"]).as_str(),
         Some("nearest_ties_even_0_0001_usd")
@@ -778,5 +796,331 @@ fn declared_cash_rounding_keeps_every_original_amount_and_signed_rounding_delta(
         "exact-residue.toml",
         &(source + &cash.replace("nearest_ties_even_0_0001_usd", "exact_0_0001_usd")),
         "exactly representable",
+    );
+}
+
+fn robustness_declaration(radius: &str) -> String {
+    let mut text = format!(
+        r#"
+[[robustness]]
+method = "wasserstein_1"
+radius = "{radius}"
+metric_basis = "SYNTHETIC unit distance between distinct complete shared scenarios"
+radius_basis = "Declared scenario-weight sensitivity; no confidence coverage inferred"
+support = "declared_shared_scenarios"
+distance_unit = "dimensionless"
+"#,
+    );
+    for from in ["hard", "soft"] {
+        for to in ["hard", "soft"] {
+            let value = if from == to { "0/1" } else { "1/1" };
+            text.push_str(&format!(
+                "\n[[transport_distance]]\nfrom = \"{from}\"\nto = \"{to}\"\nvalue = \"{value}\"\n"
+            ));
+        }
+    }
+    text
+}
+
+fn robust_choice<'a>(payload: &'a Json, members: &[&str]) -> &'a Json {
+    let id = field(choice(payload, members), &["bundle_id"]);
+    field(payload, &["program", "summary", "robustness", "bundles"])
+        .as_array()
+        .expect("nominally feasible stressed bundles")
+        .iter()
+        .find(|row| field(row, &["bundle_id"]) == id)
+        .expect("stressed bundle retained")
+}
+
+fn robust_winners(payload: &Json, name: &str) -> Vec<Vec<String>> {
+    let summary = field(payload, &["program", "summary"]);
+    let ids = field(summary, &["robustness", name])
+        .as_array()
+        .expect("stress winners");
+    field(summary, &["choices"])
+        .as_array()
+        .expect("choices")
+        .iter()
+        .filter(|c| ids.iter().any(|id| id == field(c, &["bundle_id"])))
+        .map(|c| selected(c).into_iter().map(str::to_owned).collect())
+        .collect()
+}
+
+#[test]
+fn source_weight_stress_has_distinct_exact_mean_and_regret_winners_and_real_cli_receipts() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let nominal = json(&run(&path));
+    let source = std::fs::read_to_string(path).expect("portfolio source");
+    let text = source + &robustness_declaration("1/2");
+    let path = write(&dir, "robust.toml", &text);
+    let envelope = run(&path);
+    let payload = json(&envelope);
+    assert_eq!(
+        field(&payload, &["program", "summary", "choices"]),
+        field(&nominal, &["program", "summary", "choices"])
+    );
+    assert_eq!(field(&payload, &["sources"]), field(&nominal, &["sources"]));
+    assert_eq!(
+        winners(&payload, "feasible_winners"),
+        vec![vec!["aux", "original"]]
+    );
+    assert_eq!(
+        robust_winners(&payload, "maximin_mean_winners"),
+        vec![vec!["original"]]
+    );
+    assert_eq!(
+        robust_winners(&payload, "minimax_expected_regret_winners"),
+        vec![vec!["aux", "original"]]
+    );
+    let stress = field(&payload, &["program", "summary", "robustness"]);
+    assert_eq!(field(stress, &["objective_unit"]).as_str(), Some("USD"));
+    assert_eq!(
+        field(stress, &["state_ids"]),
+        &Json::Array(vec![Json::String("hard".into()), Json::String("soft".into())])
+    );
+    // Radius 1/2 and unit distance allow the original 1/2,1/2 law to put all
+    // mass on either complete state. Net source cash remains [-76,25445.6]
+    // for both projects and [212,12972.8] for the original project.
+    let both = robust_choice(&payload, &["aux", "original"]);
+    assert_eq!(field(both, &["nominal_mean"]).as_str(), Some("63424/5"));
+    assert_eq!(field(both, &["worst_case_mean"]).as_str(), Some("-76/1"));
+    assert_eq!(
+        field(both, &["worst_case_expected_regret"]).as_str(),
+        Some("288/1")
+    );
+    let original = robust_choice(&payload, &["original"]);
+    assert_eq!(
+        field(original, &["worst_case_mean"]).as_str(),
+        Some("212/1")
+    );
+    assert_eq!(
+        field(original, &["worst_case_expected_regret"]).as_str(),
+        Some("62364/5")
+    );
+    for certificate in ["loss_certificate", "regret_certificate"] {
+        assert_eq!(
+            field(both, &[certificate, "duality_gap"]).as_str(),
+            Some("0/1")
+        );
+        assert_eq!(
+            field(both, &[certificate, "transport_cost"]).as_str(),
+            Some("1/2")
+        );
+    }
+    let claim = field(&payload, &["program", "inputs", "robustness"]);
+    assert_eq!(field(claim, &["evidence"]).as_str(), Some("assumed"));
+    let anchors = field(claim, &["anchors"])
+        .as_array()
+        .expect("robustness source anchors");
+    for sha in [sha256(text.as_bytes()), sha256(SOURCE.as_bytes())] {
+        let sha = sha.to_hex();
+        assert!(
+            anchors
+                .iter()
+                .any(|anchor| field(anchor, &["sha256"]).as_str() == Some(sha.as_str()))
+        );
+    }
+    assert!(anchors.iter().any(|anchor| {
+        field(anchor, &["locator"])
+            .as_str()
+            .is_some_and(|locator| locator.ends_with("robustness.distance_unit"))
+    }));
+    assert_eq!(envelope.to_json(), run(&path).to_json());
+    let actual = Command::new(binary())
+        .args(args(&path))
+        .args(["--workspace"])
+        .arg(root())
+        .output()
+        .expect("robust capital CLI binary");
+    assert!(actual.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stdout).trim_end(),
+        envelope.to_json()
+    );
+    let markdown = Command::new(binary())
+        .args(args(&path))
+        .args(["--format", "markdown", "--workspace"])
+        .arg(root())
+        .output()
+        .expect("robust capital Markdown");
+    assert!(markdown.status.success());
+    let rendered = envelope.rendered_markdown.as_deref().expect("Markdown");
+    assert_eq!(
+        String::from_utf8_lossy(&markdown.stdout),
+        format!("{rendered}\n")
+    );
+    assert!(rendered.contains("Capital scenario-weight robustness"));
+    assert!(rendered.contains("Source dual potential"));
+}
+
+#[test]
+fn source_cash_tail_limits_are_certified_under_stress_separately_from_nominal_selection() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let source = std::fs::read_to_string(path).expect("portfolio source");
+    let text = source.replace(
+        "tail_mass = \"1/2\"",
+        "tail_mass = \"3/4\"\nmax_tail_loss = \"0\"",
+    ) + &robustness_declaration("1/2");
+    let payload = json(&run(&write(&dir, "robust-tail.toml", &text)));
+    assert_eq!(
+        winners(&payload, "feasible_winners"),
+        vec![vec!["aux", "original"]]
+    );
+    assert_eq!(
+        robust_winners(&payload, "minimax_expected_regret_winners"),
+        vec![vec!["aux", "original"]]
+    );
+    assert_eq!(
+        robust_winners(&payload, "robust_tail_minimax_expected_regret_winners"),
+        vec![vec!["original"]]
+    );
+    let both = robust_choice(&payload, &["aux", "original"]);
+    assert_eq!(field(both, &["robust_tail_feasible"]).as_bool(), Some(false));
+    let tail = &field(both, &["tail_limits"])
+        .as_array()
+        .expect("declared tail limit")[0];
+    // The nominal worst 3/4 has loss (0.5*76 - 0.25*25445.6)/0.75.
+    // Moving the hard state's entire half mass to soft makes that loss 76.
+    assert_eq!(
+        field(tail, &["nominal_tail_loss"]).as_str(),
+        Some("-42156/5")
+    );
+    assert_eq!(
+        field(tail, &["worst_case_tail_loss"]).as_str(),
+        Some("76/1")
+    );
+    assert_eq!(
+        field(tail, &["certificate", "duality_gap"]).as_str(),
+        Some("0/1")
+    );
+    assert_eq!(
+        field(
+            robust_choice(&payload, &["original"]),
+            &["robust_tail_feasible"]
+        )
+        .as_bool(),
+        Some(true)
+    );
+    let equal = json(&run(&write(
+        &dir,
+        "robust-tail-equality.toml",
+        &text.replace("max_tail_loss = \"0\"", "max_tail_loss = \"76\""),
+    )));
+    assert_eq!(
+        robust_winners(&equal, "robust_tail_minimax_expected_regret_winners"),
+        vec![vec!["aux", "original"]]
+    );
+}
+
+#[test]
+fn zero_stressed_weight_cannot_erase_an_original_source_cash_shortfall() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let source = std::fs::read_to_string(path).expect("portfolio source")
+        + &cash_declaration("2500", "-1616.0001", "5000");
+    let nominal = json(&run(&write(&dir, "nominal-cash.toml", &source)));
+    let payload = json(&run(&write(
+        &dir,
+        "robust-cash.toml",
+        &(source + &robustness_declaration("1/2")),
+    )));
+    assert_eq!(
+        field(&payload, &["source_cash"]),
+        field(&nominal, &["source_cash"])
+    );
+    assert_eq!(
+        field(&payload, &["program", "summary", "choices"]),
+        field(&nominal, &["program", "summary", "choices"])
+    );
+    let both = choice(&payload, &["aux", "original"]);
+    assert_eq!(
+        field(checkpoint(both, "soft", Some("first")), &["slack"]).as_str(),
+        Some("-1/10000")
+    );
+    let stress = field(&payload, &["program", "summary", "robustness"]);
+    assert!(
+        field(stress, &["structural_rejections"])
+            .as_array()
+            .expect("original cash exclusions")
+            .contains(field(both, &["bundle_id"]))
+    );
+    assert!(
+        field(stress, &["bundles"])
+            .as_array()
+            .expect("stressed bundles")
+            .iter()
+            .all(|row| field(row, &["bundle_id"]) != field(both, &["bundle_id"]))
+    );
+    assert_eq!(
+        field(
+            robust_choice(&payload, &[]),
+            &["regret_certificate", "destination_weights"]
+        ),
+        &Json::Array(vec![Json::String("1/1".into()), Json::String("0/1".into())])
+    );
+    assert_eq!(
+        robust_winners(&payload, "minimax_expected_regret_winners"),
+        vec![vec!["original"]]
+    );
+}
+
+#[test]
+fn source_weight_stress_requires_explicit_support_units_and_complete_valid_geometry() {
+    let dir = temporary();
+    let stress = robustness_declaration("1/2");
+    for (from, to, why) in [
+        (
+            "support = \"declared_shared_scenarios\"\n",
+            "",
+            "missing support",
+        ),
+        (
+            "distance_unit = \"dimensionless\"",
+            "distance_unit = \"USD\"",
+            "dimensionless distances required",
+        ),
+        (
+            "radius = \"1/2\"",
+            "radius = \"-1/2\"",
+            "radius must be nonnegative",
+        ),
+        (
+            "[[transport_distance]]\nfrom = \"hard\"\nto = \"soft\"\nvalue = \"1/1\"\n",
+            "",
+            "every ordered distance pair",
+        ),
+        (
+            "from = \"soft\"\nto = \"hard\"\nvalue = \"1/1\"",
+            "from = \"soft\"\nto = \"hard\"\nvalue = \"2/1\"",
+            "metric must be symmetric",
+        ),
+        (
+            "from = \"soft\"\nto = \"soft\"",
+            "from = \"outside\"\nto = \"soft\"",
+            "unknown shared state",
+        ),
+    ] {
+        refused(
+            &dir,
+            "invalid-robustness.toml",
+            &(PORTFOLIO.to_owned() + &stress.replace(from, to)),
+            why,
+        );
+    }
+    let distance =
+        "\n[[transport_distance]]\nfrom = \"hard\"\nto = \"soft\"\nvalue = \"1/1\"\n";
+    refused(
+        &dir,
+        "duplicate-distance.toml",
+        &(PORTFOLIO.to_owned() + &stress + distance),
+        "unique transport distances",
+    );
+    refused(
+        &dir,
+        "orphan-distance.toml",
+        &(PORTFOLIO.to_owned() + distance),
+        "explicit robustness declaration",
     );
 }
