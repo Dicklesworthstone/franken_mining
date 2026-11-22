@@ -16,6 +16,7 @@ members = [
     "crates/fmine-object",
     "crates/fmine-sync",
     "crates/fmine-telemetry",
+    "crates/fmine-lab",
     "crates/fmine-numerics",
     "crates/fmine-materials",
     "crates/fmine-flow",

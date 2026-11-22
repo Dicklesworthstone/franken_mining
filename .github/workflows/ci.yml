@@ -128,6 +128,10 @@ jobs:
           cat "$RUNNER_TEMP/det_families.txt"
           test "$(wc -l < "$RUNNER_TEMP/det_families.txt")" -eq 18
           { echo '### GATE-DET-01 (18 families)'; echo '```'; cat "$RUNNER_TEMP/det_families.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # BD-099/BD-100/BD-097/BD-337: LabRuntime virtual-time replay (seeds 0..999), DPOR, CrashPack, PO-BED-8, invariance.
+      - name: LabRuntime seeds 0..999, DPOR, chaos and PO-BED-8
+        if: matrix.profile == 'dev'
+        run: cargo test -p fmine-lab --lib --locked
       # Every verb's printed envelope (bd-sjrh.3, PO-ADIT-1); the real-corpus run logs skipped: corpus_absent.
       - name: Envelope e2e
         if: matrix.profile == 'dev'

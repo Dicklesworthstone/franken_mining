@@ -97,6 +97,10 @@ from = "fmine-sync"
 to = "fmine-ledger"
 
 [[allowed_same_layer_edge]]
+from = "fmine-lab"
+to = "fmine-runtime"
+
+[[allowed_same_layer_edge]]
 from = "fmine-calib"
 to = "fmine-numerics"
 

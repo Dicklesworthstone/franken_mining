@@ -1,0 +1,17 @@
+[package]
+name = "fmine-lab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Testpit S1 deterministic virtual-time LabRuntime harness, DPOR explorer, chaos profiles, CrashPack, and PO-BED-8 capability-mask lab tests (BD-099, BD-100, BD-097, BD-337)."
+
+[lints]
+workspace = true
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-runtime = { path = "../fmine-runtime" }
+fmine-time = { path = "../fmine-time" }

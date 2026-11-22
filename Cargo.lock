@@ -193,6 +193,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-lab"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-runtime",
+ "fmine-time",
+]
+
+[[package]]
 name = "fmine-ledger"
 version = "0.1.0"
 dependencies = [
