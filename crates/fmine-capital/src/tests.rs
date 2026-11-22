@@ -402,6 +402,65 @@ fn declared_cash_portfolios_keep_joint_risk_without_recharging_spending_or_claim
 }
 
 #[test]
+fn declared_cash_selection_stability_reweights_net_outcomes_and_preserves_nominal_choices() {
+    let mut program = with_cash_valuation(inputs(
+        &[("growth", 1, &[-8, 10]), ("steady", 1, &[3, 3])],
+        &[r(1, 3), r(2, 3)],
+        1,
+        r(2, 5),
+        Some(5),
+    ));
+    let nominal = evaluate(&program).unwrap();
+    let design = stability::SelectionStabilityDesign {
+        model_key: program.policy.value.model_key.clone(),
+        method: stability::METHOD.into(),
+        seed: 229,
+        replicates: 200,
+        draws_per_replicate: 5,
+        sampling_basis: "Synthetic finite-law sensitivity of complete cash states".into(),
+    };
+    let tag = design.canonical_tag();
+    program.selection_stability = Some(claim(
+        "capital.cash.selection-stability",
+        design,
+        &tag,
+        AdditivityClass::NonAdditive,
+    ));
+    let evaluated = evaluate(&program).unwrap();
+    assert_eq!(evaluated.summary().choices, nominal.summary().choices);
+    assert_eq!(selected_winners(&evaluated), vec![vec!["growth"]]);
+    let summary = evaluated.summary().selection_stability.as_ref().unwrap();
+    assert_eq!(summary.objective_unit, "USD");
+    let growth = &row(&nominal, &["growth"]).bundle_id;
+    let steady = &row(&nominal, &["steady"]).bundle_id;
+    assert_eq!(summary.nominal_winners, vec![growth.clone()]);
+    assert_eq!(summary.nominal_runner_up, vec![steady.clone()]);
+    let mut growth_count = 0_u32;
+    for replicate in &summary.replicates {
+        assert_eq!(replicate.state_counts.iter().sum::<u32>(), 5);
+        // With b bad draws, growth mean is 10 - 18*b/5. Its worst-two-draw
+        // average loss passes the 5 USD cap exactly when b <= 1.
+        let expected = if replicate.state_counts[0] <= 1 {
+            growth_count += 1;
+            growth
+        } else {
+            steady
+        };
+        assert_eq!(replicate.feasible_winners, vec![expected.clone()]);
+    }
+    let frequency = summary
+        .alternatives
+        .iter()
+        .find(|row| &row.alternative_id == growth)
+        .unwrap();
+    assert_eq!(frequency.co_winner_replicates, growth_count);
+    assert_eq!(frequency.risk_feasible_replicates, growth_count);
+    assert_eq!(frequency.selection_frequency, r(i128::from(growth_count), 200));
+    assert_eq!(frequency.fragile, growth_count < 160);
+    assert_eq!(summary.no_feasible_replicates, 0);
+}
+
+#[test]
 fn declared_cash_schedule_pays_initial_capital_before_receipts_and_keeps_earlier_failures() {
     let original = inputs(&[("A", 90, &[40]), ("B", 80, &[30])], &[ONE], 90, ONE, None);
     let cash = with_cash_valuation(original.clone());

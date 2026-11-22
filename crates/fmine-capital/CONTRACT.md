@@ -231,6 +231,14 @@ waive its cash floor, capital call, share-count failure or other obligation. Eac
 primary mean and every primary/secondary tail-loss constraint. Nominal risk-rejection flags are not reused.
 The adapter reuses assessed outcomes; it does not rerun cash, debt, ownership or policy enumeration.
 
+The declared-period cash convention also admits this experiment. The source-investment adapter requires
+`support = "declared_shared_scenarios"` and `resampling_unit = "complete_joint_state"` in addition to
+the method, seed, replicate count, draws and sampling basis. Every sampled state preserves all projects,
+periods and physical/commercial outcomes together. Already-net source returns are reweighted without
+charging initial capital again; nominal choices, original weights, source cash and any separately declared
+Wasserstein comparison are unchanged. Complete source ancestry and sampling declarations bind the Claim.
+The existing 8,000,000-draw and 32,000,000 state/law/alternative work bounds apply before sampling.
+
 Every exact co-winner survives. Each alternative reports risk-feasible and co-winner counts over all
 replicates, and a nominal co-winner below frequency 4/5 is flagged fragile. The nominal runner-up retains
 every exact tie at the next lower feasible mean. Definite/possible flip frequencies concern selection
@@ -797,7 +805,9 @@ candidate's return and independently constrains budget without a second charge. 
 dependencies, exclusions, same-state regret and joint signed-loss CVaR use the existing exact
 owner. Explicit `FundingSchedule` pays initial capital once from opening cash and applies
 nominal operating flows at declared checkpoints. This convention still refuses aggregate/entity
-funding, equity/entity valuation, staged recourse, bootstrap and scenario-stress extensions.
+funding, equity/entity valuation and staged recourse. Explicit conditional joint-state selection stability
+and finite-support Wasserstein weight stress use the same net cash vectors and preserve original-state
+cash-floor obligations.
 Existing NAV modes retain their original input and rendering bytes. The CLI's
 `fmine.capital-investments.v1` adapter admits complete retained investment sources under
 explicit common-scenario and additivity assumptions; it refuses overlapping operating supports

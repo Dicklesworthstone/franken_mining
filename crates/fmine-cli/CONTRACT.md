@@ -75,7 +75,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   dependencies, exclusions and joint signed-loss CVaR use the existing capital engine, preserving every
   source alternative, rejection, full source bytes/hash and Claim ancestry. The distinct
   `additive_discounted_incremental_cash` convention identifies a declared cash window; source-local
-  downside screens and unsupported aggregate/entity funding, equity, resampling and recourse
+  downside screens and unsupported aggregate/entity funding, equity and recourse
   modes refuse. No lifetime NAV, terminal value, independence or interaction model is inferred.
   Controls: `xtask/tests/capital_investments.rs`; example: `tests/capital/production_investments.toml`.
   Optional `[[funding_schedule]]` requires `cash_basis`, `opening_date`,
@@ -110,6 +110,17 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   to all opening and period-close cash floors, including states assigned zero adversarial probability.
   These source-supported weight stresses do not supply new outcomes, fitted probabilities, confidence
   coverage or lifetime NAV.
+  Optional `[[selection_stability]]` requires `method = "weighted_multinomial"`, a quoted unsigned
+  64-bit `seed`, `replicates` in `200..2000`, `draws_per_replicate` in `1..4096`, `sampling_basis`,
+  `support = "declared_shared_scenarios"` and `resampling_unit = "complete_joint_state"`. Seeded draws
+  preserve all candidates and periods in each original state; the existing selector reweights already-net
+  cash and recomputes every declared portfolio tail limit. Original budget, dependency, exclusion and
+  all-state cash-floor failures remain binding when a state receives zero draws. Reports retain exact
+  co-winners, no-winner replicates, runner-ups, conditional selection frequencies and nominal co-winner
+  fragility below `4/5`. Nominal choices, original source cash and separate Wasserstein comparisons are
+  unchanged. Full declaration and investment ancestry bind the receipt. Existing limits of 8,000,000
+  total draws and 32,000,000 state/law/alternative work apply. Frequencies and draw counts describe the
+  declared sensitivity experiment; no empirical sample size or calibrated optimality probability is inferred.
 
 - DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>
   --recovery <worksheet> --terms <worksheet>` values each complete shared physical/commercial state

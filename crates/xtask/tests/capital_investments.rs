@@ -1129,3 +1129,327 @@ fn source_weight_stress_requires_explicit_support_units_and_complete_valid_geome
         "explicit robustness declaration",
     );
 }
+
+fn stability_declaration() -> &'static str {
+    r#"
+[[selection_stability]]
+method = "weighted_multinomial"
+seed = "229"
+replicates = "200"
+draws_per_replicate = "1"
+sampling_basis = "SYNTHETIC conditional scenario-law experiment; one draw is not an effective historical sample size"
+support = "declared_shared_scenarios"
+resampling_unit = "complete_joint_state"
+"#
+}
+
+fn stability(payload: &Json) -> &Json {
+    field(payload, &["program", "summary", "selection_frequency"])
+}
+
+fn stability_choice<'a>(payload: &'a Json, members: &[&str]) -> &'a Json {
+    let id = field(choice(payload, members), &["bundle_id"]);
+    field(stability(payload), &["alternatives"])
+        .as_array()
+        .expect("selection frequencies")
+        .iter()
+        .find(|row| field(row, &["alternative_id"]) == id)
+        .expect("original subset frequency retained")
+}
+
+/// The sampler's counts are inputs to this independent source-cash selection oracle.
+/// Each draw retains both projects and both operating periods in its original state.
+fn one_draw_winners(payload: &Json, hard: &[&str], soft: &[&str]) -> [u64; 2] {
+    let result = stability(payload);
+    assert_eq!(
+        field(result, &["state_ids"]),
+        &Json::Array(vec![
+            Json::String("hard".into()),
+            Json::String("soft".into())
+        ])
+    );
+    let replicates = field(result, &["replicates"])
+        .as_array()
+        .expect("every retained resample");
+    assert_eq!(replicates.len(), 200);
+    let mut counts = [0; 2];
+    for replicate in replicates {
+        let draws = field(replicate, &["state_counts"])
+            .as_array()
+            .expect("complete state count vector");
+        assert_eq!(draws.len(), 2);
+        let draw_counts = (draws[0].u64(), draws[1].u64());
+        assert!(
+            matches!(draw_counts, (Some(1), Some(0)) | (Some(0), Some(1))),
+            "one complete joint-state draw required"
+        );
+        let index = usize::from(draw_counts.1 == Some(1));
+        counts[index] += 1;
+        let expected = choice(payload, if index == 0 { hard } else { soft });
+        assert_eq!(
+            field(replicate, &["feasible_winners"]),
+            &Json::Array(vec![field(expected, &["bundle_id"]).clone()])
+        );
+    }
+    assert!(
+        counts[0] > 0 && counts[1] > 0,
+        "the fixed seed exercises both laws"
+    );
+    counts
+}
+
+#[test]
+fn source_selection_stability_retains_nominal_cash_robustness_and_actual_cli_receipts() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let source = std::fs::read_to_string(path).expect("source portfolio")
+        + &cash_declaration("2500", "0", "0")
+        + &robustness_declaration("1/2");
+    let nominal = json(&run(&write(&dir, "nominal-stress.toml", &source)));
+    let text = source + stability_declaration();
+    let path = write(&dir, "selection-stability.toml", &text);
+    let envelope = run(&path);
+    let payload = json(&envelope);
+    for keys in [
+        vec!["program", "summary", "choices"],
+        vec!["program", "summary", "feasible_winners"],
+        vec!["program", "summary", "robustness"],
+        vec!["program", "inputs", "weights", "value"],
+        vec!["sources"],
+        vec!["source_cash"],
+    ] {
+        assert_eq!(field(&payload, &keys), field(&nominal, &keys));
+    }
+    assert_eq!(
+        field(&payload, &["program", "summary", "selection_frequency_status"]).as_str(),
+        Some("conditional_weighted_bootstrap")
+    );
+    assert_eq!(
+        winners(&payload, "feasible_winners"),
+        vec![vec!["aux", "original"]]
+    );
+    assert_eq!(
+        robust_winners(&payload, "maximin_mean_winners"),
+        vec![vec!["original"]]
+    );
+    // Independent source arithmetic: soft gives original 212 > hold 0 > both -76 > aux -288;
+    // hard gives both 25445.6 > original 12972.8 > aux 12472.8 > hold 0.
+    let [hard, soft] = one_draw_winners(&payload, &["aux", "original"], &["original"]);
+    let both = stability_choice(&payload, &["aux", "original"]);
+    assert_eq!(field(both, &["co_winner_replicates"]).u64(), Some(hard));
+    assert_eq!(field(both, &["risk_feasible_replicates"]).u64(), Some(200));
+    assert_eq!(
+        fraction(field(both, &["selection_frequency"])),
+        Rat::new(i128::from(hard), 200).expect("frequency")
+    );
+    assert!(
+        hard < 160,
+        "the declared one-draw experiment exposes fragility"
+    );
+    assert_eq!(field(both, &["fragile"]).as_bool(), Some(true));
+    assert_eq!(
+        field(stability(&payload), &["definite_flip_frequency"]),
+        field(stability(&payload), &["possible_flip_frequency"])
+    );
+    assert_eq!(
+        fraction(field(stability(&payload), &["definite_flip_frequency"])),
+        Rat::new(i128::from(soft), 200).expect("flip frequency")
+    );
+    let claim = field(&payload, &["program", "inputs", "selection_stability"]);
+    assert_eq!(field(claim, &["evidence"]).as_str(), Some("assumed"));
+    assert!(
+        field(&payload, &["program", "claim", "parents"])
+            .as_array()
+            .expect("source-bound program parents")
+            .contains(field(claim, &["id"]))
+    );
+    let anchors = field(claim, &["anchors"]).as_array().expect("source anchors");
+    for hash in [sha256(text.as_bytes()), sha256(SOURCE.as_bytes())] {
+        let hash = hash.to_hex();
+        assert!(
+            anchors
+                .iter()
+                .any(|anchor| field(anchor, &["sha256"]).as_str() == Some(hash.as_str()))
+        );
+    }
+    assert!(anchors.iter().any(|anchor| {
+        field(anchor, &["locator"])
+            .as_str()
+            .is_some_and(|locator| locator.ends_with("selection_stability.resampling_unit"))
+    }));
+    assert_eq!(envelope.to_json(), run(&path).to_json());
+    let rendered = envelope.rendered_markdown.as_deref().expect("Markdown");
+    assert!(rendered.contains("Selection stability"));
+    assert!(rendered.contains("fragile co-winner"));
+    assert!(rendered.contains("not calibrated probabilities of optimality"));
+    let expected_json = envelope.to_json();
+    for (format, expected) in [("json", expected_json.as_str()), ("markdown", rendered)] {
+        let actual = Command::new(binary())
+            .args(args(&path))
+            .args(["--format", format, "--workspace"])
+            .arg(root())
+            .output()
+            .expect("source-derived selection-stability CLI");
+        assert!(actual.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&actual.stdout),
+            format!("{expected}\n")
+        );
+    }
+    let changed = json(&run(&write(
+        &dir,
+        "changed-sampling-basis.toml",
+        &text.replace(
+            "conditional scenario-law experiment",
+            "changed conditional sampling rationale",
+        ),
+    )));
+    assert_eq!(
+        field(stability(&payload), &["replicates"]),
+        field(stability(&changed), &["replicates"])
+    );
+    assert_ne!(field(&payload, &["digest"]), field(&changed, &["digest"]));
+    assert_ne!(
+        field(claim, &["id"]),
+        field(&changed, &["program", "inputs", "selection_stability", "id"])
+    );
+}
+
+#[test]
+fn source_resamples_recompute_joint_tail_limits_instead_of_freezing_nominal_risk_flags() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let source = std::fs::read_to_string(path).expect("source portfolio");
+    let text = source.replace(
+        "tail_mass = \"1/2\"",
+        "tail_mass = \"1/2\"\nmax_tail_loss = \"0\"",
+    ) + stability_declaration();
+    let payload = json(&run(&write(&dir, "resampled-risk.toml", &text)));
+    assert_eq!(
+        winners(&payload, "feasible_winners"),
+        vec![vec!["original"]]
+    );
+    let both = choice(&payload, &["aux", "original"]);
+    assert_eq!(field(both, &["risk_rejected"]).as_bool(), Some(true));
+    assert_eq!(field(both, &["tail_loss"]).as_str(), Some("76/1"));
+    // In an all-hard draw the complete two-project loss is -25445.6, so it
+    // passes the declared zero cap and wins despite its original risk rejection.
+    let [hard, soft] = one_draw_winners(&payload, &["aux", "original"], &["original"]);
+    let both = stability_choice(&payload, &["aux", "original"]);
+    assert_eq!(field(both, &["risk_feasible_replicates"]).u64(), Some(hard));
+    assert_eq!(field(both, &["co_winner_replicates"]).u64(), Some(hard));
+    let original = stability_choice(&payload, &["original"]);
+    assert_eq!(
+        field(original, &["risk_feasible_replicates"]).u64(),
+        Some(200)
+    );
+    assert_eq!(field(original, &["co_winner_replicates"]).u64(), Some(soft));
+    assert_eq!(
+        field(stability(&payload), &["no_feasible_replicates"]).u64(),
+        Some(0)
+    );
+}
+
+#[test]
+fn unsampled_source_states_keep_their_original_cash_floor_obligations() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let source = std::fs::read_to_string(path).expect("source portfolio")
+        + &cash_declaration("2500", "-1616.0001", "5000");
+    let nominal = json(&run(&write(&dir, "nominal-floor.toml", &source)));
+    let payload = json(&run(&write(
+        &dir,
+        "resampled-floor.toml",
+        &(source + stability_declaration()),
+    )));
+    assert_eq!(
+        field(&payload, &["program", "summary", "choices"]),
+        field(&nominal, &["program", "summary", "choices"])
+    );
+    assert_eq!(
+        field(&payload, &["source_cash"]),
+        field(&nominal, &["source_cash"])
+    );
+    let both = choice(&payload, &["aux", "original"]);
+    assert_eq!(
+        field(checkpoint(both, "soft", Some("first")), &["slack"]).as_str(),
+        Some("-1/10000")
+    );
+    // Both projects fail the original soft-state cash floor, even in all-hard
+    // resamples. The original project beats aux by 500 USD in every state.
+    one_draw_winners(&payload, &["original"], &["original"]);
+    let both = stability_choice(&payload, &["aux", "original"]);
+    assert_eq!(field(both, &["structurally_feasible"]).as_bool(), Some(false));
+    assert_eq!(field(both, &["risk_feasible_replicates"]).u64(), Some(0));
+    assert_eq!(field(both, &["co_winner_replicates"]).u64(), Some(0));
+    assert_eq!(
+        field(
+            stability_choice(&payload, &["original"]),
+            &["selection_frequency"]
+        )
+        .as_str(),
+        Some("1/1")
+    );
+}
+
+#[test]
+fn source_selection_stability_requires_explicit_joint_sampling_and_bounded_integer_controls() {
+    let dir = temporary();
+    for (before, after, why) in [
+        (
+            "support = \"declared_shared_scenarios\"\n",
+            "",
+            "missing support",
+        ),
+        (
+            "resampling_unit = \"complete_joint_state\"",
+            "resampling_unit = \"independent_candidate_period\"",
+            "complete_joint_state resampling required",
+        ),
+        (
+            "seed = \"229\"",
+            "seed = \"+229\"",
+            "unsigned decimal integers",
+        ),
+        (
+            "seed = \"229\"",
+            "seed = \"18446744073709551616\"",
+            "exceeds its integer range",
+        ),
+        (
+            "replicates = \"200\"",
+            "replicates = \"199\"",
+            "200..=2000 replicates",
+        ),
+        (
+            "draws_per_replicate = \"1\"",
+            "draws_per_replicate = \"0\"",
+            "1..=4096 draws",
+        ),
+        (
+            "replicates = \"200\"",
+            "replicates = \"2000\"",
+            "8000000 total draws",
+        ),
+    ] {
+        let mut declaration = stability_declaration().replace(before, after);
+        if why == "8000000 total draws" {
+            declaration = declaration.replace(
+                "draws_per_replicate = \"1\"",
+                "draws_per_replicate = \"4096\"",
+            );
+        }
+        refused(
+            &dir,
+            "invalid-selection-stability.toml",
+            &(PORTFOLIO.to_owned() + &declaration),
+            why,
+        );
+    }
+    refused(
+        &dir,
+        "duplicate-selection-stability.toml",
+        &(PORTFOLIO.to_owned() + stability_declaration() + stability_declaration()),
+        "one weighted_multinomial selection_stability declaration",
+    );
+}

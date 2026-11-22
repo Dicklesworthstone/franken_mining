@@ -1069,12 +1069,11 @@ fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>)>
             || inputs.funding.is_some()
             || inputs.entity_funding.is_some()
             || inputs.equity.is_some()
-            || !inputs.entity_valuations.is_empty()
-            || inputs.selection_stability.is_some())
+            || !inputs.entity_valuations.is_empty())
     {
         return Err(bad(
             RefusalCode::BasisMismatch105,
-            "declared-period cash supports static total-USD subsets, an optional nominal funding schedule and finite-support scenario-weight robustness; NAV, equity, aggregate/entity funding, recourse and resampling require their own declared semantics",
+            "declared-period cash supports static total-USD subsets, an optional nominal funding schedule, finite-support scenario-weight robustness and conditional joint-state selection stability; NAV, equity, aggregate/entity funding and recourse require their own declared semantics",
         ));
     }
     admit(

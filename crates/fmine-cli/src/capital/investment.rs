@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use fmine_capital::robustness::{MAX_TRANSPORT_STATES, METHOD, RobustnessDesign, StateDistance};
+use fmine_capital::stability::{METHOD as STABILITY_METHOD, SelectionStabilityDesign};
 use fmine_capital::{
     CandidateCashFlow, CapitalCandidate, CashPeriod, FundingSchedule, ProgramInputs, ProgramPolicy,
     StateCashFlow,
@@ -94,6 +95,17 @@ fn number(value: &str) -> Result<Rat> {
     }
 }
 
+fn unsigned<T: std::str::FromStr>(value: &str) -> Result<T> {
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid(
+            "selection stability controls require unsigned decimal integers",
+        ));
+    }
+    value
+        .parse()
+        .map_err(|_| invalid("selection stability control exceeds its integer range"))
+}
+
 fn money(value: Rat) -> Result<Money> {
     let scaled = value
         .checked_mul(Rat::from_integer(Money::SCALE))
@@ -128,6 +140,7 @@ struct Declaration {
     funding_schedule: Option<FundingSchedule>,
     cash_rounding: Option<String>,
     robustness: Option<RobustnessDesign>,
+    selection_stability: Option<SelectionStabilityDesign>,
     claim: Claim<()>,
 }
 
@@ -146,7 +159,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
     }
     let doc = parse_subset(text).map_err(|e| invalid(e.to_string()))?;
     if doc.rows.len()
-        > 8 + 64 + 16 + 1 + 16 + 256 * 17 + 1 + MAX_TRANSPORT_STATES * MAX_TRANSPORT_STATES
+        > 8 + 64 + 16 + 1 + 16 + 256 * 17 + 2 + MAX_TRANSPORT_STATES * MAX_TRANSPORT_STATES
     {
         return Err(invalid("capital investment manifest has too many rows"));
     }
@@ -179,6 +192,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
     let mut funding_schedule = None;
     let mut cash_rounding = None;
     let mut robustness = None;
+    let mut selection_stability = None;
     let mut distances = BTreeMap::new();
     let (mut cash_periods, mut opening_cash, mut baseline_flows) =
         (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
@@ -357,6 +371,47 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
                     ));
                 }
             }
+            "selection_stability" => {
+                let f = fields(
+                    &row.fields,
+                    &[
+                        "method",
+                        "seed",
+                        "replicates",
+                        "draws_per_replicate",
+                        "sampling_basis",
+                        "support",
+                        "resampling_unit",
+                    ],
+                    &[],
+                )?;
+                if selection_stability.is_some()
+                    || get(&f, "method")? != STABILITY_METHOD
+                    || get(&f, "support")? != "declared_shared_scenarios"
+                    || get(&f, "resampling_unit")? != "complete_joint_state"
+                {
+                    return Err(invalid(
+                        "one weighted_multinomial selection_stability declaration over declared_shared_scenarios with complete_joint_state resampling required",
+                    ));
+                }
+                let replicates: usize = unsigned(get(&f, "replicates")?)?;
+                let draws_per_replicate: usize = unsigned(get(&f, "draws_per_replicate")?)?;
+                if !(200..=2000).contains(&replicates)
+                    || !(1..=4096).contains(&draws_per_replicate)
+                {
+                    return Err(invalid(
+                        "selection stability requires 200..=2000 replicates and 1..=4096 draws per replicate",
+                    ));
+                }
+                selection_stability = Some(SelectionStabilityDesign {
+                    model_key: get(&top, "model_key")?.into(),
+                    method: STABILITY_METHOD.into(),
+                    seed: unsigned(get(&f, "seed")?)?,
+                    replicates,
+                    draws_per_replicate,
+                    sampling_basis: get(&f, "sampling_basis")?.into(),
+                });
+            }
             _ => return Err(invalid(format!("unsupported table {}", row.table))),
         }
         for f in &row.fields {
@@ -441,6 +496,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
         funding_schedule,
         cash_rounding,
         robustness,
+        selection_stability,
         claim,
     })
 }
@@ -789,6 +845,14 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
             AdditivityClass::NonAdditive,
         )
     });
+    let selection_stability = d.selection_stability.as_ref().map(|design| {
+        all.claim(
+            "capital.investment.selection-stability/1",
+            design.clone(),
+            &design.canonical_tag(),
+            AdditivityClass::NonAdditive,
+        )
+    });
     let no_claim = if funding_schedule.is_some() {
         LIQUIDITY_NO_CLAIM
     } else {
@@ -803,7 +867,7 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
         entity_funding: None,
         equity: None,
         entity_valuations: Vec::new(),
-        selection_stability: None,
+        selection_stability,
         robustness,
     })?;
     let mut enc = Encoder::new_frame(*b"PCIR", 1);
