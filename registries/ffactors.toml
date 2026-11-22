@@ -1,71 +1,205 @@
-# registries/ffactors.toml — Site-Profile F-Factor Definitions Registry (BD-148, plan §20.3–§20.5)
-# Registries are data: every F-factor names its exact numerator/denominator nodes, quantity basis,
-# stockpile adjustment requirement (G-TOUCH-3), and mutual-compensation threshold.
+# registries/ffactors.toml — Site-Profile F-Factor and MCF Definitions Registry (BD-148, BD-278, plan §20.3–§20.5)
+# Registries are data: every F-factor / MCF / RCF row carries a version, exact numerator/denominator
+# nodes, quantity basis, spatial/temporal support, stockpile adjustment requirement (G-TOUCH-3),
+# mutual-compensation threshold, and source Evidence IDs + locators.
+# G-TOUCH-4 renders the full versioned registry key (never a bare "F1" or "MCF" label).
 
 schema_version = 1
 
 [[ffactor]]
 id = "F1_tonnes"
+version = 1
 family = "F1"
 site_profile = "open_pit_standard"
 numerator_node = "grade_control"
 denominator_node = "resource_model"
 quantity_basis = "dry_tonnes"
+support = "mined_polygon_period"
 requires_stockpile_adjustment = false
 mutual_comp_tol_bps = 500
+source_e_ids = "R7_4_3"
+source_locator = "plan:§20.4"
 description = "Grade-control vs. resource-model dry tonnage ratio over mined polygon volume"
 
 [[ffactor]]
 id = "F1_metal_au"
+version = 1
 family = "F1"
 site_profile = "open_pit_standard"
 numerator_node = "grade_control"
 denominator_node = "resource_model"
 quantity_basis = "contained_au"
+support = "mined_polygon_period"
 requires_stockpile_adjustment = false
 mutual_comp_tol_bps = 500
+source_e_ids = "R7_4_3"
+source_locator = "plan:§20.4"
 description = "Grade-control vs. resource-model contained Au metal ratio over mined polygon volume"
 
 [[ffactor]]
 id = "F2_tonnes"
+version = 1
 family = "F2"
 site_profile = "open_pit_standard"
 numerator_node = "mill_feed"
 denominator_node = "grade_control"
 quantity_basis = "dry_tonnes"
+support = "plant_period"
 requires_stockpile_adjustment = true
 mutual_comp_tol_bps = 500
+source_e_ids = "R7_4_3"
+source_locator = "plan:§20.4"
 description = "Mill-feed vs. grade-control dry tonnage ratio (must adjust for intervening ROM stockpile delta per G-TOUCH-3)"
 
 [[ffactor]]
 id = "F2_metal_au"
+version = 1
 family = "F2"
 site_profile = "open_pit_standard"
 numerator_node = "mill_feed"
 denominator_node = "grade_control"
 quantity_basis = "contained_au"
+support = "plant_period"
 requires_stockpile_adjustment = true
 mutual_comp_tol_bps = 500
+source_e_ids = "R7_4_3"
+source_locator = "plan:§20.4"
 description = "Mill-feed vs. grade-control contained Au ratio (must adjust for intervening ROM stockpile delta per G-TOUCH-3)"
 
 [[ffactor]]
 id = "F3_metal_au"
+version = 1
 family = "F3"
 site_profile = "open_pit_standard"
 numerator_node = "mill_feed"
 denominator_node = "resource_model"
 quantity_basis = "contained_au"
+support = "plant_period"
 requires_stockpile_adjustment = true
 mutual_comp_tol_bps = 500
+source_e_ids = "R7_4_3,E385"
+source_locator = "plan:§20.4"
 description = "Mine-to-mill composite ratio F3 = F1 * F2 (must inspect F1 and F2 separately to prevent mutual compensation)"
 
 [[ffactor]]
 id = "MCF_au"
+version = 1
 family = "MCF"
 site_profile = "underground_stoping"
 numerator_node = "plant_accounted_au"
 denominator_node = "mine_call_au"
 quantity_basis = "contained_au"
+support = "plant_period"
 requires_stockpile_adjustment = true
 mutual_comp_tol_bps = 400
+source_e_ids = "R6_6_1"
+source_locator = "plan:§20.4"
 description = "Mine Call Factor: plant-accounted Au (recovered + tails) divided by stope mine-call Au"
+
+# --- Site-specific §20.4 definitions (BD-278; FACT C2 §4.2, C3 §3.1) ---
+# Note: NGM F1 is NOT public (DATA-GATE, plan §20.4) and is deliberately absent.
+
+[[ffactor]]
+id = "F1.barrick_kibali.conversion"
+version = 1
+family = "F1"
+site_profile = "barrick_kibali"
+numerator_node = "short_range_gc_model"
+denominator_node = "long_range_resource_model"
+quantity_basis = "contained_au"
+support = "Indicated_to_Measured_conversion_areas_yoy"
+requires_stockpile_adjustment = false
+mutual_comp_tol_bps = 500
+source_e_ids = "E203"
+source_locator = "Kibali_TR_2025:p183"
+description = "Kibali model-to-model conversion factor over Ind->Meas areas year on year (not mined volume; G-TOUCH-4 renders registry key)"
+
+[[ffactor]]
+id = "MCF_out.barrick_africa"
+version = 1
+family = "MCF"
+site_profile = "barrick_kibali"
+numerator_node = "mill_check_out"
+denominator_node = "gc_call"
+quantity_basis = "contained_au"
+support = "plant_year_or_month"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+source_e_ids = "E204"
+source_locator = "Kibali_TR_2025:p221"
+description = "Kibali primary reconciliation: Mills Check Out (bullion + inventory change) divided by GC Call"
+
+[[ffactor]]
+id = "MCF_in.barrick_africa"
+version = 1
+family = "MCF"
+site_profile = "barrick_kibali"
+numerator_node = "mill_check_in"
+denominator_node = "gc_call"
+quantity_basis = "contained_au"
+support = "plant_year"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+source_e_ids = "E210"
+source_locator = "Kibali_TR_2025:p222,p224"
+description = "Kibali check-in MCF: mill check-in (reconstituted from CIL and gravity sampling) divided by GC Call"
+
+[[ffactor]]
+id = "MCF_t.barrick_loulo"
+version = 1
+family = "MCF"
+site_profile = "barrick_loulo"
+numerator_node = "plant_tails_tonnes"
+denominator_node = "gc_call_tonnes"
+quantity_basis = "dry_tonnes"
+support = "plant_year"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+source_e_ids = "E205"
+source_locator = "Loulo_TR_2023:p274"
+description = "Loulo tonnage MCF: plant tails tonnes divided by GC call tonnes"
+
+[[ffactor]]
+id = "MCF_g.barrick_loulo"
+version = 1
+family = "MCF"
+site_profile = "barrick_loulo"
+numerator_node = "mill_check_out_grade"
+denominator_node = "gc_call_grade"
+quantity_basis = "grade_g_per_t"
+support = "plant_year"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+source_e_ids = "E205"
+source_locator = "Loulo_TR_2023:p274"
+description = "Loulo grade MCF: mill check-out grade divided by GC call grade"
+
+[[ffactor]]
+id = "RCF.barrick_loulo"
+version = 1
+family = "RCF"
+site_profile = "barrick_loulo"
+numerator_node = "mill_check_out"
+denominator_node = "resource_model_mined_3d"
+quantity_basis = "contained_au"
+support = "plant_year"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+source_e_ids = "E209"
+source_locator = "Loulo_TR_2023:p297,p301"
+description = "Loulo Resource Call Factor: plant check-out divided by resource model over 3D mined volume"
+
+[[ffactor]]
+id = "MCF_out.ngm"
+version = 1
+family = "MCF"
+site_profile = "ngm"
+numerator_node = "mill_check_out"
+denominator_node = "gc_call"
+quantity_basis = "tonnes_grade_metal"
+support = "plant_year"
+requires_stockpile_adjustment = true
+mutual_comp_tol_bps = 500
+source_e_ids = "E154,E155,E156"
+source_locator = "Carlin_TR_2025:p216-p218"
+description = "NGM plant MCF out: mill check-out divided by GC call (tonnes, grade, metal; sits closer to F2 than F1)"

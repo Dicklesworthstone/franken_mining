@@ -44,18 +44,31 @@ impl FFactorFamily {
     }
 }
 
-/// Site-profile definition of one reconciliation F-factor parsed from `registries/ffactors.toml`.
+/// Site-profile definition of one reconciliation F-factor parsed from `registries/ffactors.toml`
+/// (`BD-148`, `BD-278`, plan §20.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FFactorDefinition {
     pub id: String,
+    pub version: u32,
     pub family: FFactorFamily,
     pub site_profile: String,
     pub numerator_node: String,
     pub denominator_node: String,
     pub quantity_basis: String,
+    pub support: String,
     pub requires_stockpile_adjustment: bool,
     pub mutual_comp_tol_bps: u32,
+    pub source_e_ids: Vec<String>,
+    pub source_locator: String,
     pub description: String,
+}
+
+impl FFactorDefinition {
+    /// Canonical versioned registry key required by `G-TOUCH-4` (e.g. `F1.barrick_kibali.conversion@v1`).
+    #[must_use]
+    pub fn versioned_key(&self) -> String {
+        format!("{}@v{}", self.id, self.version)
+    }
 }
 
 /// Exact rational posterior quantile triplet (`p10 <= p50 <= p90`) for a quantity or F-factor.
@@ -90,10 +103,11 @@ impl ExactPosteriorTriplet {
     }
 }
 
-/// Posterior F-factor estimate retaining full uncertainty bounds (never a bare scalar point).
+/// Posterior F-factor estimate retaining full uncertainty bounds and definition version (never a bare scalar point).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PosteriorFFactor {
     pub definition_id: String,
+    pub definition_version: u32,
     pub family: FFactorFamily,
     pub ratio: ExactPosteriorTriplet,
     pub stockpile_adjusted: bool,
@@ -129,11 +143,29 @@ pub fn parse_ffactor_registry(text: &str) -> Result<Vec<FFactorDefinition>, Flow
                     detail: format!("[[ffactor]] missing field '{k}'"),
                 })
         };
+        let get_non_empty = |k: &str| -> Result<String, FlowError> {
+            let v = get(k)?;
+            if v.trim().is_empty() {
+                return Err(FlowError::InvalidGraph {
+                    detail: format!("[[ffactor]] field '{k}' must be non-empty"),
+                });
+            }
+            Ok(v)
+        };
         let id = get("id")?;
         if id.is_empty() || !seen.insert(id.clone()) {
             return Err(FlowError::DuplicateId {
                 kind: "ffactor",
                 id,
+            });
+        }
+        let ver_raw = get("version")?;
+        let version: u32 = ver_raw.parse().map_err(|_| FlowError::InvalidGraph {
+            detail: format!("ffactor '{id}' invalid version {ver_raw:?}"),
+        })?;
+        if version == 0 {
+            return Err(FlowError::InvalidGraph {
+                detail: format!("ffactor '{id}' version must be >= 1"),
             });
         }
         let family = FFactorFamily::parse(&get("family")?)?;
@@ -153,23 +185,38 @@ pub fn parse_ffactor_registry(text: &str) -> Result<Vec<FFactorDefinition>, Flow
         let mutual_comp_tol_bps: u32 = tol_raw.parse().map_err(|_| FlowError::InvalidGraph {
             detail: format!("ffactor '{id}' invalid mutual_comp_tol_bps {tol_raw:?}"),
         })?;
-        if mutual_comp_tol_bps == 0 || mutual_comp_tol_bps > 10_000 {
+        if !(1..=9_999).contains(&mutual_comp_tol_bps) {
             return Err(FlowError::InvalidGraph {
                 detail: format!(
-                    "ffactor '{id}' mutual_comp_tol_bps {mutual_comp_tol_bps} outside 1..=10000"
+                    "ffactor '{id}' mutual_comp_tol_bps {mutual_comp_tol_bps} outside 1..=9999"
                 ),
+            });
+        }
+        let source_e_ids: Vec<String> = get("source_e_ids")?
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        if source_e_ids.is_empty() {
+            return Err(FlowError::InvalidGraph {
+                detail: format!("ffactor '{id}' must cite at least one source_e_id"),
             });
         }
         out.push(FFactorDefinition {
             id,
+            version,
             family,
-            site_profile: get("site_profile")?,
-            numerator_node: get("numerator_node")?,
-            denominator_node: get("denominator_node")?,
-            quantity_basis: get("quantity_basis")?,
+            site_profile: get_non_empty("site_profile")?,
+            numerator_node: get_non_empty("numerator_node")?,
+            denominator_node: get_non_empty("denominator_node")?,
+            quantity_basis: get_non_empty("quantity_basis")?,
+            support: get_non_empty("support")?,
             requires_stockpile_adjustment,
             mutual_comp_tol_bps,
-            description: get("description")?,
+            source_e_ids,
+            source_locator: get_non_empty("source_locator")?,
+            description: get_non_empty("description")?,
         });
         Ok(())
     };
@@ -201,11 +248,11 @@ pub fn parse_ffactor_registry(text: &str) -> Result<Vec<FFactorDefinition>, Flow
         let val = v.trim();
         match cur.as_mut() {
             None => {
-                if key == "schema_version" && val == "1" {
+                if !saw_version && key == "schema_version" && val == "1" {
                     saw_version = true;
                 } else {
                     return Err(FlowError::InvalidGraph {
-                        detail: format!("line {line}: expected schema_version = 1"),
+                        detail: format!("line {line}: expected single schema_version = 1"),
                     });
                 }
             }
@@ -279,10 +326,86 @@ pub fn compute_posterior_ffactor(
     let ratio = ExactPosteriorTriplet::new(p10, p50, p90)?;
     Ok(PosteriorFFactor {
         definition_id: def.id.clone(),
+        definition_version: def.version,
         family: def.family,
         ratio,
         stockpile_adjusted,
     })
+}
+
+/// Format an exact rational ratio as a deterministic 4-decimal percentage string (e.g. `101.20%`)
+/// using integer rounding halves away from zero (no bare `f64`).
+#[must_use]
+pub fn format_exact_pct_4dp(q: ExactQty) -> String {
+    // Scale by 100 * 10_000 = 1_000_000 to get basis points * 100 (4 decimal places of %).
+    let sign = if q.num() < 0 { "-" } else { "" };
+    let num_abs = q.num().unsigned_abs();
+    let den_abs = q.den().unsigned_abs();
+    let scaled_num = num_abs.saturating_mul(1_000_000);
+    let half_den = den_abs / 2;
+    let rounded = scaled_num.saturating_add(half_den) / den_abs;
+    let whole = rounded / 10_000;
+    let frac = rounded % 10_000;
+    format!("{sign}{whole}.{frac:04}%")
+}
+
+/// Enforce `G-TOUCH-4` (`BD-278`, plan §20.4): render a [`PosteriorFFactor`] strictly with its
+/// versioned registry key (`id@vN`), support, source locator, and `[p10, p90]` posterior interval.
+///
+/// Refuses (`FMINE-REF-107`) any attempt to render a bare family label (`"F1"`, `"F2"`, `"F3"`,
+/// `"MCF"`, `"RCF"`), an unversioned (`version == 0`) or mismatched definition, an empty period,
+/// or an unvalidated quantile triplet.
+pub fn render_ffactor_g_touch_4(
+    factor: &PosteriorFFactor,
+    def: &FFactorDefinition,
+    period_label: &str,
+) -> Result<String, FlowError> {
+    if def.id.is_empty()
+        || def.version == 0
+        || def.support.trim().is_empty()
+        || def.source_locator.trim().is_empty()
+        || period_label.trim().is_empty()
+    {
+        return Err(FlowError::InvalidGraph {
+            detail: "G-TOUCH-4: F-factor render requires non-empty registry id, version >= 1, support, source_locator, and period"
+                .to_string(),
+        });
+    }
+    if matches!(def.id.as_str(), "F1" | "F2" | "F3" | "MCF" | "RCF") {
+        return Err(FlowError::InvalidGraph {
+            detail: format!(
+                "G-TOUCH-4: bare label '{}' is forbidden; render the full site registry key",
+                def.id
+            ),
+        });
+    }
+    if factor.definition_id != def.id || factor.definition_version != def.version {
+        return Err(FlowError::InvalidGraph {
+            detail: format!(
+                "G-TOUCH-4: factor ({}@v{}) does not match registry definition ({}@v{})",
+                factor.definition_id, factor.definition_version, def.id, def.version
+            ),
+        });
+    }
+    let _ = ExactPosteriorTriplet::new(factor.ratio.p10, factor.ratio.p50, factor.ratio.p90)?;
+    if factor.ratio.p10.signum() < 0 {
+        return Err(FlowError::InvalidQuantity {
+            detail: "G-TOUCH-4: cannot render negative F-factor ratio".to_string(),
+        });
+    }
+    Ok(format!(
+        "{} [{}] ({}; {}/{}; support={}; src={}): p50={} [p10={}, p90={}]",
+        def.versioned_key(),
+        period_label.trim(),
+        def.site_profile,
+        def.numerator_node,
+        def.denominator_node,
+        def.support,
+        def.source_locator,
+        format_exact_pct_4dp(factor.ratio.p50),
+        format_exact_pct_4dp(factor.ratio.p10),
+        format_exact_pct_4dp(factor.ratio.p90),
+    ))
 }
 
 fn exceeds_unit_tol(q: ExactQty, tol_bps: u32) -> Result<bool, FlowError> {
@@ -445,6 +568,7 @@ mod tests {
                 f1,
                 PosteriorFFactor {
                     definition_id: "F2_bad".to_string(),
+                    definition_version: 1,
                     family: FFactorFamily::F2,
                     ratio: ExactPosteriorTriplet {
                         p10: ExactQty::from_integer(2),
@@ -456,6 +580,98 @@ mod tests {
                 500
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn test_site_specific_ffactor_registry_and_g_touch_4_rendering() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        let text =
+            std::fs::read_to_string(root.join("registries/ffactors.toml")).expect("read registry");
+        let defs = parse_ffactor_registry(&text).expect("parse ffactors.toml");
+
+        // All 7 §20.4 site-specific definitions (Kibali, Loulo, NGM) present with E-ids & locators.
+        let required_keys = [
+            "F1.barrick_kibali.conversion",
+            "MCF_out.barrick_africa",
+            "MCF_in.barrick_africa",
+            "MCF_t.barrick_loulo",
+            "MCF_g.barrick_loulo",
+            "RCF.barrick_loulo",
+            "MCF_out.ngm",
+        ];
+        for key in required_keys {
+            let def = defs
+                .iter()
+                .find(|d| d.id == key)
+                .unwrap_or_else(|| panic!("missing §20.4 registry key {key}"));
+            assert!(def.version >= 1);
+            assert!(!def.source_e_ids.is_empty());
+            assert!(!def.source_locator.is_empty());
+        }
+        // NGM F1 is NOT public (DATA-GATE, plan §20.4): must NOT exist in the public registry.
+        assert!(
+            defs.iter()
+                .all(|d| !(d.site_profile == "ngm" && d.family == FFactorFamily::F1))
+        );
+
+        // G-TOUCH-4 renders the full versioned registry key + interval, never bare "F1".
+        let kibali_f1 = defs
+            .iter()
+            .find(|d| d.id == "F1.barrick_kibali.conversion")
+            .expect("kibali F1");
+        let num = ExactPosteriorTriplet::new_positive(
+            ExactQty::from_integer(980),
+            ExactQty::from_integer(1000),
+            ExactQty::from_integer(1020),
+        )
+        .unwrap();
+        let den = ExactPosteriorTriplet::new_positive(
+            ExactQty::from_integer(990),
+            ExactQty::from_integer(1000),
+            ExactQty::from_integer(1010),
+        )
+        .unwrap();
+        let post = compute_posterior_ffactor(kibali_f1, None, num, den, false).expect("kibali f1");
+        let rendered =
+            render_ffactor_g_touch_4(&post, kibali_f1, "2025").expect("G-TOUCH-4 render");
+        assert!(rendered.starts_with("F1.barrick_kibali.conversion@v1 [2025]"));
+        assert!(rendered.contains("p50=100.0000%"));
+        assert!(rendered.contains("p10="));
+        assert!(rendered.contains("p90="));
+        assert!(rendered.contains("Kibali_TR_2025:p183"));
+
+        // G-TOUCH-4 refuses bare label, version == 0, empty period, or definition mismatch.
+        let mut bare = kibali_f1.clone();
+        bare.id = "F1".to_string();
+        let mut bare_post = post.clone();
+        bare_post.definition_id = "F1".to_string();
+        assert_eq!(
+            render_ffactor_g_touch_4(&bare_post, &bare, "2025")
+                .unwrap_err()
+                .to_refusal()
+                .code,
+            "FMINE-REF-107"
+        );
+        assert_eq!(
+            render_ffactor_g_touch_4(&post, kibali_f1, "   ")
+                .unwrap_err()
+                .to_refusal()
+                .code,
+            "FMINE-REF-107"
+        );
+        let mut v0 = kibali_f1.clone();
+        v0.version = 0;
+        assert_eq!(
+            render_ffactor_g_touch_4(&post, &v0, "2025")
+                .unwrap_err()
+                .to_refusal()
+                .code,
+            "FMINE-REF-107"
         );
     }
 }

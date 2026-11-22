@@ -5,6 +5,8 @@
 pub mod balance;
 pub mod ffactors;
 pub mod graph;
+pub mod r0_parity;
+pub mod verbatim_table;
 
 use core::fmt;
 
