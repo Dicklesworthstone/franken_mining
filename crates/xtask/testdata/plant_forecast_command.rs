@@ -482,3 +482,118 @@ fn supply_limited_forecasts_replay_retained_sources_and_keep_operating_rate_sema
     assert_eq!(head(&root), retained_head);
     assert_eq!(std::fs::read(root.join("journal")).unwrap(), before);
 }
+
+#[test]
+fn scenario_corrections_feed_weighted_forecasts_and_verify_without_source_files() {
+    let (root, _, _) = fixture();
+    let original = std::fs::read_to_string(root.join("recovery.toml")).unwrap();
+    let soft = r#"
+[[correction]]
+scenario = "soft"
+id = "soft-adjustment"
+revision = "synthetic-v1"
+additive_fraction = "-0.1"
+"#;
+    let hard = r#"
+[[correction]]
+scenario = "hard"
+id = "hard-adjustment"
+revision = "synthetic-v1"
+additive_fraction = "0.2"
+upper_cap_fraction = "0.95"
+"#;
+    let corrected = format!("{original}{soft}{hard}");
+    std::fs::write(root.join("recovery.toml"), &corrected).unwrap();
+    run(
+        &root,
+        &[
+            "init", "--journal", "journal", "--cell", "synthetic-plant",
+            "--max-clock-skew-ms", "1", "--trust-host-clock",
+        ],
+        0,
+    );
+    let targets = [
+        ("corrected-recovery", "recovery", [0.95, 0.5]),
+        ("corrected-metal", "recovered-metal", [0.304, 0.160]),
+    ];
+    for (id, target, expected) in targets {
+        let previous = head(&root);
+        let registered = run(
+            &root,
+            &[
+                "register-plant", "--journal", "journal", "--head", &previous,
+                "--input", "production.toml", "--grinding", "grinding.toml",
+                "--recovery", "recovery.toml", "--id", id, "--target", target,
+                "--author-role", "synthetic-model-role", "--time-basis", "utc-unix-ns",
+                "--trust-host-clock",
+            ],
+            0,
+        );
+        let forecast = field(&registered, &["payload", "forecasts"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| field(row, &["alias"]).as_str() == Some(id))
+            .unwrap();
+        let samples = field(forecast, &["payload", "samples"]).as_array().unwrap();
+        assert_eq!(samples.len(), 2);
+        // Independent answers: hard min(.9+.2,.95), soft .6-.1.
+        // Both states contain .32 kg; corrected recovered metal is .304 and .160.
+        for (sample, expected) in samples.iter().zip(expected) {
+            assert!((sample.f64().unwrap() - expected).abs() < 1e-12);
+        }
+        assert_eq!(
+            field(forecast, &["payload", "weights"]),
+            &parse(br#"["1/2","1/2"]"#).unwrap(),
+        );
+        assert_eq!(
+            field(
+                &registered,
+                &["payload", "plant_admission", "source_receipt", "sources",
+                    "recovery", "submitted_worksheet"],
+            ).as_str(),
+            Some(corrected.as_str()),
+        );
+    }
+    let saved_head = head(&root);
+    let saved_bytes = std::fs::read(root.join("journal")).unwrap();
+    std::fs::write(root.join("recovery.toml"), format!("{original}{soft}")).unwrap();
+    run(
+        &root,
+        &[
+            "register-plant", "--journal", "journal", "--head", &saved_head,
+            "--input", "production.toml", "--grinding", "grinding.toml",
+            "--recovery", "recovery.toml", "--id", "incomplete", "--target", "recovery",
+            "--author-role", "synthetic-model-role", "--time-basis", "utc-unix-ns",
+            "--trust-host-clock",
+        ],
+        3,
+    );
+    assert_eq!(head(&root), saved_head);
+    assert_eq!(std::fs::read(root.join("journal")).unwrap(), saved_bytes);
+    for name in ["production", "grinding", "recovery"] {
+        std::fs::rename(
+            root.join(format!("{name}.toml")),
+            root.join(format!("{name}.saved")),
+        ).unwrap();
+    }
+    for (id, _, _) in targets {
+        let verified = run(
+            &root,
+            &["verify-plant", "--journal", "journal", "--forecast", id, "--head", &saved_head],
+            0,
+        );
+        let verification = field(&verified, &["payload", "verification"]);
+        assert_eq!(field(verification, &["status"]).as_str(), Some("verified"));
+        assert_eq!(field(verification, &["source_files_opened"]).as_bool(), Some(false));
+        assert_eq!(
+            field(
+                verification,
+                &["admission", "source_receipt", "sources", "recovery", "submitted_worksheet"],
+            ).as_str(),
+            Some(corrected.as_str()),
+        );
+    }
+    assert_eq!(head(&root), saved_head);
+    assert_eq!(std::fs::read(root.join("journal")).unwrap(), saved_bytes);
+}

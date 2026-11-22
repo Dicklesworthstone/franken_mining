@@ -102,8 +102,22 @@ fn unit(value: InputUnit) -> &'static str {
         InputUnit::Hours => "hours",
     }
 }
-fn member_json(member: &RecoveryMemberReceipt) -> String {
+fn member_json(member: &RecoveryMemberReceipt, retain_correction: bool) -> String {
     let receipt = &member.receipt;
+    let correction = if retain_correction {
+        let source = receipt.model().correction();
+        format!(
+            ",\"correction\":{{\"version\":{{\"id\":{},\"revision\":{}}},\"test_work_claim_id\":{},\"additive_fraction\":{},\"upper_cap_fraction\":{},\"claim\":{}}}",
+            quoted(&source.value.version.id),
+            quoted(&source.value.version.revision),
+            quoted(&source.value.test_work.to_string()),
+            exact(source.value.additive_fraction),
+            source.value.upper_cap_fraction.map_or_else(|| "null".into(), exact),
+            claim_json(source),
+        )
+    } else {
+        String::new()
+    };
     let values = receipt
         .inputs()
         .value
@@ -121,7 +135,7 @@ fn member_json(member: &RecoveryMemberReceipt) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"id\":{},\"weight\":{},\"inputs\":{{\"claim\":{},\"values\":[{values}]}},\"admitted_claim\":{},\"receipt_digest\":{},\"result\":{}}}",
+        "{{\"id\":{},\"weight\":{},\"inputs\":{{\"claim\":{},\"values\":[{values}]}},\"admitted_claim\":{},\"receipt_digest\":{},\"result\":{}{correction}}}",
         quoted(&member.id),
         exact(member.weight),
         claim_json(receipt.inputs()),
@@ -162,11 +176,14 @@ impl RecoveryEnsembleReceipt {
         let members = self
             .members
             .iter()
-            .map(member_json)
+            .map(|member| member_json(member, self.corrections.is_some()))
             .collect::<Vec<_>>()
             .join(",");
+        let corrections = self.corrections.as_ref().map_or_else(String::new, |source| {
+            format!(",\"scenario_corrections_claim\":{}", claim_json(source))
+        });
         format!(
-            "{{\"schema\":\"fmine.plant-recovery-ensemble.v1\",\"mode\":\"declared_joint_population\",\"calibration\":\"uncalibrated\",\"population_claim\":{},\"admitted_claim\":{},\"receipt_digest\":{},\"summary\":{{\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{}}},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"route\":{},\"scenario_count\":{},\"mean\":{},\"variance\":{},\"minimum\":{},\"p10\":{},\"p50\":{},\"p90\":{},\"maximum\":{},\"probability_capped\":{}}},\"members\":[{members}],\"quantile_convention\":\"inverse empirical CDF; exact cumulative probability; no interpolation\",\"no_claim\":{}}}",
+            "{{\"schema\":\"fmine.plant-recovery-ensemble.v1\",\"mode\":\"declared_joint_population\",\"calibration\":\"uncalibrated\",\"population_claim\":{},\"admitted_claim\":{},\"receipt_digest\":{}{corrections},\"summary\":{{\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{}}},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"route\":{},\"scenario_count\":{},\"mean\":{},\"variance\":{},\"minimum\":{},\"p10\":{},\"p50\":{},\"p90\":{},\"maximum\":{},\"probability_capped\":{}}},\"members\":[{members}],\"quantile_convention\":\"inverse empirical CDF; exact cumulative probability; no interpolation\",\"no_claim\":{}}}",
             claim_json(&self.population),
             claim_json(&self.claim),
             quoted(&self.digest),
@@ -186,7 +203,7 @@ impl RecoveryEnsembleReceipt {
             value.p90.value(),
             value.maximum.value(),
             exact(value.probability_capped),
-            quoted(NO_CLAIM),
+            quoted(self.no_claim()),
         )
     }
 
@@ -247,7 +264,31 @@ impl RecoveryEnsembleReceipt {
                 Digest32(source.artifact_sha256).to_hex(),
             );
         }
-        let _ = write!(out, "\n{NO_CLAIM}\n");
+        if let Some(source) = &self.corrections {
+            let _ = write!(
+                out,
+                "\nScenario correction population: {}. Each row replaces the nominal correction for its named state.\n\n| Scenario | Additive fraction | Explicit upper cap | Correction Claim |\n|---|---:|---:|---|\n",
+                source.claim_id,
+            );
+            for member in &self.members {
+                let correction = member.receipt.model().correction();
+                let fraction = correction.value.additive_fraction;
+                let cap = correction.value.upper_cap_fraction.map_or_else(
+                    || "none".into(),
+                    |value| format!("{}/{}", value.num(), value.den()),
+                );
+                let _ = writeln!(
+                    out,
+                    "| {} | {}/{} | {} | {} |",
+                    markdown(&member.id),
+                    fraction.num(),
+                    fraction.den(),
+                    cap,
+                    correction.claim_id,
+                );
+            }
+        }
+        let _ = write!(out, "\n{}\n", self.no_claim());
         out
     }
 }

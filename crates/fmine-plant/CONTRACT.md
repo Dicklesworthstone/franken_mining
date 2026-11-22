@@ -609,9 +609,41 @@ exercise exact weighted-quantile boundaries, very rare states, small nonzero var
 identity, source metadata, malformed weights and refusal of any incompatible member.
 
 These are conditional probabilities under a user-supplied finite population, explicitly marked
-uncalibrated. Neither population completeness in reality nor uncertain card parameters, fitted
+uncalibrated. Neither population completeness in reality nor fitted test-work parameter distributions, fitted
 likelihoods, empirical recovery calibration, sample-to-blend transfer, forecast registration or
 operating permission is established. Authentic source and prospective outcome gates remain open.
+
+### Paired conditional correction layers (DESIGN; BD-176/181/182/287)
+
+`RecoveryModel::evaluate_ensemble_with_corrections` additionally admits a
+`Claim<RecoveryCorrections>` binding the exact input-population Claim and a complete
+scenario-to-correction map. Every state replaces the nominal signed additive correction and explicit
+cap with its own sourced `RecoveryCorrection`. The test-work formula, compiled program,
+operational factors and route stay common. Scenario IDs preserve dependence between blend inputs,
+corrections, grinding and production; probabilities still come from the original joint population.
+There is no independent cross product, resampling, fitted distribution or fallback to a nominal
+correction for a missing state.
+
+The existing recovery worksheet accepts optional `scenario` on correction rows. Exactly one
+correction without a scenario remains the nominal layer. If any conditional corrections are present,
+each declared scenario needs exactly one; extra, missing, duplicate or unknown states refuse.
+Correction target versions, source identity, admissibility and cap bounds are checked before that
+state is evaluated, and the final fraction must remain physical. A failed state refuses the complete
+nominal-plus-ensemble worksheet, without dropping probability mass.
+
+Member receipts retain their actual correction Claims and exact parameters. JSON and Markdown show
+each paired correction; the declaration and retained nominal layer participate in source ancestry,
+confidentiality and UU propagation. The old common-correction path keeps its original receipt frame
+and rendering; the optional path uses the RCES v2 receipt frame. Production and forecast registration
+consume the same corrected member values, and retained-worksheet verification reconstructs the
+correction population without opening original source paths.
+
+Independent constructed answers in `cards::ensemble::tests` use `R(g)=g/2` at
+`g={0.5,1.5}`: pairing corrections `{+0.25,-0.25}` yields constant recovery 0.5;
+reversing them yields `{0,1}` with variance 0.25. An explicit high-state cap of 0.8 gives
+mean 0.4, variance 0.16 and exact cap probability 1/2. Production and actual-binary journal controls
+cover the paired metal calculation and offline replay. These are declared finite alternatives, not
+estimated sampler biases, fitted parameter covariance, empirical calibration or qualified site data.
 
 ## 21. Bond grinding energy and throughput (DESIGN; plan §17.3, PO-CRUC-4; BD-176/181)
 

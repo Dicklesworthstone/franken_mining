@@ -13,8 +13,33 @@ mod tests;
 
 pub const INPUT_METRIC: &str = "plant.recovery.joint_population/1";
 pub const OUTPUT_METRIC: &str = "plant.recovery.ensemble_evaluation/1";
+pub const CORRECTIONS_METRIC: &str = "plant.recovery.scenario_corrections/1";
 pub const MAX_SCENARIOS: usize = 256;
 pub const NO_CLAIM: &str = "Conditional finite-population recovery distribution under the declared joint inputs, weights and common versioned card. No probability calibration, input-population completeness in reality, fitted model uncertainty, sample-to-blend transfer or operating authorization is established.";
+
+pub const CORRECTIONS_NO_CLAIM: &str = "Conditional finite-population recovery distribution under the declared joint inputs, exact weights and scenario-specific correction layers. Test work, operational factors and route remain common; corrections are paired by scenario identity, not independently sampled. No probability calibration, fitted parameter uncertainty, population completeness in reality, sample-to-blend transfer or operating authorization is established.";
+
+/// A complete paired correction population tied to the original joint input
+/// Claim, including its weights. Each value replaces the nominal correction
+/// for that scenario; no independent product population or fallback is inferred.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecoveryCorrections {
+    pub population_id: ClaimId,
+    pub scenarios: BTreeMap<String, Claim<RecoveryCorrection>>,
+}
+impl RecoveryCorrections {
+    pub fn canonical_tag(&self) -> String {
+        let mut enc = Encoder::new_frame(*b"RCCP", 1);
+        enc.put_str(&self.population_id.to_string());
+        enc.put_u64(self.scenarios.len() as u64);
+        for (id, correction) in &self.scenarios {
+            enc.put_str(id);
+            enc.put_str(&correction.value.canonical_tag());
+            inventory::put_source_envelope(&mut enc, correction, 0);
+        }
+        blake3_hash(&enc.finish()).to_hex()
+    }
+}
 
 /// One complete simultaneous blend realization and its exact probability.
 /// Weights are probabilities across alternative states, never tonnage weights
@@ -94,16 +119,29 @@ impl RecoveryMemberReceipt {
 pub struct RecoveryEnsembleReceipt {
     model: RecoveryModel,
     population: Claim<RecoveryPopulation>,
+    corrections: Option<Claim<RecoveryCorrections>>,
     members: Vec<RecoveryMemberReceipt>,
     claim: Claim<RecoveryEnsembleSummary>,
     digest: String,
 }
 impl RecoveryEnsembleReceipt {
+    /// Common model retaining the nominal correction. Conditional replay also
+    /// needs the complete source population returned by `corrections`.
     pub fn model(&self) -> &RecoveryModel {
         &self.model
     }
     pub fn population(&self) -> &Claim<RecoveryPopulation> {
         &self.population
+    }
+    pub fn corrections(&self) -> Option<&Claim<RecoveryCorrections>> {
+        self.corrections.as_ref()
+    }
+    pub fn no_claim(&self) -> &'static str {
+        if self.corrections.is_some() {
+            CORRECTIONS_NO_CLAIM
+        } else {
+            NO_CLAIM
+        }
     }
     pub fn members(&self) -> &[RecoveryMemberReceipt] {
         &self.members
@@ -123,6 +161,25 @@ impl RecoveryModel {
     pub fn evaluate_ensemble(
         &self,
         population: &Claim<RecoveryPopulation>,
+    ) -> Result<RecoveryEnsembleReceipt> {
+        self.evaluate_joint(population, None)
+    }
+
+    /// Propagate explicitly paired correction uncertainty through each member
+    /// before computing moments or joining processing production. Every joint
+    /// state must supply its own full correction, with the shared test-work ID.
+    pub fn evaluate_ensemble_with_corrections(
+        &self,
+        population: &Claim<RecoveryPopulation>,
+        corrections: &Claim<RecoveryCorrections>,
+    ) -> Result<RecoveryEnsembleReceipt> {
+        self.evaluate_joint(population, Some(corrections))
+    }
+
+    fn evaluate_joint(
+        &self,
+        population: &Claim<RecoveryPopulation>,
+        corrections: Option<&Claim<RecoveryCorrections>>,
     ) -> Result<RecoveryEnsembleReceipt> {
         let scenarios = &population.value.scenarios;
         if scenarios.is_empty() || scenarios.len() > MAX_SCENARIOS {
@@ -177,14 +234,49 @@ impl RecoveryModel {
             ));
         }
 
+        if let Some(corrections) = corrections {
+            if corrections.value.scenarios.len() != scenarios.len()
+                || scenarios
+                    .iter()
+                    .any(|row| !corrections.value.scenarios.contains_key(&row.id))
+            {
+                return Err(fail(
+                    RefusalCode::BasisMismatch105,
+                    "scenario corrections must cover exactly the complete joint population",
+                ));
+            }
+            admit(
+                corrections,
+                CORRECTIONS_METRIC,
+                &corrections.value.canonical_tag(),
+            )?;
+            if corrections.value.population_id != population.claim_id {
+                return Err(fail(
+                    RefusalCode::FrozenRecordMutation507,
+                    "scenario corrections target a different joint input population",
+                ));
+            }
+        }
         let mut members = Vec::with_capacity(scenarios.len());
         let mut probability_capped = ExactQty::from_integer(0);
         let mut metadata = Metadata::new();
-        let mut enc = Encoder::new_frame(*b"RCES", 1);
+        let mut enc = Encoder::new_frame(*b"RCES", if corrections.is_some() { 2 } else { 1 });
         include(&mut metadata, &mut enc, population, 0)?;
+        if let Some(corrections) = corrections {
+            include(&mut metadata, &mut enc, corrections, 2)?;
+            // The retained nominal model remains original source evidence even
+            // though its correction is replaced for every conditional member.
+            include(&mut metadata, &mut enc, self.correction(), 3)?;
+        }
         enc.put_u64(scenarios.len() as u64);
         for scenario in scenarios {
-            let receipt = self.evaluate(&scenario.inputs).map_err(|mut refusal| {
+            let evaluation = if let Some(corrections) = corrections {
+                self.with_correction(&corrections.value.scenarios[&scenario.id])
+                    .and_then(|model| model.evaluate(&scenario.inputs))
+            } else {
+                self.evaluate(&scenario.inputs)
+            };
+            let receipt = evaluation.map_err(|mut refusal| {
                 refusal.what = format!("scenario {}: {}", scenario.id, refusal.what);
                 refusal
             })?;
@@ -288,6 +380,7 @@ impl RecoveryModel {
         Ok(RecoveryEnsembleReceipt {
             model: self.clone(),
             population: population.clone(),
+            corrections: corrections.cloned(),
             members,
             claim,
             digest,

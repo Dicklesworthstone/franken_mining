@@ -263,26 +263,7 @@ impl RecoveryModel {
             }
             numeric(factor.value.multiplier)?;
         }
-        admit(
-            correction,
-            CORRECTION_METRIC,
-            &correction.value.canonical_tag(),
-        )?;
-        target(
-            &correction.value.version,
-            correction.value.test_work,
-            test_work.claim_id,
-        )?;
-        numeric(correction.value.additive_fraction)?;
-        if let Some(cap) = correction.value.upper_cap_fraction {
-            if cap.signum() < 0 || compare(cap, ExactQty::from_integer(1))?.is_gt() {
-                return Err(fail(
-                    RefusalCode::OutsidePhysicalDomain109,
-                    "explicit recovery cap must lie in [0,1]",
-                ));
-            }
-            numeric(cap)?;
-        }
+        admit_correction(correction, test_work.claim_id)?;
         admit(route, ROUTE_METRIC, &route.value.canonical_tag())?;
         target(
             &route.value.version,
@@ -305,6 +286,15 @@ impl RecoveryModel {
             program,
             names,
         })
+    }
+
+    /// Retain the compiled formula and common layers while admitting one
+    /// explicitly sourced conditional correction. No nominal correction is added.
+    fn with_correction(&self, correction: &Claim<RecoveryCorrection>) -> Result<Self> {
+        admit_correction(correction, self.test_work.claim_id)?;
+        let mut model = self.clone();
+        model.correction = correction.clone();
+        Ok(model)
     }
 
     pub fn test_work(&self) -> &Claim<TestWorkCard> {
@@ -644,6 +634,29 @@ fn target(v: &CardVersion, actual: ClaimId, expected: ClaimId) -> Result<()> {
             "layer targets a different test-work version",
         ))
     }
+}
+fn admit_correction(correction: &Claim<RecoveryCorrection>, test_work: ClaimId) -> Result<()> {
+    admit(
+        correction,
+        CORRECTION_METRIC,
+        &correction.value.canonical_tag(),
+    )?;
+    target(
+        &correction.value.version,
+        correction.value.test_work,
+        test_work,
+    )?;
+    numeric(correction.value.additive_fraction)?;
+    if let Some(cap) = correction.value.upper_cap_fraction {
+        if cap.signum() < 0 || compare(cap, ExactQty::from_integer(1))?.is_gt() {
+            return Err(fail(
+                RefusalCode::OutsidePhysicalDomain109,
+                "explicit recovery cap must lie in [0,1]",
+            ));
+        }
+        numeric(cap)?;
+    }
+    Ok(())
 }
 fn admit<T>(c: &Claim<T>, metric: &str, tag: &str) -> Result<()> {
     inventory::admit_source(c, metric, tag, AdditivityClass::NonAdditive)

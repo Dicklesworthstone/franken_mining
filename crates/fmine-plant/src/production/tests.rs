@@ -1029,3 +1029,54 @@ fn supply_worksheet_is_opt_in_strict_and_source_bound_with_legacy_output_preserv
     assert_eq!(supplied.receipt().points(), changed.receipt().points());
     assert_ne!(supplied.receipt().digest(), changed.receipt().digest());
 }
+
+#[test]
+fn conditional_corrections_remain_paired_with_grinding_before_metal_aggregation() {
+    use crate::cards::ensemble::{CORRECTIONS_METRIC, RecoveryCorrections};
+
+    let (grinding, _, inputs) = fixture();
+    let common = recovery(
+        [q(2, 1); 2],
+        [q(7, 10); 2],
+        InputUnit::GramsPerDryMetricTonne,
+    );
+    let corrected = |deltas: [ExactQty; 2]| {
+        let scenarios = ["a", "b"]
+            .into_iter()
+            .zip(deltas)
+            .map(|(id, additive_fraction)| {
+                let value = RecoveryCorrection {
+                    version: version(id),
+                    test_work: common.model().test_work().claim_id,
+                    additive_fraction,
+                    upper_cap_fraction: None,
+                };
+                let tag = value.canonical_tag();
+                (id.to_string(), source(cards::CORRECTION_METRIC, value, tag))
+            })
+            .collect();
+        let value = RecoveryCorrections {
+            population_id: common.population().claim_id,
+            scenarios,
+        };
+        let tag = value.canonical_tag();
+        common
+            .model()
+            .evaluate_ensemble_with_corrections(
+                common.population(),
+                &source(CORRECTIONS_METRIC, value, tag),
+            )
+            .unwrap()
+    };
+    let paired = corrected([q(1, 5), q(-1, 5)]);
+    let opposed = corrected([q(-1, 5), q(1, 5)]);
+    let first = evaluate(&grinding, &paired, &inputs).unwrap();
+    let second = evaluate(&grinding, &opposed, &inputs).unwrap();
+    assert_eq!(first.summary().throughput, second.summary().throughput);
+    assert_eq!(first.summary().recovery, second.summary().recovery);
+    // Independent arithmetic: .5*(.32*.9+.16*.5) versus .5*(.32*.5+.16*.9).
+    close(first.summary().recovered_metal.mean.value(), 0.184);
+    close(second.summary().recovered_metal.mean.value(), 0.152);
+    assert_ne!(first.digest(), second.digest());
+    assert_eq!(first.recovery().corrections(), paired.corrections());
+}

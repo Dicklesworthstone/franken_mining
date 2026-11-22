@@ -6,7 +6,7 @@ use crate::cards::{
     self, CardVersion, InputRequirement, InputUnit, InputValue, OperationalFactor, OutputScale,
     RecoveryCorrection, RecoveryInputs, RecoveryModel, RecoveryScope, RouteAssumption,
     TestWorkCard,
-    ensemble::{self, RecoveryPopulation, RecoveryScenario},
+    ensemble::{self, RecoveryCorrections, RecoveryPopulation, RecoveryScenario},
 };
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
@@ -42,10 +42,11 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"operation_rows\":[\"id\",\"revision\",\"multiplier\"],",
     "\"operations\":\"Zero through eight nonnegative multipliers, applied in worksheet order; duplicate id/revision pairs refuse\",",
     "\"correction_rows\":[\"id\",\"revision\",\"additive_fraction\"],",
-    "\"optional_correction_fields\":[\"upper_cap_fraction\"],",
+    "\"optional_correction_fields\":[\"upper_cap_fraction\",\"scenario\"],",
+    "\"scenario_corrections\":\"Optional complete paired correction population: exactly one correction without scenario remains the nominal layer; if any scenario corrections occur, exactly one must name each joint scenario. Each replaces the nominal correction; no added nominal offset, fallback, independent draws or renormalization\",",
     "\"correction\":\"Signed additive fraction, so 0.02 is two percentage points; optional explicit cap in [0,1], with no implicit clipping\",",
     "\"route_rows\":[\"id\",\"revision\",\"route\"],",
-    "\"layers\":\"Exactly one test_work, correction and route; every operation, correction and route binds the single test-work Claim\",",
+    "\"layers\":\"Exactly one test_work, nominal correction and route; every operation and every nominal or scenario correction binds the single test-work Claim\",",
     "\"quantities\":\"Exact plain decimals or n/d with a positive denominator; original numeric tokens are retained; bounds and fractions are checked before numerical evaluation\",",
     "\"output\":\"Original versioned layers, formula, exact bounds, source Claims, inputs, each intermediate fraction, explicit cap status and receipt digest; a kernel refusal retains parsed declarations with null result and admitted_claim\",",
     "\"evidence\":\"Assumed, Internal and uncalibrated; nominal evaluation does not establish source accuracy, applicability, forecast calibration or operating permission\",",
@@ -201,6 +202,7 @@ struct Worksheet {
     route: Claim<RouteAssumption>,
     inputs: Claim<RecoveryInputs>,
     population: Option<(Claim<RecoveryPopulation>, String)>,
+    corrections: Option<(Claim<RecoveryCorrections>, String)>,
     model_json: String,
     inputs_json: String,
 }
@@ -298,7 +300,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
     let document = parse_subset(text).map_err(|error| bad(error.line, error.reason))?;
     if document.rows.len()
         > (ensemble::MAX_SCENARIOS + 2) * cards::MAX_INPUTS
-            + ensemble::MAX_SCENARIOS
+            + 2 * ensemble::MAX_SCENARIOS
             + cards::MAX_OPERATIONAL_FACTORS
             + 3
     {
@@ -459,49 +461,70 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         ));
         operations.push(factor);
     }
-    let row = single(&document, "correction")?;
-    let values = fields(
-        &row.fields,
-        &["id", "revision", "additive_fraction"],
-        &["upper_cap_fraction"],
-        row.line,
-    )?;
-    let correction = RecoveryCorrection {
-        version: version(&values)?,
-        test_work: test_work.claim_id,
-        additive_fraction: quantity(get(&values, "additive_fraction")?)?,
-        upper_cap_fraction: values
-            .get("upper_cap_fraction")
-            .copied()
-            .map(quantity)
-            .transpose()?,
-    };
-    let tag = correction.canonical_tag();
-    let correction = source_claim(
-        correction,
-        &tag,
-        cards::CORRECTION_METRIC,
-        source,
-        format!(
-            "correction row line {}; targets the worksheet test_work",
-            row.line
-        ),
-    );
-    let correction_json = format!(
-        "{{\"version\":{},\"test_work_claim_id\":{},\"raw_additive_fraction\":{},\"additive_fraction\":{},\"raw_upper_cap_fraction\":{},\"upper_cap_fraction\":{},\"claim\":{}}}",
-        version_json(&correction.value.version),
-        quoted(&test_work.claim_id.to_string()),
-        quoted(get(&values, "additive_fraction")?.0),
-        exact(correction.value.additive_fraction),
-        values
-            .get("upper_cap_fraction")
-            .map_or_else(|| "null".into(), |value| quoted(value.0)),
-        correction
-            .value
-            .upper_cap_fraction
-            .map_or_else(|| "null".into(), exact),
-        claim_json(&correction),
-    );
+    let mut nominal_correction = None;
+    let mut scenario_corrections = BTreeMap::new();
+    let mut scenario_correction_json = BTreeMap::new();
+    for row in document.rows_of("correction") {
+        let values = fields(
+            &row.fields,
+            &["id", "revision", "additive_fraction"],
+            &["upper_cap_fraction", "scenario"],
+            row.line,
+        )?;
+        let correction = RecoveryCorrection {
+            version: version(&values)?,
+            test_work: test_work.claim_id,
+            additive_fraction: quantity(get(&values, "additive_fraction")?)?,
+            upper_cap_fraction: values
+                .get("upper_cap_fraction")
+                .copied()
+                .map(quantity)
+                .transpose()?,
+        };
+        let tag = correction.canonical_tag();
+        let correction = source_claim(
+            correction,
+            &tag,
+            cards::CORRECTION_METRIC,
+            source,
+            format!(
+                "correction row line {}; targets the worksheet test_work",
+                row.line
+            ),
+        );
+        let json = format!(
+            "{{\"version\":{},\"test_work_claim_id\":{},\"raw_additive_fraction\":{},\"additive_fraction\":{},\"raw_upper_cap_fraction\":{},\"upper_cap_fraction\":{},\"claim\":{}}}",
+            version_json(&correction.value.version),
+            quoted(&test_work.claim_id.to_string()),
+            quoted(get(&values, "additive_fraction")?.0),
+            exact(correction.value.additive_fraction),
+            values
+                .get("upper_cap_fraction")
+                .map_or_else(|| "null".into(), |value| quoted(value.0)),
+            correction
+                .value
+                .upper_cap_fraction
+                .map_or_else(|| "null".into(), exact),
+            claim_json(&correction),
+        );
+        if let Some((id, _)) = values.get("scenario") {
+            if id.is_empty()
+                || scenario_corrections
+                    .insert(id.to_string(), correction)
+                    .is_some()
+            {
+                return Err(bad(row.line, "correction scenario must be nonempty and unique"));
+            }
+            scenario_correction_json.insert(
+                id.to_string(),
+                format!("{{\"scenario\":{},\"correction\":{json}}}", quoted(id)),
+            );
+        } else if nominal_correction.replace((correction, json)).is_some() {
+            return Err(bad(row.line, "duplicate nominal [[correction]] row"));
+        }
+    }
+    let (correction, correction_json) = nominal_correction
+        .ok_or_else(|| bad(1, "exactly one nominal [[correction]] row is required"))?;
     let row = single(&document, "route")?;
     let values = fields(&row.fields, &["id", "revision", "route"], &[], row.line)?;
     let route = RouteAssumption {
@@ -641,6 +664,32 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         );
         Some((population, json))
     };
+    let corrections = if scenario_corrections.is_empty() {
+        None
+    } else {
+        let Some((population, _)) = &population else {
+            return Err(bad(1, "scenario corrections require a declared joint population"));
+        };
+        let value = RecoveryCorrections {
+            population_id: population.claim_id,
+            scenarios: scenario_corrections,
+        };
+        let tag = value.canonical_tag();
+        let declaration = source_claim(
+            value,
+            &tag,
+            ensemble::CORRECTIONS_METRIC,
+            source,
+            "all scenario correction rows paired to the complete joint input population".into(),
+        );
+        let json = format!(
+            "{{\"claim\":{},\"population_claim_id\":{},\"scenarios\":[{}]}}",
+            claim_json(&declaration),
+            quoted(&population.claim_id.to_string()),
+            scenario_correction_json.into_values().collect::<Vec<_>>().join(","),
+        );
+        Some((declaration, json))
+    };
     Ok(Worksheet {
         test_work,
         operations,
@@ -648,6 +697,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         route,
         inputs,
         population,
+        corrections,
         model_json: format!(
             "{{\"test_work\":{test_work_json},\"operations\":[{}],\"correction\":{correction_json},\"route\":{route_json}}}",
             operation_json.join(","),
@@ -706,7 +756,12 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         let ensemble = worksheet
             .population
             .as_ref()
-            .map(|(population, _)| model.evaluate_ensemble(population))
+            .map(|(population, _)| match &worksheet.corrections {
+                Some((corrections, _)) => {
+                    model.evaluate_ensemble_with_corrections(population, corrections)
+                }
+                None => model.evaluate_ensemble(population),
+            })
             .transpose()?;
         Ok((nominal, ensemble))
     });
@@ -736,8 +791,14 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         .map_or_else(String::new, |(_, declarations)| {
             format!(",\"population\":{declarations},\"ensemble\":{ensemble}")
         });
+    let corrections = worksheet
+        .corrections
+        .as_ref()
+        .map_or_else(String::new, |(_, declarations)| {
+            format!(",\"scenario_corrections\":{declarations}")
+        });
     let json = format!(
-        "{{\"schema\":\"fmine.plant-recovery-result.v1\",\"mode\":\"nominal_recovery_card\",\"source\":{{\"path\":{},\"sha256\":{},\"bytes\":{}}},\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{},\"processing_support\":true}},\"model\":{},\"inputs\":{},\"admitted_claim\":{admitted},\"receipt_digest\":{digest},\"result\":{result}{population}}}",
+        "{{\"schema\":\"fmine.plant-recovery-result.v1\",\"mode\":\"nominal_recovery_card\",\"source\":{{\"path\":{},\"sha256\":{},\"bytes\":{}}},\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{},\"processing_support\":true}},\"model\":{},\"inputs\":{},\"admitted_claim\":{admitted},\"receipt_digest\":{digest},\"result\":{result}{population}{corrections}}}",
         quoted(&source.artifact_path),
         quoted(&Digest32(source.artifact_sha256).to_hex()),
         text.len(),
@@ -748,7 +809,9 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         worksheet.model_json,
         worksheet.inputs_json,
     );
-    let no_claim = if worksheet.population.is_some() {
+    let no_claim = if worksheet.corrections.is_some() {
+        ensemble::CORRECTIONS_NO_CLAIM
+    } else if worksheet.population.is_some() {
         ENSEMBLE_NO_CLAIM
     } else {
         NO_CLAIM
@@ -807,5 +870,92 @@ mod tests {
         for absent in ["admitted_claim", "receipt_digest", "result"] {
             assert!(json.contains(&format!("\"{absent}\":null")), "{absent}");
         }
+    }
+
+    const JOINT: &str = include_str!("../../../../tests/plant/production_recovery.toml");
+    const CORRECTIONS: &str = r#"
+[[correction]]
+scenario = "soft"
+id = "soft-plant-adjustment"
+revision = "declared-v1"
+additive_fraction = "-0.1"
+
+[[correction]]
+scenario = "hard"
+id = "hard-plant-adjustment"
+revision = "declared-v1"
+additive_fraction = "0.2"
+upper_cap_fraction = "0.95"
+"#;
+
+    #[test]
+    fn worksheet_pairs_correction_layers_and_retains_nominal_and_raw_sources() {
+        let text = format!(
+            "{}{CORRECTIONS}",
+            JOINT.replace("additive_fraction = \"0\"", "additive_fraction = \"0.05\""),
+        );
+        let result = evaluate(&text, &source(&text)).unwrap();
+        assert!(result.refusal().is_none());
+        let ensemble = result.ensemble_receipt().unwrap();
+        // Hand arithmetic: soft .6-.1=.5; hard min(.9+.2,.95)=.95.
+        // The nominal .05 adjustment is replaced, never added again.
+        assert!((ensemble.claim().value.mean.value() - 0.725).abs() < 1e-14);
+        assert!((ensemble.claim().value.variance.value() - 0.050625).abs() < 1e-14);
+        assert_eq!(
+            ensemble.claim().value.probability_capped,
+            ExactQty::new(1, 2).unwrap(),
+        );
+        assert_eq!(
+            ensemble.model().correction().value.additive_fraction,
+            ExactQty::new(1, 20).unwrap(),
+        );
+        let json = result.to_json();
+        for expected in [
+            "\"raw_additive_fraction\":\"-0.1\"",
+            "\"raw_additive_fraction\":\"0.2\"",
+            "\"raw_upper_cap_fraction\":\"0.95\"",
+            "\"scenario_corrections\":",
+            "\"admitted_claim\":{",
+            "hard-plant-adjustment",
+        ] {
+            assert!(json.contains(expected), "{expected}");
+        }
+        assert_eq!(result.no_claim(), ensemble::CORRECTIONS_NO_CLAIM);
+        assert_eq!(
+            evaluate(&text, &source(JOINT)).err().unwrap().code,
+            RefusalCode::DigestMismatch505.as_str(),
+        );
+    }
+
+    #[test]
+    fn worksheet_refuses_incomplete_unknown_and_duplicate_correction_states() {
+        let incomplete = CORRECTIONS
+            .split_once("[[correction]]\nscenario = \"hard\"")
+            .unwrap()
+            .0;
+        for rows in [
+            incomplete.to_string(),
+            CORRECTIONS.replace("scenario = \"hard\"", "scenario = \"unknown\""),
+        ] {
+            let text = format!("{JOINT}{rows}");
+            let result = evaluate(&text, &source(&text)).unwrap();
+            assert_eq!(
+                result.refusal().unwrap().code,
+                RefusalCode::BasisMismatch105.as_str(),
+            );
+            assert!(result.ensemble_receipt().is_none());
+            assert!(result.to_json().contains("\"admitted_claim\":null"));
+            assert!(result.to_json().contains("\"scenario_corrections\":"));
+        }
+        let duplicate = format!("{JOINT}{CORRECTIONS}{CORRECTIONS}");
+        assert_eq!(
+            evaluate(&duplicate, &source(&duplicate)).err().unwrap().code,
+            RefusalCode::InputMissingOrUnreadable506.as_str(),
+        );
+        let no_population = format!("{WORKSHEET}{CORRECTIONS}");
+        assert_eq!(
+            evaluate(&no_population, &source(&no_population)).err().unwrap().code,
+            RefusalCode::InputMissingOrUnreadable506.as_str(),
+        );
     }
 }
