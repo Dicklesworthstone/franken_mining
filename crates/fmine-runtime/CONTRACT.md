@@ -15,7 +15,7 @@ A reading claims no synchronisation, uncertainty bound, monotonicity or authorit
 - **Layer:** S1
 - **Subsystem:** Bedrock
 - **LOC budget:** 12,000 planned / 14,000 ceiling
-- **Allowed Module Families:** `["budget", "clock", "process", "region", "supervise"]`
+- **Allowed Module Families:** `["budget", "clock", "obligations", "process", "region", "supervise"]`
 
 ## 2. Inputs
 - **The host clock**, through `HostWallClock::now_ns`.

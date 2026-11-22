@@ -6,6 +6,7 @@
 pub mod cap_audit;
 pub mod chaos;
 pub mod invariance;
+pub mod oracles;
 pub mod runtime;
 
 use core::fmt;

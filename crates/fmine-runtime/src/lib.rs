@@ -2,6 +2,7 @@
 //! synchronization, bounded uncertainty, monotonicity, authority or external time proof.
 
 pub mod budget;
+pub mod obligations;
 pub mod process;
 pub mod region;
 pub mod supervise;

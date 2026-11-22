@@ -7,7 +7,7 @@ Testpit `S1` deterministic virtual-time simulation harness, Dynamic Partial-Orde
 - **Layer:** S1
 - **Subsystem:** Testpit
 - **LOC budget:** 10,000 planned / 12,000 ceiling
-- **Allowed Module Families:** `["runtime", "chaos", "cap_audit", "invariance"]`
+- **Allowed Module Families:** `["runtime", "chaos", "cap_audit", "invariance", "oracles"]`
 
 ## 2. Inputs
 - Deterministic 64-bit seeds (`0..999` in CI, `0..10_000` nightly), `SchedulerPolicy`, `DiagnosticLevel`, virtual timestamps, and protocol actor scripts.
@@ -59,9 +59,11 @@ Verification/lab evidence only (Testpit); never production operational measureme
 - `chaos::{PartitionWindow, CrashBoundary, ChaosProfile, ChaosOutcome, CrashPack, run_chaos_campaign, replay_crash_pack}`
 - `cap_audit::{CapabilityAuditReport, audit_all_runtime_capability_profiles}`
 - `invariance::{AuthoritativeOp, InvarianceReport, verify_scheduler_and_diagnostic_invariance}`
+- `oracles::{ProofObligation, OracleViolation, LeaseEvent, CasTraceEvent, PostingEvent, BridgeIntent, BridgeReplayState, check_po_bed_1_single_writer, check_po_bed_2_prefix_consistency, check_po_bed_3_root_last_cas, check_po_bed_4_exactly_once_posting, check_po_bed_10_bridge_idempotency}` (`BD-101`)
 
 ## 12. Proof obligations
 - `BD-099` (`Same seed → same trace digest` + DPOR): `runtime::tests::test_lab_runtime_seeds_0_to_999_same_seed_same_trace_digest`, `runtime::tests::test_dpor_prunes_independent_actors_and_catches_seeded_lease_race`.
 - `BD-100` (`Failing seed reproduces` via `CrashPack`): `chaos::tests::test_chaos_profiles_and_crash_pack_reproduce_failing_seed`.
 - `BD-097` (`PO-BED-8` runtime capability-mask lab test): `cap_audit::tests::test_po_bed_8_runtime_capability_masks_and_supervisor_profiles`.
+- `BD-101` (`FM oracles PO-BED-1, 2, 3, 4, 10` firing on seeded bugs): `oracles::tests::test_all_five_fm_oracles_pass_clean_and_fire_on_seeded_bugs`.
 - `BD-337` (`INT-AS-001` criterion 8 over seeds `0..999` × 3 diagnostic levels): `invariance::tests::test_int_as_001_criterion_8_authoritative_invariance_1000_seeds`.
