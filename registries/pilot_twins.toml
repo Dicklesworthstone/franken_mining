@@ -1,0 +1,84 @@
+# registries/pilot_twins.toml — Pilot Protocol Card Twin-Family & Extraction-Cost Registry
+# (BD-356.S1, BD-356.S2; plan §37.3; TARGET placeholder ranges, OPEN until site metallurgist confirms)
+# Synthetic twins from public filings only; no site data; no personal data; no affiliation implied.
+
+schema_version = 1
+
+[[site_twin]]
+site = "lumwana"
+ownership_pct = 100
+copper_unit = "kt"
+k = 5
+status = "TARGET_OPEN_PLACEHOLDER"
+sampler_ratio_min = 0.25
+sampler_ratio_max = 1.50
+intra_quarter_autocorr_min = 0.10
+intra_quarter_autocorr_max = 0.75
+fresh_trans_kinetics_min = 0.65
+fresh_trans_kinetics_max = 0.95
+power_bar_target = 0.80
+
+[[segment_boundary]]
+site = "lumwana"
+quarter = "2024Q2"
+event = "Grid power instability regime shift (2024)"
+source_e_id = "E584"
+
+[[segment_boundary]]
+site = "lumwana"
+quarter = "2025Q1"
+event = "Prolonged SAG mill shutdown"
+source_e_id = "E581"
+
+[[segment_boundary]]
+site = "lumwana"
+quarter = "2025Q3"
+event = "September shutdown and crusher downtime"
+source_e_id = "E582"
+
+[[segment_boundary]]
+site = "lumwana"
+quarter = "2026Q1"
+event = "February mill reline"
+source_e_id = "E583"
+
+[[segment_boundary]]
+site = "lumwana"
+quarter = "2026Q2"
+event = "Pebble-crusher tie-in"
+source_e_id = "E580"
+
+[[candidate_file]]
+site = "lumwana"
+name = "monthly_metallurgical_balance"
+extraction_cost = 1.0
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Monthly plant metallurgical mass and metal balance (feed, concentrate, tails)."
+
+[[candidate_file]]
+site = "lumwana"
+name = "head_tail_conc_samplers"
+extraction_cost = 1.5
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Shift head, tail, and concentrate sampler and assay records (non-personal)."
+
+[[candidate_file]]
+site = "lumwana"
+name = "conc_shipment_settlement_assays"
+extraction_cost = 1.2
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Concentrate shipment weighbridge and smelter outturn settlement assays."
+
+[[candidate_file]]
+site = "lumwana"
+name = "fresh_transitional_feed_tags"
+extraction_cost = 2.0
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Fresh vs. transitional ore domain tags on mill feed."
+
+[[candidate_file]]
+site = "lumwana"
+name = "monthly_reconciliation_pack"
+extraction_cost = 1.8
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Monthly mine-to-mill reconciliation pack (F1/F2/F3 and downtime logs; no rosters)."

@@ -1622,8 +1622,8 @@ mod tests {
         // and fmine-object's merkle.rs, cas.rs (BD-090), fmine-authz's five modules (BD-092..095),
         // fmine-io's dialects.rs and redact.rs (BD-186, BD-292), and fmine-sync's seven portable modules
         // (lib, manifest, transport, version_vector, sync_cert, residency_plan, gluing; BD-102..108),
-        // and fmine-gen's twelve BitwisePortable modules (lib, seal, worlds, harness, geology, cu_au_world, biases, drillholes, dispatch, mill_balance, fa_book, metamorphic; BD-127..134, 143).
-        assert_eq!(report.bitwise_files, 80, "{report:?}");
+        // and fmine-gen's fourteen BitwisePortable modules (lib, seal, worlds, harness, geology, cu_au_world, biases, drillholes, dispatch, mill_balance, fa_book, metamorphic, plant_twin, pilot_power; BD-127..134, 143, BD-356.S1/S2).
+        assert_eq!(report.bitwise_files, 82, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

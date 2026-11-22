@@ -16,3 +16,6 @@ fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-units = { path = "../fmine-units" }
+
+[dev-dependencies]
+fmine-io = { path = "../fmine-io" }
