@@ -1229,19 +1229,24 @@ fn resolve_inner(
     let nowcast_publications = if post_quarter {
         let original = outcome_quarter.to_string();
         if registry.issuer != rules.issuer
-            || registry.sources.iter().filter(|source| {
-                source.kind == "mine_stats" && source.quarter == original
-            }).count() != 1
+            || registry
+                .sources
+                .iter()
+                .filter(|source| source.kind == "mine_stats" && source.quarter == original)
+                .count()
+                != 1
         {
             return Err(refusal(
                 RefusalCode::SourceCellUnusable208,
                 "post-quarter nowcast scoring requires one registered original outcome workbook; no comparative can replace it",
             ));
         }
-        let publications = fmine_public::forecast::nowcast_publications(&registry, outcome_quarter)?;
-        if publications.iter().any(|source| {
-            proof_upper_utc.is_some_and(|upper| upper >= source.day_start_utc)
-        }) {
+        let publications =
+            fmine_public::forecast::nowcast_publications(&registry, outcome_quarter)?;
+        if publications
+            .iter()
+            .any(|source| proof_upper_utc.is_some_and(|upper| upper >= source.day_start_utc))
+        {
             return Err(refusal(
                 RefusalCode::LateRegistration206,
                 "the complete nowcast proof must precede every registered original publication day",

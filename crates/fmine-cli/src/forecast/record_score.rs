@@ -285,7 +285,11 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
     let post_quarter = loaded.rules.is_post_quarter_nowcast();
     let resolved = if post_quarter {
         record_sources::resolve_nowcast(
-            root, &loaded.rules, &loaded.manifest, as_of, record_proof.times.upper_utc,
+            root,
+            &loaded.rules,
+            &loaded.manifest,
+            as_of,
+            record_proof.times.upper_utc,
         )?
     } else {
         record_sources::resolve(root, &loaded.rules, &loaded.manifest, as_of)?
@@ -310,7 +314,9 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
         String::new()
     };
     let horizon = if post_quarter {
-        format!("{horizon},\"timing_mode\":\"post_quarter_prepublication\",\"score_population\":\"post_quarter_nowcasts_only\"")
+        format!(
+            "{horizon},\"timing_mode\":\"post_quarter_prepublication\",\"score_population\":\"post_quarter_nowcasts_only\""
+        )
     } else {
         horizon
     };
@@ -347,7 +353,11 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
     let payload = format!("{{{body},\"digest\":{}}}", js(&digest.to_hex()));
     let markdown = format!(
         "# {}\n\nRecord: {}. Label: {}. Evidence as of {}.\n\nRecord SHA-256: `{}`. Assessment SHA-256: `{}`.\n\nBoth RFC 3161 receipts verify against the explicitly selected trust roots; the rules precede the record.\n\n{}\n\n{}\n\n{}\n",
-        if post_quarter { "Frozen post-quarter nowcast assessment" } else { "Frozen forecast record assessment" },
+        if post_quarter {
+            "Frozen post-quarter nowcast assessment"
+        } else {
+            "Frozen forecast record assessment"
+        },
         markdown_text(&loaded.manifest.record_id),
         loaded.manifest.label.as_str(),
         command.as_of,

@@ -1288,7 +1288,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 - `forecast_record::{Command, execute}`: a read-only adapter over exact frozen record bytes, explicit RFC 3161
   trust roots and registered original sources; numerical scoring delegates to `fmine-calib`.
 - DESIGN (BD-067/BD-334): `forecast_candidate::{Command, execute}` exposes `forecast record build` with
-  required rules, named `pooled-quarterly-ratio-empirical-v1` model and an explicit UTC evidence cut. It uses
+  required rules, explicit `--model pooled-quarterly-ratio-empirical-v1` or
+  `--model seasonal-quarterly-ratio-empirical-v1`, and an explicit UTC evidence cut. It uses
   the public source adapter and pure candidate kernel, retaining the complete live site/target population,
   exact model rows, actual decimal CSV rows, historical ratio/exclusion audits and canonical source Claims.
   JSON schema `fmine.forecast-record-candidate.v1` and Markdown label the draft uncalibrated and identify
@@ -1300,9 +1301,21 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   ratio pool still uses positive adjacent observations only. Negative live costs reverse the two tail products;
   the point remains the live cost times the pooled-ratio median. CSV decimal precision is explicit (0–12,
   default 6), with lower-down, upper-up, nearest-point rounding, point ties toward positive infinity and
-  unsigned zero. Exact bounds equal the persistence comparator before rounding; the median
+  unsigned zero. The all-season model's exact bounds equal the persistence comparator before rounding; its median
   point is not evidence of independent skill. The output manifest preserves retrieval evidence separately
   from declared publication dates and is not the completed issuance manifest.
+  The explicitly seasonal model selects positive adjacent historical transitions whose destination
+  calendar quarter matches the common validated outcome horizon, including Q4-to-next-year-Q1.
+  It retains the frozen live-site population and every required original source, observation and Claim.
+  Seasonal pool JSON adds `seasonal_destination_quarter` and `off_season_pairs`; these pairs retain both
+  endpoints, while unusable selected pairs remain in `excluded_pairs`. Markdown identifies the selected
+  quarter and omitted-season audit count. An empty selected pool refuses without an all-season fallback.
+  Model identity and the complete source corpus remain receipt-bound, including when models produce
+  identical CSV values or a source affects only other seasons. The legacy all-season candidate JSON,
+  Markdown, CSV and receipt encoding remain unchanged; the registered persistence comparator is also
+  unchanged. Seasonal bounds can differ from that comparator and retain exact signed-cost ordering and
+  outward decimal enclosure. The seasonal scope text makes no claim of seasonality, calibrated coverage,
+  independent skill, attestation or issuance.
 - DESIGN (BD-067/BD-076): annual public records support `cu_prod_100_kt` with `fy_minus_9m` and
   `c1_usd_per_lb` / `aisc_usd_per_lb` with `q4_qtd`, alongside the original gold targets. The shared
   `fmine_calib::record::TargetMetric` defines source units, guidance quantity and the required cost

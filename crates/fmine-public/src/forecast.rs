@@ -9,7 +9,7 @@ use std::path::Path;
 
 use fmine_calib::record::{
     self, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
-    candidate::{Candidate, CandidateSeries, build_candidate},
+    candidate::{Candidate, CandidateModel, CandidateSeries, build_candidate_with_model},
 };
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
@@ -95,7 +95,9 @@ pub fn nowcast_publications(
             )
         };
         let day = day.ok_or_else(bad)?;
-        let basis = basis.filter(|basis| basis.starts_with("FACT: ")).ok_or_else(bad)?;
+        let basis = basis
+            .filter(|basis| basis.starts_with("FACT: "))
+            .ok_or_else(bad)?;
         let day_start_utc = record::parse_date(day)
             .and_then(|day| day.checked_mul(86_400))
             .filter(|day| quarter.end_utc().is_some_and(|end| *day >= end))
@@ -196,6 +198,7 @@ fn pool(rules: &RecordRules, target: &str) -> Result<(Quarter, Quarter, Quarter)
 
 struct Prepared {
     rules: RecordRules,
+    model: CandidateModel,
     profile: IssuerProfile,
     sources: Vec<CandidateSource>,
     nowcast_publications: Vec<NowcastPublication>,
@@ -239,7 +242,10 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     }
     let nowcast_publications = if rules.is_post_quarter_nowcast() {
         let publications = nowcast_publications(&registry, outcome)?;
-        if publications.iter().any(|source| cut >= source.day_start_utc) {
+        if publications
+            .iter()
+            .any(|source| cut >= source.day_start_utc)
+        {
             return Err(refuse(
                 RefusalCode::AssayLookahead108,
                 "post-quarter nowcast information cut reaches a registered original publication day",
@@ -315,6 +321,7 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     profile.sources.sort_by(|a, b| a.quarter.cmp(&b.quarter));
     Ok(Prepared {
         rules,
+        model: CandidateModel::PooledQuarterlyRatio,
         profile,
         sources,
         nowcast_publications,
@@ -632,8 +639,9 @@ fn finish(
             });
         }
     }
-    let candidate = build_candidate(&prepared.rules, &series, decimal_places)
-        .map_err(|e| source_error(e.to_string()))?;
+    let candidate =
+        build_candidate_with_model(&prepared.rules, &series, decimal_places, prepared.model)
+            .map_err(|e| source_error(e.to_string()))?;
     let mut enc = Encoder::new_frame(*b"FCAN", 1);
     enc.put_fixed(&prepared.rules_digest.0);
     enc.put_fixed(&prepared.rules_file_sha256.0);
@@ -679,7 +687,7 @@ fn finish(
 }
 
 /// Build a complete unissued candidate at an explicit information cut. Only the original Mine Stats
-/// releases required by the declared pools and Q3 point are opened. Missing or ambiguous source releases,
+/// releases required by the declared pools and point quarter are opened. Missing or ambiguous releases,
 /// unreadable or altered bytes, look-ahead, unprinted/changing cost bases and unsafe statuses refuse.
 /// Historical missing/nonpositive values remain in the audit; every live point must be usable.
 pub fn build(
@@ -688,12 +696,32 @@ pub fn build(
     as_of: &str,
     decimal_places: u32,
 ) -> Result<PublicCandidate> {
+    build_with_model(
+        root,
+        rules_bytes,
+        as_of,
+        decimal_places,
+        CandidateModel::PooledQuarterlyRatio,
+    )
+}
+
+/// Build a source-bound candidate with an explicitly selected empirical model. Seasonal selection
+/// retains every original release and observation required by the frozen pool, including off-season
+/// transitions; it changes no source admission, ownership, information-cut or issuance requirement.
+pub fn build_with_model(
+    root: &Path,
+    rules_bytes: &[u8],
+    as_of: &str,
+    decimal_places: u32,
+    model: CandidateModel,
+) -> Result<PublicCandidate> {
     let rules = record::parse_rules(utf8(rules_bytes)?).map_err(|e| invalid(e.to_string()))?;
     if !is_issuer_name(&rules.issuer) {
         return Err(invalid("rules issuer is not a safe registered issuer name"));
     }
     let registry = read_registry(&registry_path(root, &rules.issuer))?;
-    let prepared = prepare(rules_bytes, &registry, as_of)?;
+    let mut prepared = prepare(rules_bytes, &registry, as_of)?;
+    prepared.model = model;
     let sources = load_registered_sources(&prepared.profile, root)?;
     finish(prepared, sources, decimal_places)
 }

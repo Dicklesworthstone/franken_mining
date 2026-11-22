@@ -194,20 +194,24 @@ fn post_quarter_nowcast_rules_freeze_timing_and_never_relabel_ordinary_forecasts
     let rules = parse_rules(&rules_text).unwrap();
     assert!(rules.is_post_quarter_nowcast());
     assert_eq!(rules.outcome_quarter().unwrap().to_string(), "2026Q4");
-    assert!(
-        rules.targets.iter().all(|target| {
-            target.outcome == Outcome::QuarterQtdNowcast
-                && TargetMetric::from_target(target).is_some()
-        })
-    );
+    assert!(rules.targets.iter().all(|target| {
+        target.outcome == Outcome::QuarterQtdNowcast && TargetMetric::from_target(target).is_some()
+    }));
     assert_ne!(
         fmine_calib::record::rules_digest(rules_text.as_bytes()),
         fmine_calib::record::rules_digest(ANNUAL.as_bytes()),
         "the explicit mode and release policy are prospectively hashed"
     );
     for invalid in [
-        rules_text.replacen("outcome = \"quarter_qtd_nowcast\"", "outcome = \"quarter_qtd\"", 1),
-        rules_text.replace("earliest_outcome_release_utc = \"2027-01-15T00:00:00Z\"\n", ""),
+        rules_text.replacen(
+            "outcome = \"quarter_qtd_nowcast\"",
+            "outcome = \"quarter_qtd\"",
+            1,
+        ),
+        rules_text.replace(
+            "earliest_outcome_release_utc = \"2027-01-15T00:00:00Z\"\n",
+            "",
+        ),
         rules_text.replace("2027-01-15T00:00:00Z", "2027-01-14T23:59:59Z"),
         rules_text.replace("2027-01-01T00:00:00Z", "2026-12-31T23:59:59Z"),
         rules_text.replace("quarter_qtd_nowcast", "quarter_qtd"),

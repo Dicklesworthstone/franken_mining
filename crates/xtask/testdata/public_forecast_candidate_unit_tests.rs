@@ -138,8 +138,8 @@ fn fixture(edit: impl Fn(u8, &mut MinimalSheet)) -> (String, Vec<LoadedSource>) 
     )
 }
 
-fn fixture_quarters(
-    quarters: [&str; 3],
+fn fixture_quarters<const N: usize>(
+    quarters: [&str; N],
     retrieval: &str,
     include_q1_ytd: bool,
     edit: impl Fn(u8, &mut MinimalSheet),
@@ -149,9 +149,10 @@ fn fixture_quarters(
          retrieved_utc = \"{retrieval}\"\nurl_prefix = \"https://example.invalid/\"\n",
     );
     let mut sources = Vec::new();
-    for q in 1..=3 {
+    for (index, quarter) in quarters.into_iter().enumerate() {
+        let q = u8::try_from(index + 1).unwrap();
         let file_name = format!("Synthetic_Q{q}.xlsx");
-        let quarter = quarters[usize::from(q - 1)].to_string();
+        let quarter = quarter.to_string();
         let mut s = sheet(q);
         edit(q, &mut s);
         replace_cell(
@@ -194,6 +195,109 @@ fn fixture_quarters(
     }
     registry.push_str("\n[[subject]]\nname = \"Site A\"\n[[subject]]\nname = \"Site B\"\n");
     (registry, sources)
+}
+
+#[test]
+fn seasonal_candidate_retains_off_season_original_sources_and_binds_their_changes() {
+    let rules = RULES
+        .replace("pool_from = \"2030Q1\"", "pool_from = \"2029Q1\"")
+        .replace("pool_through = \"2030Q2\"", "pool_through = \"2029Q4\"");
+    let fixture = |first_value| {
+        fixture_quarters(
+            ["2029Q1", "2029Q2", "2029Q3", "2029Q4", "2030Q3"],
+            "2030-10-02T10:00:00Z/10:01:00Z",
+            false,
+            |q, sheet| {
+                let production = match q {
+                    1 => Some([first_value, 100.0]),
+                    3 => Some([100.0, 200.0]),
+                    4 => Some([125.0, 100.0]),
+                    _ => None,
+                };
+                if let Some([a, b]) = production {
+                    replace_cell(sheet, "B3", MinimalCell::Number(a));
+                    replace_cell(sheet, "B4", MinimalCell::Number(b));
+                }
+            },
+        )
+    };
+    let build = |registry: &str, sources, model| {
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = model;
+        finish(prepared, sources, 2)
+    };
+    let (registry, sources) = fixture(50.0);
+    let report = build(
+        &registry,
+        sources.clone(),
+        CandidateModel::SeasonalQuarterlyRatio,
+    )
+    .unwrap();
+    assert_eq!(
+        report.candidate.model_id,
+        "seasonal-quarterly-ratio-empirical-v1"
+    );
+    assert_eq!(report.sources.len(), 5);
+    assert_eq!(report.observations.len(), 20);
+    assert!(report.observations.iter().all(|row| row.claim.is_some()));
+    let pool = &report.candidate.pools[0];
+    assert_eq!(
+        pool.ratios,
+        vec![Rat::new(5, 4).unwrap(), Rat::new(1, 2).unwrap()]
+    );
+    assert_eq!(pool.off_season_pairs.len(), 4);
+    assert_eq!(pool.seasonal_destination_quarter, Some(4));
+    assert_eq!(report.candidate.exact_rows[0].point, Rat::from_integer(5));
+    assert_eq!(report.candidate.exact_rows[0].hi, Rat::new(25, 2).unwrap());
+    let baseline = build(
+        &registry,
+        sources.clone(),
+        CandidateModel::PooledQuarterlyRatio,
+    )
+    .unwrap();
+    assert_eq!(report.sources, baseline.sources);
+    assert_ne!(report.candidate.csv, baseline.candidate.csv);
+    assert_ne!(report.digest, baseline.digest);
+    let (changed_registry, changed_sources) = fixture(75.0);
+    let changed = build(
+        &changed_registry,
+        changed_sources,
+        CandidateModel::SeasonalQuarterlyRatio,
+    )
+    .unwrap();
+    assert_eq!(changed.candidate.csv, report.candidate.csv);
+    assert_ne!(
+        changed.digest, report.digest,
+        "off-season evidence stays receipt-bound"
+    );
+    assert_ne!(changed.sources[0].sha256, report.sources[0].sha256);
+    let missing = sources.into_iter().skip(1).collect();
+    assert!(build(&registry, missing, CandidateModel::SeasonalQuarterlyRatio).is_err());
+}
+
+#[test]
+fn seasonal_model_identity_changes_receipt_even_when_the_numeric_forecast_is_identical() {
+    let rules = RULES
+        .replace("pool_from = \"2030Q1\"", "pool_from = \"2029Q3\"")
+        .replace("pool_through = \"2030Q2\"", "pool_through = \"2029Q4\"");
+    let (registry, sources) = fixture_quarters(
+        ["2029Q3", "2029Q4", "2030Q3"],
+        "2030-10-02T10:00:00Z/10:01:00Z",
+        false,
+        |_, _| {},
+    );
+    let default = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+        sources.clone(),
+        2,
+    )
+    .unwrap();
+    let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+    prepared.model = CandidateModel::SeasonalQuarterlyRatio;
+    let seasonal = finish(prepared, sources, 2).unwrap();
+    assert_eq!(seasonal.candidate.csv, default.candidate.csv);
+    assert_eq!(seasonal.sources, default.sources);
+    assert_ne!(seasonal.digest, default.digest);
 }
 
 #[test]

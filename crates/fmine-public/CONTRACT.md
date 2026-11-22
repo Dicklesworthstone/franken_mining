@@ -75,6 +75,19 @@ The public lane of M0 (`fmine assure public`).
   pound/ounce refusals, attributable-production targets and changing cost ownership:
   `copper_candidates_keep_kt_and_both_per_pound_costs_in_separate_source_bound_pools` and
   `copper_candidate_refuses_unit_aliases_attributable_targets_and_ownership_changes`.
+  `forecast::build_with_model` also accepts the explicit seasonal empirical candidate model. The original
+  `build` API keeps the all-season model and its output encoding. Seasonal selection occurs only after
+  authenticating and reading every original release and observation required by the frozen historical
+  pools and point quarter. Other-season sources remain mandatory, including their timing, ownership,
+  status and byte-authentication checks; selecting a season never reduces the source corpus.
+  Only positive adjacent transitions ending in the validated outcome's calendar quarter enter the
+  seasonal ratio pool. Every other-season pair and unusable selected pair remains auditable, and an
+  empty selected pool refuses. The receipt binds the model identifier even when two models produce the
+  same numeric CSV; edits to other-season source data also change the receipt while leaving seasonal
+  quantiles unchanged when their selected transitions are unaffected. Signed cost points, information
+  cuts, source Claims and unissued status retain the same admission rules. The registered all-season
+  persistence comparator remains a separate unchanged baseline; seasonal selection establishes neither
+  calibrated coverage nor forecasting skill.
 
 - DESIGN (BD-057/BD-059): `html::run(workspace, issuer, definitions, as_of)` turns registered HTML
   table cells into canonical public Claims. It parses the exact captured source registry and mapping

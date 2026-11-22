@@ -10,6 +10,7 @@ use fmine_io::omf::json::{self, Json};
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
 
 const MODEL: &str = "pooled-quarterly-ratio-empirical-v1";
+const SEASONAL_MODEL: &str = "seasonal-quarterly-ratio-empirical-v1";
 const CUT: &str = "2030-10-03T00:00:00Z";
 static SERIAL: AtomicUsize = AtomicUsize::new(0);
 
@@ -90,6 +91,20 @@ impl Fixture {
     }
 
     fn with_metrics(rules: &str, production_header: &str, cost_header: &str) -> Self {
+        Self::with_quarters(
+            rules,
+            production_header,
+            cost_header,
+            &[(2030, 1, 1), (2030, 2, 2), (2030, 3, 3)],
+        )
+    }
+
+    fn with_quarters(
+        rules: &str,
+        production_header: &str,
+        cost_header: &str,
+        quarters: &[(i32, u8, u8)],
+    ) -> Self {
         let root = std::env::temp_dir().join(format!(
             "fmine-forecast-candidate-{}-{}",
             std::process::id(),
@@ -102,12 +117,12 @@ impl Fixture {
             "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"invented\"\n\
              retrieved_utc = \"2030-10-02T10:00:00Z/10:01:00Z\"\nurl_prefix = \"https://example.invalid/\"\n",
         );
-        for quarter in 1..=3 {
-            let bytes = workbook(quarter, production_header, cost_header);
-            let file = format!("Invented_Q{quarter}.xlsx");
+        for (index, &(year, quarter, values)) in quarters.iter().enumerate() {
+            let bytes = workbook(year, values, production_header, cost_header);
+            let file = format!("Invented_Q{}.xlsx", index + 1);
             std::fs::write(root.join("invented").join(&file), &bytes).unwrap();
             writeln!(registry,
-                "\n[[source]]\nfile = \"{file}\"\nkind = \"mine_stats\"\nquarter = \"2030Q{quarter}\"\n\
+                "\n[[source]]\nfile = \"{file}\"\nkind = \"mine_stats\"\nquarter = \"{year}Q{quarter}\"\n\
                  path = \"{file}\"\nurl_basis = \"fetched and verified 2030-10-02\"\nbytes = {}\nsha256 = \"{}\"",
                 bytes.len(), sha256(&bytes).to_hex()
             ).unwrap();
@@ -139,7 +154,7 @@ impl Fixture {
     }
 }
 
-fn workbook(quarter: u8, production_header: &str, cost_header: &str) -> Vec<u8> {
+fn workbook(year: i32, values: u8, production_header: &str, cost_header: &str) -> Vec<u8> {
     let text = |value: &str| MinimalCell::Text(value.into());
     let styled = |value: &str| MinimalCell::Styled {
         raw: value.into(),
@@ -147,7 +162,7 @@ fn workbook(quarter: u8, production_header: &str, cost_header: &str) -> Vec<u8> 
     };
     // All four columns retain a 0.4 stored fraction that is absent from their integer display.
     // Production ratios are 125/100 and 100/200; cost ratios are 1100/1000 and 2400/2000.
-    let values = match quarter {
+    let values = match values {
         1 => ["100.4", "1000.4", "200.4", "2000.4"],
         2 => ["125.4", "1100.4", "100.4", "2400.4"],
         _ => ["300.4", "1500.4", "80.4", "3000.4"],
@@ -158,7 +173,7 @@ fn workbook(quarter: u8, production_header: &str, cost_header: &str) -> Vec<u8> 
             hidden: false,
             cells: vec![
                 ("A1".into(), text("For the three months ended")),
-                ("B1".into(), MinimalCell::Number(2030.0)),
+                ("B1".into(), MinimalCell::Number(f64::from(year))),
                 ("B2".into(), text(production_header)),
                 ("C2".into(), text(cost_header)),
                 ("A3".into(), text("Site A (50%)")),
@@ -205,6 +220,133 @@ fn at<'a>(value: &'a Json, path: &[&str]) -> &'a Json {
             .get(key)
             .unwrap_or_else(|| panic!("missing {key}: {value:?}"))
     })
+}
+
+#[test]
+fn seasonal_cli_builds_a_distinct_source_bound_forecast_with_complete_off_season_audit() {
+    let rules = RULES
+        .replace("pool_from = \"2030Q1\"", "pool_from = \"2029Q1\"")
+        .replace("pool_through = \"2030Q2\"", "pool_through = \"2029Q4\"");
+    let fixture = Fixture::with_quarters(
+        &rules,
+        "Gold produced (000s oz, 100%)",
+        "All-in sustaining costs ($/oz)",
+        &[
+            (2029, 1, 1),
+            (2029, 2, 2),
+            (2029, 3, 1),
+            (2029, 4, 2),
+            (2030, 3, 3),
+        ],
+    );
+    let mut args = fixture.args();
+    let model = args.iter().position(|s| s == "--model").unwrap() + 1;
+    args[model] = SEASONAL_MODEL.into();
+    let (exit, value, bytes) = invoke(&args);
+    assert_eq!(exit, 0, "{bytes}");
+    assert_eq!(invoke(&args).2, bytes);
+    let report = at(&value, &["payload"]);
+    assert_eq!(at(report, &["model"]).as_str(), Some(SEASONAL_MODEL));
+    assert_eq!(at(report, &["uncalibrated"]).as_bool(), Some(true));
+    assert_eq!(at(report, &["issued"]).as_bool(), Some(false));
+    assert_eq!(at(report, &["attestation"]), &Json::Null);
+    assert_eq!(at(report, &["timestamp_proof"]), &Json::Null);
+    let csv = at(report, &["forecasts_csv"]).as_str().unwrap();
+    assert_eq!(
+        csv,
+        concat!(
+            "site,target,point,p10,p90,uncalibrated\n",
+            "Site A,production,150.00,150.00,375.00,true\n",
+            "Site A,unit_cost,1650.00,1650.00,1800.00,true\n",
+            "Site B,production,40.00,40.00,100.00,true\n",
+            "Site B,unit_cost,3300.00,3300.00,3600.00,true\n",
+        )
+    );
+    assert_eq!(
+        parse_forecasts(csv.as_bytes(), &parse_rules(&rules).unwrap())
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(at(report, &["input_manifest"]).as_array().unwrap().len(), 5);
+    assert_eq!(at(report, &["observations"]).as_array().unwrap().len(), 20);
+    for pool in at(report, &["pools"]).as_array().unwrap() {
+        assert_eq!(at(pool, &["seasonal_destination_quarter"]).i64(), Some(4));
+        assert_eq!(at(pool, &["ratio_count"]).i64(), Some(2));
+        assert!(at(pool, &["excluded_pairs"]).as_array().unwrap().is_empty());
+        let excluded = at(pool, &["off_season_pairs"]).as_array().unwrap();
+        assert_eq!(excluded.len(), 4);
+        assert_eq!(at(&excluded[0], &["from"]).as_str(), Some("2029Q1"));
+        assert_eq!(at(&excluded[0], &["to"]).as_str(), Some("2029Q2"));
+        assert_ne!(at(&excluded[0], &["before"]), &Json::Null);
+        assert_ne!(at(&excluded[0], &["after"]), &Json::Null);
+    }
+    let no_claim = at(&value, &["no_claim"]).as_str().unwrap();
+    assert!(no_claim.contains("Synthetic, uncalibrated seasonal draft"));
+    assert!(no_claim.contains("all-season persistence comparator is unchanged"));
+    assert!(!no_claim.contains("bounds equal"));
+    let (exit, default, _) = invoke(&fixture.args());
+    assert_eq!(exit, 0);
+    let default = at(&default, &["payload"]);
+    assert_ne!(at(default, &["forecasts_csv"]), at(report, &["forecasts_csv"]));
+    assert_ne!(
+        at(default, &["receipt_digest"]),
+        at(report, &["receipt_digest"])
+    );
+    assert_eq!(
+        at(default, &["input_manifest"]),
+        at(report, &["input_manifest"])
+    );
+    assert_eq!(at(default, &["observations"]), at(report, &["observations"]));
+    let mut markdown = args.clone();
+    markdown.extend(["--format".into(), "markdown".into()]);
+    let rendered = output(&markdown);
+    assert!(rendered.status.success());
+    let rendered = String::from_utf8(rendered.stdout).unwrap();
+    assert!(rendered.contains("Selected transitions end in calendar Q4"));
+    assert!(rendered.contains("4 other-season pairs remain in the JSON audit"));
+    assert!(rendered.contains(SEASONAL_MODEL));
+    // Even a source used only in excluded seasons must pass the normal byte authentication.
+    std::fs::write(
+        fixture.root.join("invented/Invented_Q1.xlsx"),
+        b"altered off-season source",
+    )
+    .unwrap();
+    let (exit, refusal, _) = invoke(&args);
+    assert_ne!(exit, 0);
+    assert_eq!(at(&refusal, &["payload"]), &Json::Null);
+    assert!(
+        at(&refusal, &["refusal", "what"])
+            .as_str()
+            .unwrap()
+            .contains("Invented_Q1.xlsx")
+    );
+}
+
+#[test]
+fn seasonal_cli_refuses_an_empty_selected_season_without_using_all_season_pairs() {
+    let fixture = Fixture::new();
+    let mut args = fixture.args();
+    let model = args.iter().position(|s| s == "--model").unwrap() + 1;
+    args[model] = SEASONAL_MODEL.into();
+    let (exit, refusal, _) = invoke(&args);
+    assert_ne!(exit, 0);
+    assert_eq!(at(&refusal, &["payload"]), &Json::Null);
+    assert_eq!(
+        at(&refusal, &["refusal", "code"]).as_str(),
+        Some("FMINE-REF-208")
+    );
+    assert!(
+        at(&refusal, &["refusal", "what"])
+            .as_str()
+            .unwrap()
+            .contains("no positive adjacent-quarter ratio into Q4")
+    );
+    let (exit, default, _) = invoke(&fixture.args());
+    assert_eq!(
+        exit, 0,
+        "the same source corpus supports the explicitly different model: {default:?}"
+    );
 }
 
 #[test]
@@ -513,6 +655,15 @@ fn markdown_and_robot_docs_expose_candidate_status_and_export() {
     assert_eq!(
         at(&docs, &["payload", "forecast_candidate", "model"]).as_str(),
         Some(MODEL)
+    );
+    assert_eq!(
+        at(&docs, &["payload", "forecast_candidate", "models"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Json::as_str)
+            .collect::<Vec<_>>(),
+        vec![Some(MODEL), Some(SEASONAL_MODEL)]
     );
 }
 

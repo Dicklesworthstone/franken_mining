@@ -54,6 +54,181 @@ fn series() -> Vec<CandidateSeries> {
     ]
 }
 
+fn seasonal_fixture() -> (RecordRules, Vec<CandidateSeries>) {
+    let mut rules = rules();
+    for baseline in &mut rules.baselines {
+        if matches!(baseline.kind, BaselineKind::Persistence { .. }) {
+            baseline.kind = BaselineKind::Persistence {
+                pool_from: q(2023, 3),
+                pool_through: q(2024, 4),
+                point: q(2025, 3),
+            };
+        }
+    }
+    let mut inputs = series();
+    inputs[0].history = [100, 200, 10_000, 1, 100, 150]
+        .map(|n| Some(i(n)))
+        .to_vec();
+    inputs[1].history = [50, 25, 5_000, 1, 50, 50].map(|n| Some(i(n))).to_vec();
+    (rules, inputs)
+}
+
+#[test]
+fn seasonal_candidate_has_independent_exact_bounds_and_a_complete_transition_audit() {
+    let (rules, inputs) = seasonal_fixture();
+    let build = |values: &[CandidateSeries]| {
+        build_candidate_with_model(&rules, values, 2, CandidateModel::SeasonalQuarterlyRatio)
+            .unwrap()
+    };
+    let candidate = build(&inputs);
+    assert_eq!(candidate.model_id, SEASONAL_MODEL_ID);
+    let pool = &candidate.pools[0];
+    // Independently selected Q3->Q4 ratios: Carlin [2, 3/2], Cortez [1/2, 1].
+    // Sorted inverse ECDF at .1, .5, .9 yields 1/2, 1, 2; off-season extremes have no mass.
+    assert_eq!(pool.ratios, vec![i(2), r(3, 2), r(1, 2), i(1)]);
+    assert_eq!(pool.seasonal_destination_quarter, Some(4));
+    assert!(pool.excluded_pairs.is_empty());
+    assert_eq!(pool.off_season_pairs.len(), 6);
+    assert_eq!(pool.off_season_pairs[0].from, q(2023, 4));
+    assert_eq!(pool.off_season_pairs[0].to, q(2024, 1));
+    assert_eq!(pool.off_season_pairs[0].before, Some(i(200)));
+    assert_eq!(pool.off_season_pairs[0].after, Some(i(10_000)));
+    assert_eq!(
+        candidate.csv,
+        concat!(
+            "site,target,point,p10,p90,uncalibrated\n",
+            "Carlin,production,200.00,100.00,400.00,true\n",
+            "Cortez,production,100.00,50.00,200.00,true\n",
+        )
+    );
+    assert_eq!(candidate.not_published_sites, vec!["Hemlo"]);
+    let all_seasons = build_candidate(&rules, &inputs, 2).unwrap();
+    assert_eq!(
+        persistence_interval(
+            &all_seasons.pools[0].ratios,
+            i(200),
+            rules.alpha,
+            rules.estimator,
+        )
+        .unwrap(),
+        (r(1, 50), i(20_000)),
+        "the registered all-season baseline retains its independent exact values"
+    );
+    assert_ne!(all_seasons.exact_rows, candidate.exact_rows);
+    assert_eq!(all_seasons.pools[0].ratios.len(), 10);
+    assert!(all_seasons.pools[0].off_season_pairs.is_empty());
+    assert_eq!(all_seasons.pools[0].seasonal_destination_quarter, None);
+    let mut reordered = inputs.clone();
+    reordered.reverse();
+    assert_eq!(build(&reordered), candidate);
+    let mut changed = inputs;
+    changed[0].history[2] = Some(i(9));
+    let changed = build(&changed);
+    assert_eq!(changed.csv, candidate.csv);
+    assert_ne!(changed.pools[0].off_season_pairs, pool.off_season_pairs);
+}
+
+#[test]
+fn seasonal_selection_supports_each_quarter_and_q4_to_q1_year_rollover() {
+    for (destination, expected) in [
+        (1, vec![i(5), i(5)]),
+        (2, vec![i(2), i(6), i(2), i(6)]),
+        (3, vec![i(3), i(7), i(3), i(7)]),
+        (4, vec![i(4), i(8), i(4), i(8)]),
+    ] {
+        let (mut rules, mut inputs) = seasonal_fixture();
+        rules.targets[0].outcome = crate::record::Outcome::QuarterQtd;
+        let point = q(2025, if destination == 1 { 4 } else { destination - 1 });
+        for baseline in &mut rules.baselines {
+            if matches!(baseline.kind, BaselineKind::Persistence { .. }) {
+                baseline.kind = BaselineKind::Persistence {
+                    pool_from: q(2023, 1),
+                    pool_through: q(2024, 4),
+                    point,
+                };
+            }
+        }
+        for input in &mut inputs {
+            input.history = [2, 4, 12, 48, 240, 1440, 10_080, 80_640]
+                .map(|n| Some(i(n)))
+                .to_vec();
+        }
+        let candidate = build_candidate_with_model(
+            &rules,
+            &inputs,
+            2,
+            CandidateModel::SeasonalQuarterlyRatio,
+        )
+        .unwrap();
+        let pool = &candidate.pools[0];
+        assert_eq!(pool.ratios, expected);
+        assert_eq!(pool.seasonal_destination_quarter, Some(destination));
+        assert_eq!(pool.ratios.len() + pool.off_season_pairs.len(), 14);
+        assert_eq!(
+            rules.outcome_quarter().unwrap(),
+            q(if destination == 1 { 2026 } else { 2025 }, destination)
+        );
+    }
+}
+
+#[test]
+fn seasonal_missing_and_nonpositive_pairs_are_not_bridged_or_replaced_by_other_seasons() {
+    let (rules, mut inputs) = seasonal_fixture();
+    inputs[0].history[1] = None;
+    inputs[1].history[1] = Some(i(0));
+    let candidate = build_candidate_with_model(
+        &rules,
+        &inputs,
+        2,
+        CandidateModel::SeasonalQuarterlyRatio,
+    )
+    .unwrap();
+    let pool = &candidate.pools[0];
+    assert_eq!(pool.ratios, vec![r(3, 2), i(1)]);
+    assert_eq!(pool.excluded_pairs.len(), 2);
+    assert_eq!(pool.excluded_pairs[0].after, None);
+    assert_eq!(pool.excluded_pairs[1].after, Some(i(0)));
+    assert_eq!(pool.off_season_pairs.len(), 6);
+    assert_eq!(pool.off_season_pairs[0].before, None);
+    inputs[0].history[5] = None;
+    inputs[1].history[5] = Some(i(-1));
+    assert!(build_candidate(&rules, &inputs, 2).is_ok());
+    let error = build_candidate_with_model(
+        &rules,
+        &inputs,
+        2,
+        CandidateModel::SeasonalQuarterlyRatio,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("no positive adjacent-quarter ratio into Q4")
+    );
+}
+
+#[test]
+fn seasonal_cost_forecasts_retain_signed_and_zero_points() {
+    let (mut rules, mut inputs) = seasonal_fixture();
+    rules.targets[0].field = "aisc_usd_per_oz".into();
+    rules.targets[0].outcome = crate::record::Outcome::Q4Qtd;
+    inputs[0].point = Some(i(-200));
+    inputs[1].point = Some(i(0));
+    let candidate = build_candidate_with_model(
+        &rules,
+        &inputs,
+        2,
+        CandidateModel::SeasonalQuarterlyRatio,
+    )
+    .unwrap();
+    assert_eq!(candidate.exact_rows[0].point, i(-200));
+    assert_eq!(candidate.exact_rows[0].lo, i(-400));
+    assert_eq!(candidate.exact_rows[0].hi, i(-100));
+    assert_eq!(candidate.exact_rows[1].point, i(0));
+    assert_eq!(candidate.exact_rows[1].lo, i(0));
+    assert_eq!(candidate.exact_rows[1].hi, i(0));
+}
+
 #[test]
 fn exact_empirical_candidate_and_comparator_agree_on_bounds() {
     // Independent order statistics: sorted ratios [1, 1.1, 1.2, 1.5] select ranks 1, 2 and 4.

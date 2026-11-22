@@ -60,6 +60,18 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   The pure kernel authenticates no source, availability time, author attestation or external time proof and
   does not create an issued or registered forecast. Its adapter must bind every history and point value to
   the original-release cell, source digest, unit, ownership basis and information cut before publication.
+  `build_candidate_with_model` additionally accepts the explicit
+  `CandidateModel::SeasonalQuarterlyRatio`, named `seasonal-quarterly-ratio-empirical-v1`.
+  It derives the destination calendar quarter from the common validated outcome horizon and admits only
+  positive adjacent-quarter ratios ending in that quarter, pooled across the frozen live sites and years.
+  Q4-to-next-year-Q1 transitions retain their original adjacent dates. The frozen pool and complete history
+  slots remain unchanged: other-season pairs retain both endpoints in `off_season_pairs`, while missing
+  or nonpositive selected pairs remain in `excluded_pairs`. Gaps are never bridged. An empty selected
+  pool refuses the complete candidate without falling back to other seasons. The same exact quantiles,
+  signed/zero cost treatment, rounding and resource bounds apply. The existing `build_candidate` wrapper
+  keeps the all-season model; the registered persistence comparator and its encodings are unchanged.
+  Seasonal intervals may differ from that comparator, but model selection supplies no evidence of
+  seasonality, calibrated coverage or independent forecasting skill.
 - DESIGN (BD-047/BD-049, plan §10.1): `register_payload_with_metadata` freezes a complete
   `ForecastMetadata` beside the predictive distribution: family, author role, domain, horizon, site,
   quantity and unit. Every label is nonempty, trimmed, at most 256 bytes and free of control characters.

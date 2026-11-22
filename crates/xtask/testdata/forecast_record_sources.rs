@@ -1127,7 +1127,10 @@ fn post_quarter_nowcast_source_scores_require_prepublication_proof_and_keep_miss
     let root = std::env::temp_dir().join(format!(
         "fmine-nowcast-source-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     std::fs::create_dir_all(root.join("corpus")).unwrap();
     std::fs::create_dir_all(root.join("registries/sources")).unwrap();
@@ -1148,15 +1151,19 @@ fn post_quarter_nowcast_source_scores_require_prepublication_proof_and_keep_miss
     std::fs::write(root.join("corpus/Original.xlsx"), &bytes).unwrap();
     let registry = format!(
         "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\nretrieved_utc = \"2031-02-01T00:00:00Z\"\nurl_prefix = \"https://example.invalid/\"\n\n[[source]]\nfile = \"Original.xlsx\"\nkind = \"mine_stats\"\nquarter = \"2030Q4\"\npath = \"Original.xlsx\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\npublished_at = \"2031-01-10\"\npublished_at_basis = \"FACT: synthetic original release\"\n\n[[subject]]\nname = \"Site A\"\n[[subject]]\nname = \"Site B\"\n",
-        bytes.len(), sha256(&bytes).to_hex()
+        bytes.len(),
+        sha256(&bytes).to_hex()
     );
     let registry_path = root.join("registries/sources/synthetic.toml");
     std::fs::write(&registry_path, &registry).unwrap();
-    let mut rules = record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+    let mut rules =
+        record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
     rules.issuer = "synthetic".into();
     rules.targets.truncate(1);
     rules.targets[0].outcome = Outcome::QuarterQtdNowcast;
-    rules.baselines.retain(|baseline| baseline.target == rules.targets[0].id);
+    rules
+        .baselines
+        .retain(|baseline| baseline.target == rules.targets[0].id);
     for baseline in &mut rules.baselines {
         if matches!(baseline.kind, BaselineKind::Persistence { .. }) {
             baseline.kind = BaselineKind::Persistence {
@@ -1174,59 +1181,125 @@ fn post_quarter_nowcast_source_scores_require_prepublication_proof_and_keep_miss
         earliest_release_utc: parse_utc("2031-01-20T00:00:00Z").unwrap(),
         basis: "Synthetic preliminary announcement deadline, prospectively declared".into(),
     });
-    rules.sites = ["Site A", "Site B"].into_iter().map(|name| record::RulesSite {
-        name: name.into(), status: SiteStatus::Live, locator: "synthetic source".into(), reason: None,
-    }).collect();
-    let mut frozen = manifest(vec![input("prior.txt", b"synthetic prior information", "2030-01-01")]);
+    rules.sites = ["Site A", "Site B"]
+        .into_iter()
+        .map(|name| record::RulesSite {
+            name: name.into(),
+            status: SiteStatus::Live,
+            locator: "synthetic source".into(),
+            reason: None,
+        })
+        .collect();
+    let mut frozen = manifest(vec![input(
+        "prior.txt",
+        b"synthetic prior information",
+        "2030-01-01",
+    )]);
     frozen.record_id = rules.record_id.clone();
     frozen.information_cutoff_utc = parse_utc("2031-01-05T00:00:00Z").unwrap();
     let proof = parse_utc("2031-01-06T00:00:00Z").unwrap();
     let as_of = parse_utc("2031-02-01T00:00:00Z").unwrap();
     let resolved = resolve_nowcast(&root, &rules, &frozen, as_of, proof).unwrap();
-    assert_eq!(number(&resolved.outcomes[0].value), Some(Rat::from_integer(53)));
-    assert!(matches!(resolved.outcomes[1].value, Availability::Unavailable(_)));
+    assert_eq!(
+        number(&resolved.outcomes[0].value),
+        Some(Rat::from_integer(53))
+    );
+    assert!(matches!(
+        resolved.outcomes[1].value,
+        Availability::Unavailable(_)
+    ));
     assert!(resolved.evidence_json.contains("Original.xlsx:QTD!B5"));
     assert!(resolved.evidence_json.contains(&sha256(&bytes).to_hex()));
-    assert!(resolved.evidence_json.contains("\"role\":\"nowcast_publication_boundary\""));
-    assert!(resolved.evidence_json.contains("\"role\":\"declared_earliest_outcome_release\""));
-    let forecasts = ["Site A", "Site B"].into_iter().map(|site| record::ForecastRow {
-        site: site.into(), target: rules.targets[0].id.clone(),
-        point: Rat::from_integer(45), lo: Rat::from_integer(40), hi: Rat::from_integer(50),
-    }).collect::<Vec<_>>();
+    assert!(
+        resolved
+            .evidence_json
+            .contains("\"role\":\"nowcast_publication_boundary\"")
+    );
+    assert!(
+        resolved
+            .evidence_json
+            .contains("\"role\":\"declared_earliest_outcome_release\"")
+    );
+    let forecasts = ["Site A", "Site B"]
+        .into_iter()
+        .map(|site| record::ForecastRow {
+            site: site.into(),
+            target: rules.targets[0].id.clone(),
+            point: Rat::from_integer(45),
+            lo: Rat::from_integer(40),
+            hi: Rat::from_integer(50),
+        })
+        .collect::<Vec<_>>();
     let scored = record::scoring::paired::assess(
-        &rules, &forecasts, &resolved.outcomes, &resolved.baselines,
-    ).unwrap();
+        &rules,
+        &forecasts,
+        &resolved.outcomes,
+        &resolved.baselines,
+    )
+    .unwrap();
     assert_eq!(scored.targets[0].n_live, 2);
     assert_eq!(scored.targets[0].n_resolved, 1);
     assert_eq!(scored.targets[0].n_unresolved, 1);
-    assert_eq!(scored.members[0].forecast_score.unwrap().interval_score, Rat::from_integer(40));
+    assert_eq!(
+        scored.members[0].forecast_score.unwrap().interval_score,
+        Rat::from_integer(40)
+    );
     assert!(scored.members[1].forecast_score.is_none());
-    assert_eq!(resolve(&root, &rules, &frozen, as_of).err().unwrap().code, "FMINE-REF-206");
+    assert_eq!(
+        resolve(&root, &rules, &frozen, as_of).err().unwrap().code,
+        "FMINE-REF-206"
+    );
     for upper in [
         frozen.information_cutoff_utc,
         parse_utc("2031-01-10T00:00:00Z").unwrap(),
         parse_utc("2031-01-20T00:00:00Z").unwrap(),
     ] {
         assert_eq!(
-            resolve_nowcast(&root, &rules, &frozen, as_of, upper).err().unwrap().code,
+            resolve_nowcast(&root, &rules, &frozen, as_of, upper)
+                .err()
+                .unwrap()
+                .code,
             "FMINE-REF-206"
         );
     }
     let mut mislabeled = frozen.clone();
     mislabeled.label = Label::Forecast;
     assert_eq!(
-        resolve_nowcast(&root, &rules, &mislabeled, as_of, proof).err().unwrap().code,
+        resolve_nowcast(&root, &rules, &mislabeled, as_of, proof)
+            .err()
+            .unwrap()
+            .code,
         "FMINE-REF-206"
     );
     for (edited, code) in [
-        (registry.replace("published_at = \"2031-01-10\"\n", "")
-            .replace("published_at_basis = \"FACT: synthetic original release\"\n", ""), "FMINE-REF-108"),
-        (registry.replace("FACT: synthetic original release", "INFERENCE: later retrieval"), "FMINE-REF-108"),
-        (registry.replace("quarter = \"2030Q4\"", "quarter = \"2031Q4\""), "FMINE-REF-208"),
+        (
+            registry
+                .replace("published_at = \"2031-01-10\"\n", "")
+                .replace(
+                    "published_at_basis = \"FACT: synthetic original release\"\n",
+                    "",
+                ),
+            "FMINE-REF-108",
+        ),
+        (
+            registry.replace(
+                "FACT: synthetic original release",
+                "INFERENCE: later retrieval",
+            ),
+            "FMINE-REF-108",
+        ),
+        (
+            registry.replace("quarter = \"2030Q4\"", "quarter = \"2031Q4\""),
+            "FMINE-REF-208",
+        ),
     ] {
         std::fs::write(&registry_path, edited).unwrap();
         assert_eq!(
-            resolve_nowcast(&root, &rules, &frozen, as_of, proof).err().unwrap().code, code
+            resolve_nowcast(&root, &rules, &frozen, as_of, proof)
+                .err()
+                .unwrap()
+                .code,
+            code
         );
     }
     let preliminary = format!(
@@ -1235,15 +1308,22 @@ fn post_quarter_nowcast_source_scores_require_prepublication_proof_and_keep_miss
     );
     std::fs::write(&registry_path, preliminary).unwrap();
     assert_eq!(
-        resolve_nowcast(&root, &rules, &frozen, as_of, proof).err().unwrap().code,
+        resolve_nowcast(&root, &rules, &frozen, as_of, proof)
+            .err()
+            .unwrap()
+            .code,
         "FMINE-REF-206",
         "same-day publication is not an intraday nonpublication proof"
     );
-    std::fs::write(&registry_path, registry.replace("corpus_dir = \"corpus\"", "corpus_dir = \"unavailable\"")).unwrap();
+    std::fs::write(
+        &registry_path,
+        registry.replace("corpus_dir = \"corpus\"", "corpus_dir = \"unavailable\""),
+    )
+    .unwrap();
     let missing = resolve_nowcast(&root, &rules, &frozen, as_of, proof).unwrap();
-    let scored = record::scoring::paired::assess(
-        &rules, &forecasts, &missing.outcomes, &missing.baselines,
-    ).unwrap();
+    let scored =
+        record::scoring::paired::assess(&rules, &forecasts, &missing.outcomes, &missing.baselines)
+            .unwrap();
     assert_eq!(scored.targets[0].n_live, 2);
     assert_eq!(scored.targets[0].n_resolved, 0);
     assert_eq!(scored.targets[0].n_unresolved, 2);

@@ -904,7 +904,9 @@ impl RecordRules {
                 ));
             }
         } else if self.nowcast_availability.is_some() {
-            return Err(invalid("outcome release declarations require quarter_qtd_nowcast targets"));
+            return Err(invalid(
+                "outcome release declarations require quarter_qtd_nowcast targets",
+            ));
         }
         Ok(outcome)
     }
@@ -912,11 +914,7 @@ impl RecordRules {
     // Quarterly rules share one horizon even when callers construct structs directly. The older
     // annual numerical APIs retain their existing admission behavior.
     fn validate_quarterly_period(&self) -> Result<(), RecordError> {
-        if self
-            .targets
-            .iter()
-            .any(|t| t.outcome.is_quarterly())
-        {
+        if self.targets.iter().any(|t| t.outcome.is_quarterly()) {
             self.outcome_quarter()?;
         }
         Ok(())
@@ -1193,7 +1191,10 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
             proof_by: top.parsed("proof_by_utc", utc, parse_utc)?,
         },
         nowcast_availability: if doc.top.iter().any(|field| {
-            matches!(field.key.as_str(), "earliest_outcome_release_utc" | "outcome_release_basis")
+            matches!(
+                field.key.as_str(),
+                "earliest_outcome_release_utc" | "outcome_release_basis"
+            )
         }) {
             Some(NowcastAvailability {
                 earliest_release_utc: top.parsed("earliest_outcome_release_utc", utc, parse_utc)?,
