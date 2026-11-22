@@ -233,11 +233,10 @@ pub fn fit_correction(
     if spec.scope != model.test_work().value.scope
         || spec.test_work != model.test_work().claim_id
         || spec.route != model.route().claim_id
-        || !spec
-            .operation_ids
+        || !spec.operation_ids.iter().copied().eq(model
+            .operations()
             .iter()
-            .copied()
-            .eq(model.operations().iter().map(|operation| operation.claim_id))
+            .map(|operation| operation.claim_id))
     {
         return Err(fail(
             RefusalCode::SupportMismatch102,
@@ -264,8 +263,7 @@ pub fn fit_correction(
     }
     let mut pairs: Vec<_> = spec.pairs.iter().collect();
     pairs.sort_by(|a, b| {
-        (a.value.interval.start_ns, &a.value.id)
-            .cmp(&(b.value.interval.start_ns, &b.value.id))
+        (a.value.interval.start_ns, &a.value.id).cmp(&(b.value.interval.start_ns, &b.value.id))
     });
     let mut ids = BTreeSet::new();
     let mut previous_end = None;
@@ -326,7 +324,11 @@ pub fn fit_correction(
     let mean_residual_fraction = exact(sum.checked_div(n))?;
     let mut squared_deviations = ExactQty::from_integer(0);
     for residual in &residuals {
-        let deviation = exact(residual.residual_fraction.checked_sub(mean_residual_fraction))?;
+        let deviation = exact(
+            residual
+                .residual_fraction
+                .checked_sub(mean_residual_fraction),
+        )?;
         let square = exact(deviation.checked_mul(deviation))?;
         squared_deviations = exact(squared_deviations.checked_add(square))?;
     }

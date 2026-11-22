@@ -499,8 +499,7 @@ fn perform(
                     && Row(row).string("id")? == forecast
                 {
                     let earliest = record.time_bounds(journal.header())?.0;
-                    let (report, markdown) =
-                        super::plant::verify(&Row(row), operation, earliest)?;
+                    let (report, markdown) = super::plant::verify(&Row(row), operation, earliest)?;
                     let payload = format!(
                         "{{\"operation\":\"verify-plant\",\"head\":{},\"head_pinned\":{},\"forecast_id\":{},\"registration_head\":{},\"verification\":{report}}}",
                         js(&journal.head().to_hex()),

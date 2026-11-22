@@ -106,11 +106,7 @@ fn fixture() -> (RecoveryModel, CorrectionFit) {
     let tag = route.canonical_tag();
     let route = source(ROUTE_METRIC, route, &tag);
     let model = RecoveryModel::compile(&card, &operations, &old, &route).unwrap();
-    let pairs = [
-        (q(1, 5), q(3, 10)),
-        (q(2, 5), q(3, 5)),
-        (q(3, 5), q(3, 5)),
-    ]
+    let pairs = [(q(1, 5), q(3, 10)), (q(2, 5), q(3, 5)), (q(3, 5), q(3, 5))]
         .into_iter()
         .enumerate()
         .map(|(i, (baseline_fraction, observed_fraction))| {
@@ -186,12 +182,7 @@ fn exact_residual_oracle_keeps_sources_and_uses_n_minus_one_variance() {
     assert_eq!(receipt.model(), &model);
     assert_eq!(receipt.correction().value.additive_fraction, q(1, 10));
     assert_eq!(model.correction().value.additive_fraction, q(1, 20));
-    let validity = receipt
-        .correction()
-        .value
-        .fit_validity
-        .as_ref()
-        .unwrap();
+    let validity = receipt.correction().value.fit_validity.as_ref().unwrap();
     assert_eq!(validity.fit_digest, receipt.digest());
     assert_eq!(validity.operation_ids, declaration.value.operation_ids);
     assert_eq!(validity.route, model.route().claim_id);
@@ -486,7 +477,10 @@ fn complete_nominal_and_pair_metadata_taint_the_fit_and_fitted_correction() {
     let receipt = fit_correction(&tainted, &input(declaration)).unwrap();
     assert_ne!(receipt.digest(), original.digest());
     assert_eq!(receipt.model().correction(), &old);
-    assert_eq!(receipt.summary().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        receipt.summary().confidentiality,
+        Confidentiality::internal()
+    );
     assert_eq!(
         receipt.correction().confidentiality,
         Confidentiality::internal()
@@ -500,7 +494,10 @@ fn complete_nominal_and_pair_metadata_taint_the_fit_and_fitted_correction() {
     let alternate = tainted.with_correction(&no_supersession).unwrap();
     let alternate = fit_correction(&alternate, receipt.input()).unwrap();
     assert_ne!(receipt.digest(), alternate.digest());
-    assert_ne!(receipt.correction().claim_id, alternate.correction().claim_id);
+    assert_ne!(
+        receipt.correction().claim_id,
+        alternate.correction().claim_id
+    );
 }
 
 #[test]
@@ -522,13 +519,19 @@ fn old_correction_tags_stay_identical_and_fitted_chronology_is_bound() {
         receipt.correction().value.canonical_tag()
     );
     assert_eq!(
-        model.with_correction(&correction(changed)).unwrap_err().code,
+        model
+            .with_correction(&correction(changed))
+            .unwrap_err()
+            .code,
         "FMINE-REF-203"
     );
     let mut changed = receipt.correction().value.clone();
     changed.fit_validity.as_mut().unwrap().fit_digest = "invalid".into();
     assert_eq!(
-        model.with_correction(&correction(changed)).unwrap_err().code,
+        model
+            .with_correction(&correction(changed))
+            .unwrap_err()
+            .code,
         "FMINE-REF-507"
     );
 }

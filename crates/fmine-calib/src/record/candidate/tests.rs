@@ -66,9 +66,7 @@ fn seasonal_fixture() -> (RecordRules, Vec<CandidateSeries>) {
         }
     }
     let mut inputs = series();
-    inputs[0].history = [100, 200, 10_000, 1, 100, 150]
-        .map(|n| Some(i(n)))
-        .to_vec();
+    inputs[0].history = [100, 200, 10_000, 1, 100, 150].map(|n| Some(i(n))).to_vec();
     inputs[1].history = [50, 25, 5_000, 1, 50, 50].map(|n| Some(i(n))).to_vec();
     (rules, inputs)
 }
@@ -153,13 +151,9 @@ fn seasonal_selection_supports_each_quarter_and_q4_to_q1_year_rollover() {
                 .map(|n| Some(i(n)))
                 .to_vec();
         }
-        let candidate = build_candidate_with_model(
-            &rules,
-            &inputs,
-            2,
-            CandidateModel::SeasonalQuarterlyRatio,
-        )
-        .unwrap();
+        let candidate =
+            build_candidate_with_model(&rules, &inputs, 2, CandidateModel::SeasonalQuarterlyRatio)
+                .unwrap();
         let pool = &candidate.pools[0];
         assert_eq!(pool.ratios, expected);
         assert_eq!(pool.seasonal_destination_quarter, Some(destination));
@@ -176,13 +170,9 @@ fn seasonal_missing_and_nonpositive_pairs_are_not_bridged_or_replaced_by_other_s
     let (rules, mut inputs) = seasonal_fixture();
     inputs[0].history[1] = None;
     inputs[1].history[1] = Some(i(0));
-    let candidate = build_candidate_with_model(
-        &rules,
-        &inputs,
-        2,
-        CandidateModel::SeasonalQuarterlyRatio,
-    )
-    .unwrap();
+    let candidate =
+        build_candidate_with_model(&rules, &inputs, 2, CandidateModel::SeasonalQuarterlyRatio)
+            .unwrap();
     let pool = &candidate.pools[0];
     assert_eq!(pool.ratios, vec![r(3, 2), i(1)]);
     assert_eq!(pool.excluded_pairs.len(), 2);
@@ -193,13 +183,9 @@ fn seasonal_missing_and_nonpositive_pairs_are_not_bridged_or_replaced_by_other_s
     inputs[0].history[5] = None;
     inputs[1].history[5] = Some(i(-1));
     assert!(build_candidate(&rules, &inputs, 2).is_ok());
-    let error = build_candidate_with_model(
-        &rules,
-        &inputs,
-        2,
-        CandidateModel::SeasonalQuarterlyRatio,
-    )
-    .unwrap_err();
+    let error =
+        build_candidate_with_model(&rules, &inputs, 2, CandidateModel::SeasonalQuarterlyRatio)
+            .unwrap_err();
     assert!(
         error
             .to_string()
@@ -214,13 +200,9 @@ fn seasonal_cost_forecasts_retain_signed_and_zero_points() {
     rules.targets[0].outcome = crate::record::Outcome::Q4Qtd;
     inputs[0].point = Some(i(-200));
     inputs[1].point = Some(i(0));
-    let candidate = build_candidate_with_model(
-        &rules,
-        &inputs,
-        2,
-        CandidateModel::SeasonalQuarterlyRatio,
-    )
-    .unwrap();
+    let candidate =
+        build_candidate_with_model(&rules, &inputs, 2, CandidateModel::SeasonalQuarterlyRatio)
+            .unwrap();
     assert_eq!(candidate.exact_rows[0].point, i(-200));
     assert_eq!(candidate.exact_rows[0].lo, i(-400));
     assert_eq!(candidate.exact_rows[0].hi, i(-100));

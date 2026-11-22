@@ -877,7 +877,10 @@ fn source_weight_stress_has_distinct_exact_mean_and_regret_winners_and_real_cli_
     assert_eq!(field(stress, &["objective_unit"]).as_str(), Some("USD"));
     assert_eq!(
         field(stress, &["state_ids"]),
-        &Json::Array(vec![Json::String("hard".into()), Json::String("soft".into())])
+        &Json::Array(vec![
+            Json::String("hard".into()),
+            Json::String("soft".into())
+        ])
     );
     // Radius 1/2 and unit distance allow the original 1/2,1/2 law to put all
     // mass on either complete state. Net source cash remains [-76,25445.6]
@@ -977,7 +980,10 @@ fn source_cash_tail_limits_are_certified_under_stress_separately_from_nominal_se
         vec![vec!["original"]]
     );
     let both = robust_choice(&payload, &["aux", "original"]);
-    assert_eq!(field(both, &["robust_tail_feasible"]).as_bool(), Some(false));
+    assert_eq!(
+        field(both, &["robust_tail_feasible"]).as_bool(),
+        Some(false)
+    );
     let tail = &field(both, &["tail_limits"])
         .as_array()
         .expect("declared tail limit")[0];
@@ -1109,8 +1115,7 @@ fn source_weight_stress_requires_explicit_support_units_and_complete_valid_geome
             why,
         );
     }
-    let distance =
-        "\n[[transport_distance]]\nfrom = \"hard\"\nto = \"soft\"\nvalue = \"1/1\"\n";
+    let distance = "\n[[transport_distance]]\nfrom = \"hard\"\nto = \"soft\"\nvalue = \"1/1\"\n";
     refused(
         &dir,
         "duplicate-distance.toml",

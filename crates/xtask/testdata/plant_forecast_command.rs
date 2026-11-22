@@ -753,14 +753,25 @@ uncensored = "true"
         assert!((actual.f64().unwrap() - expected).abs() < 1e-12);
     };
     let revised = fitted
-        .replace("observed_fraction = \"0.62\"", "observed_fraction = \"0.63\"")
-        .replace("observed_fraction = \"0.86\"", "observed_fraction = \"0.85\"");
+        .replace(
+            "observed_fraction = \"0.62\"",
+            "observed_fraction = \"0.63\"",
+        )
+        .replace(
+            "observed_fraction = \"0.86\"",
+            "observed_fraction = \"0.85\"",
+        );
     let mut admissions = Vec::new();
     let mut digests = Vec::new();
     for (id, target, expected, source) in [
         ("fitted-recovery", "recovery", [0.94, 0.64], &fitted),
         ("fitted-metal", "recovered-metal", [0.3008, 0.2048], &fitted),
-        ("revised-pairs", "recovered-metal", [0.3008, 0.2048], &revised),
+        (
+            "revised-pairs",
+            "recovered-metal",
+            [0.3008, 0.2048],
+            &revised,
+        ),
     ] {
         std::fs::write(root.join("recovery.toml"), source).unwrap();
         let registered = register(id, target, 0);
@@ -905,13 +916,8 @@ uncensored = "true"
     };
     for (skew, expected) in [(0, 0), (1, 3)] {
         let file = format!("fit-clock-{skew}");
-        let mut crafted = Journal::create(
-            &root.join(&file),
-            "synthetic-fit-clock",
-            skew,
-            &AtCut(cut),
-        )
-        .unwrap();
+        let mut crafted =
+            Journal::create(&root.join(&file), "synthetic-fit-clock", skew, &AtCut(cut)).unwrap();
         crafted
             .append(operation, &AtCut(cut), |_, _| Ok(()))
             .unwrap();

@@ -392,7 +392,10 @@ fn parse_fit(
             &tag,
             fit::PAIR_METRIC,
             source,
-            format!("correction_pair row line {}; declared aligned processing support and uncapped baseline", pair_row.line),
+            format!(
+                "correction_pair row line {}; declared aligned processing support and uncapped baseline",
+                pair_row.line
+            ),
         );
         pair_json.push(format!(
             "{{\"id\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"available_ns\":\"{}\",\"raw_start_ns\":{},\"raw_end_ns\":{},\"raw_available_ns\":{},\"raw_baseline_fraction\":{},\"raw_observed_fraction\":{},\"baseline_fraction\":{},\"observed_fraction\":{},\"uncensored\":{},\"claim\":{}}}",
@@ -437,7 +440,10 @@ fn parse_fit(
         &tag,
         fit::INPUT_METRIC,
         source,
-        format!("correction_fit row line {}; original test-work, ordered operations, route, target interval and all correction_pair rows", row.line),
+        format!(
+            "correction_fit row line {}; original test-work, ordered operations, route, target interval and all correction_pair rows",
+            row.line
+        ),
     );
     let json = format!(
         "{{\"version\":{},\"method\":{},\"baseline\":{},\"alignment\":{},\"test_work_claim_id\":{},\"operation_claim_ids\":[{}],\"route_claim_id\":{},\"evidence_cut_ns\":\"{}\",\"raw_evidence_cut_ns\":{},\"target_start_ns\":\"{}\",\"target_end_ns\":\"{}\",\"raw_upper_cap_fraction\":{},\"upper_cap_fraction\":{},\"pairs\":[{}],\"claim\":{}}}",

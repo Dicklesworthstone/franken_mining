@@ -118,7 +118,7 @@ impl Fixture {
              retrieved_utc = \"2030-10-02T10:00:00Z/10:01:00Z\"\nurl_prefix = \"https://example.invalid/\"\n",
         );
         for (index, &(year, quarter, values)) in quarters.iter().enumerate() {
-            let bytes = workbook(year, values, production_header, cost_header);
+            let bytes = workbook(year, quarter, values, production_header, cost_header);
             let file = format!("Invented_Q{}.xlsx", index + 1);
             std::fs::write(root.join("invented").join(&file), &bytes).unwrap();
             writeln!(registry,
@@ -154,7 +154,13 @@ impl Fixture {
     }
 }
 
-fn workbook(year: i32, values: u8, production_header: &str, cost_header: &str) -> Vec<u8> {
+fn workbook(
+    year: i32,
+    quarter: u8,
+    values: u8,
+    production_header: &str,
+    cost_header: &str,
+) -> Vec<u8> {
     let text = |value: &str| MinimalCell::Text(value.into());
     let styled = |value: &str| MinimalCell::Styled {
         raw: value.into(),
@@ -174,6 +180,8 @@ fn workbook(year: i32, values: u8, production_header: &str, cost_header: &str) -
             cells: vec![
                 ("A1".into(), text("For the three months ended")),
                 ("B1".into(), MinimalCell::Number(f64::from(year))),
+                // Different releases remain distinct sources even when their numerical cells repeat.
+                ("D1".into(), text(&format!("Synthetic release {year}Q{quarter}"))),
                 ("B2".into(), text(production_header)),
                 ("C2".into(), text(cost_header)),
                 ("A3".into(), text("Site A (50%)")),
@@ -596,7 +604,11 @@ fn usage_requires_an_explicit_model_cut_and_unique_options() {
         variants.push((args, format!("forecast record build requires {key}")));
     }
     for (key, value, message) in [
-        ("--model", "unknown", format!("--model requires {MODEL}")),
+        (
+            "--model",
+            "unknown",
+            format!("--model requires {MODEL}|{SEASONAL_MODEL}"),
+        ),
         (
             "--decimal-places",
             "13",

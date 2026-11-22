@@ -283,16 +283,18 @@ fn excluded_json(pair: &ExcludedPair) -> String {
 }
 
 fn pool_json(pool: &CandidatePool) -> String {
-    let season = pool.seasonal_destination_quarter.map_or_else(String::new, |q| {
-        format!(
-            ",\"seasonal_destination_quarter\":{q},\"off_season_pairs\":[{}]",
-            pool.off_season_pairs
-                .iter()
-                .map(excluded_json)
-                .collect::<Vec<_>>()
-                .join(","),
-        )
-    });
+    let season = pool
+        .seasonal_destination_quarter
+        .map_or_else(String::new, |q| {
+            format!(
+                ",\"seasonal_destination_quarter\":{q},\"off_season_pairs\":[{}]",
+                pool.off_season_pairs
+                    .iter()
+                    .map(excluded_json)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
+        });
     format!(
         "{{\"target\":{},\"from\":{},\"through\":{},\"point_quarter\":{},\"ratio_count\":{},\"ratios\":[{}],\"excluded_pairs\":[{}],\"lower_ratio\":{},\"median_ratio\":{},\"upper_ratio\":{}{season}}}",
         js(&pool.target),
