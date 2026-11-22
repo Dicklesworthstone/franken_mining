@@ -10,7 +10,7 @@ Testpit T-layer synthetic-truth world generator and sealed scoring harness (`BD-
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** 20,000 planned / 23,000 ceiling
-- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "cu_au_world", "biases", "drillholes", "dispatch", "mill_balance", "fa_book", "metamorphic", "plant_twin", "pilot_power"]`
+- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "cu_au_world", "biases", "drillholes", "dispatch", "mill_balance", "fa_book", "metamorphic", "plant_twin", "pilot_power", "review"]`
 
 ## 2. Inputs
 - Deterministic `seed_root: u64`, `WorldCondition` (`CorrectlySpecified`, `Misspecified`, `IdentifiabilityProbe`), and world configuration (`OpenPitAuConfig`).
@@ -62,7 +62,9 @@ Synthetic only (`EvidenceClass::ModelledUncalibrated` / synthetic test harness);
 - `metamorphic::{LotSpec, assert_split_merge_lot_invariance, canonical_set_digest, assert_permutation_digest_invariance, assert_exact_statutory_unit_roundtrips}` (`BD-143`)
 - `plant_twin::{SYNTHETIC_PUBLIC_LABEL, TwinAxes, AxisRanges, SegmentBoundary, CandidateFileCostRow, PilotTwinRegistrySpec, CitedPoint, CitedSeries, QuarterAgg, DailyMicroPoint, PlantTwin, TwinFamily, parse_pilot_twins_registry}` (`BD-356.S1`, `registries/pilot_twins.toml`)
 - `pilot_power::{AttributionCause, LinearBiasObs, TwoBiasPosterior, TwinCausePower, PowerEnvelope, FileLabel, LabelledCandidateFile, solve_two_bias_posterior, reject_personal_data_files, subset_identifiability_rank, estimate_twin_cause_power, estimate_power_envelope, render_power_table, greedy_select_for_twin, label_candidate_files}` (`BD-356.S2`)
+- `review::{MAX_EXACT_CLOPPER_PEARSON_N, SeedClass, ReviewKey, clopper_pearson, commit, verify, generate_os_nonce}` (`BD-357.S1`)
 
 ## 12. Proof obligations
 - `GATE-GEN-01` (sealed truth inaccessible outside scoring harness): `seal.rs` `compile_fail` doctests + `harness::tests::test_sealed_truth_isolation_and_deterministic_replay`.
 - Known-answer & coverage recovery: `harness::tests::test_scoring_harness_recovers_seeded_biases_and_coverage`.
+- `BD-357.S1` (transcendental-free exact Clopper–Pearson coverage & BLAKE3 `ReviewKey` commitment): `review::tests::test_clopper_pearson_known_answers`, `review::tests::test_clopper_pearson_exact_coverage_ge_95`, `review::tests::test_clopper_pearson_simulated_coverage_10k`, `review::tests::test_review_key_commit_verify_roundtrip`, `review::tests::test_review_key_tamper_fails`.

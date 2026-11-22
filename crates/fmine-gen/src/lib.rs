@@ -12,6 +12,7 @@ pub mod metamorphic;
 pub mod mill_balance;
 pub mod pilot_power;
 pub mod plant_twin;
+pub mod review;
 pub mod seal;
 pub mod worlds;
 

@@ -299,6 +299,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-telemetry"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-time",
+ "fmine-units",
+]
+
+[[package]]
 name = "fmine-time"
 version = "0.1.0"
 dependencies = [

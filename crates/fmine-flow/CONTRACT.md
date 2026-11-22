@@ -9,7 +9,7 @@ Touchstone K1 material-flow graph and exact extensive conservation kernel (`BD-1
 - **Layer:** K1
 - **Subsystem:** Touchstone
 - **LOC budget:** 20,000 planned / 23,000 ceiling
-- **Allowed Module Families:** `["graph", "balance", "ffactors", "r0_parity", "verbatim_table"]`
+- **Allowed Module Families:** `["graph", "balance", "ffactors", "r0_parity", "verbatim_table", "compensation"]`
 
 ## 2. Inputs
 - Pure in-memory `FlowNode` and `FlowStream` declarations validated into a `FlowGraph`.
@@ -33,7 +33,7 @@ Touchstone K1 material-flow graph and exact extensive conservation kernel (`BD-1
 - `FlowError::InvalidGraph` / `FlowError::DuplicateId` / `FlowError::UnknownNode` / `FlowError::UnknownStream` → `FMINE-REF-107` (exit 3).
 
 ## 6. Determinism class
-All files (`lib.rs`, `graph.rs`, `balance.rs`, `ffactors.rs`, `r0_parity.rs`, `verbatim_table.rs`) declare `//! Determinism: BitwisePortable`. Arithmetic is 100% exact `i128` rational (`ExactQty`) over `BTreeMap`/`BTreeSet` collections.
+All files (`lib.rs`, `graph.rs`, `balance.rs`, `ffactors.rs`, `r0_parity.rs`, `verbatim_table.rs`, `compensation.rs`) declare `//! Determinism: BitwisePortable`. Arithmetic is 100% exact `i128` rational (`ExactQty`) over `BTreeMap`/`BTreeSet` collections.
 
 ## 7. Evidence class of outputs
 Not applicable: pure structural graph and exact conservation law checker; callers wrap outputs in `Claim`s.
@@ -55,6 +55,7 @@ Not applicable: pure structural graph and exact conservation law checker; caller
 - `ffactors::{FFactorFamily, FFactorDefinition, ExactPosteriorTriplet, PosteriorFFactor, F3Decomposition, parse_ffactor_registry, compute_posterior_ffactor, decompose_f3, format_exact_pct_4dp, render_ffactor_g_touch_4}` (`BD-148`, `BD-278`, `G-TOUCH-4`, `registries/ffactors.toml`)
 - `r0_parity::{SitePackRow, R0ParityRowVerdict, R0ParityReport, run_r0_site_parity}` (`BD-160`, R0 site-convention parity mode)
 - `verbatim_table::{RowRole, DerivedGrade, DiscrepancyKind, DiscrepancyRecord, VerbatimTableRowInput, ImportedReconciliationRow, VerbatimRatioRowInput, VerbatimRatioAudit, grams_per_troy_oz, import_verbatim_table_row, audit_verbatim_ratio_row}` (`BD-279`, `G-TOUCH-6`, `E206–E209`)
+- `compensation::{CompensationClass, WithinFactorInput, InvestigationTrigger, WithinFactorVerdict, AnnualFactorRow, SignedBiasPrior, McfCheckOutDivergence, MultiYearSeriesAudit, detect_within_factor_compensation, audit_mcf_checkout_vs_checkin, audit_multi_year_series}` (`BD-280`, §20.4–§20.5, `E154–E156`, `KA-TOUCH-KIBALI-2016-2025` `E210–E212`)
 
 ## 12. Proof obligations
 - `PO-BED-6` / `INV-005` (exact extensive conservation at commit, no plugs): `balance::tests::test_exact_conservation_closure_and_refusal_no_plug`, `balance::tests::test_stockpile_split_merge_metamorphic_conservation`.
@@ -62,3 +63,4 @@ Not applicable: pure structural graph and exact conservation law checker; caller
 - `G-TOUCH-4` / `BD-278` (site-specific F-factor & MCF registry keys + versioned renders): `ffactors::tests::test_site_specific_ffactor_registry_and_g_touch_4_rendering`.
 - `BD-160` (R0 parity mode reproducing synthetic site packs): `r0_parity::tests::test_r0_parity_reproduces_synthetic_site_packs_and_enforces_profile_isolation`.
 - `G-TOUCH-6` / `BD-279` (verbatim reconciliation-table importer & E206–E209 discrepancy filing): `verbatim_table::tests::test_kibali_2024_mcf_loulo_rcf_and_g_touch_6_residual_discrepancies`.
+- `BD-280` (within-factor compensation & `KA-TOUCH-KIBALI-2016-2025` signed bias prior): `compensation::tests::test_goldstrike_roaster_2024_within_factor_compensation_and_negative_controls`, `compensation::tests::test_ka_touch_kibali_2016_2025_series_compensation_and_signed_bias_prior`.
