@@ -121,6 +121,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-explore"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-crs",
+ "fmine-evidence",
+ "fmine-units",
+]
+
+[[package]]
 name = "fmine-flow"
 version = "0.1.0"
 dependencies = [
@@ -181,6 +192,16 @@ version = "0.1.0"
 dependencies = [
  "fmine-evidence",
  "fmine-numerics",
+]
+
+[[package]]
+name = "fmine-materials"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-units",
 ]
 
 [[package]]
