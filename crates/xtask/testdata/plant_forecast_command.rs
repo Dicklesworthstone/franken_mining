@@ -761,6 +761,44 @@ uncensored = "true"
             "observed_fraction = \"0.86\"",
             "observed_fraction = \"0.85\"",
         );
+    let evaluated = format!(
+        r#"{}
+[[correction_input]]
+pair = "earlier-shift"
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "1"
+
+[[correction_input]]
+pair = "earlier-shift"
+name = "P80"
+measurand = "grinding-product-p80"
+unit = "micrometres"
+value = "100"
+
+[[correction_input]]
+pair = "later-shift"
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "3"
+
+[[correction_input]]
+pair = "later-shift"
+name = "P80"
+measurand = "grinding-product-p80"
+unit = "micrometres"
+value = "100"
+"#,
+        fitted
+            .replace(
+                "post_operational_pre_correction",
+                "evaluated_post_operational_pre_correction",
+            )
+            .replace("baseline_fraction = \"0.6\"\n", "")
+            .replace("baseline_fraction = \"0.8\"\n", ""),
+    );
     let mut admissions = Vec::new();
     let mut digests = Vec::new();
     for (id, target, expected, source) in [
@@ -771,6 +809,12 @@ uncensored = "true"
             "recovered-metal",
             [0.3008, 0.2048],
             &revised,
+        ),
+        (
+            "evaluated-history",
+            "recovered-metal",
+            [0.3008, 0.2048],
+            &evaluated,
         ),
     ] {
         std::fs::write(root.join("recovery.toml"), source).unwrap();
@@ -803,6 +847,8 @@ uncensored = "true"
         // Paired states retain .32 kg contained: .32*.94=.3008, .32*.64=.2048.
         // Revised residuals .03/.05 have the same mean but a different descriptive sample variance;
         // neither .0008 nor .0002 is silently turned into forecast noise or scenario weights.
+        // Evaluated history computes (60+10*1-100/10)/100 and (60+10*3-100/10)/100
+        // through the original card, representing those binary64 baselines exactly before fitting.
         for (sample, expected) in samples.iter().zip(expected) {
             near(sample, expected);
         }
@@ -842,6 +888,10 @@ uncensored = "true"
         digests[1], digests[2],
         "changed paired evidence changes identity despite equal means"
     );
+    assert_ne!(
+        digests[1], digests[3],
+        "computed historical baselines retain their own derivation evidence"
+    );
     let saved_head = head(&root);
     let saved_bytes = std::fs::read(root.join("journal")).unwrap();
     for invalid in [
@@ -854,6 +904,10 @@ uncensored = "true"
         fitted.replace(
             &format!("evidence_cut_ns = \"{cut}\""),
             &format!("evidence_cut_ns = \"{}\"", start - HOUR),
+        ),
+        evaluated.replace(
+            "unit = \"g_per_dry_t\"\nvalue = \"3\"",
+            "unit = \"ppm_dry_mass\"\nvalue = \"3\"",
         ),
     ] {
         std::fs::write(root.join("recovery.toml"), invalid).unwrap();
@@ -891,7 +945,7 @@ uncensored = "true"
         assert_eq!(field(verification, &["admission"]), admission);
     }
     let reopened = Journal::open_read(&root.join("journal"), None).unwrap();
-    assert_eq!(reopened.records().len(), 4);
+    assert_eq!(reopened.records().len(), 1 + admissions.len());
     for record in reopened.records().iter().skip(1) {
         let Entry::Operation(operation) = &record.entry else {
             panic!("plant operation")

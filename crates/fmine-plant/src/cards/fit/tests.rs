@@ -120,6 +120,7 @@ fn fixture() -> (RecoveryModel, CorrectionFit) {
                 baseline_fraction,
                 observed_fraction,
                 uncensored: true,
+                baseline_model: None,
             })
         })
         .collect();

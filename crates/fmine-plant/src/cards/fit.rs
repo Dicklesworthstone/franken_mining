@@ -6,6 +6,7 @@
 use super::*;
 use fmine_units::UnitsError;
 
+pub mod observations;
 #[cfg(test)]
 mod tests;
 
@@ -39,6 +40,28 @@ impl FitAlignment {
     }
 }
 
+/// A computed baseline belongs to these exact model layers. Corrections and
+/// caps are deliberately excluded because neither participates in the baseline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaselineModelBinding {
+    pub test_work: ClaimId,
+    pub operation_ids: Vec<ClaimId>,
+    pub route: ClaimId,
+}
+impl BaselineModelBinding {
+    fn from_model(model: &RecoveryModel) -> Self {
+        Self {
+            test_work: model.test_work().claim_id,
+            operation_ids: model
+                .operations()
+                .iter()
+                .map(|operation| operation.claim_id)
+                .collect(),
+            route: model.route().claim_id,
+        }
+    }
+}
+
 /// One aligned, uncensored physical interval. Adjacent intervals may share an
 /// endpoint; their interiors must not overlap. Every value uses recovery
 /// fractions, not percentage points or tonnage weights.
@@ -52,16 +75,30 @@ pub struct RecoveryPair {
     pub observed_fraction: ExactQty,
     /// False rejects: a cap or censoring cannot identify an uncapped residual.
     pub uncensored: bool,
+    /// None identifies a source-declared baseline. Computed baselines bind the
+    /// model that actually evaluated their original processing inputs.
+    pub baseline_model: Option<BaselineModelBinding>,
 }
 impl RecoveryPair {
     pub fn canonical_tag(&self) -> String {
-        let mut enc = Encoder::new_frame(*b"RCPF", 1);
+        let mut enc = Encoder::new_frame(
+            *b"RCPF",
+            if self.baseline_model.is_some() { 2 } else { 1 },
+        );
         enc.put_str(&self.id);
         put_time(&mut enc, self.interval);
         enc.put_i64(self.available_ns);
         put_exact(&mut enc, self.baseline_fraction);
         put_exact(&mut enc, self.observed_fraction);
         enc.put_u8(u8::from(self.uncensored));
+        if let Some(model) = &self.baseline_model {
+            enc.put_str(&model.test_work.to_string());
+            enc.put_u64(model.operation_ids.len() as u64);
+            for id in &model.operation_ids {
+                enc.put_str(&id.to_string());
+            }
+            enc.put_str(&model.route.to_string());
+        }
         blake3_hash(&enc.finish()).to_hex()
     }
 }
@@ -214,6 +251,12 @@ pub fn fit_correction(
     let spec = &input.value;
     if !(2..=MAX_PAIRS).contains(&spec.pairs.len())
         || spec.operation_ids.len() > MAX_OPERATIONAL_FACTORS
+        || spec.pairs.iter().any(|pair| {
+            pair.value
+                .baseline_model
+                .as_ref()
+                .is_some_and(|model| model.operation_ids.len() > MAX_OPERATIONAL_FACTORS)
+        })
     {
         return Err(fail(
             RefusalCode::NoClaimInDomain201,
@@ -269,9 +312,20 @@ pub fn fit_correction(
     let mut previous_end = None;
     let mut residuals = Vec::with_capacity(pairs.len());
     let mut sum = ExactQty::from_integer(0);
+    let baseline_model = BaselineModelBinding::from_model(model);
     for pair in pairs {
         let value = &pair.value;
         admit(pair, PAIR_METRIC, &value.canonical_tag())?;
+        if value
+            .baseline_model
+            .as_ref()
+            .is_some_and(|binding| binding != &baseline_model)
+        {
+            return Err(fail(
+                RefusalCode::SupportMismatch102,
+                "derived baseline belongs to different test work, ordered operations or route",
+            ));
+        }
         interval(value.interval)?;
         if !named(&value.id) || value.id.len() > 256 || !ids.insert(value.id.clone()) {
             return Err(fail(

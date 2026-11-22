@@ -477,10 +477,33 @@ every declared joint scenario, then the existing coupled production and saved-fo
 the complete original model, raw pair tokens, source Claims, fit summary and applied correction. A kernel
 refusal keeps parsed declarations while supplying no fit, recovery or ensemble result.
 
+An explicit `baseline = "evaluated_post_operational_pre_correction"` mode derives each baseline from
+the original historical inputs through `cards::fit::observations::derive_pair`. In this mode
+`correction_pair` omits and forbids `baseline_fraction`. Each `[[correction_input]]` supplies `pair`,
+`name`, `measurand`, `unit` and exact `value`; each declared pair must have precisely all card coordinates.
+The original card formula, output scale and ordered operational factors are evaluated on that pair's
+interval and the declared top-level scope. Exact applicability bounds, units, measurands, physical support,
+card validity and finite numerical range are checked by the same evaluator as nominal recovery.
+The original correction, cap and fitted future-use interval are excluded from this historical baseline
+arithmetic; all original model layers and their complete source envelopes remain retained as evidence.
+
+The computed binary64 baseline is represented exactly as a rational, with no decimal rounding before
+residual fitting. This is exact representation of a numerical result, not a symbolic formula evaluation
+or proof of measurement accuracy. Representation or rational fit arithmetic outside the supported range
+refuses. Each derived pair binds the exact test-work, ordered operation and route Claims; attempting to
+fit it under different model layers refuses. A baseline Claim additionally binds full model, input and
+observation envelopes so source metadata remains represented in downstream pair and fit identities.
+`correction_fit_result` retains the actual evaluated input Claim, every derived pair receipt, baseline
+Claim, original input and observation Claims, and test-work/operational intermediates. Parsed historical
+inputs remain visible after a kernel refusal. Supplied-baseline and no-fit paths retain their prior
+canonical encodings and output shapes. Coupled production and saved plant forecasts use this same path;
+offline verification re-evaluates the retained historical inputs without reopening their original files.
+
 Known-answer controls cover exact residual moments, replacement without double counting, source/version
 identity, future-only reuse and typed refusals. Actual CLI controls cover fitted physical output, independent
-source edits with an unchanged mean, explicit cap replacement and atomic failure. These are synthetic
-controls: supplied historical baselines and alignment remain declared evidence, with no field validation,
+source edits with an unchanged mean, explicit cap replacement, nonlinear historical inputs, exact binary64
+representation, model-binding refusal, retained-source forecast replay and atomic failure. These are
+synthetic controls: historical inputs, observations, supplied baselines and alignment remain declared evidence, with no field validation,
 automatic card promotion, empirical probability calibration or operating authority.
 
 ### Executable source-unit illustrations

@@ -385,6 +385,17 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     their existing semantics. The fit does not imply a standard error, calibrated probabilities or
     automatic model promotion. The exact schema is exposed in `robot-docs.plant_recovery`; real-binary
     tests cover direct fitting, coupled output, retained-source verification and atomic timing refusals.
+    `baseline = "evaluated_post_operational_pre_correction"` instead derives each historical baseline
+    from `[[correction_input]]` rows naming `pair`, `name`, `measurand`, `unit` and `value`.
+    Each pair supplies all card coordinates and omits `baseline_fraction`; mixed, duplicate, orphan,
+    unit-mismatched or out-of-applicability inputs refuse. The shared evaluator runs the original
+    formula and ordered operational factors on each historical interval, excluding the old correction
+    and cap. Its binary64 result is represented exactly as a rational before fitting; overflow refuses.
+    Complete model, input and observation envelopes bind each baseline Claim, and each computed pair
+    binds the actual test work, ordered operations and route. The result retains all intermediates,
+    derived pair receipts and the actual fit-input Claim. Declared historical inputs remain visible on
+    kernel refusal. Coupled production, forecast registration and offline retained-source verification
+    all use the same computed-baseline path; numeric representation does not establish empirical accuracy.
   - DESIGN (BD-177): `plant transfer --input <worksheet.toml>` reads a source-bound
     `fmine.plant-transfer.v1` worksheet and invokes the raw-lot projection owner. It requires explicit
     complete/nonoverlapping whole-lot support, matched moisture/assay dry bases, wet mass in kg,

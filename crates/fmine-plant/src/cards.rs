@@ -196,6 +196,15 @@ pub struct RecoveryReceipt {
     claim: Claim<RecoveryEvaluation>,
     digest: String,
 }
+
+/// Shared arithmetic before correction or cap; historical fitting uses this
+/// same path without applying a fitted correction's future-support restriction.
+struct BaselineEvaluation {
+    initial: f64,
+    operational_fractions: Vec<Fraction>,
+    result: f64,
+}
+
 impl RecoveryReceipt {
     pub fn model(&self) -> &RecoveryModel {
         &self.model
@@ -330,9 +339,11 @@ impl RecoveryModel {
         &self.route
     }
 
-    /// Evaluate a conditional nominal recovery. Exact bounds are checked before
-    /// numerical conversion. No extrapolation, unit conversion or implicit cap.
-    pub fn evaluate(&self, inputs: &Claim<RecoveryInputs>) -> Result<RecoveryReceipt> {
+    fn evaluate_baseline(
+        &self,
+        inputs: &Claim<RecoveryInputs>,
+        enforce_fitted_support: bool,
+    ) -> Result<BaselineEvaluation> {
         admit(inputs, INPUT_METRIC, &inputs.value.canonical_tag())?;
         let query = &inputs.value;
         let card = &self.test_work.value;
@@ -351,7 +362,8 @@ impl RecoveryModel {
                 "processing interval lies outside this card version's validity",
             ));
         }
-        if let Some(validity) = &self.correction.value.fit_validity
+        if enforce_fitted_support
+            && let Some(validity) = &self.correction.value.fit_validity
             && (query.interval.start_ns <= validity.evidence_cut_ns
                 || query.interval.start_ns < validity.target_interval.start_ns
                 || query.interval.end_ns > validity.target_interval.end_ns)
@@ -427,6 +439,22 @@ impl RecoveryModel {
             result = next;
             operational_fractions.push(Fraction::new(result));
         }
+        Ok(BaselineEvaluation {
+            initial,
+            operational_fractions,
+            result,
+        })
+    }
+
+    /// Evaluate a conditional nominal recovery. Exact bounds are checked before
+    /// numerical conversion. No extrapolation, unit conversion or implicit cap.
+    pub fn evaluate(&self, inputs: &Claim<RecoveryInputs>) -> Result<RecoveryReceipt> {
+        let BaselineEvaluation {
+            initial,
+            operational_fractions,
+            result,
+        } = self.evaluate_baseline(inputs, true)?;
+        let query = &inputs.value;
         let corrected = finite(result + numeric(self.correction.value.additive_fraction)?)?;
         let (final_value, cap_applied) = if let Some(cap) = self.correction.value.upper_cap_fraction
         {
