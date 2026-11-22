@@ -15,8 +15,10 @@ use fmine_time::ValidTime;
 use fmine_units::{ExactQty, Qty};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod cu_speciation;
 pub mod ensemble;
 mod formula;
+pub mod preg_rob;
 #[cfg(test)]
 mod tests;
 pub mod worksheet;

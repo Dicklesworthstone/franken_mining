@@ -13,7 +13,7 @@ K0 numerical owner, preserving the original observations and a separately declar
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory", "flowsheet", "grinding", "production", "reconciliation", "measurements", "raw_measurements", "cards", "rtd", "trajectory"]`
+- **Allowed Module Families:** `["inventory", "flowsheet", "grinding", "production", "reconciliation", "measurements", "raw_measurements", "cards", "custody", "rtd", "trajectory"]`
 
 ## 2. Inputs
 
@@ -891,3 +891,9 @@ source/scope changes and confidentiality. The actual command regression compares
 the coarser mode wins with unconstrained feed, while the finer mode wins with common 50 t availability.
 It verifies the monetary means through the existing valuation and decision owners. These calculations
 remain declared and uncalibrated; they do not establish a real mine's ore availability or plant validity.
+
+### 25. Product custody, dual-attested shipment release, Cu speciation and preg-rob cards (BD-179/180/182/288)
+
+- `custody` (`BitwisePortable`, zero bare `f64`): IMSBC concentrate liquefaction gate (`prepare_concentrate_shipment`, refusing missing/stale/above-TML moisture with `FMINE-REF-403`), dual-human-attested shipment release wired to `fmine_authz::human_token::HumanTokenVerifier::verify_dual_attestation` (`release_shipment_with_dual_attestation`, re-checking moisture freshness before consuming tokens, setting `execution_authorized = false` per `INV-002`), append-only hash-chained `DoreVaultLog` with top/bottom pin spread validation, and `audit_refinery_outturn` flagging above-tolerance discrepancies as restricted `InvestigationCase`s.
+- `cards::cu_speciation` (`BitwisePortable`, zero bare `f64`): speciation-weighted Cu heap/dump transfer card `TCu_rec = F1·ASCu/TCu + F2·CNCu/TCu + F3_eff·SCu/TCu` (Zaldívar `96/78/40` `E289`, `55%` insoluble-Cu cap `E290`), enforcing processing-support (`G-CRUC-2`, `FMINE-REF-102`), validity-box bounds (`G-CRUC-1`, `FMINE-REF-203`), and explicit priced-UU extrapolation (`FMINE-REF-204`).
+- `cards::preg_rob` (`BitwisePortable`, zero bare `f64`): gold-adsorption spike-test preg-robbing card enforcing strict `< 40%` / `< 60%` source feed caps (`E173`/`E175`), optional Raman `CarbonType` covariate, `InputUnit::SpikeTestPercent` (`FMINE-REF-107`), and `render_preg_rob_validity_table`.

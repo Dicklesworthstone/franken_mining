@@ -8,6 +8,7 @@ publish = false
 description = "Claim-native elemental plant inventory accounting with exact conservation and source-bound receipts."
 
 [dependencies]
+fmine-authz = { path = "../fmine-authz" }
 fmine-core = { path = "../fmine-core" }
 fmine-units = { path = "../fmine-units" }
 fmine-time = { path = "../fmine-time" }

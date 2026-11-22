@@ -4,6 +4,7 @@
 //! Determinism: Exact
 
 pub mod cards;
+pub mod custody;
 pub mod flowsheet;
 pub mod grinding;
 pub mod inventory;

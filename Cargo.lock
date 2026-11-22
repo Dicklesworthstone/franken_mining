@@ -249,6 +249,7 @@ dependencies = [
 name = "fmine-plant"
 version = "0.1.0"
 dependencies = [
+ "fmine-authz",
  "fmine-claim",
  "fmine-core",
  "fmine-evidence",
@@ -333,6 +334,16 @@ dependencies = [
  "fmine-object",
  "fmine-sync",
  "fmine-units",
+]
+
+[[package]]
+name = "fmine-view"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-crs",
+ "fmine-evidence",
+ "fmine-geom",
 ]
 
 [[package]]
