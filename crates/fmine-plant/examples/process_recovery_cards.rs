@@ -114,6 +114,7 @@ fn model(example: &Illustration) -> Result<RecoveryModel> {
         test_work: card.claim_id,
         additive_fraction: q("0.02")?,
         upper_cap_fraction: Some(q("0.90")?),
+        fit_validity: None,
     };
     let tag = correction.canonical_tag();
     let correction = source(CORRECTION_METRIC, correction, &tag, None);

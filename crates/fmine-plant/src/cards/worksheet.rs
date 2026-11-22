@@ -7,6 +7,7 @@ use crate::cards::{
     RecoveryCorrection, RecoveryInputs, RecoveryModel, RecoveryScope, RouteAssumption,
     TestWorkCard,
     ensemble::{self, RecoveryCorrections, RecoveryPopulation, RecoveryScenario},
+    fit::{self, CorrectionFit, CorrectionFitReceipt, FitAlignment, RecoveryPair},
 };
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
@@ -45,6 +46,16 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"optional_correction_fields\":[\"upper_cap_fraction\",\"scenario\"],",
     "\"scenario_corrections\":\"Optional complete paired correction population: exactly one correction without scenario remains the nominal layer; if any scenario corrections occur, exactly one must name each joint scenario. Each replaces the nominal correction; no added nominal offset, fallback, independent draws or renormalization\",",
     "\"correction\":\"Signed additive fraction, so 0.02 is two percentage points; optional explicit cap in [0,1], with no implicit clipping\",",
+    "\"optional_correction_fit_rows\":[\"id\",\"revision\",\"method\",\"baseline\",\"alignment\",\"evidence_cut_ns\"],",
+    "\"optional_correction_fit_fields\":[\"upper_cap_fraction\"],",
+    "\"correction_fit_method\":\"Exactly one optional correction_fit row; method must be unweighted_additive_residual_mean and baseline must be post_operational_pre_correction. Baselines are uncapped predictions after the complete ordered operational factors and before the original correction\",",
+    "\"correction_fit_alignment\":[\"same_processing_support\",\"residence_time_aligned\"],",
+    "\"correction_pair_rows\":[\"id\",\"start_ns\",\"end_ns\",\"available_ns\",\"baseline_fraction\",\"observed_fraction\",\"uncensored\"],",
+    "\"correction_fit_pairs\":\"A fit requires 2..256 distinct source-bound correction_pair rows on explicitly aligned processing support. Positive-duration intervals must be inside original card validity and have no overlapping interiors; adjacent endpoints are allowed. Baselines must be nonnegative, observations in [0,1], and uncensored must be true. Alignment and source accuracy remain declared assumptions; no block-to-blend or residence-time alignment is inferred\",",
+    "\"correction_fit_timing\":\"Each pair must be complete before it is available: end_ns <= available_ns <= evidence_cut_ns. The evidence cut must be strictly before the top-level processing start_ns; that complete processing interval becomes the fitted target and must lie inside card validity. The fitted correction retains its evidence cut, target interval, exact ordered operation Claims, route Claim and fit digest, and refuses retrospective or out-of-target use\",",
+    "\"correction_fit_replacement\":\"Fit id/revision must differ from the original nominal correction version. The exact mean of observed_fraction minus baseline_fraction replaces the original additive offset. The fit's optional cap replaces the original cap; omitting it means no cap. No old offset is added or old cap inherited. A fit may apply to nominal and all joint scenarios but cannot be combined with scenario correction overrides\",",
+    "\"correction_fit_statistics\":\"Every residual, its source Claim, the exact unweighted mean and descriptive sample residual variance with denominator n-1 are retained. Variance is in squared recovery fractions. No independence, representative sample, standard error, confidence interval or empirical calibration is inferred\",",
+    "\"correction_fit_output\":\"model retains the original submitted declaration; model_role labels this explicitly when a fit is requested. correction_fit retains the raw pair declarations and Claims. A successful correction_fit_result.correction is the applied replacement, with the original correction Claim named separately. Fit, nominal and joint-scenario evaluation is all-or-nothing: a kernel refusal keeps declarations and raw values, with correction_fit_result, result and admitted_claim null and no admitted ensemble\",",
     "\"route_rows\":[\"id\",\"revision\",\"route\"],",
     "\"layers\":\"Exactly one test_work, nominal correction and route; every operation and every nominal or scenario correction binds the single test-work Claim\",",
     "\"quantities\":\"Exact plain decimals or n/d with a positive denominator; original numeric tokens are retained; bounds and fractions are checked before numerical evaluation\",",
@@ -203,6 +214,7 @@ struct Worksheet {
     inputs: Claim<RecoveryInputs>,
     population: Option<(Claim<RecoveryPopulation>, String)>,
     corrections: Option<(Claim<RecoveryCorrections>, String)>,
+    fit: Option<(Claim<CorrectionFit>, String)>,
     model_json: String,
     inputs_json: String,
 }
@@ -296,13 +308,236 @@ fn source_claim<T>(
     )
 }
 
+fn parse_fit(
+    document: &TomlDoc,
+    source: &SourceAnchor,
+    test_work: &Claim<TestWorkCard>,
+    operations: &[Claim<OperationalFactor>],
+    route: &Claim<RouteAssumption>,
+    target_interval: ValidTime,
+) -> Result<Option<(Claim<CorrectionFit>, String)>, Refusal> {
+    if document.rows_of("correction_fit").next().is_none() {
+        if let Some(row) = document.rows_of("correction_pair").next() {
+            return Err(bad(
+                row.line,
+                "correction pairs require a correction_fit declaration",
+            ));
+        }
+        return Ok(None);
+    }
+    let row = single(document, "correction_fit")?;
+    let values = fields(
+        &row.fields,
+        &[
+            "id",
+            "revision",
+            "method",
+            "baseline",
+            "alignment",
+            "evidence_cut_ns",
+        ],
+        &["upper_cap_fraction"],
+        row.line,
+    )?;
+    if get(&values, "method")?.0 != fit::METHOD || get(&values, "baseline")?.0 != fit::BASELINE {
+        return Err(bad(
+            row.line,
+            "correction fit requires unweighted_additive_residual_mean on post_operational_pre_correction uncapped baselines",
+        ));
+    }
+    let alignment = match get(&values, "alignment")? {
+        ("same_processing_support", _) => FitAlignment::SameProcessingSupport,
+        ("residence_time_aligned", _) => FitAlignment::ResidenceTimeAligned,
+        (_, line) => {
+            return Err(bad(
+                line,
+                "declare same_processing_support or residence_time_aligned",
+            ));
+        }
+    };
+    let mut pairs = Vec::new();
+    let mut pair_json = Vec::new();
+    for pair_row in document.rows_of("correction_pair") {
+        if pairs.len() >= fit::MAX_PAIRS {
+            return Err(bad(
+                pair_row.line,
+                "at most 256 correction pairs are supported",
+            ));
+        }
+        let fields = fields(
+            &pair_row.fields,
+            &[
+                "id",
+                "start_ns",
+                "end_ns",
+                "available_ns",
+                "baseline_fraction",
+                "observed_fraction",
+                "uncensored",
+            ],
+            &[],
+            pair_row.line,
+        )?;
+        let pair = RecoveryPair {
+            id: get(&fields, "id")?.0.into(),
+            interval: interval(&fields, "start_ns", "end_ns")?,
+            available_ns: integer(get(&fields, "available_ns")?)?,
+            baseline_fraction: quantity(get(&fields, "baseline_fraction")?)?,
+            observed_fraction: quantity(get(&fields, "observed_fraction")?)?,
+            uncensored: boolean(get(&fields, "uncensored")?)?,
+        };
+        let tag = pair.canonical_tag();
+        let pair = source_claim(
+            pair,
+            &tag,
+            fit::PAIR_METRIC,
+            source,
+            format!("correction_pair row line {}; declared aligned processing support and uncapped baseline", pair_row.line),
+        );
+        pair_json.push(format!(
+            "{{\"id\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"available_ns\":\"{}\",\"raw_start_ns\":{},\"raw_end_ns\":{},\"raw_available_ns\":{},\"raw_baseline_fraction\":{},\"raw_observed_fraction\":{},\"baseline_fraction\":{},\"observed_fraction\":{},\"uncensored\":{},\"claim\":{}}}",
+            quoted(&pair.value.id),
+            pair.value.interval.start_ns,
+            pair.value.interval.end_ns,
+            pair.value.available_ns,
+            quoted(get(&fields, "start_ns")?.0),
+            quoted(get(&fields, "end_ns")?.0),
+            quoted(get(&fields, "available_ns")?.0),
+            quoted(get(&fields, "baseline_fraction")?.0),
+            quoted(get(&fields, "observed_fraction")?.0),
+            exact(pair.value.baseline_fraction),
+            exact(pair.value.observed_fraction),
+            pair.value.uncensored,
+            claim_json(&pair),
+        ));
+        pairs.push(pair);
+    }
+    let request = CorrectionFit {
+        version: version(&values)?,
+        scope: test_work.value.scope.clone(),
+        test_work: test_work.claim_id,
+        operation_ids: operations
+            .iter()
+            .map(|operation| operation.claim_id)
+            .collect(),
+        route: route.claim_id,
+        evidence_cut_ns: integer(get(&values, "evidence_cut_ns")?)?,
+        target_interval,
+        alignment,
+        upper_cap_fraction: values
+            .get("upper_cap_fraction")
+            .copied()
+            .map(quantity)
+            .transpose()?,
+        pairs,
+    };
+    let tag = request.canonical_tag();
+    let request = source_claim(
+        request,
+        &tag,
+        fit::INPUT_METRIC,
+        source,
+        format!("correction_fit row line {}; original test-work, ordered operations, route, target interval and all correction_pair rows", row.line),
+    );
+    let json = format!(
+        "{{\"version\":{},\"method\":{},\"baseline\":{},\"alignment\":{},\"test_work_claim_id\":{},\"operation_claim_ids\":[{}],\"route_claim_id\":{},\"evidence_cut_ns\":\"{}\",\"raw_evidence_cut_ns\":{},\"target_start_ns\":\"{}\",\"target_end_ns\":\"{}\",\"raw_upper_cap_fraction\":{},\"upper_cap_fraction\":{},\"pairs\":[{}],\"claim\":{}}}",
+        version_json(&request.value.version),
+        quoted(fit::METHOD),
+        quoted(fit::BASELINE),
+        quoted(alignment.as_str()),
+        quoted(&test_work.claim_id.to_string()),
+        request
+            .value
+            .operation_ids
+            .iter()
+            .map(|id| quoted(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join(","),
+        quoted(&route.claim_id.to_string()),
+        request.value.evidence_cut_ns,
+        quoted(get(&values, "evidence_cut_ns")?.0),
+        target_interval.start_ns,
+        target_interval.end_ns,
+        values
+            .get("upper_cap_fraction")
+            .map_or_else(|| "null".into(), |value| quoted(value.0)),
+        request
+            .value
+            .upper_cap_fraction
+            .map_or_else(|| "null".into(), exact),
+        pair_json.join(","),
+        claim_json(&request),
+    );
+    Ok(Some((request, json)))
+}
+
+fn fit_result_json(receipt: &CorrectionFitReceipt) -> String {
+    let summary = &receipt.summary().value;
+    let correction = receipt.correction();
+    let residuals = summary
+        .residuals
+        .iter()
+        .map(|residual| {
+            format!(
+                "{{\"id\":{},\"pair_claim_id\":{},\"residual_fraction\":{}}}",
+                quoted(&residual.id),
+                quoted(&residual.pair_id.to_string()),
+                exact(residual.residual_fraction),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let validity = correction.value.fit_validity.as_ref().map_or_else(
+        || "null".into(),
+        |value| {
+            format!(
+                "{{\"evidence_cut_ns\":\"{}\",\"target_start_ns\":\"{}\",\"target_end_ns\":\"{}\",\"operation_claim_ids\":[{}],\"route_claim_id\":{},\"fit_digest\":{}}}",
+                value.evidence_cut_ns,
+                value.target_interval.start_ns,
+                value.target_interval.end_ns,
+                value
+                    .operation_ids
+                    .iter()
+                    .map(|id| quoted(&id.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                quoted(&value.route.to_string()),
+                quoted(&value.fit_digest),
+            )
+        },
+    );
+    format!(
+        "{{\"receipt_digest\":{},\"claim\":{},\"pair_count\":{},\"mean_residual_fraction\":{},\"sample_residual_variance\":{},\"variance_unit\":\"squared_recovery_fraction\",\"residuals\":[{residuals}],\"correction_role\":\"applied_replacement\",\"replaced_correction_claim_id\":{},\"correction\":{{\"version\":{},\"test_work_claim_id\":{},\"additive_fraction\":{},\"upper_cap_fraction\":{},\"fit_validity\":{validity},\"claim\":{}}}}}",
+        quoted(receipt.digest()),
+        claim_json(receipt.summary()),
+        summary.pair_count,
+        exact(summary.mean_residual_fraction),
+        exact(summary.sample_residual_variance),
+        quoted(&receipt.model().correction().claim_id.to_string()),
+        version_json(&correction.value.version),
+        quoted(&correction.value.test_work.to_string()),
+        exact(correction.value.additive_fraction),
+        correction
+            .value
+            .upper_cap_fraction
+            .map_or_else(|| "null".into(), exact),
+        claim_json(correction),
+    )
+}
+
 fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
     let document = parse_subset(text).map_err(|error| bad(error.line, error.reason))?;
+    let fit_rows = if document.rows_of("correction_fit").next().is_some() {
+        fit::MAX_PAIRS + 1
+    } else {
+        0
+    };
     if document.rows.len()
         > (ensemble::MAX_SCENARIOS + 2) * cards::MAX_INPUTS
             + 2 * ensemble::MAX_SCENARIOS
             + cards::MAX_OPERATIONAL_FACTORS
             + 3
+            + fit_rows
     {
         return Err(bad(1, "recovery worksheet exceeds the bounded row count"));
     }
@@ -316,6 +551,8 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
                 | "operation"
                 | "correction"
                 | "route"
+                | "correction_fit"
+                | "correction_pair"
         ) {
             return Err(bad(row.line, format!("unsupported table {}", row.table)));
         }
@@ -480,6 +717,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
                 .copied()
                 .map(quantity)
                 .transpose()?,
+            fit_validity: None,
         };
         let tag = correction.canonical_tag();
         let correction = source_claim(
@@ -513,7 +751,10 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
                     .insert(id.to_string(), correction)
                     .is_some()
             {
-                return Err(bad(row.line, "correction scenario must be nonempty and unique"));
+                return Err(bad(
+                    row.line,
+                    "correction scenario must be nonempty and unique",
+                ));
             }
             scenario_correction_json.insert(
                 id.to_string(),
@@ -668,7 +909,10 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         None
     } else {
         let Some((population, _)) = &population else {
-            return Err(bad(1, "scenario corrections require a declared joint population"));
+            return Err(bad(
+                1,
+                "scenario corrections require a declared joint population",
+            ));
         };
         let value = RecoveryCorrections {
             population_id: population.claim_id,
@@ -686,10 +930,20 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
             "{{\"claim\":{},\"population_claim_id\":{},\"scenarios\":[{}]}}",
             claim_json(&declaration),
             quoted(&population.claim_id.to_string()),
-            scenario_correction_json.into_values().collect::<Vec<_>>().join(","),
+            scenario_correction_json
+                .into_values()
+                .collect::<Vec<_>>()
+                .join(","),
         );
         Some((declaration, json))
     };
+    let fit = parse_fit(&document, source, &test_work, &operations, &route, interval)?;
+    if fit.is_some() && corrections.is_some() {
+        return Err(bad(
+            1,
+            "correction fitting and scenario correction overrides cannot be combined",
+        ));
+    }
     Ok(Worksheet {
         test_work,
         operations,
@@ -698,6 +952,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         inputs,
         population,
         corrections,
+        fit,
         model_json: format!(
             "{{\"test_work\":{test_work_json},\"operations\":[{}],\"correction\":{correction_json},\"route\":{route_json}}}",
             operation_json.join(","),
@@ -752,6 +1007,15 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         &worksheet.route,
     )
     .and_then(|model| {
+        let fitted = worksheet
+            .fit
+            .as_ref()
+            .map(|(request, _)| fit::fit_correction(&model, request))
+            .transpose()?;
+        let model = match &fitted {
+            Some(receipt) => model.with_correction(receipt.correction())?,
+            None => model,
+        };
         let nominal = model.evaluate(&worksheet.inputs)?;
         let ensemble = worksheet
             .population
@@ -763,21 +1027,23 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
                 None => model.evaluate_ensemble(population),
             })
             .transpose()?;
-        Ok((nominal, ensemble))
+        Ok((nominal, ensemble, fitted))
     });
-    let (refusal, admitted, digest, result, ensemble_receipt) = match evaluation {
-        Ok((receipt, ensemble)) => (
+    let (refusal, admitted, digest, result, ensemble_receipt, fit_receipt) = match evaluation {
+        Ok((receipt, ensemble, fitted)) => (
             None,
             claim_json(receipt.claim()),
             quoted(receipt.digest()),
             receipt.result_json(),
             ensemble,
+            fitted,
         ),
         Err(refusal) => (
             Some(refusal),
             "null".into(),
             "null".into(),
             "null".into(),
+            None,
             None,
         ),
     };
@@ -797,8 +1063,19 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         .map_or_else(String::new, |(_, declarations)| {
             format!(",\"scenario_corrections\":{declarations}")
         });
+    let fit = worksheet
+        .fit
+        .as_ref()
+        .map_or_else(String::new, |(_, declarations)| {
+            let result = fit_receipt
+                .as_ref()
+                .map_or_else(|| "null".into(), fit_result_json);
+            format!(
+                ",\"model_role\":\"retained_original_declaration\",\"correction_fit\":{declarations},\"correction_fit_result\":{result}"
+            )
+        });
     let json = format!(
-        "{{\"schema\":\"fmine.plant-recovery-result.v1\",\"mode\":\"nominal_recovery_card\",\"source\":{{\"path\":{},\"sha256\":{},\"bytes\":{}}},\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{},\"processing_support\":true}},\"model\":{},\"inputs\":{},\"admitted_claim\":{admitted},\"receipt_digest\":{digest},\"result\":{result}{population}{corrections}}}",
+        "{{\"schema\":\"fmine.plant-recovery-result.v1\",\"mode\":\"nominal_recovery_card\",\"source\":{{\"path\":{},\"sha256\":{},\"bytes\":{}}},\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{},\"processing_support\":true}},\"model\":{},\"inputs\":{},\"admitted_claim\":{admitted},\"receipt_digest\":{digest},\"result\":{result}{population}{corrections}{fit}}}",
         quoted(&source.artifact_path),
         quoted(&Digest32(source.artifact_sha256).to_hex()),
         text.len(),
@@ -809,7 +1086,9 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         worksheet.model_json,
         worksheet.inputs_json,
     );
-    let no_claim = if worksheet.corrections.is_some() {
+    let no_claim = if worksheet.fit.is_some() {
+        fit::NO_CLAIM
+    } else if worksheet.corrections.is_some() {
         ensemble::CORRECTIONS_NO_CLAIM
     } else if worksheet.population.is_some() {
         ENSEMBLE_NO_CLAIM
@@ -949,12 +1228,18 @@ upper_cap_fraction = "0.95"
         }
         let duplicate = format!("{JOINT}{CORRECTIONS}{CORRECTIONS}");
         assert_eq!(
-            evaluate(&duplicate, &source(&duplicate)).err().unwrap().code,
+            evaluate(&duplicate, &source(&duplicate))
+                .err()
+                .unwrap()
+                .code,
             RefusalCode::InputMissingOrUnreadable506.as_str(),
         );
         let no_population = format!("{WORKSHEET}{CORRECTIONS}");
         assert_eq!(
-            evaluate(&no_population, &source(&no_population)).err().unwrap().code,
+            evaluate(&no_population, &source(&no_population))
+                .err()
+                .unwrap()
+                .code,
             RefusalCode::InputMissingOrUnreadable506.as_str(),
         );
     }

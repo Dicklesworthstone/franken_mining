@@ -498,7 +498,9 @@ fn perform(
                     && row.table == "plant_forecast"
                     && Row(row).string("id")? == forecast
                 {
-                    let (report, markdown) = super::plant::verify(&Row(row), operation)?;
+                    let earliest = record.time_bounds(journal.header())?.0;
+                    let (report, markdown) =
+                        super::plant::verify(&Row(row), operation, earliest)?;
                     let payload = format!(
                         "{{\"operation\":\"verify-plant\",\"head\":{},\"head_pinned\":{},\"forecast_id\":{},\"registration_head\":{},\"verification\":{report}}}",
                         js(&journal.head().to_hex()),
@@ -560,6 +562,7 @@ fn perform(
     let mut journal = Journal::open_write(&root.join(path), head)?;
     let mut state = replay(&journal)?;
     let mut plant_evidence = None;
+    let mut plant_fit_cut = None;
     let (request, table, selected) = match command {
         Command::Register { request, .. } => (read_request(&root.join(request))?, "forecast", None),
         Command::RegisterAssumption { input, .. } => (
@@ -621,6 +624,7 @@ fn perform(
                 },
                 root,
             )?;
+            plant_fit_cut = prepared.fit_evidence_cut_ns;
             plant_evidence = Some(prepared.evidence_json);
             (prepared.request, "plant_forecast", None)
         }
@@ -704,6 +708,10 @@ fn perform(
     let previous = version_counts(journal.records(), &state, selected)?;
     let mut response = None;
     journal.append(&request, clock, |record, header| {
+        if plant_fit_cut.is_some() {
+            let earliest = record.time_bounds(header)?.0;
+            super::plant::validate_fit_evidence_time(plant_fit_cut, earliest)?;
+        }
         let assessment = apply(&mut state, record, header, Some(table))?;
         // New opt-in policies retain distinct versions; older operation meanings stay frozen.
         let mut versions = previous.versions;

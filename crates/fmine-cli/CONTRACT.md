@@ -358,6 +358,22 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     documented in `robot-docs.plant_recovery`; `tests/plant/recovery_card.toml` is synthetic, with real-binary
     checks in `crates/xtask/testdata/plant_recovery_contract.rs`, including nonlinear joint scenarios from
     `tests/plant/recovery_scenarios.toml` and independently authored correlation/cap cases.
+    Optional `[[correction_fit]]` and 2..256 `[[correction_pair]]` rows fit an exact unweighted mean
+    residual on explicitly aligned historical processing support. Baselines are uncapped and already
+    include the ordered operational factors, before any prior correction. The fitted mean and explicitly
+    declared optional cap replace the original correction and cap; raw pairs, exact descriptive sample
+    variance, original model and applied replacement Claims remain separately visible. Pair intervals
+    cannot overlap, all observations must be available by the evidence cut, and the cut must strictly
+    precede the target inside the same card validity. Model identities and those future-support
+    restrictions travel with the fitted correction. Censoring, incomplete samples, unsupported methods
+    or alignment and simultaneous scenario correction overrides refuse. The shared fitted adjustment
+    propagates through every joint scenario and the existing production/forecast path. Registering a
+    plant forecast additionally requires the fit evidence cut at or before the registration clock's
+    earliest bound; explicit `verify-plant` checks that same boundary after recomputing retained sources.
+    A future cut refuses before any journal append. No-fit worksheets and old saved operations retain
+    their existing semantics. The fit does not imply a standard error, calibrated probabilities or
+    automatic model promotion. The exact schema is exposed in `robot-docs.plant_recovery`; real-binary
+    tests cover direct fitting, coupled output, retained-source verification and atomic timing refusals.
   - DESIGN (BD-177): `plant transfer --input <worksheet.toml>` reads a source-bound
     `fmine.plant-transfer.v1` worksheet and invokes the raw-lot projection owner. It requires explicit
     complete/nonoverlapping whole-lot support, matched moisture/assay dry bases, wet mass in kg,

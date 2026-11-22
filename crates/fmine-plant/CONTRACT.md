@@ -441,6 +441,48 @@ supply that bound. No implicit clipping occurs. Source evidence, confidentiality
 unknown-unknown metadata are combined using the existing plant admission and receipt machinery;
 outputs are never promoted beyond `Estimated`.
 
+### Source-bound fitted recovery adjustments (DESIGN; plan §17.3 and §20.5)
+
+`cards::fit::fit_correction` derives a separately versioned additive adjustment from 2 through 256
+explicitly aligned historical recovery pairs. A baseline is the uncapped prediction **after** the
+ordered operational factors and **before** any correction. Each residual is observed recovery minus
+that baseline; the fitted adjustment is the exact unweighted residual mean. The receipt also retains
+every residual and the exact descriptive sample variance with denominator `n - 1`. It does not turn
+that variance into an uncertainty distribution, standard error, confidence interval or calibration claim.
+
+Each pair has its own Claim, identifier, positive physical interval, availability time, exact fraction
+values and explicit uncensored declaration. Observations lie in `[0,1]`; pre-correction baselines must
+be nonnegative and may exceed one. Intervals cannot overlap, must lie inside the original card's validity,
+and must finish before or at their availability time and the declared evidence cut. The evidence cut
+must strictly precede the target interval, which also lies inside card validity. The source explicitly
+declares common processing support or residence-time alignment; matching timestamps do not establish
+either. Duplicate, incomplete, censored, future, conflicting or overflowing inputs refuse atomically.
+
+The input binds the exact test-work Claim, scope, ordered operational-factor Claims and route Claim.
+The output correction carries those identities, the evidence cut, target interval and fit receipt digest.
+Both model compilation and `with_correction` enforce the identities; every evaluation enforces future
+target support. Taking the fitted correction out of its receipt cannot remove these restrictions.
+The original model remains immutable and fully retained. The new signed adjustment and explicitly
+declared optional cap replace the original correction and cap; the original offset is never added twice.
+Unfitted correction tags and calculations keep their original encoding and behavior.
+
+The existing `plant recovery` worksheet accepts one optional `[[correction_fit]]` with `id`, `revision`,
+`method = "unweighted_additive_residual_mean"`, `baseline = "post_operational_pre_correction"`,
+`alignment = "same_processing_support"` or `"residence_time_aligned"`, `evidence_cut_ns` and optional
+`upper_cap_fraction`. Its target is the worksheet's processing interval. Each `[[correction_pair]]`
+supplies `id`, `start_ns`, `end_ns`, `available_ns`, `baseline_fraction`, `observed_fraction` and
+`uncensored = "true"`. The nominal correction remains required as the retained original declaration;
+simultaneous scenario correction overrides refuse. Successful fits feed the nominal evaluation and
+every declared joint scenario, then the existing coupled production and saved-forecast path. JSON retains
+the complete original model, raw pair tokens, source Claims, fit summary and applied correction. A kernel
+refusal keeps parsed declarations while supplying no fit, recovery or ensemble result.
+
+Known-answer controls cover exact residual moments, replacement without double counting, source/version
+identity, future-only reuse and typed refusals. Actual CLI controls cover fitted physical output, independent
+source edits with an unchanged mean, explicit cap replacement and atomic failure. These are synthetic
+controls: supplied historical baselines and alignment remain declared evidence, with no field validation,
+automatic card promotion, empirical probability calibration or operating authority.
+
 ### Executable source-unit illustrations
 
 ```sh

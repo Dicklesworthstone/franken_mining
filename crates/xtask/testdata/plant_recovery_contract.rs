@@ -458,3 +458,161 @@ fn strict_schema_and_robot_docs_make_the_workflow_discoverable() {
             .contains("no implicit conversions")
     );
 }
+
+const FIT: &str = r#"
+[[correction_fit]]
+id = "synthetic-paired-adjustment"
+revision = "fit-v1"
+method = "unweighted_additive_residual_mean"
+baseline = "post_operational_pre_correction"
+alignment = "same_processing_support"
+evidence_cut_ns = "9"
+
+[[correction_pair]]
+id = "first"
+start_ns = "0"
+end_ns = "3"
+available_ns = "3"
+baseline_fraction = "0.600"
+observed_fraction = "0.620"
+uncensored = "true"
+
+[[correction_pair]]
+id = "second"
+start_ns = "3"
+end_ns = "6"
+available_ns = "6"
+baseline_fraction = "0.700"
+observed_fraction = "0.760"
+uncensored = "true"
+"#;
+
+#[test]
+fn aligned_observations_fit_an_exact_replacement_and_retain_the_original_model() {
+    let text = format!("{WORKSHEET}{FIT}");
+    let path = scratch(&text);
+    let (status, value, bytes) = run(&path);
+    assert_eq!(status, 0, "{value:?}");
+    assert_eq!(run(&path).2, bytes);
+    let payload = at(&value, &["payload"]);
+    // (.62-.60 + .76-.70)/2 = .04. The previous +.02 and .79 cap
+    // are retained for audit, but are both replaced, not applied again.
+    let fitted = at(payload, &["correction_fit_result"]);
+    assert_eq!(at(fitted, &["pair_count"]).i64(), Some(2));
+    assert_eq!(exact(at(fitted, &["mean_residual_fraction"])), (1, 25));
+    assert_eq!(exact(at(fitted, &["sample_residual_variance"])), (1, 1250));
+    let residuals = at(fitted, &["residuals"]).as_array().unwrap();
+    assert_eq!(exact(at(&residuals[0], &["residual_fraction"])), (1, 50));
+    assert_eq!(exact(at(&residuals[1], &["residual_fraction"])), (3, 50));
+    close(at(payload, &["result", "recovery_fraction"]), 1019.0 / 1250.0);
+    assert_eq!(at(payload, &["result", "cap_applied"]).as_bool(), Some(false));
+    assert_eq!(
+        exact(at(payload, &["model", "correction", "additive_fraction"])),
+        (1, 50)
+    );
+    assert_eq!(
+        exact(at(payload, &["model", "correction", "upper_cap_fraction"])),
+        (79, 100)
+    );
+    let correction = at(fitted, &["correction"]);
+    assert_eq!(exact(at(correction, &["additive_fraction"])), (1, 25));
+    assert_eq!(at(correction, &["upper_cap_fraction"]), &Json::Null);
+    let validity = at(correction, &["fit_validity"]);
+    for (key, expected) in [
+        ("evidence_cut_ns", "9"),
+        ("target_start_ns", "10"),
+        ("target_end_ns", "20"),
+    ] {
+        assert_eq!(at(validity, &[key]).as_str(), Some(expected));
+    }
+    assert_eq!(at(validity, &["fit_digest"]), at(fitted, &["receipt_digest"]));
+    let declaration = at(payload, &["correction_fit"]);
+    assert_eq!(
+        at(declaration, &["operation_claim_ids"]),
+        at(validity, &["operation_claim_ids"])
+    );
+    assert_eq!(
+        at(declaration, &["route_claim_id"]),
+        at(validity, &["route_claim_id"])
+    );
+    let pairs = at(declaration, &["pairs"]).as_array().unwrap();
+    assert_eq!(at(&pairs[0], &["raw_baseline_fraction"]).as_str(), Some("0.600"));
+    assert_eq!(at(&pairs[1], &["raw_observed_fraction"]).as_str(), Some("0.760"));
+    let hash = fmine_core::hash::sha256(text.as_bytes()).to_hex();
+    for claim in [
+        at(fitted, &["claim"]),
+        at(correction, &["claim"]),
+        at(declaration, &["claim"]),
+        at(&pairs[0], &["claim"]),
+        at(&pairs[1], &["claim"]),
+        at(payload, &["admitted_claim"]),
+    ] {
+        assert_eq!(at(claim, &["evidence"]).as_str(), Some("Assumed"));
+        assert_eq!(at(claim, &["confidentiality"]).as_str(), Some("Internal"));
+        assert_eq!(at(claim, &["calibration"]).as_str(), Some("uncalibrated"));
+        for anchor in at(claim, &["sources"]).as_array().unwrap() {
+            assert_eq!(at(anchor, &["sha256"]).as_str(), Some(hash.as_str()));
+        }
+    }
+    assert!(at(&value, &["no_claim"]).as_str().unwrap().contains("Sample residual variance"));
+
+    let revised = text.replace("0.620", "0.630").replace("0.760", "0.750");
+    std::fs::write(&path, &revised).unwrap();
+    let (status, changed, _) = run(&path);
+    assert_eq!(status, 0, "{changed:?}");
+    let changed = at(&changed, &["payload"]);
+    assert_eq!(at(changed, &["result"]), at(payload, &["result"]));
+    assert_eq!(
+        exact(at(changed, &["correction_fit_result", "sample_residual_variance"])),
+        (1, 5000)
+    );
+    assert_ne!(at(changed, &["receipt_digest"]), at(payload, &["receipt_digest"]));
+    assert_ne!(
+        at(changed, &["correction_fit_result", "receipt_digest"]),
+        at(fitted, &["receipt_digest"])
+    );
+
+    let capped = format!("{WORKSHEET}{}", FIT.replace(
+        "evidence_cut_ns = \"9\"",
+        "evidence_cut_ns = \"9\"\nupper_cap_fraction = \"0.8\""
+    ));
+    let (status, capped, _) = run(&scratch(&capped));
+    assert_eq!(status, 0, "{capped:?}");
+    close(at(&capped, &["payload", "result", "recovery_fraction"]), 0.8);
+    assert_eq!(at(&capped, &["payload", "result", "cap_applied"]).as_bool(), Some(true));
+}
+
+#[test]
+fn correction_fit_timing_alignment_censoring_and_incomplete_samples_refuse_atomically() {
+    for (from, to, code) in [
+        ("evidence_cut_ns = \"9\"", "evidence_cut_ns = \"10\"", "FMINE-REF-203"),
+        ("available_ns = \"6\"", "available_ns = \"10\"", "FMINE-REF-203"),
+        ("available_ns = \"6\"", "available_ns = \"5\"", "FMINE-REF-203"),
+        ("start_ns = \"3\"", "start_ns = \"2\"", "FMINE-REF-102"),
+        ("uncensored = \"true\"", "uncensored = \"false\"", "FMINE-REF-202"),
+        ("observed_fraction = \"0.760\"", "observed_fraction = \"1.001\"", "FMINE-REF-109"),
+        ("id = \"second\"", "id = \"first\"", "FMINE-REF-201"),
+    ] {
+        let text = format!("{WORKSHEET}{}", FIT.replace(from, to));
+        let value = refused(&text, code);
+        let payload = at(&value, &["payload"]);
+        assert_eq!(at(payload, &["correction_fit_result"]), &Json::Null);
+        assert_eq!(at(payload, &["correction_fit", "pairs"]).as_array().unwrap().len(), 2);
+        assert!(at(payload, &["model", "correction", "claim"]).as_object().is_some());
+    }
+    for (from, to) in [
+        ("unweighted_additive_residual_mean", "implicit_regression"),
+        ("post_operational_pre_correction", "raw_test_work"),
+        ("same_processing_support", "equal_timestamps"),
+    ] {
+        refused(&format!("{WORKSHEET}{}", FIT.replace(from, to)), "FMINE-REF-506");
+    }
+    let (declaration, pairs) = FIT.split_once("[[correction_pair]]").unwrap();
+    refused(&format!("{WORKSHEET}[[correction_pair]]{pairs}"), "FMINE-REF-506");
+    refused(&format!("{WORKSHEET}{FIT}{declaration}"), "FMINE-REF-506");
+    let one_pair = FIT.split("[[correction_pair]]").take(2).collect::<Vec<_>>().join("[[correction_pair]]");
+    let value = refused(&format!("{WORKSHEET}{one_pair}"), "FMINE-REF-201");
+    assert_eq!(at(&value, &["payload", "correction_fit_result"]), &Json::Null);
+    let rtd = FIT.replace("same_processing_support", "residence_time_aligned");
+    assert_eq!(run(&scratch(&format!("{WORKSHEET}{rtd}"))).0, 0);
+}

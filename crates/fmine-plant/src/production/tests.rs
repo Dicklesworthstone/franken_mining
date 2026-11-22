@@ -179,6 +179,7 @@ fn recovery(
         test_work: test_work.claim_id,
         additive_fraction: ZERO,
         upper_cap_fraction: None,
+        fit_validity: None,
     };
     let tag = value.canonical_tag();
     let correction = source(cards::CORRECTION_METRIC, value, tag);
@@ -1050,6 +1051,7 @@ fn conditional_corrections_remain_paired_with_grinding_before_metal_aggregation(
                     test_work: common.model().test_work().claim_id,
                     additive_fraction,
                     upper_cap_fraction: None,
+                    fit_validity: None,
                 };
                 let tag = value.canonical_tag();
                 (id.to_string(), source(cards::CORRECTION_METRIC, value, tag))

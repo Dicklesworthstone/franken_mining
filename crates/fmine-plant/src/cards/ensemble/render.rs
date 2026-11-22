@@ -112,7 +112,10 @@ fn member_json(member: &RecoveryMemberReceipt, retain_correction: bool) -> Strin
             quoted(&source.value.version.revision),
             quoted(&source.value.test_work.to_string()),
             exact(source.value.additive_fraction),
-            source.value.upper_cap_fraction.map_or_else(|| "null".into(), exact),
+            source
+                .value
+                .upper_cap_fraction
+                .map_or_else(|| "null".into(), exact),
             claim_json(source),
         )
     } else {
@@ -179,9 +182,12 @@ impl RecoveryEnsembleReceipt {
             .map(|member| member_json(member, self.corrections.is_some()))
             .collect::<Vec<_>>()
             .join(",");
-        let corrections = self.corrections.as_ref().map_or_else(String::new, |source| {
-            format!(",\"scenario_corrections_claim\":{}", claim_json(source))
-        });
+        let corrections = self
+            .corrections
+            .as_ref()
+            .map_or_else(String::new, |source| {
+                format!(",\"scenario_corrections_claim\":{}", claim_json(source))
+            });
         format!(
             "{{\"schema\":\"fmine.plant-recovery-ensemble.v1\",\"mode\":\"declared_joint_population\",\"calibration\":\"uncalibrated\",\"population_claim\":{},\"admitted_claim\":{},\"receipt_digest\":{}{corrections},\"summary\":{{\"scope\":{{\"circuit\":{},\"material_domain\":{},\"dry_basis\":{},\"element\":{}}},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"route\":{},\"scenario_count\":{},\"mean\":{},\"variance\":{},\"minimum\":{},\"p10\":{},\"p50\":{},\"p90\":{},\"maximum\":{},\"probability_capped\":{}}},\"members\":[{members}],\"quantile_convention\":\"inverse empirical CDF; exact cumulative probability; no interpolation\",\"no_claim\":{}}}",
             claim_json(&self.population),

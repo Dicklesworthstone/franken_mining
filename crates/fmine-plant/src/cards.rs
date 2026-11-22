@@ -2,9 +2,10 @@
 //! Empirical formulas consume numeric coordinates in declared source units.
 //! Four source/version layers remain separate: test work, ordered operational
 //! factors, explicit correction/cap, and the assumed processing route.
-//! This evaluates a declared card and optional declared joint input population;
-//! it does not fit parameters, transfer sample support, manufacture uncertainty,
-//! calibrate a forecast or authorize plant control.
+//! This evaluates declared cards and joint input populations. The bounded fit
+//! module derives a separately versioned additive correction from aligned
+//! historical pairs; it never transfers sample support, manufactures uncertainty,
+//! calibrates a forecast or authorizes plant control.
 //! Determinism: DeterministicPerIsa
 
 use crate::{inventory, reconciliation::Metadata};
@@ -16,6 +17,7 @@ use fmine_units::{ExactQty, Qty};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod ensemble;
+pub mod fit;
 mod formula;
 #[cfg(test)]
 mod tests;
@@ -124,6 +126,20 @@ pub struct RecoveryCorrection {
     pub additive_fraction: ExactQty,
     /// Optional explicitly sourced upper policy cap in [0,1].
     pub upper_cap_fraction: Option<ExactQty>,
+    /// Fitted corrections are usable only on their declared future support.
+    /// None retains the original explicitly declared correction semantics.
+    pub fit_validity: Option<CorrectionFitValidity>,
+}
+
+/// Restrictions travel with a fitted correction when it is applied to a model.
+/// Source identities prevent changing the pre-correction baseline or route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorrectionFitValidity {
+    pub evidence_cut_ns: i64,
+    pub target_interval: ValidTime,
+    pub operation_ids: Vec<ClaimId>,
+    pub route: ClaimId,
+    pub fit_digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,6 +280,7 @@ impl RecoveryModel {
             numeric(factor.value.multiplier)?;
         }
         admit_correction(correction, test_work.claim_id)?;
+        admit_fit_validity(correction, test_work, operations, route)?;
         admit(route, ROUTE_METRIC, &route.value.canonical_tag())?;
         target(
             &route.value.version,
@@ -289,9 +306,12 @@ impl RecoveryModel {
     }
 
     /// Retain the compiled formula and common layers while admitting one
-    /// explicitly sourced conditional correction. No nominal correction is added.
-    fn with_correction(&self, correction: &Claim<RecoveryCorrection>) -> Result<Self> {
+    /// explicitly sourced conditional correction. The source identity, test-work
+    /// version and any fitted operation, route and future-support restrictions
+    /// are checked. This replaces the correction; no nominal correction is added.
+    pub fn with_correction(&self, correction: &Claim<RecoveryCorrection>) -> Result<Self> {
         admit_correction(correction, self.test_work.claim_id)?;
+        admit_fit_validity(correction, &self.test_work, &self.operations, &self.route)?;
         let mut model = self.clone();
         model.correction = correction.clone();
         Ok(model)
@@ -329,6 +349,16 @@ impl RecoveryModel {
             return Err(fail(
                 RefusalCode::OutsideAoa203,
                 "processing interval lies outside this card version's validity",
+            ));
+        }
+        if let Some(validity) = &self.correction.value.fit_validity
+            && (query.interval.start_ns <= validity.evidence_cut_ns
+                || query.interval.start_ns < validity.target_interval.start_ns
+                || query.interval.end_ns > validity.target_interval.end_ns)
+        {
+            return Err(fail(
+                RefusalCode::OutsideAoa203,
+                "fitted correction cannot be applied before its evidence cut or outside its target interval",
             ));
         }
         if query.values.len() != self.names.len() {
@@ -482,11 +512,28 @@ impl OperationalFactor {
 }
 impl RecoveryCorrection {
     pub fn canonical_tag(&self) -> String {
-        let mut e = layer_encoder(*b"RCCO", &self.version, self.test_work);
+        let mut e = if self.fit_validity.is_some() {
+            let mut e = Encoder::new_frame(*b"RCCO", 2);
+            put_version(&mut e, &self.version);
+            e.put_str(&self.test_work.to_string());
+            e
+        } else {
+            layer_encoder(*b"RCCO", &self.version, self.test_work)
+        };
         put_exact(&mut e, self.additive_fraction);
         e.put_u8(u8::from(self.upper_cap_fraction.is_some()));
         if let Some(v) = self.upper_cap_fraction {
             put_exact(&mut e, v);
+        }
+        if let Some(validity) = &self.fit_validity {
+            e.put_i64(validity.evidence_cut_ns);
+            put_time(&mut e, validity.target_interval);
+            e.put_u64(validity.operation_ids.len() as u64);
+            for id in &validity.operation_ids {
+                e.put_str(&id.to_string());
+            }
+            e.put_str(&validity.route.to_string());
+            e.put_str(&validity.fit_digest);
         }
         blake3_hash(&e.finish()).to_hex()
     }
@@ -636,6 +683,17 @@ fn target(v: &CardVersion, actual: ClaimId, expected: ClaimId) -> Result<()> {
     }
 }
 fn admit_correction(correction: &Claim<RecoveryCorrection>, test_work: ClaimId) -> Result<()> {
+    if correction
+        .value
+        .fit_validity
+        .as_ref()
+        .is_some_and(|validity| validity.operation_ids.len() > MAX_OPERATIONAL_FACTORS)
+    {
+        return Err(fail(
+            RefusalCode::NoClaimInDomain201,
+            "fitted correction exceeds the operational layer bound",
+        ));
+    }
     admit(
         correction,
         CORRECTION_METRIC,
@@ -655,6 +713,50 @@ fn admit_correction(correction: &Claim<RecoveryCorrection>, test_work: ClaimId) 
             ));
         }
         numeric(cap)?;
+    }
+    Ok(())
+}
+fn admit_fit_validity(
+    correction: &Claim<RecoveryCorrection>,
+    test_work: &Claim<TestWorkCard>,
+    operations: &[Claim<OperationalFactor>],
+    route: &Claim<RouteAssumption>,
+) -> Result<()> {
+    let Some(validity) = &correction.value.fit_validity else {
+        return Ok(());
+    };
+    interval(validity.target_interval)?;
+    if validity.evidence_cut_ns >= validity.target_interval.start_ns
+        || validity.target_interval.start_ns < test_work.value.valid_time.start_ns
+        || validity.target_interval.end_ns > test_work.value.valid_time.end_ns
+    {
+        return Err(fail(
+            RefusalCode::OutsideAoa203,
+            "fitted correction requires a future target inside test-work validity",
+        ));
+    }
+    if !validity
+        .operation_ids
+        .iter()
+        .copied()
+        .eq(operations.iter().map(|operation| operation.claim_id))
+        || validity.route != route.claim_id
+    {
+        return Err(fail(
+            RefusalCode::FrozenRecordMutation507,
+            "fitted correction targets different operational factors or route",
+        ));
+    }
+    if validity.fit_digest.len() != 64
+        || !validity
+            .fit_digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(fail(
+            RefusalCode::FrozenRecordMutation507,
+            "fitted correction requires its exact fit receipt digest",
+        ));
     }
     Ok(())
 }

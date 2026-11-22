@@ -76,6 +76,7 @@ fn model(formula: &str, names: &[&str], cap: Option<&str>) -> RecoveryModel {
         test_work: card.claim_id,
         additive_fraction: q("0"),
         upper_cap_fraction: cap.map(q),
+        fit_validity: None,
     };
     let tag = value.canonical_tag();
     let correction = source(CORRECTION_METRIC, value, &tag);
@@ -473,6 +474,7 @@ fn conditional_correction(
         test_work: model.test_work().claim_id,
         additive_fraction: q(delta),
         upper_cap_fraction: cap.map(q),
+        fit_validity: None,
     };
     let tag = value.canonical_tag();
     source(CORRECTION_METRIC, value, &tag)
@@ -497,8 +499,14 @@ fn paired_corrections_preserve_dependence_and_apply_caps_before_summary() {
         let corrections = correction_population(
             &population,
             BTreeMap::from([
-                ("low".into(), conditional_correction(&model, "low", low, None)),
-                ("high".into(), conditional_correction(&model, "high", high, cap)),
+                (
+                    "low".into(),
+                    conditional_correction(&model, "low", low, None),
+                ),
+                (
+                    "high".into(),
+                    conditional_correction(&model, "high", high, cap),
+                ),
             ]),
         );
         model
@@ -530,7 +538,11 @@ fn paired_corrections_preserve_dependence_and_apply_caps_before_summary() {
     let json = capped.to_json();
     assert_eq!(json.matches("\"additive_fraction\"").count(), 2);
     assert!(json.contains("\"scenario_corrections_claim\":"));
-    assert!(capped.to_markdown().contains("replaces the nominal correction"));
+    assert!(
+        capped
+            .to_markdown()
+            .contains("replaces the nominal correction")
+    );
     assert_eq!(capped.no_claim(), CORRECTIONS_NO_CLAIM);
     let legacy = model.evaluate_ensemble(&population).unwrap();
     assert!(legacy.corrections().is_none());
@@ -543,14 +555,24 @@ fn correction_population_requires_exact_members_and_original_weights() {
     let model = model("g/2", &["g"], None);
     let population = population(binary(&model, "0.5", "1.5"));
     let rows = BTreeMap::from([
-        ("low".into(), conditional_correction(&model, "low", "0.25", None)),
-        ("high".into(), conditional_correction(&model, "high", "-0.25", None)),
+        (
+            "low".into(),
+            conditional_correction(&model, "low", "0.25", None),
+        ),
+        (
+            "high".into(),
+            conditional_correction(&model, "high", "-0.25", None),
+        ),
     ]);
     for case in 0..3 {
         let mut changed = rows.clone();
         match case {
-            0 => { changed.remove("low"); }
-            1 => { changed.insert("extra".into(), rows["low"].clone()); }
+            0 => {
+                changed.remove("low");
+            }
+            1 => {
+                changed.insert("extra".into(), rows["low"].clone());
+            }
             _ => {
                 let low = changed.remove("low").unwrap();
                 changed.insert("unknown".into(), low);
@@ -593,8 +615,14 @@ fn every_conditional_correction_is_source_admitted_and_physically_checked() {
         let corrections = correction_population(
             &population,
             BTreeMap::from([
-                ("low".into(), conditional_correction(&model, "low", delta, cap)),
-                ("high".into(), conditional_correction(&model, "high", "0", None)),
+                (
+                    "low".into(),
+                    conditional_correction(&model, "low", delta, cap),
+                ),
+                (
+                    "high".into(),
+                    conditional_correction(&model, "high", "0", None),
+                ),
             ]),
         );
         assert_eq!(
@@ -606,8 +634,14 @@ fn every_conditional_correction_is_source_admitted_and_physically_checked() {
         );
     }
     let mut rows = BTreeMap::from([
-        ("low".into(), conditional_correction(&model, "low", "0", None)),
-        ("high".into(), conditional_correction(&model, "high", "0", None)),
+        (
+            "low".into(),
+            conditional_correction(&model, "low", "0", None),
+        ),
+        (
+            "high".into(),
+            conditional_correction(&model, "high", "0", None),
+        ),
     ]);
     let mut wrong_target = rows["low"].value.clone();
     wrong_target.test_work = population.claim_id;
@@ -654,7 +688,10 @@ fn corrections_retain_source_metadata_and_reject_typed_mutation() {
         &population,
         BTreeMap::from([
             ("low".into(), restricted),
-            ("high".into(), conditional_correction(&model, "high", "-0.25", None)),
+            (
+                "high".into(),
+                conditional_correction(&model, "high", "-0.25", None),
+            ),
         ]),
     );
     let result = model
@@ -664,8 +701,18 @@ fn corrections_retain_source_metadata_and_reject_typed_mutation() {
     assert_eq!(result.claim().evidence, EvidenceClass::Assumed);
     assert_eq!(result.claim().state, KnowledgeState::Estimated);
     assert_eq!(result.claim().uu_terms.len(), 1);
-    assert!(result.to_json().contains("authored plant-to-lab uncertainty"));
-    corrections.value.scenarios.get_mut("low").unwrap().value.additive_fraction = q("0");
+    assert!(
+        result
+            .to_json()
+            .contains("authored plant-to-lab uncertainty")
+    );
+    corrections
+        .value
+        .scenarios
+        .get_mut("low")
+        .unwrap()
+        .value
+        .additive_fraction = q("0");
     assert_eq!(
         model
             .evaluate_ensemble_with_corrections(&population, &corrections)
