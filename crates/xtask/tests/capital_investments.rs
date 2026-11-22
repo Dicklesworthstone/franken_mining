@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use fmine_cli::{Envelope, OutputFormat, invoke};
 use fmine_core::hash::sha256;
 use fmine_io::omf::json::{Json, parse};
+use fmine_numerics::exact_feas::Rat;
 
 const SOURCE: &str = include_str!("../../../tests/decisions/production_investment.toml");
 const PORTFOLIO: &str = include_str!("../../../tests/capital/production_investments.toml");
@@ -464,4 +465,318 @@ fn overlapping_sources_duplicate_fields_and_foreign_constraints_refuse() {
     let (docs, _) = invoke(&["robot-docs".into()], &root());
     assert!(docs.payload_json.contains("fmine.capital-investments.v1"));
     assert!(docs.payload_json.contains("production_investments.toml"));
+}
+
+
+fn cash_declaration(opening: &str, first_soft: &str, second_soft: &str) -> String {
+    let mut text = String::from(
+        r#"
+[[funding_schedule]]
+cash_basis = "SYNTHETIC nominal USD; baseline excludes investment increments and initial capital"
+opening_date = "1970-01-01"
+settlement_convention = "source_period_increment_at_cash_period_close"
+cash_rounding = "nearest_ties_even_0_0001_usd"
+
+[[cash_period]]
+id = "first"
+cash_period = "1970-01-01/1970-01-01"
+minimum_cash = "0"
+
+[[cash_period]]
+id = "second"
+cash_period = "1970-01-02/1970-01-02"
+minimum_cash = "0"
+"#,
+    );
+    for state in ["soft", "hard"] {
+        text.push_str(&format!(
+            "\n[[opening_cash]]\nstate = \"{state}\"\nvalue = \"{opening}\"\n"
+        ));
+        for (period, soft_value) in [("first", first_soft), ("second", second_soft)] {
+            let value = if state == "soft" { soft_value } else { "0" };
+            text.push_str(&format!(
+                "\n[[baseline_cash_flow]]\nperiod = \"{period}\"\nstate = \"{state}\"\nvalue = \"{value}\"\n"
+            ));
+        }
+    }
+    text
+}
+
+fn checkpoint<'a>(choice: &'a Json, state: &str, period: Option<&str>) -> &'a Json {
+    field(choice, &["funding_schedule", "checkpoints"])
+        .as_array()
+        .expect("complete cash checkpoints")
+        .iter()
+        .find(|row| {
+            field(row, &["state_id"]).as_str() == Some(state)
+                && field(row, &["period_id"]).as_str() == period
+        })
+        .expect("state/period checkpoint")
+}
+
+#[test]
+fn derived_nominal_cash_pays_initial_capital_once_and_preserves_discounted_risk() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let nominal = json(&run(&path));
+    let text = std::fs::read_to_string(&path).expect("portfolio")
+        + &cash_declaration("2500", "0", "0");
+    let path = write(&dir, "funded.toml", &text);
+    let envelope = run(&path);
+    let payload = json(&envelope);
+    let both = choice(&payload, &["aux", "original"]);
+    let original = choice(&nominal, &["aux", "original"]);
+    assert_eq!(field(both, &["statistics"]), field(original, &["statistics"]));
+    assert_eq!(field(both, &["tail_loss"]).as_str(), Some("76/1"));
+    assert_eq!(
+        winners(&payload, "feasible_winners"),
+        vec![vec!["aux", "original"]]
+    );
+    let opening = checkpoint(both, "soft", None);
+    assert_eq!(field(opening, &["opening_cash"]).as_str(), Some("2500/1"));
+    assert_eq!(
+        field(opening, &["candidate_cash_flow"]).as_str(),
+        Some("-2500/1")
+    );
+    assert_eq!(field(opening, &["closing_cash"]).as_str(), Some("0/1"));
+    let first = checkpoint(both, "soft", Some("first"));
+    assert_eq!(field(first, &["closing_cash"]).as_str(), Some("1616/1"));
+    let second = checkpoint(both, "soft", Some("second"));
+    // Two independently derived 808 USD receipts in each period. The 1/2
+    // valuation multiplier never discounts nominal funding or charges capex twice.
+    assert_eq!(
+        field(second, &["candidate_cash_flow"]).as_str(),
+        Some("1616/1")
+    );
+    assert_eq!(field(second, &["closing_cash"]).as_str(), Some("3232/1"));
+    assert_eq!(
+        field(checkpoint(both, "hard", Some("second")), &["closing_cash"]).as_str(),
+        Some("186304/5")
+    );
+    let funding = field(&payload, &["program", "inputs", "funding_schedule"]);
+    let source_sha = sha256(SOURCE.as_bytes()).to_hex();
+    assert!(
+        field(funding, &["anchors"])
+            .as_array()
+            .expect("source anchors")
+            .iter()
+            .any(|a| field(a, &["sha256"]).as_str() == Some(source_sha.as_str()))
+    );
+    assert_eq!(envelope.to_json(), run(&path).to_json());
+    let actual = Command::new(binary())
+        .args(args(&path))
+        .args(["--workspace"])
+        .arg(root())
+        .output()
+        .expect("funded CLI binary");
+    assert!(actual.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stdout).trim_end(),
+        envelope.to_json()
+    );
+    assert!(
+        envelope
+            .rendered_markdown
+            .as_deref()
+            .expect("cash Markdown")
+            .contains("Funding at declared cash checkpoints")
+    );
+    assert!(run(&portfolio(&dir)).no_claim.expect("scope").contains("Liquidity is not assessed"));
+}
+
+#[test]
+fn profitable_source_portfolio_cannot_spend_future_receipts_at_opening() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let text = std::fs::read_to_string(path).expect("portfolio")
+        + &cash_declaration("2499.9999", "0", "0");
+    let payload = json(&run(&write(&dir, "opening-shortfall.toml", &text)));
+    assert_eq!(winners(&payload, "feasible_winners"), vec![vec!["original"]]);
+    let both = choice(&payload, &["aux", "original"]);
+    assert_eq!(
+        field(checkpoint(both, "soft", None), &["slack"]).as_str(),
+        Some("-1/10000")
+    );
+    assert_eq!(
+        field(checkpoint(both, "soft", Some("second")), &["closing_cash"]).as_str(),
+        Some("32319999/10000")
+    );
+    assert!(
+        field(both, &["structural_rejections"])
+            .as_array()
+            .expect("initial funding rejection")
+            .iter()
+            .any(|r| field(r, &["kind"]).as_str() == Some("cash_schedule_shortfall"))
+    );
+}
+
+#[test]
+fn source_cash_floor_breaches_survive_later_recovery_and_exact_equality_passes() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let source = std::fs::read_to_string(path).expect("portfolio");
+    let text = source.clone() + &cash_declaration("2500", "-1616.0001", "5000");
+    let payload = json(&run(&write(&dir, "period-shortfall.toml", &text)));
+    assert_eq!(winners(&payload, "feasible_winners"), vec![vec!["original"]]);
+    let both = choice(&payload, &["aux", "original"]);
+    assert_eq!(
+        field(checkpoint(both, "soft", Some("first")), &["slack"]).as_str(),
+        Some("-1/10000")
+    );
+    assert_eq!(
+        field(checkpoint(both, "soft", Some("second")), &["closing_cash"]).as_str(),
+        Some("66159999/10000")
+    );
+    let equal = source + &cash_declaration("2500", "-1616", "5000");
+    let payload = json(&run(&write(&dir, "floor-equality.toml", &equal)));
+    assert_eq!(
+        winners(&payload, "feasible_winners"),
+        vec![vec!["aux", "original"]]
+    );
+    assert_eq!(
+        field(
+            checkpoint(choice(&payload, &["aux", "original"]), "soft", Some("first")),
+            &["slack"]
+        )
+        .as_str(),
+        Some("0/1")
+    );
+}
+
+#[test]
+fn source_funding_requires_complete_exact_declared_cash_and_valid_settlement_timing() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let source = std::fs::read_to_string(path).expect("portfolio");
+    let cash = cash_declaration("2500", "0", "0");
+    for (from, to, why) in [
+        (
+            "opening_date = \"1970-01-01\"",
+            "opening_date = \"1969-12-31\"",
+            "UTC valuation date",
+        ),
+        (
+            "1970-01-01/1970-01-01",
+            "1969-12-31/1969-12-31",
+            "cannot precede",
+        ),
+        (
+            "1970-01-02/1970-01-02",
+            "1970-01-03/1970-01-03",
+            "contiguous",
+        ),
+        (
+            "id = \"second\"",
+            "id = \"foreign\"",
+            "cash period ids",
+        ),
+        (
+            "cash_rounding = \"nearest_ties_even_0_0001_usd\"",
+            "cash_rounding = \"implicit\"",
+            "exact_0_0001_usd",
+        ),
+        (
+            "[[baseline_cash_flow]]\nperiod = \"second\"\nstate = \"hard\"\nvalue = \"0\"\n",
+            "",
+            "every opening state",
+        ),
+        (
+            "value = \"2500\"",
+            "value = \"2500.00001\"",
+            "exactly representable",
+        ),
+    ] {
+        refused(
+            &dir,
+            "bad-cash.toml",
+            &(source.clone() + &cash.replace(from, to)),
+            why,
+        );
+    }
+    refused(
+        &dir,
+        "orphan-cash.toml",
+        &(source.clone() + "\n[[opening_cash]]\nstate = \"soft\"\nvalue = \"2500\"\n"),
+        "explicit funding_schedule",
+    );
+    refused(
+        &dir,
+        "transcribed-increment.toml",
+        &(source.clone()
+            + &cash
+            + "\n[[candidate_cash_flow]]\nperiod = \"first\"\ncandidate = \"original\"\nstate = \"soft\"\nvalue = \"99999\"\n"),
+        "unsupported table candidate_cash_flow",
+    );
+    // Exact settlement remains an explicit alternative to declared rounding,
+    // and must reject an unrepresentable nominal source increment.
+    let terms = dir.join("aux-4.toml");
+    let original = std::fs::read_to_string(&terms).expect("auxiliary commercial source");
+    write(
+        &dir,
+        "aux-4.toml",
+        &original.replace("fixed_usd = \"1000\"", "fixed_usd = \"1000.00001\""),
+    );
+    refused(
+        &dir,
+        "unrounded-source-cash.toml",
+        &(source
+            + &cash.replace("nearest_ties_even_0_0001_usd", "exact_0_0001_usd")),
+        "exactly representable",
+    );
+}
+
+
+fn fraction(value: &Json) -> Rat {
+    let (n, d) = value
+        .as_str()
+        .expect("rational string")
+        .split_once('/')
+        .expect("rational components");
+    Rat::new(n.parse().expect("numerator"), d.parse().expect("denominator"))
+        .expect("exact rational")
+}
+
+#[test]
+fn declared_cash_rounding_keeps_every_original_amount_and_signed_rounding_delta() {
+    let dir = temporary();
+    let path = portfolio(&dir);
+    let source = std::fs::read_to_string(path).expect("portfolio");
+    let cash = cash_declaration("2500", "0", "0");
+    let payload = json(&run(&write(&dir, "rounded-cash.toml", &(source.clone() + &cash))));
+    assert_eq!(
+        field(&payload, &["source_cash", "cash_rounding"]).as_str(),
+        Some("nearest_ties_even_0_0001_usd")
+    );
+    let rows = field(&payload, &["source_cash", "rows"])
+        .as_array()
+        .expect("every candidate/period/state source amount");
+    assert_eq!(rows.len(), 12);
+    let mut nonzero = 0;
+    for row in rows {
+        let original = fraction(field(row, &["unrounded_increment_usd"]));
+        let rounded = fraction(field(row, &["cash_increment_usd"]));
+        let delta = fraction(field(row, &["rounding_delta_usd"]));
+        assert_eq!(rounded.checked_sub(original).expect("difference"), delta);
+        assert!(
+            delta
+                .checked_cmp(Rat::new(1, 20_000).expect("half minor unit"))
+                .expect("upper bound")
+                .is_le()
+        );
+        assert!(
+            delta
+                .checked_cmp(Rat::new(-1, 20_000).expect("negative half minor unit"))
+                .expect("lower bound")
+                .is_ge()
+        );
+        nonzero += usize::from(delta != Rat::from_integer(0));
+    }
+    // Exact binary64 physical amounts generally are not exact minor USD units.
+    assert!(nonzero > 0);
+    refused(
+        &dir,
+        "exact-residue.toml",
+        &(source + &cash.replace("nearest_ties_even_0_0001_usd", "exact_0_0001_usd")),
+        "exactly representable",
+    );
 }

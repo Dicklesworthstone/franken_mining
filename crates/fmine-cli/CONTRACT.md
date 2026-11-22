@@ -64,9 +64,27 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   dependencies, exclusions and joint signed-loss CVaR use the existing capital engine, preserving every
   source alternative, rejection, full source bytes/hash and Claim ancestry. The distinct
   `additive_discounted_incremental_cash` convention identifies a declared cash window; source-local
-  downside screens and unsupported funding, equity, entity, robustness, resampling and recourse modes
-  refuse. No lifetime NAV, terminal value, liquidity path, independence or interaction model is inferred.
+  downside screens and unsupported aggregate/entity funding, equity, robustness, resampling and recourse
+  modes refuse. No lifetime NAV, terminal value, independence or interaction model is inferred.
   Controls: `xtask/tests/capital_investments.rs`; example: `tests/capital/production_investments.toml`.
+  Optional `[[funding_schedule]]` requires `cash_basis`, `opening_date`,
+  `settlement_convention = "source_period_increment_at_cash_period_close"` and
+  explicit `cash_rounding = "exact_0_0001_usd"` or `"nearest_ties_even_0_0001_usd"`.
+  Supply `[[cash_period]]` with `id`, `cash_period` and
+  `minimum_cash` for each source investment period; `[[opening_cash]]` with `state`, `value` for
+  every shared state; and `[[baseline_cash_flow]]` with `period`, `state`, `value` for every pair,
+  including zeroes. Baseline flows exclude candidate increments and initial capital. Inclusive UTC cash
+  windows are contiguous from the valuation date; the derived source-period increment settles at the
+  matching window's close, which cannot precede that source interval's exclusive end. Nominal cash comes
+  from the unrounded original operating increments, without discounting. Exact mode refuses
+  sub-0.0001-USD fractions; the explicit nearest mode rounds each increment once using the same
+  implementation as source valuation. JSON `source_cash` rows retain every original rational,
+  settled amount and signed rounding delta, bound in the command digest. Opening cash, baseline flows
+  and floors always require exact minor units. Initial capital leaves opening cash once before receipts. Every original state must meet the
+  opening and period-close floors; later recovery cannot erase an earlier shortfall. Existing discounted
+  returns and joint tail risk are unchanged. Complete sources and schedule Claims remain bound. Omitting
+  the declaration explicitly reports that liquidity is not assessed. These checks do not establish
+  intra-period solvency or infer actual payment terms.
 
 - DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>
   --recovery <worksheet> --terms <worksheet>` values each complete shared physical/commercial state

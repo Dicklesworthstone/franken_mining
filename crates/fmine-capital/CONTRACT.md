@@ -782,11 +782,19 @@ DESIGN (BD-225/229): the static kernel also admits the explicit
 cash returns, never full project NAV. Initial capital is already deducted from each
 candidate's return and independently constrains budget without a second charge. All subsets,
 dependencies, exclusions, same-state regret and joint signed-loss CVaR use the existing exact
-owner. This convention refuses equity/entity valuation, funding, staged recourse, bootstrap
-and scenario-stress extensions until their cash semantics are declared. Existing NAV modes
-retain their original input and rendering bytes. The CLI's `fmine.capital-investments.v1`
-adapter admits complete retained investment sources under explicit common-scenario and
-additivity assumptions; it refuses overlapping operating supports without shared exclusion.
+owner. Explicit `FundingSchedule` pays initial capital once from opening cash and applies
+nominal operating flows at declared checkpoints. This convention still refuses aggregate/entity
+funding, equity/entity valuation, staged recourse, bootstrap and scenario-stress extensions.
+Existing NAV modes retain their original input and rendering bytes. The CLI's
+`fmine.capital-investments.v1` adapter admits complete retained investment sources under
+explicit common-scenario and additivity assumptions; it refuses overlapping operating supports
+without shared exclusion. Optional source-bound schedules derive nominal candidate cash from
+original undiscounted investment increments with explicitly selected exact or nearest-ties-even
+0.0001-USD settlement. Every original rational, settled amount and rounding delta remains in the
+source receipt. The adapter requires declared settlement windows for every source period and
+retains every source state. Opening
+cash and complete baseline flows remain separately declared assumptions; future receipts never
+fund initial capital and later surplus never erases an earlier cash-floor breach.
 Direct known-answer control:
 `declared_cash_portfolios_keep_joint_risk_without_recharging_spending_or_claiming_nav`.
 

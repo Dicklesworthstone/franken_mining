@@ -401,7 +401,7 @@ fn difference(
         }
     }
     Ok(Claim::new(
-        &format!("public-disclosure.{}/1", report.rule()),
+        format!("public-disclosure.{}/1", report.rule()),
         value,
         &tag,
         Representation::Deterministic,

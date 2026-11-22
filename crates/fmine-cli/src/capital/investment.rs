@@ -5,7 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use fmine_capital::{CapitalCandidate, ProgramInputs, ProgramPolicy};
+use fmine_capital::{
+    CandidateCashFlow, CapitalCandidate, CashPeriod, FundingSchedule, ProgramInputs,
+    ProgramPolicy, StateCashFlow,
+};
 use fmine_claim::{
     AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
 };
@@ -15,8 +18,10 @@ use fmine_evidence::{
     EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
 use fmine_metrics::valuation::investment::{InvestmentReceipt, InvestmentSpec};
+use fmine_metrics::valuation::{MonetaryRounding, round_declared_usd_cash};
 use fmine_numerics::exact_feas::Rat;
 use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
+use fmine_time::CivilDate;
 use fmine_units::{Currency, Money};
 
 use crate::{Envelope, investment::LoadedInvestment, json_string as js, worksheet_input};
@@ -24,7 +29,11 @@ use crate::{Envelope, investment::LoadedInvestment, json_string as js, worksheet
 const SCHEMA: &str = "fmine.capital-investments.v1";
 const MAX_BYTES: usize = 64 * 1024;
 const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
-const NO_CLAIM: &str = "Source-derived static portfolio over declared discounted incremental cash windows. Shared scenario meaning and additivity across distinct operations are explicit assumptions, not inferred independence. Candidates sharing a boundary and circuit must be mutually exclusive. Every source investment is recomputed in full; selected source alternatives need not be source winners. Initial capital is subtracted in investment returns once and separately constrains the budget. Portfolio risk is the signed-loss CVaR of the combined same-state outcomes; standalone risk summaries are never added. Candidate monetary rounding is retained before additive portfolio aggregation. No missing-period cash, terminal value, project lifetime, full NAV, financing, liquidity schedule, synergy, physical authorization or calibrated probability is inferred.";
+const CASH_SETTLEMENT: &str = "source_period_increment_at_cash_period_close";
+const EXACT_CASH: &str = "exact_0_0001_usd";
+const ROUNDED_CASH: &str = "nearest_ties_even_0_0001_usd";
+const LIQUIDITY_NO_CLAIM: &str = "Source-derived static portfolio over declared discounted incremental cash windows. Optional source-bound funding pays initial capital once from opening cash and derives each candidate's nominal undiscounted operating increment from its original receipt. Each source period is assigned an explicit inclusive UTC cash window, with its increment settled at that window's close no earlier than the source period's end. Opening cash is at valuation time before initial capital; baseline cash excludes these candidate increments and initial capital. Every original state must meet the opening and period-end floors. The explicit cash-rounding policy either requires exact 0.0001 USD or rounds each nominal increment once to nearest ties even. Every unrounded amount and signed rounding delta is retained; opening cash, baseline flows and floors always require exact minor units. These settlement amounts never change already-net discounted values or joint signed-loss CVaR. Shared scenarios, additivity, settlement timing and baseline cash remain assumptions. No intra-period solvency, omitted cash, lifetime NAV, tax, financing, interaction model, calibrated probability or execution authority is inferred.";
+const NO_CLAIM: &str = "Source-derived static portfolio over declared discounted incremental cash windows. Shared scenario meaning and additivity across distinct operations are explicit assumptions, not inferred independence. Candidates sharing a boundary and circuit must be mutually exclusive. Every source investment is recomputed in full; selected source alternatives need not be source winners. Initial capital is subtracted in investment returns once and separately constrains the budget. Portfolio risk is the signed-loss CVaR of the combined same-state outcomes; standalone risk summaries are never added. Candidate monetary rounding is retained before additive portfolio aggregation. Liquidity is not assessed in this comparison. No missing-period cash, terminal value, project lifetime, full NAV, financing, liquidity schedule, synergy, physical authorization or calibrated probability is inferred.";
 type Result<T> = std::result::Result<T, Refusal>;
 type Fields<'a> = BTreeMap<&'a str, &'a str>;
 
@@ -90,7 +99,7 @@ fn money(value: Rat) -> Result<Money> {
         .map_err(|_| invalid("USD amount overflows exact minor units"))?;
     if scaled.den() != 1 {
         return Err(invalid(
-            "USD spending and limits must be exactly representable to 0.0001 USD; no rounding",
+            "USD spending, cash and limits must be exactly representable to 0.0001 USD; no rounding",
         ));
     }
     Ok(Money::from_minor(Currency::USD, scaled.num()))
@@ -115,6 +124,8 @@ struct Declaration {
     tail_mass: Rat,
     max_tail_loss: Option<Money>,
     candidates: Vec<Candidate>,
+    funding_schedule: Option<FundingSchedule>,
+    cash_rounding: Option<String>,
     claim: Claim<()>,
 }
 
@@ -132,10 +143,8 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| invalid(e.to_string()))?;
-    if doc.rows.len() > 8 + 64 + 16 {
-        return Err(invalid(
-            "at most eight candidates, 64 dependencies and 16 UU rows",
-        ));
+    if doc.rows.len() > 8 + 64 + 16 + 1 + 16 + 256 * 17 {
+        return Err(invalid("capital investment manifest has too many rows"));
     }
     let top = fields(
         &doc.top,
@@ -163,6 +172,10 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
     }
     let (mut candidates, mut requires, mut unknowns) =
         (BTreeMap::new(), Vec::new(), BTreeMap::new());
+    let mut funding_schedule = None;
+    let mut cash_rounding = None;
+    let (mut cash_periods, mut opening_cash, mut baseline_flows) =
+        (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
     let mut anchors = vec![source.clone()];
     for row in &doc.rows {
         match row.table.as_str() {
@@ -210,6 +223,77 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
                     return Err(invalid("one to sixteen unique UU declarations required"));
                 }
             }
+            "funding_schedule" => {
+                let f = fields(
+                    &row.fields,
+                    &[
+                        "cash_basis",
+                        "opening_date",
+                        "settlement_convention",
+                        "cash_rounding",
+                    ],
+                    &[],
+                )?;
+                let rounding = get(&f, "cash_rounding")?;
+                if funding_schedule.is_some()
+                    || get(&f, "settlement_convention")? != CASH_SETTLEMENT
+                    || !matches!(rounding, EXACT_CASH | ROUNDED_CASH)
+                {
+                    return Err(invalid(
+                        "one funding_schedule with source_period_increment_at_cash_period_close and an explicit exact_0_0001_usd or nearest_ties_even_0_0001_usd policy required",
+                    ));
+                }
+                cash_rounding = Some(rounding.to_owned());
+                funding_schedule = Some(FundingSchedule {
+                    model_key: get(&top, "model_key")?.into(),
+                    currency: Currency::USD,
+                    cash_basis: get(&f, "cash_basis")?.into(),
+                    opening_date: get(&f, "opening_date")?.into(),
+                    opening_cash: Vec::new(),
+                    periods: Vec::new(),
+                    baseline_flows: Vec::new(),
+                    candidate_flows: Vec::new(),
+                });
+            }
+            "cash_period" => {
+                let f = fields(&row.fields, &["id", "cash_period", "minimum_cash"], &[])?;
+                let p = CashPeriod {
+                    id: get(&f, "id")?.into(),
+                    cash_period: get(&f, "cash_period")?.into(),
+                    minimum_cash: money(number(get(&f, "minimum_cash")?)?)?,
+                };
+                if cash_periods.insert(p.id.clone(), p).is_some()
+                    || cash_periods.len() > fmine_capital::MAX_CASH_PERIODS
+                {
+                    return Err(invalid("one to sixteen unique cash periods required"));
+                }
+            }
+            "opening_cash" => {
+                let f = fields(&row.fields, &["state", "value"], &[])?;
+                if opening_cash
+                    .insert(get(&f, "state")?.to_owned(), money(number(get(&f, "value")?)?)?)
+                    .is_some()
+                    || opening_cash.len() > fmine_capital::MAX_STATES
+                {
+                    return Err(invalid("opening cash requires each state once"));
+                }
+            }
+            "baseline_cash_flow" => {
+                let f = fields(&row.fields, &["period", "state", "value"], &[])?;
+                let flow = StateCashFlow {
+                    period_id: get(&f, "period")?.into(),
+                    state_id: get(&f, "state")?.into(),
+                    value: money(number(get(&f, "value")?)?)?,
+                };
+                if baseline_flows
+                    .insert((flow.period_id.clone(), flow.state_id.clone()), flow)
+                    .is_some()
+                    || baseline_flows.len()
+                        > fmine_capital::MAX_CASH_PERIODS * fmine_capital::MAX_STATES
+                {
+                    return Err(invalid("baseline cash requires every period/state once"));
+                }
+            }
             _ => return Err(invalid(format!("unsupported table {}", row.table))),
         }
         for f in &row.fields {
@@ -224,6 +308,13 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
         return Err(invalid(
             "candidates and explicit portfolio UU assumptions are required",
         ));
+    }
+    if let Some(schedule) = &mut funding_schedule {
+        schedule.periods = cash_periods.into_values().collect();
+        schedule.opening_cash = opening_cash.into_iter().collect();
+        schedule.baseline_flows = baseline_flows.into_values().collect();
+    } else if !cash_periods.is_empty() || !opening_cash.is_empty() || !baseline_flows.is_empty() {
+        return Err(invalid("cash rows require an explicit funding_schedule"));
     }
     for (candidate, prerequisite) in requires {
         if !candidates.contains_key(&prerequisite) {
@@ -270,6 +361,8 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
             .map(|s| money(number(s)?))
             .transpose()?,
         candidates: candidates.into_values().collect(),
+        funding_schedule,
+        cash_rounding,
         claim,
     })
 }
@@ -364,6 +457,107 @@ fn selected<'a>(
         .get(&candidate.investment)
         .map(LoadedInvestment::receipt)
         .ok_or_else(|| invalid("missing investment source"))
+}
+
+fn utc_date(ns: i64) -> String {
+    let date = CivilDate::from_epoch_days(ns.div_euclid(86_400_000_000_000));
+    format!("{:04}-{:02}-{:02}", date.year, date.month, date.day)
+}
+
+fn derive_funding(
+    declaration: &Declaration,
+    loaded: &BTreeMap<String, LoadedInvestment>,
+    reference: &InvestmentReceipt,
+    metadata: &Metadata,
+) -> Result<(Option<Claim<FundingSchedule>>, String)> {
+    let Some(mut schedule) = declaration.funding_schedule.clone() else {
+        return Ok((None, String::new()));
+    };
+    let rounding = declaration
+        .cash_rounding
+        .as_deref()
+        .ok_or_else(|| invalid("source cash schedule is missing its rounding policy"))?;
+    let spec = &reference.declaration().value;
+    let states = reference.decision().inputs().weights.value.states.len();
+    let work = (1_usize << declaration.candidates.len())
+        .checked_mul(states)
+        .and_then(|n| n.checked_mul(spec.periods.len() + 1));
+    if work.is_none_or(|n| n > fmine_capital::MAX_CASH_CHECKPOINTS) {
+        return Err(invalid("source cash schedules exceed 65536 cash checkpoints"));
+    }
+    if schedule.opening_date != utc_date(spec.valuation_time_ns)
+        || schedule.periods.len() != spec.periods.len()
+    {
+        return Err(invalid(
+            "opening_date must be the UTC valuation date and every source period needs one cash period",
+        ));
+    }
+    for source_period in &spec.periods {
+        let cash_period = schedule
+            .periods
+            .iter()
+            .find(|p| p.id == source_period.id)
+            .ok_or_else(|| invalid("cash period ids must match every source investment period"))?;
+        let (_, close) = cash_period
+            .cash_period
+            .split_once('/')
+            .ok_or_else(|| invalid("cash periods require inclusive YYYY-MM-DD/YYYY-MM-DD dates"))?;
+        let last_ns = source_period
+            .end_ns
+            .checked_sub(1)
+            .ok_or_else(|| invalid("source period end is outside the supported time range"))?;
+        if !fmine_registry::sources::is_date(close) || close < utc_date(last_ns).as_str() {
+            return Err(invalid(
+                "cash settlement cannot precede the end of its source operating period",
+            ));
+        }
+    }
+    let mut rows = Vec::new();
+    for candidate in &declaration.candidates {
+        for flow in selected(loaded, candidate)?
+            .cashflows()
+            .iter()
+            .filter(|flow| flow.alternative_id == candidate.alternative)
+        {
+            let (value, delta) = if rounding == EXACT_CASH {
+                (money(flow.incremental_cash_usd)?, Rat::from_integer(0))
+            } else {
+                round_declared_usd_cash(
+                    flow.incremental_cash_usd,
+                    MonetaryRounding::NearestTiesEvenFourPlaces,
+                )?
+            };
+            let rounded = Rat::new(value.minor, Money::SCALE)
+                .map_err(|_| invalid("nominal cash exceeds the supported rational range"))?;
+            rows.push(format!(
+                "{{\"candidate_id\":{},\"period_id\":{},\"state_id\":{},\"unrounded_increment_usd\":{},\"cash_increment_usd\":{},\"rounding_delta_usd\":{}}}",
+                js(&candidate.id), js(&flow.period_id), js(&flow.scenario_id),
+                rational(flow.incremental_cash_usd), rational(rounded), rational(delta)
+            ));
+            schedule.candidate_flows.push(CandidateCashFlow {
+                period_id: flow.period_id.clone(),
+                candidate_id: candidate.id.clone(),
+                state_id: flow.scenario_id.clone(),
+                value,
+            });
+        }
+    }
+    let tag = schedule.canonical_tag();
+    let claim = metadata.claim(
+        "capital.investment.funding_schedule/1",
+        schedule,
+        &tag,
+        AdditivityClass::NonAdditive,
+    );
+    let derivation = format!(
+        "{{\"schema\":\"fmine.investment-nominal-cash.v1\",\"settlement_convention\":{},\"cash_rounding\":{},\"rows\":[{}]}}",
+        js(CASH_SETTLEMENT), js(rounding), rows.join(",")
+    );
+    Ok((Some(claim), derivation))
+}
+
+fn rational(value: Rat) -> String {
+    js(&format!("{}/{}", value.num(), value.den()))
 }
 
 pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<Envelope> {
@@ -504,12 +698,18 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
         &tag,
         AdditivityClass::NonAdditive,
     );
+    let (funding_schedule, cash_derivation) = derive_funding(&d, &loaded, reference, &all)?;
+    let no_claim = if funding_schedule.is_some() {
+        LIQUIDITY_NO_CLAIM
+    } else {
+        NO_CLAIM
+    };
     let program = fmine_capital::evaluate(&ProgramInputs {
         policy,
         weights,
         candidates,
         funding: None,
-        funding_schedule: None,
+        funding_schedule,
         entity_funding: None,
         equity: None,
         entity_valuations: Vec::new(),
@@ -522,9 +722,15 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
     for snapshot in &snapshots {
         enc.put_str(&sha256(snapshot.as_bytes()).to_hex());
     }
+    let cash_field = if cash_derivation.is_empty() {
+        String::new()
+    } else {
+        enc.put_str(&cash_derivation);
+        format!(",\"source_cash\":{cash_derivation}")
+    };
     let digest = sha256(&enc.finish()).to_hex();
     let payload = format!(
-        "{{\"schema\":\"fmine.capital-investments-command.v1\",\"mode\":\"source_derived_investment_portfolio\",\"manifest\":{{\"source\":{},\"submitted_worksheet\":{}}},\"shared_scenario_basis\":{},\"additivity_basis\":{},\"candidate_sources\":[{}],\"sources\":[{}],\"program\":{},\"digest\":{}}}",
+        "{{\"schema\":\"fmine.capital-investments-command.v1\",\"mode\":\"source_derived_investment_portfolio\",\"manifest\":{{\"source\":{},\"submitted_worksheet\":{}}},\"shared_scenario_basis\":{},\"additivity_basis\":{},\"candidate_sources\":[{}],\"sources\":[{}],\"program\":{}{cash_field},\"digest\":{}}}",
         worksheet_input::source_json(source, text.len()),
         js(text),
         js(&d.shared_scenario_basis),
@@ -534,8 +740,11 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
         program.to_json(),
         js(&digest)
     );
+    let rounding_notice = d.cash_rounding.as_ref().map_or_else(String::new, |rounding| {
+        format!("**Cash settlement rounding:** `{}`. Unrounded cash and signed rounding deltas are retained in the JSON source-cash rows.\n\n", md(rounding))
+    });
     let mut markdown = format!(
-        "# Source-derived investment portfolio\n\n{NO_CLAIM}\n\n**Shared scenario assumption:** {}.\n\n**Additivity assumption:** {}.\n\n**Source receipt digest:** `{digest}`.\n\n## Investment sources\n\n| Candidate | Source manifest | Selected alternative | Investment digest |\n|---|---|---|---|\n",
+        "# Source-derived investment portfolio\n\n{rounding_notice}{no_claim}\n\n**Shared scenario assumption:** {}.\n\n**Additivity assumption:** {}.\n\n**Source receipt digest:** `{digest}`.\n\n## Investment sources\n\n| Candidate | Source manifest | Selected alternative | Investment digest |\n|---|---|---|---|\n",
         md(&d.shared_scenario_basis),
         md(&d.additivity_basis)
     );
@@ -552,7 +761,7 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
     markdown.push('\n');
     markdown.push_str(&program.to_markdown());
     let mut envelope = Envelope::ok("decide program", payload, Vec::new());
-    envelope.no_claim = Some(NO_CLAIM);
+    envelope.no_claim = Some(no_claim);
     envelope.rendered_markdown = Some(markdown);
     Ok(envelope)
 }
