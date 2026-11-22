@@ -154,6 +154,8 @@ impl std::error::Error for L0Error {}
 pub struct CellSnapshot {
     pub cell_id: String,
     pub committed_count: u64,
+    /// Highest committed fencing epoch at `committed_count` (`1` when `committed_count == 0`).
+    pub head_epoch: u64,
     pub head_hash: Digest32,
     pub mmr_root: Digest32,
     /// Latest immutable [`KeyVersion`] for every key existing at `committed_count`.
@@ -268,6 +270,7 @@ impl L0Cell {
         let mut open_obligations = BTreeSet::new();
         let mut mmr = Mmr::new();
         let mut head_hash = GENESIS_PREV_HASH;
+        let mut head_epoch = 1_u64;
         let count_usize =
             usize::try_from(committed_count).map_err(|_| L0Error::SequenceOutOfRange {
                 cell_id: cell_id.clone(),
@@ -283,6 +286,7 @@ impl L0Cell {
         {
             let digest = self.authority.digests()[idx];
             head_hash = digest;
+            head_epoch = batch.epoch;
             mmr.push(digest.as_bytes())?;
             for op in &batch.deltas {
                 match op.kind {
@@ -311,6 +315,7 @@ impl L0Cell {
         Ok(CellSnapshot {
             cell_id: cell_id.clone(),
             committed_count,
+            head_epoch,
             head_hash,
             mmr_root: mmr.root(),
             live_keys,
@@ -378,6 +383,23 @@ impl L0Ledger {
             });
         }
         let cell = self.cell_mut(&lease.cell_id)?;
+        if lease.epoch < cell.authority.highest_seen_epoch() {
+            return Err(LedgerError::EpochRegression {
+                cell_id: lease.cell_id.clone(),
+                observed: lease.epoch,
+                highest: cell.authority.highest_seen_epoch(),
+            }
+            .into());
+        }
+        if lease != cell.authority.active_lease() || batch.cell_id != lease.cell_id {
+            return Err(LedgerError::LeaseViolation {
+                detail: format!(
+                    "lease/batch mismatch for cell '{}': batch cell '{}', lease holder '{}' (epoch {})",
+                    lease.cell_id, batch.cell_id, lease.holder_id, lease.epoch
+                ),
+            }
+            .into());
+        }
         cell.check_semantics(&batch)?;
         let digest = cell.authority.commit_with_lease(lease, batch.clone())?;
         cell.apply_semantics(&batch);

@@ -211,7 +211,7 @@ impl DistSpec {
         if self.validate().is_err() {
             return None;
         }
-        match self {
+        let val = match self {
             Self::Normal { mean, .. } => Some(*mean),
             Self::LogNormal { mu, sigma } => Some(exp(*mu + 0.5 * *sigma * *sigma)),
             Self::Beta { alpha, beta } => Some(*alpha / (*alpha + *beta)),
@@ -220,7 +220,8 @@ impl DistSpec {
             Self::Uniform { lo, hi } => Some(0.5 * (*lo + *hi)),
             Self::Triangular { lo, mode, hi } => Some((*lo + *mode + *hi) / 3.0),
             Self::Dirichlet { .. } => None,
-        }
+        };
+        val.filter(|v| v.is_finite())
     }
 
     /// `BitwisePortable` closed-form CDF for univariate families that admit elementary evaluation
@@ -301,6 +302,14 @@ impl DistSpec {
             | Self::StudentT { .. }
             | Self::Dirichlet { .. } => None,
         };
+        if let Some(v) = out
+            && !v.is_finite()
+        {
+            return Err(ReprError::InvalidParameter {
+                field: "quantile",
+                detail: format!("quantile evaluation overflowed to non-finite value {v}"),
+            });
+        }
         Ok(out)
     }
 
@@ -455,7 +464,7 @@ impl IntervalKind {
     fn validate(&self) -> Result<(), ReprError> {
         match self {
             Self::Enclosure | Self::Manski => Ok(()),
-            Self::Credible { level_bps } | Self::Conformal { level_bps, .. } => {
+            Self::Credible { level_bps } => {
                 if (1..=9999).contains(level_bps) {
                     Ok(())
                 } else {
@@ -464,6 +473,27 @@ impl IntervalKind {
                         detail: format!("level_bps {level_bps} outside 1..=9999"),
                     })
                 }
+            }
+            Self::Conformal {
+                level_bps,
+                calibration_id,
+            } => {
+                if !(1..=9999).contains(level_bps) {
+                    return Err(ReprError::InvalidParameter {
+                        field: "interval.level_bps",
+                        detail: format!("level_bps {level_bps} outside 1..=9999"),
+                    });
+                }
+                if calibration_id.kind != PrefixKind::Calibration {
+                    return Err(ReprError::InvalidParameter {
+                        field: "interval.calibration_id",
+                        detail: format!(
+                            "expected calibration ObjectId (PrefixKind::Calibration), got {:?}",
+                            calibration_id.kind
+                        ),
+                    });
+                }
+                Ok(())
             }
         }
     }
@@ -571,8 +601,20 @@ impl ClaimRepresentation {
                 Ok(())
             }
             Self::Projected {
-                value, policy_id, ..
+                of,
+                value,
+                policy_id,
+                ..
             } => {
+                if of.kind != PrefixKind::Claim {
+                    return Err(ReprError::InvalidParameter {
+                        field: "projected.of",
+                        detail: format!(
+                            "expected claim ObjectId (PrefixKind::Claim), got {:?}",
+                            of.kind
+                        ),
+                    });
+                }
                 check_finite("projected.value", *value)?;
                 if policy_id.is_empty() || policy_id.len() > MAX_REPR_STR_BYTES {
                     return Err(ReprError::InvalidParameter {
@@ -969,5 +1011,34 @@ mod tests {
             .validate()
             .is_err()
         );
+        // Wrong ObjectId prefixes must fail validate() BEFORE to_bytes() (round-trip symmetry).
+        assert!(
+            ClaimRepresentation::Interval {
+                lo: 1.0,
+                hi: 2.0,
+                kind: IntervalKind::Conformal {
+                    level_bps: 8000,
+                    calibration_id: clm_id, // wrong prefix: clm_ instead of cal_
+                }
+            }
+            .to_bytes()
+            .is_err()
+        );
+        assert!(
+            ClaimRepresentation::Projected {
+                value: 1.0,
+                policy_id: "p50".to_string(),
+                of: cal_id, // wrong prefix: cal_ instead of clm_
+            }
+            .to_bytes()
+            .is_err()
+        );
+        // Overflowing LogNormal mean/quantile must not return Some(INFINITY).
+        let huge_ln = DistSpec::LogNormal {
+            mu: 1_000.0,
+            sigma: 10.0,
+        };
+        assert_eq!(huge_ln.mean(), None);
+        assert!(huge_ln.quantile(0.5).is_err());
     }
 }

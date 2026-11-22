@@ -279,7 +279,7 @@ pub fn verify_segment_file(path: &Path) -> Result<SegmentVerification, VerifyErr
         kind: "segment",
         detail: e.to_string(),
     })?;
-    if report.torn_bytes > 0 {
+    if report.torn_bytes > 0 || report.issue.is_some() {
         return Err(VerifyError::Tamper {
             kind: "segment",
             detail: format!(

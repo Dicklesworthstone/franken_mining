@@ -276,6 +276,21 @@ impl Certificate {
                 detail: "FMT-CERT v0 does not carry a ledger_anchor".to_string(),
             });
         }
+        if let Some(anchor) = &self.ledger_anchor {
+            if anchor.format_version > crate::anchor::FMT_ANCHOR_V1 {
+                return Err(CertError::Codec(CodecError::UnsupportedVersion {
+                    actual: anchor.format_version,
+                    min_supported: 0,
+                    max_supported: crate::anchor::FMT_ANCHOR_V1,
+                }));
+            }
+            if anchor.cell_id.is_empty() || anchor.cell_id.len() > 256 {
+                return Err(CertError::InvalidField {
+                    field: "ledger_anchor.cell_id",
+                    detail: format!("length {} outside 1..=256", anchor.cell_id.len()),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -511,5 +526,36 @@ mod tests {
         assert_eq!(v0, v0_decoded);
         assert_eq!(v0_decoded.format_version, 0);
         assert!(v0_decoded.ledger_anchor.is_none());
+
+        // Regression: invalid embedded LedgerAnchor (unsupported version or empty cell_id)
+        // must refuse at build time rather than producing undecodable bytes.
+        let mut bad_anchor = sample_anchor();
+        bad_anchor.format_version = 99;
+        assert!(
+            Certificate::build(
+                "public_assurance",
+                "3274dc2",
+                DeterminismClass::Exact,
+                0,
+                vec![],
+                sha256(b"out"),
+                Some(bad_anchor),
+            )
+            .is_err()
+        );
+        let mut empty_cell_anchor = sample_anchor();
+        empty_cell_anchor.cell_id.clear();
+        assert!(
+            Certificate::build(
+                "public_assurance",
+                "3274dc2",
+                DeterminismClass::Exact,
+                0,
+                vec![],
+                sha256(b"out"),
+                Some(empty_cell_anchor),
+            )
+            .is_err()
+        );
     }
 }

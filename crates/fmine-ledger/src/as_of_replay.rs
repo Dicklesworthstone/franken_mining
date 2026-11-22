@@ -110,12 +110,7 @@ where
     let anchor = LedgerAnchor {
         format_version: FMT_ANCHOR_V1,
         cell_id: cell_id.to_string(),
-        ledger_epoch: snapshot
-            .live_keys
-            .values()
-            .map(|v| v.epoch)
-            .max()
-            .unwrap_or(1),
+        ledger_epoch: snapshot.head_epoch,
         commit_sequence: as_of_seq,
         adapter_registry_epoch: 1,
         schema_epoch: 1,
@@ -290,7 +285,7 @@ mod tests {
                 ),
             )
             .expect("commit 2");
-        let _d3 = l0
+        let d3 = l0
             .commit(
                 &lease2,
                 mk_batch(
@@ -353,5 +348,43 @@ mod tests {
             ),
             Err(AsOfReplayError::L0(L0Error::SequenceOutOfRange { .. }))
         ));
+
+        // Regression: an obligation-only commit after lease transfer to epoch 3 must advance
+        // snapshot.head_epoch and the certificate's anchor ledger_epoch to 3 (even though
+        // live_keys still only have epoch <= 2).
+        let lease_e3 = l0.transfer_lease(cell, "writer-3").expect("transfer lease");
+        assert_eq!(lease_e3.epoch, 3);
+        let b4 = mk_batch(
+            cell,
+            3,
+            4,
+            d3,
+            vec![DeltaOp::new(
+                "obl/forecast/2026Q4",
+                DeltaKind::ReserveObligation,
+                b"fy2026-reserve".to_vec(),
+            )],
+        );
+        l0.commit(&lease_e3, b4)
+            .expect("commit obligation at epoch 3");
+        let run_e3 = run_as_of(
+            &l0,
+            cell,
+            5,
+            "as_of_assay_report",
+            "31cd53e",
+            101,
+            canonical_snapshot_report,
+        )
+        .expect("run at epoch 3 obligation commit");
+        assert_eq!(
+            run_e3
+                .certificate
+                .ledger_anchor
+                .as_ref()
+                .expect("anchor")
+                .ledger_epoch,
+            3
+        );
     }
 }

@@ -251,7 +251,10 @@ pub fn compute_posterior_ffactor(
     denominator: ExactPosteriorTriplet,
     stockpile_adjusted: bool,
 ) -> Result<PosteriorFFactor, FlowError> {
-    if numerator.p10.signum() < 0 || denominator.p10.signum() <= 0 {
+    // Re-validate monotonic quantile order in case caller constructed struct fields directly.
+    let _ = ExactPosteriorTriplet::new(numerator.p10, numerator.p50, numerator.p90)?;
+    let _ = ExactPosteriorTriplet::new_positive(denominator.p10, denominator.p50, denominator.p90)?;
+    if numerator.p10.signum() < 0 {
         return Err(FlowError::InvalidQuantity {
             detail: "F-factor requires non-negative numerator and strictly positive denominator"
                 .to_string(),
@@ -301,6 +304,26 @@ pub fn decompose_f3(
     f2: PosteriorFFactor,
     mutual_comp_tol_bps: u32,
 ) -> Result<F3Decomposition, FlowError> {
+    if f1.family != FFactorFamily::F1 || f2.family != FFactorFamily::F2 {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!(
+                "decompose_f3 requires (F1, F2) families, got ({:?}, {:?})",
+                f1.family, f2.family
+            ),
+        });
+    }
+    if !(1..=9_999).contains(&mutual_comp_tol_bps) {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!("mutual_comp_tol_bps ({mutual_comp_tol_bps}) must lie in 1..=9999"),
+        });
+    }
+    let _ = ExactPosteriorTriplet::new(f1.ratio.p10, f1.ratio.p50, f1.ratio.p90)?;
+    let _ = ExactPosteriorTriplet::new(f2.ratio.p10, f2.ratio.p50, f2.ratio.p90)?;
+    if f1.ratio.p10.signum() < 0 || f2.ratio.p10.signum() < 0 {
+        return Err(FlowError::InvalidQuantity {
+            detail: "F1 and F2 ratios must be non-negative".to_string(),
+        });
+    }
     let p10 = f1.ratio.p10.checked_mul(f2.ratio.p10)?;
     let p50 = f1.ratio.p50.checked_mul(f2.ratio.p50)?;
     let p90 = f1.ratio.p90.checked_mul(f2.ratio.p90)?;
@@ -407,11 +430,32 @@ mod tests {
         assert_eq!(f1.ratio.p50, ExactQty::new(6, 5).unwrap());
         assert_eq!(f2.ratio.p50, ExactQty::new(21, 25).unwrap());
 
-        let decomp = decompose_f3(f1, f2, f2_def.mutual_comp_tol_bps).expect("f3");
+        let decomp = decompose_f3(f1.clone(), f2.clone(), f2_def.mutual_comp_tol_bps).expect("f3");
         assert_eq!(decomp.f3_product.p50, ExactQty::new(126, 125).unwrap()); // 1.008
         assert!(
             decomp.mutual_compensation_detected,
             "opposing +20% F1 and -16% F2 hiding inside 1.008 F3 must flag mutual compensation"
+        );
+
+        // Regression: swapped families (F2, F1), out-of-range tol_bps, and inverted triplet refuse.
+        assert!(decompose_f3(f2.clone(), f1.clone(), 500).is_err());
+        assert!(decompose_f3(f1.clone(), f2, 0).is_err());
+        assert!(
+            decompose_f3(
+                f1,
+                PosteriorFFactor {
+                    definition_id: "F2_bad".to_string(),
+                    family: FFactorFamily::F2,
+                    ratio: ExactPosteriorTriplet {
+                        p10: ExactQty::from_integer(2),
+                        p50: ExactQty::from_integer(1),
+                        p90: ExactQty::from_integer(3),
+                    },
+                    stockpile_adjusted: true,
+                },
+                500
+            )
+            .is_err()
         );
     }
 }

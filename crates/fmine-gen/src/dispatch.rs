@@ -143,7 +143,18 @@ fn draw_normal(stream: &mut PhiloxStream) -> f64 {
 /// Generate a deterministic fleet dispatch tonnage campaign (`BD-132`).
 pub fn generate_dispatch_campaign(cfg: &DispatchConfig) -> Result<DispatchCampaign, GenError> {
     cfg.validate()?;
-    let total_loads = (cfg.shifts as usize) * (cfg.loads_per_shift as usize);
+    let total_loads = (cfg.shifts as usize)
+        .checked_mul(cfg.loads_per_shift as usize)
+        .ok_or_else(|| GenError::InvalidConfig {
+            field: "total_loads",
+            detail: "shifts * loads_per_shift overflowed usize".to_string(),
+        })?;
+    if total_loads > 2_000_000 {
+        return Err(GenError::InvalidConfig {
+            field: "total_loads",
+            detail: format!("total_loads {total_loads} exceeds 2_000_000 cap"),
+        });
+    }
     let mut records = Vec::with_capacity(total_loads);
     let mut rollups: BTreeMap<DispatchDestination, DestinationRollup> = BTreeMap::new();
 
@@ -174,8 +185,11 @@ pub fn generate_dispatch_campaign(cfg: &DispatchConfig) -> Result<DispatchCampai
             let z_moist = draw_normal(&mut stream);
             let z_sensor = draw_normal(&mut stream);
 
-            let true_wet_val = (cfg.nominal_wet_payload_tonnes * (1.0 + 0.04 * z_fill)).max(50.0);
-            let moist_val = (cfg.true_moisture_fraction + 0.008 * z_moist).clamp(0.01, 0.25);
+            let min_true_wet = cfg.nominal_wet_payload_tonnes * 0.25;
+            let min_obs_wet = cfg.nominal_wet_payload_tonnes * 0.10;
+            let true_wet_val =
+                (cfg.nominal_wet_payload_tonnes * (1.0 + 0.04 * z_fill)).max(min_true_wet);
+            let moist_val = (cfg.true_moisture_fraction + 0.008 * z_moist).clamp(0.0, 0.95);
             let moisture =
                 MoistureFraction::new(moist_val).map_err(|e| GenError::InvalidConfig {
                     field: "moisture",
@@ -186,7 +200,7 @@ pub fn generate_dispatch_campaign(cfg: &DispatchConfig) -> Result<DispatchCampai
             let obs_wet_val = (true_wet_val
                 * cfg.truck_payload_bias_factor
                 * (1.0 + cfg.payload_noise_rel_sigma * z_sensor))
-                .max(10.0);
+                .max(min_obs_wet);
             let observed_wet = Qty::<Mass, Wet, Neutral>::new(obs_wet_val);
             let cycle_seconds = 780 + ((r_route >> 32) % 600) as u32;
 

@@ -151,8 +151,12 @@ const fn calibration_flag<T>(claim: &Claim<T>) -> &'static str {
     }
 }
 
+fn sanitize_inline(s: &str) -> String {
+    s.replace(['\r', '\n'], " ")
+}
+
 fn escape_md_cell(s: &str) -> String {
-    s.replace('|', "\\|").replace('\n', " ")
+    sanitize_inline(s).replace('|', "\\|")
 }
 
 /// Build a checked [`FmClaimRow`] from `input`, enforcing `reader` confidentiality clearance,
@@ -172,7 +176,7 @@ pub fn build_fm_row<T>(
         KnowledgeState::Known | KnowledgeState::Estimated
     );
     let (display_value, suppressed) = if numeric_permitted {
-        (input.value_range_text.to_string(), false)
+        (sanitize_inline(input.value_range_text), false)
     } else {
         (format!("[evidence state: {state_label}]"), true)
     };
@@ -301,9 +305,18 @@ pub fn render_level1(row: &FmClaimRow) -> String {
 #[must_use]
 pub fn render_markdown(row: &FmClaimRow, anchor_digest: &str, cert_digest: &str) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "### {} ({})", row.metric_key, row.clickable_link);
+    let _ = writeln!(
+        out,
+        "### {} ({})",
+        sanitize_inline(&row.metric_key),
+        sanitize_inline(&row.clickable_link)
+    );
     let _ = writeln!(out);
-    let _ = writeln!(out, "**Executive summary:** {}", row.plain_sentence);
+    let _ = writeln!(
+        out,
+        "**Executive summary:** {}",
+        sanitize_inline(&row.plain_sentence)
+    );
     let _ = writeln!(out);
     let _ = writeln!(out, "| Field | Value |");
     let _ = writeln!(out, "|---|---|");
@@ -313,7 +326,12 @@ pub fn render_markdown(row: &FmClaimRow, anchor_digest: &str, cert_digest: &str)
         "| Evidence class | `{}` |",
         escape_md_cell(&row.evidence_badge)
     );
-    let _ = writeln!(out, "| Evidence state | `{}` |", row.knowledge_state);
+    let state_cell = if row.stale {
+        format!("{} (STALE)", row.knowledge_state)
+    } else {
+        row.knowledge_state.to_string()
+    };
+    let _ = writeln!(out, "| Evidence state | `{state_cell}` |");
     let _ = writeln!(out, "| Epistemic (KK/KU/UU) | `{}` |", row.epistemic_axis);
     let _ = writeln!(out, "| Colour | `{}` |", escape_md_cell(&row.color_label));
     let _ = writeln!(
@@ -353,13 +371,18 @@ pub fn render_fm_table(rows: &[FmClaimRow], anchor_digest: &str, cert_digest: &s
     );
     let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|");
     for row in rows {
+        let state_cell = if row.stale {
+            format!("{} (STALE)", row.knowledge_state)
+        } else {
+            row.knowledge_state.to_string()
+        };
         let _ = writeln!(
             out,
             "| {} | {} | `{}` | `{}` | `{}` | `{}` | `{}` | {} | {} |",
             escape_md_cell(&row.metric_key),
             escape_md_cell(&row.clickable_link),
             escape_md_cell(&row.evidence_badge),
-            row.knowledge_state,
+            state_cell,
             row.epistemic_axis,
             escape_md_cell(&row.color_label),
             row.calibration_flag,
@@ -568,5 +591,27 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "FMINE-REF-301");
+
+        // 6. Stale claim displays "(STALE)" in both single-claim Markdown and multi-row FM table,
+        //    and CRLF in text cells is escaped without splitting Markdown rows.
+        let mut stale_claim = measured.clone();
+        stale_claim.stale = true;
+        let stale_row = build_fm_row(
+            &ClaimRenderInput {
+                claim: &stale_claim,
+                value_range_text: "1450\r\n1460",
+                unit: "$/oz",
+                calibration_summary: None,
+                flip_margin: None,
+            },
+            &Confidentiality::public(),
+        )
+        .expect("render stale row");
+        let stale_md = render_markdown(&stale_row, "anc_s", "cert_s");
+        assert!(stale_md.contains("`known (STALE)`"), "{stale_md}");
+        assert!(!stale_md.contains('\r'));
+        let stale_tbl = render_fm_table(&[stale_row], "anc_s", "cert_s");
+        assert!(stale_tbl.contains("`known (STALE)`"), "{stale_tbl}");
+        assert!(!stale_tbl.contains('\r'));
     }
 }

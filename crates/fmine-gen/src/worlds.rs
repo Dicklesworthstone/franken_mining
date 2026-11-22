@@ -173,6 +173,16 @@ impl OpenPitAuTruth {
         let mut enc = Encoder::new_frame(*b"TRTH", 1);
         enc.put_str(&self.world_id);
         enc.put_u64(self.seed_root);
+        let cond_tag: u8 = match self.condition {
+            WorldCondition::CorrectlySpecified => 1,
+            WorldCondition::Misspecified(MisspecKind::WrongVariogram) => 2,
+            WorldCondition::Misspecified(MisspecKind::WrongDomainBoundary) => 3,
+            WorldCondition::Misspecified(MisspecKind::OutOfModelFault) => 4,
+            WorldCondition::Misspecified(MisspecKind::NonStationaryGrade) => 5,
+            WorldCondition::Misspecified(MisspecKind::BiasedCapexProcess) => 6,
+            WorldCondition::IdentifiabilityProbe => 7,
+        };
+        enc.put_u8(cond_tag);
         enc.put_u64(self.biases.resource_grade_factor.to_bits());
         enc.put_u64(self.biases.dilution_tonnes_factor.to_bits());
         enc.put_u64(self.biases.moisture_factor.to_bits());

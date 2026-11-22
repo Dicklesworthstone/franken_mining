@@ -71,17 +71,25 @@ pub fn compute_royalty_rate(
                     right: step_width.ccy,
                 });
             }
-            if step_width.minor <= 0
+            if base_ceiling.minor < 0
+                || step_width.minor <= 0
                 || base_rate.signum() < 0
                 || step_increment.signum() < 0
                 || fixed_surcharges.signum() < 0
             {
                 return Err(EconError::InvalidDomain {
                     field: "price_stepped_royalty",
-                    detail: "step_width > 0 and non-negative rates required".to_string(),
+                    detail: "base_ceiling >= 0, step_width > 0, and non-negative rates required"
+                        .to_string(),
                 });
             }
             let base_total = base_rate.checked_add(fixed_surcharges)?;
+            if base_total.checked_cmp(ExactQty::from_integer(1))? == core::cmp::Ordering::Greater {
+                return Err(EconError::InvalidDomain {
+                    field: "effective_royalty_rate",
+                    detail: "base stepped royalty rate exceeded 100%".to_string(),
+                });
+            }
             if metal_price.minor <= base_ceiling.minor {
                 return Ok(base_total);
             }
@@ -286,6 +294,23 @@ pub fn compute_fiscal_breakdown(
                 .to_string(),
         });
     }
+    let one = ExactQty::from_integer(1);
+    if tax_terms.cit_rate.signum() < 0
+        || tax_terms.cit_rate.checked_cmp(one)? == core::cmp::Ordering::Greater
+    {
+        return Err(EconError::InvalidDomain {
+            field: "tax_terms.cit_rate",
+            detail: "CIT rate must lie in [0, 1]".to_string(),
+        });
+    }
+    if let Some(min_rate) = tax_terms.min_turnover_tax_rate
+        && (min_rate.signum() < 0 || min_rate.checked_cmp(one)? == core::cmp::Ordering::Greater)
+    {
+        return Err(EconError::InvalidDomain {
+            field: "tax_terms.min_turnover_tax_rate",
+            detail: "minimum turnover tax rate must lie in [0, 1]".to_string(),
+        });
+    }
     let zero_money = Money::from_minor(metal_price.ccy, 0);
     let gross_revenue = money_mul_exact(metal_price, payable_units)?;
     let (eff_roy_rate, royalty_paid) =
@@ -294,10 +319,27 @@ pub fn compute_fiscal_breakdown(
     let super_profits_tax_paid = match super_profits {
         None => zero_money,
         Some(spt) => {
-            if spt.trigger_price.ccy != metal_price.ccy || spt.bfs_price.ccy != metal_price.ccy {
+            if spt.trigger_price.ccy != metal_price.ccy {
                 return Err(EconError::CurrencyMismatch {
                     left: metal_price.ccy,
                     right: spt.trigger_price.ccy,
+                });
+            }
+            if spt.bfs_price.ccy != metal_price.ccy {
+                return Err(EconError::CurrencyMismatch {
+                    left: metal_price.ccy,
+                    right: spt.bfs_price.ccy,
+                });
+            }
+            if spt.bfs_price.minor < 0
+                || spt.trigger_price.minor < 0
+                || spt.rate.signum() < 0
+                || spt.rate.checked_cmp(one)? == core::cmp::Ordering::Greater
+            {
+                return Err(EconError::InvalidDomain {
+                    field: "super_profits",
+                    detail: "BFS/trigger prices must be >= 0 and rate must lie in [0, 1]"
+                        .to_string(),
                 });
             }
             if metal_price.minor <= spt.trigger_price.minor {
@@ -506,5 +548,67 @@ mod tests {
         ])
         .expect("exact npv");
         assert_eq!(npv, Money::from_major(Currency::USD, 10_000_000));
+    }
+
+    #[test]
+    fn test_fiscal_audit_domain_and_currency_regressions() {
+        // PriceStepped base_total > 100% must refuse even when metal_price <= base_ceiling.
+        let bad_stepped = RoyaltySchedule::PriceStepped {
+            base_rate: ExactQty::new(6, 10).unwrap(),
+            base_ceiling: Money::from_major(Currency::USD, 2_500),
+            step_increment: ExactQty::new(5, 100).unwrap(),
+            step_width: Money::from_major(Currency::USD, 400),
+            fixed_surcharges: ExactQty::new(5, 10).unwrap(), // 60% + 50% = 110%
+        };
+        assert!(matches!(
+            compute_royalty_rate(bad_stepped, Money::from_major(Currency::USD, 1_000)),
+            Err(EconError::InvalidDomain { .. })
+        ));
+
+        // SuperProfitsTax bfs_price currency mismatch must report bfs_price.ccy, not trigger_price.ccy.
+        let err = compute_fiscal_breakdown(
+            ExactQty::from_integer(1),
+            Money::from_major(Currency::USD, 3_000),
+            Money::from_major(Currency::USD, 1_000),
+            RoyaltySchedule::FlatAdValorem {
+                rate: ExactQty::new(5, 100).unwrap(),
+            },
+            CorporateTaxTerms {
+                cit_rate: ExactQty::new(3, 10).unwrap(),
+                min_turnover_tax_rate: None,
+            },
+            Some(SuperProfitsTax {
+                bfs_price: Money::from_major(Currency::CAD, 1_600),
+                trigger_price: Money::from_major(Currency::USD, 2_000),
+                rate: ExactQty::new(5, 10).unwrap(),
+                base: SuperProfitsBase::NetOfRoyaltySurplus,
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            EconError::CurrencyMismatch {
+                left: Currency::USD,
+                right: Currency::CAD,
+            }
+        );
+
+        // Out-of-bounds CIT rate (> 100%) must refuse.
+        assert!(matches!(
+            compute_fiscal_breakdown(
+                ExactQty::from_integer(1),
+                Money::from_major(Currency::USD, 2_000),
+                Money::from_major(Currency::USD, 1_000),
+                RoyaltySchedule::FlatAdValorem {
+                    rate: ExactQty::new(5, 100).unwrap(),
+                },
+                CorporateTaxTerms {
+                    cit_rate: ExactQty::new(12, 10).unwrap(),
+                    min_turnover_tax_rate: None,
+                },
+                None,
+            ),
+            Err(EconError::InvalidDomain { .. })
+        ));
     }
 }

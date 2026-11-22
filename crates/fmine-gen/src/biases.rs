@@ -122,9 +122,10 @@ impl BiasRegistry {
         let a_confounds = self.entries.get(&a).is_some_and(|e| e.confounds_with == b);
         let b_confounds = self.entries.get(&b).is_some_and(|e| e.confounds_with == a);
         if a_confounds || b_confounds {
+            let source_key = if a_confounds { a } else { b };
             let sep = self
                 .entries
-                .get(&a)
+                .get(&source_key)
                 .map_or("independent audit", |e| e.separating_measurement.as_str());
             return Err(GenError::NonIdentifiableProbe {
                 detail: format!(
@@ -168,6 +169,22 @@ pub fn parse_bias_registry(text: &str) -> Result<BiasRegistry, GenError> {
         }
         let family = BiasFamily::parse(&get("family")?)?;
         let confounds_with = BiasFamily::parse(&get("confounds_with")?)?;
+        if confounds_with == family {
+            return Err(GenError::InvalidConfig {
+                field: "confounds_with",
+                detail: format!("bias '{id}' cannot list itself as confounds_with"),
+            });
+        }
+        let get_non_empty = |k: &'static str| -> Result<String, GenError> {
+            let v = get(k)?;
+            if v.is_empty() {
+                return Err(GenError::InvalidConfig {
+                    field: k,
+                    detail: format!("bias '{id}' field '{k}' must be non-empty"),
+                });
+            }
+            Ok(v)
+        };
         let min_factor_bps: u32 =
             get("min_factor_bps")?
                 .parse()
@@ -190,16 +207,20 @@ pub fn parse_bias_registry(text: &str) -> Result<BiasRegistry, GenError> {
                 ),
             });
         }
+        let stage = get_non_empty("stage")?;
+        let quantity_kind = get_non_empty("quantity_kind")?;
+        let separating_measurement = get_non_empty("separating_measurement")?;
+        let description = get_non_empty("description")?;
         let entry = BiasRegistryEntry {
             id,
             family,
-            stage: get("stage")?,
-            quantity_kind: get("quantity_kind")?,
+            stage,
+            quantity_kind,
             min_factor_bps,
             max_factor_bps,
             confounds_with,
-            separating_measurement: get("separating_measurement")?,
-            description: get("description")?,
+            separating_measurement,
+            description,
         };
         if entries.insert(family, entry).is_some() {
             return Err(GenError::InvalidConfig {
@@ -239,16 +260,22 @@ pub fn parse_bias_registry(text: &str) -> Result<BiasRegistry, GenError> {
         let val = v.trim();
         match cur.as_mut() {
             None => {
-                if key == "schema_version" && val == "1" {
+                if !saw_version && key == "schema_version" && val == "1" {
                     saw_version = true;
                 } else {
                     return Err(GenError::InvalidConfig {
                         field: "schema_version",
-                        detail: format!("line {line}: expected schema_version = 1"),
+                        detail: format!("line {line}: expected single schema_version = 1"),
                     });
                 }
             }
             Some(fields) => {
+                if fields.iter().any(|(fk, _)| fk == key) {
+                    return Err(GenError::InvalidConfig {
+                        field: "biases.toml",
+                        detail: format!("line {line}: duplicate key '{key}' in [[bias]]"),
+                    });
+                }
                 let parsed = val
                     .strip_prefix('"')
                     .and_then(|x| x.strip_suffix('"'))
@@ -482,5 +509,17 @@ mod tests {
             .expect("separating measurement unblocks identifiability");
         reg.check_pair_identifiable(BiasFamily::Sampler, BiasFamily::Moisture, false)
             .expect("non-confounded pair is identifiable");
+
+        // Regression: asymmetric confounding lookup (ResourceModel, Sampler) must cite Sampler's
+        // separating measurement rather than ResourceModel's Dilution measurement.
+        let asym_err = reg
+            .check_pair_identifiable(BiasFamily::ResourceModel, BiasFamily::Sampler, false)
+            .unwrap_err();
+        assert_eq!(asym_err.to_refusal().code, "FMINE-REF-104");
+        let sampler_sep = &reg.get(BiasFamily::Sampler).unwrap().separating_measurement;
+        assert!(
+            asym_err.to_string().contains(sampler_sep),
+            "expected sampler separating measurement '{sampler_sep}', got: {asym_err}"
+        );
     }
 }

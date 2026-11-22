@@ -128,8 +128,22 @@ pub fn parse_country_regime_registry(text: &str) -> Result<Vec<CountryRegimeRow>
                 detail: format!("invalid u64 for '{k}': {v:?}"),
             })
         };
-        let bps = |val: u64| -> Result<ExactQty, EconError> {
+        let bps = |field: &str, val: u64| -> Result<ExactQty, EconError> {
+            if val > 10_000 {
+                return Err(EconError::RegistryParse {
+                    detail: format!("{field} ({val} bps) exceeds 10000 bps"),
+                });
+            }
             Ok(ExactQty::new(i128::from(val), 10_000)?)
+        };
+        let get_non_empty = |k: &str| -> Result<String, EconError> {
+            let v = get(k)?;
+            if v.is_empty() {
+                return Err(EconError::RegistryParse {
+                    detail: format!("[[regime]] field '{k}' must be non-empty"),
+                });
+            }
+            Ok(v)
         };
 
         let id = get("id")?;
@@ -149,21 +163,37 @@ pub fn parse_country_regime_registry(text: &str) -> Result<Vec<CountryRegimeRow>
         let royalty_kind = get("royalty_kind")?;
         let royalty = match royalty_kind.as_str() {
             "flat" => RoyaltySchedule::FlatAdValorem {
-                rate: bps(get_u64("royalty_rate_bps")?)?,
+                rate: bps("royalty_rate_bps", get_u64("royalty_rate_bps")?)?,
             },
-            "stepped" => RoyaltySchedule::PriceStepped {
-                base_rate: bps(get_u64("royalty_rate_bps")?)?,
-                base_ceiling: Money::from_major(
-                    Currency::USD,
-                    i128::from(get_u64("royalty_ceiling_usd")?),
-                ),
-                step_increment: bps(get_u64("royalty_step_bps")?)?,
-                step_width: Money::from_major(
-                    Currency::USD,
-                    i128::from(get_u64("royalty_step_width_usd")?),
-                ),
-                fixed_surcharges: bps(get_u64("royalty_fixed_surcharges_bps")?)?,
-            },
+            "stepped" => {
+                let base_bps = get_u64("royalty_rate_bps")?;
+                let fixed_bps = get_u64("royalty_fixed_surcharges_bps")?;
+                let step_width_usd = get_u64("royalty_step_width_usd")?;
+                if step_width_usd == 0 {
+                    return Err(EconError::RegistryParse {
+                        detail: format!(
+                            "regime '{id}': stepped royalty requires royalty_step_width_usd > 0"
+                        ),
+                    });
+                }
+                if base_bps.saturating_add(fixed_bps) > 10_000 {
+                    return Err(EconError::RegistryParse {
+                        detail: format!(
+                            "regime '{id}': royalty_rate_bps + royalty_fixed_surcharges_bps exceeds 10000 bps"
+                        ),
+                    });
+                }
+                RoyaltySchedule::PriceStepped {
+                    base_rate: bps("royalty_rate_bps", base_bps)?,
+                    base_ceiling: Money::from_major(
+                        Currency::USD,
+                        i128::from(get_u64("royalty_ceiling_usd")?),
+                    ),
+                    step_increment: bps("royalty_step_bps", get_u64("royalty_step_bps")?)?,
+                    step_width: Money::from_major(Currency::USD, i128::from(step_width_usd)),
+                    fixed_surcharges: bps("royalty_fixed_surcharges_bps", fixed_bps)?,
+                }
+            }
             other => {
                 return Err(EconError::RegistryParse {
                     detail: format!("regime '{id}': unknown royalty_kind {other:?}"),
@@ -171,12 +201,12 @@ pub fn parse_country_regime_registry(text: &str) -> Result<Vec<CountryRegimeRow>
             }
         };
 
-        let cit_rate = bps(get_u64("cit_rate_bps")?)?;
+        let cit_rate = bps("cit_rate_bps", get_u64("cit_rate_bps")?)?;
         let min_turn_bps = get_u64("min_turnover_tax_bps")?;
         let tax_terms = CorporateTaxTerms {
             cit_rate,
             min_turnover_tax_rate: if min_turn_bps > 0 {
-                Some(bps(min_turn_bps)?)
+                Some(bps("min_turnover_tax_bps", min_turn_bps)?)
             } else {
                 None
             },
@@ -193,7 +223,7 @@ pub fn parse_country_regime_registry(text: &str) -> Result<Vec<CountryRegimeRow>
                     Currency::USD,
                     i128::from(get_u64("super_profits_trigger_usd")?),
                 ),
-                rate: bps(spt_rate_bps)?,
+                rate: bps("super_profits_rate_bps", spt_rate_bps)?,
                 base: SuperProfitsBase::NetOfRoyaltySurplus,
             })
         } else {
@@ -214,17 +244,20 @@ pub fn parse_country_regime_registry(text: &str) -> Result<Vec<CountryRegimeRow>
 
         out.push(CountryRegimeRow {
             id,
-            country: get("country")?,
-            asset: get("asset")?,
-            instrument: get("instrument")?,
-            as_of_date: get("as_of_date")?,
+            country: get_non_empty("country")?,
+            asset: get_non_empty("asset")?,
+            instrument: get_non_empty("instrument")?,
+            as_of_date: get_non_empty("as_of_date")?,
             superseded_on,
             state,
             royalty,
             tax_terms,
             super_profits,
-            state_equity_fraction: bps(get_u64("state_equity_bps")?)?,
-            renewal_equity_step_fraction: bps(get_u64("renewal_equity_step_bps")?)?,
+            state_equity_fraction: bps("state_equity_bps", get_u64("state_equity_bps")?)?,
+            renewal_equity_step_fraction: bps(
+                "renewal_equity_step_bps",
+                get_u64("renewal_equity_step_bps")?,
+            )?,
             source_e_ids,
         });
         Ok(())
@@ -257,15 +290,20 @@ pub fn parse_country_regime_registry(text: &str) -> Result<Vec<CountryRegimeRow>
         let val = v.trim();
         match cur.as_mut() {
             None => {
-                if key == "schema_version" && val == "1" {
+                if !saw_version && key == "schema_version" && val == "1" {
                     saw_version = true;
                 } else {
                     return Err(EconError::RegistryParse {
-                        detail: format!("line {line}: expected schema_version = 1"),
+                        detail: format!("line {line}: expected single schema_version = 1"),
                     });
                 }
             }
             Some(fields) => {
+                if fields.iter().any(|(fk, _)| fk == key) {
+                    return Err(EconError::RegistryParse {
+                        detail: format!("line {line}: duplicate key '{key}' in [[regime]]"),
+                    });
+                }
                 let parsed = val
                     .strip_prefix('"')
                     .and_then(|x| x.strip_suffix('"'))
@@ -519,5 +557,55 @@ mod tests {
                 cause: RestrictionCause::Reagent
             }
         );
+
+        // 6. PNG / Porgera row carries 51% PNG stakeholder equity (FACT E428/E430) and refuses
+        //    rate evaluation while FSA royalty/tax rates remain FACT[U] (NotPublished -> FMINE-REF-201).
+        let porgera = by_id("png_porgera_2026");
+        assert_eq!(
+            porgera.state_equity_fraction,
+            ExactQty::new(51, 100).unwrap()
+        );
+        let porgera_err = evaluate_regime_fiscal_terms(
+            porgera,
+            &gold_deck("PNG-3000", 3_000),
+            Commodity::Au,
+            one_oz,
+            opex_per_oz,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(porgera_err.to_refusal().code, "FMINE-REF-201");
+    }
+
+    #[test]
+    fn test_regime_parser_and_price_deck_audit_regressions() {
+        // Negative price constructed bypassing PricePoint::new must still refuse in PriceDeck::build.
+        let neg_pt = PricePoint {
+            commodity: Commodity::Au,
+            unit: PriceUnit::PerTroyOz,
+            price: Money::from_major(Currency::USD, -100),
+        };
+        assert!(matches!(
+            PriceDeck::build("BAD", 1, "2026-01-01", Currency::USD, vec![neg_pt], None),
+            Err(EconError::InvalidDomain { .. })
+        ));
+
+        // Negative quoted royalty and rate > 1 in audit_royalty_deck_mix must refuse.
+        assert!(matches!(
+            audit_royalty_deck_mix(
+                Money::from_major(Currency::USD, 2_000),
+                ExactQty::new(5, 100).unwrap(),
+                Money::from_major(Currency::USD, -10),
+                Money::from_major(Currency::USD, 1),
+            ),
+            Err(EconError::InvalidDomain { .. })
+        ));
+
+        // Duplicate key inside [[regime]] and bps > 10000 must refuse at parse time.
+        let dup_key = "schema_version = 1\n[[regime]]\nid = \"a\"\nid = \"b\"\n";
+        assert!(matches!(
+            parse_country_regime_registry(dup_key),
+            Err(EconError::RegistryParse { .. })
+        ));
     }
 }

@@ -142,6 +142,34 @@ impl CuAuFlotationSpec {
                 detail: "concentrate custody parameters out of physical domain".to_string(),
             });
         }
+        let check_domain = |spec: &CuAuDomainSpec, expected: CuAuDomain| -> Result<(), GenError> {
+            if spec.domain != expected {
+                return Err(GenError::InvalidConfig {
+                    field: "domain",
+                    detail: format!("domain slot expected {expected:?}, got {:?}", spec.domain),
+                });
+            }
+            if !spec.log_cu_pct_mean.is_finite()
+                || !(spec.log_cu_pct_std.is_finite() && spec.log_cu_pct_std >= 0.0)
+                || !(spec.mean_cu_as_ratio.is_finite()
+                    && (0.0..=1.0).contains(&spec.mean_cu_as_ratio))
+                || !spec.log_au_gt_mean.is_finite()
+                || !(spec.log_au_gt_std.is_finite() && spec.log_au_gt_std >= 0.0)
+                || !(spec.mean_density_t_m3.is_finite()
+                    && (1.0..=10.0).contains(&spec.mean_density_t_m3))
+                || !(spec.mean_sulphur_pct.is_finite()
+                    && (0.0..=60.0).contains(&spec.mean_sulphur_pct))
+            {
+                return Err(GenError::InvalidConfig {
+                    field: "domain_spec",
+                    detail: format!("domain {expected:?} parameters out of physical domain"),
+                });
+            }
+            Ok(())
+        };
+        check_domain(&self.supergene_oxide, CuAuDomain::SupergeneOxide)?;
+        check_domain(&self.secondary_enriched, CuAuDomain::SecondaryEnriched)?;
+        check_domain(&self.primary_hypogene, CuAuDomain::PrimaryHypogene)?;
         Ok(())
     }
 }

@@ -195,6 +195,32 @@ fn check_channel(
     Ok(())
 }
 
+fn validate_non_negative(q: &ExtensiveQuantities, label: &str) -> Result<(), FlowError> {
+    if q.dry_mass.signum() < 0 {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!("{label} has negative dry_mass"),
+        });
+    }
+    if q.water_mass.signum() < 0 {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!("{label} has negative water_mass"),
+        });
+    }
+    for (el, qty) in &q.elements {
+        if el.is_empty() {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("{label} has empty element symbol"),
+            });
+        }
+        if qty.signum() < 0 {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("{label} has negative mass for element '{el}'"),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Verify exact extensive conservation (`Σ in − Σ out − Δ inventory = 0` within `tolerance`)
 /// at every interior node of `graph` (`INV-005`, `PO-BED-6`). Refuses violations with
 /// `FMINE-REF-101` — never plugs or adjusts observations.
@@ -206,10 +232,29 @@ pub fn verify_period_balance(
 ) -> Result<BalanceReport, FlowError> {
     let mut flow_map: BTreeMap<&str, &ExtensiveQuantities> = BTreeMap::new();
     for f in flows {
-        if graph.stream(&f.stream_id).is_none() {
+        let Some(stream) = graph.stream(&f.stream_id) else {
             return Err(FlowError::UnknownStream {
                 stream_id: f.stream_id.clone(),
             });
+        };
+        validate_non_negative(&f.quantities, &format!("stream '{}'", f.stream_id))?;
+        if !stream.carries_water && f.quantities.water_mass.signum() > 0 {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!(
+                    "stream '{}' does not carry water (carries_water = false) but received positive water_mass",
+                    f.stream_id
+                ),
+            });
+        }
+        for el in f.quantities.elements.keys() {
+            if !stream.elements.contains(el) {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!(
+                        "stream '{}' received undeclared element '{el}'",
+                        f.stream_id
+                    ),
+                });
+            }
         }
         if flow_map
             .insert(f.stream_id.as_str(), &f.quantities)
@@ -237,6 +282,14 @@ pub fn verify_period_balance(
                 ),
             });
         }
+        validate_non_negative(
+            &inv.opening,
+            &format!("opening inventory '{}'", inv.node_id),
+        )?;
+        validate_non_negative(
+            &inv.closing,
+            &format!("closing inventory '{}'", inv.node_id),
+        )?;
         if inv_map.insert(inv.node_id.as_str(), inv).is_some() {
             return Err(FlowError::DuplicateId {
                 kind: "inventory_delta",
@@ -252,18 +305,37 @@ pub fn verify_period_balance(
     for node in graph.interior_nodes() {
         let mut total_in = ExtensiveQuantities::zero();
         for s in graph.incoming_streams(&node.id) {
-            if let Some(q) = flow_map.get(s.id.as_str()) {
-                total_in = total_in.checked_add(q)?;
-            }
+            let Some(q) = flow_map.get(s.id.as_str()) else {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!(
+                        "missing StreamFlow for incoming stream '{}' into interior node '{}'",
+                        s.id, node.id
+                    ),
+                });
+            };
+            total_in = total_in.checked_add(q)?;
         }
         let mut total_out = ExtensiveQuantities::zero();
         for s in graph.outgoing_streams(&node.id) {
-            if let Some(q) = flow_map.get(s.id.as_str()) {
-                total_out = total_out.checked_add(q)?;
-            }
+            let Some(q) = flow_map.get(s.id.as_str()) else {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!(
+                        "missing StreamFlow for outgoing stream '{}' from interior node '{}'",
+                        s.id, node.id
+                    ),
+                });
+            };
+            total_out = total_out.checked_add(q)?;
         }
         let delta_inv = if let Some(inv) = inv_map.get(node.id.as_str()) {
             inv.closing.checked_sub(&inv.opening)?
+        } else if node.class == crate::graph::NodeClass::StockpileOrPad {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!(
+                    "missing InventoryDelta for stockpile node '{}' (cannot assume zero Δ inventory)",
+                    node.id
+                ),
+            });
         } else {
             ExtensiveQuantities::zero()
         };
@@ -534,6 +606,76 @@ mod tests {
         assert_eq!(
             rep_single.system_element_residuals,
             rep_split.system_element_residuals
+        );
+    }
+
+    #[test]
+    fn test_balance_rejects_missing_streams_missing_stockpile_delta_negative_and_undeclared() {
+        let g = FlowGraph::build(
+            vec![
+                FlowNode::new("pit", "Pit", NodeClass::BlastedAndDug, false, None).unwrap(),
+                FlowNode::new(
+                    "rom",
+                    "ROM",
+                    NodeClass::StockpileOrPad,
+                    true,
+                    Some(StockpileMixingModel::WellMixed),
+                )
+                .unwrap(),
+                FlowNode::new("mill", "Mill", NodeClass::PlantUnit, false, None).unwrap(),
+            ],
+            vec![
+                FlowStream::new("s_in", "pit", "rom", false, ["Au"]).unwrap(),
+                FlowStream::new("s_out", "rom", "mill", false, ["Au"]).unwrap(),
+            ],
+        )
+        .unwrap();
+        let inv = vec![InventoryDelta {
+            node_id: "rom".to_string(),
+            opening: qty(100, 0, 200),
+            closing: qty(100, 0, 200),
+        }];
+        let flows = vec![
+            StreamFlow {
+                stream_id: "s_in".to_string(),
+                quantities: qty(500, 0, 1000),
+            },
+            StreamFlow {
+                stream_id: "s_out".to_string(),
+                quantities: qty(500, 0, 1000),
+            },
+        ];
+
+        // 1. Missing outgoing stream flow must refuse (never silently treated as zero).
+        assert!(
+            verify_period_balance(&g, &flows[..1], &inv, &BalanceTolerance::exact_zero()).is_err()
+        );
+
+        // 2. Missing InventoryDelta on a StockpileOrPad node must refuse (never silently Δ = 0).
+        assert!(verify_period_balance(&g, &flows, &[], &BalanceTolerance::exact_zero()).is_err());
+
+        // 3. Positive water_mass on carries_water = false stream must refuse.
+        let mut wet_flows = flows.clone();
+        wet_flows[0].quantities = qty(500, 10, 1000);
+        assert!(
+            verify_period_balance(&g, &wet_flows, &inv, &BalanceTolerance::exact_zero()).is_err()
+        );
+
+        // 4. Undeclared element ("Cu" on ["Au"] stream) must refuse.
+        let mut extra_el = flows.clone();
+        extra_el[0]
+            .quantities
+            .elements
+            .insert("Cu".to_string(), ExactQty::from_integer(5));
+        assert!(
+            verify_period_balance(&g, &extra_el, &inv, &BalanceTolerance::exact_zero()).is_err()
+        );
+
+        // 5. Directly-constructed negative dry_mass must refuse.
+        let mut neg_flows = flows;
+        neg_flows[0].quantities.dry_mass = ExactQty::from_integer(-1);
+        assert!(
+            verify_period_balance(&g, &neg_flows, &inv, &BalanceTolerance::exact_zero()).is_err()
         );
     }
 }

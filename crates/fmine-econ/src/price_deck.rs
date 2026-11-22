@@ -108,6 +108,16 @@ impl PriceDeck {
         }
         let mut prices = BTreeMap::new();
         for pt in points {
+            if pt.price.minor < 0 {
+                return Err(EconError::InvalidDomain {
+                    field: "price",
+                    detail: format!(
+                        "negative price {} for {} in price deck '{deck_id}'",
+                        pt.price.minor,
+                        pt.commodity.symbol()
+                    ),
+                });
+            }
             if pt.price.ccy != currency {
                 return Err(EconError::CurrencyMismatch {
                     left: currency,
@@ -225,10 +235,15 @@ pub fn audit_royalty_deck_mix(
             right: tolerance.ccy,
         });
     }
-    if stated_price.minor <= 0 || stated_rate.signum() <= 0 || tolerance.minor < 0 {
+    if stated_price.minor <= 0
+        || stated_rate.signum() <= 0
+        || stated_rate.checked_cmp(ExactQty::from_integer(1))? == core::cmp::Ordering::Greater
+        || quoted_royalty.minor < 0
+        || tolerance.minor < 0
+    {
         return Err(EconError::InvalidDomain {
             field: "deck_mix_audit",
-            detail: "stated_price > 0, stated_rate > 0, and tolerance >= 0 required".to_string(),
+            detail: "stated_price > 0, stated_rate in (0, 1], quoted_royalty >= 0, and tolerance >= 0 required".to_string(),
         });
     }
     let expected = money_mul_exact(stated_price, stated_rate)?;

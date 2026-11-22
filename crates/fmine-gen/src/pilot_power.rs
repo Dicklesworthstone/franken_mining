@@ -253,7 +253,15 @@ pub struct PowerEnvelope {
 impl PowerEnvelope {
     /// Render the power strictly as an envelope `[min, max]` (never a bare single scalar).
     pub fn render_envelope_string(&self) -> Result<String, Refusal> {
-        if self.twins_evaluated == 0 || self.min_power > self.max_power {
+        if self.twins_evaluated == 0
+            || !self.min_power.is_finite()
+            || !self.max_power.is_finite()
+            || !self.max_mc_se.is_finite()
+            || self.min_power < 0.0
+            || self.max_power > 1.0
+            || self.max_mc_se < 0.0
+            || self.min_power > self.max_power
+        {
             return Err(Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
                 "cannot render power without a valid non-empty [min, max] envelope across twins",
@@ -501,6 +509,24 @@ pub fn greedy_select_for_twin(
 ) -> Result<Vec<String>, Refusal> {
     let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
     reject_personal_data_files(&names)?;
+    let mut seen_names = BTreeSet::new();
+    for cand in candidates {
+        if cand.name.is_empty() || !seen_names.insert(cand.name.as_str()) {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("empty or duplicate candidate file name {:?}", cand.name),
+            ));
+        }
+        if !(cand.extraction_cost.is_finite() && cand.extraction_cost > 0.0) {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!(
+                    "candidate file '{}' requires finite extraction_cost > 0 (got {})",
+                    cand.name, cand.extraction_cost
+                ),
+            ));
+        }
+    }
 
     let mut chosen: Vec<String> = Vec::new();
     let mut remaining: Vec<&CandidateFileCostRow> = candidates.iter().collect();
@@ -525,7 +551,7 @@ pub fn greedy_select_for_twin(
         let mut best_idx = 0usize;
         let mut best_score = f64::NEG_INFINITY;
         for (i, cand) in remaining.iter().enumerate() {
-            let cost = cand.extraction_cost.max(1e-6);
+            let cost = cand.extraction_cost;
             let mut next_refs = base_refs.clone();
             next_refs.push(cand.name.as_str());
             let gain = (total_power(&next_refs) - base_p) / cost;
@@ -548,6 +574,12 @@ pub fn label_candidate_files(
     candidates: &[CandidateFileCostRow],
     top_n: usize,
 ) -> Result<Vec<LabelledCandidateFile>, Refusal> {
+    if family.twins.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::NoClaimInDomain201,
+            "cannot label candidate files for a TwinFamily with zero twins",
+        ));
+    }
     let mut per_twin_sets = Vec::with_capacity(family.twins.len());
     for tw in &family.twins {
         let picked = greedy_select_for_twin(tw, candidates, top_n)?;
@@ -883,5 +915,18 @@ mod tests {
         let labels = label_candidate_files(&fam, &spec.candidate_files, 3).expect("label files");
         assert_eq!(labels.len(), 5);
         assert!(labels.iter().any(|l| l.label == FileLabel::Robust));
+
+        // Regression: non-positive extraction_cost and duplicate candidate names must refuse.
+        let mut zero_cost = tied.clone();
+        zero_cost[0].extraction_cost = 0.0;
+        assert_eq!(
+            greedy_select_for_twin(tw, &zero_cost, 1).unwrap_err().code,
+            "FMINE-REF-109"
+        );
+        let dup_names = vec![tied[0].clone(), tied[0].clone()];
+        assert_eq!(
+            greedy_select_for_twin(tw, &dup_names, 1).unwrap_err().code,
+            "FMINE-REF-109"
+        );
     }
 }

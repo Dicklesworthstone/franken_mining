@@ -162,6 +162,33 @@ pub(crate) fn generate_mill_balance_raw(
             detail: "plant_id, periods, and blocks_per_period must be non-zero".to_string(),
         });
     }
+    if !(cfg.feed_weightometer_sigma.is_finite()
+        && (0.0..=0.25).contains(&cfg.feed_weightometer_sigma))
+        || !(cfg.assay_rel_sigma.is_finite() && (0.0..=0.25).contains(&cfg.assay_rel_sigma))
+    {
+        return Err(GenError::InvalidConfig {
+            field: "mill_noise_sigma",
+            detail: "feed_weightometer_sigma and assay_rel_sigma must be finite and in [0, 0.25]"
+                .to_string(),
+        });
+    }
+    let bias_vals = [
+        cfg.biases.resource_model,
+        cfg.biases.dilution,
+        cfg.biases.survey,
+        cfg.biases.sampler,
+        cfg.biases.density,
+        cfg.biases.moisture,
+        cfg.biases.truck_payload,
+    ];
+    if !bias_vals.iter().all(|v| v.is_finite() && *v > 0.0)
+        || !(0.0..12.0).contains(&cfg.biases.moisture)
+    {
+        return Err(GenError::InvalidConfig {
+            field: "biases",
+            detail: "all bias factors must be finite and > 0 (and moisture < 12.0)".to_string(),
+        });
+    }
     if let Some(reg) = registry {
         cfg.biases.validate_against(reg)?;
     }
@@ -169,12 +196,18 @@ pub(crate) fn generate_mill_balance_raw(
     let sealed_world =
         generate_cu_au_flotation_truth(seed_root ^ 0x4D49_4C4C, &cfg.cu_au_spec, key)?;
     let world = sealed_world.open(key)?;
-    if cfg.periods * cfg.blocks_per_period > world.blocks.len() {
+    let needed_blocks = cfg
+        .periods
+        .checked_mul(cfg.blocks_per_period)
+        .ok_or_else(|| GenError::InvalidConfig {
+            field: "periods",
+            detail: "periods * blocks_per_period overflowed usize".to_string(),
+        })?;
+    if needed_blocks > world.blocks.len() {
         return Err(GenError::InvalidConfig {
             field: "periods",
             detail: format!(
-                "requested {} blocks exceed generated Cu-Au world size {}",
-                cfg.periods * cfg.blocks_per_period,
+                "requested {needed_blocks} blocks exceed generated Cu-Au world size {}",
                 world.blocks.len()
             ),
         });
@@ -231,28 +264,31 @@ pub(crate) fn generate_mill_balance_raw(
             two_product_balance(true_feed_cu_pct, true_conc_cu_pct, true_tail_cu_pct)?;
 
         // Biased & noisy observations at feed weightometer, head sampler, conc weighbridge, tails sampler.
+        // Multiplicative lognormal noise guarantees strictly positive readings in all Gaussian tails.
         let dry_moist_bias = (1.0 - 0.08 * cfg.biases.moisture) / (1.0 - 0.08);
         let obs_feed_t = feed_t
             * dry_moist_bias
-            * (1.0 + cfg.feed_weightometer_sigma * draw_normal(&mut stream));
+            * fmine_core::det::exp(cfg.feed_weightometer_sigma * draw_normal(&mut stream));
         let obs_feed_cu = true_feed_cu_pct
             * cfg.biases.sampler
-            * (1.0 + cfg.assay_rel_sigma * draw_normal(&mut stream));
+            * fmine_core::det::exp(cfg.assay_rel_sigma * draw_normal(&mut stream));
         let obs_feed_au = true_feed_au_gt
             * cfg.biases.sampler
-            * (1.0 + cfg.assay_rel_sigma * draw_normal(&mut stream));
+            * fmine_core::det::exp(cfg.assay_rel_sigma * draw_normal(&mut stream));
         // Concentrate custody is high-precision (quarter noise, unbiased weighbridge).
-        let obs_conc_t =
-            conc_t * (1.0 + 0.25 * cfg.feed_weightometer_sigma * draw_normal(&mut stream));
-        let obs_conc_cu =
-            true_conc_cu_pct * (1.0 + 0.25 * cfg.assay_rel_sigma * draw_normal(&mut stream));
-        let obs_conc_au =
-            true_conc_au_gt * (1.0 + 0.25 * cfg.assay_rel_sigma * draw_normal(&mut stream));
+        let obs_conc_t = conc_t
+            * fmine_core::det::exp(0.25 * cfg.feed_weightometer_sigma * draw_normal(&mut stream));
+        let obs_conc_cu = true_conc_cu_pct
+            * fmine_core::det::exp(0.25 * cfg.assay_rel_sigma * draw_normal(&mut stream));
+        let obs_conc_au = true_conc_au_gt
+            * fmine_core::det::exp(0.25 * cfg.assay_rel_sigma * draw_normal(&mut stream));
         let obs_tail_cu = (true_tail_cu_pct
-            * (1.0 + cfg.assay_rel_sigma * draw_normal(&mut stream)))
-        .clamp(0.001, obs_feed_cu * 0.95);
-        let obs_tail_au =
-            (true_tail_au_gt * (1.0 + cfg.assay_rel_sigma * draw_normal(&mut stream))).max(0.001);
+            * fmine_core::det::exp(cfg.assay_rel_sigma * draw_normal(&mut stream)))
+        .min(obs_feed_cu * 0.95)
+        .max(1e-6);
+        let obs_tail_au = (true_tail_au_gt
+            * fmine_core::det::exp(cfg.assay_rel_sigma * draw_normal(&mut stream)))
+        .max(1e-6);
 
         let (obs_tp_pull, obs_tp_rec) = two_product_balance(obs_feed_cu, obs_conc_cu, obs_tail_cu)?;
 
@@ -371,6 +407,20 @@ mod tests {
         assert!(
             (mean_ratio - 0.96).abs() < 0.015,
             "expected mean observed/true head Cu ~ 0.96, got {mean_ratio}"
+        );
+
+        // Regression: out-of-range noise sigma and non-positive bias factor refuse without panicking.
+        let mut bad_sigma = cfg.clone();
+        bad_sigma.assay_rel_sigma = 0.50;
+        assert!(
+            h1.generate_mill_balance(2_026_133, &bad_sigma, None)
+                .is_err()
+        );
+        let mut bad_bias = cfg;
+        bad_bias.biases.sampler = 0.0;
+        assert!(
+            h1.generate_mill_balance(2_026_133, &bad_bias, None)
+                .is_err()
         );
     }
 }

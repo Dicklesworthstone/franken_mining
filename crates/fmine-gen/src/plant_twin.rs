@@ -224,6 +224,43 @@ impl PlantTwin {
                 "PlantTwin requires at least one target quarter",
             ));
         }
+        if !(axes.sampler_ratio.is_finite()
+            && (0.0..=10.0).contains(&axes.sampler_ratio)
+            && axes.intra_quarter_autocorr.is_finite()
+            && (0.0..=0.99).contains(&axes.intra_quarter_autocorr)
+            && axes.fresh_trans_kinetics.is_finite()
+            && (0.05..=1.0).contains(&axes.fresh_trans_kinetics)
+            && injected_recovery_shift_pct.is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "PlantTwin axes or injected_recovery_shift_pct out of physical domain",
+            ));
+        }
+        let mut seen_quarters = BTreeSet::new();
+        for tgt in targets {
+            if tgt.quarter.is_empty() || !seen_quarters.insert(tgt.quarter.as_str()) {
+                return Err(Refusal::new(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    format!("empty or duplicate target quarter {:?}", tgt.quarter),
+                ));
+            }
+            if !(tgt.throughput_kt.is_finite()
+                && tgt.throughput_kt > 0.0
+                && tgt.head_grade_cu_pct.is_finite()
+                && (0.0..=100.0).contains(&tgt.head_grade_cu_pct)
+                && tgt.recovery_pct.is_finite()
+                && (0.0..=100.0).contains(&tgt.recovery_pct))
+            {
+                return Err(Refusal::new(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    format!(
+                        "target quarter '{}' values out of physical domain",
+                        tgt.quarter
+                    ),
+                ));
+            }
+        }
         const DAYS_PER_QUARTER: usize = 30;
         let mut stream = PhiloxStream::new(seed);
         let phi = axes.intra_quarter_autocorr;
@@ -351,6 +388,12 @@ impl PlantTwin {
     /// `[printed - step/2, printed + step/2]`, and copper must be in `kt` (never `Mlb`, `E565`).
     /// Any out-of-rounding cell refuses with `FMINE-REF-101` (never tuned silently).
     pub fn check_parity(&self, public: &[CitedSeries]) -> Result<(), Refusal> {
+        if public.is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::NoClaimInDomain201,
+                "check_parity requires at least one public CitedSeries",
+            ));
+        }
         // Pre-pass: validate all series units and schema before numeric parity comparison.
         for series in public {
             if series.unit.eq_ignore_ascii_case("mlb") {
@@ -371,13 +414,34 @@ impl PlantTwin {
                     format!("unknown public series '{}'", series.series_name),
                 ));
             }
+            if series.points.is_empty() {
+                return Err(Refusal::new(
+                    RefusalCode::NoClaimInDomain201,
+                    format!("public series '{}' has zero points", series.series_name),
+                ));
+            }
         }
         for series in public {
             for pt in &series.points {
-                if pt.rounding_step <= 0.0 || !pt.rounding_step.is_finite() {
+                if pt.cell.is_empty() || pt.source_sha256.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::UndeclaredUnitBasisOrTz107,
+                        format!(
+                            "public point in '{}' ({}) requires non-empty cell and source_sha256",
+                            series.series_name, pt.quarter
+                        ),
+                    ));
+                }
+                if !pt.printed_value.is_finite()
+                    || pt.rounding_step <= 0.0
+                    || !pt.rounding_step.is_finite()
+                {
                     return Err(Refusal::new(
                         RefusalCode::OutsidePhysicalDomain109,
-                        format!("non-positive rounding_step on {}", pt.cell),
+                        format!(
+                            "non-finite value or non-positive rounding_step on {}",
+                            pt.cell
+                        ),
                     ));
                 }
                 let Some(q) = self.quarters.iter().find(|q| q.quarter == pt.quarter) else {
@@ -577,15 +641,21 @@ pub fn parse_pilot_twins_registry(
         let key = k.trim();
         let val = v.trim();
         if section.is_empty() {
-            if key == "schema_version" && val == "1" {
+            if !saw_version && key == "schema_version" && val == "1" {
                 saw_version = true;
             } else {
                 return Err(Refusal::new(
                     RefusalCode::UndeclaredUnitBasisOrTz107,
-                    format!("pilot_twins.toml line {line}: expected schema_version = 1"),
+                    format!("pilot_twins.toml line {line}: expected single schema_version = 1"),
                 ));
             }
         } else {
+            if cur.iter().any(|(fk, _)| fk == key) {
+                return Err(Refusal::new(
+                    RefusalCode::UndeclaredUnitBasisOrTz107,
+                    format!("pilot_twins.toml line {line}: duplicate key '{key}' in [[{section}]]"),
+                ));
+            }
             let parsed = val
                 .strip_prefix('"')
                 .and_then(|x| x.strip_suffix('"'))
@@ -622,15 +692,23 @@ pub fn parse_pilot_twins_registry(
         })
     };
 
-    let Some(sf) = site_rows
+    let matching_sites: Vec<&Vec<(String, String)>> = site_rows
         .iter()
-        .find(|f| f.iter().any(|(k, v)| k == "site" && v == target_site))
-    else {
+        .filter(|f| f.iter().any(|(k, v)| k == "site" && v == target_site))
+        .collect();
+    if matching_sites.is_empty() {
         return Err(Refusal::new(
             RefusalCode::NoClaimInDomain201,
             format!("site '{target_site}' not found in pilot_twins.toml"),
         ));
-    };
+    }
+    if matching_sites.len() > 1 {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!("duplicate [[site_twin]] entry for site '{target_site}' in pilot_twins.toml"),
+        ));
+    }
+    let sf = matching_sites[0];
 
     let axis_ranges = AxisRanges {
         sampler_ratio: (
@@ -662,34 +740,73 @@ pub fn parse_pilot_twins_registry(
     }
 
     let mut candidate_files = Vec::new();
+    let mut seen_file_names = BTreeSet::new();
     for ff in &file_rows {
         let site = get(ff, "site")?;
         if site == target_site {
+            let name = get(ff, "name")?;
+            if name.is_empty() || !seen_file_names.insert(name.clone()) {
+                return Err(Refusal::new(
+                    RefusalCode::UndeclaredUnitBasisOrTz107,
+                    format!(
+                        "empty or duplicate candidate_file name {name:?} for site '{target_site}'"
+                    ),
+                ));
+            }
+            let extraction_cost = get_f64(ff, "extraction_cost")?;
+            if !(extraction_cost.is_finite() && extraction_cost > 0.0) {
+                return Err(Refusal::new(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    format!("candidate_file '{name}' requires finite extraction_cost > 0"),
+                ));
+            }
             candidate_files.push(CandidateFileCostRow {
                 site,
-                name: get(ff, "name")?,
-                extraction_cost: get_f64(ff, "extraction_cost")?,
+                name,
+                extraction_cost,
                 status: get(ff, "status")?,
                 description: get(ff, "description")?,
             });
         }
     }
 
+    let ownership_pct: u32 = get(sf, "ownership_pct")?.parse().map_err(|_| {
+        Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "invalid ownership_pct",
+        )
+    })?;
+    if !(1..=100).contains(&ownership_pct) {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            format!("ownership_pct ({ownership_pct}) must lie in 1..=100"),
+        ));
+    }
+    let k: usize = get(sf, "k")?
+        .parse()
+        .map_err(|_| Refusal::new(RefusalCode::OutsidePhysicalDomain109, "invalid k"))?;
+    if k == 0 {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "pilot_twins.toml requires k >= 1",
+        ));
+    }
+    let power_bar_target = get_f64(sf, "power_bar_target")?;
+    if !(power_bar_target.is_finite() && power_bar_target > 0.0 && power_bar_target <= 1.0) {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            format!("power_bar_target ({power_bar_target}) must lie in (0, 1]"),
+        ));
+    }
+
     Ok(PilotTwinRegistrySpec {
         site: target_site.to_string(),
-        ownership_pct: get(sf, "ownership_pct")?.parse().map_err(|_| {
-            Refusal::new(
-                RefusalCode::OutsidePhysicalDomain109,
-                "invalid ownership_pct",
-            )
-        })?,
+        ownership_pct,
         copper_unit: get(sf, "copper_unit")?,
-        k: get(sf, "k")?
-            .parse()
-            .map_err(|_| Refusal::new(RefusalCode::OutsidePhysicalDomain109, "invalid k"))?,
+        k,
         status: get(sf, "status")?,
         axis_ranges,
-        power_bar_target: get_f64(sf, "power_bar_target")?,
+        power_bar_target,
         segment_boundaries,
         candidate_files,
     })

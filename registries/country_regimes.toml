@@ -165,3 +165,26 @@ super_profits_trigger_usd = 0
 state_equity_bps = 1600
 renewal_equity_step_bps = 0
 source_e_ids = "E135,E448"
+
+[[regime]]
+id = "png_porgera_2026"
+country = "Papua New Guinea"
+asset = "Porgera"
+instrument = "Porgera Project Commencement Agreement (3 Feb 2022) + SML 13 + Fiscal Stability Agreement (13 Oct 2023)"
+as_of_date = "2026-08-10"
+superseded_on = ""
+state = "NotPublished:fsa_royalty_and_tax_rates_unverified_FACT_U"
+royalty_kind = "flat"
+royalty_rate_bps = 0
+royalty_ceiling_usd = 0
+royalty_step_bps = 0
+royalty_step_width_usd = 0
+royalty_fixed_surcharges_bps = 0
+cit_rate_bps = 0
+min_turnover_tax_bps = 0
+super_profits_rate_bps = 0
+super_profits_bfs_usd = 0
+super_profits_trigger_usd = 0
+state_equity_bps = 5100
+renewal_equity_step_bps = 0
+source_e_ids = "E425,E426,E427,E428,E429,E430,E431,E432"
