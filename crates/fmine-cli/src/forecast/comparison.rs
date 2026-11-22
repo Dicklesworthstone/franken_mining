@@ -3,13 +3,171 @@
 use std::fmt::Write as _;
 
 use fmine_calib::ForecastPayload;
-use fmine_calib::ledger::comparison::{PairedAssessment, PairedScore};
+use fmine_calib::ledger::comparison::gaussian::{
+    GaussianPairedAssessment, METHOD as GAUSSIAN_METHOD,
+};
+use fmine_calib::ledger::comparison::{CrpsComparison, PairedAssessment, PairedScore};
 use fmine_numerics::exact_feas::Rat;
 
-use super::{Replay, absent, js, selector_name, utc};
+use super::{Replay, absent, js, optional_number, selector_name, utc};
 use fmine_evidence::Refusal;
 
-pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps] [--head <hex>]","inputs":"Two already persisted assessments in the same journal; no clock sampling, new assessment, outcome selection or journal append","compatibility":"Same frozen public issuer, metric, unit, ownership, calendar period, vintage permission, alpha, as-of cut and outcome selector","pairing":"Union of frozen subjects, with paired numeric scores only for identical outcome values and citations; missing forecasts, unresolved outcomes and selection mismatches stay visible","score":"Default interval: unchanged exact rational interval loss and PAIR/v1 identity. Opt-in crps: exact full-distribution CRPS for empirical and weighted_empirical forecasts only; other distributions refuse even for unmatched subjects. Both use left minus right, with negative favoring left, and observed means on identical-publication pairs only","completion":"Exact global finite loss-difference bounds for unresolved pairs. CRPS sweeps the union of support atoms: the difference is linear between atoms and constant outside both supports, without outcome-domain assumptions. Exact weights are never normalized or resampled. Whole-union averages are absent if any subject lacks a forecast or compatible selection, or checked arithmetic is unrepresentable","identity":"CRPS uses fmine.forecast-crps-comparison.v1 and PCRP/v1, retaining every frozen distribution and exact weight, selected event and source citation. Default interval schema and digests remain unchanged","interpretation":"Descriptive arithmetic bounds, not confidence intervals, sequential significance, calibration or predictive skill; model information sets may differ; original assessments and registration identities remain unchanged"}"#;
+pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps] [--head <hex>]","inputs":"Two already persisted assessments in the same journal; no clock sampling, new assessment, outcome selection or journal append","compatibility":"Same frozen public issuer, metric, unit, ownership, calendar period, vintage permission, alpha, as-of cut and outcome selector","pairing":"Union of frozen subjects, with paired numeric scores only for identical outcome values and citations; missing forecasts, unresolved outcomes and selection mismatches stay visible","score":"Default interval: unchanged exact rational interval loss and PAIR/v1 identity. Opt-in crps: exact full-distribution CRPS for empirical and weighted_empirical forecasts, or a separately typed approximate Gaussian CRPS comparison when all members are Gaussian. Mixed Gaussian/finite populations and unsupported distributions refuse, including unmatched subjects. Both use left minus right, with negative favoring left, and observed means on identical-publication pairs only","completion":"Finite CRPS uses exact global extrema from a union-of-support CDF sweep. Gaussian CRPS uses approximate analytic extrema at both infinite-tail limits and the unique CDF crossing, or monotonicity at equal scales; these are not certified numerical enclosures. Neither needs an invented outcome domain. Whole-union averages are absent if any subject lacks a forecast or compatible selection, or required arithmetic is unrepresentable","identity":"Finite CRPS retains fmine.forecast-crps-comparison.v1 and PCRP/v1. Gaussian CRPS uses fmine.forecast-gaussian-crps-comparison.v1 and GCRP/v1 with arithmetic=approximate. Every frozen distribution, selected event and source citation remains available. Default interval and finite CRPS schemas and digests remain unchanged","interpretation":"Descriptive arithmetic completion diagnostics, not confidence intervals, sequential significance, calibration or predictive skill; model information sets may differ; original assessments and registration identities remain unchanged"}"#;
+
+pub(super) fn crps(
+    state: &Replay,
+    left: fmine_core::Digest32,
+    right: fmine_core::Digest32,
+) -> Result<(String, String), Refusal> {
+    match state.ledger.compare_assessments_full_crps(left, right)? {
+        CrpsComparison::Finite(report) => {
+            Ok((json(state, &report)?, markdown_crps(state, &report)?))
+        }
+        CrpsComparison::Gaussian(report) => {
+            Ok((gaussian_json(state, &report)?, gaussian_markdown(&report)))
+        }
+    }
+}
+
+fn gaussian_bounds(value: Option<(f64, f64)>) -> String {
+    value.map_or_else(
+        || "null".into(),
+        |(lo, hi)| format!("{{\"lower\":{lo},\"upper\":{hi}}}"),
+    )
+}
+
+fn gaussian_status(present: bool, no_values: bool) -> &'static str {
+    if no_values {
+        "no_paired_outcomes"
+    } else if present {
+        "approximate"
+    } else {
+        "arithmetic_indeterminate"
+    }
+}
+
+fn gaussian_json(state: &Replay, report: &GaussianPairedAssessment) -> Result<String, Refusal> {
+    let members = report.members.iter().map(|member| {
+        let left = member.left.as_ref().map(|m| state.member_json(m)).transpose()?.unwrap_or_else(|| "null".into());
+        let right = member.right.as_ref().map(|m| state.member_json(m)).transpose()?.unwrap_or_else(|| "null".into());
+        Ok(format!(
+            "{{\"subject\":{},\"status\":{},\"left\":{left},\"right\":{right},\"difference\":{},\"completion\":{},\"arithmetic_indeterminate\":{}}}",
+            js(&member.subject), js(member.status.as_str()), optional_number(member.difference),
+            gaussian_bounds(member.completion), member.arithmetic_indeterminate,
+        ))
+    }).collect::<Result<Vec<_>, Refusal>>()?.join(",");
+    let completion_status = if report.n_unmatched > 0 {
+        "unmatched_population_or_outcome_selection"
+    } else {
+        gaussian_status(report.whole_population.is_some(), false)
+    };
+    Ok(format!(
+        "{{\"schema\":\"fmine.forecast-gaussian-crps-comparison.v1\",\"arithmetic\":\"approximate\",\"digest\":{},\"left_assessment\":{},\"right_assessment\":{},\"left_cohort\":{},\"right_cohort\":{},\"issuer\":{},\"metric\":{},\"unit\":{},\"ownership\":{},\"period\":{},\"alpha\":{},\"as_of\":{},\"selector\":{},\"method\":{},\"n_members\":{},\"n_paired\":{},\"n_unresolved\":{},\"n_unmatched\":{},\"n_arithmetic_indeterminate\":{},\"observed_status\":{},\"observed_mean_difference\":{},\"completion_status\":{},\"whole_population\":{},\"members\":[{members}]}}",
+        js(&report.digest.to_hex()),
+        js(&report.left_assessment.to_hex()),
+        js(&report.right_assessment.to_hex()),
+        js(&report.left_cohort.to_hex()),
+        js(&report.right_cohort.to_hex()),
+        js(&report.issuer),
+        js(&report.metric),
+        js(&report.unit),
+        js(&report.ownership),
+        js(&report.period),
+        report.alpha,
+        utc(report.as_of_ns),
+        js(selector_name(report.selector)),
+        js(GAUSSIAN_METHOD),
+        report.members.len(),
+        report.n_paired,
+        report.n_unresolved,
+        report.n_unmatched,
+        report.n_arithmetic_indeterminate,
+        js(gaussian_status(
+            report.observed_mean_difference.is_some(),
+            report.n_paired == 0
+        )),
+        optional_number(report.observed_mean_difference),
+        js(completion_status),
+        gaussian_bounds(report.whole_population),
+    ))
+}
+
+fn gaussian_markdown(report: &GaussianPairedAssessment) -> String {
+    let text = crate::guidance::text;
+    let display =
+        |value: Option<f64>| value.map_or_else(|| "unavailable".into(), |x| x.to_string());
+    let mut out = format!(
+        "# Paired Gaussian CRPS assessment\n\n{GAUSSIAN_METHOD}\n\nArithmetic: **approximate**. The completion extrema are not certified numerical enclosures.\n\nComparison: `{}`\n\nLeft assessment: `{}`\n\nRight assessment: `{}`\n\nTarget: {} / {} / {} / {} / {}.\n\nAssessment cut: {}. Outcome selector: {}. Frozen alpha: {} (compatibility only; CRPS uses the complete distribution).\n\nPaired outcomes: {}. Unresolved pairs: {}. Unmatched subjects or selections: {}. Arithmetic indeterminate: {}.\n\nObserved mean difference: {}.\n\nWhole-population completion: {}.\n\n| Subject | Status | Left minus right | Completion |\n|---|---|---:|---|\n",
+        report.digest,
+        report.left_assessment,
+        report.right_assessment,
+        text(&report.issuer),
+        text(&report.metric),
+        text(&report.unit),
+        text(&report.ownership),
+        text(&report.period),
+        utc(report.as_of_ns).trim_matches('"'),
+        selector_name(report.selector),
+        report.alpha,
+        report.n_paired,
+        report.n_unresolved,
+        report.n_unmatched,
+        report.n_arithmetic_indeterminate,
+        display(report.observed_mean_difference),
+        report
+            .whole_population
+            .map_or_else(|| "unavailable".into(), |(lo, hi)| format!("[{lo}, {hi}]")),
+    );
+    for member in &report.members {
+        let _ = writeln!(
+            out,
+            "| {} | {}{} | {} | {} |",
+            text(&member.subject),
+            member.status.as_str(),
+            if member.arithmetic_indeterminate {
+                "; arithmetic indeterminate"
+            } else {
+                ""
+            },
+            display(member.difference),
+            member
+                .completion
+                .map_or_else(|| "unavailable".into(), |(lo, hi)| format!("[{lo}, {hi}]"))
+        );
+    }
+    out.push_str("\n## Frozen Gaussian distributions and selected source evidence\n");
+    for member in &report.members {
+        for (side, parameters, selected) in [
+            ("Left", member.left_parameters, member.left.as_ref()),
+            ("Right", member.right_parameters, member.right.as_ref()),
+        ] {
+            if let Some(parameters) = parameters {
+                let _ = writeln!(
+                    out,
+                    "\n{side} {}: Gaussian mean {}, standard deviation {} ({}).",
+                    text(&member.subject),
+                    parameters.mean,
+                    parameters.std_dev,
+                    text(&report.unit)
+                );
+            }
+            if let Some(selected) = selected {
+                let _ = writeln!(out, "Forecast `{}`.", selected.forecast_id);
+                if let super::MemberOutcome::Resolved { citation, .. } = &selected.outcome {
+                    let _ = writeln!(
+                        out,
+                        "{} / {} / {}; SHA-256 `{}`.",
+                        text(&citation.source),
+                        text(&citation.vintage),
+                        text(&citation.locator),
+                        fmine_core::Digest32(citation.sha256)
+                    );
+                }
+            }
+        }
+    }
+    out
+}
 
 fn rat(value: Rat) -> String {
     format!(

@@ -109,6 +109,22 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   descriptive arithmetic bounds, not confidence intervals, prospective model-race evidence, independence,
   calibration or predictive skill. Direct analytical, pair-distance-oracle, invariance, unsupported-payload
   and source/capacity controls are in `xtask/tests/forecast_comparison.rs`.
+- DESIGN (BD-048/049, plan §10.2): `compare_assessments_gaussian_crps` uses the identical public-target
+  and selected-source pairing for a complete Gaussian population. `compare_assessments_full_crps`
+  dispatches to this separately typed projection or the unchanged exact finite-distribution owner;
+  mixed Gaussian/finite populations and unsupported distributions refuse, including unmatched subjects.
+  Gaussian values are explicitly approximate. The difference derivative is twice the CDF difference:
+  equal standard deviations give monotonicity; otherwise one standardized CDF crossing plus the two
+  infinite-tail limits supply all global extrema. The kernel evaluates these without constructing an
+  overflowing physical crossing or subtracting huge nearly equal CRPS values. Scaled tail corrections
+  retain density contributions that would underflow before multiplication by a large standard deviation.
+  Missing-outcome extrema are approximate analytic completion diagnostics, not certified enclosures,
+  confidence intervals or calibration evidence. Every missing/mismatched subject and finite-capacity
+  failure remains explicit; no partial population bound is substituted. GCRP/v1 binds the unchanged
+  saved parent digests and new projection. Existing PAIR/v1 and PCRP/v1 identities remain unchanged.
+  Controls: `ledger/comparison/gaussian/tests.rs` and `xtask/tests/forecast_comparison.rs` cover independent
+  closed-form answers, stationary extrema, distant tails, common location/unit transformations, complete
+  membership, source mismatch and representability boundaries.
 - DESIGN (BD-049, plan §10.3): `correction_proposal(saved_digest, raw_forecast_id)` makes an explicit,
   unissued correction for a later unresolved Gaussian forecast from one complete saved assessment.
   At least two positive forecast/outcome pairs are required; every model, family, author, domain, horizon,

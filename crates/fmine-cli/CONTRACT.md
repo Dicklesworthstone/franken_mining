@@ -30,6 +30,17 @@
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+- DESIGN (BD-048/049, plan §10.2): `forecast journal compare --score crps` also admits homogeneous
+  Gaussian forecasts through `fmine.forecast-gaussian-crps-comparison.v1` and GCRP/v1. JSON declares
+  `arithmetic = "approximate"`; JSON and Markdown retain every frozen mean/standard deviation, selected
+  source citation, missing/mismatched member and arithmetic failure. Missing-outcome completion uses
+  approximate analytic global extrema, explicitly not certified numerical enclosures. Mixed
+  Gaussian/finite populations and unsupported distributions refuse instead of selecting a subset.
+  This read-only projection samples no clock, rereads no source and appends no journal operation.
+  Existing exact finite CRPS and default interval schemas/identities remain unchanged. Independent
+  kernel controls and `xtask`'s saved Gaussian comparison lifecycle exercise the numerical and durable
+  boundaries. The projection supplies no calibration, independence or predictive-skill claim.
+
 - DESIGN (BD-059/067/076): the frozen forecast-record workflow additionally admits
   `tcc_usd_per_oz` for `q4_qtd` and `quarter_qtd` targets. Candidate generation, original-release
   outcomes and persistence all consume the printed gold total cash-cost field. Its guidance comparator

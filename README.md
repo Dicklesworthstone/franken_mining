@@ -3885,12 +3885,22 @@ both source admissions, exact numerator/denominator strings and a separate compa
 
 DESIGN (BD-048/049): add `--score crps` to compare the complete empirical or weighted-empirical predictive
 distributions. This retains their exact scenario probabilities and can distinguish forecasts with identical
-central interval endpoints. Unsupported distribution types refuse rather than acquire an inferred finite
-approximation. For unresolved pairs, exact completion bounds follow from a sweep over the combined support
+central interval endpoints. For unresolved pairs, exact completion bounds follow from a sweep over the combined support
 atoms: the CRPS difference is linear between atoms and constant beyond both supports. The complete frozen
 subject population and identical-publication matching rules still apply. JSON retains the frozen forecasts
 and exact weights under a separate CRPS comparison schema and digest. The default interval comparison and
 its existing identities are unchanged; neither mode supplies a significance or calibration claim.
+
+The same `--score crps` option also compares two Gaussian forecast populations directly, including their
+declared means and standard deviations. Gaussian results use a separate schema and explicitly approximate
+numerical values. Their missing-outcome completion range comes from the two tail limits and the possible
+crossing of the Gaussian CDFs; it needs no invented finite sample or outcome range. For example, two forecasts
+with the same mean and standard deviations 20 and 10 have a left-minus-right CRPS difference of approximately
+2.33695 at that mean, while an unresolved outcome allows differences from approximately -5.64190 to 2.33695.
+These are conditional analytic extrema evaluated numerically, not certified numerical enclosures or confidence
+intervals. Every frozen subject still contributes to the population checks, including unmatched subjects.
+Mixed Gaussian/finite populations, intervals and quantile-only forecasts remain unsupported for paired CRPS.
+Replaying a comparison preserves both saved assessments and never appends to the forecast journal.
 
 ### Inspect an explicit forecast correction
 

@@ -437,10 +437,14 @@ fn perform(
             persisted_report(&mut state, *left)?;
             persisted_report(&mut state, *right)?;
             let crps = matches!(command, Command::CompareCrps { .. });
-            let report = if crps {
-                state.ledger.compare_assessments_crps(*left, *right)?
+            let (comparison_json, markdown) = if crps {
+                super::comparison::crps(&state, *left, *right)?
             } else {
-                state.ledger.compare_assessments(*left, *right)?
+                let report = state.ledger.compare_assessments(*left, *right)?;
+                (
+                    super::comparison::json(&state, &report)?,
+                    super::comparison::markdown(&report),
+                )
             };
             let head_digest = journal
                 .records()
@@ -451,13 +455,8 @@ fn perform(
                 "{{\"operation\":\"compare\",\"head\":{},\"head_pinned\":{},\"comparison\":{}}}",
                 js(&head_digest.to_hex()),
                 head.is_some(),
-                super::comparison::json(&state, &report)?,
+                comparison_json,
             );
-            let markdown = if crps {
-                super::comparison::markdown_crps(&state, &report)?
-            } else {
-                super::comparison::markdown(&report)
-            };
             return Ok((payload, markdown));
         }
         Command::Init {
