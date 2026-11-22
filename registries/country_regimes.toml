@@ -1,0 +1,167 @@
+# registries/country_regimes.toml — Versioned CountryRegime & Fiscal-Instrument Rows (BD-296, plan §23.4)
+# Every row records its statutory/contractual instrument, as-of date, supersession date (if any),
+# operational state (Stable | FiscalShock | SecurityDisruption | Suspension | Restricted:* | NotPublished:*),
+# price-contingent royalty/tax terms, and plan Evidence IDs.
+
+schema_version = 1
+
+[[regime]]
+id = "drc_kibali_2026"
+country = "DRC"
+asset = "Kibali"
+instrument = "Law 007/2002 as amended by Law 18/001 (9 Mar 2018)"
+as_of_date = "2026-02-27"
+superseded_on = ""
+state = "Stable"
+royalty_kind = "flat"
+royalty_rate_bps = 570
+royalty_ceiling_usd = 0
+royalty_step_bps = 0
+royalty_step_width_usd = 0
+royalty_fixed_surcharges_bps = 0
+cit_rate_bps = 3000
+min_turnover_tax_bps = 0
+super_profits_rate_bps = 5000
+super_profits_bfs_usd = 1600
+super_profits_trigger_usd = 2000
+state_equity_bps = 1000
+renewal_equity_step_bps = 500
+source_e_ids = "E242,E243,E244,E245,E443,E444,E445,E446,E447,E449"
+
+[[regime]]
+id = "mali_loulo_2026"
+country = "Mali"
+asset = "Loulo-Gounkoto"
+instrument = "Loi n°2023-040 (29 Aug 2023; adopted by settlement 24 Nov 2025)"
+as_of_date = "2026-08-10"
+superseded_on = ""
+state = "FiscalShock"
+royalty_kind = "stepped"
+royalty_rate_bps = 750
+royalty_ceiling_usd = 2500
+royalty_step_bps = 50
+royalty_step_width_usd = 400
+royalty_fixed_surcharges_bps = 785
+cit_rate_bps = 3000
+min_turnover_tax_bps = 0
+super_profits_rate_bps = 0
+super_profits_bfs_usd = 0
+super_profits_trigger_usd = 0
+state_equity_bps = 2000
+renewal_equity_step_bps = 0
+source_e_ids = "E410,E411,E412,E413,E414,E415,E416,E419,E421,E422,E423,E424"
+
+[[regime]]
+id = "mali_loulo_2023_superseded"
+country = "Mali"
+asset = "Loulo-Gounkoto"
+instrument = "1991-Code Establishment Conventions"
+as_of_date = "2023-03-31"
+superseded_on = "2025-11-24"
+state = "Stable"
+royalty_kind = "flat"
+royalty_rate_bps = 600
+royalty_ceiling_usd = 0
+royalty_step_bps = 0
+royalty_step_width_usd = 0
+royalty_fixed_surcharges_bps = 0
+cit_rate_bps = 3000
+min_turnover_tax_bps = 75
+super_profits_rate_bps = 0
+super_profits_bfs_usd = 0
+super_profits_trigger_usd = 0
+state_equity_bps = 2000
+renewal_equity_step_bps = 0
+source_e_ids = "E202,E246"
+
+[[regime]]
+id = "mali_loulo_2025_not_published"
+country = "Mali"
+asset = "Loulo-Gounkoto"
+instrument = "Provisional Administration (16 Jun 2025 - 16 Dec 2025)"
+as_of_date = "2025-09-30"
+superseded_on = ""
+state = "NotPublished:suspension_and_loss_of_control_Q1_Q3_2025"
+royalty_kind = "flat"
+royalty_rate_bps = 600
+royalty_ceiling_usd = 0
+royalty_step_bps = 0
+royalty_step_width_usd = 0
+royalty_fixed_surcharges_bps = 0
+cit_rate_bps = 3000
+min_turnover_tax_bps = 0
+super_profits_rate_bps = 0
+super_profits_bfs_usd = 0
+super_profits_trigger_usd = 0
+state_equity_bps = 2000
+renewal_equity_step_bps = 0
+source_e_ids = "E122,E248,E401,E409,E477,E478"
+
+[[regime]]
+id = "panama_cobre_panama_2026"
+country = "Panama"
+asset = "Cobre Panama"
+instrument = "No instrument in force (Law 406 struck down 28 Nov 2023; P&SM stockpile processing 7 Apr 2026)"
+as_of_date = "2026-10-28"
+superseded_on = ""
+state = "Restricted:stockpile-only"
+royalty_kind = "flat"
+royalty_rate_bps = 0
+royalty_ceiling_usd = 0
+royalty_step_bps = 0
+royalty_step_width_usd = 0
+royalty_fixed_surcharges_bps = 0
+cit_rate_bps = 2500
+min_turnover_tax_bps = 0
+super_profits_rate_bps = 0
+super_profits_bfs_usd = 0
+super_profits_trigger_usd = 0
+state_equity_bps = 0
+renewal_equity_step_bps = 0
+source_e_ids = "E433,E442"
+
+[[regime]]
+id = "argentina_veladero_2017_restricted"
+country = "Argentina"
+asset = "Veladero"
+instrument = "San Juan provincial cyanide-addition restriction (29 Mar - 15 Jun 2017)"
+as_of_date = "2017-04-15"
+superseded_on = ""
+state = "Restricted:reagent"
+royalty_kind = "flat"
+royalty_rate_bps = 300
+royalty_ceiling_usd = 0
+royalty_step_bps = 0
+royalty_step_width_usd = 0
+royalty_fixed_surcharges_bps = 0
+cit_rate_bps = 3500
+min_turnover_tax_bps = 0
+super_profits_rate_bps = 0
+super_profits_bfs_usd = 0
+super_profits_trigger_usd = 0
+state_equity_bps = 0
+renewal_equity_step_bps = 0
+source_e_ids = "E278,E281"
+
+[[regime]]
+id = "tanzania_twiga_2020"
+country = "Tanzania"
+asset = "North Mara - Bulyanhulu"
+instrument = "Twiga Framework Agreement under Mining Act 2010 (amended 2017; effective 24 Jan 2020)"
+as_of_date = "2020-01-24"
+superseded_on = ""
+state = "Stable"
+royalty_kind = "flat"
+royalty_rate_bps = 700
+royalty_ceiling_usd = 0
+royalty_step_bps = 0
+royalty_step_width_usd = 0
+royalty_fixed_surcharges_bps = 0
+cit_rate_bps = 3000
+min_turnover_tax_bps = 0
+super_profits_rate_bps = 0
+super_profits_bfs_usd = 0
+super_profits_trigger_usd = 0
+state_equity_bps = 1600
+renewal_equity_step_bps = 0
+source_e_ids = "E135,E448"

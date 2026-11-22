@@ -17,6 +17,7 @@ members = [
     "crates/fmine-sync",
     "crates/fmine-numerics",
     "crates/fmine-flow",
+    "crates/fmine-econ",
     "crates/fmine-geom",
     "crates/fmine-optimize",
     "crates/fmine-lp",
