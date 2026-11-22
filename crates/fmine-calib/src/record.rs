@@ -610,6 +610,16 @@ pub enum Outcome {
     /// `quarter_qtd`: the original QTD value for the quarter immediately following the common persistence
     /// point. Production and sold-metal costs retain their own units and ownership semantics.
     QuarterQtd,
+    /// `quarter_qtd_nowcast`: original QTD values after quarter end but before their registered
+    /// publication. This explicit mode is scored separately and never relaxes ordinary forecasts.
+    QuarterQtdNowcast,
+}
+
+impl Outcome {
+    #[must_use]
+    pub const fn is_quarterly(self) -> bool {
+        matches!(self, Self::QuarterQtd | Self::QuarterQtdNowcast)
+    }
 }
 
 /// A forecast target: what is forecast and what is scored.
@@ -655,7 +665,13 @@ pub enum TargetMetric {
 impl TargetMetric {
     #[must_use]
     pub fn from_target(target: &Target) -> Option<Self> {
-        match (target.field.as_str(), target.outcome) {
+        // Both explicit quarterly modes share source units; only their timing contract differs.
+        let outcome = if target.outcome == Outcome::QuarterQtdNowcast {
+            Outcome::QuarterQtd
+        } else {
+            target.outcome
+        };
+        match (target.field.as_str(), outcome) {
             ("au_prod_100_koz", Outcome::FyMinus9m | Outcome::QuarterQtd) => {
                 Some(Self::GoldProduction)
             }
@@ -760,6 +776,14 @@ pub struct RulesSite {
     pub reason: Option<String>,
 }
 
+/// A prospectively declared earliest outcome release, including preliminary announcements. The
+/// adapter also applies earlier registered publication bounds; this declaration proves no publication fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NowcastAvailability {
+    pub earliest_release_utc: i64,
+    pub basis: String,
+}
+
 /// A parsed `rules.toml`: the typed parts code scores with. The prose (the interval score's formula, the report,
 /// the calibration claim, the outcome vintage, the excluded rows) must be present but is bound only by the
 /// rules' digest.
@@ -777,6 +801,8 @@ pub struct RecordRules {
     pub coverage_level: Rat,
     pub calibration_claim_min_n: u64,
     pub dates: RecordDates,
+    /// Required only for explicit post-quarter nowcasts, and bound by the exact rules digest.
+    pub nowcast_availability: Option<NowcastAvailability>,
     pub targets: Vec<Target>,
     pub basis_rules: Vec<BasisRule>,
     pub baselines: Vec<BaselineRule>,
@@ -819,9 +845,17 @@ impl RecordRules {
         Ok((first, last, point))
     }
 
+    /// The explicit post-quarter mode is frozen in every target, never inferred from a late proof.
+    #[must_use]
+    pub fn is_post_quarter_nowcast(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| target.outcome == Outcome::QuarterQtdNowcast)
+    }
+
     /// Source adapters derive the scored quarter from a single frozen persistence point. The original
-    /// annual rules retain their Q3-to-Q4 meaning. New quarterly records use original QTD values only;
-    /// mixing those meanings or issuing a post-quarter nowcast is outside this protocol slice.
+    /// annual rules retain their Q3-to-Q4 meaning. Quarterly records use original QTD values only;
+    /// forecast and post-quarter nowcast modes cannot share one record.
     pub fn outcome_quarter(&self) -> Result<Quarter, RecordError> {
         let invalid = |reason: &str| RecordError::Forecast {
             line: 0,
@@ -831,13 +865,14 @@ impl RecordRules {
             .targets
             .split_first()
             .ok_or_else(|| invalid("record has no targets"))?;
-        let quarterly = first.outcome == Outcome::QuarterQtd;
+        let quarterly = first.outcome.is_quarterly();
         let (_, _, point) = self.persistence_pool(&first.id)?;
         if point.year == 0 {
             return Err(invalid("persistence point requires a positive year"));
         }
         for target in remaining {
-            if (target.outcome == Outcome::QuarterQtd) != quarterly
+            if target.outcome.is_quarterly() != quarterly
+                || (quarterly && target.outcome != first.outcome)
                 || self.persistence_pool(&target.id)?.2 != point
             {
                 return Err(invalid(
@@ -851,9 +886,26 @@ impl RecordRules {
             ));
         }
         let outcome = point.next();
-        outcome
+        let end = outcome
             .end_utc()
             .ok_or_else(|| invalid("scored quarter is outside the supported UTC calendar"))?;
+        if first.outcome == Outcome::QuarterQtdNowcast {
+            let availability = self.nowcast_availability.as_ref().ok_or_else(|| {
+                invalid("post-quarter nowcasts require a declared earliest outcome release and its basis")
+            })?;
+            if self.dates.nowcast_from != end
+                || self.dates.proof_by <= end
+                || self.dates.proof_by >= availability.earliest_release_utc
+                || availability.basis.trim().is_empty()
+                || availability.basis.chars().any(char::is_control)
+            {
+                return Err(invalid(
+                    "post-quarter nowcasts require quarter-end nowcast_from, a later proof deadline strictly before the earliest outcome release, and a stated release basis",
+                ));
+            }
+        } else if self.nowcast_availability.is_some() {
+            return Err(invalid("outcome release declarations require quarter_qtd_nowcast targets"));
+        }
         Ok(outcome)
     }
 
@@ -863,7 +915,7 @@ impl RecordRules {
         if self
             .targets
             .iter()
-            .any(|t| t.outcome == Outcome::QuarterQtd)
+            .any(|t| t.outcome.is_quarterly())
         {
             self.outcome_quarter()?;
         }
@@ -878,7 +930,7 @@ const RULES_PROSE_KEYS: [&str; 5] = [
     "outcome_vintage",
     "excluded_rows",
 ];
-const RULES_TOP_KEYS: [&str; 16] = [
+const RULES_TOP_KEYS: [&str; 18] = [
     "rules_id",
     "record_id",
     "issuer",
@@ -890,6 +942,8 @@ const RULES_TOP_KEYS: [&str; 16] = [
     "calibration_claim_min_n",
     "nowcast_from_utc",
     "proof_by_utc",
+    "earliest_outcome_release_utc",
+    "outcome_release_basis",
     "interval_score",
     "report",
     "calibration_claim",
@@ -972,11 +1026,12 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
                     })?,
                     outcome: r.parsed(
                         "outcome",
-                        "\"fy_minus_9m\", \"q4_qtd\" or \"quarter_qtd\"",
+                        "\"fy_minus_9m\", \"q4_qtd\", \"quarter_qtd\" or \"quarter_qtd_nowcast\"",
                         |s| match s {
                             "fy_minus_9m" => Some(Outcome::FyMinus9m),
                             "q4_qtd" => Some(Outcome::Q4Qtd),
                             "quarter_qtd" => Some(Outcome::QuarterQtd),
+                            "quarter_qtd_nowcast" => Some(Outcome::QuarterQtdNowcast),
                             _ => None,
                         },
                     )?,
@@ -1137,12 +1192,28 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
             nowcast_from: top.parsed("nowcast_from_utc", utc, parse_utc)?,
             proof_by: top.parsed("proof_by_utc", utc, parse_utc)?,
         },
+        nowcast_availability: if doc.top.iter().any(|field| {
+            matches!(field.key.as_str(), "earliest_outcome_release_utc" | "outcome_release_basis")
+        }) {
+            Some(NowcastAvailability {
+                earliest_release_utc: top.parsed("earliest_outcome_release_utc", utc, parse_utc)?,
+                basis: top.text("outcome_release_basis")?.0.into(),
+            })
+        } else {
+            None
+        },
         targets,
         basis_rules,
         baselines,
         sites,
     };
     rules.validate_quarterly_period()?;
+    if rules.nowcast_availability.is_some() && !rules.is_post_quarter_nowcast() {
+        return Err(RecordError::Forecast {
+            line: 0,
+            reason: "outcome release declarations require quarter_qtd_nowcast targets".into(),
+        });
+    }
     Ok(rules)
 }
 

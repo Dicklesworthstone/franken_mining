@@ -99,7 +99,7 @@ pub fn build_candidate(
     if rules
         .targets
         .iter()
-        .any(|t| t.outcome == super::Outcome::QuarterQtd)
+        .any(|t| t.outcome.is_quarterly())
     {
         rules.outcome_quarter()?;
     }

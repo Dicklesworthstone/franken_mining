@@ -8,13 +8,13 @@ use std::io::Read;
 use std::path::Path;
 
 use fmine_calib::record::{
-    self, Outcome, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
+    self, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
     candidate::{Candidate, CandidateSeries, build_candidate},
 };
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_registry::sources::{day_end, parse_sources_registry, retrieval_upper};
+use fmine_registry::sources::{SourcesRegistry, day_end, parse_sources_registry, retrieval_upper};
 
 use crate::key::{
     self, KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesOwnershipBasis,
@@ -40,6 +40,76 @@ pub struct CandidateSource {
     pub available_by_utc: String,
     pub published_at: Option<String>,
     pub published_at_basis: Option<String>,
+}
+
+/// A registered original-release publication boundary. The date is registry evidence, not a
+/// timestamp authority or a claim that every public disclosure has been registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NowcastPublication {
+    pub file: String,
+    pub sha256: String,
+    pub published_at: String,
+    pub published_at_basis: String,
+    /// The start, not the end, of the stated publication day: same-day proofs cannot precede it.
+    pub day_start_utc: i64,
+}
+
+/// Retain every registered workbook/HTML release for the scored quarter. Retrieval and inferred
+/// publication dates cannot establish that an outcome was still unpublished. An empty result is
+/// admissible for an unissued draft only; scoring additionally requires an original Mine Stats release.
+pub fn nowcast_publications(
+    registry: &SourcesRegistry,
+    quarter: Quarter,
+) -> Result<Vec<NowcastPublication>> {
+    let release = quarter.to_string();
+    let mut publications = Vec::new();
+    let workbook_rows = registry
+        .sources
+        .iter()
+        .filter(|source| source.quarter == release)
+        .map(|source| {
+            (
+                &source.file,
+                &source.sha256,
+                source.published_at.as_deref(),
+                source.published_at_basis.as_deref(),
+            )
+        });
+    let html_rows = registry
+        .html_sources
+        .iter()
+        .filter(|source| source.release == release)
+        .map(|source| {
+            (
+                &source.file,
+                &source.sha256,
+                Some(source.published_at.as_str()),
+                Some(source.published_at_basis.as_str()),
+            )
+        });
+    for (file, sha256, day, basis) in workbook_rows.chain(html_rows) {
+        let bad = || {
+            refuse(
+                RefusalCode::AssayLookahead108,
+                format!("{file}: post-quarter nowcasts require a FACT-cited publication date"),
+            )
+        };
+        let day = day.ok_or_else(bad)?;
+        let basis = basis.filter(|basis| basis.starts_with("FACT: ")).ok_or_else(bad)?;
+        let day_start_utc = record::parse_date(day)
+            .and_then(|day| day.checked_mul(86_400))
+            .filter(|day| quarter.end_utc().is_some_and(|end| *day >= end))
+            .ok_or_else(bad)?;
+        publications.push(NowcastPublication {
+            file: file.clone(),
+            sha256: sha256.clone(),
+            published_at: day.into(),
+            published_at_basis: basis.into(),
+            day_start_utc,
+        });
+    }
+    publications.sort_by(|a, b| a.file.cmp(&b.file));
+    Ok(publications)
 }
 
 /// One selected field. A missing row keeps its file and digest; placeholders keep their canonical Claim.
@@ -68,6 +138,8 @@ pub struct PublicCandidate {
     pub rules_file_sha256: Digest32,
     pub registry_sha256: Digest32,
     pub sources: Vec<CandidateSource>,
+    /// Empty on ordinary forecasts; registered release boundaries remain separate from model inputs.
+    pub nowcast_publications: Vec<NowcastPublication>,
     pub observations: Vec<CandidateObservation>,
     pub digest: Digest32,
 }
@@ -126,6 +198,7 @@ struct Prepared {
     rules: RecordRules,
     profile: IssuerProfile,
     sources: Vec<CandidateSource>,
+    nowcast_publications: Vec<NowcastPublication>,
     as_of: String,
     synthetic: bool,
     rules_digest: Digest32,
@@ -144,15 +217,19 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     let outcome = rules
         .outcome_quarter()
         .map_err(|e| invalid(e.to_string()))?;
-    if rules
-        .targets
-        .iter()
-        .any(|t| t.outcome == Outcome::QuarterQtd)
+    if rules.is_post_quarter_nowcast() {
+        if cut < after_quarter(outcome)? || cut >= rules.dates.proof_by {
+            return Err(refuse(
+                RefusalCode::LateRegistration206,
+                "post-quarter nowcast cuts must follow quarter end and precede the frozen proof deadline",
+            ));
+        }
+    } else if rules.targets.iter().any(|t| t.outcome.is_quarterly())
         && cut >= after_quarter(outcome)?
     {
         return Err(refuse(
             RefusalCode::LateRegistration206,
-            "quarterly candidates require an information cut before quarter end; post-quarter nowcasts are unsupported",
+            "quarterly candidates require an information cut before quarter end; declare quarter_qtd_nowcast in new rules for a post-quarter record",
         ));
     }
     let registry =
@@ -160,6 +237,18 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     if registry.issuer != rules.issuer {
         return Err(invalid("source registry issuer differs from the rules"));
     }
+    let nowcast_publications = if rules.is_post_quarter_nowcast() {
+        let publications = nowcast_publications(&registry, outcome)?;
+        if publications.iter().any(|source| cut >= source.day_start_utc) {
+            return Err(refuse(
+                RefusalCode::AssayLookahead108,
+                "post-quarter nowcast information cut reaches a registered original publication day",
+            ));
+        }
+        publications
+    } else {
+        Vec::new()
+    };
     let mut wanted = BTreeSet::new();
     for target in &rules.targets {
         expected_unit(target)?;
@@ -228,6 +317,7 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
         rules,
         profile,
         sources,
+        nowcast_publications,
         as_of: as_of.into(),
         synthetic,
         rules_digest: record::rules_digest(rules_bytes),
@@ -582,6 +672,7 @@ fn finish(
         rules_file_sha256: prepared.rules_file_sha256,
         registry_sha256: prepared.registry_sha256,
         sources: prepared.sources,
+        nowcast_publications: prepared.nowcast_publications,
         observations,
         digest,
     })

@@ -178,3 +178,44 @@ fn quarter_qtd_candidates_keep_exact_bounds_units_and_signed_cost_domains() {
         }
     }
 }
+
+#[test]
+fn post_quarter_nowcast_rules_freeze_timing_and_never_relabel_ordinary_forecasts() {
+    let rules_text = ANNUAL
+        .replace("fy_minus_9m", "quarter_qtd_nowcast")
+        .replace("q4_qtd", "quarter_qtd_nowcast")
+        .replace("2026-11-09T11:00:00Z", "2027-01-01T00:00:00Z")
+        .replace("2026-12-31T23:59:59Z", "2027-01-14T23:59:59Z")
+        .replacen(
+            "[[target]]",
+            "earliest_outcome_release_utc = \"2027-01-15T00:00:00Z\"\noutcome_release_basis = \"Synthetic earliest preliminary production announcement, not the later annual workbook\"\n\n[[target]]",
+            1,
+        );
+    let rules = parse_rules(&rules_text).unwrap();
+    assert!(rules.is_post_quarter_nowcast());
+    assert_eq!(rules.outcome_quarter().unwrap().to_string(), "2026Q4");
+    assert!(
+        rules.targets.iter().all(|target| {
+            target.outcome == Outcome::QuarterQtdNowcast
+                && TargetMetric::from_target(target).is_some()
+        })
+    );
+    assert_ne!(
+        fmine_calib::record::rules_digest(rules_text.as_bytes()),
+        fmine_calib::record::rules_digest(ANNUAL.as_bytes()),
+        "the explicit mode and release policy are prospectively hashed"
+    );
+    for invalid in [
+        rules_text.replacen("outcome = \"quarter_qtd_nowcast\"", "outcome = \"quarter_qtd\"", 1),
+        rules_text.replace("earliest_outcome_release_utc = \"2027-01-15T00:00:00Z\"\n", ""),
+        rules_text.replace("2027-01-15T00:00:00Z", "2027-01-14T23:59:59Z"),
+        rules_text.replace("2027-01-01T00:00:00Z", "2026-12-31T23:59:59Z"),
+        rules_text.replace("quarter_qtd_nowcast", "quarter_qtd"),
+    ] {
+        assert!(parse_rules(&invalid).is_err(), "{invalid}");
+    }
+    let annual = parse_rules(ANNUAL).unwrap();
+    assert!(!annual.is_post_quarter_nowcast());
+    assert!(annual.nowcast_availability.is_none());
+    assert_eq!(annual.outcome_quarter().unwrap().to_string(), "2026Q4");
+}

@@ -1,4 +1,5 @@
 use super::*;
+use fmine_calib::record::Outcome;
 use fmine_io::xlsx::{
     MinimalCell, MinimalSheet, MinimalStyles, Workbook, build_minimal_xlsx_styled,
 };
@@ -1378,4 +1379,76 @@ fn receipt_binds_rules_registry_information_cut_and_source_values() {
     let changed = run(&registry, sources).unwrap();
     assert_ne!(base.candidate.csv, changed.candidate.csv);
     assert_ne!(base.digest, changed.digest);
+}
+
+#[test]
+fn post_quarter_nowcast_candidates_keep_original_inputs_and_reject_known_publications() {
+    let rules = RULES
+        .replace("fy_minus_9m", "quarter_qtd_nowcast")
+        .replace("q4_qtd", "quarter_qtd_nowcast")
+        .replace("2030-10-01T00:00:00Z", "2031-01-01T00:00:00Z")
+        .replace("2030-12-31T23:59:59Z", "2031-01-14T23:59:59Z")
+        .replacen(
+            "[[target]]",
+            "earliest_outcome_release_utc = \"2031-01-15T00:00:00Z\"\noutcome_release_basis = \"Synthetic earliest preliminary production announcement\"\n\n[[target]]",
+            1,
+        );
+    let (registry, sources) = fixture(|_, _| {});
+    let cut = "2031-01-05T00:00:00Z";
+    let report = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), cut).unwrap(),
+        sources.clone(),
+        2,
+    )
+    .unwrap();
+    assert!(report.rules.is_post_quarter_nowcast());
+    assert_eq!(report.candidate.exact_rows.len(), 4);
+    assert_eq!(report.sources.len(), 3);
+    assert!(report.nowcast_publications.is_empty(), "unissued draft, no claim that a release is registered");
+    assert!(report.observations.iter().all(|row| row.quarter.q <= 3));
+    for invalid_cut in ["2030-12-31T23:59:59Z", "2031-01-14T23:59:59Z"] {
+        assert_eq!(
+            prepare(rules.as_bytes(), registry.as_bytes(), invalid_cut).err().unwrap().code,
+            "FMINE-REF-206"
+        );
+    }
+    let future = format!(
+        "\n[[source]]\nfile = \"Future.xlsx\"\nkind = \"mine_stats\"\nquarter = \"2030Q4\"\npath = \"Future.xlsx\"\nurl_basis = \"W1 table\"\nbytes = 1\nsha256 = \"{}\"\npublished_at = \"2031-01-10\"\npublished_at_basis = \"FACT: invented original release day\"\n",
+        "f".repeat(64)
+    );
+    let registered = format!("{registry}{future}");
+    let bounded = finish(
+        prepare(rules.as_bytes(), registered.as_bytes(), cut).unwrap(),
+        sources,
+        2,
+    )
+    .unwrap();
+    assert_eq!(bounded.candidate.csv, report.candidate.csv);
+    assert_ne!(bounded.digest, report.digest, "the full release registry remains receipt-bound");
+    assert_eq!(bounded.nowcast_publications[0].file, "Future.xlsx");
+    assert_eq!(
+        bounded.nowcast_publications[0].day_start_utc,
+        record::parse_utc("2031-01-10T00:00:00Z").unwrap()
+    );
+    assert_eq!(
+        prepare(rules.as_bytes(), registered.as_bytes(), "2031-01-10T00:00:00Z")
+            .err().unwrap().code,
+        "FMINE-REF-108"
+    );
+    for invalid in [
+        registered.replace("published_at = \"2031-01-10\"\n", "")
+            .replace("published_at_basis = \"FACT: invented original release day\"\n", ""),
+        registered.replace("FACT: invented original release day", "INFERENCE: retrieval is not a publication bound"),
+    ] {
+        assert_eq!(prepare(rules.as_bytes(), invalid.as_bytes(), cut).err().unwrap().code, "FMINE-REF-108");
+    }
+    let preliminary = format!(
+        "{registered}\n[[html]]\nfile = \"preliminary.html\"\nrelease = \"2030Q4\"\nurl = \"https://example.invalid/preliminary.html\"\nurl_basis = \"W1 table\"\npublished_at = \"2031-01-04\"\npublished_at_basis = \"FACT: invented preliminary production announcement\"\nbytes = 1\nsha256 = \"{}\"\n",
+        "e".repeat(64)
+    );
+    assert_eq!(
+        prepare(rules.as_bytes(), preliminary.as_bytes(), cut).err().unwrap().code,
+        "FMINE-REF-108",
+        "an earlier registered preliminary release takes precedence over the later workbook"
+    );
 }

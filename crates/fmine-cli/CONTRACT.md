@@ -1682,6 +1682,19 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Markdown retains every frozen member in a per-target table with its exact point, interval, outcome,
   named baseline bounds, publication status and paired membership. Missing values carry explicit reasons;
   signed and zero values retain their declared units, and the point is never reconstructed from the bounds.
+- DESIGN (BD-067/076/334): explicit `quarter_qtd_nowcast` rules support post-quarter, prepublication
+  candidates and authenticated record scoring. Every target shares the mode; the frozen rules declare
+  quarter-end `nowcast_from_utc`, a later proof deadline, and the earliest outcome release with a stated
+  basis covering preliminary announcements. The full authenticated record proof follows its post-quarter
+  information cut, meets that deadline, and strictly precedes every registered original workbook/HTML
+  publication day. Retrieval time cannot establish nonpublication. Missing publication facts refuse;
+  missing outcome bytes remain unresolved in the original scoring denominator. Candidate and assessment
+  schemas identify nowcasts separately from advance forecasts and disclose the release declaration's
+  unverified status and registry-completeness limitation. Existing ordinary forecast timing stays strict.
+  The legacy xtask verifier directs this mode to `fmine forecast record score`, which enforces the original
+  publication checks. No author attestation, external timestamp, release-calendar completeness or issued
+  forecast is fabricated by candidate generation. Parser, source, proof and actual CLI controls live in
+  the existing quarterly-record and forecast-candidate suites.
 - DESIGN (BD-067/076): a separate `quarter_qtd` record uses the original next-quarter QTD value for
   every supported gold/copper production or sold-metal cost target. A common frozen persistence point
   determines the quarter, including year rollover. Quarterly guidance must name that exact period;

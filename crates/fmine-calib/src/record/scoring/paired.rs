@@ -848,6 +848,7 @@ mod tests {
                 nowcast_from: 1,
                 proof_by: 2,
             },
+            nowcast_availability: None,
             targets: vec![Target {
                 id: "production".into(),
                 quantity: "synthetic koz at 100%".into(),

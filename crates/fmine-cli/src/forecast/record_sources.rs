@@ -685,7 +685,7 @@ fn infer_outcome(
 ) -> Result<Lookup> {
     let year = u16::try_from(quarter.year)
         .map_err(|_| invalid("outcome year is outside the supported calendar"))?;
-    if matches!(target.outcome, Outcome::Q4Qtd | Outcome::QuarterQtd) {
+    if target.outcome == Outcome::Q4Qtd || target.outcome.is_quarterly() {
         return inventory.lookup(
             site,
             target,
@@ -976,7 +976,7 @@ impl Guidance {
         let quantity = format!("guidance_{slug}_{}", metric.guidance_quantity());
         let year = u16::try_from(quarter.year)
             .map_err(|_| invalid("guidance year is outside the supported calendar"))?;
-        let period = if target.outcome == Outcome::QuarterQtd {
+        let period = if target.outcome.is_quarterly() {
             quarter.to_string()
         } else {
             format!("{year}FY")
@@ -1003,7 +1003,7 @@ impl Guidance {
             .max()
             .map(str::to_string)
         else {
-            return Ok(unavailable(if target.outcome == Outcome::QuarterQtd {
+            return Ok(unavailable(if target.outcome.is_quarterly() {
                 "no registered guidance for the scored quarter before the frozen information cut; annual guidance is ineligible"
             } else {
                 "no registered annual guidance before the frozen information cut"
@@ -1165,6 +1165,28 @@ pub(super) fn resolve(
     manifest: &RecordManifest,
     as_of_utc: i64,
 ) -> Result<Resolved> {
+    resolve_inner(root, rules, manifest, as_of_utc, None)
+}
+
+/// The caller verifies the external proof before supplying its upper time. This adapter binds that
+/// bound to the same parsed original-release registry used for outcome selection.
+pub(super) fn resolve_nowcast(
+    root: &Path,
+    rules: &RecordRules,
+    manifest: &RecordManifest,
+    as_of_utc: i64,
+    proof_upper_utc: i64,
+) -> Result<Resolved> {
+    resolve_inner(root, rules, manifest, as_of_utc, Some(proof_upper_utc))
+}
+
+fn resolve_inner(
+    root: &Path,
+    rules: &RecordRules,
+    manifest: &RecordManifest,
+    as_of_utc: i64,
+    proof_upper_utc: Option<i64>,
+) -> Result<Resolved> {
     if as_of_utc < manifest.information_cutoff_utc {
         return Err(refusal(
             RefusalCode::AssayLookahead108,
@@ -1174,11 +1196,23 @@ pub(super) fn resolve(
     let outcome_quarter = rules
         .outcome_quarter()
         .map_err(|e| invalid(e.to_string()))?;
-    let quarterly = rules
-        .targets
-        .iter()
-        .any(|t| t.outcome == Outcome::QuarterQtd);
-    if quarterly && manifest.information_cutoff_utc >= after_quarter(outcome_quarter)? {
+    let quarterly = rules.targets.iter().any(|t| t.outcome.is_quarterly());
+    let post_quarter = rules.is_post_quarter_nowcast();
+    if post_quarter {
+        if manifest.label != record::Label::Nowcast
+            || manifest.information_cutoff_utc < after_quarter(outcome_quarter)?
+            || !proof_upper_utc.is_some_and(|upper| {
+                upper > manifest.information_cutoff_utc
+                    && upper <= rules.dates.proof_by
+                    && upper <= as_of_utc
+            })
+        {
+            return Err(refusal(
+                RefusalCode::LateRegistration206,
+                "post-quarter nowcast needs its explicit label, post-quarter information cut and a verified pre-deadline proof",
+            ));
+        }
+    } else if quarterly && manifest.information_cutoff_utc >= after_quarter(outcome_quarter)? {
         return Err(refusal(
             RefusalCode::LateRegistration206,
             "quarterly record information cut must precede quarter end; post-quarter nowcasts are unsupported",
@@ -1192,6 +1226,31 @@ pub(super) fn resolve(
     }
     let registry = load_sources_registry(&registry_path(root, &rules.issuer))
         .map_err(|e| invalid(e.to_string()))?;
+    let nowcast_publications = if post_quarter {
+        let original = outcome_quarter.to_string();
+        if registry.issuer != rules.issuer
+            || registry.sources.iter().filter(|source| {
+                source.kind == "mine_stats" && source.quarter == original
+            }).count() != 1
+        {
+            return Err(refusal(
+                RefusalCode::SourceCellUnusable208,
+                "post-quarter nowcast scoring requires one registered original outcome workbook; no comparative can replace it",
+            ));
+        }
+        let publications = fmine_public::forecast::nowcast_publications(&registry, outcome_quarter)?;
+        if publications.iter().any(|source| {
+            proof_upper_utc.is_some_and(|upper| upper >= source.day_start_utc)
+        }) {
+            return Err(refusal(
+                RefusalCode::LateRegistration206,
+                "the complete nowcast proof must precede every registered original publication day",
+            ));
+        }
+        publications
+    } else {
+        Vec::new()
+    };
     let publications = registry
         .sources
         .iter()
@@ -1290,6 +1349,32 @@ pub(super) fn resolve(
         &outcome_quarters,
         as_of_utc,
     )?;
+    for source in &nowcast_publications {
+        inventory.evidence.bindings.push(format!(
+            "{{\"role\":\"nowcast_publication_boundary\",\"release\":{},\"file\":{},\"sha256\":{},\"published_at\":{},\"published_at_basis\":{},\"publication_day_start_utc\":{},\"verified_record_proof_upper_utc\":{}}}",
+            js(&outcome_quarter.to_string()),
+            js(&source.file),
+            js(&source.sha256),
+            js(&source.published_at),
+            js(&source.published_at_basis),
+            js(&format_utc(source.day_start_utc)),
+            proof_upper_utc.map_or_else(|| "null".into(), |upper| js(&format_utc(upper))),
+        ));
+    }
+    if let Some(availability) = &rules.nowcast_availability {
+        inventory.evidence.bindings.push(format!(
+            "{{\"role\":\"declared_earliest_outcome_release\",\"earliest_release_utc\":{},\"basis\":{},\"proof_deadline_utc\":{},\"independently_verified\":false}}",
+            js(&format_utc(availability.earliest_release_utc)), js(&availability.basis),
+            js(&format_utc(rules.dates.proof_by)),
+        ));
+        inventory.evidence.notes.push(format!(
+            "Declared earliest outcome release (including preliminary announcements): {}. Basis: {}. Frozen proof deadline: {}. This declaration is not proof that earlier publications do not exist.",
+            format_utc(availability.earliest_release_utc), availability.basis, format_utc(rules.dates.proof_by),
+        ));
+    }
+    if post_quarter {
+        inventory.evidence.notes.push("Post-quarter nowcast, scored separately from advance forecasts. The verified record proof precedes every registered original workbook/HTML publication day; registration completeness and publication citations are not independently authenticated.".into());
+    }
     let mut guidance = Guidance::load(root, &profile)?;
     let mut outcomes = Vec::new();
     let mut baselines = Vec::new();

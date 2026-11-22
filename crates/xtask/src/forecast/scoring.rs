@@ -99,7 +99,7 @@ fn original<'a>(
             && c.key.reporting_vintage.release == release
             && c.key.reporting_vintage.file_sha256 == source.sha256_hex
             && c.key.line.label == label
-            && (target.outcome != Outcome::QuarterQtd
+            && (!target.outcome.is_quarterly()
                 || c.locator.starts_with(&format!("{}:QTD!", source.file_name)))
     });
     let first = hits.next();
@@ -283,7 +283,7 @@ fn resolve<'a>(
     let needed: &[u8] = match target.outcome {
         Outcome::FyMinus9m => &[3, 4],
         Outcome::Q4Qtd => &[4],
-        Outcome::QuarterQtd => std::slice::from_ref(&quarter.q),
+        Outcome::QuarterQtd | Outcome::QuarterQtdNowcast => std::slice::from_ref(&quarter.q),
     };
     if needed.iter().any(|q| {
         !profile
@@ -322,7 +322,7 @@ fn resolve<'a>(
                 row.value = Some(fy.checked_sub(nine).map_err(|e| vec![e.to_string()])?);
             }
         }
-        Outcome::Q4Qtd | Outcome::QuarterQtd => {
+        Outcome::Q4Qtd | Outcome::QuarterQtd | Outcome::QuarterQtdNowcast => {
             if let Some(cell) = original(
                 profile,
                 cells,
@@ -333,7 +333,7 @@ fn resolve<'a>(
                 target,
             )? {
                 row.sources.push((
-                    if target.outcome == Outcome::QuarterQtd {
+                    if target.outcome.is_quarterly() {
                         "quarter_qtd_original"
                     } else {
                         "q4_rate_original"
@@ -343,7 +343,7 @@ fn resolve<'a>(
                 row.value = numeric(cell, reported)?;
                 if let Some(reference) = basis_reference {
                     row.sources.push((
-                        if target.outcome == Outcome::QuarterQtd {
+                        if target.outcome.is_quarterly() {
                             "frozen_point_basis_reference"
                         } else {
                             "frozen_q2_basis_reference"
@@ -467,7 +467,7 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
         .rules
         .targets
         .iter()
-        .all(|t| t.outcome == Outcome::QuarterQtd);
+        .all(|t| t.outcome.is_quarterly());
     let reference_quarter = if quarterly {
         point
     } else {

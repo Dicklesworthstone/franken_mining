@@ -26,8 +26,16 @@ The public lane of M0 (`fmine assure public`).
   printed gold AISC or total cash cost per ounce sold, and copper C1 or AISC per pound sold (`q4_qtd`). Rates are never
   differenced across cumulative periods. Explicit `quarter_qtd` targets support those same six metrics
   for the immediately following quarter, including Q4-to-next-year-Q1. Every target in a quarterly record
-  uses that outcome and the same point quarter. The candidate cut must precede the scored quarter's end;
-  post-quarter nowcasts refuse. Original FY rules keep their common Q3 point and existing output bytes.
+  uses that outcome and the same point quarter. Ordinary candidate cuts precede the scored quarter's end.
+  Explicit `quarter_qtd_nowcast` candidates instead require a cut at or after quarter end and before the
+  frozen proof deadline, with that deadline strictly before the declared earliest outcome release.
+  `nowcast_publications` retains registered scored-quarter workbook and HTML publication dates with
+  FACT-cited bases; absent/inferred dates refuse and every known publication day starts an exclusive cut
+  boundary. Earlier preliminary announcements therefore tighten the bound even when a workbook arrives
+  later. The registry is not assumed complete. Drafts may lack an outcome release; authenticated scoring
+  requires the original workbook registry entry and preserves missing outcome bodies as unresolved.
+  Publication boundaries remain separate from historical model inputs and are bound by the registry digest.
+  Original FY rules keep their common Q3 point and existing output bytes.
   `fmine_calib::record::TargetMetric` supplies the same exact
   field/outcome/unit interpretation used by the record scorers; metal quantities and cost families are
   separate pools. Every input uses the exact displayed

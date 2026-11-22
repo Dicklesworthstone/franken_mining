@@ -515,3 +515,56 @@ fn markdown_and_robot_docs_expose_candidate_status_and_export() {
         Some(MODEL)
     );
 }
+
+#[test]
+fn post_quarter_nowcast_cli_exposes_separate_schema_and_frozen_release_policy() {
+    let rules = RULES
+        .replace("fy_minus_9m", "quarter_qtd_nowcast")
+        .replace("q4_qtd", "quarter_qtd_nowcast")
+        .replace("2030-10-01T00:00:00Z", "2031-01-01T00:00:00Z")
+        .replace("2030-12-31T23:59:59Z", "2031-01-14T23:59:59Z")
+        .replacen(
+            "[[target]]",
+            "earliest_outcome_release_utc = \"2031-01-15T00:00:00Z\"\noutcome_release_basis = \"Synthetic preliminary production announcement\"\n\n[[target]]",
+            1,
+        );
+    let fixture = Fixture::with_metrics(
+        &rules, "Gold produced (000s oz, 100%)", "All-in sustaining costs ($/oz)",
+    );
+    let mut args = fixture.args();
+    let cut_index = args.iter().position(|arg| arg == "--as-of").unwrap() + 1;
+    args[cut_index] = "2031-01-05T00:00:00Z".into();
+    let (exit, value, _) = invoke(&args);
+    assert_eq!(exit, 0, "{value:?}");
+    let payload = at(&value, &["payload"]);
+    assert_eq!(
+        at(payload, &["schema"]).as_str(),
+        Some("fmine.forecast-record-nowcast-candidate.v1")
+    );
+    assert_eq!(at(payload, &["label"]).as_str(), Some("nowcast"));
+    assert_eq!(at(payload, &["outcome_quarter"]).as_str(), Some("2030Q4"));
+    assert_eq!(
+        at(payload, &["declared_outcome_release", "earliest_release_utc"]).as_str(),
+        Some("2031-01-15T00:00:00Z")
+    );
+    assert_eq!(at(payload, &["issued"]).as_bool(), Some(false));
+    assert_eq!(at(payload, &["timestamp_proof"]), &Json::Null);
+    assert!(at(payload, &["targets"]).as_array().unwrap().iter().all(|target| {
+        at(target, &["outcome"]).as_str() == Some("quarter_qtd_nowcast")
+    }));
+    let csv = at(payload, &["forecasts_csv"]).as_str().unwrap();
+    assert_eq!(parse_forecasts(csv.as_bytes(), &parse_rules(&rules).unwrap()).unwrap().len(), 4);
+    let mut markdown_args = args.clone();
+    markdown_args.extend(["--format".into(), "markdown".into()]);
+    let output = output(&markdown_args);
+    assert!(output.status.success());
+    let markdown = String::from_utf8(output.stdout).unwrap();
+    assert!(markdown.contains("Draft post-quarter nowcast candidate"));
+    assert!(markdown.contains("scored separately from advance forecasts"));
+    assert!(markdown.contains("preliminary production announcement"));
+    assert!(!markdown.contains("nowcasts are unsupported"));
+    std::fs::write(fixture.root.join("rules.toml"), RULES.replace("fy_minus_9m", "quarter_qtd").replace("q4_qtd", "quarter_qtd")).unwrap();
+    let (exit, ordinary, _) = invoke(&args);
+    assert_ne!(exit, 0, "{ordinary:?}");
+    assert!(format!("{ordinary:?}").contains("FMINE-REF-206"));
+}

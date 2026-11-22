@@ -528,7 +528,7 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     (2026-11-09T11:00Z) and the 31 Dec 2026 deadline;
   - `parse_rules` → `RecordRules` (BD-334.S2): α, the quantile estimator, the n_eff correlation range, the
     coverage level, the dates, the targets (each with its Mine Stats summary field id and its `Outcome`,
-    `fy_minus_9m`, `q4_qtd` or `quarter_qtd`), basis rules, baselines (each on a declared target, every target with one; the id
+    `fy_minus_9m`, `q4_qtd`, `quarter_qtd` or `quarter_qtd_nowcast`), basis rules, baselines (each on a declared target, every target with one; the id
     decides the `BaselineKind`, and `run_rate_persistence` carries its pool's `Quarter`s and the point quarter
     after them) and the named site universe (`live`/`not_published`, never dropped); refuses an `OPEN` marker in
     any value, a duplicate id, an unknown baseline id and every malformed or missing key;
@@ -536,7 +536,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     `au_prod_100_koz` and `cu_prod_100_kt` require `fy_minus_9m`; `aisc_usd_per_oz`, `tcc_usd_per_oz`,
     `c1_usd_per_lb` and `aisc_usd_per_lb` require `q4_qtd`. It supplies the exact unit, guidance quantity key
     and cost-definition suffix. All six fields also accept `quarter_qtd`, meaning the original
-    next-quarter QTD value.
+    next-quarter QTD value. Explicit `quarter_qtd_nowcast` uses the same units and original QTD outcome,
+    but all targets must share that mode. Its `nowcast_from_utc` equals quarter end, and `proof_by_utc`
+    must be later and strictly before mandatory `earliest_outcome_release_utc`. A nonempty
+    `outcome_release_basis` must state the declared earliest release, including preliminary announcements.
+    These exact rule bytes are frozen; the declaration is not independent evidence of nonpublication.
+    Adapters additionally enforce authenticated record timing and registered original publication bounds.
     `RecordRules::outcome_quarter` requires one common persistence point and refuses mixed annual/quarterly
     targets; annual records retain their Q3-to-Q4 meaning. Rules parsing, CSV admission and both direct
     scoring APIs enforce that shared horizon whenever a target uses `quarter_qtd`; constructing or mutating

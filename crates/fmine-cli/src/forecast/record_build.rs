@@ -14,7 +14,7 @@ use fmine_public::forecast::{CandidateObservation, CandidateSource, PublicCandid
 use crate::{Envelope, NextAction, OutputFormat, json_string as js};
 
 pub const USAGE: &str = "forecast record build --rules <rules.toml> --model pooled-quarterly-ratio-empirical-v1 --as-of YYYY-MM-DDTHH:MM:SSZ [--decimal-places 6]";
-pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.forecast-record-candidate.v1","model":"pooled-quarterly-ratio-empirical-v1","status":"draft; uncalibrated; not issued or externally timestamped","targets":{"fy_minus_9m":["au_prod_100_koz","cu_prod_100_kt"],"q4_qtd":["aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"],"quarter_qtd":["au_prod_100_koz","cu_prod_100_kt","aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"]},"quarterly":"All quarter_qtd targets use the quarter after one common persistence point, including year rollover; original QTD outcomes and matching quarterly guidance only; candidate cut and record proof must precede quarter end; post-quarter nowcasts unsupported","inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","live_points":"Production must be positive; supported cost targets retain signed or zero printed values with verified ownership and no overlapping site status; historical ratio pairs still require two positive observations","estimate":"Declared point-quarter observation multiplied by the pooled historical quarterly-ratio median","interval":"Point-quarter observation multiplied by inverse empirical CDF tails under the rules' alpha, ordering endpoint products for signed costs; exact bounds equal the registered persistence baseline","rounding":"CSV lower bounds round toward negative infinity, upper bounds toward positive infinity, points to nearest with ties toward positive infinity; 0 through 12 decimal places, default 6; no negative zero","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; no comparative substitution or silent population shrinkage","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.forecast-record-candidate.v1","model":"pooled-quarterly-ratio-empirical-v1","status":"draft; uncalibrated; not issued or externally timestamped","targets":{"fy_minus_9m":["au_prod_100_koz","cu_prod_100_kt"],"q4_qtd":["aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"],"quarter_qtd":["au_prod_100_koz","cu_prod_100_kt","aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"],"quarter_qtd_nowcast":["au_prod_100_koz","cu_prod_100_kt","aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"]},"quarterly":"All quarterly targets use the quarter after one common persistence point, including year rollover; original QTD outcomes and matching quarterly guidance only. Legacy quarter_qtd cut/proof must precede quarter end.","post_quarter_nowcast":"Every target explicitly declares quarter_qtd_nowcast; nowcast_from_utc equals quarter end and proof_by_utc is later but strictly before mandatory earliest_outcome_release_utc. outcome_release_basis must cover preliminary announcements, not just later workbooks. Cut/proof follow quarter end; candidate cuts and authenticated scoring proofs must precede every FACT-cited original workbook/HTML publication day. Scoring requires an original Mine Stats release and label=nowcast. Distinct candidate/assessment schemas prevent mixing with advance forecasts; legacy rules are unchanged.","inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","live_points":"Production must be positive; supported cost targets retain signed or zero printed values with verified ownership and no overlapping site status; historical ratio pairs still require two positive observations","estimate":"Declared point-quarter observation multiplied by the pooled historical quarterly-ratio median","interval":"Point-quarter observation multiplied by inverse empirical CDF tails under the rules' alpha, ordering endpoint products for signed costs; exact bounds equal the registered persistence baseline","rounding":"CSV lower bounds round toward negative infinity, upper bounds toward positive infinity, points to nearest with ties toward positive infinity; 0 through 12 decimal places, default 6; no negative zero","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; no comparative substitution or silent population shrinkage","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow"}"#;
 
 const VERB: &str = "forecast record build";
 const MAX_RULES_BYTES: u64 = 1024 * 1024;
@@ -201,6 +201,7 @@ fn target_json(target: &Target) -> String {
         Outcome::FyMinus9m => "fy_minus_9m",
         Outcome::Q4Qtd => "q4_qtd",
         Outcome::QuarterQtd => "quarter_qtd",
+        Outcome::QuarterQtdNowcast => "quarter_qtd_nowcast",
     };
     format!(
         "{{\"id\":{},\"field\":{},\"quantity\":{},\"scored_quantity\":{},\"unit\":{},\"basis\":{},\"outcome\":{}}}",
@@ -291,7 +292,7 @@ fn render_json(report: &PublicCandidate) -> String {
         .rules
         .targets
         .iter()
-        .any(|t| t.outcome == Outcome::QuarterQtd)
+        .any(|t| t.outcome.is_quarterly())
     {
         format!(
             ",\"outcome_quarter\":{}",
@@ -303,8 +304,34 @@ fn render_json(report: &PublicCandidate) -> String {
     } else {
         String::new()
     };
+    let post_quarter = report.rules.is_post_quarter_nowcast();
+    let schema = if post_quarter {
+        "fmine.forecast-record-nowcast-candidate.v1"
+    } else {
+        "fmine.forecast-record-candidate.v1"
+    };
+    let horizon = if post_quarter {
+        let publications = report.nowcast_publications.iter().map(|source| {
+            format!(
+                "{{\"file\":{},\"sha256\":{},\"published_at\":{},\"published_at_basis\":{},\"publication_day_start_utc\":{}}}",
+                js(&source.file), js(&source.sha256), js(&source.published_at),
+                js(&source.published_at_basis), js(&fmine_calib::record::format_utc(source.day_start_utc)),
+            )
+        }).collect::<Vec<_>>().join(",");
+        let availability = report.rules.nowcast_availability.as_ref().map_or_else(
+            || "null".into(),
+            |declared| format!(
+                "{{\"earliest_release_utc\":{},\"basis\":{},\"proof_deadline_utc\":{},\"independently_verified\":false}}",
+                js(&fmine_calib::record::format_utc(declared.earliest_release_utc)),
+                js(&declared.basis), js(&fmine_calib::record::format_utc(report.rules.dates.proof_by)),
+            ),
+        );
+        format!("{horizon},\"label\":\"nowcast\",\"timing_mode\":\"post_quarter_prepublication\",\"declared_outcome_release\":{availability},\"publication_boundaries\":[{publications}]")
+    } else {
+        horizon
+    };
     format!(
-        "{{\"schema\":\"fmine.forecast-record-candidate.v1\",\"status\":\"draft\",\"model\":{},\"issuer\":{},\"record_id\":{},\"as_of\":{}{horizon},\"synthetic\":{},\"uncalibrated\":true,\"issued\":false,\"attestation\":null,\"timestamp_proof\":null,\"alpha\":{},\"decimal_places\":{},\"rounding\":\"lower_down_upper_up_point_nearest_ties_up\",\"rules_digest\":{},\"rules_file_sha256\":{},\"registry_sha256\":{},\"receipt_digest\":{},\"forecasts_csv\":{},\"targets\":[{}],\"exact_forecasts\":[{}],\"serialized_forecasts\":[{}],\"not_published_sites\":[{}],\"pools\":[{}],\"input_manifest\":[{}],\"observations\":[{}]}}",
+        "{{\"schema\":\"{schema}\",\"status\":\"draft\",\"model\":{},\"issuer\":{},\"record_id\":{},\"as_of\":{}{horizon},\"synthetic\":{},\"uncalibrated\":true,\"issued\":false,\"attestation\":null,\"timestamp_proof\":null,\"alpha\":{},\"decimal_places\":{},\"rounding\":\"lower_down_upper_up_point_nearest_ties_up\",\"rules_digest\":{},\"rules_file_sha256\":{},\"registry_sha256\":{},\"receipt_digest\":{},\"forecasts_csv\":{},\"targets\":[{}],\"exact_forecasts\":[{}],\"serialized_forecasts\":[{}],\"not_published_sites\":[{}],\"pools\":[{}],\"input_manifest\":[{}],\"observations\":[{}]}}",
         js(candidate.model_id),
         js(&report.rules.issuer),
         js(&report.rules.record_id),
@@ -365,7 +392,12 @@ fn render_json(report: &PublicCandidate) -> String {
 
 fn render_markdown(report: &PublicCandidate) -> String {
     let mut out = format!(
-        "# Draft forecast candidate\n\nModel: `{}`. Evidence cut: `{}`. Calibration: **uncalibrated**.\n\nEvidence lane: **{}**.\n\n{}\n\n## Targets\n\n",
+        "# {}\n\nModel: `{}`. Evidence cut: `{}`. Calibration: **uncalibrated**.\n\nEvidence lane: **{}**.\n\n{}\n\n## Targets\n\n",
+        if report.rules.is_post_quarter_nowcast() {
+            "Draft post-quarter nowcast candidate"
+        } else {
+            "Draft forecast candidate"
+        },
         report.candidate.model_id,
         report.as_of,
         if report.synthetic {
@@ -379,13 +411,27 @@ fn render_markdown(report: &PublicCandidate) -> String {
         .rules
         .targets
         .iter()
-        .any(|t| t.outcome == Outcome::QuarterQtd)
+        .any(|t| t.outcome.is_quarterly())
         && let Some(pool) = report.candidate.pools.first()
     {
         let _ = writeln!(
             out,
-            "Scored quarter: **{}**, from that quarter's original QTD release. Annual guidance is ineligible. The information cut and complete record time proof must precede quarter end; post-quarter nowcasts are unsupported.\n",
-            pool.point_quarter.next()
+            "Scored quarter: **{}**, from that quarter's original QTD release. Annual guidance is ineligible. {}\n",
+            pool.point_quarter.next(),
+            if report.rules.is_post_quarter_nowcast() {
+                "Post-quarter nowcast: scored separately from advance forecasts. The complete proof must meet the frozen deadline and precede every registered original publication day."
+            } else {
+                "The information cut and complete record time proof must precede quarter end."
+            }
+        );
+    }
+    if let Some(declared) = &report.rules.nowcast_availability {
+        let _ = writeln!(
+            out,
+            "Declared earliest outcome release, including preliminary announcements: **{}**. Basis: {}. Proof deadline: **{}**. This declaration and the registry do not independently establish that no earlier publication exists.\n",
+            fmine_calib::record::format_utc(declared.earliest_release_utc),
+            crate::guidance::text(&declared.basis),
+            fmine_calib::record::format_utc(report.rules.dates.proof_by),
         );
     }
     for target in &report.rules.targets {

@@ -582,7 +582,7 @@ pub(super) fn assess(
         .rules
         .targets
         .iter()
-        .any(|target| target.outcome == record::Outcome::QuarterQtd);
+        .any(|target| target.outcome.is_quarterly());
     // A quarterly point is comparator evidence, not an outcome operand. Loading it inside this
     // optional adapter preserves unconditional model scores if an unbound point body is unavailable.
     let quarterly_points = if quarterly {
