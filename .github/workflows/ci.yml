@@ -23,7 +23,7 @@ jobs:
       - name: Source-derived investment portfolios
         run: cargo test -p xtask --test capital_investments --locked
       - name: Saved forecast diagnostics and disclosure derivations
-        run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test public_lint_derivations --test production_valuation --locked
+        run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test forecast_supplied_comparison --test public_lint_derivations --test production_valuation --locked
       - name: Source-bound journals, RTD inversion and citation integrity
         run: cargo test -p xtask --test decision_journal --test plant_rtd_inverse --test public_report_contract --test public_citations --locked
       - name: Plant command and journal integration

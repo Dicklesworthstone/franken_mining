@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use fmine_calib::ledger::comparison::PairedScore;
 use fmine_calib::ledger::correction::CorrectionMethod;
 use fmine_claim::forecast_journal::{Entry, Header, MAX_OPERATION_BYTES, Record};
 use fmine_core::hash::Digest32;
@@ -283,6 +284,14 @@ pub enum Command {
         left: Digest32,
         right: Digest32,
     },
+    /// Explicitly pair prospectively tagged targets whose outcome citations remain supplied.
+    CompareSupplied {
+        journal: PathBuf,
+        head: Option<Digest32>,
+        left: Digest32,
+        right: Digest32,
+        score: PairedScore,
+    },
     /// Propose a visible correction from saved training outcomes without changing any record.
     Correction {
         journal: PathBuf,
@@ -318,7 +327,9 @@ impl Command {
             Self::Inspect { .. } => "inspect",
             Self::VerifyPlant { .. } => "verify-plant",
             Self::Report { .. } => "report",
-            Self::Compare { .. } | Self::CompareCrps { .. } => "compare",
+            Self::Compare { .. } | Self::CompareCrps { .. } | Self::CompareSupplied { .. } => {
+                "compare"
+            }
             Self::Correction { .. } | Self::CorrectionSeries { .. } => "correction",
         }
     }
@@ -431,13 +442,22 @@ fn perform(
             head,
             left,
             right,
+        }
+        | Command::CompareSupplied {
+            journal,
+            head,
+            left,
+            right,
+            ..
         } => {
             let journal = Journal::open_read(&root.join(journal), *head)?;
             let mut state = replay(&journal)?;
             persisted_report(&mut state, *left)?;
             persisted_report(&mut state, *right)?;
             let crps = matches!(command, Command::CompareCrps { .. });
-            let (comparison_json, markdown) = if crps {
+            let (comparison_json, markdown) = if let Command::CompareSupplied { score, .. } = command {
+                super::comparison::supplied(&state, *left, *right, *score)?
+            } else if crps {
                 super::comparison::crps(&state, *left, *right)?
             } else {
                 let report = state.ledger.compare_assessments(*left, *right)?;

@@ -40,6 +40,24 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 ## 4. Public API Surface
 - `FrozenForecast`, `ForecastPayload`, `ForecastLedger`
+- DESIGN (BD-048/181, plan §10.2): `compare_supplied_assessments(left, right, PairedScore)` compares
+  two existing immutable supplied-outcome assessments through the same exact interval and finite CRPS
+  owners as public comparison. This explicit lane matches the unique prospectively frozen
+  `(domain, site, horizon, quantity, unit)` tuple; matched targets also require the same outcome deadline.
+  Model family and author remain visible but do not determine physical identity. Every cohort must have
+  complete frozen metadata and at most one forecast for each target. Resolution rule, eligible sources,
+  quantity, unit, alpha, assessment cut and outcome selector must agree. Public-bound and untagged legacy
+  cohorts refuse rather than receiving an inferred target mapping.
+  Observed pairs require both equal numeric outcomes and identical complete citations. Missing forecasts,
+  unresolved outcomes and selection mismatches remain in the union. Unresolved compatible pairs use the
+  existing exact global interval/CRPS difference extrema; whole-union averages remain absent when any
+  target lacks a forecast, has an incompatible selection or requires unrepresentable arithmetic.
+  CRPS requires finite empirical or exactly weighted empirical distributions on every member, including
+  unmatched targets. These are supplied, unverified target and source declarations, not authenticated
+  public outcomes or empirical calibration. Separate `SuppliedPairedAssessment` receipts use SINT/v1
+  for interval loss and SCRP/v1 for finite CRPS; public PAIR/PCRP/GCRP encodings and durable journal bytes
+  remain unchanged. Six independent kernel controls cover exact weighted scores, missingness, prospective
+  identity, full citations, compatibility refusals and unsupported distributions.
 - DESIGN (BD-067/BD-334): `record::candidate::build_candidate` generates a complete draft live-site × target
   record from already selected quarterly observations. The named `pooled-quarterly-ratio-empirical-v1` model
   uses each target's frozen persistence pool and inverse empirical CDF: the latest observation times

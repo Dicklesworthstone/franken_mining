@@ -681,6 +681,7 @@ fn parse_forecast_journal(
 ) -> Result<(forecast_journal::Command, OutputFormat, PathBuf), String> {
     use std::collections::BTreeMap;
 
+    use fmine_calib::ledger::comparison::PairedScore;
     use fmine_calib::ledger::correction::CorrectionMethod;
     use fmine_core::hash::Digest32;
     use forecast_journal::Command;
@@ -921,20 +922,32 @@ fn parse_forecast_journal(
                 .transpose()?;
             let left = digest(&take(&mut fields, "--left")?)?;
             let right = digest(&take(&mut fields, "--right")?)?;
-            match fields.remove("--score").as_deref().unwrap_or("interval") {
-                "interval" => Command::Compare {
-                    journal,
-                    head,
-                    left,
-                    right,
-                },
-                "crps" => Command::CompareCrps {
-                    journal,
-                    head,
-                    left,
-                    right,
-                },
+            let score = match fields.remove("--score").as_deref().unwrap_or("interval") {
+                "interval" => PairedScore::Interval,
+                "crps" => PairedScore::Crps,
                 _ => return Err("compare --score must be interval or crps".into()),
+            };
+            match fields.remove("--targets").as_deref().unwrap_or("public") {
+                "supplied" => Command::CompareSupplied {
+                    journal,
+                    head,
+                    left,
+                    right,
+                    score,
+                },
+                "public" if score == PairedScore::Crps => Command::CompareCrps {
+                    journal,
+                    head,
+                    left,
+                    right,
+                },
+                "public" => Command::Compare {
+                    journal,
+                    head,
+                    left,
+                    right,
+                },
+                _ => return Err("compare --targets must be public or supplied".into()),
             }
         }
         "correction" => {
@@ -2585,7 +2598,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal restate --journal <path> --head <hex> --cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
-                "forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps] [--head <hex>]",
+                "forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps] [--targets public|supplied] [--head <hex>]",
                 "forecast journal correction --journal <path> (--assessment <digest> | --assessments <digests>) --forecast <alias> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 forecast_candidate::USAGE,

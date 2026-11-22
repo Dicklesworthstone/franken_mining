@@ -18,6 +18,7 @@ use crate::record::{interval_score, scoring::interval_score_difference_bounds};
 
 mod crps;
 pub mod gaussian;
+pub mod supplied;
 
 pub const METHOD: &str = "Paired central-interval loss, left minus right, at the identical frozen alpha. Negative values favor the left cohort. Subjects, target, unit, ownership, calendar period, outcome selector and assessment cut must agree; paired observations require the identical citation and numeric value. The union of frozen subjects remains visible. Observed means use only identical selected publications, with every excluded subject named. Whole-population bounds exist only when all subjects have both forecasts and compatible outcome selections; unresolved pairs use exact global loss-difference extrema at the four interval endpoints. These bounds are arithmetic completion bounds, not confidence intervals. Forecast registration times and information sets may differ. No model-race significance, calibration, independence or predictive-skill claim is supplied.";
 
@@ -116,6 +117,42 @@ struct SelectedPair<'a> {
     value: Option<f64>,
 }
 
+fn select_pair<'a>(
+    subject: String,
+    left: Option<&'a MemberAssessment>,
+    right: Option<&'a MemberAssessment>,
+) -> SelectedPair<'a> {
+    let (status, value) = match (left, right) {
+        (None, _) => (PairStatus::LeftForecastMissing, None),
+        (_, None) => (PairStatus::RightForecastMissing, None),
+        (Some(l), Some(r)) => match (&l.outcome, &r.outcome) {
+            (
+                MemberOutcome::Resolved {
+                    value: a,
+                    citation: ac,
+                    ..
+                },
+                MemberOutcome::Resolved {
+                    value: b,
+                    citation: bc,
+                    ..
+                },
+            ) if a == b && ac == bc => (PairStatus::Paired, Some(*a)),
+            (MemberOutcome::Unresolved { .. }, MemberOutcome::Unresolved { .. }) => {
+                (PairStatus::Unresolved, None)
+            }
+            _ => (PairStatus::OutcomeSelectionMismatch, None),
+        },
+    };
+    SelectedPair {
+        subject,
+        left,
+        right,
+        status,
+        value,
+    }
+}
+
 struct PairedInputs<'a> {
     left: &'a Assessment,
     right: &'a Assessment,
@@ -196,35 +233,7 @@ fn paired_inputs(
         .map(|subject| {
             let l = ls.get(&subject).copied();
             let r = rs.get(&subject).copied();
-            let (status, value) = match (l, r) {
-                (None, _) => (PairStatus::LeftForecastMissing, None),
-                (_, None) => (PairStatus::RightForecastMissing, None),
-                (Some(l), Some(r)) => match (&l.outcome, &r.outcome) {
-                    (
-                        MemberOutcome::Resolved {
-                            value: a,
-                            citation: ac,
-                            ..
-                        },
-                        MemberOutcome::Resolved {
-                            value: b,
-                            citation: bc,
-                            ..
-                        },
-                    ) if a == b && ac == bc => (PairStatus::Paired, Some(*a)),
-                    (MemberOutcome::Unresolved { .. }, MemberOutcome::Unresolved { .. }) => {
-                        (PairStatus::Unresolved, None)
-                    }
-                    _ => (PairStatus::OutcomeSelectionMismatch, None),
-                },
-            };
-            SelectedPair {
-                subject,
-                left: l,
-                right: r,
-                status,
-                value,
-            }
+            select_pair(subject, l, r)
         })
         .collect();
     Ok(PairedInputs {
@@ -269,6 +278,60 @@ fn scores(
         }
         None => interval_score_difference_bounds(left, right, alpha, alpha).ok(),
     }
+}
+
+fn score_member(
+    ledger: &ForecastLedger,
+    selected: SelectedPair<'_>,
+    alpha: f64,
+    score: PairedScore,
+) -> Result<PairedMember, Refusal> {
+    let SelectedPair {
+        subject,
+        left: l,
+        right: r,
+        status,
+        value,
+    } = selected;
+    if score == PairedScore::Crps {
+        for member in [l, r].into_iter().flatten() {
+            let forecast = ledger
+                .records
+                .get(&member.forecast_id)
+                .ok_or_else(|| absent("paired CRPS forecast is unavailable"))?;
+            crps::admit(&forecast.payload)?;
+        }
+    }
+    let left_interval = (score == PairedScore::Interval)
+        .then(|| l.and_then(|member| bounds(ledger, member, alpha)))
+        .flatten();
+    let right_interval = (score == PairedScore::Interval)
+        .then(|| r.and_then(|member| bounds(ledger, member, alpha)))
+        .flatten();
+    let eligible = matches!(status, PairStatus::Paired | PairStatus::Unresolved);
+    let completion = eligible
+        .then(|| match score {
+            PairedScore::Interval => scores(left_interval, right_interval, alpha, value),
+            PairedScore::Crps => crps::scores(
+                &ledger.records.get(&l?.forecast_id)?.payload,
+                &ledger.records.get(&r?.forecast_id)?.payload,
+                value,
+            ),
+        })
+        .flatten();
+    Ok(PairedMember {
+        subject,
+        left: l.cloned(),
+        right: r.cloned(),
+        left_interval,
+        right_interval,
+        status,
+        difference: (status == PairStatus::Paired)
+            .then(|| completion.map(|b| b.0))
+            .flatten(),
+        completion,
+        arithmetic_indeterminate: eligible && completion.is_none(),
+    })
 }
 
 impl ForecastLedger {
@@ -348,53 +411,8 @@ impl ForecastLedger {
             members: selected,
         } = paired_inputs(self, left_digest, right_digest)?;
         let mut members = Vec::with_capacity(selected.len());
-        for SelectedPair {
-            subject,
-            left: l,
-            right: r,
-            status,
-            value,
-        } in selected
-        {
-            if score == PairedScore::Crps {
-                for member in [l, r].into_iter().flatten() {
-                    let forecast = self
-                        .records
-                        .get(&member.forecast_id)
-                        .ok_or_else(|| absent("paired CRPS forecast is unavailable"))?;
-                    crps::admit(&forecast.payload)?;
-                }
-            }
-            let left_interval = (score == PairedScore::Interval)
-                .then(|| l.and_then(|member| bounds(self, member, la)))
-                .flatten();
-            let right_interval = (score == PairedScore::Interval)
-                .then(|| r.and_then(|member| bounds(self, member, la)))
-                .flatten();
-            let eligible = matches!(status, PairStatus::Paired | PairStatus::Unresolved);
-            let completion = eligible
-                .then(|| match score {
-                    PairedScore::Interval => scores(left_interval, right_interval, la, value),
-                    PairedScore::Crps => crps::scores(
-                        &self.records.get(&l?.forecast_id)?.payload,
-                        &self.records.get(&r?.forecast_id)?.payload,
-                        value,
-                    ),
-                })
-                .flatten();
-            members.push(PairedMember {
-                subject,
-                left: l.cloned(),
-                right: r.cloned(),
-                left_interval,
-                right_interval,
-                status,
-                difference: (status == PairStatus::Paired)
-                    .then(|| completion.map(|b| b.0))
-                    .flatten(),
-                completion,
-                arithmetic_indeterminate: eligible && completion.is_none(),
-            });
+        for member in selected {
+            members.push(score_member(self, member, la, score)?);
         }
         let n_paired = members
             .iter()
