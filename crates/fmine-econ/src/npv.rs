@@ -69,7 +69,7 @@ pub struct ExactInterval {
 impl ExactInterval {
     /// Construct a validated exact interval (`lo <= hi`).
     pub fn new(lo: ExactQty, hi: ExactQty) -> Result<Self, EconError> {
-        if lo.checked_cmp(hi)?.is_gt() {
+        if cmp_exact_qty_total(lo, hi).is_gt() {
             return Err(EconError::InvalidDomain {
                 field: "interval",
                 detail: "interval lower bound exceeds upper bound".to_string(),
@@ -115,10 +115,10 @@ impl ExactInterval {
         let mut lo = p0;
         let mut hi = p0;
         for p in [p1, p2, p3] {
-            if p.checked_cmp(lo)?.is_lt() {
+            if cmp_exact_qty_total(p, lo).is_lt() {
                 lo = p;
             }
-            if p.checked_cmp(hi)?.is_gt() {
+            if cmp_exact_qty_total(p, hi).is_gt() {
                 hi = p;
             }
         }
@@ -127,12 +127,14 @@ impl ExactInterval {
 
     /// Returns `true` iff `self` and `other` intersect (`self.lo <= other.hi && other.lo <= self.hi`).
     pub fn overlaps(self, other: Self) -> Result<bool, EconError> {
-        Ok(self.lo.checked_cmp(other.hi)?.is_le() && other.lo.checked_cmp(self.hi)?.is_le())
+        Ok(cmp_exact_qty_total(self.lo, other.hi).is_le()
+            && cmp_exact_qty_total(other.lo, self.hi).is_le())
     }
 
     /// Returns `true` iff `self` lies completely inside `other` (`other.lo <= self.lo && self.hi <= other.hi`).
     pub fn contained_in(self, other: Self) -> Result<bool, EconError> {
-        Ok(other.lo.checked_cmp(self.lo)?.is_le() && self.hi.checked_cmp(other.hi)?.is_le())
+        Ok(cmp_exact_qty_total(other.lo, self.lo).is_le()
+            && cmp_exact_qty_total(self.hi, other.hi).is_le())
     }
 
     /// Exact midpoint `(lo + hi) / 2`.
@@ -165,6 +167,21 @@ fn mul_u128_wide(a: u128, b: u128) -> (u128, u128) {
 /// Compare `a * b` vs `c * d` exactly in 256-bit unsigned arithmetic.
 fn cmp_prod_u128(a: u128, b: u128, c: u128, d: u128) -> core::cmp::Ordering {
     mul_u128_wide(a, b).cmp(&mul_u128_wide(c, d))
+}
+
+/// Overflow-free strict total ordering on [`ExactQty`] using exact 256-bit cross-multiplication.
+fn cmp_exact_qty_total(a: ExactQty, b: ExactQty) -> core::cmp::Ordering {
+    match a.signum().cmp(&b.signum()) {
+        core::cmp::Ordering::Equal => {}
+        ord => return ord,
+    }
+    let ord = cmp_prod_u128(
+        a.num().unsigned_abs(),
+        b.den().unsigned_abs(),
+        b.num().unsigned_abs(),
+        a.den().unsigned_abs(),
+    );
+    if a.signum() < 0 { ord.reverse() } else { ord }
 }
 
 /// Compare `(k / scale)^2 <= num / den` exactly using `u128` wide products (`k^2 * den <= num * scale^2`).
@@ -395,6 +412,26 @@ pub struct ConventionDiscoveryRequest<'a> {
 /// Discover which of the three declared discounting conventions reproduces `printed_npv` within
 /// `printed_step` (`[printed_npv - printed_step/2, printed_npv + printed_step/2]`).
 ///
+fn json_escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Refines the rational square-root enclosure if a boundary straddle occurs (up to `10^-12`).
 /// Refuses with `FMINE-REF-104` (`NonIdentifiableConvention`, `"convention not discovered"`) when
 /// zero OR two-or-more conventions match.
@@ -407,6 +444,7 @@ pub fn discover_discounting_convention(
 
     let mut rows = Vec::with_capacity(DiscountConvention::ALL.len());
     let mut matched = Vec::new();
+    let exact_input_flows = req.flow_rounding_step.signum() == 0;
 
     for conv in DiscountConvention::ALL {
         let mut chosen_ivl = npv_interval(
@@ -435,7 +473,24 @@ pub fn discover_discounting_convention(
                 )?;
             }
         }
-        let matches_printed = chosen_ivl.overlaps(printed_interval)?;
+        let overlaps = chosen_ivl.overlaps(printed_interval)?;
+        let inside = chosen_ivl.contained_in(printed_interval)?;
+        // If input flows are exact and even after max sqrt refinement (10^-12) the irrational
+        // enclosure still straddles the printed interval boundary, refuse as undecided (bd-gqu3.3).
+        if exact_input_flows && conv != DiscountConvention::EndYear && overlaps && !inside {
+            return Err(EconError::NonIdentifiableConvention {
+                detail: format!(
+                    "convention '{}' remains undecided after 10^-12 sqrt refinement: \
+                     enclosure [{}..{}] straddles printed interval [{}..{}]",
+                    conv.as_str(),
+                    fmt_exact_f64_6dp(chosen_ivl.lo),
+                    fmt_exact_f64_6dp(chosen_ivl.hi),
+                    fmt_exact_f64_6dp(printed_interval.lo),
+                    fmt_exact_f64_6dp(printed_interval.hi),
+                ),
+            });
+        }
+        let matches_printed = overlaps;
         if matches_printed {
             matched.push(conv);
         }
@@ -469,10 +524,10 @@ pub fn discover_discounting_convention(
 
     let discovered = matched[0];
     let summary_log_line = format!(
-        "{{\"event\":\"npv_replay\",\"report\":\"{}\",\"sha256\":\"{}\",\
+        "{{\"event\":\"npv_replay\",\"report\":{},\"sha256\":{},\
          \"convention\":\"{}\",\"irr_state\":\"not_requested\"}}",
-        req.report_id,
-        req.report_sha256,
+        json_escape_str(req.report_id),
+        json_escape_str(req.report_sha256),
         discovered.as_str()
     );
     Ok(ConventionDiscovery {
@@ -627,13 +682,28 @@ fn solve_irr_single_bracket_unchecked_sign_changes(
     }
 
     let flows_f64: Vec<f64> = effective.iter().map(|q| q.to_f64()).collect();
-    let root = brent_root(
-        bracket_lo.to_f64(),
-        bracket_hi.to_f64(),
-        tol.to_f64(),
-        max_iter,
-        |r| npv_f64_eval(&flows_f64, r, convention),
-    )
+    if flows_f64.iter().any(|v| !v.is_finite()) {
+        return Err(EconError::NumericalRootFailed {
+            detail: "cash-flow entry overflowed finite f64 range during IRR solve".to_string(),
+        });
+    }
+    let lo_f64 = bracket_lo.to_f64();
+    let hi_f64 = bracket_hi.to_f64();
+    let tol_f64 = tol.to_f64();
+    if !lo_f64.is_finite()
+        || !hi_f64.is_finite()
+        || lo_f64 >= hi_f64
+        || !tol_f64.is_finite()
+        || tol_f64 <= 0.0
+    {
+        return Err(EconError::NumericalRootFailed {
+            detail: "IRR bracket or tolerance underflowed/overflowed finite f64 resolution"
+                .to_string(),
+        });
+    }
+    let root = brent_root(lo_f64, hi_f64, tol_f64, max_iter, |r| {
+        npv_f64_eval(&flows_f64, r, convention)
+    })
     .map_err(|err| match err {
         RootError::NoSignChange { fa, fb } => EconError::NumericalRootFailed {
             detail: format!("IRR bracket has no sign change (f(lo)={fa}, f(hi)={fb})"),
@@ -694,11 +764,55 @@ pub fn find_all_bracketed_irrs(req: &IrrScanRequest<'_>) -> Result<Vec<IrrRoot>,
             detail: "scan_lo must be < scan_hi".to_string(),
         });
     }
+    if req.scan_lo.checked_cmp(ExactQty::from_integer(-1))?.is_le() {
+        return Err(EconError::InvalidDomain {
+            field: "scan_bracket",
+            detail: "IRR scan_lo must be strictly greater than -1".to_string(),
+        });
+    }
+    if req.tol.signum() <= 0 {
+        return Err(EconError::InvalidDomain {
+            field: "tol",
+            detail: "IRR tolerance must be strictly positive".to_string(),
+        });
+    }
+    if req.max_iter == 0 {
+        return Err(EconError::NumericalRootFailed {
+            detail: "IRR max_iter must be >= 1".to_string(),
+        });
+    }
     let step = req
         .scan_hi
         .checked_sub(req.scan_lo)?
         .checked_div(ExactQty::from_integer(i128::from(req.subdivisions)))?;
     let flows_f64: Vec<f64> = effective.iter().map(|q| q.to_f64()).collect();
+    if flows_f64.iter().any(|v| !v.is_finite()) {
+        return Err(EconError::NumericalRootFailed {
+            detail: "cash-flow entry overflowed finite f64 range during IRR scan".to_string(),
+        });
+    }
+
+    let push_dedup = |roots: &mut Vec<IrrRoot>, candidate: IrrRoot| {
+        let is_dup = roots.last().is_some_and(|prev| {
+            prev.rate
+                .checked_sub(candidate.rate)
+                .ok()
+                .and_then(|d| {
+                    let abs_d = if d.signum() < 0 {
+                        ExactQty::from_integer(0).checked_sub(d).ok()?
+                    } else {
+                        d
+                    };
+                    abs_d
+                        .checked_cmp(req.tol.checked_mul(ExactQty::from_integer(10)).ok()?)
+                        .ok()
+                })
+                .is_some_and(|ord| ord.is_le())
+        });
+        if !is_dup {
+            roots.push(candidate);
+        }
+    };
 
     let mut roots: Vec<IrrRoot> = Vec::new();
     for i in 0..req.subdivisions {
@@ -718,7 +832,39 @@ pub fn find_all_bracketed_irrs(req: &IrrScanRequest<'_>) -> Result<Vec<IrrRoot>,
                 detail: "non-finite NPV during multi-root IRR scan".to_string(),
             });
         }
-        if fa == 0.0 || fb == 0.0 || (fa < 0.0) != (fb < 0.0) {
+        let exact_zero = |rate: ExactQty, f_val: f64| -> bool {
+            if f_val == 0.0 {
+                return true;
+            }
+            if req.convention == DiscountConvention::EndYear
+                && let Ok(ivl) = npv_interval(
+                    &effective,
+                    ExactQty::from_integer(0),
+                    rate,
+                    DiscountConvention::EndYear,
+                    &TaxBasis::PreTax,
+                    6,
+                )
+            {
+                return ivl.lo.signum() == 0;
+            }
+            false
+        };
+        let is_root_a = exact_zero(a, fa);
+        let is_root_b = exact_zero(b, fb);
+        // Record exact endpoint hits independently so a sub-bracket with roots at BOTH endpoints
+        // (`is_root_a && is_root_b`) never drops the second root!
+        if is_root_a {
+            push_dedup(
+                &mut roots,
+                IrrRoot {
+                    rate: a,
+                    bracket_lo: a,
+                    bracket_hi: a,
+                    iterations: 0,
+                },
+            );
+        } else if !is_root_b && (fa < 0.0) != (fb < 0.0) {
             let root = solve_irr_single_bracket_unchecked_sign_changes(
                 &effective,
                 req.convention,
@@ -727,26 +873,18 @@ pub fn find_all_bracketed_irrs(req: &IrrScanRequest<'_>) -> Result<Vec<IrrRoot>,
                 req.tol,
                 req.max_iter,
             )?;
-            // Deduplicate exact boundary hits shared between adjacent sub-brackets.
-            let is_dup = roots.last().is_some_and(|prev| {
-                prev.rate
-                    .checked_sub(root.rate)
-                    .ok()
-                    .and_then(|d| {
-                        let abs_d = if d.signum() < 0 {
-                            ExactQty::from_integer(0).checked_sub(d).ok()?
-                        } else {
-                            d
-                        };
-                        abs_d
-                            .checked_cmp(req.tol.checked_mul(ExactQty::from_integer(10)).ok()?)
-                            .ok()
-                    })
-                    .is_some_and(|ord| ord.is_le())
-            });
-            if !is_dup {
-                roots.push(root);
-            }
+            push_dedup(&mut roots, root);
+        }
+        if i + 1 == req.subdivisions && is_root_b {
+            push_dedup(
+                &mut roots,
+                IrrRoot {
+                    rate: b,
+                    bracket_lo: b,
+                    bracket_hi: b,
+                    iterations: 0,
+                },
+            );
         }
     }
     if roots.is_empty() {
@@ -971,6 +1109,78 @@ mod tests {
         assert_eq!(roots.len(), 2);
         assert!((roots[0].rate.to_f64() - 0.10).abs() < 1e-7);
         assert!((roots[1].rate.to_f64() - 0.20).abs() < 1e-7);
+
+        // Fresh-eyes regression: when BOTH endpoints of a single sub-bracket are exact roots
+        // ([0.10, 0.20], subdivisions = 1), BOTH roots are reported (neither is dropped)!
+        let both_endpoints = find_all_bracketed_irrs(&IrrScanRequest {
+            flows: &flows,
+            convention: DiscountConvention::EndYear,
+            tax_basis: &TaxBasis::PreTax,
+            scan_lo: q(10, 100),
+            scan_hi: q(20, 100),
+            subdivisions: 1,
+            tol: q(1, 1_000_000_000),
+            max_iter: 100,
+        })
+        .unwrap();
+        assert_eq!(both_endpoints.len(), 2);
+        assert_eq!(both_endpoints[0].rate, q(10, 100));
+        assert_eq!(both_endpoints[1].rate, q(20, 100));
+    }
+
+    #[test]
+    fn test_fresh_eyes_json_escape_and_undecided_straddle_refusal() {
+        // 1. Quotes and control characters in report_id/sha256 are properly JSON-escaped.
+        let disc = discover_discounting_convention(&ConventionDiscoveryRequest {
+            report_id: "report\"bad\\id\nline2",
+            report_sha256: "abc\"def",
+            flows: &synthetic_flows(),
+            flow_rounding_step: ExactQty::from_integer(0),
+            discount_rate: q(5, 100),
+            printed_npv: q(251, 10),
+            printed_step: q(1, 10),
+            tax_basis: &TaxBasis::PreTax,
+        })
+        .unwrap();
+        assert!(
+            disc.summary_log_line
+                .contains("\"report\":\"report\\\"bad\\\\id\\nline2\"")
+        );
+        assert!(disc.summary_log_line.contains("\"sha256\":\"abc\\\"def\""));
+
+        // 2. When exact-flow MidYearAll enclosure still straddles the printed interval boundary
+        // even after 10^-12 sqrt refinement, discovery refuses as undecided (FMINE-REF-104).
+        let mid_12 = npv_interval(
+            &synthetic_flows(),
+            ExactQty::from_integer(0),
+            q(5, 100),
+            DiscountConvention::MidYearAll,
+            &TaxBasis::PreTax,
+            12,
+        )
+        .unwrap();
+        let edge_center = ExactQty::new(
+            (mid_12.lo.to_f64() * 1_000_000_000_000.0).round() as i128,
+            1_000_000_000_000,
+        )
+        .unwrap();
+        let tiny_step = q(2, 1_000_000_000_000); // 2e-12: half-width 1e-12 straddles mid_12.lo cleanly!
+        let err = discover_discounting_convention(&ConventionDiscoveryRequest {
+            report_id: "straddle",
+            report_sha256: "00",
+            flows: &synthetic_flows(),
+            flow_rounding_step: ExactQty::from_integer(0),
+            discount_rate: q(5, 100),
+            printed_npv: edge_center,
+            printed_step: tiny_step,
+            tax_basis: &TaxBasis::PreTax,
+        })
+        .unwrap_err();
+        assert_eq!(
+            err.to_refusal().code,
+            RefusalCode::NonIdentifiableAttribution104.spec().code
+        );
+        assert!(err.to_string().contains("undecided"));
     }
 
     #[test]

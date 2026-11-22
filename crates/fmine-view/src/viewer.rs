@@ -3,7 +3,7 @@
 //! Holds zero write/authority endpoints and escapes all untrusted text against HTML injection.
 
 use crate::VIEW_NO_CLAIM;
-use crate::gltf::GltfExport;
+use crate::gltf::{GltfExport, crs_label};
 
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -38,6 +38,7 @@ fn json_for_script_tag(json: &str) -> String {
 pub fn render_static_viewer_html(export: &GltfExport) -> String {
     let title = html_escape(&export.scene_name);
     let no_claim = html_escape(VIEW_NO_CLAIM);
+    let crs_str = html_escape(&crs_label(export.crs_id));
     let digest_hex = export.scene_sha256.to_hex();
     let gltf_script_json = json_for_script_tag(&export.gltf_json);
 
@@ -54,7 +55,7 @@ pub fn render_static_viewer_html(export: &GltfExport) -> String {
 <h1>{title} [READ-ONLY — NO AUTHORITY PATH]</h1>\n\
 <div class=\"banner\"><strong>NO CLAIM:</strong> {no_claim}</div>\n\
 <ul>\n\
-<li>CRS: {crs:?}</li>\n\
+<li>CRS: {crs_str}</li>\n\
 <li>Vertices: {verts}</li>\n\
 <li>Triangles: {tris}</li>\n\
 <li>GLB SHA-256: <code>{digest_hex}</code></li>\n\
@@ -62,7 +63,6 @@ pub fn render_static_viewer_html(export: &GltfExport) -> String {
 <script id=\"fmine-gltf-scene\" type=\"application/json\">{gltf_script_json}</script>\n\
 </body>\n\
 </html>\n",
-        crs = export.crs_id,
         verts = export.vertex_count,
         tris = export.triangle_count,
     )
@@ -96,6 +96,8 @@ mod tests {
         let html = render_static_viewer_html(&export);
         assert!(html.contains("READ-ONLY — NO AUTHORITY PATH"));
         assert!(html.contains("NO CLAIM:"));
+        assert!(html.contains("CRS: EPSG:32641"));
+        assert!(!html.contains("Wgs84Utm"));
         assert!(html.contains(&export.scene_sha256.to_hex()));
         assert!(!html.contains("<script>alert(1)</script>"));
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));

@@ -288,8 +288,18 @@ pub fn evaluate_preg_rob_card(
         ));
     }
 
-    if let (Some(cap_t), Some(planned_t)) = (card.max_annual_feed_tonnes, input.annual_feed_tonnes)
-    {
+    if let Some(cap_t) = card.max_annual_feed_tonnes {
+        let planned_t = input.annual_feed_tonnes.ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::OutsideAoa203,
+                format!(
+                    "G-CRUC-1: source '{}' requires annual_feed_tonnes to verify cap < {}/{} t/y",
+                    card.source_name,
+                    cap_t.num(),
+                    cap_t.den()
+                ),
+            )
+        })?;
         if planned_t.signum() < 0 {
             return Err(Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
@@ -309,6 +319,13 @@ pub fn evaluate_preg_rob_card(
                 ),
             ));
         }
+    } else if let Some(planned_t) = input.annual_feed_tonnes
+        && planned_t.signum() < 0
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "annual_feed_tonnes must be >= 0",
+        ));
     }
 
     let penalty = card
@@ -341,6 +358,18 @@ pub fn evaluate_preg_rob_card(
     })
 }
 
+fn sanitize_md_cell(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '|' => out.push_str("\\|"),
+            '\r' | '\n' => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Deterministic human-readable validity summary rendering source-specific `< 40%` / `< 60%`
 /// spike-test feed caps and optional Raman `carbon_type` covariates (`BD-288`).
 #[must_use]
@@ -359,13 +388,13 @@ pub fn render_preg_rob_validity_table(cards: &[PregRobCard]) -> String {
         let eids = if c.source_e_ids.is_empty() {
             "-".to_string()
         } else {
-            c.source_e_ids.join(", ")
+            sanitize_md_cell(&c.source_e_ids.join(", "))
         };
         out.push_str(&format!(
             "| {}@{} | {} | < {} | {} | {} | {} |\n",
-            c.card_id,
-            c.version,
-            c.source_name,
+            sanitize_md_cell(&c.card_id),
+            sanitize_md_cell(&c.version),
+            sanitize_md_cell(&c.source_name),
             fmt_pct(c.max_spike_test_pct),
             ct,
             tpy,
@@ -464,6 +493,22 @@ mod tests {
                     unit: InputUnit::SpikeTestPercent,
                     spike_test_pct: ExactQty::from_integer(20),
                     carbon_type: Some(CarbonType::RamanHighActivity),
+                    annual_feed_tonnes: Some(ExactQty::from_integer(100_000)),
+                },
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::OutsideAoa203.spec().code
+        );
+
+        // Fresh-eyes regression: omitting annual_feed_tonnes cannot bypass an active annual cap!
+        assert_eq!(
+            evaluate_preg_rob_card(
+                &cap40,
+                &PregRobInput {
+                    unit: InputUnit::SpikeTestPercent,
+                    spike_test_pct: ExactQty::from_integer(20),
+                    carbon_type: Some(CarbonType::RamanLowActivity),
                     annual_feed_tonnes: None,
                 },
             )
@@ -471,6 +516,13 @@ mod tests {
             .code,
             RefusalCode::OutsideAoa203.spec().code
         );
+
+        // Fresh-eyes regression: Markdown table escapes pipes and newlines in untrusted labels.
+        let mut tricky = cap60;
+        tricky.source_name = "bad|source\ninjected".to_string();
+        let md = render_preg_rob_validity_table(&[tricky]);
+        assert!(md.contains("bad\\|source injected"));
+        assert_eq!(md.lines().count(), 3);
 
         // Dry-mass percent unit substitution refused with FMINE-REF-107.
         assert_eq!(
@@ -480,7 +532,7 @@ mod tests {
                     unit: InputUnit::DryMassPercent,
                     spike_test_pct: ExactQty::from_integer(20),
                     carbon_type: Some(CarbonType::RamanLowActivity),
-                    annual_feed_tonnes: None,
+                    annual_feed_tonnes: Some(ExactQty::from_integer(100_000)),
                 },
             )
             .unwrap_err()

@@ -134,8 +134,22 @@ impl CuSpeciationCard {
             self.residence_time_days_box.min,
             self.residence_time_days_box.max,
         )?;
+        if self.residence_time_days_box.min.signum() <= 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "residence_time_days_box.min must be strictly positive",
+            ));
+        }
         let _ = ExactValidityRange::new(self.total_cu_pct_box.min, self.total_cu_pct_box.max)?;
+        if self.total_cu_pct_box.min.signum() <= 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "total_cu_pct_box.min must be strictly positive",
+            ));
+        }
         let _ = ExactValidityRange::new(self.as_cu_ratio_box.min, self.as_cu_ratio_box.max)?;
+        check_unit_fraction("as_cu_ratio_box.min", self.as_cu_ratio_box.min)?;
+        check_unit_fraction("as_cu_ratio_box.max", self.as_cu_ratio_box.max)?;
         Ok(())
     }
 
@@ -452,6 +466,26 @@ mod tests {
             evaluate_cu_speciation_card(&card, &bad_sum)
                 .unwrap_err()
                 .code,
+            RefusalCode::OutsidePhysicalDomain109.spec().code
+        );
+
+        // 5. Fresh-eyes regression: card with non-positive residence-time box or > 1 ASCu box refuses.
+        let bad_res_card = CuSpeciationCard::zaldivar_reference(
+            ExactValidityRange::new(q(-10, 1), q(540, 1)).unwrap(),
+            ExactValidityRange::new(q(25, 100), q(120, 100)).unwrap(),
+            ExactValidityRange::new(q(10, 100), q(85, 100)).unwrap(),
+        );
+        assert_eq!(
+            bad_res_card.unwrap_err().code,
+            RefusalCode::OutsidePhysicalDomain109.spec().code
+        );
+        let bad_ratio_card = CuSpeciationCard::zaldivar_reference(
+            ExactValidityRange::new(q(180, 1), q(540, 1)).unwrap(),
+            ExactValidityRange::new(q(25, 100), q(120, 100)).unwrap(),
+            ExactValidityRange::new(q(10, 100), q(110, 100)).unwrap(),
+        );
+        assert_eq!(
+            bad_ratio_card.unwrap_err().code,
             RefusalCode::OutsidePhysicalDomain109.spec().code
         );
     }

@@ -10,10 +10,60 @@
 //! Zero bare `f64` parameters in public signatures (L-6): all grades, tonnages, probabilities,
 //! quantiles, and KS statistics use exact `fmine_units::ExactQty`.
 
+use core::cmp::Ordering;
+use std::collections::BTreeSet;
+
 use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_units::ExactQty;
 
 use crate::ExploreError;
+
+/// Exact 256-bit unsigned product `(hi, lo)` of two `u128` integers for overflow-free exact sorting.
+fn mul_u128_wide(a: u128, b: u128) -> (u128, u128) {
+    let a_lo = a & 0xFFFF_FFFF_FFFF_FFFF;
+    let a_hi = a >> 64;
+    let b_lo = b & 0xFFFF_FFFF_FFFF_FFFF;
+    let b_hi = b >> 64;
+
+    let p0 = a_lo * b_lo;
+    let p1 = a_lo * b_hi;
+    let p2 = a_hi * b_lo;
+    let p3 = a_hi * b_hi;
+
+    let mid1 = (p0 >> 64) + (p1 & 0xFFFF_FFFF_FFFF_FFFF) + (p2 & 0xFFFF_FFFF_FFFF_FFFF);
+    let lo = (p0 & 0xFFFF_FFFF_FFFF_FFFF) | (mid1 << 64);
+    let hi = p3 + (p1 >> 64) + (p2 >> 64) + (mid1 >> 64);
+    (hi, lo)
+}
+
+/// Overflow-free strict total ordering on [`ExactQty`] (`a.num * b.den` vs `b.num * a.den` in 256-bit).
+fn cmp_exact_qty_total(a: ExactQty, b: ExactQty) -> Ordering {
+    match a.signum().cmp(&b.signum()) {
+        Ordering::Equal => {}
+        ord => return ord,
+    }
+    let lhs = mul_u128_wide(a.num().unsigned_abs(), b.den().unsigned_abs());
+    let rhs = mul_u128_wide(b.num().unsigned_abs(), a.den().unsigned_abs());
+    if a.signum() < 0 {
+        rhs.cmp(&lhs)
+    } else {
+        lhs.cmp(&rhs)
+    }
+}
+
+/// Unbiased uniform index in `[0, n)` via Lemire/rejection sampling over `PhiloxStream`.
+fn next_uniform_index(stream: &mut PhiloxStream, n: u64) -> u64 {
+    if n <= 1 {
+        return 0;
+    }
+    let reject_below = (0_u64.wrapping_sub(n)) % n;
+    loop {
+        let r = stream.next_u64();
+        if r >= reject_below {
+            return r % n;
+        }
+    }
+}
 
 /// Discrete probability mass function over undiscovered deposit counts `N ∈ {0, 1, ..., max_n}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,9 +73,9 @@ pub struct UndiscoveredCountPmf {
 }
 
 impl UndiscoveredCountPmf {
-    /// Construct and validate a discrete count PMF (`probs[k] >= 0`, `Σ probs == 1`).
-    pub fn new(probs: Vec<ExactQty>) -> Result<Self, ExploreError> {
-        if probs.is_empty() {
+    /// Validate that `probs` is non-empty, non-negative, and sums exactly to `1`.
+    pub fn validate(&self) -> Result<(), ExploreError> {
+        if self.probs.is_empty() {
             return Err(ExploreError::InvalidSimplex {
                 detail: "UndiscoveredCountPmf must contain at least one count state".to_string(),
             });
@@ -33,7 +83,7 @@ impl UndiscoveredCountPmf {
         let zero = ExactQty::from_integer(0);
         let one = ExactQty::from_integer(1);
         let mut sum = zero;
-        for &p in &probs {
+        for &p in &self.probs {
             if p.checked_cmp(zero)?.is_lt() {
                 return Err(ExploreError::InvalidSimplex {
                     detail: "count PMF probability cannot be negative".to_string(),
@@ -50,7 +100,14 @@ impl UndiscoveredCountPmf {
                 ),
             });
         }
-        Ok(Self { probs })
+        Ok(())
+    }
+
+    /// Construct and validate a discrete count PMF (`probs[k] >= 0`, `Σ probs == 1`).
+    pub fn new(probs: Vec<ExactQty>) -> Result<Self, ExploreError> {
+        let pmf = Self { probs };
+        pmf.validate()?;
+        Ok(pmf)
     }
 
     /// Construct the USGS Mark3B piecewise-uniform discrete PMF from elicited quantiles
@@ -102,7 +159,10 @@ impl UndiscoveredCountPmf {
     /// Probability of zero undiscovered deposits `P(N = 0)`.
     #[must_use]
     pub fn p_zero(&self) -> ExactQty {
-        self.probs[0]
+        self.probs
+            .first()
+            .copied()
+            .unwrap_or_else(|| ExactQty::from_integer(0))
     }
 }
 
@@ -176,6 +236,7 @@ pub fn simulate_three_part_endowment(
             detail: "tract_id must be non-empty".to_string(),
         });
     }
+    count_pmf.validate()?;
     if n_draws == 0 {
         return Err(ExploreError::InvalidRecord {
             field: "n_draws",
@@ -190,10 +251,17 @@ pub fn simulate_three_part_endowment(
     }
 
     // Precompute exact per-deposit contained metal and analytical mean E[M_deposit].
+    let mut seen_deposit_ids = BTreeSet::new();
     let mut deposit_metals = Vec::with_capacity(grade_tonnage_model.len());
     let mut sum_dep_metal = ExactQty::from_integer(0);
     for dep in grade_tonnage_model {
         let m = dep.contained_metal_kt()?;
+        if !seen_deposit_ids.insert(dep.deposit_id.as_str()) {
+            return Err(ExploreError::InvalidRecord {
+                field: "deposit_id",
+                detail: format!("duplicate grade-tonnage deposit_id '{}'", dep.deposit_id),
+            });
+        }
         sum_dep_metal = sum_dep_metal.checked_add(m)?;
         deposit_metals.push(m);
     }
@@ -234,7 +302,7 @@ pub fn simulate_three_part_endowment(
 
         let mut metal = ExactQty::from_integer(0);
         for _ in 0..k {
-            let dep_idx = usize::try_from(stream.next_u64() % n_dep_u64)
+            let dep_idx = usize::try_from(next_uniform_index(&mut stream, n_dep_u64))
                 .map_err(|_| ExploreError::Overflow)?;
             metal = metal.checked_add(deposit_metals[dep_idx])?;
         }
@@ -245,16 +313,17 @@ pub fn simulate_three_part_endowment(
         draws.push(metal);
     }
 
-    // Canonical exact sort using checked_cmp (no float NaN ordering hazards).
-    draws.sort_by(|a, b| a.checked_cmp(*b).unwrap_or(core::cmp::Ordering::Equal));
+    // Canonical exact sort using overflow-free 256-bit total ordering (strict weak ordering guaranteed).
+    draws.sort_by(|a, b| cmp_exact_qty_total(*a, *b));
 
-    let quantile = |num: usize, den: usize| -> ExactQty {
-        let idx = ((draws.len() - 1) * num) / den;
-        draws[idx]
+    let quantile = |num: u128, den: u128| -> Result<ExactQty, ExploreError> {
+        let max_idx = u128::try_from(draws.len() - 1).map_err(|_| ExploreError::Overflow)?;
+        let idx = usize::try_from((max_idx * num) / den).map_err(|_| ExploreError::Overflow)?;
+        Ok(draws[idx])
     };
-    let p10_metal_kt = quantile(10, 100);
-    let p50_metal_kt = quantile(50, 100);
-    let p90_metal_kt = quantile(90, 100);
+    let p10_metal_kt = quantile(10, 100)?;
+    let p50_metal_kt = quantile(50, 100)?;
+    let p90_metal_kt = quantile(90, 100)?;
     let empirical_mean_metal_kt =
         total_sum.checked_div(ExactQty::from_integer(i128::from(n_draws)))?;
     let empirical_zero_fraction = ExactQty::new(i128::from(zero_count), i128::from(n_draws))?;
@@ -285,7 +354,7 @@ pub fn ks_two_sample_exact(
         });
     }
     for w in sorted_a.windows(2) {
-        if w[0].checked_cmp(w[1])?.is_gt() {
+        if cmp_exact_qty_total(w[0], w[1]).is_gt() {
             return Err(ExploreError::InvalidRecord {
                 field: "sorted_a",
                 detail: "KS sample A must be sorted ascending".to_string(),
@@ -293,7 +362,7 @@ pub fn ks_two_sample_exact(
         }
     }
     for w in sorted_b.windows(2) {
-        if w[0].checked_cmp(w[1])?.is_gt() {
+        if cmp_exact_qty_total(w[0], w[1]).is_gt() {
             return Err(ExploreError::InvalidRecord {
                 field: "sorted_b",
                 detail: "KS sample B must be sorted ascending".to_string(),
@@ -310,7 +379,7 @@ pub fn ks_two_sample_exact(
     while i < sorted_a.len() || j < sorted_b.len() {
         let next_x = match (sorted_a.get(i), sorted_b.get(j)) {
             (Some(&xa), Some(&xb)) => {
-                if xa.checked_cmp(xb)?.is_le() {
+                if cmp_exact_qty_total(xa, xb).is_le() {
                     xa
                 } else {
                     xb
@@ -320,10 +389,10 @@ pub fn ks_two_sample_exact(
             (None, Some(&xb)) => xb,
             (None, None) => break,
         };
-        while i < sorted_a.len() && sorted_a[i].checked_cmp(next_x)?.is_le() {
+        while i < sorted_a.len() && cmp_exact_qty_total(sorted_a[i], next_x).is_le() {
             i += 1;
         }
-        while j < sorted_b.len() && sorted_b[j].checked_cmp(next_x)?.is_le() {
+        while j < sorted_b.len() && cmp_exact_qty_total(sorted_b[j], next_x).is_le() {
             j += 1;
         }
         let fa = ExactQty::new(i128::try_from(i).map_err(|_| ExploreError::Overflow)?, na)?;
@@ -418,5 +487,29 @@ mod tests {
                 .unwrap()
                 .is_le()
         );
+
+        // Fresh-eyes regressions:
+        // 1. Manually constructed empty/unnormalized PMF refuses cleanly without panicking.
+        let empty_pmf = UndiscoveredCountPmf { probs: vec![] };
+        assert_eq!(empty_pmf.p_zero(), ExactQty::from_integer(0));
+        assert!(
+            simulate_three_part_endowment("tract-bad", &empty_pmf, &gt_model, 10, key1).is_err()
+        );
+        // 2. Duplicate deposit_id in grade-tonnage model refuses cleanly.
+        let dup_gt = vec![gt_model[0].clone(), gt_model[0].clone()];
+        assert!(simulate_three_part_endowment("tract-dup", &pmf, &dup_gt, 10, key1).is_err());
+        // 3. Overflow-free 256-bit total comparator handles huge coprime denominators cleanly.
+        let huge_a = ExactQty::new(
+            1_000_000_000_000_000_000_001_i128,
+            1_000_000_000_000_000_000_003_i128,
+        )
+        .unwrap();
+        let huge_b = ExactQty::new(
+            1_000_000_000_000_000_000_002_i128,
+            1_000_000_000_000_000_000_005_i128,
+        )
+        .unwrap();
+        assert_eq!(cmp_exact_qty_total(huge_a, huge_b), Ordering::Greater);
+        assert_eq!(cmp_exact_qty_total(huge_b, huge_a), Ordering::Less);
     }
 }

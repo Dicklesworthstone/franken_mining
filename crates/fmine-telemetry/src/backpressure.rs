@@ -140,9 +140,34 @@ impl ContinuityReceipt {
         Ok(sha256(&buf))
     }
 
-    /// Verify exact internal conservation (`admitted + dropped == total_offered`, `Σ dropped_by_signal == dropped`)
+    /// Verify structural metadata (`site_id`, `downsample_stride >= 2`, `window_start_ns <= window_end_ns`),
+    /// exact internal conservation (`admitted + dropped == total_offered`, `Σ dropped_by_signal == dropped`),
     /// AND SHA-256 receipt digest (`FMINE-REF-505` on mismatch).
     pub fn verify(&self) -> Result<(), TelemetryError> {
+        if self.site_id.trim().is_empty() {
+            return Err(TelemetryError::InvalidConfig {
+                field: "site_id",
+                detail: "continuity receipt site_id must be non-empty".to_string(),
+            });
+        }
+        if self.downsample_stride < 2 {
+            return Err(TelemetryError::InvalidConfig {
+                field: "downsample_stride",
+                detail: format!(
+                    "continuity receipt downsample_stride must be >= 2, got {}",
+                    self.downsample_stride
+                ),
+            });
+        }
+        if self.total_offered > 0 && self.window_start_ns > self.window_end_ns {
+            return Err(TelemetryError::DigestMismatch {
+                kind: "continuity_receipt",
+                detail: format!(
+                    "receipt {} inverted window [{}..{}]",
+                    self.receipt_seq, self.window_start_ns, self.window_end_ns
+                ),
+            });
+        }
         let accounted = self
             .admitted_count
             .checked_add(self.dropped_count)
@@ -219,6 +244,12 @@ impl RawRingBuffer {
         true
     }
 
+    /// Configured maximum retained sample capacity (`0` means local ring disabled).
+    #[must_use]
+    pub const fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// Currently retained raw sample count.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -260,6 +291,10 @@ pub struct BoundedIngestEdge {
     policy: IngestPolicy,
     builder: SegmentLogBuilder,
     ring: RawRingBuffer,
+    /// Tracks last offered timestamp per signal (including dropped samples) so monotonicity holds globally.
+    last_offered_ts_by_signal: BTreeMap<u32, u64>,
+    /// Tracks fixed-point scale per signal across all offered samples (including dropped samples).
+    offered_scale_by_signal: BTreeMap<u32, i8>,
     next_receipt_seq: u64,
     total_offered: u64,
     total_admitted: u64,
@@ -282,6 +317,8 @@ impl BoundedIngestEdge {
             policy,
             builder,
             ring,
+            last_offered_ts_by_signal: BTreeMap::new(),
+            offered_scale_by_signal: BTreeMap::new(),
             next_receipt_seq: 0,
             total_offered: 0,
             total_admitted: 0,
@@ -336,6 +373,7 @@ impl BoundedIngestEdge {
                 dropped_count: 0,
             });
         }
+        self.validate_offered_batch(batch)?;
         self.builder.validate_batch(batch)?;
 
         let offered_u64 = u64::try_from(batch.len()).map_err(|_| TelemetryError::Overflow)?;
@@ -346,6 +384,10 @@ impl BoundedIngestEdge {
             for &sample in batch {
                 sealed_segments.extend(self.builder.push(sample)?);
                 self.ring.push(sample);
+                self.last_offered_ts_by_signal
+                    .insert(sample.signal_id, sample.timestamp_ns);
+                self.offered_scale_by_signal
+                    .insert(sample.signal_id, sample.scale_exp10);
             }
             self.total_offered = self
                 .total_offered
@@ -380,7 +422,7 @@ impl BoundedIngestEdge {
         let mut dropped_by_signal: BTreeMap<u32, u64> = BTreeMap::new();
         let mut admitted_count = 0_u64;
         let mut dropped_count = 0_u64;
-        let mut ring_retained_count = 0_u64;
+        let mut ring_pushed_count = 0_u64;
         let mut hit_hard_limit = false;
         let max_admit_u64 = u64::try_from(self.policy.max_batch_admit_samples)
             .map_err(|_| TelemetryError::Overflow)?;
@@ -388,9 +430,13 @@ impl BoundedIngestEdge {
         for &sample in batch {
             window_start_ns = window_start_ns.min(sample.timestamp_ns);
             window_end_ns = window_end_ns.max(sample.timestamp_ns);
+            self.last_offered_ts_by_signal
+                .insert(sample.signal_id, sample.timestamp_ns);
+            self.offered_scale_by_signal
+                .insert(sample.signal_id, sample.scale_exp10);
 
             if self.ring.push(sample) {
-                ring_retained_count = ring_retained_count
+                ring_pushed_count = ring_pushed_count
                     .checked_add(1)
                     .ok_or(TelemetryError::Overflow)?;
             }
@@ -415,6 +461,10 @@ impl BoundedIngestEdge {
                 *entry = entry.checked_add(1).ok_or(TelemetryError::Overflow)?;
             }
         }
+        // Only the last `ring.capacity()` samples from this batch still reside in the ring at window end.
+        let ring_cap_u64 =
+            u64::try_from(self.ring.capacity()).map_err(|_| TelemetryError::Overflow)?;
+        let ring_retained_count = ring_pushed_count.min(ring_cap_u64);
 
         let receipt_seq = self.next_receipt_seq;
         self.next_receipt_seq = self
@@ -471,6 +521,45 @@ impl BoundedIngestEdge {
     /// Flush any currently buffered samples into a sealed segment.
     pub fn flush(&mut self) -> Result<Option<TelemetrySegment>, TelemetryError> {
         self.builder.seal_open(SealReason::ExplicitFlush)
+    }
+
+    fn validate_offered_batch(&self, batch: &[TelemetrySample]) -> Result<(), TelemetryError> {
+        let mut pending_scales: BTreeMap<u32, i8> = BTreeMap::new();
+        let mut pending_ts: BTreeMap<u32, u64> = BTreeMap::new();
+        for sample in batch {
+            sample.validate()?;
+            let expected_scale = pending_scales
+                .get(&sample.signal_id)
+                .copied()
+                .or_else(|| self.offered_scale_by_signal.get(&sample.signal_id).copied());
+            if let Some(exp10) = expected_scale
+                && exp10 != sample.scale_exp10
+            {
+                return Err(TelemetryError::ScaleMismatch {
+                    signal_id: sample.signal_id,
+                    expected_exp10: exp10,
+                    got_exp10: sample.scale_exp10,
+                });
+            }
+            pending_scales.insert(sample.signal_id, sample.scale_exp10);
+
+            let prev_ts = pending_ts.get(&sample.signal_id).copied().or_else(|| {
+                self.last_offered_ts_by_signal
+                    .get(&sample.signal_id)
+                    .copied()
+            });
+            if let Some(prev) = prev_ts
+                && sample.timestamp_ns < prev
+            {
+                return Err(TelemetryError::OutOfOrderTimestamp {
+                    signal_id: sample.signal_id,
+                    prev_ts_ns: prev,
+                    got_ts_ns: sample.timestamp_ns,
+                });
+            }
+            pending_ts.insert(sample.signal_id, sample.timestamp_ns);
+        }
+        Ok(())
     }
 }
 
@@ -674,8 +763,35 @@ mod tests {
         assert_eq!(r.admitted_count, 4);
         assert_eq!(r.dropped_count, 8);
         assert_eq!(r.drop_reason, DropReason::QueueHardLimitRejected);
-        // Ring buffer capped at 5 samples, evicting 7 oldest.
+        // Ring buffer capped at 5 samples, evicting 7 oldest: receipt honestly reports 5 retained, not 12!
+        assert_eq!(r.ring_retained_count, 5);
         assert_eq!(edge.raw_ring().len(), 5);
         assert_eq!(edge.raw_ring().evicted_count(), 7);
+
+        // Fresh-eyes regression: monotonicity is enforced even against dropped tail samples (ts = 55 ms > admitted last ts = 30 ms)!
+        let backward_after_drop = vec![mk_sample(7, 40, 99)]; // 40 ms < dropped 55 ms
+        assert_eq!(
+            edge.ingest_batch(&backward_after_drop)
+                .unwrap_err()
+                .to_refusal()
+                .code,
+            RefusalCode::UndeclaredUnitBasisOrTz107.spec().code
+        );
+
+        // Fresh-eyes regression: ContinuityReceipt::verify rejects inverted window or invalid stride even if re-signed.
+        let mut inverted = r.clone();
+        inverted.window_start_ns = inverted.window_end_ns + 1;
+        inverted.receipt_digest = inverted.compute_digest().unwrap();
+        assert_eq!(
+            inverted.verify().unwrap_err().to_refusal().code,
+            RefusalCode::DigestMismatch505.spec().code
+        );
+        let mut bad_stride = r;
+        bad_stride.downsample_stride = 1;
+        bad_stride.receipt_digest = bad_stride.compute_digest().unwrap();
+        assert_eq!(
+            bad_stride.verify().unwrap_err().to_refusal().code,
+            RefusalCode::OutsidePhysicalDomain109.spec().code
+        );
     }
 }

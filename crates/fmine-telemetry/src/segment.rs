@@ -185,11 +185,29 @@ impl TelemetrySegment {
         Ok(sha256(&buf))
     }
 
-    /// Verify structural invariants (`sample_count`, `first_ts_ns <= last_ts_ns`, scale bounds)
-    /// and that `self.segment_root` matches the canonical content digest (`FMINE-REF-505` on mismatch).
+    /// Verify structural invariants (`site_id`, `sample_count`, exact `first_ts_ns`/`last_ts_ns`
+    /// column bounds, scale bounds) and that `self.segment_root` matches the canonical content
+    /// digest (`FMINE-REF-505` on mismatch).
     pub fn verify_root(&self) -> Result<(), TelemetryError> {
+        if self.site_id.trim().is_empty() {
+            return Err(TelemetryError::InvalidConfig {
+                field: "site_id",
+                detail: "telemetry segment site_id must be non-empty".to_string(),
+            });
+        }
         let mut actual_count = 0_u64;
-        for col in self.columns.values() {
+        let mut min_ts = u64::MAX;
+        let mut max_ts = 0_u64;
+        for (&sig_key, col) in &self.columns {
+            if col.signal_id != sig_key {
+                return Err(TelemetryError::DigestMismatch {
+                    kind: "telemetry_segment",
+                    detail: format!(
+                        "segment {} column map key {sig_key} != col.signal_id {}",
+                        self.segment_seq, col.signal_id
+                    ),
+                });
+            }
             if col.scale_exp10.abs() > MAX_ABS_SCALE_EXP10 {
                 return Err(TelemetryError::InvalidConfig {
                     field: "scale_exp10",
@@ -199,10 +217,27 @@ impl TelemetrySegment {
                     ),
                 });
             }
+            if col.timestamps_ns.len() != col.values_scaled.len()
+                || col.timestamps_ns.len() != col.quality_flags.len()
+            {
+                return Err(TelemetryError::DigestMismatch {
+                    kind: "telemetry_segment",
+                    detail: format!(
+                        "segment {} column {} length mismatch",
+                        self.segment_seq, col.signal_id
+                    ),
+                });
+            }
             let n = u64::try_from(col.len()).map_err(|_| TelemetryError::Overflow)?;
             actual_count = actual_count
                 .checked_add(n)
                 .ok_or(TelemetryError::Overflow)?;
+            if let Some(&first_col_ts) = col.timestamps_ns.first() {
+                min_ts = min_ts.min(first_col_ts);
+            }
+            if let Some(&last_col_ts) = col.timestamps_ns.last() {
+                max_ts = max_ts.max(last_col_ts);
+            }
         }
         if actual_count != self.sample_count {
             return Err(TelemetryError::DigestMismatch {
@@ -213,11 +248,30 @@ impl TelemetrySegment {
                 ),
             });
         }
-        if self.sample_count > 0 && self.first_ts_ns > self.last_ts_ns {
+        if self.sample_count > 0 {
+            if self.first_ts_ns > self.last_ts_ns {
+                return Err(TelemetryError::DigestMismatch {
+                    kind: "telemetry_segment",
+                    detail: format!(
+                        "segment {} inverted bounds {} > {}",
+                        self.segment_seq, self.first_ts_ns, self.last_ts_ns
+                    ),
+                });
+            }
+            if self.first_ts_ns != min_ts || self.last_ts_ns != max_ts {
+                return Err(TelemetryError::DigestMismatch {
+                    kind: "telemetry_segment",
+                    detail: format!(
+                        "segment {} declared bounds [{}..{}] != actual column bounds [{}..{}]",
+                        self.segment_seq, self.first_ts_ns, self.last_ts_ns, min_ts, max_ts
+                    ),
+                });
+            }
+        } else if self.first_ts_ns != 0 || self.last_ts_ns != 0 {
             return Err(TelemetryError::DigestMismatch {
                 kind: "telemetry_segment",
                 detail: format!(
-                    "segment {} inverted bounds {} > {}",
+                    "empty segment {} must have zero timestamp bounds, got [{}..{}]",
                     self.segment_seq, self.first_ts_ns, self.last_ts_ns
                 ),
             });
@@ -458,11 +512,14 @@ impl SegmentLogBuilder {
         }
 
         let mut sealed = Vec::new();
-        if let Some(first_ts) = self.first_ts_ns
-            && sample.timestamp_ns.saturating_sub(first_ts) >= self.policy.seal_interval_ns
-            && let Some(seg) = self.seal_open(SealReason::Timer250Ms)?
-        {
-            sealed.push(seg);
+        if let Some(first_ts) = self.first_ts_ns {
+            let prospective_first = first_ts.min(sample.timestamp_ns);
+            let prospective_last = self.last_ts_ns.max(sample.timestamp_ns);
+            if prospective_last.saturating_sub(prospective_first) >= self.policy.seal_interval_ns
+                && let Some(seg) = self.seal_open(SealReason::Timer250Ms)?
+            {
+                sealed.push(seg);
+            }
         }
 
         self.scale_by_signal
@@ -637,5 +694,57 @@ mod tests {
             builder.push(bad_scale).unwrap_err().to_refusal().code,
             RefusalCode::BasisMismatch105.spec().code
         );
+
+        // Fresh-eyes regressions:
+        // 1. Re-signed segment with forged first_ts_ns/last_ts_ns or empty site_id is refused.
+        let mut forged_bounds = sealed[0].clone();
+        forged_bounds.last_ts_ns = 999_999_999;
+        forged_bounds.segment_root = forged_bounds.compute_root().unwrap();
+        assert_eq!(
+            forged_bounds.verify_root().unwrap_err().to_refusal().code,
+            RefusalCode::DigestMismatch505.spec().code
+        );
+        let mut blank_site = sealed[0].clone();
+        blank_site.site_id = "  ".to_string();
+        blank_site.segment_root = blank_site.compute_root().unwrap();
+        assert_eq!(
+            blank_site.verify_root().unwrap_err().to_refusal().code,
+            RefusalCode::OutsidePhysicalDomain109.spec().code
+        );
+
+        // 2. Cross-signal backward clock offset that would make span >= seal_interval_ns seals first!
+        let mut b2 = SegmentLogBuilder::new(SegmentPolicy {
+            site_id: "barrick_kibali".to_string(),
+            seal_interval_ns: DEFAULT_SEAL_INTERVAL_NS, // 250 ms
+            max_segment_samples: 100,
+            max_segment_bytes: DEFAULT_MAX_SEGMENT_BYTES,
+        })
+        .unwrap();
+        assert!(
+            b2.push(TelemetrySample {
+                signal_id: 1,
+                timestamp_ns: 500_000_000,
+                value_scaled: 10,
+                scale_exp10: 0,
+                quality_flags: 0,
+            })
+            .unwrap()
+            .is_empty()
+        );
+        // Signal 2 arrives at t = 100 ms -> prospective span = 400 ms >= 250 ms -> must seal sig 1 first!
+        let cross_sealed = b2
+            .push(TelemetrySample {
+                signal_id: 2,
+                timestamp_ns: 100_000_000,
+                value_scaled: 20,
+                scale_exp10: 0,
+                quality_flags: 0,
+            })
+            .unwrap();
+        assert_eq!(cross_sealed.len(), 1);
+        assert_eq!(cross_sealed[0].seal_reason, SealReason::Timer250Ms);
+        assert_eq!(cross_sealed[0].first_ts_ns, 500_000_000);
+        assert_eq!(cross_sealed[0].last_ts_ns, 500_000_000);
+        cross_sealed[0].verify_root().unwrap();
     }
 }

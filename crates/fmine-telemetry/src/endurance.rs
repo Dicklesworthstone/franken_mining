@@ -135,16 +135,29 @@ pub fn run_synthetic_ingest_endurance(
     }
 
     seal_latencies_ns.sort_unstable();
-    let p99_ingest_to_seal_ns = if seal_latencies_ns.is_empty() {
-        0
+    let (p99_ingest_to_seal_ns, mean_wait_s) = if seal_latencies_ns.is_empty() {
+        (0_u64, ExactQty::from_integer(0))
     } else {
-        let idx = ((seal_latencies_ns.len() - 1) * 99) / 100;
-        seal_latencies_ns[idx]
+        // Nearest-rank ceiling percentile: never under-reports tail latency on small sample counts.
+        let idx = (seal_latencies_ns.len() * 99)
+            .div_ceil(100)
+            .saturating_sub(1);
+        let p99 = seal_latencies_ns[idx];
+        let mut sum_ns = 0_i128;
+        for &lat in &seal_latencies_ns {
+            sum_ns = sum_ns
+                .checked_add(i128::from(lat))
+                .ok_or(TelemetryError::Overflow)?;
+        }
+        let denom = i128::try_from(seal_latencies_ns.len())
+            .map_err(|_| TelemetryError::Overflow)?
+            .checked_mul(1_000_000_000)
+            .ok_or(TelemetryError::Overflow)?;
+        (p99, ExactQty::new(sum_ns, denom)?)
     };
 
     // Arrival rate = 1e9 / sample_spacing_ns messages per second.
     let arrival_rate = ExactQty::new(1_000_000_000, i128::from(sample_spacing_ns))?;
-    let mean_wait_s = ExactQty::new(i128::from(p99_ingest_to_seal_ns), 1_000_000_000)?;
 
     audit_queue_stability(
         arrival_rate,
@@ -191,6 +204,25 @@ mod tests {
         assert_eq!(audit.unreceipted_loss, 0);
         assert_eq!(audit.utilization_rho, ExactQty::new(2, 3).unwrap());
         assert!(audit.p99_ingest_to_seal_ns <= GATE_INGEST_01_MAX_P99_LATENCY_NS);
+        // Fresh-eyes regression: 2 segments (250 ms timer seal + ~50 ms tail flush):
+        // p99 MUST pick the upper tail (~250 ms), while mean_wait_s MUST be the true arithmetic mean (< p99)!
+        assert!(
+            audit.p99_ingest_to_seal_ns >= 249_000_000,
+            "ceiling p99 must reflect 250ms segment, got {} ns",
+            audit.p99_ingest_to_seal_ns
+        );
+        let p99_s = ExactQty::new(i128::from(audit.p99_ingest_to_seal_ns), 1_000_000_000).unwrap();
+        assert!(
+            audit.mean_wait_s.checked_cmp(p99_s).unwrap().is_lt(),
+            "mean_wait_s must be arithmetic mean (< p99), not equal to p99"
+        );
+        assert_eq!(
+            audit.littles_law_mean_queue,
+            audit
+                .arrival_rate_msg_per_s
+                .checked_mul(audit.mean_wait_s)
+                .unwrap()
+        );
         assert!(audit.meets_po_bed_7);
 
         // Overloaded arrival rate (rho = 100k / 120k = 5/6 > 0.7) flags meets_po_bed_7 = false!

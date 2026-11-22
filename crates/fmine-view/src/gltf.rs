@@ -81,7 +81,7 @@ fn fmt_f32_json(v: f32) -> String {
     format!("{normalized:.6}")
 }
 
-fn crs_label(crs: CrsId) -> String {
+pub(crate) fn crs_label(crs: CrsId) -> String {
     match crs {
         CrsId::Epsg4326 => "EPSG:4326".to_string(),
         CrsId::Wgs84Utm { zone, north } => {
@@ -323,15 +323,28 @@ pub fn export_gltf_scene(input: &GltfSceneInput) -> Result<GltfExport, ViewError
         }
 
         let pos_offset = bin_bytes.len();
+        let mut actual_min = [f32::INFINITY; 3];
+        let mut actual_max = [f32::NEG_INFINITY; 3];
         for p in &mesh.positions {
-            for &coord in p {
+            for (axis, &coord) in p.iter().enumerate() {
                 if !coord.is_finite() {
                     return Err(ViewError::InvalidGeometry {
                         detail: format!("mesh '{}' contains non-finite position", mesh.name),
                     });
                 }
+                actual_min[axis] = actual_min[axis].min(coord);
+                actual_max[axis] = actual_max[axis].max(coord);
                 bin_bytes.extend_from_slice(&coord.to_le_bytes());
             }
+        }
+        // glTF 2.0 §3.7.2.2 requires POSITION accessor min/max to equal the exact vertex extrema.
+        if actual_min != mesh.min_pos || actual_max != mesh.max_pos {
+            return Err(ViewError::InvalidGeometry {
+                detail: format!(
+                    "mesh '{}' declared min_pos/max_pos ({:?}/{:?}) != actual vertex extrema ({:?}/{:?})",
+                    mesh.name, mesh.min_pos, mesh.max_pos, actual_min, actual_max
+                ),
+            });
         }
         let pos_len = bin_bytes.len() - pos_offset;
 
@@ -344,6 +357,11 @@ pub fn export_gltf_scene(input: &GltfSceneInput) -> Result<GltfExport, ViewError
                     });
                 }
                 bin_bytes.extend_from_slice(&coord.to_le_bytes());
+            }
+            if n[0] == 0.0 && n[1] == 0.0 && n[2] == 0.0 {
+                return Err(ViewError::InvalidGeometry {
+                    detail: format!("mesh '{}' contains zero-length normal", mesh.name),
+                });
             }
         }
         let norm_len = bin_bytes.len() - norm_offset;
@@ -591,7 +609,7 @@ mod tests {
         );
 
         // CRS mismatch across layers refuses with FMINE-REF-106.
-        let mut wrong_crs_ore = ore;
+        let mut wrong_crs_ore = ore.clone();
         wrong_crs_ore.crs_id = CrsId::Epsg4326;
         assert_eq!(
             export_gltf_scene(&GltfSceneInput {
@@ -602,6 +620,32 @@ mod tests {
             .to_refusal()
             .code,
             RefusalCode::CrsUnregisteredOrIncompatible106.spec().code
+        );
+
+        // Fresh-eyes regressions: stale min_pos/max_pos or zero-length normal refuses with FMINE-REF-109.
+        let mut stale_bbox = ore.clone();
+        stale_bbox.max_pos[0] += 100.0;
+        assert_eq!(
+            export_gltf_scene(&GltfSceneInput {
+                scene_name: "stale_bbox".to_string(),
+                meshes: vec![stale_bbox],
+            })
+            .unwrap_err()
+            .to_refusal()
+            .code,
+            RefusalCode::OutsidePhysicalDomain109.spec().code
+        );
+        let mut zero_norm = ore;
+        zero_norm.normals[0] = [0.0, 0.0, 0.0];
+        assert_eq!(
+            export_gltf_scene(&GltfSceneInput {
+                scene_name: "zero_norm".to_string(),
+                meshes: vec![zero_norm],
+            })
+            .unwrap_err()
+            .to_refusal()
+            .code,
+            RefusalCode::OutsidePhysicalDomain109.spec().code
         );
     }
 }

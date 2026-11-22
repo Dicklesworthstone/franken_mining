@@ -358,27 +358,74 @@ pub fn prepare_concentrate_shipment(
     Ok(prepared)
 }
 
-/// Release a prepared concentrate shipment ONLY with valid dual human attestation (`BD-180`,
-/// plan §17.6 & §31.3, `PO-SEC-3`, `INV-002`).
-///
-/// Re-verifies prepared digest integrity, TML clearance, and moisture freshness at `now_ns`
-/// BEFORE verifying or consuming human tokens so tampered or stale clearances refuse cleanly
-/// without burning tokens.
-pub fn release_shipment_with_dual_attestation(
+fn constant_time_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    let mut diff = 0_u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn validate_prepared_shipment_invariants(
     prepared: &PreparedShipmentRelease,
-    verifier: &mut HumanTokenVerifier,
-    keyring: &FmKeyRing,
-    first_token: &Macaroon,
-    second_token: &Macaroon,
-    now_ns: i64,
-) -> Result<ShipmentReleaseReceipt, Refusal> {
-    // Re-verify prepared shipment integrity and TML safety BEFORE consuming authority tokens.
-    let expected_digest = compute_prepared_effect_digest(prepared)?;
-    if expected_digest != prepared.effect_digest {
+) -> Result<(), Refusal> {
+    if prepared.site_id.trim().is_empty()
+        || prepared.lot_id.trim().is_empty()
+        || prepared.moisture_certificate_id.trim().is_empty()
+    {
         return Err(Refusal::new(
-            RefusalCode::DigestMismatch505,
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            "PreparedShipmentRelease requires non-empty site_id, lot_id, and moisture_certificate_id",
+        ));
+    }
+    if !prepared.product_kind.requires_tml_check() {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
             format!(
-                "lot '{}': PreparedShipmentRelease fields do not match effect_digest",
+                "lot '{}': product kind {:?} does not belong on the IMSBC concentrate shipment gate",
+                prepared.lot_id, prepared.product_kind
+            ),
+        ));
+    }
+    let zero = ExactQty::from_integer(0);
+    let one = ExactQty::from_integer(1);
+    if prepared.wet_mass_kg.signum() <= 0 {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            format!(
+                "lot '{}': wet_mass_kg must be strictly positive",
+                prepared.lot_id
+            ),
+        ));
+    }
+    if cmp_qty(prepared.tml_fraction, zero)?.is_le() || cmp_qty(prepared.tml_fraction, one)?.is_ge()
+    {
+        return Err(Refusal::new(
+            RefusalCode::UnknownMoistureVsTml403,
+            format!(
+                "lot '{}': TML fraction must lie strictly in (0, 1)",
+                prepared.lot_id
+            ),
+        ));
+    }
+    if cmp_qty(prepared.moisture_fraction, zero)?.is_lt()
+        || cmp_qty(prepared.moisture_fraction, one)?.is_ge()
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            format!(
+                "lot '{}': moisture_fraction must lie in [0, 1)",
+                prepared.lot_id
+            ),
+        ));
+    }
+    if cmp_qty(prepared.moisture_upper_bound, prepared.moisture_fraction)?.is_lt()
+        || cmp_qty(prepared.moisture_upper_bound, one)?.is_ge()
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            format!(
+                "lot '{}': moisture_upper_bound must lie in [moisture_fraction, 1)",
                 prepared.lot_id
             ),
         ));
@@ -392,6 +439,67 @@ pub fn release_shipment_with_dual_attestation(
             ),
         ));
     }
+    let expected_margin = prepared
+        .tml_fraction
+        .checked_sub(prepared.moisture_upper_bound)
+        .map_err(map_units_err)?;
+    if cmp_qty(prepared.safety_margin_below_tml, expected_margin)?.is_ne() {
+        return Err(Refusal::new(
+            RefusalCode::Conservation101,
+            format!(
+                "lot '{}': safety_margin_below_tml inconsistent with tml - moisture_upper_bound",
+                prepared.lot_id
+            ),
+        ));
+    }
+    let expected_water = prepared
+        .wet_mass_kg
+        .checked_mul(prepared.moisture_fraction)
+        .map_err(map_units_err)?;
+    let expected_dry = prepared
+        .wet_mass_kg
+        .checked_sub(expected_water)
+        .map_err(map_units_err)?;
+    if cmp_qty(prepared.water_mass_kg, expected_water)?.is_ne()
+        || cmp_qty(prepared.dry_mass_kg, expected_dry)?.is_ne()
+    {
+        return Err(Refusal::new(
+            RefusalCode::Conservation101,
+            format!(
+                "lot '{}': wet/dry/water mass conservation violated",
+                prepared.lot_id
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Release a prepared concentrate shipment ONLY with valid dual human attestation (`BD-180`,
+/// plan §17.6 & §31.3, `PO-SEC-3`, `INV-002`).
+///
+/// Re-verifies prepared digest integrity, physical mass conservation, TML clearance, and moisture
+/// freshness at `now_ns` BEFORE verifying or consuming human tokens so tampered or stale clearances
+/// refuse cleanly without burning tokens.
+pub fn release_shipment_with_dual_attestation(
+    prepared: &PreparedShipmentRelease,
+    verifier: &mut HumanTokenVerifier,
+    keyring: &FmKeyRing,
+    first_token: &Macaroon,
+    second_token: &Macaroon,
+    now_ns: i64,
+) -> Result<ShipmentReleaseReceipt, Refusal> {
+    // Re-verify prepared shipment integrity, mass conservation, and TML safety BEFORE consuming tokens.
+    let expected_digest = compute_prepared_effect_digest(prepared)?;
+    if !constant_time_eq_32(&expected_digest, &prepared.effect_digest) {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            format!(
+                "lot '{}': PreparedShipmentRelease fields do not match effect_digest",
+                prepared.lot_id
+            ),
+        ));
+    }
+    validate_prepared_shipment_invariants(prepared)?;
     check_moisture_fresh(
         &prepared.lot_id,
         prepared.moisture_measured_at_ns,
@@ -536,14 +644,19 @@ impl DoreVaultLog {
         for (name, val) in [
             ("top_pin_au_fraction", bar.top_pin_au_fraction),
             ("bottom_pin_au_fraction", bar.bottom_pin_au_fraction),
-            ("ag_fraction", bar.ag_fraction),
         ] {
-            if cmp_qty(val, zero)?.is_lt() || cmp_qty(val, one)?.is_gt() {
+            if cmp_qty(val, zero)?.is_le() || cmp_qty(val, one)?.is_gt() {
                 return Err(Refusal::new(
                     RefusalCode::OutsidePhysicalDomain109,
-                    format!("doré {name} outside [0, 1]"),
+                    format!("doré {name} must lie in (0, 1]"),
                 ));
             }
+        }
+        if cmp_qty(bar.ag_fraction, zero)?.is_lt() || cmp_qty(bar.ag_fraction, one)?.is_ge() {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "doré ag_fraction must lie in [0, 1)",
+            ));
         }
         if cmp_qty(bar.max_pin_spread_fraction, zero)?.is_lt() {
             return Err(Refusal::new(
@@ -990,6 +1103,44 @@ mod tests {
             RefusalCode::DigestMismatch505.spec().code
         );
         assert_eq!(verifier.consumed_count(), 0);
+
+        // 2c. Re-signed PreparedShipmentRelease with violated mass conservation refuses with FMINE-REF-101 WITHOUT burning tokens!
+        let mut bad_mass = prepared.clone();
+        bad_mass.dry_mass_kg = ExactQty::from_integer(1);
+        bad_mass.effect_digest = compute_prepared_effect_digest(&bad_mass).unwrap();
+        assert_eq!(
+            release_shipment_with_dual_attestation(
+                &bad_mass,
+                &mut verifier,
+                &keyring,
+                &tok_alice,
+                &tok_bob,
+                now_ns,
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::Conservation101.spec().code
+        );
+        assert_eq!(verifier.consumed_count(), 0);
+
+        // Fresh-eyes regression: doré bar with zero Au pin assay or 100% Ag refuses with FMINE-REF-109.
+        let mut vault = DoreVaultLog::new("barrick_lumwana").unwrap();
+        assert_eq!(
+            vault
+                .append_bar(&DoreBarInput {
+                    site_id: "barrick_lumwana".to_string(),
+                    bar_id: "ZERO-AU".to_string(),
+                    seal_number: "SEAL-ZERO".to_string(),
+                    gross_mass_g: ExactQty::from_integer(10_000),
+                    top_pin_au_fraction: ExactQty::from_integer(0),
+                    bottom_pin_au_fraction: ExactQty::from_integer(0),
+                    ag_fraction: q(50, 100),
+                    max_pin_spread_fraction: q(5, 1000),
+                })
+                .unwrap_err()
+                .code,
+            RefusalCode::OutsidePhysicalDomain109.spec().code
+        );
 
         // 3. Wrong effect digest refused with FMINE-REF-304.
         let mut wrong_digest = prepared.effect_digest;
