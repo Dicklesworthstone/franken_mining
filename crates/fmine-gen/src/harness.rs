@@ -8,7 +8,12 @@ use fmine_core::det::sqrt;
 use fmine_core::hash::Digest32;
 
 use crate::GenError;
+use crate::biases::BiasRegistry;
+use crate::cu_au_world::{CuAuFlotationSpec, CuAuFlotationTruth, generate_cu_au_flotation_truth};
 use crate::geology::{OpenPitAuGeologySpec, OpenPitAuGeologyTruth, generate_geology_truth};
+use crate::mill_balance::{
+    MillBalanceConfig, MillBalanceObservations, MillBalanceTruth, generate_mill_balance_raw,
+};
 use crate::seal::{SealKey, SealedTruth};
 use crate::worlds::{
     OpenPitAuConfig, OpenPitAuObservations, OpenPitAuTruth, WorldCondition,
@@ -109,6 +114,41 @@ impl ScoringHarness {
         &self,
         sealed: &'a SealedTruth<OpenPitAuGeologyTruth>,
     ) -> Result<&'a OpenPitAuGeologyTruth, GenError> {
+        Ok(sealed.open(&self.key)?)
+    }
+
+    /// Generate a sealed Open-Pit Cu–Au porphyry flotation world (`BD-129`).
+    pub fn generate_cu_au_flotation(
+        &self,
+        seed_root: u64,
+        spec: &CuAuFlotationSpec,
+    ) -> Result<SealedTruth<CuAuFlotationTruth>, GenError> {
+        generate_cu_au_flotation_truth(seed_root, spec, &self.key)
+    }
+
+    /// Open a sealed Open-Pit Cu–Au flotation world truth (`GATE-GEN-01`).
+    pub fn open_cu_au_truth<'a>(
+        &self,
+        sealed: &'a SealedTruth<CuAuFlotationTruth>,
+    ) -> Result<&'a CuAuFlotationTruth, GenError> {
+        Ok(sealed.open(&self.key)?)
+    }
+
+    /// Generate separated mill sampler observations and sealed metallurgical balance truth (`BD-133`).
+    pub fn generate_mill_balance(
+        &self,
+        seed_root: u64,
+        cfg: &MillBalanceConfig,
+        registry: Option<&BiasRegistry>,
+    ) -> Result<(MillBalanceObservations, SealedTruth<MillBalanceTruth>), GenError> {
+        generate_mill_balance_raw(seed_root, cfg, registry, &self.key)
+    }
+
+    /// Open a sealed mill balance truth with this harness's private key (`GATE-GEN-01`).
+    pub fn open_mill_balance_truth<'a>(
+        &self,
+        sealed: &'a SealedTruth<MillBalanceTruth>,
+    ) -> Result<&'a MillBalanceTruth, GenError> {
         Ok(sealed.open(&self.key)?)
     }
 

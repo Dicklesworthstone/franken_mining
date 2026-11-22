@@ -1,11 +1,15 @@
 //! Determinism: BitwisePortable
 //! Synthetic-truth world generator and sealed scoring harness (`BD-127`, plan §33.3, `GATE-GEN-01`).
 
+pub mod biases;
+pub mod cu_au_world;
+pub mod dispatch;
 pub mod drillholes;
 pub mod fa_book;
 pub mod geology;
 pub mod harness;
 pub mod metamorphic;
+pub mod mill_balance;
 pub mod seal;
 pub mod worlds;
 

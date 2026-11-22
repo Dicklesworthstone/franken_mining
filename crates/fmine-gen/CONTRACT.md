@@ -10,7 +10,7 @@ Testpit T-layer synthetic-truth world generator and sealed scoring harness (`BD-
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** 20,000 planned / 23,000 ceiling
-- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "drillholes", "fa_book", "metamorphic"]`
+- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "cu_au_world", "biases", "drillholes", "dispatch", "mill_balance", "fa_book", "metamorphic"]`
 
 ## 2. Inputs
 - Deterministic `seed_root: u64`, `WorldCondition` (`CorrectlySpecified`, `Misspecified`, `IdentifiabilityProbe`), and world configuration (`OpenPitAuConfig`).
@@ -45,7 +45,7 @@ Synthetic only (`EvidenceClass::ModelledUncalibrated` / synthetic test harness);
 - Ground truth sealed inside `SealedTruth<T>` and verified by `ScoringHarness` known-answer, coverage, and wrong-key refusal tests in `seal.rs`, `worlds.rs`, and `harness.rs`.
 
 ## 10. Known gaps
-- Additional synthetic worlds (`BD-128` full open-pit Au, `BD-129` Cu–Au flotation, `BD-130` underground stoping, `BD-131` heap leach, `BD-132` district point process, `BD-133` multi-site company) build on this framework in subsequent WP-07 beads.
+- Additional synthetic worlds (underground stoping, heap leach, synthetic district point process `BD-135`, multi-site company) build on this framework in subsequent WP-07 beads.
 
 ## 11. Public API
 - `GenError`
@@ -53,7 +53,11 @@ Synthetic only (`EvidenceClass::ModelledUncalibrated` / synthetic test harness);
 - `worlds::{WorldCondition, MisspecKind, BiasVector, OpenPitAuConfig, PeriodObservation, OpenPitAuObservations, PeriodTruth, OpenPitAuTruth}`
 - `harness::{ScoringHarness, IntervalPrediction, OpenPitAuPrediction, ScoreCard}`
 - `geology::{AuDomain, DomainSpec, OpenPitAuGeologySpec, GeologyBlock, DomainStats, GradeTonnagePoint, OpenPitAuGeologyTruth}` (`BD-128`)
+- `cu_au_world::{CuAuDomain, CuAuDomainSpec, ConcentrateCustodyTerms, CuAuFlotationSpec, CuAuBlockTruth, CuAuDomainStats, CuAuFlotationTruth}` (`BD-129`)
+- `biases::{BiasFamily, BiasRegistryEntry, BiasRegistry, SeededBiasProfile, TrueOreLot, BiasedLotObservation, parse_bias_registry, apply_seeded_biases}` (`BD-130`)
 - `drillholes::{DrillholeCampaignConfig, DrillholeCollar, CampaignManifestSummary, generate_collar, generate_interval_chunk, stream_campaign_summary}` (`BD-131`, `10^5` holes / `10^7` intervals)
+- `dispatch::{DispatchDestination, DispatchConfig, TruckLoadRecord, DestinationRollup, DispatchCampaign, generate_dispatch_campaign}` (`BD-132`)
+- `mill_balance::{MillBalanceConfig, MillPeriodObservation, MillBalanceObservations, MillPeriodTruth, MillBalanceTruth, two_product_balance}` (`BD-133`)
 - `fa_book::{MiningAccount, EntrySide, PostingLine, JournalEntry, LocalAccountingBook, generate_synthetic_mining_book}` (`BD-134`)
 - `metamorphic::{LotSpec, assert_split_merge_lot_invariance, canonical_set_digest, assert_permutation_digest_invariance, assert_exact_statutory_unit_roundtrips}` (`BD-143`)
 

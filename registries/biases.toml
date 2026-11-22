@@ -1,0 +1,82 @@
+# registries/biases.toml — Seeded Reconciliation & Operational Bias Registry (BD-130, plan §20.10, §33.3)
+# Canonical registry of seeded bias families injected by `fmine-gen` for known-answer recovery,
+# coverage verification (GATE-TOUCH-02), misspecification tests (GATE-PLUMB-E3), and identifiability probes.
+
+schema_version = 1
+
+[[bias]]
+id = "resource_model"
+family = "resource_model"
+stage = "in_situ_resource"
+quantity_kind = "grade_and_tonnage"
+min_factor_bps = 7500
+max_factor_bps = 13500
+confounds_with = "dilution"
+separating_measurement = "in_pit_grade_control_drilling_and_polygon_survey"
+description = "Resource-model conditional grade smoothing or global grade/tonnage over/under-estimation."
+
+[[bias]]
+id = "dilution"
+family = "dilution"
+stage = "mining_extraction"
+quantity_kind = "tonnage_and_grade"
+min_factor_bps = 8000
+max_factor_bps = 13000
+confounds_with = "resource_model"
+separating_measurement = "blast_movement_monitors_and_post_dig_pickup_survey"
+description = "Unplanned waste dilution and ore loss between grade-control polygon and dug ore."
+
+[[bias]]
+id = "survey"
+family = "survey"
+stage = "stockpile_inventory"
+quantity_kind = "volume_and_bulking"
+min_factor_bps = 8000
+max_factor_bps = 12500
+confounds_with = "density"
+separating_measurement = "empty_pad_zero_baseline_and_nuclear_density_gauge"
+description = "Stockpile drone/LiDAR volume or loose-bulking factor bias distorting inventory delta."
+
+[[bias]]
+id = "sampler"
+family = "sampler"
+stage = "mill_head_sampler"
+quantity_kind = "assay_grade"
+min_factor_bps = 8500
+max_factor_bps = 11500
+confounds_with = "resource_model"
+separating_measurement = "gy_bias_test_against_stopped_belt_reference_cuts"
+description = "Cross-stream cutter, belt-cut, or sub-sampling bias at plant feed, concentrate, or tails."
+
+[[bias]]
+id = "density"
+family = "density"
+stage = "rock_and_slurry_density"
+quantity_kind = "dry_bulk_density"
+min_factor_bps = 8800
+max_factor_bps = 11200
+confounds_with = "survey"
+separating_measurement = "wax_immersion_core_sg_audit_across_weathering_domains"
+description = "Systematic dry bulk density bias converting surveyed volumes to dry tonnes."
+
+[[bias]]
+id = "moisture"
+family = "moisture"
+stage = "wet_to_dry_conversion"
+quantity_kind = "moisture_fraction"
+min_factor_bps = 7000
+max_factor_bps = 14000
+confounds_with = "truck_payload"
+separating_measurement = "sealed_oven_dry_moisture_audit_at_weightometer"
+description = "Systematic bias in measured moisture fraction distorting dry-tonne conversion from wet weights."
+
+[[bias]]
+id = "truck_payload"
+family = "truck_payload"
+stage = "haulage_dispatch"
+quantity_kind = "wet_tonnage"
+min_factor_bps = 8500
+max_factor_bps = 11800
+confounds_with = "moisture"
+separating_measurement = "certified_weighbridge_calibration_against_strut_payload"
+description = "Systematic haul-truck strut-pressure payload bias relative to certified weighbridge mass."
