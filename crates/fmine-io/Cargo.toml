@@ -12,6 +12,7 @@ fmine-authz = { path = "../fmine-authz" }
 fmine-calib = { path = "../fmine-calib" }
 fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
+fmine-crs = { path = "../fmine-crs" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-geom = { path = "../fmine-geom" }
 fmine-lp = { path = "../fmine-lp" }

@@ -1620,13 +1620,13 @@ mod tests {
         // bd-5lxu, bd-2rne, bd-rbxh, bd-ubzs, pcpsp/price.rs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs
         // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and mps.rs (bd-j2ay), fmine-ledger's mmr.rs, batch.rs, cell.rs, l0.rs, as_of_replay.rs (BD-053/080/081/083/084),
         // and fmine-object's merkle.rs, cas.rs (BD-090), fmine-authz's five modules (BD-092..095),
-        // fmine-io's dialects.rs and redact.rs (BD-186, BD-292), fmine-sync's seven portable modules
+        // fmine-io's dialects.rs, redact.rs, dxf.rs, and las.rs (BD-186, BD-195, BD-196, BD-292), fmine-sync's seven portable modules
         // (lib, manifest, transport, version_vector, sync_cert, residency_plan, gluing; BD-102..108),
         // fmine-telemetry's five portable modules (lib, segment, backpressure, rollup, endurance; BD-242/243),
         // fmine-plant's three BitwisePortable custody/card modules (custody, cards/cu_speciation, cards/preg_rob; BD-179/180/182/288),
         // fmine-view's four BitwisePortable modules (lib, voxel_mesh, gltf, viewer; BD-256),
-        // and fmine-gen's fifteen BitwisePortable modules (lib, seal, worlds, harness, geology, cu_au_world, biases, drillholes, dispatch, mill_balance, fa_book, metamorphic, plant_twin, pilot_power, review; BD-127..134, 143, BD-356.S1/S2, BD-357.S1).
-        assert_eq!(report.bitwise_files, 106, "{report:?}");
+        // and fmine-gen's sixteen BitwisePortable modules (lib, seal, worlds, harness, geology, cu_au_world, biases, drillholes, dispatch, mill_balance, fa_book, metamorphic, plant_twin, pilot_power, review, det_families; BD-127..134, 141, 143, BD-356.S1/S2, BD-357.S1).
+        assert_eq!(report.bitwise_files, 109, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

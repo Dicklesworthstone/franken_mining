@@ -1,0 +1,10 @@
+# Capture record (§33.2, GATE-ORACLE-01) for bitwise_portable_families.txt: GATE-DET-01 18-family cross-profile manifest (BD-141).
+oracle = "FrankenMining BitwisePortable cross-profile digest harness (dev + release x86_64-linux; families 1-8 previously dual-ISA CI verified @ 84f32ac)"
+version = "rustc 1.100.0-nightly (nightly-2026-08-31)"
+platform = "x86_64-linux (vmi1152480 dev + ovh-b release; macos-15 CI pending)"
+inputs_digest = "sha256:b1b53d1d43d2b8a1d7835781103b5fae8644371da11591df621b5f1391ec407d"
+outputs_digest = "sha256:70ed211cdcffeb0569f2af7775d665272ab688f93d437454821036d4fda2504a"
+command = "cargo test -p fmine-gen --lib det_families:: -- --nocapture && cargo test -p fmine-gen --lib --release det_families:: -- --nocapture"
+captured_by = "coding agent (cross-profile x86_64-linux verified; macos-15 CI run pending)"
+date = "2026-11-22"
+licence = "MIT (this repository's licence)"

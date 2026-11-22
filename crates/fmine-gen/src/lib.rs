@@ -3,6 +3,7 @@
 
 pub mod biases;
 pub mod cu_au_world;
+pub mod det_families;
 pub mod dispatch;
 pub mod drillholes;
 pub mod fa_book;

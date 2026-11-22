@@ -10,7 +10,7 @@ Testpit T-layer synthetic-truth world generator and sealed scoring harness (`BD-
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** 20,000 planned / 23,000 ceiling
-- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "cu_au_world", "biases", "drillholes", "dispatch", "mill_balance", "fa_book", "metamorphic", "plant_twin", "pilot_power", "review"]`
+- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "cu_au_world", "biases", "drillholes", "dispatch", "mill_balance", "fa_book", "metamorphic", "plant_twin", "pilot_power", "review", "det_families"]`
 
 ## 2. Inputs
 - Deterministic `seed_root: u64`, `WorldCondition` (`CorrectlySpecified`, `Misspecified`, `IdentifiabilityProbe`), and world configuration (`OpenPitAuConfig`).
@@ -63,6 +63,7 @@ Synthetic only (`EvidenceClass::ModelledUncalibrated` / synthetic test harness);
 - `plant_twin::{SYNTHETIC_PUBLIC_LABEL, TwinAxes, AxisRanges, SegmentBoundary, CandidateFileCostRow, PilotTwinRegistrySpec, CitedPoint, CitedSeries, QuarterAgg, DailyMicroPoint, PlantTwin, TwinFamily, parse_pilot_twins_registry}` (`BD-356.S1`, `registries/pilot_twins.toml`)
 - `pilot_power::{AttributionCause, LinearBiasObs, TwoBiasPosterior, TwinCausePower, PowerEnvelope, FileLabel, LabelledCandidateFile, solve_two_bias_posterior, reject_personal_data_files, subset_identifiability_rank, estimate_twin_cause_power, estimate_power_envelope, render_power_table, greedy_select_for_twin, label_candidate_files}` (`BD-356.S2`)
 - `review::{MAX_EXACT_CLOPPER_PEARSON_N, SeedClass, ReviewKey, clopper_pearson, commit, verify, generate_os_nonce}` (`BD-357.S1`)
+- `det_families::{FamilyDigest, evaluate_all_bitwise_portable_families}` (`BD-141`, 18 `BitwisePortable` families pinned in `fixtures/det/bitwise_portable_families.txt`)
 
 ## 12. Proof obligations
 - `GATE-GEN-01` (sealed truth inaccessible outside scoring harness): `seal.rs` `compile_fail` doctests + `harness::tests::test_sealed_truth_isolation_and_deterministic_replay`.

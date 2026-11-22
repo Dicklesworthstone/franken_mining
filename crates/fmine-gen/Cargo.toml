@@ -12,10 +12,20 @@ workspace = true
 
 [dependencies]
 fmine-array = { path = "../fmine-array" }
+fmine-calib = { path = "../fmine-calib" }
 fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
+fmine-crs = { path = "../fmine-crs" }
+fmine-econ = { path = "../fmine-econ" }
 fmine-evidence = { path = "../fmine-evidence" }
-fmine-units = { path = "../fmine-units" }
-
-[dev-dependencies]
+fmine-explore = { path = "../fmine-explore" }
+fmine-flow = { path = "../fmine-flow" }
+fmine-geom = { path = "../fmine-geom" }
 fmine-io = { path = "../fmine-io" }
+fmine-metrics = { path = "../fmine-metrics" }
+fmine-numerics = { path = "../fmine-numerics" }
+fmine-optimize = { path = "../fmine-optimize" }
+fmine-plant = { path = "../fmine-plant" }
+fmine-telemetry = { path = "../fmine-telemetry" }
+fmine-units = { path = "../fmine-units" }
+fmine-view = { path = "../fmine-view" }

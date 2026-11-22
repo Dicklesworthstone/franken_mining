@@ -146,11 +146,23 @@ name = "fmine-gen"
 version = "0.1.0"
 dependencies = [
  "fmine-array",
+ "fmine-calib",
  "fmine-claim",
  "fmine-core",
+ "fmine-crs",
+ "fmine-econ",
  "fmine-evidence",
+ "fmine-explore",
+ "fmine-flow",
+ "fmine-geom",
  "fmine-io",
+ "fmine-metrics",
+ "fmine-numerics",
+ "fmine-optimize",
+ "fmine-plant",
+ "fmine-telemetry",
  "fmine-units",
+ "fmine-view",
 ]
 
 [[package]]
@@ -169,6 +181,7 @@ dependencies = [
  "fmine-calib",
  "fmine-claim",
  "fmine-core",
+ "fmine-crs",
  "fmine-evidence",
  "fmine-geom",
  "fmine-lp",
