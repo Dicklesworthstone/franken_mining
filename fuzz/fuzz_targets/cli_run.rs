@@ -50,6 +50,7 @@ const FLAGS: &[&str] = &[
     "--expected-head",
     "--format",
     "--head",
+    "--input",
     "--issuer",
     "--journal",
     "--json",
@@ -94,6 +95,7 @@ const FLAGS: &[&str] = &[
 /// Each option that takes a value, with a value its parser accepts, as one entry. A command that gets past its
 /// parser needs several options at once; one byte per option lets the fuzzer reach the verb behind the parser.
 const PAIRS: &[(&str, &str)] = &[
+    ("--input", "worksheet.toml"),
     ("--artifact", "report.json"),
     ("--artifact-format", "json"),
     ("--as-of", "2026-10-31"),

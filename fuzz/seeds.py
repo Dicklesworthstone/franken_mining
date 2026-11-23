@@ -570,6 +570,7 @@ def main() -> None:
     now, unc = ("--now", "2026-11-01T00:00:00Z"), ("--uncertainty-ns", "0")
     auth = (jr, ("--expected-head", zero), ("--key", "key"), now, unc)
     seeds["cli_run"] += [
+        run("recon run", ("--input", "worksheet.toml")),
         run("forecast journal init", jr, ("--cell", "demo"), ("--max-clock-skew-ms", "1"), tr),
         *(run(v, jr, tr, hd, ("--request", "request.toml"))
           for v in ("forecast journal register", "forecast journal freeze", "forecast journal outcome")),

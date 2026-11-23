@@ -41,9 +41,14 @@ jobs:
       - name: clippy (warnings denied)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # The fuzz targets (fuzz/, their own workspace; plan §32.4) are outside every workspace command above, so a
-      # change to a decoder's API would break them unseen. This only compiles them; scripts/fuzz.sh runs them.
+      # change to a decoder's API would break them unseen. scripts/fuzz.sh runs the full campaign.
       - name: Fuzz targets compile
         run: cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
+      - name: Fuzz CLI exit codes and envelopes (PO-ADIT-4)
+        run: |
+          cargo install cargo-fuzz --version 0.13.1 --locked
+          python3 -I fuzz/seeds.py "$GITHUB_WORKSPACE" "$RUNNER_TEMP/fmine-seeds"
+          cargo fuzz run --dev --sanitizer none cli_run "$RUNNER_TEMP/fmine-seeds/cli_run" -- -runs=25000 -timeout=10
 
   # BD-326 (bd-i787.2): advisories, bans, licences and sources over the graph of deny.toml's three targets. The
   # advisory database is fetched first, retried once, so the check itself runs offline.
