@@ -40,6 +40,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-authz"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+]
+
+[[package]]
 name = "fmine-calib"
 version = "0.1.0"
 dependencies = [
@@ -86,7 +95,9 @@ dependencies = [
  "fmine-crs",
  "fmine-decide",
  "fmine-evidence",
+ "fmine-flow",
  "fmine-io",
+ "fmine-ledger",
  "fmine-lp",
  "fmine-metrics",
  "fmine-numerics",
@@ -132,6 +143,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-flow"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-units",
+]
+
+[[package]]
 name = "fmine-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -141,6 +161,7 @@ dependencies = [
  "fmine-core",
  "fmine-evidence",
  "fmine-io",
+ "fmine-ledger",
  "fmine-optimize",
  "fmine-registry",
  "libfuzzer-sys",
@@ -158,14 +179,27 @@ dependencies = [
 name = "fmine-io"
 version = "0.1.0"
 dependencies = [
+ "fmine-authz",
  "fmine-calib",
  "fmine-claim",
  "fmine-core",
+ "fmine-crs",
  "fmine-evidence",
  "fmine-geom",
  "fmine-lp",
+ "fmine-object",
  "fmine-optimize",
+ "fmine-registry",
  "fmine-runtime",
+ "fmine-units",
+]
+
+[[package]]
+name = "fmine-ledger"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
 ]
 
 [[package]]
@@ -202,6 +236,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-object"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+]
+
+[[package]]
 name = "fmine-optimize"
 version = "0.1.0"
 dependencies = [
@@ -213,6 +255,7 @@ dependencies = [
 name = "fmine-plant"
 version = "0.1.0"
 dependencies = [
+ "fmine-authz",
  "fmine-claim",
  "fmine-core",
  "fmine-evidence",
