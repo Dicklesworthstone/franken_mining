@@ -59,6 +59,43 @@ fn sheet(name: &str, quarter: &str, values: [f64; 2]) -> MinimalSheet {
     }
 }
 
+fn capital_sheet(source: MinimalSheet) -> MinimalSheet {
+    let cell = |name: &str| {
+        source.cells.iter().find(|(id, _)| id == name).unwrap().1.clone()
+    };
+    let mut cells = vec![
+        ("A3".into(), cell("A3")),
+        ("A4".into(), MinimalCell::Text("Capital expenditures ($ millions)".into())),
+        ("A5".into(), MinimalCell::Text("Minesite sustaining".into())),
+        ("A6".into(), MinimalCell::Text("Projects".into())),
+        ("A7".into(), MinimalCell::Text("Total capital expenditures ($ millions)".into())),
+    ];
+    for (row, col) in [(5, "B"), (6, "C"), (7, "D")] {
+        let sustaining = cell(&format!("C{row}"));
+        let projects = match sustaining.clone() {
+            MinimalCell::Number(value) => MinimalCell::Number(value / 2.0),
+            other => other,
+        };
+        cells.push((format!("{col}2"), cell(&format!("A{row}"))));
+        cells.push((format!("{col}3"), cell("B3")));
+        cells.push((format!("{col}5"), sustaining));
+        cells.push((format!("{col}6"), projects));
+        cells.push((format!("{col}7"), cell(&format!("B{row}"))));
+    }
+    MinimalSheet {
+        name: if source.name == "QTD" { "Minestats1" } else { "Minestats2" }.into(),
+        hidden: false,
+        cells,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceFamily {
+    Gold,
+    Copper,
+    Capex,
+}
+
 fn rules() -> String {
     let mut rules = String::from(
         r#"rules_id = "SYNTHETIC-2026-rules"
@@ -114,6 +151,16 @@ fn workspace_with_signed_cost_forecast(copper: bool, signed_cost: bool) -> PathB
 }
 
 fn workspace_with_quarterly_candidate(copper: bool, signed_cost: bool, quarterly: bool) -> PathBuf {
+    workspace_with_family(
+        if copper { SourceFamily::Copper } else { SourceFamily::Gold },
+        signed_cost,
+        quarterly,
+    )
+}
+
+fn workspace_with_family(family: SourceFamily, signed_cost: bool, quarterly: bool) -> PathBuf {
+    let copper = family == SourceFamily::Copper;
+    let capex = family == SourceFamily::Capex;
     let root = std::env::temp_dir().join(format!(
         "fmine-record-score-{}-{}",
         std::process::id(),
@@ -172,15 +219,20 @@ fn workspace_with_quarterly_candidate(copper: bool, signed_cost: bool, quarterly
                 }
             }
         }
+        if capex {
+            sheets = sheets.into_iter().map(capital_sheet).collect();
+        }
         let bytes = build_minimal_xlsx(&sheets);
         fs::write(root.join("corpus").join(file), &bytes).unwrap();
         let (len, hash) = (bytes.len(), sha256(&bytes).to_hex());
         writeln!(registry, "\n[[source]]\nfile = \"{file}\"\nkind = \"mine_stats\"\nquarter = \"{quarter}\"\npath = \"{file}\"\nurl_basis = \"W1 table\"\npublished_at = \"{published}\"\npublished_at_basis = \"FACT: invented release date\"\nbytes = {len}\nsha256 = \"{hash}\"").unwrap();
-        if copper {
+        if copper || capex {
             writeln!(registry, "retrieved_utc = \"{published}T12:00:00Z\"").unwrap();
         }
     }
-    let doc: &[u8] = if quarterly {
+    let doc: &[u8] = if capex {
+        b"Explicitly synthetic Q4 guidance: Site A total capex 50 - 60 USD millions; minesite sustaining capex 105 - 115 USD millions."
+    } else if quarterly {
         b"Explicitly synthetic Q4 guidance: Site A production 50 - 60 kt; C1 105 - 115 USD per sold copper pound."
     } else if copper {
         b"Explicitly synthetic guidance: Site A production 140 - 160 kt; C1 105 - 115 USD per sold copper pound."
@@ -212,7 +264,17 @@ fn workspace_with_quarterly_candidate(copper: bool, signed_cost: bool, quarterly
             token
         };
         let period = if quarterly { "2026Q4" } else { "2026FY" };
-        let (metric, unit, basis) = if copper {
+        let (metric, unit, basis) = if capex {
+            if metric == "production_koz" {
+                ("capex_usd_m", "usd_m", "100%;capex=issuer-reported-total")
+            } else {
+                (
+                    "capex_sustaining_usd_m",
+                    "usd_m",
+                    "100%;capex=issuer-reported-minesite-sustaining",
+                )
+            }
+        } else if copper {
             if metric == "production_koz" {
                 ("production_kt", "kt", "100%")
             } else {
@@ -234,7 +296,11 @@ fn workspace_with_quarterly_candidate(copper: bool, signed_cost: bool, quarterly
         transcriptions,
     )
     .unwrap();
-    let rules = if copper {
+    let rules = if capex {
+        rules()
+            .replace("au_prod_100_koz", "capex_usd_m")
+            .replace("aisc_usd_per_oz", "capex_sustaining_usd_m")
+    } else if copper {
         rules()
             .replace("au_prod_100_koz", "cu_prod_100_kt")
             .replace("aisc_usd_per_oz", "c1_usd_per_lb")
@@ -248,7 +314,7 @@ fn workspace_with_quarterly_candidate(copper: bool, signed_cost: bool, quarterly
     } else {
         rules
     };
-    let cut = if copper { "2026-10-03T00:00:00Z" } else { CUT };
+    let cut = if copper || capex { "2026-10-03T00:00:00Z" } else { CUT };
     fs::write(root.join("record/rules.toml"), &rules).unwrap();
     let csv = if signed_cost {
         CSV.replace(
@@ -256,7 +322,7 @@ fn workspace_with_quarterly_candidate(copper: bool, signed_cost: bool, quarterly
             "Site A,unit_cost,-120,-125,-115",
         )
         .replace("Site B,unit_cost,105,100,110", "Site B,unit_cost,0,-5,5")
-    } else if copper {
+    } else if copper || capex {
         let (json, exit) = fmine_cli::run(
             &[
                 "forecast",
@@ -445,6 +511,86 @@ fn assert_score(fragment: &str, score: u32) {
         )),
         "{fragment}"
     );
+}
+
+#[test]
+#[ignore = "requires OpenSSL 3.x and host clock from 2026-10-03 through 2026-12-31; real TSA time is never backdated"]
+fn capex_candidate_freezes_scores_exact_scopes_and_keeps_changed_ownership_unresolved() {
+    let now = i64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+    ).unwrap();
+    assert!(
+        (parse_utc("2026-10-03T00:00:00Z").unwrap()..parse_utc("2026-12-31T23:59:45Z").unwrap())
+            .contains(&now)
+    );
+    let root = workspace_with_family(SourceFamily::Capex, false, true);
+    let csv = fs::read_to_string(root.join("record/forecasts.csv")).unwrap();
+    assert!(csv.contains("Site A,production,44.00,44.00,44.00,true"));
+    assert!(csv.contains("Site A,unit_cost,110.00,110.00,110.00,true"));
+    let (json, exit) = run(&root, AS_OF, "tsa/ca.pem", "json");
+    assert_eq!(exit, 0, "{json}");
+    assert_eq!(run(&root, AS_OF, "tsa/ca.pem", "json"), (json.clone(), 0));
+    for (target, outcome, score, guidance_score) in
+        [("production", 53, 90, 10), ("unit_cost", 120, 100, 60)]
+    {
+        let item = member(&json, "Site A", target);
+        assert!(item.contains(&format!("\"outcome\":{{\"status\":\"available\",\"value\":{{\"num\":\"{outcome}\",\"den\":\"1\"}}}}")), "{item}");
+        assert_score(item.split("\"baselines\":").next().unwrap(), score);
+        for (baseline, expected) in [
+            ("issuer_guidance", guidance_score),
+            ("run_rate_persistence", score),
+        ] {
+            assert_score(
+                item.split(&format!("\"baseline\":\"{baseline}\""))
+                    .nth(1).unwrap().split("{\"baseline\":").next().unwrap(),
+                expected,
+            );
+        }
+        assert!(member(&json, "Site B", target).contains("\"forecast_score\":null"));
+        assert!(member(&json, "Site C", target).starts_with("\"not_published\""));
+    }
+    for source in [
+        "site::total capital expenditures ($ millions)",
+        "site:capital expenditures ($ millions):minesite sustaining",
+        "Q4.xlsx:Minestats1!B7",
+        "Q4.xlsx:Minestats1!B5",
+        "\"unit\":\"usd_m\"",
+    ] {
+        assert!(json.contains(source), "{source}: {json}");
+    }
+    let (markdown, exit) = run(&root, AS_OF, "tsa/ca.pem", "markdown");
+    assert_eq!(exit, 0, "{markdown}");
+    for meaning in ["capex_usd_m", "capex_sustaining_usd_m", "usd_m"] {
+        assert!(markdown.contains(meaning), "{meaning}: {markdown}");
+    }
+
+    // A later actual with a different printed share must not be scored against the frozen amount.
+    let old = fs::read(root.join("corpus/Q4.xlsx")).unwrap();
+    let mut future = vec![
+        capital_sheet(sheet("QTD", "2026Q4", [53.0, 120.0])),
+        capital_sheet(sheet("YTD", "2026Q4", [152.0, 999.0])),
+    ];
+    for sheet in &mut future {
+        sheet.cells.iter_mut().find(|(id, _)| id == "B2").unwrap().1 =
+            MinimalCell::Text("Site A (50%)".into());
+    }
+    let changed_bytes = build_minimal_xlsx(&future);
+    fs::write(root.join("corpus/Q4.xlsx"), &changed_bytes).unwrap();
+    let registry_path = root.join("registries/sources/synthetic.toml");
+    let registry = fs::read_to_string(&registry_path).unwrap();
+    let old_binding = format!("bytes = {}\nsha256 = \"{}\"", old.len(), sha256(&old).to_hex());
+    let new_binding = format!("bytes = {}\nsha256 = \"{}\"", changed_bytes.len(), sha256(&changed_bytes).to_hex());
+    assert_eq!(registry.matches(&old_binding).count(), 1);
+    fs::write(&registry_path, registry.replacen(&old_binding, &new_binding, 1)).unwrap();
+    let (changed, exit) = run(&root, AS_OF, "tsa/ca.pem", "json");
+    assert_eq!(exit, 0, "{changed}");
+    for target in ["production", "unit_cost"] {
+        let item = member(&changed, "Site A", target);
+        assert!(item.contains("\"forecast_score\":null"), "{item}");
+        assert!(item.contains("same printed ownership"), "{item}");
+    }
+    assert_eq!(fs::read_to_string(root.join("record/forecasts.csv")).unwrap(), csv);
+    eprintln!("capex_forecast_record_score_fixture={}", root.display());
 }
 
 #[test]

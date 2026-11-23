@@ -2128,3 +2128,14 @@ None: every failure is a usage error or a typed refusal.
   sensitivities. The opt-in `clusters` projection adds conditional one-axis inference; simultaneous site/year
   inference, empirical qualification and the full guidance data gate remain open. These track-record paths
   neither attribute controllable cost causes nor register forecasts.
+
+## Quarterly capex record sources
+
+DESIGN (BD-059/067/076): record build/score support original-quarter total, minesite-sustaining
+and project capex in `usd_m`. Source resolution matches the exact Mine Stats capital line,
+three-month period, site, unit, original release and printed ownership. Numeric signed/zero
+amounts are admitted only without status flags; status-derived Nil is unavailable.
+Shared persistence pools retain every quarter slot and block on ownership drift. Original-quarter
+outcomes and guidance must match the usable frozen point's ownership; guidance additionally
+requires the target's explicit `;capex=issuer-reported-...` suffix and exact quarter.
+No cumulative subtraction, component substitution or ownership conversion is supplied.

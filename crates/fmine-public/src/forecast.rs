@@ -19,7 +19,7 @@ use fmine_registry::sources::{SourcesRegistry, day_end, parse_sources_registry, 
 use crate::key::{
     self, KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesOwnershipBasis,
 };
-use crate::mine_stats::{LabelVocabulary, MineStatsRead, View, read_mine_stats};
+use crate::mine_stats::{LabelVocabulary, MineStatsRead, MineStatsValue, View, read_mine_stats};
 use crate::sources::{IssuerProfile, SourceKind, is_issuer_name, registry_path};
 use crate::{LoadedSource, load_registered_sources};
 
@@ -362,6 +362,28 @@ fn per_ounce_withholding_note(source: &LoadedSource, site: &str, year: u16) -> O
     note
 }
 
+/// Raw printed line identity for frozen-record adapters, before canonical Claim admission.
+/// Counting raw competitors preserves ambiguity even when a competing cell is unusable.
+/// Registry aliases cannot redefine a capital scope; this helper authenticates no value or basis.
+#[must_use]
+pub fn record_source_line(value: &MineStatsValue) -> String {
+    let normalize = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+    };
+    if value.view == View::Summary {
+        format!("summary:{}", normalize(&value.label))
+    } else {
+        format!(
+            "site:{}:{}",
+            normalize(value.section.as_deref().unwrap_or("")),
+            normalize(&value.label)
+        )
+    }
+}
+
 fn observation(
     profile: &IssuerProfile,
     source: &LoadedSource,
@@ -371,6 +393,8 @@ fn observation(
     quarter: Quarter,
     role: &'static str,
 ) -> Result<CandidateObservation> {
+    let metric = TargetMetric::from_target(target)
+        .ok_or_else(|| invalid(format!("unsupported field/outcome for {}", target.id)))?;
     let period = Period {
         year: u16::try_from(quarter.year)
             .map_err(|_| invalid("source year is outside the supported calendar"))?,
@@ -382,12 +406,12 @@ fn observation(
             .iter()
             .find(|s| s.label == v.site)
             .map_or(v.site.as_str(), |s| s.subject.as_str());
-        v.view == View::Summary
-            && v.sheet == "QTD"
-            && v.months == 3
-            && v.period == period.code()
-            && subject == site
-            && v.label == target.field
+        let field_matches = if metric.is_capex() {
+            v.view == View::Minestats && record_source_line(v) == metric.source_line()
+        } else {
+            v.view == View::Summary && v.sheet == "QTD" && v.label == target.field
+        };
+        field_matches && v.months == 3 && v.period == period.code() && subject == site
     });
     let first = hits.next();
     if hits.next().is_some() {
@@ -420,7 +444,7 @@ fn observation(
         || claim.key.reporting_vintage.file_sha256 != row.sha256
         || claim.key.scope != Scope::Site
         || claim.key.unit != expected_unit(target)?
-        || claim.key.line.label != format!("summary:{}", target.field)
+        || claim.key.line.label != metric.source_line()
         || claim.key.line.occurrence != 0
         || claim.key.ownership_basis == OwnershipBasis::Unprinted
         || (TargetMetric::from_target(target).is_some_and(TargetMetric::is_production)
@@ -436,16 +460,7 @@ fn observation(
         .sheet(&raw.sheet)
         .and_then(|s| s.cells_by_coord.values().find(|c| c.cell_ref == raw.cell))
         .and_then(|c| c.displayed());
-    let signed_point = role == "point"
-        && matches!(
-            TargetMetric::from_target(target),
-            Some(
-                TargetMetric::GoldAisc
-                    | TargetMetric::GoldTcc
-                    | TargetMetric::CopperC1
-                    | TargetMetric::CopperAisc
-            )
-        );
+    let signed_point = role == "point" && !metric.is_production();
     let (value, mut reason) = match displayed {
         Some(Ok(display)) => match Rat::from_decimal_str(&display.text()) {
             Ok(value) => (
@@ -517,7 +532,7 @@ fn observation(
             && flagged == Some(key::StatusKind::Withheld))
         .then(|| per_ounce_withholding_note(source, site, period.year))
         .flatten();
-        // A zero cost point is usable only as an unflagged source number. In particular, a status-derived
+        // A zero cost or capex point requires an unflagged source number. In particular, a status-derived
         // Nil must not become a zero forecast just because its stored cell happens to contain zero.
         if (((value.signum() != 0 || signed_point) && overlaps_status)
             || flagged.is_some()
@@ -688,7 +703,7 @@ fn finish(
 
 /// Build a complete unissued candidate at an explicit information cut. Only the original Mine Stats
 /// releases required by the declared pools and point quarter are opened. Missing or ambiguous releases,
-/// unreadable or altered bytes, look-ahead, unprinted/changing cost bases and unsafe statuses refuse.
+/// unreadable or altered bytes, look-ahead, unprinted/changing cost or capex bases and unsafe statuses refuse.
 /// Historical missing/nonpositive values remain in the audit; every live point must be usable.
 pub fn build(
     root: &Path,

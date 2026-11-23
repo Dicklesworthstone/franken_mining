@@ -14,7 +14,7 @@ use fmine_calib::record::{
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_public::key::{
-    self, KeyedCell, OwnershipBasis, Period, PeriodKind, Scope, SeriesOwnershipBasis,
+    self, KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesOwnershipBasis,
 };
 use fmine_public::mine_stats::{MineStatsCell, MineStatsValue, View, read_mine_stats};
 use fmine_public::sources::{
@@ -503,7 +503,18 @@ impl Inventory {
                         raw.unwrap_or("unavailable")
                     ));
                 }
-                for raw in read.values.into_iter().filter(|v| v.view == View::Summary) {
+                for raw in read.values.into_iter().filter(|v| {
+                    v.view == View::Summary
+                        || [
+                            TargetMetric::CapexTotal,
+                            TargetMetric::CapexSustaining,
+                            TargetMetric::CapexProjects,
+                        ]
+                        .iter()
+                        .any(|metric| {
+                            fmine_public::forecast::record_source_line(v) == metric.source_line()
+                        })
+                }) {
                     let keyed =
                         key::from_mine_stats(profile, &source.workbook, &source.quarter, &raw)
                             .map_err(|e| e.to_string());
@@ -574,6 +585,8 @@ impl Inventory {
         period: Period,
         benchmark: bool,
     ) -> Result<Lookup> {
+        let metric = TargetMetric::from_target(target)
+            .ok_or_else(|| invalid("source target has no supported interpretation"))?;
         if let Some(reason) = self.release_reason(release, benchmark) {
             return Ok(Lookup::missing(reason));
         }
@@ -581,10 +594,18 @@ impl Inventory {
             .observations
             .iter()
             .filter(|o| {
+                let field_matches = if metric.is_capex() {
+                    o.raw.view == View::Minestats
+                        && o.raw.months == 3
+                        && fmine_public::forecast::record_source_line(&o.raw) == metric.source_line()
+                } else {
+                    o.raw.view == View::Summary
+                        && (!matches!(period.kind, PeriodKind::Quarter(_)) || o.raw.sheet == "QTD")
+                        && o.raw.label == target.field
+                };
                 o.release == release
                     && o.raw.period == period.code()
-                    && (!matches!(period.kind, PeriodKind::Quarter(_)) || o.raw.sheet == "QTD")
-                    && o.raw.label == target.field
+                    && field_matches
                     && o.keyed
                         .as_ref()
                         .map_or(o.raw.site.as_str(), |c| c.key.subject.as_str())
@@ -625,7 +646,7 @@ impl Inventory {
                 if cell.key.scope != Scope::Site
                     || cell.key.valid_period != period
                     || cell.key.unit != target_unit(target)?
-                    || cell.key.line.label != format!("summary:{}", target.field)
+                    || cell.key.line.label != metric.source_line()
                     || cell.key.line.occurrence != 0
                 {
                     unavailable(
@@ -637,6 +658,16 @@ impl Inventory {
                     && cell.key.ownership_basis != OwnershipBasis::Consolidated100
                 {
                     unavailable("production must use the printed 100% basis")
+                } else if metric.is_capex()
+                    && !matches!(
+                        &cell.claim.value,
+                        PublicValue::Number {
+                            under_status: None,
+                            ..
+                        }
+                    )
+                {
+                    unavailable("capex requires an unflagged printed number, not a status-derived Nil")
                 } else {
                     // A printed numeric zero remains numeric under the frozen rule, even if the generic
                     // public projection calls it a status-dependent Nil. The raw source type remains visible.
@@ -762,6 +793,9 @@ fn persistence(
             "persistence pool must contain 2..=200 prior quarters",
         ));
     }
+    let capex = TargetMetric::from_target(target).is_some_and(TargetMetric::is_capex);
+    let mut capex_points = BTreeMap::new();
+    let mut basis_refusal = None;
     let mut series = Vec::new();
     let mut omitted = Vec::new();
     for site in rules.sites.iter().filter(|s| s.status == SiteStatus::Live) {
@@ -795,13 +829,43 @@ fn persistence(
                     js(&pair_reason(&pair[0].value)), js(&pair_reason(&pair[1].value))));
             }
         }
+        if capex {
+            let point_value = inventory.lookup(
+                &site.name,
+                target,
+                point,
+                Period {
+                    year: point.year as u16,
+                    kind: PeriodKind::Quarter(point.q),
+                },
+                true,
+            )?;
+            let bases = values
+                .iter()
+                .filter(|v| number(&v.value).is_some_and(|n| n.signum() > 0))
+                .chain(
+                    std::iter::once(&point_value)
+                        .filter(|v| number(&v.value).is_some()),
+                )
+                .filter_map(|v| v.basis.map(SeriesOwnershipBasis::from))
+                .collect::<BTreeSet<_>>();
+            if bases.len() > 1 {
+                basis_refusal = Some(format!(
+                    "{} {} capex ownership changes across eligible history and point; shared pool refused",
+                    site.name, target.id
+                ));
+            }
+            capex_points.insert(site.name.clone(), point_value);
+        }
         series.push(values.iter().map(|v| number(&v.value)).collect::<Vec<_>>());
     }
     let (ratios, left_out) = exact(record::pooled_ratios(&series))?;
-    let blocked = quarters.iter().find_map(|q| {
-        inventory
-            .release_reason(*q, true)
-            .map(|why| format!("fixed pool input {q}: {why}"))
+    let blocked = basis_refusal.or_else(|| {
+        quarters.iter().find_map(|q| {
+            inventory
+                .release_reason(*q, true)
+                .map(|why| format!("fixed pool input {q}: {why}"))
+        })
     });
     let quantiles = if blocked.is_none() && !ratios.is_empty() {
         Some(exact(record::ratio_quantiles(
@@ -817,20 +881,26 @@ fn persistence(
         quantiles.map_or_else(|| "null".into(), |(lo, hi)| format!("{{\"lo\":{},\"hi\":{}}}", rat(lo), rat(hi))), optional(blocked.as_deref()), omitted.join(",")));
     let mut result = BTreeMap::new();
     for site in rules.sites.iter().filter(|s| s.status == SiteStatus::Live) {
-        let point_value = inventory.lookup(
-            &site.name,
-            target,
-            point,
-            Period {
-                year: point.year as u16,
-                kind: PeriodKind::Quarter(point.q),
-            },
-            true,
-        )?;
+        let point_value = if capex {
+            capex_points
+                .remove(&site.name)
+                .ok_or_else(|| invalid("capex point omitted a frozen member"))?
+        } else {
+            inventory.lookup(
+                &site.name,
+                target,
+                point,
+                Period {
+                    year: point.year as u16,
+                    kind: PeriodKind::Quarter(point.q),
+                },
+                true,
+            )?
+        };
         let value = match (quantiles, number(&point_value.value)) {
             (Some((lo, hi)), Some(point)) => {
                 // Only training pairs require positive values. A printed zero is a valid point;
-                // signed cost points reverse the order of the scaled quantiles.
+                // signed cost and capex points reverse the order of the scaled quantiles.
                 let (lo, hi) = if point.signum() < 0 {
                     (hi, lo)
                 } else {
@@ -1088,9 +1158,11 @@ impl Guidance {
         };
         let basis_text = if let Some(suffix) = metric.guidance_basis_suffix() {
             let Some(ownership) = row.basis.strip_suffix(suffix) else {
-                return Ok(unavailable(
-                    "cost guidance lacks the target's explicit issuer-reported sold-metal definition",
-                ));
+                return Ok(unavailable(if metric.is_capex() {
+                    "capex guidance lacks the target's explicit issuer-reported capital scope"
+                } else {
+                    "cost guidance lacks the target's explicit issuer-reported sold-metal definition"
+                }));
             };
             ownership
         } else {
@@ -1105,6 +1177,36 @@ impl Guidance {
         if metric.is_production() {
             lo = exact(lo.checked_div(share))?;
             hi = exact(hi.checked_div(share))?;
+        }
+        if metric.is_capex() {
+            // Quarterly rules bind one common immediately preceding persistence point.
+            let point = Quarter {
+                year: quarter.year - i32::from(quarter.q == 1),
+                q: if quarter.q == 1 { 4 } else { quarter.q - 1 },
+            };
+            let point_value = inventory.lookup(
+                site,
+                target,
+                point,
+                Period {
+                    year: point.year as u16,
+                    kind: PeriodKind::Quarter(point.q),
+                },
+                true,
+            )?;
+            let compatible = match point_value.basis {
+                Some(OwnershipBasis::Consolidated100) => basis_text == "100%",
+                Some(OwnershipBasis::Attributable { num, den, .. }) => {
+                    basis_text.starts_with("attributable:")
+                        && share == exact(Rat::new(i128::from(num), i128::from(den)))?
+                }
+                _ => false,
+            };
+            if number(&point_value.value).is_none() || !compatible {
+                return Ok(unavailable(
+                    "capex guidance must match the usable frozen point's printed ownership; no conversion is inferred",
+                ));
+            }
         }
         if target.outcome == Outcome::FyMinus9m {
             let nine = inventory.lookup(
@@ -1384,8 +1486,9 @@ fn resolve_inner(
     let mut outcomes = Vec::new();
     let mut baselines = Vec::new();
     for target in &rules.targets {
+        let capex = TargetMetric::from_target(target).is_some_and(TargetMetric::is_capex);
         for site in &rules.sites {
-            let observed = if site.status == SiteStatus::NotPublished {
+            let mut observed = if site.status == SiteStatus::NotPublished {
                 Lookup::missing(format!(
                     "frozen NOT_PUBLISHED: {}",
                     site.reason
@@ -1399,24 +1502,29 @@ fn resolve_inner(
                 && site.status == SiteStatus::Live
             {
                 let reference = rules.baselines.iter().find_map(|b| match b.kind {
-                    BaselineKind::Persistence { pool_through, .. } if b.target == target.id => {
-                        Some(pool_through)
-                    }
+                    BaselineKind::Persistence {
+                        pool_through,
+                        point,
+                        ..
+                    } if b.target == target.id => Some(if capex { point } else { pool_through }),
                     _ => None,
                 });
                 let old = if let Some(q) = reference {
-                    inventory
-                        .lookup(
-                            &site.name,
-                            target,
-                            q,
-                            Period {
-                                year: q.year as u16,
-                                kind: PeriodKind::Quarter(q.q),
-                            },
-                            true,
-                        )?
-                        .basis
+                    let previous = inventory.lookup(
+                        &site.name,
+                        target,
+                        q,
+                        Period {
+                            year: q.year as u16,
+                            kind: PeriodKind::Quarter(q.q),
+                        },
+                        true,
+                    )?;
+                    if capex && number(&previous.value).is_none() {
+                        None
+                    } else {
+                        previous.basis
+                    }
                 } else {
                     None
                 };
@@ -1425,8 +1533,20 @@ fn resolve_inner(
                 });
                 inventory.evidence.bindings.push(format!("{{\"role\":\"outcome_basis_comparison\",\"site\":{},\"target\":{},\"basis_changed\":{},\"reference_basis\":{},\"outcome_basis\":{}}}",
                     js(&site.name), js(&target.id), changed.map_or_else(|| "null".into(), |v| v.to_string()), old.map_or_else(|| "null".into(), |v| js(&basis(v))), observed.basis.map_or_else(|| "null".into(), |v| js(&basis(v)))));
-                inventory.evidence.notes.push(format!("{} {} ownership basis: frozen pool-through {}; outcome {}; basis_changed={}. Cost rates retain their printed basis and are not rescaled.",
-                    site.name, target.id, old.map_or_else(|| "unavailable".into(), basis), observed.basis.map_or_else(|| "unavailable".into(), basis), changed.map_or_else(|| "unknown".into(), |v| v.to_string())));
+                if capex {
+                    if number(&observed.value).is_some() && changed != Some(false) {
+                        observed.value = unavailable(
+                            "capex outcome needs the same printed ownership as the usable frozen point; no conversion is inferred",
+                        );
+                    }
+                    inventory.evidence.notes.push(format!(
+                        "{} {} capex retains its printed scope, quarterly support and ownership. Outcome ownership must match the usable frozen point; status-derived Nil is not zero.",
+                        site.name, target.id
+                    ));
+                } else {
+                    inventory.evidence.notes.push(format!("{} {} ownership basis: frozen pool-through {}; outcome {}; basis_changed={}. Cost rates retain their printed basis and are not rescaled.",
+                        site.name, target.id, old.map_or_else(|| "unavailable".into(), basis), observed.basis.map_or_else(|| "unavailable".into(), basis), changed.map_or_else(|| "unknown".into(), |v| v.to_string())));
+                }
             }
             outcomes.push(OutcomeRow {
                 site: site.name.clone(),
@@ -1475,7 +1595,12 @@ fn resolve_inner(
         }
     }
     let evidence = inventory.evidence;
-    let point_name = if quarterly {
+    let has_capex = rules.targets.iter().any(|target| {
+        TargetMetric::from_target(target).is_some_and(TargetMetric::is_capex)
+    });
+    let point_name = if has_capex {
+        "original quarterly persistence-point"
+    } else if quarterly {
         "original QTD persistence-point"
     } else {
         "Q3"
@@ -1495,7 +1620,9 @@ fn resolve_inner(
             .collect::<Vec<_>>()
             .join("\n\n")
     );
-    let outcome_policy = if quarterly {
+    let outcome_policy = if has_capex {
+        "original_scored_quarter_QTD_for_production_and_unit_cost;original_scored_quarter_Minestats_for_capex;never_cumulative_or_later_comparatives"
+    } else if quarterly {
         "original_scored_quarter_QTD_for_production_and_unit_cost;never_cumulative_or_later_comparatives"
     } else {
         "original_yearQ4_FY_minus_original_yearQ3_9M_for_production;original_yearQ4_QTD_for_unit_cost;never_later_comparatives"
@@ -1505,10 +1632,16 @@ fn resolve_inner(
     } else {
         "guidance_strictly_before_forecast_cut;fixed_original_Q3_and_history_by_assessment_cut_may_be_outside_forecast_manifest"
     };
+    let printed_zero_policy = if has_capex {
+        "legacy_six_targets_keep_frozen_numeric_zero;capex_requires_unflagged_numeric_source"
+    } else {
+        "numeric_zero_is_an_outcome_or_persistence_point_even_when_generic_projection_has_status_nil"
+    };
     let evidence_json = format!(
-        "{{\"outcome_policy\":{},\"baseline_policy\":{},\"same_information_set_claim\":false,\"verification_scope\":\"all matching manifest hashes checked against registry; only selected source bytes re-read\",\"printed_zero_policy\":\"numeric_zero_is_an_outcome_or_persistence_point_even_when_generic_projection_has_status_nil\",\"sources\":[{}],\"cells\":[{}],\"documents\":[{}],\"bindings\":[{}],\"persistence_pools\":[{}]}}",
+        "{{\"outcome_policy\":{},\"baseline_policy\":{},\"same_information_set_claim\":false,\"verification_scope\":\"all matching manifest hashes checked against registry; only selected source bytes re-read\",\"printed_zero_policy\":{},\"sources\":[{}],\"cells\":[{}],\"documents\":[{}],\"bindings\":[{}],\"persistence_pools\":[{}]}}",
         js(outcome_policy),
         js(baseline_policy),
+        js(printed_zero_policy),
         evidence.sources.join(","),
         evidence.cells.into_values().collect::<Vec<_>>().join(","),
         evidence

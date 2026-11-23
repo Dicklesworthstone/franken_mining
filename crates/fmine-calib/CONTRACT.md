@@ -761,3 +761,13 @@ substitute for statistical confidence intervals. Mean-z bounds propagate source 
 The frozen-record scorer consumes already transformed, selected inputs. Its completion bounds do not make an
 unavailable baseline into a published prediction; its confidence references do not establish forecasting skill.
 The actual FY2026 record and outcomes remain subject to the Q3 source gate, external time proof and later release.
+
+## Quarterly capital target semantics
+
+DESIGN (BD-059/067/076): `record::TargetMetric` adds distinct total, minesite-sustaining
+and project capex meanings for `capex_usd_m`, `capex_sustaining_usd_m` and
+`capex_projects_usd_m`. All use `usd_m` and require `Outcome::QuarterQtd`, including
+the existing explicit nowcast normalization. `Q4Qtd` and `FyMinus9m` do not admit capital targets.
+The metric exposes its exact canonical source line and issuer-reported guidance suffix.
+Capital points may be signed or zero; positive historical adjacency and exact pooled-ratio
+arithmetic remain unchanged. This adds target meanings without modifying frozen rule bytes.

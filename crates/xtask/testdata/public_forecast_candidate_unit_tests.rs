@@ -432,6 +432,155 @@ fn replace_cell(sheet: &mut MinimalSheet, cell: &str, value: MinimalCell) {
         .1 = value;
 }
 
+fn capex_rules() -> String {
+    let mut rules = RULES.split("[[target]]").next().unwrap().to_string();
+    for field in [
+        "capex_usd_m",
+        "capex_sustaining_usd_m",
+        "capex_projects_usd_m",
+    ] {
+        rules.push_str(&format!(
+            "\n[[target]]\nid = \"{field}\"\nquantity = \"printed capital scope\"\nscored_quantity = \"original quarterly USD millions\"\nfield = \"{field}\"\noutcome = \"quarter_qtd\"\n\
+             [[baseline]]\nid = \"run_rate_persistence\"\ntarget = \"{field}\"\nrule = \"positive adjacent ratios\"\nsource = \"invented capital workbooks\"\npool_from = \"2030Q1\"\npool_through = \"2030Q2\"\npoint_quarter = \"2030Q3\"\n"
+        ));
+    }
+    for site in ["Site A", "Site B"] {
+        rules.push_str(&format!(
+            "\n[[site]]\nname = \"{site}\"\nstatus = \"live\"\nlocator = \"synthetic:Minestats1\"\n"
+        ));
+    }
+    rules
+}
+
+fn capex_sheet(q: u8, sheet: &mut MinimalSheet) {
+    let text = |value: &str| MinimalCell::Text(value.into());
+    let (sustaining, projects, total) = match q {
+        1 => ([10.0, 20.0], [30.0, 40.0], [40.0, 60.0]),
+        2 => ([20.0, 80.0], [90.0, 80.0], [110.0, 160.0]),
+        _ => ([-1.25, 2.0], [0.0, 5.0], [-1.25, 7.0]),
+    };
+    sheet.name = "Minestats1".into();
+    sheet.cells = vec![
+        ("B1".into(), MinimalCell::Number(2030.0)),
+        ("B2".into(), text("Site A (50%)")),
+        ("C2".into(), text("Site B (75%)")),
+        ("A3".into(), text("For the three months ended")),
+        ("B3".into(), MinimalCell::Number(2030.0)),
+        ("C3".into(), MinimalCell::Number(2030.0)),
+        ("A4".into(), text("Capital expenditures ($ millions)")),
+        ("A5".into(), text("Minesite sustaining")),
+        ("B5".into(), MinimalCell::Number(sustaining[0])),
+        ("C5".into(), MinimalCell::Number(sustaining[1])),
+        ("A6".into(), text("Projects")),
+        ("B6".into(), MinimalCell::Number(projects[0])),
+        ("C6".into(), MinimalCell::Number(projects[1])),
+        ("A7".into(), text("Total capital expenditures ($ millions)")),
+        ("B7".into(), MinimalCell::Number(total[0])),
+        ("C7".into(), MinimalCell::Number(total[1])),
+    ];
+}
+
+#[test]
+fn capex_candidates_bind_three_quarterly_scopes_with_signed_and_zero_points() {
+    let rules = capex_rules();
+    let (registry, sources) = fixture(capex_sheet);
+    let report = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+        sources,
+        2,
+    )
+    .unwrap();
+    assert_eq!(report.candidate.exact_rows.len(), 6);
+    for (target, lo, hi) in [
+        ("capex_usd_m", Rat::new(-55, 16).unwrap(), Rat::new(-10, 3).unwrap()),
+        ("capex_sustaining_usd_m", Rat::from_integer(-5), Rat::new(-5, 2).unwrap()),
+        ("capex_projects_usd_m", Rat::from_integer(0), Rat::from_integer(0)),
+    ] {
+        let row = report
+            .candidate
+            .exact_rows
+            .iter()
+            .find(|row| row.site == "Site A" && row.target == target)
+            .unwrap();
+        assert_eq!((row.lo, row.hi), (lo, hi));
+        let metric = TargetMetric::from_target(
+            report.rules.targets.iter().find(|t| t.id == target).unwrap(),
+        )
+        .unwrap();
+        let observations = report
+            .observations
+            .iter()
+            .filter(|row| row.target == target)
+            .collect::<Vec<_>>();
+        assert_eq!(observations.len(), 6);
+        for observation in observations {
+            let claim = observation.claim.as_ref().unwrap();
+            assert_eq!(claim.key.line.label, metric.source_line());
+            assert_eq!(claim.key.unit, "usd_m");
+            assert_eq!(claim.key.reporting_vintage.release, observation.quarter.to_string());
+            assert_eq!(claim.key.reporting_vintage.file_sha256, observation.sha256);
+            assert!(claim.locator.contains(":Minestats1!"));
+        }
+    }
+    assert!(report.candidate.csv.contains("Site A,capex_usd_m,-3.33,-3.44,-3.33,true"));
+    assert!(report.candidate.csv.contains("Site A,capex_projects_usd_m,0.00,0.00,0.00,true"));
+    assert_eq!(
+        record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+        report.candidate.serialized_rows
+    );
+    let (changed_registry, changed_sources) = fixture(|q, sheet| {
+        capex_sheet(q, sheet);
+        if q == 3 {
+            replace_cell(sheet, "B7", MinimalCell::Number(-2.0));
+        }
+    });
+    let changed = finish(
+        prepare(rules.as_bytes(), changed_registry.as_bytes(), CUT).unwrap(),
+        changed_sources,
+        2,
+    )
+    .unwrap();
+    assert_ne!(report.digest, changed.digest);
+    assert_ne!(report.candidate.csv, changed.candidate.csv);
+}
+
+#[test]
+fn capex_candidates_refuse_wrong_scope_period_units_ownership_and_status_zeros() {
+    let rules = capex_rules();
+    for defect in 0..7 {
+        let (registry, sources) = fixture(|q, sheet| {
+            capex_sheet(q, sheet);
+            if q != 3 {
+                return;
+            }
+            match defect {
+                0 => replace_cell(sheet, "A7", MinimalCell::Text("Adjusted capital expenditures ($ millions)".into())),
+                1 => replace_cell(sheet, "A3", MinimalCell::Text("For the nine months ended".into())),
+                2 => replace_cell(sheet, "A4", MinimalCell::Text("Capital expenditures (CAD millions)".into())),
+                3 => replace_cell(sheet, "B2", MinimalCell::Text("Site A".into())),
+                4 => replace_cell(sheet, "B2", MinimalCell::Text("Site A (60%)".into())),
+                5 => replace_cell(sheet, "B7", MinimalCell::Text("—".into())),
+                _ => {
+                    for cell in ["B5", "B6", "B7"] {
+                        replace_cell(sheet, cell, MinimalCell::Number(0.0));
+                    }
+                }
+            }
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        if defect == 6 {
+            prepared.profile.subject_statuses.push(key::SubjectStatus {
+                subject: "Site A".into(),
+                kind: key::StatusKind::Withheld,
+                first: (2030, 7),
+                last: Some((2030, 9)),
+                evidence: "DESIGN: invented withheld quarter".into(),
+            });
+        }
+        assert!(finish(prepared, sources, 2).is_err(), "defect {defect}");
+    }
+}
+
 fn copper_rules() -> String {
     let mut rules = RULES
         .replace("100% gold production", "100% copper production")

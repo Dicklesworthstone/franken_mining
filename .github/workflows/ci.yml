@@ -33,6 +33,7 @@ jobs:
           cargo test -p fmine-public --lib --locked
           cargo test -p xtask --lib forecast:: --locked
           cargo test -p xtask --test quarterly_record_rules --test forecast_record_score --locked
+          cargo test -p xtask --test forecast_record_score capex_candidate_freezes_scores_exact_scopes_and_keeps_changed_ownership_unresolved --locked -- --ignored --exact
 
   # AGENTS.md "Compiler Checks" (bd-l736): formatting and clippy, warnings denied. One OS is enough; lints do
   # not depend on the target here.

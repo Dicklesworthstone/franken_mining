@@ -3382,6 +3382,34 @@ uses original QTD outcomes and exact quarterly guidance, including Q4-to-Q1 year
 optional persistence-point workbook leaves the model result and any usable guidance comparison intact,
 with the comparator's source error reported explicitly.
 
+
+#### Quarterly capital expenditure forecasts
+
+DESIGN (BD-059/067/076): separate quarterly rules can also freeze original reported capital
+expenditures in USD millions. Both `quarter_qtd` and explicitly declared `quarter_qtd_nowcast`
+records support these exact scopes:
+
+| Rules `field` | Unit | Original Mine Stats source | Required guidance-basis suffix |
+|---|---|---|---|
+| `capex_usd_m` | `usd_m` | Total capital expenditures | `;capex=issuer-reported-total` |
+| `capex_sustaining_usd_m` | `usd_m` | Capital expenditures / Minesite sustaining | `;capex=issuer-reported-minesite-sustaining` |
+| `capex_projects_usd_m` | `usd_m` | Capital expenditures / Projects | `;capex=issuer-reported-projects` |
+
+Use these fields with the existing `forecast record build`, external timestamp and
+`forecast record score` commands. Each outcome is the original scored-quarter three-month cell.
+The three capital scopes remain separate through candidate generation, frozen scoring, persistence
+and quarterly issuer-guidance comparison. Total capex is never reconstructed from components;
+annual or cumulative amounts and another capital scope never substitute. No ownership scaling is applied.
+
+The common quarterly persistence point may be a printed negative or zero number. Historical ratio
+training still requires positive adjacent quarters and retains missing/nonpositive slots, so it
+never bridges a missing quarter. Candidate histories must retain the same printed ownership basis.
+A changed basis blocks the shared persistence pool; an outcome or guidance assertion whose basis
+differs from the usable frozen point remains unresolved. Status-derived zeros, missing points,
+ambiguous cells and unsupported `q4_qtd`/`fy_minus_9m` capital targets are refused or retained as
+unavailable. These are uncalibrated declared-model forecasts with the existing information-cut,
+source-hash and timestamp requirements.
+
 ### Compute the frozen issuer-guidance baseline
 
 DESIGN (BD-334): the forecast record fixes two comparators. The existing `forecast-baseline` command computes

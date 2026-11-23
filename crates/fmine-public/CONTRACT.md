@@ -1252,3 +1252,19 @@ The public lane of M0 (`fmine assure public`).
   pull and annual-to-quarter support remain explicit model limitations. Signed differences do not establish
   causation, recoverable production, investment value or forecasting skill. This slice emits no dollar
   sensitivity or annualized economic estimate, and makes no first-publication claim for comparative inputs.
+
+## Quarterly capital expenditure forecast records
+
+DESIGN (BD-059/067/076): `forecast` admits `capex_usd_m`, `capex_sustaining_usd_m`
+and `capex_projects_usd_m` only for explicit quarterly/quarterly-nowcast rules, each in `usd_m`.
+The source owner matches complete canonical Mine Stats line identities for reported total,
+minesite sustaining and project expenditures, respectively. It preserves every raw competitor
+before admission, original quarter, display token, cell, hash and printed ownership basis.
+Summary aliases, cumulative amounts and other capital scopes cannot supply these targets.
+
+Signed and zero unflagged numeric persistence points are permitted; training requires positive
+adjacent quarter pairs with missing/nonpositive slots retained. Changing ownership among eligible
+history and point values refuses candidate generation. No capital values are scaled to a different
+ownership basis. Frozen-record scoring and comparators retain the same scope and basis requirements.
+Status-derived zeros cannot become numeric capex observations. Existing six production/cost targets
+retain their prior receipts and admission rules.

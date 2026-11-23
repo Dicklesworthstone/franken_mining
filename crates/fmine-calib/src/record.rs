@@ -628,13 +628,13 @@ pub struct Target {
     pub id: String,
     pub quantity: String,
     pub scored_quantity: String,
-    /// The Mine Stats summary field id the target is read from (e.g. `au_prod_100_koz`).
+    /// Supported Mine Stats field id; capex targets bind an explicit printed site-row scope.
     pub field: String,
     pub outcome: Outcome,
 }
 
 impl Target {
-    /// Net sold-metal cost forecasts may be credits. Unknown fields and incompatible outcome rules
+    /// Net sold-metal costs and capex may be credits. Unknown fields and incompatible outcome rules
     /// retain the nonnegative domain; a caller's target ID or prose cannot authorize signed values.
     fn permits_signed_forecast(&self) -> bool {
         matches!(
@@ -644,6 +644,9 @@ impl Target {
                     | TargetMetric::GoldTcc
                     | TargetMetric::CopperC1
                     | TargetMetric::CopperAisc
+                    | TargetMetric::CapexTotal
+                    | TargetMetric::CapexSustaining
+                    | TargetMetric::CapexProjects
             )
         )
     }
@@ -660,6 +663,9 @@ pub enum TargetMetric {
     CopperProduction,
     CopperC1,
     CopperAisc,
+    CapexTotal,
+    CapexSustaining,
+    CapexProjects,
 }
 
 impl TargetMetric {
@@ -682,6 +688,9 @@ impl TargetMetric {
             }
             ("c1_usd_per_lb", Outcome::Q4Qtd | Outcome::QuarterQtd) => Some(Self::CopperC1),
             ("aisc_usd_per_lb", Outcome::Q4Qtd | Outcome::QuarterQtd) => Some(Self::CopperAisc),
+            ("capex_usd_m", Outcome::QuarterQtd) => Some(Self::CapexTotal),
+            ("capex_sustaining_usd_m", Outcome::QuarterQtd) => Some(Self::CapexSustaining),
+            ("capex_projects_usd_m", Outcome::QuarterQtd) => Some(Self::CapexProjects),
             _ => None,
         }
     }
@@ -693,6 +702,7 @@ impl TargetMetric {
             Self::GoldAisc | Self::GoldTcc => "usd_per_oz",
             Self::CopperProduction => "kt",
             Self::CopperC1 | Self::CopperAisc => "usd_per_lb",
+            Self::CapexTotal | Self::CapexSustaining | Self::CapexProjects => "usd_m",
         }
     }
 
@@ -705,6 +715,9 @@ impl TargetMetric {
             Self::CopperProduction => "production_kt",
             Self::CopperC1 => "c1_usd_per_lb",
             Self::CopperAisc => "aisc_usd_per_lb",
+            Self::CapexTotal => "capex_usd_m",
+            Self::CapexSustaining => "capex_sustaining_usd_m",
+            Self::CapexProjects => "capex_projects_usd_m",
         }
     }
 
@@ -716,12 +729,39 @@ impl TargetMetric {
             Self::GoldTcc => Some(";tcc=issuer-reported-per-sold-oz"),
             Self::CopperC1 => Some(";c1=issuer-reported-per-sold-lb"),
             Self::CopperAisc => Some(";aisc=issuer-reported-per-sold-lb"),
+            Self::CapexTotal => Some(";capex=issuer-reported-total"),
+            Self::CapexSustaining => Some(";capex=issuer-reported-minesite-sustaining"),
+            Self::CapexProjects => Some(";capex=issuer-reported-projects"),
         }
     }
 
     #[must_use]
     pub const fn is_production(self) -> bool {
         matches!(self, Self::GoldProduction | Self::CopperProduction)
+    }
+
+    #[must_use]
+    pub const fn is_capex(self) -> bool {
+        matches!(
+            self,
+            Self::CapexTotal | Self::CapexSustaining | Self::CapexProjects
+        )
+    }
+
+    /// Exact canonical line identity; capital scopes never inherit a caller's target alias.
+    #[must_use]
+    pub const fn source_line(self) -> &'static str {
+        match self {
+            Self::GoldProduction => "summary:au_prod_100_koz",
+            Self::GoldAisc => "summary:aisc_usd_per_oz",
+            Self::GoldTcc => "summary:tcc_usd_per_oz",
+            Self::CopperProduction => "summary:cu_prod_100_kt",
+            Self::CopperC1 => "summary:c1_usd_per_lb",
+            Self::CopperAisc => "summary:aisc_usd_per_lb",
+            Self::CapexTotal => "site::total capital expenditures ($ millions)",
+            Self::CapexSustaining => "site:capital expenditures ($ millions):minesite sustaining",
+            Self::CapexProjects => "site:capital expenditures ($ millions):projects",
+        }
     }
 }
 
@@ -2204,6 +2244,49 @@ mod tests {
             target.outcome = outcome;
             target.field = "cu_prod_attr_kt".into();
             assert!(TargetMetric::from_target(&target).is_none());
+        }
+    }
+
+    #[test]
+    fn capex_target_semantics_require_explicit_quarterly_scopes_and_keep_signed_amounts() {
+        for (field, line, suffix) in [
+            (
+                "capex_usd_m",
+                "site::total capital expenditures ($ millions)",
+                ";capex=issuer-reported-total",
+            ),
+            (
+                "capex_sustaining_usd_m",
+                "site:capital expenditures ($ millions):minesite sustaining",
+                ";capex=issuer-reported-minesite-sustaining",
+            ),
+            (
+                "capex_projects_usd_m",
+                "site:capital expenditures ($ millions):projects",
+                ";capex=issuer-reported-projects",
+            ),
+        ] {
+            let mut rules = parse_rules(&rules_text()).unwrap();
+            rules.targets[0].field = field.into();
+            rules.targets[0].outcome = Outcome::QuarterQtd;
+            let metric = TargetMetric::from_target(&rules.targets[0]).unwrap();
+            assert!(metric.is_capex());
+            assert!(!metric.is_production());
+            assert_eq!(metric.unit(), "usd_m");
+            assert_eq!(metric.guidance_quantity(), field);
+            assert_eq!(metric.source_line(), line);
+            assert_eq!(metric.guidance_basis_suffix(), Some(suffix));
+            let csv = b"site,target,point,p10,p90,uncalibrated\nSynthetic A,production,-1.25,-2,-1,true\n";
+            for outcome in [Outcome::QuarterQtd, Outcome::QuarterQtdNowcast] {
+                rules.targets[0].outcome = outcome;
+                assert_eq!(TargetMetric::from_target(&rules.targets[0]), Some(metric));
+                assert!(parse_forecasts(csv, &rules).is_ok());
+            }
+            for outcome in [Outcome::FyMinus9m, Outcome::Q4Qtd] {
+                rules.targets[0].outcome = outcome;
+                assert!(TargetMetric::from_target(&rules.targets[0]).is_none());
+                assert!(parse_forecasts(csv, &rules).is_err());
+            }
         }
     }
 
