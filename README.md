@@ -70,6 +70,20 @@ The calculation also compares permanent closure from each starting state, includ
 the transition cost, payable tonnes, remaining obligations or cash available today to see when the
 choice reverses. Each state retains its losing and unavailable choices. [Editable nickel worksheet](tests/capital/executive_care.toml)
 
+### Does one price deck change which investment leads?
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_deck.toml --brief
+```
+
+**INFERENCE from synthetic inputs.** Using its sponsor's gold prices, the higher-power upgrade leads by
+**US$4,665.20**. Applying the same period-by-period gold prices to both options puts the base upgrade ahead by
+**US$907.60**. The sponsor's extra US$15,000/kg in the first period accounts for the US$5,572.80 swing after
+payability, flat royalties and the supplied scenario weights. The comparison covers two declared operating
+periods on a common pre-tax ownership basis. The original plans, costs and discount factors stay fixed.
+Holding cash is a third choice. Full JSON retains the original submissions, paired prices and both valuation
+receipts. [Editable committee worksheet](tests/capital/executive_deck.toml)
+
 A miner's numbers are produced by a dozen systems that each pass along a single value and discard how sure they
 were. The result is predictable:
 - guidance that misses;

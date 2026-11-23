@@ -38,6 +38,21 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   - DESIGN (bd-ftw5). Executive worksheets accept `decide program <worksheet> --brief`. The meeting
     view retains the findings, decision alternatives, uncertainty, revisit condition and worksheet digest.
     Full Markdown and JSON give the line-by-line evidence and both treasury checkpoint ledgers.
+  - DESIGN (bd-xm5k). `common_price_deck` compares two distinct source investment alternatives and
+    holding cash by weighted, discounted incremental pre-tax USD over the declared periods. A dated
+    `comparison` declares one element, a shared ownership/cash counterfactual basis and
+    `fixed_plan_flat_royalty_pre_tax`. Two dated `candidate` rows name investment manifest paths and
+    alternative IDs. The `price` rows cover every period and scenario once in exact USD per payable kg.
+    Matching element, dates, periods, discount factors, cash conventions and scenario meanings and weights
+    are checked; the operator attests the shared ownership and group counterfactual. Projects on one
+    circuit require identical do-nothing cash by period and state. The replay replaces only the price in
+    each source's existing commercial terms, then reruns the original margin and discounted investment
+    engines over the same production. Recomputed royalties use the original flat rates. The investment's
+    monetary rounding and each state's weight determine the exact reported means and co-winners.
+    This comparison covers fixed operating plans and supports up to 13 deck rows within the executive
+    worksheet limit. Separate risk screens, contingent actions and price-dependent mine plans or fiscal
+    terms require a separate valuation. JSON binds paired price rows and both source calculations to a
+    comparison digest, including complete original worksheet bytes and the original/repriced cash flows.
   - DESIGN (bd-ftw5). `hedge_liquidity` admits one entity's unrestricted USD cash, one committed
     facility and a fixed net cargo receipt. Declare every calendar day after the opening date through the
     horizon, including zero-flow days (up to 14). The undrawn line is available from the opening of its

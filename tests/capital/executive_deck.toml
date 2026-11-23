@@ -1,0 +1,59 @@
+# SYNTHETIC. Two competing operating investments for one gold circuit.
+schema = "fmine.executive-decision.v1"
+decision = "common_price_deck"
+question = "Which gold circuit investment leads when both use the committee price deck?"
+owner = "Group investment committee"
+as_of = "2030-04-15"
+scope = "Invented North Basin gold circuit · two declared operating periods"
+evidence = "synthetic"
+uncertainty = "The submitted recovery, charges, capital and discount factors are assumptions. Value covers the two declared periods"
+revisit_if = "Throughput, sales terms, fiscal terms, ownership or funding change"
+
+[[comparison]]
+element = "Au"
+ownership_basis = "Both options on 100% circuit basis with incremental cash measured against the same operating baseline"
+repricing_basis = "fixed_plan_flat_royalty_pre_tax"
+source = "Synthetic committee comparison instruction C-4"
+known_on = "2030-04-12"
+
+[[candidate]]
+label = "Base mill upgrade"
+investment = "tests/decisions/sponsor_power_investment.toml"
+alternative = "process"
+source = "Synthetic original submission A section 2"
+known_on = "2030-04-09"
+
+[[candidate]]
+label = "Higher-power upgrade"
+investment = "tests/decisions/sponsor_power_investment.toml"
+alternative = "higher-power"
+source = "Synthetic original submission B section 2"
+known_on = "2030-04-09"
+
+[[price]]
+period = "first"
+state = "soft"
+usd_per_kg = "50000"
+source = "Synthetic committee price deck C-4 row 1"
+known_on = "2030-04-12"
+
+[[price]]
+period = "first"
+state = "hard"
+usd_per_kg = "70000"
+source = "Synthetic committee price deck C-4 row 2"
+known_on = "2030-04-12"
+
+[[price]]
+period = "second"
+state = "soft"
+usd_per_kg = "50000"
+source = "Synthetic committee price deck C-4 row 3"
+known_on = "2030-04-12"
+
+[[price]]
+period = "second"
+state = "hard"
+usd_per_kg = "70000"
+source = "Synthetic committee price deck C-4 row 4"
+known_on = "2030-04-12"

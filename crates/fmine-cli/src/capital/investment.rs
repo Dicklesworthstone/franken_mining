@@ -82,7 +82,7 @@ pub(super) fn get<'a>(f: &Fields<'a>, name: &str) -> Result<&'a str> {
         .ok_or_else(|| invalid(format!("missing {name}")))
 }
 
-fn number(value: &str) -> Result<Rat> {
+pub(super) fn number(value: &str) -> Result<Rat> {
     if let Some((n, d)) = value.split_once('/') {
         let n = n
             .parse::<i128>()
@@ -566,7 +566,7 @@ impl Metadata {
     }
 }
 
-fn compatible(reference: &InvestmentSpec, current: &InvestmentSpec) -> bool {
+pub(super) fn compatible(reference: &InvestmentSpec, current: &InvestmentSpec) -> bool {
     let mut a = reference.periods.clone();
     let mut b = current.periods.clone();
     a.sort_by(|x, y| x.id.cmp(&y.id));

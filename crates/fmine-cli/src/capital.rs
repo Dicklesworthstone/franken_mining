@@ -16,7 +16,8 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "\"schema\":\"fmine.capital-program.v1\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
     "\"executive_brief\":\"decide program <executive worksheet> --brief prints the meeting paper. Use --format markdown for the full tables and source locators.\",",
-    "\"executive_examples\":[\"tests/capital/executive_purchase.toml\",\"tests/capital/executive_purchase_potash.toml\",\"tests/capital/executive_tenure.toml\",\"tests/capital/executive_group.toml\",\"tests/capital/executive_rehabilitation.toml\",\"tests/capital/executive_estimates.toml\",\"tests/capital/executive_hedge.toml\",\"tests/capital/executive_care.toml\"],",
+    "\"executive_examples\":[\"tests/capital/executive_purchase.toml\",\"tests/capital/executive_purchase_potash.toml\",\"tests/capital/executive_tenure.toml\",\"tests/capital/executive_group.toml\",\"tests/capital/executive_rehabilitation.toml\",\"tests/capital/executive_estimates.toml\",\"tests/capital/executive_hedge.toml\",\"tests/capital/executive_care.toml\",\"tests/capital/executive_deck.toml\"],",
+    "\"common_price_deck\":{\"decision\":\"common_price_deck\",\"comparison\":[\"element\",\"ownership_basis\",\"repricing_basis (fixed_plan_flat_royalty_pre_tax)\"],\"candidate (exactly two)\":[\"label\",\"investment (production investment manifest path)\",\"alternative\"],\"price (exactly one per period and shared state)\":[\"period\",\"state\",\"usd_per_kg (nonnegative exact decimal or n/d)\"],\"every_table\":[\"source\",\"known_on\"]},",
     "\"investment_schema\":\"fmine.capital-investments.v1\",",
     "\"investment_fields\":[\"schema\",\"model_key\",\"question\",\"currency (USD)\",\"budget\",\"tail_mass\",\"max_tail_loss (optional)\",\"payoff_convention (additive_discounted_incremental_cash)\",\"shared_scenario_basis\",\"additivity_basis\",\"reference_class_basis\"],",
     "\"investment_tables\":{\"candidate\":[\"id\",\"label\",\"investment (source investment manifest path)\",\"alternative (source alternative id)\",\"exclusion_group (optional)\"],\"requires\":[\"candidate\",\"prerequisite\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"],\"funding_schedule\":[\"cash_basis\",\"opening_date\",\"settlement_convention (source_period_increment_at_cash_period_close)\",\"cash_rounding (exact_0_0001_usd or nearest_ties_even_0_0001_usd)\"],\"cash_period\":[\"id (source investment period id)\",\"cash_period (inclusive UTC YYYY-MM-DD/YYYY-MM-DD)\",\"minimum_cash\"],\"opening_cash\":[\"state\",\"value\"],\"baseline_cash_flow\":[\"period\",\"state\",\"value\"],\"robustness\":[\"method (wasserstein_1)\",\"radius (nonnegative exact decimal or n/d)\",\"metric_basis\",\"radius_basis\",\"support (declared_shared_scenarios)\",\"distance_unit (dimensionless)\"],\"transport_distance\":[\"from\",\"to\",\"value (nonnegative exact decimal or n/d)\"]},",
@@ -60,7 +61,7 @@ pub(super) fn execute(model: &Path, root: &Path, brief: bool) -> Envelope {
                 return investment::execute(&text, &source, root);
             }
             if schema == executive::SCHEMA {
-                return executive::worksheet(&doc, &text, &source, brief);
+                return executive::worksheet(&doc, &text, &source, root, brief);
             }
         }
         if brief {

@@ -16,6 +16,7 @@ use crate::{Envelope, json_string as js, worksheet_input};
 use worksheet_input::markdown_cell as cell;
 
 mod care;
+mod deck;
 mod hedge;
 
 pub(super) const SCHEMA: &str = "fmine.executive-decision.v1";
@@ -107,6 +108,7 @@ struct Card {
     rows: Vec<Vec<String>>,
     /// Optional mode-specific JSON member, built alongside the human findings.
     detail: Option<(&'static str, String)>,
+    calculation_digest: Option<String>,
 }
 impl Card {
     fn new(columns: &[&'static str]) -> Self {
@@ -115,6 +117,7 @@ impl Card {
             columns: columns.to_vec(),
             rows: Vec::new(),
             detail: None,
+            calculation_digest: None,
         }
     }
 }
@@ -123,6 +126,7 @@ pub(super) fn worksheet(
     doc: &TomlDoc,
     text: &str,
     source: &SourceAnchor,
+    root: &std::path::Path,
     brief: bool,
 ) -> Result<Envelope> {
     if text.len() > 65536 || doc.rows.is_empty() || doc.rows.len() > 16 {
@@ -153,6 +157,7 @@ pub(super) fn worksheet(
     let mode = get(&f, "decision")?;
     let card = match mode {
         "purchase" => purchase(doc, as_of)?,
+        "common_price_deck" => deck::compare(doc, as_of, source, root)?,
         "operating_review" => care::compare(doc, as_of)?,
         "hedge_liquidity" => hedge::compare(doc, as_of)?,
         "rehabilitation" => rehabilitation(doc, as_of)?,
@@ -204,6 +209,9 @@ pub(super) fn worksheet(
         cell(&source.artifact_path),
         fmine_core::Digest32(source.artifact_sha256)
     );
+    if let Some(digest) = &card.calculation_digest {
+        let _ = writeln!(md, "\nInvestment comparison SHA-256: {digest}.");
+    }
     let mut sources = Vec::new();
     for r in &doc.rows {
         let text_field = |key| match r.get(key).map(|f| &f.value) {
@@ -1110,7 +1118,7 @@ mod tests {
             fmine_core::hash::sha256(text.as_bytes()).0,
             "worksheet",
         );
-        worksheet(&doc, text, &source, false)
+        worksheet(&doc, text, &source, std::path::Path::new("."), false)
     }
     fn report(s: &str) -> String {
         evaluate(s)

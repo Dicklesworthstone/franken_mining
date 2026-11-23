@@ -191,6 +191,79 @@ fn nickel_price_supports_continuing_but_leaves_a_mine_on_care_below_restart_pric
 }
 
 #[test]
+fn common_deck_reverses_gold_investment_ranking_and_retains_the_original_terms() {
+    let payload = card("deck");
+    let deck = payload.get("price_deck").expect("price deck");
+    let get = |o: &Json, key: &str| o.get(key).and_then(Json::as_str).expect("field").to_owned();
+    let winners = |key: &str| {
+        deck.get(key)
+            .and_then(Json::as_array)
+            .expect("winners")
+            .iter()
+            .map(|v| v.as_str().expect("label"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(winners("submitted_winners"), ["Higher-power upgrade"]);
+    assert_eq!(winners("common_winners"), ["Base mill upgrade"]);
+    assert_eq!(deck.get("project_order_reversed"), Some(&Json::Bool(true)));
+    assert_eq!(get(deck, "submitted_first_minus_second_usd"), "-23326/5");
+    assert_eq!(get(deck, "common_first_minus_second_usd"), "4538/5");
+    assert_eq!(
+        row(&payload, "Higher-power upgrade"),
+        [
+            "Higher-power upgrade",
+            "US$11,257.60",
+            "US$5,684.80",
+            "-US$5,572.80"
+        ]
+    );
+    let second = &deck
+        .get("candidates")
+        .and_then(Json::as_array)
+        .expect("candidates")[1];
+    let prices = second
+        .get("prices")
+        .and_then(Json::as_array)
+        .expect("prices");
+    let hard = prices
+        .iter()
+        .find(|p| get(p, "period") == "first" && get(p, "state") == "hard")
+        .expect("first-period hard ore");
+    assert_eq!(get(hard, "submitted_usd_per_kg"), "85000");
+    assert_eq!(get(hard, "common_usd_per_kg"), "70000");
+    let calculations = deck
+        .get("source_calculations")
+        .and_then(Json::as_array)
+        .expect("source calculations");
+    assert_eq!(calculations.len(), 1, "shared manifest is loaded once");
+    let submitted = calculations[0]
+        .get("submitted")
+        .expect("original calculation");
+    assert!(
+        get(
+            submitted.get("manifest").expect("original manifest"),
+            "submitted_worksheet"
+        )
+        .contains("sponsor_power_terms.toml")
+    );
+    assert_ne!(
+        get(
+            submitted.get("investment").expect("original investment"),
+            "digest"
+        ),
+        get(
+            calculations[0]
+                .get("common_deck")
+                .expect("replayed investment"),
+            "digest"
+        )
+    );
+    let full = String::from_utf8(run("deck", true).stdout).expect("full Markdown");
+    assert!(full.contains(&get(deck, "digest")) && full.contains("C-4 row 4"));
+    assert_eq!(run("deck", false).stdout, run("deck", false).stdout);
+}
+
+#[test]
 fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_digest() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let brief = |model: &str, flags: &[&str]| {
@@ -209,6 +282,7 @@ fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_dige
     for name in [
         "hedge",
         "care",
+        "deck",
         "purchase",
         "purchase_potash",
         "rehabilitation",
