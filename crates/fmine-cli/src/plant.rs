@@ -6,6 +6,7 @@ mod grinding;
 mod network;
 pub(crate) mod production;
 mod project;
+mod raw_balance;
 mod recovery;
 mod rtd;
 mod trajectory;
@@ -25,6 +26,8 @@ use crate::{Envelope, NextAction, json_string as quoted, worksheet_input};
 
 pub const BALANCE_USAGE: &str = "plant balance --input <worksheet.toml>";
 pub const RECONCILE_USAGE: &str = "plant reconcile --input <worksheet.toml>";
+pub const RAW_BALANCE_USAGE: &str = "plant reconcile-raw --input <worksheet.toml>";
+pub const RAW_BALANCE_DOCS_JSON: &str = fmine_plant::raw_measurements::balance::ROBOT_DOCS_JSON;
 pub const PROJECT_USAGE: &str = "plant project --input <worksheet.toml>";
 pub const PROJECT_DOCS_JSON: &str = project::ROBOT_DOCS_JSON;
 pub const TRANSFER_USAGE: &str = "plant transfer --input <worksheet.toml>";
@@ -51,6 +54,9 @@ pub const ROBOT_DOCS_JSON: &str = worksheet::ROBOT_DOCS_JSON;
 pub enum Command {
     Inventory {
         mode: Mode,
+        input: PathBuf,
+    },
+    RawBalance {
         input: PathBuf,
     },
     Project {
@@ -119,7 +125,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         || args[3].starts_with("--")
     {
         return Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {RTD_INVERSE_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {RAW_BALANCE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {RTD_INVERSE_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
         ));
     }
     let input = PathBuf::from(&args[3]);
@@ -132,6 +138,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             mode: Mode::Reconcile,
             input,
         }),
+        "reconcile-raw" => Ok(Command::RawBalance { input }),
         "project" => Ok(Command::Project { input }),
         "transfer" => Ok(Command::Transfer { input }),
         "flowsheet" => Ok(Command::Network { input }),
@@ -142,7 +149,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "grinding" => Ok(Command::Grinding { input }),
         "trajectory" => Ok(Command::Trajectory { input }),
         _ => Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {RTD_INVERSE_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {RAW_BALANCE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {RTD_INVERSE_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
         )),
     }
 }
@@ -205,6 +212,7 @@ fn actions() -> Vec<NextAction> {
 pub fn execute(command: &Command, root: &Path) -> Envelope {
     let (mode, input) = match command {
         Command::Inventory { mode, input } => (*mode, input),
+        Command::RawBalance { input } => return raw_balance::execute(input, root),
         Command::Project { input } => return project::execute(input, root),
         Command::Transfer { input } => return transfer::execute(input, root),
         Command::Network { input } => return network::execute(input, root),

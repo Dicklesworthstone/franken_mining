@@ -19,7 +19,7 @@ jobs:
       - name: Build CLI for command integration tests
         run: cargo build -p fmine-cli --locked
       - name: Calibration, plant, valuation and capital known answers
-        run: cargo test -p fmine-calib -p fmine-plant -p fmine-metrics -p fmine-capital --lib --locked
+        run: cargo test -p fmine-numerics -p fmine-calib -p fmine-plant -p fmine-metrics -p fmine-capital --lib --locked
       - name: Source-derived investment portfolios
         run: cargo test -p xtask --test capital_investments --locked
       - name: Saved forecast diagnostics and disclosure derivations

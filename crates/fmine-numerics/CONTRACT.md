@@ -460,3 +460,24 @@ rather than against floating-point roundoff itself. This dimensionally consisten
 scale does not change any covariance entry or the retained-posterior conservation audit. A two-unit
 recycle regression independently eliminates the unmeasured product and checks its estimate 100.6,
 variance 3.2, feed/product covariance 0.4 and gross-error statistic 0.2 with one degree of freedom.
+
+## Nonlinear measurements and linear conserved quantities
+
+DESIGN (BD-151/155/177): `reconciliation::nonlinear::reconcile_nonlinear` accepts finite
+initial coordinates, a complete SPD raw-error correlation, linear constraints/targets and
+per-row closure tolerances, plus analytic standardized-residual/Jacobian and physical-domain
+callbacks. It uses full-covariance Gauss–Newton information, the existing linear equality
+reconciler and an l1 merit backtracking search. No clipping, rank dropping or regularized
+fallback changes the declared problem.
+
+The maximum budget is 128 iterations with 48 halvings per step. Admission requires closure,
+coordinate-wise information-scaled Lagrangian stationarity and step error at 1e-9. Final
+residuals, multipliers, objective and tangent covariance are recomputed at the returned point.
+The retained covariance is the local Gauss–Newton approximation conditional on exact linear
+constraints; it is not a global optimum certificate, nonlinear posterior or calibrated interval.
+A boundary optimum needing inequality multipliers, singular information or exhausted search refuses.
+
+Independent tests use h(x,y)=(x²,y²), observations (1,9) and x=y>0: the optimum is sqrt(5),
+objective 32 and every tangent covariance entry 1/40. Raw correlation 1/2 changes the objective
+to 64. Constraint scaling, twelve orders of coordinate scaling and explicit refusal cases
+exercise convergence without using the implementation as its own expected-value oracle.

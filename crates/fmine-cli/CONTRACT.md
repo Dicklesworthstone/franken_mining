@@ -2139,3 +2139,12 @@ Shared persistence pools retain every quarter slot and block on ownership drift.
 outcomes and guidance must match the usable frozen point's ownership; guidance additionally
 requires the target's explicit `;capex=issuer-reported-...` suffix and exact quarter.
 No cumulative subtraction, component substitution or ownership conversion is supplied.
+
+## Raw-measurement plant reconciliation command
+
+DESIGN (BD-151/155/177): `plant reconcile-raw --input <worksheet.toml>` performs bounded
+source reading and delegates physical admission, numerical fitting and result rendering to
+`fmine_plant::raw_measurements::balance`. JSON and Markdown expose the same source-bound
+result. Refused fitted candidates retain diagnostics without an admitted Claim. The verb is
+nonmutating, registered under Crucible and available in robot-docs with all required units,
+basis declarations, raw correlations and solver limits. Existing plant commands are unchanged.

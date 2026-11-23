@@ -77,6 +77,7 @@ bytes, physical support, original observations and model assumptions in its outp
 ```bash
 cargo run -p fmine-cli -- plant balance --input tests/plant/closed_inventory.toml
 cargo run -p fmine-cli -- plant reconcile --input tests/plant/measured_inventory.toml
+cargo run -p fmine-cli -- plant reconcile-raw --input tests/plant/raw_balance.toml
 cargo run -p fmine-cli -- plant trajectory --input tests/plant/trajectory_survey.toml --format markdown
 cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.toml
 cargo run -p fmine-cli -- plant transfer --input tests/plant/raw_transfer.toml
@@ -93,6 +94,29 @@ Rejected candidates return a nonzero exit status and no admitted balance Claim w
 observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. This calculation
 does not audit a site's measurements, infer recovery or certify P754 compliance. `fmine robot-docs` documents
 the strict worksheet fields, explicit kg basis, stocktake timing and all required covariance pairs.
+
+
+DESIGN (BD-151/155/177): `plant reconcile-raw` fits the original wet-weight, moisture and
+dry-assay likelihood while conserving dry matter, H2O and elemental kilograms. Each stream's
+adjusted coordinates are extensive amounts `D,W,E`; predicted measurements are
+`D+W`, `W/(D+W)` and `E/D`. This avoids treating an observed grade as a conserved quantity
+or replacing the original measurement model with a linear projection.
+
+The worksheet declares one complete conservative mechanical boundary, one non-H/O element,
+2–16 whole-interval streams, exact fixed endpoint stocks, positive raw uncertainties, and every
+pair in the raw-error correlation matrix, including zeros. A bounded Gauss–Newton calculation
+uses analytic derivatives, equality-constrained steps and a physical-domain merit line search.
+Its output retains original bytes and source Claims, exact nominal imbalances, fitted extensive
+quantities, derived grades, the full local covariance, convergence diagnostics and a receipt.
+Exceeding the declared misfit limit retains diagnostics but supplies no admitted Claim.
+
+The synthetic example fits feed `(D,W,Cu)=(80,20,8)` kg and product `(40,10,2)` kg
+against fixed inventory growth `(40,10,6)` kg, with squared standardized raw misfit
+`0.818625`. These are independently constructed arithmetic checks. The fit remains a
+conditional local stationary solution with first-order tangent covariance; it supplies neither
+a global-optimum guarantee nor an exact chi-square interpretation or empirical calibration.
+Missing observations, rank failures and boundary optima requiring inequality multipliers
+refuse. Existing `plant reconcile` and `plant transfer` retain their separate meanings.
 
 `plant production` joins the complete grinding and recovery populations by their shared scenario IDs
 and exact probabilities. A third worksheet declares the common physical support, linked recovery grade

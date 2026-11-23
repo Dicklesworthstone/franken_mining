@@ -1050,3 +1050,29 @@ source/scope changes and confidentiality. The actual command regression compares
 the coarser mode wins with unconstrained feed, while the finer mode wins with common 50 t availability.
 It verifies the monetary means through the existing valuation and decision owners. These calculations
 remain declared and uncalibrated; they do not establish a real mine's ore availability or plant validity.
+
+## Original raw-measurement likelihood with extensive conservation
+
+DESIGN (BD-151/155/177; plan section 20.2): `raw_measurements::balance::evaluate` admits
+a byte-bound `fmine.plant-raw-balance.v1` worksheet for one complete conservative mechanical
+boundary, one non-H/O element and 2–16 whole-interval streams. Explicit exact endpoint stocks
+are fixed conditional inputs. Every stream declares wet kg, water/wet mass and total element/dry
+matter, positive raw uncertainties and complete cross-stream/channel correlation, including zeros.
+
+Latent coordinates are extensive D/W/E; raw predictions are D+W, W/(D+W), E/D. The K0 nonlinear
+owner minimizes the original full-correlated standardized residual objective under linear
+extensive conservation, with analytic derivatives and a physical-domain merit line search.
+Input conversion has an explicit numerical budget; a separate final kg audit verifies closure.
+Grades are derived after fitting and never reconciled as conservation variables.
+
+Results preserve the complete source text and Claim, scope/interval/dry basis, fixed stocks,
+exact nominal imbalance, fitted quantities, standardized residuals/objective, full local kg²
+covariance and convergence diagnostics. A declared misfit failure retains diagnostics and a
+refusal but no admitted result Claim. Solver failure retains the source and refusal without
+inventing a fitted result. Output Claims remain Assumed, Internal and uncalibrated.
+
+The result is conditional and locally stationary. Gauss–Newton tangent covariance is a first-order
+approximation, not a nonlinear posterior or confidence region; the objective has no supplied exact
+chi-square law. No global optimum, active-inequality solver, missing-sensor inference, bias attribution
+or real-plant validation is claimed. The synthetic fixture has independent fit D/W/E=(80,20,8) and
+(40,10,2), fixed stock growth (40,10,6), raw misfit 0.818625 and a separately derived tangent covariance.

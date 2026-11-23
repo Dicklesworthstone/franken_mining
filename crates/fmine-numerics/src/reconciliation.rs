@@ -31,6 +31,8 @@ const RELATIVE_AUDIT: f64 = 2.0e-10;
 
 /// Observable unmeasured variables without fictitious observations or priors.
 pub mod partial;
+/// Bounded nonlinear raw likelihood with linear extensive conservation.
+pub mod nonlinear;
 
 /// A complete numerical calculation; admission into a plant account belongs to its caller.
 #[derive(Debug, Clone, PartialEq)]

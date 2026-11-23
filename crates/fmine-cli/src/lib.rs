@@ -2536,6 +2536,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 schedule::omf::DESIGN_USAGE,
                 plant::BALANCE_USAGE,
                 plant::RECONCILE_USAGE,
+                plant::RAW_BALANCE_USAGE,
                 plant::PROJECT_USAGE,
                 plant::TRANSFER_USAGE,
                 plant::NETWORK_USAGE,
@@ -2688,6 +2689,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(fmine_io::omf::design_report::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_inventory\":");
             payload.push_str(plant::ROBOT_DOCS_JSON);
+            payload.push_str(",\"plant_raw_balance\":");
+            payload.push_str(plant::RAW_BALANCE_DOCS_JSON);
             payload.push_str(",\"plant_material\":");
             payload.push_str(plant::PROJECT_DOCS_JSON);
             payload.push_str(",\"plant_transfer\":");
