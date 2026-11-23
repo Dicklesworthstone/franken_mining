@@ -1931,6 +1931,13 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`, `fmine-optimize` (`pitflow`, for `plan pit`).
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-342): `guidance completion --metric tcc` explicitly selects gold total cash cost.
+  Registered guidance requires its own sold-ounce definition, and YTD/history require original
+  TCC observations. The command retains exact signed numerator/rate requirements, source Claims,
+  checked joint historical witnesses and a separate v3 JSON report with `cost_metric: "tcc"`.
+  JSON and Markdown label the selected cost metric throughout. Optional technical comparisons
+  concern production only. The command refuses missing or incompatible required evidence rather
+  than substituting AISC; authentic issuer TCC acceptance and calibration remain open.
 - DESIGN (BD-341.S4): `track-record clusters --issuer <issuer> --as-of YYYY-MM-DD --axis year|site`
   optionally selects one site and delegates to the registered evidence-cut loader plus the separate
   cluster projection. `--synthetic --axis year|site` uses explicitly invented evidence. The axis is

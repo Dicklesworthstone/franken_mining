@@ -122,7 +122,11 @@ fn validate<'a>(
             (&q.sold, "historical quarter sold", family.sold_kind()),
             (
                 &q.aisc,
-                metric.select("historical quarter AISC", "historical quarter C1"),
+                metric.select(
+                    "historical quarter AISC",
+                    "historical quarter C1",
+                    "historical quarter TCC",
+                ),
                 rate_kind,
             ),
         ] {
@@ -142,7 +146,7 @@ fn validate<'a>(
                 format!(
                     "{}: quarters must be consecutive, with production, sales and {} on the same support",
                     h.id,
-                    metric.select("AISC", "C1")
+                    metric.select("AISC", "C1", "TCC")
                 ),
             );
         }
@@ -158,6 +162,7 @@ fn validate<'a>(
                 metric.select(
                     "historical quarter and guidance AISC definitions differ",
                     "historical quarter and guidance C1 definitions differ",
+                    "historical quarter and guidance TCC definitions differ",
                 ),
             );
         }
@@ -744,6 +749,7 @@ mod tests {
                 QuantityKind::AiscUsdPerSoldOz
                     | QuantityKind::AiscUsdPerSoldLb
                     | QuantityKind::C1UsdPerSoldLb
+                    | QuantityKind::TccUsdPerSoldOz
             ) {
                 "invented/sold".into()
             } else {
@@ -844,6 +850,55 @@ mod tests {
         h.quarters[0].aisc = claim(QuantityKind::C1UsdPerSoldLb, p(2025, 7, 9), 2, 2);
         h.quarters[1].aisc = claim(QuantityKind::C1UsdPerSoldLb, p(2025, 10, 12), 3, 3);
         (i, h)
+    }
+
+    #[test]
+    fn gold_tcc_quarters_preserve_sales_coupling_metric_and_checked_witnesses() {
+        let mut i = inputs();
+        i.aisc_guidance = claim(QuantityKind::TccUsdPerSoldOz, p(2026, 1, 12), -100, -100);
+        i.ytd_aisc = claim(QuantityKind::TccUsdPerSoldOz, p(2026, 1, 6), -100, -100);
+        let mut h = history();
+        h.quarters[0].aisc = claim(QuantityKind::TccUsdPerSoldOz, p(2024, 7, 9), -80, -80);
+        h.quarters[1].aisc = claim(QuantityKind::TccUsdPerSoldOz, p(2024, 10, 12), -120, -120);
+        let report = compare_quarters(&i, std::slice::from_ref(&h)).unwrap();
+        assert_eq!(report.verdict, HistoryVerdict::WithinEnvelope);
+        let check = &report.checks[0];
+        // 50 koz * -80 USD/oz + 50 koz * -120 USD/oz = -10 USD million.
+        assert_eq!(check.totals.value.cost_metric, CostMetric::Tcc);
+        assert_eq!(check.totals.value.aisc_spend_usd_m, point(n(-10)));
+        assert_eq!(check.totals.value.aisc, point(n(-100)));
+        let witness = &check.witness.as_ref().unwrap().value;
+        assert_eq!(witness.completion.cost_metric, CostMetric::Tcc);
+        assert_eq!(witness.completion.annual_aisc, n(-100));
+        assert_eq!(witness.completion.annual_production, n(200));
+        assert!(
+            witness
+                .quarters
+                .iter()
+                .all(|q| q.cost_metric == CostMetric::Tcc)
+        );
+        assert!(check_quarter_witness(&i, &h, witness).unwrap());
+        let mut forged = witness.clone();
+        forged.completion.cost_metric = CostMetric::Aisc;
+        assert!(!check_quarter_witness(&i, &h, &forged).unwrap());
+        assert_ne!(
+            witness.completion.canonical_tag(&h.id),
+            forged.completion.canonical_tag(&h.id)
+        );
+        let mut forged = witness.clone();
+        forged.quarters[0].cost_metric = CostMetric::Aisc;
+        assert!(!check_quarter_witness(&i, &h, &forged).unwrap());
+        assert_eq!(
+            compare_quarters(&i, &[history()]).unwrap_err().code,
+            "FMINE-REF-105"
+        );
+
+        i.aisc_guidance.value.interval = point(n(-200));
+        let excluded = compare_quarters(&i, &[h]).unwrap();
+        assert_eq!(excluded.verdict, HistoryVerdict::ExceedsEnvelope);
+        assert_eq!(excluded.checks[0].cost_possible, Some(false));
+        assert!(excluded.checks[0].witness.is_none());
+        assert_eq!(excluded.checks[0].certificates.len(), 1);
     }
 
     #[test]

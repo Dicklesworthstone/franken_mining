@@ -1194,6 +1194,14 @@ The public lane of M0 (`fmine assure public`).
 
 ## 10. Non-Goals & Scope Boundary
 
+- DESIGN (BD-342): explicit `CostMetric::Tcc` selects gold guidance assertions named
+  `guidance_<site>_tcc_usd_per_oz` with `;tcc=issuer-reported-per-sold-oz`, and the matching
+  `summary:tcc_usd_per_oz` YTD and original-quarter observations. Missing or incompatible TCC
+  evidence cannot fall back to AISC. Exact signed requirements and historical witnesses retain
+  source hashes, ownership, sold-ounce units and separate TCC Claim identities. TCC reports use
+  `fmine.guidance.completion.v3` and TCC-labelled fields; AISC/C1 report versions are unchanged.
+  Registered-source controls use invented evidence. Authentic issuer transcription and the full
+  BD-342 acceptance population remain separate work.
 - DESIGN (BD-342): `guidance::run_public_with_metric` explicitly selects `CostMetric::Aisc` or copper
   `CostMetric::C1`. C1 requires agreed `guidance_<site>_c1_usd_per_lb` assertions with
   `;c1=issuer-reported-per-sold-lb`, the same document's copper-production target, and original-vintage

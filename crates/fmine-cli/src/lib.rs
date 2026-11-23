@@ -1295,7 +1295,8 @@ pub fn parse_args(
                 let metric = match args.get(i).map(String::as_str) {
                     Some("aisc") => fmine_metrics::guidance::CostMetric::Aisc,
                     Some("c1") => fmine_metrics::guidance::CostMetric::C1,
-                    _ => return Err("guidance completion --metric requires aisc or c1".into()),
+                    Some("tcc") => fmine_metrics::guidance::CostMetric::Tcc,
+                    _ => return Err("guidance completion --metric requires aisc, c1 or tcc".into()),
                 };
                 if guidance_metric.replace(metric).is_some() {
                     return Err("--metric may be supplied only once".into());
@@ -2573,7 +2574,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "reliance refresh --journal <path> --expected-head <hex> --key <path> --now <UTC> --uncertainty-ns <n>",
                 "reliance export <file> --output <path> --journal <path> --head <hex> --now <UTC> --uncertainty-ns <n>",
                 "recall --journal <path> (--revision <build-revision> | --claim <id>) [--head <hex>]",
-                "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--metric aisc|c1] [--capacity-document <registered file>]",
+                "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--metric aisc|c1|tcc] [--capacity-document <registered file>]",
                 "guidance completion --synthetic",
                 "mirror --asset <asset> --period <period> --as-of YYYY-MM-DD --left-issuer <issuer> --left-document <file> --right-issuer <issuer> --right-document <file> --metric cash-costs|aisc|cost-of-sales",
                 "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]",

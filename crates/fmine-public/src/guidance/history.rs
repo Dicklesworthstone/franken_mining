@@ -46,7 +46,7 @@ fn window(
     let subject = &inputs.production_guidance.value.subject;
     let family = GuidanceFamily::from_production_kind(inputs.production_guidance.value.kind)?;
     let metric = inputs.cost_metric()?;
-    let [prod, rate] = source_lines(family, inputs.production_guidance.value.ownership, metric);
+    let [prod, rate] = source_lines(family, inputs.production_guidance.value.ownership, metric)?;
     let sold = sales_lines(family);
     let mut source_claims = Vec::new();
     let mut history = Vec::new();

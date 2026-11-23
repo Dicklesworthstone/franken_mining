@@ -1,10 +1,11 @@
 //! Public guidance completion (BD-342): source selection for the exact metric kernel.
 //!
 //! DESIGN: accepted two-reader quantities pair `guidance_<site>_production_koz` with
-//! `guidance_<site>_aisc_usd_per_oz` for gold, or `production_kt` with the explicitly selected
-//! `aisc_usd_per_lb` or `c1_usd_per_lb` for copper. C1 never substitutes for AISC or vice versa.
+//! `guidance_<site>_aisc_usd_per_oz` or `tcc_usd_per_oz` for gold, or `production_kt` with the explicitly selected
+//! `aisc_usd_per_lb` or `c1_usd_per_lb` for copper. Each selected cost metric requires its own assertion and actuals.
 //! Hyphens in the site key become underscores; period is `YYYYFY`. Basis is `100%` or `attributable:n/d`;
-//! AISC additionally declares `;aisc=issuer-reported-per-sold-oz` or `-lb`. Copper sales use an explicit
+//! AISC additionally declares `;aisc=issuer-reported-per-sold-oz` or `-lb`; gold TCC declares
+//! `;tcc=issuer-reported-per-sold-oz`. Copper sales use an explicit
 //! million-pound row or a source-bound exact conversion of a declared kt sales row; production is never
 //! substituted for sales. The assertion compares
 //! the issuer's reported metric, never
@@ -219,27 +220,33 @@ fn site_key(subject: &str) -> String {
 }
 
 fn cost_key(metric: CostMetric) -> &'static str {
-    match metric {
-        CostMetric::Aisc => "aisc",
-        CostMetric::C1 => "c1",
-    }
+    metric.as_str()
 }
 
 fn families(metric: CostMetric) -> &'static [GuidanceFamily] {
     match metric {
         CostMetric::Aisc => &[GuidanceFamily::Gold, GuidanceFamily::Copper],
         CostMetric::C1 => &[GuidanceFamily::Copper],
+        CostMetric::Tcc => &[GuidanceFamily::Gold],
     }
 }
 
 fn family_quantities(site: &str, family: GuidanceFamily, metric: CostMetric) -> [String; 2] {
     let stem = format!("guidance_{}", site.replace('-', "_"));
-    let suffixes = match (family, metric) {
-        (GuidanceFamily::Gold, _) => ["production_koz", "aisc_usd_per_oz"],
-        (GuidanceFamily::Copper, CostMetric::Aisc) => ["production_kt", "aisc_usd_per_lb"],
-        (GuidanceFamily::Copper, CostMetric::C1) => ["production_kt", "c1_usd_per_lb"],
+    // The caller enumerates only `families(metric)`; admission also checks `metric.rate_kind(family)`.
+    let production = match family {
+        GuidanceFamily::Gold => "production_koz",
+        GuidanceFamily::Copper => "production_kt",
     };
-    suffixes.map(|suffix| format!("{stem}_{suffix}"))
+    let rate = match metric {
+        CostMetric::Aisc => match family {
+            GuidanceFamily::Gold => "aisc_usd_per_oz",
+            GuidanceFamily::Copper => "aisc_usd_per_lb",
+        },
+        CostMetric::C1 => "c1_usd_per_lb",
+        CostMetric::Tcc => "tcc_usd_per_oz",
+    };
+    [production, rate].map(|suffix| format!("{stem}_{suffix}"))
 }
 
 fn guidance_quantities(site: &str, metric: CostMetric) -> Vec<String> {
@@ -251,7 +258,7 @@ fn guidance_quantities(site: &str, metric: CostMetric) -> Vec<String> {
 
 fn rate_definition(kind: QuantityKind) -> Option<&'static str> {
     match kind {
-        QuantityKind::AiscUsdPerSoldOz => Some(COST_BASIS),
+        QuantityKind::AiscUsdPerSoldOz | QuantityKind::TccUsdPerSoldOz => Some(COST_BASIS),
         QuantityKind::AiscUsdPerSoldLb | QuantityKind::C1UsdPerSoldLb => {
             Some("issuer-reported-per-sold-lb")
         }
@@ -264,9 +271,11 @@ fn quantity_unit(kind: QuantityKind) -> &'static str {
         QuantityKind::ProductionKoz | QuantityKind::SoldKoz => "koz",
         QuantityKind::ProductionKt => "kt",
         QuantityKind::SoldMillionLb => "Mlb",
-        QuantityKind::AiscUsdPerSoldOz => "usd_per_oz",
+        QuantityKind::AiscUsdPerSoldOz | QuantityKind::TccUsdPerSoldOz => "usd_per_oz",
         QuantityKind::AiscUsdPerSoldLb | QuantityKind::C1UsdPerSoldLb => "usd_per_lb",
-        QuantityKind::AiscSpendUsdMillion | QuantityKind::C1SpendUsdMillion => "usd_m",
+        QuantityKind::AiscSpendUsdMillion
+        | QuantityKind::C1SpendUsdMillion
+        | QuantityKind::TccSpendUsdMillion => "usd_m",
     }
 }
 
@@ -274,15 +283,20 @@ fn source_lines(
     family: GuidanceFamily,
     ownership: Ownership,
     metric: CostMetric,
-) -> [&'static str; 2] {
-    match family {
+) -> Result<[&'static str; 2]> {
+    metric.rate_kind(family)?;
+    let lines = match family {
         GuidanceFamily::Gold => [
             if ownership == Ownership::Full {
                 "summary:au_prod_100_koz"
             } else {
                 "summary:au_prod_attr_koz"
             },
-            "summary:aisc_usd_per_oz",
+            if metric == CostMetric::Tcc {
+                "summary:tcc_usd_per_oz"
+            } else {
+                "summary:aisc_usd_per_oz"
+            },
         ],
         GuidanceFamily::Copper => [
             if ownership == Ownership::Full {
@@ -290,12 +304,14 @@ fn source_lines(
             } else {
                 "summary:cu_prod_attr_kt"
             },
-            match metric {
-                CostMetric::Aisc => "summary:aisc_usd_per_lb",
-                CostMetric::C1 => "summary:c1_usd_per_lb",
+            if metric == CostMetric::C1 {
+                "summary:c1_usd_per_lb"
+            } else {
+                "summary:aisc_usd_per_lb"
             },
         ],
-    }
+    };
+    Ok(lines)
 }
 
 fn sales_lines(family: GuidanceFamily) -> &'static [&'static str] {
@@ -786,7 +802,7 @@ fn assemble(
         synthetic,
     )?;
     let aisc_guidance = guidance_claim(guidance[1], subject, year, rate_kind, synthetic)?;
-    let [prod_line, rate_line] = source_lines(family, production_guidance.value.ownership, metric);
+    let [prod_line, rate_line] = source_lines(family, production_guidance.value.ownership, metric)?;
     let sold_lines = sales_lines(family);
     let ytd = period_code(year, months);
     let production = select_cell(cells, subject, through, &ytd, prod_line)?;
@@ -902,6 +918,7 @@ fn assemble(
     let (version, metric_field) = match metric {
         CostMetric::Aisc => (1, ""),
         CostMetric::C1 => (2, ",\"cost_metric\":\"c1\""),
+        CostMetric::Tcc => (3, ",\"cost_metric\":\"tcc\""),
     };
     let cost_label = cost.to_ascii_uppercase();
     let body = format!(
@@ -1027,6 +1044,8 @@ fn quantity_json(c: &Claim<Quantity>) -> String {
             QuantityKind::AiscUsdPerSoldLb => "aisc_usd_per_sold_lb",
             QuantityKind::C1UsdPerSoldLb => "c1_usd_per_sold_lb",
             QuantityKind::C1SpendUsdMillion => "c1_spend_usd_m",
+            QuantityKind::TccUsdPerSoldOz => "tcc_usd_per_sold_oz",
+            QuantityKind::TccSpendUsdMillion => "tcc_spend_usd_m",
         }),
         js(&q.definition),
         rat(q.interval.lo),
@@ -1045,8 +1064,8 @@ pub fn run_public(
     run_public_with_metric(root, issuer, site, through, as_of, CostMetric::Aisc)
 }
 
-/// DESIGN (BD-342): selects the issuer's C1 or AISC definition before reading guidance or history.
-/// C1 requires copper production and explicit C1 rate assertions; AISC never fills a missing C1 row.
+/// DESIGN (BD-342): selects the issuer's TCC, C1 or AISC definition before reading guidance or history.
+/// TCC requires gold and C1 requires copper; AISC never fills a missing assertion or actual of either.
 pub fn run_public_with_metric(
     root: &Path,
     issuer: &str,

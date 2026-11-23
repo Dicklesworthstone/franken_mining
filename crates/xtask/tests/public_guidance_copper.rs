@@ -548,11 +548,13 @@ fn signed_and_zero_copper_costs_reach_the_cli_with_exact_bounds_and_historical_w
         for source in ["Guidance.pdf", "2030Q2.xlsx:YTD!D5", "2029Q3.xlsx:QTD!D5"] {
             assert!(envelope.payload_json.contains(source));
         }
-        assert!(
-            envelope
-                .payload_json
-                .contains(&format!("\"num\":\"{}\"", spend.lo.num()))
-        );
+        assert!(envelope.payload_json.contains(&format!(
+            "\"interval\":{{\"lo\":\"{}/{}\",\"hi\":\"{}/{}\",\"closed\":true}}",
+            spend.lo.num(),
+            spend.lo.den(),
+            spend.hi.num(),
+            spend.hi.den()
+        )));
         let mut markdown = arguments();
         markdown.extend(["--format".into(), "markdown".into()]);
         let (text, code) = fmine_cli::run(&markdown, &root);

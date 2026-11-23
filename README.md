@@ -4302,6 +4302,7 @@ quantity suffixes after `guidance_<site_key_with_underscores>_` are:
 | Metal / selected metric | Production suffix and unit | Cost suffix and unit | Additional cost basis |
 |---|---|---|---|
 | Gold | `production_koz`, `koz` | `aisc_usd_per_oz`, `usd_per_oz` | `;aisc=issuer-reported-per-sold-oz` |
+| Gold / `--metric tcc` | `production_koz`, `koz` | `tcc_usd_per_oz`, `usd_per_oz` | `;tcc=issuer-reported-per-sold-oz` |
 | Copper | `production_kt`, `kt` | `aisc_usd_per_lb`, `usd_per_lb` | `;aisc=issuer-reported-per-sold-lb` |
 | Copper / `--metric c1` | `production_kt`, `kt` | `c1_usd_per_lb`, `usd_per_lb` | `;c1=issuer-reported-per-sold-lb` |
 
@@ -4321,6 +4322,21 @@ assertion refuses; AISC cannot replace it. Historical windows likewise require o
 The C1 JSON report uses `fmine.guidance.completion.v2`, `cost_metric: "c1"`, and C1-labelled requirements,
 frontiers and historical witnesses. Existing AISC reports retain their v1 schema and interpretation.
 Signed C1 net credits use the same exact endpoint arithmetic and separate sales assumption as AISC.
+
+Select `--metric tcc` for gold total-cash-cost completion, using the corresponding registered guidance
+and original-quarter Mine Stats TCC observations:
+
+```bash
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q3 --as-of 2026-11-22 --metric tcc --format markdown
+```
+
+The command requires the evidence described in the table above. TCC and AISC retain separate definitions,
+source rows, Claim identities and spending/rate fields even though both are expressed per sold ounce.
+Missing TCC guidance or YTD actuals refuse; missing historical TCC remains an explicit excluded window.
+An AISC observation cannot fill either gap. Signed TCC net credits retain their exact bounds and the
+same separately declared sales continuation. TCC reports use `fmine.guidance.completion.v3` with
+`cost_metric: "tcc"`; existing AISC and C1 report versions remain unchanged. The technical scenario
+comparison still concerns production only and does not establish joint production/TCC feasibility.
 
 The result reports exact remaining production and a spending/rate frontier for the selected cost metric.
 Cost rates use summed costs and sold metal; they never average quarterly rates or treat production as sales. Copper production stays in kt;

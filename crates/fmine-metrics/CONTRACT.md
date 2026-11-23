@@ -540,6 +540,13 @@ The other modules have local errors with no refusal code:
 
 ## 10. Known gaps
 
+- DESIGN (BD-342): gold TCC completion uses separate `TccUsdPerSoldOz` and `TccSpendUsdMillion`
+  quantities over the existing exact sales-weighted kernel. Signed costs, rounded input intervals,
+  distinct metric keys and original-quarter witnesses remain bound to the selected definition.
+  TCC cannot borrow AISC rates or copper units; incompatible or missing definitions refuse. New
+  TCC frames use version 4 while existing AISC/C1 frames retain their bytes. Independent controls
+  cover exact signed spending/rate answers, incompatible definitions and checked joint witnesses.
+  This arithmetic does not authenticate issuer accounting inputs or establish calibration.
 - DESIGN (BD-346.S5): the bounded dollar-cost bridge has synthetic exact and source-loader controls in
   `metrics_mirror_cost_controls.rs` and `mirror_cost_oracle.py`. Authentic partner filings, complete
   accounting-definition equivalence, general policy bridges and the full BD-346 power/data gates
