@@ -113,15 +113,19 @@ cargo run -p fmine-cli -- plant balance --feed tests/plant/material_projection.t
 ```
 
 In this synthetic circuit, concentrate takes **10% of dry feed, 80% of copper and 50% of gold**. The
-assay split assumes these are the only dry outlets and the circuit inventory stays constant. If metal is
-missing from an outlet worksheet, its residual stays unknown. The other elements can still be checked.
+assay split assumes these are the only dry outlets and the circuit inventory stays constant. If an outlet
+lacks a copper assay, the copper residual stays unknown. Other assayed elements can still be checked.
+
+INFERENCE: the copper assays in UAF's worked example imply 72.41% recovery. Using its mass yield rounded
+to 1.5% gives the published 73.5%. The two-product report keeps both calculations visible when you supply
+that rounded mass split. [UAF Mining Mill Operator Training, Lesson 2](https://millops.community.uaf.edu/amit-135/amit-135-lesson-2/#Mass-Yield-Formula-Example)
 
 The supplied examples are synthetic. The single-input `balance` checks exact nominal closure. `reconcile` uses the declared full
 error covariance and reports fitted amounts, adjustments, posterior covariance and gross-error diagnostics.
 Rejected candidates return a nonzero exit status and no admitted balance Claim while retaining the original
-observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. This calculation
-does not audit a site's measurements, infer recovery or certify P754 compliance. `fmine robot-docs` documents
-the strict worksheet fields, explicit kg basis, stocktake timing and all required covariance pairs.
+observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. The single-input
+inventory modes report closure and reconciliation. Site measurement audits and P754 sign-off require separate
+evidence. `fmine robot-docs` lists the worksheet fields, kg basis, stocktake timing and required covariance pairs.
 
 `plant production` joins the complete grinding and recovery populations by their shared scenario IDs
 and exact probabilities. A third worksheet declares the common physical support, linked recovery grade
