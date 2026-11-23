@@ -86,7 +86,7 @@ fn executive_one_pager_matches_the_expansion_golden_and_preserves_policy_constra
     for args in [
         &["decide", "card", "unused", "--brief", "--json"][..],
         &["decide", "card", "unused", "--format", "json", "--brief"],
-        &["decide", "program", "unused", "--brief"],
+        &["decide", "recovery-bounds", "unused", "--brief"],
         &["decide", "card", "unused", "--brief", "--brief"],
     ] {
         let owned: Vec<_> = args.iter().map(|s| (*s).to_owned()).collect();
