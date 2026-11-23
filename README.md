@@ -2,10 +2,10 @@
 
 <div align="center">
 
-[![Status](https://img.shields.io/badge/status-design%20plan%20%C2%B7%20scaffold%20in%20progress-orange)](#honest-status)
-[![Runtime](https://img.shields.io/badge/runtime-asupersync%200.5.0-6f42c1)](#oracles-and-pins)
+[![Status](https://img.shields.io/badge/status-working%20CLI%20%C2%B7%20M0%20open-orange)](#honest-status)
+[![Runtime pin](https://img.shields.io/badge/runtime%20pin-asupersync%200.5.0-6f42c1)](#oracles-and-pins)
 [![Core](https://img.shields.io/badge/core-Rust%202024-b7410e)](#architecture)
-[![Plan](https://img.shields.io/badge/plan-485%20beads%20%C2%B7%20E001%E2%80%93E852-2ea44f)](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md)
+[![Plan](https://img.shields.io/badge/plan-design%20and%20milestones-2ea44f)](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md)
 [![License](https://img.shields.io/badge/license-MIT%20%2B%20AI%20rider-yellow)](LICENSE)
 
 </div>
@@ -46,26 +46,23 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 
 ## Honest status
 
-**Status.** The design is written down and has been audited. The code is starting.
-- [`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md`](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md)
-  (about 8,900 lines) is the technical constitution.
-- A Rust workspace scaffold (the S0 substrate, the first public-lane crates and the `xtask` layering checks) is
-  being built in `crates/`.
-- Nothing is *implemented* in the plan's sense (§0.2), which requires all of:
-  - a pinned oracle;
-  - a filled `CONTRACT.md`;
-  - Claim-typed outputs;
-  - a robot-CLI entry point;
-  - a recorded gate PASS.
+**FACT.** The CLI runs on supplied mine worksheets. A mine geologist can reconcile dry tonnes and
+contained metal, a plant planner can bound a blend with untested ore, and a technical services team
+can assess forecasts against later outcomes. Each example below runs on checked-in synthetic inputs.
+[Reconciliation](#find-a-grade-miss-hidden-by-on-plan-metal),
+[blend planning](#bound-a-recovery-decision-with-untested-ore), and
+[forecast assessment](#assess-a-frozen-forecast-cohort).
 
-  Every capability below is DESIGN or TARGET until its gate says otherwise.
+**FACT.** M0 public assurance remains open. The separate ultimate-pit gate records an exact match on
+11 MineLib instances in a local run. Operating-site validation remains open.
+The [delivery record](docs/delivery/README.md) lists the evidence and outstanding site tests by milestone.
 
 | Question | Answer |
 |---|---|
 | Is there a design? | **Yes.** §0–§39 plus Appendices A–J. Every load-bearing statement is labelled FACT, DESIGN, HYPOTHESIS, TARGET or OPEN, and every FACT cites an evidence row |
 | Is it evidenced? | **Yes, with a register.** [`planning/mor/MOR_CASE.md`](planning/mor/MOR_CASE.md) holds E001–E852. The corpus rows (E101–E399) were re-read by a second reader against the PDFs and workbooks: 273 exact, 18 confirmed with nuance, 3 page-locator fixes, 0 substantive errors. The research rows (E401–E655) still await a second reader |
 | Has it been reviewed? | **Five audits and six hypothesis passes.** AUDIT_1–AUDIT_5 covered domain accuracy, suite fit, internal consistency, a corpus second read and a second-wave review of equations, guards and the bead graph. Brenner passes B1–B6 covered subsurface, prospectivity, planning and capital, substrate, wedge and pre-mortem, and operations, plant, tailings and workforce. Their corrections are folded in (plan Appendix H) |
-| Is there a work plan? | **Yes.** 21 work packages and 485 beads with 917 dependency edges, acyclic. Instantiated in `.beads/` for `br` |
+| Is there a work plan? | **Yes.** The work packages and their dependencies are in Beads. Run `br ready` in this checkout for the current work queue. |
 | Is there code? | **Yes, and the public lane runs.** `fmine assure public --issuer barrick` runs end to end on the 20 registered workbooks through 2026Q3 (not in git), evaluating 2,915 AISC identities and reproducing the source-epoch pin in `repro/barrick/expected.toml`. `--through 2026Q2` retains the earlier 18-source root. Q3 admission and its two source-grounded COS ownership corrections are recorded in E859–E860. The full M0 gate remains open |
 | Has anything been benchmarked? | **No benchmark suite.** One machine has timed `fmine-optimize`'s certified ultimate pit: MineLib's 2.1M-block mclaughlin in about 1.2 s, and a synthetic 10⁷-block model in under a minute (`crates/fmine-optimize/CONTRACT.md` §8). Every other speed and scale number in the plan is a TARGET |
 
