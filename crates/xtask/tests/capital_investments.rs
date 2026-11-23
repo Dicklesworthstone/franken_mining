@@ -405,6 +405,81 @@ fn incompatible_or_incomplete_investment_sources_never_yield_a_partial_portfolio
 }
 
 #[test]
+fn testwork_investments_cannot_silently_become_act_now_portfolio_candidates() {
+    let dir = temporary();
+    let mut source = SOURCE.replace(
+        "schema = \"fmine.production-investment.v1\"",
+        "schema = \"fmine.production-investment.v1\"\ninformation_basis = \"before_action_same_payoffs_explicit_delay_cost\"",
+    );
+    source.push_str(
+        r#"
+[[information_option]]
+id = "ore-test"
+label = "Synthetic ore test before the investment commitment"
+test_cost = "100"
+delay_cost = "25"
+delay_days = 0
+
+[[signal]]
+option = "ore-test"
+id = "soft-result"
+
+[[signal]]
+option = "ore-test"
+id = "hard-result"
+"#,
+    );
+    for state in ["soft", "hard"] {
+        for signal in ["soft", "hard"] {
+            let probability = if state == signal { "1/1" } else { "0/1" };
+            source.push_str(&format!(
+                "\n[[likelihood]]\noption = \"ore-test\"\nstate = \"{state}\"\nsignal = \"{signal}-result\"\nprobability = \"{probability}\"\n"
+            ));
+        }
+    }
+    let investment = write(&dir, "investment-with-testwork.toml", &source);
+    let (envelope, format) = invoke(
+        &[
+            "decide".into(),
+            "investment".into(),
+            "--manifest".into(),
+            investment.to_string_lossy().into_owned(),
+        ],
+        &root(),
+    );
+    assert_eq!(format, OutputFormat::Json);
+    let payload = json(&envelope);
+    let summary = field(&payload, &["investment", "decision", "summary"]);
+    let options = field(summary, &["information", "options"])
+        .as_array()
+        .expect("admitted source information options");
+    assert_eq!(options.len(), 1);
+    assert_eq!(
+        field(&options[0], &["option_id"]).as_str(),
+        Some("ore-test")
+    );
+    assert!(
+        field(summary, &["alternatives"])
+            .as_array()
+            .expect("original act-now alternatives")
+            .iter()
+            .any(|a| field(a, &["action_id"]).as_str() == Some("process"))
+    );
+    // The portfolio still explicitly selects the source's ordinary process/higher-power
+    // actions. Silently extracting their outcomes would discard the retained testwork model.
+    let portfolio = PORTFOLIO.replace(
+        "tests/decisions/production_investment.toml",
+        &investment.to_string_lossy().replace('\\', "\\\\"),
+    );
+    refused(
+        &dir,
+        "testwork-portfolio.toml",
+        &portfolio,
+        "source investment information options are not portfolio candidates",
+    );
+}
+
+#[test]
 fn foreign_shared_states_and_overlap_across_separate_manifests_refuse() {
     let dir = temporary();
     let path = portfolio(&dir);
@@ -1221,7 +1296,11 @@ fn source_selection_stability_retains_nominal_cash_robustness_and_actual_cli_rec
         assert_eq!(field(&payload, &keys), field(&nominal, &keys));
     }
     assert_eq!(
-        field(&payload, &["program", "summary", "selection_frequency_status"]).as_str(),
+        field(
+            &payload,
+            &["program", "summary", "selection_frequency_status"]
+        )
+        .as_str(),
         Some("conditional_weighted_bootstrap")
     );
     assert_eq!(
@@ -1263,7 +1342,9 @@ fn source_selection_stability_retains_nominal_cash_robustness_and_actual_cli_rec
             .expect("source-bound program parents")
             .contains(field(claim, &["id"]))
     );
-    let anchors = field(claim, &["anchors"]).as_array().expect("source anchors");
+    let anchors = field(claim, &["anchors"])
+        .as_array()
+        .expect("source anchors");
     for hash in [sha256(text.as_bytes()), sha256(SOURCE.as_bytes())] {
         let hash = hash.to_hex();
         assert!(
@@ -1311,7 +1392,10 @@ fn source_selection_stability_retains_nominal_cash_robustness_and_actual_cli_rec
     assert_ne!(field(&payload, &["digest"]), field(&changed, &["digest"]));
     assert_ne!(
         field(claim, &["id"]),
-        field(&changed, &["program", "inputs", "selection_stability", "id"])
+        field(
+            &changed,
+            &["program", "inputs", "selection_stability", "id"]
+        )
     );
 }
 
@@ -1379,7 +1463,10 @@ fn unsampled_source_states_keep_their_original_cash_floor_obligations() {
     // resamples. The original project beats aux by 500 USD in every state.
     one_draw_winners(&payload, &["original"], &["original"]);
     let both = stability_choice(&payload, &["aux", "original"]);
-    assert_eq!(field(both, &["structurally_feasible"]).as_bool(), Some(false));
+    assert_eq!(
+        field(both, &["structurally_feasible"]).as_bool(),
+        Some(false)
+    );
     assert_eq!(field(both, &["risk_feasible_replicates"]).u64(), Some(0));
     assert_eq!(field(both, &["co_winner_replicates"]).u64(), Some(0));
     assert_eq!(

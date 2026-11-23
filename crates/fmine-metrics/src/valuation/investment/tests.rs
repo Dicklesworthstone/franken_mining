@@ -5,6 +5,7 @@ use super::*;
 use fmine_plant::{cards, grinding, production};
 
 const MANIFEST: &str = include_str!("../../../../../tests/decisions/production_investment.toml");
+const TESTWORK: &str = include_str!("../../../../../tests/decisions/investment_testwork.toml");
 const LOW: &str = include_str!("../../../../../tests/plant/grinding_joint.toml");
 const HIGH: &str = include_str!("../../../../../tests/plant/grinding_higher_power.toml");
 const RECOVERY: &str = include_str!("../../../../../tests/plant/production_recovery.toml");
@@ -84,6 +85,221 @@ fn rebound(spec: InvestmentSpec, original: &Claim<InvestmentSpec>) -> Claim<Inve
         original.parents.clone(),
         original.anchors.clone(),
     )
+}
+
+#[test]
+fn testwork_selects_complete_investments_and_charges_valuation_time_costs_once() {
+    let receipt = manifest(TESTWORK).evaluate(&bundles()).unwrap();
+    let info = receipt.decision().summary().information.as_ref().unwrap();
+    let test = &info.options[0];
+    // Independent two-period outcomes: original (212, 12972.8), higher-power
+    // (-8576, 19945.6). A perfect signal chooses the whole original path for
+    // soft ore and the whole higher-power path for hard ore, each with mass 1/2.
+    assert_eq!(info.baseline_value.major, q(32962, 5));
+    assert_eq!(test.gross_value.major, q(50394, 5));
+    assert_eq!(test.evsi.major, q(17432, 5));
+    assert_eq!(test.total_cost.major, q(125, 1));
+    assert_eq!(test.net_value.major, q(49769, 5));
+    assert_eq!(test.net_voi.major, q(16807, 5));
+    assert_eq!(test.policy_risk.mean.major, test.net_value.major);
+    assert_eq!(test.policy_risk.cvar95_loss.major, q(-87, 1));
+    assert_eq!(test.policy_risk.loss_probability, ZERO);
+    for (signal, action) in [("soft-result", "process"), ("hard-result", "higher-power")] {
+        let policy = test.signals.iter().find(|s| s.signal_id == signal).unwrap();
+        assert_eq!(policy.probability, q(1, 2));
+        assert_eq!(policy.selected_action.as_deref(), Some(action));
+    }
+    assert_eq!(info.overall_winners[0].id, "ore-test");
+    assert_eq!(
+        info.overall_winners[0].kind,
+        card::information::ChoiceKind::InformationOption
+    );
+    let claim = receipt.decision().claim();
+    assert_eq!(claim.evidence, EvidenceClass::Assumed);
+    assert_eq!(claim.confidentiality, Confidentiality::internal());
+    assert!(
+        claim
+            .uu_terms
+            .iter()
+            .any(|u| u.scenario_id == "UU-synthetic-investment-horizon")
+    );
+    for locator in [
+        "information_option.test_cost",
+        "likelihood.probability",
+        "information_basis",
+    ] {
+        assert!(
+            claim.anchors.iter().any(|a| a.locator.contains(locator)),
+            "{locator}"
+        );
+    }
+    let option = &receipt.decision().inputs().information_options[0];
+    assert!(option.parents.contains(&receipt.declaration().claim_id));
+    assert_eq!(option.value.valuation_basis, VALUATION_BASIS);
+    assert_eq!(
+        card::evaluate(receipt.decision().inputs()).unwrap(),
+        *receipt.decision()
+    );
+    let markdown = receipt.to_markdown();
+    assert!(markdown.contains("valuation-time USD") || markdown.contains("valuation time"));
+    assert!(markdown.contains("Value of information"));
+    assert!(markdown.contains("Signal"));
+}
+
+#[test]
+fn noisy_test_uses_signal_posteriors_and_realized_tail_losses_without_state_leakage() {
+    let text = TESTWORK
+        .replace("probability = \"1/1\"", "probability = \"3/4\"")
+        .replace("probability = \"0/1\"", "probability = \"1/4\"");
+    let receipt = manifest(&limited(&text, "0", "0"))
+        .evaluate(&bundles())
+        .unwrap();
+    let summary = receipt.decision().summary();
+    let info = summary.information.as_ref().unwrap();
+    let test = &info.options[0];
+    // The two signal-specific expectations before costs are 3402.2 and 12815.2.
+    // A misleading hard signal on soft ore loses 8576 + 125 USD with mass 1/8.
+    assert_eq!(test.gross_value.major, q(81087, 10));
+    assert_eq!(test.evsi.major, q(15163, 10));
+    assert_eq!(test.net_value.major, q(79837, 10));
+    assert_eq!(test.policy_risk.loss_probability, q(1, 8));
+    assert_eq!(test.policy_risk.cvar95_loss.major, q(8701, 1));
+    assert_eq!(info.overall_winners[0].id, "ore-test");
+    let screen = summary.downside.as_ref().unwrap();
+    assert_eq!(screen.nominal.winners[0].id, "process");
+    let row = screen
+        .choices
+        .iter()
+        .find(|c| c.choice.id == "ore-test")
+        .unwrap();
+    assert!(!row.nominal_eligible);
+    assert_eq!(row.nominal_breach_probability, q(1, 8));
+    assert!(
+        receipt
+            .to_markdown()
+            .contains("information_option:ore-test")
+    );
+    assert!(receipt.to_markdown().contains("act_now:process"));
+}
+
+#[test]
+fn uninformative_and_unreachable_signals_remain_visible_and_do_nothing_still_pays_test_costs() {
+    let inputs = bundles();
+    let text = TESTWORK
+        .replace("probability = \"1/1\"", "probability = \"1/2\"")
+        .replace("probability = \"0/1\"", "probability = \"1/2\"");
+    let receipt = manifest(&text).evaluate(&inputs).unwrap();
+    let info = receipt.decision().summary().information.as_ref().unwrap();
+    assert_eq!(info.options[0].evsi.major, ZERO);
+    assert_eq!(info.options[0].net_voi.major, q(-125, 1));
+    assert!(info.options[0].baseline_optimal_after_every_reachable_signal);
+    assert_eq!(info.overall_winners[0].id, "process");
+    let text = format!(
+        "{TESTWORK}\n[[signal]]\noption = \"ore-test\"\nid = \"unreachable\"\n[[likelihood]]\noption = \"ore-test\"\nstate = \"soft\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n[[likelihood]]\noption = \"ore-test\"\nstate = \"hard\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n"
+    );
+    let receipt = manifest(&text).evaluate(&inputs).unwrap();
+    let test = &receipt
+        .decision()
+        .summary()
+        .information
+        .as_ref()
+        .unwrap()
+        .options[0];
+    assert_eq!(test.net_value.major, q(49769, 5));
+    let unreachable = test
+        .signals
+        .iter()
+        .find(|s| s.signal_id == "unreachable")
+        .unwrap();
+    assert_eq!(unreachable.probability, ZERO);
+    assert_eq!(unreachable.selected_action, None);
+    assert_eq!(unreachable.posterior_state_weights, None);
+    let no_investment = TESTWORK
+        .replace(
+            "initial_capex_usd = \"1000\"",
+            "initial_capex_usd = \"50000\"",
+        )
+        .replace(
+            "initial_capex_usd = \"8000\"",
+            "initial_capex_usd = \"50000\"",
+        );
+    let receipt = manifest(&no_investment).evaluate(&inputs).unwrap();
+    let test = &receipt
+        .decision()
+        .summary()
+        .information
+        .as_ref()
+        .unwrap()
+        .options[0];
+    assert_eq!(test.gross_value.major, ZERO);
+    assert_eq!(test.net_value.major, q(-125, 1));
+    assert!(
+        test.signals
+            .iter()
+            .all(|s| s.selected_action.as_deref() == Some(DO_NOTHING))
+    );
+    assert_eq!(test.policy_risk.loss_probability, ONE);
+}
+
+#[test]
+fn information_basis_and_every_likelihood_are_required_and_source_mutations_change_receipts() {
+    let inputs = bundles();
+    let basis_line = "information_basis = \"before_action_same_payoffs_explicit_delay_cost\"\n";
+    let without_matrix = TESTWORK.split("[[information_option]]").next().unwrap();
+    let missing_cell = TESTWORK.rsplit_once("[[likelihood]]").unwrap().0;
+    for text in [
+        TESTWORK.replace(basis_line, ""),
+        TESTWORK.replace(
+            "before_action_same_payoffs_explicit_delay_cost",
+            "infer_later_cash",
+        ),
+        without_matrix.to_string(),
+        missing_cell.to_string(),
+        TESTWORK.replace("state = \"hard\"", "state = \"foreign\""),
+        TESTWORK.replace("probability = \"1/1\"", "probability = \"3/4\""),
+        TESTWORK.replace("test_cost = \"100\"", "test_cost = \"100.00001\""),
+        TESTWORK.replace("delay_cost = \"25\"", "delay_cost = \"-25\""),
+        TESTWORK.replace("delay_days = 5", "delay_days = \"5\""),
+        format!("{TESTWORK}\n[[signal]]\noption = \"unknown\"\nid = \"extra\"\n"),
+        format!(
+            "{TESTWORK}\n[[likelihood]]\noption = \"ore-test\"\nstate = \"soft\"\nsignal = \"soft-result\"\nprobability = \"1/1\"\n"
+        ),
+    ] {
+        let result = worksheet::parse(&text, &source(&text, "investment.toml"))
+            .and_then(|m| m.evaluate(&inputs));
+        assert!(result.is_err(), "{text}");
+    }
+    let original = manifest(TESTWORK).evaluate(&inputs).unwrap();
+    let changed = manifest(&TESTWORK.replace("test_cost = \"100\"", "test_cost = \"101\""))
+        .evaluate(&inputs)
+        .unwrap();
+    assert_ne!(
+        original.declaration().claim_id,
+        changed.declaration().claim_id
+    );
+    assert_ne!(original.digest(), changed.digest());
+    let mut changed_spec = original.declaration().value.clone();
+    changed_spec.information_options[0].test_cost.ccy = Currency::EUR;
+    assert!(evaluate(&rebound(changed_spec, original.declaration()), &inputs).is_err());
+    let mut changed_claim = original.declaration().clone();
+    changed_claim.value.information_options[0].delay_days += 1;
+    assert_eq!(
+        evaluate(&changed_claim, &inputs).unwrap_err().code,
+        "FMINE-REF-105"
+    );
+}
+
+#[test]
+fn legacy_model_keys_and_source_bound_testwork_keep_the_existing_named_key_domain() {
+    for input in [MANIFEST, TESTWORK] {
+        let key = manifest(input).declaration().value.model_key.clone();
+        let input = input.replace(
+            &format!("model_key = \"{key}\""),
+            "model_key = \"site/model v1\"",
+        );
+        let receipt = manifest(&input).evaluate(&bundles()).unwrap();
+        assert_eq!(receipt.decision().summary().model_key, "site/model v1");
+    }
 }
 
 #[test]

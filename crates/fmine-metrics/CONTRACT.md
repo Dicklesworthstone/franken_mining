@@ -109,10 +109,32 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   breach; floor equality passes, and probability-cap equality passes. The existing decision engine
   retains every alternative, unconstrained winners, eligible co-winners and the expected-value cost of
   the limit. No eligible choice yields no fallback, including when do-nothing breaches a positive floor.
-  This does not test interim liquidity or bound loss severity; information policies are not admitted.
+  With declared information options, the same screen checks each displayed expected-value-optimal
+  signal policy over realized state/signal paths, including test and delay costs. It does not optimize
+  a different constrained policy, test interim liquidity or bound loss severity.
   Absent limits preserve existing declaration bytes and identities. The known-answer and actual-binary
   tests cover a nominal winner rejected for capital-loss probability, boundary equality, final rounding,
   empty eligibility, unchanged legacy identity, malformed limits and retained source anchors.
+
+  DESIGN (BD-225/227/229): optional information rows use the shared `card::model` parser and require
+  `information_basis = "before_action_same_payoffs_explicit_delay_cost"`. Each test precedes initial
+  commitment, with an explicit complete signal likelihood matrix over the original shared states.
+  One signal chooses one entire investment path, never a different investment in each period.
+  Nonnegative Money test and delay costs are already on the declared valuation-time basis and are
+  subtracted exactly once; they are not discounted again. Delay days remain visible, and unchanged
+  source cash flows, physical windows and discount factors after the delay are explicit assumptions.
+  Option Claims inherit complete source evidence, confidentiality, UU and ancestry. Missing likelihoods,
+  foreign states, ambiguous timing, wrong currency and source/value mismatches refuse. Without options,
+  the original declaration encoding and behavior are unchanged. The retained Markdown and JSON expose
+  exact EVSI, net VOI, posteriors, unreachable signals, policy choices and realized tail losses.
+
+  `tests/decisions/investment_testwork.toml` adds a perfect test to the two-period example: gross
+  expected value 10,078.80 USD, EVSI 3,486.40 USD, test cost 100 USD, delay cost 25 USD, net value
+  9,953.80 USD and net VOI 3,361.40 USD. Independent noisy-signal controls retain 1/8 probability of
+  loss and a worst-tail loss of 8,701 USD; uninformative tests have zero EVSI, and choosing do-nothing
+  still pays the costs. `fmine-cli/tests/investment.rs` checks the real binary and retained sources.
+  The `capital-investments` adapter refuses these sources rather than silently discarding contingent
+  policies or their costs; `xtask/tests/capital_investments.rs` covers that complete-command boundary.
 
   Synthetic example: `tests/decisions/production_investment.toml` uses two periods and factors 1 and
   1/2. Initial capex of 1,000/8,000 USD reverses the operating-margin ranking: the original mode's mean

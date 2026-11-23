@@ -220,6 +220,27 @@ and physical/commercial support must match, and every original worksheet and exa
 available. The card compares mutually exclusive investments with zero incremental value for do-nothing;
 it values only the declared cash window, with no inferred terminal value, tax, financing or project lifetime.
 
+An investment manifest can also declare testwork before committing to any complete investment path:
+
+```bash
+cargo run -p fmine-cli -- decide investment \
+  --manifest tests/decisions/investment_testwork.toml --format markdown
+```
+
+The same `information_option`, `signal` and complete `likelihood` tables use
+`information_basis = "before_action_same_payoffs_explicit_delay_cost"`. Test and delay costs are
+nonnegative amounts already expressed at the declared valuation time; each is charged once, after
+choosing a whole investment from the signal posterior. A signal cannot select different investments
+in different periods or reveal the true state. Delay days are retained, while unchanged period cash
+and discount factors after that delay are explicit assumptions. No cost is discounted a second time.
+
+In the synthetic two-period example, perfect testwork raises gross expected value from $6,592.40 to
+$10,078.80. Test cost of $100 and declared delay cost of $25 leave net expected value of $9,953.80 and
+net value of information of $3,361.40. Noisy tests retain their realized state-and-signal losses, so a
+downside limit can reject a test even when its expected value leads. Choosing do-nothing after testing
+still pays the test and delay costs. `decide program` refuses information-bearing investment sources:
+combining contingent choices requires a separately declared joint portfolio policy.
+
 Both `decide production --manifest` and `decide investment --manifest` support a source-bound downside limit. It screens
 every alternative, including do-nothing, against the same declared cash floor and maximum probability of
 falling strictly below it. Add this section to the comparison or investment manifest:

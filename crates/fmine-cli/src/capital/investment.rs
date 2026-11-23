@@ -396,8 +396,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {
                 }
                 let replicates: usize = unsigned(get(&f, "replicates")?)?;
                 let draws_per_replicate: usize = unsigned(get(&f, "draws_per_replicate")?)?;
-                if !(200..=2000).contains(&replicates)
-                    || !(1..=4096).contains(&draws_per_replicate)
+                if !(200..=2000).contains(&replicates) || !(1..=4096).contains(&draws_per_replicate)
                 {
                     return Err(invalid(
                         "selection stability requires 200..=2000 replicates and 1..=4096 draws per replicate",
@@ -737,6 +736,11 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
         if s.downside_limit.is_some() {
             return Err(invalid(
                 "source investment downside limits are not portfolio constraints; use an unscreened source and declare the joint portfolio tail-loss limit",
+            ));
+        }
+        if !s.information_options.is_empty() {
+            return Err(invalid(
+                "source investment information options are not portfolio candidates; a joint signal and contingent portfolio policy must be declared before combining testwork with investments",
             ));
         }
         if s.shared_scenario_basis != d.shared_scenario_basis

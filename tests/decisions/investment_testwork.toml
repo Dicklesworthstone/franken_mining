@@ -1,0 +1,118 @@
+# SYNTHETIC: a perfect ore test precedes one complete two-period investment choice.
+# Independent values: gross policy 10078.8 USD; EVSI 3486.4 USD; total test/delay
+# cost 125 USD present value; net policy 9953.8 USD; net VOI 3361.4 USD.
+schema = "fmine.production-investment.v1"
+model_key = "synthetic-investment-testwork"
+question = "Buy an ore test before committing to one of the complete two-period investments?"
+shared_scenario_basis = "SYNTHETIC persistent soft or hard ore and price state across both periods and both mutually exclusive investments"
+discount_basis = "SYNTHETIC explicit present-value multipliers at time zero; test and delay costs are already valuation-time USD present values"
+cashflow_basis = "incremental_operating_cash_excludes_initial_capex"
+currency = "USD"
+valuation_time_ns = "0"
+boundary = "synthetic-plant/v1"
+circuit = "synthetic-ball-mill"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+commercial_support = "Synthetic payable Au from exactly this one-hour recovered-metal population"
+monetary_rounding = "nearest_ties_even_0_0001_usd"
+information_basis = "before_action_same_payoffs_explicit_delay_cost"
+
+[[period]]
+id = "first"
+start_ns = "0"
+end_ns = "3600000000000"
+discount_factor = "1"
+
+[[period]]
+id = "second"
+start_ns = "3600000000000"
+end_ns = "7200000000000"
+discount_factor = "1/2"
+
+[[alternative]]
+id = "process"
+label = "Initial investment in the original operating mode"
+initial_capex_usd = "1000"
+
+[[alternative]]
+id = "higher-power"
+label = "Initial investment in the higher-power mode"
+initial_capex_usd = "8000"
+
+[[bundle]]
+alternative = "process"
+period = "first"
+input = "tests/plant/production_joint.toml"
+grinding = "tests/plant/grinding_joint.toml"
+recovery = "tests/plant/production_recovery.toml"
+terms = "tests/decisions/production_valuation.toml"
+
+[[bundle]]
+alternative = "higher-power"
+period = "first"
+input = "tests/plant/production_joint.toml"
+grinding = "tests/plant/grinding_higher_power.toml"
+recovery = "tests/plant/production_recovery.toml"
+terms = "tests/decisions/production_valuation_higher_power.toml"
+
+[[bundle]]
+alternative = "process"
+period = "second"
+input = "tests/plant/investment_second_production.toml"
+grinding = "tests/plant/investment_second_grinding.toml"
+recovery = "tests/plant/investment_second_recovery.toml"
+terms = "tests/decisions/investment_second_valuation.toml"
+
+[[bundle]]
+alternative = "higher-power"
+period = "second"
+input = "tests/plant/investment_second_production.toml"
+grinding = "tests/plant/investment_second_grinding_high.toml"
+recovery = "tests/plant/investment_second_recovery.toml"
+terms = "tests/decisions/investment_second_valuation_high.toml"
+
+[[uu]]
+id = "UU-synthetic-investment-horizon"
+description = "Invented unmodelled commissioning costs, test validity and cash outside the declared two-period window"
+trigger = "Initial expenditure, test likelihoods, post-delay payoffs or excluded cash differ from this explicit comparison"
+downside_usd_m = "0.03"
+
+[[information_option]]
+id = "ore-test"
+label = "SYNTHETIC perfect ore test before the investment commitment"
+test_cost = "100"
+delay_cost = "25"
+delay_days = 5
+
+[[signal]]
+option = "ore-test"
+id = "soft-result"
+
+[[signal]]
+option = "ore-test"
+id = "hard-result"
+
+[[likelihood]]
+option = "ore-test"
+state = "soft"
+signal = "soft-result"
+probability = "1/1"
+
+[[likelihood]]
+option = "ore-test"
+state = "soft"
+signal = "hard-result"
+probability = "0/1"
+
+[[likelihood]]
+option = "ore-test"
+state = "hard"
+signal = "soft-result"
+probability = "0/1"
+
+[[likelihood]]
+option = "ore-test"
+state = "hard"
+signal = "hard-result"
+probability = "1/1"

@@ -3,6 +3,8 @@
 
 use super::*;
 use fmine_decide::card::downside::DownsideLimit;
+use fmine_decide::card::information::InformationOption;
+use fmine_decide::card::model::INFORMATION_BASIS;
 
 mod render;
 #[cfg(test)]
@@ -52,6 +54,9 @@ pub struct InvestmentSpec {
     pub monetary_rounding: MonetaryRounding,
     /// Screen final discounted incremental value after capex and the declared Money rounding.
     pub downside_limit: Option<DownsideLimit>,
+    /// Test results precede the whole investment commitment; costs are valuation-time USD.
+    pub information_basis: Option<String>,
+    pub information_options: Vec<InformationOption>,
     pub periods: Vec<InvestmentPeriod>,
     pub alternatives: Vec<InvestmentAlternative>,
 }
@@ -132,6 +137,15 @@ fn invalid(message: &str) -> Refusal {
 }
 
 fn validate_spec(spec: &InvestmentSpec) -> Result<()> {
+    match (&spec.information_basis, spec.information_options.is_empty()) {
+        (None, true) => {}
+        (Some(basis), false) if basis == INFORMATION_BASIS => {}
+        _ => {
+            return Err(invalid(
+                "information options require information_basis=before_action_same_payoffs_explicit_delay_cost; a basis without options is not admitted",
+            ));
+        }
+    }
     if let Some(limit) = &spec.downside_limit {
         if limit.model_key != spec.model_key
             || limit.valuation_basis != VALUATION_BASIS
@@ -152,7 +166,7 @@ fn validate_spec(spec: &InvestmentSpec) -> Result<()> {
         if limit.policy_optimization.is_some() {
             return Err(bad(
                 RefusalCode::NoClaimInDomain201,
-                "investment comparisons screen complete investment choices; no information policies are declared",
+                "investment comparisons screen act-now choices and declared expected-value test policies; constrained policy optimization is not supported",
             ));
         }
     }
@@ -440,10 +454,22 @@ pub fn evaluate(
             AdditivityClass::NonAdditive,
         )
     });
+    let information_options = spec
+        .information_options
+        .iter()
+        .map(|option| {
+            all_meta.claim(
+                "production.investment.information/1",
+                option.clone(),
+                &option.canonical_tag(),
+                AdditivityClass::NonAdditive,
+            )
+        })
+        .collect();
     let decision = card::evaluate(&DecisionInputs {
         weights,
         actions,
-        information_options: Vec::new(),
+        information_options,
         robustness: None,
         downside_limit,
     })?;

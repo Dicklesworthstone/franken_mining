@@ -63,33 +63,41 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| parse_error(e.line, e.reason))?;
-    if doc.rows.len() > MAX_ALTERNATIVES + MAX_PERIODS + MAX_ALTERNATIVES * MAX_PERIODS + 17 {
+    let information_row =
+        |table: &str| matches!(table, "information_option" | "signal" | "likelihood");
+    if doc
+        .rows
+        .iter()
+        .filter(|row| !information_row(&row.table))
+        .count()
+        > MAX_ALTERNATIVES + MAX_PERIODS + MAX_ALTERNATIVES * MAX_PERIODS + 17
+    {
         return Err(parse_error(
             1,
             "too many investment, period, bundle or UU rows",
         ));
     }
-    let top = fields(
-        &doc.top,
-        &[
-            "schema",
-            "model_key",
-            "question",
-            "shared_scenario_basis",
-            "discount_basis",
-            "cashflow_basis",
-            "currency",
-            "valuation_time_ns",
-            "boundary",
-            "circuit",
-            "material_domain",
-            "dry_basis",
-            "element",
-            "commercial_support",
-            "monetary_rounding",
-        ],
-        1,
-    )?;
+    let mut required = vec![
+        "schema",
+        "model_key",
+        "question",
+        "shared_scenario_basis",
+        "discount_basis",
+        "cashflow_basis",
+        "currency",
+        "valuation_time_ns",
+        "boundary",
+        "circuit",
+        "material_domain",
+        "dry_basis",
+        "element",
+        "commercial_support",
+        "monetary_rounding",
+    ];
+    if doc.top.iter().any(|f| f.key == "information_basis") {
+        required.push("information_basis");
+    }
+    let top = fields(&doc.top, &required, 1)?;
     if get(&top, "schema")?.0 != SCHEMA
         || get(&top, "currency")?.0 != "USD"
         || get(&top, "monetary_rounding")?.0 != MonetaryRounding::NearestTiesEvenFourPlaces.as_str()
@@ -224,10 +232,11 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
                     ));
                 }
             }
+            "information_option" | "signal" | "likelihood" => {}
             _ => {
                 return Err(parse_error(
                     row.line,
-                    "only period, alternative, bundle, downside_limit and uu tables are supported",
+                    "only period, alternative, bundle, downside_limit, uu, information_option, signal and likelihood tables are supported",
                 ));
             }
         }
@@ -262,6 +271,17 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         commercial_support: get(&top, "commercial_support")?.0.into(),
         monetary_rounding: MonetaryRounding::NearestTiesEvenFourPlaces,
         downside_limit,
+        information_basis: top.get("information_basis").map(|(s, _)| (*s).into()),
+        information_options: fmine_decide::card::model::parse_information_options(
+            &doc.rows
+                .iter()
+                .filter(|row| information_row(&row.table))
+                .cloned()
+                .collect::<Vec<_>>(),
+            get(&top, "model_key")?.0,
+            Currency::USD,
+            VALUATION_BASIS,
+        )?,
         periods,
         alternatives,
     };
