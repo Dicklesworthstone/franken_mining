@@ -11,6 +11,8 @@ use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xls
 
 const MODEL: &str = "pooled-quarterly-ratio-empirical-v1";
 const SEASONAL_MODEL: &str = "seasonal-quarterly-ratio-empirical-v1";
+const CHANGE_MODEL: &str = "pooled-quarterly-change-empirical-v1";
+const SEASONAL_CHANGE_MODEL: &str = "seasonal-quarterly-change-empirical-v1";
 const CUT: &str = "2030-10-03T00:00:00Z";
 static SERIAL: AtomicUsize = AtomicUsize::new(0);
 
@@ -171,6 +173,9 @@ fn workbook(
     let values = match values {
         1 => ["100.4", "1000.4", "200.4", "2000.4"],
         2 => ["125.4", "1100.4", "100.4", "2400.4"],
+        4 => ["100.4", "-10.4", "200.4", "0.4"],
+        5 => ["125.4", "0.4", "210.4", "-20.4"],
+        6 => ["300.4", "0.4", "80.4", "-40.4"],
         _ => ["300.4", "1500.4", "80.4", "3000.4"],
     };
     build_minimal_xlsx_styled(
@@ -181,7 +186,10 @@ fn workbook(
                 ("A1".into(), text("For the three months ended")),
                 ("B1".into(), MinimalCell::Number(f64::from(year))),
                 // Different releases remain distinct sources even when their numerical cells repeat.
-                ("D1".into(), text(&format!("Synthetic release {year}Q{quarter}"))),
+                (
+                    "D1".into(),
+                    text(&format!("Synthetic release {year}Q{quarter}")),
+                ),
                 ("B2".into(), text(production_header)),
                 ("C2".into(), text(cost_header)),
                 ("A3".into(), text("Site A (50%)")),
@@ -296,7 +304,10 @@ fn seasonal_cli_builds_a_distinct_source_bound_forecast_with_complete_off_season
     let (exit, default, _) = invoke(&fixture.args());
     assert_eq!(exit, 0);
     let default = at(&default, &["payload"]);
-    assert_ne!(at(default, &["forecasts_csv"]), at(report, &["forecasts_csv"]));
+    assert_ne!(
+        at(default, &["forecasts_csv"]),
+        at(report, &["forecasts_csv"])
+    );
     assert_ne!(
         at(default, &["receipt_digest"]),
         at(report, &["receipt_digest"])
@@ -305,7 +316,10 @@ fn seasonal_cli_builds_a_distinct_source_bound_forecast_with_complete_off_season
         at(default, &["input_manifest"]),
         at(report, &["input_manifest"])
     );
-    assert_eq!(at(default, &["observations"]), at(report, &["observations"]));
+    assert_eq!(
+        at(default, &["observations"]),
+        at(report, &["observations"])
+    );
     let mut markdown = args.clone();
     markdown.extend(["--format".into(), "markdown".into()]);
     let rendered = output(&markdown);
@@ -355,6 +369,114 @@ fn seasonal_cli_refuses_an_empty_selected_season_without_using_all_season_pairs(
         exit, 0,
         "the same source corpus supports the explicitly different model: {default:?}"
     );
+}
+
+#[test]
+fn additive_cli_builds_nonzero_width_at_zero_cost_and_keeps_source_bound_change_units() {
+    for (model, seasonal) in [(CHANGE_MODEL, false), (SEASONAL_CHANGE_MODEL, true)] {
+        let rules = if seasonal {
+            RULES
+                .replace("pool_from = \"2030Q1\"", "pool_from = \"2029Q1\"")
+                .replace("pool_through = \"2030Q2\"", "pool_through = \"2029Q4\"")
+        } else {
+            RULES.into()
+        };
+        let quarters = if seasonal {
+            vec![
+                (2029, 1, 1),
+                (2029, 2, 2),
+                (2029, 3, 4),
+                (2029, 4, 5),
+                (2030, 3, 6),
+            ]
+        } else {
+            vec![(2030, 1, 4), (2030, 2, 5), (2030, 3, 6)]
+        };
+        let fixture = Fixture::with_quarters(
+            &rules,
+            "Gold produced (000s oz, 100%)",
+            "All-in sustaining costs ($/oz)",
+            &quarters,
+        );
+        let mut args = fixture.args();
+        let selected = args.iter().position(|s| s == "--model").unwrap() + 1;
+        args[selected] = model.into();
+        let (exit, value, bytes) = invoke(&args);
+        assert_eq!(exit, 0, "{bytes}");
+        assert_eq!(invoke(&args).2, bytes, "deterministic complete output");
+        let report = at(&value, &["payload"]);
+        assert_eq!(
+            at(report, &["schema"]).as_str(),
+            Some("fmine.forecast-record-candidate.v2")
+        );
+        assert_eq!(at(report, &["model"]).as_str(), Some(model));
+        assert_eq!(at(report, &["issued"]).as_bool(), Some(false));
+        assert_eq!(at(report, &["uncalibrated"]).as_bool(), Some(true));
+        assert_eq!(at(report, &["attestation"]), &Json::Null);
+        assert_eq!(at(report, &["timestamp_proof"]), &Json::Null);
+        let csv = at(report, &["forecasts_csv"]).as_str().unwrap();
+        assert_eq!(
+            csv,
+            concat!(
+                "site,target,point,p10,p90,uncalibrated\n",
+                "Site A,production,310.00,310.00,325.00,true\n",
+                "Site A,unit_cost,-20.00,-20.00,10.00,true\n",
+                "Site B,production,90.00,90.00,105.00,true\n",
+                "Site B,unit_cost,-60.00,-60.00,-30.00,true\n",
+            )
+        );
+        assert_eq!(
+            parse_forecasts(csv.as_bytes(), &parse_rules(&rules).unwrap())
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(
+            at(report, &["observations"]).as_array().unwrap().len(),
+            4 * quarters.len()
+        );
+        for pool in at(report, &["pools"]).as_array().unwrap() {
+            assert_eq!(at(pool, &["change_kind"]).as_str(), Some("additive"));
+            assert_eq!(at(pool, &["change_count"]).i64(), Some(2));
+            assert!(pool.get("ratios").is_none());
+            assert!(at(pool, &["excluded_pairs"]).as_array().unwrap().is_empty());
+            let unit = if at(pool, &["target"]).as_str() == Some("production") {
+                "koz"
+            } else {
+                "usd_per_oz"
+            };
+            assert_eq!(at(pool, &["change_unit"]).as_str(), Some(unit));
+            if seasonal {
+                assert_eq!(at(pool, &["seasonal_destination_quarter"]).i64(), Some(4));
+                assert_eq!(at(pool, &["off_season_pairs"]).as_array().unwrap().len(), 4);
+            }
+        }
+        for row in at(report, &["observations"]).as_array().unwrap() {
+            assert_eq!(at(row, &["reason"]), &Json::Null);
+            assert_ne!(at(row, &["claim"]), &Json::Null);
+        }
+        let no_claim = at(&value, &["no_claim"]).as_str().unwrap();
+        assert!(no_claim.contains("Synthetic, uncalibrated additive-change draft"));
+        assert!(no_claim.contains("ratio persistence comparator is unchanged"));
+        let mut markdown = args.clone();
+        markdown.extend(["--format".into(), "markdown".into()]);
+        let rendered = output(&markdown);
+        assert!(rendered.status.success());
+        let rendered = String::from_utf8(rendered.stdout).unwrap();
+        assert!(rendered.contains("additive changes in the target's unit"));
+        if seasonal {
+            assert!(rendered.contains("Selected transitions end in calendar Q4"));
+        }
+        // An additive model cannot bypass original-byte admission, even off season.
+        std::fs::write(
+            fixture.root.join("invented/Invented_Q1.xlsx"),
+            b"altered history",
+        )
+        .unwrap();
+        let (exit, refused, _) = invoke(&args);
+        assert_ne!(exit, 0);
+        assert_eq!(at(&refused, &["payload"]), &Json::Null);
+    }
 }
 
 #[test]
@@ -692,7 +814,9 @@ fn post_quarter_nowcast_cli_exposes_separate_schema_and_frozen_release_policy() 
             1,
         );
     let fixture = Fixture::with_metrics(
-        &rules, "Gold produced (000s oz, 100%)", "All-in sustaining costs ($/oz)",
+        &rules,
+        "Gold produced (000s oz, 100%)",
+        "All-in sustaining costs ($/oz)",
     );
     let mut args = fixture.args();
     let cut_index = args.iter().position(|arg| arg == "--as-of").unwrap() + 1;
@@ -707,16 +831,29 @@ fn post_quarter_nowcast_cli_exposes_separate_schema_and_frozen_release_policy() 
     assert_eq!(at(payload, &["label"]).as_str(), Some("nowcast"));
     assert_eq!(at(payload, &["outcome_quarter"]).as_str(), Some("2030Q4"));
     assert_eq!(
-        at(payload, &["declared_outcome_release", "earliest_release_utc"]).as_str(),
+        at(
+            payload,
+            &["declared_outcome_release", "earliest_release_utc"]
+        )
+        .as_str(),
         Some("2031-01-15T00:00:00Z")
     );
     assert_eq!(at(payload, &["issued"]).as_bool(), Some(false));
     assert_eq!(at(payload, &["timestamp_proof"]), &Json::Null);
-    assert!(at(payload, &["targets"]).as_array().unwrap().iter().all(|target| {
-        at(target, &["outcome"]).as_str() == Some("quarter_qtd_nowcast")
-    }));
+    assert!(
+        at(payload, &["targets"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|target| { at(target, &["outcome"]).as_str() == Some("quarter_qtd_nowcast") })
+    );
     let csv = at(payload, &["forecasts_csv"]).as_str().unwrap();
-    assert_eq!(parse_forecasts(csv.as_bytes(), &parse_rules(&rules).unwrap()).unwrap().len(), 4);
+    assert_eq!(
+        parse_forecasts(csv.as_bytes(), &parse_rules(&rules).unwrap())
+            .unwrap()
+            .len(),
+        4
+    );
     let mut markdown_args = args.clone();
     markdown_args.extend(["--format".into(), "markdown".into()]);
     let output = output(&markdown_args);
@@ -726,7 +863,13 @@ fn post_quarter_nowcast_cli_exposes_separate_schema_and_frozen_release_policy() 
     assert!(markdown.contains("scored separately from advance forecasts"));
     assert!(markdown.contains("preliminary production announcement"));
     assert!(!markdown.contains("nowcasts are unsupported"));
-    std::fs::write(fixture.root.join("rules.toml"), RULES.replace("fy_minus_9m", "quarter_qtd").replace("q4_qtd", "quarter_qtd")).unwrap();
+    std::fs::write(
+        fixture.root.join("rules.toml"),
+        RULES
+            .replace("fy_minus_9m", "quarter_qtd")
+            .replace("q4_qtd", "quarter_qtd"),
+    )
+    .unwrap();
     let (exit, ordinary, _) = invoke(&args);
     assert_ne!(exit, 0, "{ordinary:?}");
     assert!(format!("{ordinary:?}").contains("FMINE-REF-206"));

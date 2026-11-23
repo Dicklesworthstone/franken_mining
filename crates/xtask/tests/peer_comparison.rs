@@ -156,11 +156,7 @@ fn capital_peer_source_and_definition_mismatches_keep_the_complete_population() 
             "operations=continuing",
             "definition mismatch operations",
         ),
-        (
-            ";timing=cash",
-            "",
-            "missing definition field timing",
-        ),
+        (";timing=cash", "", "missing definition field timing"),
         (
             "metric=capex-total",
             "metric=capex-project",
@@ -172,11 +168,7 @@ fn capital_peer_source_and_definition_mismatches_keep_the_complete_population() 
             "denominator=sold",
             "unsupported definition denominator",
         ),
-        (
-            "unit = \"USD_m\"",
-            "unit = \"CAD_m\"",
-            "exact metric unit",
-        ),
+        ("unit = \"USD_m\"", "unit = \"CAD_m\"", "exact metric unit"),
         (
             "period = \"2030FY\"",
             "period = \"2030H1\"",

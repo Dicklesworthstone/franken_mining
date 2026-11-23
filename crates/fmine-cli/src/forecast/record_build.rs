@@ -7,7 +7,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use fmine_calib::record::candidate::{
-    CandidateModel, CandidatePool, ExcludedPair, MODEL_ID, SEASONAL_MODEL_ID,
+    CHANGE_MODEL_ID, CandidateModel, CandidatePool, ChangeKind, ExcludedPair, MODEL_ID,
+    SEASONAL_CHANGE_MODEL_ID, SEASONAL_MODEL_ID,
 };
 use fmine_calib::record::{ForecastRow, Outcome, Rat, Target, parse_utc};
 use fmine_evidence::{Refusal, RefusalCode};
@@ -15,8 +16,19 @@ use fmine_public::forecast::{CandidateObservation, CandidateSource, PublicCandid
 
 use crate::{Envelope, NextAction, OutputFormat, json_string as js};
 
-pub const USAGE: &str = "forecast record build --rules <rules.toml> --model pooled-quarterly-ratio-empirical-v1|seasonal-quarterly-ratio-empirical-v1 --as-of YYYY-MM-DDTHH:MM:SSZ [--decimal-places 6]";
-pub const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.forecast-record-candidate.v1","model":"pooled-quarterly-ratio-empirical-v1","models":["pooled-quarterly-ratio-empirical-v1","seasonal-quarterly-ratio-empirical-v1"],"seasonal":"Explicit seasonal model pools only positive adjacent transitions whose destination calendar quarter matches the common forecast horizon, across all frozen live sites and years. All original sources remain required; other-season transitions retain both endpoints in off_season_pairs. Missing or nonpositive in-season pairs remain in excluded_pairs. Empty seasonal pools refuse without fallback. Model identity is receipt-bound; the registered all-season persistence comparator is unchanged. This is an uncalibrated modeling assumption, not evidence of seasonality or forecasting skill.","status":"draft; uncalibrated; not issued or externally timestamped","targets":{"fy_minus_9m":["au_prod_100_koz","cu_prod_100_kt"],"q4_qtd":["aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"],"quarter_qtd":["au_prod_100_koz","cu_prod_100_kt","aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb","capex_usd_m","capex_sustaining_usd_m","capex_projects_usd_m"],"quarter_qtd_nowcast":["au_prod_100_koz","cu_prod_100_kt","aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb","capex_usd_m","capex_sustaining_usd_m","capex_projects_usd_m"]},"quarterly":"All quarterly targets use the quarter after one common persistence point, including year rollover; original quarterly outcomes and matching quarterly guidance only. Legacy quarter_qtd cut/proof must precede quarter end.","post_quarter_nowcast":"Every target explicitly declares quarter_qtd_nowcast; nowcast_from_utc equals quarter end and proof_by_utc is later but strictly before mandatory earliest_outcome_release_utc. outcome_release_basis must cover preliminary announcements, not just later workbooks. Cut/proof follow quarter end; candidate cuts and authenticated scoring proofs must precede every FACT-cited original workbook/HTML publication day. Scoring requires an original Mine Stats release and label=nowcast. Distinct candidate/assessment schemas prevent mixing with advance forecasts; legacy rules are unchanged.","inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","live_points":"Production must be positive; supported cost and capex targets retain signed or zero printed values with verified ownership and no overlapping site status; historical ratio pairs still require two positive observations","estimate":"Declared point-quarter observation multiplied by the selected model's historical quarterly-ratio median","interval":"Point-quarter observation multiplied by inverse empirical CDF tails under the rules' alpha, ordering endpoint products for signed amounts; the all-season model's exact bounds equal the registered persistence baseline","rounding":"CSV lower bounds round toward negative infinity, upper bounds toward positive infinity, points to nearest with ties toward positive infinity; 0 through 12 decimal places, default 6; no negative zero","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; no comparative substitution or silent population shrinkage","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow","capex":"Total, minesite-sustaining and project capital expenditures are distinct printed Minestats site rows in USD millions, admitted only for quarter_qtd or quarter_qtd_nowcast. No scope substitution, cumulative subtraction, alias-based redefinition or ownership conversion is permitted. Candidates and persistence require stable ownership across eligible history and the point. Outcomes and quarterly guidance must match that usable point's ownership; incompatible outcomes remain unresolved. Guidance must name the matching issuer-reported capital scope. Status-derived Nil never becomes zero."}"#;
+pub const USAGE: &str = "forecast record build --rules <rules.toml> --model pooled-quarterly-ratio-empirical-v1|seasonal-quarterly-ratio-empirical-v1|pooled-quarterly-change-empirical-v1|seasonal-quarterly-change-empirical-v1 --as-of YYYY-MM-DDTHH:MM:SSZ [--decimal-places 6]";
+pub const ROBOT_DOCS_JSON: &str = concat!(
+    r#"{"schema":"fmine.forecast-record-candidate.v1","additive_schema":"fmine.forecast-record-candidate.v2","model":"pooled-quarterly-ratio-empirical-v1","models":["pooled-quarterly-ratio-empirical-v1","seasonal-quarterly-ratio-empirical-v1","pooled-quarterly-change-empirical-v1","seasonal-quarterly-change-empirical-v1"],"#,
+    r#""seasonal":"Explicit seasonal models select adjacent transitions whose destination calendar quarter matches the common forecast horizon, across all frozen live sites and years. All original sources remain required; other-season transitions retain both endpoints in off_season_pairs. Missing or inadmissible in-season pairs remain in excluded_pairs. Empty seasonal pools refuse without fallback. Model identity is receipt-bound; the registered all-season ratio persistence comparator is unchanged. This is an uncalibrated modeling assumption, not evidence of seasonality or forecasting skill.","#,
+    r#""additive":"Explicit change models pool exact after-before differences separately for each target. Signed or zero cost/capex histories remain admissible; production histories must be nonnegative. Point and interval are latest + Q(1/2) and latest + [Q(alpha/2),Q(1-alpha/2)] in the target's unit. Negative production bounds refuse before decimal rounding; nothing is clamped. Zero cost/capital points can therefore retain nonzero predictive width. Pooling absolute changes across sites assumes transferable changes, not relative growth or estimated site effects. Additive reports use v2 schemas, changes/change_count/lower_change/median_change/upper_change and an explicit change_unit; ratio v1 output, frozen rules, CSV and comparator semantics remain unchanged.","#,
+    r#""status":"draft; uncalibrated; not issued or externally timestamped","targets":{"fy_minus_9m":["au_prod_100_koz","cu_prod_100_kt"],"q4_qtd":["aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb"],"quarter_qtd":["au_prod_100_koz","cu_prod_100_kt","aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb","capex_usd_m","capex_sustaining_usd_m","capex_projects_usd_m"],"quarter_qtd_nowcast":["au_prod_100_koz","cu_prod_100_kt","aisc_usd_per_oz","tcc_usd_per_oz","c1_usd_per_lb","aisc_usd_per_lb","capex_usd_m","capex_sustaining_usd_m","capex_projects_usd_m"]},"#,
+    r#""quarterly":"All quarterly targets use the quarter after one common persistence point, including year rollover; original quarterly outcomes and matching quarterly guidance only. Legacy quarter_qtd cut/proof must precede quarter end.","#,
+    r#""post_quarter_nowcast":"Every target explicitly declares quarter_qtd_nowcast; nowcast_from_utc equals quarter end and proof_by_utc is later but strictly before mandatory earliest_outcome_release_utc. outcome_release_basis must cover preliminary announcements, not just later workbooks. Cut/proof follow quarter end; candidate cuts and authenticated scoring proofs must precede every FACT-cited original workbook/HTML publication day. Scoring requires an original Mine Stats release and label=nowcast. Distinct candidate/assessment schemas prevent mixing with advance forecasts; legacy rules are unchanged.","#,
+    r#""inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","live_points":"Production must be positive; supported cost and capex targets retain signed or zero printed values with verified ownership and no overlapping site status. Ratio history requires positive observations; additive admission checks ownership and numeric status on every signed or zero historical value too.","#,
+    r#""estimate":"Ratio models multiply the point-quarter observation by their historical quarterly-ratio median; change models add the median difference.","interval":"Ratio models multiply the latest observation by inverse empirical CDF tails, ordering products for signed amounts. Only the all-season ratio model's exact bounds equal the registered persistence baseline. Additive models use ordered translated tails.","#,
+    r#""rounding":"CSV lower bounds round toward negative infinity, upper bounds toward positive infinity, points to nearest with ties toward positive infinity; 0 through 12 decimal places, default 6; no negative zero","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; missing historical quarters never bridge, and no comparative substitution or silent population shrinkage occurs","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow","#,
+    r#""capex":"Total, minesite-sustaining and project capital expenditures are distinct printed Minestats site rows in USD millions, admitted only for quarter_qtd or quarter_qtd_nowcast. No scope substitution, cumulative subtraction, alias-based redefinition or ownership conversion is permitted. Candidates and persistence require stable ownership across eligible history and the point. Outcomes and quarterly guidance must match that usable point's ownership; incompatible outcomes remain unresolved. Guidance must name the matching issuer-reported capital scope. Status-derived Nil never becomes zero."}"#,
+);
 
 const VERB: &str = "forecast record build";
 const MAX_RULES_BYTES: u64 = 1024 * 1024;
@@ -24,9 +36,20 @@ const NO_CLAIM: &str = "Uncalibrated draft under an explicitly selected empirica
 const SYNTHETIC_NO_CLAIM: &str = "Synthetic, uncalibrated draft from invented source workbooks. It demonstrates the empirical calculation and does not describe an actual issuer or establish forecasting skill. Exact interval bounds equal the persistence baseline on the same synthetic inputs; decimal export may widen them. This does not issue or time-prove a forecast or supply an author attestation.";
 const SEASONAL_NO_CLAIM: &str = "Uncalibrated seasonal draft under an explicitly selected empirical model. Same-calendar-quarter historical transitions do not establish seasonality, stable future outcomes, calibrated coverage or forecasting skill. The registered all-season persistence comparator is unchanged; decimal export may widen candidate bounds. This does not issue or time-prove a forecast or supply an author attestation. From registered public evidence; no affiliation implied.";
 const SYNTHETIC_SEASONAL_NO_CLAIM: &str = "Synthetic, uncalibrated seasonal draft from invented source workbooks. It demonstrates same-calendar-quarter empirical ratios and does not describe an actual issuer, establish seasonality or forecasting skill. The registered all-season persistence comparator is unchanged; decimal export may widen candidate bounds. This does not issue or time-prove a forecast or supply an author attestation.";
+const CHANGE_NO_CLAIM: &str = "Uncalibrated additive-change draft under an explicitly selected empirical model. Pooling absolute adjacent-quarter changes across sites assumes transferable changes in the target's unit; it does not establish exchangeability, seasonality, stable future outcomes, calibrated coverage or forecasting skill. The registered all-season ratio persistence comparator is unchanged; decimal export may widen candidate bounds. This does not issue or time-prove a forecast or supply an author attestation. From registered public evidence; no affiliation implied.";
+const SYNTHETIC_CHANGE_NO_CLAIM: &str = "Synthetic, uncalibrated additive-change draft from invented source workbooks. It demonstrates absolute adjacent-quarter changes in the target's unit, not an actual issuer forecast. Pooling across sites and any seasonal selection are declared assumptions, with no calibrated coverage or forecasting-skill claim. The registered all-season ratio persistence comparator is unchanged; decimal export may widen candidate bounds. This does not issue or time-prove a forecast or supply an author attestation.";
 
 fn no_claim(report: &PublicCandidate) -> &'static str {
-    if report.candidate.model_id == SEASONAL_MODEL_ID {
+    if matches!(
+        report.candidate.model_id,
+        CHANGE_MODEL_ID | SEASONAL_CHANGE_MODEL_ID
+    ) {
+        if report.synthetic {
+            SYNTHETIC_CHANGE_NO_CLAIM
+        } else {
+            CHANGE_NO_CLAIM
+        }
+    } else if report.candidate.model_id == SEASONAL_MODEL_ID {
         if report.synthetic {
             SYNTHETIC_SEASONAL_NO_CLAIM
         } else {
@@ -93,7 +116,13 @@ pub(crate) fn parse(
     let model = match required("--model")? {
         MODEL_ID => CandidateModel::PooledQuarterlyRatio,
         SEASONAL_MODEL_ID => CandidateModel::SeasonalQuarterlyRatio,
-        _ => return Err(format!("--model requires {MODEL_ID}|{SEASONAL_MODEL_ID}")),
+        CHANGE_MODEL_ID => CandidateModel::PooledQuarterlyChange,
+        SEASONAL_CHANGE_MODEL_ID => CandidateModel::SeasonalQuarterlyChange,
+        _ => {
+            return Err(format!(
+                "--model requires {MODEL_ID}|{SEASONAL_MODEL_ID}|{CHANGE_MODEL_ID}|{SEASONAL_CHANGE_MODEL_ID}"
+            ));
+        }
     };
     let as_of = required("--as-of")?;
     if parse_utc(as_of).is_none() {
@@ -287,7 +316,7 @@ fn excluded_json(pair: &ExcludedPair) -> String {
     )
 }
 
-fn pool_json(pool: &CandidatePool) -> String {
+fn pool_json(pool: &CandidatePool, unit: Option<&str>) -> String {
     let season = pool
         .seasonal_destination_quarter
         .map_or_else(String::new, |q| {
@@ -300,14 +329,25 @@ fn pool_json(pool: &CandidatePool) -> String {
                     .join(","),
             )
         });
+    let (noun, plural, meaning) = match pool.kind {
+        ChangeKind::Ratio => ("ratio", "ratios", String::new()),
+        ChangeKind::Additive => (
+            "change",
+            "changes",
+            format!(
+                ",\"change_kind\":\"additive\",\"change_unit\":{}",
+                optional(unit)
+            ),
+        ),
+    };
     format!(
-        "{{\"target\":{},\"from\":{},\"through\":{},\"point_quarter\":{},\"ratio_count\":{},\"ratios\":[{}],\"excluded_pairs\":[{}],\"lower_ratio\":{},\"median_ratio\":{},\"upper_ratio\":{}{season}}}",
+        "{{\"target\":{},\"from\":{},\"through\":{},\"point_quarter\":{}{meaning},\"{noun}_count\":{},\"{plural}\":[{}],\"excluded_pairs\":[{}],\"lower_{noun}\":{},\"median_{noun}\":{},\"upper_{noun}\":{}{season}}}",
         js(&pool.target),
         js(&pool.pool_from.to_string()),
         js(&pool.pool_through.to_string()),
         js(&pool.point_quarter.to_string()),
-        pool.ratios.len(),
-        pool.ratios
+        pool.changes.len(),
+        pool.changes
             .iter()
             .map(|value| js(&exact(*value)))
             .collect::<Vec<_>>()
@@ -317,9 +357,9 @@ fn pool_json(pool: &CandidatePool) -> String {
             .map(excluded_json)
             .collect::<Vec<_>>()
             .join(","),
-        js(&exact(pool.lower_ratio)),
-        js(&exact(pool.median_ratio)),
-        js(&exact(pool.upper_ratio)),
+        js(&exact(pool.lower_change)),
+        js(&exact(pool.median_change)),
+        js(&exact(pool.upper_change)),
     )
 }
 
@@ -342,10 +382,15 @@ fn render_json(report: &PublicCandidate) -> String {
         String::new()
     };
     let post_quarter = report.rules.is_post_quarter_nowcast();
-    let schema = if post_quarter {
-        "fmine.forecast-record-nowcast-candidate.v1"
-    } else {
-        "fmine.forecast-record-candidate.v1"
+    let additive = candidate
+        .pools
+        .iter()
+        .any(|pool| pool.kind == ChangeKind::Additive);
+    let schema = match (post_quarter, additive) {
+        (true, true) => "fmine.forecast-record-nowcast-candidate.v2",
+        (false, true) => "fmine.forecast-record-candidate.v2",
+        (true, false) => "fmine.forecast-record-nowcast-candidate.v1",
+        (false, false) => "fmine.forecast-record-candidate.v1",
     };
     let horizon = if post_quarter {
         let publications = report.nowcast_publications.iter().map(|source| {
@@ -411,7 +456,16 @@ fn render_json(report: &PublicCandidate) -> String {
         candidate
             .pools
             .iter()
-            .map(pool_json)
+            .map(|pool| {
+                let unit = report
+                    .rules
+                    .targets
+                    .iter()
+                    .find(|target| target.id == pool.target)
+                    .and_then(fmine_calib::record::TargetMetric::from_target)
+                    .map(fmine_calib::record::TargetMetric::unit);
+                pool_json(pool, unit)
+            })
             .collect::<Vec<_>>()
             .join(","),
         report
@@ -496,9 +550,13 @@ fn render_markdown(report: &PublicCandidate) -> String {
     for pool in &report.candidate.pools {
         let _ = writeln!(
             out,
-            "- {}: {} ratios, {} excluded adjacent pairs, {} through {}; latest observation {}.",
+            "- {}: {} {}, {} excluded adjacent pairs, {} through {}; latest observation {}.",
             pool.target,
-            pool.ratios.len(),
+            pool.changes.len(),
+            match pool.kind {
+                ChangeKind::Ratio => "ratios",
+                ChangeKind::Additive => "additive changes in the target's unit",
+            },
             pool.excluded_pairs.len(),
             pool.pool_from,
             pool.pool_through,
@@ -507,8 +565,14 @@ fn render_markdown(report: &PublicCandidate) -> String {
         if let Some(q) = pool.seasonal_destination_quarter {
             let _ = writeln!(
                 out,
-                "  Selected transitions end in calendar Q{q}; {} other-season pairs remain in the JSON audit. Missing or nonpositive selected pairs are excluded without bridging gaps.",
+                "  Selected transitions end in calendar Q{q}; {} other-season pairs remain in the JSON audit. {}",
                 pool.off_season_pairs.len(),
+                match pool.kind {
+                    ChangeKind::Ratio =>
+                        "Missing or nonpositive selected pairs are excluded without bridging gaps.",
+                    ChangeKind::Additive =>
+                        "Missing or negative-production selected pairs are excluded without bridging gaps; signed costs and capital expenditures remain admissible.",
+                },
             );
         }
     }

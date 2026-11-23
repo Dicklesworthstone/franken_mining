@@ -98,6 +98,19 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   keeps the all-season model; the registered persistence comparator and its encodings are unchanged.
   Seasonal intervals may differ from that comparator, but model selection supplies no evidence of
   seasonality, calibrated coverage or independent forecasting skill.
+  DESIGN (BD-067/334): the explicit `PooledQuarterlyChange` and `SeasonalQuarterlyChange` models
+  instead use exact adjacent `after - before` differences in the target's unit. Their identifiers are
+  `pooled-quarterly-change-empirical-v1` and `seasonal-quarterly-change-empirical-v1`. Each latest value
+  receives the pool's median and tail quantiles additively. Signed and zero cost/capital history remains
+  usable; production history must be nonnegative and its live point remains positive. Missing or
+  inadmissible pairs remain explicit, with no bridging or seasonal fallback. A negative exact production
+  bound refuses before decimal export rather than rounding or clamping to zero. Supported field/outcome
+  pairs, not target aliases, control admission. `CandidatePool::kind` separates dimensionless ratios from
+  unit-bearing changes; the pure API's change fields cannot mislabel one as the other. Frozen CSV/rules
+  and the ratio comparator are unchanged. Pooling absolute changes across sites assumes transferable
+  changes at that target's scale; it estimates no site effect, relative growth or calibrated probability.
+  Direct controls in `record::candidate::tests` cover signed/zero capital and all sold-metal cost targets,
+  seasonal selection, missing quarters, physical-domain refusal, exact rounding, translation and overflow.
 - DESIGN (BD-047/BD-049, plan §10.1): `register_payload_with_metadata` freezes a complete
   `ForecastMetadata` beside the predictive distribution: family, author role, domain, horizon, site,
   quantity and unit. Every label is nonempty, trimmed, at most 256 bytes and free of control characters.

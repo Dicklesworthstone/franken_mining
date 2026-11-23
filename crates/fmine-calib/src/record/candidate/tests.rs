@@ -83,7 +83,8 @@ fn seasonal_candidate_has_independent_exact_bounds_and_a_complete_transition_aud
     let pool = &candidate.pools[0];
     // Independently selected Q3->Q4 ratios: Carlin [2, 3/2], Cortez [1/2, 1].
     // Sorted inverse ECDF at .1, .5, .9 yields 1/2, 1, 2; off-season extremes have no mass.
-    assert_eq!(pool.ratios, vec![i(2), r(3, 2), r(1, 2), i(1)]);
+    assert_eq!(pool.kind, ChangeKind::Ratio);
+    assert_eq!(pool.changes, vec![i(2), r(3, 2), r(1, 2), i(1)]);
     assert_eq!(pool.seasonal_destination_quarter, Some(4));
     assert!(pool.excluded_pairs.is_empty());
     assert_eq!(pool.off_season_pairs.len(), 6);
@@ -103,7 +104,7 @@ fn seasonal_candidate_has_independent_exact_bounds_and_a_complete_transition_aud
     let all_seasons = build_candidate(&rules, &inputs, 2).unwrap();
     assert_eq!(
         persistence_interval(
-            &all_seasons.pools[0].ratios,
+            &all_seasons.pools[0].changes,
             i(200),
             rules.alpha,
             rules.estimator,
@@ -113,7 +114,7 @@ fn seasonal_candidate_has_independent_exact_bounds_and_a_complete_transition_aud
         "the registered all-season baseline retains its independent exact values"
     );
     assert_ne!(all_seasons.exact_rows, candidate.exact_rows);
-    assert_eq!(all_seasons.pools[0].ratios.len(), 10);
+    assert_eq!(all_seasons.pools[0].changes.len(), 10);
     assert!(all_seasons.pools[0].off_season_pairs.is_empty());
     assert_eq!(all_seasons.pools[0].seasonal_destination_quarter, None);
     let mut reordered = inputs.clone();
@@ -155,9 +156,9 @@ fn seasonal_selection_supports_each_quarter_and_q4_to_q1_year_rollover() {
             build_candidate_with_model(&rules, &inputs, 2, CandidateModel::SeasonalQuarterlyRatio)
                 .unwrap();
         let pool = &candidate.pools[0];
-        assert_eq!(pool.ratios, expected);
+        assert_eq!(pool.changes, expected);
         assert_eq!(pool.seasonal_destination_quarter, Some(destination));
-        assert_eq!(pool.ratios.len() + pool.off_season_pairs.len(), 14);
+        assert_eq!(pool.changes.len() + pool.off_season_pairs.len(), 14);
         assert_eq!(
             rules.outcome_quarter().unwrap(),
             q(if destination == 1 { 2026 } else { 2025 }, destination)
@@ -174,7 +175,7 @@ fn seasonal_missing_and_nonpositive_pairs_are_not_bridged_or_replaced_by_other_s
         build_candidate_with_model(&rules, &inputs, 2, CandidateModel::SeasonalQuarterlyRatio)
             .unwrap();
     let pool = &candidate.pools[0];
-    assert_eq!(pool.ratios, vec![r(3, 2), i(1)]);
+    assert_eq!(pool.changes, vec![r(3, 2), i(1)]);
     assert_eq!(pool.excluded_pairs.len(), 2);
     assert_eq!(pool.excluded_pairs[0].after, None);
     assert_eq!(pool.excluded_pairs[1].after, Some(i(0)));
@@ -212,6 +213,198 @@ fn seasonal_cost_forecasts_retain_signed_and_zero_points() {
 }
 
 #[test]
+fn additive_models_use_signed_cost_and_capital_history_at_zero_and_negative_points() {
+    for field in [
+        "aisc_usd_per_oz",
+        "tcc_usd_per_oz",
+        "c1_usd_per_lb",
+        "aisc_usd_per_lb",
+        "capex_usd_m",
+        "capex_sustaining_usd_m",
+        "capex_projects_usd_m",
+    ] {
+        let mut rules = rules();
+        rules.targets[0].field = field.into();
+        rules.targets[0].outcome = crate::record::Outcome::QuarterQtd;
+        let mut inputs = series();
+        inputs[0].history = [-10, 0, -5].map(|n| Some(i(n))).to_vec();
+        inputs[1].history = [0, -20, 10].map(|n| Some(i(n))).to_vec();
+        inputs[0].point = Some(i(0));
+        inputs[1].point = Some(i(-40));
+        let candidate =
+            build_candidate_with_model(&rules, &inputs, 2, CandidateModel::PooledQuarterlyChange)
+                .unwrap();
+        assert_eq!(candidate.model_id, CHANGE_MODEL_ID);
+        let pool = &candidate.pools[0];
+        // Signed adjacent changes are [10,-5,-20,30]. The inverse ECDF
+        // selects -20, -5, 30, independently of the sign of the latest value.
+        assert_eq!(pool.kind, ChangeKind::Additive);
+        assert_eq!(pool.changes, [i(10), i(-5), i(-20), i(30)]);
+        assert_eq!(
+            (pool.lower_change, pool.median_change, pool.upper_change),
+            (i(-20), i(-5), i(30))
+        );
+        assert!(pool.excluded_pairs.is_empty());
+        assert_eq!(
+            candidate.csv,
+            concat!(
+                "site,target,point,p10,p90,uncalibrated\n",
+                "Carlin,production,-5.00,-20.00,30.00,true\n",
+                "Cortez,production,-45.00,-60.00,-10.00,true\n",
+            )
+        );
+        assert_eq!(candidate.exact_rows, candidate.serialized_rows);
+        assert_eq!(candidate.not_published_sites, ["Hemlo"]);
+        assert!(
+            build_candidate(&rules, &inputs, 2).is_err(),
+            "ratio model remains unchanged"
+        );
+        inputs.reverse();
+        assert_eq!(
+            build_candidate_with_model(&rules, &inputs, 2, CandidateModel::PooledQuarterlyChange,)
+                .unwrap(),
+            candidate
+        );
+    }
+}
+
+#[test]
+fn seasonal_additive_changes_keep_quarter_selection_and_missing_pairs_explicit() {
+    let (rules, mut inputs) = seasonal_fixture();
+    let build = |values: &[CandidateSeries]| {
+        build_candidate_with_model(&rules, values, 2, CandidateModel::SeasonalQuarterlyChange)
+    };
+    let candidate = build(&inputs).unwrap();
+    assert_eq!(candidate.model_id, SEASONAL_CHANGE_MODEL_ID);
+    let pool = &candidate.pools[0];
+    assert_eq!(pool.changes, [i(100), i(50), i(-25), i(0)]);
+    assert_eq!(pool.seasonal_destination_quarter, Some(4));
+    assert_eq!(pool.off_season_pairs.len(), 6);
+    assert_eq!(
+        (
+            candidate.exact_rows[0].lo,
+            candidate.exact_rows[0].point,
+            candidate.exact_rows[0].hi
+        ),
+        (i(175), i(200), i(300))
+    );
+    inputs[0].history[2] = Some(i(9));
+    assert_eq!(
+        build(&inputs).unwrap().csv,
+        candidate.csv,
+        "off-season extremes carry no mass"
+    );
+    inputs[0].history[1] = None;
+    let missing = build(&inputs).unwrap();
+    assert_eq!(missing.pools[0].changes, [i(50), i(-25), i(0)]);
+    assert_eq!(missing.pools[0].excluded_pairs.len(), 1);
+    assert_eq!(missing.pools[0].excluded_pairs[0].after, None);
+    for input in &mut inputs {
+        input.history[1] = None;
+        input.history[5] = None;
+    }
+    assert!(
+        build(&inputs)
+            .unwrap_err()
+            .to_string()
+            .contains("no admissible adjacent-quarter change into Q4")
+    );
+}
+
+#[test]
+fn additive_changes_do_not_bridge_gaps_or_discard_zero_production_history() {
+    let rules = rules();
+    let mut inputs = series();
+    inputs[0].history = vec![Some(i(0)), None, Some(i(100))];
+    inputs[1].history = [0, 1, 0].map(|n| Some(i(n))).to_vec();
+    let candidate =
+        build_candidate_with_model(&rules, &inputs, 2, CandidateModel::PooledQuarterlyChange)
+            .unwrap();
+    assert_eq!(candidate.pools[0].changes, [i(1), i(-1)]);
+    assert_eq!(candidate.pools[0].excluded_pairs.len(), 2);
+    assert_eq!(
+        (candidate.exact_rows[1].lo, candidate.exact_rows[1].hi),
+        (i(99), i(101))
+    );
+    inputs[0].history = [100, -1, 132].map(|n| Some(i(n))).to_vec();
+    let negative =
+        build_candidate_with_model(&rules, &inputs, 2, CandidateModel::PooledQuarterlyChange)
+            .unwrap();
+    assert_eq!(negative.pools[0].changes, candidate.pools[0].changes);
+    assert_eq!(negative.pools[0].excluded_pairs[0].after, Some(i(-1)));
+    assert_eq!(negative.pools[0].excluded_pairs[1].before, Some(i(-1)));
+}
+
+#[test]
+fn additive_forecasts_refuse_negative_production_before_decimal_rounding() {
+    let mut rules = rules();
+    let mut inputs = series();
+    for input in &mut inputs {
+        input.history = vec![Some(i(1)), Some(r(499, 500)), Some(r(249, 250))];
+        input.point = Some(r(1, 1000));
+    }
+    let error =
+        build_candidate_with_model(&rules, &inputs, 0, CandidateModel::PooledQuarterlyChange)
+            .unwrap_err();
+    assert!(error.to_string().contains("nonnegative production domain"));
+    // A cost-like alias does not authorize negative physical production.
+    rules.targets[0].field = "unknown".into();
+    assert!(
+        build_candidate_with_model(&rules, &inputs, 2, CandidateModel::PooledQuarterlyChange,)
+            .unwrap_err()
+            .to_string()
+            .contains("supported field/outcome")
+    );
+}
+
+#[test]
+fn additive_changes_keep_exact_rounding_translation_and_overflow_refusals() {
+    let mut rules = rules();
+    rules.targets[0].field = "aisc_usd_per_oz".into();
+    rules.targets[0].outcome = crate::record::Outcome::Q4Qtd;
+    let mut inputs = series();
+    for input in &mut inputs {
+        input.history = vec![Some(r(-1, 3)), Some(i(0)), Some(r(-1, 3))];
+        input.point = Some(i(0));
+    }
+    let build = |inputs: &[CandidateSeries]| {
+        build_candidate_with_model(&rules, inputs, 2, CandidateModel::PooledQuarterlyChange)
+    };
+    let candidate = build(&inputs).unwrap();
+    assert_eq!(
+        (
+            candidate.exact_rows[0].lo,
+            candidate.exact_rows[0].point,
+            candidate.exact_rows[0].hi
+        ),
+        (r(-1, 3), r(-1, 3), r(1, 3))
+    );
+    assert_eq!(
+        (
+            candidate.serialized_rows[0].lo,
+            candidate.serialized_rows[0].point,
+            candidate.serialized_rows[0].hi
+        ),
+        (r(-34, 100), r(-33, 100), r(34, 100))
+    );
+    for input in &mut inputs {
+        for value in input.history.iter_mut().chain([&mut input.point]) {
+            *value = value.map(|v| v.checked_add(i(10)).unwrap());
+        }
+    }
+    let shifted = build(&inputs).unwrap();
+    assert_eq!(shifted.pools, candidate.pools);
+    assert_eq!(shifted.exact_rows[0].lo, r(29, 3));
+    inputs[0].history = vec![Some(i(-i128::MAX)), Some(i(i128::MAX)), Some(i(0))];
+    assert_eq!(build(&inputs), Err(RecordError::Overflow));
+    for input in &mut inputs {
+        input.history = vec![Some(i(0)), Some(i(1)), Some(i(2))];
+        input.point = Some(i(i128::MAX));
+    }
+    assert_eq!(build(&inputs), Err(RecordError::Overflow));
+}
+
+#[test]
 fn exact_empirical_candidate_and_comparator_agree_on_bounds() {
     // Independent order statistics: sorted ratios [1, 1.1, 1.2, 1.5] select ranks 1, 2 and 4.
     let rules = rules();
@@ -219,10 +412,11 @@ fn exact_empirical_candidate_and_comparator_agree_on_bounds() {
     assert_eq!(candidate.model_id, MODEL_ID);
     assert_eq!(candidate.not_published_sites, ["Hemlo"]);
     let pool = &candidate.pools[0];
-    assert_eq!(pool.ratios, [r(11, 10), r(6, 5), i(1), r(3, 2)]);
+    assert_eq!(pool.kind, ChangeKind::Ratio);
+    assert_eq!(pool.changes, [r(11, 10), r(6, 5), i(1), r(3, 2)]);
     assert!(pool.excluded_pairs.is_empty());
     assert_eq!(
-        (pool.lower_ratio, pool.median_ratio, pool.upper_ratio),
+        (pool.lower_change, pool.median_change, pool.upper_change),
         (i(1), r(11, 10), r(3, 2))
     );
     assert_eq!(
@@ -249,7 +443,7 @@ fn exact_empirical_candidate_and_comparator_agree_on_bounds() {
         assert_eq!(
             (row.lo, row.hi),
             persistence_interval(
-                &pool.ratios,
+                &pool.changes,
                 input.point.unwrap(),
                 rules.alpha,
                 rules.estimator
@@ -308,7 +502,7 @@ fn signed_cost_points_reverse_bounds_and_zero_remains_a_complete_candidate() {
             assert_eq!(
                 (row.lo, row.hi),
                 persistence_interval(
-                    &candidate.pools[0].ratios,
+                    &candidate.pools[0].changes,
                     input.point.unwrap(),
                     rules.alpha,
                     rules.estimator
@@ -319,7 +513,7 @@ fn signed_cost_points_reverse_bounds_and_zero_remains_a_complete_candidate() {
 
         inputs[0].history[1] = Some(i(-1));
         let excluded = build_candidate(&rules, &inputs, 2).unwrap();
-        assert_eq!(excluded.pools[0].ratios, [i(1), r(3, 2)]);
+        assert_eq!(excluded.pools[0].changes, [i(1), r(3, 2)]);
         assert_eq!(excluded.pools[0].excluded_pairs.len(), 2);
         inputs[0].point = None;
         assert!(build_candidate(&rules, &inputs, 2).is_err());
@@ -467,7 +661,7 @@ fn missing_and_nonpositive_observations_omit_adjacent_pairs_without_bridging() {
     inputs[0].history[1] = None;
     let candidate = build_candidate(&rules(), &inputs, 2).unwrap();
     let pool = &candidate.pools[0];
-    assert_eq!(pool.ratios, [i(1), r(3, 2)]);
+    assert_eq!(pool.changes, [i(1), r(3, 2)]);
     assert_eq!(
         pool.excluded_pairs,
         [
@@ -490,7 +684,7 @@ fn missing_and_nonpositive_observations_omit_adjacent_pairs_without_bridging() {
     for value in [i(0), i(-1)] {
         inputs[0].history[1] = Some(value);
         let candidate = build_candidate(&rules(), &inputs, 2).unwrap();
-        assert_eq!(candidate.pools[0].ratios, [i(1), r(3, 2)]);
+        assert_eq!(candidate.pools[0].changes, [i(1), r(3, 2)]);
         assert_eq!(candidate.pools[0].excluded_pairs[0].after, Some(value));
         assert_eq!(candidate.pools[0].excluded_pairs[1].before, Some(value));
     }

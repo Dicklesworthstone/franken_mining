@@ -390,9 +390,10 @@ fn observation(
     read: &MineStatsRead,
     site: &str,
     target: &Target,
-    quarter: Quarter,
-    role: &'static str,
+    position: (Quarter, &'static str),
+    model: CandidateModel,
 ) -> Result<CandidateObservation> {
+    let (quarter, role) = position;
     let metric = TargetMetric::from_target(target)
         .ok_or_else(|| invalid(format!("unsupported field/outcome for {}", target.id)))?;
     let period = Period {
@@ -461,12 +462,19 @@ fn observation(
         .and_then(|s| s.cells_by_coord.values().find(|c| c.cell_ref == raw.cell))
         .and_then(|c| c.displayed());
     let signed_point = role == "point" && !metric.is_production();
+    let additive_history = model.is_additive() && role == "history";
+    let zero_admissible = signed_point || additive_history;
     let (value, mut reason) = match displayed {
         Some(Ok(display)) => match Rat::from_decimal_str(&display.text()) {
             Ok(value) => (
                 Some(value),
-                (value.signum() <= 0 && !signed_point)
-                    .then(|| "non_positive_printed_number_excluded_by_model".to_string()),
+                if additive_history {
+                    (metric.is_production() && value.signum() < 0)
+                        .then(|| "negative_printed_production_excluded_by_model".to_string())
+                } else {
+                    (value.signum() <= 0 && !signed_point)
+                        .then(|| "non_positive_printed_number_excluded_by_model".to_string())
+                },
             ),
             Err(_) if matches!(display.text().trim(), "" | "-" | "–" | "—" | "n/a" | "N/A") => {
                 (None, Some("printed_placeholder".into()))
@@ -532,11 +540,11 @@ fn observation(
             && flagged == Some(key::StatusKind::Withheld))
         .then(|| per_ounce_withholding_note(source, site, period.year))
         .flatten();
-        // A zero cost or capex point requires an unflagged source number. In particular, a status-derived
-        // Nil must not become a zero forecast just because its stored cell happens to contain zero.
-        if (((value.signum() != 0 || signed_point) && overlaps_status)
+        // Every zero admitted by a model needs an unflagged numeric assertion. A
+        // status-derived Nil cannot become an additive observation or a live point.
+        if (((value.signum() != 0 || zero_admissible) && overlaps_status)
             || flagged.is_some()
-            || (signed_point && !matches!(&claim.claim.value, PublicValue::Number { .. })))
+            || (zero_admissible && !matches!(&claim.claim.value, PublicValue::Number { .. })))
             && note.is_none()
         {
             return Err(refuse(
@@ -614,8 +622,8 @@ fn finish(
                     read,
                     &site.name,
                     target,
-                    quarter,
-                    role,
+                    (quarter, role),
+                    prepared.model,
                 )?;
                 if role == "history" {
                     history.push(row.value);
@@ -628,10 +636,9 @@ fn finish(
             if TargetMetric::from_target(target).is_some_and(|m| !m.is_production()) {
                 let mut bases = BTreeSet::new();
                 for row in &observations[start..] {
-                    if row
-                        .value
-                        .is_some_and(|x| x.signum() > 0 || row.role == "point")
-                        && let Some(claim) = &row.claim
+                    if row.value.is_some_and(|x| {
+                        x.signum() > 0 || row.role == "point" || prepared.model.is_additive()
+                    }) && let Some(claim) = &row.claim
                     {
                         bases.insert(SeriesOwnershipBasis::from(claim.key.ownership_basis));
                     }
@@ -723,6 +730,8 @@ pub fn build(
 /// Build a source-bound candidate with an explicitly selected empirical model. Seasonal selection
 /// retains every original release and observation required by the frozen pool, including off-season
 /// transitions; it changes no source admission, ownership, information-cut or issuance requirement.
+/// Additive models extend numeric history admission to unflagged zero and signed cost/capital values;
+/// every such value also participates in the source-status and ownership-consistency checks.
 pub fn build_with_model(
     root: &Path,
     rules_bytes: &[u8],

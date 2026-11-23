@@ -172,7 +172,7 @@ fn fixture_quarters<const N: usize>(
             &sheets,
             Some(&MinimalStyles {
                 num_fmts: vec![],
-                xfs: vec![0, 1],
+                xfs: vec![0, 1, 2],
             }),
         );
         let workbook = Workbook::from_bytes(format!("invented/{file_name}"), &bytes).unwrap();
@@ -242,7 +242,7 @@ fn seasonal_candidate_retains_off_season_original_sources_and_binds_their_change
     assert!(report.observations.iter().all(|row| row.claim.is_some()));
     let pool = &report.candidate.pools[0];
     assert_eq!(
-        pool.ratios,
+        pool.changes,
         vec![Rat::new(5, 4).unwrap(), Rat::new(1, 2).unwrap()]
     );
     assert_eq!(pool.off_season_pairs.len(), 4);
@@ -454,6 +454,17 @@ fn capex_rules() -> String {
 
 fn capex_sheet(q: u8, sheet: &mut MinimalSheet) {
     let text = |value: &str| MinimalCell::Text(value.into());
+    let amount = |value: f64| {
+        if value.fract() == 0.0 {
+            MinimalCell::Number(value)
+        } else {
+            // Fractional public values require explicit displayed precision.
+            MinimalCell::Styled {
+                raw: value.to_string(),
+                xf: 2,
+            }
+        }
+    };
     let (sustaining, projects, total) = match q {
         1 => ([10.0, 20.0], [30.0, 40.0], [40.0, 60.0]),
         2 => ([20.0, 80.0], [90.0, 80.0], [110.0, 160.0]),
@@ -469,13 +480,13 @@ fn capex_sheet(q: u8, sheet: &mut MinimalSheet) {
         ("C3".into(), MinimalCell::Number(2030.0)),
         ("A4".into(), text("Capital expenditures ($ millions)")),
         ("A5".into(), text("Minesite sustaining")),
-        ("B5".into(), MinimalCell::Number(sustaining[0])),
+        ("B5".into(), amount(sustaining[0])),
         ("C5".into(), MinimalCell::Number(sustaining[1])),
         ("A6".into(), text("Projects")),
         ("B6".into(), MinimalCell::Number(projects[0])),
         ("C6".into(), MinimalCell::Number(projects[1])),
         ("A7".into(), text("Total capital expenditures ($ millions)")),
-        ("B7".into(), MinimalCell::Number(total[0])),
+        ("B7".into(), amount(total[0])),
         ("C7".into(), MinimalCell::Number(total[1])),
     ];
 }
@@ -492,9 +503,21 @@ fn capex_candidates_bind_three_quarterly_scopes_with_signed_and_zero_points() {
     .unwrap();
     assert_eq!(report.candidate.exact_rows.len(), 6);
     for (target, lo, hi) in [
-        ("capex_usd_m", Rat::new(-55, 16).unwrap(), Rat::new(-10, 3).unwrap()),
-        ("capex_sustaining_usd_m", Rat::from_integer(-5), Rat::new(-5, 2).unwrap()),
-        ("capex_projects_usd_m", Rat::from_integer(0), Rat::from_integer(0)),
+        (
+            "capex_usd_m",
+            Rat::new(-55, 16).unwrap(),
+            Rat::new(-10, 3).unwrap(),
+        ),
+        (
+            "capex_sustaining_usd_m",
+            Rat::from_integer(-5),
+            Rat::new(-5, 2).unwrap(),
+        ),
+        (
+            "capex_projects_usd_m",
+            Rat::from_integer(0),
+            Rat::from_integer(0),
+        ),
     ] {
         let row = report
             .candidate
@@ -504,7 +527,12 @@ fn capex_candidates_bind_three_quarterly_scopes_with_signed_and_zero_points() {
             .unwrap();
         assert_eq!((row.lo, row.hi), (lo, hi));
         let metric = TargetMetric::from_target(
-            report.rules.targets.iter().find(|t| t.id == target).unwrap(),
+            report
+                .rules
+                .targets
+                .iter()
+                .find(|t| t.id == target)
+                .unwrap(),
         )
         .unwrap();
         let observations = report
@@ -517,13 +545,26 @@ fn capex_candidates_bind_three_quarterly_scopes_with_signed_and_zero_points() {
             let claim = observation.claim.as_ref().unwrap();
             assert_eq!(claim.key.line.label, metric.source_line());
             assert_eq!(claim.key.unit, "usd_m");
-            assert_eq!(claim.key.reporting_vintage.release, observation.quarter.to_string());
+            assert_eq!(
+                claim.key.reporting_vintage.release,
+                observation.quarter.to_string()
+            );
             assert_eq!(claim.key.reporting_vintage.file_sha256, observation.sha256);
             assert!(claim.locator.contains(":Minestats1!"));
         }
     }
-    assert!(report.candidate.csv.contains("Site A,capex_usd_m,-3.33,-3.44,-3.33,true"));
-    assert!(report.candidate.csv.contains("Site A,capex_projects_usd_m,0.00,0.00,0.00,true"));
+    assert!(
+        report
+            .candidate
+            .csv
+            .contains("Site A,capex_usd_m,-3.33,-3.44,-3.33,true")
+    );
+    assert!(
+        report
+            .candidate
+            .csv
+            .contains("Site A,capex_projects_usd_m,0.00,0.00,0.00,true")
+    );
     assert_eq!(
         record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
         report.candidate.serialized_rows
@@ -554,9 +595,21 @@ fn capex_candidates_refuse_wrong_scope_period_units_ownership_and_status_zeros()
                 return;
             }
             match defect {
-                0 => replace_cell(sheet, "A7", MinimalCell::Text("Adjusted capital expenditures ($ millions)".into())),
-                1 => replace_cell(sheet, "A3", MinimalCell::Text("For the nine months ended".into())),
-                2 => replace_cell(sheet, "A4", MinimalCell::Text("Capital expenditures (CAD millions)".into())),
+                0 => replace_cell(
+                    sheet,
+                    "A7",
+                    MinimalCell::Text("Adjusted capital expenditures ($ millions)".into()),
+                ),
+                1 => replace_cell(
+                    sheet,
+                    "A3",
+                    MinimalCell::Text("For the nine months ended".into()),
+                ),
+                2 => replace_cell(
+                    sheet,
+                    "A4",
+                    MinimalCell::Text("Capital expenditures (CAD millions)".into()),
+                ),
                 3 => replace_cell(sheet, "B2", MinimalCell::Text("Site A".into())),
                 4 => replace_cell(sheet, "B2", MinimalCell::Text("Site A (60%)".into())),
                 5 => replace_cell(sheet, "B7", MinimalCell::Text("—".into())),
@@ -578,6 +631,212 @@ fn capex_candidates_refuse_wrong_scope_period_units_ownership_and_status_zeros()
             });
         }
         assert!(finish(prepared, sources, 2).is_err(), "defect {defect}");
+    }
+}
+
+fn signed_capex_history(q: u8, sheet: &mut MinimalSheet) {
+    capex_sheet(q, sheet);
+    let (a, b) = match q {
+        1 => (-10.0, 0.0),
+        2 => (0.0, -20.0),
+        _ => (0.0, -40.0),
+    };
+    // Total remains the sum of the two independently named capital scopes.
+    for (row, scale) in [(5, 1.0), (6, 2.0), (7, 3.0)] {
+        replace_cell(sheet, &format!("B{row}"), MinimalCell::Number(a * scale));
+        replace_cell(sheet, &format!("C{row}"), MinimalCell::Number(b * scale));
+    }
+}
+
+#[test]
+fn additive_candidates_retain_signed_original_capex_histories_and_scope_specific_widths() {
+    let rules = capex_rules();
+    let (registry, sources) = fixture(signed_capex_history);
+    let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+    prepared.model = CandidateModel::PooledQuarterlyChange;
+    let report = finish(prepared, sources.clone(), 2).unwrap();
+    assert_eq!(
+        report.candidate.model_id,
+        "pooled-quarterly-change-empirical-v1"
+    );
+    assert_eq!(report.observations.len(), 18);
+    assert!(report.observations.iter().all(|row| row.reason.is_none()));
+    for (target, scale) in [
+        ("capex_sustaining_usd_m", 1),
+        ("capex_projects_usd_m", 2),
+        ("capex_usd_m", 3),
+    ] {
+        let pool = report
+            .candidate
+            .pools
+            .iter()
+            .find(|p| p.target == target)
+            .unwrap();
+        assert_eq!(
+            pool.kind,
+            fmine_calib::record::candidate::ChangeKind::Additive
+        );
+        assert_eq!(
+            pool.changes,
+            [
+                Rat::from_integer(10 * scale),
+                Rat::from_integer(-20 * scale)
+            ]
+        );
+        assert!(pool.excluded_pairs.is_empty());
+        for (site, expected) in [("Site A", (-20, -20, 10)), ("Site B", (-60, -60, -30))] {
+            let row = report
+                .candidate
+                .exact_rows
+                .iter()
+                .find(|r| r.site == site && r.target == target)
+                .unwrap();
+            assert_eq!(
+                (row.lo, row.point, row.hi),
+                (
+                    Rat::from_integer(expected.0 * scale),
+                    Rat::from_integer(expected.1 * scale),
+                    Rat::from_integer(expected.2 * scale),
+                )
+            );
+        }
+        for observation in report
+            .observations
+            .iter()
+            .filter(|row| row.target == target)
+        {
+            let claim = observation.claim.as_ref().unwrap();
+            assert_eq!(claim.key.unit, "usd_m");
+            assert_eq!(
+                claim.key.reporting_vintage.release,
+                observation.quarter.to_string()
+            );
+            assert_eq!(claim.key.reporting_vintage.file_sha256, observation.sha256);
+            assert!(matches!(
+                &claim.claim.value,
+                PublicValue::Number {
+                    under_status: None,
+                    ..
+                }
+            ));
+        }
+    }
+    assert_eq!(
+        record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+        report.candidate.serialized_rows
+    );
+    assert!(
+        finish(
+            prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+            sources,
+            2
+        )
+        .unwrap_err()
+        .what
+        .contains("no positive adjacent-quarter ratio")
+    );
+}
+
+#[test]
+fn additive_history_checks_ownership_and_status_on_previously_excluded_negative_and_zero_values() {
+    let rules = capex_rules();
+    for cell in ["B2", "C2"] {
+        let (registry, sources) = fixture(|q, sheet| {
+            signed_capex_history(q, sheet);
+            if q == 1 {
+                replace_cell(
+                    sheet,
+                    cell,
+                    MinimalCell::Text(
+                        if cell == "B2" {
+                            "Site A (60%)"
+                        } else {
+                            "Site B (80%)"
+                        }
+                        .into(),
+                    ),
+                );
+            }
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str());
+        assert!(error.what.contains("changing ownership"));
+    }
+    for kind in [
+        key::StatusKind::Withheld,
+        key::StatusKind::Disposed,
+        key::StatusKind::CareAndMaintenance,
+    ] {
+        let (registry, sources) = fixture(signed_capex_history);
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        prepared.profile.subject_statuses.push(key::SubjectStatus {
+            subject: "Site B".into(),
+            kind,
+            first: (2030, 1),
+            last: Some((2030, 3)),
+            evidence: "DESIGN: invented unavailable historical quarter".into(),
+        });
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str());
+        assert!(error.what.contains("status"));
+    }
+}
+
+#[test]
+fn additive_cost_candidates_keep_zero_and_signed_history_without_relabelling_it_excluded() {
+    for (field, header, unit) in [
+        (
+            "aisc_usd_per_oz",
+            "All-in sustaining costs ($/oz)",
+            "usd_per_oz",
+        ),
+        ("tcc_usd_per_oz", "Total cash costs ($/oz)", "usd_per_oz"),
+        ("c1_usd_per_lb", "C1 cash costs ($/lb)", "usd_per_lb"),
+        (
+            "aisc_usd_per_lb",
+            "All-in sustaining costs ($/lb)",
+            "usd_per_lb",
+        ),
+    ] {
+        let rules = RULES.replace("aisc_usd_per_oz", field);
+        let (registry, sources) = fixture(|q, sheet| {
+            replace_cell(sheet, "C2", MinimalCell::Text(header.into()));
+            let (a, b) = match q {
+                1 => (-10.0, 0.0),
+                2 => (0.0, -20.0),
+                _ => (0.0, -40.0),
+            };
+            replace_cell(sheet, "C3", MinimalCell::Number(a));
+            replace_cell(sheet, "C4", MinimalCell::Number(b));
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        let report = finish(prepared, sources, 2).unwrap();
+        let row = report
+            .candidate
+            .exact_rows
+            .iter()
+            .find(|r| r.site == "Site A" && r.target == "unit_cost")
+            .unwrap();
+        assert_eq!(
+            (row.lo, row.point, row.hi),
+            (
+                Rat::from_integer(-20),
+                Rat::from_integer(-20),
+                Rat::from_integer(10),
+            )
+        );
+        for row in report
+            .observations
+            .iter()
+            .filter(|r| r.target == "unit_cost")
+        {
+            assert!(row.reason.is_none());
+            assert_eq!(row.claim.as_ref().unwrap().key.unit, unit);
+        }
     }
 }
 
@@ -1174,7 +1433,7 @@ fn missing_rows_placeholders_and_nonpositive_history_are_audited_without_imputat
     });
     let report = run(&registry, sources).unwrap();
     for pool in &report.candidate.pools {
-        assert_eq!(pool.ratios.len(), 1);
+        assert_eq!(pool.changes.len(), 1);
         assert_eq!(pool.excluded_pairs.len(), 1);
         assert_eq!(pool.excluded_pairs[0].site, "Site A");
     }
@@ -1439,7 +1698,7 @@ fn withholding_exception_never_supplies_missing_notes_costs_points_or_disposal_s
                 .candidate
                 .pools
                 .iter()
-                .all(|p| p.ratios.len() == 1 && p.excluded_pairs.len() == 1)
+                .all(|p| p.changes.len() == 1 && p.excluded_pairs.len() == 1)
         );
         for row in report
             .observations
@@ -1478,11 +1737,11 @@ fn real_q3_candidate_preserves_partial_production_and_matches_independent_fracti
             .find(|p| p.target == target)
             .unwrap();
         assert_eq!(
-            (pool.ratios.len(), pool.excluded_pairs.len()),
+            (pool.changes.len(), pool.excluded_pairs.len()),
             (count, excluded)
         );
         assert_eq!(
-            [pool.lower_ratio, pool.median_ratio, pool.upper_ratio],
+            [pool.lower_change, pool.median_change, pool.upper_change],
             ratios.map(|(n, d)| Rat::new(n, d).unwrap())
         );
     }
@@ -1657,11 +1916,17 @@ fn post_quarter_nowcast_candidates_keep_original_inputs_and_reject_known_publica
     assert!(report.rules.is_post_quarter_nowcast());
     assert_eq!(report.candidate.exact_rows.len(), 4);
     assert_eq!(report.sources.len(), 3);
-    assert!(report.nowcast_publications.is_empty(), "unissued draft, no claim that a release is registered");
+    assert!(
+        report.nowcast_publications.is_empty(),
+        "unissued draft, no claim that a release is registered"
+    );
     assert!(report.observations.iter().all(|row| row.quarter.q <= 3));
     for invalid_cut in ["2030-12-31T23:59:59Z", "2031-01-14T23:59:59Z"] {
         assert_eq!(
-            prepare(rules.as_bytes(), registry.as_bytes(), invalid_cut).err().unwrap().code,
+            prepare(rules.as_bytes(), registry.as_bytes(), invalid_cut)
+                .err()
+                .unwrap()
+                .code,
             "FMINE-REF-206"
         );
     }
@@ -1677,30 +1942,55 @@ fn post_quarter_nowcast_candidates_keep_original_inputs_and_reject_known_publica
     )
     .unwrap();
     assert_eq!(bounded.candidate.csv, report.candidate.csv);
-    assert_ne!(bounded.digest, report.digest, "the full release registry remains receipt-bound");
+    assert_ne!(
+        bounded.digest, report.digest,
+        "the full release registry remains receipt-bound"
+    );
     assert_eq!(bounded.nowcast_publications[0].file, "Future.xlsx");
     assert_eq!(
         bounded.nowcast_publications[0].day_start_utc,
         record::parse_utc("2031-01-10T00:00:00Z").unwrap()
     );
     assert_eq!(
-        prepare(rules.as_bytes(), registered.as_bytes(), "2031-01-10T00:00:00Z")
-            .err().unwrap().code,
+        prepare(
+            rules.as_bytes(),
+            registered.as_bytes(),
+            "2031-01-10T00:00:00Z"
+        )
+        .err()
+        .unwrap()
+        .code,
         "FMINE-REF-108"
     );
     for invalid in [
-        registered.replace("published_at = \"2031-01-10\"\n", "")
-            .replace("published_at_basis = \"FACT: invented original release day\"\n", ""),
-        registered.replace("FACT: invented original release day", "INFERENCE: retrieval is not a publication bound"),
+        registered
+            .replace("published_at = \"2031-01-10\"\n", "")
+            .replace(
+                "published_at_basis = \"FACT: invented original release day\"\n",
+                "",
+            ),
+        registered.replace(
+            "FACT: invented original release day",
+            "INFERENCE: retrieval is not a publication bound",
+        ),
     ] {
-        assert_eq!(prepare(rules.as_bytes(), invalid.as_bytes(), cut).err().unwrap().code, "FMINE-REF-108");
+        assert_eq!(
+            prepare(rules.as_bytes(), invalid.as_bytes(), cut)
+                .err()
+                .unwrap()
+                .code,
+            "FMINE-REF-108"
+        );
     }
     let preliminary = format!(
         "{registered}\n[[html]]\nfile = \"preliminary.html\"\nrelease = \"2030Q4\"\nurl = \"https://example.invalid/preliminary.html\"\nurl_basis = \"W1 table\"\npublished_at = \"2031-01-04\"\npublished_at_basis = \"FACT: invented preliminary production announcement\"\nbytes = 1\nsha256 = \"{}\"\n",
         "e".repeat(64)
     );
     assert_eq!(
-        prepare(rules.as_bytes(), preliminary.as_bytes(), cut).err().unwrap().code,
+        prepare(rules.as_bytes(), preliminary.as_bytes(), cut)
+            .err()
+            .unwrap()
+            .code,
         "FMINE-REF-108",
         "an earlier registered preliminary release takes precedence over the later workbook"
     );
