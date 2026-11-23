@@ -1934,8 +1934,9 @@ original encoding and remain readable. New information choices use compact v3 op
 card and policy JSON directly as quoted strings while preserving their exact bytes and digests.
 If an unlinked action would exceed the limit in v1, the writer tries compact v5, which retains the
 same card bytes and digests. Reading a v5 entry requires a v5-capable reader. Forecast-linked choices use v4.
-Mixed histories use v2 reports. An independently saved `--head` detects rollback or rewriting; unpinned
-inspection explicitly cannot establish the original history or evaluation provenance. Host-clock accuracy
+Action-only histories use v1 reports. Histories with information choices use v2 reports. A forecast link
+on any decision selects v3 for the whole report. An independently saved `--head` detects rollback or
+rewriting. Unpinned inspection cannot establish the original history or evaluation provenance. Host-clock accuracy
 and the code revision are declarations, not external time proof or authenticated human identity. Recording
 a choice grants no approval, sign-off or execution authority and does not close the full BD-225 gate.
 
