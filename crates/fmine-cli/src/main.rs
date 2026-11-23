@@ -9,10 +9,20 @@ use std::process::ExitCode;
 const EXIT_IO: u8 = 5;
 
 fn main() -> ExitCode {
-    let raw_args: Vec<String> = env::args().skip(1).collect();
+    let raw_args: Result<Vec<_>, _> = env::args_os()
+        .skip(1)
+        .map(|arg| arg.into_string())
+        .collect();
     let default_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     // Every invocation, a usage error included, prints exactly one envelope (BD-329.S3).
-    let (text, exit_code) = fmine_cli::run(&raw_args, &default_root);
+    let (text, exit_code) = match raw_args {
+        Ok(args) => fmine_cli::run(&args, &default_root),
+        Err(_) => {
+            let env =
+                fmine_cli::Envelope::usage_error("unknown", "arguments must be valid Unicode");
+            (env.to_json(), env.exit_code)
+        }
+    };
     // A closed or full stdout is exit 5 with a line on stderr. `println!` would panic and exit 101, which is not
     // in the exit-code dictionary, and the envelope's own code would claim an outcome its reader never got.
     let mut out = io::stdout().lock();

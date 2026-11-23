@@ -4,6 +4,25 @@ use std::process::{Command, Stdio};
 
 use fmine_core::rand::{PhiloxStream, RngKey};
 
+#[test]
+#[cfg(unix)]
+fn non_unicode_argv_prints_one_usage_envelope() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
+        .args(["recon", "run", "--input"])
+        .arg(OsStr::from_bytes(b"worksheet-\xff.toml"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.lines().count(), 1);
+    assert!(stdout.contains("\"status\":\"usage_error\""));
+    assert!(stdout.contains("\"exit_code\":2"));
+}
+
 /// Verbs, flags and words `parse_args` knows, beside junk, so the generator reaches every branch of the parser
 /// and the verbs behind it. `--workspace` values only ever name the test's empty or missing roots, so no issuer
 /// file is read.
