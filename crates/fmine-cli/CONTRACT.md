@@ -7,6 +7,10 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 - **Layer:** U
 - **Subsystem:** Adit
 
+- DESIGN (BD-054). `decide card <model> --brief` selects the executive Markdown view of the same evaluated
+  Claim, with the worksheet path and SHA-256. An explicit JSON format or a different verb refuses the flag.
+  The ordinary JSON and analyst Markdown retain the full comparison.
+
 - DESIGN (bd-4hg5, bd-rn1q, bd-3a2a, bd-jg7w, bd-zabr). `decide program` admits
   `fmine.executive-decision.v1` for source-bound committee comparisons. Each worksheet declares owner,
   scope, decision date, evidence lane, omitted uncertainty and a reconsideration trigger. Every table

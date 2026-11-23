@@ -143,6 +143,12 @@ each break-even and tail loss. Durable journal records retain their original car
   `information_to_markdown` and `downside_to_markdown` so source-retaining receipts can render the same
   complete policy and risk results without a second evaluator or loss of information-option choices.
 - `FlipMargin`, `DecisionCard` (`build`, `build_as_of`, `temporal_replay_bytes`)
+- DESIGN (BD-054). `EvaluatedCard::executive_brief` binds an `EpistemicOnePager` to the same finite-scenario
+  output Claim as the analyst view. It shows the nominal winners, the primary payoff range, the exact
+  additional cost needed to tie another immediate action, modeled information value, any stressed
+  ranking and downside limit, and the omitted scenarios and their triggers. It retains ties and
+  identifies an already-tied choice. Evidence class and calibration scope travel with the result.
+  `tests/decisions/expansion_brief.md` is the hand-worked command golden.
 - `RetrospectiveDecisionCard`: immutable `card`, `cone` and `replay` accessors; scoped Markdown renderer
   (`render_one_pager_markdown`), which puts a "Historical check" section before the card
 - `VoiCampaign`, `VoiRankedItem`, `rank_voi_campaigns -> Result<Vec<VoiRankedItem>, Refusal>`

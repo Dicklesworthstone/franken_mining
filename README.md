@@ -2035,6 +2035,7 @@ draft DecisionCard. Run the invented expansion exercise supplied in the reposito
 ```bash
 cargo run -p fmine-cli -- decide card tests/decisions/expansion.toml --format markdown
 cargo run -p fmine-cli -- decide card tests/decisions/expansion.toml --json
+cargo run -p fmine-cli -- decide card tests/decisions/expansion.toml --brief
 ```
 
 The model declares named states with exact rational probabilities, monetary payoffs for every action in every
