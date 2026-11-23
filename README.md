@@ -3766,8 +3766,12 @@ cut. `--selector first-published` is the default; `latest-as-of` selects eligibl
 actual result digest in the operation, including when the caller omits that option. Replay checks that binding
 and refuses a different result; a v2 assessment without its stored digest is invalid. The cut must already
 be in the past under the declared clock bound.
-Reopening restores these seals and earlier assessment digests. `inspect`
-replays recorded operations without writing; omitting its optional head pin leaves rollback authenticity unchecked.
+Reopening restores these seals and earlier assessment digests. Run `forecast journal inspect --journal <path>
+--head <retained-head> --format markdown` to see the calibration flag and resolved/total forecasts at each
+saved cut. Compare rows for the same cohort and selector. For example, a later revision can change the
+`latest-as-of` verdict while the original measurements still give the same `first-published` verdict.
+The rows follow journal order and include the digest for opening each full report. Inspection is read-only.
+An independently retained head lets the reader detect rollback.
 
 Recover a complete saved assessment using its exact `payload.report.assessment.digest`:
 

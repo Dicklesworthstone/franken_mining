@@ -24,7 +24,7 @@ use super::source::{PublicMissing, ReceiptClaim, ResolvedOriginalOutcome, Status
 use super::{
     Assessment, AssessmentFailure, MemberOutcome, Replay, Row, absent, cohort_json, display_or,
     invalid, js, missing, missing_name, parse_subset, payload_json, selection, selector_name, time,
-    utc,
+    utc, utc_text,
 };
 use crate::{DOCTOR_WHY, Envelope, NextAction};
 
@@ -748,17 +748,10 @@ pub(super) fn persisted_report(
     state: &mut Replay,
     digest: Digest32,
 ) -> Result<Assessment, Refusal> {
-    let (cohort, as_of_ns, selector) = state
+    let checkpoint = state
         .checkpoints
         .iter()
         .find(|checkpoint| checkpoint.digest == digest)
-        .map(|checkpoint| {
-            (
-                checkpoint.cohort.clone(),
-                checkpoint.as_of_ns,
-                checkpoint.selector,
-            )
-        })
         .ok_or_else(|| {
             absent(format!(
                 "assessment {digest} was not persisted in this journal"
@@ -766,7 +759,8 @@ pub(super) fn persisted_report(
         })?;
     // Replay already populated this exact immutable assessment and its seal. This retrieves the cached
     // result; accepting arbitrary cohort/cut inputs here would introduce a new assessment instead.
-    let report = state.assessment(&cohort, as_of_ns, selector)?;
+    let cohort = checkpoint.cohort.clone();
+    let report = state.assessment(&cohort, checkpoint.as_of_ns, checkpoint.selector)?;
     if report.digest != digest {
         return Err(Refusal::new(
             RefusalCode::DigestMismatch505,
@@ -1760,17 +1754,19 @@ fn presentation_at(
         .checkpoints
         .iter()
         .map(|checkpoint| {
+            let summary = if operation == "inspect" {
+                format!(",\"calibration_flag\":{},\"n_resolved\":{},\"n_members\":{}",
+                    js(checkpoint.flag.as_str()), checkpoint.resolved, checkpoint.members)
+            } else {
+                String::new()
+            };
             format!(
-                "{{\"cohort\":{},\"as_of_ns\":{},\"selector\":{},\"digest\":{},\"result_digest_binding\":{}}}",
+                "{{\"cohort\":{},\"as_of_ns\":{},\"selector\":{},\"digest\":{},\"result_digest_binding\":{}{summary}}}",
                 js(&checkpoint.cohort),
                 checkpoint.as_of_ns,
                 js(selector_name(checkpoint.selector)),
                 js(&checkpoint.digest.to_hex()),
-                js(if checkpoint.expected.is_some() {
-                    "persisted_checkpoint"
-                } else {
-                    "legacy_unbound"
-                }),
+                js(checkpoint.binding()),
             )
         })
         .collect::<Vec<_>>()
@@ -1899,6 +1895,23 @@ fn markdown(
     if state.temporal_validation.is_some() {
         out.push_str("\nDeclared ancestry was checked at each forecast's registration. Supplied time metadata is not independently verified; generator replay was not performed. JSON includes the provenance-file hash and per-forecast cone digests.\n");
     }
+    if operation == "inspect" && !state.checkpoints.is_empty() {
+        out.push_str("\n## Saved assessments\n\nJournal order. Compare cuts for the same cohort and outcome selector.\n\n| Cohort | Assessment cut (UTC) | Outcome selector | Calibration flag | Resolved / members | Assessment digest | Digest binding |\n|---|---|---|---|---:|---|---|\n");
+        for checkpoint in &state.checkpoints {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} | {} / {} | `{}` | {} |",
+                text(&checkpoint.cohort),
+                utc_text(checkpoint.as_of_ns),
+                selector_name(checkpoint.selector),
+                checkpoint.flag.as_str(),
+                checkpoint.resolved,
+                checkpoint.members,
+                checkpoint.digest,
+                checkpoint.binding()
+            );
+        }
+    }
     for (id, admission) in &state.correction_admissions {
         if assessment.is_none_or(|report| {
             report
@@ -1983,12 +1996,13 @@ fn markdown(
         }
         let _ = writeln!(
             out,
-            "\n## Assessment\n\nCut: {}; selector: {}. Members: {}; resolved: {}; unresolved: {}.\n\nAssessment digest: `{}`.\n\n| Forecast | Outcome |\n|---|---|",
+            "\n## Assessment\n\nCut: {}; selector: {}. Members: {}; resolved: {}; unresolved: {}. Calibration flag: {}.\n\nAssessment digest: `{}`.\n\n| Forecast | Outcome |\n|---|---|",
             utc(report.as_of_ns),
             selector_name(report.selector),
             report.summary.n_members,
             report.summary.n_resolved,
             report.summary.n_unresolved,
+            report.summary.flag.as_str(),
             report.digest.to_hex(),
         );
         for member in &report.per_member {

@@ -922,6 +922,9 @@ and checkpoints. `operation_schema` continues to identify the row grammar. `oper
 its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
 over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only
 and can verify an independently retained head; an unpinned read establishes internal consistency only.
+Its `assessments` rows include the saved `calibration_flag`, `n_resolved` and `n_members`. Markdown shows
+those values with the cohort, cut, selector, digest and binding in append order, including duplicate cuts.
+These are whole-cohort results under the frozen policy. Segment diagnostics keep their own denominators.
 `report --assessment <digest> [--head <hex>] [--provenance <path>]` retrieves one existing persisted assessment
 under the journal's shared lock. It accepts no new cohort/cut/selector and samples no clock. The saved tuple
 selects the existing kernel result, whose digest must match; missing assessments refuse `FMINE-REF-201`, wrong

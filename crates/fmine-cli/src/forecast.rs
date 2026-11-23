@@ -98,6 +98,19 @@ struct Checkpoint {
     selector: OutcomeSelector,
     digest: Digest32,
     expected: Option<Digest32>,
+    flag: CalibrationFlag,
+    resolved: usize,
+    members: usize,
+}
+
+impl Checkpoint {
+    fn binding(&self) -> &'static str {
+        if self.expected.is_some() {
+            "persisted_checkpoint"
+        } else {
+            "legacy_unbound"
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -555,6 +568,9 @@ impl Replay {
             selector,
             digest: report.digest,
             expected,
+            flag: report.summary.flag,
+            resolved: report.summary.n_resolved,
+            members: report.summary.n_members,
         });
         Ok(report)
     }
@@ -945,12 +961,15 @@ fn missing_name(s: MissingReason) -> &'static str {
     }
 }
 fn utc(ns: i64) -> String {
+    js(&utc_text(ns))
+}
+fn utc_text(ns: i64) -> String {
     let text = format_utc(ns.div_euclid(1_000_000_000));
     let nanos = ns.rem_euclid(1_000_000_000);
     if nanos == 0 {
-        js(&text)
+        text
     } else {
-        js(&format!("{}.{nanos:09}Z", text.trim_end_matches('Z')))
+        format!("{}.{nanos:09}Z", text.trim_end_matches('Z'))
     }
 }
 fn display_or<T: ToString>(value: Option<T>, missing: &str) -> String {
@@ -1108,13 +1127,6 @@ fn summary_json(report: &Assessment) -> String {
             log.probability_floor, score_json(Some(log.score)),
         )
     });
-    let flag = match s.flag {
-        CalibrationFlag::Calibrated => "calibrated",
-        CalibrationFlag::Overconfident => "overconfident",
-        CalibrationFlag::Biased => "biased",
-        CalibrationFlag::Unscored => "unscored",
-        CalibrationFlag::Descriptive => "descriptive",
-    };
     let coverage = coverage_json(s.coverage);
     let reasons = unresolved_json(&s.unresolved_by_reason);
     format!(
@@ -1129,7 +1141,7 @@ fn summary_json(report: &Assessment) -> String {
         s.effective_n.upper,
         pair(s.effective_n.correlation_range),
         optional_number(s.mean_standardized_bias),
-        js(flag)
+        js(s.flag.as_str())
     )
 }
 

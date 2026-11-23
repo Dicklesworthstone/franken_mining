@@ -176,11 +176,15 @@ impl Journal {
     }
 
     fn assess(&mut self, cut: &str, selector: &str) -> String {
+        self.assess_cohort("two-sites", cut, selector)
+    }
+
+    fn assess_cohort(&mut self, cohort: &str, cut: &str, selector: &str) -> String {
         self.write(
             Command::Assess {
                 journal: JOURNAL.into(),
                 head: self.head,
-                cohort: "two-sites".into(),
+                cohort: cohort.into(),
                 as_of: cut.into(),
                 selector: selector.into(),
                 expected_digest: None,
@@ -233,6 +237,150 @@ impl Journal {
 
 fn saved_reports() -> (Journal, String, String) {
     saved_reports_with_fraction(0)
+}
+
+#[test]
+fn inspection_retains_one_models_calibration_as_outcomes_and_restatements_arrive() {
+    let _guard = isolated_fixture();
+    let mut journal = Journal::new();
+    let aliases = (0..35).map(|i| format!("shift-{i}")).collect::<Vec<_>>();
+    for (i, alias) in aliases.iter().enumerate() {
+        let forecast = format!(
+            r#"[[forecast]]
+id = "{alias}"
+model_key = "mill-v1"
+outcome_due = "2030-12-31T00:00:00Z"
+kind = "gaussian"
+mean = "80"
+std_dev = "1"
+family = "recovery"
+author_role = "mill-planner"
+domain = "concentrator"
+horizon = "shift"
+site = "synthetic-mill"
+quantity = "recovery"
+unit = "percent""#
+        );
+        journal.append_at(&forecast, ns("2030-01-02T00:00:00Z") + i as i64 * SECOND);
+    }
+    let cohort = format!(
+        r#"[[cohort]]
+name = "mill-shifts"
+members = "{}"
+resolution_rule = "Synthetic mill recovery"
+eligible_sources = "mill"
+alpha = "0.2"
+min_calibration_n = 35
+rho_low = "0"
+rho_high = "0""#,
+        aliases.join(",")
+    );
+    journal.append(&cohort, "2030-01-03T00:00:00Z");
+    let event = |i: usize, value: i32, supersedes: usize, at: &str| {
+        let (kind, predecessor) = if supersedes == 0 {
+            ("published", String::new())
+        } else {
+            ("restated", format!("supersedes = {supersedes}"))
+        };
+        format!(
+            r#"[[outcome]]
+forecast = "shift-{i}"
+kind = "{kind}"
+value = "{value}"
+available_at = "{at}"
+source = "mill"
+vintage = "v{rev}"
+locator = "synthetic:shift-{i}"
+sha256 = "{digest}"
+{predecessor}"#,
+            rev = supersedes + 1,
+            digest = sha256(format!("synthetic:{i}/{value}/{supersedes}").as_bytes())
+        )
+    };
+    let first = "first-published";
+    let latest = "latest-as-of";
+    let pending = journal.assess_cohort("mill-shifts", "2031-01-01T00:00:00Z", latest);
+    for i in 0..35 {
+        let miss = if i % 2 == 0 { 78 } else { 82 };
+        let at = if i < 10 {
+            "2031-01-02T00:00:00Z"
+        } else {
+            "2031-01-04T00:00:00Z"
+        };
+        journal.append_at(
+            &event(i, if i % 5 == 0 { miss } else { 80 }, 0, at),
+            ns(at) + SECOND,
+        );
+        if i == 9 {
+            journal.assess_cohort("mill-shifts", "2031-01-03T00:00:00Z", latest);
+        }
+    }
+    let complete = journal.assess_cohort("mill-shifts", "2031-01-05T00:00:00Z", latest);
+    let at = "2031-01-06T00:00:00Z";
+    for i in (0..35).filter(|i| i % 5 != 0) {
+        journal.append_at(
+            &event(i, if i % 2 == 0 { 78 } else { 82 }, 1, at),
+            ns(at) + SECOND,
+        );
+    }
+    journal.assess_cohort("mill-shifts", "2031-01-07T00:00:00Z", latest);
+    let at = "2031-01-08T00:00:00Z";
+    for i in (0..20).step_by(2) {
+        journal.append_at(
+            &event(i, 82, if i % 5 == 0 { 1 } else { 2 }, at),
+            ns(at) + SECOND,
+        );
+    }
+    journal.assess_cohort("mill-shifts", "2031-01-09T00:00:00Z", latest);
+    journal.assess_cohort("mill-shifts", "2031-01-10T00:00:00Z", first);
+    let before = journal.bytes();
+    let inspected = execute_with_clock(
+        &Command::Inspect {
+            journal: JOURNAL.into(),
+            head: Some(journal.head),
+        },
+        &journal.root,
+        &NeverClock,
+    );
+    assert_eq!(inspected.exit_code, 0, "{inspected:?}");
+    let rows = inspected
+        .payload_json
+        .split_once("\"assessments\":[")
+        .expect("inventory")
+        .1
+        .split_once(']')
+        .expect("end of inventory")
+        .0
+        .split("},{")
+        .collect::<Vec<_>>();
+    let markdown = inspected.rendered_markdown.expect("readable inspection");
+    let expected = [
+        (latest, "unscored", 0),
+        (latest, "descriptive", 10),
+        (latest, "calibrated", 35),
+        (latest, "overconfident", 35),
+        (latest, "biased", 35),
+        (first, "calibrated", 35),
+    ];
+    assert_eq!(rows.len(), expected.len());
+    for (row, (selector, flag, resolved)) in rows.iter().zip(expected) {
+        assert_eq!(string_field(row, "selector"), selector);
+        assert_eq!(string_field(row, "calibration_flag"), flag);
+        assert!(row.contains(&format!("\"n_resolved\":{resolved},\"n_members\":35")));
+        let digest = string_field(row, "digest");
+        assert!(markdown.contains(&format!(
+            "| {selector} | {flag} | {resolved} / 35 | `{digest}` | persisted_checkpoint |"
+        )));
+    }
+    for original in [pending, complete] {
+        let digest = digest_field(assessment(&original), "digest");
+        let reopened = journal.report(digest, Some(journal.head));
+        assert_eq!(
+            nested_report(&original),
+            nested_report(&reopened.payload_json)
+        );
+    }
+    assert_eq!(journal.bytes(), before);
 }
 
 fn saved_reports_with_fraction(fraction_ns: i64) -> (Journal, String, String) {

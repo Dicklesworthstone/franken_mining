@@ -41,6 +41,19 @@ pub enum CalibrationFlag {
     Descriptive,
 }
 
+impl CalibrationFlag {
+    /// Stable spelling used in saved assessment reports.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Calibrated => "calibrated",
+            Self::Overconfident => "overconfident",
+            Self::Biased => "biased",
+            Self::Unscored => "unscored",
+            Self::Descriptive => "descriptive",
+        }
+    }
+}
+
 /// Summary report produced by `ForecastLedger::evaluate_model` (`BD-048`, `BD-049`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CalibrationReport {
