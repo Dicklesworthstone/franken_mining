@@ -187,19 +187,45 @@ pub(super) fn worksheet(doc: &TomlDoc, text: &str, source: &SourceAnchor) -> Res
         cell(&source.artifact_path),
         fmine_core::Digest32(source.artifact_sha256)
     );
+    let mut sources = Vec::new();
     for r in &doc.rows {
-        if let Some(fmine_registry::toml_subset::TomlValue::Str(locator)) =
-            r.get("source").map(|f| &f.value)
-        {
-            let _ = writeln!(md, "- {} line {}: {}", r.table, r.line, cell(locator));
-        }
+        let text_field = |key| match r.get(key).map(|f| &f.value) {
+            Some(fmine_registry::toml_subset::TomlValue::Str(value)) => Ok(value.as_str()),
+            _ => Err(invalid(format!(
+                "line {}: missing source evidence {key}",
+                r.line
+            ))),
+        };
+        let locator = text_field("source")?;
+        let known_on = text_field("known_on")?;
+        let _ = writeln!(
+            md,
+            "- {} line {} (known {}): {}",
+            r.table,
+            r.line,
+            known_on,
+            cell(locator)
+        );
+        sources.push(format!(
+            "{{\"table\":{},\"line\":{},\"known_on\":{},\"locator\":{}}}",
+            js(&r.table),
+            r.line,
+            js(known_on),
+            js(locator)
+        ));
     }
     let _ = writeln!(md, "\n{BOUNDARY}");
     let payload = format!(
-        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}}}",
+        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"question\":{},\"owner\":{},\"support\":{},\"evidence_class\":\"assumed\",\"calibrated\":false,\"uncertainty\":{},\"revisit_if\":{},\"source_rows\":[{}],\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}}}",
         js(mode),
         js(evidence),
         js(as_of),
+        js(get(&f, "question")?),
+        js(get(&f, "owner")?),
+        js(get(&f, "scope")?),
+        js(get(&f, "uncertainty")?),
+        js(get(&f, "revisit_if")?),
+        sources.join(","),
         array(&card.findings),
         array(&columns),
         card.rows
@@ -741,6 +767,7 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         "Site constraint",
     ]);
     let (mut goals, mut plan, mut capacity) = (0, 0, 0);
+    let mut offsets = Vec::new();
     let mut seen = BTreeSet::new();
     for row in doc.rows_of("site") {
         let f = row_fields(
@@ -787,6 +814,7 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         goals += goal;
         plan += base;
         capacity += usable;
+        offsets.push((id, by, usable - base));
         c.rows.push(vec![
             id.into(),
             share.to_string(),
@@ -804,6 +832,14 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     }
     c.findings.push(format!("{} {} attributable through {through}. Group target {}; current plan {}; remaining net increase needed {}; maximum additional output before deadlines {}.",get(&g,"commodity")?,get(&g,"unit")?,fraction(target,10000)?,fraction(plan,10000)?,fraction((target-plan).max(0),10000)?,fraction(capacity-plan,10000)?));
     c.findings.push(if capacity<target {format!("Even all admitted offsets leave a group shortfall of {}.",fraction(target-capacity,10000)?)} else {"Declared site bounds allow enough aggregate output. This is conditional on the stated simultaneous capacity basis.".into()});
+    if capacity >= target {
+        for (id, by, offset) in offsets {
+            let indispensable = target - (capacity - offset);
+            if indispensable > 0 {
+                c.findings.push(format!("{id} must supply at least {} above its baseline even if all other sites reach their bounds. Decision deadline {by}.", fraction(indispensable,10000)?));
+            }
+        }
+    }
     c.findings.push(format!(
         "Simultaneous capacity basis: {}.",
         get(&g, "common_capacity_basis")?
@@ -1000,6 +1036,11 @@ mod tests {
             "credit_on_purchase_usd = \"250000\"",
         ));
         assert!(credited.contains("Holding costs no more in either outcome"));
+        let refunded = report(&PURCHASE.replace(
+            "total_cancel_usd = \"5000000\"",
+            "total_cancel_usd = \"1000000\"",
+        ));
+        assert!(refunded.contains("| Order / cancel | 3000000 | -2000000 | 1000000 |"));
         let floored = report(&PURCHASE.replace("float_days = \"12\"", "float_days = \"40\""));
         assert!(floored.contains("| Lapse / proceed | 0 | 21500000 | 21500000 | 0 | 0 |"));
         assert!(evaluate(&PURCHASE.replace("2030-11-15", "2030-02-30")).is_err());

@@ -12,11 +12,13 @@
 
 **Controller’s independent calculation.** Treasury starts the meeting with $19.5m. Ordering leaves $16.5m; holding leaves $19.25m. The assumed 22 March counterfactual balance is $45m before the drive and substation. Exercising the hold leaves $45m − $20.25m − $6.5m = $18.25m. Under lapse it leaves $45m − $21.5m − $6.5m = $17m. Delay exposure is 18 × $80,000 = **$1.44m**, shown separately from cash due on 22 March. The break-even cancellation probability for hold versus order is $250k ÷ $5m = **5%**. The committee assigned no cancellation probability.
 
-**Fictional minute.** The group committee approved only the fee and set the review date. The project controller was asked to reconfirm price and float. Treasury was asked to preserve the substation allocation. The reversal trigger was a withdrawn or changed firm hold, or enough schedule float for the later slot. The engineering team in this scenario approved the drive on 22 March and procurement exercised the hold. Under that outcome the fee was spent. No realized saving is credited.
+**Before signing.** Procurement must confirm the hold in writing under VD-17. Project controls must confirm the 12-day float against B07. Treasury must reserve the substation allocation under T09. Reopen the decision if the supplier changes the hold or the later slot fits inside the revised float.
 
 ---
 
 ## Independent replay and follow-on use
+
+**Fictional minute and subsequent outcome.** On 8 March the group committee approved only the fee and set the review date. In this scenario the engineering team approved the drive on 22 March and procurement exercised the hold. The fee was spent. No realized saving is credited. This resolution is outside the original meeting insert and its input worksheet.
 
 **DESIGN.** In the simulated original meeting, procurement’s stand-alone comparison favored the $20m order over the later $21.5m quote. Treasury’s dated floor and the substation commitment changed the simulated committee choice. The CLI reads only the decision-time worksheet. The later fictional minute above is deliberately outside its inputs. JSON preserves the original worksheet and digest so a reviewer can challenge a date, credit or basis.
 
@@ -37,3 +39,16 @@ cargo run -p fmine-cli -- decide program tests/capital/executive_purchase_potash
 ```
 
 **Measurement boundary.** The fixtures exercise the calculations, evidence cutoff and change of decision. Operator preparation time, adoption, actual contract enforceability, physical execution and realized business benefit require independent observations. None is measured by this fictional pilot.
+
+## Delivery checklist
+
+| Bead | Completed work | Verification |
+|---|---|---|
+| bd-4hg5 | Read quoted price, deposit, cancellation, option fee and exercise credit. Validate offer and review dates. Compare missing and expired offers. Charge schedule delay only after float. Check each branch against both parent floors and the competing commitment. Retain tied choices, source locators and the original worksheet. | Copper and potash binary examples; controls for credits, refunds through the payment convention, expired holds, future data, mismatched JV cash and float. |
+| bd-3a2a | Admit eligible packages, date work and conditional releases, deduct replacement collateral and work cost, and report cash, line and surety separately. Preserve unknown release timing. | Net cash and line/surety known answers; late, pending and ineligible release controls. |
+| bd-rn1q | Compare renew, farm out and surrender. Carry rights and obligations, dated offers and retained interest. Apply the existing cover-sensitive detection calculation. Report the economic ranges, dominated choices and unresolved overlap. | Blind survey versus sensitive negative, expired farm-out, legally unavailable choices, invalid retained share and detection inputs. |
+| bd-jg7w | Require a common commodity, unit and remaining interval. Apply site interests once. Reconcile group and site targets, enforce lapsed deadlines, and identify each indispensable site increment. | Attributable group example, missed intervention, basis mismatch, duplicate site, over-ownership and allocation mismatch. |
+| bd-zabr | Preserve all original approvals and their disposition. Admit only earlier comparable closeouts, retain scope changes and cancellations, and report original and adjusted holdout errors. | Five-project docket plus cohort timing, latest holdout, unknown actual and same-day outcome controls. |
+| bd-srg1 | Construct the fictional source terms, original decision insert, controller reconciliation, simulated minute, later outcome and second-commodity reuse. Keep the future result outside the original insert. | Two independent purchase known answers, source-byte hashes, deterministic replay and opposite decisions. Real-world outcomes remain unobserved. |
+
+The command-level regression cases are in [executive.rs](../../crates/fmine-cli/tests/executive.rs). The input controls run beside the [worksheet evaluator](../../crates/fmine-cli/src/capital/executive.rs).
