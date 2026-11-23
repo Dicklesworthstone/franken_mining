@@ -38,6 +38,10 @@ pub struct Improvement {
 /// examined by one exact period search, across all requested rounds.
 pub const PERIOD_WORK: usize = 262_144;
 
+/// At most this many following mined blocks, in ID order, are considered as
+/// partners when single-block period moves stall.
+pub const PERIOD_PAIR_SCAN: usize = 64;
+
 /// Actual work and exact objective numerators for a fixed-fraction period search.
 /// A stopped search retains its feasible incumbent; it supplies no bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +49,10 @@ pub struct PeriodSearch {
     pub before: i128,
     pub after: i128,
     pub rounds: usize,
+    /// Accepted single-block or atomic two-block moves.
     pub moves: usize,
+    /// Atomic two-block moves, included in `moves`.
+    pub pair_moves: usize,
     pub trials: usize,
     pub work: usize,
     pub work_exhausted: bool,
@@ -62,6 +69,137 @@ struct PeriodBlock {
     id: usize,
     value: i128,
     uses: Vec<i128>,
+}
+
+struct PeriodPairs<'a> {
+    model: &'a PcpspModel,
+    blocks: &'a [PeriodBlock],
+    factors: &'a [i64],
+    dependants: &'a [Vec<usize>],
+    scale: i128,
+}
+
+impl PeriodPairs<'_> {
+    /// Accept the first pair with a profitable feasible common period, taking
+    /// its best period and the earliest of ties. Resume single moves afterwards.
+    fn advance(
+        &self,
+        periods: &mut [Option<usize>],
+        used: &mut [Vec<i128>],
+        search: &mut PeriodSearch,
+        budget: usize,
+    ) -> Result<bool, Refusal> {
+        let bad = |detail| refuse(format!("fractional periods: {detail}"));
+        let overflow = || bad("exact pair objective or resource arithmetic overflows i128");
+        for (index, first_block) in self.blocks.iter().enumerate() {
+            for second_block in self.blocks.iter().skip(index + 1).take(PERIOD_PAIR_SCAN) {
+                let pair = [first_block, second_block];
+                let ids = [first_block.id, second_block.id];
+                let scan = ids.iter().fold(1_usize, |n, &b| {
+                    n.saturating_add(self.model.requires[b].len())
+                        .saturating_add(self.dependants[b].len())
+                });
+                if scan > budget - search.work {
+                    search.work_exhausted = true;
+                    return Ok(false);
+                }
+                search.work += scan;
+                let old = [
+                    periods[ids[0]].ok_or_else(|| bad("mined pair member lost its period"))?,
+                    periods[ids[1]].ok_or_else(|| bad("mined pair member lost its period"))?,
+                ];
+                let (mut first, mut last) = (0, self.model.periods() - 1);
+                for b in ids {
+                    for &required in &self.model.requires[b] {
+                        if !ids.contains(&(required as usize)) {
+                            first = first.max(
+                                periods[required as usize]
+                                    .ok_or_else(|| bad("mined predecessor lost its period"))?,
+                            );
+                        }
+                    }
+                    for &dependent in &self.dependants[b] {
+                        if !ids.contains(&dependent) {
+                            last = last.min(
+                                periods[dependent]
+                                    .ok_or_else(|| bad("mined dependant lost its period"))?,
+                            );
+                        }
+                    }
+                }
+                let mut best = None;
+                for (to, &factor) in self.factors.iter().enumerate().take(last + 1).skip(first) {
+                    if old == [to, to] {
+                        continue;
+                    }
+                    // Charge every possible affected period, even when two
+                    // coincide or an early row rejects the proposal.
+                    let trial = self.model.resources().saturating_mul(3).saturating_add(1);
+                    if trial > budget - search.work {
+                        search.work_exhausted = true;
+                        break;
+                    }
+                    search.work += trial;
+                    search.trials += 1;
+                    let gain = pair.iter().zip(old).try_fold(0_i128, |sum, (b, from)| {
+                        b.value
+                            .checked_mul(i128::from(factor) - i128::from(self.factors[from]))
+                            .and_then(|value| sum.checked_add(value))
+                            .ok_or_else(overflow)
+                    })?;
+                    if gain <= best.map_or(0, |(_, gain)| gain) {
+                        continue;
+                    }
+                    let affected = [old[0], old[1], to];
+                    let mut feasible = true;
+                    'periods: for (i, &t) in affected.iter().enumerate() {
+                        if affected[..i].contains(&t) {
+                            continue;
+                        }
+                        for (r, row) in used.iter().enumerate() {
+                            let mut total = row[t];
+                            for (block, from) in pair.iter().zip(old) {
+                                if from == t {
+                                    total =
+                                        total.checked_sub(block.uses[r]).ok_or_else(overflow)?;
+                                }
+                                if to == t {
+                                    total =
+                                        total.checked_add(block.uses[r]).ok_or_else(overflow)?;
+                                }
+                            }
+                            if total > i128::from(self.model.limits[r][t]) * self.scale {
+                                feasible = false;
+                                break 'periods;
+                            }
+                        }
+                    }
+                    if feasible {
+                        best = Some((to, gain));
+                    }
+                }
+                if let Some((to, gain)) = best {
+                    for (r, row) in used.iter_mut().enumerate() {
+                        for (block, from) in pair.iter().zip(old) {
+                            row[from] =
+                                row[from].checked_sub(block.uses[r]).ok_or_else(overflow)?;
+                            row[to] = row[to].checked_add(block.uses[r]).ok_or_else(overflow)?;
+                        }
+                    }
+                    periods[ids[0]] = Some(to);
+                    periods[ids[1]] = Some(to);
+                    search.after = search.after.checked_add(gain).ok_or_else(overflow)?;
+                    search.moves += 1;
+                    search.pair_moves += 1;
+                    return Ok(true);
+                }
+                if search.work_exhausted {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[derive(Clone)]
@@ -299,9 +437,13 @@ pub fn polish(
 /// strictly profitable feasible period, with the earliest period breaking ties.
 /// Both the vacated and receiving periods must retain every signed resource
 /// limit, and all mined predecessors and dependants must retain their order.
+/// After single moves stall, pairs from the next [`PERIOD_PAIR_SCAN`] mined
+/// blocks may enter one common period atomically. Internal precedence moves
+/// with the pair; every external predecessor and dependant still bounds it.
+/// The first improving pair takes its best period, then single moves resume.
 /// No block is added or removed, no fraction is rounded, and no temporary
-/// infeasibility or loss is accepted. Cycles requiring simultaneous moves are
-/// outside this one-block neighborhood.
+/// infeasibility or loss is accepted. Larger groups, distant partners and pairs
+/// moving to different new periods are outside this bounded neighborhood.
 ///
 /// The caller supplies 0..=1,000 rounds. [`PERIOD_WORK`] additionally bounds the
 /// search across those rounds; input aggregation and the independent final
@@ -342,6 +484,7 @@ fn reschedule_bounded(
         after: before,
         rounds: 0,
         moves: 0,
+        pair_moves: 0,
         trials: 0,
         work: 0,
         work_exhausted: false,
@@ -388,6 +531,13 @@ fn reschedule_bounded(
         }
     }
     let mut used = checked.used.clone();
+    let pairs = PeriodPairs {
+        model,
+        blocks: &blocks,
+        factors,
+        dependants: &dependants,
+        scale,
+    };
     'rounds: for _ in 0..rounds {
         search.rounds += 1;
         let mut changed = false;
@@ -472,7 +622,10 @@ fn reschedule_bounded(
                 break 'rounds;
             }
         }
-        if !changed {
+        if !changed && !pairs.advance(&mut periods, &mut used, &mut search, budget)? {
+            break;
+        }
+        if search.work_exhausted {
             break;
         }
     }

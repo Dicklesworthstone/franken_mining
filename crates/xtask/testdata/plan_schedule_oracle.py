@@ -195,6 +195,25 @@ def fractional_periods():
     assert markdown.returncode == 0 and "Fixed-fraction period search" in markdown.stdout
     assert "1 accepted moves" in markdown.stdout and "fractions" in markdown.stdout
 
+    # Start the mutually required blocks late as well. The independent block
+    # advances alone, then the exact half-mill cycle must advance atomically.
+    paired_source = "0 0 1 0.5\n0 1 1 0.5\n1 0 1 1\n2 0 1 0.5\n2 1 1 0.5\n"
+    (ROOT / "candidate.sol").write_text(paired_source)
+    frozen = verify(command([*options, "--rounds", "0"]), values, uses, requires, caps, Q(25, 2))
+    assert frozen["selected"]["solution"] == paired_source
+    paired_report = command(options)
+    paired = verify(paired_report, values, uses, requires, caps, Q(25))
+    assert paired["selected"]["origin"] == "fractional_period_search"
+    assert paired["selected"]["solution"] == p["selected"]["solution"]
+    assert paired["candidate"] == frozen["candidate"]
+    assert paired["candidate"]["source"]["sha256"] == hashlib.sha256(paired_source.encode()).hexdigest()
+    assert fraction(paired["candidate"]["discounted_value"]) == Q(25, 2)
+    paired_search = paired["fractional_period_search"]
+    assert paired_search["moves"] == 2 and paired_search["pair_moves"] == 1
+    assert fraction(paired_search["before"]) == Q(25, 2) and fraction(paired_search["after"]) == 25
+    assert paired_search["work"] <= paired_search["work_limit"] and not paired_search["work_exhausted"]
+    assert command(options) == paired_report
+
 
 def generated_models():
     rng = random.Random(0x51A17)

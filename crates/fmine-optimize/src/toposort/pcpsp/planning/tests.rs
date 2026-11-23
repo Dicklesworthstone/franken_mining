@@ -95,6 +95,39 @@ fn imported_split_periods_improve_without_rewriting_the_submitted_assessment() {
     assert_eq!(solve(&m, options(8), Some(&outside)).unwrap(), p);
 }
 
+#[test]
+fn imported_split_cycle_advances_as_a_pair_with_its_original_assessment_intact() {
+    let mut m = model(
+        &[[0, 40], [0, 10]],
+        &[[0, 2], [0, 0]],
+        &[1, 1],
+        "1",
+        &[vec![1], vec![0]],
+    );
+    m.uses.push(vec![0, 0, 0, 2]);
+    m.limits.push(vec![1, 1]);
+    let source = "0 0 1 0.5\n0 1 1 0.5\n1 0 1 0.5\n1 1 1 0.5\n";
+    let outside = candidate::parse_solution(source, &m, 3).unwrap();
+    let frozen = solve(&m, options(0), Some(&outside)).unwrap();
+    assert_eq!(frozen.origin, "external_candidate");
+    assert_eq!(frozen.schedule, outside);
+    let plan = solve(&m, options(8), Some(&outside)).unwrap();
+    assert_eq!(plan.origin, "fractional_period_search");
+    assert_eq!(plan.period_seed_origin, "external_candidate");
+    assert_eq!(plan.candidate, frozen.candidate);
+    let search = plan.fractional_periods.as_ref().unwrap();
+    assert_eq!((search.moves, search.pair_moves), (1, 1));
+    assert_eq!(search.before, 12_500 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(search.after, 25_000 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(
+        candidate::write_solution(&plan.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n1 0 0 0.5\n1 1 0 0.5\n"
+    );
+    assert_eq!(candidate::write_solution(&outside), source);
+    assert_certificate(&m, &plan);
+    assert_eq!(solve(&m, options(8), Some(&outside)).unwrap(), plan);
+}
+
 /// Enumerate each block's unmined or (period, destination) choice and apply
 /// the mathematical constraints directly. No candidate or schedule checker is
 /// called; in particular, signed resource uses are added without truncation.
