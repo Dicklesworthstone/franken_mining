@@ -3,6 +3,7 @@
 
 use std::fmt::Write as _;
 
+use super::parcels::FeedCase;
 use crate::card::render::{claim_json, js, rq};
 
 use super::{
@@ -20,6 +21,22 @@ fn interval(value: Interval) -> String {
 
 fn weights(value: &WeightBasis) -> String {
     match value {
+        WeightBasis::Parcels(lots) => {
+            let rows = lots
+                .iter()
+                .map(|(id, lot)| {
+                    format!(
+                        r#"{{"id":{},"role":{},"dry_tonnes":{},"grade_g_per_t":{}}}"#,
+                        js(id),
+                        js(lot.testwork.as_str()),
+                        interval(lot.dry_tonnes),
+                        interval(lot.grade_g_per_t)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(r#"{{"basis":"parcels","lots":[{rows}]}}"#)
+        }
         WeightBasis::ContainedMetal { untested_fraction } => format!(
             "{{\"basis\":\"contained_metal\",\"untested_fraction\":{}}}",
             interval(*untested_fraction)
@@ -37,6 +54,29 @@ fn weights(value: &WeightBasis) -> String {
             interval(*untested_grade_g_per_t)
         ),
     }
+}
+
+fn case_json(case: &FeedCase) -> String {
+    let held = case.held_back.as_deref().map_or_else(|| "null".into(), js);
+    let assessment = match &case.recovery {
+        Ok((r, s)) => format!(
+            r#""recovery":{},"stability":{},"refusal":null"#,
+            interval(*r),
+            js(s.as_str())
+        ),
+        Err(e) => format!(
+            r#""recovery":null,"stability":null,"refusal":{{"code":{},"what":{},"fix":{}}}"#,
+            js(e.code),
+            js(&e.what),
+            js(e.fix)
+        ),
+    };
+    format!(
+        r#"{{"held_back":{held},"dry_tonnes":{},"contained_grams":{},"recovered_grams":{},{assessment}}}"#,
+        interval(case.dry_tonnes),
+        interval(case.contained_grams),
+        interval(case.recovered_grams)
+    )
 }
 
 pub(super) fn model_json(value: &RecoveryBoundModel) -> String {
@@ -83,8 +123,19 @@ pub(super) fn summary_json(value: &BoundSummary) -> String {
         "{{\"untested_metal_fraction\":{},\"tested_recovery\":{},\"untested_recovery\":{},\"aggregate_recovery\":{}}}",
         rq(v.untested_metal_fraction), rq(v.tested_recovery), rq(v.untested_recovery), rq(v.aggregate_recovery)
     )).collect::<Vec<_>>().join(",");
+    let cases = if value.parcel_cases.is_empty() {
+        String::new()
+    } else {
+        let rows = value
+            .parcel_cases
+            .iter()
+            .map(case_json)
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(r#","parcel_cases":[{rows}]"#)
+    };
     format!(
-        "{{\"untested_metal_fraction\":{},\"recovery\":{},\"threshold\":{},\"stability\":{},\"proceed_condition\":{},\"stop_condition\":{},\"vertices\":[{vertices}]}}",
+        "{{\"untested_metal_fraction\":{},\"recovery\":{},\"threshold\":{},\"stability\":{},\"proceed_condition\":{},\"stop_condition\":{},\"vertices\":[{vertices}]{cases}}}",
         interval(value.untested_metal_fraction),
         interval(value.recovery),
         rq(value.threshold),
@@ -113,6 +164,27 @@ fn ratio(value: super::Rat) -> String {
 
 fn interval_text(value: Interval) -> String {
     format!("[{}, {}]", ratio(value.lower), ratio(value.upper))
+}
+
+// Present short, exact decimal masses when possible, with fractions for finer precision.
+fn mass_text(value: super::Rat) -> String {
+    let (n, d) = (value.num(), value.den());
+    if d == 1 {
+        return n.to_string();
+    }
+    if 100 % d == 0 {
+        return format!("{}.{:02}", n / d, (n % d) * (100 / d));
+    }
+    ratio(value)
+}
+
+fn lot_range(bounds: Interval, format: impl Fn(super::Rat) -> String) -> String {
+    let lower = format(bounds.lower);
+    if bounds.lower == bounds.upper {
+        lower
+    } else {
+        format!("{lower}–{}", format(bounds.upper))
+    }
 }
 
 fn condition_text(value: &TestCondition) -> String {
@@ -228,6 +300,29 @@ impl BoundCard {
                 }
             };
         write_windows(&mut out, self.share_ranges());
+        if !summary.parcel_cases.is_empty() {
+            out.push_str("\n## Whole-lot holdbacks\n\nEach row uses the remaining feed without replacement. Recovery percentages are rounded for display. Verdicts use the exact bounds in the JSON card.\n\n| Feed scenario | Dry tonnes | Contained metal (g) | Recovered metal (g) | Recovery (%) | Target verdict |\n|---|---:|---:|---:|---:|---|\n");
+            for case in &summary.parcel_cases {
+                let label = case
+                    .held_back
+                    .as_ref()
+                    .map_or_else(|| "All feed".into(), |id| format!("Hold back {}", md(id)));
+                let (recovery, status) = match &case.recovery {
+                    Ok((r, s)) => (
+                        lot_range(*r, |v| format!("{:.2}", v.to_f64() * 100.0)),
+                        s.as_str().replace('_', " "),
+                    ),
+                    Err(e) => ("—".into(), format!("{} · {}", e.code, md(&e.what))),
+                };
+                let _ = writeln!(
+                    out,
+                    "| {label} | {} | {} | {} | {recovery} | {status} |",
+                    lot_range(case.dry_tonnes, mass_text),
+                    lot_range(case.contained_grams, mass_text),
+                    lot_range(case.recovered_grams, mass_text)
+                );
+            }
+        }
         if let Some(windows) = self.dry_share_ranges().transpose() {
             out.push_str("\n## Untested share of dry feed tonnes\n\nThese windows use the available dry tonnes and hold across both declared grade and recovery ranges.\n\n");
             write_windows(&mut out, windows);

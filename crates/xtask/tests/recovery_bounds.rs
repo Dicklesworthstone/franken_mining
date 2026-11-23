@@ -123,6 +123,13 @@ pair = lambda interval: (F(interval["lower"]), F(interval["upper"]))
 weights = model["weights"]
 if weights["basis"] == "contained_metal":
     w = pair(weights["untested_fraction"])
+elif weights["basis"] == "parcels":
+    mass = {"tested":[0, 0], "untested":[0, 0]}
+    for lot in weights["lots"]:
+        for i,(tonnes,grade) in enumerate(zip(pair(lot["dry_tonnes"]), pair(lot["grade_g_per_t"]))):
+            mass[lot["role"]][i] += tonnes*grade
+    t, u = mass["tested"], mass["untested"]
+    w = (u[0]/(u[0]+t[1]), u[1]/(u[1]+t[0]))
 else:
     assert weights["basis"] == "dry_tonnes_and_grade"
     tt, tg = pair(weights["tested_dry_metric_tonnes"]), pair(weights["tested_grade_g_per_t"])
@@ -146,6 +153,46 @@ assert F(result["threshold"]) == threshold
 stability = "stable_proceed" if bounds[0] >= threshold else "stable_stop" if bounds[1] < threshold else "unstable"
 assert result["stability"] == stability
 "#;
+
+#[test]
+fn stockpile_holdbacks_match_independent_forward_lot_and_recovery_enumeration() {
+    let fixture = Path::new("tests/decisions/stockpile_holdback.toml");
+    let out = invoke(fixture, &root());
+    assert!(out.rendered_markdown.as_ref().expect("lot comparison").contains(
+        "| Hold back high-grade-pocket | 84 | 84–88 | 73.60–82.40 | 85.45–94.29 | stable proceed |"
+    ));
+    python(
+        &out.to_json(),
+        r#"
+lots = [
+    ("base-stockpile", "tested", (80,), (1,)),
+    ("marginal-pad", "untested", (4,), (1,2)),
+    ("high-grade-pocket", "untested", (15,16), (3,4))
+]
+cases = result["parcel_cases"]
+assert [c["held_back"] for c in cases] == [None, "base-stockpile", "high-grade-pocket", "marginal-pad"]
+for case in cases:
+    kept = [lot for lot in lots if lot[0] != case["held_back"]]
+    completions = []
+    for shipment in itertools.product(*(itertools.product(t,g) for _,_,t,g in kept)):
+        for rt,ru in itertools.product([F(9,10),F(19,20)],[F(2,5),F(4,5)]):
+            dry = sum(t for t,_ in shipment)
+            grams = sum(t*g for t,g in shipment)
+            gold = sum(t*g*(rt if role=="tested" else ru)
+                       for (t,g),(_,role,_,_) in zip(shipment,kept))
+            completions.append((dry,grams,gold,gold/grams))
+    for field,values in zip(["dry_tonnes","contained_grams","recovered_grams","recovery"],zip(*completions)):
+        assert pair(case[field]) == (min(values), max(values)), (case,field,values)
+    lo,hi = pair(case["recovery"])
+    assert case["refusal"] is None
+    assert case["stability"] == ("stable_proceed" if lo>=F(17,20) else "stable_stop" if hi<F(17,20) else "unstable")
+assert pair(cases[0]["recovery"]) == pair(result["recovery"])
+assert [c["held_back"] for c in cases if c["stability"]=="stable_proceed"] == ["high-grade-pocket"]
+assert pair(cases[2]["recovered_grams"]) == (F("73.6"), F("82.4"))
+assert pair(cases[0]["recovered_grams"]) == (F("91.6"), F("133.6"))
+"#,
+    );
+}
 
 #[test]
 fn declared_known_answers_match_independent_exact_endpoint_arithmetic() {
@@ -315,6 +362,7 @@ fn real_binary_matches_library_json_and_readable_exact_cards() {
     for fixture in [
         "tests/decisions/untested_ore.toml",
         "tests/decisions/untested_ore_tonnes.toml",
+        "tests/decisions/stockpile_holdback.toml",
     ] {
         let expected = invoke(Path::new(fixture), &workspace);
         assert_eq!(expected.exit_code, 0, "{}", expected.to_json());

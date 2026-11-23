@@ -11,6 +11,7 @@ use fmine_numerics::exact_feas::Rat;
 use fmine_units::UnitsError;
 
 pub mod model;
+pub mod parcels;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -49,6 +50,8 @@ pub enum WeightBasis {
         untested_tonnes: Interval,
         untested_grade_g_per_t: Interval,
     },
+    /// Named, disjoint lots in the same feed period, route and metal.
+    Parcels(std::collections::BTreeMap<String, parcels::FeedParcel>),
 }
 
 /// One explicitly sourced model; its Claim class must describe its weakest declaration.
@@ -122,6 +125,8 @@ pub struct BoundSummary {
     pub proceed_condition: TestCondition,
     pub stop_condition: TestCondition,
     pub vertices: Vec<Vertex>,
+    /// All feed, then each whole-lot holdback. Empty for aggregate weight declarations.
+    pub parcel_cases: Vec<parcels::FeedCase>,
 }
 
 /// Immutable source/model/output snapshot; the digest also binds metadata not in generic Claim ids.
@@ -224,8 +229,9 @@ fn untested_share(tested: Interval, untested: Interval) -> Result<Interval> {
     })
 }
 
-fn metal_weights(basis: &WeightBasis) -> Result<Interval> {
-    let result = match basis {
+fn weights_and_cases(model: &RecoveryBoundModel) -> Result<(Interval, Vec<parcels::FeedCase>)> {
+    let result = match &model.weights {
+        WeightBasis::Parcels(lots) => return parcels::compare(lots, model),
         WeightBasis::ContainedMetal { untested_fraction } => *untested_fraction,
         WeightBasis::DryTonnesAndGrade {
             tested_tonnes,
@@ -235,23 +241,52 @@ fn metal_weights(basis: &WeightBasis) -> Result<Interval> {
         } => {
             let tested = contained_grams(*tested_tonnes, *tested_grade_g_per_t)?;
             let untested = contained_grams(*untested_tonnes, *untested_grade_g_per_t)?;
-            if exact(tested.lower.checked_add(untested.lower))? == ZERO {
-                return Err(bad(
-                    RefusalCode::OutsidePhysicalDomain109,
-                    "the admitted tonne/grade box includes zero combined contained metal",
-                ));
-            }
-            untested_share(tested, untested)?
+            positive_metal_share(tested, untested)?
         }
     };
     interval(result, true)?;
-    Ok(result)
+    Ok((result, Vec::new()))
+}
+
+fn positive_metal_share(tested: Interval, untested: Interval) -> Result<Interval> {
+    if tested.lower == ZERO && untested.lower == ZERO {
+        return Err(bad(
+            RefusalCode::OutsidePhysicalDomain109,
+            "the admitted tonne/grade box includes zero combined contained metal",
+        ));
+    }
+    untested_share(tested, untested)
 }
 fn aggregate(weight: Rat, tested: Rat, untested: Rat) -> Result<Rat> {
     exact(
         exact(exact(ONE.checked_sub(weight))?.checked_mul(tested))?
             .checked_add(exact(weight.checked_mul(untested))?),
     )
+}
+
+fn recovery_range(weights: Interval, model: &RecoveryBoundModel) -> Result<Interval> {
+    let t = model.tested_recovery;
+    let u = model.untested_recovery;
+    Ok(Interval {
+        lower: min(
+            aggregate(weights.lower, t.lower, u.lower)?,
+            aggregate(weights.upper, t.lower, u.lower)?,
+        )?,
+        upper: max(
+            aggregate(weights.lower, t.upper, u.upper)?,
+            aggregate(weights.upper, t.upper, u.upper)?,
+        )?,
+    })
+}
+
+fn stability(range: Interval, threshold: Rat) -> Result<Stability> {
+    Ok(if !exact(range.lower.checked_cmp(threshold))?.is_lt() {
+        Stability::StableProceed
+    } else if exact(range.upper.checked_cmp(threshold))?.is_lt() {
+        Stability::StableStop
+    } else {
+        Stability::Unstable
+    })
 }
 
 /// At fixed share the worst and best recoveries use paired lower and upper endpoints,
@@ -452,7 +487,7 @@ pub fn evaluate(inputs: &Claim<RecoveryBoundModel>) -> Result<BoundCard> {
         },
         true,
     )?;
-    let weights = metal_weights(&m.weights)?;
+    let (weights, parcel_cases) = weights_and_cases(m)?;
     let mut vertices = Vec::with_capacity(8);
     let (mut lower, mut upper) = (ONE, ZERO);
     for w in [weights.lower, weights.upper] {
@@ -470,48 +505,18 @@ pub fn evaluate(inputs: &Claim<RecoveryBoundModel>) -> Result<BoundCard> {
             }
         }
     }
-    let lower_closed = min(
-        aggregate(
-            weights.lower,
-            m.tested_recovery.lower,
-            m.untested_recovery.lower,
-        )?,
-        aggregate(
-            weights.upper,
-            m.tested_recovery.lower,
-            m.untested_recovery.lower,
-        )?,
-    )?;
-    let upper_closed = max(
-        aggregate(
-            weights.lower,
-            m.tested_recovery.upper,
-            m.untested_recovery.upper,
-        )?,
-        aggregate(
-            weights.upper,
-            m.tested_recovery.upper,
-            m.untested_recovery.upper,
-        )?,
-    )?;
-    if lower != lower_closed || upper != upper_closed {
+    let recovery = recovery_range(weights, m)?;
+    if lower != recovery.lower || upper != recovery.upper {
         return Err(bad(
             RefusalCode::NumericalCertificateFailed207,
             "vertex and closed-form extrema disagree",
         ));
     }
-    let stability = if !exact(lower.checked_cmp(m.threshold))?.is_lt() {
-        Stability::StableProceed
-    } else if exact(upper.checked_cmp(m.threshold))?.is_lt() {
-        Stability::StableStop
-    } else {
-        Stability::Unstable
-    };
     let summary = BoundSummary {
         untested_metal_fraction: weights,
-        recovery: Interval { lower, upper },
+        recovery,
         threshold: m.threshold,
-        stability,
+        stability: stability(recovery, m.threshold)?,
         proceed_condition: condition(
             weights,
             m.tested_recovery.lower,
@@ -527,6 +532,7 @@ pub fn evaluate(inputs: &Claim<RecoveryBoundModel>) -> Result<BoundCard> {
             false,
         )?,
         vertices,
+        parcel_cases,
     };
     let mut binding = Encoder::new_frame(*b"UBND", 1);
     binding.put_str(&crate::card::render::claim_json(

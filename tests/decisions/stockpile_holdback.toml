@@ -1,0 +1,52 @@
+# SYNTHETIC: disjoint parcels scheduled to one additive route in a single shift.
+schema = "fmine.recovery-bounds.v1"
+model_key = "shift_feed"
+question = "Which whole-lot holdback meets the shift recovery target, and how much gold would still be recovered?"
+route = "synthetic gold circuit"
+metal = "Au"
+additivity_basis = "The three lots share one route with additive recovered gold and no throughput interaction."
+untested_bound_basis = "The two untested lots share a declared 40-80 percent recovery envelope."
+
+[[parcel]]
+id = "base-stockpile"
+role = "tested"
+dry_tonnes_lower = "80"
+dry_tonnes_upper = "80"
+grade_g_per_t_lower = "1"
+grade_g_per_t_upper = "1"
+
+[[parcel]]
+id = "marginal-pad"
+role = "untested"
+dry_tonnes_lower = "4"
+dry_tonnes_upper = "4"
+grade_g_per_t_lower = "1"
+grade_g_per_t_upper = "2"
+
+[[parcel]]
+id = "high-grade-pocket"
+role = "untested"
+dry_tonnes_lower = "15"
+dry_tonnes_upper = "16"
+grade_g_per_t_lower = "3"
+grade_g_per_t_upper = "4"
+
+[[recovery]]
+role = "tested"
+lower = "0.90"
+upper = "0.95"
+
+[[recovery]]
+role = "untested"
+lower = "0.40"
+upper = "0.80"
+
+[[decision]]
+rule = "proceed_if_at_least"
+threshold = "0.85"
+
+[[uu]]
+id = "unmodelled_interaction"
+description = "The lot mixture could change recovery outside the assumed envelope."
+trigger = "Mixed-feed testwork contradicts additive recoveries."
+downside_usd_m = "1"

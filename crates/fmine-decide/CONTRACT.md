@@ -382,6 +382,14 @@ basis, and one positive named UU scenario. Weights are either a contained-metal 
 explicit independent dry-tonne and grade intervals in grams per dry metric tonne. Tonnes alone are not
 metal weights. A box admitting zero combined contained metal refuses.
 
+DESIGN (BD-351): disjoint named feed lots can replace aggregate weights. Each carries a tested or
+untested role and independent dry-tonne and g/t bounds for the declared metal. The result Claim binds
+the full-feed case and one counterfactual per lot, in ID order, with no replacement feed. Each retains
+exact ranges for dry tonnes, contained grams, recovered grams and recovery. An alternative admitting
+zero total contained metal keeps the mass ranges and a typed refusal for its recovery percentage.
+No throughput, revenue, spatial test coverage or dispatch decision is inferred. The known-answer fixture
+is `tests/decisions/stockpile_holdback.toml`.
+
 Exact rational arithmetic enumerates all eight endpoint vertices and checks the closed-form extrema of
 `R = (1-w) * R_tested + w * R_untested`. The card retains witnesses and reports stable proceed, stable
 stop or unstable. Proceed means recovery is at least the declared threshold; stop is strictly below it.

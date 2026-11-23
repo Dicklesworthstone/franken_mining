@@ -1773,6 +1773,7 @@ cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_ore.to
 cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_ore_tonnes.toml --format markdown
 cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_blend.toml --format markdown
 cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_dry_blend.toml --format markdown
+cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/stockpile_holdback.toml --format markdown
 ```
 
 The strict `fmine.recovery-bounds.v1` worksheet declares tested and untested recovery intervals,
@@ -1801,6 +1802,17 @@ counts as proceed.
 The tonne example supplies 80 dry tonnes at 1 g/t and 20 dry tonnes at 3 g/t. Untested ore therefore
 contains **3/7** of the metal, and the aggregate lower bound is **24/35**. A 20% tonne fraction would
 produce the wrong recovery bound.
+
+For a shift feed assembled from stockpiles or deliveries, enter one `[[parcel]]` per disjoint lot.
+Give each lot an ID, a tested or untested role, dry metric tonnes and grade in grams per dry tonne,
+each quantity with its lower and upper bound. The card compares the full feed with holding back each
+lot in turn. Each comparison shows the remaining tonnes, contained metal, recovered metal and whether
+the recovery target holds. It assumes the same route and recovery ranges, with no replacement feed.
+
+In the synthetic gold example, the full feed could recover **91.6–133.6 g**, and could miss the 85%
+target. Holding back the high-grade pocket guarantees at least **85.45%** recovery under the stated
+bounds. It also leaves only **84 dry tonnes** and **73.6–82.4 g** recoverable. A planner can see the
+cost in metal of meeting the percentage target before choosing a feed.
 
 JSON and Markdown preserve the source, input/output Claims, evidence, confidentiality and UU. The
 receipt binds that metadata as well as the numerical result. These are conditional identification

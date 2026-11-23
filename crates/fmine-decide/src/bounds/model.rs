@@ -2,7 +2,7 @@
 //! All imported values are internal assumptions; exact arithmetic does not qualify their evidence.
 //! Determinism: Exact
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_claim::{
     AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
@@ -14,6 +14,7 @@ use fmine_evidence::{
 };
 use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
 
+use super::parcels::{FeedParcel, Testwork};
 use super::{INPUT_METRIC, Interval, Rat, RecoveryBoundModel, WeightBasis};
 
 pub const SCHEMA: &str = "fmine.recovery-bounds.v1";
@@ -21,7 +22,8 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.recovery-bounds.v1\",\"command\":\"decide recovery-bounds <model-file>\",",
     "\"input\":\"Bounded UTF-8 worksheet; source SHA-256 and original field tokens retained\",",
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"route\",\"metal\",\"additivity_basis\",\"untested_bound_basis\"],",
-    "\"weights\":\"Exactly one weights row: contained_metal with lower/upper untested fraction, or dry_tonnes_and_grade with tested_tonnes, tested_grade_g_per_t, untested_tonnes, untested_grade_g_per_t, each suffixed _lower and _upper\",",
+    "\"weights\":\"Either parcel rows or one weights row: contained_metal with lower/upper untested fraction, or dry_tonnes_and_grade with tested_tonnes, tested_grade_g_per_t, untested_tonnes, untested_grade_g_per_t, each suffixed _lower and _upper\",",
+    "\"parcel\":\"Each disjoint lot has id, role (tested or untested), dry_tonnes_lower/upper and grade_g_per_t_lower/upper. The card compares all feed and each whole-lot holdback with no replacement. Example: tests/decisions/stockpile_holdback.toml\",",
     "\"recovery\":\"Exactly two recovery rows, role tested or untested, with lower/upper fractions; explicit [0,1] physical bounds are permitted\",",
     "\"decision\":\"One decision row: threshold fraction and rule proceed_if_at_least; equality proceeds and stop is strictly below\",",
     "\"uu\":\"Exactly one uu row: id, description, trigger, positive finite downside_usd_m naming the untested-bound uncertainty\",",
@@ -81,6 +83,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<Claim<RecoveryBoundMode
     }
     identifier(model_key, 1)?;
     let mut weights = None;
+    let mut parcels = BTreeMap::new();
     let mut tested = None;
     let mut untested = None;
     let mut threshold = None;
@@ -89,6 +92,41 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<Claim<RecoveryBoundMode
     let mut anchors = vec![source.clone()];
     for row in &doc.rows {
         match row.table.as_str() {
+            "parcel" => {
+                let [id, role, tl, tu, gl, gu] = strings(
+                    &row.fields,
+                    [
+                        "id",
+                        "role",
+                        "dry_tonnes_lower",
+                        "dry_tonnes_upper",
+                        "grade_g_per_t_lower",
+                        "grade_g_per_t_upper",
+                    ],
+                    row.line,
+                    INPUT,
+                )?;
+                identifier(id, row.line)?;
+                let testwork = match role {
+                    "tested" => Testwork::Tested,
+                    "untested" => Testwork::Untested,
+                    _ => {
+                        return Err(bad(
+                            INPUT,
+                            row.line,
+                            "parcel role must be tested or untested",
+                        ));
+                    }
+                };
+                let lot = FeedParcel {
+                    testwork,
+                    dry_tonnes: interval(tl, tu, row.line)?,
+                    grade_g_per_t: interval(gl, gu, row.line)?,
+                };
+                if parcels.insert(id.to_string(), lot).is_some() {
+                    return Err(bad(INPUT, row.line, &format!("duplicate parcel id {id}")));
+                }
+            }
             "weights" => {
                 if weights.is_some() {
                     return Err(bad(INPUT, row.line, "exactly one weights row is permitted"));
@@ -230,6 +268,18 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<Claim<RecoveryBoundMode
             }
         }
     }
+    let weights = match (weights, parcels.is_empty()) {
+        (Some(weight), true) => weight,
+        (None, false) => WeightBasis::Parcels(parcels),
+        (Some(_), false) => {
+            return Err(bad(
+                INPUT,
+                1,
+                "parcel rows and aggregate weights cannot be mixed",
+            ));
+        }
+        (None, true) => return Err(bad(INPUT, 1, "declare a weights row or named feed parcels")),
+    };
     let model = RecoveryBoundModel {
         model_key: model_key.into(),
         question: question.into(),
@@ -237,7 +287,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<Claim<RecoveryBoundMode
         metal: metal.into(),
         additivity_basis: additivity_basis.into(),
         untested_bound_basis: untested_bound_basis.into(),
-        weights: weights.ok_or_else(|| bad(INPUT, 1, "missing weights row"))?,
+        weights,
         tested_recovery: tested.ok_or_else(|| bad(INPUT, 1, "missing tested recovery row"))?,
         untested_recovery: untested
             .ok_or_else(|| bad(INPUT, 1, "missing untested recovery row"))?,
@@ -405,6 +455,98 @@ mod tests {
         let report = card.to_markdown();
         assert!(report.contains("Proceed — [1/20, 1/10]"));
         assert!(report.contains("Stop — (1/2, 3/4]"));
+    }
+
+    #[test]
+    fn holdback_with_no_remaining_metal_preserves_tonnage_and_other_choices() {
+        let sheet = include_str!("../../../../tests/decisions/stockpile_holdback.toml");
+        let (head, lots) = sheet.split_once("[[parcel]]").unwrap();
+        let (first, _) = lots.split_once("[[parcel]]").unwrap();
+        let (_, rules) = sheet.split_once("[[recovery]]").unwrap();
+        let single = format!("{head}[[parcel]]{first}[[recovery]]{rules}");
+        let checked = |s: &str| super::super::evaluate(&parse(s, source(s))?);
+        let card = checked(&single).unwrap();
+        let cases = &card.summary().parcel_cases;
+        assert_eq!(cases.len(), 2);
+        assert_eq!(
+            cases[0].recovery.as_ref().unwrap().1,
+            super::super::Stability::StableProceed
+        );
+        assert_eq!(cases[1].dry_tonnes.upper, super::super::ZERO);
+        assert_eq!(cases[1].recovered_grams.upper, super::super::ZERO);
+        assert_eq!(
+            cases[1].recovery.as_ref().unwrap_err().code,
+            "FMINE-REF-109"
+        );
+        assert!(card.to_markdown().contains("Hold back base-stockpile"));
+        let variable_grade =
+            sheet.replace("grade_g_per_t_lower = \"1\"", "grade_g_per_t_lower = \"0\"");
+        let partial = checked(&variable_grade).unwrap();
+        let retained = partial
+            .summary()
+            .parcel_cases
+            .iter()
+            .find(|case| case.held_back.as_deref() == Some("high-grade-pocket"))
+            .unwrap();
+        assert_eq!(retained.dry_tonnes.lower.num(), 84);
+        assert_eq!(retained.contained_grams.lower.num(), 0);
+        assert_eq!(retained.contained_grams.upper.num(), 88);
+        assert_eq!(
+            retained.recovery.as_ref().unwrap_err().code,
+            "FMINE-REF-109"
+        );
+        assert!(partial.summary().parcel_cases[0].recovery.is_ok());
+        for (s, code) in [
+            (
+                sheet.replace("marginal-pad", "base-stockpile"),
+                "FMINE-REF-506",
+            ),
+            (
+                sheet.replace("role = \"tested\"", "role = \"unknown\""),
+                "FMINE-REF-506",
+            ),
+            (
+                format!(
+                    "{sheet}\n[[weights]]\nbasis = \"contained_metal\"\nlower = \"0\"\nupper = \"1\"\n"
+                ),
+                "FMINE-REF-506",
+            ),
+            (
+                sheet.replace("dry_tonnes_lower = \"4\"", "dry_tonnes_lower = \"5\""),
+                "FMINE-REF-109",
+            ),
+            (
+                format!("{sheet}\n[[interaction]]\nkind = \"clay\"\n"),
+                "FMINE-REF-103",
+            ),
+        ] {
+            assert_eq!(checked(&s).unwrap_err().code, code);
+        }
+    }
+
+    #[test]
+    fn reordering_parcels_preserves_choices_and_rebinds_the_source_receipt() {
+        let sheet = include_str!("../../../../tests/decisions/stockpile_holdback.toml");
+        let (header, rows) = sheet.split_once("[[parcel]]").unwrap();
+        let (lots, rules) = rows.split_once("[[recovery]]").unwrap();
+        let mut sections = lots.split("[[parcel]]").collect::<Vec<_>>();
+        sections.reverse();
+        let reordered = sections.join("[[parcel]]");
+        let other = format!("{header}[[parcel]]{reordered}[[recovery]]{rules}");
+        let checked = |s: &str| super::super::evaluate(&parse(s, source(s))?);
+        let original = checked(sheet).unwrap();
+        let reversed = checked(&other).unwrap();
+        assert_eq!(original.summary(), reversed.summary());
+        assert_ne!(original.digest(), reversed.digest());
+        for id in ["base-stockpile", "marginal-pad", "high-grade-pocket"] {
+            assert!(
+                original
+                    .inputs()
+                    .anchors
+                    .iter()
+                    .any(|a| a.locator.contains(id))
+            );
+        }
     }
 
     #[test]
