@@ -77,6 +77,19 @@ fn procurement_preserves_the_competing_project_and_prices_only_critical_delay() 
     let c = card("purchase");
     assert!(finding(&c, "Hold (250000 USD)"));
     assert!(finding(&c, "probability 1/20"));
+    let limits = c.get("procurement_limits").expect("negotiation terms");
+    for (key, expected) in [
+        ("max_hold_fee_usd", "500000"),
+        ("fixed_exercise_credit_usd", "0"),
+        ("max_replacement_price_usd", "20500000"),
+        ("latest_on_time_delivery", "2030-11-27"),
+    ] {
+        assert_eq!(limits.get(key).and_then(Json::as_str), Some(expected));
+    }
+    assert!(finding(
+        &c,
+        "reduce the price by at least 1000000 USD and bring delivery forward by at least 18 days"
+    ));
     assert_eq!(
         row(&c, "Order / cancel"),
         [
@@ -84,8 +97,8 @@ fn procurement_preserves_the_competing_project_and_prices_only_critical_delay() 
             "3000000",
             "2000000",
             "5000000",
-            "0",
-            "0",
+            "not applicable",
+            "not applicable",
             "-1500000",
             "22000000",
             "15500000"
@@ -131,6 +144,18 @@ fn second_asset_credits_the_option_and_a_later_delivery_consumes_only_float() {
     let c = card("purchase_potash");
     assert!(finding(&c, "Lapse (0 USD)"));
     assert!(finding(&c, "probability 1/34"));
+    let limits = c.get("procurement_limits").expect("negotiation terms");
+    for (key, expected) in [
+        ("max_hold_fee_usd", "1100000"),
+        ("fixed_exercise_credit_usd", "100000"),
+        ("max_replacement_price_usd", "9000000"),
+        ("latest_on_time_delivery", "2030-09-16"),
+    ] {
+        assert_eq!(limits.get(key).and_then(Json::as_str), Some(expected));
+    }
+    for outcome in ["Order / cancel", "Hold / cancel", "Lapse / cancel"] {
+        assert_eq!(&row(&c, outcome)[4..6], ["not applicable"; 2]);
+    }
     assert_eq!(
         &row(&c, "Hold / proceed")[1..4],
         ["150000", "7900000", "8050000"]

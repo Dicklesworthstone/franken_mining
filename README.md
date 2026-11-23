@@ -24,7 +24,12 @@ checkpoints and the ability to fund a competing substation. Run it from the work
 cargo run -p fmine-cli -- decide program tests/capital/executive_purchase.toml --format markdown
 ```
 
-Use `--json` for the full submitted worksheet, source digest, findings and comparison rows. The operator
+The same example gives Procurement two concrete negotiating terms. A replacement quote must come down
+by $1 million **and** deliver 18 days earlier to preserve first ore and the substation. Treasury can afford
+up to $500,000 for the existing hold at its stated exercise credit. That ceiling measures liquidity.
+The supplier's quoted fee is $250,000.
+
+Use `--json` for the full submitted worksheet, source digest, findings, comparison rows and procurement limits. The operator
 declares source availability, payment terms and financial scope. An input dated after the meeting refuses.
 The two-asset exercise and the independent controller arithmetic are in the [synthetic pilot](docs/delivery/EXECUTIVE_DECISION_PILOT.md).
 Other worksheets compare [tenure options](tests/capital/executive_tenure.toml),

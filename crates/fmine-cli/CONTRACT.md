@@ -21,7 +21,12 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     Delay exposure is separate from cash at review. Cash headroom uses the same primitive as capital-program
     opening checkpoints. The minimum upfront payment and the minimum cancellation loss each require
     preserving the competing expenditure and both floors under proceed and cancel. Named scenario
-    arithmetic supplies no probabilities or engineering validation.
+    arithmetic supplies no probabilities or engineering validation. `procurement_limits` carries the
+    largest replacement price consistent with both floors and the competing project, and the latest
+    delivery that fits inside float. For a live hold it gives the maximum affordable fee at the fixed
+    exercise credit. USD limits are whole decimal strings. Zero is attainable; null means no feasible
+    price or fee, or no applicable live hold terms. A null delivery limit means the stated float extends
+    past the four-digit worksheet calendar. Cancelled branches have no commissioning milestone to delay.
   - Rehabilitation compares mutually exclusive, owner-eligible packages at one horizon. Work is paid on
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release

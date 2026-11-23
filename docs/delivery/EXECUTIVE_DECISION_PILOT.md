@@ -18,6 +18,14 @@
 
 ## Independent replay and follow-on use
 
+**Negotiating room at the original meeting.** In the fictional copper case, Treasury can spend
+$45m − $18m − $6.5m = **$20.5m** in total at review. The reserved drive costs $20m and its fee buys
+no exercise credit, leaving **$500k** as the largest affordable hold fee. Today's cash also permits
+that fee. For waiting to work, Procurement needs a replacement quote at or below **$20.5m**, with delivery
+by **27 November** (15 November plus 12 days). Against the existing offer this requires **both** a
+$1m reduction and delivery 18 days earlier. The supplier has offered neither concession. These figures
+measure the budget and schedule limits, without assigning a value to the vendor's willingness to move.
+
 **Fictional minute and subsequent outcome.** On 8 March the group committee approved only the fee and set the review date. In this scenario the engineering team approved the drive on 22 March and procurement exercised the hold. The fee was spent. No realized saving is credited. This resolution is outside the original meeting insert and its input worksheet.
 
 **DESIGN.** In the simulated original meeting, procurement’s stand-alone comparison favored the $20m order over the later $21.5m quote. Treasury’s dated floor and the substation commitment changed the simulated committee choice. The CLI reads only the decision-time worksheet. The later fictional minute above is deliberately outside its inputs. JSON preserves the original worksheet and digest so a reviewer can challenge a date, credit or basis.
