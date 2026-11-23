@@ -123,6 +123,8 @@ fn input(c: &Claim<TrajectoryInput>) -> String {
         TrajectoryValue::Stocktake(_) => "stocktake",
         TrajectoryValue::Inflow(_) => "inflow",
         TrajectoryValue::Outflow(_) => "outflow",
+        TrajectoryValue::UnmeasuredInflow => "unmeasured_inflow",
+        TrajectoryValue::UnmeasuredOutflow => "unmeasured_outflow",
     };
     format!(
         "{{\"role\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"kg_exact\":{},\"claim\":{}}}",
@@ -162,6 +164,26 @@ fn stock(d: &InventoryTrajectory, time: i64, i: usize) -> String {
         i = i,
     )
 }
+fn inferred_flow(outcome: &TrajectoryOutcome, location: &TrajectoryLocation, i: usize) -> String {
+    let d = outcome.diagnostics();
+    let variance = d.posterior_covariance[i * d.estimates_kg.len() + i].value();
+    let declaration = outcome.inputs().iter().find(|c| {
+        c.value.value.is_unmeasured_flow() && c.value.location().as_ref() == Some(location)
+    });
+    format!(
+        concat!(
+            "{{\"key\":{},\"coordinate_index\":{i},\"declaration_claim_id\":{},",
+            "\"source_claim_id\":null,\"observed_kg\":null,\"estimate_kg\":{},",
+            "\"posterior_variance_kg2\":{},\"conditional_standard_deviation_kg\":{},\"unmeasured\":true}}"
+        ),
+        quoted(&location.worksheet_key()),
+        declaration.map_or_else(|| "null".into(), |c| quoted(&c.claim_id.to_string())),
+        number(d.estimates_kg[i].value()),
+        number(variance),
+        number(variance.sqrt()),
+        i = i,
+    )
+}
 fn gross(diagnostic: &GrossErrorDiagnostic) -> String {
     match diagnostic {
         GrossErrorDiagnostic::NoRedundancy => {
@@ -184,13 +206,24 @@ pub(super) fn json(submitted: &str, source: &SourceAnchor, outcome: &TrajectoryO
         .observations
         .iter()
         .map(|key| coordinate(&key.location, Some(key.source)))
-        .chain(
-            d.unmeasured_stocktakes_ns
-                .iter()
-                .map(|t| coordinate(&TrajectoryLocation::Stocktake(*t), None)),
-        )
+        .chain(d.unmeasured_locations().map(|key| coordinate(&key, None)))
         .collect::<Vec<_>>()
         .join(",");
+    let inferred_flows = if d.unmeasured_flows.is_empty() {
+        String::new()
+    } else {
+        let flows = d
+            .unmeasured_flows
+            .iter()
+            .filter_map(|key| {
+                d.coordinate_index(key)
+                    .map(|i| inferred_flow(outcome, key, i))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(",\"inferred_flows\":[{flows}]")
+    };
+    let version = if d.unmeasured_flows.is_empty() { 1 } else { 2 };
     let stocks = d
         .boundaries_ns
         .iter()
@@ -225,12 +258,12 @@ pub(super) fn json(submitted: &str, source: &SourceAnchor, outcome: &TrajectoryO
     );
     format!(
         concat!(
-            "{{\"schema\":\"fmine.plant-trajectory-result.v1\",\"source\":{},\"submitted_worksheet\":{},",
+            "{{\"schema\":\"fmine.plant-trajectory-result.v{version}\",\"source\":{},\"submitted_worksheet\":{},",
             "\"scope\":{{\"boundary\":{},\"element\":{},\"measurand\":{},\"basis\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\"}},",
             "\"source_inputs\":[{observations}],\"coordinate_order\":[{order}],\"measured_coordinate_count\":{},",
             "\"error_model\":{{\"claim\":{},\"basis\":{},\"covariance_kg2\":{},\"unbiased_gaussian_errors\":true,",
             "\"global_chi_square_limit\":{},\"normalized_adjustment_limit\":{},\"closure_tolerance_kg\":{}}},",
-            "\"result\":{{\"stocks\":[{stocks}],\"observed_kg\":{},\"estimates_kg\":{},\"measured_adjustments_kg\":{},",
+            "\"result\":{{\"stocks\":[{stocks}]{inferred_flows},\"observed_kg\":{},\"estimates_kg\":{},\"measured_adjustments_kg\":{},",
             "\"posterior_covariance_kg2\":{},\"measured_adjustment_covariance_kg2\":{},\"normalized_adjustments\":[{normalized}],",
             "\"period_conservation\":[{periods}],\"gross_error\":{}}},",
             "\"admitted_claim\":{},\"refusal\":{rejection},\"receipt_digest\":{},\"calibration\":\"uncalibrated\",\"no_claim\":{}}}"
@@ -261,13 +294,15 @@ pub(super) fn json(submitted: &str, source: &SourceAnchor, outcome: &TrajectoryO
             .admitted_claim()
             .map_or_else(|_| "null".into(), claim),
         quoted(outcome.digest()),
-        quoted(worksheet::NO_CLAIM),
+        quoted(worksheet::no_claim(outcome)),
         observations = observations,
         order = order,
         stocks = stocks,
         normalized = normalized,
         periods = periods,
         rejection = rejection,
+        version = version,
+        inferred_flows = inferred_flows,
     )
 }
 
@@ -275,7 +310,7 @@ pub(super) fn markdown(outcome: &TrajectoryOutcome) -> String {
     let d = outcome.diagnostics();
     let mut out = format!(
         "# Conditional inventory trajectory\n\n{}\n\nBoundary: {}. Measurand: {} ({}). Scope: {}–{} ns.\n\n",
-        worksheet::NO_CLAIM,
+        worksheet::no_claim(outcome),
         escaped(&d.scope.boundary),
         escaped(&d.scope.measurand),
         escaped(&d.scope.element),
@@ -311,6 +346,20 @@ pub(super) fn markdown(outcome: &TrajectoryOutcome) -> String {
             );
         }
     }
+    if !d.unmeasured_flows.is_empty() {
+        out.push_str("\n## Unmeasured interval flows\n\nEach total is inferred from the declared conservation equations and genuine observations. No zero measurement, covariance row or prior was supplied.\n\n| Coordinate | Observed kg | Fitted kg | Conditional standard deviation (kg) | Status |\n|---|---:|---:|---:|---|\n");
+        for location in &d.unmeasured_flows {
+            if let Some(i) = d.coordinate_index(location) {
+                let _ = writeln!(
+                    out,
+                    "| {} | — | {} | {} | Unmeasured, inferred |",
+                    escaped(&location.worksheet_key()),
+                    number(d.estimates_kg[i].value()),
+                    number(d.posterior_covariance[i * count + i].value().sqrt()),
+                );
+            }
+        }
+    }
     out.push_str("\n## Original observations and fitted adjustments\n\n| Coordinate | Observed kg | Fitted kg | Adjustment kg | Source Claim |\n|---|---:|---:|---:|---|\n");
     for (i, key) in d.observations.iter().enumerate() {
         let _ = writeln!(
@@ -323,7 +372,11 @@ pub(super) fn markdown(outcome: &TrajectoryOutcome) -> String {
             key.source
         );
     }
-    out.push_str("\n## Conservation and gross-error diagnostics\n\n| Period (ns) | Exact observed contribution (kg) | Contains unmeasured stocks | Fitted residual (kg) |\n|---|---:|---|---:|\n");
+    if d.unmeasured_flows.is_empty() {
+        out.push_str("\n## Conservation and gross-error diagnostics\n\n| Period (ns) | Exact observed contribution (kg) | Contains unmeasured stocks | Fitted residual (kg) |\n|---|---:|---|---:|\n");
+    } else {
+        out.push_str("\n## Conservation and gross-error diagnostics\n\n| Period (ns) | Exact observed contribution (kg) | Contains unmeasured stocks or flows | Fitted residual (kg) |\n|---|---:|---|---:|\n");
+    }
     for row in &d.conservation {
         let q = row.observed_contribution_exact_kg;
         let _ = writeln!(

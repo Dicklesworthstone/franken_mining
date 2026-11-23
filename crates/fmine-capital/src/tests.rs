@@ -111,6 +111,18 @@ pub(crate) fn with_schedule(mut inputs: ProgramInputs) -> ProgramInputs {
     }));
     inputs
 }
+pub(crate) fn with_cash_valuation(mut inputs: ProgramInputs) -> ProgramInputs {
+    let mut policy = inputs.policy.value.clone();
+    policy.payoff_convention = CASH_PAYOFF_CONVENTION.into();
+    policy.valuation_basis = CASH_VALUATION_BASIS.into();
+    inputs.policy = policy_claim(policy);
+    for candidate in &mut inputs.candidates {
+        let mut value = candidate.value.clone();
+        value.valuation_basis = CASH_VALUATION_BASIS.into();
+        *candidate = candidate_claim(value);
+    }
+    inputs
+}
 pub(crate) fn set_candidate_flow(
     schedule: &mut FundingSchedule,
     period: &str,
@@ -339,6 +351,308 @@ fn checkpoint<'a>(
         .iter()
         .find(|row| row.period_id.as_deref() == period && row.state_id == state)
         .unwrap()
+}
+
+#[test]
+fn declared_cash_portfolios_keep_joint_risk_without_recharging_spending_or_claiming_nav() {
+    let i = with_cash_valuation(inputs(
+        &[("A", 2, &[7, -3]), ("B", 3, &[-2, 8])],
+        &[r(1, 2), r(1, 2)],
+        5,
+        r(1, 2),
+        Some(0),
+    ));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["A", "B"]]);
+    let both = row(&report, &["A", "B"]);
+    assert_eq!(both.statistics.as_ref().unwrap().mean.major, r(5, 1));
+    assert_eq!(both.spend.major, r(5, 1));
+    assert_eq!(both.tail_loss.unwrap().major, r(-5, 1));
+    assert!(row(&report, &["A"]).risk_rejected);
+    assert!(row(&report, &["B"]).risk_rejected);
+    assert_eq!(report.no_claim(), CASH_NO_CLAIM);
+    assert!(
+        report
+            .to_json()
+            .contains("expected_discounted_incremental_cash")
+    );
+    assert!(
+        report
+            .to_markdown()
+            .contains("Mean discounted incremental cash")
+    );
+    assert!(!report.to_markdown().contains("Mean net delta-NAV"));
+    assert!(
+        evaluate(&with_funding(
+            i.clone(),
+            &[100, 100],
+            &[("A", &[2, 2]), ("B", &[3, 3])],
+            20,
+        ))
+        .is_err()
+    );
+    let mut equity = with_equity(i.clone(), &[100, 100], r(10, 1));
+    equity.policy = i.policy.clone();
+    assert!(evaluate(&equity).is_err());
+    let mut wrong = i;
+    let mut policy = wrong.policy.value.clone();
+    policy.valuation_basis = "full project NAV".into();
+    wrong.policy = policy_claim(policy);
+    assert!(evaluate(&wrong).is_err());
+}
+
+#[test]
+fn declared_cash_selection_stability_reweights_net_outcomes_and_preserves_nominal_choices() {
+    let mut program = with_cash_valuation(inputs(
+        &[("growth", 1, &[-8, 10]), ("steady", 1, &[3, 3])],
+        &[r(1, 3), r(2, 3)],
+        1,
+        r(2, 5),
+        Some(5),
+    ));
+    let nominal = evaluate(&program).unwrap();
+    let design = stability::SelectionStabilityDesign {
+        model_key: program.policy.value.model_key.clone(),
+        method: stability::METHOD.into(),
+        seed: 229,
+        replicates: 200,
+        draws_per_replicate: 5,
+        sampling_basis: "Synthetic finite-law sensitivity of complete cash states".into(),
+    };
+    let tag = design.canonical_tag();
+    program.selection_stability = Some(claim(
+        "capital.cash.selection-stability",
+        design,
+        &tag,
+        AdditivityClass::NonAdditive,
+    ));
+    let evaluated = evaluate(&program).unwrap();
+    assert_eq!(evaluated.summary().choices, nominal.summary().choices);
+    assert_eq!(selected_winners(&evaluated), vec![vec!["growth"]]);
+    let summary = evaluated.summary().selection_stability.as_ref().unwrap();
+    assert_eq!(summary.objective_unit, "USD");
+    let growth = &row(&nominal, &["growth"]).bundle_id;
+    let steady = &row(&nominal, &["steady"]).bundle_id;
+    assert_eq!(summary.nominal_winners, vec![growth.clone()]);
+    assert_eq!(summary.nominal_runner_up, vec![steady.clone()]);
+    let mut growth_count = 0_u32;
+    for replicate in &summary.replicates {
+        assert_eq!(replicate.state_counts.iter().sum::<u32>(), 5);
+        // With b bad draws, growth mean is 10 - 18*b/5. Its worst-two-draw
+        // average loss passes the 5 USD cap exactly when b <= 1.
+        let expected = if replicate.state_counts[0] <= 1 {
+            growth_count += 1;
+            growth
+        } else {
+            steady
+        };
+        assert_eq!(replicate.feasible_winners, vec![expected.clone()]);
+    }
+    let frequency = summary
+        .alternatives
+        .iter()
+        .find(|row| &row.alternative_id == growth)
+        .unwrap();
+    assert_eq!(frequency.co_winner_replicates, growth_count);
+    assert_eq!(frequency.risk_feasible_replicates, growth_count);
+    assert_eq!(
+        frequency.selection_frequency,
+        r(i128::from(growth_count), 200)
+    );
+    assert_eq!(frequency.fragile, growth_count < 160);
+    assert_eq!(summary.no_feasible_replicates, 0);
+}
+
+#[test]
+fn declared_cash_schedule_pays_initial_capital_before_receipts_and_keeps_earlier_failures() {
+    let original = inputs(&[("A", 90, &[40]), ("B", 80, &[30])], &[ONE], 90, ONE, None);
+    let cash = with_cash_valuation(original.clone());
+    assert_eq!(selected_winners(&evaluate(&cash).unwrap()), vec![vec!["A"]]);
+    let mut scheduled = with_schedule(cash);
+    let mut schedule = scheduled.funding_schedule.as_ref().unwrap().value.clone();
+    set_candidate_flow(&mut schedule, "start", "A", "s0", 110);
+    set_candidate_flow(&mut schedule, "start", "B", "s0", 100);
+    scheduled.funding_schedule = Some(schedule_claim(schedule.clone()));
+    let report = evaluate(&scheduled).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["B"]]);
+    let a = row(&report, &["A"]);
+    let opening = checkpoint(a, None, "s0");
+    assert_eq!(opening.opening_cash.major, r(100, 1));
+    assert_eq!(opening.baseline_cash_flow.major, ZERO);
+    assert_eq!(opening.candidate_cash_flow.major, r(-90, 1));
+    assert_eq!(opening.closing_cash.major, r(10, 1));
+    assert_eq!(opening.slack.major, r(-10, 1));
+    assert_eq!(
+        checkpoint(a, Some("start"), "s0").opening_cash.major,
+        r(10, 1)
+    );
+    assert_eq!(
+        checkpoint(a, Some("finish"), "s0").closing_cash.major,
+        r(120, 1)
+    );
+    assert_eq!(
+        a.funding_schedule.as_ref().unwrap().minimum_slack.major,
+        r(-10, 1)
+    );
+    assert!(matches!(a.structural_rejections.as_slice(),
+        [StructuralRejection::CashScheduleShortfall { period_id: None, state_id, shortfall, .. }]
+        if state_id == "s0" && shortfall.major == r(10, 1)));
+    let b = row(&report, &["B"]);
+    assert_eq!(checkpoint(b, None, "s0").closing_cash.major, r(20, 1));
+    assert_eq!(
+        b.funding_schedule.as_ref().unwrap().minimum_slack.major,
+        ZERO
+    );
+    assert_eq!(b.statistics.as_ref().unwrap().mean.major, r(30, 1));
+    assert_eq!(report.no_claim(), CASH_LIQUIDITY_NO_CLAIM);
+    assert!(
+        report
+            .to_markdown()
+            .contains("initial capital is paid once at opening")
+    );
+    assert!(
+        !report
+            .to_markdown()
+            .contains("supplied net delta-NAV payoffs")
+    );
+
+    // DESIGN: legacy NAV schedules explicitly own their whole cash sequence; costs remain budget-only.
+    let mut legacy = with_schedule(original);
+    legacy.funding_schedule = Some(schedule_claim(schedule));
+    let nav = evaluate(&legacy).unwrap();
+    assert_eq!(selected_winners(&nav), vec![vec!["A"]]);
+    assert_eq!(
+        checkpoint(row(&nav, &["A"]), None, "s0")
+            .candidate_cash_flow
+            .major,
+        ZERO
+    );
+    assert_eq!(
+        checkpoint(row(&nav, &["A"]), None, "s0").closing_cash.major,
+        r(100, 1)
+    );
+    assert_eq!(nav.no_claim(), CASH_SCHEDULE_NO_CLAIM);
+}
+
+#[test]
+fn declared_cash_schedule_keeps_minor_unit_period_shortfalls_in_every_shared_state() {
+    let mut i = with_schedule(with_cash_valuation(inputs(
+        &[("A", 30, &[10, 10]), ("B", 50, &[8, 8])],
+        &[r(1, 100), r(99, 100)],
+        80,
+        ONE,
+        None,
+    )));
+    let mut schedule = i.funding_schedule.as_ref().unwrap().value.clone();
+    schedule.opening_cash[1].1 = usd(200);
+    set_candidate_flow(&mut schedule, "start", "A", "s1", 80);
+    set_candidate_flow(&mut schedule, "start", "B", "s1", 80);
+    set_candidate_flow(&mut schedule, "finish", "A", "s0", 10);
+    i.funding_schedule = Some(schedule_claim(schedule.clone()));
+    let at_floor = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&at_floor), vec![vec!["A", "B"]]);
+    assert_eq!(
+        row(&at_floor, &["A", "B"])
+            .funding_schedule
+            .as_ref()
+            .unwrap()
+            .minimum_slack
+            .major,
+        ZERO
+    );
+    schedule
+        .candidate_flows
+        .iter_mut()
+        .find(|flow| flow.period_id == "start" && flow.candidate_id == "A" && flow.state_id == "s0")
+        .unwrap()
+        .value = Money::from_minor(Currency::USD, -1);
+    i.funding_schedule = Some(schedule_claim(schedule));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["A"]]);
+    let both = row(&report, &["A", "B"]);
+    assert_eq!(checkpoint(both, None, "s0").slack.major, ZERO);
+    assert_eq!(
+        checkpoint(both, Some("start"), "s0").slack.major,
+        r(-1, Money::SCALE)
+    );
+    assert_eq!(
+        checkpoint(both, Some("start"), "s1").closing_cash.major,
+        r(280, 1)
+    );
+    assert_eq!(
+        checkpoint(both, Some("finish"), "s0").closing_cash.major,
+        r(30 * Money::SCALE - 1, Money::SCALE)
+    );
+    assert_eq!(
+        both.funding_schedule.as_ref().unwrap().minimum_slack.major,
+        r(-1, Money::SCALE)
+    );
+    assert!(matches!(both.structural_rejections.as_slice(),
+        [StructuralRejection::CashScheduleShortfall { period_id: Some(period), state_id, shortfall, .. }]
+        if period == "start" && state_id == "s0" && shortfall.major == r(1, Money::SCALE)));
+}
+
+#[test]
+fn declared_cash_schedule_preserves_joint_value_and_risk_without_repaying_capital() {
+    let i = with_cash_valuation(inputs(
+        &[("A", 2, &[7, -3]), ("B", 3, &[-2, 8])],
+        &[r(1, 2), r(1, 2)],
+        5,
+        r(1, 2),
+        Some(0),
+    ));
+    let original = evaluate(&i).unwrap();
+    let mut timed = with_schedule(i);
+    let mut schedule = timed.funding_schedule.as_ref().unwrap().value.clone();
+    schedule.opening_cash[1].1 = usd(200);
+    for (period, candidate, s0, s1) in [
+        ("start", "A", 10, -5),
+        ("start", "B", -4, 6),
+        ("finish", "A", -1, 4),
+        ("finish", "B", 2, -3),
+    ] {
+        set_candidate_flow(&mut schedule, period, candidate, "s0", s0);
+        set_candidate_flow(&mut schedule, period, candidate, "s1", s1);
+    }
+    timed.funding_schedule = Some(schedule_claim(schedule));
+    let report = evaluate(&timed).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["A", "B"]]);
+    for members in [&[][..], &["A"][..], &["B"][..], &["A", "B"][..]] {
+        let after = row(&report, members);
+        let before = row(&original, members);
+        assert_eq!(after.statistics, before.statistics);
+        assert_eq!(after.tail_loss, before.tail_loss);
+        assert_eq!(after.risk_rejected, before.risk_rejected);
+    }
+    let both = row(&report, &["A", "B"]);
+    assert_eq!(checkpoint(both, None, "s0").closing_cash.major, r(95, 1));
+    assert_eq!(checkpoint(both, None, "s1").closing_cash.major, r(195, 1));
+    assert_eq!(
+        checkpoint(both, Some("start"), "s0").closing_cash.major,
+        r(101, 1)
+    );
+    assert_eq!(
+        checkpoint(both, Some("finish"), "s0").closing_cash.major,
+        r(102, 1)
+    );
+    assert_eq!(
+        checkpoint(both, Some("finish"), "s1").closing_cash.major,
+        r(197, 1)
+    );
+    assert_eq!(both.statistics.as_ref().unwrap().mean.major, r(5, 1));
+    assert_eq!(both.tail_loss.unwrap().major, r(-5, 1));
+    assert!(row(&report, &["A"]).risk_rejected);
+    assert!(row(&report, &["B"]).risk_rejected);
+
+    let mut permuted = timed;
+    permuted.candidates.reverse();
+    permuted.weights.value.states.reverse();
+    let schedule = &mut permuted.funding_schedule.as_mut().unwrap().value;
+    schedule.periods.reverse();
+    schedule.opening_cash.reverse();
+    schedule.baseline_flows.reverse();
+    schedule.candidate_flows.reverse();
+    assert_eq!(evaluate(&permuted).unwrap(), report);
 }
 
 #[test]

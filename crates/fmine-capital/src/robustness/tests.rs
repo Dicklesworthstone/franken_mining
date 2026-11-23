@@ -5,7 +5,7 @@ use super::*;
 use crate::entity::valuation::CandidateNavChange;
 use crate::tests::{
     claim, equity_claim, inputs, policy_claim, r, set_baseline_flow, set_candidate_flow,
-    set_share_change, usd, with_equity, with_schedule,
+    set_share_change, usd, with_cash_valuation, with_equity, with_schedule,
 };
 
 fn design_claim(design: RobustnessDesign) -> Claim<RobustnessDesign> {
@@ -207,6 +207,43 @@ fn expected_value_and_regret_choose_different_stress_winners_without_changing_no
             .contains("\"stressed_tail_loss_feasibility_certified\":false")
     );
     assert!(evaluated.to_markdown().contains("Source dual potential"));
+}
+
+#[test]
+fn declared_cash_robustness_uses_net_cash_once_and_retains_exact_transport_witnesses() {
+    for radius in [ZERO, r(1, 4), ONE] {
+        let mut program = with_cash_valuation(example(radius));
+        let evaluated = evaluate(&program).unwrap();
+        let summary = evaluated.summary().robustness.as_ref().unwrap();
+        assert_eq!(summary.objective_unit, "USD");
+        assert_eq!(summary.nominal_expected_value_winners, ["bundle_01"]);
+        assert_eq!(row(summary, "bundle_01").nominal_mean, r(12, 1));
+        for (id, losses, regrets) in [
+            ("bundle_00", [ZERO, ZERO], [r(20, 1), r(8, 1)]),
+            ("bundle_01", [r(-20, 1), r(12, 1)], [ZERO, r(20, 1)]),
+            ("bundle_02", [r(-8, 1), r(-8, 1)], [r(12, 1), ZERO]),
+        ] {
+            let bundle = row(summary, id);
+            assert_eq!(
+                bundle.worst_case_mean,
+                ZERO.checked_sub(exhaustive_worst(losses, radius)).unwrap()
+            );
+            witness(&bundle.loss_certificate, losses);
+            witness(&bundle.regret_certificate, regrets);
+        }
+        assert!(
+            evaluated
+                .to_json()
+                .contains("\"objective\":\"expected_discounted_incremental_cash\"")
+        );
+        program.robustness = None;
+        let nominal = evaluate(&program).unwrap();
+        assert_eq!(nominal.summary().choices, evaluated.summary().choices);
+        assert_eq!(
+            nominal.summary().feasible_winners,
+            evaluated.summary().feasible_winners
+        );
+    }
 }
 
 #[test]

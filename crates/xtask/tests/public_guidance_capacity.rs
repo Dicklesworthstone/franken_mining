@@ -10,7 +10,10 @@ mod tests {
     use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal};
     use fmine_io::xlsx::{MinimalCell, MinimalSheet, build_minimal_xlsx};
     use fmine_metrics::capacity::CapacityVerdict;
-    use fmine_metrics::guidance::{EnvelopeTier, HistoryVerdict, Ownership, Period};
+    use fmine_metrics::guidance::{
+        CostMetric, EnvelopeTier, HistoryVerdict, Ownership, Period, QuantityKind,
+        SpendingRequirement, quarters,
+    };
     use fmine_numerics::exact_feas::Rat;
     use fmine_public::guidance::capacity::{
         TechnicalAssessment, TechnicalComparison, TechnicalScenarioKind,
@@ -164,6 +167,22 @@ mod tests {
     }
 
     fn workspace(tag: &str) -> PathBuf {
+        workspace_with_tcc(tag, None, true)
+    }
+
+    fn tcc_row(signed: bool) -> Row {
+        Row {
+            doc: "Guidance.pdf",
+            col: "Total cash costs",
+            token: if signed { "-900 - -800" } else { "800 - 900" },
+            quantity: "guidance_example_mine_tcc_usd_per_oz",
+            unit: "usd_per_oz",
+            basis: "attributable:4/5;tcc=issuer-reported-per-sold-oz",
+            period: "2030FY",
+        }
+    }
+
+    fn workspace_with_tcc(tag: &str, signed_tcc: Option<bool>, historical_tcc: bool) -> PathBuf {
         let root =
             std::env::temp_dir().join(format!("fmine-technical-{tag}-{}", std::process::id()));
         for dir in ["corpus", "registries/sources", "registries/transcriptions"] {
@@ -174,7 +193,7 @@ mod tests {
              retrieved_utc = \"2030-07-31T00:00:00Z\"\nurl_prefix = \"https://example.invalid/\"\n\
              [[subject]]\nname = \"Example Mine\"\n"
         );
-        for (release, sheets) in [
+        for (release, mut sheets) in [
             (
                 "2029Q2",
                 vec![sheet("YTD", "2029", "six", "June 30", ["70", "70", "1400"])],
@@ -207,6 +226,29 @@ mod tests {
                 vec![sheet("YTD", "2030", "six", "June 30", ["68", "60", "2283"])],
             ),
         ] {
+            if let Some(signed) = signed_tcc
+                && (historical_tcc || release == "2030Q2")
+            {
+                let token = match (release == "2030Q2", signed) {
+                    (true, false) => "1200",
+                    (true, true) => "-1200",
+                    (false, false) => "700",
+                    (false, true) => "-700",
+                };
+                for sheet in &mut sheets {
+                    sheet.cells.push((
+                        "E4".into(),
+                        MinimalCell::Text("Total cash costs ($/oz)".into()),
+                    ));
+                    sheet.cells.push((
+                        "E5".into(),
+                        MinimalCell::Styled {
+                            raw: token.into(),
+                            xf: 0,
+                        },
+                    ));
+                }
+            }
             let file = format!("{release}.xlsx");
             let bytes = build_minimal_xlsx(&sheets);
             std::fs::write(root.join("corpus").join(&file), &bytes).unwrap();
@@ -229,6 +271,9 @@ mod tests {
             true,
         );
         let mut rows = guidance_rows();
+        if let Some(signed) = signed_tcc {
+            rows.push(tcc_row(signed));
+        }
         rows.extend(technical_rows());
         write_rows(&root, &rows, "");
         root
@@ -236,6 +281,229 @@ mod tests {
 
     fn run(root: &Path, as_of: &str) -> Result<GuidanceCompletionReport, Refusal> {
         guidance::run_public(root, ISSUER, "example-mine", "2030Q2", as_of)
+    }
+
+    fn run_tcc(root: &Path) -> Result<GuidanceCompletionReport, Refusal> {
+        guidance::run_public_with_metric(
+            root,
+            ISSUER,
+            "example-mine",
+            "2030Q2",
+            "2030-07-31",
+            CostMetric::Tcc,
+        )
+    }
+
+    #[test]
+    fn gold_tcc_registered_sources_keep_signed_exact_requirements_and_selected_metric_in_cli() {
+        for signed in [false, true] {
+            let root = workspace_with_tcc(
+                if signed { "tcc-signed" } else { "tcc-positive" },
+                Some(signed),
+                true,
+            );
+            let report = run_tcc(&root).unwrap();
+            let aisc = run(&root, "2030-07-31").unwrap();
+            let interval = |lo, hi| fmine_numerics::exact_feas::Interval {
+                lo,
+                hi,
+                lo_strict: false,
+                hi_strict: false,
+            };
+            let q = |n, d| Rat::new(n, d).unwrap();
+            let sign_bounds = |lo, hi| {
+                if signed {
+                    interval(
+                        Rat::from_integer(0).checked_sub(hi).unwrap(),
+                        Rat::from_integer(0).checked_sub(lo).unwrap(),
+                    )
+                } else {
+                    interval(lo, hi)
+                }
+            };
+            // Independent half-step arithmetic: ytd = [59.5,60.5] koz * [1199.5,1200.5] USD/oz.
+            // Remaining sales are 210±0.5 minus 70±0.5 = [139,141] koz. For each annual
+            // target A, future spend is (A*R + (A-r)*S)/1000, preserving the same S in both terms.
+            assert_eq!(
+                report.inputs.ytd_aisc.value.kind,
+                QuantityKind::TccUsdPerSoldOz
+            );
+            assert_eq!(report.inputs.ytd_aisc.metric_key, "summary:tcc_usd_per_oz");
+            assert_eq!(
+                report.inputs.ytd_aisc.value.interval,
+                sign_bounds(q(2399, 2), q(2401, 2))
+            );
+            assert_eq!(
+                report.completion.ytd_aisc_spend.value.interval,
+                sign_bounds(q(285481, 4000), q(290521, 4000))
+            );
+            assert_eq!(
+                report.completion.remaining_aisc_spend.value.interval,
+                sign_bounds(q(347879, 4000), q(436319, 4000))
+            );
+            assert_eq!(
+                report.completion.remaining_aisc_rate.value.interval,
+                sign_bounds(q(347879, 556), q(436319, 564))
+            );
+            assert_eq!(
+                report.completion.remaining_aisc_spend.value.kind,
+                QuantityKind::TccSpendUsdMillion
+            );
+            assert_eq!(
+                report.completion.spending_requirement,
+                if signed {
+                    SpendingRequirement::EntirelyNegative
+                } else {
+                    SpendingRequirement::Nonnegative
+                }
+            );
+            assert_eq!(
+                report.completion.remaining_production,
+                aisc.completion.remaining_production
+            );
+            assert_ne!(report.digest, aisc.digest);
+            assert_eq!(
+                (report.history.tier, report.history.verdict),
+                (EnvelopeTier::T1, HistoryVerdict::WithinEnvelope)
+            );
+            let source = &report.history_sources[0];
+            let h = quarters::QuarterlyHistory {
+                id: source.id.clone(),
+                quarters: source.quarters.clone(),
+            };
+            let witness = &report.history.checks[0].witness.as_ref().unwrap().value;
+            assert!(quarters::check_quarter_witness(&report.inputs, &h, witness).unwrap());
+            for quarter in &source.quarters {
+                assert_eq!(quarter.aisc.value.kind, QuantityKind::TccUsdPerSoldOz);
+                assert_eq!(quarter.aisc.metric_key, "summary:tcc_usd_per_oz");
+            }
+            let json = report.to_json();
+            for expected in [
+                "\"schema\":\"fmine.guidance.completion.v3\"",
+                "\"cost_metric\":\"tcc\"",
+                "\"tcc_guidance\"",
+                "\"ytd_tcc\"",
+                "\"ytd_tcc_spend\"",
+                "\"remaining_tcc_rate\"",
+                "\"remaining_tcc_spend\"",
+                "\"annual_tcc\"",
+                "\"tcc_usd_per_sold_oz\"",
+                "\"tcc_spend_usd_m\"",
+                "2030Q2.xlsx:YTD!E5",
+                "2029Q3.xlsx:QTD!E5",
+            ] {
+                assert!(json.contains(expected), "missing {expected}: {json}");
+            }
+            for wrong in [
+                "\"aisc_guidance\"",
+                "\"ytd_aisc\"",
+                "\"remaining_aisc_rate\"",
+                "2030Q2.xlsx:YTD!D5",
+                "2029Q3.xlsx:QTD!D5",
+            ] {
+                assert!(!json.contains(wrong), "TCC borrowed AISC {wrong}: {json}");
+            }
+            assert_eq!(json, run_tcc(&root).unwrap().to_json());
+            let mut args: Vec<_> = [
+                "guidance",
+                "completion",
+                "--issuer",
+                ISSUER,
+                "--site",
+                "example-mine",
+                "--through",
+                "2030Q2",
+                "--as-of",
+                "2030-07-31",
+                "--metric",
+                "tcc",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+            let (envelope, _) = fmine_cli::invoke(&args, &root);
+            assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+            assert_eq!(envelope.payload_json, json);
+            args.extend(["--format".into(), "markdown".into()]);
+            let (markdown, exit) = fmine_cli::run(&args, &root);
+            assert_eq!(exit, 0, "{markdown}");
+            for label in [
+                "Annual TCC guidance",
+                "YTD TCC spending",
+                "Required remaining TCC",
+                "USD per sold oz",
+                "joint production/TCC witness",
+                "separate TCC frontier",
+                "Checked witness",
+            ] {
+                assert!(markdown.contains(label), "missing {label}: {markdown}");
+            }
+            assert!(!markdown.contains("AISC"), "{markdown}");
+        }
+    }
+
+    #[test]
+    fn tcc_never_borrows_aisc_for_missing_guidance_actuals_or_history() {
+        let root = workspace("tcc-absent");
+        assert_eq!(run_tcc(&root).unwrap_err().code, "FMINE-REF-202");
+        let mut rows = guidance_rows();
+        rows.push(tcc_row(false));
+        rows.extend(technical_rows());
+        write_rows(&root, &rows, "");
+        assert_eq!(run_tcc(&root).unwrap_err().code, "FMINE-REF-201");
+        assert!(run(&root, "2030-07-31").is_ok());
+
+        let root = workspace_with_tcc("tcc-no-history", Some(false), false);
+        let report = run_tcc(&root).unwrap();
+        assert_eq!(
+            (report.history.tier, report.history.verdict),
+            (EnvelopeTier::T3, HistoryVerdict::Indeterminate)
+        );
+        assert!(report.history_sources.is_empty());
+        assert_eq!(report.history_exclusions.len(), 1);
+        assert!(
+            report.history_exclusions[0]
+                .reason
+                .contains("summary:tcc_usd_per_oz")
+        );
+        assert_eq!(
+            run(&root, "2030-07-31").unwrap().history.verdict,
+            HistoryVerdict::WithinEnvelope
+        );
+
+        let root = workspace_with_tcc("tcc-declarations", Some(false), true);
+        for (basis, unit, code) in [
+            (
+                "attributable:4/5;aisc=issuer-reported-per-sold-oz",
+                "usd_per_oz",
+                "FMINE-REF-107",
+            ),
+            (
+                "attributable:4/5;tcc=issuer-reported-per-produced-oz",
+                "usd_per_oz",
+                "FMINE-REF-107",
+            ),
+            (
+                "attributable:4/5;tcc=issuer-reported-per-sold-oz",
+                "usd_per_lb",
+                "FMINE-REF-105",
+            ),
+            (
+                "attributable:3/5;tcc=issuer-reported-per-sold-oz",
+                "usd_per_oz",
+                "FMINE-REF-105",
+            ),
+        ] {
+            let mut row = tcc_row(false);
+            row.basis = basis;
+            row.unit = unit;
+            let mut rows = guidance_rows();
+            rows.push(row);
+            rows.extend(technical_rows());
+            write_rows(&root, &rows, "");
+            assert_eq!(run_tcc(&root).unwrap_err().code, code, "{basis} {unit}");
+            assert!(run(&root, "2030-07-31").is_ok());
+        }
     }
 
     fn comparison(report: &GuidanceCompletionReport) -> &TechnicalComparison {

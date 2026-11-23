@@ -8,18 +8,18 @@ use std::io::Read;
 use std::path::Path;
 
 use fmine_calib::record::{
-    self, Outcome, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
-    candidate::{Candidate, CandidateSeries, build_candidate},
+    self, Quarter, Rat, RecordRules, SiteStatus, Target, TargetMetric,
+    candidate::{Candidate, CandidateModel, CandidateSeries, build_candidate_with_model},
 };
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_registry::sources::{day_end, parse_sources_registry, retrieval_upper};
+use fmine_registry::sources::{SourcesRegistry, day_end, parse_sources_registry, retrieval_upper};
 
 use crate::key::{
     self, KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesOwnershipBasis,
 };
-use crate::mine_stats::{LabelVocabulary, MineStatsRead, View, read_mine_stats};
+use crate::mine_stats::{LabelVocabulary, MineStatsRead, MineStatsValue, View, read_mine_stats};
 use crate::sources::{IssuerProfile, SourceKind, is_issuer_name, registry_path};
 use crate::{LoadedSource, load_registered_sources};
 
@@ -40,6 +40,78 @@ pub struct CandidateSource {
     pub available_by_utc: String,
     pub published_at: Option<String>,
     pub published_at_basis: Option<String>,
+}
+
+/// A registered original-release publication boundary. The date is registry evidence, not a
+/// timestamp authority or a claim that every public disclosure has been registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NowcastPublication {
+    pub file: String,
+    pub sha256: String,
+    pub published_at: String,
+    pub published_at_basis: String,
+    /// The start, not the end, of the stated publication day: same-day proofs cannot precede it.
+    pub day_start_utc: i64,
+}
+
+/// Retain every registered workbook/HTML release for the scored quarter. Retrieval and inferred
+/// publication dates cannot establish that an outcome was still unpublished. An empty result is
+/// admissible for an unissued draft only; scoring additionally requires an original Mine Stats release.
+pub fn nowcast_publications(
+    registry: &SourcesRegistry,
+    quarter: Quarter,
+) -> Result<Vec<NowcastPublication>> {
+    let release = quarter.to_string();
+    let mut publications = Vec::new();
+    let workbook_rows = registry
+        .sources
+        .iter()
+        .filter(|source| source.quarter == release)
+        .map(|source| {
+            (
+                &source.file,
+                &source.sha256,
+                source.published_at.as_deref(),
+                source.published_at_basis.as_deref(),
+            )
+        });
+    let html_rows = registry
+        .html_sources
+        .iter()
+        .filter(|source| source.release == release)
+        .map(|source| {
+            (
+                &source.file,
+                &source.sha256,
+                Some(source.published_at.as_str()),
+                Some(source.published_at_basis.as_str()),
+            )
+        });
+    for (file, sha256, day, basis) in workbook_rows.chain(html_rows) {
+        let bad = || {
+            refuse(
+                RefusalCode::AssayLookahead108,
+                format!("{file}: post-quarter nowcasts require a FACT-cited publication date"),
+            )
+        };
+        let day = day.ok_or_else(bad)?;
+        let basis = basis
+            .filter(|basis| basis.starts_with("FACT: "))
+            .ok_or_else(bad)?;
+        let day_start_utc = record::parse_date(day)
+            .and_then(|day| day.checked_mul(86_400))
+            .filter(|day| quarter.end_utc().is_some_and(|end| *day >= end))
+            .ok_or_else(bad)?;
+        publications.push(NowcastPublication {
+            file: file.clone(),
+            sha256: sha256.clone(),
+            published_at: day.into(),
+            published_at_basis: basis.into(),
+            day_start_utc,
+        });
+    }
+    publications.sort_by(|a, b| a.file.cmp(&b.file));
+    Ok(publications)
 }
 
 /// One selected field. A missing row keeps its file and digest; placeholders keep their canonical Claim.
@@ -68,6 +140,8 @@ pub struct PublicCandidate {
     pub rules_file_sha256: Digest32,
     pub registry_sha256: Digest32,
     pub sources: Vec<CandidateSource>,
+    /// Empty on ordinary forecasts; registered release boundaries remain separate from model inputs.
+    pub nowcast_publications: Vec<NowcastPublication>,
     pub observations: Vec<CandidateObservation>,
     pub digest: Digest32,
 }
@@ -124,8 +198,10 @@ fn pool(rules: &RecordRules, target: &str) -> Result<(Quarter, Quarter, Quarter)
 
 struct Prepared {
     rules: RecordRules,
+    model: CandidateModel,
     profile: IssuerProfile,
     sources: Vec<CandidateSource>,
+    nowcast_publications: Vec<NowcastPublication>,
     as_of: String,
     synthetic: bool,
     rules_digest: Digest32,
@@ -144,15 +220,19 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     let outcome = rules
         .outcome_quarter()
         .map_err(|e| invalid(e.to_string()))?;
-    if rules
-        .targets
-        .iter()
-        .any(|t| t.outcome == Outcome::QuarterQtd)
+    if rules.is_post_quarter_nowcast() {
+        if cut < after_quarter(outcome)? || cut >= rules.dates.proof_by {
+            return Err(refuse(
+                RefusalCode::LateRegistration206,
+                "post-quarter nowcast cuts must follow quarter end and precede the frozen proof deadline",
+            ));
+        }
+    } else if rules.targets.iter().any(|t| t.outcome.is_quarterly())
         && cut >= after_quarter(outcome)?
     {
         return Err(refuse(
             RefusalCode::LateRegistration206,
-            "quarterly candidates require an information cut before quarter end; post-quarter nowcasts are unsupported",
+            "quarterly candidates require an information cut before quarter end; declare quarter_qtd_nowcast in new rules for a post-quarter record",
         ));
     }
     let registry =
@@ -160,6 +240,21 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     if registry.issuer != rules.issuer {
         return Err(invalid("source registry issuer differs from the rules"));
     }
+    let nowcast_publications = if rules.is_post_quarter_nowcast() {
+        let publications = nowcast_publications(&registry, outcome)?;
+        if publications
+            .iter()
+            .any(|source| cut >= source.day_start_utc)
+        {
+            return Err(refuse(
+                RefusalCode::AssayLookahead108,
+                "post-quarter nowcast information cut reaches a registered original publication day",
+            ));
+        }
+        publications
+    } else {
+        Vec::new()
+    };
     let mut wanted = BTreeSet::new();
     for target in &rules.targets {
         expected_unit(target)?;
@@ -226,8 +321,10 @@ fn prepare(rules_bytes: &[u8], registry_bytes: &[u8], as_of: &str) -> Result<Pre
     profile.sources.sort_by(|a, b| a.quarter.cmp(&b.quarter));
     Ok(Prepared {
         rules,
+        model: CandidateModel::PooledQuarterlyRatio,
         profile,
         sources,
+        nowcast_publications,
         as_of: as_of.into(),
         synthetic,
         rules_digest: record::rules_digest(rules_bytes),
@@ -265,15 +362,40 @@ fn per_ounce_withholding_note(source: &LoadedSource, site: &str, year: u16) -> O
     note
 }
 
+/// Raw printed line identity for frozen-record adapters, before canonical Claim admission.
+/// Counting raw competitors preserves ambiguity even when a competing cell is unusable.
+/// Registry aliases cannot redefine a capital scope; this helper authenticates no value or basis.
+#[must_use]
+pub fn record_source_line(value: &MineStatsValue) -> String {
+    let normalize = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+    };
+    if value.view == View::Summary {
+        format!("summary:{}", normalize(&value.label))
+    } else {
+        format!(
+            "site:{}:{}",
+            normalize(value.section.as_deref().unwrap_or("")),
+            normalize(&value.label)
+        )
+    }
+}
+
 fn observation(
     profile: &IssuerProfile,
     source: &LoadedSource,
     read: &MineStatsRead,
     site: &str,
     target: &Target,
-    quarter: Quarter,
-    role: &'static str,
+    position: (Quarter, &'static str),
+    model: CandidateModel,
 ) -> Result<CandidateObservation> {
+    let (quarter, role) = position;
+    let metric = TargetMetric::from_target(target)
+        .ok_or_else(|| invalid(format!("unsupported field/outcome for {}", target.id)))?;
     let period = Period {
         year: u16::try_from(quarter.year)
             .map_err(|_| invalid("source year is outside the supported calendar"))?,
@@ -285,12 +407,12 @@ fn observation(
             .iter()
             .find(|s| s.label == v.site)
             .map_or(v.site.as_str(), |s| s.subject.as_str());
-        v.view == View::Summary
-            && v.sheet == "QTD"
-            && v.months == 3
-            && v.period == period.code()
-            && subject == site
-            && v.label == target.field
+        let field_matches = if metric.is_capex() {
+            v.view == View::Minestats && record_source_line(v) == metric.source_line()
+        } else {
+            v.view == View::Summary && v.sheet == "QTD" && v.label == target.field
+        };
+        field_matches && v.months == 3 && v.period == period.code() && subject == site
     });
     let first = hits.next();
     if hits.next().is_some() {
@@ -323,7 +445,7 @@ fn observation(
         || claim.key.reporting_vintage.file_sha256 != row.sha256
         || claim.key.scope != Scope::Site
         || claim.key.unit != expected_unit(target)?
-        || claim.key.line.label != format!("summary:{}", target.field)
+        || claim.key.line.label != metric.source_line()
         || claim.key.line.occurrence != 0
         || claim.key.ownership_basis == OwnershipBasis::Unprinted
         || (TargetMetric::from_target(target).is_some_and(TargetMetric::is_production)
@@ -339,17 +461,20 @@ fn observation(
         .sheet(&raw.sheet)
         .and_then(|s| s.cells_by_coord.values().find(|c| c.cell_ref == raw.cell))
         .and_then(|c| c.displayed());
-    let signed_point = role == "point"
-        && matches!(
-            TargetMetric::from_target(target),
-            Some(TargetMetric::GoldAisc | TargetMetric::CopperC1 | TargetMetric::CopperAisc)
-        );
+    let signed_point = role == "point" && !metric.is_production();
+    let additive_observation = model.is_additive();
+    let zero_admissible = signed_point || additive_observation;
     let (value, mut reason) = match displayed {
         Some(Ok(display)) => match Rat::from_decimal_str(&display.text()) {
             Ok(value) => (
                 Some(value),
-                (value.signum() <= 0 && !signed_point)
-                    .then(|| "non_positive_printed_number_excluded_by_model".to_string()),
+                if additive_observation {
+                    (metric.is_production() && value.signum() < 0)
+                        .then(|| "negative_printed_production_excluded_by_model".to_string())
+                } else {
+                    (value.signum() <= 0 && !signed_point)
+                        .then(|| "non_positive_printed_number_excluded_by_model".to_string())
+                },
             ),
             Err(_) if matches!(display.text().trim(), "" | "-" | "–" | "—" | "n/a" | "N/A") => {
                 (None, Some("printed_placeholder".into()))
@@ -415,11 +540,11 @@ fn observation(
             && flagged == Some(key::StatusKind::Withheld))
         .then(|| per_ounce_withholding_note(source, site, period.year))
         .flatten();
-        // A zero cost point is usable only as an unflagged source number. In particular, a status-derived
-        // Nil must not become a zero forecast just because its stored cell happens to contain zero.
-        if (((value.signum() != 0 || signed_point) && overlaps_status)
+        // Every zero admitted by a model needs an unflagged numeric assertion. A
+        // status-derived Nil cannot become an additive observation or a live point.
+        if (((value.signum() != 0 || zero_admissible) && overlaps_status)
             || flagged.is_some()
-            || (signed_point && !matches!(&claim.claim.value, PublicValue::Number { .. })))
+            || (zero_admissible && !matches!(&claim.claim.value, PublicValue::Number { .. })))
             && note.is_none()
         {
             return Err(refuse(
@@ -497,8 +622,8 @@ fn finish(
                     read,
                     &site.name,
                     target,
-                    quarter,
-                    role,
+                    (quarter, role),
+                    prepared.model,
                 )?;
                 if role == "history" {
                     history.push(row.value);
@@ -511,10 +636,9 @@ fn finish(
             if TargetMetric::from_target(target).is_some_and(|m| !m.is_production()) {
                 let mut bases = BTreeSet::new();
                 for row in &observations[start..] {
-                    if row
-                        .value
-                        .is_some_and(|x| x.signum() > 0 || row.role == "point")
-                        && let Some(claim) = &row.claim
+                    if row.value.is_some_and(|x| {
+                        x.signum() > 0 || row.role == "point" || prepared.model.is_additive()
+                    }) && let Some(claim) = &row.claim
                     {
                         bases.insert(SeriesOwnershipBasis::from(claim.key.ownership_basis));
                     }
@@ -537,8 +661,9 @@ fn finish(
             });
         }
     }
-    let candidate = build_candidate(&prepared.rules, &series, decimal_places)
-        .map_err(|e| source_error(e.to_string()))?;
+    let candidate =
+        build_candidate_with_model(&prepared.rules, &series, decimal_places, prepared.model)
+            .map_err(|e| source_error(e.to_string()))?;
     let mut enc = Encoder::new_frame(*b"FCAN", 1);
     enc.put_fixed(&prepared.rules_digest.0);
     enc.put_fixed(&prepared.rules_file_sha256.0);
@@ -577,14 +702,15 @@ fn finish(
         rules_file_sha256: prepared.rules_file_sha256,
         registry_sha256: prepared.registry_sha256,
         sources: prepared.sources,
+        nowcast_publications: prepared.nowcast_publications,
         observations,
         digest,
     })
 }
 
 /// Build a complete unissued candidate at an explicit information cut. Only the original Mine Stats
-/// releases required by the declared pools and Q3 point are opened. Missing or ambiguous source releases,
-/// unreadable or altered bytes, look-ahead, unprinted/changing cost bases and unsafe statuses refuse.
+/// releases required by the declared pools and point quarter are opened. Missing or ambiguous releases,
+/// unreadable or altered bytes, look-ahead, unprinted/changing cost or capex bases and unsafe statuses refuse.
 /// Historical missing/nonpositive values remain in the audit; every live point must be usable.
 pub fn build(
     root: &Path,
@@ -592,12 +718,34 @@ pub fn build(
     as_of: &str,
     decimal_places: u32,
 ) -> Result<PublicCandidate> {
+    build_with_model(
+        root,
+        rules_bytes,
+        as_of,
+        decimal_places,
+        CandidateModel::PooledQuarterlyRatio,
+    )
+}
+
+/// Build a source-bound candidate with an explicitly selected empirical model. Seasonal selection
+/// retains every original release and observation required by the frozen pool, including off-season
+/// transitions; it changes no source admission, ownership, information-cut or issuance requirement.
+/// Additive models extend numeric history admission to unflagged zero and signed cost/capital values;
+/// every such value also participates in the source-status and ownership-consistency checks.
+pub fn build_with_model(
+    root: &Path,
+    rules_bytes: &[u8],
+    as_of: &str,
+    decimal_places: u32,
+    model: CandidateModel,
+) -> Result<PublicCandidate> {
     let rules = record::parse_rules(utf8(rules_bytes)?).map_err(|e| invalid(e.to_string()))?;
     if !is_issuer_name(&rules.issuer) {
         return Err(invalid("rules issuer is not a safe registered issuer name"));
     }
     let registry = read_registry(&registry_path(root, &rules.issuer))?;
-    let prepared = prepare(rules_bytes, &registry, as_of)?;
+    let mut prepared = prepare(rules_bytes, &registry, as_of)?;
+    prepared.model = model;
     let sources = load_registered_sources(&prepared.profile, root)?;
     finish(prepared, sources, decimal_places)
 }

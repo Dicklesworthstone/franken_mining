@@ -45,7 +45,8 @@ fn window(
 ) -> Result<HistorySourceWindow> {
     let subject = &inputs.production_guidance.value.subject;
     let family = GuidanceFamily::from_production_kind(inputs.production_guidance.value.kind)?;
-    let [prod, rate] = source_lines(family, inputs.production_guidance.value.ownership);
+    let metric = inputs.cost_metric()?;
+    let [prod, rate] = source_lines(family, inputs.production_guidance.value.ownership, metric)?;
     let sold = sales_lines(family);
     let mut source_claims = Vec::new();
     let mut history = Vec::new();
@@ -58,7 +59,7 @@ fn window(
             id: release,
             production: actual_claim(p, family.production_kind())?,
             sold: actual_claim(s, family.sold_kind())?,
-            aisc: actual_claim(r, family.rate_kind())?,
+            aisc: actual_claim(r, metric.rate_kind(family)?)?,
         });
         source_claims.extend([p.clone(), s.clone(), r.clone()]);
     }
@@ -188,12 +189,13 @@ fn units(family: GuidanceFamily) -> (&'static str, &'static str, &'static str) {
     }
 }
 
-fn witness(c: &Claim<quarters::QuarterlyWitness>) -> String {
+fn witness(c: &Claim<quarters::QuarterlyWitness>, metric: CostMetric) -> String {
     let p = &c.value.completion;
+    let cost = cost_key(metric);
     let (production, sold, rate) = units(p.family);
-    let qs = c.value.quarters.iter().map(|q| format!("{{\"source_period\":{},\"replay_period\":{},\"production_{production}\":{},\"sold_{sold}\":{},\"aisc_{rate}\":{},\"spend_usd_m\":{}}}", period(q.source_period), period(q.replay_period), rational(q.production), rational(q.sold), rational(q.aisc), rational(q.spend_usd_m))).collect::<Vec<_>>().join(",");
+    let qs = c.value.quarters.iter().map(|q| format!("{{\"source_period\":{},\"replay_period\":{},\"production_{production}\":{},\"sold_{sold}\":{},\"{cost}_{rate}\":{},\"spend_usd_m\":{}}}", period(q.source_period), period(q.replay_period), rational(q.production), rational(q.sold), rational(q.aisc), rational(q.spend_usd_m))).collect::<Vec<_>>().join(",");
     format!(
-        "{{{},\"independently_checked\":true,\"completion\":{{\"ytd_production_{production}\":{},\"remaining_production_{production}\":{},\"ytd_sold_{sold}\":{},\"remaining_sold_{sold}\":{},\"ytd_aisc_{rate}\":{},\"remaining_aisc_{rate}\":{},\"annual_production_{production}\":{},\"annual_aisc_{rate}\":{},\"remaining_spend_usd_m\":{}}},\"quarters\":[{}]}}",
+        "{{{},\"independently_checked\":true,\"completion\":{{\"ytd_production_{production}\":{},\"remaining_production_{production}\":{},\"ytd_sold_{sold}\":{},\"remaining_sold_{sold}\":{},\"ytd_{cost}_{rate}\":{},\"remaining_{cost}_{rate}\":{},\"annual_production_{production}\":{},\"annual_{cost}_{rate}\":{},\"remaining_spend_usd_m\":{}}},\"quarters\":[{}]}}",
         claim_fields(c),
         rational(p.ytd_production),
         rational(p.remaining_production),
@@ -235,11 +237,12 @@ fn certificate(c: &quarters::CheckedCertificate) -> String {
     )
 }
 
-pub(super) fn to_json(e: &HistoricalEnvelope) -> String {
+pub(super) fn to_json(e: &HistoricalEnvelope, metric: CostMetric) -> String {
+    let cost = cost_key(metric);
     let checks = e.comparison.checks.iter().map(|c| {
         let t = &c.totals.value;
         let (production, sold, rate) = units(t.family);
-        format!("{{\"id\":{},\"same_season\":{},\"totals\":{{{},\"marginal_projections_only\":true,\"first_period\":{},\"last_period\":{},\"production_{production}\":{},\"sold_{sold}\":{},\"aisc_{rate}\":{},\"aisc_spend_usd_m\":{}}},\"production_possible\":{},\"cost_possible\":{},\"witness\":{},\"certificates\":[{}],\"indeterminate\":[{}]}}", js(&c.id), c.same_season, claim_fields(&c.totals), period(t.first_period), period(t.last_period), interval(t.production), interval(t.sold), interval(t.aisc), interval(t.aisc_spend_usd_m), c.production_possible.map_or("null".into(), |v| v.to_string()), c.cost_possible.map_or("null".into(), |v| v.to_string()), c.witness.as_ref().map_or("null".into(), witness), c.certificates.iter().map(certificate).collect::<Vec<_>>().join(","), c.indeterminate.iter().map(|s| js(s)).collect::<Vec<_>>().join(","))
+        format!("{{\"id\":{},\"same_season\":{},\"totals\":{{{},\"marginal_projections_only\":true,\"first_period\":{},\"last_period\":{},\"production_{production}\":{},\"sold_{sold}\":{},\"{cost}_{rate}\":{},\"{cost}_spend_usd_m\":{}}},\"production_possible\":{},\"cost_possible\":{},\"witness\":{},\"certificates\":[{}],\"indeterminate\":[{}]}}", js(&c.id), c.same_season, claim_fields(&c.totals), period(t.first_period), period(t.last_period), interval(t.production), interval(t.sold), interval(t.aisc), interval(t.aisc_spend_usd_m), c.production_possible.map_or("null".into(), |v| v.to_string()), c.cost_possible.map_or("null".into(), |v| v.to_string()), c.witness.as_ref().map_or("null".into(), |w| witness(w, metric)), c.certificates.iter().map(certificate).collect::<Vec<_>>().join(","), c.indeterminate.iter().map(|s| js(s)).collect::<Vec<_>>().join(","))
     }).collect::<Vec<_>>().join(",");
     let sources = e
         .sources
@@ -256,7 +259,7 @@ pub(super) fn to_json(e: &HistoricalEnvelope) -> String {
                 s.quarters
                     .iter()
                     .map(|q| format!(
-                        "{{\"id\":{},\"production\":{},\"sold\":{},\"aisc\":{}}}",
+                        "{{\"id\":{},\"production\":{},\"sold\":{},\"{cost}\":{}}}",
                         js(&q.id),
                         quantity_json(&q.production),
                         quantity_json(&q.sold),

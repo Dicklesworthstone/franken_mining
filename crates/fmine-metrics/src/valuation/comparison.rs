@@ -5,6 +5,7 @@
 
 use super::*;
 use fmine_decide::card::downside::DownsideLimit;
+use fmine_decide::card::{InformationOption, model::INFORMATION_BASIS};
 use std::fmt::Write as _;
 
 #[cfg(test)]
@@ -14,6 +15,7 @@ pub mod worksheet;
 pub const INPUT_METRIC: &str = "production.comparison.declaration/1";
 pub const MAX_ALTERNATIVES: usize = 16;
 pub const NO_CLAIM: &str = "Conditional comparison of declared operating alternatives over one complete shared scenario population and physical/commercial support. Common state meaning is an explicit assumption, not established by matching names. Every alternative retains its original production and commercial calculations, including losing alternatives; do-nothing cash is identical before rounding. No physical feasibility, counterfactual identification, joint action or portfolio, calibration, project NPV, safety assessment or execution authorization is supplied.";
+pub const INFORMATION_NO_CLAIM: &str = "Conditional comparison of declared operating alternatives and at most one source-declared information option over the same complete scenario population. Common state meaning, likelihoods and continued validity of each action payoff after the test delay are explicit assumptions. The test is observed before acting; test and delay costs are USD in the same immediate cash-margin basis, charged once in every signal outcome, including do nothing. Delay days do not shift physical periods or infer lost production, discounting or additional costs. Exact EVSI, signal policies and policy risk are conditional on these declarations; no calibrated test accuracy, sequential tests, physical feasibility, causal identification, joint action portfolio, project NPV or execution authorization is supplied. Every original source and losing alternative remains retained.";
 
 /// The counterfactual population and comparison support are declared separately
 /// from each alternative's original one-action valuation question.
@@ -32,6 +34,8 @@ pub struct ComparisonSpec {
     pub commercial_support: String,
     pub action_ids: Vec<String>,
     pub downside_limit: Option<DownsideLimit>,
+    pub information_basis: Option<String>,
+    pub information_options: Vec<InformationOption>,
 }
 
 impl ComparisonSpec {
@@ -61,6 +65,16 @@ impl ComparisonSpec {
         // Existing declarations retain their canonical bytes when no limit is declared.
         if let Some(limit) = &self.downside_limit {
             enc.put_str(&limit.canonical_tag());
+        }
+        if self.information_basis.is_some() || !self.information_options.is_empty() {
+            enc.put_str("source-bound-information/v1");
+            enc.put_str(self.information_basis.as_deref().unwrap_or(""));
+            let mut options = self.information_options.iter().collect::<Vec<_>>();
+            options.sort_by(|a, b| a.option_id.cmp(&b.option_id));
+            enc.put_u64(options.len() as u64);
+            for option in options {
+                enc.put_str(&option.canonical_tag());
+            }
         }
         format!("production-comparison/v1:{}", sha256(&enc.finish()))
     }
@@ -135,8 +149,20 @@ pub fn evaluate(
     {
         return Err(bad(
             RefusalCode::NoClaimInDomain201,
-            "production comparisons screen act-now choices; no information policies are declared",
+            "production comparisons screen act-now and declared fixed one-test policies; policy optimization is not supported",
         ));
+    }
+    match (
+        spec.information_basis.as_deref(),
+        spec.information_options.is_empty(),
+    ) {
+        (None, true) | (Some(INFORMATION_BASIS), false) => {}
+        _ => {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "information options require before_action_same_payoffs_explicit_delay_cost; the basis alone is not an information option",
+            ));
+        }
     }
     if !(2..=MAX_ALTERNATIVES).contains(&alternatives.len())
         || alternatives.len() != spec.action_ids.len()
@@ -286,10 +312,22 @@ pub fn evaluate(
             AdditivityClass::NonAdditive,
         )
     });
+    let information_options = spec
+        .information_options
+        .iter()
+        .map(|option| {
+            all_meta.claim(
+                "production.comparison.information/1",
+                option.clone(),
+                &option.canonical_tag(),
+                AdditivityClass::NonAdditive,
+            )
+        })
+        .collect();
     let decision = card::evaluate(&DecisionInputs {
         weights,
         actions,
-        information_options: Vec::new(),
+        information_options,
         robustness: None,
         downside_limit,
     })?;
@@ -310,6 +348,14 @@ pub fn evaluate(
 }
 
 impl ComparisonReceipt {
+    pub fn no_claim(&self) -> &'static str {
+        if self.declaration.value.information_options.is_empty() {
+            NO_CLAIM
+        } else {
+            INFORMATION_NO_CLAIM
+        }
+    }
+
     pub fn to_json(&self) -> String {
         use render::js;
         let spec = &self.declaration.value;
@@ -330,8 +376,14 @@ impl ComparisonReceipt {
             spec.end_ns,
             js(&spec.commercial_support),
         );
+        let information = spec
+            .information_basis
+            .as_ref()
+            .map_or_else(String::new, |basis| {
+                format!(",\"information_basis\":{}", js(basis))
+            });
         format!(
-            "{{\"schema\":\"fmine.production-comparison.receipt.v1\",\"model_key\":{},\"question\":{},\"shared_scenario_basis\":{},\"scope\":{},\"action_ids\":[{}],\"declaration\":{},\"submitted_manifest\":{},\"alternatives\":[{}],\"decision\":{},\"digest\":{},\"no_claim\":{}}}",
+            "{{\"schema\":\"fmine.production-comparison.receipt.v1\",\"model_key\":{},\"question\":{},\"shared_scenario_basis\":{}{information},\"scope\":{},\"action_ids\":[{}],\"declaration\":{},\"submitted_manifest\":{},\"alternatives\":[{}],\"decision\":{},\"digest\":{},\"no_claim\":{}}}",
             js(&spec.model_key),
             js(&spec.question),
             js(&spec.shared_scenario_basis),
@@ -348,7 +400,7 @@ impl ComparisonReceipt {
                 .join(","),
             self.decision.to_json(),
             js(&self.digest),
-            js(NO_CLAIM),
+            js(self.no_claim()),
         )
     }
 
@@ -360,8 +412,9 @@ impl ComparisonReceipt {
             .downside
             .as_ref()
             .map_or_else(String::new, |limit| limit.decision_brief());
+        let no_claim = self.no_claim();
         let mut out = format!(
-            "# Production alternatives\n\n{}\n\n{brief}{NO_CLAIM}\n\n**Shared scenario assumption:** {}.\n\n**Boundary / circuit:** {} / {}. **Physical interval:** [{}, {}). **Element:** {}.\n\n**Commercial support:** {}. **Evidence:** {:?}. **Confidentiality:** {}.\n\n",
+            "# Production alternatives\n\n{}\n\n{brief}{no_claim}\n\n**Shared scenario assumption:** {}.\n\n**Boundary / circuit:** {} / {}. **Physical interval:** [{}, {}). **Element:** {}.\n\n**Commercial support:** {}. **Evidence:** {:?}. **Confidentiality:** {}.\n\n",
             md(&spec.question),
             md(&spec.shared_scenario_basis),
             md(&spec.boundary),
@@ -396,7 +449,19 @@ impl ComparisonReceipt {
             md(&summary.minimax_regret_winners.join(", ")),
             card::TIE_RULE
         );
-        if let Some(screen) = &summary.downside {
+        if let Some(information) = self.decision.information_to_markdown() {
+            let _ = writeln!(
+                out,
+                "\n**Information basis:** {INFORMATION_BASIS}. Test and delay costs use the same immediate USD cash-margin basis; unchanged post-delay action payoffs are declared, not recalculated.\n"
+            );
+            out.push_str(&information);
+            if let Some(downside) = self.decision.downside_to_markdown() {
+                out.push_str(&downside);
+            }
+        }
+        if let Some(screen) = &summary.downside
+            && summary.information.is_none()
+        {
             let _ = writeln!(
                 out,
                 "\n## Downside probability limit\n\n**Breach:** rounded immediate cash margin < **{} USD**; equality is not a breach. **Maximum probability:** **{}**, inclusive. Probabilities remain conditional on the declared uncalibrated scenarios; the unconstrained ranking above is unchanged. This is not a safety limit or a bound on loss severity.\n\n| Action | Breach probability | Eligibility |\n|---|---:|---|",

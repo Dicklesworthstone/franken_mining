@@ -171,6 +171,16 @@ fn require_pre_outcome_proof(
     let end = quarter
         .end_utc()
         .ok_or_else(|| invalid("outcome quarter is outside the supported calendar"))?;
+    if rules.is_post_quarter_nowcast() {
+        if upper_utc < end || upper_utc > rules.dates.proof_by {
+            return Err(Refusal::new(
+                RefusalCode::LateRegistration206,
+                "post-quarter nowcast proof must follow quarter end and meet its frozen deadline",
+            ));
+        }
+        // Original-release publication bounds are checked by resolve_nowcast before source scoring.
+        return Ok(quarter);
+    }
     if upper_utc >= end {
         let quarterly = rules
             .targets
@@ -272,7 +282,18 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
         ));
     }
     require_pre_outcome_proof(&loaded.rules, record_proof.times.upper_utc)?;
-    let resolved = record_sources::resolve(root, &loaded.rules, &loaded.manifest, as_of)?;
+    let post_quarter = loaded.rules.is_post_quarter_nowcast();
+    let resolved = if post_quarter {
+        record_sources::resolve_nowcast(
+            root,
+            &loaded.rules,
+            &loaded.manifest,
+            as_of,
+            record_proof.times.upper_utc,
+        )?
+    } else {
+        record_sources::resolve(root, &loaded.rules, &loaded.manifest, as_of)?
+    };
     let assessment = record::scoring::paired::assess(
         &loaded.rules,
         &loaded.forecasts,
@@ -283,7 +304,7 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
         .rules
         .targets
         .iter()
-        .any(|t| t.outcome == record::Outcome::QuarterQtd)
+        .any(|t| t.outcome.is_quarterly())
     {
         format!(
             ",\"outcome_quarter\":{}",
@@ -292,9 +313,20 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
     } else {
         String::new()
     };
+    let horizon = if post_quarter {
+        format!(
+            "{horizon},\"timing_mode\":\"post_quarter_prepublication\",\"score_population\":\"post_quarter_nowcasts_only\""
+        )
+    } else {
+        horizon
+    };
     let body = format!(
         "\"schema\":{schema},\"lane\":{lane},\"gate_eligible\":false,\"record_id\":{id},\"label\":{label},\"contact\":{contact},\"author_attestation\":{attestation},\"information_cutoff_utc\":{cut},\"as_of\":{as_of},\"outcome_year\":{year}{horizon},\"record_sha256\":{record_digest},\"rules_sha256\":{rules_digest},\"rules_timestamp\":{rules_proof},\"record_timestamp\":{record_proof},\"source_availability_basis\":\"frozen_manifest_and_registered_publication_or_retrieval_bound\",\"scores\":{scores},\"evidence\":{evidence}",
-        schema = js(SCHEMA),
+        schema = js(if post_quarter {
+            "fmine.forecast-record-nowcast-assessment.v1"
+        } else {
+            SCHEMA
+        }),
         lane = js(if resolved.synthetic {
             "synthetic"
         } else {
@@ -320,7 +352,12 @@ fn perform(command: &Command, root: &Path) -> Result<(String, String), Refusal> 
     let digest = sha256(format!("{{{body}}}").as_bytes());
     let payload = format!("{{{body},\"digest\":{}}}", js(&digest.to_hex()));
     let markdown = format!(
-        "# Frozen forecast record assessment\n\nRecord: {}. Label: {}. Evidence as of {}.\n\nRecord SHA-256: `{}`. Assessment SHA-256: `{}`.\n\nBoth RFC 3161 receipts verify against the explicitly selected trust roots; the rules precede the record.\n\n{}\n\n{}\n\n{}\n",
+        "# {}\n\nRecord: {}. Label: {}. Evidence as of {}.\n\nRecord SHA-256: `{}`. Assessment SHA-256: `{}`.\n\nBoth RFC 3161 receipts verify against the explicitly selected trust roots; the rules precede the record.\n\n{}\n\n{}\n\n{}\n",
+        if post_quarter {
+            "Frozen post-quarter nowcast assessment"
+        } else {
+            "Frozen forecast record assessment"
+        },
         markdown_text(&loaded.manifest.record_id),
         loaded.manifest.label.as_str(),
         command.as_of,

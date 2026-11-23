@@ -14,6 +14,9 @@ use fmine_units::ExactQty;
 use super::super::live::{Command, execute_with_clock};
 use super::super::{Replay, Row, parse_subset};
 
+#[path = "forecast_plant_comparison.rs"]
+mod supplied_comparison;
+
 const COUPLING: &str = include_str!("../../../tests/plant/production_joint.toml");
 const GRINDING: &str = include_str!("../../../tests/plant/grinding_joint.toml");
 const RECOVERY: &str = include_str!("../../../tests/plant/production_recovery.toml");

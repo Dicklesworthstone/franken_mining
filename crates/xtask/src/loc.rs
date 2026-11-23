@@ -860,7 +860,7 @@ mod tests {
         let rows = budget_rows(&fs::read_to_string(real).expect("budget"));
         assert!(rows.len() >= 59, "{}", rows.len());
         assert_eq!(rows.get("fmine-array"), Some(&(6000, 7000)));
-        assert_eq!(rows.values().map(|r| r.0).sum::<usize>(), 1_171_000);
+        assert_eq!(rows.values().map(|r| r.0).sum::<usize>(), 1_182_000);
     }
 
     /// BD-012's done-when: a synthetic overrun blocks the merge. Over planned, a commit adding to the crate fails

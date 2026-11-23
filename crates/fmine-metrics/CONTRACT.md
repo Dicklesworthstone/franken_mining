@@ -22,8 +22,20 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
   Every original alternative and the unconstrained ranking remain visible alongside eligible co-winners
   and the expected-value cost of the limit. An empty eligible set has no fallback. The risk Claim retains
   manifest SHA-256 and field locators, and limit/model/currency/basis changes bind receipt identity or
-  refuse. No information policy, safety constraint or calibrated risk estimate is supplied. Manifests
-  without a limit preserve their original canonical bytes and behavior;
+  refuse. No safety constraint or calibrated risk estimate is supplied. Manifests without a limit
+  preserve their original canonical bytes and behavior;
+  DESIGN (BD-225/227): comparison manifests optionally declare `information_option`, `signal` and
+  `likelihood` tables under `information_basis = "before_action_same_payoffs_explicit_delay_cost"`.
+  The shared decision-model parser admits exact nonnegative Money costs, integer delay days and complete
+  conditional signal distributions; the actual source state population is checked by `card::evaluate`.
+  Source-bound option Claims inherit every original input's evidence, confidentiality, UU and ancestry.
+  The existing finite evaluator owns EVSI, signal choices, net policy risk and downside screening.
+  Tests occur before one action and leave the source action payoffs unchanged by explicit assumption;
+  delay days do not infer a physical or financial adjustment. Unreachable signals remain visible,
+  losing tests remain in the receipt, and malformed or incomplete likelihoods refuse the whole result.
+  JSON and Markdown retain costs, likelihoods, posteriors, policy outcomes and all exact ties. Without
+  information rows, original declaration identities and output behavior remain unchanged. Synthetic
+  controls are in `valuation/comparison/tests.rs` and `fmine-cli/tests/production_comparison.rs`;
 - DESIGN (BD-225/229): `valuation::investment` derives mutually exclusive investment comparisons
   from complete, already evaluated operating cash receipts over explicitly declared periods. Initial
   capex is charged once; each period's unrounded same-state operating cash minus its do-nothing cash
@@ -53,7 +65,7 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Crate:** `fmine-metrics`
 - **Layer:** E
 - **Subsystem:** Bullion
-- **LOC budget:** 28,000 planned / 32,000 ceiling
+- **LOC budget:** 29,000 planned / 33,000 ceiling
 - **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation", "comparison", "valuation"]`
 
 ## 2. Inputs
@@ -91,10 +103,39 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   digest binds complete declaration metadata, source receipts and final comparison. All arithmetic
   overflow, missing bundles, changed state weights and incompatible supports refuse the whole request.
 
-  DESIGN (BD-225.5): an optional `[[downside_limit]]` binds an exact USD floor and maximum breach
-  probability to the investment declaration. Every rounded post-capex outcome, including zero for
-  doing nothing, enters the same screen. The report gives each alternative's probability of falling
-  strictly below the floor, the eligible winners, and the expected value forgone under the limit.
+  An optional single `[[downside_limit]]` declares an exactly representable `floor_usd` and an exact
+  `max_breach_probability` in [0,1]. The source-bound screen applies to final rounded discounted
+  incremental value after initial capex, over complete scenario paths. Strictly below the floor is a
+  breach; floor equality passes, and probability-cap equality passes. The existing decision engine
+  retains every alternative, unconstrained winners, eligible co-winners and the expected-value cost of
+  the limit. No eligible choice yields no fallback, including when do-nothing breaches a positive floor.
+  With declared information options, the same screen checks each displayed expected-value-optimal
+  signal policy over realized state/signal paths, including test and delay costs. It does not optimize
+  a different constrained policy, test interim liquidity or bound loss severity.
+  Absent limits preserve existing declaration bytes and identities. The known-answer and actual-binary
+  tests cover a nominal winner rejected for capital-loss probability, boundary equality, final rounding,
+  empty eligibility, unchanged legacy identity, malformed limits and retained source anchors.
+
+  DESIGN (BD-225/227/229): optional information rows use the shared `card::model` parser and require
+  `information_basis = "before_action_same_payoffs_explicit_delay_cost"`. Each test precedes initial
+  commitment, with an explicit complete signal likelihood matrix over the original shared states.
+  One signal chooses one entire investment path, never a different investment in each period.
+  Nonnegative Money test and delay costs are already on the declared valuation-time basis and are
+  subtracted exactly once; they are not discounted again. Delay days remain visible, and unchanged
+  source cash flows, physical windows and discount factors after the delay are explicit assumptions.
+  Option Claims inherit complete source evidence, confidentiality, UU and ancestry. Missing likelihoods,
+  foreign states, ambiguous timing, wrong currency and source/value mismatches refuse. Without options,
+  the original declaration encoding and behavior are unchanged. The retained Markdown and JSON expose
+  exact EVSI, net VOI, posteriors, unreachable signals, policy choices and realized tail losses.
+
+  `tests/decisions/investment_testwork.toml` adds a perfect test to the two-period example: gross
+  expected value 10,078.80 USD, EVSI 3,486.40 USD, test cost 100 USD, delay cost 25 USD, net value
+  9,953.80 USD and net VOI 3,361.40 USD. Independent noisy-signal controls retain 1/8 probability of
+  loss and a worst-tail loss of 8,701 USD; uninformative tests have zero EVSI, and choosing do-nothing
+  still pays the costs. `fmine-cli/tests/investment.rs` checks the real binary and retained sources.
+  The `capital-investments` adapter refuses these sources rather than silently discarding contingent
+  policies or their costs; `xtask/tests/capital_investments.rs` covers that complete-command boundary.
+  The decision brief reports each screen’s co-winners and the expected value forgone under its limit.
 
   Synthetic example: `tests/decisions/production_investment.toml` uses two periods and factors 1 and
   1/2. Initial capex of 1,000/8,000 USD reverses the operating-margin ranking: the original mode's mean
@@ -167,6 +208,13 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   Missing, extra or duplicate peers and differing fields refuse; no bridge or conversion
   is inferred. `comparison::source::bind` admits two-reader-agreed printed actuals from a selected
   registered financial or annual filing. The I/O owner authenticates bytes and complete reader agreement.
+- DESIGN (BD-355): `CapexTotal`, `CapexSustaining` and `CapexProject` extend the same exact ranking
+  path to signed annual capital amounts in `USD_m`. They are extensive, company-wide, all-metal
+  readings with `denominator=none`; their distinct metric keys fix the capital scope. Source-agreed
+  definitions must match ownership, operations, cash/accrual timing and included/excluded treatment
+  of leases, exploration, stripping, capitalized interest, acquisitions and disposal proceeds.
+  Missing or incompatible fields refuse; cost-per-sold-metal fields cannot fill capital definitions.
+  No total construction, component reclassification, currency conversion or accounting bridge is supplied.
 - DESIGN (BD-346.S5): `mirror::cost::compare` accepts canonical `Claim<CostReading>`s for cash costs,
   AISC or cost of sales in USD millions. Each original and signed adjustment retains its raw printed
   token, agreeing reader IDs, exact half-step bounds, own-document definition locator, publication
@@ -192,11 +240,27 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   production in kt, sales in million lb and AISC USD per sold lb. Production never supplies sales.
   Gold rate times sold divides by 1000 to yield USD millions; copper rate times million lb already yields
   USD millions. Historical quarter constraints and independently checked witnesses retain the same family
-  and conversion. Mixed families, inconsistent definitions/ownership and nonpositive sales/rate bounds
-  refuse; computed signed requirements remain signed. Generic witness/totals fields carry explicit family
+  and conversion. Mixed families, inconsistent definitions/ownership and nonpositive sales bounds
+  refuse. Net cost rates may be signed, zero or cross zero. Exact corner products retain signed YTD and
+  quarter spending; original-quarter constraints still govern every joint witness or exclusion.
+  Computed signed requirements remain signed. Generic witness/totals fields carry explicit family
   metadata. Gold canonical bytes retain their v1 layouts; copper quantities have distinct kind tags and
   witness/total frames use v2. Known answers live in `guidance::tests` and `guidance::quarters::tests`.
+  DESIGN (BD-342): explicit `CostMetric::C1` admits copper C1 per sold lb through the same exact
+  arithmetic and original-quarter constraints, with distinct C1 rate/spend kinds and derived metric keys.
+  It cannot substitute for AISC or accept gold. Every cost input and historical quarter must share the
+  selected metric and definition. Compound results retain `cost_metric`; C1 witness/totals frames use v3,
+  preserving all prior AISC frames. Legacy Rust `aisc_*` member names hold the explicitly typed selected
+  metric. Signed/zero costs, exact witnesses, checked exclusions and AISC-substitution refusals have direct
+  known-answer controls in the same test modules. This conditional arithmetic does not reproduce issuer
+  filings, authenticate the selected accounting definition or establish calibrated guidance probabilities.
 - **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
+  DESIGN (BD-342): gold uses dry Mt, gold g/t and a recovery fraction, producing koz. Copper uses
+  separately typed dry Mt, copper dry-mass grade fraction and copper recovery fraction, producing kt
+  through the exact factor 1000 kt/Mt. Every physical factor must match the production's metal,
+  full-mine basis, subject and remaining months. Copper input grade and recovery fractions cannot
+  exceed one. Gold canonical frames remain unchanged; copper physical frames bind their distinct metal
+  and quantity kinds. Public adapters explicitly convert copper percent readings to fractions.
 - **`recovery`.** `TrainingRow`s and an `OperatingRow` of `Claim<recovery::Quantity>`, in percent and kt units.
   DESIGN (bd-srqc): `recovery::sensitivity` accepts a canonical quarterly `Claim<ModelProjection>`
   and a separately declared `Claim<CopperPrice>`. The named, nonnegative USD/lb price is an exact constant
@@ -473,8 +537,16 @@ The other modules have local errors with no refusal code:
 - **The legacy cut-off section** is source-unverified arithmetic over registered tokens: neither the report bytes nor independent readings are authenticated. **`cutoff::source`** reproduces stated technical-report assumptions. It is not an optimal operating cut-off, a reserve classification or completion of the real-data gate.
 - **The legacy LMDI** is float. Its spend and sold ounces must share a scale. It encodes no units or basis, and its closure tolerance is 1e-9 USD/oz absolute.
 - **The typed waterfall** fixes its units: $M, koz, thousand tonnes, g/t and a fraction. It checks that both periods carry the same basis tag, but cannot authenticate that basis. Its enclosures treat inputs as independent, so they over-enclose shared ones.
-- **Guidance** works on closed intervals, with sales and AISC strictly positive and production at least zero. Its results are necessary arithmetic conditions, not forecasts or probabilities. `T1` is the supplied history only. `ExceedsEnvelope` says nothing about physical capacity.
+- **Guidance** works on closed intervals, with sales strictly positive, production at least zero and net AISC
+  signed or zero. Its results are necessary arithmetic conditions, not forecasts or probabilities. `T1` is the
+  supplied history only. `ExceedsEnvelope` says nothing about physical capacity. Signed product/frontier
+  extrema, zero-crossing bounds and unchanged sales-domain refusals are checked in `guidance::tests`;
+  `quarters::tests::signed_quarter_costs_preserve_spend_bounds_and_checked_joint_witnesses` checks the
+  signed historical witnesses and exclusions against the original quarter equations.
 - **Capacity** multiplies the three maxima. That gives an optimistic ceiling, not a plan. `NotExcluded` is not a feasibility witness.
+  The copper required-grade result retains signed values and values above one: these describe an
+  already-delivered requirement or an excluded scenario, not a proposed physical grade. The optimistic
+  maximum need not be jointly attainable. Neither metal supplies a joint production/AISC witness.
 - **Recovery** fits two descriptive annual models and applies them to quarters. Its enclosures cover input rounding, not sampling error. An extrapolated recovery outside 0–100% is kept as computed.
 - **The PDF identity adapter (`roll_forward`, BD-340.S5)** verifies declared arithmetic of issuer assertions, not their truth or completeness. It never emits reserve classifications, selects a preferred filing/deck vintage, silently changes a printed sign, or supplies an issuer-attributed corrected figure. Synthetic E692-shaped arithmetic is a known-answer test of the binding; the authentic historical transcription and independent census gates remain open. Closed intervals are agnostic about ties; a named half-open convention is never changed to rescue a row. No file I/O occurs here: callers authenticate actual registered bytes and reader agreement before public use.
 - **Reserve replacement** is not reserve validation. Actual file authentication and independent reader agreement remain the caller's duty.
@@ -510,6 +582,13 @@ The other modules have local errors with no refusal code:
 
 ## 10. Known gaps
 
+- DESIGN (BD-342): gold TCC completion uses separate `TccUsdPerSoldOz` and `TccSpendUsdMillion`
+  quantities over the existing exact sales-weighted kernel. Signed costs, rounded input intervals,
+  distinct metric keys and original-quarter witnesses remain bound to the selected definition.
+  TCC cannot borrow AISC rates or copper units; incompatible or missing definitions refuse. New
+  TCC frames use version 4 while existing AISC/C1 frames retain their bytes. Independent controls
+  cover exact signed spending/rate answers, incompatible definitions and checked joint witnesses.
+  This arithmetic does not authenticate issuer accounting inputs or establish calibration.
 - DESIGN (BD-346.S5): the bounded dollar-cost bridge has synthetic exact and source-loader controls in
   `metrics_mirror_cost_controls.rs` and `mirror_cost_oracle.py`. Authentic partner filings, complete
   accounting-definition equivalence, general policy bridges and the full BD-346 power/data gates
@@ -557,6 +636,14 @@ The other modules have local errors with no refusal code:
 - **No cross-host digest** for `lib.rs`, `cutoff`, `cutoff::source`, the typed waterfall or `recovery`.
 - **The real-data gates are open.** Actual FY2023–FY2025 partner-source reproduction, the full synthetic power gate (BD-346.S6) and partner-filing capital coverage remain separate BD-346 work. The cost receipt does not complete the WGC real-data gate.
 - **The quarter work does not close the wider gates.** The additive quarter kernel and the quarter sums do not close the general derived-identity or the independently labelled disclosure-lint assessment gates.
+- DESIGN (BD-059/BD-345): `public_derivation::quarter_rate` derives a closed quarterly gold cost-rate
+  enclosure from two cumulative rates and their own sold-gold quantities. The exact 16-vertex calculation
+  preserves sales-variable dependence in numerator and denominator; both cumulative sales and their entire
+  difference must be positive. Signed rates retain their signs. The source adapter owns calendar, filing,
+  site, ownership and metric compatibility; the Claim wrapper retains all four parents, anchors, weakest
+  evidence and explicit same-definition assumptions. Two exact kernel controls and the independent
+  HTML Fraction oracle cover arithmetic, source binding and refusals. This conditional arithmetic does not
+  establish accounting-definition equivalence, credit treatment, real-issuer acceptance or calibration.
 
 ## 11. Public API
 

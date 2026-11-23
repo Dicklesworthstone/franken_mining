@@ -1,0 +1,70 @@
+# SYNTHETIC: perfect declared hardness information changes the operating mode.
+# Independent arithmetic: EVSI 596 USD; test 80 + delay 20 USD => net VOI 496 USD.
+# After soft-result choose process (808 USD); after hard-result choose higher-power (18630.4 USD).
+# The same operating payoffs are explicitly assumed to remain valid after the declared delay.
+schema = "fmine.production-comparison.v1"
+model_key = "synthetic-operating-testwork"
+question = "Buy the declared hardness test before choosing the operating mode?"
+shared_scenario_basis = "SYNTHETIC common soft or hard ore and market state across operating modes and the test likelihood"
+information_basis = "before_action_same_payoffs_explicit_delay_cost"
+boundary = "synthetic-plant/v1"
+circuit = "synthetic-ball-mill"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+start_ns = "0"
+end_ns = "3600000000000"
+commercial_support = "Synthetic payable Au from exactly this one-hour recovered-metal population"
+
+[[alternative]]
+id = "process"
+input = "tests/plant/production_joint.toml"
+grinding = "tests/plant/grinding_joint.toml"
+recovery = "tests/plant/production_recovery.toml"
+terms = "tests/decisions/production_valuation.toml"
+
+[[alternative]]
+id = "higher-power"
+input = "tests/plant/production_joint.toml"
+grinding = "tests/plant/grinding_higher_power.toml"
+recovery = "tests/plant/production_recovery.toml"
+terms = "tests/decisions/production_valuation_higher_power.toml"
+
+[[information_option]]
+id = "hardness-test"
+label = "Synthetic hardness test before acting"
+test_cost = "80"
+delay_cost = "20"
+delay_days = 1
+
+[[signal]]
+option = "hardness-test"
+id = "soft-result"
+
+[[signal]]
+option = "hardness-test"
+id = "hard-result"
+
+[[likelihood]]
+option = "hardness-test"
+state = "soft"
+signal = "soft-result"
+probability = "1/1"
+
+[[likelihood]]
+option = "hardness-test"
+state = "soft"
+signal = "hard-result"
+probability = "0/1"
+
+[[likelihood]]
+option = "hardness-test"
+state = "hard"
+signal = "soft-result"
+probability = "0/1"
+
+[[likelihood]]
+option = "hardness-test"
+state = "hard"
+signal = "hard-result"
+probability = "1/1"

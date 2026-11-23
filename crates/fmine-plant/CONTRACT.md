@@ -12,7 +12,7 @@ K0 numerical owner, preserving the original observations and a separately declar
 - **Crate:** `fmine-plant`
 - **Layer:** K2
 - **Subsystem:** Crucible
-- **LOC budget:** 32,000 planned / 37,000 ceiling
+- **LOC budget:** 37,000 planned / 43,000 ceiling
 - **Allowed Module Families:** `["inventory", "flowsheet", "grinding", "production", "reconciliation", "measurements", "raw_measurements", "cards", "custody", "rtd", "trajectory"]`
 
 ## 2. Inputs
@@ -163,8 +163,9 @@ BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18), 
 input populations propagated per realization (§20); report ingestion, source-box qualification,
 fitting and calibration remain. BD-313 now has source-bound forward RTD
 transport and conditional lag alignment (§19), plus bounded known-kernel noisy inverse reconciliation
-(§24), including measured active-opening stock uncertainty; kernel fitting, uncertain transport parameters
-and unmeasured initial stocks remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
+(§24), including measured active-opening stock uncertainty and identifiable entirely unmeasured active
+opening stocks; kernel fitting, uncertain transport parameters and mixed measured/unmeasured active
+openings remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
 worksheets expose nominal material conversion, elemental inventory accounting/reconciliation and joint flowsheet reconciliation;
 their byte-bound declarations remain Assumed rather than verified plant measurements.
@@ -446,6 +447,71 @@ supply that bound. No implicit clipping occurs. Source evidence, confidentiality
 unknown-unknown metadata are combined using the existing plant admission and receipt machinery;
 outputs are never promoted beyond `Estimated`.
 
+### Source-bound fitted recovery adjustments (DESIGN; plan §17.3 and §20.5)
+
+`cards::fit::fit_correction` derives a separately versioned additive adjustment from 2 through 256
+explicitly aligned historical recovery pairs. A baseline is the uncapped prediction **after** the
+ordered operational factors and **before** any correction. Each residual is observed recovery minus
+that baseline; the fitted adjustment is the exact unweighted residual mean. The receipt also retains
+every residual and the exact descriptive sample variance with denominator `n - 1`. It does not turn
+that variance into an uncertainty distribution, standard error, confidence interval or calibration claim.
+
+Each pair has its own Claim, identifier, positive physical interval, availability time, exact fraction
+values and explicit uncensored declaration. Observations lie in `[0,1]`; pre-correction baselines must
+be nonnegative and may exceed one. Intervals cannot overlap, must lie inside the original card's validity,
+and must finish before or at their availability time and the declared evidence cut. The evidence cut
+must strictly precede the target interval, which also lies inside card validity. The source explicitly
+declares common processing support or residence-time alignment; matching timestamps do not establish
+either. Duplicate, incomplete, censored, future, conflicting or overflowing inputs refuse atomically.
+
+The input binds the exact test-work Claim, scope, ordered operational-factor Claims and route Claim.
+The output correction carries those identities, the evidence cut, target interval and fit receipt digest.
+Both model compilation and `with_correction` enforce the identities; every evaluation enforces future
+target support. Taking the fitted correction out of its receipt cannot remove these restrictions.
+The original model remains immutable and fully retained. The new signed adjustment and explicitly
+declared optional cap replace the original correction and cap; the original offset is never added twice.
+Unfitted correction tags and calculations keep their original encoding and behavior.
+
+The existing `plant recovery` worksheet accepts one optional `[[correction_fit]]` with `id`, `revision`,
+`method = "unweighted_additive_residual_mean"`, `baseline = "post_operational_pre_correction"`,
+`alignment = "same_processing_support"` or `"residence_time_aligned"`, `evidence_cut_ns` and optional
+`upper_cap_fraction`. Its target is the worksheet's processing interval. Each `[[correction_pair]]`
+supplies `id`, `start_ns`, `end_ns`, `available_ns`, `baseline_fraction`, `observed_fraction` and
+`uncensored = "true"`. The nominal correction remains required as the retained original declaration;
+simultaneous scenario correction overrides refuse. Successful fits feed the nominal evaluation and
+every declared joint scenario, then the existing coupled production and saved-forecast path. JSON retains
+the complete original model, raw pair tokens, source Claims, fit summary and applied correction. A kernel
+refusal keeps parsed declarations while supplying no fit, recovery or ensemble result.
+
+An explicit `baseline = "evaluated_post_operational_pre_correction"` mode derives each baseline from
+the original historical inputs through `cards::fit::observations::derive_pair`. In this mode
+`correction_pair` omits and forbids `baseline_fraction`. Each `[[correction_input]]` supplies `pair`,
+`name`, `measurand`, `unit` and exact `value`; each declared pair must have precisely all card coordinates.
+The original card formula, output scale and ordered operational factors are evaluated on that pair's
+interval and the declared top-level scope. Exact applicability bounds, units, measurands, physical support,
+card validity and finite numerical range are checked by the same evaluator as nominal recovery.
+The original correction, cap and fitted future-use interval are excluded from this historical baseline
+arithmetic; all original model layers and their complete source envelopes remain retained as evidence.
+
+The computed binary64 baseline is represented exactly as a rational, with no decimal rounding before
+residual fitting. This is exact representation of a numerical result, not a symbolic formula evaluation
+or proof of measurement accuracy. Representation or rational fit arithmetic outside the supported range
+refuses. Each derived pair binds the exact test-work, ordered operation and route Claims; attempting to
+fit it under different model layers refuses. A baseline Claim additionally binds full model, input and
+observation envelopes so source metadata remains represented in downstream pair and fit identities.
+`correction_fit_result` retains the actual evaluated input Claim, every derived pair receipt, baseline
+Claim, original input and observation Claims, and test-work/operational intermediates. Parsed historical
+inputs remain visible after a kernel refusal. Supplied-baseline and no-fit paths retain their prior
+canonical encodings and output shapes. Coupled production and saved plant forecasts use this same path;
+offline verification re-evaluates the retained historical inputs without reopening their original files.
+
+Known-answer controls cover exact residual moments, replacement without double counting, source/version
+identity, future-only reuse and typed refusals. Actual CLI controls cover fitted physical output, independent
+source edits with an unchanged mean, explicit cap replacement, nonlinear historical inputs, exact binary64
+representation, model-binding refusal, retained-source forecast replay and atomic failure. These are
+synthetic controls: historical inputs, observations, supplied baselines and alignment remain declared evidence, with no field validation,
+automatic card promotion, empirical probability calibration or operating authority.
+
 ### Executable source-unit illustrations
 
 ```sh
@@ -614,9 +680,41 @@ exercise exact weighted-quantile boundaries, very rare states, small nonzero var
 identity, source metadata, malformed weights and refusal of any incompatible member.
 
 These are conditional probabilities under a user-supplied finite population, explicitly marked
-uncalibrated. Neither population completeness in reality nor uncertain card parameters, fitted
+uncalibrated. Neither population completeness in reality nor fitted test-work parameter distributions, fitted
 likelihoods, empirical recovery calibration, sample-to-blend transfer, forecast registration or
 operating permission is established. Authentic source and prospective outcome gates remain open.
+
+### Paired conditional correction layers (DESIGN; BD-176/181/182/287)
+
+`RecoveryModel::evaluate_ensemble_with_corrections` additionally admits a
+`Claim<RecoveryCorrections>` binding the exact input-population Claim and a complete
+scenario-to-correction map. Every state replaces the nominal signed additive correction and explicit
+cap with its own sourced `RecoveryCorrection`. The test-work formula, compiled program,
+operational factors and route stay common. Scenario IDs preserve dependence between blend inputs,
+corrections, grinding and production; probabilities still come from the original joint population.
+There is no independent cross product, resampling, fitted distribution or fallback to a nominal
+correction for a missing state.
+
+The existing recovery worksheet accepts optional `scenario` on correction rows. Exactly one
+correction without a scenario remains the nominal layer. If any conditional corrections are present,
+each declared scenario needs exactly one; extra, missing, duplicate or unknown states refuse.
+Correction target versions, source identity, admissibility and cap bounds are checked before that
+state is evaluated, and the final fraction must remain physical. A failed state refuses the complete
+nominal-plus-ensemble worksheet, without dropping probability mass.
+
+Member receipts retain their actual correction Claims and exact parameters. JSON and Markdown show
+each paired correction; the declaration and retained nominal layer participate in source ancestry,
+confidentiality and UU propagation. The old common-correction path keeps its original receipt frame
+and rendering; the optional path uses the RCES v2 receipt frame. Production and forecast registration
+consume the same corrected member values, and retained-worksheet verification reconstructs the
+correction population without opening original source paths.
+
+Independent constructed answers in `cards::ensemble::tests` use `R(g)=g/2` at
+`g={0.5,1.5}`: pairing corrections `{+0.25,-0.25}` yields constant recovery 0.5;
+reversing them yields `{0,1}` with variance 0.25. An explicit high-state cap of 0.8 gives
+mean 0.4, variance 0.16 and exact cap probability 1/2. Production and actual-binary journal controls
+cover the paired metal calculation and offline replay. These are declared finite alternatives, not
+estimated sampler biases, fitted parameter covariance, empirical calibration or qualified site data.
 
 ### 21. Bond grinding energy and throughput (DESIGN; plan §17.3, PO-CRUC-4; BD-176/181)
 
@@ -716,10 +814,11 @@ remain open for those broader capabilities and their evidence gates.
 
 `trajectory::reconcile_trajectory` jointly estimates one conserved total elemental measurand in kg
 inside one complete physical storage boundary across 2..32 contiguous periods. Each period's total
-inflow and outflow must be genuine observed Claims, including explicit zero totals. Every boundary
-stock is either one genuine stocktake Claim or explicitly declared unmeasured. The same stock coordinate
-is used as closing inventory of one period and opening inventory of the next; no second observation,
-fake timestamp, covariance row, prior or balancing plug is created for a latent state.
+inflow and outflow is either a genuine observed Claim (including explicit zero totals) or a source-bound
+`UnmeasuredInflow`/`UnmeasuredOutflow` declaration with no numeric mass. Every boundary stock is either
+one genuine stocktake Claim or explicitly declared unmeasured. The same stock coordinate is used as
+closing inventory of one period and opening inventory of the next; no second observation, fake
+timestamp, covariance row, prior or balancing plug is created for a latent stock or flow.
 
 The source-bound population declares the full scope, strictly increasing shared endpoints, completeness
 and unmeasured states. `trajectory::observation_order` admits source identity, elemental mass basis,
@@ -727,7 +826,11 @@ exact physical time, support, evidence and usability before defining the full me
 `Claim<TrajectoryErrorModel>` binds the exact population and ordered source Claims, complete covariance
 including cross-period errors, named error basis, unbiased Gaussian assumption and diagnostic policy.
 The existing linear/partial GLS owners solve all period balances simultaneously. An entirely unmeasured
-stock trajectory has an unidentifiable common offset and refuses `FMINE-REF-104`. No rank is repaired.
+stock trajectory has an unidentifiable common offset and refuses `FMINE-REF-104`. An interval with
+both inflow and outflow unmeasured identifies only their difference and also refuses `FMINE-REF-104`.
+The joint solver refuses any remaining rank deficiency, including unknown transfer totals that cannot
+be separated by the available surveys. No rank is repaired. Coordinate order is measured stocks,
+inflows and outflows, then unmeasured stocks, inflows and outflows, chronologically within each group.
 
 `TrajectoryOutcome` retains immutable original Claims and the error model, every measured and inferred
 estimate, full measured/latent posterior covariance, adjustment covariance, correlated normalized
@@ -749,6 +852,16 @@ are SHA-256 bound before parsing. Work is bounded to 1 MiB, 32 periods, 97 fitte
 conditional stock standard deviations, all fitted flow coordinates and complete joint covariance appear
 in the versioned JSON result; Markdown exposes the trajectory, adjustments and investigation diagnostics.
 Worksheet inputs remain Assumed, Internal and uncalibrated.
+
+The additive `fmine.plant-trajectory.v2` worksheet permits the exact string `"unmeasured"` for an
+`inflow_kg` or `outflow_kg` total. Missing fields still refuse; a latent total must have no covariance
+row. A result with absent flows uses `fmine.plant-trajectory-result.v2`, exposes `inferred_flows` with
+null observed mass/source, its explicit declaration Claim ID and conditional variance/standard
+deviation, and uses PTRR frame version 2. New declaration tags use PTIN frame version 2; existing
+population, measured input, error-model and v1 receipt encodings remain unchanged. Markdown separates
+inferred totals from genuine observations. Independent affine-map tests cover every joint covariance
+entry for a missing inflow and stock with correlated measurement errors, outflow inference, retained
+negative fits, declaration provenance and unidentifiable transfers.
 
 `tests/plant/trajectory_survey.toml` is a synthetic worked example. Independent reduced-closure tests
 check the complete covariance with independent and correlated flow errors, retrospective conditioning,
@@ -815,9 +928,70 @@ inverse recovery and full correlated covariance, mixed measured/missing feeds, g
 negative-fit rejection, correlated measured openings, separate tank-stock responses, throughput-clock
 equivalence, complete bypass, dead stocks, shutdown, weak
 transfer, source binding, work bounds and cancellation. This conditional slice does not fit RTD parameters,
-infer unmeasured initial stocks, model flow/kernel uncertainty, identify sensor biases, separate transport from reaction,
+model flow/kernel uncertainty, identify sensor biases, separate transport from reaction,
 calibrate recovery cards or establish empirical P754/plant gates. BD-313 remains open for those broader
 requirements.
+
+### Explicitly unmeasured active opening stocks (DESIGN; BD-313)
+
+`rtd::inverse::deconvolve_unmeasured_opening` accepts a separate
+`Claim<UnmeasuredOpening>` naming the element, boundary, opening instant, active tank count and fixed
+nonexchanging dead inventory. It contains no active-stock amount, observation, covariance or prior.
+`OpeningTreatment::Unmeasured` adds one latent coordinate per active tank to the same partial GLS
+solve used for missing feeds. Only genuine feed/outlet observations enter the supplied full covariance.
+The latent order is missing feeds chronologically, then active opening stocks in flow order; the
+original declaration, all measured sources, full joint covariance and fitted tank-stock response remain
+in the immutable result. `InverseOutcome::opening()` returns an `InverseOpening` source enum with
+`specified()` and `unmeasured()` accessors; the existing `deconvolve` entry point remains available.
+
+An unobservable startup history, including complete bypass or more unknown stocks/feeds than independent
+interval constraints, refuses `FMINE-REF-104`. No pseudo-observation or regularizer repairs the rank.
+Negative fitted stock rejects with the full diagnostic candidate retained. The scalar forward replay
+starts from the fitted active stocks and checks each interval and the whole-window elemental balance.
+Zero residual degrees of freedom remains `NoRedundancy`, not a passed gross-error test.
+
+`fmine.plant-rtd-inverse.v3` requires `fixed_transport = "true"` and
+`opening_treatment = "unmeasured"`. Every active tank is unmeasured; only the explicit `tank = "dead"`
+opening row is supplied. Active-opening amounts or covariance rows refuse rather than becoming known
+zeros. In the v3 JSON result, inferred opening coordinates have null `source_claim_id` and an explicit
+`declaration_claim_id`; Markdown distinguishes them from observed stocks. RTIE/RTIR frame version 3
+binds this treatment while the v1/v2 source and receipt encodings retain their previous bytes.
+
+The synthetic `tests/plant/rtd_inverse_unmeasured_opening.toml` declares one tank, observed first feed
+10 kg and two integrated outlets. Independent one-tank closed forms identify an initial 2 kg stock and
+the unmeasured second feed of 4 kg, retaining all correlations in the resulting 5×5 covariance.
+Kernel tests additionally compare a redundant fit against an independently eliminated one-row GLS
+system and recover two distinct tank stocks from Erlang survival formulas. These are conditional
+known answers; they supply no real-plant validation, uncertain transport parameters or inferred dead inventory.
+
+### Mixed measured and unmeasured active opening stocks (DESIGN; BD-313)
+
+`rtd::inverse::deconvolve_mixed_opening` accepts `Claim<MixedOpening>` with one
+`Option<MaterialAmounts>` per active tank. `Some` retains a genuine stock observation; `None` declares
+an unmeasured stock without an amount, covariance entry or prior. Both kinds must be present.
+`OpeningTreatment::Mixed` uses the same partial GLS and scalar replay as the other inference modes.
+Measured stocks enter the genuine observation population in tank order before the chronological flows;
+the latent order is missing feeds followed by unmeasured stocks in tank order. Every opening/flow
+correlation remains in the supplied full covariance and the fitted joint covariance. Separate response
+columns preserve each tank's physical position even when the measured tanks are not a leading group.
+
+The strict `fmine.plant-rtd-inverse.v4` worksheet requires `fixed_transport = "true"`,
+`opening_treatment = "mixed"` and a row for every active tank. An unmeasured row contains only `tank`
+and `element_kg = "unmeasured"`; measured and dead rows require exact `dry_kg`, `water_kg` and
+`element_kg`. Covariance keys `opening/<one-based-tank>` are admissible only for measured tanks.
+The `RTIM/1` source declaration binds the complete measured/unmeasured pattern, its genuine amounts,
+element, boundary, opening time and fixed dead inventory. `RTIE/4` and `RTIR/4` bind the mixed treatment
+without changing v1–v3 source or receipt encodings. `InverseOpening::mixed()` exposes the immutable
+original source; inferred JSON coordinates keep null observation-source IDs and a declaration Claim ID.
+
+`tests/plant/rtd_inverse_mixed_opening.toml` is a synthetic two-tank example with measured second stock
+3 kg and first feed 10 kg. Independent Erlang equations recover first stock 2 kg and missing second feed
+4 kg; kernel regressions compare every entry of the 6×6 covariance with the analytical linear map.
+A separate redundant example checks the full GLS posterior and gross-error statistic after analytic
+elimination of the unknown stock. Rank deficiency refuses 104; negative fitted mass and gross-error
+failures retain rejected diagnostics. Missing stocks never acquire zero observations or priors.
+This remains conditional on fixed transport and the submitted error model; it does not infer dead
+inventory, qualify a plant response or establish recovery calibration. Broader BD-313 gates remain open.
 
 ### 25. Shared-scenario processing production (DESIGN; BD-176/181/182, plan §17.4)
 
@@ -897,6 +1071,32 @@ source/scope changes and confidentiality. The actual command regression compares
 the coarser mode wins with unconstrained feed, while the finer mode wins with common 50 t availability.
 It verifies the monetary means through the existing valuation and decision owners. These calculations
 remain declared and uncalibrated; they do not establish a real mine's ore availability or plant validity.
+
+### Original raw-measurement likelihood with extensive conservation
+
+DESIGN (BD-151/155/177; plan section 20.2): `raw_measurements::balance::evaluate` admits
+a byte-bound `fmine.plant-raw-balance.v1` worksheet for one complete conservative mechanical
+boundary, one non-H/O element and 2–16 whole-interval streams. Explicit exact endpoint stocks
+are fixed conditional inputs. Every stream declares wet kg, water/wet mass and total element/dry
+matter, positive raw uncertainties and complete cross-stream/channel correlation, including zeros.
+
+Latent coordinates are extensive D/W/E; raw predictions are D+W, W/(D+W), E/D. The K0 nonlinear
+owner minimizes the original full-correlated standardized residual objective under linear
+extensive conservation, with analytic derivatives and a physical-domain merit line search.
+Input conversion has an explicit numerical budget; a separate final kg audit verifies closure.
+Grades are derived after fitting and never reconciled as conservation variables.
+
+Results preserve the complete source text and Claim, scope/interval/dry basis, fixed stocks,
+exact nominal imbalance, fitted quantities, standardized residuals/objective, full local kg²
+covariance and convergence diagnostics. A declared misfit failure retains diagnostics and a
+refusal but no admitted result Claim. Solver failure retains the source and refusal without
+inventing a fitted result. Output Claims remain Assumed, Internal and uncalibrated.
+
+The result is conditional and locally stationary. Gauss–Newton tangent covariance is a first-order
+approximation, not a nonlinear posterior or confidence region; the objective has no supplied exact
+chi-square law. No global optimum, active-inequality solver, missing-sensor inference, bias attribution
+or real-plant validation is claimed. The synthetic fixture has independent fit D/W/E=(80,20,8) and
+(40,10,2), fixed stock growth (40,10,6), raw misfit 0.818625 and a separately derived tangent covariance.
 
 ### 25. Product custody, dual-attested shipment release, Cu speciation and preg-rob cards (BD-179/180/182/288)
 

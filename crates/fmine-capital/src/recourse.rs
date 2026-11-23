@@ -1077,6 +1077,12 @@ fn objective_units(
 /// Enumerates every admitted two-stage policy, preserving every infeasible policy and realized path.
 /// Observation classes restrict decisions, while the complete unconditional state vector determines risk.
 pub fn evaluate(inputs: &RecourseInputs) -> Result<EvaluatedRecourseProgram> {
+    if inputs.program.policy.value.payoff_convention == CASH_PAYOFF_CONVENTION {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "declared-period incremental cash is a static comparison; staged cash semantics are not declared",
+        ));
+    }
     let Admission {
         metadata,
         policy_count,

@@ -5,6 +5,7 @@ use super::*;
 use fmine_plant::{cards, grinding, production};
 
 const MANIFEST: &str = include_str!("../../../../../tests/decisions/production_comparison.toml");
+const TESTWORK: &str = include_str!("../../../../../tests/decisions/production_testwork.toml");
 const LOW: &str = include_str!("../../../../../tests/plant/grinding_joint.toml");
 const HIGH: &str = include_str!("../../../../../tests/plant/grinding_higher_power.toml");
 const RECOVERY: &str = include_str!("../../../../../tests/plant/production_recovery.toml");
@@ -540,4 +541,284 @@ fn manifest_limits_refuse_lossy_money_invalid_probabilities_duplicates_and_unkno
             "{invalid_limit}"
         );
     }
+}
+
+#[test]
+fn source_bound_testwork_prices_the_actual_operating_payoffs_and_retains_every_policy_input() {
+    let input = worksheet::parse(TESTWORK, &source(TESTWORK, "testwork.toml")).unwrap();
+    let alternatives = [
+        alternative(false, str::to_owned),
+        alternative(true, str::to_owned),
+    ];
+    let receipt = input.evaluate(&alternatives).unwrap();
+    let decision = receipt.decision();
+    let info = decision.summary().information.as_ref().unwrap();
+    let test = &info.options[0];
+    // Independent complete-state arithmetic: .5 * (808 + 18630.4) - 9123.2 = 596.
+    assert_eq!(info.evpi.major, q(596, 1));
+    assert_eq!(test.evsi.major, q(596, 1));
+    assert_eq!(test.gross_value.major, q(48_596, 5));
+    assert_eq!(test.test_cost.major, q(80, 1));
+    assert_eq!(test.delay_cost.major, q(20, 1));
+    assert_eq!(test.total_cost.major, q(100, 1));
+    assert_eq!(test.net_value.major, q(48_096, 5));
+    assert_eq!(test.net_voi.major, q(496, 1));
+    assert_eq!(test.strict_change_probability, q(1, 2));
+    assert_eq!(test.policy_risk.cvar95_loss.major, q(-708, 1));
+    assert_eq!(info.overall_winners[0].id, "hardness-test");
+    assert_eq!(
+        info.overall_winners[0].kind,
+        card::information::ChoiceKind::InformationOption
+    );
+    for (signal, action) in [("soft-result", "process"), ("hard-result", "higher-power")] {
+        let policy = test.signals.iter().find(|p| p.signal_id == signal).unwrap();
+        assert_eq!(policy.best_actions, [action]);
+        assert_eq!(policy.probability, q(1, 2));
+    }
+    let claim = &decision.inputs().information_options[0];
+    assert_eq!(claim.value.likelihoods.len(), 4);
+    assert_eq!(claim.evidence, EvidenceClass::Assumed);
+    assert_eq!(claim.confidentiality, Confidentiality::internal());
+    assert!(!claim.uu_terms.is_empty());
+    assert!(claim.parents.contains(&input.declaration().claim_id));
+    for alternative in &alternatives {
+        assert!(
+            claim
+                .parents
+                .contains(&alternative.decision().claim().claim_id)
+        );
+    }
+    for field in [
+        "information_option.test_cost",
+        "information_option.delay_cost",
+        "likelihood.probability",
+    ] {
+        assert!(
+            claim
+                .anchors
+                .iter()
+                .any(|a| a.artifact_sha256 == sha256(TESTWORK.as_bytes()).0
+                    && a.locator.ends_with(field))
+        );
+    }
+    assert_eq!(*decision, card::evaluate(decision.inputs()).unwrap());
+    let markdown = receipt.to_markdown();
+    assert!(markdown.contains("496/1"));
+    assert!(markdown.contains("Conditional policy: hardness-test"));
+    assert!(markdown.contains("Complete declared likelihood matrices"));
+    assert!(markdown.contains(INFORMATION_BASIS));
+    assert!(receipt.to_json().contains("\"information_basis\""));
+    assert_eq!(receipt.no_claim(), INFORMATION_NO_CLAIM);
+}
+
+#[test]
+fn noisy_test_downside_counts_realized_losses_and_charges_cost_once() {
+    let alternatives = [
+        alternative(false, str::to_owned),
+        alternative(true, str::to_owned),
+    ];
+    let noisy = TESTWORK
+        .replace("probability = \"1/1\"", "probability = \"19/20\"")
+        .replace("probability = \"0/1\"", "probability = \"1/20\"");
+    for (limit, winner) in [("1/40", "hardness-test"), ("1/100", "process")] {
+        let text = format!(
+            "{noisy}\n[[downside_limit]]\nfloor_usd = \"0\"\nmax_breach_probability = \"{limit}\"\n"
+        );
+        let receipt = worksheet::parse(&text, &source(&text, "testwork.toml"))
+            .unwrap()
+            .evaluate(&alternatives)
+            .unwrap();
+        let summary = receipt.decision().summary();
+        let test = &summary.information.as_ref().unwrap().options[0];
+        assert_eq!(test.evsi.major, q(8_333, 25));
+        assert_eq!(test.net_voi.major, q(5_833, 25));
+        assert!(
+            test.signals
+                .iter()
+                .all(|s| s.conditional_value.unwrap().major.signum() > 0)
+        );
+        let screen = summary.downside.as_ref().unwrap();
+        let policy = screen
+            .choices
+            .iter()
+            .find(|c| c.choice.id == "hardness-test")
+            .unwrap();
+        // Only soft ore with the erroneous hard result loses: .5 * .05 = .025.
+        assert_eq!(policy.nominal_breach_probability, q(1, 40));
+        assert_eq!(policy.conditional_breach_probabilities, [ZERO, q(1, 20)]);
+        assert_eq!(screen.nominal.winners[0].id, winner);
+        assert!(
+            receipt
+                .to_markdown()
+                .contains("Policy rows integrate the original realized state/signal outcomes")
+        );
+        let markdown = receipt.to_markdown();
+        assert!(markdown.contains("| information_option | hardness-test | 233913/25 | 1/40 |"));
+        let shown_winner = if winner == "hardness-test" {
+            "information\\_option / hardness-test"
+        } else {
+            "act\\_now / process"
+        };
+        assert!(markdown.contains(&format!("**Co-winners:** {shown_winner}.")));
+    }
+}
+
+#[test]
+fn uninformative_losing_and_tied_tests_remain_visible_without_fabricating_value() {
+    let alternatives = [
+        alternative(false, str::to_owned),
+        alternative(true, str::to_owned),
+    ];
+    for (text, expected_evsi, expected_net, ties) in [
+        (
+            TESTWORK
+                .replace("\"1/1\"", "\"1/2\"")
+                .replace("\"0/1\"", "\"1/2\""),
+            ZERO,
+            q(-100, 1),
+            false,
+        ),
+        (
+            TESTWORK.replace("test_cost = \"80\"", "test_cost = \"576\""),
+            q(596, 1),
+            ZERO,
+            true,
+        ),
+    ] {
+        let receipt = worksheet::parse(&text, &source(&text, "testwork.toml"))
+            .unwrap()
+            .evaluate(&alternatives)
+            .unwrap();
+        let info = receipt.decision().summary().information.as_ref().unwrap();
+        assert_eq!(info.options.len(), 1);
+        assert_eq!(info.options[0].evsi.major, expected_evsi);
+        assert_eq!(info.options[0].net_voi.major, expected_net);
+        assert_eq!(info.overall_winners.len(), if ties { 2 } else { 1 });
+        assert_eq!(info.overall_winners[0].id, "higher-power");
+        assert_eq!(
+            info.options[0].baseline_optimal_after_every_reachable_signal,
+            !ties
+        );
+    }
+}
+
+#[test]
+fn source_information_requires_complete_real_states_explicit_basis_and_exact_nonnegative_costs() {
+    let alternatives = [
+        alternative(false, str::to_owned),
+        alternative(true, str::to_owned),
+    ];
+    for text in [
+        TESTWORK
+            .split("\n[[likelihood]]")
+            .filter(|row| !row.contains("state = \"soft\""))
+            .collect::<Vec<_>>()
+            .join("\n[[likelihood]]"),
+        TESTWORK.replace("state = \"soft\"", "state = \"foreign\""),
+    ] {
+        let input = worksheet::parse(&text, &source(&text, "testwork.toml")).unwrap();
+        assert!(input.evaluate(&alternatives).is_err());
+    }
+    let missing_zero = TESTWORK
+        .split("\n[[likelihood]]")
+        .filter(|row| {
+            !(row.contains("state = \"soft\"") && row.contains("signal = \"hard-result\""))
+        })
+        .collect::<Vec<_>>()
+        .join("\n[[likelihood]]");
+    for text in [
+        missing_zero,
+        TESTWORK.replace(
+            &format!("information_basis = \"{INFORMATION_BASIS}\"\n"),
+            "",
+        ),
+        TESTWORK.replace(INFORMATION_BASIS, "shift-periods-and-recompute"),
+        TESTWORK.replace("test_cost = \"80\"", "test_cost = \"-1\""),
+        TESTWORK.replace("delay_cost = \"20\"", "delay_cost = \"0.00001\""),
+        TESTWORK.replace("delay_cost = \"20\"", "delay_cost = \"1/3\""),
+        TESTWORK.replace("delay_days = 1", "delay_days = \"1\""),
+        TESTWORK.replacen("probability = \"1/1\"", "probability = \"9/10\"", 1),
+        format!("{TESTWORK}\n[[signal]]\noption = \"hardness-test\"\nid = \"soft-result\"\n"),
+        format!("information_basis = \"{INFORMATION_BASIS}\"\n{MANIFEST}"),
+    ] {
+        assert!(
+            worksheet::parse(&text, &source(&text, "testwork.toml")).is_err(),
+            "invalid information accepted: {text}"
+        );
+    }
+}
+
+#[test]
+fn information_sources_and_declared_basis_bind_identity_without_changing_legacy_absence() {
+    let alternatives = [
+        alternative(false, str::to_owned),
+        alternative(true, str::to_owned),
+    ];
+    let legacy = MANIFEST.replace(
+        "synthetic-operating-modes",
+        "legacy choice/model with spaces",
+    );
+    let no_information = worksheet::parse(&legacy, &source(&legacy, "legacy.toml"))
+        .unwrap()
+        .evaluate(&alternatives)
+        .unwrap();
+    assert!(
+        no_information
+            .decision()
+            .inputs()
+            .information_options
+            .is_empty()
+    );
+    assert!(no_information.decision().summary().information.is_none());
+    assert!(!no_information.to_json().contains("\"information_basis\""));
+    assert_eq!(no_information.no_claim(), NO_CLAIM);
+    let named = TESTWORK.replace(
+        "synthetic-operating-testwork",
+        "legacy choice/model with spaces",
+    );
+    assert!(
+        worksheet::parse(&named, &source(&named, "named.toml"))
+            .unwrap()
+            .evaluate(&alternatives)
+            .is_ok()
+    );
+    let named_states = TESTWORK.replace("state = \"soft\"", "state = \"soft ore/domain\"");
+    let renamed = [
+        alternative(false, |s| s.replace("\"soft\"", "\"soft ore/domain\"")),
+        alternative(true, |s| s.replace("\"soft\"", "\"soft ore/domain\"")),
+    ];
+    assert!(
+        worksheet::parse(&named_states, &source(&named_states, "named.toml"))
+            .unwrap()
+            .evaluate(&renamed)
+            .is_ok()
+    );
+    let input = worksheet::parse(TESTWORK, &source(TESTWORK, "testwork.toml")).unwrap();
+    let original = input.evaluate(&alternatives).unwrap();
+    let mut declaration = input.declaration().clone();
+    declaration.value.information_options[0].test_cost.minor += 1;
+    assert_eq!(
+        evaluate(&declaration, &alternatives).unwrap_err().code,
+        "FMINE-REF-507"
+    );
+    let altered = bind(declaration.value, input.declaration());
+    assert_ne!(
+        original.digest(),
+        evaluate(&altered, &alternatives).unwrap().digest()
+    );
+    let mut changed = input.declaration().value.clone();
+    changed.information_basis = None;
+    assert_eq!(
+        evaluate(&bind(changed, input.declaration()), &alternatives)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-105"
+    );
+    let annotated = format!("# retained source-only evidence change\n{TESTWORK}");
+    let other = worksheet::parse(&annotated, &source(&annotated, "testwork.toml"))
+        .unwrap()
+        .evaluate(&alternatives)
+        .unwrap();
+    assert_eq!(original.decision().summary(), other.decision().summary());
+    assert_ne!(original.digest(), other.digest());
 }

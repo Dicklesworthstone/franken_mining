@@ -233,6 +233,12 @@ fn represented(value: f64) -> Result<Rat> {
     }
 }
 
+/// Apply the declared USD settlement boundary to exact unrounded cash.
+/// Returns the admitted amount and `rounded - unrounded` USD; neither evidence nor calibration changes.
+pub fn round_declared_usd_cash(value: Rat, rule: MonetaryRounding) -> Result<(Money, Rat)> {
+    money(value, rule)
+}
+
 fn money(value: Rat, rule: MonetaryRounding) -> Result<(Money, Rat)> {
     match rule {
         MonetaryRounding::NearestTiesEvenFourPlaces => {}

@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use fmine_calib::ledger::comparison::PairedScore;
 use fmine_calib::ledger::correction::CorrectionMethod;
 use fmine_claim::forecast_journal::{Entry, Header, MAX_OPERATION_BYTES, Record};
 use fmine_core::hash::Digest32;
@@ -283,6 +284,14 @@ pub enum Command {
         left: Digest32,
         right: Digest32,
     },
+    /// Explicitly pair prospectively tagged targets whose outcome citations remain supplied.
+    CompareSupplied {
+        journal: PathBuf,
+        head: Option<Digest32>,
+        left: Digest32,
+        right: Digest32,
+        score: PairedScore,
+    },
     /// Propose a visible correction from saved training outcomes without changing any record.
     Correction {
         journal: PathBuf,
@@ -318,7 +327,9 @@ impl Command {
             Self::Inspect { .. } => "inspect",
             Self::VerifyPlant { .. } => "verify-plant",
             Self::Report { .. } => "report",
-            Self::Compare { .. } | Self::CompareCrps { .. } => "compare",
+            Self::Compare { .. } | Self::CompareCrps { .. } | Self::CompareSupplied { .. } => {
+                "compare"
+            }
             Self::Correction { .. } | Self::CorrectionSeries { .. } => "correction",
         }
     }
@@ -431,17 +442,31 @@ fn perform(
             head,
             left,
             right,
+        }
+        | Command::CompareSupplied {
+            journal,
+            head,
+            left,
+            right,
+            ..
         } => {
             let journal = Journal::open_read(&root.join(journal), *head)?;
             let mut state = replay(&journal)?;
             persisted_report(&mut state, *left)?;
             persisted_report(&mut state, *right)?;
             let crps = matches!(command, Command::CompareCrps { .. });
-            let report = if crps {
-                state.ledger.compare_assessments_crps(*left, *right)?
-            } else {
-                state.ledger.compare_assessments(*left, *right)?
-            };
+            let (comparison_json, markdown) =
+                if let Command::CompareSupplied { score, .. } = command {
+                    super::comparison::supplied(&state, *left, *right, *score)?
+                } else if crps {
+                    super::comparison::crps(&state, *left, *right)?
+                } else {
+                    let report = state.ledger.compare_assessments(*left, *right)?;
+                    (
+                        super::comparison::json(&state, &report)?,
+                        super::comparison::markdown(&report),
+                    )
+                };
             let head_digest = journal
                 .records()
                 .last()
@@ -451,13 +476,8 @@ fn perform(
                 "{{\"operation\":\"compare\",\"head\":{},\"head_pinned\":{},\"comparison\":{}}}",
                 js(&head_digest.to_hex()),
                 head.is_some(),
-                super::comparison::json(&state, &report)?,
+                comparison_json,
             );
-            let markdown = if crps {
-                super::comparison::markdown_crps(&state, &report)?
-            } else {
-                super::comparison::markdown(&report)
-            };
             return Ok((payload, markdown));
         }
         Command::Init {
@@ -499,7 +519,8 @@ fn perform(
                     && row.table == "plant_forecast"
                     && Row(row).string("id")? == forecast
                 {
-                    let (report, markdown) = super::plant::verify(&Row(row), operation)?;
+                    let earliest = record.time_bounds(journal.header())?.0;
+                    let (report, markdown) = super::plant::verify(&Row(row), operation, earliest)?;
                     let payload = format!(
                         "{{\"operation\":\"verify-plant\",\"head\":{},\"head_pinned\":{},\"forecast_id\":{},\"registration_head\":{},\"verification\":{report}}}",
                         js(&journal.head().to_hex()),
@@ -561,6 +582,7 @@ fn perform(
     let mut journal = Journal::open_write(&root.join(path), head)?;
     let mut state = replay(&journal)?;
     let mut plant_evidence = None;
+    let mut plant_fit_cut = None;
     let (request, table, selected) = match command {
         Command::Register { request, .. } => (read_request(&root.join(request))?, "forecast", None),
         Command::RegisterAssumption { input, .. } => (
@@ -622,6 +644,7 @@ fn perform(
                 },
                 root,
             )?;
+            plant_fit_cut = prepared.fit_evidence_cut_ns;
             plant_evidence = Some(prepared.evidence_json);
             (prepared.request, "plant_forecast", None)
         }
@@ -705,6 +728,10 @@ fn perform(
     let previous = version_counts(journal.records(), &state, selected)?;
     let mut response = None;
     journal.append(&request, clock, |record, header| {
+        if plant_fit_cut.is_some() {
+            let earliest = record.time_bounds(header)?.0;
+            super::plant::validate_fit_evidence_time(plant_fit_cut, earliest)?;
+        }
         let assessment = apply(&mut state, record, header, Some(table))?;
         // New opt-in policies retain distinct versions; older operation meanings stay frozen.
         let mut versions = previous.versions;

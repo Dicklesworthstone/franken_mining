@@ -95,6 +95,7 @@ fn model_with(
         test_work: card.claim_id,
         additive_fraction: q(addition),
         upper_cap_fraction: cap.map(q),
+        fit_validity: None,
     };
     let tag = c.canonical_tag();
     let correction = source(CORRECTION_METRIC, c, &tag);

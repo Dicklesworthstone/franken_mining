@@ -1,0 +1,32 @@
+# SYNTHETIC source-derived capital comparison: the two operating modes share a circuit
+# and therefore cannot be funded together. No source payoffs are transcribed here.
+schema = "fmine.capital-investments.v1"
+model_key = "synthetic-source-derived-capital"
+question = "Which source-derived investment fits the declared capital budget?"
+currency = "USD"
+budget = "8000"
+tail_mass = "1/2"
+payoff_convention = "additive_discounted_incremental_cash"
+shared_scenario_basis = "SYNTHETIC persistent soft or hard ore and price state across both periods and both mutually exclusive investments"
+additivity_basis = "SYNTHETIC alternatives on one circuit are explicitly exclusive; no shared baseline, interactions, additional cash or other projects are inferred"
+reference_class_basis = "Explicitly unadjusted synthetic operating cash and initial-capital assumptions"
+
+[[candidate]]
+id = "original"
+label = "Original operating investment"
+investment = "tests/decisions/production_investment.toml"
+alternative = "process"
+exclusion_group = "same-operating-circuit"
+
+[[candidate]]
+id = "higher"
+label = "Higher-power operating investment"
+investment = "tests/decisions/production_investment.toml"
+alternative = "higher-power"
+exclusion_group = "same-operating-circuit"
+
+[[uu]]
+id = "UU-synthetic-portfolio-additivity"
+description = "Unrepresented capital overruns, cross-project interactions and omitted cash"
+trigger = "Declared costs, supported periods or additivity no longer describe the candidate set"
+downside_usd_m = "0.05"

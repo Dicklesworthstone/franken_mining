@@ -6453,7 +6453,7 @@ are Rust LOC in thousands, including tests. They are TARGETs, and each ceiling i
 | K | ★`fmine-qaqc` | Corebox | CRMs, blanks, duplicates, detection limits, censored fitting, e-process drift, lab certificates | 15 | 17 | A |
 | K | `fmine-geostat` | Strata | Variography, kriging, change of support, conditional simulation | 40 | 46 | B |
 | K | `fmine-belief` | Strata | Subsurface belief objects, realization sets, implicit structure, block-model projections | 25 | 29 | B |
-| K | ★`fmine-calib` | Plumb | Forecast registration, proper scoring, calibration records, surprise monitors, reference classes (§10) | 18 | 21 | A |
+| K | ★`fmine-calib` | Plumb | Forecast registration, proper scoring, calibration records, surprise monitors, reference classes (§10) | 27 | 31 | A |
 | K | `fmine-explore` | Lodestar | Deposits, exploration effort, absence classes, detection-thinning data model (§11) | 15 | 17 | B |
 | K | `fmine-geotech` | Highwall | Rock mass, slope and support laws, instrumentation semantics, TARP automata | 22 | 25 | C |
 | K | ★`fmine-flow` | Touchstone | Material-flow graph, conservation laws, F-factors (§20) | 20 | 23 | A |
@@ -6461,7 +6461,7 @@ are Rust LOC in thousands, including tests. They are TARGETs, and each ceiling i
 | K | `fmine-plan` | Pushback | Plan and schedule models, precedence, scenario labels, cut-off, blend, compliance math | 30 | 35 | B |
 | K | `fmine-blast` | Headframe | Drill and blast design records, fragmentation and blast-movement models | 15 | 17 | C |
 | K | `fmine-ops` | Headframe | As-built, load and haul, reliability, ventilation, dewatering, energy, wear | 35 | 40 | C |
-| K | ★`fmine-plant` | Crucible | Flowsheet graph, process cards, geomet chain, P754 balances, refining custody | 32 | 37 | A |
+| K | ★`fmine-plant` | Crucible | Flowsheet graph, process cards, geomet chain, P754 balances, refining custody | 37 | 43 | A |
 | K | `fmine-tailings` | Freeboard | TSF evidence state, GISTM traceability, water balance, ARD/PAG, closure | 18 | 21 | C |
 | K | `fmine-workforce` | Muster | Rosters, competencies, fatigue, CCV, productivity, budgets by driver (privacy by design) | 16 | 18 | C |
 | K | ★`fmine-reserves` | Hallmark | Register model, CP/QP acts, renderers, data-verification index, statement reconciliation | 20 | 23 | A |
@@ -6472,16 +6472,16 @@ are Rust LOC in thousands, including tests. They are TARGETs, and each ceiling i
 | E | `fmine-infer` | Lodestar | NUTS, SMC and the thinned point-process posteriors | 24 | 28 | B |
 | E | `fmine-prospect` | Lodestar | Prospectivity engine, Bayesian search, drill-target VOI | 22 | 25 | B |
 | E | ★`fmine-decide` | Helm | DecisionCards, VOI, sensitivities, robustness views; the only franken-evidence/franken-decision adapter and renderer | 20 | 23 | A |
-| E | `fmine-capital` | Helm | CapitalProgram optimization, scenario index, real options, deal cards | 20 | 23 | B |
+| E | `fmine-capital` | Helm | CapitalProgram optimization, scenario index, real options, deal cards | 25 | 29 | B |
 | E | `fmine-metalacct` | Bullion | Metal-accounting subledger, costing, FA summary preparation, Merkle folding | 30 | 35 | B |
 | E | `fmine-acctpack` | Bullion | The 17-part mining domain pack over FA (NRV, stockpile costing, streams, ARO …) | 22 | 25 | B |
-| E | ★`fmine-metrics` | Bullion | AISC/AIC/C1/GEO/reserve replacement/ROCE variants, LMDI waterfalls, public lane | 18 | 21 | A |
+| E | ★`fmine-metrics` | Bullion | AISC/AIC/C1/GEO/reserve replacement/ROCE variants, LMDI waterfalls, public lane | 29 | 33 | A |
 | V | ★`fmine-io` | Portal | Quarantine-on-import parsers and writers (§32) | 40 | 46 | A |
-| V | ★`fmine-public` | Portal | Public-filings lane: issuer filings parsed into Public-basis Claims (§31.1) | 18 | 21 | A |
+| V | ★`fmine-public` | Portal | Public-filings lane: issuer filings parsed into Public-basis Claims (§31.1) | 24 | 28 | A |
 | V | ★`fmine-projection` | Bedrock | Projectors to fsqlite, fgdb and frankensearch; high-water marks | 20 | 23 | A |
 | V | `fmine-fa-bridge` | Bullion | Posting-slot automaton over `fa --json`; outbox; FA-ACC client side | 15 | 17 | B |
 | V | ★`fmine-service` | Adit | Node composition (roles, supervisors, leases) → binary `fmined` | 15 | 17 | A |
-| U | ★`fmine-cli` | Adit | Binary `fmine`; robot NDJSON; verb registry; doctor and repair | 26 | 30 | A |
+| U | ★`fmine-cli` | Adit | Binary `fmine`; robot NDJSON; verb registry; doctor and repair | 44 | 51 | A |
 | U | `fmine-mcp` | Adit | Thin adapter over verbs (the only fastmcp dependent); parity gate | 10 | 12 | B |
 | U | `fmine-tui` | Adit | frankentui ops console (inline mode, asupersync lane) | 15 | 17 | B |
 | U | ★`fmine-report` | Adit | franken_markdown + frankenmermaid reports with anchors and `no_claim` lines | 12 | 14 | A |
@@ -6498,24 +6498,24 @@ are Rust LOC in thousands, including tests. They are TARGETs, and each ceiling i
 |---|---:|---:|---:|
 | S0 Substrate | 8 | 89 | 102 |
 | S1 Runtime and authority | 7 | 107 | 123 |
-| K Domain kernels | 20 | 446 | 514 |
-| E Engines | 10 | 232 | 267 |
-| V Services and adapters | 5 | 108 | 124 |
-| U Surfaces | 5 | 78 | 90 |
+| K Domain kernels | 20 | 460 | 530 |
+| E Engines | 10 | 248 | 285 |
+| V Services and adapters | 5 | 114 | 131 |
+| U Surfaces | 5 | 96 | 111 |
 | T Verification | 4 | 68 | 78 |
-| **Total** | **59** | **1,128** | **1,298** |
+| **Total** | **59** | **1,182** | **1,360** |
 
 | Phase | Crates first sliced | Full budgets of those crates (k) | Slice actually built in the phase (k, TARGET) |
 |---|---:|---:|---|
-| A (M0–M2, demonstrator) | 35 ★ | 615 | ≈ 390 planned, 450 ceiling (subsets of the ★ crates) |
-| B (M3–M4) | 18 | 392 | the remainder of phase-A crates as their slices widen, plus these |
+| A (M0–M2, demonstrator) | 35 ★ | 664 | ≈ 390 planned, 450 ceiling (subsets of the ★ crates) |
+| B (M3–M4) | 18 | 397 | the remainder of phase-A crates as their slices widen, plus these |
 | C (M5–M6) | 6 | 121 | — |
 
 - **Calibration of these sizes.** FA is ≈ 796k LOC for accounting alone (R4 §4.2; HEAD `41363acb`). FTX reached 324k for a
   narrower product and overran its plan 2.7× (R5 §2.3). B4's 39-crate map was 738k. This map adds 20 crates for
   the subsystems Part III specified (Lodestar, Headframe, Crucible, Freeboard, Muster, Helm, the public lane and
   the viewer).
-- **Reading the numbers.** 1.13M LOC is a ceiling-governed *envelope*, not a promise. The phase-A demonstrator
+- **Reading the numbers.** 1.18M LOC is a ceiling-governed *envelope*, not a promise. The phase-A demonstrator
   is the only commitment, and §37's program gate at month 12 decides whether phases B and C are funded. LOC
   figures are scope caps, never effort or schedule estimates.
 - **Velocity reference class (R7-C112, R7-C113, R7-C115).** Across 25 FrankenSuite siblings, lifetime non-blank Rust

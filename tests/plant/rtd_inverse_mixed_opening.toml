@@ -1,0 +1,112 @@
+# SYNTHETIC two-tank history with a measured second tank and unmeasured first tank.
+# Independent Erlang formulas, a=exp(-1), S=[2,3], F=[10,4] kg:
+# O0=(1-2a)*S0+(1-a)*S1+(3a-1)*F0.
+# O1=(2a-3a^2)*S0+(a-a^2)*S1+(2-6a+4a^2)*F0+(3a-1)*F1.
+# The first stock and second feed are unknown; no amount or prior is supplied.
+# Printed outlets come from these closed forms, not the RTD implementation.
+schema = "fmine.plant-rtd-inverse.v4"
+boundary = "synthetic-inverse-mixed-opening/v1"
+element = "Au"
+measurand = "total-Au/all-phases"
+mass_basis = "kg-total/all-phases/full-physical-boundary"
+start_ns = "0"
+end_ns = "2000000000"
+opening_ns = "0"
+tanks = "2"
+volume_m3 = "2"
+bypass_fraction = "0"
+dead_fraction = "0"
+min_flow_m3_per_s = "0"
+max_flow_m3_per_s = "2"
+common_conservative_transport = "true"
+piecewise_constant_feed_per_volume = "true"
+dry_tolerance_kg = "0.00000001"
+water_tolerance_kg = "0.00000001"
+element_tolerance_kg = "0.00000001"
+max_kernel_steps = "128"
+error_model_basis = "synthetic correlated stock and flow observations; illustrative covariance, not empirical calibration"
+fixed_transport = "true"
+opening_treatment = "mixed"
+unbiased_gaussian_errors = "true"
+global_chi_square_limit = "10"
+closure_tolerance_kg = "0.00000001"
+
+[[opening]]
+tank = "1"
+element_kg = "unmeasured"
+
+[[opening]]
+tank = "2"
+dry_kg = "100"
+water_kg = "100"
+element_kg = "3"
+
+[[opening]]
+tank = "dead"
+dry_kg = "0"
+water_kg = "0"
+element_kg = "0"
+
+[[interval]]
+start_ns = "0"
+end_ns = "1000000000"
+slurry_volume_m3 = "1"
+feed_kg = "10"
+outlet_kg = "3.461227146943173396697046714"
+
+[[interval]]
+start_ns = "1000000000"
+end_ns = "2000000000"
+slurry_volume_m3 = "1"
+feed_kg = "unmeasured"
+outlet_kg = "5.112336692305858263297509768"
+
+[[covariance]]
+left = "opening/2"
+right = "opening/2"
+kg2 = "0.25"
+
+[[covariance]]
+left = "opening/2"
+right = "feed/0/1000000000"
+kg2 = "0.01"
+
+[[covariance]]
+left = "opening/2"
+right = "outlet/0/1000000000"
+kg2 = "-0.02"
+
+[[covariance]]
+left = "opening/2"
+right = "outlet/1000000000/2000000000"
+kg2 = "0.005"
+
+[[covariance]]
+left = "feed/0/1000000000"
+right = "feed/0/1000000000"
+kg2 = "0.04"
+
+[[covariance]]
+left = "feed/0/1000000000"
+right = "outlet/0/1000000000"
+kg2 = "0.006"
+
+[[covariance]]
+left = "feed/0/1000000000"
+right = "outlet/1000000000/2000000000"
+kg2 = "-0.003"
+
+[[covariance]]
+left = "outlet/0/1000000000"
+right = "outlet/0/1000000000"
+kg2 = "0.09"
+
+[[covariance]]
+left = "outlet/0/1000000000"
+right = "outlet/1000000000/2000000000"
+kg2 = "0.012"
+
+[[covariance]]
+left = "outlet/1000000000/2000000000"
+right = "outlet/1000000000/2000000000"
+kg2 = "0.16"

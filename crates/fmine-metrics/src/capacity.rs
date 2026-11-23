@@ -1,9 +1,10 @@
-//! Exact gold-production exclusion bounds from stated physical limits (BD-342, COD-01).
+//! Exact gold/copper production exclusion bounds from stated physical limits (BD-342, COD-01).
 //!
-//! Dry feed is in million metric tonnes, head grade in grams of gold per dry metric tonne, and recovery
-//! is a fraction. All three describe the full mine over the same remaining calendar-month support.
-//! Their maximum product is converted with the statutory troy-ounce constant, then scaled by an explicit
-//! attributable share if required. Simultaneous attainability of those maxima is never assumed: they give
+//! Dry feed is in million metric tonnes. Gold head grade is in grams per dry metric tonne; copper head
+//! grade and both recoveries are fractions. All three factors name the same metal and describe the full
+//! mine over the same remaining calendar-month support. Their maximum product is converted to gold koz
+//! or copper kt, then scaled by an explicit attributable share if required. Simultaneous attainability
+//! of those maxima is never assumed: they give
 //! an optimistic ceiling, not a feasible plan or a joint production-cost witness. Callers must authenticate
 //! technical-report sources and their units; this kernel alone establishes no public T2 eligibility.
 //! Determinism: Exact (checked rational arithmetic; canonical input tags and sorted parent/source identities).
@@ -16,7 +17,7 @@ use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_numerics::exact_feas::{Interval, Rat};
 use fmine_units::{TROY_OZ_TO_GRAMS_DEN, TROY_OZ_TO_GRAMS_NUM, UnitsError};
 
-use crate::guidance::{Ownership, Period, Quantity, QuantityKind};
+use crate::guidance::{GuidanceFamily, Ownership, Period, Quantity};
 
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
@@ -28,11 +29,17 @@ pub enum PhysicalKind {
     RemainingDryFeedMt,
     HeadGradeGPerT,
     RecoveryFraction,
+    RemainingCopperDryFeedMt,
+    CopperHeadGradeFraction,
+    CopperRecoveryFraction,
 }
 
 impl PhysicalKind {
     fn additivity(self) -> AdditivityClass {
-        if self == Self::RemainingDryFeedMt {
+        if matches!(
+            self,
+            Self::RemainingDryFeedMt | Self::RemainingCopperDryFeedMt
+        ) {
             AdditivityClass::ExtensiveAdditive
         } else {
             AdditivityClass::IntensiveWeighted
@@ -52,11 +59,18 @@ pub struct PhysicalLimit {
 }
 
 impl PhysicalLimit {
-    /// Binds gold, dry metric-tonne basis, physical quantity, period, ownership and exact bounds.
+    /// Binds metal, dry metric-tonne basis, physical quantity, period, ownership and exact bounds.
     #[must_use]
     pub fn canonical_tag(&self) -> String {
         let mut e = Encoder::new_frame(*b"GCP1", 1);
-        e.put_str("gold;dry-metric-tonne;physical-quantity");
+        e.put_str(match self.kind {
+            PhysicalKind::RemainingDryFeedMt
+            | PhysicalKind::HeadGradeGPerT
+            | PhysicalKind::RecoveryFraction => "gold;dry-metric-tonne;physical-quantity",
+            PhysicalKind::RemainingCopperDryFeedMt
+            | PhysicalKind::CopperHeadGradeFraction
+            | PhysicalKind::CopperRecoveryFraction => "copper;dry-metric-tonne;physical-quantity",
+        });
         e.put_str(&self.subject);
         e.put_u16(self.period.year);
         e.put_u8(self.period.first_month);
@@ -65,6 +79,9 @@ impl PhysicalLimit {
             PhysicalKind::RemainingDryFeedMt => 0,
             PhysicalKind::HeadGradeGPerT => 1,
             PhysicalKind::RecoveryFraction => 2,
+            PhysicalKind::RemainingCopperDryFeedMt => 3,
+            PhysicalKind::CopperHeadGradeFraction => 4,
+            PhysicalKind::CopperRecoveryFraction => 5,
         });
         match self.ownership {
             Ownership::Full => e.put_u8(0),
@@ -103,7 +120,7 @@ pub enum CapacityVerdict {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapacityReport {
-    /// Exact point-valued upper ceiling in gold koz on the required production's ownership basis.
+    /// Exact point-valued upper ceiling in gold koz or copper kt on the requirement's ownership basis.
     pub maximum_production: Claim<Quantity>,
     /// Algebraic full-mine grade required at the maximum feed and recovery. Signed bounds are retained:
     /// a nonpositive requirement is already delivered, not a predicted negative physical head grade.
@@ -183,15 +200,10 @@ fn interval(i: Interval, signed: bool) -> Result<()> {
     Ok(())
 }
 
-fn validate(required: &Claim<Quantity>, limits: &CapacityLimits) -> Result<Rat> {
+fn validate(required: &Claim<Quantity>, limits: &CapacityLimits) -> Result<(GuidanceFamily, Rat)> {
     ready(required, AdditivityClass::ExtensiveAdditive)?;
     let q = &required.value;
-    if q.kind != QuantityKind::ProductionKoz {
-        return refuse(
-            RefusalCode::BasisMismatch105,
-            "required quantity must be gold production in koz",
-        );
-    }
+    let family = GuidanceFamily::from_production_kind(q.kind)?;
     if q.subject.trim().is_empty() {
         return refuse(
             RefusalCode::UndeclaredUnitBasisOrTz107,
@@ -221,11 +233,22 @@ fn validate(required: &Claim<Quantity>, limits: &CapacityLimits) -> Result<Rat> 
             "attributable share must be in (0, 1]",
         );
     }
-    for (c, kind) in [
-        (&limits.feed, PhysicalKind::RemainingDryFeedMt),
-        (&limits.grade, PhysicalKind::HeadGradeGPerT),
-        (&limits.recovery, PhysicalKind::RecoveryFraction),
-    ] {
+    let kinds = match family {
+        GuidanceFamily::Gold => [
+            PhysicalKind::RemainingDryFeedMt,
+            PhysicalKind::HeadGradeGPerT,
+            PhysicalKind::RecoveryFraction,
+        ],
+        GuidanceFamily::Copper => [
+            PhysicalKind::RemainingCopperDryFeedMt,
+            PhysicalKind::CopperHeadGradeFraction,
+            PhysicalKind::CopperRecoveryFraction,
+        ],
+    };
+    for (c, kind) in [&limits.feed, &limits.grade, &limits.recovery]
+        .into_iter()
+        .zip(kinds)
+    {
         ready(c, kind.additivity())?;
         if c.value.kind != kind
             || c.value.ownership != Ownership::Full
@@ -233,7 +256,7 @@ fn validate(required: &Claim<Quantity>, limits: &CapacityLimits) -> Result<Rat> 
         {
             return refuse(
                 RefusalCode::BasisMismatch105,
-                "physical limit needs its declared unit, full-mine basis and the same subject",
+                "physical limit needs the same metal, its declared unit, full-mine basis and the same subject",
             );
         }
         if c.value.period != q.period {
@@ -250,13 +273,21 @@ fn validate(required: &Claim<Quantity>, limits: &CapacityLimits) -> Result<Rat> 
             "recovery fraction exceeds one",
         );
     }
+    if family == GuidanceFamily::Copper
+        && exact(limits.grade.value.interval.hi.checked_cmp(ONE))? == Ordering::Greater
+    {
+        return refuse(
+            RefusalCode::OutsidePhysicalDomain109,
+            "copper dry-mass head-grade fraction exceeds one",
+        );
+    }
     if limits.feed.value.interval.hi == ZERO || limits.recovery.value.interval.hi == ZERO {
         return refuse(
             RefusalCode::OutsidePhysicalDomain109,
             "zero maximum feed or recovery makes required grade undefined",
         );
     }
-    Ok(share)
+    Ok((family, share))
 }
 
 fn derived<T>(
@@ -308,15 +339,13 @@ fn derived<T>(
     )
 }
 
-/// Compares signed remaining gold production with the most optimistic stated physical ceiling.
+/// Compares signed remaining gold/copper production with the most optimistic stated physical ceiling.
 /// This is an exclusion bound under supplied assumptions, never a physical feasibility or cost witness.
 pub fn compare_production(
     required_remaining: &Claim<Quantity>,
     limits: &CapacityLimits,
 ) -> Result<CapacityReport> {
-    let share = validate(required_remaining, limits)?;
-    // Mt × g/t gives 10^6 grams; dividing by 10^3 ounces/koz leaves the factor 1000.
-    let grams_per_oz = exact(Rat::new(TROY_OZ_TO_GRAMS_NUM, TROY_OZ_TO_GRAMS_DEN))?;
+    let (family, share) = validate(required_remaining, limits)?;
     let feed_recovery = exact(
         limits
             .feed
@@ -325,19 +354,33 @@ pub fn compare_production(
             .hi
             .checked_mul(limits.recovery.value.interval.hi),
     )?;
-    let full_koz_per_grade = exact(
-        exact(feed_recovery.checked_mul(Rat::from_integer(1000)))?.checked_div(grams_per_oz),
-    )?;
-    let scaled_koz_per_grade = exact(full_koz_per_grade.checked_mul(share))?;
-    let ceiling = exact(scaled_koz_per_grade.checked_mul(limits.grade.value.interval.hi))?;
+    let full_production_per_grade = exact(feed_recovery.checked_mul(Rat::from_integer(1000)))?;
+    let full_production_per_grade = match family {
+        // Mt × g/t gives 10^6 grams; dividing by 10^3 ounces/koz leaves the factor 1000.
+        GuidanceFamily::Gold => exact(
+            full_production_per_grade
+                .checked_div(exact(Rat::new(TROY_OZ_TO_GRAMS_NUM, TROY_OZ_TO_GRAMS_DEN))?),
+        )?,
+        // Mt × copper dry-mass fraction × recovery × 1000 kt/Mt; no ounce conversion.
+        GuidanceFamily::Copper => full_production_per_grade,
+    };
+    let scaled_production_per_grade = exact(full_production_per_grade.checked_mul(share))?;
+    let ceiling = exact(scaled_production_per_grade.checked_mul(limits.grade.value.interval.hi))?;
     let q = &required_remaining.value;
     let maximum = Quantity {
         subject: q.subject.clone(),
         period: q.period,
         ownership: q.ownership,
-        kind: QuantityKind::ProductionKoz,
-        definition:
-            "optimistic ceiling from stated full-mine dry feed, gold head grade and recovery".into(),
+        kind: family.production_kind(),
+        definition: match family {
+            GuidanceFamily::Gold => {
+                "optimistic ceiling from stated full-mine dry feed, gold head grade and recovery"
+            }
+            GuidanceFamily::Copper => {
+                "optimistic ceiling from stated full-mine dry feed, copper dry-mass head grade and recovery"
+            }
+        }
+        .into(),
         interval: Interval {
             lo: ceiling,
             hi: ceiling,
@@ -349,10 +392,10 @@ pub fn compare_production(
         subject: q.subject.clone(),
         period: q.period,
         ownership: Ownership::Full,
-        kind: PhysicalKind::HeadGradeGPerT,
+        kind: limits.grade.value.kind,
         interval: Interval {
-            lo: exact(q.interval.lo.checked_div(scaled_koz_per_grade))?,
-            hi: exact(q.interval.hi.checked_div(scaled_koz_per_grade))?,
+            lo: exact(q.interval.lo.checked_div(scaled_production_per_grade))?,
+            hi: exact(q.interval.hi.checked_div(scaled_production_per_grade))?,
             lo_strict: false,
             hi_strict: false,
         },
@@ -366,7 +409,10 @@ pub fn compare_production(
     };
     Ok(CapacityReport {
         maximum_production: derived(
-            "capacity.gold.maximum_production/1",
+            match family {
+                GuidanceFamily::Gold => "capacity.gold.maximum_production/1",
+                GuidanceFamily::Copper => "capacity.copper.maximum_production/1",
+            },
             maximum.clone(),
             &maximum.canonical_tag(),
             AdditivityClass::ExtensiveAdditive,
@@ -374,7 +420,10 @@ pub fn compare_production(
             limits,
         ),
         optimistic_required_grade: derived(
-            "capacity.gold.optimistic_required_grade/1",
+            match family {
+                GuidanceFamily::Gold => "capacity.gold.optimistic_required_grade/1",
+                GuidanceFamily::Copper => "capacity.copper.optimistic_required_grade/1",
+            },
             needed.clone(),
             &needed.canonical_tag(),
             AdditivityClass::IntensiveWeighted,

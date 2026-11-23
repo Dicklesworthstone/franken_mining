@@ -92,6 +92,7 @@ bytes, physical support, original observations and model assumptions in its outp
 ```bash
 cargo run -p fmine-cli -- plant balance --input tests/plant/closed_inventory.toml
 cargo run -p fmine-cli -- plant reconcile --input tests/plant/measured_inventory.toml
+cargo run -p fmine-cli -- plant reconcile-raw --input tests/plant/raw_balance.toml
 cargo run -p fmine-cli -- plant trajectory --input tests/plant/trajectory_survey.toml --format markdown
 cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.toml
 cargo run -p fmine-cli -- plant transfer --input tests/plant/raw_transfer.toml
@@ -126,6 +127,29 @@ Rejected candidates return a nonzero exit status and no admitted balance Claim w
 observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. The single-input
 inventory modes report closure and reconciliation. Site measurement audits and P754 sign-off require separate
 evidence. `fmine robot-docs` lists the worksheet fields, kg basis, stocktake timing and required covariance pairs.
+
+
+DESIGN (BD-151/155/177): `plant reconcile-raw` fits the original wet-weight, moisture and
+dry-assay likelihood while conserving dry matter, H2O and elemental kilograms. Each stream's
+adjusted coordinates are extensive amounts `D,W,E`; predicted measurements are
+`D+W`, `W/(D+W)` and `E/D`. This avoids treating an observed grade as a conserved quantity
+or replacing the original measurement model with a linear projection.
+
+The worksheet declares one complete conservative mechanical boundary, one non-H/O element,
+2–16 whole-interval streams, exact fixed endpoint stocks, positive raw uncertainties, and every
+pair in the raw-error correlation matrix, including zeros. A bounded Gauss–Newton calculation
+uses analytic derivatives, equality-constrained steps and a physical-domain merit line search.
+Its output retains original bytes and source Claims, exact nominal imbalances, fitted extensive
+quantities, derived grades, the full local covariance, convergence diagnostics and a receipt.
+Exceeding the declared misfit limit retains diagnostics but supplies no admitted Claim.
+
+The synthetic example fits feed `(D,W,Cu)=(80,20,8)` kg and product `(40,10,2)` kg
+against fixed inventory growth `(40,10,6)` kg, with squared standardized raw misfit
+`0.818625`. These are independently constructed arithmetic checks. The fit remains a
+conditional local stationary solution with first-order tangent covariance; it supplies neither
+a global-optimum guarantee nor an exact chi-square interpretation or empirical calibration.
+Missing observations, rank failures and boundary optima requiring inequality multipliers
+refuse. Existing `plant reconcile` and `plant transfer` retain their separate meanings.
 
 `plant production` joins the complete grinding and recovery populations by their shared scenario IDs
 and exact probabilities. A third worksheet declares the common physical support, linked recovery grade
@@ -177,6 +201,25 @@ source paths are relative to the workspace root. The result compares individual 
 not establish a combined portfolio, causal counterfactual, calibrated forecast, project NPV or authority
 to operate the plant.
 
+DESIGN (BD-225/227): compare a declared test with acting immediately, directly from the retained
+operating source bundles:
+
+```bash
+cargo run -p fmine-cli -- decide production \
+  --manifest tests/decisions/production_testwork.toml --format markdown
+```
+
+The manifest supplies explicit test and delay costs, named signals and every state/signal likelihood,
+including zeros. Its `information_basis = "before_action_same_payoffs_explicit_delay_cost"` declaration
+assumes the result arrives before selecting an operating mode and that the original cash margins remain
+valid after the delay. Delay days do not infer lost production or shift operating dates. The existing
+exact decision evaluator reports EVSI, net VOI, posterior choices, realized policy risk and downside
+eligibility while preserving the original physical and commercial Claims. In the synthetic example,
+a perfect test is worth $596 before its $80 test cost and $20 delay cost, leaving $496 net VOI.
+An uninformative test has zero gross information value; missing likelihoods refuse the calculation.
+These are conditional arithmetic results under declared assumptions, not evidence of a real test's
+accuracy, calibrated probabilities or permission to operate.
+
 DESIGN (BD-176/181): the opt-in `fmine.plant-production.v2` worksheet declares available dry ore for
 every shared scenario. It processes the lesser of that supply and the grinding capacity over the scheduled
 exposure, retaining both quantities, unused feed and capacity, used exposure and the binding constraint:
@@ -210,6 +253,27 @@ and physical/commercial support must match, and every original worksheet and exa
 available. The card compares mutually exclusive investments with zero incremental value for do-nothing;
 it values only the declared cash window, with no inferred terminal value, tax, financing or project lifetime.
 
+An investment manifest can also declare testwork before committing to any complete investment path:
+
+```bash
+cargo run -p fmine-cli -- decide investment \
+  --manifest tests/decisions/investment_testwork.toml --format markdown
+```
+
+The same `information_option`, `signal` and complete `likelihood` tables use
+`information_basis = "before_action_same_payoffs_explicit_delay_cost"`. Test and delay costs are
+nonnegative amounts already expressed at the declared valuation time; each is charged once, after
+choosing a whole investment from the signal posterior. A signal cannot select different investments
+in different periods or reveal the true state. Delay days are retained, while unchanged period cash
+and discount factors after that delay are explicit assumptions. No cost is discounted a second time.
+
+In the synthetic two-period example, perfect testwork raises gross expected value from $6,592.40 to
+$10,078.80. Test cost of $100 and declared delay cost of $25 leave net expected value of $9,953.80 and
+net value of information of $3,361.40. Noisy tests retain their realized state-and-signal losses, so a
+downside limit can reject a test even when its expected value leads. Choosing do-nothing after testing
+still pays the test and delay costs. `decide program` refuses information-bearing investment sources:
+combining contingent choices requires a separately declared joint portfolio policy.
+
 Both `decide investment` and `decide production --manifest` accept a downside limit. In an investment
 manifest the floor applies to the final discounted incremental value after capex over all declared periods.
 In an operating comparison it applies to the immediate cash margin. Each screen includes doing nothing.
@@ -233,6 +297,13 @@ Equality with the floor does not count as a breach, and equality with the probab
 JSON and Markdown retain each mode's breach probability, the eligible winners and the expected-value cost
 of the limit. If every action fails, the card reports no eligible winner. These probabilities apply to
 the final money-rounded cash margins under the supplied, uncalibrated scenarios.
+
+For investments, the floor applies to final discounted incremental value **after initial capital** across
+the complete declared period path. Individual-period cash is not screened. The original two-period example
+has a positive 212 USD worst-state value for the original mode; a floor of 212 USD admits it, while a floor
+of 212.0001 USD with zero permitted breach probability leaves no eligible alternative. The limit does not
+establish interim funding sufficiency or bound the amount lost. Existing manifests without a downside
+limit retain their prior declaration identities.
 
 `forecast journal register-plant` registers a selected recovery, throughput, dry-tonnage, contained-metal
 or recovered-metal target through the existing durable forecast journal. It takes the same three source
@@ -375,13 +446,32 @@ outlet observations under a declared transport model:
 ```sh
 cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse.toml --json
 cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_opening.toml --format markdown
+cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_unmeasured_opening.toml --json
+cargo run -p fmine-cli -- plant rtd-infer --input tests/plant/rtd_inverse_mixed_opening.toml --json
 ```
 
 DESIGN: the v1 worksheet fixes initial stocks. The v2 worksheet instead declares every active tank's
 opening elemental stock as a measurement, with its variance and all opening/flow correlations. Opening
 stocks, measured feeds and outlet masses are fitted jointly; absent feeds receive no invented observation
-or prior. Dead stock and transport parameters remain fixed. Both modes keep original source Claims,
+or prior. Dead stock and transport parameters remain fixed. All modes keep original source Claims,
 the full joint covariance, source bytes, adjustment diagnostics and independently replayed conservation.
+
+The v3 worksheet declares `opening_treatment = "unmeasured"` and supplies only the fixed dead-stock row.
+It jointly infers active opening stocks and missing interval feeds when the genuine observations identify
+them. It admits no invented opening quantity, variance or prior. The synthetic v3 example uses a measured
+first feed of **10 kg** and two outlet measurements to recover **2 kg** of opening stock and a **4 kg**
+second feed, with their joint covariance. Unknown coordinates retain null observation-source IDs and a
+separate declaration reference. Unidentifiable histories refuse rather than selecting an arbitrary split.
+
+DESIGN: v4 supports a mixture of measured and unmeasured opening tanks with
+`opening_treatment = "mixed"`. Every active tank has a row. A measured tank supplies its exact masses;
+an unmeasured tank supplies only `tank` and `element_kg = "unmeasured"`. Both kinds must be present,
+and covariance entries name only genuine measurements. The synthetic two-tank example measures the
+second opening stock at **3 kg** and the first feed at **10 kg**. Independent Erlang equations give an
+unmeasured first opening stock of **2 kg** and second feed of **4 kg**, with a full **6×6 joint covariance**.
+Measured stocks retain their source Claims; inferred stocks retain their declaration references without
+becoming observations. No missing stock is replaced by zero or a prior, and non-identifiable histories
+still refuse. Existing v1–v3 input and receipt formats remain available.
 
 The synthetic measured-opening example starts with a **2 kg** stock measurement and reconstructs
 **10 kg and 4 kg** interval feeds. Its declared correlated errors give feed variances of approximately
@@ -745,7 +835,9 @@ source perturbations and signed rounding, and exercise the built executable; the
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.
 It reads MineLib block/destination values, precedence arcs and per-period resource limits, constructs
 a whole-block schedule, improves its periods and destinations, then tries profitable fractional
-destination allocations at fixed mining periods. Every selected schedule is independently checked.
+destination allocations at fixed mining periods. The best split schedule can then improve its mining
+periods while retaining its exact destination fractions, then jointly improve a block's period and
+its allocation between two destinations. Every selected schedule is independently checked.
 A global Lagrangian upper bound is recomputed from the returned prices over **every model
 block**, including negative-value material that can enable a blend.
 
@@ -778,7 +870,9 @@ total **33**, while satisfying a signed blending row exactly. An outside candida
 `block destination period fraction`, with zero-based indices and `%` comments. Fractions never round;
 each mined block must total exactly one, and every predecessor must be completely mined in the same
 or an earlier period. Whole-block candidates can seed further search. A better feasible split candidate
-is retained exactly; the solver does not silently round its destinations.
+retains its exact routing fractions as the search seed; later routing changes require a strict exact
+improvement on the declared share grid. Its original submitted value and feasibility assessment remain
+in the report.
 
 LP guidance can generate additional mining sets before local search and fractional polishing:
 
@@ -799,7 +893,7 @@ uses one worker and tolerance `1e-6`. An iteration-limited point may guide searc
 `[0,1]` share admission; its row residuals or floating objective never certify a schedule. JSON records
 termination, iterations, problem size, generated/searched starts, polished seeds and exact guided value;
 the selected schedule records its origin. Explicit size limits refuse excessive LP expansion before
-allocation. Omitting `--lp-guidance` retains the existing command behavior and output shape.
+allocation. Omitting `--lp-guidance` leaves those additional LP-guided starts disabled.
 
 Fractional allocations can also be generated without an outside candidate:
 
@@ -818,6 +912,43 @@ whole-block search would otherwise discard. Admitted external whole schedules an
 versions can also seed fractional allocations, including mining sets the internal start cannot construct.
 This is a heuristic over bounded pricing directions;
 it does not claim an optimal fractional destination assignment or alter mining periods during polishing.
+
+DESIGN (BD-252/253, plan §15.6): after selecting the best incumbent, a schedule with genuine destination
+splits receives a bounded period search, including when an imported candidate supplied those splits.
+Each accepted one-block move strictly improves exact discounted value while preserving all routing
+fractions and the mined set. It checks predecessor and dependent periods and every signed resource row
+in both the vacated and receiving periods: removing a negative blending credit must not make the old
+period infeasible. A final independent check recomputes feasibility and value before the global bound
+is replayed. The search uses `--rounds` and at most 262,144 block/precedence/resource/period work units;
+exhaustion retains its checked incumbent. `--rounds 0` disables these period moves.
+
+JSON includes `fractional_period_search` for a selected split incumbent, with its seed origin, exact
+before/after values, moves, rounds, trials and budget exhaustion. A strict improvement sets
+`selected.origin` to `fractional_period_search`. The independent synthetic CLI example advances an
+imported split schedule from **22.5 to 25** without changing any route fraction. This neighborhood does
+not change fractions, add or drop blocks, or move several blocks simultaneously; it supplies no new
+optimality claim.
+
+DESIGN (BD-252/253): the subsequent joint search can move one block and change its destination fractions
+in the same step, or improve its routing within the current period. It checks every destination pair
+against exact signed resource inequalities and chooses the best representable fraction on the declared
+decimal grid. Every accepted move preserves the mined set, precedence and feasibility in both affected
+periods. This crosses capacity traps that a fixed-fraction period move cannot cross.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/joint_fractional.pcpsp --prec tests/planning/joint_fractional.prec \
+  --candidate tests/planning/joint_fractional.sol --share-decimals 2 \
+  --list-schedule --format markdown
+```
+
+The synthetic input declares an imported schedule worth **27.5**. Its third block sends 75% to the mill
+in period 1. That allocation cannot fit in period 0; changing the mill allocation to 50% while moving
+the block earlier raises the total to **30**. `--rounds 0` retains the original schedule. The separate
+`joint_period_route_search` report shows the seed, exact values, route/period move counts and work budget.
+At most 262,144 work units and the requested rounds are used; exhaustion retains complete feasible
+improvements. Only one block moves at a time, and its new allocation uses at most two destinations.
+The method supplies no additional optimality claim; the independent full-model bound still applies.
 
 The JSON reports the input hashes, decimal scales, rounding counts, exact rational discounted value,
 resource usage, candidate infeasibility witnesses, bound prices and gap. `--list-schedule` includes
@@ -1140,6 +1271,25 @@ An optional date filters future filings before their bytes are read and reports 
 from numeric agreement. It does not prove that the current mapping or registry existed on that date.
 This selector reads only the mapped HTML population and cannot be combined with `--through` or `--synthetic`.
 
+The same report now includes a separate `source_arithmetic` receipt for extensive quantities: gold and
+copper production, and gold sales. It derives Q2 from H1−Q1, Q3 from 9M−H1 and Q4 from FY−9M, or H1/9M/FY
+from complete Q1-based quarter sums. Exact printed rounding bounds propagate through every operation;
+the result distinguishes a supported draft enclosure, a contradiction and precision the sources do not
+establish. Every operand must match the site, year, unit and ownership basis, with one eligible source per
+required period. Missing periods, unusable values and competing vintages remain explicit. The receipt keeps
+the full source ancestry and publication evidence, and its digest binds both the draft and selected sources.
+An arithmetic result is a derived Claim, not a new issuer disclosure; direct assertions and explicit citation
+verdicts remain visible, and intensive rates are not subtracted or summed.
+
+For gold AISC and gold cost of sales, the receipt can also derive a conditional quarterly rate from
+two cumulative rates and their matching gold sales in the **same filing**. It subtracts the implied
+cumulative costs and divides by incremental sales, preserving the sales variables shared by numerator
+and denominator. All four operands must have the same printed ownership basis; their complete rounding
+enclosures must establish positive incremental sales. Signed rates remain signed. The report shows the
+exact enclosure, four source Claims and the assumption of an unchanged issuer cost definition. It does
+not infer by-product/co-product treatment or turn the derived rate into an issuer disclosure. Missing
+sales, competing vintages, incompatible bases and denominators that could be zero remain explicit.
+
 ### Select affordable capital bundles under shared scenario risk
 
 DESIGN (BD-229, plan section 23): `decide program` constructs and compares static combinations of declared
@@ -1169,6 +1319,31 @@ Spending constrains the budget; it is **not deducted again** from already-net pa
 from summed payoffs within each shared state, including fractional tail-boundary mass, so dependence remains
 in the calculation. Full input/output Claims, source bytes, constraints and adjustment bases bind the receipt,
 including candidates that never win.
+
+#### Build a portfolio directly from operating investment sources
+
+`decide program` also accepts `fmine.capital-investments.v1`. Each candidate names an investment manifest
+and one of its alternatives; the command recomputes every underlying physical and commercial bundle and
+derives the capital cost and state returns. Run the source-based example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/production_investments.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/production_investments.toml --json
+```
+
+The manifest declares a shared scenario interpretation, an additivity basis, the budget and tail-risk policy.
+All source investments must use identical named states, exact weights, valuation dates, period windows and
+discount factors. Candidates on the same physical boundary and circuit must share an exclusion group,
+including when separate manifest paths describe the same operation. Prerequisites and exclusions apply
+before ranking; the source alternative need not have won its standalone comparison.
+
+The `additive_discounted_incremental_cash` convention values the declared cash periods. Initial capex
+constrains the budget and is already deducted in each source return. The engine sums returns within each
+shared state before calculating portfolio risk and regret, retaining every bundle, rejection and tied winner.
+JSON includes the complete source receipts and original bytes, with hashes binding the full calculation.
+Source-local downside screens are refused here: the portfolio's joint risk policy is declared explicitly.
+This comparison does not establish full lifetime NAV, terminal value, financing capacity, interim liquidity
+or project interactions; those require additional source models.
 
 #### Stress capital choices under declared scenario-weight shifts
 
@@ -3173,6 +3348,16 @@ Markdown preserve the selected sources and parent assessment digest, so later ou
 rewrite an earlier diagnostic report. These are descriptive diagnostics, not calibration verdicts, confidence
 intervals or claims of independent observations.
 
+The separate `gaussian_log_scores` projection reports **negative log predictive density** for Gaussian
+members, in nats relative to the frozen target unit. Lower scores are better; a negative score is valid for
+a density and is never clamped to zero. The projection retains every selected source, unresolved Gaussian
+and unsupported distribution. Pending outcomes receive completion bounds from the prospectively declared
+domain; an absent domain has an unbounded upper loss. Arithmetic failure stays explicit and prevents a
+partial average. These are floating-point completion bounds, not certified outward enclosures. The
+GLS1/v1 digest binds the saved assessment without changing earlier journal or assessment identities.
+JSON and saved-journal Markdown expose both individual losses and the observed and whole-population
+summaries. Different target units must not be compared directly, and these scores do not imply calibration.
+
 DESIGN (BD-048/049): the sibling `interval_coverage` projection reports central **50%, 80% and 95%** coverage.
 Gaussian and empirical distributions supply their central quantiles; explicit intervals and quantile tables
 contribute only exactly declared levels. Each level shows its supported population, unresolved and unsupported
@@ -3317,6 +3502,7 @@ Candidate generation and record scoring share these explicit target meanings:
 | `au_prod_100_koz` | `koz` | `fy_minus_9m`: original FY gold production minus original nine-month production, both on the 100% basis |
 | `cu_prod_100_kt` | `kt` | `fy_minus_9m`: original FY copper production minus original nine-month production, both on the 100% basis |
 | `aisc_usd_per_oz` | `usd_per_oz` | `q4_qtd`: original Q4 AISC per ounce sold |
+| `tcc_usd_per_oz` | `usd_per_oz` | `q4_qtd`: original Q4 total cash cost per ounce sold |
 | `c1_usd_per_lb` | `usd_per_lb` | `q4_qtd`: original Q4 C1 per copper pound sold |
 | `aisc_usd_per_lb` | `usd_per_lb` | `q4_qtd`: original Q4 AISC per copper pound sold |
 
@@ -3324,6 +3510,12 @@ Copper forecasts require rules that explicitly declare these copper targets, the
 comparators. The sealed `forecasts/fy2026/rules.toml` remains the gold record. This support does not change
 those rules or issue copper forecasts; production quantities are additive, while cost rates retain their
 printed ownership evidence and are neither subtracted nor ownership-scaled.
+
+DESIGN (BD-059/067/076): separate rules may also declare gold total cash cost with
+`field = "tcc_usd_per_oz"`. The candidate, original-release outcome and persistence comparator all use
+that printed TCC field. The issuer-guidance comparator requires its own agreed TCC assertion with
+`;tcc=issuer-reported-per-sold-oz`; AISC cannot stand in for it. TCC supports signed and zero costs under
+the same explicit model and ownership checks. Existing frozen rules and record bytes are unchanged.
 
 The `pooled-quarterly-ratio-empirical-v1` model uses the historical pool fixed by each persistence rule. For
 each target it multiplies a site's latest Q3 observation by the pool's lower, median and upper inverse-ECDF
@@ -3368,7 +3560,8 @@ DESIGN (BD-067): separate rules can declare `outcome = "quarter_qtd"` on every t
 quarter immediately after their common persistence point. A `2026Q4` point therefore targets `2027Q1`.
 The candidate builder, robot-CLI record scorer and `xtask forecast-record-score` support gold production
 in 100%-basis koz,
-copper production in 100%-basis kt, gold AISC per ounce sold, and copper C1 or AISC per pound sold.
+copper production in 100%-basis kt, gold AISC or total cash cost per ounce sold, and copper C1 or AISC
+per pound sold.
 Quarterly production resolves directly to the original scored-quarter QTD cell; it is not an annual
 or year-to-date subtraction. The sealed FY2026 rules retain their existing meanings and bytes.
 
@@ -3386,6 +3579,34 @@ exact probabilities, signed cost handling and uncalibrated interpretation are un
 uses original QTD outcomes and exact quarterly guidance, including Q4-to-Q1 year rollover. An unavailable
 optional persistence-point workbook leaves the model result and any usable guidance comparison intact,
 with the comparator's source error reported explicitly.
+
+
+#### Quarterly capital expenditure forecasts
+
+DESIGN (BD-059/067/076): separate quarterly rules can also freeze original reported capital
+expenditures in USD millions. Both `quarter_qtd` and explicitly declared `quarter_qtd_nowcast`
+records support these exact scopes:
+
+| Rules `field` | Unit | Original Mine Stats source | Required guidance-basis suffix |
+|---|---|---|---|
+| `capex_usd_m` | `usd_m` | Total capital expenditures | `;capex=issuer-reported-total` |
+| `capex_sustaining_usd_m` | `usd_m` | Capital expenditures / Minesite sustaining | `;capex=issuer-reported-minesite-sustaining` |
+| `capex_projects_usd_m` | `usd_m` | Capital expenditures / Projects | `;capex=issuer-reported-projects` |
+
+Use these fields with the existing `forecast record build`, external timestamp and
+`forecast record score` commands. Each outcome is the original scored-quarter three-month cell.
+The three capital scopes remain separate through candidate generation, frozen scoring, persistence
+and quarterly issuer-guidance comparison. Total capex is never reconstructed from components;
+annual or cumulative amounts and another capital scope never substitute. No ownership scaling is applied.
+
+The common quarterly persistence point may be a printed negative or zero number. Historical ratio
+training still requires positive adjacent quarters and retains missing/nonpositive slots, so it
+never bridges a missing quarter. Candidate histories must retain the same printed ownership basis.
+A changed basis blocks the shared persistence pool; an outcome or guidance assertion whose basis
+differs from the usable frozen point remains unresolved. Status-derived zeros, missing points,
+ambiguous cells and unsupported `q4_qtd`/`fy_minus_9m` capital targets are refused or retained as
+unavailable. These are uncalibrated declared-model forecasts with the existing information-cut,
+source-hash and timestamp requirements.
 
 ### Compute the frozen issuer-guidance baseline
 
@@ -3894,12 +4115,48 @@ both source admissions, exact numerator/denominator strings and a separate compa
 
 DESIGN (BD-048/049): add `--score crps` to compare the complete empirical or weighted-empirical predictive
 distributions. This retains their exact scenario probabilities and can distinguish forecasts with identical
-central interval endpoints. Unsupported distribution types refuse rather than acquire an inferred finite
-approximation. For unresolved pairs, exact completion bounds follow from a sweep over the combined support
+central interval endpoints. For unresolved pairs, exact completion bounds follow from a sweep over the combined support
 atoms: the CRPS difference is linear between atoms and constant beyond both supports. The complete frozen
 subject population and identical-publication matching rules still apply. JSON retains the frozen forecasts
 and exact weights under a separate CRPS comparison schema and digest. The default interval comparison and
 its existing identities are unchanged; neither mode supplies a significance or calibration claim.
+
+The same `--score crps` option also compares two Gaussian forecast populations directly, including their
+declared means and standard deviations. Gaussian results use a separate schema and explicitly approximate
+numerical values. Their missing-outcome completion range comes from the two tail limits and the possible
+crossing of the Gaussian CDFs; it needs no invented finite sample or outcome range. For example, two forecasts
+with the same mean and standard deviations 20 and 10 have a left-minus-right CRPS difference of approximately
+2.33695 at that mean, while an unresolved outcome allows differences from approximately -5.64190 to 2.33695.
+These are conditional analytic extrema evaluated numerically, not certified numerical enclosures or confidence
+intervals. Every frozen subject still contributes to the population checks, including unmatched subjects.
+Mixed Gaussian/finite populations, intervals and quantile-only forecasts remain unsupported for paired CRPS.
+Replaying a comparison preserves both saved assessments and never appends to the forecast journal.
+
+### Compare saved event forecasts
+
+DESIGN (BD-048): saved supplied-outcome cohorts with prospectively frozen target metadata can also be
+compared using the proper binary-event Brier score:
+
+```bash
+cargo run -p fmine-cli -- forecast journal compare \
+  --journal runs/forecast-demo/history \
+  --left LEFT_ASSESSMENT_DIGEST --right RIGHT_ASSESSMENT_DIGEST \
+  --targets supplied --score brier --format markdown
+```
+
+Both complete cohorts must contain Bernoulli forecasts. Target identity, outcome deadlines, assessment
+cuts and full outcome citations must agree before a pair receives an observed score. The difference is
+left loss minus right loss, calculated exactly from the original frozen probabilities; zero and one
+are valid probabilities. Unresolved events retain their exact possible loss differences at outcomes
+zero and one. Whole-population bounds include those events, so a favorable score on the observed subset
+cannot silently stand in for the complete cohort. Missing forecasts, incompatible outcome selections
+or arithmetic capacity failures make affected aggregates unavailable.
+
+For example, probabilities 0.75 and 0.25 differ in Brier loss by -0.5 when the event occurs and +0.5
+when it does not. Before resolution, their difference is bounded by [-0.5, +0.5]. These are arithmetic
+completion bounds under the supplied target definitions, not confidence intervals or a calibration verdict.
+The command is read-only and preserves existing interval/CRPS receipts and journal history. Brier requires
+explicit `--targets supplied`; public-target comparisons retain their existing supported scores.
 
 ### Inspect an explicit forecast correction
 
@@ -4220,23 +4477,56 @@ entries in the local, ignored `registries/transcriptions/<issuer>.toml`. Use the
 an annual period such as `2026FY`, and an explicit ownership basis (`100%` or `attributable:n/d`). Supported
 quantity suffixes after `guidance_<site_key_with_underscores>_` are:
 
-| Metal | Production suffix and unit | AISC suffix and unit | Additional AISC basis |
+| Metal / selected metric | Production suffix and unit | Cost suffix and unit | Additional cost basis |
 |---|---|---|---|
 | Gold | `production_koz`, `koz` | `aisc_usd_per_oz`, `usd_per_oz` | `;aisc=issuer-reported-per-sold-oz` |
+| Gold / `--metric tcc` | `production_koz`, `koz` | `tcc_usd_per_oz`, `usd_per_oz` | `;tcc=issuer-reported-per-sold-oz` |
 | Copper | `production_kt`, `kt` | `aisc_usd_per_lb`, `usd_per_lb` | `;aisc=issuer-reported-per-sold-lb` |
+| Copper / `--metric c1` | `production_kt`, `kt` | `c1_usd_per_lb`, `usd_per_lb` | `;c1=issuer-reported-per-sold-lb` |
 
 Both guidance rows must come from the same latest eligible registered document and identify one metal family.
 Missing, conflicting or mixed-family evidence refuses; no real guidance values are bundled in the code.
 For a copper site with this evidence, use the same command with its site key, such as `--site lumwana`.
 
-The result reports exact remaining production and an AISC spending/rate frontier. AISC uses summed costs and
-sold metal; it never averages quarterly rates or treats production as sales. Copper production stays in kt;
+DESIGN (BD-342): `--metric aisc` is the default. Select `--metric c1` to calculate copper C1 completion
+from the registered C1 guidance and the Mine Stats C1 row. For example, with the corresponding evidence:
+
+```bash
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site lumwana --through 2026Q3 --as-of 2026-11-20 --metric c1 --format markdown
+```
+
+C1 and AISC remain distinct typed definitions despite sharing USD per sold lb. A missing or disputed C1
+assertion refuses; AISC cannot replace it. Historical windows likewise require original C1 observations.
+The C1 JSON report uses `fmine.guidance.completion.v2`, `cost_metric: "c1"`, and C1-labelled requirements,
+frontiers and historical witnesses. Existing AISC reports retain their v1 schema and interpretation.
+Signed C1 net credits use the same exact endpoint arithmetic and separate sales assumption as AISC.
+
+Select `--metric tcc` for gold total-cash-cost completion, using the corresponding registered guidance
+and original-quarter Mine Stats TCC observations:
+
+```bash
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q3 --as-of 2026-11-22 --metric tcc --format markdown
+```
+
+The command requires the evidence described in the table above. TCC and AISC retain separate definitions,
+source rows, Claim identities and spending/rate fields even though both are expressed per sold ounce.
+Missing TCC guidance or YTD actuals refuse; missing historical TCC remains an explicit excluded window.
+An AISC observation cannot fill either gap. Signed TCC net credits retain their exact bounds and the
+same separately declared sales continuation. TCC reports use `fmine.guidance.completion.v3` with
+`cost_metric: "tcc"`; existing AISC and C1 report versions remain unchanged. The technical scenario
+comparison still concerns production only and does not establish joint production/TCC feasibility.
+
+The result reports exact remaining production and a spending/rate frontier for the selected cost metric.
+Cost rates use summed costs and sold metal; they never average quarterly rates or treat production as sales. Copper production stays in kt;
 sales use million lb and rates use USD per sold lb. Explicitly labelled copper sales in kt are converted by
 the declared exact rule `million_lb = kt × 100000000 / 45359237`, retaining the original source Claim and
 the complete displayed rounding interval. The adapter accepts the registered site-sales labels only and
 refuses competing sales rows. Consequently USD/lb times million lb gives USD millions directly; gold's
 USD/oz times koz retains its separate division by 1000. Remaining sales explicitly assume
 the preceding year's sales for the same remaining months, with source Claims and rounding intervals retained.
+Net AISC may be negative, zero or cross zero within its rounding interval. The exact spending bounds consider
+every sales/rate endpoint combination, including by-product credits. Physical production remains nonnegative,
+and every sales interval must stay strictly above zero. Signed costs keep their declared metric definition.
 The report also tests completion jointly against every usable contiguous historical quarter window of the
 remaining duration, including windows crossing a year boundary. Production, sales and AISC come from each
 quarter's own original release before the guidance year; later comparatives cannot replace a missing original.
@@ -4246,7 +4536,7 @@ replay; an exclusion includes checked certificates and applies only to those his
 declared sales assumption. Missing or incompatible windows have explicit reasons, and no usable history stays
 **T3 for the historical comparison**. Solver limits remain indeterminate.
 
-A separate **T2 technical production comparison for gold** binds the remaining requirement to a registered
+A separate **T2 technical production comparison for gold or copper** binds the remaining requirement to a registered
 `technical_report` PDF and three agreed, page-cited inputs. Use these quantity keys and units, with site
 hyphens written as underscores:
 
@@ -4254,10 +4544,14 @@ hyphens written as underscores:
 |---|---|---|
 | `technical_<site>_remaining_dry_feed_mt` | `dry_mt` | Million dry metric tonnes over the remaining months |
 | `technical_<site>_head_grade_g_per_t` | `g_per_dry_t` | Gold head grade per dry metric tonne |
-| `technical_<site>_recovery_percent` | `percent` | Gold recovery in explicit percent units |
+| `technical_<site>_head_grade_percent` | `percent_dry_mass` | Copper mass as a percentage of dry feed; use instead of the gold grade row |
+| `technical_<site>_recovery_percent` | `percent` | Recovery of the selected metal in explicit percent units |
 
 All three rows must come from the same latest eligible document and declare the same basis:
 `100%;scenario=declared_upper_bound`, `100%;scenario=plan`, or `100%;scenario=nameplate`.
+For copper, append `;metal=copper` to every row's basis. Copper grade and recovery percentages divide by
+100 explicitly; dry Mt times both fractions times 1000 gives copper kt. The gold calculation retains
+the statutory troy-ounce conversion and produces koz. Physical factors from different metals cannot mix.
 Their period must be the exact remaining support: `YYYYQ2-Q4` after Q1, `YYYYH2` after Q2, or `YYYYQ4`
 after Q3. Full-mine inputs are converted exactly; the guidance ownership share scales production only.
 No annual rate, average grade or life-of-mine figure is silently converted into a remaining-period bound.
@@ -4267,9 +4561,11 @@ citations. Plan/nameplate comparisons remain conditional, and no T2 result suppl
 witness. Missing, altered, disputed or inapplicable optional technical evidence gives a named **T3 technical
 result** while preserving the arithmetic requirements and historical comparison. Newer incomplete inputs
 cannot silently fall back to an older complete report. The synthetic command exercises the positive T2 path.
-Copper retains an explicit T3 technical result until a copper-specific capacity model is supplied; its
-arithmetic requirements and T1 historical comparison remain available. Explicit `--capacity-document`
-requests also require gold. C1 completion is outside this AISC slice.
+Copper reports its ceiling in kt and its optimistic required grade as a fraction of dry feed mass.
+DESIGN known answer: 10 Mt at 0.5% copper and 90% recovery yields a 45 kt full-mine ceiling, or 36 kt at
+an explicit 80% ownership share. These invented values illustrate the conversion; they are not issuer data.
+The same production-only technical comparison applies alongside either selected copper cost definition;
+it does not establish joint production/C1 feasibility or a probability of meeting guidance.
 
 The report includes the guidance vintage, as-of selection and all source hashes. Each workbook uses its cited
 publication date, with the registered retrieval upper date as a fallback where publication is unstated. Later
@@ -4301,15 +4597,18 @@ calendar-month period (for example `2026-07/2026-12`):
 | `remaining_dry_feed_mt` | `dry_mt` | Maximum remaining dry feed, in million metric tonnes |
 | `head_grade_g_per_t` | `g_per_dry_t` | Upper gold head grade, grams per dry metric tonne |
 | `recovery_fraction` | `fraction` | Upper gold recovery, greater than zero and at most one |
+| `head_grade_percent` | `percent_dry_mass` | Upper copper dry-mass grade; replaces the gold grade row |
+| `recovery_percent` | `percent` | Upper copper recovery; replaces the gold recovery row |
 
-Each row requires basis `100%;bound=explicit-upper;metal=gold`, a single explicitly stated upper value,
+Gold rows require basis `100%;bound=explicit-upper;metal=gold`; copper rows require
+`100%;bound=explicit-upper;metal=copper`. Each row has a single explicitly stated upper value,
 and a printed locator label identifying a maximum, upper limit or at-most bound. Ordinary forecasts,
-average grades, percent values, wet tonnes and annual nameplate values are not silently converted into
+average grades, undeclared percentages, wet tonnes and annual nameplate values are not silently converted into
 remaining-period physical limits. Missing, conflicting, incompatible or late evidence refuses the requested
 capacity comparison.
 
-The **T2 production-ceiling comparison** multiplies the explicit full-mine limits, uses the exact statutory
-troy-ounce conversion and applies the guidance's stated attributable share when needed. It reports the
+The **T2 production-ceiling comparison** multiplies the explicit full-mine limits, uses the exact gold
+troy-ounce or copper Mt-to-kt conversion and applies the guidance's stated attributable share when needed. It reports the
 optimistic maximum production and required head-grade interval, with canonical Claims and citations.
 A requirement above that optimistic ceiling is excluded by the stated limits. **Not excluded** establishes
 neither simultaneous attainability of the maxima nor production-cost feasibility. Already delivered

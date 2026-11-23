@@ -298,3 +298,404 @@ fn invalid_starts_and_unrepresentable_discounted_numerators_refuse() {
             .contains("overflow")
     );
 }
+
+#[test]
+fn exact_split_period_move_advances_value_without_rounding_its_routes() {
+    let m = model(&[[0, 10]], &[vec![[0, 2]]], &[vec![1, 1]], 2);
+    let start = candidate::parse_solution("0 0 1 0.5\n0 1 1 0.5\n", &m, 3).unwrap();
+    let p = reschedule(&m, &start, &[10, 9], 8).unwrap();
+    assert_eq!((p.search.before, p.search.after), (45_000, 50_000));
+    assert_eq!(p.search.moves, 1);
+    assert_eq!(p.search.pair_moves, 0);
+    assert_eq!(p.checked.used, [vec![1_000, 0]]);
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n"
+    );
+    assert_eq!(reschedule(&m, &start, &[10, 9], 8).unwrap(), p);
+    assert_eq!(reschedule(&m, &start, &[10, 9], 0).unwrap().schedule, start);
+    assert_eq!(reschedule(&m, &start, &[0, 0], 8).unwrap().schedule, start);
+    assert_eq!(reschedule(&m, &start, &[1, 1], 8).unwrap().search.moves, 0);
+    // A self requirement moves on both sides of its own arc.
+    let mut self_arc = m.clone();
+    self_arc.requires[0] = vec![0];
+    assert_eq!(
+        reschedule(&self_arc, &start, &[10, 9], 8).unwrap().schedule,
+        p.schedule
+    );
+}
+
+#[test]
+fn paired_split_periods_cross_opposing_blend_limits_at_the_enumerated_optimum() {
+    let m = model(
+        &[[0, 12], [0, 8]],
+        &[vec![[0, 2], [0, -2]], vec![[0, -2], [0, 2]]],
+        &[vec![0, 0], vec![0, 0]],
+        2,
+    );
+    let start =
+        candidate::parse_solution("0 0 1 0.5\n0 1 1 0.5\n1 0 1 0.5\n1 1 1 0.5\n", &m, 3).unwrap();
+    // Independent enumeration on the two declared half-share streams: both
+    // sides of the blend impose opposite zero limits. Separate moves cannot
+    // leave either source or target balanced, although their joint move can.
+    let factors = [10_i128, 5];
+    let mut optimum = 0;
+    let mut feasible = 0;
+    for a in 0..2 {
+        for b in 0..2 {
+            let mut use_by_period = [0_i128; 2];
+            use_by_period[a] += 1_000;
+            use_by_period[b] -= 1_000;
+            if use_by_period.iter().any(|&use_| use_ > 0 || -use_ > 0) {
+                continue;
+            }
+            feasible += 1;
+            optimum = optimum.max(6_000 * factors[a] + 4_000 * factors[b]);
+        }
+    }
+    assert_eq!((feasible, optimum), (2, 100_000));
+    let p = reschedule(&m, &start, &[10, 5], 8).unwrap();
+    assert_eq!((p.search.before, p.search.after), (50_000, optimum));
+    assert_eq!((p.search.moves, p.search.pair_moves), (1, 1));
+    assert_eq!(p.checked.used, [vec![0, 0], vec![0, 0]]);
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n1 0 0 0.5\n1 1 0 0.5\n"
+    );
+    assert_eq!(reschedule(&m, &start, &[10, 5], 8).unwrap(), p);
+    assert_eq!(reschedule(&m, &start, &[10, 5], 0).unwrap().schedule, start);
+}
+
+#[test]
+fn signed_credit_cannot_leave_a_blend_it_supports_but_can_delay_when_spare() {
+    let mut m = model(
+        &[[-4, -2], [12, 12]],
+        &[vec![[0, -4], [2, 2]]],
+        &[vec![0, 0]],
+        2,
+    );
+    let start = candidate::parse_solution("0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n", &m, 3).unwrap();
+    let p = reschedule(&m, &start, &[2, 1], 8).unwrap();
+    assert_eq!(p.search.before, 18_000);
+    assert_eq!(p.schedule, start); // Removing -2 leaves +2 above the old zero cap.
+    assert_eq!(p.search.moves, 0);
+    m.uses[0][2] = 0;
+    m.uses[0][3] = 0;
+    let p = reschedule(&m, &start, &[2, 1], 8).unwrap();
+    assert_eq!((p.search.before, p.search.after), (18_000, 21_000));
+    assert_eq!(p.checked.used, [vec![0, -2_000]]);
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 1 0.5\n0 1 1 0.5\n1 0 0 1\n"
+    );
+}
+
+#[test]
+fn joint_precedence_moves_preserve_split_routes_and_receiving_capacity() {
+    let mut m = model(&[[10, 10], [-4, -4]], &[], &[], 3);
+    m.requires[0] = vec![1];
+    let start = candidate::parse_solution("0 0 1 0.5\n0 1 1 0.5\n1 0 1 1\n", &m, 3).unwrap();
+    let p = reschedule(&m, &start, &[3, 2, 1], 8).unwrap();
+    // Neither block can move profitably alone. Their exact joint value can
+    // advance without separating the profitable block from its support.
+    assert_eq!((p.search.before, p.search.after), (12_000, 18_000));
+    assert_eq!((p.search.moves, p.search.pair_moves), (1, 1));
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n"
+    );
+    m.requires[1] = vec![0];
+    assert_eq!(
+        reschedule(&m, &start, &[3, 2, 1], 8).unwrap().schedule,
+        p.schedule
+    );
+
+    let m = model(&[[0, 10]], &[vec![[0, 2]]], &[vec![0, 1]], 2);
+    let start = candidate::parse_solution("0 0 1 0.5\n0 1 1 0.5\n", &m, 3).unwrap();
+    assert_eq!(reschedule(&m, &start, &[2, 1], 8).unwrap().schedule, start);
+}
+
+#[test]
+fn paired_cycles_respect_external_predecessors_and_dependants() {
+    let mut m = model(
+        &[[0, 0], [0, 10], [0, 8], [0, 0]],
+        &[
+            vec![[1, 1], [0, 0], [0, 0], [0, 0]],
+            vec![[0, 0], [0, 0], [0, 0], [1, 1]],
+        ],
+        &[vec![0, 1, 0], vec![0, 1, 0]],
+        3,
+    );
+    m.requires[1] = vec![0, 2];
+    m.requires[2] = vec![1];
+    m.requires[3] = vec![2];
+    let start = candidate::parse_solution(
+        "0 0 1 1\n1 0 1 0.5\n1 1 1 0.5\n2 0 1 0.5\n2 1 1 0.5\n3 0 1 1\n",
+        &m,
+        3,
+    )
+    .unwrap();
+    // Blocks 0 and 3 are pinned by separate period-specific capacity rows.
+    // The positive cycle cannot advance past 0 even when moved atomically.
+    let p = reschedule(&m, &start, &[3, 2, 1], 8).unwrap();
+    assert_eq!(p.schedule, start);
+    assert_eq!(p.search.moves, 0);
+    // The same pair with negative values cannot defer past dependant 3.
+    m.values[3] = -10;
+    m.values[5] = -8;
+    let p = reschedule(&m, &start, &[3, 2, 1], 8).unwrap();
+    assert_eq!(p.schedule, start);
+    assert_eq!(p.search.moves, 0);
+}
+
+#[test]
+fn pair_removal_checks_signed_credits_in_both_original_periods() {
+    let m = model(
+        &[[0, 10], [0, 8], [0, 0], [0, 0]],
+        &[
+            vec![[0, 2], [0, -2], [-1, -1], [1, 1]],
+            vec![[0, 0], [0, 0], [1, 1], [0, 0]],
+            vec![[0, 0], [0, 0], [0, 0], [1, 1]],
+        ],
+        &[vec![0, 0, 0], vec![0, 1, 0], vec![0, 0, 1]],
+        3,
+    );
+    let start = candidate::parse_solution(
+        "0 0 1 0.5\n0 1 1 0.5\n1 0 2 0.5\n1 1 2 0.5\n2 0 1 1\n3 0 2 1\n",
+        &m,
+        3,
+    )
+    .unwrap();
+    // The profitable pair 0+1 balances at its destination, but its removed
+    // negative credit would leave block 3 above the old period's zero cap.
+    // Its existing partners 2 and 3 cannot move because their own rows pin them.
+    let p = reschedule(&m, &start, &[3, 2, 1], 8).unwrap();
+    assert_eq!(p.schedule, start);
+    assert_eq!(p.search.pair_moves, 0);
+    assert_eq!(p.checked.used[0], [0, 0, 0]);
+}
+
+#[test]
+fn period_search_bounds_work_and_retains_every_fully_checked_improvement() {
+    let m = model(&[[0, 10]], &[vec![[0, 2]]], &[vec![1, 1, 1]], 3);
+    let start = candidate::parse_solution("0 0 2 0.5\n0 1 2 0.5\n", &m, 3).unwrap();
+    let stopped = reschedule_bounded(&m, &start, &[3, 2, 1], 8, 0).unwrap();
+    assert_eq!(stopped.schedule, start);
+    assert!(stopped.search.work_exhausted);
+    assert_eq!((stopped.search.work, stopped.search.trials), (0, 0));
+    // One block scan and one target (including its resource row) fit. The
+    // complete feasible move is retained when the next trial meets the cap.
+    let partial = reschedule_bounded(&m, &start, &[3, 2, 1], 8, 3).unwrap();
+    assert_eq!((partial.search.work, partial.search.trials), (3, 1));
+    assert!(partial.search.work_exhausted && partial.checked.feasible());
+    assert_eq!(
+        (partial.search.before, partial.search.after),
+        (5_000, 15_000)
+    );
+    assert_eq!(partial.search.moves, 1);
+}
+
+#[test]
+fn pair_budget_exhaustion_never_applies_half_of_a_blend() {
+    let m = model(
+        &[[0, 12], [0, 8]],
+        &[vec![[0, 2], [0, -2]], vec![[0, -2], [0, 2]]],
+        &[vec![0, 0, 0], vec![0, 0, 0]],
+        3,
+    );
+    let start =
+        candidate::parse_solution("0 0 2 0.5\n0 1 2 0.5\n1 0 2 0.5\n1 1 2 0.5\n", &m, 3).unwrap();
+    for budget in 0..=32 {
+        let p = reschedule_bounded(&m, &start, &[3, 2, 1], 8, budget).unwrap();
+        let period = p.schedule.assignments()[0].period;
+        assert!(p.schedule.assignments().iter().all(|a| a.period == period));
+        assert!(p.checked.feasible() && p.search.after >= p.search.before);
+        assert!(p.search.work <= budget && p.search.pair_moves <= 1);
+    }
+    // Four single-block period trials, the pair scan and its first target
+    // fit; stopping before the second target retains the fully checked pair.
+    let p = reschedule_bounded(&m, &start, &[3, 2, 1], 8, 22).unwrap();
+    assert_eq!((p.search.work, p.search.trials), (22, 5));
+    assert!(p.search.work_exhausted);
+    assert_eq!((p.search.moves, p.search.pair_moves), (1, 1));
+    assert_eq!((p.search.before, p.search.after), (10_000, 30_000));
+}
+
+#[test]
+fn period_pair_scan_is_bounded_in_mined_id_order() {
+    let count = PERIOD_PAIR_SCAN + 2;
+    let mut values = vec![[0, 0]; count];
+    values[0] = [0, 12];
+    values[count - 1] = [0, 8];
+    let mut row = vec![[0, 0]; count];
+    row[0] = [0, 2];
+    row[count - 1] = [0, -2];
+    let opposite = row.iter().map(|v| [-v[0], -v[1]]).collect();
+    let m = model(&values, &[row, opposite], &[vec![0, 0], vec![0, 0]], 2);
+    let shares = (0..count)
+        .flat_map(|b| {
+            (0..2).map(move |d| candidate::DestinationShare {
+                block: b as u32,
+                destination: d,
+                period: 1,
+                fraction: 5,
+            })
+        })
+        .collect();
+    let start = candidate::SplitSchedule::new(&m, shares, 1).unwrap();
+    let p = reschedule(&m, &start, &[2, 1], 8).unwrap();
+    assert_eq!(p.schedule, start);
+    assert_eq!(p.search.pair_moves, 0);
+    assert!(!p.search.work_exhausted && p.search.work <= PERIOD_WORK);
+}
+
+#[test]
+fn fixed_fraction_period_search_matches_independent_small_model_constraints() {
+    let mut cases = 0;
+    let mut improvements = 0;
+    for seed in 0..48_i64 {
+        let values: Vec<_> = (0..3)
+            .map(|b| [(seed + b * 3) % 11 - 5, (seed * 3 + b * 5) % 17 - 6])
+            .collect();
+        let uses: Vec<Vec<_>> = (0..2)
+            .map(|r| {
+                (0..3)
+                    .map(|b| [(seed + b + r) % 5 - 2, (seed * 3 + b * 2 + r) % 7 - 3])
+                    .collect()
+            })
+            .collect();
+        let caps = vec![vec![1, 1, 2], vec![0, 1, 1]];
+        let mut m = model(&values, &uses, &caps, 3);
+        if seed % 3 == 0 {
+            m.requires[2] = vec![0];
+        }
+        let fractions = [1 + seed % 9, 1 + (seed * 3) % 9, 1 + (seed * 7) % 9];
+        let factors = [10_i64, 7, 4];
+        // Independent arithmetic on the declared values and signed uses. No
+        // candidate checker or search helper contributes to this oracle.
+        let oracle = |periods: &[usize]| -> Option<i128> {
+            let mut resource = vec![vec![0_i64; 3]; 2];
+            let mut value = 0_i128;
+            for b in 0..3 {
+                if m.requires[b]
+                    .iter()
+                    .any(|&q| periods[q as usize] > periods[b])
+                {
+                    return None;
+                }
+                let shares = [10 - fractions[b], fractions[b]];
+                for (d, &part) in shares.iter().enumerate() {
+                    value += i128::from(values[b][d] * part * factors[periods[b]]);
+                    for r in 0..2 {
+                        resource[r][periods[b]] += uses[r][b][d] * part;
+                    }
+                }
+            }
+            if (0..2).any(|r| (0..3).any(|t| resource[r][t] > caps[r][t] * 10)) {
+                None
+            } else {
+                Some(value)
+            }
+        };
+        let feasible: Vec<_> = (0..27)
+            .filter_map(|i| {
+                let periods = vec![i % 3, (i / 3) % 3, i / 9];
+                oracle(&periods).map(|v| (periods, v))
+            })
+            .collect();
+        if feasible.is_empty() {
+            continue;
+        }
+        let (periods, before) = &feasible[seed as usize % feasible.len()];
+        let assignments = (0..3)
+            .flat_map(|b| {
+                (0..2).map(move |d| candidate::DestinationShare {
+                    block: b as u32,
+                    destination: d as u32,
+                    period: periods[b] as u32,
+                    fraction: if d == 0 {
+                        10 - fractions[b]
+                    } else {
+                        fractions[b]
+                    },
+                })
+            })
+            .collect();
+        let start = candidate::SplitSchedule::new(&m, assignments, 1).unwrap();
+        let p = reschedule(&m, &start, &factors, 100).unwrap();
+        let mut after_periods = vec![0; 3];
+        for a in p.schedule.assignments() {
+            after_periods[a.block as usize] = a.period as usize;
+        }
+        assert_eq!(p.search.before, *before);
+        assert_eq!(oracle(&after_periods), Some(p.search.after));
+        assert!(
+            p.search.after >= *before
+                && p.search.after <= feasible.iter().map(|(_, v)| *v).max().unwrap()
+        );
+        assert!(p.checked.feasible() && !p.search.work_exhausted && p.search.work <= PERIOD_WORK);
+        let routes = |s: &candidate::SplitSchedule| {
+            s.assignments()
+                .iter()
+                .map(|a| (a.block, a.destination, a.fraction))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(routes(&p.schedule), routes(&start));
+        for b in 0..3 {
+            for t in 0..3 {
+                let mut neighbor = after_periods.clone();
+                neighbor[b] = t;
+                assert!(
+                    oracle(&neighbor).is_none_or(|v| v <= p.search.after),
+                    "seed {seed}"
+                );
+                for c in b + 1..3 {
+                    neighbor[c] = t;
+                    assert!(
+                        oracle(&neighbor).is_none_or(|v| v <= p.search.after),
+                        "pair {b}/{c}, seed {seed}"
+                    );
+                    neighbor[c] = after_periods[c];
+                }
+            }
+        }
+        improvements += usize::from(p.search.after > *before);
+        cases += 1;
+    }
+    assert!(
+        cases >= 24 && improvements >= 8,
+        "{cases} cases, {improvements} improvements"
+    );
+}
+
+#[test]
+fn fixed_fraction_period_search_refuses_bad_inputs_without_normalizing_them() {
+    let m = model(&[[0, 10]], &[vec![[0, 2]]], &[vec![1, 1]], 2);
+    let s = candidate::parse_solution("0 0 1 0.5\n0 1 1 0.5\n", &m, 3).unwrap();
+    for factors in [vec![], vec![1], vec![1, -1]] {
+        assert!(reschedule(&m, &s, &factors, 8).is_err());
+    }
+    assert!(reschedule(&m, &s, &[2, 1], 1_001).is_err());
+    let incomplete = candidate::parse_solution("0 0 1 0.4\n0 1 1 0.5\n", &m, 3).unwrap();
+    assert!(
+        reschedule(&m, &incomplete, &[2, 1], 8)
+            .unwrap_err()
+            .what
+            .contains("infeasible")
+    );
+    let exceeded = candidate::parse_solution("0 0 1 0.4\n0 1 1 0.6\n", &m, 3).unwrap();
+    assert!(
+        reschedule(&m, &exceeded, &[2, 1], 8)
+            .unwrap_err()
+            .what
+            .contains("infeasible")
+    );
+    let huge = model(&[[i64::MAX, i64::MAX]], &[], &[], 2);
+    let s = candidate::parse_solution("0 0 0 0.5\n0 1 0 0.5\n", &huge, 9).unwrap();
+    assert!(
+        reschedule(&huge, &s, &[i64::MAX, 1], 8)
+            .unwrap_err()
+            .what
+            .contains("overflow")
+    );
+}

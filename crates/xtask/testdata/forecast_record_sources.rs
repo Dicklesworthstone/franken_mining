@@ -76,6 +76,7 @@ fn observation_on_sheet(
                         "cu_prod_100_kt" => "Copper produced (kt 100%)",
                         "c1_usd_per_lb" => "C1 cash costs ($/lb)",
                         "aisc_usd_per_lb" => "All-in sustaining costs ($/lb)",
+                        "tcc_usd_per_oz" => "Total cash costs ($/oz)",
                         _ => "All-in sustaining costs ($/oz)",
                     }
                     .into(),
@@ -112,6 +113,7 @@ fn observation_on_sheet(
     assert!(keyed.is_ok(), "{keyed:?}");
     Observation {
         release: Quarter::parse(release).unwrap(),
+        canonical_subject: canonical_raw_subject(&profile, &raw),
         raw,
         keyed,
         printed: Rat::from_decimal_str(token).map_err(|e| e.to_string()),
@@ -147,6 +149,456 @@ fn copper_target(field: &str) -> Target {
     value
 }
 
+fn capex_target(field: &str) -> Target {
+    let mut target = copper_target(field);
+    target.outcome = Outcome::QuarterQtd;
+    target
+}
+
+fn capital_observation(
+    release: &str,
+    period: Period,
+    target: &Target,
+    token: &str,
+    ownership: &str,
+    status: Option<StatusKind>,
+) -> Observation {
+    let months = match period.kind {
+        PeriodKind::Quarter(_) => "three",
+        PeriodKind::H1 => "six",
+        PeriodKind::NineMonths => "nine",
+        PeriodKind::FullYear => "twelve",
+    };
+    let label = match target.field.as_str() {
+        "capex_usd_m" => "Total capital expenditures ($ millions)",
+        "capex_sustaining_usd_m" => "Minesite sustaining",
+        "capex_projects_usd_m" => "Projects",
+        _ => panic!("capital fixture requires an explicit capital target"),
+    };
+    let site = if ownership.is_empty() {
+        "Site A".to_string()
+    } else {
+        format!("Site A ({ownership})")
+    };
+    let file = format!("invented-{release}-{}-{}.xlsx", period.code(), target.id);
+    let bytes = build_minimal_xlsx(&[MinimalSheet {
+        name: "Minestats1".into(),
+        hidden: false,
+        cells: vec![
+            ("B2".into(), MinimalCell::Text(site)),
+            (
+                "A3".into(),
+                MinimalCell::Text(format!("For the {months} months ended")),
+            ),
+            ("B3".into(), MinimalCell::Number(f64::from(period.year))),
+            (
+                "A4".into(),
+                MinimalCell::Text("Capital expenditures ($ millions)".into()),
+            ),
+            ("A5".into(), MinimalCell::Text(label.into())),
+            (
+                "B5".into(),
+                token
+                    .parse::<f64>()
+                    .map_or_else(|_| MinimalCell::Text(token.into()), MinimalCell::Number),
+            ),
+        ],
+    }]);
+    let workbook = Workbook::from_bytes(&file, &bytes).unwrap();
+    let mut profile = fmine_public::synthetic::synthetic_profile();
+    profile.sources.clear();
+    profile.subject_statuses.clear();
+    if let Some(kind) = status {
+        profile.subject_statuses.push(SubjectStatus {
+            subject: "Site A".into(),
+            kind,
+            first: (2029, 1),
+            last: None,
+            evidence: "DESIGN: invented capital status".into(),
+        });
+    }
+    let raw = read_mine_stats(&workbook, release, None)
+        .unwrap()
+        .values
+        .into_iter()
+        .next()
+        .unwrap();
+    let keyed = key::from_mine_stats(&profile, &workbook, release, &raw).map_err(|e| e.to_string());
+    assert!(keyed.is_ok(), "{keyed:?}");
+    Observation {
+        release: Quarter::parse(release).unwrap(),
+        canonical_subject: canonical_raw_subject(&profile, &raw),
+        raw,
+        keyed,
+        printed: Rat::from_decimal_str(token).map_err(|e| e.to_string()),
+        file,
+        hash: sha256(&bytes).to_hex(),
+    }
+}
+
+#[test]
+fn capex_alias_competitor_is_counted_even_when_its_source_claim_is_refused() {
+    let file = "invented-ambiguous-capex.xlsx";
+    let release = "2030Q4";
+    let bytes = build_minimal_xlsx(&[MinimalSheet {
+        name: "Minestats1".into(),
+        hidden: false,
+        cells: vec![
+            ("B2".into(), MinimalCell::Text("Site A (50%)".into())),
+            ("C2".into(), MinimalCell::Text("Capex Alias (0%)".into())),
+            (
+                "A3".into(),
+                MinimalCell::Text("For the three months ended".into()),
+            ),
+            ("B3".into(), MinimalCell::Number(2030.0)),
+            ("C3".into(), MinimalCell::Number(2030.0)),
+            (
+                "A5".into(),
+                MinimalCell::Text("Total capital expenditures ($ millions)".into()),
+            ),
+            ("B5".into(), MinimalCell::Number(12.0)),
+            ("C5".into(), MinimalCell::Number(999.0)),
+        ],
+    }]);
+    let workbook = Workbook::from_bytes(file, &bytes).unwrap();
+    let mut profile = fmine_public::synthetic::synthetic_profile();
+    profile.sources.clear();
+    profile.shares.push(fmine_public::sources::RegisteredShare {
+        subject: "Site A".into(),
+        label: "Capex Alias".into(),
+        num: 1,
+        den: 2,
+        evidence: "DESIGN: invented alternate subject spelling".into(),
+    });
+    let read = read_mine_stats(&workbook, release, None).unwrap();
+    assert!(read.refusals.is_empty());
+    assert_eq!(read.values.len(), 2);
+    let mut observations = read
+        .values
+        .into_iter()
+        .map(|raw| {
+            let display = workbook
+                .sheet(&raw.sheet)
+                .unwrap()
+                .cells_by_coord
+                .values()
+                .find(|cell| cell.cell_ref == raw.cell)
+                .unwrap()
+                .displayed()
+                .unwrap()
+                .unwrap();
+            Observation {
+                release: Quarter::parse(release).unwrap(),
+                canonical_subject: canonical_raw_subject(&profile, &raw),
+                keyed: key::from_mine_stats(&profile, &workbook, release, &raw)
+                    .map_err(|e| e.to_string()),
+                printed: Rat::from_decimal_str(&display.text()).map_err(|e| e.to_string()),
+                raw,
+                file: file.into(),
+                hash: sha256(&bytes).to_hex(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let bad_index = observations
+        .iter()
+        .position(|o| o.raw.cell == "C5")
+        .unwrap();
+    let competitor = observations.remove(bad_index);
+    assert!(
+        competitor.keyed.is_err(),
+        "zero printed ownership cannot form a Claim"
+    );
+    assert_eq!(competitor.canonical_subject, "Site A");
+    assert_eq!(competitor.raw.site, "Capex Alias");
+    assert_eq!(competitor.raw.site_raw, "Capex Alias (0%)");
+    let bad_locator = competitor.locator();
+    let target = capex_target("capex_usd_m");
+    let quarter = Quarter { year: 2030, q: 4 };
+    let mut sources = inventory(observations);
+    let valid = infer_outcome(&mut sources, "Site A", &target, quarter).unwrap();
+    assert_eq!(number(&valid.value), Some(Rat::from_integer(12)));
+    sources.observations.push(competitor);
+    let ambiguous = infer_outcome(&mut sources, "Site A", &target, quarter).unwrap();
+    assert!(matches!(
+        ambiguous.value,
+        Availability::Unavailable(ref why) if why == "ambiguous original source cells"
+    ));
+    assert_eq!(ambiguous.locators.len(), 2);
+    let evidence = &sources.evidence.cells[&bad_locator];
+    assert!(evidence.contains("\"claim_id\":null"));
+    assert!(!evidence.contains("\"unusable\":null"));
+}
+
+#[test]
+fn capex_outcomes_keep_scopes_original_quarters_and_signed_source_values() {
+    let quarter = Quarter { year: 2030, q: 4 };
+    let period = Period {
+        year: 2030,
+        kind: PeriodKind::Quarter(4),
+    };
+    for field in [
+        "capex_usd_m",
+        "capex_sustaining_usd_m",
+        "capex_projects_usd_m",
+    ] {
+        let target = capex_target(field);
+        let other = capex_target(if field == "capex_usd_m" {
+            "capex_sustaining_usd_m"
+        } else {
+            "capex_usd_m"
+        });
+        let mut sources = inventory(vec![
+            capital_observation("2030Q4", period, &target, "-1.25", "50%", None),
+            capital_observation("2030Q4", period, &other, "888", "50%", None),
+            capital_observation(
+                "2030Q4",
+                Period {
+                    year: 2030,
+                    kind: PeriodKind::FullYear,
+                },
+                &target,
+                "777",
+                "50%",
+                None,
+            ),
+            capital_observation("2031Q4", period, &target, "999", "50%", None),
+        ]);
+        let outcome = infer_outcome(&mut sources, "Site A", &target, quarter).unwrap();
+        assert_eq!(number(&outcome.value), Some(Rat::new(-5, 4).unwrap()));
+        assert_eq!(outcome.locators.len(), 1);
+        sources.observations.remove(0);
+        assert!(matches!(
+            infer_outcome(&mut sources, "Site A", &target, quarter)
+                .unwrap()
+                .value,
+            Availability::Unavailable(_)
+        ));
+        for (token, ownership, status, available) in [
+            ("0", "50%", None, true),
+            ("0", "50%", Some(StatusKind::Disposed), false),
+            ("5", "50%", Some(StatusKind::Withheld), false),
+            ("5", "", None, false),
+            ("—", "50%", None, false),
+        ] {
+            let mut sources = inventory(vec![capital_observation(
+                "2030Q4", period, &target, token, ownership, status,
+            )]);
+            let outcome = infer_outcome(&mut sources, "Site A", &target, quarter).unwrap();
+            assert_eq!(number(&outcome.value).is_some(), available);
+            if available {
+                assert_eq!(number(&outcome.value), Some(Rat::from_integer(0)));
+            }
+        }
+    }
+}
+
+#[test]
+fn capex_persistence_orders_signed_bounds_and_refuses_gaps_and_ownership_drift() {
+    let target = capex_target("capex_sustaining_usd_m");
+    let mut rules =
+        record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+    rules.sites = vec![record::RulesSite {
+        name: "Site A".into(),
+        status: SiteStatus::Live,
+        locator: "synthetic:Minestats1!B5".into(),
+        reason: None,
+    }];
+    let rule = BaselineRule {
+        id: "run_rate_persistence".into(),
+        target: target.id.clone(),
+        kind: BaselineKind::Persistence {
+            pool_from: Quarter { year: 2030, q: 1 },
+            pool_through: Quarter { year: 2030, q: 3 },
+            point: Quarter { year: 2031, q: 3 },
+        },
+        rule: "positive adjacent ratios with unchanged capital ownership".into(),
+        source: "invented original capital releases".into(),
+        line: 1,
+    };
+    let period = |year, q| Period {
+        year,
+        kind: PeriodKind::Quarter(q),
+    };
+    let mut sources = inventory(vec![
+        capital_observation("2030Q1", period(2030, 1), &target, "100", "50%", None),
+        capital_observation("2030Q2", period(2030, 2), &target, "50", "50%", None),
+        capital_observation("2030Q3", period(2030, 3), &target, "100", "50%", None),
+        capital_observation("2031Q3", period(2031, 3), &target, "-10", "50%", None),
+        capital_observation(
+            "2030Q2",
+            period(2030, 2),
+            &capex_target("capex_projects_usd_m"),
+            "999999",
+            "75%",
+            None,
+        ),
+    ]);
+    let signed = persistence(&mut sources, &rules, &target, &rule).unwrap();
+    assert_eq!(
+        signed["Site A"],
+        Availability::Available(Bounds {
+            lo: Rat::from_integer(-20),
+            hi: Rat::from_integer(-5),
+        })
+    );
+    sources.observations[3] =
+        capital_observation("2031Q3", period(2031, 3), &target, "0", "50%", None);
+    let zero = persistence(&mut sources, &rules, &target, &rule).unwrap();
+    assert_eq!(
+        zero["Site A"],
+        Availability::Available(Bounds {
+            lo: Rat::from_integer(0),
+            hi: Rat::from_integer(0),
+        })
+    );
+    sources.observations[1] =
+        capital_observation("2030Q2", period(2030, 2), &target, "0", "50%", None);
+    let gap = persistence(&mut sources, &rules, &target, &rule).unwrap();
+    assert!(matches!(gap["Site A"], Availability::Unavailable(_)));
+    assert!(
+        sources
+            .evidence
+            .pools
+            .last()
+            .unwrap()
+            .contains("\"ratios\":0,\"omitted_pairs\":2")
+    );
+    sources.observations[1] =
+        capital_observation("2030Q2", period(2030, 2), &target, "50", "75%", None);
+    let drift = persistence(&mut sources, &rules, &target, &rule).unwrap();
+    assert!(
+        matches!(&drift["Site A"], Availability::Unavailable(why) if why.contains("ownership"))
+    );
+}
+
+#[test]
+fn capex_guidance_requires_quarter_scope_and_matching_ownership_without_scaling() {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "fmine-capex-guidance-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let bytes = b"SYNTHETIC capital guidance, not issuer evidence";
+    std::fs::write(root.join("capex.pdf"), bytes).unwrap();
+    let mut profile = fmine_public::synthetic::synthetic_profile();
+    profile.documents = vec![DocumentRow {
+        file: "capex.pdf".into(),
+        dir: ".".into(),
+        kind: "mda".into(),
+        url: "https://example.invalid/capex.pdf".into(),
+        url_basis: "invented".into(),
+        published_at: "2030-10-01".into(),
+        published_at_basis: "invented".into(),
+        pages: 1,
+        bytes: bytes.len() as u64,
+        sha256: sha256(bytes).to_hex(),
+    }];
+    let target = capex_target("capex_usd_m");
+    let mut guidance = Guidance {
+        registry: Some(TranscriptionRegistry {
+            issuer: profile.issuer.clone(),
+            entries: ["one", "two"]
+                .into_iter()
+                .map(|reader| EntryRow {
+                    locator: Locator {
+                        doc: "capex.pdf".into(),
+                        page: 1,
+                        table: "Synthetic capital".into(),
+                        row: "Site A".into(),
+                        col: "capex_usd_m".into(),
+                    },
+                    doc_sha256: sha256(bytes).to_hex(),
+                    token: "-2 - 1".into(),
+                    value: parse_token("-2 - 1").unwrap(),
+                    quantity: "guidance_site_a_capex_usd_m".into(),
+                    unit: "usd_m".into(),
+                    basis: "attributable:1/2;capex=issuer-reported-total".into(),
+                    period: "2030Q4".into(),
+                    reader: reader.into(),
+                    line: 1,
+                })
+                .collect(),
+        }),
+        checked: BTreeMap::new(),
+    };
+    let mut sources = inventory(vec![capital_observation(
+        "2030Q3",
+        Period {
+            year: 2030,
+            kind: PeriodKind::Quarter(3),
+        },
+        &target,
+        "-1.25",
+        "50%",
+        None,
+    )]);
+    let frozen = manifest(vec![]);
+    let quarter = Quarter { year: 2030, q: 4 };
+    let actual = guidance
+        .resolve(
+            &root,
+            &profile,
+            &frozen,
+            &mut sources,
+            "Site A",
+            &target,
+            quarter,
+        )
+        .unwrap();
+    assert_eq!(
+        actual,
+        Availability::Available(Bounds {
+            lo: Rat::from_integer(-2),
+            hi: Rat::from_integer(1),
+        })
+    );
+    for (basis, period, unit) in [
+        ("100%;capex=issuer-reported-total", "2030Q4", "usd_m"),
+        (
+            "attributable:3/4;capex=issuer-reported-total",
+            "2030Q4",
+            "usd_m",
+        ),
+        (
+            "attributable:1/2;capex=issuer-reported-projects",
+            "2030Q4",
+            "usd_m",
+        ),
+        (
+            "attributable:1/2;capex=issuer-reported-total",
+            "2030FY",
+            "usd_m",
+        ),
+        (
+            "attributable:1/2;capex=issuer-reported-total",
+            "2030Q4",
+            "koz",
+        ),
+    ] {
+        for entry in &mut guidance.registry.as_mut().unwrap().entries {
+            entry.basis = basis.into();
+            entry.period = period.into();
+            entry.unit = unit.into();
+        }
+        assert!(matches!(
+            guidance
+                .resolve(
+                    &root,
+                    &profile,
+                    &frozen,
+                    &mut sources,
+                    "Site A",
+                    &target,
+                    quarter,
+                )
+                .unwrap(),
+            Availability::Unavailable(_)
+        ));
+    }
+}
+
 #[test]
 fn quarterly_outcomes_select_only_the_scored_original_qtd_for_every_metric() {
     for quarter in [Quarter { year: 2031, q: 1 }, Quarter { year: 2031, q: 2 }] {
@@ -154,6 +606,7 @@ fn quarterly_outcomes_select_only_the_scored_original_qtd_for_every_metric() {
             "au_prod_100_koz",
             "cu_prod_100_kt",
             "aisc_usd_per_oz",
+            "tcc_usd_per_oz",
             "c1_usd_per_lb",
             "aisc_usd_per_lb",
         ] {
@@ -222,6 +675,54 @@ fn quarterly_outcomes_select_only_the_scored_original_qtd_for_every_metric() {
             );
         }
     }
+}
+
+#[test]
+fn gold_tcc_outcomes_use_original_qtd_without_aisc_or_cumulative_substitution() {
+    let cost = copper_target("tcc_usd_per_oz");
+    let period = Period {
+        year: 2030,
+        kind: PeriodKind::Quarter(4),
+    };
+    let mut sources = inventory(vec![
+        observation("2030Q4", period, &cost, "-7.25", false),
+        observation("2030Q4", period, &target(false), "999", false),
+        observation(
+            "2030Q4",
+            Period {
+                year: 2030,
+                kind: PeriodKind::FullYear,
+            },
+            &cost,
+            "1200",
+            false,
+        ),
+        observation(
+            "2030Q3",
+            Period {
+                year: 2030,
+                kind: PeriodKind::NineMonths,
+            },
+            &cost,
+            "1000",
+            false,
+        ),
+        observation("2031Q4", period, &cost, "500", false),
+    ]);
+    let quarter = Quarter { year: 2030, q: 4 };
+    let observed = infer_outcome(&mut sources, "Site A", &cost, quarter).unwrap();
+    assert_eq!(number(&observed.value), Some(Rat::new(-29, 4).unwrap()));
+    assert_eq!(observed.locators.len(), 1);
+    assert!(sources.evidence.cells.values().any(|cell| {
+        cell.contains("summary:tcc_usd_per_oz") && cell.contains("\"unit\":\"usd_per_oz\"")
+    }));
+    sources.observations.remove(0);
+    assert!(matches!(
+        infer_outcome(&mut sources, "Site A", &cost, quarter)
+            .unwrap()
+            .value,
+        Availability::Unavailable(_)
+    ));
 }
 
 #[test]
@@ -369,6 +870,14 @@ fn copper_guidance_uses_its_own_share_and_requires_each_sold_pound_definition() 
             "3.1 - 3.3",
             "attributable:3/4;aisc=issuer-reported-per-sold-lb",
             ("3.1", "3.3"),
+        ),
+        (
+            "tcc_usd_per_oz",
+            "tcc_usd_per_oz",
+            "usd_per_oz",
+            "-20 - 10",
+            "attributable:3/4;tcc=issuer-reported-per-sold-oz",
+            ("-20", "10"),
         ),
     ] {
         let target = copper_target(field);
@@ -1062,4 +1571,211 @@ fn latest_guidance_requires_agreement_and_converts_its_own_share_before_subtract
             .code,
         "FMINE-REF-505"
     );
+}
+
+#[test]
+fn post_quarter_nowcast_source_scores_require_prepublication_proof_and_keep_missing_members() {
+    let root = std::env::temp_dir().join(format!(
+        "fmine-nowcast-source-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("corpus")).unwrap();
+    std::fs::create_dir_all(root.join("registries/sources")).unwrap();
+    let text = |value: &str| MinimalCell::Text(value.into());
+    let bytes = build_minimal_xlsx(&[MinimalSheet {
+        name: "QTD".into(),
+        hidden: false,
+        cells: vec![
+            ("A3".into(), text("For the three months ended December 31,")),
+            ("B3".into(), MinimalCell::Number(2030.0)),
+            ("B4".into(), text("Gold produced (000s oz 100%)")),
+            ("A5".into(), text("Site A (100%)")),
+            ("B5".into(), MinimalCell::Number(53.0)),
+            ("A6".into(), text("Site B (100%)")),
+            ("B6".into(), text("—")),
+        ],
+    }]);
+    std::fs::write(root.join("corpus/Original.xlsx"), &bytes).unwrap();
+    let registry = format!(
+        "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\nretrieved_utc = \"2031-02-01T00:00:00Z\"\nurl_prefix = \"https://example.invalid/\"\n\n[[source]]\nfile = \"Original.xlsx\"\nkind = \"mine_stats\"\nquarter = \"2030Q4\"\npath = \"Original.xlsx\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\npublished_at = \"2031-01-10\"\npublished_at_basis = \"FACT: synthetic original release\"\n\n[[subject]]\nname = \"Site A\"\n[[subject]]\nname = \"Site B\"\n",
+        bytes.len(),
+        sha256(&bytes).to_hex()
+    );
+    let registry_path = root.join("registries/sources/synthetic.toml");
+    std::fs::write(&registry_path, &registry).unwrap();
+    let mut rules =
+        record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+    rules.issuer = "synthetic".into();
+    rules.targets.truncate(1);
+    rules.targets[0].outcome = Outcome::QuarterQtdNowcast;
+    rules
+        .baselines
+        .retain(|baseline| baseline.target == rules.targets[0].id);
+    for baseline in &mut rules.baselines {
+        if matches!(baseline.kind, BaselineKind::Persistence { .. }) {
+            baseline.kind = BaselineKind::Persistence {
+                pool_from: Quarter { year: 2030, q: 1 },
+                pool_through: Quarter { year: 2030, q: 2 },
+                point: Quarter { year: 2030, q: 3 },
+            };
+        }
+    }
+    rules.dates = record::RecordDates {
+        nowcast_from: parse_utc("2031-01-01T00:00:00Z").unwrap(),
+        proof_by: parse_utc("2031-01-19T23:59:59Z").unwrap(),
+    };
+    rules.nowcast_availability = Some(record::NowcastAvailability {
+        earliest_release_utc: parse_utc("2031-01-20T00:00:00Z").unwrap(),
+        basis: "Synthetic preliminary announcement deadline, prospectively declared".into(),
+    });
+    rules.sites = ["Site A", "Site B"]
+        .into_iter()
+        .map(|name| record::RulesSite {
+            name: name.into(),
+            status: SiteStatus::Live,
+            locator: "synthetic source".into(),
+            reason: None,
+        })
+        .collect();
+    let mut frozen = manifest(vec![input(
+        "prior.txt",
+        b"synthetic prior information",
+        "2030-01-01",
+    )]);
+    frozen.record_id = rules.record_id.clone();
+    frozen.information_cutoff_utc = parse_utc("2031-01-05T00:00:00Z").unwrap();
+    let proof = parse_utc("2031-01-06T00:00:00Z").unwrap();
+    let as_of = parse_utc("2031-02-01T00:00:00Z").unwrap();
+    let resolved = resolve_nowcast(&root, &rules, &frozen, as_of, proof).unwrap();
+    assert_eq!(
+        number(&resolved.outcomes[0].value),
+        Some(Rat::from_integer(53))
+    );
+    assert!(matches!(
+        resolved.outcomes[1].value,
+        Availability::Unavailable(_)
+    ));
+    assert!(resolved.evidence_json.contains("Original.xlsx:QTD!B5"));
+    assert!(resolved.evidence_json.contains(&sha256(&bytes).to_hex()));
+    assert!(
+        resolved
+            .evidence_json
+            .contains("\"role\":\"nowcast_publication_boundary\"")
+    );
+    assert!(
+        resolved
+            .evidence_json
+            .contains("\"role\":\"declared_earliest_outcome_release\"")
+    );
+    let forecasts = ["Site A", "Site B"]
+        .into_iter()
+        .map(|site| record::ForecastRow {
+            site: site.into(),
+            target: rules.targets[0].id.clone(),
+            point: Rat::from_integer(45),
+            lo: Rat::from_integer(40),
+            hi: Rat::from_integer(50),
+        })
+        .collect::<Vec<_>>();
+    let scored = record::scoring::paired::assess(
+        &rules,
+        &forecasts,
+        &resolved.outcomes,
+        &resolved.baselines,
+    )
+    .unwrap();
+    assert_eq!(scored.targets[0].n_live, 2);
+    assert_eq!(scored.targets[0].n_resolved, 1);
+    assert_eq!(scored.targets[0].n_unresolved, 1);
+    assert_eq!(
+        scored.members[0].forecast_score.unwrap().interval_score,
+        Rat::from_integer(40)
+    );
+    assert!(scored.members[1].forecast_score.is_none());
+    assert_eq!(
+        resolve(&root, &rules, &frozen, as_of).err().unwrap().code,
+        "FMINE-REF-206"
+    );
+    for upper in [
+        frozen.information_cutoff_utc,
+        parse_utc("2031-01-10T00:00:00Z").unwrap(),
+        parse_utc("2031-01-20T00:00:00Z").unwrap(),
+    ] {
+        assert_eq!(
+            resolve_nowcast(&root, &rules, &frozen, as_of, upper)
+                .err()
+                .unwrap()
+                .code,
+            "FMINE-REF-206"
+        );
+    }
+    let mut mislabeled = frozen.clone();
+    mislabeled.label = Label::Forecast;
+    assert_eq!(
+        resolve_nowcast(&root, &rules, &mislabeled, as_of, proof)
+            .err()
+            .unwrap()
+            .code,
+        "FMINE-REF-206"
+    );
+    for (edited, code) in [
+        (
+            registry
+                .replace("published_at = \"2031-01-10\"\n", "")
+                .replace(
+                    "published_at_basis = \"FACT: synthetic original release\"\n",
+                    "",
+                ),
+            "FMINE-REF-108",
+        ),
+        (
+            registry.replace(
+                "FACT: synthetic original release",
+                "INFERENCE: later retrieval",
+            ),
+            "FMINE-REF-108",
+        ),
+        (
+            registry.replace("quarter = \"2030Q4\"", "quarter = \"2031Q4\""),
+            "FMINE-REF-208",
+        ),
+    ] {
+        std::fs::write(&registry_path, edited).unwrap();
+        assert_eq!(
+            resolve_nowcast(&root, &rules, &frozen, as_of, proof)
+                .err()
+                .unwrap()
+                .code,
+            code
+        );
+    }
+    let preliminary = format!(
+        "{registry}\n[[html]]\nfile = \"preliminary.html\"\nrelease = \"2030Q4\"\nurl = \"https://example.invalid/preliminary.html\"\nurl_basis = \"W1 table\"\npublished_at = \"2031-01-06\"\npublished_at_basis = \"FACT: synthetic preliminary production announcement\"\nbytes = 1\nsha256 = \"{}\"\n",
+        "e".repeat(64)
+    );
+    std::fs::write(&registry_path, preliminary).unwrap();
+    assert_eq!(
+        resolve_nowcast(&root, &rules, &frozen, as_of, proof)
+            .err()
+            .unwrap()
+            .code,
+        "FMINE-REF-206",
+        "same-day publication is not an intraday nonpublication proof"
+    );
+    std::fs::write(
+        &registry_path,
+        registry.replace("corpus_dir = \"corpus\"", "corpus_dir = \"unavailable\""),
+    )
+    .unwrap();
+    let missing = resolve_nowcast(&root, &rules, &frozen, as_of, proof).unwrap();
+    let scored =
+        record::scoring::paired::assess(&rules, &forecasts, &missing.outcomes, &missing.baselines)
+            .unwrap();
+    assert_eq!(scored.targets[0].n_live, 2);
+    assert_eq!(scored.targets[0].n_resolved, 0);
+    assert_eq!(scored.targets[0].n_unresolved, 2);
 }

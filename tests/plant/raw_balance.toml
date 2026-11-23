@@ -1,0 +1,136 @@
+# SYNTHETIC: independently constructed nonlinear KKT answer, not plant data.
+# Fitted feed D/W/Cu = 80/20/8 kg; product = 40/10/2 kg.
+# Fixed inventory growth = 40/10/6 kg. Squared raw misfit = 0.818625.
+schema = "fmine.plant-raw-balance.v1"
+boundary = "synthetic-raw-boundary/v1"
+element = "Cu"
+measurand = "total-elemental-copper"
+dry_basis = "all-non-water-matter"
+start_ns = "0"
+end_ns = "86400000000000"
+mass_unit = "kg"
+fraction_unit = "mass_fraction"
+moisture_basis = "water_over_wet_mass"
+assay_basis = "total_element/all_non_water_dry_matter"
+complete = "true"
+whole_interval_streams = "true"
+conservative_mechanical_boundary = "true"
+moisture_is_h2o = "true"
+fixed_endpoint_stocks = "true"
+unbiased_gaussian_raw_errors = "true"
+local_covariance_accepted = "true"
+error_model_basis = "synthetic explicit independent raw errors; no empirical qualification"
+opening_dry_kg = "0"
+opening_water_kg = "0"
+opening_element_kg = "0"
+closing_dry_kg = "40"
+closing_water_kg = "10"
+closing_element_kg = "6"
+balance_tolerance_kg = "0.00000001"
+max_standardized_misfit = "10"
+max_iterations = "128"
+
+[[stream]]
+id = "feed"
+direction = "in"
+wet_kg = "100.08"
+water_fraction = "0.199"
+dry_element_fraction = "0.108"
+sigma_wet_kg = "1"
+sigma_water_fraction = "0.01"
+sigma_dry_element_fraction = "0.01"
+
+[[stream]]
+id = "product"
+direction = "out"
+wet_kg = "49.96"
+water_fraction = "0.20025"
+dry_element_fraction = "0.046"
+sigma_wet_kg = "1"
+sigma_water_fraction = "0.01"
+sigma_dry_element_fraction = "0.01"
+
+[[correlation]]
+left = "feed/wet_mass"
+right = "feed/wet_mass"
+value = "1"
+[[correlation]]
+left = "feed/wet_mass"
+right = "feed/moisture"
+value = "0"
+[[correlation]]
+left = "feed/wet_mass"
+right = "feed/assay"
+value = "0"
+[[correlation]]
+left = "feed/wet_mass"
+right = "product/wet_mass"
+value = "0"
+[[correlation]]
+left = "feed/wet_mass"
+right = "product/moisture"
+value = "0"
+[[correlation]]
+left = "feed/wet_mass"
+right = "product/assay"
+value = "0"
+[[correlation]]
+left = "feed/moisture"
+right = "feed/moisture"
+value = "1"
+[[correlation]]
+left = "feed/moisture"
+right = "feed/assay"
+value = "0"
+[[correlation]]
+left = "feed/moisture"
+right = "product/wet_mass"
+value = "0"
+[[correlation]]
+left = "feed/moisture"
+right = "product/moisture"
+value = "0"
+[[correlation]]
+left = "feed/moisture"
+right = "product/assay"
+value = "0"
+[[correlation]]
+left = "feed/assay"
+right = "feed/assay"
+value = "1"
+[[correlation]]
+left = "feed/assay"
+right = "product/wet_mass"
+value = "0"
+[[correlation]]
+left = "feed/assay"
+right = "product/moisture"
+value = "0"
+[[correlation]]
+left = "feed/assay"
+right = "product/assay"
+value = "0"
+[[correlation]]
+left = "product/wet_mass"
+right = "product/wet_mass"
+value = "1"
+[[correlation]]
+left = "product/wet_mass"
+right = "product/moisture"
+value = "0"
+[[correlation]]
+left = "product/wet_mass"
+right = "product/assay"
+value = "0"
+[[correlation]]
+left = "product/moisture"
+right = "product/moisture"
+value = "1"
+[[correlation]]
+left = "product/moisture"
+right = "product/assay"
+value = "0"
+[[correlation]]
+left = "product/assay"
+right = "product/assay"
+value = "1"

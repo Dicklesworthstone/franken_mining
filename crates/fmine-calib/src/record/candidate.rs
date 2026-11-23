@@ -1,6 +1,7 @@
-//! DESIGN (BD-067/334): a draft empirical quarterly-ratio forecast under the frozen record rules.
+//! DESIGN (BD-067/334): draft empirical quarterly forecasts under the frozen record rules.
 //! Exact quantiles and decimal export are distinct: outward rounding changes the interval that is scored.
-//! The unrounded bounds equal the persistence comparator on the same inputs; only its point estimate differs.
+//! The all-season ratio model's unrounded bounds equal the persistence comparator on the same inputs.
+//! The explicitly seasonal model selects only transitions into the forecast's calendar quarter.
 //! This kernel authenticates no sources or time, and neither registers nor issues a forecast.
 //! Determinism: Exact
 
@@ -8,14 +9,61 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    Estimator, ForecastRow, Quarter, Rat, RecordError, RecordRules, SiteStatus, exact,
-    forecasts_header, parse_forecasts, quantile, ratio_quantiles,
+    Estimator, ForecastRow, Quarter, Rat, RecordError, RecordRules, SiteStatus, TargetMetric,
+    exact, forecasts_header, parse_forecasts, quantile, ratio_quantiles,
 };
 
 pub const MODEL_ID: &str = "pooled-quarterly-ratio-empirical-v1";
+pub const SEASONAL_MODEL_ID: &str = "seasonal-quarterly-ratio-empirical-v1";
+pub const CHANGE_MODEL_ID: &str = "pooled-quarterly-change-empirical-v1";
+pub const SEASONAL_CHANGE_MODEL_ID: &str = "seasonal-quarterly-change-empirical-v1";
 pub const MAX_DECIMAL_PLACES: u32 = 12;
 const MAX_SERIES: usize = 4_096;
 const MAX_HISTORY_VALUES: usize = 65_536;
+
+/// DESIGN: declared empirical assumptions, not fitted or calibrated distributions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateModel {
+    PooledQuarterlyRatio,
+    SeasonalQuarterlyRatio,
+    PooledQuarterlyChange,
+    SeasonalQuarterlyChange,
+}
+
+impl CandidateModel {
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::PooledQuarterlyRatio => MODEL_ID,
+            Self::SeasonalQuarterlyRatio => SEASONAL_MODEL_ID,
+            Self::PooledQuarterlyChange => CHANGE_MODEL_ID,
+            Self::SeasonalQuarterlyChange => SEASONAL_CHANGE_MODEL_ID,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_additive(self) -> bool {
+        matches!(
+            self,
+            Self::PooledQuarterlyChange | Self::SeasonalQuarterlyChange
+        )
+    }
+
+    const fn is_seasonal(self) -> bool {
+        matches!(
+            self,
+            Self::SeasonalQuarterlyRatio | Self::SeasonalQuarterlyChange
+        )
+    }
+}
+
+/// Additive changes have the target's unit; ratios are dimensionless. The distinction
+/// is retained in the pool rather than storing unit-bearing changes as ratios.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    Ratio,
+    Additive,
+}
 
 /// Values must already have the target's exact unit, support, ownership basis and original-release vintage.
 /// `history` has one slot per frozen pool quarter, including missing slots; it must never bridge a gap.
@@ -27,8 +75,8 @@ pub struct CandidateSeries {
     pub point: Option<Rat>,
 }
 
-/// A pair omitted by the frozen positive-ratio rule. Both endpoints remain visible, including zero or negative
-/// observations; neither becomes a zero forecast or an imputed positive observation.
+/// A pair omitted by model admission or declared seasonal selection. Both endpoints
+/// remain visible, including missing, zero or negative observations; none is imputed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExcludedPair {
     pub site: String,
@@ -44,12 +92,18 @@ pub struct CandidatePool {
     pub pool_from: Quarter,
     pub pool_through: Quarter,
     pub point_quarter: Quarter,
-    /// Stable rules-site and quarter order, with repeated ratios retaining their empirical mass.
-    pub ratios: Vec<Rat>,
+    pub kind: ChangeKind,
+    /// Stable rules-site and quarter order; repeated changes retain their empirical mass.
+    pub changes: Vec<Rat>,
+    /// Missing or out-of-domain pairs within the selected season (all pairs for pooled models).
     pub excluded_pairs: Vec<ExcludedPair>,
-    pub lower_ratio: Rat,
-    pub median_ratio: Rat,
-    pub upper_ratio: Rat,
+    /// None for the all-season model; otherwise 1..4, derived from the common frozen outcome horizon.
+    pub seasonal_destination_quarter: Option<u8>,
+    /// Every other-season transition, retaining endpoints even when missing or nonpositive.
+    pub off_season_pairs: Vec<ExcludedPair>,
+    pub lower_change: Rat,
+    pub median_change: Rat,
+    pub upper_change: Rat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +111,7 @@ pub struct Candidate {
     pub model_id: &'static str,
     pub alpha: Rat,
     pub decimal_places: u32,
-    /// Supplied latest observation times the ratio-pool median, with ordered scaled tail bounds.
+    /// Latest observation combined with the declared ratio or additive change quantiles.
     pub exact_rows: Vec<ForecastRow>,
     /// The actual decimal rows in `csv`, retained separately because these are the quantities later scored.
     pub serialized_rows: Vec<ForecastRow>,
@@ -96,10 +150,38 @@ pub fn build_candidate(
     series: &[CandidateSeries],
     decimal_places: u32,
 ) -> Result<Candidate, RecordError> {
-    if rules
-        .targets
-        .iter()
-        .any(|t| t.outcome == super::Outcome::QuarterQtd)
+    build_candidate_with_model(
+        rules,
+        series,
+        decimal_places,
+        CandidateModel::PooledQuarterlyRatio,
+    )
+}
+
+/// Build with an explicit model while retaining the frozen source, site, target and unit universe.
+/// DESIGN: the seasonal model assumes positive historical transitions into the same calendar quarter
+/// apply to the forecast horizon. It pools across live sites and years, with no weighting, trend fit,
+/// fallback to other seasons or claim that seasonality or future coverage has been established.
+/// The registered all-season persistence comparator is unchanged. Exact quantiles, signed cost support
+/// and outward decimal enclosure are shared with the default candidate.
+/// Additive models instead pool `after - before` in each target's unit and add its quantiles to the
+/// latest observation. Signed cost/capital histories are admissible, as are zero production histories;
+/// missing and negative production histories are excluded without bridging. Production points still
+/// require positive observations, and negative production forecasts refuse rather than clamp.
+/// Pooling absolute changes across sites is an explicit exchangeability assumption, not a fitted effect.
+pub fn build_candidate_with_model(
+    rules: &RecordRules,
+    series: &[CandidateSeries],
+    decimal_places: u32,
+    model: CandidateModel,
+) -> Result<Candidate, RecordError> {
+    let seasonal_destination_quarter = if model.is_seasonal() {
+        Some(rules.outcome_quarter()?.q)
+    } else {
+        None
+    };
+    if seasonal_destination_quarter.is_none()
+        && rules.targets.iter().any(|t| t.outcome.is_quarterly())
     {
         rules.outcome_quarter()?;
     }
@@ -169,12 +251,25 @@ pub fn build_candidate(
             .targets
             .iter()
             .any(|target| target.id == s.target && target.permits_signed_forecast());
-        if s.point.is_none_or(|x| x.signum() <= 0 && !signed) {
+        let nonnegative = model.is_additive()
+            && rules.targets.iter().any(|target| {
+                target.id == s.target
+                    && TargetMetric::from_target(target).is_some_and(TargetMetric::is_production)
+            });
+        if s.point
+            .is_none_or(|x| !signed && (x.signum() < 0 || (x.signum() == 0 && !nonnegative)))
+        {
             return Err(invalid(format!(
                 "{} / {} needs a {} point-quarter observation",
                 s.site,
                 s.target,
-                if signed { "numeric" } else { "positive" }
+                if signed {
+                    "numeric"
+                } else if nonnegative {
+                    "nonnegative"
+                } else {
+                    "positive"
+                }
             )));
         }
     }
@@ -199,10 +294,17 @@ pub fn build_candidate(
     }
     let mut pools = Vec::with_capacity(rules.targets.len());
     for target in &rules.targets {
+        if model.is_additive() && TargetMetric::from_target(target).is_none() {
+            return Err(invalid(format!(
+                "{} needs a supported field/outcome for additive changes",
+                target.id
+            )));
+        }
         let (pool_from, pool_through, point) = rules.persistence_pool(&target.id)?;
         let quarters = pool_from.through(pool_through);
-        let mut ratios = Vec::new();
+        let mut changes = Vec::new();
         let mut excluded_pairs = Vec::new();
+        let mut off_season_pairs = Vec::new();
         for site in &live {
             let s = indexed
                 .get(&(*site, target.id.as_str()))
@@ -217,9 +319,28 @@ pub fn build_candidate(
                 )));
             }
             for (dates, values) in quarters.windows(2).zip(s.history.windows(2)) {
+                if seasonal_destination_quarter.is_some_and(|q| dates[1].q != q) {
+                    off_season_pairs.push(ExcludedPair {
+                        site: (*site).to_string(),
+                        from: dates[0],
+                        to: dates[1],
+                        before: values[0],
+                        after: values[1],
+                    });
+                    continue;
+                }
                 match (values[0], values[1]) {
-                    (Some(a), Some(b)) if a.signum() > 0 && b.signum() > 0 => {
-                        ratios.push(exact(b.checked_div(a))?);
+                    (Some(a), Some(b))
+                        if model.is_additive()
+                            && (target.permits_signed_forecast()
+                                || (a.signum() >= 0 && b.signum() >= 0)) =>
+                    {
+                        changes.push(exact(b.checked_sub(a))?);
+                    }
+                    (Some(a), Some(b))
+                        if !model.is_additive() && a.signum() > 0 && b.signum() > 0 =>
+                    {
+                        changes.push(exact(b.checked_div(a))?);
                     }
                     (before, after) => excluded_pairs.push(ExcludedPair {
                         site: (*site).to_string(),
@@ -231,24 +352,49 @@ pub fn build_candidate(
                 }
             }
         }
-        if ratios.is_empty() {
+        if changes.is_empty() {
             return Err(invalid(format!(
-                "{} has no positive adjacent-quarter ratio",
-                target.id
+                "{} has no {}{}",
+                target.id,
+                if model.is_additive() {
+                    "admissible adjacent-quarter change"
+                } else {
+                    "positive adjacent-quarter ratio"
+                },
+                seasonal_destination_quarter.map_or_else(String::new, |q| format!(" into Q{q}")),
             )));
         }
-        let (lower_ratio, upper_ratio) = ratio_quantiles(&ratios, rules.alpha, rules.estimator)?;
-        let median_ratio = quantile(&ratios, exact(Rat::new(1, 2))?, rules.estimator)?;
+        let (lower_change, upper_change) = if model.is_additive() {
+            let lower_level = exact(rules.alpha.checked_div(Rat::from_integer(2)))?;
+            (
+                quantile(&changes, lower_level, rules.estimator)?,
+                quantile(
+                    &changes,
+                    exact(Rat::from_integer(1).checked_sub(lower_level))?,
+                    rules.estimator,
+                )?,
+            )
+        } else {
+            ratio_quantiles(&changes, rules.alpha, rules.estimator)?
+        };
+        let median_change = quantile(&changes, exact(Rat::new(1, 2))?, rules.estimator)?;
         pools.push(CandidatePool {
             target: target.id.clone(),
             pool_from,
             pool_through,
             point_quarter: point,
-            ratios,
+            kind: if model.is_additive() {
+                ChangeKind::Additive
+            } else {
+                ChangeKind::Ratio
+            },
+            changes,
             excluded_pairs,
-            lower_ratio,
-            median_ratio,
-            upper_ratio,
+            seasonal_destination_quarter,
+            off_season_pairs,
+            lower_change,
+            median_change,
+            upper_change,
         });
     }
     let mut exact_rows = Vec::with_capacity(expected);
@@ -259,18 +405,36 @@ pub fn build_candidate(
                 .get(&(*site, pool.target.as_str()))
                 .and_then(|s| s.point)
                 .ok_or_else(|| invalid("missing point observation after validation"))?;
-            let (lower_ratio, upper_ratio) = if point.signum() < 0 {
-                (pool.upper_ratio, pool.lower_ratio)
+            let (lower, upper) = if pool.kind == ChangeKind::Ratio && point.signum() < 0 {
+                (pool.upper_change, pool.lower_change)
             } else {
-                (pool.lower_ratio, pool.upper_ratio)
+                (pool.lower_change, pool.upper_change)
+            };
+            let predict = |change| {
+                exact(match pool.kind {
+                    ChangeKind::Ratio => point.checked_mul(change),
+                    ChangeKind::Additive => point.checked_add(change),
+                })
             };
             let row = ForecastRow {
                 site: (*site).to_string(),
                 target: pool.target.clone(),
-                point: exact(point.checked_mul(pool.median_ratio))?,
-                lo: exact(point.checked_mul(lower_ratio))?,
-                hi: exact(point.checked_mul(upper_ratio))?,
+                point: predict(pool.median_change)?,
+                lo: predict(lower)?,
+                hi: predict(upper)?,
             };
+            if model.is_additive()
+                && row.lo.signum() < 0
+                && !rules
+                    .targets
+                    .iter()
+                    .any(|target| target.id == pool.target && target.permits_signed_forecast())
+            {
+                return Err(invalid(format!(
+                    "{} / {} additive interval leaves the nonnegative production domain",
+                    site, pool.target
+                )));
+            }
             csv.push_str(&format!(
                 "{},{},{},{},{},true\n",
                 row.site,
@@ -284,7 +448,7 @@ pub fn build_candidate(
     }
     let serialized_rows = parse_forecasts(csv.as_bytes(), rules)?;
     Ok(Candidate {
-        model_id: MODEL_ID,
+        model_id: model.id(),
         alpha: rules.alpha,
         decimal_places,
         exact_rows,

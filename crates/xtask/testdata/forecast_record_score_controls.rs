@@ -78,6 +78,37 @@ mod tests {
     }
 
     #[test]
+    fn post_quarter_proofs_require_explicit_frozen_mode_and_earliest_release_deadline() {
+        let annual = record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+        let mut nowcast = annual.clone();
+        for target in &mut nowcast.targets {
+            target.outcome = record::Outcome::QuarterQtdNowcast;
+        }
+        nowcast.dates = record::RecordDates {
+            nowcast_from: parse_utc("2027-01-01T00:00:00Z").unwrap(),
+            proof_by: parse_utc("2027-01-14T23:59:59Z").unwrap(),
+        };
+        nowcast.nowcast_availability = Some(record::NowcastAvailability {
+            earliest_release_utc: parse_utc("2027-01-15T00:00:00Z").unwrap(),
+            basis: "Synthetic first preliminary announcement".into(),
+        });
+        let proof = parse_utc("2027-01-05T00:00:00Z").unwrap();
+        assert_eq!(require_pre_outcome_proof(&nowcast, proof).unwrap().to_string(), "2026Q4");
+        assert_eq!(require_pre_outcome_proof(&annual, proof).unwrap_err().code, "FMINE-REF-206");
+        for upper in [
+            parse_utc("2026-12-31T23:59:59Z").unwrap(),
+            parse_utc("2027-01-15T00:00:00Z").unwrap(),
+        ] {
+            assert_eq!(
+                require_pre_outcome_proof(&nowcast, upper).unwrap_err().code,
+                "FMINE-REF-206"
+            );
+        }
+        nowcast.dates.proof_by = nowcast.nowcast_availability.as_ref().unwrap().earliest_release_utc;
+        assert!(require_pre_outcome_proof(&nowcast, proof).is_err());
+    }
+
+    #[test]
     fn markdown_preserves_exact_signed_zero_missing_and_not_published_members() {
         use record::scoring::paired::{Availability, BaselineRow, Bounds, OutcomeRow, assess};
         use record::{Rat, RulesSite, SiteStatus};

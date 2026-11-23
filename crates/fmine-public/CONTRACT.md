@@ -26,11 +26,19 @@ The public lane of M0 (`fmine assure public`).
   unissued quarterly-ratio candidate through `fmine_calib::record::candidate`. It reads only the original
   Mine Stats releases required by the declared historical pools and their common persistence point. The supported
   target meanings are 100%-basis gold production in koz and copper production in kt (`fy_minus_9m`),
-  printed gold AISC per ounce sold, and copper C1 or AISC per pound sold (`q4_qtd`). Rates are never
-  differenced across cumulative periods. Explicit `quarter_qtd` targets support those same five metrics
+  printed gold AISC or total cash cost per ounce sold, and copper C1 or AISC per pound sold (`q4_qtd`). Rates are never
+  differenced across cumulative periods. Explicit `quarter_qtd` targets support those same six metrics
   for the immediately following quarter, including Q4-to-next-year-Q1. Every target in a quarterly record
-  uses that outcome and the same point quarter. The candidate cut must precede the scored quarter's end;
-  post-quarter nowcasts refuse. Original FY rules keep their common Q3 point and existing output bytes.
+  uses that outcome and the same point quarter. Ordinary candidate cuts precede the scored quarter's end.
+  Explicit `quarter_qtd_nowcast` candidates instead require a cut at or after quarter end and before the
+  frozen proof deadline, with that deadline strictly before the declared earliest outcome release.
+  `nowcast_publications` retains registered scored-quarter workbook and HTML publication dates with
+  FACT-cited bases; absent/inferred dates refuse and every known publication day starts an exclusive cut
+  boundary. Earlier preliminary announcements therefore tighten the bound even when a workbook arrives
+  later. The registry is not assumed complete. Drafts may lack an outcome release; authenticated scoring
+  requires the original workbook registry entry and preserves missing outcome bodies as unresolved.
+  Publication boundaries remain separate from historical model inputs and are bound by the registry digest.
+  Original FY rules keep their common Q3 point and existing output bytes.
   `fmine_calib::record::TargetMetric` supplies the same exact
   field/outcome/unit interpretation used by the record scorers; metal quantities and cost families are
   separate pools. Every input uses the exact displayed
@@ -39,7 +47,7 @@ The public lane of M0 (`fmine assure public`).
   registered site status refuses. No source value is rescaled or filled from a later comparative.
   Historical placeholders, absent rows and nonpositive printed values remain named observations; excluded
   ratio pairs and every `not_published` site remain visible. Live production points must be positive and usable.
-  Canonical gold AISC and copper C1/AISC cost points may be signed or zero, retaining their exact displayed
+  Canonical gold AISC/TCC and copper C1/AISC cost points may be signed or zero, retaining their exact displayed
   value and printed ownership. Their negative multipliers reverse the scaled tail endpoints; zero remains
   a complete zero candidate. The historical positive-ratio pool is unchanged. A live cost point overlapping
   a registered site status refuses even when its raw cell contains zero; status-derived Nil and placeholders
@@ -70,6 +78,19 @@ The public lane of M0 (`fmine assure public`).
   pound/ounce refusals, attributable-production targets and changing cost ownership:
   `copper_candidates_keep_kt_and_both_per_pound_costs_in_separate_source_bound_pools` and
   `copper_candidate_refuses_unit_aliases_attributable_targets_and_ownership_changes`.
+  `forecast::build_with_model` also accepts the explicit seasonal empirical candidate model. The original
+  `build` API keeps the all-season model and its output encoding. Seasonal selection occurs only after
+  authenticating and reading every original release and observation required by the frozen historical
+  pools and point quarter. Other-season sources remain mandatory, including their timing, ownership,
+  status and byte-authentication checks; selecting a season never reduces the source corpus.
+  Only positive adjacent transitions ending in the validated outcome's calendar quarter enter the
+  seasonal ratio pool. Every other-season pair and unusable selected pair remains auditable, and an
+  empty selected pool refuses. The receipt binds the model identifier even when two models produce the
+  same numeric CSV; edits to other-season source data also change the receipt while leaving seasonal
+  quantiles unchanged when their selected transitions are unaffected. Signed cost points, information
+  cuts, source Claims and unissued status retain the same admission rules. The registered all-season
+  persistence comparator remains a separate unchanged baseline; seasonal selection establishes neither
+  calibrated coverage nor forecasting skill.
 
 - DESIGN (BD-057/BD-059): `html::run(workspace, issuer, definitions, as_of)` turns registered HTML
   table cells into canonical public Claims. It parses the exact captured source registry and mapping
@@ -307,6 +328,10 @@ The public lane of M0 (`fmine assure public`).
   scenario before making a joint comparison. Checked witnesses preserve original and hypothetical supports;
   checked exclusion certificates apply only to the supplied finite windows. No usable window stays T3, and
   solver caps remain indeterminate.
+  Net AISC rates retain their printed sign, including zero-crossing rounding boxes, through exact YTD
+  spending, remaining requirements and joint historical comparisons. Sales must remain strictly positive.
+  `xtask/tests/public_guidance_copper.rs` checks negative and printed-zero costs from authenticated invented
+  filings through JSON/Markdown output, with independently calculated bounds and checked quarterly witnesses.
   `guidance::capacity` independently selects the latest eligible registered `technical_report` with agreed
   `technical_<site>_remaining_dry_feed_mt`, `technical_<site>_head_grade_g_per_t` and
   `technical_<site>_recovery_percent` rows. Units must be `dry_mt` (million dry metric tonnes),
@@ -318,8 +343,14 @@ The public lane of M0 (`fmine assure public`).
   implicit wet/dry, grade-average or ownership conversion is allowed. Missing, changed, disputed, pending or
   inapplicable optional technical evidence becomes a typed technical T3 without discarding the requirements
   or historical assessment. Selection never falls back over a newer incomplete or inapplicable document.
-  Copper completion retains its arithmetic and T1 history but reports technical T3 explicitly: the
-  gold grade/ounce capacity model is not applicable to copper. These source-to-report tests use invented
+  DESIGN (BD-342): copper uses the same feed/recovery quantity suffixes, with `head_grade_percent`
+  instead of `head_grade_g_per_t`, units `dry_mt`, `percent_dry_mass` and `percent`, and an explicit
+  `;metal=copper` suffix on all three common scenario bases. Both percentages convert exactly to
+  fractions; dry Mt times grade times recovery times 1000 yields kt before ownership scaling.
+  JSON and Markdown retain the copper units, required dry-mass grade fraction, and source evidence.
+  Gold factors cannot enter a copper calculation. Both grade keys participate in source selection so
+  an incomplete or wrong-metal newer report cannot silently select older complete inputs.
+  These source-to-report tests use invented
   public-format evidence and do not establish authentic issuer acceptance or prospective calibration.
 - `guidance::track_record` (BD-341): `run(workspace, issuer, site, as_of)` verifies the source registry,
   workbook bytes and two-reader document transcriptions before comparing registered annual guidance with
@@ -1167,6 +1198,27 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
   known changes, with 30 region-map exclusions citing E461. A complete issuer-consistency gate record remains
   outstanding; these projections alone do not establish a full M0 gate pass.
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io`, `fmine-metrics`, `fmine-numerics`, `fmine-calib`, `fmine-registry`, `fmine-units`, `fmine-time`.
+
+### Gold and copper cost guidance
+
+- DESIGN (BD-342): explicit `CostMetric::Tcc` selects gold guidance assertions named
+  `guidance_<site>_tcc_usd_per_oz` with `;tcc=issuer-reported-per-sold-oz`, and the matching
+  `summary:tcc_usd_per_oz` YTD and original-quarter observations. Missing or incompatible TCC
+  evidence cannot fall back to AISC. Exact signed requirements and historical witnesses retain
+  source hashes, ownership, sold-ounce units and separate TCC Claim identities. TCC reports use
+  `fmine.guidance.completion.v3` and TCC-labelled fields; AISC/C1 report versions are unchanged.
+  Registered-source controls use invented evidence. Authentic issuer transcription and the full
+  BD-342 acceptance population remain separate work.
+- DESIGN (BD-342): `guidance::run_public_with_metric` explicitly selects `CostMetric::Aisc` or copper
+  `CostMetric::C1`. C1 requires agreed `guidance_<site>_c1_usd_per_lb` assertions with
+  `;c1=issuer-reported-per-sold-lb`, the same document's copper-production target, and original-vintage
+  `summary:c1_usd_per_lb` actuals/history. AISC cannot fill any missing C1 observation. Exact signed
+  C1 spending and rate requirements retain their own typed Claims, source hashes, sales assumptions,
+  historical witnesses and refusals. Optional technical scenarios still constrain production only.
+  The C1 report uses `fmine.guidance.completion.v2` with `cost_metric: "c1"` and C1-labelled fields;
+  existing AISC reports keep v1. Synthetic registered-source controls in `public_guidance_copper.rs`
+  exercise both metrics in the same sources, rounding, signed credits, incompatible evidence and CLI
+  selection. Authentic issuer C1 transcription, calibration and full BD-342 acceptance remain separate.
 - DESIGN (BD-341.S4): `guidance::track_record::clusters` wraps the unchanged dated comparison in
   `fmine.guidance.track-record.clusters.v1` / `GTCL` v1. Its digest binds the entire original report,
   both first-published and latest-registered selectors, every guidance/source link, both exact cluster
@@ -1215,3 +1267,19 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
   pull and annual-to-quarter support remain explicit model limitations. Signed differences do not establish
   causation, recoverable production, investment value or forecasting skill. This slice emits no dollar
   sensitivity or annualized economic estimate, and makes no first-publication claim for comparative inputs.
+
+### Quarterly capital expenditure forecast records
+
+DESIGN (BD-059/067/076): `forecast` admits `capex_usd_m`, `capex_sustaining_usd_m`
+and `capex_projects_usd_m` only for explicit quarterly/quarterly-nowcast rules, each in `usd_m`.
+The source owner matches complete canonical Mine Stats line identities for reported total,
+minesite sustaining and project expenditures, respectively. It preserves every raw competitor
+before admission, original quarter, display token, cell, hash and printed ownership basis.
+Summary aliases, cumulative amounts and other capital scopes cannot supply these targets.
+
+Signed and zero unflagged numeric persistence points are permitted; training requires positive
+adjacent quarter pairs with missing/nonpositive slots retained. Changing ownership among eligible
+history and point values refuses candidate generation. No capital values are scaled to a different
+ownership basis. Frozen-record scoring and comparators retain the same scope and basis requirements.
+Status-derived zeros cannot become numeric capex observations. Existing six production/cost targets
+retain their prior receipts and admission rules.

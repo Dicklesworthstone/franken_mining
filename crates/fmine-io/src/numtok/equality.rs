@@ -117,6 +117,23 @@ pub fn context(text: &str, tokens: &[Token], citations: &[Span], subjects: &[Str
             c.subjects.push(subject.clone());
         }
     }
+    // A named metal narrows the generic cost-of-sales predicate to its registered unit.
+    for (phrase, units) in [
+        (
+            "gold cost of sales",
+            [UnitTok::UsdPerOz, UnitTok::DollarPerOz],
+        ),
+        (
+            "copper cost of sales",
+            [UnitTok::UsdPerLb, UnitTok::DollarPerLb],
+        ),
+    ] {
+        if !c.units.is_empty() && c.units.iter().all(|unit| units.contains(unit)) {
+            for _ in 0..erase_phrase(&mut rest, phrase) {
+                c.metrics.push(Metric::CostOfSales);
+            }
+        }
+    }
     for (label, m) in [
         ("all-in sustaining costs", Metric::Aisc),
         ("all in sustaining costs", Metric::Aisc),

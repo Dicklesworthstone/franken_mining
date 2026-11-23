@@ -6,7 +6,7 @@ Pure calibration, forecast pre-registration (`INV-008`), strictly proper scoring
 - **Crate:** `fmine-calib`
 - **Layer:** K0
 - **Subsystem:** Plumb
-- **LOC budget:** 26,000 planned / 30,000 ceiling
+- **LOC budget:** 27,000 planned / 31,000 ceiling
 - **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record", "guidance_scores"]`
 
 ## 2. Inputs
@@ -56,10 +56,36 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 ## 4. Invariants
 - `FrozenForecast`, `ForecastPayload`, `ForecastLedger`
+- DESIGN (BD-048/181, plan §10.2): `compare_supplied_assessments(left, right, PairedScore)` compares
+  two existing immutable supplied-outcome assessments through the same exact interval and finite CRPS
+  owners as public comparison. This explicit lane matches the unique prospectively frozen
+  `(domain, site, horizon, quantity, unit)` tuple; matched targets also require the same outcome deadline.
+  Model family and author remain visible but do not determine physical identity. Every cohort must have
+  complete frozen metadata and at most one forecast for each target. Resolution rule, eligible sources,
+  quantity, unit, alpha, assessment cut and outcome selector must agree. Public-bound and untagged legacy
+  cohorts refuse rather than receiving an inferred target mapping.
+  Observed pairs require both equal numeric outcomes and identical complete citations. Missing forecasts,
+  unresolved outcomes and selection mismatches remain in the union. Unresolved compatible pairs use the
+  existing exact global interval/CRPS difference extrema; whole-union averages remain absent when any
+  target lacks a forecast, has an incompatible selection or requires unrepresentable arithmetic.
+  CRPS requires finite empirical or exactly weighted empirical distributions on every member, including
+  unmatched targets. These are supplied, unverified target and source declarations, not authenticated
+  public outcomes or empirical calibration. Separate `SuppliedPairedAssessment` receipts use SINT/v1
+  for interval loss and SCRP/v1 for finite CRPS; public PAIR/PCRP/GCRP encodings and durable journal bytes
+  remain unchanged. Six independent kernel controls cover exact weighted scores, missingness, prospective
+  identity, full citations, compatibility refusals and unsupported distributions.
+  DESIGN (BD-048): `PairedScore::Brier` adds exact paired binary-event losses to the same supplied-target
+  path. Every forecast in both complete cohorts must be Bernoulli, including unmatched members. Original
+  probabilities, including zero and one, are retained without a log-score floor. The difference
+  `(p_left - p_right) * (p_left + p_right - 2y)` has its binary completion extrema at zero and one;
+  equal probabilities cancel even when their individual rational representation exceeds capacity.
+  Missing outcomes remain in the denominator, while missing forecasts, source mismatches and arithmetic
+  failures keep affected aggregates unavailable. SBRI/v1 binds this separate comparison; existing
+  interval, CRPS, forecast and assessment encodings remain unchanged.
 - DESIGN (BD-067/BD-334): `record::candidate::build_candidate` generates a complete draft live-site × target
   record from already selected quarterly observations. The named `pooled-quarterly-ratio-empirical-v1` model
   uses each target's frozen persistence pool and inverse empirical CDF: the latest observation times
-  the pooled median, with ordered scaled tail bounds. Only the canonical gold AISC and copper C1/AISC
+  the pooled median, with ordered scaled tail bounds. Only the canonical gold AISC/TCC and copper C1/AISC
   cost targets admit signed or zero live observations; production and unsupported targets still require a
   positive point. Negative multipliers reverse the tail endpoints, while the point remains the multiplier
   times the ratio-pool median. Its exact interval equals that comparator's interval on identical
@@ -76,6 +102,33 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   The pure kernel authenticates no source, availability time, author attestation or external time proof and
   does not create an issued or registered forecast. Its adapter must bind every history and point value to
   the original-release cell, source digest, unit, ownership basis and information cut before publication.
+  `build_candidate_with_model` additionally accepts the explicit
+  `CandidateModel::SeasonalQuarterlyRatio`, named `seasonal-quarterly-ratio-empirical-v1`.
+  It derives the destination calendar quarter from the common validated outcome horizon and admits only
+  positive adjacent-quarter ratios ending in that quarter, pooled across the frozen live sites and years.
+  Q4-to-next-year-Q1 transitions retain their original adjacent dates. The frozen pool and complete history
+  slots remain unchanged: other-season pairs retain both endpoints in `off_season_pairs`, while missing
+  or nonpositive selected pairs remain in `excluded_pairs`. Gaps are never bridged. An empty selected
+  pool refuses the complete candidate without falling back to other seasons. The same exact quantiles,
+  signed/zero cost treatment, rounding and resource bounds apply. The existing `build_candidate` wrapper
+  keeps the all-season model; the registered persistence comparator and its encodings are unchanged.
+  Seasonal intervals may differ from that comparator, but model selection supplies no evidence of
+  seasonality, calibrated coverage or independent forecasting skill.
+  DESIGN (BD-067/334): the explicit `PooledQuarterlyChange` and `SeasonalQuarterlyChange` models
+  instead use exact adjacent `after - before` differences in the target's unit. Their identifiers are
+  `pooled-quarterly-change-empirical-v1` and `seasonal-quarterly-change-empirical-v1`. Each latest value
+  receives the pool's median and tail quantiles additively. Signed and zero cost/capital history remains
+  usable; production history and its live point must be nonnegative. An explicitly numeric zero point
+  can therefore receive a nonzero restart interval under these additive assumptions; ratio models
+  continue to require positive production points. Missing or
+  inadmissible pairs remain explicit, with no bridging or seasonal fallback. A negative exact production
+  bound refuses before decimal export rather than rounding or clamping to zero. Supported field/outcome
+  pairs, not target aliases, control admission. `CandidatePool::kind` separates dimensionless ratios from
+  unit-bearing changes; the pure API's change fields cannot mislabel one as the other. Frozen CSV/rules
+  and the ratio comparator are unchanged. Pooling absolute changes across sites assumes transferable
+  changes at that target's scale; it estimates no site effect, relative growth or calibrated probability.
+  Direct controls in `record::candidate::tests` cover signed/zero capital and all sold-metal cost targets,
+  seasonal selection, missing quarters, physical-domain refusal, exact rounding, translation and overflow.
 - DESIGN (BD-047/BD-049, plan §10.1): `register_payload_with_metadata` freezes a complete
   `ForecastMetadata` beside the predictive distribution: family, author role, domain, horizon, site,
   quantity and unit. Every label is nonempty, trimmed, at most 256 bytes and free of control characters.
@@ -125,6 +178,22 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   descriptive arithmetic bounds, not confidence intervals, prospective model-race evidence, independence,
   calibration or predictive skill. Direct analytical, pair-distance-oracle, invariance, unsupported-payload
   and source/capacity controls are in `xtask/tests/forecast_comparison.rs`.
+- DESIGN (BD-048/049, plan §10.2): `compare_assessments_gaussian_crps` uses the identical public-target
+  and selected-source pairing for a complete Gaussian population. `compare_assessments_full_crps`
+  dispatches to this separately typed projection or the unchanged exact finite-distribution owner;
+  mixed Gaussian/finite populations and unsupported distributions refuse, including unmatched subjects.
+  Gaussian values are explicitly approximate. The difference derivative is twice the CDF difference:
+  equal standard deviations give monotonicity; otherwise one standardized CDF crossing plus the two
+  infinite-tail limits supply all global extrema. The kernel evaluates these without constructing an
+  overflowing physical crossing or subtracting huge nearly equal CRPS values. Scaled tail corrections
+  retain density contributions that would underflow before multiplication by a large standard deviation.
+  Missing-outcome extrema are approximate analytic completion diagnostics, not certified enclosures,
+  confidence intervals or calibration evidence. Every missing/mismatched subject and finite-capacity
+  failure remains explicit; no partial population bound is substituted. GCRP/v1 binds the unchanged
+  saved parent digests and new projection. Existing PAIR/v1 and PCRP/v1 identities remain unchanged.
+  Controls: `ledger/comparison/gaussian/tests.rs` and `xtask/tests/forecast_comparison.rs` cover independent
+  closed-form answers, stationary extrema, distant tails, common location/unit transformations, complete
+  membership, source mismatch and representability boundaries.
 - DESIGN (BD-049, plan §10.3): `correction_proposal(saved_digest, raw_forecast_id)` makes an explicit,
   unissued correction for a later unresolved Gaussian forecast from one complete saved assessment.
   At least two positive forecast/outcome pairs are required; every model, family, author, domain, horizon,
@@ -204,6 +273,17 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   forecast/cohort/assessment identities. Pure JSON and Markdown renderers expose this descriptive projection;
   no calibration, independence or confidence claim follows. Public-API acceptance tests live in
   `xtask/tests/forecast_diagnostics.rs`; private bin/count edge tests remain beside the kernel.
+- DESIGN (BD-048/049): `gaussian_log_diagnostics(saved_digest)` exposes the existing Gaussian negative
+  log-density score for each saved Gaussian member, including valid negative losses. Its named Gaussian
+  population retains unresolved members in full-population completion bounds; other distributions remain
+  explicit. The frozen outcome domain determines convex minimum/endpoint maximum bounds; without one the
+  upper bound is unbounded. Arithmetic failure retains the member and invalidates affected averages.
+  Values use the existing floating-point kernel and are not certified outward enclosures. Scores depend on
+  the frozen target unit: scaling it by a positive factor adds that factor's logarithm. GLS1/v1 binds the
+  exact parent, parameters, selected events/sources and projection without changing earlier durable bytes.
+  Assessment JSON and saved-report Markdown expose these descriptive scores without a calibration verdict.
+  Independent density answers, missing/domain controls, numerical failure and immutable replay controls
+  live in `xtask/tests/forecast_diagnostics.rs`.
 - DESIGN (BD-048/049): `quantile_diagnostics(saved_digest)` supplements the saved assessment with twice-pinball
   loss at **every supplied quantile**, including interior levels. The preregistered central interval score
   remains unchanged. At level 1/2 this loss is absolute error; for exactly complementary levels p and 1-p,
@@ -533,14 +613,20 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     (2026-11-09T11:00Z) and the 31 Dec 2026 deadline;
   - `parse_rules` → `RecordRules` (BD-334.S2): α, the quantile estimator, the n_eff correlation range, the
     coverage level, the dates, the targets (each with its Mine Stats summary field id and its `Outcome`,
-    `fy_minus_9m`, `q4_qtd` or `quarter_qtd`), basis rules, baselines (each on a declared target, every target with one; the id
+    `fy_minus_9m`, `q4_qtd`, `quarter_qtd` or `quarter_qtd_nowcast`), basis rules, baselines (each on a declared target, every target with one; the id
     decides the `BaselineKind`, and `run_rate_persistence` carries its pool's `Quarter`s and the point quarter
     after them) and the named site universe (`live`/`not_published`, never dropped); refuses an `OPEN` marker in
     any value, a duplicate id, an unknown baseline id and every malformed or missing key;
   - `TargetMetric::from_target` gives candidate and scoring adapters one explicit source interpretation:
-    `au_prod_100_koz` and `cu_prod_100_kt` require `fy_minus_9m`; `aisc_usd_per_oz`, `c1_usd_per_lb` and
-    `aisc_usd_per_lb` require `q4_qtd`. It supplies the exact unit, guidance quantity key and cost-definition
-    suffix. All five fields also accept `quarter_qtd`, meaning the original next-quarter QTD value.
+    `au_prod_100_koz` and `cu_prod_100_kt` require `fy_minus_9m`; `aisc_usd_per_oz`, `tcc_usd_per_oz`,
+    `c1_usd_per_lb` and `aisc_usd_per_lb` require `q4_qtd`. It supplies the exact unit, guidance quantity key
+    and cost-definition suffix. All six fields also accept `quarter_qtd`, meaning the original
+    next-quarter QTD value. Explicit `quarter_qtd_nowcast` uses the same units and original QTD outcome,
+    but all targets must share that mode. Its `nowcast_from_utc` equals quarter end, and `proof_by_utc`
+    must be later and strictly before mandatory `earliest_outcome_release_utc`. A nonempty
+    `outcome_release_basis` must state the declared earliest release, including preliminary announcements.
+    These exact rule bytes are frozen; the declaration is not independent evidence of nonpublication.
+    Adapters additionally enforce authenticated record timing and registered original publication bounds.
     `RecordRules::outcome_quarter` requires one common persistence point and refuses mixed annual/quarterly
     targets; annual records retain their Q3-to-Q4 meaning. Rules parsing, CSV admission and both direct
     scoring APIs enforce that shared horizon whenever a target uses `quarter_qtd`; constructing or mutating
@@ -554,7 +640,7 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   - `parse_forecasts(csv, rules)` → `Vec<ForecastRow>` (BD-334.S3): the header `forecasts_header` derives from α
     (`site,target,point,p10,p90,uncalibrated` at 0.2), exactly one row per live site × target, none for a
     `not_published` site, exact decimals with lower ≤ point ≤ upper, and `uncalibrated` = `true`.
-    Gold AISC and copper C1/AISC sold-metal cost targets admit signed forecasts, including credit-only and
+    Gold AISC/TCC and copper C1/AISC sold-metal cost targets admit signed forecasts, including credit-only and
     cross-zero ranges. The exact field and `q4_qtd` or `quarter_qtd` outcome rule authorize this domain, never the target ID
     or prose. Production, unknown fields and incompatible field/outcome pairs retain nonnegative bounds.
     Both direct scoring APIs enforce the same target domain; signed costs are not clamped or excluded.
@@ -708,7 +794,7 @@ durable ledger or external timestamp authority. Caller-supplied times are orderi
   `guidance_scores::certified::tests::test_frozen_95_percent_level_against_independent_binomial_sum` compares
   95% endpoints with an independent 90-digit Decimal binomial summation. A separate regression pins the
   previous CP90 grid endpoints and a dyadic exact-root case.
-- `public_target_semantics_keep_metal_denominator_and_additivity_distinct` checks all five public target
+- `public_target_semantics_keep_metal_denominator_and_additivity_distinct` checks all six public target
   interpretations and rejects reversed outcome kinds and an attributable-production alias.
 (BD-047/BD-068). It does not infer a fallback after a target's definition changes, estimate correlation, or claim
 calibration for an issuer guidance range with no stated level. Guidance's IID Clopper–Pearson reference interval
@@ -722,3 +808,13 @@ substitute for statistical confidence intervals. Mean-z bounds propagate source 
 The frozen-record scorer consumes already transformed, selected inputs. Its completion bounds do not make an
 unavailable baseline into a published prediction; its confidence references do not establish forecasting skill.
 The actual FY2026 record and outcomes remain subject to the Q3 source gate, external time proof and later release.
+
+### Quarterly capital target semantics
+
+DESIGN (BD-059/067/076): `record::TargetMetric` adds distinct total, minesite-sustaining
+and project capex meanings for `capex_usd_m`, `capex_sustaining_usd_m` and
+`capex_projects_usd_m`. All use `usd_m` and require `Outcome::QuarterQtd`, including
+the existing explicit nowcast normalization. `Q4Qtd` and `FyMinus9m` do not admit capital targets.
+The metric exposes its exact canonical source line and issuer-reported guidance suffix.
+Capital points may be signed or zero; positive historical adjacency and exact pooled-ratio
+arithmetic remain unchanged. This adds target meanings without modifying frozen rule bytes.

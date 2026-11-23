@@ -1,12 +1,12 @@
 # CONTRACT.md — `fmine-cli`
 
 ## 1. Purpose
-The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-118`, `BD-071`), implementing all 79 registered verbs in `registries/verbs.toml` over the `FMT-ENV-1` response envelope, `doctor` diagnostics, `robot-docs` / `robot schema`, and `repair plan` / `repair apply <digest>` (`PO-ADIT-1`..`PO-ADIT-3`).
+The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-118`, `BD-071`) exposes the 80 verbs in `registries/verbs.toml` over the `FMT-ENV-1` response envelope, including `doctor` diagnostics, `robot-docs` / `robot schema`, and `repair plan` / `repair apply <digest>` (`PO-ADIT-1`..`PO-ADIT-3`).
 
 - **Crate:** `fmine-cli`
 - **Layer:** U
 - **Subsystem:** Adit
-- **LOC budget:** 40,000 planned / 46,000 ceiling
+- **LOC budget:** 44,000 planned / 51,000 ceiling
 - **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
@@ -50,6 +50,98 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   JSON binds exact ratios and worksheet line numbers to the source hash. Markdown rounds for display.
   Inputs are internal assumptions. Posterior uncertainty, inventory matching and period close remain open.
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
+
+- DESIGN (BD-048/049, plan §10.2): `forecast journal compare --score crps` also admits homogeneous
+  Gaussian forecasts through `fmine.forecast-gaussian-crps-comparison.v1` and GCRP/v1. JSON declares
+  `arithmetic = "approximate"`; JSON and Markdown retain every frozen mean/standard deviation, selected
+  source citation, missing/mismatched member and arithmetic failure. Missing-outcome completion uses
+  approximate analytic global extrema, explicitly not certified numerical enclosures. Mixed
+  Gaussian/finite populations and unsupported distributions refuse instead of selecting a subset.
+  This read-only projection samples no clock, rereads no source and appends no journal operation.
+  Existing exact finite CRPS and default interval schemas/identities remain unchanged. Independent
+  kernel controls and `xtask`'s saved Gaussian comparison lifecycle exercise the numerical and durable
+  boundaries. The projection supplies no calibration, independence or predictive-skill claim.
+
+- DESIGN (BD-059/067/076): the frozen forecast-record workflow additionally admits
+  `tcc_usd_per_oz` for `q4_qtd` and `quarter_qtd` targets. Candidate generation, original-release
+  outcomes and persistence all consume the printed gold total cash-cost field. Its guidance comparator
+  requires an agreed `tcc_usd_per_oz` quantity with `;tcc=issuer-reported-per-sold-oz`; gold AISC cannot
+  substitute. Signed and zero costs keep their literal values, subject to existing source, ownership
+  and status checks. Cost rates are not subtracted or scaled by ownership. Existing rule files,
+  canonical records and target interpretations remain unchanged when TCC is absent.
+
+- DESIGN (BD-342): `guidance completion --metric aisc|c1` defaults to AISC and permits explicit copper
+  C1 completion. The source owner selects matching guidance, YTD actuals and original-quarter history;
+  no AISC/C1 substitution is allowed. JSON uses C1 names and schema `fmine.guidance.completion.v2`
+  for C1, while AISC keeps its existing v1 bytes. Markdown labels C1 requirements and joint witnesses
+  in USD per sold pound. Signed costs, printed rounding, source citations and named missing-history
+  exclusions remain visible. Automatic and explicitly selected technical scenarios remain independent
+  production-only comparisons. Unsupported or repeated metrics and metric selection with the fixed
+  synthetic example are usage errors. No forecast registration or full gate acceptance is supplied.
+
+- DESIGN (BD-225/229): `decide investment --manifest <investment.toml>` optionally screens final
+  discounted incremental cash after initial capex using one `[[downside_limit]]` with `floor_usd`
+  and `max_breach_probability`. The exact floor must fit 0.0001 USD without rounding. JSON and Markdown
+  retain nominal and eligible winners, every rejection, probability-cap equality and an explicit empty
+  selection with no fallback. This horizon-wide loss-probability screen does not imply interim cash
+  sufficiency, calibrated scenarios or a bound on loss severity. The shared source loader recomputes and
+  retains every declared physical/commercial bundle before returning any investment receipt.
+
+- DESIGN (BD-225/229): `decide program <model-file>` also accepts the source-bound
+  `fmine.capital-investments.v1` schema. Candidate mappings name an investment manifest and alternative;
+  the shared loader recomputes complete underlying production/commercial receipts before deriving costs
+  and state returns. Explicit shared-scenario and additivity declarations, identical state IDs/weights and
+  valuation periods/discounts, and same-operation exclusion groups govern admission. Exact initial capex
+  constrains the budget without being deducted again from already-net cash returns. Exhaustive subsets,
+  dependencies, exclusions and joint signed-loss CVaR use the existing capital engine, preserving every
+  source alternative, rejection, full source bytes/hash and Claim ancestry. The distinct
+  `additive_discounted_incremental_cash` convention identifies a declared cash window; source-local
+  downside screens and unsupported aggregate/entity funding, equity and recourse
+  modes refuse. No lifetime NAV, terminal value, independence or interaction model is inferred.
+  Controls: `xtask/tests/capital_investments.rs`; example: `tests/capital/production_investments.toml`.
+  Optional `[[funding_schedule]]` requires `cash_basis`, `opening_date`,
+  `settlement_convention = "source_period_increment_at_cash_period_close"` and
+  explicit `cash_rounding = "exact_0_0001_usd"` or `"nearest_ties_even_0_0001_usd"`.
+  Supply `[[cash_period]]` with `id`, `cash_period` and
+  `minimum_cash` for each source investment period; `[[opening_cash]]` with `state`, `value` for
+  every shared state; and `[[baseline_cash_flow]]` with `period`, `state`, `value` for every pair,
+  including zeroes. Baseline flows exclude candidate increments and initial capital. Inclusive UTC cash
+  windows are contiguous from the valuation date; the derived source-period increment settles at the
+  matching window's close, which cannot precede that source interval's exclusive end. Nominal cash comes
+  from the unrounded original operating increments, without discounting. Exact mode refuses
+  sub-0.0001-USD fractions; the explicit nearest mode rounds each increment once using the same
+  implementation as source valuation. JSON `source_cash` rows retain every original rational,
+  settled amount and signed rounding delta, bound in the command digest. Opening cash, baseline flows
+  and floors always require exact minor units. Initial capital leaves opening cash once before receipts. Every original state must meet the
+  opening and period-close floors; later recovery cannot erase an earlier shortfall. Existing discounted
+  returns and joint tail risk are unchanged. Complete sources and schedule Claims remain bound. Omitting
+  the declaration explicitly reports that liquidity is not assessed. These checks do not establish
+  intra-period solvency or infer actual payment terms.
+  Optional `[[robustness]]` requires `method = "wasserstein_1"`, nonnegative exact `radius`,
+  `metric_basis`, `radius_basis`, `support = "declared_shared_scenarios"` and
+  `distance_unit = "dimensionless"`. Supply exactly one `[[transport_distance]]` row with `from`, `to`
+  and `value` for every ordered pair of original shared states, including zero diagonals and both
+  directions. Values accept exact decimals or `n/d`; distances must form a proper metric with positive
+  off-diagonal values, symmetry and the triangle inequality. The existing 64-state and transport work
+  limits apply within the source manifest byte limit. Complete sources and declared geometry remain
+  bound to the robustness Claim. The report retains nominal winners and original cash outcomes while
+  separately comparing worst-case mean and expected regret over nominally feasible bundles. Explicit
+  portfolio tail-loss caps also receive exact worst-CVaR certificates and separate robust-tail eligibility
+  and filtered co-winners; equality passes, and no cap is inferred. Every original state remains subject
+  to all opening and period-close cash floors, including states assigned zero adversarial probability.
+  These source-supported weight stresses do not supply new outcomes, fitted probabilities, confidence
+  coverage or lifetime NAV.
+  Optional `[[selection_stability]]` requires `method = "weighted_multinomial"`, a quoted unsigned
+  64-bit `seed`, `replicates` in `200..2000`, `draws_per_replicate` in `1..4096`, `sampling_basis`,
+  `support = "declared_shared_scenarios"` and `resampling_unit = "complete_joint_state"`. Seeded draws
+  preserve all candidates and periods in each original state; the existing selector reweights already-net
+  cash and recomputes every declared portfolio tail limit. Original budget, dependency, exclusion and
+  all-state cash-floor failures remain binding when a state receives zero draws. Reports retain exact
+  co-winners, no-winner replicates, runner-ups, conditional selection frequencies and nominal co-winner
+  fragility below `4/5`. Nominal choices, original source cash and separate Wasserstein comparisons are
+  unchanged. Full declaration and investment ancestry bind the receipt. Existing limits of 8,000,000
+  total draws and 32,000,000 state/law/alternative work apply. Frequencies and draw counts describe the
+  declared sensitivity experiment; no empirical sample size or calibrated optimality probability is inferred.
 
 - DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>
   --recovery <worksheet> --terms <worksheet>` values each complete shared physical/commercial state
@@ -192,17 +284,28 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Inputs remain Assumed and Internal; synthetic fixtures and direct CLI-library checks are in
   `tests/plant/rtd_*.toml` and `xtask/tests/plant_rtd.rs`.
 - DESIGN (BD-313): `plant rtd-infer --input <worksheet.toml>` reads strict
-  `fmine.plant-rtd-inverse.v1` or `.v2` declarations and calls the pure known-kernel inverse adapter.
+  `fmine.plant-rtd-inverse.v1`, `.v2`, `.v3` or `.v4` declarations and calls the pure known-kernel inverse adapter.
   Up to 32 contiguous intervals declare outlet elemental kilograms and either a genuine measured
   feed or explicit `unmeasured`; unknown feeds receive no invented observation or prior variance.
   The complete covariance of genuine observations includes every cross-period pair. The declared
   RTD and throughput volumes are fixed and source-bound. V1 fixes opening inventory; v2 requires
   measured active-opening stocks and their complete covariance, including stock/flow correlations.
+  V3 requires `opening_treatment = "unmeasured"` and only the fixed dead-stock opening row. It forbids
+  active opening amounts and observation/covariance rows for unknown stocks. Identifiable opening stocks
+  and missing feeds are inferred jointly without priors; unresolved attribution refuses `FMINE-REF-104`.
+  V4 requires `fixed_transport = "true"`, `opening_treatment = "mixed"` and an explicit row for every
+  active tank, with both measured and unmeasured stocks present. An unmeasured row contains only `tank`
+  and `element_kg = "unmeasured"`; measured and fixed dead rows carry all exact mass fields. Only measured
+  tanks receive `opening/<one-based-tank>` covariance coordinates, preceding the chronological flows.
+  The mixed source and full correlated solve retain each tank's identity, with missing feeds and then
+  unmeasured stocks in latent order. V4 has separate source/receipt encodings; v1–v3 remain unchanged.
+  Inferred coordinates retain null observation-source IDs and their distinct declaration Claim reference.
   Dead stock remains fixed. JSON and Markdown
   retain conditional opening/feed estimates, full joint covariance, response matrices, independent forward
   replay, conservation and gross-error diagnostics. No redundancy is reported as unavailable,
   never a passing test. Negative or gross-error fits retain rejected diagnostics and no admitted
-  Claim. Assumptions remain Assumed, Internal and uncalibrated. Synthetic independent analytic
+  Claim. Assumptions remain Assumed, Internal and uncalibrated; no uncertain-kernel fit, inferred dead
+  inventory or empirical plant/recovery qualification is supplied. Synthetic independent analytic
   answers and strict refusal checks live in `tests/plant/rtd_inverse*.toml` and
   `xtask/tests/plant_rtd_inverse.rs`.
 
@@ -267,7 +370,21 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     `tests/planning/joint_route.pcpsp` is the synthetic discounted-value 5→6 example; zero rounds retains
     its initial schedule. Bounded price columns propose exact decimal-grid destination splits
     at fixed mining periods from internal and admitted external whole starts; only checked strict gains
-    are retained, with genuine external splits preferred on equal value. No external claimed bound, calibration, sampling confidence, reserve
+    are retained, with genuine external splits preferred on equal value. The selected split incumbent,
+    including an imported one, then receives bounded one-block period moves with every destination
+    fraction and the mined set preserved. Both periods' signed resource rows and both precedence
+    directions must remain feasible. `--rounds` and a 262,144-work-unit limit bound the pass; exhaustion
+    retains its checked incumbent. Optional `fractional_period_search` JSON/Markdown reports the seed,
+    exact before/after value and work counters, with that origin selected only on a strict gain. The
+    original external candidate assessment remains unchanged. A subsequent bounded joint pass searches
+    each mined block's period and exact allocation between every destination pair. The optional
+    `joint_period_route_search` report retains the immediate seed origin, before/after values, move and
+    work counters; a strict gain selects that origin. Same-period rerouting is included. Both affected
+    periods' signed rows and both precedence directions must hold, and the final independent candidate
+    check and full-model bound replay remain mandatory. This pass has its own 262,144-work-unit limit,
+    uses `--rounds`, and preserves the mined set and original candidate receipt. Zero rounds disables it.
+    `tests/planning/joint_fractional.*` declares the synthetic 27.5→30 example checked by the existing
+    independent CLI oracle. No external claimed bound, calibration, sampling confidence, reserve
     status or execution permission is inferred. `xtask/tests/plan_schedule.rs` invokes a Python Fraction
     oracle against the actual binary, including independent exhaustive primal and dual-price checks.
     Optional `--lp-guidance` solves the PCPSP relaxation in this upper layer with `fmine-lp` PDLP,
@@ -294,6 +411,33 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     documented in `robot-docs.plant_recovery`; `tests/plant/recovery_card.toml` is synthetic, with real-binary
     checks in `crates/xtask/testdata/plant_recovery_contract.rs`, including nonlinear joint scenarios from
     `tests/plant/recovery_scenarios.toml` and independently authored correlation/cap cases.
+    Optional `[[correction_fit]]` and 2..256 `[[correction_pair]]` rows fit an exact unweighted mean
+    residual on explicitly aligned historical processing support. Baselines are uncapped and already
+    include the ordered operational factors, before any prior correction. The fitted mean and explicitly
+    declared optional cap replace the original correction and cap; raw pairs, exact descriptive sample
+    variance, original model and applied replacement Claims remain separately visible. Pair intervals
+    cannot overlap, all observations must be available by the evidence cut, and the cut must strictly
+    precede the target inside the same card validity. Model identities and those future-support
+    restrictions travel with the fitted correction. Censoring, incomplete samples, unsupported methods
+    or alignment and simultaneous scenario correction overrides refuse. The shared fitted adjustment
+    propagates through every joint scenario and the existing production/forecast path. Registering a
+    plant forecast additionally requires the fit evidence cut at or before the registration clock's
+    earliest bound; explicit `verify-plant` checks that same boundary after recomputing retained sources.
+    A future cut refuses before any journal append. No-fit worksheets and old saved operations retain
+    their existing semantics. The fit does not imply a standard error, calibrated probabilities or
+    automatic model promotion. The exact schema is exposed in `robot-docs.plant_recovery`; real-binary
+    tests cover direct fitting, coupled output, retained-source verification and atomic timing refusals.
+    `baseline = "evaluated_post_operational_pre_correction"` instead derives each historical baseline
+    from `[[correction_input]]` rows naming `pair`, `name`, `measurand`, `unit` and `value`.
+    Each pair supplies all card coordinates and omits `baseline_fraction`; mixed, duplicate, orphan,
+    unit-mismatched or out-of-applicability inputs refuse. The shared evaluator runs the original
+    formula and ordered operational factors on each historical interval, excluding the old correction
+    and cap. Its binary64 result is represented exactly as a rational before fitting; overflow refuses.
+    Complete model, input and observation envelopes bind each baseline Claim, and each computed pair
+    binds the actual test work, ordered operations and route. The result retains all intermediates,
+    derived pair receipts and the actual fit-input Claim. Declared historical inputs remain visible on
+    kernel refusal. Coupled production, forecast registration and offline retained-source verification
+    all use the same computed-baseline path; numeric representation does not establish empirical accuracy.
   - DESIGN (BD-177): `plant transfer --input <worksheet.toml>` reads a source-bound
     `fmine.plant-transfer.v1` worksheet and invokes the raw-lot projection owner. It requires explicit
     complete/nonoverlapping whole-lot support, matched moisture/assay dry bases, wet mass in kg,
@@ -577,6 +721,23 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     mapping. Future source bytes are excluded before reads. HTML cost-credit treatment is unstated, so an
     explicit by-product or co-product assertion remains unchecked. This source selector is exclusive with
     `--synthetic` and `--through`; ordinary workbook lint remains available through its existing selector.
+    A separate `fmine.html_period_arithmetic.v1` receipt derives H1−Q1, 9M−H1 and FY−9M quarters and
+    complete Q1-based H1/9M/FY sums for explicit gold/copper production and gold sales. Exact printed
+    half-step bounds propagate through the existing quarter and public-derivation kernels; source Claims,
+    dates, label/mapping/registry anchors and typed intermediate/result Claims remain inspectable.
+    Every required period must have one admitted assertion on the same site, unit and ownership basis.
+    Competing vintages remain ambiguous; missing, status-marked or placeholder operands never become zero.
+    Direct assertions and explicit citations retain their equality verdicts. No rate subtraction, unit or
+    ownership conversion, historical mapping proof or issuer disclosure is inferred. The receipt binds
+    the draft digest, complete selected Claim population and arithmetic findings. Independent exact
+    source/CLI cases extend `xtask/tests/html_lint.rs` and its Python Fraction oracle.
+    DESIGN (BD-059/BD-345): the same receipt conditionally reconstructs quarterly gold AISC and cost
+    of sales from `(R_cumulative*Q_cumulative - R_prior*Q_prior)/(Q_cumulative-Q_prior)`.
+    All four rate/sold-gold Claims must be unique, share one filing and printed ownership basis, and
+    cover H1/Q1, 9M/H1 or FY/9M. The whole incremental-sales enclosure must be positive. Exact
+    vertex bounds preserve the repeated sales variables and signed rates. Same-definition/sold-denominator
+    assumptions accompany every result; credit treatment, accounting equivalence, issuer disclosure and
+    calibration remain unestablished. Missing or competing inputs retain source evidence without a result.
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
@@ -606,8 +767,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     historical-sales scenario, in JSON or readable `--format markdown` (BD-342);
     gold displays koz and USD per sold oz; copper displays production kt, sales million lb and USD per sold lb,
     including correctly labelled original-quarter witnesses. Source-declared copper sales in kt retain their
-    exact conversion and source ancestry. Copper technical capacity stays T3/indeterminate, and explicitly
-    selected gold capacity documents refuse copper rather than applying a gold grade/ounce model;
+    exact conversion and source ancestry. Copper technical capacity accepts explicitly declared copper
+    dry-feed, dry-mass grade and recovery inputs, with kt ceilings and fraction-valued required grades.
+    Selected gold factors refuse in copper calculations, and missing technical evidence stays T3;
   - `track-record --issuer <issuer> [--site <site>] [--through YYYYQn | --as-of YYYY-MM-DD] [--price-subject <subject>]` or `--synthetic`: cited issuer
     guidance against first-published annual outcomes, with separate comparative assessments, retained missing
     members, exact descriptive scores and JSON or readable Markdown output (BD-341);
@@ -1011,6 +1173,38 @@ arithmetic results, not confidence intervals or sequential evidence of model sup
 source-to-journal fixture includes analytical weighted/uniform results, missing-outcome bounds, retained
 sources, offline replay, CLI selection/refusal and legacy-default checks.
 
+### Explicit supplied-target comparisons (BD-048/181, plan §10.2)
+
+`forecast journal compare --targets supplied` enables paired interval or finite CRPS comparison of
+registered plant and other prospectively tagged supplied-outcome cohorts. Omitted `--targets` and
+explicit `--targets public` retain the public admission path. The supplied path requires the same frozen
+resolution rule, eligible sources, quantity, unit, alpha, saved assessment cut and outcome selector.
+Matching uses the complete unique domain/site/horizon/quantity/unit tuple and equal outcome deadlines.
+Duplicate targets, untagged legacy forecasts and public-bound cohorts refuse. Equal observed numbers
+are insufficient: both selected values and complete citations must match. Missing forecasts, unresolved
+outcomes and source mismatches remain visible; whole-population bounds require a compatible pair for
+every target. `--score crps` requires complete finite distributions even on unmatched targets.
+
+The separate `fmine.forecast-supplied-comparison.v1` (SINT/v1) and
+`fmine.forecast-supplied-crps-comparison.v1` (SCRP/v1) receipts retain frozen distributions, model/author
+metadata, selected events and full citations. JSON and Markdown explicitly identify declarations and
+citations as supplied and unverified. The command samples no clock, opens no original source file,
+creates no assessment and appends nothing; public comparison and journal encodings remain unchanged.
+Independent kernel tests live in `xtask/tests/forecast_supplied_comparison.rs`. The actual plant command
+control registers original and fitted forecasts, freezes cohorts before physical start, saves supplied
+outcomes and assessments, and compares them after original source paths disappear. Its exact synthetic
+example improves CRPS from `7/32` to `3/32`, with preceding unresolved difference bounds `[-1/8, 1/8]`.
+These scores and arithmetic completion bounds establish no calibration or statistical model superiority.
+
+DESIGN (BD-048): `--score brier --targets supplied` compares saved Bernoulli cohorts using their original
+probabilities and binary outcomes. Every member must be a Bernoulli forecast, including unmatched targets.
+For an unresolved matched event, the exact loss-difference extrema occur at outcomes zero and one.
+The result retains observed scores separately from whole-population completion bounds, with no dropped
+unresolved events or probability clipping. `fmine.forecast-supplied-brier-comparison.v1` uses SBRI/v1;
+the existing schemas and journal bytes are unchanged. Brier with default or explicit public targets
+refuses, so a requested score cannot silently fall through to interval scoring. JSON and Markdown
+retain the same target, source, missingness and arithmetic-capacity checks as the supplied interval path.
+
 ### Explicit forecast correction proposals (BD-049, plan §10.3)
 
 `forecast journal correction --journal <path> --assessment <digest> --forecast <alias> [--head <hex>]`
@@ -1220,7 +1414,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 - `forecast_record::{Command, execute}`: a read-only adapter over exact frozen record bytes, explicit RFC 3161
   trust roots and registered original sources; numerical scoring delegates to `fmine-calib`.
 - DESIGN (BD-067/BD-334): `forecast_candidate::{Command, execute}` exposes `forecast record build` with
-  required rules, named `pooled-quarterly-ratio-empirical-v1` model and an explicit UTC evidence cut. It uses
+  required rules, explicit `--model pooled-quarterly-ratio-empirical-v1` or
+  `--model seasonal-quarterly-ratio-empirical-v1`, and an explicit UTC evidence cut. It uses
   the public source adapter and pure candidate kernel, retaining the complete live site/target population,
   exact model rows, actual decimal CSV rows, historical ratio/exclusion audits and canonical source Claims.
   JSON schema `fmine.forecast-record-candidate.v1` and Markdown label the draft uncalibrated and identify
@@ -1232,9 +1427,21 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   ratio pool still uses positive adjacent observations only. Negative live costs reverse the two tail products;
   the point remains the live cost times the pooled-ratio median. CSV decimal precision is explicit (0–12,
   default 6), with lower-down, upper-up, nearest-point rounding, point ties toward positive infinity and
-  unsigned zero. Exact bounds equal the persistence comparator before rounding; the median
+  unsigned zero. The all-season model's exact bounds equal the persistence comparator before rounding; its median
   point is not evidence of independent skill. The output manifest preserves retrieval evidence separately
   from declared publication dates and is not the completed issuance manifest.
+  The explicitly seasonal model selects positive adjacent historical transitions whose destination
+  calendar quarter matches the common validated outcome horizon, including Q4-to-next-year-Q1.
+  It retains the frozen live-site population and every required original source, observation and Claim.
+  Seasonal pool JSON adds `seasonal_destination_quarter` and `off_season_pairs`; these pairs retain both
+  endpoints, while unusable selected pairs remain in `excluded_pairs`. Markdown identifies the selected
+  quarter and omitted-season audit count. An empty selected pool refuses without an all-season fallback.
+  Model identity and the complete source corpus remain receipt-bound, including when models produce
+  identical CSV values or a source affects only other seasons. The legacy all-season candidate JSON,
+  Markdown, CSV and receipt encoding remain unchanged; the registered persistence comparator is also
+  unchanged. Seasonal bounds can differ from that comparator and retain exact signed-cost ordering and
+  outward decimal enclosure. The seasonal scope text makes no claim of seasonality, calibrated coverage,
+  independent skill, attestation or issuance.
 - DESIGN (BD-067/BD-076): annual public records support `cu_prod_100_kt` with `fy_minus_9m` and
   `c1_usd_per_lb` / `aisc_usd_per_lb` with `q4_qtd`, alongside the original gold targets. The shared
   `fmine_calib::record::TargetMetric` defines source units, guidance quantity and the required cost
@@ -1422,6 +1629,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
   guidance, incompatible ownership/support, future evidence and unusable sales refuse; synthetic evidence is
   available only through the explicit synthetic lane.
+  Signed and zero net AISC, including zero-crossing rounding intervals, are admitted under the unchanged
+  explicit gold/copper cost definition. YTD and historical spending bounds use exact four-corner products;
+  physical production stays nonnegative and every sales interval stays strictly positive. The quarterly
+  solver retains each signed cost/sales wedge and independently checks any completion witness.
   T1 output retains exact source-quarter/replay-quarter points and checked exclusion certificates under the
   separately declared sales scenario. No usable historical window remains T3. Markdown retains exact fractions
   when a decimal would round, labels display approximations and escapes source text; it never adds authority.
@@ -1437,7 +1648,11 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   retaining every reader at each selected locator; unrelated technical inputs cannot block that comparison.
   The full-mine gold limits must explicitly state maximum remaining dry feed,
   grade and recovery, with exact units and `100%;bound=explicit-upper;metal=gold` basis; ordinary averages or
-  annual nameplate values do not qualify. The adapter delegates ceiling and required-grade arithmetic to
+  annual nameplate values do not qualify. DESIGN (BD-342): copper declares the analogous
+  `100%;bound=explicit-upper;metal=copper` basis, with `head_grade_percent` in `percent_dry_mass`
+  alongside dry Mt and recovery percent. Grade and recovery convert to distinct copper fraction types;
+  the exact production ceiling is in kt and the required grade is a fraction of dry feed mass.
+  The adapter delegates ceiling and required-grade arithmetic to
   `fmine_metrics::capacity`. The T2 result is a production-only exclusion test; NotExcluded supplies no
   feasibility witness or probability. Its Claims retain source anchors and interpretation. A composite digest
   binds both the arithmetic/history and capacity reports; the envelope still has no authority certificate.
@@ -1631,6 +1846,19 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Markdown retains every frozen member in a per-target table with its exact point, interval, outcome,
   named baseline bounds, publication status and paired membership. Missing values carry explicit reasons;
   signed and zero values retain their declared units, and the point is never reconstructed from the bounds.
+- DESIGN (BD-067/076/334): explicit `quarter_qtd_nowcast` rules support post-quarter, prepublication
+  candidates and authenticated record scoring. Every target shares the mode; the frozen rules declare
+  quarter-end `nowcast_from_utc`, a later proof deadline, and the earliest outcome release with a stated
+  basis covering preliminary announcements. The full authenticated record proof follows its post-quarter
+  information cut, meets that deadline, and strictly precedes every registered original workbook/HTML
+  publication day. Retrieval time cannot establish nonpublication. Missing publication facts refuse;
+  missing outcome bytes remain unresolved in the original scoring denominator. Candidate and assessment
+  schemas identify nowcasts separately from advance forecasts and disclose the release declaration's
+  unverified status and registry-completeness limitation. Existing ordinary forecast timing stays strict.
+  The legacy xtask verifier directs this mode to `fmine forecast record score`, which enforces the original
+  publication checks. No author attestation, external timestamp, release-calendar completeness or issued
+  forecast is fabricated by candidate generation. Parser, source, proof and actual CLI controls live in
+  the existing quarterly-record and forecast-candidate suites.
 - DESIGN (BD-067/076): a separate `quarter_qtd` record uses the original next-quarter QTD value for
   every supported gold/copper production or sold-metal cost target. A common frozen persistence point
   determines the quarter, including year rollover. Quarterly guidance must name that exact period;
@@ -1783,6 +2011,16 @@ None: every failure is a usage error or a typed refusal.
 - Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-crs`, `fmine-evidence`, `fmine-claim`,
   `fmine-ledger`, `fmine-runtime`, `fmine-registry`, `fmine-array`, `fmine-numerics`, `fmine-calib`,
   `fmine-decide`, `fmine-capital`, `fmine-io`, `fmine-public`, `fmine-metrics`, `fmine-optimize`, `fmine-lp`, `fmine-plant`.
+
+### Gold total cash-cost guidance
+
+- DESIGN (BD-342): `guidance completion --metric tcc` explicitly selects gold total cash cost.
+  Registered guidance requires its own sold-ounce definition, and YTD/history require original
+  TCC observations. The command retains exact signed numerator/rate requirements, source Claims,
+  checked joint historical witnesses and a separate v3 JSON report with `cost_metric: "tcc"`.
+  JSON and Markdown label the selected cost metric throughout. Optional technical comparisons
+  concern production only. The command refuses missing or incompatible required evidence rather
+  than substituting AISC; authentic issuer TCC acceptance and calibration remain open.
 - DESIGN (BD-341.S4): `track-record clusters --issuer <issuer> --as-of YYYY-MM-DD --axis year|site`
   optionally selects one site and delegates to the registered evidence-cut loader plus the separate
   cluster projection. `--synthetic --axis year|site` uses explicitly invented evidence. The axis is
@@ -1980,3 +2218,23 @@ None: every failure is a usage error or a typed refusal.
   sensitivities. The opt-in `clusters` projection adds conditional one-axis inference; simultaneous site/year
   inference, empirical qualification and the full guidance data gate remain open. These track-record paths
   neither attribute controllable cost causes nor register forecasts.
+
+### Quarterly capex record sources
+
+DESIGN (BD-059/067/076): record build/score support original-quarter total, minesite-sustaining
+and project capex in `usd_m`. Source resolution matches the exact Mine Stats capital line,
+three-month period, site, unit, original release and printed ownership. Numeric signed/zero
+amounts are admitted only without status flags; status-derived Nil is unavailable.
+Shared persistence pools retain every quarter slot and block on ownership drift. Original-quarter
+outcomes and guidance must match the usable frozen point's ownership; guidance additionally
+requires the target's explicit `;capex=issuer-reported-...` suffix and exact quarter.
+No cumulative subtraction, component substitution or ownership conversion is supplied.
+
+### Raw-measurement plant reconciliation command
+
+DESIGN (BD-151/155/177): `plant reconcile-raw --input <worksheet.toml>` performs bounded
+source reading and delegates physical admission, numerical fitting and result rendering to
+`fmine_plant::raw_measurements::balance`. JSON and Markdown expose the same source-bound
+result. Refused fitted candidates retain diagnostics without an admitted Claim. The verb is
+nonmutating, registered under Crucible and available in robot-docs with all required units,
+basis declarations, raw correlations and solver limits. Existing plant commands are unchanged.

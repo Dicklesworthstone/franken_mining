@@ -14,9 +14,6 @@ fn rat(q: Rat) -> String {
 }
 
 pub(super) fn spec(s: &InvestmentSpec) -> String {
-    let limit = s.downside_limit.as_ref().map_or_else(String::new, |limit| {
-        format!(",\"downside_limit\":{}", limit.to_json())
-    });
     let mut periods = s.periods.iter().collect::<Vec<_>>();
     periods.sort_by_key(|p| &p.id);
     let periods = periods
@@ -46,9 +43,36 @@ pub(super) fn spec(s: &InvestmentSpec) -> String {
         })
         .collect::<Vec<_>>()
         .join(",");
+    // Existing declarations retain their bytes and identity when the optional screen is absent.
+    let downside = s.downside_limit.as_ref().map_or_else(String::new, |limit| {
+        format!(",\"downside_limit\":{}", limit.to_json())
+    });
+    let information = s
+        .information_basis
+        .as_ref()
+        .map_or_else(String::new, |basis| {
+            let mut options = s.information_options.iter().collect::<Vec<_>>();
+            options.sort_by_key(|o| &o.option_id);
+            let options = options
+                .iter()
+                .map(|o| {
+                    format!(
+                        r#"{{"id":{},"canonical_tag":{}}}"#,
+                        js(&o.option_id),
+                        js(&o.canonical_tag())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                r#", "information_basis":{},"information_options":[{}]"#,
+                js(basis),
+                options
+            )
+        });
     format!(
         concat!(
-            r#"{{"model_key":{},"question":{},"shared_scenario_basis":{},"discount_basis":{},"cashflow_basis":{},"currency":{},"valuation_time_ns":"{}","boundary":{},"circuit":{},"material_domain":{},"dry_basis":{},"element":{},"commercial_support":{},"monetary_rounding":{},"periods":[{}],"alternatives":[{}]{}}}"#
+            r#"{{"model_key":{},"question":{},"shared_scenario_basis":{},"discount_basis":{},"cashflow_basis":{},"currency":{},"valuation_time_ns":"{}","boundary":{},"circuit":{},"material_domain":{},"dry_basis":{},"element":{},"commercial_support":{},"monetary_rounding":{},"periods":[{}],"alternatives":[{}]{}{}}}"#
         ),
         js(&s.model_key),
         js(&s.question),
@@ -66,7 +90,8 @@ pub(super) fn spec(s: &InvestmentSpec) -> String {
         js(s.monetary_rounding.as_str()),
         periods,
         alternatives,
-        limit
+        downside,
+        information
     )
 }
 
@@ -183,13 +208,36 @@ impl InvestmentReceipt {
                 shown(a.mean_regret.major)
             );
         }
+        let _ = writeln!(
+            out,
+            "\n**Expected-value co-winners:** {}. **Minimax-regret co-winners:** {}.\n\n{}\n",
+            md(&self.decision.summary().expected_value_winners.join(", ")),
+            md(&self.decision.summary().minimax_regret_winners.join(", ")),
+            card::TIE_RULE
+        );
+        if let Some(information) = self.decision.information_to_markdown() {
+            out.push_str("\n## Information before the investment commitment\n\nThe source explicitly assumes that the test result arrives before choosing a whole investment and that every declared investment cash flow remains valid after the test delay. Test cost and delay cost are nonnegative USD present values at the declared valuation time, charged once on every signal branch, including a decision to do nothing. Delay days do not shift operating periods or infer lost cash, discounting or financing.\n");
+            out.push_str(&information);
+        }
         if let Some(screen) = screen {
-            out.push_str("\n### Investment downside by alternative\n\nThe floor applies to the final rounded discounted incremental cash after initial capex.\n\n| Alternative | Probability below floor | Eligibility |\n|---|---:|---|\n");
+            let choice_name = |choice: &card::downside::DownsideChoiceId| {
+                if s.information_options.is_empty() {
+                    choice.id.clone()
+                } else {
+                    format!("{}:{}", choice.kind.as_str(), choice.id)
+                }
+            };
+            let _ = writeln!(
+                out,
+                "\n## Investment downside probability limit\n\n**Breach:** final rounded discounted incremental value after initial capex < **{} USD**; equality is not a breach. **Maximum probability:** **{}**, inclusive. This screens the complete investment horizon, not individual-period cash. Probabilities remain conditional on the declared uncalibrated scenarios; the unconstrained ranking above is unchanged. The limit does not bound loss severity or funding needs.\n\n| Alternative | Breach probability | Eligibility |\n|---|---:|---|",
+                monetary(screen.limit.floor),
+                shown(screen.limit.max_breach_probability)
+            );
             for choice in &screen.choices {
                 let _ = writeln!(
                     out,
                     "| {} | {} | {} |",
-                    md(&choice.choice.id),
+                    md(&choice_name(&choice.choice)),
                     shown(choice.nominal_breach_probability),
                     if choice.nominal_eligible {
                         "eligible"
@@ -198,14 +246,28 @@ impl InvestmentReceipt {
                     }
                 );
             }
+            if screen.nominal.winners.is_empty() {
+                out.push_str("\n**No eligible choice.** Every declared alternative fails this probability limit; no fallback is selected.\n");
+            } else {
+                let winners = screen
+                    .nominal
+                    .winners
+                    .iter()
+                    .map(choice_name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(
+                    out,
+                    "\n**Downside-eligible expected-value co-winners:** {}. **Expected-value cost of the limit:** {} USD. All exact ties remain.\n",
+                    md(&winners),
+                    screen
+                        .nominal
+                        .expected_value_cost_of_limit
+                        .map_or_else(|| "unavailable".into(), shown)
+                );
+            }
         }
-        let _ = writeln!(
-            out,
-            "\n**Expected-value co-winners:** {}. **Minimax-regret co-winners:** {}.\n\n{}\n\n## Source ancestry\n",
-            md(&self.decision.summary().expected_value_winners.join(", ")),
-            md(&self.decision.summary().minimax_regret_winners.join(", ")),
-            card::TIE_RULE
-        );
+        out.push_str("\n## Source ancestry\n");
         let sources = self
             .decision
             .claim()

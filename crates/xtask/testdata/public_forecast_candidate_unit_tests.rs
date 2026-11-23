@@ -1,4 +1,5 @@
 use super::*;
+use fmine_calib::record::Outcome;
 use fmine_io::xlsx::{
     MinimalCell, MinimalSheet, MinimalStyles, Workbook, build_minimal_xlsx_styled,
 };
@@ -137,8 +138,8 @@ fn fixture(edit: impl Fn(u8, &mut MinimalSheet)) -> (String, Vec<LoadedSource>) 
     )
 }
 
-fn fixture_quarters(
-    quarters: [&str; 3],
+fn fixture_quarters<const N: usize>(
+    quarters: [&str; N],
     retrieval: &str,
     include_q1_ytd: bool,
     edit: impl Fn(u8, &mut MinimalSheet),
@@ -148,9 +149,10 @@ fn fixture_quarters(
          retrieved_utc = \"{retrieval}\"\nurl_prefix = \"https://example.invalid/\"\n",
     );
     let mut sources = Vec::new();
-    for q in 1..=3 {
+    for (index, quarter) in quarters.into_iter().enumerate() {
+        let q = u8::try_from(index + 1).unwrap();
         let file_name = format!("Synthetic_Q{q}.xlsx");
-        let quarter = quarters[usize::from(q - 1)].to_string();
+        let quarter = quarter.to_string();
         let mut s = sheet(q);
         edit(q, &mut s);
         replace_cell(
@@ -170,7 +172,7 @@ fn fixture_quarters(
             &sheets,
             Some(&MinimalStyles {
                 num_fmts: vec![],
-                xfs: vec![0, 1],
+                xfs: vec![0, 1, 2],
             }),
         );
         let workbook = Workbook::from_bytes(format!("invented/{file_name}"), &bytes).unwrap();
@@ -193,6 +195,109 @@ fn fixture_quarters(
     }
     registry.push_str("\n[[subject]]\nname = \"Site A\"\n[[subject]]\nname = \"Site B\"\n");
     (registry, sources)
+}
+
+#[test]
+fn seasonal_candidate_retains_off_season_original_sources_and_binds_their_changes() {
+    let rules = RULES
+        .replace("pool_from = \"2030Q1\"", "pool_from = \"2029Q1\"")
+        .replace("pool_through = \"2030Q2\"", "pool_through = \"2029Q4\"");
+    let fixture = |first_value| {
+        fixture_quarters(
+            ["2029Q1", "2029Q2", "2029Q3", "2029Q4", "2030Q3"],
+            "2030-10-02T10:00:00Z/10:01:00Z",
+            false,
+            |q, sheet| {
+                let production = match q {
+                    1 => Some([first_value, 100.0]),
+                    3 => Some([100.0, 200.0]),
+                    4 => Some([125.0, 100.0]),
+                    _ => None,
+                };
+                if let Some([a, b]) = production {
+                    replace_cell(sheet, "B3", MinimalCell::Number(a));
+                    replace_cell(sheet, "B4", MinimalCell::Number(b));
+                }
+            },
+        )
+    };
+    let build = |registry: &str, sources, model| {
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = model;
+        finish(prepared, sources, 2)
+    };
+    let (registry, sources) = fixture(50.0);
+    let report = build(
+        &registry,
+        sources.clone(),
+        CandidateModel::SeasonalQuarterlyRatio,
+    )
+    .unwrap();
+    assert_eq!(
+        report.candidate.model_id,
+        "seasonal-quarterly-ratio-empirical-v1"
+    );
+    assert_eq!(report.sources.len(), 5);
+    assert_eq!(report.observations.len(), 20);
+    assert!(report.observations.iter().all(|row| row.claim.is_some()));
+    let pool = &report.candidate.pools[0];
+    assert_eq!(
+        pool.changes,
+        vec![Rat::new(5, 4).unwrap(), Rat::new(1, 2).unwrap()]
+    );
+    assert_eq!(pool.off_season_pairs.len(), 4);
+    assert_eq!(pool.seasonal_destination_quarter, Some(4));
+    assert_eq!(report.candidate.exact_rows[0].point, Rat::from_integer(5));
+    assert_eq!(report.candidate.exact_rows[0].hi, Rat::new(25, 2).unwrap());
+    let baseline = build(
+        &registry,
+        sources.clone(),
+        CandidateModel::PooledQuarterlyRatio,
+    )
+    .unwrap();
+    assert_eq!(report.sources, baseline.sources);
+    assert_ne!(report.candidate.csv, baseline.candidate.csv);
+    assert_ne!(report.digest, baseline.digest);
+    let (changed_registry, changed_sources) = fixture(75.0);
+    let changed = build(
+        &changed_registry,
+        changed_sources,
+        CandidateModel::SeasonalQuarterlyRatio,
+    )
+    .unwrap();
+    assert_eq!(changed.candidate.csv, report.candidate.csv);
+    assert_ne!(
+        changed.digest, report.digest,
+        "off-season evidence stays receipt-bound"
+    );
+    assert_ne!(changed.sources[0].sha256, report.sources[0].sha256);
+    let missing = sources.into_iter().skip(1).collect();
+    assert!(build(&registry, missing, CandidateModel::SeasonalQuarterlyRatio).is_err());
+}
+
+#[test]
+fn seasonal_model_identity_changes_receipt_even_when_the_numeric_forecast_is_identical() {
+    let rules = RULES
+        .replace("pool_from = \"2030Q1\"", "pool_from = \"2029Q3\"")
+        .replace("pool_through = \"2030Q2\"", "pool_through = \"2029Q4\"");
+    let (registry, sources) = fixture_quarters(
+        ["2029Q3", "2029Q4", "2030Q3"],
+        "2030-10-02T10:00:00Z/10:01:00Z",
+        false,
+        |_, _| {},
+    );
+    let default = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+        sources.clone(),
+        2,
+    )
+    .unwrap();
+    let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+    prepared.model = CandidateModel::SeasonalQuarterlyRatio;
+    let seasonal = finish(prepared, sources, 2).unwrap();
+    assert_eq!(seasonal.candidate.csv, default.candidate.csv);
+    assert_eq!(seasonal.sources, default.sources);
+    assert_ne!(seasonal.digest, default.digest);
 }
 
 #[test]
@@ -327,6 +432,512 @@ fn replace_cell(sheet: &mut MinimalSheet, cell: &str, value: MinimalCell) {
         .1 = value;
 }
 
+fn capex_rules() -> String {
+    let mut rules = RULES.split("[[target]]").next().unwrap().to_string();
+    for field in [
+        "capex_usd_m",
+        "capex_sustaining_usd_m",
+        "capex_projects_usd_m",
+    ] {
+        rules.push_str(&format!(
+            "\n[[target]]\nid = \"{field}\"\nquantity = \"printed capital scope\"\nscored_quantity = \"original quarterly USD millions\"\nfield = \"{field}\"\noutcome = \"quarter_qtd\"\n\
+             [[baseline]]\nid = \"run_rate_persistence\"\ntarget = \"{field}\"\nrule = \"positive adjacent ratios\"\nsource = \"invented capital workbooks\"\npool_from = \"2030Q1\"\npool_through = \"2030Q2\"\npoint_quarter = \"2030Q3\"\n"
+        ));
+    }
+    for site in ["Site A", "Site B"] {
+        rules.push_str(&format!(
+            "\n[[site]]\nname = \"{site}\"\nstatus = \"live\"\nlocator = \"synthetic:Minestats1\"\n"
+        ));
+    }
+    rules
+}
+
+fn capex_sheet(q: u8, sheet: &mut MinimalSheet) {
+    let text = |value: &str| MinimalCell::Text(value.into());
+    let amount = |value: f64| {
+        if value.fract() == 0.0 {
+            MinimalCell::Number(value)
+        } else {
+            // Fractional public values require explicit displayed precision.
+            MinimalCell::Styled {
+                raw: value.to_string(),
+                xf: 2,
+            }
+        }
+    };
+    let (sustaining, projects, total) = match q {
+        1 => ([10.0, 20.0], [30.0, 40.0], [40.0, 60.0]),
+        2 => ([20.0, 80.0], [90.0, 80.0], [110.0, 160.0]),
+        _ => ([-1.25, 2.0], [0.0, 5.0], [-1.25, 7.0]),
+    };
+    sheet.name = "Minestats1".into();
+    sheet.cells = vec![
+        ("B1".into(), MinimalCell::Number(2030.0)),
+        ("B2".into(), text("Site A (50%)")),
+        ("C2".into(), text("Site B (75%)")),
+        ("A3".into(), text("For the three months ended")),
+        ("B3".into(), MinimalCell::Number(2030.0)),
+        ("C3".into(), MinimalCell::Number(2030.0)),
+        ("A4".into(), text("Capital expenditures ($ millions)")),
+        ("A5".into(), text("Minesite sustaining")),
+        ("B5".into(), amount(sustaining[0])),
+        ("C5".into(), MinimalCell::Number(sustaining[1])),
+        ("A6".into(), text("Projects")),
+        ("B6".into(), MinimalCell::Number(projects[0])),
+        ("C6".into(), MinimalCell::Number(projects[1])),
+        ("A7".into(), text("Total capital expenditures ($ millions)")),
+        ("B7".into(), amount(total[0])),
+        ("C7".into(), MinimalCell::Number(total[1])),
+    ];
+}
+
+#[test]
+fn capex_candidates_bind_three_quarterly_scopes_with_signed_and_zero_points() {
+    let rules = capex_rules();
+    let (registry, sources) = fixture(capex_sheet);
+    let report = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+        sources,
+        2,
+    )
+    .unwrap();
+    assert_eq!(report.candidate.exact_rows.len(), 6);
+    for (target, lo, hi) in [
+        (
+            "capex_usd_m",
+            Rat::new(-55, 16).unwrap(),
+            Rat::new(-10, 3).unwrap(),
+        ),
+        (
+            "capex_sustaining_usd_m",
+            Rat::from_integer(-5),
+            Rat::new(-5, 2).unwrap(),
+        ),
+        (
+            "capex_projects_usd_m",
+            Rat::from_integer(0),
+            Rat::from_integer(0),
+        ),
+    ] {
+        let row = report
+            .candidate
+            .exact_rows
+            .iter()
+            .find(|row| row.site == "Site A" && row.target == target)
+            .unwrap();
+        assert_eq!((row.lo, row.hi), (lo, hi));
+        let metric = TargetMetric::from_target(
+            report
+                .rules
+                .targets
+                .iter()
+                .find(|t| t.id == target)
+                .unwrap(),
+        )
+        .unwrap();
+        let observations = report
+            .observations
+            .iter()
+            .filter(|row| row.target == target)
+            .collect::<Vec<_>>();
+        assert_eq!(observations.len(), 6);
+        for observation in observations {
+            let claim = observation.claim.as_ref().unwrap();
+            assert_eq!(claim.key.line.label, metric.source_line());
+            assert_eq!(claim.key.unit, "usd_m");
+            assert_eq!(
+                claim.key.reporting_vintage.release,
+                observation.quarter.to_string()
+            );
+            assert_eq!(claim.key.reporting_vintage.file_sha256, observation.sha256);
+            assert!(claim.locator.contains(":Minestats1!"));
+        }
+    }
+    assert!(
+        report
+            .candidate
+            .csv
+            .contains("Site A,capex_usd_m,-3.33,-3.44,-3.33,true")
+    );
+    assert!(
+        report
+            .candidate
+            .csv
+            .contains("Site A,capex_projects_usd_m,0.00,0.00,0.00,true")
+    );
+    assert_eq!(
+        record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+        report.candidate.serialized_rows
+    );
+    let (changed_registry, changed_sources) = fixture(|q, sheet| {
+        capex_sheet(q, sheet);
+        if q == 3 {
+            replace_cell(sheet, "B7", MinimalCell::Number(-2.0));
+        }
+    });
+    let changed = finish(
+        prepare(rules.as_bytes(), changed_registry.as_bytes(), CUT).unwrap(),
+        changed_sources,
+        2,
+    )
+    .unwrap();
+    assert_ne!(report.digest, changed.digest);
+    assert_ne!(report.candidate.csv, changed.candidate.csv);
+}
+
+#[test]
+fn capex_candidates_refuse_wrong_scope_period_units_ownership_and_status_zeros() {
+    let rules = capex_rules();
+    for defect in 0..7 {
+        let (registry, sources) = fixture(|q, sheet| {
+            capex_sheet(q, sheet);
+            if q != 3 {
+                return;
+            }
+            match defect {
+                0 => replace_cell(
+                    sheet,
+                    "A7",
+                    MinimalCell::Text("Adjusted capital expenditures ($ millions)".into()),
+                ),
+                1 => replace_cell(
+                    sheet,
+                    "A3",
+                    MinimalCell::Text("For the nine months ended".into()),
+                ),
+                2 => replace_cell(
+                    sheet,
+                    "A4",
+                    MinimalCell::Text("Capital expenditures (CAD millions)".into()),
+                ),
+                3 => replace_cell(sheet, "B2", MinimalCell::Text("Site A".into())),
+                4 => replace_cell(sheet, "B2", MinimalCell::Text("Site A (60%)".into())),
+                5 => replace_cell(sheet, "B7", MinimalCell::Text("—".into())),
+                _ => {
+                    for cell in ["B5", "B6", "B7"] {
+                        replace_cell(sheet, cell, MinimalCell::Number(0.0));
+                    }
+                }
+            }
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        if defect == 6 {
+            prepared.profile.subject_statuses.push(key::SubjectStatus {
+                subject: "Site A".into(),
+                kind: key::StatusKind::Withheld,
+                first: (2030, 7),
+                last: Some((2030, 9)),
+                evidence: "DESIGN: invented withheld quarter".into(),
+            });
+        }
+        assert!(finish(prepared, sources, 2).is_err(), "defect {defect}");
+    }
+}
+
+fn signed_capex_history(q: u8, sheet: &mut MinimalSheet) {
+    capex_sheet(q, sheet);
+    let (a, b) = match q {
+        1 => (-10.0, 0.0),
+        2 => (0.0, -20.0),
+        _ => (0.0, -40.0),
+    };
+    // Total remains the sum of the two independently named capital scopes.
+    for (row, scale) in [(5, 1.0), (6, 2.0), (7, 3.0)] {
+        replace_cell(sheet, &format!("B{row}"), MinimalCell::Number(a * scale));
+        replace_cell(sheet, &format!("C{row}"), MinimalCell::Number(b * scale));
+    }
+}
+
+#[test]
+fn additive_candidates_retain_signed_original_capex_histories_and_scope_specific_widths() {
+    let rules = capex_rules();
+    let (registry, sources) = fixture(signed_capex_history);
+    let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+    prepared.model = CandidateModel::PooledQuarterlyChange;
+    let report = finish(prepared, sources.clone(), 2).unwrap();
+    assert_eq!(
+        report.candidate.model_id,
+        "pooled-quarterly-change-empirical-v1"
+    );
+    assert_eq!(report.observations.len(), 18);
+    assert!(report.observations.iter().all(|row| row.reason.is_none()));
+    for (target, scale) in [
+        ("capex_sustaining_usd_m", 1),
+        ("capex_projects_usd_m", 2),
+        ("capex_usd_m", 3),
+    ] {
+        let pool = report
+            .candidate
+            .pools
+            .iter()
+            .find(|p| p.target == target)
+            .unwrap();
+        assert_eq!(
+            pool.kind,
+            fmine_calib::record::candidate::ChangeKind::Additive
+        );
+        assert_eq!(
+            pool.changes,
+            [
+                Rat::from_integer(10 * scale),
+                Rat::from_integer(-20 * scale)
+            ]
+        );
+        assert!(pool.excluded_pairs.is_empty());
+        for (site, expected) in [("Site A", (-20, -20, 10)), ("Site B", (-60, -60, -30))] {
+            let row = report
+                .candidate
+                .exact_rows
+                .iter()
+                .find(|r| r.site == site && r.target == target)
+                .unwrap();
+            assert_eq!(
+                (row.lo, row.point, row.hi),
+                (
+                    Rat::from_integer(expected.0 * scale),
+                    Rat::from_integer(expected.1 * scale),
+                    Rat::from_integer(expected.2 * scale),
+                )
+            );
+        }
+        for observation in report
+            .observations
+            .iter()
+            .filter(|row| row.target == target)
+        {
+            let claim = observation.claim.as_ref().unwrap();
+            assert_eq!(claim.key.unit, "usd_m");
+            assert_eq!(
+                claim.key.reporting_vintage.release,
+                observation.quarter.to_string()
+            );
+            assert_eq!(claim.key.reporting_vintage.file_sha256, observation.sha256);
+            assert!(matches!(
+                &claim.claim.value,
+                PublicValue::Number {
+                    under_status: None,
+                    ..
+                }
+            ));
+        }
+    }
+    assert_eq!(
+        record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+        report.candidate.serialized_rows
+    );
+    assert!(
+        finish(
+            prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+            sources,
+            2
+        )
+        .unwrap_err()
+        .what
+        .contains("no positive adjacent-quarter ratio")
+    );
+}
+
+#[test]
+fn additive_history_checks_ownership_and_status_on_previously_excluded_negative_and_zero_values() {
+    let rules = capex_rules();
+    for cell in ["B2", "C2"] {
+        let (registry, sources) = fixture(|q, sheet| {
+            signed_capex_history(q, sheet);
+            if q == 1 {
+                replace_cell(
+                    sheet,
+                    cell,
+                    MinimalCell::Text(
+                        if cell == "B2" {
+                            "Site A (60%)"
+                        } else {
+                            "Site B (80%)"
+                        }
+                        .into(),
+                    ),
+                );
+            }
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str());
+        assert!(error.what.contains("changing ownership"));
+    }
+    for kind in [
+        key::StatusKind::Withheld,
+        key::StatusKind::Disposed,
+        key::StatusKind::CareAndMaintenance,
+    ] {
+        let (registry, sources) = fixture(signed_capex_history);
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        prepared.profile.subject_statuses.push(key::SubjectStatus {
+            subject: "Site B".into(),
+            kind,
+            first: (2030, 1),
+            last: Some((2030, 3)),
+            evidence: "DESIGN: invented unavailable historical quarter".into(),
+        });
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str());
+        assert!(error.what.contains("status"));
+    }
+}
+
+#[test]
+fn additive_zero_production_points_keep_original_numeric_claims_for_both_metals() {
+    for (field, header, unit) in [
+        ("au_prod_100_koz", "Gold produced (000s oz, 100%)", "koz"),
+        ("cu_prod_100_kt", "Copper produced (kt 100%)", "kt"),
+    ] {
+        let rules = RULES.replace("au_prod_100_koz", field);
+        let (registry, sources) = fixture(|q, sheet| {
+            replace_cell(sheet, "B2", MinimalCell::Text(header.into()));
+            if q == 3 {
+                replace_cell(sheet, "B3", MinimalCell::Number(0.0));
+                replace_cell(sheet, "B4", MinimalCell::Number(0.0));
+            }
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        let report = finish(prepared, sources.clone(), 2).unwrap();
+        for row in report
+            .candidate
+            .exact_rows
+            .iter()
+            .filter(|r| r.target == "production")
+        {
+            // The two original Q1->Q2 changes are 100-50 and 300-100, independent of the model.
+            assert_eq!(
+                (row.lo, row.point, row.hi),
+                (
+                    Rat::from_integer(50),
+                    Rat::from_integer(50),
+                    Rat::from_integer(200)
+                )
+            );
+        }
+        for row in report
+            .observations
+            .iter()
+            .filter(|r| r.target == "production" && r.role == "point")
+        {
+            assert_eq!(row.value, Some(Rat::from_integer(0)));
+            assert!(row.reason.is_none());
+            let source = row.claim.as_ref().unwrap();
+            assert_eq!(source.key.unit, unit);
+            assert_eq!(source.key.ownership_basis, OwnershipBasis::Consolidated100);
+            assert_eq!(source.key.reporting_vintage.file_sha256, row.sha256);
+            assert!(matches!(
+                source.claim.value,
+                PublicValue::Number {
+                    under_status: None,
+                    ..
+                }
+            ));
+        }
+        let prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        assert!(finish(prepared, sources, 2).is_err());
+    }
+}
+
+#[test]
+fn additive_zero_production_points_do_not_launder_statuses_placeholders_or_negative_values() {
+    for kind in [
+        key::StatusKind::Withheld,
+        key::StatusKind::Disposed,
+        key::StatusKind::CareAndMaintenance,
+    ] {
+        let (registry, sources) = fixture(|q, sheet| {
+            if q == 3 {
+                replace_cell(sheet, "B3", MinimalCell::Number(0.0));
+            }
+        });
+        let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        prepared.profile.subject_statuses.push(key::SubjectStatus {
+            subject: "Site A".into(),
+            kind,
+            first: (2030, 7),
+            last: Some((2030, 9)),
+            evidence: "DESIGN: invented unavailable point-quarter production".into(),
+        });
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str());
+        assert!(error.what.contains("status"));
+    }
+    for cell in [
+        MinimalCell::Text("—".into()),
+        MinimalCell::Text("n/a".into()),
+        MinimalCell::Number(-1.0),
+    ] {
+        let (registry, sources) = fixture(|q, sheet| {
+            if q == 3 {
+                replace_cell(sheet, "B3", cell.clone());
+            }
+        });
+        let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        assert!(finish(prepared, sources, 2).is_err());
+    }
+}
+
+#[test]
+fn additive_cost_candidates_keep_zero_and_signed_history_without_relabelling_it_excluded() {
+    for (field, header, unit) in [
+        (
+            "aisc_usd_per_oz",
+            "All-in sustaining costs ($/oz)",
+            "usd_per_oz",
+        ),
+        ("tcc_usd_per_oz", "Total cash costs ($/oz)", "usd_per_oz"),
+        ("c1_usd_per_lb", "C1 cash costs ($/lb)", "usd_per_lb"),
+        (
+            "aisc_usd_per_lb",
+            "All-in sustaining costs ($/lb)",
+            "usd_per_lb",
+        ),
+    ] {
+        let rules = RULES.replace("aisc_usd_per_oz", field);
+        let (registry, sources) = fixture(|q, sheet| {
+            replace_cell(sheet, "C2", MinimalCell::Text(header.into()));
+            let (a, b) = match q {
+                1 => (-10.0, 0.0),
+                2 => (0.0, -20.0),
+                _ => (0.0, -40.0),
+            };
+            replace_cell(sheet, "C3", MinimalCell::Number(a));
+            replace_cell(sheet, "C4", MinimalCell::Number(b));
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        let report = finish(prepared, sources, 2).unwrap();
+        let row = report
+            .candidate
+            .exact_rows
+            .iter()
+            .find(|r| r.site == "Site A" && r.target == "unit_cost")
+            .unwrap();
+        assert_eq!(
+            (row.lo, row.point, row.hi),
+            (
+                Rat::from_integer(-20),
+                Rat::from_integer(-20),
+                Rat::from_integer(10),
+            )
+        );
+        for row in report
+            .observations
+            .iter()
+            .filter(|r| r.target == "unit_cost")
+        {
+            assert!(row.reason.is_none());
+            assert_eq!(row.claim.as_ref().unwrap().key.unit, unit);
+        }
+    }
+}
+
 fn copper_rules() -> String {
     let mut rules = RULES
         .replace("100% gold production", "100% copper production")
@@ -446,6 +1057,164 @@ fn copper_candidates_keep_kt_and_both_per_pound_costs_in_separate_source_bound_p
     .unwrap();
     assert_eq!(report.digest, repeated.digest);
     assert_eq!(report.candidate.csv, repeated.candidate.csv);
+}
+
+#[test]
+fn gold_tcc_candidates_keep_a_distinct_pool_signed_points_and_original_source_claims() {
+    let mut rules = RULES.to_string();
+    rules.push_str(
+        r#"
+[[target]]
+id = "cash_cost"
+quantity = "total cash costs per attributable ounce sold"
+scored_quantity = "printed Q4 total cash costs"
+field = "tcc_usd_per_oz"
+outcome = "q4_qtd"
+[[baseline]]
+id = "run_rate_persistence"
+target = "cash_cost"
+rule = "consecutive positive quarterly ratios"
+source = "invented gold workbooks"
+pool_from = "2030Q1"
+pool_through = "2030Q2"
+point_quarter = "2030Q3"
+"#,
+    );
+    let tcc_sheet = |q: u8, sheet: &mut MinimalSheet| {
+        sheet.cells.push((
+            "D2".into(),
+            MinimalCell::Text("Total cash costs ($/oz)".into()),
+        ));
+        let values = match q {
+            1 => [100.0, 100.0],
+            2 => [50.0, 200.0],
+            _ => [-10.0, 0.0],
+        };
+        for (row, value) in [(3, values[0]), (4, values[1])] {
+            sheet
+                .cells
+                .push((format!("D{row}"), MinimalCell::Number(value)));
+        }
+    };
+    for quarterly in [false, true] {
+        let rules = if quarterly {
+            rules
+                .replace("fy_minus_9m", "quarter_qtd")
+                .replace("q4_qtd", "quarter_qtd")
+        } else {
+            rules.clone()
+        };
+        let (registry, sources) = fixture(tcc_sheet);
+        let report = finish(
+            prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+            sources.clone(),
+            2,
+        )
+        .unwrap();
+        assert_eq!(report.candidate.exact_rows.len(), 6);
+        for (site, expected) in [("Site A", (-20, -5, -5)), ("Site B", (0, 0, 0))] {
+            let row = report
+                .candidate
+                .exact_rows
+                .iter()
+                .find(|r| r.site == site && r.target == "cash_cost")
+                .unwrap();
+            // Independent TCC ratios are 1/2 and 2, distinct from the AISC ratios 11/10 and 6/5.
+            assert_eq!(
+                (row.lo, row.point, row.hi),
+                (
+                    Rat::from_integer(expected.0),
+                    Rat::from_integer(expected.1),
+                    Rat::from_integer(expected.2)
+                )
+            );
+        }
+        for observation in report
+            .observations
+            .iter()
+            .filter(|o| o.target == "cash_cost")
+        {
+            let claim = observation.claim.as_ref().unwrap();
+            assert_eq!(claim.key.line.label, "summary:tcc_usd_per_oz");
+            assert_eq!(claim.key.unit, "usd_per_oz");
+            assert!(claim.locator.contains(":QTD!D"));
+            assert!(matches!(
+                claim.key.ownership_basis,
+                OwnershipBasis::Attributable { .. }
+            ));
+        }
+        assert_eq!(
+            record::parse_forecasts(report.candidate.csv.as_bytes(), &report.rules).unwrap(),
+            report.candidate.serialized_rows
+        );
+        assert_eq!(
+            finish(
+                prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+                sources,
+                2
+            )
+            .unwrap()
+            .digest,
+            report.digest
+        );
+        let (registry, sources) = fixture(|q, sheet| {
+            if q < 3 {
+                tcc_sheet(q, sheet);
+            }
+        });
+        assert!(
+            finish(
+                prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap(),
+                sources,
+                2
+            )
+            .is_err(),
+            "a published AISC point cannot fill a missing TCC point"
+        );
+    }
+}
+
+#[test]
+fn gold_tcc_points_preserve_ownership_status_and_placeholder_refusals() {
+    let rules = RULES.replace("aisc_usd_per_oz", "tcc_usd_per_oz");
+    for defect in ["ownership", "status", "placeholder"] {
+        let (registry, sources) = fixture(|q, sheet| {
+            replace_cell(
+                sheet,
+                "C2",
+                MinimalCell::Text("Total cash costs ($/oz)".into()),
+            );
+            if q == 3 {
+                replace_cell(sheet, "C3", MinimalCell::Number(0.0));
+                if defect == "ownership" {
+                    replace_cell(sheet, "A3", MinimalCell::Text("Site A (60%)".into()));
+                } else if defect == "placeholder" {
+                    replace_cell(sheet, "C3", MinimalCell::Text("—".into()));
+                }
+            }
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.rules.targets.retain(|t| t.id == "unit_cost");
+        prepared.rules.baselines.retain(|b| b.target == "unit_cost");
+        if defect == "status" {
+            prepared.profile.subject_statuses.push(key::SubjectStatus {
+                subject: "Site A".into(),
+                kind: key::StatusKind::Withheld,
+                first: (2030, 7),
+                last: Some((2030, 9)),
+                evidence: "synthetic withheld TCC source".into(),
+            });
+        }
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(
+            error.code,
+            if defect == "placeholder" {
+                RefusalCode::SourceCellUnusable208.as_str()
+            } else {
+                RefusalCode::BasisMismatch105.as_str()
+            }
+        );
+    }
 }
 
 #[test]
@@ -762,7 +1531,7 @@ fn missing_rows_placeholders_and_nonpositive_history_are_audited_without_imputat
     });
     let report = run(&registry, sources).unwrap();
     for pool in &report.candidate.pools {
-        assert_eq!(pool.ratios.len(), 1);
+        assert_eq!(pool.changes.len(), 1);
         assert_eq!(pool.excluded_pairs.len(), 1);
         assert_eq!(pool.excluded_pairs[0].site, "Site A");
     }
@@ -1027,7 +1796,7 @@ fn withholding_exception_never_supplies_missing_notes_costs_points_or_disposal_s
                 .candidate
                 .pools
                 .iter()
-                .all(|p| p.ratios.len() == 1 && p.excluded_pairs.len() == 1)
+                .all(|p| p.changes.len() == 1 && p.excluded_pairs.len() == 1)
         );
         for row in report
             .observations
@@ -1066,11 +1835,11 @@ fn real_q3_candidate_preserves_partial_production_and_matches_independent_fracti
             .find(|p| p.target == target)
             .unwrap();
         assert_eq!(
-            (pool.ratios.len(), pool.excluded_pairs.len()),
+            (pool.changes.len(), pool.excluded_pairs.len()),
             (count, excluded)
         );
         assert_eq!(
-            [pool.lower_ratio, pool.median_ratio, pool.upper_ratio],
+            [pool.lower_change, pool.median_change, pool.upper_change],
             ratios.map(|(n, d)| Rat::new(n, d).unwrap())
         );
     }
@@ -1220,4 +1989,107 @@ fn receipt_binds_rules_registry_information_cut_and_source_values() {
     let changed = run(&registry, sources).unwrap();
     assert_ne!(base.candidate.csv, changed.candidate.csv);
     assert_ne!(base.digest, changed.digest);
+}
+
+#[test]
+fn post_quarter_nowcast_candidates_keep_original_inputs_and_reject_known_publications() {
+    let rules = RULES
+        .replace("fy_minus_9m", "quarter_qtd_nowcast")
+        .replace("q4_qtd", "quarter_qtd_nowcast")
+        .replace("2030-10-01T00:00:00Z", "2031-01-01T00:00:00Z")
+        .replace("2030-12-31T23:59:59Z", "2031-01-14T23:59:59Z")
+        .replacen(
+            "[[target]]",
+            "earliest_outcome_release_utc = \"2031-01-15T00:00:00Z\"\noutcome_release_basis = \"Synthetic earliest preliminary production announcement\"\n\n[[target]]",
+            1,
+        );
+    let (registry, sources) = fixture(|_, _| {});
+    let cut = "2031-01-05T00:00:00Z";
+    let report = finish(
+        prepare(rules.as_bytes(), registry.as_bytes(), cut).unwrap(),
+        sources.clone(),
+        2,
+    )
+    .unwrap();
+    assert!(report.rules.is_post_quarter_nowcast());
+    assert_eq!(report.candidate.exact_rows.len(), 4);
+    assert_eq!(report.sources.len(), 3);
+    assert!(
+        report.nowcast_publications.is_empty(),
+        "unissued draft, no claim that a release is registered"
+    );
+    assert!(report.observations.iter().all(|row| row.quarter.q <= 3));
+    for invalid_cut in ["2030-12-31T23:59:59Z", "2031-01-14T23:59:59Z"] {
+        assert_eq!(
+            prepare(rules.as_bytes(), registry.as_bytes(), invalid_cut)
+                .err()
+                .unwrap()
+                .code,
+            "FMINE-REF-206"
+        );
+    }
+    let future = format!(
+        "\n[[source]]\nfile = \"Future.xlsx\"\nkind = \"mine_stats\"\nquarter = \"2030Q4\"\npath = \"Future.xlsx\"\nurl_basis = \"W1 table\"\nbytes = 1\nsha256 = \"{}\"\npublished_at = \"2031-01-10\"\npublished_at_basis = \"FACT: invented original release day\"\n",
+        "f".repeat(64)
+    );
+    let registered = format!("{registry}{future}");
+    let bounded = finish(
+        prepare(rules.as_bytes(), registered.as_bytes(), cut).unwrap(),
+        sources,
+        2,
+    )
+    .unwrap();
+    assert_eq!(bounded.candidate.csv, report.candidate.csv);
+    assert_ne!(
+        bounded.digest, report.digest,
+        "the full release registry remains receipt-bound"
+    );
+    assert_eq!(bounded.nowcast_publications[0].file, "Future.xlsx");
+    assert_eq!(
+        bounded.nowcast_publications[0].day_start_utc,
+        record::parse_utc("2031-01-10T00:00:00Z").unwrap()
+    );
+    assert_eq!(
+        prepare(
+            rules.as_bytes(),
+            registered.as_bytes(),
+            "2031-01-10T00:00:00Z"
+        )
+        .err()
+        .unwrap()
+        .code,
+        "FMINE-REF-108"
+    );
+    for invalid in [
+        registered
+            .replace("published_at = \"2031-01-10\"\n", "")
+            .replace(
+                "published_at_basis = \"FACT: invented original release day\"\n",
+                "",
+            ),
+        registered.replace(
+            "FACT: invented original release day",
+            "INFERENCE: retrieval is not a publication bound",
+        ),
+    ] {
+        assert_eq!(
+            prepare(rules.as_bytes(), invalid.as_bytes(), cut)
+                .err()
+                .unwrap()
+                .code,
+            "FMINE-REF-108"
+        );
+    }
+    let preliminary = format!(
+        "{registered}\n[[html]]\nfile = \"preliminary.html\"\nrelease = \"2030Q4\"\nurl = \"https://example.invalid/preliminary.html\"\nurl_basis = \"W1 table\"\npublished_at = \"2031-01-04\"\npublished_at_basis = \"FACT: invented preliminary production announcement\"\nbytes = 1\nsha256 = \"{}\"\n",
+        "e".repeat(64)
+    );
+    assert_eq!(
+        prepare(rules.as_bytes(), preliminary.as_bytes(), cut)
+            .err()
+            .unwrap()
+            .code,
+        "FMINE-REF-108",
+        "an earlier registered preliminary release takes precedence over the later workbook"
+    );
 }

@@ -381,6 +381,12 @@ mutates_authority = false
 description = "Reconcile declared elemental inventory under a full error covariance, retaining rejected diagnostics without a balance Claim"
 
 [[verb]]
+path = "plant reconcile-raw"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Fit declared raw wet masses, moisture and dry assays while conserving dry matter, water and elemental kilograms under full raw-error correlation"
+
+[[verb]]
 path = "plant project"
 subsystem = "Crucible"
 mutates_authority = false

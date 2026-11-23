@@ -82,9 +82,11 @@ fn quantity_unit(kind: QuantityKind) -> &'static str {
         QuantityKind::ProductionKoz | QuantityKind::SoldKoz => "koz",
         QuantityKind::ProductionKt => "kt",
         QuantityKind::SoldMillionLb => "million lb",
-        QuantityKind::AiscUsdPerSoldOz => "USD per sold oz",
-        QuantityKind::AiscUsdPerSoldLb => "USD per sold lb",
-        QuantityKind::AiscSpendUsdMillion => "USD million",
+        QuantityKind::AiscUsdPerSoldOz | QuantityKind::TccUsdPerSoldOz => "USD per sold oz",
+        QuantityKind::AiscUsdPerSoldLb | QuantityKind::C1UsdPerSoldLb => "USD per sold lb",
+        QuantityKind::AiscSpendUsdMillion
+        | QuantityKind::C1SpendUsdMillion
+        | QuantityKind::TccSpendUsdMillion => "USD million",
     }
 }
 
@@ -108,7 +110,7 @@ fn physical_row(out: &mut String, name: &str, claim: &Claim<PhysicalLimit>, unit
     );
 }
 
-fn technical(out: &mut String, assessment: &TechnicalAssessment) {
+fn technical(out: &mut String, assessment: &TechnicalAssessment, cost: &str) {
     out.push_str("## Automatic technical-report scenario\n\n");
     let TechnicalAssessment::Compared(comparison) = assessment else {
         if let TechnicalAssessment::Indeterminate { reason } = assessment {
@@ -138,10 +140,16 @@ fn technical(out: &mut String, assessment: &TechnicalAssessment) {
             "The production requirement is already satisfied across the supplied bounds."
         }
     };
+    let copper = comparison.result.maximum_production.value.kind == QuantityKind::ProductionKt;
+    let grade_unit = if copper {
+        "copper mass fraction of dry feed"
+    } else {
+        "g per dry tonne"
+    };
     let _ = writeln!(
         out,
         "**T2 — {scenario}.** {verdict}\n\nSource: {}; published {}; date basis: {}.\n\n\
-         This comparison concerns production only. It does not supply a joint production/AISC witness or establish mine capacity. \
+         This comparison concerns production only. It does not supply a joint production/{cost} witness or establish mine capacity. \
          Plan and nameplate values remain conditional scenarios. No annual rate is prorated and no grade average becomes an upper bound.\n\n\
          | Quantity | Exact bounds | Evidence | Claim |\n|---|---|---|---|",
         text(&comparison.document.file),
@@ -154,11 +162,7 @@ fn technical(out: &mut String, assessment: &TechnicalAssessment) {
             &comparison.limits.feed,
             "Mt",
         ),
-        (
-            "Feed head grade",
-            &comparison.limits.grade,
-            "g per dry tonne",
-        ),
+        ("Feed head grade", &comparison.limits.grade, grade_unit),
         ("Recovery", &comparison.limits.recovery, "fraction"),
     ] {
         physical_row(out, name, claim, unit);
@@ -167,16 +171,23 @@ fn technical(out: &mut String, assessment: &TechnicalAssessment) {
         out,
         "Maximum production under supplied limits",
         &comparison.result.maximum_production,
-        "koz, on the guidance ownership basis",
+        if copper {
+            "kt, on the guidance ownership basis"
+        } else {
+            "koz, on the guidance ownership basis"
+        },
     );
     physical_row(
         out,
         "Optimistic required head grade",
         &comparison.result.optimistic_required_grade,
-        "g per dry tonne",
+        grade_unit,
     );
-    out.push_str("\nThe required grade uses the highest supplied dry-feed and recovery bounds. A signed requirement is retained; the separate AISC frontier and historical tests still apply.\n\n\
-                  | Page citation | Printed token | Unit | Basis | Period |\n|---|---|---|---|---|\n");
+    let _ = writeln!(
+        out,
+        "\nThe required grade uses the highest supplied dry-feed and recovery bounds. A signed requirement is retained; the separate {cost} frontier and historical tests still apply.\n\n\
+                  | Page citation | Printed token | Unit | Basis | Period |\n|---|---|---|---|---|"
+    );
     for source in &comparison.sources {
         let _ = writeln!(
             out,
@@ -217,6 +228,11 @@ fn render_inner(
     let production_unit = quantity_unit(inputs.production_guidance.value.kind);
     let sold_unit = quantity_unit(inputs.remaining_sold.value.kind);
     let rate_unit = quantity_unit(inputs.aisc_guidance.value.kind);
+    let cost = match inputs.aisc_guidance.value.kind {
+        QuantityKind::C1UsdPerSoldLb => "C1",
+        QuantityKind::TccUsdPerSoldOz => "TCC",
+        _ => "AISC",
+    };
     let sold_metal = if inputs.remaining_sold.value.kind == QuantityKind::SoldMillionLb {
         "sold copper in millions of pounds"
     } else {
@@ -258,24 +274,30 @@ fn render_inner(
     );
     for (name, claim) in [
         (
-            "Remaining production",
+            "Remaining production".to_string(),
             &report.completion.remaining_production,
         ),
-        ("Assumed remaining sales", &inputs.remaining_sold),
-        ("YTD AISC spending", &report.completion.ytd_aisc_spend),
         (
-            "Required remaining AISC spending",
+            "Assumed remaining sales".to_string(),
+            &inputs.remaining_sold,
+        ),
+        (
+            format!("YTD {cost} spending"),
+            &report.completion.ytd_aisc_spend,
+        ),
+        (
+            format!("Required remaining {cost} spending"),
             &report.completion.remaining_aisc_spend,
         ),
         (
-            "Required remaining AISC",
+            format!("Required remaining {cost}"),
             &report.completion.remaining_aisc_rate,
         ),
     ] {
-        row(&mut out, name, claim, quantity_unit(claim.value.kind));
+        row(&mut out, &name, claim, quantity_unit(claim.value.kind));
     }
-    out.push_str("\nClosed bounds retain printed rounding uncertainty. Approximate decimal displays are marked ≈; the accompanying fractions remain exact. Signed requirements are retained. The Evidence column preserves the weakest input evidence; it does not mean the issuer asserted the computed requirement or the replay assumption.\n\n");
-    technical(&mut out, &report.technical);
+    out.push_str("\nClosed bounds retain printed rounding uncertainty. Approximate decimal displays are marked ≈; the accompanying fractions remain exact. Signed net costs and requirements are retained, including rounding bounds that cross zero; sales remain strictly positive. The Evidence column preserves the weakest input evidence; it does not mean the issuer asserted the computed requirement or the replay assumption.\n\n");
+    technical(&mut out, &report.technical, cost);
     out.push_str("## Historical joint comparison\n\nA marginal production success and a marginal cost success do not establish joint feasibility. Only a checked joint witness does. Exclusion is limited to the supplied finite historical windows; it is not a mine-capacity conclusion or a forecast.\n\n");
     if report.history.checks.is_empty() {
         out.push_str("No complete admissible historical window was supplied.\n\n");
@@ -302,7 +324,7 @@ fn render_inner(
                 let value = &witness.value;
                 let _ = writeln!(
                     out,
-                    "### Checked replay: {}\n\nAnnual production: {} {production_unit}; annual AISC: {} {rate_unit}.\n\n| Original support | Hypothetical replay | Production ({production_unit}) | Sales ({sold_unit}) | AISC ({rate_unit}) |\n|---|---|---|---|---|",
+                    "### Checked replay: {}\n\nAnnual production: {} {production_unit}; annual {cost}: {} {rate_unit}.\n\n| Original support | Hypothetical replay | Production ({production_unit}) | Sales ({sold_unit}) | {cost} ({rate_unit}) |\n|---|---|---|---|---|",
                     text(&check.id),
                     number(value.completion.annual_production),
                     number(value.completion.annual_aisc)
@@ -337,13 +359,16 @@ fn render_inner(
     }
     out.push_str("## Guidance and actuals\n\n| Quantity | Exact bounds | Evidence | Claim |\n|---|---|---|---|\n");
     for (name, claim) in [
-        ("Annual production guidance", &inputs.production_guidance),
-        ("Annual AISC guidance", &inputs.aisc_guidance),
-        ("YTD production", &inputs.ytd_production),
-        ("YTD sales", &inputs.ytd_sold),
-        ("YTD AISC", &inputs.ytd_aisc),
+        (
+            "Annual production guidance".to_string(),
+            &inputs.production_guidance,
+        ),
+        (format!("Annual {cost} guidance"), &inputs.aisc_guidance),
+        ("YTD production".to_string(), &inputs.ytd_production),
+        ("YTD sales".to_string(), &inputs.ytd_sold),
+        (format!("YTD {cost}"), &inputs.ytd_aisc),
     ] {
-        row(&mut out, name, claim, quantity_unit(claim.value.kind));
+        row(&mut out, &name, claim, quantity_unit(claim.value.kind));
     }
     let mut anchors = BTreeSet::new();
     for claim in [

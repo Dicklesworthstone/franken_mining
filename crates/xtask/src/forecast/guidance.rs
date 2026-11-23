@@ -365,7 +365,7 @@ pub(super) fn bind_rows(
     let period = if rules
         .targets
         .iter()
-        .any(|target| target.outcome == Outcome::QuarterQtd)
+        .any(|target| target.outcome.is_quarterly())
     {
         rules
             .outcome_quarter()

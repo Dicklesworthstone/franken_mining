@@ -19,7 +19,22 @@ pub mod omf;
 
 pub const USAGE: &str = "plan schedule --pcpsp <file.pcpsp> --prec <file.prec> [--candidate <file.sol>] [--decimals N] [--use-decimals N] [--share-decimals N] [--round] [--rounds N] [--bound-steps N] [--lp-guidance [--lp-iterations N]] [--list-schedule]";
 const NO_CLAIM: &str = "A checked schedule and upper bound for the supplied deterministic PCPSP model and explicit integer discount factors. Values, capacities and precedence are declarations; sampling error and input calibration are not measured. A positive gap may reflect a loose bound. No reserve, execution authority or operational feasibility beyond the declared rows is established.";
-pub const ROBOT_DOCS_JSON: &str = r#"{"input":"MineLib PCPSP and PREC text; optional four-column block/destination/period/fraction solution; each input at most 1 GiB and SHA-256 bound","scales":"--decimals and --use-decimals default6; --share-decimals default9; all 0..9. Values refuse excess precision unless --round; resource uses round up and limits down; fractions never round","method":"TopoSort, period/destination local search with joint period-and-route moves and alternative-route insertions after separate neighborhoods stall, exact fractional polishing of initial and improved whole schedules using bounded pricing directions, exact candidate check, and a global Lagrangian upper bound replayed from its prices. Joint moves check precedence and every signed resource limit in both affected periods. Fractional polishing preserves mining periods and is a heuristic, not a destination-LP optimum. Whole-block candidates can warm-start search; split candidates retain their exact fractions","lp_guidance":"Opt-in --lp-guidance solves the relaxation with PDLP, fixed tolerance1e-6 and one worker. --lp-iterations1..1000000 default100000 requires --lp-guidance. Six threshold/release starts are searched and fractionally polished; duplicate starts/seeds are reused. Only a strict exact improvement replaces the baseline or external split. Iteration-limit shares are admitted as guidance after finite[0,1] checks; row feasibility and the LP objective are never trusted. Status optimal describes the LP stopping rule, not plan optimality. An empty LP scope skips the solver. Numerical infeasibility refuses because the empty schedule is feasible","work":"--rounds0..1000 default20; --bound-steps1..4096 default64; fractional pricing at most256 columns and1024 master steps per period/seed. LP guidance adds at most6 whole searches and12 fractional passes, with preallocation limits1000000 columns/full-model block-period cells,2000000 rows and8000000 sparse entries","discount":"period0 factor2^40; each subsequent factor=floor(previous*rate_scale/(rate_scale+rate)); factors emitted","output":"Exact rational discounted values and bound gap; model rounding counts, resource uses, candidate infeasibility witnesses, certificate prices; --list-schedule emits canonical MineLib solution text. With guidance, lp_guidance reports termination, iterations, dimensions, start counts and best exact guided value; selected.origin identifies the winning path. The numerical certificate remains the full-model integer Lagrangian replay","scope":"Only upper resource limits and no general side constraints; signed blend coefficients accepted. Structural candidate errors refuse; numerical infeasibility is reported and never admitted as an incumbent. No tolerance or claimed external bound is trusted","example":"tests/planning/fractional.pcpsp","joint_move_example":"tests/planning/joint_route.pcpsp"}"#;
+pub const ROBOT_DOCS_JSON: &str = concat!(
+    "{",
+    r#""input":"MineLib PCPSP and PREC text; optional four-column block/destination/period/fraction solution; each input at most 1 GiB and SHA-256 bound","#,
+    r#""scales":"--decimals and --use-decimals default6; --share-decimals default9; all 0..9. Values refuse excess precision unless --round; resource uses round up and limits down; fractions never round","#,
+    r#""method":"TopoSort, period/destination local search with joint whole-route moves and alternative-route insertions, then exact fractional polishing of initial and improved whole schedules using bounded pricing directions. Fractional polishing preserves mining periods and is not a destination-LP optimum. The best split incumbent, including an imported candidate, receives single-block and atomic two-block common-period moves preserving every destination fraction and the mined set. All affected signed rows and external precedence must remain feasible; larger groups, different pair target periods and temporary loss/infeasibility are not searched. The subsequent joint fractional pass is described separately below. Final feasibility and value are independently checked, and the global full-model Lagrangian upper bound is replayed from its prices","#,
+    r#""joint_fractional_moves":"For positive --rounds and a nonempty incumbent, search each mined block's period and every destination pair together, including same-period rerouting. Exact signed resource inequalities determine an inclusive interval of integer fractions on the declared decimal grid. Only strict exact gains are retained. Both vacated and receiving periods and both precedence directions remain feasible. The mined set and original candidate assessment are preserved; each moved block uses at most two destinations. Existing larger splits remain unless a tested pair improves them. No global optimality is inferred","#,
+    r#""lp_guidance":"Opt-in --lp-guidance solves the relaxation with PDLP, fixed tolerance1e-6 and one worker. --lp-iterations1..1000000 default100000 requires --lp-guidance. Six threshold/release starts are searched and fractionally polished; duplicate starts/seeds are reused. Only a strict exact improvement replaces the baseline or external split. Iteration-limit shares are admitted as guidance after finite[0,1] checks; row feasibility and the LP objective are never trusted. Status optimal describes the LP stopping rule, not plan optimality. An empty LP scope skips the solver. Numerical infeasibility refuses because the empty schedule is feasible","#,
+    r#""work":"--rounds0..1000 default20; --bound-steps1..4096 default64; fractional pricing at most256 columns and1024 master steps per period/seed. Fixed-fraction period search and joint fractional period/route search each share --rounds and each have a separate262144 work-unit limit. Fixed-fraction pairs consider at most64 following mined blocks in ID order. Exhaustion retains every complete feasible improvement. Zero rounds disables both period searches and joint rerouting. LP guidance adds at most6 whole searches and12 fractional passes, with preallocation limits1000000 columns/full-model block-period cells,2000000 rows and8000000 sparse entries","#,
+    r#""discount":"period0 factor2^40; each subsequent factor=floor(previous*rate_scale/(rate_scale+rate)); factors emitted","#,
+    r#""output":"Exact rational discounted values and bound gap; model rounding counts, resource uses, original candidate infeasibility witnesses and value, certificate prices; --list-schedule emits canonical MineLib solution text. fractional_period_search retains fixed-fraction seed/value/work counters including pair_moves. joint_period_route_search retains its immediate seed, exact before/after values, period/route move counts, trials and budget exhaustion. With guidance, lp_guidance reports termination, iterations, dimensions, start counts and best exact guided value; selected.origin identifies the winning path. The numerical certificate remains the full-model integer Lagrangian replay","#,
+    r#""scope":"Only upper resource limits and no general side constraints; signed blend coefficients accepted. Structural candidate errors refuse; numerical infeasibility is reported and never admitted as an incumbent. No tolerance or claimed external bound is trusted","#,
+    r#""example":"tests/planning/fractional.pcpsp","#,
+    r#""joint_move_example":"tests/planning/joint_route.pcpsp","#,
+    r#""joint_fractional_example":"tests/planning/joint_fractional.pcpsp with matching .prec and --candidate .sol""#,
+    "}"
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -167,6 +182,72 @@ fn ratio(n: i128, d: i128) -> String {
     format!("{{\"numerator\":\"{n}\",\"denominator\":\"{d}\"}}")
 }
 
+fn fractional_period_report(plan: &planning::Plan, denominator: i128) -> (String, String) {
+    let Some(s) = &plan.fractional_periods else {
+        return (String::new(), String::new());
+    };
+    let work_limit = pcpsp::fractional::PERIOD_WORK;
+    let json = format!(
+        ",\"fractional_period_search\":{{\"seed_origin\":\"{}\",\"before\":{},\"after\":{},\"rounds\":{},\"moves\":{},\"pair_moves\":{},\"period_trials\":{},\"work\":{},\"work_limit\":{work_limit},\"work_exhausted\":{},\"destination_fractions_preserved\":true,\"mined_set_preserved\":true}}",
+        plan.period_seed_origin,
+        ratio(s.before, denominator),
+        ratio(s.after, denominator),
+        s.rounds,
+        s.moves,
+        s.pair_moves,
+        s.trials,
+        s.work,
+        s.work_exhausted,
+    );
+    let markdown = format!(
+        "\nFixed-fraction period search from `{}`: {} accepted moves ({} paired) over {} rounds and {} period trials, using {} of {work_limit} work units (budget exhausted: {}). Exact value {}/{denominator} → {}/{denominator}. Every destination fraction and the mined set are preserved; all affected periods' signed resource limits and precedence are checked. This bounded neighborhood supplies no additional optimality claim.\n",
+        plan.period_seed_origin,
+        s.moves,
+        s.pair_moves,
+        s.rounds,
+        s.trials,
+        s.work,
+        s.work_exhausted,
+        s.before,
+        s.after,
+    );
+    (json, markdown)
+}
+
+fn joint_period_route_report(plan: &planning::Plan, denominator: i128) -> (String, String) {
+    let Some(s) = &plan.joint_period_routes else {
+        return (String::new(), String::new());
+    };
+    let work_limit = pcpsp::fractional::joint::WORK;
+    let json = format!(
+        ",\"joint_period_route_search\":{{\"seed_origin\":\"{}\",\"before\":{},\"after\":{},\"rounds\":{},\"moves\":{},\"period_moves\":{},\"route_moves\":{},\"trials\":{},\"work\":{},\"work_limit\":{work_limit},\"work_exhausted\":{},\"mined_set_preserved\":true,\"maximum_destinations_per_moved_block\":2}}",
+        plan.joint_seed_origin,
+        ratio(s.before, denominator),
+        ratio(s.after, denominator),
+        s.rounds,
+        s.moves,
+        s.period_moves,
+        s.route_moves,
+        s.trials,
+        s.work,
+        s.work_exhausted,
+    );
+    let markdown = format!(
+        "\nJoint period and route search from `{}`: {} accepted moves ({} changing period, {} changing routes) over {} rounds and {} trials, using {} of {work_limit} work units (budget exhausted: {}). Exact value {}/{denominator} → {}/{denominator}. Each moved block uses at most two destinations on the declared decimal grid. The mined set, precedence and every affected signed resource limit are preserved. This bounded neighborhood supplies no additional optimality claim.\n",
+        plan.joint_seed_origin,
+        s.moves,
+        s.period_moves,
+        s.route_moves,
+        s.rounds,
+        s.trials,
+        s.work,
+        s.work_exhausted,
+        s.before,
+        s.after,
+    );
+    (json, markdown)
+}
+
 pub fn execute(command: &Command, root: &Path) -> Envelope {
     let run = || -> Result<Envelope, Refusal> {
         let read =
@@ -228,8 +309,10 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             || (String::new(), String::new()),
             |(g, s)| (g.json(s, denominator), g.markdown(s)),
         );
+        let (fractional_json, fractional_markdown) = fractional_period_report(&plan, denominator);
+        let (joint_json, joint_markdown) = joint_period_route_report(&plan, denominator);
         let payload = format!(
-            "{{\"schema\":\"fmine.plan-schedule.v1\",\"model\":{{\"format\":\"minelib_pcpsp\",\"name\":\"{}\",\"pcpsp\":{},\"prec\":{},\"blocks\":{},\"periods\":{},\"destinations\":{},\"resources\":{}}},\"value_decimals\":{},\"use_decimals\":{},\"share_decimals\":{},\"rounding\":{{\"values\":{},\"uses_up\":{},\"limits_down\":{}}},\"discount_factors\":{},\"discount_scale\":\"{DISCOUNT_SCALE}\",\"selected\":{{\"origin\":\"{}\",\"check\":{},\"discounted_value\":{},\"solution\":{}}},\"candidate\":{external},\"bound\":{{\"method\":\"lagrangian_full_model\",\"verified\":true,\"value\":{},\"prices\":{},\"steps\":{},\"gap\":{}}},\"search\":{{\"cycles\":{},\"round_limit\":{},\"bound_step_limit\":{}}}{lp_json}}}",
+            "{{\"schema\":\"fmine.plan-schedule.v1\",\"model\":{{\"format\":\"minelib_pcpsp\",\"name\":\"{}\",\"pcpsp\":{},\"prec\":{},\"blocks\":{},\"periods\":{},\"destinations\":{},\"resources\":{}}},\"value_decimals\":{},\"use_decimals\":{},\"share_decimals\":{},\"rounding\":{{\"values\":{},\"uses_up\":{},\"limits_down\":{}}},\"discount_factors\":{},\"discount_scale\":\"{DISCOUNT_SCALE}\",\"selected\":{{\"origin\":\"{}\",\"check\":{},\"discounted_value\":{},\"solution\":{}}},\"candidate\":{external},\"bound\":{{\"method\":\"lagrangian_full_model\",\"verified\":true,\"value\":{},\"prices\":{},\"steps\":{},\"gap\":{}}},\"search\":{{\"cycles\":{},\"round_limit\":{},\"bound_step_limit\":{}}}{lp_json}{fractional_json}{joint_json}}}",
             escape_json(&model.name),
             worksheet_input::source_json(&source, text.len()),
             worksheet_input::source_json(&prec_source, prec.len()),
@@ -265,7 +348,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         }
         let candidate_line = plan.candidate.as_ref().map_or_else(String::new, |c| format!("\nExternal candidate: feasible={}, incomplete blocks={}, unmet requirements={}, exceeded limits={}.\n", c.checked.feasible(), c.checked.incomplete, c.checked.unmet, c.checked.over_limit.len()));
         envelope.rendered_markdown = Some(format!(
-            "# Production schedule: {}\n\nSelected `{}`: {} mined blocks. Feasibility and discounted value checked.\n\n| Discounted value | Verified upper bound | Gap to bound |\n|---|---|---|\n| {}/{} | {}/{} | {}/{} |\n\nValues are exact fractions in the input model's currency units.\n{candidate_line}{lp_markdown}\n{}\n\n{NO_CLAIM}\n",
+            "# Production schedule: {}\n\nSelected `{}`: {} mined blocks. Feasibility and discounted value checked.\n\n| Discounted value | Verified upper bound | Gap to bound |\n|---|---|---|\n| {}/{} | {}/{} | {}/{} |\n\nValues are exact fractions in the input model's currency units.\n{candidate_line}{lp_markdown}{fractional_markdown}{joint_markdown}\n{}\n\n{NO_CLAIM}\n",
             crate::guidance::text(&model.name),
             plan.origin,
             plan.checked.mined,

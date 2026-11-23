@@ -1,10 +1,10 @@
 # registries/loc_budget.toml — Per-Crate LOC Budgets and Ceilings (§28.3, §28.4, BD-003)
 # Total: 59 crates across 7 layers (S0..T) plus gated fmine-simbridge.
-# Planned sum = 1,128k LOC; Ceiling sum = 1,298k LOC.
+# Planned sum = 1,182k LOC; Ceiling sum = 1,360k LOC.
 
 schema_version = 1
-program_planned_loc = 1128000
-program_ceiling_loc = 1298000
+program_planned_loc = 1182000
+program_ceiling_loc = 1360000
 
 [[crate]]
 name = "fmine-core"
@@ -173,8 +173,8 @@ name = "fmine-calib"
 layer = "K0"
 subsystem = "Plumb"
 phase = "A"
-planned_loc = 26000
-ceiling_loc = 30000
+planned_loc = 27000
+ceiling_loc = 31000
 charter = "Forecast registration, proper scoring, calibration records, surprise monitors, reference classes (§10)"
 
 [[crate]]
@@ -245,8 +245,8 @@ name = "fmine-plant"
 layer = "K2"
 subsystem = "Crucible"
 phase = "A"
-planned_loc = 32000
-ceiling_loc = 37000
+planned_loc = 37000
+ceiling_loc = 43000
 charter = "Flowsheet graph, process cards, geomet chain, P754 balances, refining custody"
 
 [[crate]]
@@ -407,8 +407,8 @@ name = "fmine-metrics"
 layer = "E"
 subsystem = "Bullion"
 phase = "A"
-planned_loc = 28000
-ceiling_loc = 32000
+planned_loc = 29000
+ceiling_loc = 33000
 charter = "AISC/AIC/C1/GEO/reserve replacement/ROCE variants, LMDI waterfalls, public lane"
 
 [[crate]]
@@ -461,8 +461,8 @@ name = "fmine-cli"
 layer = "U"
 subsystem = "Adit"
 phase = "A"
-planned_loc = 40000
-ceiling_loc = 46000
+planned_loc = 44000
+ceiling_loc = 51000
 charter = "Binary fmine; robot NDJSON; verb registry; doctor and repair"
 
 [[crate]]

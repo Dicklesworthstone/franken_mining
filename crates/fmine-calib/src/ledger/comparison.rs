@@ -16,16 +16,23 @@ use super::{
 };
 use crate::record::{interval_score, scoring::interval_score_difference_bounds};
 
+mod brier;
 mod crps;
+pub mod gaussian;
+pub mod supplied;
 
 pub const METHOD: &str = "Paired central-interval loss, left minus right, at the identical frozen alpha. Negative values favor the left cohort. Subjects, target, unit, ownership, calendar period, outcome selector and assessment cut must agree; paired observations require the identical citation and numeric value. The union of frozen subjects remains visible. Observed means use only identical selected publications, with every excluded subject named. Whole-population bounds exist only when all subjects have both forecasts and compatible outcome selections; unresolved pairs use exact global loss-difference extrema at the four interval endpoints. These bounds are arithmetic completion bounds, not confidence intervals. Forecast registration times and information sets may differ. No model-race significance, calibration, independence or predictive-skill claim is supplied.";
 
 pub const CRPS_METHOD: &str = "Paired full-distribution CRPS, left minus right, for finite empirical or exactly weighted empirical forecasts. Negative values favor the left cohort. Frozen binary support values and exact probability masses are retained without interpolation, resampling or normalization. Public target, ownership, vintage permission, alpha, assessment cut and outcome selector must agree; resolved pairs require identical numeric outcomes and complete citations. The union of frozen subjects remains visible. Observed means use identical-publication pairs only. Unresolved pairs use exact global CRPS-difference extrema at the union of forecast support atoms: the difference is linear between atoms and constant in both tails because both distributions have total mass one. Whole-population bounds require both forecasts and compatible selections for every subject. Checked rational capacity failures invalidate affected results without dropping members. These are arithmetic completion bounds, not confidence intervals. Registration times and information sets may differ. No sequential significance, independence, calibration or predictive-skill claim is supplied.";
 
+pub const BRIER_METHOD: &str = "Explicit supplied-target paired Brier loss, left minus right: (p_left-y)^2-(p_right-y)^2. Negative values favor the left cohort. Only frozen Bernoulli probabilities are admitted, including zero and one; no log-score floor, clipping, resampling or normalization changes them. Complete domain, site, horizon, quantity and unit labels and identical outcome deadlines identify each target. Resolution rule, eligible sources, alpha, assessment cut and selector must agree. Resolved pairs require identical binary outcomes and complete citations. Missing forecasts, unresolved outcomes and selection mismatches remain in the union. Exact checked rationals represent the frozen binary probabilities. For each unresolved compatible pair, the difference is affine in y and its exact extrema are attained at y=0 or y=1. Summing those extrema gives the sharp whole-population bounds over all binary completions; equal forecasts contribute exactly zero. Missing forecasts, incompatible selections or unrepresentable arithmetic leave affected aggregates unavailable. These are descriptive arithmetic bounds, not confidence intervals, sequential significance, calibration or predictive skill. Target declarations and citations remain supplied and unverified; model families, authors and information sets may differ.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairedScore {
     Interval,
     Crps,
+    /// Binary-event loss, admitted only through the explicit supplied-target comparison.
+    Brier,
 }
 
 impl PairedScore {
@@ -33,6 +40,7 @@ impl PairedScore {
         match self {
             Self::Interval => METHOD,
             Self::Crps => CRPS_METHOD,
+            Self::Brier => BRIER_METHOD,
         }
     }
 }
@@ -99,6 +107,66 @@ pub struct PairedAssessment {
     pub digest: Digest32,
 }
 
+/// Complete-distribution comparisons keep exact finite arithmetic separate from approximate Gaussian
+/// evaluation. Both variants retain the same immutable public-target and selected-source pairing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CrpsComparison {
+    Finite(PairedAssessment),
+    Gaussian(gaussian::GaussianPairedAssessment),
+}
+
+struct SelectedPair<'a> {
+    subject: String,
+    left: Option<&'a MemberAssessment>,
+    right: Option<&'a MemberAssessment>,
+    status: PairStatus,
+    value: Option<f64>,
+}
+
+fn select_pair<'a>(
+    subject: String,
+    left: Option<&'a MemberAssessment>,
+    right: Option<&'a MemberAssessment>,
+) -> SelectedPair<'a> {
+    let (status, value) = match (left, right) {
+        (None, _) => (PairStatus::LeftForecastMissing, None),
+        (_, None) => (PairStatus::RightForecastMissing, None),
+        (Some(l), Some(r)) => match (&l.outcome, &r.outcome) {
+            (
+                MemberOutcome::Resolved {
+                    value: a,
+                    citation: ac,
+                    ..
+                },
+                MemberOutcome::Resolved {
+                    value: b,
+                    citation: bc,
+                    ..
+                },
+            ) if a == b && ac == bc => (PairStatus::Paired, Some(*a)),
+            (MemberOutcome::Unresolved { .. }, MemberOutcome::Unresolved { .. }) => {
+                (PairStatus::Unresolved, None)
+            }
+            _ => (PairStatus::OutcomeSelectionMismatch, None),
+        },
+    };
+    SelectedPair {
+        subject,
+        left,
+        right,
+        status,
+        value,
+    }
+}
+
+struct PairedInputs<'a> {
+    left: &'a Assessment,
+    right: &'a Assessment,
+    policy: PublicResolutionPolicy,
+    alpha: f64,
+    members: Vec<SelectedPair<'a>>,
+}
+
 fn saved(ledger: &ForecastLedger, digest: Digest32) -> Result<&Assessment, Refusal> {
     ledger
         .assessments
@@ -141,6 +209,48 @@ fn subjects<'a>(
         .collect()
 }
 
+fn paired_inputs(
+    ledger: &ForecastLedger,
+    left_digest: Digest32,
+    right_digest: Digest32,
+) -> Result<PairedInputs<'_>, Refusal> {
+    let (left, right) = (saved(ledger, left_digest)?, saved(ledger, right_digest)?);
+    let ((lp, lv, la), (rp, rv, ra)) = (policy(ledger, left)?, policy(ledger, right)?);
+    if left.as_of_ns != right.as_of_ns || left.selector != right.selector {
+        return Err(domain(
+            "paired comparisons require the same assessment cut and outcome selector",
+        ));
+    }
+    if lp.issuer != rp.issuer
+        || lp.metric != rp.metric
+        || lp.period != rp.period
+        || lp.ownership != rp.ownership
+        || lv != rv
+        || la.to_bits() != ra.to_bits()
+    {
+        return Err(domain(
+            "paired comparisons require identical frozen target, ownership, vintage permission and alpha",
+        ));
+    }
+    let (ls, rs) = (subjects(left, &lp)?, subjects(right, &rp)?);
+    let names: BTreeSet<_> = ls.keys().chain(rs.keys()).cloned().collect();
+    let members = names
+        .into_iter()
+        .map(|subject| {
+            let l = ls.get(&subject).copied();
+            let r = rs.get(&subject).copied();
+            select_pair(subject, l, r)
+        })
+        .collect();
+    Ok(PairedInputs {
+        left,
+        right,
+        policy: lp,
+        alpha: la,
+        members,
+    })
+}
+
 fn bounds(ledger: &ForecastLedger, member: &MemberAssessment, alpha: f64) -> Option<(f64, f64)> {
     ledger
         .records
@@ -176,6 +286,69 @@ fn scores(
     }
 }
 
+fn score_member(
+    ledger: &ForecastLedger,
+    selected: SelectedPair<'_>,
+    alpha: f64,
+    score: PairedScore,
+) -> Result<PairedMember, Refusal> {
+    let SelectedPair {
+        subject,
+        left: l,
+        right: r,
+        status,
+        value,
+    } = selected;
+    if matches!(score, PairedScore::Crps | PairedScore::Brier) {
+        for member in [l, r].into_iter().flatten() {
+            let forecast = ledger
+                .records
+                .get(&member.forecast_id)
+                .ok_or_else(|| absent("paired distribution forecast is unavailable"))?;
+            match score {
+                PairedScore::Crps => crps::admit(&forecast.payload)?,
+                PairedScore::Brier => brier::admit(&forecast.payload)?,
+                PairedScore::Interval => {}
+            }
+        }
+    }
+    let left_interval = (score == PairedScore::Interval)
+        .then(|| l.and_then(|member| bounds(ledger, member, alpha)))
+        .flatten();
+    let right_interval = (score == PairedScore::Interval)
+        .then(|| r.and_then(|member| bounds(ledger, member, alpha)))
+        .flatten();
+    let eligible = matches!(status, PairStatus::Paired | PairStatus::Unresolved);
+    let completion = eligible
+        .then(|| match score {
+            PairedScore::Interval => scores(left_interval, right_interval, alpha, value),
+            PairedScore::Crps => crps::scores(
+                &ledger.records.get(&l?.forecast_id)?.payload,
+                &ledger.records.get(&r?.forecast_id)?.payload,
+                value,
+            ),
+            PairedScore::Brier => brier::scores(
+                &ledger.records.get(&l?.forecast_id)?.payload,
+                &ledger.records.get(&r?.forecast_id)?.payload,
+                value,
+            ),
+        })
+        .flatten();
+    Ok(PairedMember {
+        subject,
+        left: l.cloned(),
+        right: r.cloned(),
+        left_interval,
+        right_interval,
+        status,
+        difference: (status == PairStatus::Paired)
+            .then(|| completion.map(|b| b.0))
+            .flatten(),
+        completion,
+        arithmetic_indeterminate: eligible && completion.is_none(),
+    })
+}
+
 impl ForecastLedger {
     /// Compare already saved assessments without selecting outcomes again or advancing authority time.
     /// Same-target subjects are matched by their frozen source policy, not their model name or value.
@@ -197,97 +370,64 @@ impl ForecastLedger {
         self.compare_with_score(left_digest, right_digest, PairedScore::Crps)
     }
 
+    /// Select the complete-distribution CRPS owner after checking every member on both sides, including
+    /// unmatched subjects. Mixed Gaussian/finite populations and incomplete distributions refuse.
+    pub fn compare_assessments_full_crps(
+        &self,
+        left_digest: Digest32,
+        right_digest: Digest32,
+    ) -> Result<CrpsComparison, Refusal> {
+        let mut gaussian = None;
+        for assessment in [saved(self, left_digest)?, saved(self, right_digest)?] {
+            for member in &assessment.per_member {
+                let payload = &self
+                    .records
+                    .get(&member.forecast_id)
+                    .ok_or_else(|| absent("paired CRPS forecast is unavailable"))?
+                    .payload;
+                let kind = match payload {
+                    super::ForecastPayload::Gaussian { .. } => true,
+                    super::ForecastPayload::Empirical { .. }
+                    | super::ForecastPayload::WeightedEmpirical { .. } => false,
+                    _ => {
+                        return Err(domain(
+                            "paired CRPS supports only complete finite distributions or homogeneous Gaussian forecasts",
+                        ));
+                    }
+                };
+                if gaussian.is_some_and(|old| old != kind) {
+                    return Err(domain(
+                        "paired CRPS supports only homogeneous Gaussian forecasts or finite distributions; mixed populations are not silently subsetted",
+                    ));
+                }
+                gaussian = Some(kind);
+            }
+        }
+        if gaussian == Some(true) {
+            self.compare_assessments_gaussian_crps(left_digest, right_digest)
+                .map(CrpsComparison::Gaussian)
+        } else {
+            self.compare_assessments_crps(left_digest, right_digest)
+                .map(CrpsComparison::Finite)
+        }
+    }
+
     fn compare_with_score(
         &self,
         left_digest: Digest32,
         right_digest: Digest32,
         score: PairedScore,
     ) -> Result<PairedAssessment, Refusal> {
-        let (left, right) = (saved(self, left_digest)?, saved(self, right_digest)?);
-        let ((lp, lv, la), (rp, rv, ra)) = (policy(self, left)?, policy(self, right)?);
-        if left.as_of_ns != right.as_of_ns || left.selector != right.selector {
-            return Err(domain(
-                "paired comparisons require the same assessment cut and outcome selector",
-            ));
-        }
-        if lp.issuer != rp.issuer
-            || lp.metric != rp.metric
-            || lp.period != rp.period
-            || lp.ownership != rp.ownership
-            || lv != rv
-            || la.to_bits() != ra.to_bits()
-        {
-            return Err(domain(
-                "paired comparisons require identical frozen target, ownership, vintage permission and alpha",
-            ));
-        }
-        let (ls, rs) = (subjects(left, &lp)?, subjects(right, &rp)?);
-        let names: BTreeSet<_> = ls.keys().chain(rs.keys()).cloned().collect();
-        let mut members = Vec::with_capacity(names.len());
-        for subject in names {
-            let l = ls.get(&subject).copied();
-            let r = rs.get(&subject).copied();
-            if score == PairedScore::Crps {
-                for member in [l, r].into_iter().flatten() {
-                    let forecast = self
-                        .records
-                        .get(&member.forecast_id)
-                        .ok_or_else(|| absent("paired CRPS forecast is unavailable"))?;
-                    crps::admit(&forecast.payload)?;
-                }
-            }
-            let (status, value) = match (l, r) {
-                (None, _) => (PairStatus::LeftForecastMissing, None),
-                (_, None) => (PairStatus::RightForecastMissing, None),
-                (Some(l), Some(r)) => match (&l.outcome, &r.outcome) {
-                    (
-                        MemberOutcome::Resolved {
-                            value: a,
-                            citation: ac,
-                            ..
-                        },
-                        MemberOutcome::Resolved {
-                            value: b,
-                            citation: bc,
-                            ..
-                        },
-                    ) if a == b && ac == bc => (PairStatus::Paired, Some(*a)),
-                    (MemberOutcome::Unresolved { .. }, MemberOutcome::Unresolved { .. }) => {
-                        (PairStatus::Unresolved, None)
-                    }
-                    _ => (PairStatus::OutcomeSelectionMismatch, None),
-                },
-            };
-            let left_interval = (score == PairedScore::Interval)
-                .then(|| l.and_then(|member| bounds(self, member, la)))
-                .flatten();
-            let right_interval = (score == PairedScore::Interval)
-                .then(|| r.and_then(|member| bounds(self, member, la)))
-                .flatten();
-            let eligible = matches!(status, PairStatus::Paired | PairStatus::Unresolved);
-            let completion = eligible
-                .then(|| match score {
-                    PairedScore::Interval => scores(left_interval, right_interval, la, value),
-                    PairedScore::Crps => crps::scores(
-                        &self.records.get(&l?.forecast_id)?.payload,
-                        &self.records.get(&r?.forecast_id)?.payload,
-                        value,
-                    ),
-                })
-                .flatten();
-            members.push(PairedMember {
-                subject,
-                left: l.cloned(),
-                right: r.cloned(),
-                left_interval,
-                right_interval,
-                status,
-                difference: (status == PairStatus::Paired)
-                    .then(|| completion.map(|b| b.0))
-                    .flatten(),
-                completion,
-                arithmetic_indeterminate: eligible && completion.is_none(),
-            });
+        let PairedInputs {
+            left,
+            right,
+            policy: lp,
+            alpha: la,
+            members: selected,
+        } = paired_inputs(self, left_digest, right_digest)?;
+        let mut members = Vec::with_capacity(selected.len());
+        for member in selected {
+            members.push(score_member(self, member, la, score)?);
         }
         let n_paired = members
             .iter()
@@ -372,6 +512,7 @@ impl PairedAssessment {
         let tag = match self.score {
             PairedScore::Interval => *b"PAIR",
             PairedScore::Crps => *b"PCRP",
+            PairedScore::Brier => *b"PBRI",
         };
         let mut enc = Encoder::new_frame(tag, 1);
         enc.put_fixed(&self.left_assessment.0);

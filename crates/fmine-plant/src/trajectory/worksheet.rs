@@ -8,8 +8,10 @@ use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
 use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
 
 pub const SCHEMA: &str = "fmine.plant-trajectory.v1";
+pub const UNMEASURED_FLOW_SCHEMA: &str = "fmine.plant-trajectory.v2";
 pub const MAX_BYTES: u64 = 1024 * 1024;
 pub const NO_CLAIM: &str = "Conditional linear inventory reconciliation for one storage boundary and one total elemental measurand across declared contiguous periods. Only genuine observations enter the supplied full covariance; missing boundary stocks have no prior or invented measurement. Submitted observations, completeness and unbiased Gaussian error model remain Assumed, Internal and uncalibrated. Later surveys condition a new retrospective result, not an earlier decision forecast. No sensor-bias estimation, robust likelihood, stockpile mixing, leach dynamics, empirical calibration, P754 compliance, ledger commit or operating authorization is supplied.";
+pub const UNMEASURED_FLOW_NO_CLAIM: &str = "Conditional linear inventory and flow reconciliation for one storage boundary and one total elemental measurand across declared contiguous periods. Only genuine observations enter the supplied full covariance; explicitly unmeasured stocks and flows have no prior, zero placeholder or invented measurement. Conservation must identify every separate latent total. Submitted observations, completeness and unbiased Gaussian error model remain Assumed, Internal and uncalibrated. Later surveys condition a new retrospective result, not an earlier decision forecast. No sensor-bias estimation, robust likelihood, stockpile mixing, leach dynamics, empirical calibration, P754 compliance, ledger commit or operating authorization is supplied.";
 pub const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.plant-trajectory.v1\",\"command\":\"plant trajectory --input <worksheet.toml>\",",
     "\"input\":\"Regular UTF-8 TOML, at most 1 MiB; exact bytes SHA-256 bound\",",
@@ -17,11 +19,13 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"optional_fields\":[\"normalized_adjustment_limit\"],",
     "\"period_rows\":[\"start_ns\",\"end_ns\",\"inflow_kg\",\"outflow_kg\"],",
     "\"periods\":\"2..32 positive intervals exactly tile the full scope; every inflow and outflow total is supplied, including zeros\",",
+    "\"unmeasured_flow_schema\":\"fmine.plant-trajectory.v2 also accepts the explicit string unmeasured for inflow_kg or outflow_kg. Each period retains at least one measured flow; both missing can identify only net flow and refuse. Remaining latent coordinates must be jointly identifiable\",",
     "\"stocktake_rows\":[\"at_ns\",\"kg\"],\"unmeasured_stocktake_rows\":[\"at_ns\"],",
     "\"stocks\":\"Exactly one measured or explicitly unmeasured stock per period boundary; a shared endpoint is one coordinate; at least one measured stock anchors the trajectory\",",
     "\"covariance_rows\":[\"left\",\"right\",\"kg2\"],",
     "\"coordinate_keys\":\"stock/<instant>; inflow/<start>/<end>; outflow/<start>/<end>; nanoseconds use canonical signed integer spelling\",",
-    "\"covariance\":\"Every unordered pair of genuine measurements, including explicit zero cross terms; no rows for unmeasured stocks; full symmetric positive-definite covariance in kg2\",",
+    "\"covariance\":\"Every unordered pair of genuine measurements, including explicit zero cross terms; no rows for unmeasured stocks or flows; full symmetric positive-definite covariance in kg2\",",
+    "\"coordinate_order\":\"Measured stocks, inflows, outflows by time; then unmeasured stocks, inflows, outflows by time. v2 results include inferred_flows with explicit absent observations and conditional variances\",",
     "\"basis\":\"kg-total-element/all-phases/full-physical-boundary\",",
     "\"values\":\"Quoted trimmed strings; masses are exact plain decimals or n/d with positive denominator; times signed integer nanoseconds; error parameters finite numbers\",",
     "\"output\":\"Original Claims, shared stock trajectory, every fitted flow, full posterior and adjustment covariance, exact observed contributions and period residuals\",",
@@ -180,11 +184,22 @@ impl WorksheetResult {
     pub fn refusal(&self) -> Option<&Refusal> {
         self.outcome.refusal()
     }
+    pub fn no_claim(&self) -> &'static str {
+        no_claim(&self.outcome)
+    }
     pub fn to_json(&self) -> String {
         super::render::json(&self.submitted, &self.source, &self.outcome)
     }
     pub fn to_markdown(&self) -> String {
         super::render::markdown(&self.outcome)
+    }
+}
+
+pub(super) fn no_claim(outcome: &TrajectoryOutcome) -> &'static str {
+    if outcome.diagnostics().unmeasured_flows.is_empty() {
+        NO_CLAIM
+    } else {
+        UNMEASURED_FLOW_NO_CLAIM
     }
 }
 
@@ -232,9 +247,16 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
         &["normalized_adjustment_limit"],
         1,
     )?;
-    if get(&top, "schema")?.0 != SCHEMA {
-        return Err(bad(1, format!("schema must be {SCHEMA}")));
-    }
+    let allow_unmeasured_flows = match get(&top, "schema")?.0 {
+        SCHEMA => false,
+        UNMEASURED_FLOW_SCHEMA => true,
+        _ => {
+            return Err(bad(
+                1,
+                format!("schema must be {SCHEMA} or {UNMEASURED_FLOW_SCHEMA}"),
+            ));
+        }
+    };
     if get(&top, "basis")?.0 != inventory::MASS_BASIS {
         return Err(fail(
             RefusalCode::UndeclaredUnitBasisOrTz107,
@@ -271,16 +293,20 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
                     end_ns: integer(get(&values, "end_ns")?)?,
                 };
                 periods.push(time);
-                for (name, value) in [
-                    (
-                        "inflow_kg",
-                        TrajectoryValue::Inflow(quantity(get(&values, "inflow_kg")?)?),
-                    ),
-                    (
-                        "outflow_kg",
-                        TrajectoryValue::Outflow(quantity(get(&values, "outflow_kg")?)?),
-                    ),
-                ] {
+                for name in ["inflow_kg", "outflow_kg"] {
+                    let amount = get(&values, name)?;
+                    let value = match (name, amount.0 == "unmeasured") {
+                        (_, true) if !allow_unmeasured_flows => {
+                            return Err(bad(
+                                amount.1,
+                                "unmeasured flows require fmine.plant-trajectory.v2",
+                            ));
+                        }
+                        ("inflow_kg", true) => TrajectoryValue::UnmeasuredInflow,
+                        (_, true) => TrajectoryValue::UnmeasuredOutflow,
+                        ("inflow_kg", false) => TrajectoryValue::Inflow(quantity(amount)?),
+                        (_, false) => TrajectoryValue::Outflow(quantity(amount)?),
+                    };
                     inputs.push(input_claim(
                         TrajectoryInput {
                             scope: scope.clone(),

@@ -16,10 +16,20 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
-      - name: Calibration, plant and valuation known answers
-        run: cargo test -p fmine-calib -p fmine-plant -p fmine-metrics --lib --locked
+      - name: Build CLI for command integration tests
+        run: cargo build -p fmine-cli --locked
+      - name: Exact production scheduling and independent command oracle
+        run: |
+          cargo test -p fmine-optimize --lib --locked
+          python3 -I crates/xtask/testdata/plan_schedule_oracle.py target/debug/fmine
+      - name: Exact HTML disclosure arithmetic and independent source oracle
+        run: python3 -I crates/xtask/testdata/html_lint_oracle.py target/debug/fmine
+      - name: Calibration, plant, valuation and capital known answers
+        run: cargo test -p fmine-numerics -p fmine-calib -p fmine-plant -p fmine-decide -p fmine-metrics -p fmine-capital --lib --locked
+      - name: Source-derived investment portfolios
+        run: cargo test -p xtask --test capital_investments --locked
       - name: Saved forecast diagnostics and disclosure derivations
-        run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test public_lint_derivations --test production_valuation --locked
+        run: cargo test -p xtask --test forecast_diagnostics --test forecast_live --test forecast_supplied_comparison --test public_lint_derivations --test production_valuation --locked
       - name: Source-bound journals, RTD inversion and citation integrity
         run: cargo test -p xtask --test decision_journal --test plant_rtd_inverse --test public_report_contract --test public_citations --locked
       - name: Plant command and journal integration
@@ -29,6 +39,16 @@ jobs:
           cargo test -p fmine-public --lib --locked
           cargo test -p xtask --lib forecast:: --locked
           cargo test -p xtask --test quarterly_record_rules --test forecast_record_score --locked
+      - name: Authenticated capex record within the frozen fixture's issuance window
+        run: |
+          capex_fixture_now=$(date -u +%s)
+          capex_fixture_start=$(date -u -d '2026-10-03T00:00:00Z' +%s)
+          capex_fixture_end=$(date -u -d '2026-12-31T23:59:45Z' +%s)
+          if (( capex_fixture_now >= capex_fixture_start && capex_fixture_now < capex_fixture_end )); then
+            cargo test -p xtask --test forecast_record_score capex_candidate_freezes_scores_exact_scopes_and_keeps_changed_ownership_unresolved --locked -- --ignored --exact
+          else
+            echo "::notice::The authenticated capex fixture is outside its declared 2026 issuance window; source and arithmetic capex regressions still run above."
+          fi
 
   # AGENTS.md "Compiler Checks" (bd-l736): formatting and clippy, warnings denied. One OS is enough; lints do
   # not depend on the target here.

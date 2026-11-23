@@ -9,12 +9,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_core::hash::sha256;
+use fmine_evidence::{KnowledgeState, Refusal};
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
+use fmine_metrics::capacity::{CapacityVerdict, PhysicalKind};
 use fmine_metrics::guidance::{
-    EnvelopeTier, GuidanceFamily, HistoryVerdict, QuantityKind, quarters,
+    CostMetric, EnvelopeTier, GuidanceFamily, HistoryVerdict, QuantityKind, quarters,
 };
 use fmine_numerics::exact_feas::{Interval, Rat};
-use fmine_public::guidance::{self, GuidanceCompletionReport, capacity::TechnicalAssessment};
+use fmine_public::guidance::{
+    self, GuidanceCompletionReport,
+    capacity::{TechnicalAssessment, TechnicalComparison, TechnicalScenarioKind},
+};
 use fmine_public::sources::{registry_path, transcriptions_path};
 
 const ISSUER: &str = "copper_completion_fixture";
@@ -63,6 +68,80 @@ fn guidance_entries(file: &str, basis: &str) -> String {
     out
 }
 
+fn c1_entries(file: &str, basis: &str, signed: bool) -> String {
+    ["reader-a", "reader-b"]
+        .into_iter()
+        .map(|reader| {
+            entry(
+                file,
+                "c1_usd_per_lb",
+                if signed {
+                    "-2.00 - -1.50"
+                } else {
+                    "1.50 - 2.00"
+                },
+                "usd_per_lb",
+                &format!("{basis};c1=issuer-reported-per-sold-lb"),
+                reader,
+            )
+        })
+        .collect()
+}
+
+fn technical_entries(file: &str, scenario: &str, explicit: bool) -> String {
+    let mut out = String::new();
+    let basis = if explicit {
+        "100%;bound=explicit-upper;metal=copper".to_string()
+    } else {
+        format!("100%;scenario={scenario};metal=copper")
+    };
+    for (suffix, token, unit) in [
+        ("remaining_dry_feed_mt", "10", "dry_mt"),
+        ("head_grade_percent", "2", "percent_dry_mass"),
+        ("recovery_percent", "90", "percent"),
+    ] {
+        for reader in ["reader-a", "reader-b"] {
+            out.push_str(
+                &entry(file, suffix, token, unit, &basis, reader)
+                    .replace(
+                        "guidance_copper_mine_",
+                        if explicit {
+                            "capacity_copper_mine_"
+                        } else {
+                            "technical_copper_mine_"
+                        },
+                    )
+                    .replace(
+                        "Invented annual guidance",
+                        if explicit {
+                            "Explicit maximum limits"
+                        } else {
+                            "Invented technical scenario"
+                        },
+                    )
+                    .replace(
+                        "2030FY",
+                        if explicit {
+                            "2030-07/2030-12"
+                        } else {
+                            "2030H2"
+                        },
+                    ),
+            );
+        }
+    }
+    out
+}
+
+fn technical_comparison(
+    report: &GuidanceCompletionReport,
+) -> Result<&TechnicalComparison, &Refusal> {
+    match &report.technical {
+        TechnicalAssessment::Compared(comparison) => Ok(comparison),
+        TechnicalAssessment::Indeterminate { reason } => Err(reason),
+    }
+}
+
 fn write_entries(root: &Path, entries: &str) {
     std::fs::write(
         transcriptions_path(root, ISSUER),
@@ -86,6 +165,11 @@ fn sheets(
     };
     let heading = format!("For the {months} months ended {end},");
     let subject = format!("Copper Mine ({share})");
+    let rate = match fault {
+        "signed_cost" => format!("-{}", values[2]),
+        "zero_cost" => "0".into(),
+        _ => values[2].into(),
+    };
     let full = values[0].parse::<u64>().unwrap() * if share == "50%" { 2 } else { 1 };
     let sales_label = match fault {
         "unsupported_sales_unit" => "Sales (kilograms)",
@@ -116,7 +200,7 @@ fn sheets(
                 ("D4".into(), text("All-in sustaining costs ($/lb)")),
                 ("B5".into(), number(&full.to_string())),
                 ("C5".into(), number(values[0])),
-                ("D5".into(), number(values[2])),
+                ("D5".into(), number(&rate)),
             ],
         },
         MinimalSheet {
@@ -144,6 +228,18 @@ fn sheets(
             ],
         },
     ];
+    if matches!(fault, "c1" | "signed_c1" | "c1_current_only") {
+        let c1 = match (year == "2030", fault == "signed_c1") {
+            (true, false) => "2.00",
+            (false, false) => "1.50",
+            (true, true) => "-2.00",
+            (false, true) => "-1.50",
+        };
+        sheets[0].cells.extend([
+            ("E4".into(), text("C1 cash costs ($/lb)")),
+            ("E5".into(), number(c1)),
+        ]);
+    }
     if fault == "ambiguous_sales" {
         sheets[1].cells.extend([
             ("A4".into(), text("Sales (Thousands of tonnes)")),
@@ -166,7 +262,16 @@ fn workspace(tag: &str, share: &str, fault: &str) -> PathBuf {
     let mut registry = format!(
         "schema = \"fmine.sources.v1\"\nissuer = \"{ISSUER}\"\ncorpus_dir = \"corpus\"\nretrieved_utc = \"2030-07-31T00:00:00Z\"\nurl_prefix = \"https://example.invalid/\"\n[[subject]]\nname = \"Copper Mine\"\n"
     );
-    let historical_fault = if ["sales_kt", "aliased_sales_kt", "mixed_sales_units"].contains(&fault)
+    let historical_fault = if [
+        "sales_kt",
+        "aliased_sales_kt",
+        "mixed_sales_units",
+        "signed_cost",
+        "zero_cost",
+        "c1",
+        "signed_c1",
+    ]
+    .contains(&fault)
     {
         fault
     } else {
@@ -239,22 +344,43 @@ fn workspace(tag: &str, share: &str, fault: &str) -> PathBuf {
     }
     std::fs::write(registry_path(&root, ISSUER), registry).unwrap();
     register_document(&root, "Guidance.pdf", "2030-01-15", "mda");
-    write_entries(
-        &root,
-        &guidance_entries(
-            "Guidance.pdf",
-            if share == "50%" {
-                "attributable:1/2"
-            } else {
-                "100%"
-            },
-        ),
+    let entries = guidance_entries(
+        "Guidance.pdf",
+        if share == "50%" {
+            "attributable:1/2"
+        } else {
+            "100%"
+        },
     );
+    let entries = match fault {
+        "signed_cost" => entries.replace("3.00 - 3.50", "-3.50 - -3.00"),
+        "zero_cost" => entries.replace("3.00 - 3.50", "-0.50 - 0.50"),
+        _ => entries,
+    };
+    let entries = if matches!(fault, "c1" | "signed_c1" | "c1_current_only") {
+        entries
+            + &c1_entries(
+                "Guidance.pdf",
+                if share == "50%" {
+                    "attributable:1/2"
+                } else {
+                    "100%"
+                },
+                fault == "signed_c1",
+            )
+    } else {
+        entries
+    };
+    write_entries(&root, &entries);
     root
 }
 
 fn run(root: &Path) -> Result<GuidanceCompletionReport, fmine_evidence::Refusal> {
     guidance::run_public(root, ISSUER, "copper-mine", "2030Q2", AS_OF)
+}
+
+fn run_c1(root: &Path) -> Result<GuidanceCompletionReport, fmine_evidence::Refusal> {
+    guidance::run_public_with_metric(root, ISSUER, "copper-mine", "2030Q2", AS_OF, CostMetric::C1)
 }
 
 fn interval(lo: (i128, i128), hi: (i128, i128)) -> Interval {
@@ -358,8 +484,338 @@ fn copper_source_completion_keeps_exact_units_rounding_and_checked_history() {
             report.technical,
             TechnicalAssessment::Indeterminate { .. }
         ));
-        assert!(json.contains("copper technical production scenarios are unavailable"));
+        assert!(json.contains("no registered technical"));
         assert_eq!(json, run(&root).unwrap().to_json());
+    }
+}
+
+#[test]
+fn signed_and_zero_copper_costs_reach_the_cli_with_exact_bounds_and_historical_witnesses() {
+    for (case, ytd, spend, rate, shown) in [
+        (
+            "signed_cost",
+            interval((-9612801, 40000), (-9587201, 40000)),
+            interval((-12813499, 40000), (-9586599, 40000)),
+            interval((-12813499, 4000400), (-9586599, 3999600)),
+            "−320.337475",
+        ),
+        (
+            "zero_cost",
+            interval((-12001, 40000), (12001, 40000)),
+            interval((-3212301, 40000), (3212301, 40000)),
+            interval((-2891, 3600), (2891, 3600)),
+            "−80.307525",
+        ),
+    ] {
+        let root = workspace(case, "50%", case);
+        let report = run(&root).unwrap();
+        // Independent half-step arithmetic: signed_cost reverses the prior known-answer rate
+        // signs; zero_cost has r=[-0.005,0.005], A=[-0.5,0.5], S=[59.995,60.005], R=[99.99,100.01].
+        assert_eq!(report.completion.ytd_aisc_spend.value.interval, ytd);
+        assert_eq!(report.completion.remaining_aisc_spend.value.interval, spend);
+        assert_eq!(report.completion.remaining_aisc_rate.value.interval, rate);
+        assert_eq!(report.history.verdict, HistoryVerdict::WithinEnvelope);
+        assert_eq!(report.history_sources.len(), 1);
+        let source = &report.history_sources[0];
+        let history = quarters::QuarterlyHistory {
+            id: source.id.clone(),
+            quarters: source.quarters.clone(),
+        };
+        let witness = &report.history.checks[0].witness.as_ref().unwrap().value;
+        assert!(quarters::check_quarter_witness(&report.inputs, &history, witness).unwrap());
+        assert!(report.inputs.ytd_aisc.value.interval.lo.signum() < 0);
+        assert!(
+            !report
+                .history_exclusions
+                .iter()
+                .any(|e| e.code == "FMINE-REF-109")
+        );
+
+        let (envelope, _) = fmine_cli::invoke(&arguments(), &root);
+        assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+        assert_eq!(envelope.payload_json, report.to_json());
+        for source in ["Guidance.pdf", "2030Q2.xlsx:YTD!D5", "2029Q3.xlsx:QTD!D5"] {
+            assert!(envelope.payload_json.contains(source));
+        }
+        assert!(envelope.payload_json.contains(&format!(
+            "\"interval\":{{\"lo\":\"{}/{}\",\"hi\":\"{}/{}\",\"closed\":true}}",
+            spend.lo.num(),
+            spend.lo.den(),
+            spend.hi.num(),
+            spend.hi.den()
+        )));
+        let mut markdown = arguments();
+        markdown.extend(["--format".into(), "markdown".into()]);
+        let (text, code) = fmine_cli::run(&markdown, &root);
+        assert_eq!(code, 0, "{text}");
+        assert!(text.contains(shown), "{text}");
+        assert!(text.contains("USD per sold lb") && text.contains("Checked witness"));
+        assert_eq!(report.to_json(), run(&root).unwrap().to_json());
+    }
+}
+
+#[test]
+fn copper_c1_completion_uses_distinct_sources_exact_costs_and_checked_history() {
+    for share in ["50%", "100%"] {
+        let root = workspace("c1-known-answer", share, "c1");
+        let aisc = run(&root).unwrap();
+        let explicit_aisc = guidance::run_public_with_metric(
+            &root,
+            ISSUER,
+            "copper-mine",
+            "2030Q2",
+            AS_OF,
+            CostMetric::Aisc,
+        )
+        .unwrap();
+        assert_eq!(aisc.to_json(), explicit_aisc.to_json());
+        let report = run_c1(&root).unwrap();
+        let i = &report.inputs;
+        assert_eq!(i.ytd_aisc.value.kind, QuantityKind::C1UsdPerSoldLb);
+        assert_eq!(i.ytd_aisc.metric_key, "summary:c1_usd_per_lb");
+        assert_eq!(i.ytd_aisc.value.interval, interval((399, 200), (401, 200)));
+        assert_eq!(
+            aisc.inputs.ytd_aisc.value.interval,
+            interval((799, 200), (801, 200))
+        );
+        assert_eq!(
+            report.completion.remaining_production,
+            aisc.completion.remaining_production
+        );
+        // Independent Fraction corners: r*S, A*R+(A-r)*S, A+(A-r)*S/R. Both cost columns exist.
+        assert_eq!(
+            report.completion.ytd_aisc_spend.value.kind,
+            QuantityKind::C1SpendUsdMillion
+        );
+        assert_eq!(
+            report.completion.ytd_aisc_spend.value.interval,
+            interval((4787601, 40000), (4812401, 40000))
+        );
+        assert_eq!(
+            report.completion.remaining_aisc_spend.value.interval,
+            interval((4787299, 40000), (8012801, 40000))
+        );
+        assert_eq!(
+            report.completion.remaining_aisc_rate.value.interval,
+            interval((4309, 3600), (728291, 363600))
+        );
+        assert_eq!(
+            report.completion.remaining_aisc_rate.value.kind,
+            QuantityKind::C1UsdPerSoldLb
+        );
+        assert_eq!(
+            (report.history.tier, report.history.verdict),
+            (EnvelopeTier::T1, HistoryVerdict::WithinEnvelope)
+        );
+        let source = &report.history_sources[0];
+        let history = quarters::QuarterlyHistory {
+            id: source.id.clone(),
+            quarters: source.quarters.clone(),
+        };
+        let witness = &report.history.checks[0].witness.as_ref().unwrap().value;
+        assert!(quarters::check_quarter_witness(i, &history, witness).unwrap());
+        assert!(!matches!(
+            quarters::check_quarter_witness(&aisc.inputs, &history, witness),
+            Ok(true)
+        ));
+        for quarter in &history.quarters {
+            assert_eq!(quarter.aisc.value.kind, QuantityKind::C1UsdPerSoldLb);
+            assert_eq!(quarter.aisc.metric_key, "summary:c1_usd_per_lb");
+            assert_eq!(
+                quarter.aisc.value.interval,
+                interval((299, 200), (301, 200))
+            );
+        }
+        let json = report.to_json();
+        for expected in [
+            "\"schema\":\"fmine.guidance.completion.v2\"",
+            "\"cost_metric\":\"c1\"",
+            "\"c1_guidance\"",
+            "\"ytd_c1\"",
+            "\"ytd_c1_spend\"",
+            "\"remaining_c1_rate\"",
+            "\"remaining_c1_spend\"",
+            "\"annual_c1\"",
+            "\"c1_usd_per_sold_lb\"",
+            "\"c1_spend_usd_m\"",
+            "2030Q2.xlsx:YTD!E5",
+            "2029Q3.xlsx:QTD!E5",
+        ] {
+            assert!(json.contains(expected), "missing {expected}: {json}");
+        }
+        for wrong in [
+            "\"aisc_guidance\"",
+            "\"ytd_aisc\"",
+            "\"remaining_aisc_rate\"",
+            "\"annual_aisc\"",
+            "2030Q2.xlsx:YTD!D5",
+            "2029Q3.xlsx:QTD!D5",
+        ] {
+            assert!(
+                !json.contains(wrong),
+                "C1 report borrowed AISC {wrong}: {json}"
+            );
+        }
+        assert_ne!(report.digest, aisc.digest);
+        assert_eq!(json, run_c1(&root).unwrap().to_json());
+        let mut args = arguments();
+        args.extend(["--metric".into(), "c1".into()]);
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+        assert_eq!(envelope.payload_json, json);
+        args.extend(["--format".into(), "markdown".into()]);
+        let (markdown, exit) = fmine_cli::run(&args, &root);
+        assert_eq!(exit, 0, "{markdown}");
+        for expected in [
+            "Annual C1 guidance",
+            "YTD C1 spending",
+            "Required remaining C1",
+            "USD per sold lb",
+            "119.682475",
+            "T1",
+        ] {
+            assert!(
+                markdown.contains(expected),
+                "missing {expected}: {markdown}"
+            );
+        }
+        assert!(!markdown.contains("AISC"), "{markdown}");
+    }
+}
+
+#[test]
+fn copper_c1_signed_net_credits_keep_their_exact_requirement_and_history() {
+    let root = workspace("c1-net-credits", "50%", "signed_c1");
+    let report = run_c1(&root).unwrap();
+    assert_eq!(
+        report.completion.ytd_aisc_spend.value.interval,
+        interval((-4812401, 40000), (-4787601, 40000))
+    );
+    assert_eq!(
+        report.completion.remaining_aisc_spend.value.interval,
+        interval((-8012801, 40000), (-4787299, 40000))
+    );
+    assert_eq!(
+        report.completion.remaining_aisc_rate.value.interval,
+        interval((-728291, 363600), (-4309, 3600))
+    );
+    assert_eq!(report.history.verdict, HistoryVerdict::WithinEnvelope);
+    let history = &report.history_sources[0];
+    assert!(
+        quarters::check_quarter_witness(
+            &report.inputs,
+            &quarters::QuarterlyHistory {
+                id: history.id.clone(),
+                quarters: history.quarters.clone()
+            },
+            &report.history.checks[0].witness.as_ref().unwrap().value,
+        )
+        .unwrap()
+    );
+    let mut args = arguments();
+    args.extend([
+        "--metric".into(),
+        "c1".into(),
+        "--format".into(),
+        "markdown".into(),
+    ]);
+    let (markdown, exit) = fmine_cli::run(&args, &root);
+    assert_eq!(exit, 0, "{markdown}");
+    assert!(markdown.contains("−200.320025"), "{markdown}");
+    assert!(markdown.contains("Required remaining C1"));
+    assert!(!markdown.contains("AISC"));
+}
+
+#[test]
+fn copper_c1_missing_or_incompatible_evidence_never_falls_back_to_aisc() {
+    let root = workspace("c1-absent", "50%", "");
+    assert_eq!(run_c1(&root).unwrap_err().code, "FMINE-REF-202");
+    let guidance = guidance_entries("Guidance.pdf", "attributable:1/2");
+    let c1 = c1_entries("Guidance.pdf", "attributable:1/2", false);
+    write_entries(&root, &format!("{guidance}{c1}"));
+    assert_eq!(run_c1(&root).unwrap_err().code, "FMINE-REF-201");
+    assert!(run(&root).is_ok());
+
+    let root = workspace("c1-no-history", "50%", "c1_current_only");
+    let report = run_c1(&root).unwrap();
+    assert_eq!(
+        (report.history.tier, report.history.verdict),
+        (EnvelopeTier::T3, HistoryVerdict::Indeterminate)
+    );
+    assert!(report.history_sources.is_empty());
+    assert_eq!(
+        run(&root).unwrap().history.verdict,
+        HistoryVerdict::WithinEnvelope
+    );
+
+    let root = workspace("c1-definition", "50%", "c1");
+    for (old, new, code) in [
+        (
+            ";c1=issuer-reported-per-sold-lb",
+            ";aisc=issuer-reported-per-sold-lb",
+            "FMINE-REF-107",
+        ),
+        (
+            "issuer-reported-per-sold-lb",
+            "issuer-reported-per-sold-oz",
+            "FMINE-REF-107",
+        ),
+        (
+            "unit = \"usd_per_lb\"",
+            "unit = \"usd_per_oz\"",
+            "FMINE-REF-105",
+        ),
+        ("attributable:1/2", "attributable:3/5", "FMINE-REF-105"),
+    ] {
+        write_entries(&root, &format!("{guidance}{}", c1.replace(old, new)));
+        assert_eq!(run_c1(&root).unwrap_err().code, code, "{old} -> {new}");
+        assert!(
+            run(&root).is_ok(),
+            "unselected C1 must not alter AISC: {old} -> {new}"
+        );
+    }
+    let disputed = c1.replacen("token = \"1.50 - 2.00\"", "token = \"1.60 - 2.10\"", 1);
+    write_entries(&root, &format!("{guidance}{disputed}"));
+    assert_eq!(run_c1(&root).unwrap_err().code, "FMINE-REF-202");
+    write_entries(&root, &format!("{guidance}{c1}"));
+    register_document(&root, "Later.pdf", "2030-07-20", "mda");
+    write_entries(
+        &root,
+        &format!(
+            "{guidance}{c1}{}",
+            guidance_entries("Later.pdf", "attributable:1/2")
+        ),
+    );
+    assert_eq!(run_c1(&root).unwrap_err().code, "FMINE-REF-202");
+}
+
+#[test]
+fn guidance_cost_metric_cli_requires_an_explicit_supported_choice() {
+    let root = workspace("c1-cli-options", "50%", "c1");
+    let (default, _) = fmine_cli::invoke(&arguments(), &root);
+    let mut aisc = arguments();
+    aisc.extend(["--metric".into(), "aisc".into()]);
+    assert_eq!(
+        default.to_json(),
+        fmine_cli::invoke(&aisc, &root).0.to_json()
+    );
+    for values in [
+        vec!["--metric", "c2"],
+        vec!["--metric", "c1", "--metric", "aisc"],
+        vec!["--metric"],
+    ] {
+        let mut args = arguments();
+        args.extend(values.into_iter().map(str::to_string));
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_ne!(envelope.exit_code, 0, "{}", envelope.to_json());
+    }
+    for args in [
+        vec!["guidance", "completion", "--synthetic", "--metric", "c1"],
+        vec!["track-record", "--synthetic", "--metric", "c1"],
+    ] {
+        let args: Vec<_> = args.into_iter().map(str::to_string).collect();
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_ne!(envelope.exit_code, 0, "{}", envelope.to_json());
     }
 }
 
@@ -672,5 +1128,258 @@ fn copper_completion_cli_renders_truthful_units_and_keeps_technical_limits_unava
     explicit.extend(["--capacity-document".into(), "Technical.pdf".into()]);
     let (refused, _) = fmine_cli::invoke(&explicit, &root);
     assert_eq!(refused.exit_code, 3, "{}", refused.to_json());
-    assert!(refused.to_json().contains("FMINE-REF-105"));
+    assert!(refused.to_json().contains("FMINE-REF-202"));
+}
+
+#[test]
+fn copper_technical_scenarios_and_explicit_limits_preserve_exact_units_and_sources() {
+    for (share, basis, maximum, grade_denominator) in [
+        ("50%", "attributable:1/2", 90, 900_000),
+        ("100%", "100%", 180, 1_800_000),
+    ] {
+        let root = workspace("technical-positive", share, "");
+        let arithmetic = run(&root).unwrap();
+        register_document(&root, "Technical.pdf", "2030-07-01", "technical_report");
+        let rows = format!(
+            "{}{}{}",
+            guidance_entries("Guidance.pdf", basis),
+            technical_entries("Technical.pdf", "declared_upper_bound", false),
+            technical_entries("Technical.pdf", "declared_upper_bound", true),
+        );
+        write_entries(&root, &rows);
+        let report = run(&root).unwrap();
+        assert_eq!(report.completion, arithmetic.completion);
+        assert_eq!(report.history, arithmetic.history);
+        let c = technical_comparison(&report).unwrap();
+        assert_eq!(c.kind, TechnicalScenarioKind::DeclaredUpperBound);
+        assert_eq!(c.result.verdict, CapacityVerdict::NotExcluded);
+        // Independent dimensional answer: 10 Mt * (2/100) * (90/100) * 1000 kt/Mt * share.
+        assert_eq!(
+            c.result.maximum_production.value.kind,
+            QuantityKind::ProductionKt
+        );
+        assert_eq!(
+            c.result.maximum_production.value.interval,
+            interval((maximum, 1), (maximum, 1))
+        );
+        assert_eq!(
+            c.result.optimistic_required_grade.value.interval,
+            interval((11999, grade_denominator), (16001, grade_denominator))
+        );
+        assert_eq!(
+            c.limits.feed.value.kind,
+            PhysicalKind::RemainingCopperDryFeedMt
+        );
+        assert_eq!(
+            c.limits.grade.value.kind,
+            PhysicalKind::CopperHeadGradeFraction
+        );
+        assert_eq!(
+            c.limits.recovery.value.kind,
+            PhysicalKind::CopperRecoveryFraction
+        );
+        assert_eq!(c.limits.grade.value.interval, interval((1, 50), (1, 50)));
+        assert_eq!(c.limits.recovery.value.interval, interval((9, 10), (9, 10)));
+        assert_eq!(c.sources.len(), 3);
+        for input in [&c.limits.feed, &c.limits.grade, &c.limits.recovery] {
+            input.check_id().unwrap();
+            assert!(
+                c.result
+                    .maximum_production
+                    .parents
+                    .contains(&input.claim_id)
+            );
+            assert_eq!(
+                input.anchors[0].artifact_sha256,
+                sha256(&document("Technical.pdf")).0
+            );
+        }
+        let json = report.to_json();
+        assert!(json.contains("\"copper_head_grade_fraction_of_dry_mass\""));
+        assert!(json.contains("\"physical_impossibility_claim\":false"));
+        assert!(!json.contains("_koz") && !json.contains("gold_head_grade"));
+        assert_eq!(json, run(&root).unwrap().to_json());
+
+        let mut args = arguments();
+        args.extend(["--capacity-document".into(), "Technical.pdf".into()]);
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+        let json = envelope.to_json();
+        assert!(json.contains("\"scope\":\"copper_production_ceiling_only\""));
+        assert!(json.contains("\"unit\":\"kt\""));
+        assert!(json.contains("\"unit\":\"copper_fraction_dry_mass\""));
+        assert!(json.contains("\"bounds_unit\":\"copper_fraction_dry_mass\""));
+        assert!(json.contains("\"bounds_unit\":\"fraction\""));
+        assert!(json.contains("\"bounds_conversion\":\"source percent divided by 100\""));
+        assert!(json.contains(&format!("\"num\":\"{maximum}\",\"den\":\"1\"")));
+        assert!(!json.contains("koz") && !json.contains("gold-production"));
+        assert_eq!(json, fmine_cli::invoke(&args, &root).0.to_json());
+        args.extend(["--format".into(), "markdown".into()]);
+        let (markdown, exit) = fmine_cli::run(&args, &root);
+        assert_eq!(exit, 0, "{markdown}");
+        for expected in [
+            "T2",
+            "copper mass fraction of dry feed",
+            "percent",
+            "kt",
+            "USD per sold lb",
+        ] {
+            assert!(
+                markdown.contains(expected),
+                "missing {expected}: {markdown}"
+            );
+        }
+        assert!(!markdown.contains("koz") && !markdown.contains("g per dry"));
+    }
+}
+
+#[test]
+fn copper_plan_rounding_and_strict_source_admission_keep_indeterminate_distinct_from_excluded() {
+    let root = workspace("technical-admission", "50%", "");
+    register_document(&root, "Technical.pdf", "2030-07-01", "technical_report");
+    let guidance = guidance_entries("Guidance.pdf", "attributable:1/2");
+    let limits = technical_entries("Technical.pdf", "declared_upper_bound", false);
+    write_entries(&root, &format!("{guidance}{limits}"));
+    let original = run(&root).unwrap();
+    for (scenario, expected_kind) in [
+        ("plan", TechnicalScenarioKind::Plan),
+        ("nameplate", TechnicalScenarioKind::Nameplate),
+    ] {
+        write_entries(
+            &root,
+            &format!(
+                "{guidance}{}",
+                technical_entries("Technical.pdf", scenario, false)
+            ),
+        );
+        let rounded = run(&root).unwrap();
+        let c = technical_comparison(&rounded).unwrap();
+        assert_eq!(c.kind, expected_kind);
+        assert_eq!(c.limits.feed.state, KnowledgeState::Estimated);
+        assert_eq!(c.limits.grade.value.interval, interval((3, 200), (1, 40)));
+        assert_eq!(
+            c.limits.recovery.value.interval,
+            interval((179, 200), (181, 200))
+        );
+        // 10.5 * 0.025 * 0.905 * 1000 * 1/2 = 118.78125 kt, not 2.5 or 90.5 as fractions.
+        assert_eq!(
+            c.result.maximum_production.value.interval.hi,
+            Rat::new(3801, 32).unwrap()
+        );
+        assert_eq!(rounded.completion, original.completion);
+        assert_eq!(rounded.history, original.history);
+    }
+    let excluded = limits.replace("token = \"10\"", "token = \"1\"");
+    write_entries(&root, &format!("{guidance}{excluded}"));
+    let excluded = run(&root).unwrap();
+    assert_eq!(
+        technical_comparison(&excluded).unwrap().result.verdict,
+        CapacityVerdict::ExceedsStatedProductionCeiling
+    );
+    assert_eq!(excluded.completion, original.completion);
+    for (old, new, code) in [
+        (";metal=copper", "", "FMINE-REF-105"),
+        ("percent_dry_mass", "percent", "FMINE-REF-105"),
+        ("dry_mt", "wet_mt", "FMINE-REF-105"),
+        ("2030H2", "2030FY", "FMINE-REF-102"),
+        ("token = \"2\"", "token = \"101\"", "FMINE-REF-109"),
+        ("token = \"90\"", "token = \"101\"", "FMINE-REF-109"),
+    ] {
+        write_entries(&root, &format!("{guidance}{}", limits.replace(old, new)));
+        let bad = run(&root).unwrap();
+        assert_eq!(
+            technical_comparison(&bad).unwrap_err().code,
+            code,
+            "{old} -> {new}"
+        );
+        assert_eq!(bad.completion, original.completion);
+        assert_eq!(bad.history, original.history);
+    }
+    register_document(&root, "Updated.pdf", "2030-07-20", "technical_report");
+    let pending = entry(
+        "Updated.pdf",
+        "head_grade_percent",
+        "1.5",
+        "percent_dry_mass",
+        "100%;scenario=plan;metal=copper",
+        "reader-a",
+    )
+    .replace("guidance_copper_mine_", "technical_copper_mine_")
+    .replace("2030FY", "2030H2");
+    write_entries(&root, &format!("{guidance}{limits}{pending}"));
+    let pending = run(&root).unwrap();
+    let reason = technical_comparison(&pending).unwrap_err();
+    assert_eq!(reason.code, "FMINE-REF-202");
+    assert!(reason.what.contains("Updated.pdf"));
+    assert_eq!(pending.completion, original.completion);
+    assert_eq!(pending.history, original.history);
+    // A newer agreed gold-grade-only row is still a latest technical document for this site.
+    // It cannot make the selector resurrect the older complete copper limits.
+    let mut wrong_family = String::new();
+    for reader in ["reader-a", "reader-b"] {
+        wrong_family.push_str(
+            &entry(
+                "Updated.pdf",
+                "head_grade_g_per_t",
+                "2",
+                "g_per_dry_t",
+                "100%;scenario=plan",
+                reader,
+            )
+            .replace("guidance_copper_mine_", "technical_copper_mine_")
+            .replace("2030FY", "2030H2"),
+        );
+    }
+    write_entries(&root, &format!("{guidance}{limits}{wrong_family}"));
+    let wrong_family = run(&root).unwrap();
+    let reason = technical_comparison(&wrong_family).unwrap_err();
+    assert_eq!(reason.code, "FMINE-REF-202");
+    assert!(reason.what.contains("Updated.pdf"));
+    assert_eq!(wrong_family.completion, original.completion);
+    assert_eq!(wrong_family.history, original.history);
+}
+
+#[test]
+fn explicit_copper_limits_reject_wrong_metal_unit_period_and_changed_source_bytes() {
+    let root = workspace("explicit-copper-admission", "50%", "");
+    register_document(&root, "Technical.pdf", "2030-07-01", "technical_report");
+    let guidance = guidance_entries("Guidance.pdf", "attributable:1/2");
+    let limits = technical_entries("Technical.pdf", "declared_upper_bound", true);
+    let mut args = arguments();
+    args.extend(["--capacity-document".into(), "Technical.pdf".into()]);
+    for (old, new, code) in [
+        (";metal=copper", ";metal=gold", "FMINE-REF-107"),
+        ("percent_dry_mass", "fraction", "FMINE-REF-105"),
+        ("unit = \"percent\"", "unit = \"fraction\"", "FMINE-REF-105"),
+        ("2030-07/2030-12", "2030FY", "FMINE-REF-102"),
+        (
+            "Explicit maximum limits",
+            "Nameplate estimate",
+            "FMINE-REF-107",
+        ),
+        ("token = \"90\"", "token = \"101\"", "FMINE-REF-109"),
+    ] {
+        write_entries(&root, &format!("{guidance}{}", limits.replace(old, new)));
+        let (envelope, _) = fmine_cli::invoke(&args, &root);
+        assert_ne!(envelope.exit_code, 0);
+        assert!(
+            envelope.to_json().contains(code),
+            "{old} -> {new}: {}",
+            envelope.to_json()
+        );
+    }
+    write_entries(&root, &format!("{guidance}{limits}"));
+    assert_eq!(fmine_cli::invoke(&args, &root).0.exit_code, 0);
+    std::fs::write(
+        root.join("corpus/Technical.pdf"),
+        b"SYNTHETIC altered technical-report bytes",
+    )
+    .unwrap();
+    let (envelope, _) = fmine_cli::invoke(&args, &root);
+    assert_ne!(envelope.exit_code, 0);
+    assert!(
+        envelope.to_json().contains("FMINE-REF-505"),
+        "{}",
+        envelope.to_json()
+    );
 }

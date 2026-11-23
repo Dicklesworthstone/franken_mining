@@ -600,6 +600,9 @@ fn proof_before_outcome_end(rules: &RecordRules, proof: ProofTimes) -> Res<()> {
 /// Verifies the exact already-loaded manifest, forecasts and rules. Both verify and score use this path;
 /// scoring never rereads mutable record payloads after establishing their frozen digest.
 fn verify_loaded(root: &Path, dir: &Path, loaded: &Loaded) -> Res<(Vec<String>, ProofTimes)> {
+    if loaded.rules.is_post_quarter_nowcast() {
+        return fail("post-quarter nowcasts require fmine forecast record score with original-release publication checks".into());
+    }
     let stored = fs::read_to_string(dir.join("record.sha256"))
         .map_err(|e| vec![format!("cannot read record.sha256: {e}")])?;
     if stored.trim_end() != loaded.digest {

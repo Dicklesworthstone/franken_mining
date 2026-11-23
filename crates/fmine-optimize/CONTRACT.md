@@ -135,6 +135,42 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   overflow and 24 signed models compared with exhaustive 11³-grid enumeration. Planner tests also
   retain an initial negative-cost dump assignment long enough to discover a positive split after
   whole-block local search would have discarded the block.
+- DESIGN (BD-252/253, plan §15.6): `toposort::pcpsp::fractional::reschedule` improves mining periods
+  while preserving every destination fraction and the mined set. It visits blocks in ID order and
+  takes only strict exact gains, checking predecessor/dependent periods and signed resource rows in
+  both the vacated and receiving periods. Earlier periods break equal-gain ties. The caller's 0–1,000
+  rounds and `PERIOD_WORK` (262,144 block/precedence/resource/period work units) bound the search;
+  exhaustion retains the feasible incumbent. Aggregation and the independent final candidate check
+  remain linear in the model and assignments. Checked arithmetic failures refuse.
+  Both planning entry points apply this pass to the best incumbent when it has genuine splits,
+  including imported candidates. A strict gain sets origin `fractional_period_search`; `Plan` retains
+  its seed origin, exact before/after values and work counters, alongside the original external
+  candidate assessment and independently replayed full-model bound. Zero rounds disables period
+  moves while retaining existing destination polishing. After single moves stall, `PERIOD_PAIR_SCAN`
+  (64) following mined blocks per anchor bound a two-block common-period search under the same work
+  budget. Internal precedence moves with the pair; both old periods and every external arc still
+  constrain it. The first improving pair takes its best period, with earliest ties, then single moves
+  resume. `pair_moves` is a subset of total moves. Larger groups, more distant partners, two different
+  new periods, mined-set changes, rerouting and temporary infeasibility remain outside this pass.
+  No global optimality claim is supplied. Exact controls cover complementary signed rows, two-node
+  cycles, external precedence, removing credits from either old period, budget exhaustion and an
+  independent tiny-model enumeration; the CLI oracle retains the original imported-candidate receipt.
+- DESIGN (BD-252/253, plan §15.6): `toposort::pcpsp::fractional::joint::improve` searches each mined
+  block's period and exact allocation between every destination pair, keeping other blocks fixed.
+  For a share `x` of the second destination, every resource row is `a*x <= b`; positive `a` gives an
+  integer upper bound, negative `a` an integer lower bound, and zero `a` either admits or rejects the
+  pair. Their intersection with `[0, share_scale]` supplies the objective-maximizing grid endpoint.
+  Both resource signs, the vacated period and predecessor/dependent periods are checked. Same-period
+  rerouting is included. Only strict exact gains are accepted, with deterministic period/pair ties;
+  larger existing splits survive unchanged unless an admitted pair improves them. The shared
+  `joint::WORK` limit is 262,144, plus the caller's 0–1,000 rounds. Exhaustion preserves complete
+  feasible improvements; arithmetic overflow refuses. Final candidate checking independently
+  recomputes all resource use and discounted value. The pass does not insert or drop blocks, move
+  several blocks at once, optimize allocations among three or more destinations, or certify optimality.
+  Both planner entry points run it after fixed-fraction period search for a nonempty incumbent and
+  positive rounds. `Plan::joint_seed_origin` and `joint_period_routes` retain the seed and counters;
+  `joint_period_route_search` becomes the selected origin only on a strict gain. The original external
+  candidate assessment remains intact, and the full-model Lagrangian certificate is still replayed.
 - One `i64` value per block, in a caller-chosen integer money unit; the caller scales and rounds, never this crate. The one exception is `pitflow::minelib`, which scales a UPIT file's decimals at the places the caller declares and rounds only when the caller asks.
 - For `pitflow::minelib`: the two files' text, the number of decimal places and a `Rounding`.
 - Precedence arcs `u → v`, read "taking `u` requires taking `v`", either as CSR (`ClosureProblem::new(weights, offsets, targets)`) or as one list per block (`from_requirements`). Duplicate arcs and self-loops are accepted. Cycles are accepted too: a cycle's blocks are taken together or not at all.
@@ -607,10 +643,12 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   external-corpus check, not evidence supplied by these synthetic cases.
 - `bd-nzwd` and `bd-t75z` have one adapter, `fmine-io`'s `omf::pit::PitModel` (bd-joiv). It feeds `slope_arcs`, `solve` and `nested_shells` a regular OMF block model whose values are attributes, tested so far only on synthetic files. `fmine plan pit --omf` now exposes ultimate pits through that adapter with mandatory model/attribute selectors, scale, uniform finite-depth slope and rounding acceptance; the certificate covers the scaled integer problem. The CLI also retains MineLib UPIT pairs (BD-250). No price deck feeds either path; OMF nested shells, sector/domain slope tables, schedules and external candidate admission are not exposed by this command.
 - PCPSP (`toposort::pcpsp`):
-  - Period/local search still uses whole destinations. Automatic fractional polishing searches exact lines
+  - The initial period/local search uses whole destinations. Automatic fractional polishing searches exact lines
     toward Price's proposed assignments and admits exactly representable simultaneous master mixtures
     after rational reconstruction and integer checks. It does not certify the full fixed-period LP optimum
-    or optimize mining periods jointly with fractional routes; an imported split can remain better.
+    or optimize mining periods jointly with changing fractional routes. The final incumbent can now
+    improve periods with its exact fractions held fixed, including bounded two-block common-period
+    moves. Larger simultaneous groups and joint fraction/period changes remain outside that neighborhood.
     Mixtures requiring non-decimal fractions, rational arithmetic beyond i128, or more than 32 resource
     rows fall back to the existing exact line search. Bounded pricing can stop before the best mixture.
   - General side constraints and lower limits are not read.
@@ -671,6 +709,9 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `toposort::pcpsp::parse`, `toposort::pcpsp::PcpspModel` (`name`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`, `blocks`, `periods`, `destinations`, `resources`, `value`, `uses`, `limits`, `requires`, `with_destinations`), `toposort::pcpsp::greedy`, `toposort::pcpsp::greedy_from`, `toposort::pcpsp::destinations`, `toposort::pcpsp::DestinationMoves` (`switches`, `exchanges`, `priced`, `unmined`), `toposort::pcpsp::improve`, `toposort::pcpsp::PcpspImprovement` (`schedule`, `destination`, `before`, `after`, `cycles`, `moves`, `destination_moves`, `joint_moves`), `toposort::pcpsp::{MAX_DESTINATIONS, PAIR_SCAN, PAIR_WORK}`, `toposort::pcpsp::price::PRICE_COLUMNS`, `toposort::pcpsp::price::MASTER_STEPS`, `toposort::pcpsp::price::REPAIR_MOVES`
 - `toposort::pcpsp::candidate::{parse_solution, write_solution, from_whole, check}`, `DestinationShare` (`block`, `destination`, `period`, `fraction`), `SplitSchedule` (`new`, `share_decimals`, `scale`, `assignments`), `SplitCheck` (`scale`, `mined`, `period_values`, `used`, `incomplete`, `first_incomplete`, `unmet`, `first_unmet`, `over_limit`, `feasible`, `value`, `discounted_value`).
 - `toposort::pcpsp::fractional::polish`, `fractional::Improvement` (`schedule`, `checked`, `before`, `after`, `improved_periods`, `proposals`). Objectives retain the candidate scale and caller's discount-factor scale; no fixed-period optimality or unmeasured calibration claim is made.
+- `toposort::pcpsp::fractional::reschedule`, `fractional::Rescheduled` (`schedule`, `checked`, `search`),
+  `fractional::PeriodSearch` (`before`, `after`, `rounds`, `moves`, `pair_moves`, `trials`, `work`, `work_exhausted`),
+  `fractional::PERIOD_WORK`, `fractional::PERIOD_PAIR_SCAN`. Exact fractions and the mined set are preserved during bounded period moves.
 - `toposort::pcpsp::planning::{solve, solve_with_guidance}`, `Options` (`rounds`, `bound_steps`, `share_decimals`), `CandidateAssessment` (`checked`, `discounted_numerator`), `GuidanceSearch` (`starts`, `searched`, `polished`, `best_numerator`) and `Plan` (`schedule`, `checked`, `discounted_numerator`, `origin`, `factors`, `heuristic`, `candidate`, `guidance`, `bound`, `gap_numerator`). Guidance never replaces the independent exact checks or the full-model numerical certificate.
 - `toposort::lp::relaxation`, `toposort::lp::Relaxation` (`cost`, `matrix`, `row_lo`, `row_hi`, `col_lo`, `col_hi`), `toposort::lp::Shares` (`new`, `blocks`, `periods`, `share`, `expected`, `medians`), `toposort::lp::starts`, `toposort::lp::Start` (`threshold`, `released`, `schedule`), `toposort::lp::incumbent`, `toposort::lp::Incumbent` (`searched`, `best`, `schedule`), `toposort::lp::THRESHOLDS`. `Shares::ranks` is crate-only: `starts` takes its thresholds from `THRESHOLDS`, and a public bare-`f64` threshold would need an L-6 exception.
 - `toposort::lp::lagrangian_value`, `toposort::lp::LagrangianValue` (`bound`, `shift`, `schedule`, `used`), `toposort::lp::lagrangian_bound`, `toposort::lp::Lagrangian` (`bound`, `prices`, `history`), `toposort::lp::STALL` (`bd-oq7d`). Prices and target are integers; no public parameter is a bare `f64` (L-6).

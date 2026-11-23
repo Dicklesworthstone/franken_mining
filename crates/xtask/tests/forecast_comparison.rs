@@ -671,3 +671,194 @@ fn crps_keeps_source_mismatches_missing_members_and_exact_capacity_failures_visi
     assert_eq!(overflow.whole_population, None);
     assert_eq!(overflow.members.len(), 1);
 }
+
+fn gaussian(mean: f64, std_dev: f64) -> ForecastPayload {
+    ForecastPayload::Gaussian { mean, std_dev }
+}
+
+#[test]
+fn gaussian_crps_retains_full_public_pairing_and_distinct_approximate_results() {
+    use fmine_calib::ledger::comparison::CrpsComparison;
+    let mut ledger = ForecastLedger::new();
+    let ids = [
+        [
+            finite_forecast(&mut ledger, "left-a", gaussian(10.0, 1.0)),
+            finite_forecast(&mut ledger, "left-b", gaussian(0.0, 2.0)),
+        ],
+        [
+            finite_forecast(&mut ledger, "right-a", gaussian(12.0, 1.0)),
+            finite_forecast(&mut ledger, "right-b", gaussian(2.0, 1.0)),
+        ],
+    ];
+    let left = cohort(
+        &mut ledger,
+        "left",
+        &[(ids[0][0], "A"), (ids[0][1], "B")],
+        PublicMetric::ProductionKoz,
+    );
+    let right = cohort(
+        &mut ledger,
+        "right",
+        &[(ids[1][0], "A"), (ids[1][1], "B")],
+        PublicMetric::ProductionKoz,
+    );
+    for model in ids {
+        publish(&mut ledger, model[0], 10.0, "Sheet!A1");
+    }
+    let (left, right) = (assess(&mut ledger, left), assess(&mut ledger, right));
+    let old_interval = ledger.compare_assessments(left, right).unwrap();
+    let report = ledger
+        .compare_assessments_gaussian_crps(left, right)
+        .unwrap();
+    let close = |actual: f64, expected: f64| assert!((actual - expected).abs() < 1e-12);
+    assert_eq!(
+        (
+            report.n_paired,
+            report.n_unresolved,
+            report.n_unmatched,
+            report.n_arithmetic_indeterminate
+        ),
+        (1, 1, 0, 0)
+    );
+    close(
+        report.observed_mean_difference.unwrap(),
+        -1.219_096_844_430_794_1,
+    );
+    let pending = report.members[1].completion.unwrap();
+    close(pending.0, -2.564_189_583_547_756);
+    close(pending.1, 1.452_791_821_685_903_3);
+    let whole = report.whole_population.unwrap();
+    close(whole.0, (-1.219_096_844_430_794_1 + pending.0) / 2.0);
+    close(whole.1, (-1.219_096_844_430_794_1 + pending.1) / 2.0);
+    assert_eq!(
+        ledger.compare_assessments_full_crps(left, right).unwrap(),
+        CrpsComparison::Gaussian(report.clone())
+    );
+    let reverse = ledger
+        .compare_assessments_gaussian_crps(right, left)
+        .unwrap();
+    close(reverse.whole_population.unwrap().0, -whole.1);
+    close(reverse.whole_population.unwrap().1, -whole.0);
+    assert_ne!(reverse.digest, report.digest);
+    assert_eq!(
+        old_interval,
+        ledger.compare_assessments(left, right).unwrap()
+    );
+    assert!(matches!(&report.members[0].left.as_ref().unwrap().outcome,
+        fmine_calib::MemberOutcome::Resolved { citation: source, .. } if source == &citation("Sheet!A1")));
+    assert_eq!(
+        ledger
+            .compare_assessments_gaussian_crps(left, right)
+            .unwrap(),
+        report
+    );
+
+    let mut finite = finite_pair();
+    let (l, rr) = (
+        assess(&mut finite.ledger, finite.left),
+        assess(&mut finite.ledger, finite.right),
+    );
+    assert_eq!(
+        finite.ledger.compare_assessments_full_crps(l, rr).unwrap(),
+        CrpsComparison::Finite(finite.ledger.compare_assessments_crps(l, rr).unwrap())
+    );
+}
+
+#[test]
+fn gaussian_crps_never_selects_away_unmatched_or_mismatched_sources() {
+    let mut ledger = ForecastLedger::new();
+    let ids = [
+        finite_forecast(&mut ledger, "left-a", gaussian(1.0, 2.0)),
+        finite_forecast(&mut ledger, "left-b", gaussian(1.0, 2.0)),
+        finite_forecast(&mut ledger, "right-a", gaussian(1.0, 1.0)),
+        finite_forecast(&mut ledger, "right-c", gaussian(1.0, 1.0)),
+    ];
+    let left = cohort(
+        &mut ledger,
+        "left",
+        &[(ids[0], "A"), (ids[1], "B")],
+        PublicMetric::ProductionKoz,
+    );
+    let right = cohort(
+        &mut ledger,
+        "right",
+        &[(ids[2], "A"), (ids[3], "C")],
+        PublicMetric::ProductionKoz,
+    );
+    publish(&mut ledger, ids[0], 1.0, "Sheet!A1");
+    publish(&mut ledger, ids[2], 1.0, "Sheet!A2");
+    let (left, right) = (assess(&mut ledger, left), assess(&mut ledger, right));
+    let report = ledger
+        .compare_assessments_gaussian_crps(left, right)
+        .unwrap();
+    assert_eq!(report.members.len(), 3);
+    assert_eq!(report.n_unmatched, 3);
+    assert_eq!(report.n_arithmetic_indeterminate, 0);
+    assert_eq!(report.whole_population, None);
+    assert_eq!(report.observed_mean_difference, None);
+    assert_eq!(
+        report.members.iter().map(|m| m.status).collect::<Vec<_>>(),
+        [
+            PairStatus::OutcomeSelectionMismatch,
+            PairStatus::RightForecastMissing,
+            PairStatus::LeftForecastMissing
+        ]
+    );
+    assert!(report.members[0].left.is_some() && report.members[0].right.is_some());
+
+    let mut mixed = ForecastLedger::new();
+    let normal = finite_forecast(&mut mixed, "normal", gaussian(1.0, 1.0));
+    let finite = finite_forecast(&mut mixed, "finite", empirical(&[0.0, 2.0]));
+    let left = cohort(
+        &mut mixed,
+        "left",
+        &[(normal, "A")],
+        PublicMetric::ProductionKoz,
+    );
+    let right = cohort(
+        &mut mixed,
+        "right",
+        &[(finite, "B")],
+        PublicMetric::ProductionKoz,
+    );
+    let (left, right) = (assess(&mut mixed, left), assess(&mut mixed, right));
+    assert!(
+        mixed
+            .compare_assessments_full_crps(left, right)
+            .unwrap_err()
+            .what
+            .contains("mixed populations")
+    );
+    assert!(
+        mixed
+            .compare_assessments_gaussian_crps(left, right)
+            .is_err()
+    );
+}
+
+#[test]
+fn gaussian_crps_capacity_failures_keep_the_missing_population() {
+    let mut ledger = ForecastLedger::new();
+    let left = finite_forecast(&mut ledger, "left", gaussian(-f64::MAX, 1.0));
+    let right = finite_forecast(&mut ledger, "right", gaussian(f64::MAX, 1.0));
+    let left = cohort(
+        &mut ledger,
+        "left",
+        &[(left, "A")],
+        PublicMetric::ProductionKoz,
+    );
+    let right = cohort(
+        &mut ledger,
+        "right",
+        &[(right, "A")],
+        PublicMetric::ProductionKoz,
+    );
+    let (left, right) = (assess(&mut ledger, left), assess(&mut ledger, right));
+    let report = ledger
+        .compare_assessments_gaussian_crps(left, right)
+        .unwrap();
+    assert_eq!(report.members.len(), 1);
+    assert_eq!(report.n_unresolved, 1);
+    assert_eq!(report.n_arithmetic_indeterminate, 1);
+    assert_eq!(report.whole_population, None);
+}

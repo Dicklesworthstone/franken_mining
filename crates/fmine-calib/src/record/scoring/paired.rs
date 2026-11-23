@@ -848,6 +848,7 @@ mod tests {
                 nowcast_from: 1,
                 proof_by: 2,
             },
+            nowcast_availability: None,
             targets: vec![Target {
                 id: "production".into(),
                 quantity: "synthetic koz at 100%".into(),
@@ -1310,7 +1311,12 @@ mod tests {
         outcomes[1].value = Availability::Available(ZERO);
         baselines[0].value = interval(-3, -1);
         baselines[1].value = interval(0, 0);
-        for field in ["aisc_usd_per_oz", "c1_usd_per_lb", "aisc_usd_per_lb"] {
+        for field in [
+            "aisc_usd_per_oz",
+            "tcc_usd_per_oz",
+            "c1_usd_per_lb",
+            "aisc_usd_per_lb",
+        ] {
             rules.targets[0].field = field.into();
             rules.targets[0].outcome = Outcome::Q4Qtd;
             let report = assess(&rules, &forecasts, &outcomes, &baselines).expect(field);

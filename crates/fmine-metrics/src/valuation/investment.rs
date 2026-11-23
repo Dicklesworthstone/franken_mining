@@ -3,6 +3,8 @@
 
 use super::*;
 use fmine_decide::card::downside::DownsideLimit;
+use fmine_decide::card::information::InformationOption;
+use fmine_decide::card::model::INFORMATION_BASIS;
 
 mod render;
 #[cfg(test)]
@@ -50,10 +52,13 @@ pub struct InvestmentSpec {
     pub element: String,
     pub commercial_support: String,
     pub monetary_rounding: MonetaryRounding,
+    /// Screen final discounted incremental value after capex and the declared Money rounding.
+    pub downside_limit: Option<DownsideLimit>,
+    /// Test results precede the whole investment commitment; costs are valuation-time USD.
+    pub information_basis: Option<String>,
+    pub information_options: Vec<InformationOption>,
     pub periods: Vec<InvestmentPeriod>,
     pub alternatives: Vec<InvestmentAlternative>,
-    /// Applied to the final discounted incremental value after charging initial capex.
-    pub downside_limit: Option<DownsideLimit>,
 }
 
 impl InvestmentSpec {
@@ -132,14 +137,38 @@ fn invalid(message: &str) -> Refusal {
 }
 
 fn validate_spec(spec: &InvestmentSpec) -> Result<()> {
-    if spec
-        .downside_limit
-        .as_ref()
-        .is_some_and(|limit| limit.policy_optimization.is_some())
-    {
-        return Err(invalid(
-            "investment comparisons have no information policies to optimize",
-        ));
+    match (&spec.information_basis, spec.information_options.is_empty()) {
+        (None, true) => {}
+        (Some(basis), false) if basis == INFORMATION_BASIS => {}
+        _ => {
+            return Err(invalid(
+                "information options require information_basis=before_action_same_payoffs_explicit_delay_cost; a basis without options is not admitted",
+            ));
+        }
+    }
+    if let Some(limit) = &spec.downside_limit {
+        if limit.model_key != spec.model_key
+            || limit.valuation_basis != VALUATION_BASIS
+            || limit.floor.ccy != spec.currency
+        {
+            return Err(invalid(
+                "investment downside limit must share the model, currency and discounted incremental cash basis",
+            ));
+        }
+        if limit.max_breach_probability.num() < 0
+            || limit.max_breach_probability.num() > limit.max_breach_probability.den()
+        {
+            return Err(bad(
+                RefusalCode::OutsidePhysicalDomain109,
+                "maximum investment downside breach probability must lie in [0,1]",
+            ));
+        }
+        if limit.policy_optimization.is_some() {
+            return Err(bad(
+                RefusalCode::NoClaimInDomain201,
+                "investment comparisons screen act-now choices and declared expected-value test policies; constrained policy optimization is not supported",
+            ));
+        }
     }
     if !(1..=MAX_ALTERNATIVES).contains(&spec.alternatives.len())
         || !(1..=MAX_PERIODS).contains(&spec.periods.len())
@@ -417,19 +446,32 @@ pub fn evaluate(
         &tag,
         AdditivityClass::ExtensiveAdditive,
     ));
+    let downside_limit = spec.downside_limit.as_ref().map(|limit| {
+        all_meta.claim(
+            "production.investment.downside_limit/1",
+            limit.clone(),
+            &limit.canonical_tag(),
+            AdditivityClass::NonAdditive,
+        )
+    });
+    let information_options = spec
+        .information_options
+        .iter()
+        .map(|option| {
+            all_meta.claim(
+                "production.investment.information/1",
+                option.clone(),
+                &option.canonical_tag(),
+                AdditivityClass::NonAdditive,
+            )
+        })
+        .collect();
     let decision = card::evaluate(&DecisionInputs {
         weights,
         actions,
-        information_options: Vec::new(),
+        information_options,
         robustness: None,
-        downside_limit: spec.downside_limit.as_ref().map(|limit| {
-            all_meta.claim(
-                "production.investment.downside_limit/1",
-                limit.clone(),
-                &limit.canonical_tag(),
-                AdditivityClass::NonAdditive,
-            )
-        }),
+        downside_limit,
     })?;
     let mut enc = Encoder::new_frame(*b"PVIR", 1);
     enc.put_str(&super::render::claim(declaration));

@@ -1,11 +1,12 @@
 //! Guidance completion requirements (BD-342): exact arithmetic conditional on a separately declared sales
-//! continuation. Production is never substituted for sold metal, and annual AISC is a ratio of summed
+//! continuation. Production is never substituted for sold metal, and annual unit cost is a ratio of summed
 //! numerators to summed sales, never an average of quarterly rates.
 //! Determinism: Exact
 //!
 //! DESIGN: target bounds are exact guidance limits; closed input intervals describe rounding or an explicitly
 //! stated scenario, not probabilities. All inputs carry a subject, period, ownership basis and source anchors.
-//! The positive-rate slice refuses zero/negative AISC and sold intervals touching zero. Production may be zero.
+//! AISC, gold TCC and copper C1 retain signed net costs, including zero-crossing rounding boxes. Sold intervals
+//! must stay strictly positive, and physical production must be nonnegative.
 //! Computed remainders and spending requirements remain signed: a negative requirement is not clamped into a
 //! plausible physical continuation. Historical checks consider each cited period's joint rounding box separately;
 //! failure of that finite envelope says nothing about the mine's physical capacity.
@@ -52,12 +53,19 @@ pub enum QuantityKind {
     ProductionKt,
     SoldMillionLb,
     AiscUsdPerSoldLb,
+    C1UsdPerSoldLb,
+    C1SpendUsdMillion,
+    TccUsdPerSoldOz,
+    TccSpendUsdMillion,
 }
 
 impl QuantityKind {
     fn additivity(self) -> AdditivityClass {
         match self {
-            Self::AiscUsdPerSoldOz | Self::AiscUsdPerSoldLb => AdditivityClass::IntensiveWeighted,
+            Self::AiscUsdPerSoldOz
+            | Self::AiscUsdPerSoldLb
+            | Self::C1UsdPerSoldLb
+            | Self::TccUsdPerSoldOz => AdditivityClass::IntensiveWeighted,
             _ => AdditivityClass::ExtensiveAdditive,
         }
     }
@@ -125,6 +133,75 @@ impl GuidanceFamily {
     }
 }
 
+/// The explicitly selected cost definition. Equal units never make TCC or C1 interchangeable with AISC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostMetric {
+    Aisc,
+    C1,
+    Tcc,
+}
+
+impl CostMetric {
+    pub fn from_rate_kind(kind: QuantityKind) -> Result<Self> {
+        match kind {
+            QuantityKind::AiscUsdPerSoldOz | QuantityKind::AiscUsdPerSoldLb => Ok(Self::Aisc),
+            QuantityKind::C1UsdPerSoldLb => Ok(Self::C1),
+            QuantityKind::TccUsdPerSoldOz => Ok(Self::Tcc),
+            _ => refuse(
+                RefusalCode::BasisMismatch105,
+                "guidance cost metric requires an explicit AISC, gold TCC or copper C1 rate kind",
+            ),
+        }
+    }
+
+    pub fn rate_kind(self, family: GuidanceFamily) -> Result<QuantityKind> {
+        match (self, family) {
+            (Self::Aisc, _) => Ok(family.rate_kind()),
+            (Self::C1, GuidanceFamily::Copper) => Ok(QuantityKind::C1UsdPerSoldLb),
+            (Self::C1, GuidanceFamily::Gold) => refuse(
+                RefusalCode::BasisMismatch105,
+                "C1 completion requires copper production in kt and sales in million lb",
+            ),
+            (Self::Tcc, GuidanceFamily::Gold) => Ok(QuantityKind::TccUsdPerSoldOz),
+            (Self::Tcc, GuidanceFamily::Copper) => refuse(
+                RefusalCode::BasisMismatch105,
+                "TCC completion requires gold production and sales in koz",
+            ),
+        }
+    }
+
+    #[must_use]
+    pub const fn spend_kind(self) -> QuantityKind {
+        match self {
+            Self::Aisc => QuantityKind::AiscSpendUsdMillion,
+            Self::C1 => QuantityKind::C1SpendUsdMillion,
+            Self::Tcc => QuantityKind::TccSpendUsdMillion,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.select("aisc", "c1", "tcc")
+    }
+
+    const fn select(self, aisc: &'static str, c1: &'static str, tcc: &'static str) -> &'static str {
+        match self {
+            Self::Aisc => aisc,
+            Self::C1 => c1,
+            Self::Tcc => tcc,
+        }
+    }
+
+    // Existing gold/copper AISC and copper C1 frames retain their bytes; v4 identifies gold TCC.
+    const fn frame_version(self, family: GuidanceFamily) -> u16 {
+        match self {
+            Self::Aisc => family.frame_version(),
+            Self::C1 => 3,
+            Self::Tcc => 4,
+        }
+    }
+}
+
 /// An exact closed interval on one declared support and basis, carried inside a [`Claim`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Quantity {
@@ -132,7 +209,7 @@ pub struct Quantity {
     pub period: Period,
     pub ownership: Ownership,
     pub kind: QuantityKind,
-    /// AISC definition, including credits/denominator treatment. Required for costs and unchanged across them.
+    /// Cost definition, including credits/denominator treatment. Required for costs and unchanged across them.
     /// Physical quantities may leave this empty; their kinds distinguish metal, stage and mass unit.
     pub definition: String,
     pub interval: Interval,
@@ -162,6 +239,10 @@ impl Quantity {
             QuantityKind::ProductionKt => 4,
             QuantityKind::SoldMillionLb => 5,
             QuantityKind::AiscUsdPerSoldLb => 6,
+            QuantityKind::C1UsdPerSoldLb => 7,
+            QuantityKind::C1SpendUsdMillion => 8,
+            QuantityKind::TccUsdPerSoldOz => 9,
+            QuantityKind::TccSpendUsdMillion => 10,
         });
         enc.put_str(&self.definition);
         put_rat(&mut enc, self.interval.lo);
@@ -173,6 +254,7 @@ impl Quantity {
 }
 
 /// Annual targets, current YTD actuals, and an independently declared remaining-sales scenario.
+/// Legacy `aisc_*` member names hold the explicitly typed selected cost metric, never an AISC/TCC/C1 conversion.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompletionInputs {
     pub production_guidance: Claim<Quantity>,
@@ -183,7 +265,23 @@ pub struct CompletionInputs {
     pub remaining_sold: Claim<Quantity>,
 }
 
-/// One end of the annual AISC guidance range and its conditional remaining-spend/rate frontier.
+impl CompletionInputs {
+    /// Reads the declared cost rate kind and checks that its metal matches production.
+    pub fn cost_metric(&self) -> Result<CostMetric> {
+        let family = GuidanceFamily::from_production_kind(self.production_guidance.value.kind)?;
+        let metric = CostMetric::from_rate_kind(self.aisc_guidance.value.kind)?;
+        if metric.rate_kind(family)? != self.aisc_guidance.value.kind {
+            return refuse(
+                RefusalCode::BasisMismatch105,
+                "guidance cost rate and production use different metal families",
+            );
+        }
+        Ok(metric)
+    }
+}
+
+/// One end of the annual selected cost range and its conditional remaining-spend/rate frontier.
+/// Legacy `aisc_*` names retain their API spelling; quantity kinds and metric keys identify AISC, TCC or C1.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrontierPoint {
     pub annual_aisc: Claim<Quantity>,
@@ -200,6 +298,7 @@ pub enum SpendingRequirement {
 }
 
 /// Exact requirements; they are neither forecasts nor probabilities of meeting guidance.
+/// Legacy `aisc_*` names retain their API spelling; quantity kinds and metric keys identify AISC, TCC or C1.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompletionReport {
     /// Guidance minus YTD production. A negative bound means that part of the target was already surpassed.
@@ -279,6 +378,18 @@ fn hull(values: impl IntoIterator<Item = Rat>) -> Exact<Interval> {
     Ok(closed(lo, hi))
 }
 
+/// The four corner products enclose signed net cost rates without assuming that rate and sales endpoints
+/// have the same order. All callers validate strictly positive sales and the family's explicit unit scale.
+fn spend_bounds(sold: Interval, rate: Interval, family: GuidanceFamily) -> Exact<Interval> {
+    let product = |s: Rat, r: Rat| s.checked_mul(r)?.checked_div(family.spend_divisor());
+    hull([
+        product(sold.lo, rate.lo)?,
+        product(sold.lo, rate.hi)?,
+        product(sold.hi, rate.lo)?,
+        product(sold.hi, rate.hi)?,
+    ])
+}
+
 fn validate_claim(c: &Claim<Quantity>, role: &str, kind: QuantityKind) -> Result<()> {
     if matches!(c.representation, Representation::Placeholder { .. }) {
         return refuse(
@@ -343,12 +454,20 @@ fn validate_claim(c: &Claim<Quantity>, role: &str, kind: QuantityKind) -> Result
     if q.subject.trim().is_empty()
         || (matches!(
             kind,
-            QuantityKind::AiscUsdPerSoldOz | QuantityKind::AiscUsdPerSoldLb
+            QuantityKind::AiscUsdPerSoldOz
+                | QuantityKind::AiscUsdPerSoldLb
+                | QuantityKind::C1UsdPerSoldLb
+                | QuantityKind::TccUsdPerSoldOz
         ) && q.definition.trim().is_empty())
     {
+        let metric = match kind {
+            QuantityKind::C1UsdPerSoldLb => "C1",
+            QuantityKind::TccUsdPerSoldOz => "TCC",
+            _ => "AISC",
+        };
         return refuse(
             RefusalCode::UndeclaredUnitBasisOrTz107,
-            format!("{role}: subject or AISC definition is undeclared"),
+            format!("{role}: subject or {metric} definition is undeclared"),
         );
     }
     if q.period.year == 0
@@ -382,15 +501,22 @@ fn validate_claim(c: &Claim<Quantity>, role: &str, kind: QuantityKind) -> Result
             format!("{role}: reversed interval"),
         );
     }
-    let strictly_positive = !matches!(
-        kind,
-        QuantityKind::ProductionKoz | QuantityKind::ProductionKt
-    );
-    if q.interval.lo.signum() < 0 || (strictly_positive && q.interval.lo == ZERO) {
+    let outside_domain = match kind {
+        QuantityKind::ProductionKoz | QuantityKind::ProductionKt => q.interval.lo.signum() < 0,
+        QuantityKind::SoldKoz | QuantityKind::SoldMillionLb => q.interval.lo.signum() <= 0,
+        QuantityKind::AiscUsdPerSoldOz
+        | QuantityKind::AiscUsdPerSoldLb
+        | QuantityKind::AiscSpendUsdMillion
+        | QuantityKind::C1UsdPerSoldLb
+        | QuantityKind::C1SpendUsdMillion
+        | QuantityKind::TccUsdPerSoldOz
+        | QuantityKind::TccSpendUsdMillion => false,
+    };
+    if outside_domain {
         return refuse(
             RefusalCode::OutsidePhysicalDomain109,
             format!(
-                "{role}: production must be nonnegative; this slice needs strictly positive sales and AISC throughout their intervals"
+                "{role}: production must be nonnegative and sales strictly positive throughout their intervals; net costs may be signed"
             ),
         );
     }
@@ -409,20 +535,30 @@ fn same_basis(a: &Quantity, b: &Quantity, role: &str) -> Result<()> {
 
 fn validate_inputs(i: &CompletionInputs) -> Result<Period> {
     let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
+    let metric = i.cost_metric()?;
+    let rate_kind = metric.rate_kind(family)?;
     for (c, role, kind) in [
         (
             &i.production_guidance,
             "production_guidance",
             family.production_kind(),
         ),
-        (&i.aisc_guidance, "aisc_guidance", family.rate_kind()),
+        (
+            &i.aisc_guidance,
+            metric.select("aisc_guidance", "c1_guidance", "tcc_guidance"),
+            rate_kind,
+        ),
         (
             &i.ytd_production,
             "ytd_production",
             family.production_kind(),
         ),
         (&i.ytd_sold, "ytd_sold", family.sold_kind()),
-        (&i.ytd_aisc, "ytd_aisc", family.rate_kind()),
+        (
+            &i.ytd_aisc,
+            metric.select("ytd_aisc", "ytd_c1", "ytd_tcc"),
+            rate_kind,
+        ),
         (&i.remaining_sold, "remaining_sold", family.sold_kind()),
     ] {
         validate_claim(c, role, kind)?;
@@ -458,7 +594,11 @@ fn validate_inputs(i: &CompletionInputs) -> Result<Period> {
     if i.aisc_guidance.value.definition != i.ytd_aisc.value.definition {
         return refuse(
             RefusalCode::BasisMismatch105,
-            "aisc_guidance and ytd_aisc use different cost definitions",
+            metric.select(
+                "aisc_guidance and ytd_aisc use different cost definitions",
+                "c1_guidance and ytd_c1 use different cost definitions",
+                "tcc_guidance and ytd_tcc use different cost definitions",
+            ),
         );
     }
     Ok(remaining)
@@ -565,11 +705,13 @@ fn frontier_bounds(
     Ok((hull(spends)?, hull(rates)?))
 }
 
-/// Computes the exact required remaining production and the AISC frontier conditional on `remaining_sold`.
+/// Computes the exact required remaining production and selected cost frontier conditional on `remaining_sold`.
 /// All emitted quantities retain input evidence classes, citations, confidentiality, and parent claim ids.
 pub fn complete(i: &CompletionInputs) -> Result<CompletionReport> {
     let remaining = validate_inputs(i)?;
     let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
+    let metric = i.cost_metric()?;
+    let rate_kind = metric.rate_kind(family)?;
     let production = &i.production_guidance.value;
     let cost = &i.aisc_guidance.value;
     let p = i.ytd_production.value.interval;
@@ -582,14 +724,7 @@ pub fn complete(i: &CompletionInputs) -> Result<CompletionReport> {
             production.interval.hi.checked_sub(p.lo)?,
         ))
     })())?;
-    let ytd_spend = exact((|| {
-        Ok(closed(
-            r.lo.checked_mul(s.lo)?
-                .checked_div(family.spend_divisor())?,
-            r.hi.checked_mul(s.hi)?
-                .checked_div(family.spend_divisor())?,
-        ))
-    })())?;
+    let ytd_spend = exact(spend_bounds(s, r, family))?;
     let cost_parents = [
         &i.aisc_guidance,
         &i.ytd_aisc,
@@ -601,27 +736,39 @@ pub fn complete(i: &CompletionInputs) -> Result<CompletionReport> {
         let (n, rate) = exact(frontier_bounds(point(a), r, s, rem, family))?;
         Ok(FrontierPoint {
             annual_aisc: derived(
-                "guidance.annual_aisc_endpoint/1",
+                metric.select(
+                    "guidance.annual_aisc_endpoint/1",
+                    "guidance.annual_c1_endpoint/1",
+                    "guidance.annual_tcc_endpoint/1",
+                ),
                 &[&i.aisc_guidance],
                 cost,
                 cost.period,
-                family.rate_kind(),
+                rate_kind,
                 point(a),
             ),
             remaining_aisc_spend: derived(
-                "guidance.remaining_aisc_spend/1",
+                metric.select(
+                    "guidance.remaining_aisc_spend/1",
+                    "guidance.remaining_c1_spend/1",
+                    "guidance.remaining_tcc_spend/1",
+                ),
                 &cost_parents,
                 cost,
                 remaining,
-                QuantityKind::AiscSpendUsdMillion,
+                metric.spend_kind(),
                 n,
             ),
             remaining_aisc_rate: derived(
-                "guidance.remaining_aisc_rate/1",
+                metric.select(
+                    "guidance.remaining_aisc_rate/1",
+                    "guidance.remaining_c1_rate/1",
+                    "guidance.remaining_tcc_rate/1",
+                ),
                 &cost_parents,
                 cost,
                 remaining,
-                family.rate_kind(),
+                rate_kind,
                 rate,
             ),
         })
@@ -636,27 +783,39 @@ pub fn complete(i: &CompletionInputs) -> Result<CompletionReport> {
             remaining_production,
         ),
         ytd_aisc_spend: derived(
-            "guidance.ytd_aisc_spend/1",
+            metric.select(
+                "guidance.ytd_aisc_spend/1",
+                "guidance.ytd_c1_spend/1",
+                "guidance.ytd_tcc_spend/1",
+            ),
             &[&i.ytd_aisc, &i.ytd_sold],
             cost,
             i.ytd_aisc.value.period,
-            QuantityKind::AiscSpendUsdMillion,
+            metric.spend_kind(),
             ytd_spend,
         ),
         remaining_aisc_spend: derived(
-            "guidance.remaining_aisc_spend/1",
+            metric.select(
+                "guidance.remaining_aisc_spend/1",
+                "guidance.remaining_c1_spend/1",
+                "guidance.remaining_tcc_spend/1",
+            ),
             &cost_parents,
             cost,
             remaining,
-            QuantityKind::AiscSpendUsdMillion,
+            metric.spend_kind(),
             spend,
         ),
         remaining_aisc_rate: derived(
-            "guidance.remaining_aisc_rate/1",
+            metric.select(
+                "guidance.remaining_aisc_rate/1",
+                "guidance.remaining_c1_rate/1",
+                "guidance.remaining_tcc_rate/1",
+            ),
             &cost_parents,
             cost,
             remaining,
-            family.rate_kind(),
+            rate_kind,
             rate,
         ),
         frontier: [endpoint(cost.interval.lo)?, endpoint(cost.interval.hi)?],
@@ -670,22 +829,25 @@ pub fn complete(i: &CompletionInputs) -> Result<CompletionReport> {
     })
 }
 
-/// One historical continuation, whose production, sales and AISC all describe the same earlier period.
+/// One historical continuation, whose production, sales and selected cost describe the same earlier period.
 /// Its month span must equal the target's remaining span; a quarter is not silently doubled to represent H2.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalContinuation {
     pub id: String,
     pub production: Claim<Quantity>,
     pub sold: Claim<Quantity>,
+    /// Legacy field name; its kind must match the explicitly selected cost metric.
     pub aisc: Claim<Quantity>,
 }
 
 /// A rational witness inside one historical period's rounding box and every declared current input interval.
 /// The explicit family fixes production, sales and rate units; spend is always USD millions.
+/// Legacy `aisc` member names use the selected `cost_metric`, which the independent checker verifies.
 /// The witness itself is returned inside a provenance-bearing Claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionWitness {
     pub family: GuidanceFamily,
+    pub cost_metric: CostMetric,
     pub ytd_production: Rat,
     pub remaining_production: Rat,
     pub ytd_sold: Rat,
@@ -699,7 +861,7 @@ pub struct CompletionWitness {
 
 impl CompletionWitness {
     fn canonical_tag(&self, history: &str) -> String {
-        let mut enc = Encoder::new_frame(*b"GCW1", self.family.frame_version());
+        let mut enc = Encoder::new_frame(*b"GCW1", self.cost_metric.frame_version(self.family));
         enc.put_str(history);
         for x in [
             self.ytd_production,
@@ -754,6 +916,8 @@ pub struct HistoryReport {
 
 fn validate_history(i: &CompletionInputs, h: &HistoricalContinuation) -> Result<()> {
     let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
+    let metric = i.cost_metric()?;
+    let rate_kind = metric.rate_kind(family)?;
     if h.id.trim().is_empty() {
         return refuse(
             RefusalCode::NoClaimInDomain201,
@@ -767,7 +931,11 @@ fn validate_history(i: &CompletionInputs, h: &HistoricalContinuation) -> Result<
             family.production_kind(),
         ),
         (&h.sold, "historical sold", family.sold_kind()),
-        (&h.aisc, "historical AISC", family.rate_kind()),
+        (
+            &h.aisc,
+            metric.select("historical AISC", "historical C1", "historical TCC"),
+            rate_kind,
+        ),
     ] {
         validate_claim(claim, role, kind)?;
         same_basis(&i.production_guidance.value, &claim.value, role)?;
@@ -799,7 +967,11 @@ fn validate_history(i: &CompletionInputs, h: &HistoricalContinuation) -> Result<
     if h.aisc.value.definition != i.aisc_guidance.value.definition {
         return refuse(
             RefusalCode::BasisMismatch105,
-            format!("{}: historical and guided AISC definitions differ", h.id),
+            format!(
+                "{}: historical and guided {} definitions differ",
+                h.id,
+                metric.select("AISC", "C1", "TCC")
+            ),
         );
     }
     Ok(())
@@ -897,6 +1069,7 @@ fn build_witness(
     i: &CompletionInputs,
     h: &HistoricalContinuation,
     family: GuidanceFamily,
+    cost_metric: CostMetric,
 ) -> Exact<(bool, bool, Option<CompletionWitness>)> {
     let p = i.ytd_production.value.interval;
     let rem_p = h.production.value.interval;
@@ -912,6 +1085,7 @@ fn build_witness(
             let ytd_p = max(p.lo, total.lo.checked_sub(rem_p.hi)?)?;
             Some(CompletionWitness {
                 family,
+                cost_metric,
                 ytd_production: ytd_p,
                 remaining_production: total.lo.checked_sub(ytd_p)?,
                 ytd_sold: cost.ytd_sold,
@@ -940,7 +1114,7 @@ pub fn check_witness(
     validate_inputs(i)?;
     validate_history(i, h)?;
     let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
-    if w.family != family {
+    if w.family != family || w.cost_metric != i.cost_metric()? {
         return Ok(false);
     }
     exact((|| {
@@ -982,6 +1156,7 @@ pub fn compare_history(
 ) -> Result<HistoryReport> {
     validate_inputs(i)?;
     let family = GuidanceFamily::from_production_kind(i.production_guidance.value.kind)?;
+    let cost_metric = i.cost_metric()?;
     if history.is_empty() {
         return Ok(HistoryReport {
             tier: EnvelopeTier::T3,
@@ -1000,7 +1175,8 @@ pub fn compare_history(
     let mut checks = Vec::with_capacity(history.len());
     for h in ordered {
         validate_history(i, h)?;
-        let (production_possible, cost_possible, witness) = exact(build_witness(i, h, family))?;
+        let (production_possible, cost_possible, witness) =
+            exact(build_witness(i, h, family, cost_metric))?;
         let witness = if let Some(witness) = witness {
             if !check_witness(i, h, &witness)? {
                 return refuse(
@@ -1075,7 +1251,10 @@ mod tests {
             kind,
             definition: if matches!(
                 kind,
-                QuantityKind::AiscUsdPerSoldOz | QuantityKind::AiscUsdPerSoldLb
+                QuantityKind::AiscUsdPerSoldOz
+                    | QuantityKind::AiscUsdPerSoldLb
+                    | QuantityKind::C1UsdPerSoldLb
+                    | QuantityKind::TccUsdPerSoldOz
             ) {
                 "synthetic/by_product/sold".into()
             } else {
@@ -1261,6 +1440,262 @@ mod tests {
         }
     }
 
+    fn c1_inputs() -> CompletionInputs {
+        let mut i = copper_inputs();
+        i.aisc_guidance = claim(
+            "copper.guidance.c1",
+            QuantityKind::C1UsdPerSoldLb,
+            period(1, 12),
+            n(3),
+            q(7, 2),
+        );
+        i.ytd_aisc = claim(
+            "copper.ytd.c1",
+            QuantityKind::C1UsdPerSoldLb,
+            period(1, 6),
+            n(4),
+            n(4),
+        );
+        i
+    }
+
+    fn c1_history() -> HistoricalContinuation {
+        let mut h = copper_history();
+        h.aisc = claim(
+            "copper.history.c1",
+            QuantityKind::C1UsdPerSoldLb,
+            h.aisc.value.period,
+            q(11, 5),
+            q(11, 5),
+        );
+        h
+    }
+
+    fn tcc_inputs(signed: bool) -> CompletionInputs {
+        let mut i = inputs();
+        let (lo, hi, actual) = if signed {
+            (-900, -800, -1200)
+        } else {
+            (800, 900, 1200)
+        };
+        i.aisc_guidance = claim(
+            "gold.guidance.tcc",
+            QuantityKind::TccUsdPerSoldOz,
+            period(1, 12),
+            n(lo),
+            n(hi),
+        );
+        i.ytd_aisc = claim(
+            "gold.ytd.tcc",
+            QuantityKind::TccUsdPerSoldOz,
+            period(1, 6),
+            n(actual),
+            n(actual),
+        );
+        i
+    }
+
+    #[test]
+    fn gold_tcc_completion_keeps_exact_signed_spend_and_distinct_cost_identity() {
+        for signed in [false, true] {
+            let i = tcc_inputs(signed);
+            let r = complete(&i).unwrap();
+            assert_eq!(i.cost_metric().unwrap(), CostMetric::Tcc);
+            // 68 koz * USD1200/oz = USD81.6m. Target USD800..900/oz, future sales
+            // 132..162 koz: spending is USD78.4..125.4m, rates 19600/33..20900/27.
+            let (spend, rate, ytd) = if signed {
+                (
+                    closed(q(-627, 5), q(-392, 5)),
+                    closed(q(-20900, 27), q(-19600, 33)),
+                    q(-408, 5),
+                )
+            } else {
+                (
+                    closed(q(392, 5), q(627, 5)),
+                    closed(q(19600, 33), q(20900, 27)),
+                    q(408, 5),
+                )
+            };
+            assert_eq!(r.ytd_aisc_spend.value.interval, point(ytd));
+            assert_eq!(r.remaining_aisc_spend.value.interval, spend);
+            assert_eq!(r.remaining_aisc_rate.value.interval, rate);
+            assert_eq!(
+                r.remaining_aisc_spend.value.kind,
+                QuantityKind::TccSpendUsdMillion
+            );
+            assert_eq!(
+                r.remaining_aisc_rate.value.kind,
+                QuantityKind::TccUsdPerSoldOz
+            );
+            assert_eq!(
+                r.remaining_aisc_rate.metric_key,
+                "guidance.remaining_tcc_rate/1"
+            );
+            assert_eq!(r.ytd_aisc_spend.metric_key, "guidance.ytd_tcc_spend/1");
+            assert_eq!(
+                r.frontier[0].annual_aisc.metric_key,
+                "guidance.annual_tcc_endpoint/1"
+            );
+            assert_eq!(
+                r.spending_requirement,
+                if signed {
+                    SpendingRequirement::EntirelyNegative
+                } else {
+                    SpendingRequirement::Nonnegative
+                }
+            );
+            assert!(r.remaining_aisc_rate.parents.contains(&i.ytd_aisc.claim_id));
+
+            let mut aisc = i.clone();
+            for value in [&mut aisc.aisc_guidance, &mut aisc.ytd_aisc] {
+                *value = claim(
+                    "gold.aisc",
+                    QuantityKind::AiscUsdPerSoldOz,
+                    value.value.period,
+                    value.value.interval.lo,
+                    value.value.interval.hi,
+                );
+            }
+            let aisc = complete(&aisc).unwrap();
+            assert_eq!(aisc.remaining_aisc_rate.value.interval, rate);
+            assert_ne!(
+                aisc.remaining_aisc_rate.claim_id,
+                r.remaining_aisc_rate.claim_id
+            );
+            assert_ne!(
+                aisc.remaining_aisc_rate.value.canonical_tag(),
+                r.remaining_aisc_rate.value.canonical_tag()
+            );
+        }
+    }
+
+    #[test]
+    fn tcc_admission_rejects_aisc_copper_and_missing_definition_substitutions() {
+        let i = tcc_inputs(false);
+        let mut mixed = i.clone();
+        mixed.ytd_aisc = inputs().ytd_aisc;
+        assert_eq!(complete(&mixed).unwrap_err().code, "FMINE-REF-105");
+        let mut copper = copper_inputs();
+        copper.aisc_guidance = i.aisc_guidance.clone();
+        assert_eq!(complete(&copper).unwrap_err().code, "FMINE-REF-105");
+        assert!(CostMetric::Tcc.rate_kind(GuidanceFamily::Copper).is_err());
+        assert!(CostMetric::from_rate_kind(QuantityKind::TccSpendUsdMillion).is_err());
+        let mut missing = i.clone();
+        missing.aisc_guidance.value.definition.clear();
+        assert_eq!(complete(&missing).unwrap_err().code, "FMINE-REF-107");
+        let mut changed = i;
+        changed.ytd_aisc.value.definition = "different/credit/treatment".into();
+        assert_eq!(complete(&changed).unwrap_err().code, "FMINE-REF-105");
+    }
+
+    #[test]
+    fn copper_c1_completion_has_distinct_claims_and_exact_sold_weighted_requirements() {
+        let i = c1_inputs();
+        let r = complete(&i).unwrap();
+        assert_eq!(i.cost_metric().unwrap(), CostMetric::C1);
+        // 80 Mlb at USD4/lb = USD320m. Annual endpoint spends are 3*(80+90)=510 and
+        // 3.5*(80+110)=665, leaving USD190..345m. No sustaining-cost adjustment is inferred.
+        assert_eq!(r.remaining_production.value.interval, closed(n(60), n(80)));
+        assert_eq!(r.ytd_aisc_spend.value.interval, point(n(320)));
+        assert_eq!(
+            r.remaining_aisc_spend.value.interval,
+            closed(n(190), n(345))
+        );
+        assert_eq!(
+            r.remaining_aisc_rate.value.interval,
+            closed(q(19, 9), q(69, 22))
+        );
+        assert_eq!(r.ytd_aisc_spend.value.kind, QuantityKind::C1SpendUsdMillion);
+        assert_eq!(
+            r.remaining_aisc_spend.value.kind,
+            QuantityKind::C1SpendUsdMillion
+        );
+        assert_eq!(
+            r.remaining_aisc_rate.value.kind,
+            QuantityKind::C1UsdPerSoldLb
+        );
+        assert_eq!(
+            r.remaining_aisc_rate.metric_key,
+            "guidance.remaining_c1_rate/1"
+        );
+        assert_eq!(r.ytd_aisc_spend.metric_key, "guidance.ytd_c1_spend/1");
+        for endpoint in &r.frontier {
+            assert_eq!(
+                endpoint.annual_aisc.value.kind,
+                QuantityKind::C1UsdPerSoldLb
+            );
+            assert_eq!(
+                endpoint.annual_aisc.metric_key,
+                "guidance.annual_c1_endpoint/1"
+            );
+            assert_eq!(
+                endpoint.remaining_aisc_spend.value.kind,
+                QuantityKind::C1SpendUsdMillion
+            );
+        }
+        let aisc = complete(&copper_inputs()).unwrap();
+        assert_eq!(
+            r.remaining_aisc_rate.value.interval,
+            aisc.remaining_aisc_rate.value.interval
+        );
+        assert_ne!(
+            r.remaining_aisc_rate.claim_id,
+            aisc.remaining_aisc_rate.claim_id
+        );
+        assert_ne!(
+            r.remaining_aisc_rate.value.canonical_tag(),
+            aisc.remaining_aisc_rate.value.canonical_tag()
+        );
+        assert_eq!(
+            r.remaining_aisc_rate.value.definition,
+            i.aisc_guidance.value.definition
+        );
+        assert!(
+            r.remaining_aisc_rate
+                .parents
+                .contains(&i.aisc_guidance.claim_id)
+        );
+        assert!(r.remaining_aisc_rate.parents.contains(&i.ytd_aisc.claim_id));
+    }
+
+    #[test]
+    fn c1_admission_and_witness_checks_reject_aisc_and_gold_substitution() {
+        let (i, h) = (c1_inputs(), c1_history());
+        let report = compare_history(&i, std::slice::from_ref(&h)).unwrap();
+        assert_eq!(report.verdict, HistoryVerdict::WithinEnvelope);
+        let w = &report.checks[0].witness.as_ref().unwrap().value;
+        assert_eq!(w.cost_metric, CostMetric::C1);
+        assert_eq!(w.annual_aisc, n(3));
+        assert_eq!(w.remaining_spend_usd_m, n(220));
+        assert!(check_witness(&i, &h, w).unwrap());
+        let mut forged = w.clone();
+        forged.cost_metric = CostMetric::Aisc;
+        assert!(!check_witness(&i, &h, &forged).unwrap());
+        assert_ne!(w.canonical_tag(&h.id), forged.canonical_tag(&h.id));
+
+        let mut mixed = i.clone();
+        mixed.ytd_aisc = copper_inputs().ytd_aisc;
+        assert_eq!(complete(&mixed).unwrap_err().code, "FMINE-REF-105");
+        assert_eq!(
+            compare_history(&i, &[copper_history()]).unwrap_err().code,
+            "FMINE-REF-105"
+        );
+        let mut wrong_definition = i.clone();
+        wrong_definition.ytd_aisc.value.definition = "different/credit/treatment".into();
+        assert_eq!(
+            complete(&wrong_definition).unwrap_err().code,
+            "FMINE-REF-105"
+        );
+        let mut undeclared = i.clone();
+        undeclared.aisc_guidance.value.definition.clear();
+        assert_eq!(complete(&undeclared).unwrap_err().code, "FMINE-REF-107");
+        let mut gold = inputs();
+        gold.aisc_guidance = i.aisc_guidance;
+        assert_eq!(complete(&gold).unwrap_err().code, "FMINE-REF-105");
+        assert!(CostMetric::C1.rate_kind(GuidanceFamily::Gold).is_err());
+        assert!(CostMetric::from_rate_kind(QuantityKind::C1SpendUsdMillion).is_err());
+    }
+
     #[test]
     fn copper_completion_keeps_kt_and_million_pounds_and_exact_usd_million_scale() {
         let i = copper_inputs();
@@ -1435,6 +1870,52 @@ mod tests {
     }
 
     #[test]
+    fn signed_and_zero_net_costs_keep_exact_spend_and_remaining_rate_bounds() {
+        for mut i in [inputs(), copper_inputs(), c1_inputs()] {
+            let family =
+                GuidanceFamily::from_production_kind(i.production_guidance.value.kind).unwrap();
+            let scale = family.spend_divisor();
+            i.aisc_guidance.value.interval = closed(n(-1), ONE);
+            i.ytd_aisc.value.interval = closed(n(-2), n(-1));
+            i.ytd_sold.value.interval = closed(n(10), n(20));
+            i.remaining_sold.value.interval = closed(n(5), n(10));
+            let report = complete(&i).unwrap();
+            // Independent extrema: YTD net cost is [-2*20, -1*10]; remaining net cost is
+            // A*R+(A-r)*S, with minimum -1*10+0*S and maximum 1*10+3*20.
+            assert_eq!(
+                report.ytd_aisc_spend.value.interval,
+                closed(
+                    n(-40).checked_div(scale).unwrap(),
+                    n(-10).checked_div(scale).unwrap()
+                )
+            );
+            assert_eq!(
+                report.remaining_aisc_spend.value.interval,
+                closed(
+                    n(-10).checked_div(scale).unwrap(),
+                    n(70).checked_div(scale).unwrap()
+                )
+            );
+            assert_eq!(
+                report.remaining_aisc_rate.value.interval,
+                closed(n(-1), n(13))
+            );
+            assert_eq!(
+                report.spending_requirement,
+                SpendingRequirement::IncludesNegative
+            );
+            assert_eq!(report.remaining_aisc_spend.parents.len(), 4);
+
+            i.aisc_guidance.value.interval = point(ZERO);
+            i.ytd_aisc.value.interval = point(ZERO);
+            let report = complete(&i).unwrap();
+            assert_eq!(report.ytd_aisc_spend.value.interval, point(ZERO));
+            assert_eq!(report.remaining_aisc_spend.value.interval, point(ZERO));
+            assert_eq!(report.remaining_aisc_rate.value.interval, point(ZERO));
+        }
+    }
+
+    #[test]
     fn rounding_extrema_enclose_every_small_interior_combination() {
         let target = closed(n(4), n(8));
         let rate = closed(n(2), n(6));
@@ -1465,6 +1946,54 @@ mod tests {
     }
 
     #[test]
+    fn signed_frontiers_and_spend_enclose_all_sign_combinations_and_attain_their_bounds() {
+        for family in [GuidanceFamily::Gold, GuidanceFamily::Copper] {
+            let scale = family.spend_divisor();
+            for (a0, a1) in [(-4, -2), (-1, 1), (2, 4)] {
+                for (r0, r1) in [(-4, -2), (-1, 1), (2, 4)] {
+                    let (ns, rs) = frontier_bounds(
+                        closed(n(a0), n(a1)),
+                        closed(n(r0), n(r1)),
+                        closed(ONE, n(3)),
+                        closed(ONE, n(4)),
+                        family,
+                    )
+                    .unwrap();
+                    let ys = spend_bounds(closed(ONE, n(3)), closed(n(r0), n(r1)), family).unwrap();
+                    let mut reached = [false; 6];
+                    for a in a0..=a1 {
+                        for r in r0..=r1 {
+                            for s in 1..=3 {
+                                for rem in 1..=4 {
+                                    // Direct annual accounting, independently of the corner implementation.
+                                    let ytd = n(r * s).checked_div(scale).unwrap();
+                                    let spend =
+                                        n(a * (s + rem) - r * s).checked_div(scale).unwrap();
+                                    let rate = q(a * (s + rem) - r * s, rem);
+                                    assert!(ys.contains(ytd).unwrap());
+                                    assert!(ns.contains(spend).unwrap());
+                                    assert!(rs.contains(rate).unwrap());
+                                    for (seen, equal) in reached.iter_mut().zip([
+                                        ytd == ys.lo,
+                                        ytd == ys.hi,
+                                        spend == ns.lo,
+                                        spend == ns.hi,
+                                        rate == rs.lo,
+                                        rate == rs.hi,
+                                    ]) {
+                                        *seen |= equal;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    assert!(reached.into_iter().all(|seen| seen));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn signed_derived_requirements_are_never_clamped() {
         let mut i = inputs();
         i.production_guidance.value.interval = closed(n(20), n(30));
@@ -1489,18 +2018,27 @@ mod tests {
 
     #[test]
     fn unsupported_domains_and_zero_denominators_refuse_by_name() {
-        for role in ["ytd_sold", "remaining_sold", "ytd_aisc", "aisc_guidance"] {
+        for role in ["ytd_sold", "remaining_sold"] {
             let mut i = inputs();
             let c = match role {
                 "ytd_sold" => &mut i.ytd_sold,
-                "remaining_sold" => &mut i.remaining_sold,
-                "ytd_aisc" => &mut i.ytd_aisc,
-                _ => &mut i.aisc_guidance,
+                _ => &mut i.remaining_sold,
             };
             c.value.interval.lo = ZERO;
             let refusal = complete(&i).unwrap_err();
             assert_eq!(refusal.code, "FMINE-REF-109");
             assert!(refusal.what.contains(role));
+        }
+        for role in ["ytd_aisc", "aisc_guidance"] {
+            let mut i = inputs();
+            let c = match role {
+                "ytd_aisc" => &mut i.ytd_aisc,
+                _ => &mut i.aisc_guidance,
+            };
+            c.value.interval = closed(ONE, n(-1));
+            let refusal = complete(&i).unwrap_err();
+            assert_eq!(refusal.code, "FMINE-REF-109");
+            assert!(refusal.what.contains(role) && refusal.what.contains("reversed"));
         }
         let mut i = inputs();
         i.ytd_production.value.interval.lo = n(-1);

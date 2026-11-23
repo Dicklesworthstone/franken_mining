@@ -267,6 +267,169 @@ fn independent_and_correlated_full_posteriors_match_direct_single_closure_oracle
 }
 
 #[test]
+fn missing_inflow_and_stock_match_an_independent_affine_covariance_oracle() {
+    for cross in [0.0, 0.5] {
+        let mut inputs = inputs(true);
+        inputs[2] = input(TrajectoryValue::UnmeasuredInflow, 0, 10);
+        let declaration = inputs[2].claim_id;
+        let mut policy = model(&inputs);
+        // Genuine y=[s0,s2,in1,out0,out1]. Neither s1 nor in0 is an observation.
+        policy.value.covariance[1] = KilogramsSquared::new(cross);
+        policy.value.covariance[5] = KilogramsSquared::new(cross);
+        refresh_model(&mut policy);
+        let outcome = reconcile_trajectory(&inputs, &policy).unwrap();
+        let claim = outcome.admitted_claim().unwrap();
+        let d = &claim.value;
+        let inflow = TrajectoryLocation::Inflow {
+            start_ns: 0,
+            end_ns: 10,
+        };
+        assert_eq!(d.observations.len(), 5);
+        assert_eq!(d.unmeasured_stocktakes_ns, [10]);
+        assert_eq!(d.unmeasured_flows.as_slice(), std::slice::from_ref(&inflow));
+        assert_eq!(d.coordinate_index(&inflow), Some(6));
+        assert!(d.observations.iter().all(|v| v.source != declaration));
+        assert!(claim.parents.contains(&declaration));
+        assert!(outcome.inputs().contains(&inputs[2]));
+        assert_eq!(inputs[2].additivity, AdditivityClass::NonAdditive);
+        assert_eq!(inputs[2].value.value.mass(), None);
+        assert_eq!(d.gross_error, GrossErrorDiagnostic::NoRedundancy);
+        // s1=s2-in1+out1; in0=s2-s0-in1+out0+out1. Full joint covariance
+        // follows this fixed affine map, independently of the GLS implementation.
+        let map = [
+            [1.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, -1.0, 0.0, 1.0],
+            [-1.0, 1.0, -1.0, 1.0, 1.0],
+        ];
+        let means = [10.0, 20.0, 7.0, 3.0, 4.0, 17.0, 10.0];
+        for i in 0..7 {
+            close(d.estimates_kg[i].value(), means[i]);
+            for j in 0..7 {
+                let independent: f64 = (0..5).map(|k| map[i][k] * map[j][k]).sum();
+                close(
+                    cov(d, i, j),
+                    independent + cross * (map[i][0] * map[j][1] + map[i][1] * map[j][0]),
+                );
+            }
+        }
+        for adjustment in &d.measured_adjustments_kg {
+            close(adjustment.value(), 0.0);
+        }
+        for row in &d.conservation {
+            assert!(row.has_unmeasured_terms);
+            close(row.reconciled_residual_kg.value(), 0.0);
+        }
+        let mut permutation = inputs.clone();
+        permutation.reverse();
+        assert_eq!(
+            reconcile_trajectory(&permutation, &policy).unwrap(),
+            outcome
+        );
+        let mut reanchored = inputs.clone();
+        reanchored[2].anchors[0]
+            .locator
+            .push_str(" explicit absent transfer");
+        refresh_input(&mut reanchored[2]);
+        let rebound = reconcile_trajectory(&reanchored, &policy).unwrap();
+        assert_eq!(rebound.diagnostics(), d);
+        assert_ne!(rebound.digest(), outcome.digest());
+    }
+}
+
+#[test]
+fn missing_outflow_is_inferred_without_clamping_a_negative_candidate() {
+    let mut inputs = inputs(true);
+    inputs[3] = input(TrajectoryValue::UnmeasuredOutflow, 0, 10);
+    inputs[6] = input(
+        TrajectoryValue::Stocktake(ExactQty::from_integer(15)),
+        20,
+        20,
+    );
+    let outcome = reconcile_trajectory(&inputs, &model(&inputs)).unwrap();
+    let d = &outcome.admitted_claim().unwrap().value;
+    let outflow = TrajectoryLocation::Outflow {
+        start_ns: 0,
+        end_ns: 10,
+    };
+    let i = d.coordinate_index(&outflow).unwrap();
+    // s1=s2-in1+out1=12; out0=s0+in0+in1-out1-s2=3.
+    close(d.estimates_kg[stock(d, 10)].value(), 12.0);
+    close(d.estimates_kg[i].value(), 3.0);
+    close(cov(d, i, i), 5.0);
+    close(cov(d, stock(d, 10), i), -3.0);
+    inputs[6] = input(
+        TrajectoryValue::Stocktake(ExactQty::from_integer(20)),
+        20,
+        20,
+    );
+    let rejected = reconcile_trajectory(&inputs, &model(&inputs)).unwrap();
+    assert_eq!(rejected.refusal().unwrap().code, "FMINE-REF-109");
+    assert!(rejected.admitted_claim().is_err());
+    close(rejected.diagnostics().estimates_kg[i].value(), -2.0);
+    assert!(rejected.inputs().contains(&inputs[3]));
+    assert!(!rejected.digest().is_empty());
+}
+
+#[test]
+fn missing_flow_declarations_refuse_duplicates_and_nonidentifiable_totals() {
+    let mut values = inputs(true);
+    values[2] = input(TrajectoryValue::UnmeasuredInflow, 0, 10);
+    let mut both = values.clone();
+    both[3] = input(TrajectoryValue::UnmeasuredOutflow, 0, 10);
+    code(observation_order(&both), "FMINE-REF-104");
+    let mut duplicate = values.clone();
+    duplicate.push(values[2].clone());
+    code(observation_order(&duplicate), "FMINE-REF-105");
+    duplicate = values.clone();
+    duplicate.push(input(
+        TrajectoryValue::Inflow(ExactQty::from_integer(0)),
+        0,
+        10,
+    ));
+    code(observation_order(&duplicate), "FMINE-REF-105");
+    values[4] = input(TrajectoryValue::UnmeasuredInflow, 10, 20);
+    // Three unknown coordinates cannot be recovered from two balances.
+    code(
+        reconcile_trajectory(&values, &model(&values)),
+        "FMINE-REF-104",
+    );
+
+    // Three balances still do not identify those same three coordinates:
+    // the final fully observed balance adds redundancy, not the missing split.
+    values.push(input(
+        TrajectoryValue::Stocktake(ExactQty::from_integer(21)),
+        30,
+        30,
+    ));
+    values.push(input(
+        TrajectoryValue::Inflow(ExactQty::from_integer(2)),
+        20,
+        30,
+    ));
+    values.push(input(
+        TrajectoryValue::Outflow(ExactQty::from_integer(1)),
+        20,
+        30,
+    ));
+    if let TrajectoryValue::Population { boundaries_ns, .. } = &mut values[0].value.value {
+        boundaries_ns.push(30);
+    }
+    values[0].value.physical_time.end_ns = 30;
+    for value in &mut values {
+        value.value.scope.interval.end_ns = 30;
+        refresh_input(value);
+    }
+    let mut policy = model(&values);
+    policy.value.scope.interval.end_ns = 30;
+    refresh_model(&mut policy);
+    code(reconcile_trajectory(&values, &policy), "FMINE-REF-104");
+}
+
+#[test]
 fn fully_measured_shared_stock_is_one_coordinate_and_not_two_observations() {
     let mut inputs = inputs(true);
     if let TrajectoryValue::Population {

@@ -1,9 +1,11 @@
 //! Public guidance completion (BD-342): source selection for the exact metric kernel.
 //!
 //! DESIGN: accepted two-reader quantities pair `guidance_<site>_production_koz` with
-//! `guidance_<site>_aisc_usd_per_oz` for gold, or `production_kt` with `aisc_usd_per_lb` for copper.
+//! `guidance_<site>_aisc_usd_per_oz` or `tcc_usd_per_oz` for gold, or `production_kt` with the explicitly selected
+//! `aisc_usd_per_lb` or `c1_usd_per_lb` for copper. Each selected cost metric requires its own assertion and actuals.
 //! Hyphens in the site key become underscores; period is `YYYYFY`. Basis is `100%` or `attributable:n/d`;
-//! AISC additionally declares `;aisc=issuer-reported-per-sold-oz` or `-lb`. Copper sales use an explicit
+//! AISC additionally declares `;aisc=issuer-reported-per-sold-oz` or `-lb`; gold TCC declares
+//! `;tcc=issuer-reported-per-sold-oz`. Copper sales use an explicit
 //! million-pound row or a source-bound exact conversion of a declared kt sales row; production is never
 //! substituted for sales. The assertion compares
 //! the issuer's reported metric, never
@@ -29,8 +31,8 @@ use fmine_evidence::{
     EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
 use fmine_metrics::guidance::{
-    self as kernel, CompletionInputs, CompletionReport, GuidanceFamily, Ownership, Period,
-    Quantity, QuantityKind,
+    self as kernel, CompletionInputs, CompletionReport, CostMetric, GuidanceFamily, Ownership,
+    Period, Quantity, QuantityKind,
 };
 use fmine_numerics::exact_feas::{Convention, Interval, Rat};
 use fmine_registry::sources::{is_date, is_quarter};
@@ -217,26 +219,49 @@ fn site_key(subject: &str) -> String {
         .join("-")
 }
 
-fn family_quantities(site: &str, family: GuidanceFamily) -> [String; 2] {
-    let stem = format!("guidance_{}", site.replace('-', "_"));
-    let suffixes = match family {
-        GuidanceFamily::Gold => ["production_koz", "aisc_usd_per_oz"],
-        GuidanceFamily::Copper => ["production_kt", "aisc_usd_per_lb"],
-    };
-    suffixes.map(|suffix| format!("{stem}_{suffix}"))
+fn cost_key(metric: CostMetric) -> &'static str {
+    metric.as_str()
 }
 
-fn guidance_quantities(site: &str) -> Vec<String> {
-    [GuidanceFamily::Gold, GuidanceFamily::Copper]
-        .into_iter()
-        .flat_map(|family| family_quantities(site, family))
+fn families(metric: CostMetric) -> &'static [GuidanceFamily] {
+    match metric {
+        CostMetric::Aisc => &[GuidanceFamily::Gold, GuidanceFamily::Copper],
+        CostMetric::C1 => &[GuidanceFamily::Copper],
+        CostMetric::Tcc => &[GuidanceFamily::Gold],
+    }
+}
+
+fn family_quantities(site: &str, family: GuidanceFamily, metric: CostMetric) -> [String; 2] {
+    let stem = format!("guidance_{}", site.replace('-', "_"));
+    // The caller enumerates only `families(metric)`; admission also checks `metric.rate_kind(family)`.
+    let production = match family {
+        GuidanceFamily::Gold => "production_koz",
+        GuidanceFamily::Copper => "production_kt",
+    };
+    let rate = match metric {
+        CostMetric::Aisc => match family {
+            GuidanceFamily::Gold => "aisc_usd_per_oz",
+            GuidanceFamily::Copper => "aisc_usd_per_lb",
+        },
+        CostMetric::C1 => "c1_usd_per_lb",
+        CostMetric::Tcc => "tcc_usd_per_oz",
+    };
+    [production, rate].map(|suffix| format!("{stem}_{suffix}"))
+}
+
+fn guidance_quantities(site: &str, metric: CostMetric) -> Vec<String> {
+    families(metric)
+        .iter()
+        .flat_map(|family| family_quantities(site, *family, metric))
         .collect()
 }
 
 fn rate_definition(kind: QuantityKind) -> Option<&'static str> {
     match kind {
-        QuantityKind::AiscUsdPerSoldOz => Some(COST_BASIS),
-        QuantityKind::AiscUsdPerSoldLb => Some("issuer-reported-per-sold-lb"),
+        QuantityKind::AiscUsdPerSoldOz | QuantityKind::TccUsdPerSoldOz => Some(COST_BASIS),
+        QuantityKind::AiscUsdPerSoldLb | QuantityKind::C1UsdPerSoldLb => {
+            Some("issuer-reported-per-sold-lb")
+        }
         _ => None,
     }
 }
@@ -246,21 +271,32 @@ fn quantity_unit(kind: QuantityKind) -> &'static str {
         QuantityKind::ProductionKoz | QuantityKind::SoldKoz => "koz",
         QuantityKind::ProductionKt => "kt",
         QuantityKind::SoldMillionLb => "Mlb",
-        QuantityKind::AiscUsdPerSoldOz => "usd_per_oz",
-        QuantityKind::AiscUsdPerSoldLb => "usd_per_lb",
-        QuantityKind::AiscSpendUsdMillion => "usd_m",
+        QuantityKind::AiscUsdPerSoldOz | QuantityKind::TccUsdPerSoldOz => "usd_per_oz",
+        QuantityKind::AiscUsdPerSoldLb | QuantityKind::C1UsdPerSoldLb => "usd_per_lb",
+        QuantityKind::AiscSpendUsdMillion
+        | QuantityKind::C1SpendUsdMillion
+        | QuantityKind::TccSpendUsdMillion => "usd_m",
     }
 }
 
-fn source_lines(family: GuidanceFamily, ownership: Ownership) -> [&'static str; 2] {
-    match family {
+fn source_lines(
+    family: GuidanceFamily,
+    ownership: Ownership,
+    metric: CostMetric,
+) -> Result<[&'static str; 2]> {
+    metric.rate_kind(family)?;
+    let lines = match family {
         GuidanceFamily::Gold => [
             if ownership == Ownership::Full {
                 "summary:au_prod_100_koz"
             } else {
                 "summary:au_prod_attr_koz"
             },
-            "summary:aisc_usd_per_oz",
+            if metric == CostMetric::Tcc {
+                "summary:tcc_usd_per_oz"
+            } else {
+                "summary:aisc_usd_per_oz"
+            },
         ],
         GuidanceFamily::Copper => [
             if ownership == Ownership::Full {
@@ -268,9 +304,14 @@ fn source_lines(family: GuidanceFamily, ownership: Ownership) -> [&'static str; 
             } else {
                 "summary:cu_prod_attr_kt"
             },
-            "summary:aisc_usd_per_lb",
+            if metric == CostMetric::C1 {
+                "summary:c1_usd_per_lb"
+            } else {
+                "summary:aisc_usd_per_lb"
+            },
         ],
-    }
+    };
+    Ok(lines)
 }
 
 fn sales_lines(family: GuidanceFamily) -> &'static [&'static str] {
@@ -285,8 +326,9 @@ fn guidance_rows<'a>(
     site: &str,
     year: u16,
     as_of: &str,
+    metric: CostMetric,
 ) -> Result<([&'a Accepted; 2], &'a CheckedDocument, GuidanceFamily)> {
-    let keys = guidance_quantities(site);
+    let keys = guidance_quantities(site, metric);
     let period = format!("{year}FY");
     if !report.agreement.is_consistent() {
         return Err(refuse(
@@ -339,10 +381,11 @@ fn guidance_rows<'a>(
         ));
     };
     let doc = *doc;
-    let families: Vec<_> = [GuidanceFamily::Gold, GuidanceFamily::Copper]
-        .into_iter()
+    let families: Vec<_> = families(metric)
+        .iter()
+        .copied()
         .filter(|family| {
-            let keys = family_quantities(site, *family);
+            let keys = family_quantities(site, *family, metric);
             report.agreement.accepted.iter().any(|a| {
                 a.locator.doc == doc.file && a.period == period && keys.contains(&a.quantity)
             })
@@ -351,11 +394,11 @@ fn guidance_rows<'a>(
     let [family] = families.as_slice() else {
         return Err(refuse(
             RefusalCode::NonIdentifiableAttribution104,
-            "latest guidance must identify one gold or copper production/AISC family",
+            "latest guidance must identify one production family for the selected cost metric",
         ));
     };
     let family = *family;
-    let keys = family_quantities(site, family);
+    let keys = family_quantities(site, family, metric);
     let row = |key: &str| -> Result<&Accepted> {
         let rows: Vec<_> = report
             .agreement
@@ -455,13 +498,14 @@ fn guidance_claim(
         ));
     }
     let (basis, definition) = if let Some(definition) = rate_definition(kind) {
+        let metric = cost_key(CostMetric::from_rate_kind(kind)?);
         let basis = a
             .basis
-            .strip_suffix(&format!(";aisc={definition}"))
+            .strip_suffix(&format!(";{metric}={definition}"))
             .ok_or_else(|| {
                 refuse(
                     RefusalCode::UndeclaredUnitBasisOrTz107,
-                    format!("{} must explicitly match {definition}", a.locator),
+                    format!("{} must explicitly match {metric}={definition}", a.locator),
                 )
             })?;
         (basis, definition)
@@ -731,6 +775,7 @@ fn assemble(
     cells: &[KeyedCell],
     technical_source: Result<Option<&TranscriptionReport>>,
     synthetic: bool,
+    metric: CostMetric,
 ) -> Result<GuidanceCompletionReport> {
     let (year, months) = request(through, as_of)?;
     let subjects: BTreeSet<_> = cells
@@ -747,7 +792,8 @@ fn assemble(
             ));
         }
     };
-    let (guidance, doc, family) = guidance_rows(transcripts, site, year, as_of)?;
+    let (guidance, doc, family) = guidance_rows(transcripts, site, year, as_of, metric)?;
+    let rate_kind = metric.rate_kind(family)?;
     let production_guidance = guidance_claim(
         guidance[0],
         subject,
@@ -755,8 +801,8 @@ fn assemble(
         family.production_kind(),
         synthetic,
     )?;
-    let aisc_guidance = guidance_claim(guidance[1], subject, year, family.rate_kind(), synthetic)?;
-    let [prod_line, rate_line] = source_lines(family, production_guidance.value.ownership);
+    let aisc_guidance = guidance_claim(guidance[1], subject, year, rate_kind, synthetic)?;
+    let [prod_line, rate_line] = source_lines(family, production_guidance.value.ownership, metric)?;
     let sold_lines = sales_lines(family);
     let ytd = period_code(year, months);
     let production = select_cell(cells, subject, through, &ytd, prod_line)?;
@@ -828,7 +874,7 @@ fn assemble(
         aisc_guidance,
         ytd_production: actual_claim(production, family.production_kind())?,
         ytd_sold: actual_claim(sold, family.sold_kind())?,
-        ytd_aisc: actual_claim(aisc, family.rate_kind())?,
+        ytd_aisc: actual_claim(aisc, rate_kind)?,
         remaining_sold,
     };
     let completion = kernel::complete(&inputs)?;
@@ -847,12 +893,13 @@ fn assemble(
         .collect::<Vec<_>>()
         .join(",");
     let rows = guidance.iter().map(|a| format!("{{\"locator\":{},\"sha256\":{},\"token\":{},\"quantity\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}}", js(&a.locator.to_string()), js(&a.doc_sha256), js(&a.token), js(&a.quantity), js(&a.unit), js(&a.basis), js(&a.period), a.readers.len())).collect::<Vec<_>>().join(",");
+    let cost = cost_key(metric);
     let frontier = completion
         .frontier
         .iter()
         .map(|p| {
             format!(
-                "{{\"annual_aisc\":{},\"remaining_aisc_spend\":{},\"remaining_aisc_rate\":{}}}",
+                "{{\"annual_{cost}\":{},\"remaining_{cost}_spend\":{},\"remaining_{cost}_rate\":{}}}",
                 quantity_json(&p.annual_aisc),
                 quantity_json(&p.remaining_aisc_spend),
                 quantity_json(&p.remaining_aisc_rate)
@@ -868,8 +915,14 @@ fn assemble(
             "ASSUMPTION: repeat preceding-year FY-minus-YTD copper sales in millions of pounds, using that year's corresponding registered releases; not a forecast"
         }
     };
+    let (version, metric_field) = match metric {
+        CostMetric::Aisc => (1, ""),
+        CostMetric::C1 => (2, ",\"cost_metric\":\"c1\""),
+        CostMetric::Tcc => (3, ",\"cost_metric\":\"tcc\""),
+    };
+    let cost_label = cost.to_ascii_uppercase();
     let body = format!(
-        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"source_availability\":{},\"availability_basis\":\"declared publication where cited; retrieval upper bound otherwise; no proof of historical registry existence\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":{},\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_rate\":{},\"remaining_aisc_spend\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"technical\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical joint tests and technical production comparisons retain separate tiers and assumptions; no technical input supplies a joint production-cost witness.\"],\"no_claim\":{}",
+        "\"schema\":\"fmine.guidance.completion.v{version}\"{metric_field},\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"source_availability\":{},\"availability_basis\":\"declared publication where cited; retrieval upper bound otherwise; no proof of historical registry existence\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":{},\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"{cost}_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_{cost}\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_{cost}_spend\":{},\"remaining_{cost}_rate\":{},\"remaining_{cost}_spend\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"technical\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"{cost_label} comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical joint tests and technical production comparisons retain separate tiers and assumptions; no technical input supplies a joint production-cost witness.\"],\"no_claim\":{}",
         js(if synthetic { "synthetic" } else { "public" }),
         js(issuer),
         js(site),
@@ -905,7 +958,7 @@ fn assemble(
         sources,
         quantity_json(&fy),
         quantity_json(&hytd),
-        history::to_json(&historical),
+        history::to_json(&historical, metric),
         capacity::to_json(&technical),
         js(NO_CLAIM)
     );
@@ -989,6 +1042,10 @@ fn quantity_json(c: &Claim<Quantity>) -> String {
             QuantityKind::ProductionKt => "production_kt",
             QuantityKind::SoldMillionLb => "sold_million_lb",
             QuantityKind::AiscUsdPerSoldLb => "aisc_usd_per_sold_lb",
+            QuantityKind::C1UsdPerSoldLb => "c1_usd_per_sold_lb",
+            QuantityKind::C1SpendUsdMillion => "c1_spend_usd_m",
+            QuantityKind::TccUsdPerSoldOz => "tcc_usd_per_sold_oz",
+            QuantityKind::TccSpendUsdMillion => "tcc_spend_usd_m",
         }),
         js(&q.definition),
         rat(q.interval.lo),
@@ -1004,6 +1061,19 @@ pub fn run_public(
     through: &str,
     as_of: &str,
 ) -> Result<GuidanceCompletionReport> {
+    run_public_with_metric(root, issuer, site, through, as_of, CostMetric::Aisc)
+}
+
+/// DESIGN (BD-342): selects the issuer's TCC, C1 or AISC definition before reading guidance or history.
+/// TCC requires gold and C1 requires copper; AISC never fills a missing assertion or actual of either.
+pub fn run_public_with_metric(
+    root: &Path,
+    issuer: &str,
+    site: &str,
+    through: &str,
+    as_of: &str,
+    metric: CostMetric,
+) -> Result<GuidanceCompletionReport> {
     request(through, as_of)?;
     if issuer == crate::synthetic::SYNTHETIC_ISSUER {
         return Err(refuse(
@@ -1013,7 +1083,7 @@ pub fn run_public(
     }
     let profile = load_issuer_profile(root, issuer)?.through(through)?;
     let (claims, availability) = crate::key::mine_stats::load_claims_as_of(&profile, root, as_of)?;
-    let transcripts = load_transcription_quantities_as_of(&profile, root, as_of, &guidance_quantities(site), None)?.ok_or_else(|| refuse(RefusalCode::NoClaimInDomain201, format!("registries/transcriptions/{issuer}.toml is absent; two readers must transcribe the guidance with registered document hashes and publication dates")))?;
+    let transcripts = load_transcription_quantities_as_of(&profile, root, as_of, &guidance_quantities(site, metric), None)?.ok_or_else(|| refuse(RefusalCode::NoClaimInDomain201, format!("registries/transcriptions/{issuer}.toml is absent; two readers must transcribe the guidance with registered document hashes and publication dates")))?;
     let technical = load_transcription_quantities_as_of(
         &profile,
         root,
@@ -1031,6 +1101,7 @@ pub fn run_public(
         &claims.claims,
         technical.as_ref().map(Option::as_ref).map_err(Clone::clone),
         false,
+        metric,
     )
 }
 
@@ -1051,6 +1122,7 @@ pub fn run_synthetic() -> Result<GuidanceCompletionReport> {
         &cells,
         Ok(Some(&technical)),
         true,
+        CostMetric::Aisc,
     )
 }
 

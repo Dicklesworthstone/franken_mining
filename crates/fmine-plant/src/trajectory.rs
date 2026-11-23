@@ -1,7 +1,7 @@
 //! DESIGN: bounded joint linear inventory estimation across contiguous periods
 //! (plan §§20.2–20.3, 20.8; BD-154/177). Each boundary stock is ONE coordinate,
 //! shared by its adjoining periods. Only genuine measurements have covariance
-//! rows; unmeasured stocks have no fabricated observations or process priors.
+//! rows; unmeasured stocks and flows have no fabricated observations or process priors.
 //! Determinism: DeterministicPerIsa
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,17 +46,23 @@ pub enum TrajectoryValue {
     Stocktake(ExactQty),
     Inflow(ExactQty),
     Outflow(ExactQty),
+    /// Complete interval totals whose values were not measured. These source
+    /// declarations are not numeric observations and have no covariance rows.
+    UnmeasuredInflow,
+    UnmeasuredOutflow,
 }
 impl TrajectoryValue {
     pub const fn additivity(&self) -> AdditivityClass {
         match self {
-            Self::Population { .. } => AdditivityClass::NonAdditive,
+            Self::Population { .. } | Self::UnmeasuredInflow | Self::UnmeasuredOutflow => {
+                AdditivityClass::NonAdditive
+            }
             _ => AdditivityClass::ExtensiveAdditive,
         }
     }
     fn mass(&self) -> Option<ExactQty> {
         match self {
-            Self::Population { .. } => None,
+            Self::Population { .. } | Self::UnmeasuredInflow | Self::UnmeasuredOutflow => None,
             Self::Stocktake(q) | Self::Inflow(q) | Self::Outflow(q) => Some(*q),
         }
     }
@@ -66,7 +72,13 @@ impl TrajectoryValue {
             Self::Stocktake(_) => 1,
             Self::Inflow(_) => 2,
             Self::Outflow(_) => 3,
+            // Tag 4 belongs to the error-model source in the receipt.
+            Self::UnmeasuredInflow => 5,
+            Self::UnmeasuredOutflow => 6,
         }
+    }
+    fn is_unmeasured_flow(&self) -> bool {
+        matches!(self, Self::UnmeasuredInflow | Self::UnmeasuredOutflow)
     }
 }
 
@@ -79,7 +91,12 @@ pub struct TrajectoryInput {
 }
 impl TrajectoryInput {
     pub fn canonical_tag(&self) -> String {
-        let mut enc = Encoder::new_frame(*b"PTIN", 1);
+        let version = if self.value.is_unmeasured_flow() {
+            2
+        } else {
+            1
+        };
+        let mut enc = Encoder::new_frame(*b"PTIN", version);
         put_scope(&mut enc, &self.scope);
         put_time(&mut enc, self.physical_time);
         enc.put_u8(self.value.role());
@@ -119,14 +136,18 @@ impl TrajectoryInput {
         match self.value {
             TrajectoryValue::Population { .. } => None,
             TrajectoryValue::Stocktake(_) => Some(TrajectoryLocation::Stocktake(t.start_ns)),
-            TrajectoryValue::Inflow(_) => Some(TrajectoryLocation::Inflow {
-                start_ns: t.start_ns,
-                end_ns: t.end_ns,
-            }),
-            TrajectoryValue::Outflow(_) => Some(TrajectoryLocation::Outflow {
-                start_ns: t.start_ns,
-                end_ns: t.end_ns,
-            }),
+            TrajectoryValue::Inflow(_) | TrajectoryValue::UnmeasuredInflow => {
+                Some(TrajectoryLocation::Inflow {
+                    start_ns: t.start_ns,
+                    end_ns: t.end_ns,
+                })
+            }
+            TrajectoryValue::Outflow(_) | TrajectoryValue::UnmeasuredOutflow => {
+                Some(TrajectoryLocation::Outflow {
+                    start_ns: t.start_ns,
+                    end_ns: t.end_ns,
+                })
+            }
         }
     }
 }
@@ -211,7 +232,7 @@ impl TrajectoryErrorModel {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeriodConservation {
     pub interval: ValidTime,
-    /// With a missing endpoint this is only the observed contribution, not an imbalance.
+    /// With a missing stock or flow this is only the observed contribution, not an imbalance.
     pub observed_contribution_exact_kg: ExactQty,
     pub has_unmeasured_terms: bool,
     pub reconciled_residual_kg: Kilograms,
@@ -223,8 +244,11 @@ pub struct InventoryTrajectory {
     pub boundaries_ns: Vec<i64>,
     pub observations: Vec<TrajectoryObservation>,
     pub unmeasured_stocktakes_ns: Vec<i64>,
+    /// Inflow locations by period, then outflow locations by period. These
+    /// follow latent stocks in the fitted coordinate and covariance order.
+    pub unmeasured_flows: Vec<TrajectoryLocation>,
     pub observed_kg: Vec<Kilograms>,
-    /// Measured coordinates in observation order, then latent stocks by instant.
+    /// Measured coordinates, latent stocks by instant, then latent flows.
     pub estimates_kg: Vec<Kilograms>,
     pub measured_adjustments_kg: Vec<Kilograms>,
     /// Full row-major joint covariance in the same measured-then-latent order.
@@ -236,15 +260,25 @@ pub struct InventoryTrajectory {
 }
 impl InventoryTrajectory {
     pub fn stock_coordinate_index(&self, at_ns: i64) -> Option<usize> {
+        self.coordinate_index(&TrajectoryLocation::Stocktake(at_ns))
+    }
+
+    pub fn coordinate_index(&self, location: &TrajectoryLocation) -> Option<usize> {
         self.observations
             .iter()
-            .position(|key| key.location == TrajectoryLocation::Stocktake(at_ns))
+            .position(|key| &key.location == location)
             .or_else(|| {
-                self.unmeasured_stocktakes_ns
-                    .iter()
-                    .position(|time| *time == at_ns)
+                self.unmeasured_locations()
+                    .position(|key| &key == location)
                     .map(|i| i + self.observations.len())
             })
+    }
+
+    fn unmeasured_locations(&self) -> impl Iterator<Item = TrajectoryLocation> + '_ {
+        self.unmeasured_stocktakes_ns
+            .iter()
+            .map(|t| TrajectoryLocation::Stocktake(*t))
+            .chain(self.unmeasured_flows.iter().cloned())
     }
 }
 
@@ -345,7 +379,7 @@ fn put_optional(enc: &mut Encoder, value: Option<f64>) {
 struct AdmittedInputs<'a> {
     inputs: Vec<&'a Claim<TrajectoryInput>>,
     boundaries: &'a [i64],
-    missing: &'a BTreeSet<i64>,
+    missing: BTreeSet<TrajectoryLocation>,
     measurements: BTreeMap<TrajectoryLocation, &'a Claim<TrajectoryInput>>,
 }
 impl AdmittedInputs<'_> {
@@ -428,6 +462,10 @@ fn admit_inputs(inputs: &[Claim<TrajectoryInput>]) -> Result<AdmittedInputs<'_>>
         ));
     }
     let mut measurements = BTreeMap::new();
+    let mut missing: BTreeSet<_> = unmeasured_stocktakes
+        .iter()
+        .map(|t| TrajectoryLocation::Stocktake(*t))
+        .collect();
     for (i, input) in ordered.iter().enumerate() {
         if i > 0 && matches!(input.value.value, TrajectoryValue::Population { .. }) {
             return Err(fail(
@@ -469,7 +507,15 @@ fn admit_inputs(inputs: &[Claim<TrajectoryInput>]) -> Result<AdmittedInputs<'_>>
                     "observed stocks and flows must be nonnegative total elemental kg",
                 ));
             }
-            if measurements.insert(location, *input).is_some() {
+            if input.value.value.is_unmeasured_flow() {
+                if measurements.contains_key(&location) || !missing.insert(location) {
+                    return Err(fail(
+                        RefusalCode::BasisMismatch105,
+                        "a flow must be measured exactly once or explicitly unmeasured",
+                    ));
+                }
+            } else if missing.contains(&location) || measurements.insert(location, *input).is_some()
+            {
                 return Err(fail(
                     RefusalCode::BasisMismatch105,
                     "duplicate measurement at one shared coordinate",
@@ -488,6 +534,7 @@ fn admit_inputs(inputs: &[Claim<TrajectoryInput>]) -> Result<AdmittedInputs<'_>>
         }
     }
     for w in boundaries_ns.windows(2) {
+        let mut unmeasured_flows = 0;
         for location in [
             TrajectoryLocation::Inflow {
                 start_ns: w[0],
@@ -498,12 +545,23 @@ fn admit_inputs(inputs: &[Claim<TrajectoryInput>]) -> Result<AdmittedInputs<'_>>
                 end_ns: w[1],
             },
         ] {
-            if !measurements.contains_key(&location) {
+            if missing.contains(&location) {
+                unmeasured_flows += 1;
+            } else if !measurements.contains_key(&location) {
                 return Err(fail(
                     RefusalCode::NoClaimInDomain201,
-                    "every period needs both genuine inflow and outflow totals, including explicit zeros",
+                    "every period needs each inflow and outflow total measured or explicitly unmeasured; omission is not zero",
                 ));
             }
+        }
+        // With both flows absent only their difference is constrained. Refuse
+        // this exact rank defect before the solver's measured-row SPD check.
+        // Otherwise each period has a genuine flow unique to that balance row.
+        if unmeasured_flows == 2 {
+            return Err(fail(
+                RefusalCode::NonIdentifiableAttribution104,
+                "inflow and outflow are both unmeasured in one period; their separate totals are not identifiable",
+            ));
         }
     }
     if unmeasured_stocktakes.len() == boundaries_ns.len() {
@@ -515,7 +573,7 @@ fn admit_inputs(inputs: &[Claim<TrajectoryInput>]) -> Result<AdmittedInputs<'_>>
     Ok(AdmittedInputs {
         inputs: ordered,
         boundaries: boundaries_ns,
-        missing: unmeasured_stocktakes,
+        missing,
         measurements,
     })
 }
@@ -610,16 +668,16 @@ pub fn reconcile_trajectory(
             }
             .map_err(|_| numerical("exact observed conservation contribution overflows"))?;
         }
-        for time in admitted.missing {
-            latent_matrix.push(f64::from(
-                TrajectoryLocation::Stocktake(*time).coefficient(interval),
-            ));
+        for location in &admitted.missing {
+            latent_matrix.push(f64::from(location.coefficient(interval)));
         }
         conservation.push(PeriodConservation {
             interval,
             observed_contribution_exact_kg: raw,
-            has_unmeasured_terms: admitted.missing.contains(&w[0])
-                || admitted.missing.contains(&w[1]),
+            has_unmeasured_terms: admitted
+                .missing
+                .iter()
+                .any(|location| location.coefficient(interval) != 0),
             reconciled_residual_kg: Kilograms::new(0.0),
         });
     }
@@ -721,7 +779,20 @@ pub fn reconcile_trajectory(
         scope: model.scope.clone(),
         boundaries_ns: admitted.boundaries.to_vec(),
         observations,
-        unmeasured_stocktakes_ns: admitted.missing.iter().copied().collect(),
+        unmeasured_stocktakes_ns: admitted
+            .missing
+            .iter()
+            .filter_map(|location| match location {
+                TrajectoryLocation::Stocktake(t) => Some(*t),
+                _ => None,
+            })
+            .collect(),
+        unmeasured_flows: admitted
+            .missing
+            .iter()
+            .filter(|location| !matches!(location, TrajectoryLocation::Stocktake(_)))
+            .cloned()
+            .collect(),
         observed_kg: observed.into_iter().map(Kilograms::new).collect(),
         estimates_kg: fitted.into_iter().map(Kilograms::new).collect(),
         measured_adjustments_kg: fit
@@ -744,7 +815,12 @@ pub fn reconcile_trajectory(
         gross_error,
     };
     let mut meta = Metadata::new();
-    let mut enc = Encoder::new_frame(*b"PTRR", 1);
+    let version = if diagnostics.unmeasured_flows.is_empty() {
+        1
+    } else {
+        2
+    };
+    let mut enc = Encoder::new_frame(*b"PTRR", version);
     enc.put_u64(admitted.inputs.len() as u64);
     for source in &admitted.inputs {
         inventory::put_source_envelope(&mut enc, *source, source.value.value.role());

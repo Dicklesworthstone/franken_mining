@@ -76,6 +76,7 @@ fn model(formula: &str, names: &[&str], cap: Option<&str>) -> RecoveryModel {
         test_work: card.claim_id,
         additive_fraction: q("0"),
         upper_cap_fraction: cap.map(q),
+        fit_validity: None,
     };
     let tag = value.canonical_tag();
     let correction = source(CORRECTION_METRIC, value, &tag);
@@ -460,4 +461,328 @@ fn renderers_escape_names_and_retain_complete_member_evaluations() {
         assert!(json.contains(member.receipt().digest()));
         assert!(json.contains(&member.receipt().inputs().claim_id.to_string()));
     }
+}
+
+fn conditional_correction(
+    model: &RecoveryModel,
+    id: &str,
+    delta: &str,
+    cap: Option<&str>,
+) -> Claim<RecoveryCorrection> {
+    let value = RecoveryCorrection {
+        version: version(id),
+        test_work: model.test_work().claim_id,
+        additive_fraction: q(delta),
+        upper_cap_fraction: cap.map(q),
+        fit_validity: None,
+    };
+    let tag = value.canonical_tag();
+    source(CORRECTION_METRIC, value, &tag)
+}
+fn correction_population(
+    population: &Claim<RecoveryPopulation>,
+    scenarios: BTreeMap<String, Claim<RecoveryCorrection>>,
+) -> Claim<RecoveryCorrections> {
+    let value = RecoveryCorrections {
+        population_id: population.claim_id,
+        scenarios,
+    };
+    let tag = value.canonical_tag();
+    source(CORRECTIONS_METRIC, value, &tag)
+}
+
+#[test]
+fn paired_corrections_preserve_dependence_and_apply_caps_before_summary() {
+    let model = model("g/2", &["g"], None);
+    let population = population(binary(&model, "0.5", "1.5"));
+    let evaluate = |low, high, cap| {
+        let corrections = correction_population(
+            &population,
+            BTreeMap::from([
+                (
+                    "low".into(),
+                    conditional_correction(&model, "low", low, None),
+                ),
+                (
+                    "high".into(),
+                    conditional_correction(&model, "high", high, cap),
+                ),
+            ]),
+        );
+        model
+            .evaluate_ensemble_with_corrections(&population, &corrections)
+            .unwrap()
+    };
+    // Same input and correction marginals; pairing gives either {.5,.5} or {0,1}.
+    let opposed = evaluate("0.25", "-0.25", None);
+    let paired = evaluate("-0.25", "0.25", None);
+    close(opposed.claim().value.mean.value(), 0.5);
+    close(opposed.claim().value.variance.value(), 0.0);
+    close(paired.claim().value.mean.value(), 0.5);
+    close(paired.claim().value.variance.value(), 0.25);
+    assert_ne!(opposed.digest(), paired.digest());
+    let capped = evaluate("-0.25", "0.25", Some("0.8"));
+    close(capped.claim().value.mean.value(), 0.4);
+    close(capped.claim().value.variance.value(), 0.16);
+    assert_eq!(capped.claim().value.probability_capped, q("0.5"));
+    assert_eq!(capped.model(), &model);
+    let corrections = capped.corrections().unwrap();
+    assert_eq!(corrections.value.population_id, population.claim_id);
+    assert!(capped.claim().parents.contains(&corrections.claim_id));
+    for member in capped.members() {
+        assert_eq!(
+            member.receipt().model().correction(),
+            &corrections.value.scenarios[member.id()],
+        );
+    }
+    let json = capped.to_json();
+    assert_eq!(json.matches("\"additive_fraction\"").count(), 2);
+    assert!(json.contains("\"scenario_corrections_claim\":"));
+    assert!(
+        capped
+            .to_markdown()
+            .contains("replaces the nominal correction")
+    );
+    assert_eq!(capped.no_claim(), CORRECTIONS_NO_CLAIM);
+    let legacy = model.evaluate_ensemble(&population).unwrap();
+    assert!(legacy.corrections().is_none());
+    assert!(!legacy.to_json().contains("scenario_corrections"));
+    assert_eq!(legacy.no_claim(), NO_CLAIM);
+}
+
+#[test]
+fn correction_population_requires_exact_members_and_original_weights() {
+    let model = model("g/2", &["g"], None);
+    let population = population(binary(&model, "0.5", "1.5"));
+    let rows = BTreeMap::from([
+        (
+            "low".into(),
+            conditional_correction(&model, "low", "0.25", None),
+        ),
+        (
+            "high".into(),
+            conditional_correction(&model, "high", "-0.25", None),
+        ),
+    ]);
+    for case in 0..3 {
+        let mut changed = rows.clone();
+        match case {
+            0 => {
+                changed.remove("low");
+            }
+            1 => {
+                changed.insert("extra".into(), rows["low"].clone());
+            }
+            _ => {
+                let low = changed.remove("low").unwrap();
+                changed.insert("unknown".into(), low);
+            }
+        }
+        let corrections = correction_population(&population, changed);
+        assert_eq!(
+            model
+                .evaluate_ensemble_with_corrections(&population, &corrections)
+                .unwrap_err()
+                .code,
+            RefusalCode::BasisMismatch105.as_str(),
+        );
+    }
+    let corrections = correction_population(&population, rows);
+    let mut changed = population.value.clone();
+    changed.scenarios[0].weight = q("0.25");
+    changed.scenarios[1].weight = q("0.75");
+    let tag = changed.canonical_tag();
+    let changed = source(INPUT_METRIC, changed, &tag);
+    assert_eq!(
+        model
+            .evaluate_ensemble_with_corrections(&changed, &corrections)
+            .unwrap_err()
+            .code,
+        RefusalCode::FrozenRecordMutation507.as_str(),
+    );
+}
+
+#[test]
+fn every_conditional_correction_is_source_admitted_and_physically_checked() {
+    let model = model("g/2", &["g"], None);
+    let population = population(binary(&model, "0.5", "1.5"));
+    for (delta, cap) in [
+        ("-0.5", None),
+        ("1", None),
+        ("0", Some("-0.1")),
+        ("0", Some("1.1")),
+    ] {
+        let corrections = correction_population(
+            &population,
+            BTreeMap::from([
+                (
+                    "low".into(),
+                    conditional_correction(&model, "low", delta, cap),
+                ),
+                (
+                    "high".into(),
+                    conditional_correction(&model, "high", "0", None),
+                ),
+            ]),
+        );
+        assert_eq!(
+            model
+                .evaluate_ensemble_with_corrections(&population, &corrections)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutsidePhysicalDomain109.as_str(),
+        );
+    }
+    let mut rows = BTreeMap::from([
+        (
+            "low".into(),
+            conditional_correction(&model, "low", "0", None),
+        ),
+        (
+            "high".into(),
+            conditional_correction(&model, "high", "0", None),
+        ),
+    ]);
+    let mut wrong_target = rows["low"].value.clone();
+    wrong_target.test_work = population.claim_id;
+    let tag = wrong_target.canonical_tag();
+    rows.insert("low".into(), source(CORRECTION_METRIC, wrong_target, &tag));
+    assert_eq!(
+        model
+            .evaluate_ensemble_with_corrections(
+                &population,
+                &correction_population(&population, rows),
+            )
+            .unwrap_err()
+            .code,
+        RefusalCode::FrozenRecordMutation507.as_str(),
+    );
+}
+
+#[test]
+fn corrections_retain_source_metadata_and_reject_typed_mutation() {
+    let model = model("g/2", &["g"], None);
+    let population = population(binary(&model, "0.5", "1.5"));
+    let original = conditional_correction(&model, "low", "0.25", None);
+    let restricted = Claim::new(
+        &original.metric_key,
+        original.value.clone(),
+        original.value_tag(),
+        original.representation.clone(),
+        original.support,
+        original.additivity,
+        original.evidence,
+        original.epistemic,
+        original.state,
+        Confidentiality::internal(),
+        vec![UuTerm {
+            scenario_id: "conditional-adjustment".into(),
+            description: "authored plant-to-lab uncertainty".into(),
+            downside_exposure_usd_m: 1.0,
+            trigger_indicator: "change of operating regime".into(),
+        }],
+        original.parents.clone(),
+        original.anchors.clone(),
+    );
+    let mut corrections = correction_population(
+        &population,
+        BTreeMap::from([
+            ("low".into(), restricted),
+            (
+                "high".into(),
+                conditional_correction(&model, "high", "-0.25", None),
+            ),
+        ]),
+    );
+    let result = model
+        .evaluate_ensemble_with_corrections(&population, &corrections)
+        .unwrap();
+    assert_eq!(result.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(result.claim().evidence, EvidenceClass::Assumed);
+    assert_eq!(result.claim().state, KnowledgeState::Estimated);
+    assert_eq!(result.claim().uu_terms.len(), 1);
+    assert!(
+        result
+            .to_json()
+            .contains("authored plant-to-lab uncertainty")
+    );
+    corrections
+        .value
+        .scenarios
+        .get_mut("low")
+        .unwrap()
+        .value
+        .additive_fraction = q("0");
+    assert_eq!(
+        model
+            .evaluate_ensemble_with_corrections(&population, &corrections)
+            .unwrap_err()
+            .code,
+        RefusalCode::FrozenRecordMutation507.as_str(),
+    );
+    let mut corrections = result.corrections().unwrap().clone();
+    let mut rows = corrections.value.scenarios.clone();
+    rows.get_mut("low").unwrap().stale = true;
+    corrections = correction_population(&population, rows);
+    assert_eq!(
+        model
+            .evaluate_ensemble_with_corrections(&population, &corrections)
+            .unwrap_err()
+            .code,
+        RefusalCode::StaleAnchor502.as_str(),
+    );
+}
+
+#[test]
+fn retained_nominal_correction_binds_digest_and_taint_even_when_every_state_replaces_it() {
+    let model = model("g/2", &["g"], None);
+    let population = population(binary(&model, "0.5", "1.5"));
+    let corrections = correction_population(
+        &population,
+        BTreeMap::from([
+            (
+                "low".into(),
+                conditional_correction(&model, "low", "0.25", None),
+            ),
+            (
+                "high".into(),
+                conditional_correction(&model, "high", "-0.25", None),
+            ),
+        ]),
+    );
+    let original = model
+        .evaluate_ensemble_with_corrections(&population, &corrections)
+        .unwrap();
+    let nominal = conditional_correction(&model, "new-nominal", "0.1", None);
+    let nominal = Claim::new(
+        &nominal.metric_key,
+        nominal.value.clone(),
+        nominal.value_tag(),
+        nominal.representation.clone(),
+        nominal.support,
+        nominal.additivity,
+        nominal.evidence,
+        nominal.epistemic,
+        nominal.state,
+        Confidentiality::internal(),
+        nominal.uu_terms.clone(),
+        nominal.parents.clone(),
+        nominal.anchors.clone(),
+    );
+    let changed = RecoveryModel::compile(
+        model.test_work(),
+        model.operations(),
+        &nominal,
+        model.route(),
+    )
+    .unwrap()
+    .evaluate_ensemble_with_corrections(&population, &corrections)
+    .unwrap();
+    assert_eq!(original.claim().value, changed.claim().value);
+    assert_eq!(original.members(), changed.members());
+    assert_ne!(original.digest(), changed.digest());
+    assert_eq!(changed.model().correction(), &nominal);
+    assert!(changed.claim().parents.contains(&nominal.claim_id));
+    assert_eq!(original.claim().confidentiality, Confidentiality::public());
+    assert_eq!(changed.claim().confidentiality, Confidentiality::internal());
 }

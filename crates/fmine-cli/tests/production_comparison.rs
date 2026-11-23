@@ -12,6 +12,7 @@ use fmine_core::hash::sha256;
 use fmine_io::omf::json::{Json, parse};
 
 const MANIFEST: &str = include_str!("../../../tests/decisions/production_comparison.toml");
+const TESTWORK: &str = include_str!("../../../tests/decisions/production_testwork.toml");
 const HIGH_TERMS: &str =
     include_str!("../../../tests/decisions/production_valuation_higher_power.toml");
 const HIGH_GRINDING: &str = include_str!("../../../tests/plant/grinding_higher_power.toml");
@@ -445,5 +446,151 @@ fn all_failed_downside_screen_has_no_fallback_and_invalid_limits_refuse_atomical
         let output = binary(&root, &args);
         assert!(!output.status.success());
         assert!(!String::from_utf8_lossy(&output.stdout).contains("\"expected_value_primary\""));
+    }
+}
+
+#[test]
+fn actual_binary_values_source_derived_testwork_and_renders_the_same_complete_policy() {
+    let root = fixture();
+    std::fs::write(
+        root.join("tests/decisions/production_comparison.toml"),
+        TESTWORK,
+    )
+    .expect("synthetic testwork manifest");
+    let args = arguments();
+    let (library, _) = invoke(&args, &root);
+    assert_eq!(library.exit_code, 0, "{}", library.to_json());
+    let output = binary(&root, &args);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        library.to_json()
+    );
+    assert_eq!(output.stdout, binary(&root, &args).stdout);
+    let json = parse(&output.stdout).expect("testwork output");
+    let comparison = field(&json, &["payload", "comparison"]);
+    assert_eq!(
+        field(comparison, &["information_basis"]).as_str(),
+        Some("before_action_same_payoffs_explicit_delay_cost")
+    );
+    let summary = field(comparison, &["decision", "summary"]);
+    assert_eq!(
+        field(summary, &["expected_value_primary"]).as_str(),
+        Some("higher-power")
+    );
+    let information = field(summary, &["information"]);
+    let option = &field(information, &["options"])
+        .as_array()
+        .expect("information options")[0];
+    for (key, expected) in [
+        ("evsi", "596/1"),
+        ("test_cost", "80/1"),
+        ("delay_cost", "20/1"),
+        ("net_voi", "496/1"),
+        ("net_value", "48096/5"),
+    ] {
+        assert_eq!(field(option, &[key]).as_str(), Some(expected));
+    }
+    let winner = &field(information, &["overall_winners"])
+        .as_array()
+        .expect("overall winners")[0];
+    assert_eq!(field(winner, &["id"]).as_str(), Some("hardness-test"));
+    assert_eq!(
+        field(winner, &["kind"]).as_str(),
+        Some("information_option")
+    );
+    for (signal, action) in [("soft-result", "process"), ("hard-result", "higher-power")] {
+        let policy = field(option, &["signals"])
+            .as_array()
+            .expect("signal policies")
+            .iter()
+            .find(|row| field(row, &["signal_id"]).as_str() == Some(signal))
+            .expect("retained signal");
+        assert_eq!(field(policy, &["selected_action"]).as_str(), Some(action));
+    }
+    assert_eq!(
+        field(&json, &["payload", "manifest", "submitted_worksheet"]).as_str(),
+        Some(TESTWORK)
+    );
+    assert_eq!(
+        field(&json, &["payload", "manifest", "source", "sha256"]).as_str(),
+        Some(sha256(TESTWORK.as_bytes()).to_hex().as_str())
+    );
+    assert_eq!(
+        field(comparison, &["decision", "output_claim", "evidence"]).as_str(),
+        Some("assumed")
+    );
+    assert_eq!(
+        field(comparison, &["decision", "output_claim", "confidentiality"]).as_str(),
+        Some("Internal")
+    );
+    assert!(
+        field(&json, &["no_claim"])
+            .as_str()
+            .expect("scope statement")
+            .contains("test and delay costs are USD")
+    );
+    let mut markdown_args = args;
+    markdown_args.extend(["--format".into(), "markdown".into()]);
+    let markdown = binary(&root, &markdown_args);
+    assert!(markdown.status.success());
+    let (rendered, code) = run(&markdown_args, &root);
+    assert_eq!(code, 0);
+    assert_eq!(
+        String::from_utf8_lossy(&markdown.stdout).trim_end(),
+        rendered.trim_end()
+    );
+    for text in [
+        "496/1",
+        "Conditional policy: hardness-test",
+        "Complete declared likelihood matrices",
+        "same immediate USD cash-margin basis",
+    ] {
+        assert!(rendered.contains(text));
+    }
+    let (docs, _) = invoke(&["robot-docs".into()], &root);
+    let docs = parse(docs.to_json().as_bytes()).expect("robot docs");
+    assert_eq!(
+        field(
+            &docs,
+            &[
+                "payload",
+                "production_decision",
+                "comparison",
+                "information_example",
+            ],
+        )
+        .as_str(),
+        Some("tests/decisions/production_testwork.toml")
+    );
+}
+
+#[test]
+fn incomplete_or_unbound_testwork_refuses_the_whole_source_comparison() {
+    let root = fixture();
+    let path = root.join("tests/decisions/production_comparison.toml");
+    let missing_state = TESTWORK
+        .split("\n[[likelihood]]")
+        .filter(|row| !row.contains("state = \"soft\""))
+        .collect::<Vec<_>>()
+        .join("\n[[likelihood]]");
+    for invalid in [
+        missing_state,
+        TESTWORK.replace(
+            "information_basis = \"before_action_same_payoffs_explicit_delay_cost\"\n",
+            "",
+        ),
+        TESTWORK.replace("state = \"soft\"", "state = \"foreign\""),
+        TESTWORK.replace("delay_cost = \"20\"", "delay_cost = \"-0.0001\""),
+        TESTWORK.replace("test_cost = \"80\"", "test_cost = \"80.00001\""),
+        TESTWORK.replacen("probability = \"1/1\"", "probability = \"9/10\"", 1),
+    ] {
+        std::fs::write(&path, invalid).expect("invalid synthetic testwork");
+        let output = binary(&root, &arguments());
+        assert!(!output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(!text.contains("\"expected_value_primary\""));
+        assert!(!text.contains("\"overall_winners\""));
+        assert!(parse(&output.stdout).is_ok());
     }
 }

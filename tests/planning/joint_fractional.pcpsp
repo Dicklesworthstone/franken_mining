@@ -1,0 +1,23 @@
+% SYNTHETIC: a half-mill source-only cycle earns 20 in period 0.
+% A third block earns 7.5 at a late 75% split; an early 50% split earns 10.
+NAME: joint-fractional-period-example
+TYPE: PCPSP
+NBLOCKS: 3
+NPERIODS: 2
+NDESTINATIONS: 2
+NRESOURCE_SIDE_CONSTRAINTS: 2
+NGENERAL_SIDE_CONSTRAINTS: 0
+DISCOUNT_RATE: 1
+RESOURCE_CONSTRAINT_LIMITS:
+0 0 L 1
+0 1 L 1
+1 0 L 2
+1 1 L 3
+OBJECTIVE_FUNCTION:
+0 0 40
+1 0 0
+2 0 20
+RESOURCE_CONSTRAINT_COEFFICIENTS:
+0 1 0 2
+2 1 1 4
+EOF

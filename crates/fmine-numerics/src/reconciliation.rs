@@ -29,6 +29,8 @@ pub const MAX_OBSERVATIONS: usize = 128;
 pub const MAX_CONSTRAINTS: usize = 64;
 const RELATIVE_AUDIT: f64 = 2.0e-10;
 
+/// Bounded nonlinear raw likelihood with linear extensive conservation.
+pub mod nonlinear;
 /// Observable unmeasured variables without fictitious observations or priors.
 pub mod partial;
 

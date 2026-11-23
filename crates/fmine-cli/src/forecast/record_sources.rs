@@ -14,7 +14,7 @@ use fmine_calib::record::{
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_public::key::{
-    self, KeyedCell, OwnershipBasis, Period, PeriodKind, Scope, SeriesOwnershipBasis,
+    self, KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesOwnershipBasis,
 };
 use fmine_public::mine_stats::{MineStatsCell, MineStatsValue, View, read_mine_stats};
 use fmine_public::sources::{
@@ -257,8 +257,19 @@ impl Publication {
     }
 }
 
+/// Resolve only the registered subject spelling before Claim admission. This preserves raw labels
+/// and keeps a malformed competing capex cell in the canonical site's ambiguity count.
+fn canonical_raw_subject(profile: &IssuerProfile, raw: &MineStatsValue) -> String {
+    profile
+        .shares
+        .iter()
+        .find(|share| share.label == raw.site)
+        .map_or_else(|| raw.site.clone(), |share| share.subject.clone())
+}
+
 struct Observation {
     release: Quarter,
+    canonical_subject: String,
     raw: MineStatsValue,
     keyed: std::result::Result<KeyedCell, String>,
     printed: std::result::Result<Rat, String>,
@@ -503,7 +514,18 @@ impl Inventory {
                         raw.unwrap_or("unavailable")
                     ));
                 }
-                for raw in read.values.into_iter().filter(|v| v.view == View::Summary) {
+                for raw in read.values.into_iter().filter(|v| {
+                    v.view == View::Summary
+                        || [
+                            TargetMetric::CapexTotal,
+                            TargetMetric::CapexSustaining,
+                            TargetMetric::CapexProjects,
+                        ]
+                        .iter()
+                        .any(|metric| {
+                            fmine_public::forecast::record_source_line(v) == metric.source_line()
+                        })
+                }) {
                     let keyed =
                         key::from_mine_stats(profile, &source.workbook, &source.quarter, &raw)
                             .map_err(|e| e.to_string());
@@ -525,6 +547,7 @@ impl Inventory {
                         });
                     this.observations.push(Observation {
                         release: *quarter,
+                        canonical_subject: canonical_raw_subject(profile, &raw),
                         raw,
                         keyed,
                         printed,
@@ -574,6 +597,8 @@ impl Inventory {
         period: Period,
         benchmark: bool,
     ) -> Result<Lookup> {
+        let metric = TargetMetric::from_target(target)
+            .ok_or_else(|| invalid("source target has no supported interpretation"))?;
         if let Some(reason) = self.release_reason(release, benchmark) {
             return Ok(Lookup::missing(reason));
         }
@@ -581,14 +606,27 @@ impl Inventory {
             .observations
             .iter()
             .filter(|o| {
-                o.release == release
-                    && o.raw.period == period.code()
-                    && (!matches!(period.kind, PeriodKind::Quarter(_)) || o.raw.sheet == "QTD")
-                    && o.raw.label == target.field
-                    && o.keyed
+                let field_matches = if metric.is_capex() {
+                    o.raw.view == View::Minestats
+                        && o.raw.months == 3
+                        && fmine_public::forecast::record_source_line(&o.raw)
+                            == metric.source_line()
+                } else {
+                    o.raw.view == View::Summary
+                        && (!matches!(period.kind, PeriodKind::Quarter(_)) || o.raw.sheet == "QTD")
+                        && o.raw.label == target.field
+                };
+                let subject = if metric.is_capex() {
+                    o.canonical_subject.as_str()
+                } else {
+                    o.keyed
                         .as_ref()
                         .map_or(o.raw.site.as_str(), |c| c.key.subject.as_str())
-                        == site
+                };
+                o.release == release
+                    && o.raw.period == period.code()
+                    && field_matches
+                    && subject == site
             })
             .collect::<Vec<_>>();
         let locators = candidates.iter().map(|c| c.locator()).collect::<Vec<_>>();
@@ -625,7 +663,7 @@ impl Inventory {
                 if cell.key.scope != Scope::Site
                     || cell.key.valid_period != period
                     || cell.key.unit != target_unit(target)?
-                    || cell.key.line.label != format!("summary:{}", target.field)
+                    || cell.key.line.label != metric.source_line()
                     || cell.key.line.occurrence != 0
                 {
                     unavailable(
@@ -637,6 +675,18 @@ impl Inventory {
                     && cell.key.ownership_basis != OwnershipBasis::Consolidated100
                 {
                     unavailable("production must use the printed 100% basis")
+                } else if metric.is_capex()
+                    && !matches!(
+                        &cell.claim.value,
+                        PublicValue::Number {
+                            under_status: None,
+                            ..
+                        }
+                    )
+                {
+                    unavailable(
+                        "capex requires an unflagged printed number, not a status-derived Nil",
+                    )
                 } else {
                     // A printed numeric zero remains numeric under the frozen rule, even if the generic
                     // public projection calls it a status-dependent Nil. The raw source type remains visible.
@@ -685,7 +735,7 @@ fn infer_outcome(
 ) -> Result<Lookup> {
     let year = u16::try_from(quarter.year)
         .map_err(|_| invalid("outcome year is outside the supported calendar"))?;
-    if matches!(target.outcome, Outcome::Q4Qtd | Outcome::QuarterQtd) {
+    if target.outcome == Outcome::Q4Qtd || target.outcome.is_quarterly() {
         return inventory.lookup(
             site,
             target,
@@ -762,6 +812,9 @@ fn persistence(
             "persistence pool must contain 2..=200 prior quarters",
         ));
     }
+    let capex = TargetMetric::from_target(target).is_some_and(TargetMetric::is_capex);
+    let mut capex_points = BTreeMap::new();
+    let mut basis_refusal = None;
     let mut series = Vec::new();
     let mut omitted = Vec::new();
     for site in rules.sites.iter().filter(|s| s.status == SiteStatus::Live) {
@@ -795,13 +848,40 @@ fn persistence(
                     js(&pair_reason(&pair[0].value)), js(&pair_reason(&pair[1].value))));
             }
         }
+        if capex {
+            let point_value = inventory.lookup(
+                &site.name,
+                target,
+                point,
+                Period {
+                    year: point.year as u16,
+                    kind: PeriodKind::Quarter(point.q),
+                },
+                true,
+            )?;
+            let bases = values
+                .iter()
+                .filter(|v| number(&v.value).is_some_and(|n| n.signum() > 0))
+                .chain(std::iter::once(&point_value).filter(|v| number(&v.value).is_some()))
+                .filter_map(|v| v.basis.map(SeriesOwnershipBasis::from))
+                .collect::<BTreeSet<_>>();
+            if bases.len() > 1 {
+                basis_refusal = Some(format!(
+                    "{} {} capex ownership changes across eligible history and point; shared pool refused",
+                    site.name, target.id
+                ));
+            }
+            capex_points.insert(site.name.clone(), point_value);
+        }
         series.push(values.iter().map(|v| number(&v.value)).collect::<Vec<_>>());
     }
     let (ratios, left_out) = exact(record::pooled_ratios(&series))?;
-    let blocked = quarters.iter().find_map(|q| {
-        inventory
-            .release_reason(*q, true)
-            .map(|why| format!("fixed pool input {q}: {why}"))
+    let blocked = basis_refusal.or_else(|| {
+        quarters.iter().find_map(|q| {
+            inventory
+                .release_reason(*q, true)
+                .map(|why| format!("fixed pool input {q}: {why}"))
+        })
     });
     let quantiles = if blocked.is_none() && !ratios.is_empty() {
         Some(exact(record::ratio_quantiles(
@@ -817,20 +897,26 @@ fn persistence(
         quantiles.map_or_else(|| "null".into(), |(lo, hi)| format!("{{\"lo\":{},\"hi\":{}}}", rat(lo), rat(hi))), optional(blocked.as_deref()), omitted.join(",")));
     let mut result = BTreeMap::new();
     for site in rules.sites.iter().filter(|s| s.status == SiteStatus::Live) {
-        let point_value = inventory.lookup(
-            &site.name,
-            target,
-            point,
-            Period {
-                year: point.year as u16,
-                kind: PeriodKind::Quarter(point.q),
-            },
-            true,
-        )?;
+        let point_value = if capex {
+            capex_points
+                .remove(&site.name)
+                .ok_or_else(|| invalid("capex point omitted a frozen member"))?
+        } else {
+            inventory.lookup(
+                &site.name,
+                target,
+                point,
+                Period {
+                    year: point.year as u16,
+                    kind: PeriodKind::Quarter(point.q),
+                },
+                true,
+            )?
+        };
         let value = match (quantiles, number(&point_value.value)) {
             (Some((lo, hi)), Some(point)) => {
                 // Only training pairs require positive values. A printed zero is a valid point;
-                // signed cost points reverse the order of the scaled quantiles.
+                // signed cost and capex points reverse the order of the scaled quantiles.
                 let (lo, hi) = if point.signum() < 0 {
                     (hi, lo)
                 } else {
@@ -976,7 +1062,7 @@ impl Guidance {
         let quantity = format!("guidance_{slug}_{}", metric.guidance_quantity());
         let year = u16::try_from(quarter.year)
             .map_err(|_| invalid("guidance year is outside the supported calendar"))?;
-        let period = if target.outcome == Outcome::QuarterQtd {
+        let period = if target.outcome.is_quarterly() {
             quarter.to_string()
         } else {
             format!("{year}FY")
@@ -1003,7 +1089,7 @@ impl Guidance {
             .max()
             .map(str::to_string)
         else {
-            return Ok(unavailable(if target.outcome == Outcome::QuarterQtd {
+            return Ok(unavailable(if target.outcome.is_quarterly() {
                 "no registered guidance for the scored quarter before the frozen information cut; annual guidance is ineligible"
             } else {
                 "no registered annual guidance before the frozen information cut"
@@ -1088,9 +1174,11 @@ impl Guidance {
         };
         let basis_text = if let Some(suffix) = metric.guidance_basis_suffix() {
             let Some(ownership) = row.basis.strip_suffix(suffix) else {
-                return Ok(unavailable(
-                    "cost guidance lacks the target's explicit issuer-reported sold-metal definition",
-                ));
+                return Ok(unavailable(if metric.is_capex() {
+                    "capex guidance lacks the target's explicit issuer-reported capital scope"
+                } else {
+                    "cost guidance lacks the target's explicit issuer-reported sold-metal definition"
+                }));
             };
             ownership
         } else {
@@ -1105,6 +1193,36 @@ impl Guidance {
         if metric.is_production() {
             lo = exact(lo.checked_div(share))?;
             hi = exact(hi.checked_div(share))?;
+        }
+        if metric.is_capex() {
+            // Quarterly rules bind one common immediately preceding persistence point.
+            let point = Quarter {
+                year: quarter.year - i32::from(quarter.q == 1),
+                q: if quarter.q == 1 { 4 } else { quarter.q - 1 },
+            };
+            let point_value = inventory.lookup(
+                site,
+                target,
+                point,
+                Period {
+                    year: point.year as u16,
+                    kind: PeriodKind::Quarter(point.q),
+                },
+                true,
+            )?;
+            let compatible = match point_value.basis {
+                Some(OwnershipBasis::Consolidated100) => basis_text == "100%",
+                Some(OwnershipBasis::Attributable { num, den, .. }) => {
+                    basis_text.starts_with("attributable:")
+                        && share == exact(Rat::new(i128::from(num), i128::from(den)))?
+                }
+                _ => false,
+            };
+            if number(&point_value.value).is_none() || !compatible {
+                return Ok(unavailable(
+                    "capex guidance must match the usable frozen point's printed ownership; no conversion is inferred",
+                ));
+            }
         }
         if target.outcome == Outcome::FyMinus9m {
             let nine = inventory.lookup(
@@ -1165,6 +1283,28 @@ pub(super) fn resolve(
     manifest: &RecordManifest,
     as_of_utc: i64,
 ) -> Result<Resolved> {
+    resolve_inner(root, rules, manifest, as_of_utc, None)
+}
+
+/// The caller verifies the external proof before supplying its upper time. This adapter binds that
+/// bound to the same parsed original-release registry used for outcome selection.
+pub(super) fn resolve_nowcast(
+    root: &Path,
+    rules: &RecordRules,
+    manifest: &RecordManifest,
+    as_of_utc: i64,
+    proof_upper_utc: i64,
+) -> Result<Resolved> {
+    resolve_inner(root, rules, manifest, as_of_utc, Some(proof_upper_utc))
+}
+
+fn resolve_inner(
+    root: &Path,
+    rules: &RecordRules,
+    manifest: &RecordManifest,
+    as_of_utc: i64,
+    proof_upper_utc: Option<i64>,
+) -> Result<Resolved> {
     if as_of_utc < manifest.information_cutoff_utc {
         return Err(refusal(
             RefusalCode::AssayLookahead108,
@@ -1174,11 +1314,23 @@ pub(super) fn resolve(
     let outcome_quarter = rules
         .outcome_quarter()
         .map_err(|e| invalid(e.to_string()))?;
-    let quarterly = rules
-        .targets
-        .iter()
-        .any(|t| t.outcome == Outcome::QuarterQtd);
-    if quarterly && manifest.information_cutoff_utc >= after_quarter(outcome_quarter)? {
+    let quarterly = rules.targets.iter().any(|t| t.outcome.is_quarterly());
+    let post_quarter = rules.is_post_quarter_nowcast();
+    if post_quarter {
+        if manifest.label != record::Label::Nowcast
+            || manifest.information_cutoff_utc < after_quarter(outcome_quarter)?
+            || !proof_upper_utc.is_some_and(|upper| {
+                upper > manifest.information_cutoff_utc
+                    && upper <= rules.dates.proof_by
+                    && upper <= as_of_utc
+            })
+        {
+            return Err(refusal(
+                RefusalCode::LateRegistration206,
+                "post-quarter nowcast needs its explicit label, post-quarter information cut and a verified pre-deadline proof",
+            ));
+        }
+    } else if quarterly && manifest.information_cutoff_utc >= after_quarter(outcome_quarter)? {
         return Err(refusal(
             RefusalCode::LateRegistration206,
             "quarterly record information cut must precede quarter end; post-quarter nowcasts are unsupported",
@@ -1192,6 +1344,36 @@ pub(super) fn resolve(
     }
     let registry = load_sources_registry(&registry_path(root, &rules.issuer))
         .map_err(|e| invalid(e.to_string()))?;
+    let nowcast_publications = if post_quarter {
+        let original = outcome_quarter.to_string();
+        if registry.issuer != rules.issuer
+            || registry
+                .sources
+                .iter()
+                .filter(|source| source.kind == "mine_stats" && source.quarter == original)
+                .count()
+                != 1
+        {
+            return Err(refusal(
+                RefusalCode::SourceCellUnusable208,
+                "post-quarter nowcast scoring requires one registered original outcome workbook; no comparative can replace it",
+            ));
+        }
+        let publications =
+            fmine_public::forecast::nowcast_publications(&registry, outcome_quarter)?;
+        if publications
+            .iter()
+            .any(|source| proof_upper_utc.is_some_and(|upper| upper >= source.day_start_utc))
+        {
+            return Err(refusal(
+                RefusalCode::LateRegistration206,
+                "the complete nowcast proof must precede every registered original publication day",
+            ));
+        }
+        publications
+    } else {
+        Vec::new()
+    };
     let publications = registry
         .sources
         .iter()
@@ -1290,12 +1472,39 @@ pub(super) fn resolve(
         &outcome_quarters,
         as_of_utc,
     )?;
+    for source in &nowcast_publications {
+        inventory.evidence.bindings.push(format!(
+            "{{\"role\":\"nowcast_publication_boundary\",\"release\":{},\"file\":{},\"sha256\":{},\"published_at\":{},\"published_at_basis\":{},\"publication_day_start_utc\":{},\"verified_record_proof_upper_utc\":{}}}",
+            js(&outcome_quarter.to_string()),
+            js(&source.file),
+            js(&source.sha256),
+            js(&source.published_at),
+            js(&source.published_at_basis),
+            js(&format_utc(source.day_start_utc)),
+            proof_upper_utc.map_or_else(|| "null".into(), |upper| js(&format_utc(upper))),
+        ));
+    }
+    if let Some(availability) = &rules.nowcast_availability {
+        inventory.evidence.bindings.push(format!(
+            "{{\"role\":\"declared_earliest_outcome_release\",\"earliest_release_utc\":{},\"basis\":{},\"proof_deadline_utc\":{},\"independently_verified\":false}}",
+            js(&format_utc(availability.earliest_release_utc)), js(&availability.basis),
+            js(&format_utc(rules.dates.proof_by)),
+        ));
+        inventory.evidence.notes.push(format!(
+            "Declared earliest outcome release (including preliminary announcements): {}. Basis: {}. Frozen proof deadline: {}. This declaration is not proof that earlier publications do not exist.",
+            format_utc(availability.earliest_release_utc), availability.basis, format_utc(rules.dates.proof_by),
+        ));
+    }
+    if post_quarter {
+        inventory.evidence.notes.push("Post-quarter nowcast, scored separately from advance forecasts. The verified record proof precedes every registered original workbook/HTML publication day; registration completeness and publication citations are not independently authenticated.".into());
+    }
     let mut guidance = Guidance::load(root, &profile)?;
     let mut outcomes = Vec::new();
     let mut baselines = Vec::new();
     for target in &rules.targets {
+        let capex = TargetMetric::from_target(target).is_some_and(TargetMetric::is_capex);
         for site in &rules.sites {
-            let observed = if site.status == SiteStatus::NotPublished {
+            let mut observed = if site.status == SiteStatus::NotPublished {
                 Lookup::missing(format!(
                     "frozen NOT_PUBLISHED: {}",
                     site.reason
@@ -1309,24 +1518,29 @@ pub(super) fn resolve(
                 && site.status == SiteStatus::Live
             {
                 let reference = rules.baselines.iter().find_map(|b| match b.kind {
-                    BaselineKind::Persistence { pool_through, .. } if b.target == target.id => {
-                        Some(pool_through)
-                    }
+                    BaselineKind::Persistence {
+                        pool_through,
+                        point,
+                        ..
+                    } if b.target == target.id => Some(if capex { point } else { pool_through }),
                     _ => None,
                 });
                 let old = if let Some(q) = reference {
-                    inventory
-                        .lookup(
-                            &site.name,
-                            target,
-                            q,
-                            Period {
-                                year: q.year as u16,
-                                kind: PeriodKind::Quarter(q.q),
-                            },
-                            true,
-                        )?
-                        .basis
+                    let previous = inventory.lookup(
+                        &site.name,
+                        target,
+                        q,
+                        Period {
+                            year: q.year as u16,
+                            kind: PeriodKind::Quarter(q.q),
+                        },
+                        true,
+                    )?;
+                    if capex && number(&previous.value).is_none() {
+                        None
+                    } else {
+                        previous.basis
+                    }
                 } else {
                     None
                 };
@@ -1335,8 +1549,20 @@ pub(super) fn resolve(
                 });
                 inventory.evidence.bindings.push(format!("{{\"role\":\"outcome_basis_comparison\",\"site\":{},\"target\":{},\"basis_changed\":{},\"reference_basis\":{},\"outcome_basis\":{}}}",
                     js(&site.name), js(&target.id), changed.map_or_else(|| "null".into(), |v| v.to_string()), old.map_or_else(|| "null".into(), |v| js(&basis(v))), observed.basis.map_or_else(|| "null".into(), |v| js(&basis(v)))));
-                inventory.evidence.notes.push(format!("{} {} ownership basis: frozen pool-through {}; outcome {}; basis_changed={}. Cost rates retain their printed basis and are not rescaled.",
-                    site.name, target.id, old.map_or_else(|| "unavailable".into(), basis), observed.basis.map_or_else(|| "unavailable".into(), basis), changed.map_or_else(|| "unknown".into(), |v| v.to_string())));
+                if capex {
+                    if number(&observed.value).is_some() && changed != Some(false) {
+                        observed.value = unavailable(
+                            "capex outcome needs the same printed ownership as the usable frozen point; no conversion is inferred",
+                        );
+                    }
+                    inventory.evidence.notes.push(format!(
+                        "{} {} capex retains its printed scope, quarterly support and ownership. Outcome ownership must match the usable frozen point; status-derived Nil is not zero.",
+                        site.name, target.id
+                    ));
+                } else {
+                    inventory.evidence.notes.push(format!("{} {} ownership basis: frozen pool-through {}; outcome {}; basis_changed={}. Cost rates retain their printed basis and are not rescaled.",
+                        site.name, target.id, old.map_or_else(|| "unavailable".into(), basis), observed.basis.map_or_else(|| "unavailable".into(), basis), changed.map_or_else(|| "unknown".into(), |v| v.to_string())));
+                }
             }
             outcomes.push(OutcomeRow {
                 site: site.name.clone(),
@@ -1385,7 +1611,13 @@ pub(super) fn resolve(
         }
     }
     let evidence = inventory.evidence;
-    let point_name = if quarterly {
+    let has_capex = rules
+        .targets
+        .iter()
+        .any(|target| TargetMetric::from_target(target).is_some_and(TargetMetric::is_capex));
+    let point_name = if has_capex {
+        "original quarterly persistence-point"
+    } else if quarterly {
         "original QTD persistence-point"
     } else {
         "Q3"
@@ -1405,7 +1637,9 @@ pub(super) fn resolve(
             .collect::<Vec<_>>()
             .join("\n\n")
     );
-    let outcome_policy = if quarterly {
+    let outcome_policy = if has_capex {
+        "original_scored_quarter_QTD_for_production_and_unit_cost;original_scored_quarter_Minestats_for_capex;never_cumulative_or_later_comparatives"
+    } else if quarterly {
         "original_scored_quarter_QTD_for_production_and_unit_cost;never_cumulative_or_later_comparatives"
     } else {
         "original_yearQ4_FY_minus_original_yearQ3_9M_for_production;original_yearQ4_QTD_for_unit_cost;never_later_comparatives"
@@ -1415,10 +1649,16 @@ pub(super) fn resolve(
     } else {
         "guidance_strictly_before_forecast_cut;fixed_original_Q3_and_history_by_assessment_cut_may_be_outside_forecast_manifest"
     };
+    let printed_zero_policy = if has_capex {
+        "legacy_six_targets_keep_frozen_numeric_zero;capex_requires_unflagged_numeric_source"
+    } else {
+        "numeric_zero_is_an_outcome_or_persistence_point_even_when_generic_projection_has_status_nil"
+    };
     let evidence_json = format!(
-        "{{\"outcome_policy\":{},\"baseline_policy\":{},\"same_information_set_claim\":false,\"verification_scope\":\"all matching manifest hashes checked against registry; only selected source bytes re-read\",\"printed_zero_policy\":\"numeric_zero_is_an_outcome_or_persistence_point_even_when_generic_projection_has_status_nil\",\"sources\":[{}],\"cells\":[{}],\"documents\":[{}],\"bindings\":[{}],\"persistence_pools\":[{}]}}",
+        "{{\"outcome_policy\":{},\"baseline_policy\":{},\"same_information_set_claim\":false,\"verification_scope\":\"all matching manifest hashes checked against registry; only selected source bytes re-read\",\"printed_zero_policy\":{},\"sources\":[{}],\"cells\":[{}],\"documents\":[{}],\"bindings\":[{}],\"persistence_pools\":[{}]}}",
         js(outcome_policy),
         js(baseline_policy),
+        js(printed_zero_policy),
         evidence.sources.join(","),
         evidence.cells.into_values().collect::<Vec<_>>().join(","),
         evidence

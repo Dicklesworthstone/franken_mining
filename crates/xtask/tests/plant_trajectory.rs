@@ -194,6 +194,155 @@ fn without_terminal_survey() -> String {
     text
 }
 
+fn without_covariance_coordinate(text: &str, coordinate: &str) -> String {
+    let mut blocks = text.split("\n[[");
+    let mut result = blocks.next().expect("header").to_owned();
+    for block in blocks {
+        if !(block.starts_with("covariance]]") && block.contains(&format!("\"{coordinate}\""))) {
+            result.push_str("\n[[");
+            result.push_str(block);
+        }
+    }
+    result
+}
+
+fn with_unmeasured_first_inflow() -> String {
+    let text = changed(
+        TEXT,
+        "fmine.plant-trajectory.v1",
+        "fmine.plant-trajectory.v2",
+    );
+    let text = changed(&text, "inflow_kg = \"5\"", "inflow_kg = \"unmeasured\"");
+    without_covariance_coordinate(&text, "inflow/0/10")
+}
+
+#[test]
+fn v2_command_infers_absent_flow_with_joint_uncertainty_and_its_declaration() {
+    for cross in [0.0, 0.5] {
+        let text = with_unmeasured_first_inflow();
+        let text = changed(
+            &text,
+            "left = \"stock/0\"\nright = \"stock/20\"\nkg2 = \"0\"",
+            &format!("left = \"stock/0\"\nright = \"stock/20\"\nkg2 = \"{cross}\""),
+        );
+        let (envelope, value) = evaluate(&text);
+        assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+        assert_eq!(
+            at(&value, &["schema"]).as_str(),
+            Some("fmine.plant-trajectory-result.v2")
+        );
+        assert_eq!(at(&value, &["measured_coordinate_count"]).i64(), Some(5));
+        assert_eq!(
+            array(at(&value, &["error_model", "covariance_kg2"])).len(),
+            25
+        );
+        assert_eq!(array(at(&value, &["coordinate_order"])).len(), 7);
+        assert_eq!(array(at(&value, &["source_inputs"])).len(), 7);
+        close(estimate(&value, "stock/10"), 17.0);
+        close(estimate(&value, "inflow/0/10"), 10.0);
+        close(covariance(&value, "stock/10", "stock/10"), 3.0);
+        close(
+            covariance(&value, "inflow/0/10", "inflow/0/10"),
+            5.0 - 2.0 * cross,
+        );
+        close(covariance(&value, "stock/10", "inflow/0/10"), 3.0 - cross);
+        assert_eq!(
+            at(&value, &["result", "gross_error", "status"]).as_str(),
+            Some("no_redundancy")
+        );
+        let inferred = array(at(&value, &["result", "inferred_flows"]));
+        assert_eq!(inferred.len(), 1);
+        let flow = &inferred[0];
+        assert_eq!(at(flow, &["key"]).as_str(), Some("inflow/0/10"));
+        assert_eq!(at(flow, &["source_claim_id"]), &Json::Null);
+        assert_eq!(at(flow, &["observed_kg"]), &Json::Null);
+        assert_eq!(at(flow, &["unmeasured"]).as_bool(), Some(true));
+        close(number(at(flow, &["estimate_kg"])), 10.0);
+        close(
+            number(at(flow, &["posterior_variance_kg2"])),
+            5.0 - 2.0 * cross,
+        );
+        close(
+            number(at(flow, &["conditional_standard_deviation_kg"])),
+            (5.0 - 2.0 * cross).sqrt(),
+        );
+        let declaration = array(at(&value, &["source_inputs"]))
+            .iter()
+            .find(|row| at(row, &["role"]).as_str() == Some("unmeasured_inflow"))
+            .expect("explicit absent-flow declaration");
+        assert_eq!(at(declaration, &["kg_exact"]), &Json::Null);
+        assert_eq!(
+            at(declaration, &["claim", "additivity"]).as_str(),
+            Some("NonAdditive")
+        );
+        assert_eq!(
+            at(flow, &["declaration_claim_id"]),
+            at(declaration, &["claim", "id"])
+        );
+        assert!(
+            array(at(&value, &["admitted_claim", "parents"]))
+                .contains(at(flow, &["declaration_claim_id"]))
+        );
+        assert_eq!(envelope.no_claim, at(&value, &["no_claim"]).as_str());
+        let markdown = envelope.rendered_markdown.expect("markdown");
+        assert!(markdown.contains("Unmeasured interval flows"));
+        assert!(markdown.contains("inflow/0/10"));
+    }
+}
+
+#[test]
+fn v2_command_retains_negative_inferred_outflow_as_rejected_diagnostics() {
+    let text = changed(
+        TEXT,
+        "fmine.plant-trajectory.v1",
+        "fmine.plant-trajectory.v2",
+    );
+    let text = changed(&text, "outflow_kg = \"3\"", "outflow_kg = \"unmeasured\"");
+    let text = without_covariance_coordinate(&text, "outflow/0/10");
+    let (envelope, value) = refused(&text, "FMINE-REF-109");
+    close(estimate(&value, "outflow/0/10"), -2.0);
+    let inferred = array(at(&value, &["result", "inferred_flows"]));
+    close(number(at(&inferred[0], &["estimate_kg"])), -2.0);
+    assert_eq!(at(&inferred[0], &["observed_kg"]), &Json::Null);
+    assert!(at(&value, &["receipt_digest"]).as_str().is_some());
+    assert!(
+        envelope
+            .rendered_markdown
+            .expect("diagnostics")
+            .contains("Rejected:")
+    );
+}
+
+#[test]
+fn absent_flows_require_v2_and_explicit_identifiable_measurement_population() {
+    let text = with_unmeasured_first_inflow();
+    refused(
+        &changed(
+            &text,
+            "fmine.plant-trajectory.v2",
+            "fmine.plant-trajectory.v1",
+        ),
+        "FMINE-REF-506",
+    );
+    refused(
+        &changed(&text, "inflow_kg = \"unmeasured\"\n", ""),
+        "FMINE-REF-506",
+    );
+    refused(
+        &format!(
+            "{text}\n[[covariance]]\nleft = \"inflow/0/10\"\nright = \"inflow/0/10\"\nkg2 = \"1\"\n"
+        ),
+        "FMINE-REF-506",
+    );
+    refused(
+        &changed(&text, "outflow_kg = \"3\"", "outflow_kg = \"unmeasured\""),
+        "FMINE-REF-104",
+    );
+    let ambiguous = changed(&text, "inflow_kg = \"7\"", "inflow_kg = \"unmeasured\"");
+    let ambiguous = without_covariance_coordinate(&ambiguous, "inflow/10/20");
+    refused(&ambiguous, "FMINE-REF-104");
+}
+
 #[test]
 fn no_terminal_survey_infers_trajectory_without_fabricating_a_gross_error_pass() {
     let text = without_terminal_survey();
@@ -342,6 +491,7 @@ fn unanchored_offset_refuses_and_command_docs_name_actual_schema() {
     let root = scratch();
     let docs = invoke(&["robot-docs".into()], &root).0.to_json();
     assert!(docs.contains("fmine.plant-trajectory.v1"));
+    assert!(docs.contains("fmine.plant-trajectory.v2"));
     assert!(docs.contains("plant trajectory --input"));
     let (bad, _) = invoke(
         &[

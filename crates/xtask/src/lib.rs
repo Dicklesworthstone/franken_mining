@@ -154,15 +154,15 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
     let total_ceiling: usize = rows.iter().map(|r| r.ceiling_loc).sum();
     let total_actual: usize = rows.iter().map(|r| r.actual_loc).sum();
 
-    // §28.3 base (1,128,000 / 1,298,000) + approved BUDGET-AMEND-001..005 (+43,000 / +49,000).
-    if total_planned != 1_171_000 {
+    // The §28.3 totals include approved BUDGET-AMEND-001 through BUDGET-AMEND-009.
+    if total_planned != 1_182_000 {
         errors.push(format!(
-            "total_planned in loc_budget.toml must equal 1,171,000 (§28.3 + BUDGET-AMEND-001..005), found {total_planned}"
+            "total_planned in loc_budget.toml must equal 1,182,000 (§28.3 + BUDGET-AMEND-001..009), found {total_planned}"
         ));
     }
-    if total_ceiling != 1_347_000 {
+    if total_ceiling != 1_360_000 {
         errors.push(format!(
-            "total_ceiling in loc_budget.toml must equal 1,347,000 (§28.3 + BUDGET-AMEND-001..005), found {total_ceiling}"
+            "total_ceiling in loc_budget.toml must equal 1,360,000 (§28.3 + BUDGET-AMEND-001..009), found {total_ceiling}"
         ));
     }
 
@@ -1629,7 +1629,8 @@ mod tests {
         // fmine-view's four BitwisePortable modules (lib, voxel_mesh, gltf, viewer; BD-256),
         // and fmine-gen's sixteen BitwisePortable modules (lib, seal, worlds, harness, geology, cu_au_world, biases, drillholes, dispatch, mill_balance, fa_book, metamorphic, plant_twin, pilot_power, review, det_families; BD-127..134, 141, 143, BD-356.S1/S2, BD-357.S1).
         // BD-162 adds the CLI's exact matched-cohort screen to the portable modules above.
-        assert_eq!(report.bitwise_files, 117, "{report:?}");
+        // Joint fractional scheduling and its independent controls are BitwisePortable.
+        assert_eq!(report.bitwise_files, 119, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
@@ -2131,8 +2132,8 @@ mod tests {
             .to_path_buf();
         let report = check_all(&root).expect("GATE-LAYERS-00 check-all must pass with zero errors");
         assert!(report.rows.len() >= 59);
-        assert_eq!(report.total_planned, 1_171_000);
-        assert_eq!(report.total_ceiling, 1_347_000);
+        assert_eq!(report.total_planned, 1_182_000);
+        assert_eq!(report.total_ceiling, 1_360_000);
         assert!(report.total_actual > 4_000);
     }
 

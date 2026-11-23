@@ -47,3 +47,52 @@ fn copper_peer_binary_matches_library_json_markdown_and_refusals() {
         );
     }
 }
+
+#[test]
+fn capital_peer_binary_preserves_amounts_and_refuses_changed_timing() {
+    let binary = env!("CARGO_BIN_EXE_fmine");
+    for metric in [
+        Metric::CapexTotal,
+        Metric::CapexSustaining,
+        Metric::CapexProject,
+    ] {
+        let fixture = Fixture::new_metric(metric);
+        fixture.write_rows("peer_a", "-1.25", &["reader_a", "reader_b"]);
+        let result = fixture.ok();
+        for (format, expected) in [
+            ("json", result.to_json()),
+            ("markdown", result.rendered_markdown.unwrap()),
+        ] {
+            let output = std::process::Command::new(binary)
+                .args(fixture.args())
+                .args(["--format", format, "--workspace"])
+                .arg(&fixture.root)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{expected}\n")
+            );
+        }
+        fixture.change_rows("peer_d", "timing=cash", "timing=accrual");
+        let refused = fixture.invoke();
+        assert_ne!(refused.exit_code, 0);
+        let output = std::process::Command::new(binary)
+            .args(fixture.args())
+            .arg("--workspace")
+            .arg(&fixture.root)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(i32::from(refused.exit_code)));
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{}\n", refused.to_json())
+        );
+    }
+}
