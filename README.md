@@ -102,7 +102,21 @@ cargo run -p fmine-cli -- plant recovery --input tests/plant/recovery_card.toml
 cargo run -p fmine-cli -- plant production --input tests/plant/production_joint.toml --grinding tests/plant/grinding_joint.toml --recovery tests/plant/production_recovery.toml
 ```
 
-The supplied examples are synthetic. `balance` checks exact nominal closure. `reconcile` uses the declared full
+For a two-product circuit, compare a period's feed, concentrate and tailings using three ordinary material
+worksheets. The screen shows the concentrate share of submitted dry tonnes and metal, the corresponding
+assay-implied shares, and the signed kilograms left after subtracting the outlets from feed.
+
+```bash
+cargo run -p fmine-cli -- plant balance --feed tests/plant/material_projection.toml \
+  --concentrate tests/plant/two_product_concentrate.toml \
+  --tailings tests/plant/two_product_tailings.toml --format markdown
+```
+
+In this synthetic circuit, concentrate takes **10% of dry feed, 80% of copper and 50% of gold**. The
+assay split assumes these are the only dry outlets and the circuit inventory stays constant. If metal is
+missing from an outlet worksheet, its residual stays unknown. The other elements can still be checked.
+
+The supplied examples are synthetic. The single-input `balance` checks exact nominal closure. `reconcile` uses the declared full
 error covariance and reports fitted amounts, adjustments, posterior covariance and gross-error diagnostics.
 Rejected candidates return a nonzero exit status and no admitted balance Claim while retaining the original
 observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. This calculation

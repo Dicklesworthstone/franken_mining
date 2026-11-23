@@ -1,0 +1,30 @@
+# Synthetic tailings carry the remaining 2,250 kg dry matter, 10 kg Cu and 5 g Au.
+schema = "fmine.plant-material.v1"
+boundary = "synthetic-plant/v1"
+material = "tailings/period-1"
+start_ns = "0"
+end_ns = "10"
+assay_basis = "total_element/all_non_water_dry_matter"
+whole_material_support = "true"
+
+[[mass]]
+role = "dry"
+value = "2250"
+unit = "kg"
+
+[[mass]]
+role = "water"
+value = "75"
+unit = "kg"
+
+[[assay]]
+element = "Au"
+measurand = "total-Au/all-phases"
+value = "20/9"
+unit = "g_per_t"
+
+[[assay]]
+element = "Cu"
+measurand = "total-Cu/all-phases"
+value = "4/9"
+unit = "mass_percent"

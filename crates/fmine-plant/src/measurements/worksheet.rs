@@ -81,6 +81,7 @@ fn assay_unit(value: (&str, usize)) -> Result<AssayUnit, Refusal> {
 }
 
 fn parse(text: &str, source: &SourceAnchor) -> Result<Vec<Observation>, Refusal> {
+    check_source(text, source, "material")?;
     let document = parse_subset(text).map_err(|e| bad(e.line, e.reason))?;
     if document.rows.len() > 256 {
         return Err(bad(1, "a material worksheet admits at most 256 rows"));
@@ -274,12 +275,24 @@ impl WorksheetResult {
     }
 }
 
+fn project(
+    observations: &[Observation],
+) -> Result<measurements::MaterialProjectionReceipt, Refusal> {
+    let claims: Vec<_> = observations.iter().map(|row| row.claim.clone()).collect();
+    measurements::project_material(&claims)
+}
+
+pub(super) fn receipt(
+    text: &str,
+    source: &SourceAnchor,
+) -> Result<measurements::MaterialProjectionReceipt, Refusal> {
+    project(&parse(text, source)?)
+}
+
 /// Evaluate exact submitted bytes without opening a source path or consulting a clock.
 pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Refusal> {
-    check_source(text, source, "material")?;
     let observations = parse(text, source)?;
-    let claims: Vec<_> = observations.iter().map(|row| row.claim.clone()).collect();
-    let scope = claims.first().map(|input| &input.value.scope);
+    let scope = observations.first().map(|row| &row.claim.value.scope);
     let scope_json = scope.map_or_else(
         || "null".into(),
         |scope| {
@@ -293,7 +306,7 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
             )
         },
     );
-    let (refusal, admitted, digest, result) = match measurements::project_material(&claims) {
+    let (refusal, admitted, digest, result) = match project(&observations) {
         Ok(receipt) => {
             let amounts = &receipt.summary().amounts;
             let elements = amounts

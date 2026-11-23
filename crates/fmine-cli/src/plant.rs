@@ -10,20 +10,22 @@ mod recovery;
 mod rtd;
 mod trajectory;
 mod transfer;
+mod two_product;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use fmine_claim::Claim;
-use fmine_core::Digest32;
 use fmine_evidence::Refusal;
 use fmine_plant::inventory::worksheet;
 pub use fmine_plant::inventory::worksheet::Mode;
+use fmine_plant::inventory::worksheet::claim_json;
 use fmine_units::ExactQty;
 
 use crate::{Envelope, NextAction, json_string as quoted, worksheet_input};
 
 pub const BALANCE_USAGE: &str = "plant balance --input <worksheet.toml>";
+pub const TWO_PRODUCT_USAGE: &str =
+    "plant balance --feed <material.toml> --concentrate <material.toml> --tailings <material.toml>";
 pub const RECONCILE_USAGE: &str = "plant reconcile --input <worksheet.toml>";
 pub const PROJECT_USAGE: &str = "plant project --input <worksheet.toml>";
 pub const PROJECT_DOCS_JSON: &str = project::ROBOT_DOCS_JSON;
@@ -49,6 +51,11 @@ const MAX_BYTES: u64 = worksheet::MAX_BYTES;
 pub const ROBOT_DOCS_JSON: &str = worksheet::ROBOT_DOCS_JSON;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    TwoProduct {
+        feed: PathBuf,
+        concentrate: PathBuf,
+        tailings: PathBuf,
+    },
     Inventory {
         mode: Mode,
         input: PathBuf,
@@ -88,29 +95,47 @@ pub enum Command {
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
+    let three_streams = args.get(1).is_some_and(|w| w == "balance")
+        && args
+            .iter()
+            .skip(2)
+            .any(|w| matches!(w.as_str(), "--feed" | "--concentrate" | "--tailings"));
     if args.first().is_some_and(|word| word == "plant")
-        && args.get(1).is_some_and(|word| word == "production")
+        && (three_streams || args.get(1).is_some_and(|w| w == "production"))
     {
+        let (options, usage) = if three_streams {
+            (["--feed", "--concentrate", "--tailings"], TWO_PRODUCT_USAGE)
+        } else {
+            (["--input", "--grinding", "--recovery"], PRODUCTION_USAGE)
+        };
         if args.len() != 8 {
-            return Err(PRODUCTION_USAGE.into());
+            return Err(usage.into());
         }
         let mut paths = BTreeMap::new();
         for pair in args[2..].as_chunks::<2>().0 {
-            if !["--input", "--grinding", "--recovery"].contains(&pair[0].as_str())
+            if !options.contains(&pair[0].as_str())
                 || pair[1].trim().is_empty()
                 || pair[1].starts_with("--")
                 || paths
                     .insert(pair[0].as_str(), PathBuf::from(&pair[1]))
                     .is_some()
             {
-                return Err(PRODUCTION_USAGE.into());
+                return Err(usage.into());
             }
         }
-        return Ok(Command::Production {
-            input: paths.remove("--input").ok_or(PRODUCTION_USAGE)?,
-            grinding: paths.remove("--grinding").ok_or(PRODUCTION_USAGE)?,
-            recovery: paths.remove("--recovery").ok_or(PRODUCTION_USAGE)?,
-        });
+        return if three_streams {
+            Ok(Command::TwoProduct {
+                feed: paths.remove("--feed").ok_or(usage)?,
+                concentrate: paths.remove("--concentrate").ok_or(usage)?,
+                tailings: paths.remove("--tailings").ok_or(usage)?,
+            })
+        } else {
+            Ok(Command::Production {
+                input: paths.remove("--input").ok_or(usage)?,
+                grinding: paths.remove("--grinding").ok_or(usage)?,
+                recovery: paths.remove("--recovery").ok_or(usage)?,
+            })
+        };
     }
     if args.len() != 4
         || args[0] != "plant"
@@ -167,34 +192,6 @@ fn numbers(values: impl IntoIterator<Item = f64>) -> String {
         values.into_iter().map(number).collect::<Vec<_>>().join(",")
     )
 }
-fn claim_json<T>(claim: &Claim<T>) -> String {
-    let anchors = claim
-        .anchors
-        .iter()
-        .map(|a| {
-            format!(
-                "{{\"path\":{},\"sha256\":{},\"locator\":{}}}",
-                quoted(&a.artifact_path),
-                quoted(&Digest32(a.artifact_sha256).to_hex()),
-                quoted(&a.locator)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{{\"id\":{},\"metric\":{},\"evidence\":{},\"state\":{},\"confidentiality\":\"Internal\",\"calibration\":\"uncalibrated\",\"parents\":[{}],\"sources\":[{anchors}]}}",
-        quoted(&claim.claim_id.to_string()),
-        quoted(&claim.metric_key),
-        quoted(&format!("{:?}", claim.evidence)),
-        quoted(&format!("{:?}", claim.state)),
-        claim
-            .parents
-            .iter()
-            .map(|id| quoted(&id.to_string()))
-            .collect::<Vec<_>>()
-            .join(",")
-    )
-}
 fn actions() -> Vec<NextAction> {
     vec![NextAction::new(
         "fmine robot-docs",
@@ -204,6 +201,11 @@ fn actions() -> Vec<NextAction> {
 
 pub fn execute(command: &Command, root: &Path) -> Envelope {
     let (mode, input) = match command {
+        Command::TwoProduct {
+            feed,
+            concentrate,
+            tailings,
+        } => return two_product::execute(root, [feed, concentrate, tailings]),
         Command::Inventory { mode, input } => (*mode, input),
         Command::Project { input } => return project::execute(input, root),
         Command::Transfer { input } => return transfer::execute(input, root),

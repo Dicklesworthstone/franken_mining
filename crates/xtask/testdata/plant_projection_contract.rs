@@ -9,6 +9,55 @@ const DRY_MASS: &str = "[[mass]]\nrole = \"dry\"\nvalue = \"2.5\"\nunit = \"t\""
 const WATER_MASS: &str = "[[mass]]\nrole = \"water\"\nvalue = \"125\"\nunit = \"kg\"";
 static SERIAL: AtomicUsize = AtomicUsize::new(0);
 
+#[test]
+fn two_product_balance_compares_submitted_masses_with_assays_at_the_cli() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let args = [
+        "plant",
+        "balance",
+        "--tailings",
+        "tests/plant/two_product_tailings.toml",
+        "--feed",
+        "tests/plant/material_projection.toml",
+        "--concentrate",
+        "tests/plant/two_product_concentrate.toml",
+    ];
+    let run = |format| {
+        Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .current_dir(&root)
+            .args(args)
+            .args(["--format", format])
+            .output()
+            .unwrap()
+    };
+    let out = run("json");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(out.stdout, run("json").stdout);
+    let doc = json::parse(&out.stdout).unwrap();
+    let p = at(&doc, &["payload"]);
+    assert_eq!(exact(at(p, &["dry_residual_kg"])), (0, 1));
+    assert_eq!(exact(at(p, &["concentrate_over_feed_dry_mass"])), (1, 10));
+    let rows = at(p, &["elements"]).as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for (row, (element, recovery)) in rows.iter().zip([("Au", (1, 2)), ("Cu", (4, 5))]) {
+        assert_eq!(at(row, &["element"]).as_str(), Some(element));
+        assert_eq!(at(row, &["assay_status"]).as_str(), Some("solved"));
+        assert_eq!(exact(at(row, &["assay_mass_pull"])), (1, 10));
+        assert_eq!(exact(at(row, &["assay_recovery"])), recovery);
+        assert_eq!(exact(at(row, &["concentrate_over_feed_metal"])), recovery);
+        assert_eq!(exact(at(row, &["residual_kg"])), (0, 1));
+    }
+    assert_eq!(at(p, &["claim", "parents"]).as_array().unwrap().len(), 3);
+    assert_eq!(at(p, &["claim", "evidence"]).as_str(), Some("Assumed"));
+    let md = String::from_utf8(run("markdown").stdout).unwrap();
+    assert!(md.contains("Cu / total-Cu/all-phases | 0 | 80.00% | 10.00% | 80.00% | solved"));
+    assert!(md.contains("Au / total-Au/all-phases | 0 | 50.00% | 10.00% | 50.00% | solved"));
+}
+
 fn scratch(text: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "fmine-plant-projection-{}-{}.toml",
@@ -328,6 +377,17 @@ fn material_projection_is_available_in_robot_docs_and_refuses_bad_command_shapes
     for args in [
         vec!["plant", "project"],
         vec!["plant", "project", "--input", "a", "--input", "b"],
+        vec![
+            "plant",
+            "balance",
+            "--feed",
+            "a",
+            "--feed",
+            "b",
+            "--tailings",
+            "c",
+        ],
+        vec!["plant", "balance", "--feed", "a", "--concentrate", "b"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
             .args(args)

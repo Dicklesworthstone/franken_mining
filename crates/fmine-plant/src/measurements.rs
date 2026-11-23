@@ -5,6 +5,7 @@
 //! No sampling extrapolation, chemical conversion or error covariance is inferred.
 //! Determinism: Exact
 
+pub mod two_product;
 pub mod worksheet;
 
 use std::collections::{BTreeMap, BTreeSet};

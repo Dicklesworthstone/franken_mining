@@ -2489,6 +2489,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 schedule::omf::SHELLS_USAGE,
                 schedule::omf::DESIGN_USAGE,
                 plant::BALANCE_USAGE,
+                plant::TWO_PRODUCT_USAGE,
                 recon::USAGE,
                 plant::RECONCILE_USAGE,
                 plant::PROJECT_USAGE,

@@ -12,6 +12,7 @@ use fmine_flow::compensation::{
 use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
 use fmine_units::{ExactQty, UnitsError};
 
+use crate::worksheet_input::markdown_cell;
 use crate::{Envelope, json_string as quote, worksheet_input};
 
 pub(super) const USAGE: &str = "recon run --input <matched-cohorts.toml>";
@@ -88,24 +89,6 @@ fn ratio(actual: ExactQty, planned: ExactQty) -> Result<Option<ExactQty>, Refusa
     } else {
         actual.checked_div(planned).map(Some).map_err(physical)
     }
-}
-
-fn markdown_cell(s: &str) -> String {
-    let mut escaped = String::new();
-    for c in s.chars() {
-        match c {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '\\' | '|' | '`' | '[' | ']' | '*' | '_' | '~' => {
-                escaped.push('\\');
-                escaped.push(c);
-            }
-            c if c.is_control() => escaped.push(' '),
-            c => escaped.push(c),
-        }
-    }
-    escaped
 }
 
 struct Amounts {

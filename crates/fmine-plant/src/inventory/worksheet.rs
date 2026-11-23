@@ -40,6 +40,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"balance\":\"Exact closure only; error-model fields refuse instead of being ignored\",",
     "\"rejected\":\"Nonzero exit; original observations and available fitted diagnostics retained; admitted_claim is null\",",
     "\"evidence\":\"Assumed, Internal and uncalibrated; byte binding does not audit the worksheet\",",
+    "\"two_product\":{\"command\":\"plant balance --feed <material.toml> --concentrate <material.toml> --tailings <material.toml>\",\"input_schema\":\"fmine.plant-material.v1\",\"basis\":\"Two dry outlets and unchanged circuit inventory; compare exact signed residuals and stream ratios with the assay-only split. Missing assays remain null.\"},",
     "\"examples\":[\"tests/plant/closed_inventory.toml\",\"tests/plant/measured_inventory.toml\"]}"
 );
 
@@ -435,7 +436,8 @@ fn numbers(values: impl IntoIterator<Item = f64>) -> String {
         values.into_iter().map(number).collect::<Vec<_>>().join(",")
     )
 }
-pub(crate) fn claim_json<T>(claim: &Claim<T>) -> String {
+/// Render provenance for plant worksheet claims, which have no fitted calibration record.
+pub fn claim_json<T>(claim: &Claim<T>) -> String {
     let anchors = claim
         .anchors
         .iter()
@@ -450,11 +452,17 @@ pub(crate) fn claim_json<T>(claim: &Claim<T>) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"id\":{},\"metric\":{},\"evidence\":{},\"state\":{},\"confidentiality\":\"Internal\",\"calibration\":\"uncalibrated\",\"parents\":[{}],\"sources\":[{anchors}]}}",
+        "{{\"id\":{},\"metric\":{},\"evidence\":{},\"state\":{},\"confidentiality\":{},\"calibration\":{},\"parents\":[{}],\"sources\":[{anchors}]}}",
         quoted(&claim.claim_id.to_string()),
         quoted(&claim.metric_key),
         quoted(&format!("{:?}", claim.evidence)),
         quoted(&format!("{:?}", claim.state)),
+        quoted(&claim.confidentiality.to_string()),
+        quoted(if claim.calibration_failed {
+            "failed"
+        } else {
+            "uncalibrated"
+        }),
         claim
             .parents
             .iter()

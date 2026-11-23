@@ -17,6 +17,12 @@ K0 numerical owner, preserving the original observations and a separately declar
 
 ## 2. Inputs
 
+DESIGN (bd-137.1). `measurements::two_product::evaluate` admits feed, concentrate and tailings through
+the existing material-worksheet projection. Streams must be distinct and share a boundary and positive-duration
+interval. It compares exact submitted dry and elemental mass with an assay-only split under two-outlet,
+unchanged-inventory assumptions. Per-element reporting preserves missing assays, zero denominators, residuals
+and infeasible or unidentifiable splits. Source worksheet hashes and stream roles are bound into the diagnostic Claim.
+
 Six `Claim<MetalBalanceInput>` values: an explicit complete-population declaration, opening stock, feed,
 product, other outflow and closing stock. Every physical quantity is a nonnegative `ExactQty` of kilograms
 of the same total elemental measurand in all phases, at the full physical boundary. Explicit zero totals

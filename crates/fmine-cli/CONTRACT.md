@@ -32,6 +32,11 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 ## 2. Inputs
 ### Command grammars and domain formulation
 
+- DESIGN (bd-137.1). `plant balance --feed <material> --concentrate <material> --tailings <material>`
+  compares three `fmine.plant-material.v1` worksheets. JSON and Markdown report feed-minus-outlets dry and
+  elemental kg, concentrate/feed ratios and assay-implied splits. The CLI preserves source hashes, full
+  measurand identity and missing components. This is a conditional diagnostic for a two-product circuit.
+
 - DESIGN (BD-162). `recon run --input <matched-cohorts.toml>` screens declared planned and actual dry tonnes
   and contained kg for a common site, period, element, ownership basis and matching material support.
   `fmine.matched-cohorts.v1` requires unique supports and a tolerance of 1–9,999 basis points. Positive
