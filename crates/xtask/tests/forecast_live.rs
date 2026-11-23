@@ -2073,3 +2073,161 @@ fn saved_binary_event_comparisons_reopen_without_clock_reads_or_journal_writes()
     assert_ne!(fmine_cli::invoke(&args, &journal.root).0.exit_code, 0);
     assert_eq!(fs::read(&journal.path).unwrap(), before);
 }
+
+#[test]
+fn supplied_brier_comparison_replays_saved_event_evidence_without_clock_or_writes() {
+    use fmine_calib::ledger::comparison::PairedScore;
+    use fmine_io::omf::json::parse;
+
+    struct NoComparisonClock;
+    impl WallClock for NoComparisonClock {
+        fn now_ns(&self) -> Result<i64, ClockError> {
+            panic!("saved Brier comparisons must not sample a clock")
+        }
+    }
+    fn saved(journal: &mut Journal, name: &str, cut: &str, selector: &str) -> Digest32 {
+        let payload = journal.ok(
+            Command::Assess {
+                journal: journal.path.clone(),
+                head: journal.head,
+                cohort: name.into(),
+                as_of: cut.into(),
+                selector: selector.into(),
+                expected_digest: None,
+            },
+            ns(cut),
+        );
+        assessment_digest(&payload)
+    }
+    fn compare(journal: &Journal, left: Digest32, right: Digest32) -> Envelope {
+        execute_with_clock(
+            &Command::CompareSupplied {
+                journal: journal.path.clone(),
+                head: Some(journal.head),
+                left,
+                right,
+                score: PairedScore::Brier,
+            },
+            &journal.root,
+            &NoComparisonClock,
+        )
+    }
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    for (alias, model, site, probability) in [
+        ("left-a", "left", "A", "0.25"),
+        ("left-b", "left", "B", "0"),
+        ("right-a", "right", "A", "0.75"),
+        ("right-b", "right", "B", "0.5"),
+    ] {
+        journal.append(
+            &format!("[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{model}\"\noutcome_due = \"{DUE}\"\nkind = \"bernoulli\"\nprobability = \"{probability}\"\nfamily = \"synthetic-{model}\"\nauthor_role = \"synthetic-model-role\"\ndomain = \"mill\"\nhorizon = \"synthetic FY2030\"\nsite = \"{site}\"\nquantity = \"production_below_target\"\nunit = \"event\"\n"),
+            ns("2030-01-02T00:00:00Z"),
+        );
+    }
+    for model in ["left", "right"] {
+        journal.append(
+            &format!("[[cohort]]\nname = \"{model}\"\nmembers = \"{model}-a,{model}-b\"\nresolution_rule = \"One iff supplied FY2030 production is below 100 koz; zero otherwise\"\neligible_sources = \"synthetic:issuer\"\nalpha = \"0.2\"\n"),
+            ns("2030-01-03T00:00:00Z"),
+        );
+    }
+    for alias in ["left-a", "right-a"] {
+        journal.append(
+            &outcome(alias, 1, "2031-01-01T00:00:00Z", false),
+            ns("2031-01-02T00:00:00Z"),
+        );
+    }
+    let left = saved(&mut journal, "left", CUT, "latest-as-of");
+    let right = saved(&mut journal, "right", CUT, "latest-as-of");
+    let bytes = fs::read(&journal.path).unwrap();
+    let compared = compare(&journal, left, right);
+    assert_eq!(compared.exit_code, 0, "{compared:?}");
+    let json = parse(compared.payload_json.as_bytes()).unwrap();
+    let report = json.get("comparison").unwrap();
+    assert_eq!(
+        report.get("schema").unwrap().as_str(),
+        Some("fmine.forecast-supplied-brier-comparison.v1")
+    );
+    assert_eq!(
+        report.get("source_citations").unwrap().as_str(),
+        Some("supplied_not_verified")
+    );
+    assert_eq!(report.get("n_members").unwrap().u64(), Some(2));
+    assert_eq!(report.get("n_paired").unwrap().u64(), Some(1));
+    assert_eq!(report.get("n_unresolved").unwrap().u64(), Some(1));
+    assert!(
+        compared
+            .payload_json
+            .contains("\"observed_mean_difference\":{\"num\":\"1\",\"den\":\"2\"}")
+    );
+    assert!(compared.payload_json.contains("\"whole_population\":{\"lower\":{\"num\":\"1\",\"den\":\"8\"},\"upper\":{\"num\":\"5\",\"den\":\"8\"}}"));
+    assert!(compared.payload_json.contains("Invented!A1"));
+    assert!(compared.payload_json.contains(&"11".repeat(32)));
+    let markdown = compared.rendered_markdown.as_ref().unwrap();
+    assert!(markdown.contains("binary-event Brier loss"));
+    assert!(markdown.contains("[1/8, 5/8]"));
+    assert!(markdown.contains("supplied, not verified"));
+    assert!(markdown.contains("\"probability\":0.25"));
+
+    let args = vec![
+        "forecast".into(),
+        "journal".into(),
+        "compare".into(),
+        "--journal".into(),
+        journal.path.display().to_string(),
+        "--left".into(),
+        left.to_hex(),
+        "--right".into(),
+        right.to_hex(),
+        "--targets".into(),
+        "supplied".into(),
+        "--score".into(),
+        "brier".into(),
+        "--head".into(),
+        journal.head.to_hex(),
+    ];
+    assert_eq!(
+        fmine_cli::invoke(&args, &journal.root).0.to_json(),
+        compared.to_json()
+    );
+    let mut implicit_public = args.clone();
+    implicit_public.drain(9..11);
+    assert!(fmine_cli::parse_args(&implicit_public, &journal.root).is_err());
+    let mut explicit_public = args.clone();
+    explicit_public[10] = "public".into();
+    assert!(fmine_cli::parse_args(&explicit_public, &journal.root).is_err());
+    assert_eq!(fs::read(&journal.path).unwrap(), bytes);
+
+    for alias in ["left-a", "right-a"] {
+        journal.append(
+            &outcome(alias, 0, "2031-01-20T00:00:00Z", true),
+            ns("2031-01-21T00:00:00Z"),
+        );
+    }
+    let revised_left = saved(&mut journal, "left", "2031-02-01T00:00:00Z", "latest-as-of");
+    let revised_right = saved(
+        &mut journal,
+        "right",
+        "2031-02-01T00:00:00Z",
+        "latest-as-of",
+    );
+    let revised = compare(&journal, revised_left, revised_right);
+    assert_eq!(revised.exit_code, 0, "{revised:?}");
+    assert!(
+        revised
+            .payload_json
+            .contains("\"observed_mean_difference\":{\"num\":\"-1\",\"den\":\"2\"}")
+    );
+    let retained = fs::read(&journal.path).unwrap();
+    for i in 0..journal.next_request {
+        fs::rename(
+            journal.root.join(format!("request-{i}.toml")),
+            journal.root.join(format!("retired-request-{i}.toml")),
+        )
+        .unwrap();
+    }
+    let replayed = compare(&journal, left, right);
+    assert_eq!(replayed.exit_code, 0, "{replayed:?}");
+    let replayed_json = parse(replayed.payload_json.as_bytes()).unwrap();
+    assert_eq!(replayed_json.get("comparison").unwrap(), report);
+    assert_eq!(fs::read(&journal.path).unwrap(), retained);
+}

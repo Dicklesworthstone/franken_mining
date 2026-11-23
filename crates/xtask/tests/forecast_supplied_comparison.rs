@@ -765,3 +765,57 @@ fn brier_requires_binary_forecasts_and_keeps_unrepresentable_members() {
             .is_err()
     );
 }
+
+fn event(ledger: &mut ForecastLedger, name: &str, site: &str, probability: f64) -> ObjectId {
+    register(
+        ledger,
+        name,
+        event_metadata(site),
+        10,
+        ForecastPayload::Bernoulli { probability },
+    )
+}
+
+#[test]
+fn brier_completion_bounds_match_every_binary_completion_through_ten_members() {
+    for n in 1..=10 {
+        let mut ledger = ForecastLedger::new();
+        let probabilities: Vec<_> = (0..n)
+            .map(|i| ((i % 5) as i128, ((2 * i + 1) % 5) as i128))
+            .collect();
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for (i, &(p, q)) in probabilities.iter().enumerate() {
+            let site = format!("synthetic-{i}");
+            left.push(event(&mut ledger, "left", &site, p as f64 / 4.0));
+            right.push(event(&mut ledger, "right", &site, q as f64 / 4.0));
+        }
+        let lc = ledger.freeze_cohort(event_spec("left", left)).unwrap();
+        let rc = ledger.freeze_cohort(event_spec("right", right)).unwrap();
+        let (l, rr) = (assess(&mut ledger, lc), assess(&mut ledger, rc));
+        let report = ledger
+            .compare_supplied_assessments(l, rr, PairedScore::Brier)
+            .unwrap();
+        let differences: Vec<i128> = (0..(1 << n))
+            .map(|mask| {
+                probabilities
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(p, q))| {
+                        let y = if mask & (1 << i) == 0 { 0 } else { 4 };
+                        (p - y).pow(2) - (q - y).pow(2)
+                    })
+                    .sum()
+            })
+            .collect();
+        assert_eq!(report.n_unresolved, n);
+        assert_eq!(report.observed_mean_difference, None);
+        assert_eq!(
+            report.whole_population,
+            Some((
+                r(*differences.iter().min().unwrap(), 16 * n as i128),
+                r(*differences.iter().max().unwrap(), 16 * n as i128),
+            ))
+        );
+    }
+}
