@@ -28,7 +28,7 @@ use fmine_units::{Currency, Money};
 
 use crate::{Envelope, investment::LoadedInvestment, json_string as js, worksheet_input};
 
-const SCHEMA: &str = "fmine.capital-investments.v1";
+pub(super) const SCHEMA: &str = "fmine.capital-investments.v1";
 const MAX_BYTES: usize = 64 * 1024;
 const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 const CASH_SETTLEMENT: &str = "source_period_increment_at_cash_period_close";
@@ -37,13 +37,17 @@ const ROUNDED_CASH: &str = "nearest_ties_even_0_0001_usd";
 const LIQUIDITY_NO_CLAIM: &str = "Source-derived static portfolio over declared discounted incremental cash windows. Optional source-bound funding pays initial capital once from opening cash and derives each candidate's nominal undiscounted operating increment from its original receipt. Each source period is assigned an explicit inclusive UTC cash window, with its increment settled at that window's close no earlier than the source period's end. Opening cash is at valuation time before initial capital; baseline cash excludes these candidate increments and initial capital. Every original state must meet the opening and period-end floors. The explicit cash-rounding policy either requires exact 0.0001 USD or rounds each nominal increment once to nearest ties even. Every unrounded amount and signed rounding delta is retained; opening cash, baseline flows and floors always require exact minor units. These settlement amounts never change already-net discounted values or joint signed-loss CVaR. Shared scenarios, additivity, settlement timing and baseline cash remain assumptions. No intra-period solvency, omitted cash, lifetime NAV, tax, financing, interaction model, calibrated probability or execution authority is inferred.";
 const NO_CLAIM: &str = "Source-derived static portfolio over declared discounted incremental cash windows. Shared scenario meaning and additivity across distinct operations are explicit assumptions, not inferred independence. Candidates sharing a boundary and circuit must be mutually exclusive. Every source investment is recomputed in full; selected source alternatives need not be source winners. Initial capital is subtracted in investment returns once and separately constrains the budget. Portfolio risk is the signed-loss CVaR of the combined same-state outcomes; standalone risk summaries are never added. Candidate monetary rounding is retained before additive portfolio aggregation. Liquidity is not assessed in this comparison. No missing-period cash, terminal value, project lifetime, full NAV, financing, liquidity schedule, synergy, physical authorization or calibrated probability is inferred.";
 type Result<T> = std::result::Result<T, Refusal>;
-type Fields<'a> = BTreeMap<&'a str, &'a str>;
+pub(super) type Fields<'a> = BTreeMap<&'a str, &'a str>;
 
-fn invalid(why: impl Into<String>) -> Refusal {
+pub(super) fn invalid(why: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::BasisMismatch105, why)
 }
 
-fn fields<'a>(input: &'a [TomlField], required: &[&str], optional: &[&str]) -> Result<Fields<'a>> {
+pub(super) fn fields<'a>(
+    input: &'a [TomlField],
+    required: &[&str],
+    optional: &[&str],
+) -> Result<Fields<'a>> {
     let mut out = BTreeMap::new();
     for f in input {
         let TomlValue::Str(value) = &f.value else {
@@ -72,7 +76,7 @@ fn fields<'a>(input: &'a [TomlField], required: &[&str], optional: &[&str]) -> R
     Ok(out)
 }
 
-fn get<'a>(f: &Fields<'a>, name: &str) -> Result<&'a str> {
+pub(super) fn get<'a>(f: &Fields<'a>, name: &str) -> Result<&'a str> {
     f.get(name)
         .copied()
         .ok_or_else(|| invalid(format!("missing {name}")))
@@ -142,13 +146,6 @@ struct Declaration {
     robustness: Option<RobustnessDesign>,
     selection_stability: Option<SelectionStabilityDesign>,
     claim: Claim<()>,
-}
-
-pub(super) fn matches(text: &str) -> bool {
-    parse_subset(text).is_ok_and(|doc| {
-        doc.top_get("schema")
-            .is_some_and(|f| matches!(&f.value, TomlValue::Str(s) if s == SCHEMA))
-    })
 }
 
 fn parse(text: &str, source: &SourceAnchor) -> Result<Declaration> {

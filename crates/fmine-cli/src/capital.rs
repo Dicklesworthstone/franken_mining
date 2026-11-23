@@ -7,12 +7,15 @@ use fmine_evidence::Refusal;
 
 use crate::{Envelope, NextAction, worksheet_input};
 
+mod executive;
 mod investment;
 
 pub(super) const USAGE: &str = "decide program <model-file>";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
     "\"schema\":\"fmine.capital-program.v1\",",
+    "\"executive_schema\":\"fmine.executive-decision.v1\",",
+    "\"executive_examples\":[\"tests/capital/executive_purchase.toml\",\"tests/capital/executive_purchase_potash.toml\",\"tests/capital/executive_tenure.toml\",\"tests/capital/executive_group.toml\",\"tests/capital/executive_rehabilitation.toml\",\"tests/capital/executive_estimates.toml\"],",
     "\"investment_schema\":\"fmine.capital-investments.v1\",",
     "\"investment_fields\":[\"schema\",\"model_key\",\"question\",\"currency (USD)\",\"budget\",\"tail_mass\",\"max_tail_loss (optional)\",\"payoff_convention (additive_discounted_incremental_cash)\",\"shared_scenario_basis\",\"additivity_basis\",\"reference_class_basis\"],",
     "\"investment_tables\":{\"candidate\":[\"id\",\"label\",\"investment (source investment manifest path)\",\"alternative (source alternative id)\",\"exclusion_group (optional)\"],\"requires\":[\"candidate\",\"prerequisite\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"],\"funding_schedule\":[\"cash_basis\",\"opening_date\",\"settlement_convention (source_period_increment_at_cash_period_close)\",\"cash_rounding (exact_0_0001_usd or nearest_ties_even_0_0001_usd)\"],\"cash_period\":[\"id (source investment period id)\",\"cash_period (inclusive UTC YYYY-MM-DD/YYYY-MM-DD)\",\"minimum_cash\"],\"opening_cash\":[\"state\",\"value\"],\"baseline_cash_flow\":[\"period\",\"state\",\"value\"],\"robustness\":[\"method (wasserstein_1)\",\"radius (nonnegative exact decimal or n/d)\",\"metric_basis\",\"radius_basis\",\"support (declared_shared_scenarios)\",\"distance_unit (dimensionless)\"],\"transport_distance\":[\"from\",\"to\",\"value (nonnegative exact decimal or n/d)\"]},",
@@ -48,8 +51,16 @@ pub(super) fn execute(model: &Path, root: &Path) -> Envelope {
             "capital program",
             "declared static capital program",
         )?;
-        if investment::matches(&text) {
-            return investment::execute(&text, &source, root);
+        if let Ok(doc) = fmine_registry::toml_subset::parse_subset(&text)
+            && let Some(fmine_registry::toml_subset::TomlValue::Str(schema)) =
+                doc.top_get("schema").map(|f| &f.value)
+        {
+            if schema == investment::SCHEMA {
+                return investment::execute(&text, &source, root);
+            }
+            if schema == executive::SCHEMA {
+                return executive::worksheet(&doc, &text, &source);
+            }
         }
         let evaluated = fmine_capital::model::evaluate(&text, source.clone())?;
         let payload = format!(

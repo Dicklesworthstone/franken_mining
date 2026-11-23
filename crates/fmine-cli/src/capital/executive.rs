@@ -1,0 +1,1078 @@
+//! DESIGN: dated, source-bound alternatives for a single executive decision.
+//! Determinism: Exact. Worksheet inputs are declarations, including their claimed availability.
+
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+
+use fmine_core::anchor::SourceAnchor;
+use fmine_evidence::Refusal;
+use fmine_registry::toml_subset::{TomlDoc, TomlRow};
+use fmine_time::CivilDate;
+use fmine_units::{Currency, ExactQty, Money};
+
+use super::investment::{Fields, fields, get, invalid};
+use crate::{Envelope, json_string as js, worksheet_input};
+use worksheet_input::markdown_cell as cell;
+
+pub(super) const SCHEMA: &str = "fmine.executive-decision.v1";
+const BOUNDARY: &str = "Conditional on the submitted worksheet, dated sources and completeness of the declared scope. No calibrated probability, authenticated historical availability, real-world savings, execution authority or sign-off is inferred.";
+type Result<T> = std::result::Result<T, Refusal>;
+
+/// Fields common to every decision row include the source locator and the date it became available.
+fn row_fields<'a>(row: &'a TomlRow, names: &[&str], as_of: &str) -> Result<Fields<'a>> {
+    let mut all = vec!["source", "known_on"];
+    all.extend_from_slice(names);
+    let f = fields(&row.fields, &all, &[])?;
+    if date(&f, "known_on")? > as_of {
+        return Err(invalid(format!(
+            "line {}: source was unavailable on the decision date",
+            row.line
+        )));
+    }
+    Ok(f)
+}
+
+fn date<'a>(f: &Fields<'a>, k: &str) -> Result<&'a str> {
+    let s = get(f, k)?;
+    if !fmine_registry::sources::is_date(s) {
+        return Err(invalid(format!("{k} requires a calendar date YYYY-MM-DD")));
+    }
+    Ok(s)
+}
+
+fn day(s: &str) -> Result<i64> {
+    let err = || invalid("invalid calendar day");
+    // Callers first validate ASCII YYYY-MM-DD with date().
+    CivilDate::new(
+        s[..4].parse().map_err(|_| err())?,
+        s[5..7].parse().map_err(|_| err())?,
+        s[8..].parse().map_err(|_| err())?,
+    )
+    .map(CivilDate::to_epoch_days)
+    .map_err(|_| err())
+}
+
+// Whole USD or whole declared physical units. At most 16 rows; widening each i64 leaves
+// room in i128 for summed cash and for products of two nonnegative inputs.
+fn qty(f: &Fields<'_>, k: &str) -> Result<i128> {
+    get(f, k)?
+        .parse::<i64>()
+        .ok()
+        .filter(|v| *v >= 0)
+        .map(i128::from)
+        .ok_or_else(|| {
+            invalid(format!(
+                "{k} requires a nonnegative whole quantity within i64"
+            ))
+        })
+}
+
+fn flag(f: &Fields<'_>, k: &str) -> Result<bool> {
+    match get(f, k)? {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        _ => Err(invalid(format!("{k} requires yes or no"))),
+    }
+}
+
+fn table<'a>(doc: &'a TomlDoc, name: &'a str) -> Result<&'a TomlRow> {
+    let mut rows = doc.rows_of(name);
+    let row = rows
+        .next()
+        .ok_or_else(|| invalid(format!("missing {name}")))?;
+    if rows.next().is_some() {
+        return Err(invalid(format!("duplicate {name}")));
+    }
+    Ok(row)
+}
+
+fn tables(doc: &TomlDoc, allowed: &[&str]) -> Result<()> {
+    if doc
+        .rows
+        .iter()
+        .any(|r| !allowed.contains(&r.table.as_str()))
+    {
+        return Err(invalid("unexpected table for the decision type"));
+    }
+    Ok(())
+}
+
+struct Card {
+    findings: Vec<String>,
+    columns: Vec<&'static str>,
+    rows: Vec<Vec<String>>,
+}
+impl Card {
+    fn new(columns: &[&'static str]) -> Self {
+        Self {
+            findings: Vec::new(),
+            columns: columns.to_vec(),
+            rows: Vec::new(),
+        }
+    }
+}
+
+pub(super) fn worksheet(doc: &TomlDoc, text: &str, source: &SourceAnchor) -> Result<Envelope> {
+    if text.len() > 65536 || doc.rows.is_empty() || doc.rows.len() > 16 {
+        return Err(invalid(
+            "executive worksheets require 1–16 source rows within 64 KiB",
+        ));
+    }
+    let f = fields(
+        &doc.top,
+        &[
+            "schema",
+            "decision",
+            "question",
+            "owner",
+            "as_of",
+            "scope",
+            "evidence",
+            "uncertainty",
+            "revisit_if",
+        ],
+        &[],
+    )?;
+    let as_of = date(&f, "as_of")?;
+    let evidence = get(&f, "evidence")?;
+    if !matches!(evidence, "synthetic" | "operator_declared") {
+        return Err(invalid("evidence must be synthetic or operator_declared"));
+    }
+    let mode = get(&f, "decision")?;
+    let card = match mode {
+        "purchase" => purchase(doc, as_of)?,
+        "rehabilitation" => rehabilitation(doc, as_of)?,
+        "tenure" => tenure(doc, as_of)?,
+        "group_recovery" => group_recovery(doc, as_of)?,
+        "project_estimates" => project_estimates(doc, as_of)?,
+        _ => return Err(invalid("unknown executive decision type")),
+    };
+    let array = |v: &[String]| {
+        format!(
+            "[{}]",
+            v.iter().map(|s| js(s)).collect::<Vec<_>>().join(",")
+        )
+    };
+    let columns: Vec<_> = card.columns.iter().map(|s| s.to_string()).collect();
+    let mut md = format!(
+        "# {}\n\n{} · {} · {} · {}\n\n",
+        cell(get(&f, "question")?),
+        cell(get(&f, "owner")?),
+        as_of,
+        cell(get(&f, "scope")?),
+        evidence
+    );
+    for msg in &card.findings {
+        let _ = writeln!(md, "- {}", cell(msg));
+    }
+    let _ = writeln!(
+        md,
+        "\n| {} |\n|{}|",
+        columns.join(" | "),
+        vec!["---"; columns.len()].join("|")
+    );
+    for row in &card.rows {
+        let _ = writeln!(
+            md,
+            "| {} |",
+            row.iter().map(|s| cell(s)).collect::<Vec<_>>().join(" | ")
+        );
+    }
+    let _ = writeln!(
+        md,
+        "\nUncertainty: {}. Revisit if: {}.\n\nEvidence: {} (SHA-256 {}).",
+        cell(get(&f, "uncertainty")?),
+        cell(get(&f, "revisit_if")?),
+        cell(&source.artifact_path),
+        fmine_core::Digest32(source.artifact_sha256)
+    );
+    for r in &doc.rows {
+        if let Some(fmine_registry::toml_subset::TomlValue::Str(locator)) =
+            r.get("source").map(|f| &f.value)
+        {
+            let _ = writeln!(md, "- {} line {}: {}", r.table, r.line, cell(locator));
+        }
+    }
+    let _ = writeln!(md, "\n{BOUNDARY}");
+    let payload = format!(
+        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}}}",
+        js(mode),
+        js(evidence),
+        js(as_of),
+        array(&card.findings),
+        array(&columns),
+        card.rows
+            .iter()
+            .map(|r| array(r))
+            .collect::<Vec<_>>()
+            .join(","),
+        worksheet_input::source_json(source, text.len()),
+        js(text)
+    );
+    let mut envelope = Envelope::ok("decide program", payload, Vec::new());
+    envelope.rendered_markdown = Some(md);
+    envelope.no_claim = Some(BOUNDARY);
+    Ok(envelope)
+}
+
+fn headroom(cash: i128, payment: i128, floor: i128) -> Result<i128> {
+    let usd = |n| Money::from_major(Currency::USD, n);
+    let (_, slack) = fmine_capital::cash_after_payment(usd(cash), usd(payment), usd(floor))?;
+    Ok(slack.minor / Money::SCALE)
+}
+
+fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
+    tables(doc, &["order", "treasury", "schedule", "hold", "wait"])?;
+    let order = row_fields(
+        table(doc, "order")?,
+        &[
+            "entity",
+            "expires",
+            "review",
+            "price_usd",
+            "deposit_usd",
+            "total_cancel_usd",
+        ],
+        as_of,
+    )?;
+    let fund = row_fields(
+        table(doc, "treasury")?,
+        &[
+            "entity",
+            "decision_cash_usd",
+            "review_cash_usd",
+            "decision_floor_usd",
+            "review_floor_usd",
+            "other_project",
+            "other_due_usd",
+        ],
+        as_of,
+    )?;
+    let schedule = row_fields(
+        table(doc, "schedule")?,
+        &[
+            "reserved_delivery",
+            "float_days",
+            "delay_cost_usd_per_day",
+            "milestone",
+        ],
+        as_of,
+    )?;
+    let review = date(&order, "review")?;
+    let expiry = date(&order, "expires")?;
+    let delivery = date(&schedule, "reserved_delivery")?;
+    if get(&order, "entity")? != get(&fund, "entity")? || review <= as_of || delivery < review {
+        return Err(invalid(
+            "require matching paying entity, future review, and delivery on or after review",
+        ));
+    }
+    let price = qty(&order, "price_usd")?;
+    let deposit = qty(&order, "deposit_usd")?;
+    let cancel = qty(&order, "total_cancel_usd")?;
+    if deposit > price {
+        return Err(invalid("credited deposit exceeds order price"));
+    }
+    let now = qty(&fund, "decision_cash_usd")?;
+    let later = qty(&fund, "review_cash_usd")?;
+    let now_floor = qty(&fund, "decision_floor_usd")?;
+    let later_floor = qty(&fund, "review_floor_usd")?;
+    let other = qty(&fund, "other_due_usd")?;
+    let float = qty(&schedule, "float_days")?;
+    let delay_rate = qty(&schedule, "delay_cost_usd_per_day")?;
+    let mut c = Card::new(&[
+        "Choice / outcome",
+        "Pay now USD",
+        "Net due at review USD",
+        "Total supplier USD",
+        "Milestone slip days",
+        "Delay exposure USD",
+        "Cash slack now USD",
+        "Cash slack at review USD",
+        "Slack with competing project USD",
+    ]);
+    c.findings.push(format!("Order deadline {expiry}; engineering review {review}; milestone {}. Cash belongs to {}. Competing project {} needs {other} USD at review.",get(&schedule,"milestone")?,get(&fund,"entity")?,get(&fund,"other_project")?));
+    let mut paths = Vec::new();
+    if as_of <= expiry {
+        paths.push(("Order / proceed", deposit, price, 0));
+        paths.push(("Order / cancel", deposit, cancel, 0));
+    } else {
+        c.findings
+            .push("Order unavailable: quoted order deadline passed.".into());
+    }
+    if doc.rows_of("hold").next().is_some() {
+        let hold = row_fields(
+            table(doc, "hold")?,
+            &[
+                "accept_by",
+                "valid_through",
+                "fee_usd",
+                "credit_on_purchase_usd",
+            ],
+            as_of,
+        )?;
+        let fee = qty(&hold, "fee_usd")?;
+        let credit = qty(&hold, "credit_on_purchase_usd")?;
+        let accept = date(&hold, "accept_by")?;
+        let through = date(&hold, "valid_through")?;
+        if credit > fee || credit > price || through < accept {
+            return Err(invalid("invalid slot hold credit or date order"));
+        }
+        if accept >= as_of && through >= review {
+            paths.push(("Hold / proceed", fee, price + fee - credit, 0));
+            paths.push(("Hold / cancel", fee, fee, 0));
+            c.findings.push(format!(
+                "Accept hold by {accept}; exercise or release at {review}."
+            ));
+            if as_of <= expiry {
+                let extra = fee - credit;
+                let saving = cancel - fee;
+                let comparison = if extra == 0 && saving == 0 {
+                    "Equal supplier cost in both outcomes".into()
+                } else if saving < 0 {
+                    "Ordering costs no more in either outcome".into()
+                } else if extra == 0 {
+                    "Holding costs no more in either outcome".into()
+                } else {
+                    let p = ExactQty::new(extra, extra + saving)
+                        .map_err(|_| invalid("break-even overflow"))?;
+                    format!(
+                        "Break-even cancellation probability {}/{}; holding costs no more at or above this threshold",
+                        p.num(),
+                        p.den()
+                    )
+                };
+                c.findings.push(format!("{comparison}. Comparison uses undiscounted supplier costs before liquidity checks."));
+            }
+        } else {
+            c.findings.push("Hold unavailable: acceptance deadline passed or the slot expires before the review.".into());
+        }
+    } else {
+        c.findings
+            .push("Hold unavailable: no documented supplier option.".into());
+    }
+    paths.push(("Lapse / cancel", 0, 0, 0));
+    if doc.rows_of("wait").next().is_some() {
+        let wait = row_fields(
+            table(doc, "wait")?,
+            &["delivery", "price_usd", "valid_through"],
+            as_of,
+        )?;
+        let arrival = date(&wait, "delivery")?;
+        if arrival < review {
+            return Err(invalid("unreserved delivery precedes review"));
+        }
+        if date(&wait, "valid_through")? >= review {
+            let slip = (i128::from(day(arrival)? - day(delivery)?) - float).max(0);
+            paths.push(("Lapse / proceed", 0, qty(&wait, "price_usd")?, slip));
+        } else {
+            c.findings
+                .push("Lapse / proceed unpriced: replacement quote expires before review.".into());
+        }
+    } else {
+        c.findings
+            .push("Lapse / proceed unpriced: replacement price or delivery is unknown.".into());
+    }
+    let mut qualified = Vec::new();
+    for (proceed, cancel_label) in [
+        ("Order / proceed", "Order / cancel"),
+        ("Hold / proceed", "Hold / cancel"),
+        ("Lapse / proceed", "Lapse / cancel"),
+    ] {
+        if let (Some(&(_, upfront, cost, 0)), Some(&(_, _, cancelled, _))) = (
+            paths.iter().find(|p| p.0 == proceed),
+            paths.iter().find(|p| p.0 == cancel_label),
+        ) && headroom(now, upfront, now_floor)? >= 0
+            && headroom(later, cost.max(cancelled), later_floor)? >= other
+        {
+            qualified.push((
+                proceed.split_once(" / ").map_or(proceed, |v| v.0),
+                upfront,
+                cancelled,
+            ));
+        }
+    }
+    let first = match qualified.iter().map(|v|v.1).min() {
+        Some(minimum) => format!("Least cash due today among on-time alternatives that preserve both cash floors and the competing project in both outcomes: {} ({minimum} USD).", qualified.iter().filter(|v|v.1==minimum).map(|v|v.0).collect::<Vec<_>>().join(", ")),
+        None => "No fully priced on-time alternative preserves both floors and the competing project in both outcomes.".into(),
+    };
+    c.findings.insert(0, first);
+    if let Some(loss) = qualified.iter().map(|v| v.2).min() {
+        let choices = qualified
+            .iter()
+            .filter(|v| v.2 == loss)
+            .map(|v| v.0)
+            .collect::<Vec<_>>()
+            .join(", ");
+        c.findings.insert(1,format!("Smallest total loss if cancelled among the same eligible choices: {choices} ({loss} USD)."));
+    }
+    for (label, upfront, total, slip) in paths {
+        let initial = headroom(now, upfront, now_floor)?;
+        let closing = headroom(later, total, later_floor)?;
+        let joint = closing - other;
+        if initial >= 0 && closing >= 0 && other <= later - later_floor && joint < 0 {
+            c.findings.push(format!(
+                "{label} displaces {} at review by {} USD.",
+                get(&fund, "other_project")?,
+                -joint
+            ));
+        }
+        c.rows.push(vec![
+            label.into(),
+            upfront.to_string(),
+            (total - upfront).to_string(),
+            total.to_string(),
+            slip.to_string(),
+            (slip * delay_rate).to_string(),
+            initial.to_string(),
+            closing.to_string(),
+            joint.to_string(),
+        ]);
+    }
+    Ok(c)
+}
+
+fn distinct(seen: &mut BTreeSet<String>, id: &str) -> Result<()> {
+    if !seen.insert(id.into()) {
+        return Err(invalid(format!(
+            "duplicate decision alternative or site {id}"
+        )));
+    }
+    Ok(())
+}
+
+fn rehabilitation(doc: &TomlDoc, as_of: &str) -> Result<Card> {
+    tables(doc, &["horizon", "package"])?;
+    let h = row_fields(table(doc, "horizon")?, &["entity", "through"], as_of)?;
+    let through = date(&h, "through")?;
+    if through < as_of {
+        return Err(invalid("comparison horizon precedes decision"));
+    }
+    let mut c = Card::new(&[
+        "Package",
+        "Eligibility",
+        "Work USD",
+        "Earliest release",
+        "Net cash USD by horizon",
+        "Net credit line USD",
+        "Net surety USD",
+    ]);
+    let mut seen = BTreeSet::new();
+    let mut best: Option<i128> = None;
+    let mut leaders = Vec::new();
+    for row in doc.rows_of("package") {
+        let f = row_fields(
+            row,
+            &[
+                "id",
+                "entity",
+                "eligible",
+                "acceptance_condition",
+                "work_date",
+                "release_date",
+                "work_usd",
+                "released_cash_usd",
+                "reposted_cash_usd",
+                "released_line_usd",
+                "reposted_line_usd",
+                "released_surety_usd",
+                "reposted_surety_usd",
+                "cash_fee_saving_usd",
+            ],
+            as_of,
+        )?;
+        let id = get(&f, "id")?;
+        distinct(&mut seen, id)?;
+        let work = date(&f, "work_date")?;
+        let release = get(&f, "release_date")?;
+        if get(&f, "entity")? != get(&h, "entity")?
+            || work < as_of
+            || (release != "pending" && date(&f, "release_date")? < work)
+        {
+            return Err(invalid(
+                "rehabilitation requires one entity and prospective work before release",
+            ));
+        }
+        let cost = qty(&f, "work_usd")?;
+        let cash = qty(&f, "released_cash_usd")? - qty(&f, "reposted_cash_usd")?
+            + qty(&f, "cash_fee_saving_usd")?;
+        let line = qty(&f, "released_line_usd")? - qty(&f, "reposted_line_usd")?;
+        let surety = qty(&f, "released_surety_usd")? - qty(&f, "reposted_surety_usd")?;
+        let eligible = flag(&f, "eligible")?;
+        let mut r = vec![
+            id.into(),
+            if eligible {
+                "eligible".into()
+            } else {
+                "ineligible".into()
+            },
+            cost.to_string(),
+            release.into(),
+        ];
+        if eligible && (release != "pending" || work > through) {
+            let released = i128::from(release != "pending" && release <= through);
+            let net = released * cash - i128::from(work <= through) * cost;
+            r.extend([
+                net.to_string(),
+                (released * line).to_string(),
+                (released * surety).to_string(),
+            ]);
+            if best.is_none_or(|b| net > b) {
+                best = Some(net);
+                leaders.clear();
+            }
+            if best == Some(net) {
+                leaders.push(id.to_string());
+            }
+        } else {
+            r.extend([
+                "unresolved".into(),
+                "unresolved".into(),
+                "unresolved".into(),
+            ]);
+        }
+        c.rows.push(r);
+        c.findings.push(format!(
+            "{id}: acceptance requires {}.",
+            get(&f, "acceptance_condition")?
+        ));
+    }
+    if seen.len() < 2 {
+        return Err(invalid("compare at least two distinct packages"));
+    }
+    if let Some(net) = best {
+        c.findings.push(format!("Highest quantified net cash through {through}: {} ({net} USD). Pending releases remain unresolved. Credit and surety are separate.",leaders.join(", ")));
+    }
+    Ok(c)
+}
+
+fn fraction(n: i128, d: i128) -> Result<String> {
+    let v = ExactQty::new(n, d).map_err(|_| invalid("undefined or overflowing ratio"))?;
+    Ok(if v.den() == 1 {
+        v.num().to_string()
+    } else {
+        format!("{}/{}", v.num(), v.den())
+    })
+}
+
+fn tenure(doc: &TomlDoc, as_of: &str) -> Result<Card> {
+    tables(doc, &["tenement", "alternative"])?;
+    let t = row_fields(
+        table(doc, "tenement")?,
+        &[
+            "expiry",
+            "linked_rights",
+            "option_low_usd",
+            "option_high_usd",
+            "survey_result",
+            "baseline_detection_pct",
+            "cover_metres",
+            "investigation_metres",
+            "sensitive_above_pct",
+        ],
+        as_of,
+    )?;
+    let expiry = date(&t, "expiry")?;
+    if expiry < as_of {
+        return Err(invalid("tenure renewal deadline has passed"));
+    }
+    let low = qty(&t, "option_low_usd")?;
+    let high = qty(&t, "option_high_usd")?;
+    let pct = |n| ExactQty::new(n, 100).map_err(|_| invalid("invalid percentage"));
+    let threshold = qty(&t, "sensitive_above_pct")?;
+    if low > high || threshold > 100 {
+        return Err(invalid("invalid option bounds or sensitivity threshold"));
+    }
+    let q = fmine_explore::absence::effective_detection_q(
+        pct(qty(&t, "baseline_detection_pct")?)?,
+        ExactQty::from_integer(qty(&t, "cover_metres")?),
+        ExactQty::from_integer(qty(&t, "investigation_metres")?),
+    )
+    .map_err(|_| invalid("invalid survey detection inputs"))?;
+    let survey = match get(&t, "survey_result")? {
+        "no_detection"
+            if q.checked_cmp(pct(threshold)?)
+                .map_err(|_| invalid("detection comparison overflow"))?
+                .is_gt() =>
+        {
+            "Sensitive negative within the surveyed footprint"
+        }
+        "no_detection" => "Survey insufficiently sensitive in the declared cover",
+        "unknown" => "Survey result unknown",
+        "detection" => "Recorded detection; economic significance unresolved",
+        _ => return Err(invalid("unknown survey result")),
+    };
+    let mut c = Card::new(&[
+        "Alternative",
+        "Availability",
+        "Net value low USD",
+        "Net value high USD",
+        "Retained share %",
+        "Break-even gross option USD including rights loss (low to high)",
+    ]);
+    c.findings.push(format!("Renewal deadline {expiry}. Linked rights: {}. {survey}; effective detection {}/{} under the declared model.",get(&t,"linked_rights")?,q.num(),q.den()));
+    let mut seen = BTreeSet::new();
+    let mut intervals = Vec::new();
+    for row in doc.rows_of("alternative") {
+        let f = row_fields(
+            row,
+            &[
+                "action",
+                "available",
+                "terms_through",
+                "cash_cost_usd",
+                "cash_received_usd",
+                "retained_pct",
+                "linked_loss_low_usd",
+                "linked_loss_high_usd",
+                "terms",
+            ],
+            as_of,
+        )?;
+        let action = get(&f, "action")?;
+        distinct(&mut seen, action)?;
+        if !matches!(action, "renew" | "farm_out" | "surrender") {
+            return Err(invalid("unknown tenure alternative"));
+        }
+        let cost = qty(&f, "cash_cost_usd")? - qty(&f, "cash_received_usd")?;
+        let share = qty(&f, "retained_pct")?;
+        let l = qty(&f, "linked_loss_low_usd")?;
+        let u = qty(&f, "linked_loss_high_usd")?;
+        if share > 100 || l > u || (action == "surrender" && share != 0) {
+            return Err(invalid(
+                "invalid remaining interest or linked-rights bounds",
+            ));
+        }
+        let terms_through = date(&f, "terms_through")?;
+        let available = flag(&f, "available")? && terms_through >= as_of;
+        let a = low * share - 100 * (cost + u);
+        let b = high * share - 100 * (cost + l);
+        if available {
+            intervals.push((action, a, b));
+        }
+        let mut r = vec![
+            action.into(),
+            if available {
+                "available"
+            } else {
+                "unavailable"
+            }
+            .into(),
+        ];
+        if available {
+            r.extend([
+                fraction(a, 100)?,
+                fraction(b, 100)?,
+                share.to_string(),
+                if share == 0 {
+                    "no retained interest".into()
+                } else {
+                    format!(
+                        "{} to {}",
+                        fraction((cost + l) * 100, share)?,
+                        fraction((cost + u) * 100, share)?
+                    )
+                },
+            ]);
+        } else {
+            r.extend(["—".into(), "—".into(), "—".into(), "—".into()]);
+        }
+        c.rows.push(r);
+        c.findings.push(format!(
+            "{action}: {}. Terms through {}.",
+            get(&f, "terms")?,
+            date(&f, "terms_through")?
+        ));
+    }
+    if seen.len() != 3 || intervals.is_empty() {
+        return Err(invalid(
+            "declare renew, farm_out and surrender, with at least one available",
+        ));
+    }
+    for (candidate, _, upper) in &intervals {
+        if let Some((better, _, _)) = intervals
+            .iter()
+            .find(|(id, lower, _)| id != candidate && lower > upper)
+        {
+            c.findings.push(format!(
+                "{candidate} is dominated by {better} over the supplied economic ranges."
+            ));
+        }
+    }
+    let robust = intervals.iter().find(|(id, lo, _)| {
+        intervals
+            .iter()
+            .all(|(other, _, hi)| id == other || lo > hi)
+    });
+    c.findings.push(robust.map_or_else(
+        || "The available value ranges overlap; no uniquely separated choice.".into(),
+        |(id, _, _)| {
+            format!("Only feasible or strictly separated choice across declared ranges: {id}.")
+        },
+    ));
+    Ok(c)
+}
+
+fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
+    tables(doc, &["group", "site"])?;
+    let g = row_fields(
+        table(doc, "group")?,
+        &[
+            "commodity",
+            "unit",
+            "through",
+            "target",
+            "common_capacity_basis",
+        ],
+        as_of,
+    )?;
+    let through = date(&g, "through")?;
+    if through <= as_of {
+        return Err(invalid("group recovery needs a remaining future interval"));
+    }
+    let target = qty(&g, "target")? * 10000;
+    let mut c = Card::new(&[
+        "Site",
+        "Interest bp",
+        "Allocated target attributable",
+        "Current plan attributable",
+        "Admissible maximum attributable",
+        "Decision by",
+        "Site constraint",
+    ]);
+    let (mut goals, mut plan, mut capacity) = (0, 0, 0);
+    let mut seen = BTreeSet::new();
+    for row in doc.rows_of("site") {
+        let f = row_fields(
+            row,
+            &[
+                "id",
+                "commodity",
+                "unit",
+                "through",
+                "basis",
+                "interest_bp",
+                "target",
+                "plan",
+                "maximum",
+                "constraint",
+                "act_by",
+            ],
+            as_of,
+        )?;
+        let id = get(&f, "id")?;
+        distinct(&mut seen, id)?;
+        let share = qty(&f, "interest_bp")?;
+        if share == 0
+            || share > 10000
+            || get(&f, "basis")? != "100_percent_project"
+            || get(&f, "commodity")? != get(&g, "commodity")?
+            || get(&f, "unit")? != get(&g, "unit")?
+            || date(&f, "through")? != through
+        {
+            return Err(invalid(
+                "site ownership, commodity, unit and remaining period must match the declared scope",
+            ));
+        }
+        let goal = qty(&f, "target")? * share;
+        let base = qty(&f, "plan")? * share;
+        let max = qty(&f, "maximum")? * share;
+        let by = date(&f, "act_by")?;
+        if max < base || by > through {
+            return Err(invalid(
+                "site maximum below plan or action deadline after the reporting interval",
+            ));
+        }
+        let usable = if by < as_of { base } else { max };
+        goals += goal;
+        plan += base;
+        capacity += usable;
+        c.rows.push(vec![
+            id.into(),
+            share.to_string(),
+            fraction(goal, 10000)?,
+            fraction(base, 10000)?,
+            fraction(usable, 10000)?,
+            by.into(),
+            get(&f, "constraint")?.into(),
+        ]);
+    }
+    if seen.len() < 2 || target != goals {
+        return Err(invalid(
+            "group target must equal the attributable allocations across at least two distinct sites",
+        ));
+    }
+    c.findings.push(format!("{} {} attributable through {through}. Group target {}; current plan {}; remaining net increase needed {}; maximum additional output before deadlines {}.",get(&g,"commodity")?,get(&g,"unit")?,fraction(target,10000)?,fraction(plan,10000)?,fraction((target-plan).max(0),10000)?,fraction(capacity-plan,10000)?));
+    c.findings.push(if capacity<target {format!("Even all admitted offsets leave a group shortfall of {}.",fraction(target-capacity,10000)?)} else {"Declared site bounds allow enough aggregate output. This is conditional on the stated simultaneous capacity basis.".into()});
+    c.findings.push(format!(
+        "Simultaneous capacity basis: {}.",
+        get(&g, "common_capacity_basis")?
+    ));
+    Ok(c)
+}
+
+fn project_estimates(doc: &TomlDoc, as_of: &str) -> Result<Card> {
+    tables(doc, &["cohort", "project"])?;
+    let cohort = row_fields(
+        table(doc, "cohort")?,
+        &["holdout", "comparable_scope", "price_basis"],
+        as_of,
+    )?;
+    let held = get(&cohort, "holdout")?;
+    let mut seen = BTreeSet::new();
+    let mut records = Vec::new();
+    for row in doc.rows_of("project") {
+        let f = row_fields(
+            row,
+            &[
+                "id",
+                "approved_on",
+                "approved_usd",
+                "status",
+                "comparable_actual_usd",
+                "scope_bridge",
+            ],
+            as_of,
+        )?;
+        let id = get(&f, "id")?;
+        distinct(&mut seen, id)?;
+        let estimate = qty(&f, "approved_usd")?;
+        let approved = date(&f, "approved_on")?;
+        let known = date(&f, "known_on")?;
+        let status = get(&f, "status")?;
+        if estimate == 0 || approved > known {
+            return Err(invalid(
+                "approval must have a positive baseline and precede source availability",
+            ));
+        }
+        let actual = match status {
+            "completed" if known > approved => Some(qty(&f, "comparable_actual_usd")?),
+            "cancelled" | "scope_changed" | "unresolved"
+                if get(&f, "comparable_actual_usd")? == "unknown" =>
+            {
+                None
+            }
+            _ => {
+                return Err(invalid(
+                    "completed outcomes need a subsequent comparable actual; cancelled, changed or unresolved records require unknown",
+                ));
+            }
+        };
+        records.push((
+            id,
+            approved,
+            known,
+            estimate,
+            actual,
+            status,
+            get(&f, "scope_bridge")?,
+        ));
+    }
+    let &(_, cut, _, estimate, observed, _, _) = records
+        .iter()
+        .find(|r| r.0 == held)
+        .ok_or_else(|| invalid("holdout absent from cohort"))?;
+    if date(&cohort, "known_on")? > cut {
+        return Err(invalid(
+            "cohort definition was unavailable at holdout approval",
+        ));
+    }
+    if records.iter().any(|r| r.1 > cut) {
+        return Err(invalid(
+            "holdout must be a latest decision in the supplied cohort",
+        ));
+    }
+    let mut c = Card::new(&[
+        "Project",
+        "Approved",
+        "Outcome available",
+        "Approved USD",
+        "Comparable actual USD",
+        "Status",
+        "Use",
+        "Scope bridge",
+    ]);
+    let mut ratios = Vec::new();
+    for (id, approved, known, base, actual, status, bridge) in &records {
+        let usage = if *id == held {
+            "holdout"
+        } else if *known >= cut {
+            "unavailable before holdout"
+        } else if let Some(a) = actual {
+            ratios.push((*a, *base));
+            "comparable completed"
+        } else {
+            status
+        };
+        c.rows.push(vec![
+            id.to_string(),
+            approved.to_string(),
+            known.to_string(),
+            base.to_string(),
+            actual.map_or_else(|| "unknown".into(), |x| x.to_string()),
+            status.to_string(),
+            usage.to_string(),
+            bridge.to_string(),
+        ]);
+    }
+    c.findings.push(format!("{} approved projects; {} comparable outcomes available strictly before {cut}. Holdout {held}. Price basis {}. Scope {}.",records.len(),ratios.len(),get(&cohort,"price_basis")?,get(&cohort,"comparable_scope")?));
+    if ratios.is_empty() {
+        c.findings.push("Comparable adjustment unavailable.".into());
+    } else {
+        // Use the empirical lower median ratio for both odd and even sample sizes.
+        ratios.sort_by(|(a, b), (x, y)| (a * y).cmp(&(x * b)));
+        let (n, d) = ratios[(ratios.len() - 1) / 2];
+        c.findings.push(format!(
+            "Lower median actual / approval {}. Holdout original {estimate} USD; adjusted {} USD.",
+            fraction(n, d)?,
+            fraction(estimate * n, d)?
+        ));
+        if let Some(actual) = observed {
+            let original = (estimate - actual).abs();
+            let corrected = (estimate * n - actual * d).abs();
+            c.findings.push(format!("Held-out absolute error: original {original} USD; adjusted {} USD. One comparison, uncalibrated.",fraction(corrected,d)?));
+        } else {
+            c.findings
+                .push("Held-out realized error unavailable.".into());
+        }
+    }
+    Ok(c)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use fmine_registry::toml_subset::parse_subset;
+    const PURCHASE: &str = include_str!("../../../../tests/capital/executive_purchase.toml");
+    const LAND: &str = include_str!("../../../../tests/capital/executive_tenure.toml");
+    const CLOSURE: &str = include_str!("../../../../tests/capital/executive_rehabilitation.toml");
+    const GROUP: &str = include_str!("../../../../tests/capital/executive_group.toml");
+    const ESTIMATES: &str = include_str!("../../../../tests/capital/executive_estimates.toml");
+    fn evaluate(text: &str) -> Result<Envelope> {
+        let doc = parse_subset(text).expect("control uses valid TOML");
+        let source = SourceAnchor::new(
+            "synthetic.toml",
+            fmine_core::hash::sha256(text.as_bytes()).0,
+            "worksheet",
+        );
+        worksheet(&doc, text, &source)
+    }
+    fn report(s: &str) -> String {
+        evaluate(s)
+            .expect("admitted")
+            .rendered_markdown
+            .expect("markdown")
+    }
+
+    #[test]
+    fn purchase_requires_firm_terms_available_by_the_meeting() {
+        let expired = PURCHASE.replace(
+            "valid_through = \"2030-03-22\"",
+            "valid_through = \"2030-03-20\"",
+        );
+        let shown = report(&expired);
+        assert!(shown.contains("Hold unavailable") && shown.contains("Lapse / proceed unpriced"));
+        assert!(!shown.contains("| Hold / proceed") && !shown.contains("probability 1/20"));
+        let future = PURCHASE.replace("known_on = \"2030-03-07\"", "known_on = \"2030-03-10\"");
+        assert!(evaluate(&future).is_err());
+        let other = PURCHASE.replacen("entity = \"Parent\"", "entity = \"Ring-fenced JV\"", 1);
+        assert!(evaluate(&other).is_err());
+        for key in [
+            "credit_on_purchase_usd = \"300000\"",
+            "credit_on_purchase_usd = \"-1\"",
+            "credit_on_purchase_usd = \"0.5\"",
+        ] {
+            assert!(evaluate(&PURCHASE.replace("credit_on_purchase_usd = \"0\"", key)).is_err());
+        }
+    }
+
+    #[test]
+    fn purchase_accepts_absent_hold_and_only_charges_elapsed_critical_days() {
+        let (start, rest) = PURCHASE.split_once("[[hold]]").expect("hold");
+        let (_, next) = rest.split_once("[[wait]]").expect("wait");
+        let shown = report(&format!("{start}[[wait]]{next}"));
+        assert!(
+            shown.contains("no documented supplier option") && !shown.contains("| Hold / proceed")
+        );
+        let credited = report(&PURCHASE.replace(
+            "credit_on_purchase_usd = \"0\"",
+            "credit_on_purchase_usd = \"250000\"",
+        ));
+        assert!(credited.contains("Holding costs no more in either outcome"));
+        let floored = report(&PURCHASE.replace("float_days = \"12\"", "float_days = \"40\""));
+        assert!(floored.contains("| Lapse / proceed | 0 | 21500000 | 21500000 | 0 | 0 |"));
+        assert!(evaluate(&PURCHASE.replace("2030-11-15", "2030-02-30")).is_err());
+    }
+
+    #[test]
+    fn release_timing_and_eligibility_control_collateral_comparison() {
+        let late = report(&CLOSURE.replace("2030-10-31", "2031-01-01"));
+        assert!(late.contains("2031-01-01 | -900000 | 0 | 0"));
+        let unknown = report(&CLOSURE.replace("2030-10-31", "pending"));
+        assert!(unknown.contains("pending | unresolved") && !unknown.contains("(1510000 USD)"));
+        let closed = report(&CLOSURE.replacen("eligible = \"yes\"", "eligible = \"no\"", 1));
+        assert!(closed.contains("North waste-rock cover | ineligible"));
+    }
+
+    #[test]
+    fn tenure_options_require_available_rights_and_admissible_detection() {
+        let only = LAND
+            .replace("available = \"yes\"", "available = \"no\"")
+            .replacen("available = \"no\"", "available = \"yes\"", 1);
+        assert!(report(&only).contains("across declared ranges: renew"));
+        assert!(
+            report(&LAND.replace("cover_metres = \"60\"", "cover_metres = \"0\""))
+                .contains("Sensitive negative")
+        );
+        assert!(
+            report(&LAND.replace("2030-03-15", "2030-03-07")).contains("farm\\_out | unavailable")
+        );
+        assert!(evaluate(&LAND.replace("retained_pct = \"0\"", "retained_pct = \"1\"")).is_err());
+        assert!(
+            evaluate(&LAND.replace(
+                "baseline_detection_pct = \"80\"",
+                "baseline_detection_pct = \"101\""
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn group_excludes_expired_interventions_and_rejects_incompatible_scopes() {
+        assert!(
+            report(&GROUP.replace("2030-10-04", "2030-09-28")).contains("group shortfall of 700")
+        );
+        for changed in [
+            GROUP.replacen("commodity = \"copper\"", "commodity = \"nickel\"", 1),
+            GROUP.replace("interest_bp = \"6000\"", "interest_bp = \"12000\""),
+            GROUP.replace("100_percent_project", "attributable"),
+            GROUP.replace("id = \"Mesa\"", "id = \"Valley\""),
+            GROUP.replacen("target = \"13000\"", "target = \"13001\"", 1),
+        ] {
+            assert!(evaluate(&changed).is_err());
+        }
+    }
+
+    #[test]
+    fn estimate_replay_refuses_retrospectively_selected_cohorts_and_keeps_nulls() {
+        assert!(evaluate(&ESTIMATES.replace("2025-01-03", "2028-07-02")).is_err());
+        assert!(
+            evaluate(&ESTIMATES.replace(
+                "holdout = \"South circuit\"",
+                "holdout = \"Western transformer\""
+            ))
+            .is_err()
+        );
+        assert!(
+            evaluate(&ESTIMATES.replace(
+                "comparable_actual_usd = \"unknown\"",
+                "comparable_actual_usd = \"0\""
+            ))
+            .is_err()
+        );
+        assert!(
+            report(&ESTIMATES.replace("2027-07-31", "2028-07-01"))
+                .contains("Comparable adjustment unavailable")
+        );
+    }
+}

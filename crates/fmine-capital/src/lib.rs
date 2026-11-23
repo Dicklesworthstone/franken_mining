@@ -1386,6 +1386,25 @@ struct FundingScheduleIndex<'a> {
     candidate_count: usize,
 }
 
+/// Exact single-entity cash after a signed net payment and its slack over the declared floor.
+/// Each amount covers the same checkpoint and excludes the payment from the starting cash.
+pub fn cash_after_payment(cash: Money, payment: Money, floor: Money) -> Result<(Money, Money)> {
+    if cash.ccy != payment.ccy || cash.ccy != floor.ccy {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "cash, payment and floor must share a currency",
+        ));
+    }
+    let overflow = |_| {
+        bad(
+            RefusalCode::NumericalCertificateFailed207,
+            "cash checkpoint exceeds exact money range",
+        )
+    };
+    let closing = cash.checked_sub(payment).map_err(overflow)?;
+    Ok((closing, closing.checked_sub(floor).map_err(overflow)?))
+}
+
 impl FundingScheduleIndex<'_> {
     fn assess(
         &self,
@@ -1411,23 +1430,12 @@ impl FundingScheduleIndex<'_> {
         let mut checkpoints = Vec::with_capacity(state_count * (schedule.periods.len() + 1));
         let mut minimum_slack: Option<i128> = None;
         for (state, opening) in &schedule.opening_cash {
-            let closing = opening
-                .minor
-                .checked_sub(initial_capital_minor)
-                .ok_or_else(|| {
-                    bad(
-                        RefusalCode::NumericalCertificateFailed207,
-                        "initial capital payment overflowed opening cash",
-                    )
-                })?;
-            let slack = closing
-                .checked_sub(first.minimum_cash.minor)
-                .ok_or_else(|| {
-                    bad(
-                        RefusalCode::NumericalCertificateFailed207,
-                        "cash-floor difference overflowed",
-                    )
-                })?;
+            let (closing, slack) = cash_after_payment(
+                *opening,
+                Money::from_minor(schedule.currency, initial_capital_minor),
+                first.minimum_cash,
+            )?;
+            let (closing, slack) = (closing.minor, slack.minor);
             minimum_slack = Some(minimum_slack.map_or(slack, |old| old.min(slack)));
             balances.push(closing);
             checkpoints.push(CashScheduleCheckpoint {
