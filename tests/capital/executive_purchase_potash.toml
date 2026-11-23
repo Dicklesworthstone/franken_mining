@@ -1,0 +1,54 @@
+# SYNTHETIC follow-on committee meeting at an unrelated fictional potash asset.
+schema = "fmine.executive-decision.v1"
+decision = "purchase"
+question = "Reserve the South Shaft hoist gearbox or use the next production slot?"
+owner = "Group investment committee"
+as_of = "2030-04-12"
+scope = "South Shaft potash sustaining project; Parent unrestricted cash, whole USD"
+evidence = "synthetic"
+uncertainty = "The vendor delivery date and the shutdown float can change"
+revisit_if = "Delivery moves beyond the signed shutdown float"
+
+[[order]]
+known_on = "2030-04-04"
+source = "Invented gearbox quote SS-4, payment and cancellation schedule"
+entity = "Parent"
+expires = "2030-04-12"
+review = "2030-04-26"
+price_usd = "8000000"
+deposit_usd = "1000000"
+total_cancel_usd = "1800000"
+
+[[hold]]
+known_on = "2030-04-08"
+source = "Invented option SS-4A; part of the fee credited on exercise"
+accept_by = "2030-04-12"
+valid_through = "2030-04-26"
+fee_usd = "150000"
+credit_on_purchase_usd = "100000"
+
+[[wait]]
+known_on = "2030-04-09"
+source = "Invented alternate quote SS-6"
+delivery = "2030-09-10"
+valid_through = "2030-04-26"
+price_usd = "8000000"
+
+[[schedule]]
+known_on = "2030-04-10"
+source = "Invented approved shutdown schedule SS-B2"
+reserved_delivery = "2030-09-01"
+float_days = "15"
+delay_cost_usd_per_day = "110000"
+milestone = "Return of hoisting capacity after scheduled shutdown"
+
+[[treasury]]
+known_on = "2030-04-11"
+source = "Invented unrestricted Parent treasury schedule T11"
+entity = "Parent"
+decision_cash_usd = "25000000"
+decision_floor_usd = "10000000"
+review_cash_usd = "26000000"
+review_floor_usd = "10000000"
+other_project = "West substation"
+other_due_usd = "7000000"

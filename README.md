@@ -13,6 +13,24 @@
 **FrankenMining is a system of record for how a mining company knows what it knows: from the first soil sample to
 the board's capital decision, every number carries its evidence, its uncertainty and its track record.**
 
+### Try a committee decision
+
+**DESIGN.** In the fictional North Basin case the committee can order a concentrator drive, pay to hold
+its delivery slot through an engineering review, or wait for the next slot. The first page compares
+cash due today, exposure on cancellation, days of commissioning delay after schedule float, both treasury
+checkpoints and the ability to fund a competing substation. Run it from the workspace root:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_purchase.toml --format markdown
+```
+
+Use `--json` for the full submitted worksheet, source digest, findings and comparison rows. The operator
+declares source availability, payment terms and financial scope. An input dated after the meeting refuses.
+The two-asset exercise and the independent controller arithmetic are in the [synthetic pilot](docs/delivery/EXECUTIVE_DECISION_PILOT.md).
+Other worksheets compare [tenure options](tests/capital/executive_tenure.toml),
+[attributable site offsets](tests/capital/executive_group.toml), [rehabilitation instruments](tests/capital/executive_rehabilitation.toml)
+and [original capital estimates against closeouts](tests/capital/executive_estimates.toml).
+
 A miner's numbers are produced by a dozen systems that each pass along a single value and discard how sure they
 were. The result is predictable:
 - guidance that misses;

@@ -6,6 +6,36 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 - **Crate:** `fmine-cli`
 - **Layer:** U
 - **Subsystem:** Adit
+
+- DESIGN (bd-4hg5, bd-rn1q, bd-3a2a, bd-jg7w, bd-zabr). `decide program` admits
+  `fmine.executive-decision.v1` for source-bound committee comparisons. Each worksheet declares owner,
+  scope, decision date, evidence lane, omitted uncertainty and a reconsideration trigger. Every table
+  names its source and reported availability date. The parser refuses future evidence, unknown fields,
+  invalid dates, duplicate options and mismatched scopes. JSON retains original bytes as UTF-8 and SHA-256.
+  Markdown identifies the source rows. None of the modes mutates an authority ledger.
+  - Procurement uses whole nominal USD and two checkpoints at one expressly named paying entity. Cash
+    balances exclude **both** proposed expenditures at both dates. The deposit is credited on purchase.
+    Total cancellation cost includes forfeiture and is settled net of the deposit at review; a negative
+    settlement is a declared refund. A hold preserves the quoted price and delivery; its specified credit
+    applies only on exercise. Full remaining supplier amounts settle on review in this bounded model.
+    Delay exposure is separate from cash at review. Cash headroom uses the same primitive as capital-program
+    opening checkpoints. The minimum upfront payment and the minimum cancellation loss each require
+    preserving the competing expenditure and both floors under proceed and cancel. Named scenario
+    arithmetic supplies no probabilities or engineering validation.
+  - Rehabilitation compares mutually exclusive, owner-eligible packages at one horizon. Work is paid on
+    its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
+    on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release
+    date leaves the net outcome unresolved once work is due.
+  - Tenure compares renew, farm out and surrender on stated costs, option bounds and linked rights. A
+    zero interest cannot specify retained option upside. Survey sensitivity uses the exploration kernel's
+    cover attenuation. No presence probability follows from a sensitive negative result.
+  - Group recovery applies each site's ownership fraction once to 100%-project production for the same
+    remaining period, unit and commodity. Distinct sites and the declared common capacity basis are
+    required. A lapsed intervention contributes only its baseline plan. Site ceilings are supplied bounds.
+  - Project estimates retain the complete declared cohort and hold out a latest approval. Only comparable
+    completed cost outcomes known strictly before that approval enter the lower-median actual/approval
+    ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
+    normalization remain the submitter's declarations. The ratio has no calibration claim.
 - **LOC budget:** 44,000 planned / 51,000 ceiling
 - **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 

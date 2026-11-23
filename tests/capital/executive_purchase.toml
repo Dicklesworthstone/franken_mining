@@ -1,0 +1,54 @@
+# SYNTHETIC. North Basin Metals, its instruments, dates and all amounts are invented.
+schema = "fmine.executive-decision.v1"
+decision = "purchase"
+question = "How should North Basin secure the concentrator drive before Friday?"
+owner = "Group investment committee"
+as_of = "2030-03-08"
+scope = "Parent treasury only; copper replacement circuit; whole nominal USD"
+evidence = "synthetic"
+uncertainty = "The engineering review may cancel the drive; no probability assigned"
+revisit_if = "The supplier changes the hold or the replacement mill delivery slot"
+
+[[order]]
+known_on = "2030-03-05"
+source = "Invented vendor offer VD-17 clauses 2 and 5"
+entity = "Parent"
+expires = "2030-03-08"
+review = "2030-03-22"
+price_usd = "20000000"
+deposit_usd = "3000000"
+total_cancel_usd = "5000000"
+
+[[hold]]
+known_on = "2030-03-07"
+source = "Invented VD-17 addendum 1, same firm price and reserved slot"
+accept_by = "2030-03-08"
+valid_through = "2030-03-22"
+fee_usd = "250000"
+credit_on_purchase_usd = "0"
+
+[[wait]]
+known_on = "2030-03-07"
+source = "Invented vendor quote VD-18; later delivery if slot lapses"
+delivery = "2030-12-15"
+valid_through = "2030-03-22"
+price_usd = "21500000"
+
+[[schedule]]
+known_on = "2030-03-06"
+source = "Invented baseline schedule B07, drive delivery to first ore"
+reserved_delivery = "2030-11-15"
+float_days = "12"
+delay_cost_usd_per_day = "80000"
+milestone = "First ore through the replacement circuit"
+
+[[treasury]]
+known_on = "2030-03-07"
+source = "Invented Treasury T09; parent unrestricted cash excluding both proposed payments and ring-fenced JV cash"
+entity = "Parent"
+decision_cash_usd = "19500000"
+decision_floor_usd = "18000000"
+review_cash_usd = "45000000"
+review_floor_usd = "18000000"
+other_project = "North Ridge substation"
+other_due_usd = "6500000"

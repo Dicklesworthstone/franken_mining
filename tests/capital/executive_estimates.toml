@@ -1,0 +1,66 @@
+schema = "fmine.executive-decision.v1"
+decision = "project_estimates"
+question = "Would past comparable projects have improved the South circuit estimate?"
+owner = "Investment committee and project controls"
+as_of = "2030-03-08"
+scope = "Invented North Basin Metals brownfield electrical packages"
+evidence = "synthetic"
+uncertainty = "Small cohort; a different scope or price convention can reverse the comparison"
+revisit_if = "Scope reconciliation changes or another project delivers a comparable outcome"
+
+[[cohort]]
+known_on = "2025-01-03"
+source = "Invented program register P01, cohort defined at inception"
+holdout = "South circuit"
+comparable_scope = "Original approved transformer package, excluding later scope additions"
+price_basis = "Constant 2025 USD at parent ownership, same cost categories"
+
+[[project]]
+known_on = "2027-07-31"
+source = "Invented completed file P11"
+id = "Western transformer"
+approved_on = "2025-07-31"
+approved_usd = "10000000"
+status = "completed"
+comparable_actual_usd = "12000000"
+scope_bridge = "Incremental switchyard expansion removed"
+
+[[project]]
+known_on = "2027-12-01"
+source = "Invented project exit P12"
+id = "Northern transformer"
+approved_on = "2026-02-28"
+approved_usd = "11000000"
+status = "cancelled"
+comparable_actual_usd = "unknown"
+scope_bridge = "Cancelled after permit timing changed"
+
+[[project]]
+known_on = "2029-08-29"
+source = "Invented closeout P13"
+id = "East circuit"
+approved_on = "2026-06-30"
+approved_usd = "18000000"
+status = "completed"
+comparable_actual_usd = "13500000"
+scope_bridge = "Closeout became available after South approval"
+
+[[project]]
+known_on = "2028-05-01"
+source = "Invented reauthorization P14"
+id = "Main transformer"
+approved_on = "2026-04-15"
+approved_usd = "12000000"
+status = "scope_changed"
+comparable_actual_usd = "unknown"
+scope_bridge = "Replacement package enlarged; original-scope cost unresolved"
+
+[[project]]
+known_on = "2030-02-28"
+source = "Invented approved paper and reconciled closeout P15"
+id = "South circuit"
+approved_on = "2028-07-01"
+approved_usd = "15000000"
+status = "completed"
+comparable_actual_usd = "17500000"
+scope_bridge = "South package aligns to original approval"
