@@ -58,6 +58,14 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   for interval loss and SCRP/v1 for finite CRPS; public PAIR/PCRP/GCRP encodings and durable journal bytes
   remain unchanged. Six independent kernel controls cover exact weighted scores, missingness, prospective
   identity, full citations, compatibility refusals and unsupported distributions.
+  DESIGN (BD-048): `PairedScore::Brier` adds exact paired binary-event losses to the same supplied-target
+  path. Every forecast in both complete cohorts must be Bernoulli, including unmatched members. Original
+  probabilities, including zero and one, are retained without a log-score floor. The difference
+  `(p_left - p_right) * (p_left + p_right - 2y)` has its binary completion extrema at zero and one;
+  equal probabilities cancel even when their individual rational representation exceeds capacity.
+  Missing outcomes remain in the denominator, while missing forecasts, source mismatches and arithmetic
+  failures keep affected aggregates unavailable. SBRI/v1 binds this separate comparison; existing
+  interval, CRPS, forecast and assessment encodings remain unchanged.
 - DESIGN (BD-067/BD-334): `record::candidate::build_candidate` generates a complete draft live-site × target
   record from already selected quarterly observations. The named `pooled-quarterly-ratio-empirical-v1` model
   uses each target's frozen persistence pool and inverse empirical CDF: the latest observation times

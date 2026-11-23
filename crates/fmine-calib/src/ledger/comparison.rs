@@ -16,6 +16,7 @@ use super::{
 };
 use crate::record::{interval_score, scoring::interval_score_difference_bounds};
 
+mod brier;
 mod crps;
 pub mod gaussian;
 pub mod supplied;
@@ -24,10 +25,14 @@ pub const METHOD: &str = "Paired central-interval loss, left minus right, at the
 
 pub const CRPS_METHOD: &str = "Paired full-distribution CRPS, left minus right, for finite empirical or exactly weighted empirical forecasts. Negative values favor the left cohort. Frozen binary support values and exact probability masses are retained without interpolation, resampling or normalization. Public target, ownership, vintage permission, alpha, assessment cut and outcome selector must agree; resolved pairs require identical numeric outcomes and complete citations. The union of frozen subjects remains visible. Observed means use identical-publication pairs only. Unresolved pairs use exact global CRPS-difference extrema at the union of forecast support atoms: the difference is linear between atoms and constant in both tails because both distributions have total mass one. Whole-population bounds require both forecasts and compatible selections for every subject. Checked rational capacity failures invalidate affected results without dropping members. These are arithmetic completion bounds, not confidence intervals. Registration times and information sets may differ. No sequential significance, independence, calibration or predictive-skill claim is supplied.";
 
+pub const BRIER_METHOD: &str = "Explicit supplied-target paired Brier loss, left minus right: (p_left-y)^2-(p_right-y)^2. Negative values favor the left cohort. Only frozen Bernoulli probabilities are admitted, including zero and one; no log-score floor, clipping, resampling or normalization changes them. Complete domain, site, horizon, quantity and unit labels and identical outcome deadlines identify each target. Resolution rule, eligible sources, alpha, assessment cut and selector must agree. Resolved pairs require identical binary outcomes and complete citations. Missing forecasts, unresolved outcomes and selection mismatches remain in the union. Exact checked rationals represent the frozen binary probabilities. For each unresolved compatible pair, the difference is affine in y and its exact extrema are attained at y=0 or y=1. Summing those extrema gives the sharp whole-population bounds over all binary completions; equal forecasts contribute exactly zero. Missing forecasts, incompatible selections or unrepresentable arithmetic leave affected aggregates unavailable. These are descriptive arithmetic bounds, not confidence intervals, sequential significance, calibration or predictive skill. Target declarations and citations remain supplied and unverified; model families, authors and information sets may differ.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairedScore {
     Interval,
     Crps,
+    /// Binary-event loss, admitted only through the explicit supplied-target comparison.
+    Brier,
 }
 
 impl PairedScore {
@@ -35,6 +40,7 @@ impl PairedScore {
         match self {
             Self::Interval => METHOD,
             Self::Crps => CRPS_METHOD,
+            Self::Brier => BRIER_METHOD,
         }
     }
 }
@@ -293,13 +299,17 @@ fn score_member(
         status,
         value,
     } = selected;
-    if score == PairedScore::Crps {
+    if matches!(score, PairedScore::Crps | PairedScore::Brier) {
         for member in [l, r].into_iter().flatten() {
             let forecast = ledger
                 .records
                 .get(&member.forecast_id)
-                .ok_or_else(|| absent("paired CRPS forecast is unavailable"))?;
-            crps::admit(&forecast.payload)?;
+                .ok_or_else(|| absent("paired distribution forecast is unavailable"))?;
+            match score {
+                PairedScore::Crps => crps::admit(&forecast.payload)?,
+                PairedScore::Brier => brier::admit(&forecast.payload)?,
+                PairedScore::Interval => {}
+            }
         }
     }
     let left_interval = (score == PairedScore::Interval)
@@ -313,6 +323,11 @@ fn score_member(
         .then(|| match score {
             PairedScore::Interval => scores(left_interval, right_interval, alpha, value),
             PairedScore::Crps => crps::scores(
+                &ledger.records.get(&l?.forecast_id)?.payload,
+                &ledger.records.get(&r?.forecast_id)?.payload,
+                value,
+            ),
+            PairedScore::Brier => brier::scores(
                 &ledger.records.get(&l?.forecast_id)?.payload,
                 &ledger.records.get(&r?.forecast_id)?.payload,
                 value,
@@ -497,6 +512,7 @@ impl PairedAssessment {
         let tag = match self.score {
             PairedScore::Interval => *b"PAIR",
             PairedScore::Crps => *b"PCRP",
+            PairedScore::Brier => *b"PBRI",
         };
         let mut enc = Encoder::new_frame(tag, 1);
         enc.put_fixed(&self.left_assessment.0);

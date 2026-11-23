@@ -416,3 +416,334 @@ fn an_unsupported_unmatched_distribution_cannot_be_silently_dropped() {
             .is_err()
     );
 }
+
+fn event_metadata(site: &str) -> ForecastMetadata {
+    let mut metadata = metadata(site);
+    metadata.family = "synthetic-event".into();
+    metadata.quantity = "event:complete_hour_meets_production_target".into();
+    metadata.unit = "1".into();
+    metadata
+}
+
+fn event_spec(name: &str, members: Vec<ObjectId>) -> CohortSpec {
+    let mut spec = spec(name, members);
+    spec.resolution_rule =
+        "Supplied binary event: complete frozen processing hour meets production target".into();
+    spec.policy.outcome_bounds = Some((0.0, 1.0));
+    spec
+}
+
+fn publish_event(ledger: &mut ForecastLedger, id: ObjectId, value: f64, locator: &str) {
+    ledger
+        .append_outcome(
+            id,
+            11,
+            12,
+            OutcomeKind::Published {
+                value,
+                citation: OutcomeCitation {
+                    source: "synthetic:mill-report".into(),
+                    vintage: "invented-complete-hour".into(),
+                    locator: locator.into(),
+                    sha256: [4; 32],
+                },
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn supplied_brier_comparison_keeps_binary_extremes_missing_events_and_saved_cuts() {
+    let mut ledger = ForecastLedger::new();
+    let left: Vec<_> = [("A", 1.0), ("B", 0.25), ("C", 0.0)]
+        .into_iter()
+        .map(|(site, probability)| {
+            register(
+                &mut ledger,
+                "left",
+                event_metadata(site),
+                10,
+                ForecastPayload::Bernoulli { probability },
+            )
+        })
+        .collect();
+    let right: Vec<_> = [("A", 0.0), ("B", 0.75), ("C", 0.0)]
+        .into_iter()
+        .map(|(site, probability)| {
+            register(
+                &mut ledger,
+                "right",
+                event_metadata(site),
+                10,
+                ForecastPayload::Bernoulli { probability },
+            )
+        })
+        .collect();
+    let mut left_spec = event_spec("left", left.clone());
+    let mut right_spec = event_spec("right", right.clone());
+    // Brier compares original probabilities; these different log-loss floors cannot clip them.
+    left_spec.policy.event_log_floor = Some(0.01);
+    right_spec.policy.event_log_floor = Some(0.1);
+    let lc = ledger.freeze_cohort(left_spec).unwrap();
+    let rc = ledger.freeze_cohort(right_spec).unwrap();
+    for id in [left[0], right[0]] {
+        publish_event(&mut ledger, id, 1.0, "Synthetic!A1");
+    }
+    for id in [left[1], right[1]] {
+        ledger
+            .append_outcome(
+                id,
+                11,
+                12,
+                OutcomeKind::Missing {
+                    reason: fmine_calib::ledger::MissingReason::NotPublished,
+                },
+            )
+            .unwrap();
+    }
+    let (l, rr) = (assess(&mut ledger, lc), assess(&mut ledger, rc));
+    let compared = ledger
+        .compare_supplied_assessments(l, rr, PairedScore::Brier)
+        .unwrap();
+    assert_eq!(
+        (
+            compared.n_paired,
+            compared.n_unresolved,
+            compared.n_unmatched,
+            compared.n_arithmetic_indeterminate,
+        ),
+        (1, 2, 0, 0)
+    );
+    // Independent direct-loss oracle: A gives 0-1=-1. B gives -1/2 at y=0 and
+    // +1/2 at y=1. Equal deterministic forecasts for C give zero at either outcome.
+    assert_eq!(compared.members[0].pair.difference, Some(r(-1, 1)));
+    assert_eq!(
+        compared.members[1].pair.completion,
+        Some((r(-1, 2), r(1, 2)))
+    );
+    assert_eq!(
+        compared.members[2].pair.completion,
+        Some((r(0, 1), r(0, 1)))
+    );
+    assert_eq!(compared.observed_mean_difference, Some(r(-1, 1)));
+    assert_eq!(compared.whole_population, Some((r(-1, 2), r(-1, 6))));
+    assert!(compared.members.iter().all(|member| {
+        member.pair.left_interval.is_none() && member.pair.right_interval.is_none()
+    }));
+    assert!(
+        compared.members[1]
+            .pair
+            .left
+            .as_ref()
+            .unwrap()
+            .selected_event
+            .is_some()
+    );
+    assert!(
+        compared.members[2]
+            .pair
+            .left
+            .as_ref()
+            .unwrap()
+            .selected_event
+            .is_none()
+    );
+    assert!(compared.method().contains("no log-score floor"));
+    let reverse = ledger
+        .compare_supplied_assessments(rr, l, PairedScore::Brier)
+        .unwrap();
+    assert_eq!(reverse.whole_population, Some((r(1, 6), r(1, 2))));
+    assert!(
+        ledger
+            .compare_supplied_assessments(l, rr, PairedScore::Crps)
+            .is_err()
+    );
+
+    for (index, site) in [(1, "B"), (2, "C")] {
+        for id in [left[index], right[index]] {
+            ledger
+                .append_outcome(
+                    id,
+                    21,
+                    22,
+                    OutcomeKind::Published {
+                        value: 0.0,
+                        citation: OutcomeCitation {
+                            source: "synthetic:mill-report".into(),
+                            vintage: "invented-complete-hour".into(),
+                            locator: format!("Synthetic!{site}1"),
+                            sha256: [4; 32],
+                        },
+                    },
+                )
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        ledger
+            .compare_supplied_assessments(l, rr, PairedScore::Brier)
+            .unwrap(),
+        compared
+    );
+    let newer: Vec<_> = [lc, rc]
+        .into_iter()
+        .map(|cohort| {
+            ledger
+                .assess(cohort, 30, OutcomeSelector::FirstPublished)
+                .unwrap()
+                .digest
+        })
+        .collect();
+    let completed = ledger
+        .compare_supplied_assessments(newer[0], newer[1], PairedScore::Brier)
+        .unwrap();
+    assert_eq!(completed.n_paired, 3);
+    assert_eq!(completed.whole_population, Some((r(-1, 2), r(-1, 2))));
+    assert_ne!(completed.digest, compared.digest);
+}
+
+#[test]
+fn brier_pairing_refuses_incompatible_targets_and_keeps_source_mismatches() {
+    for change in [
+        "none", "citation", "outcome", "event", "unit", "due", "cut", "selector", "domain",
+    ] {
+        let mut ledger = ForecastLedger::new();
+        let left = register(
+            &mut ledger,
+            "left",
+            event_metadata("A"),
+            10,
+            ForecastPayload::Bernoulli { probability: 0.0 },
+        );
+        let mut changed = event_metadata("A");
+        match change {
+            "event" => changed.quantity = "event:different_production_target".into(),
+            "unit" => changed.unit = "percent".into(),
+            "domain" => changed.domain = "different mill support".into(),
+            _ => {}
+        }
+        let right = register(
+            &mut ledger,
+            "right",
+            changed,
+            if change == "due" { 11 } else { 10 },
+            ForecastPayload::Bernoulli { probability: 1.0 },
+        );
+        let lc = ledger
+            .freeze_cohort(event_spec("left", vec![left]))
+            .unwrap();
+        let rc = ledger
+            .freeze_cohort(event_spec("right", vec![right]))
+            .unwrap();
+        publish_event(&mut ledger, left, 0.0, "Synthetic!A1");
+        publish_event(
+            &mut ledger,
+            right,
+            if change == "outcome" { 1.0 } else { 0.0 },
+            if change == "citation" {
+                "Different support!A1"
+            } else {
+                "Synthetic!A1"
+            },
+        );
+        let l = assess(&mut ledger, lc);
+        let rr = ledger
+            .assess(
+                rc,
+                if change == "cut" { 21 } else { 20 },
+                if change == "selector" {
+                    OutcomeSelector::LatestAsOf
+                } else {
+                    OutcomeSelector::FirstPublished
+                },
+            )
+            .unwrap()
+            .digest;
+        let report = ledger.compare_supplied_assessments(l, rr, PairedScore::Brier);
+        if matches!(change, "event" | "unit" | "due" | "cut" | "selector") {
+            assert!(report.is_err(), "{change}");
+        } else {
+            let report = report.unwrap();
+            if change == "none" {
+                assert_eq!(report.n_paired, 1);
+                assert_eq!(report.whole_population, Some((r(-1, 1), r(-1, 1))));
+            } else {
+                assert_eq!(report.n_paired, 0, "{change}");
+                assert_eq!(report.n_unmatched, if change == "domain" { 2 } else { 1 });
+                assert_eq!(report.observed_mean_difference, None);
+                assert_eq!(report.whole_population, None);
+            }
+        }
+    }
+}
+
+#[test]
+fn brier_requires_binary_forecasts_and_keeps_unrepresentable_members() {
+    let mut ledger = ForecastLedger::new();
+    let left = register(
+        &mut ledger,
+        "left",
+        event_metadata("A"),
+        10,
+        ForecastPayload::Bernoulli {
+            probability: f64::from_bits(1),
+        },
+    );
+    let right = register(
+        &mut ledger,
+        "right",
+        event_metadata("A"),
+        10,
+        ForecastPayload::Bernoulli { probability: 0.5 },
+    );
+    let lc = ledger
+        .freeze_cohort(event_spec("left", vec![left]))
+        .unwrap();
+    let rc = ledger
+        .freeze_cohort(event_spec("right", vec![right]))
+        .unwrap();
+    let (l, rr) = (assess(&mut ledger, lc), assess(&mut ledger, rc));
+    let report = ledger
+        .compare_supplied_assessments(l, rr, PairedScore::Brier)
+        .unwrap();
+    assert_eq!(report.members.len(), 1);
+    assert_eq!(report.n_unresolved, 1);
+    assert_eq!(report.n_arithmetic_indeterminate, 1);
+    assert_eq!(report.whole_population, None);
+    let identical = ledger
+        .compare_supplied_assessments(l, l, PairedScore::Brier)
+        .unwrap();
+    assert_eq!(identical.n_arithmetic_indeterminate, 0);
+    assert_eq!(identical.whole_population, Some((r(0, 1), r(0, 1))));
+
+    // Even an unmatched distribution with atoms at 0 and 1 cannot silently redefine an event.
+    let mut ledger = ForecastLedger::new();
+    let left = register(
+        &mut ledger,
+        "left",
+        event_metadata("A"),
+        10,
+        ForecastPayload::Bernoulli { probability: 0.5 },
+    );
+    let right = register(
+        &mut ledger,
+        "right",
+        event_metadata("B"),
+        10,
+        ForecastPayload::Empirical {
+            samples: vec![0.0, 1.0],
+        },
+    );
+    let lc = ledger
+        .freeze_cohort(event_spec("left", vec![left]))
+        .unwrap();
+    let rc = ledger
+        .freeze_cohort(event_spec("right", vec![right]))
+        .unwrap();
+    let (l, rr) = (assess(&mut ledger, lc), assess(&mut ledger, rc));
+    assert!(
+        ledger
+            .compare_supplied_assessments(l, rr, PairedScore::Brier)
+            .is_err()
+    );
+}

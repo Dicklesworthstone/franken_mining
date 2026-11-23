@@ -1144,6 +1144,15 @@ outcomes and assessments, and compares them after original source paths disappea
 example improves CRPS from `7/32` to `3/32`, with preceding unresolved difference bounds `[-1/8, 1/8]`.
 These scores and arithmetic completion bounds establish no calibration or statistical model superiority.
 
+DESIGN (BD-048): `--score brier --targets supplied` compares saved Bernoulli cohorts using their original
+probabilities and binary outcomes. Every member must be a Bernoulli forecast, including unmatched targets.
+For an unresolved matched event, the exact loss-difference extrema occur at outcomes zero and one.
+The result retains observed scores separately from whole-population completion bounds, with no dropped
+unresolved events or probability clipping. `fmine.forecast-supplied-brier-comparison.v1` uses SBRI/v1;
+the existing schemas and journal bytes are unchanged. Brier with default or explicit public targets
+refuses, so a requested score cannot silently fall through to interval scoring. JSON and Markdown
+retain the same target, source, missingness and arithmetic-capacity checks as the supplied interval path.
+
 ### Explicit forecast correction proposals (BD-049, plan §10.3)
 
 `forecast journal correction --journal <path> --assessment <digest> --forecast <alias> [--head <hex>]`

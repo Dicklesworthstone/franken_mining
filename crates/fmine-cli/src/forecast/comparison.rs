@@ -6,16 +6,14 @@ use fmine_calib::ForecastPayload;
 use fmine_calib::ledger::comparison::gaussian::{
     GaussianPairedAssessment, METHOD as GAUSSIAN_METHOD,
 };
-use fmine_calib::ledger::comparison::supplied::{
-    METHOD as SUPPLIED_METHOD, SuppliedPairedAssessment,
-};
+use fmine_calib::ledger::comparison::supplied::SuppliedPairedAssessment;
 use fmine_calib::ledger::comparison::{CrpsComparison, PairedAssessment, PairedScore};
 use fmine_numerics::exact_feas::Rat;
 
 use super::{Replay, absent, js, optional_number, selector_name, utc};
 use fmine_evidence::Refusal;
 
-pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps] [--targets public|supplied] [--head <hex>]","inputs":"Two already persisted assessments in the same journal; no clock sampling, new assessment, outcome selection or journal append","compatibility":"Default public: same frozen public issuer, metric, unit, ownership, calendar period, vintage permission, alpha, as-of cut and outcome selector","supplied_targets":"Explicit --targets supplied requires complete prospectively frozen metadata, identical resolution rule, eligible sources, quantity, unit, alpha, saved cut and selector. Pairing uses the unique full domain/site/horizon/quantity/unit tuple, with identical outcome deadlines for matching targets. Duplicate targets, legacy untagged forecasts and public-bound cohorts refuse; model/author labels do not establish physical identity. Target declarations and citations remain supplied and unverified","pairing":"Union of frozen targets, with paired numeric scores only for identical outcome values and complete citations; missing forecasts, unresolved outcomes and selection mismatches stay visible","score":"Default interval: unchanged exact rational interval loss and PAIR/v1 identity. Opt-in crps: exact full-distribution CRPS for empirical and weighted_empirical forecasts. Public comparisons additionally support homogeneous Gaussian forecasts under a separately typed approximate Gaussian comparison. Supplied CRPS requires complete finite distributions for every member, including unmatched forecasts. Both use left minus right, with negative favoring left","completion":"Finite CRPS uses exact global extrema from a union-of-support CDF sweep. Public Gaussian CRPS uses approximate analytic extrema at both infinite-tail limits and the unique CDF crossing, or monotonicity at equal scales; these are not certified numerical enclosures. Neither needs an invented outcome domain. Whole-union averages are absent if any target lacks a forecast or compatible selection, or required arithmetic is unrepresentable","identity":"Public interval PAIR/v1, finite CRPS PCRP/v1 and Gaussian GCRP/v1 schemas and digests are unchanged. The explicit supplied lane uses fmine.forecast-supplied-comparison.v1 with SINT/v1 or fmine.forecast-supplied-crps-comparison.v1 with SCRP/v1. Every frozen distribution, selected event and source citation remains available; no durable journal format changes","interpretation":"Descriptive arithmetic completion diagnostics, not confidence intervals, sequential significance, calibration or predictive skill; model information sets may differ; original assessments and registration identities remain unchanged"}"#;
+pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps|brier] [--targets public|supplied] [--head <hex>]","inputs":"Two already persisted assessments in the same journal; no clock sampling, new assessment, outcome selection or journal append","compatibility":"Default public: same frozen public issuer, metric, unit, ownership, calendar period, vintage permission, alpha, as-of cut and outcome selector","supplied_targets":"Explicit --targets supplied requires complete prospectively frozen metadata, identical resolution rule, eligible sources, quantity, unit, alpha, saved cut and selector. Pairing uses the unique full domain/site/horizon/quantity/unit tuple, with identical outcome deadlines for matching targets. Duplicate targets, legacy untagged forecasts and public-bound cohorts refuse; model/author labels do not establish physical identity. Target declarations and citations remain supplied and unverified","pairing":"Union of frozen targets, with paired numeric scores only for identical outcome values and complete citations; missing forecasts, unresolved outcomes and selection mismatches stay visible","score":"Default interval: unchanged exact rational interval loss and PAIR/v1 identity. Opt-in crps: exact full-distribution CRPS for empirical and weighted_empirical forecasts. Public comparisons additionally support homogeneous Gaussian forecasts under a separately typed approximate Gaussian comparison. Supplied CRPS requires complete finite distributions for every member, including unmatched forecasts. Opt-in brier requires explicit --targets supplied and complete Bernoulli forecasts throughout both cohorts. All use left minus right, with negative favoring left","completion":"Finite CRPS uses exact global extrema from a union-of-support CDF sweep. Public Gaussian CRPS uses approximate analytic extrema at both infinite-tail limits and the unique CDF crossing, or monotonicity at equal scales; these are not certified numerical enclosures. Neither needs an invented outcome domain. Whole-union averages are absent if any target lacks a forecast or compatible selection, or required arithmetic is unrepresentable","identity":"Public interval PAIR/v1, finite CRPS PCRP/v1 and Gaussian GCRP/v1 schemas and digests are unchanged. The explicit supplied lane uses fmine.forecast-supplied-comparison.v1 with SINT/v1, fmine.forecast-supplied-crps-comparison.v1 with SCRP/v1 or fmine.forecast-supplied-brier-comparison.v1 with SBRI/v1. Every frozen distribution, selected event and source citation remains available; no durable journal format changes","interpretation":"Descriptive arithmetic completion diagnostics, not confidence intervals, sequential significance, calibration or predictive skill; model information sets may differ; original assessments and registration identities remain unchanged","brier":"Exact Brier loss on original frozen Bernoulli probabilities, including zero and one; no log-score floor or clipping changes them. For unresolved compatible pairs, loss differences are affine in the binary outcome and their exact extrema occur at zero or one. Summed extrema give sharp full-population bounds over all binary completions. Equal forecasts contribute exactly zero, including deterministic events; unrepresentable checked arithmetic remains explicit"}"#;
 
 pub(super) fn crps(
     state: &Replay,
@@ -87,6 +85,7 @@ fn supplied_json(state: &Replay, report: &SuppliedPairedAssessment) -> Result<St
     let (schema, score) = match report.score {
         PairedScore::Interval => ("fmine.forecast-supplied-comparison.v1", "interval"),
         PairedScore::Crps => ("fmine.forecast-supplied-crps-comparison.v1", "crps"),
+        PairedScore::Brier => ("fmine.forecast-supplied-brier-comparison.v1", "brier"),
     };
     let (observed_status, completion_status) = supplied_statuses(report);
     Ok(format!(
@@ -102,7 +101,7 @@ fn supplied_json(state: &Replay, report: &SuppliedPairedAssessment) -> Result<St
         report.alpha,
         utc(report.as_of_ns),
         js(selector_name(report.selector)),
-        js(SUPPLIED_METHOD),
+        js(report.method()),
         report.members.len(),
         report.n_paired,
         report.n_unresolved,
@@ -123,10 +122,12 @@ fn supplied_markdown(
     let score = match report.score {
         PairedScore::Interval => "central interval loss",
         PairedScore::Crps => "complete finite-distribution CRPS",
+        PairedScore::Brier => "binary-event Brier loss on frozen probabilities",
     };
     let (observed_status, completion_status) = supplied_statuses(report);
+    let method = report.method();
     let mut out = format!(
-        "# Paired supplied-target assessment\n\n{SUPPLIED_METHOD}\n\nScore: **{score}**. Source citations: **supplied, not verified**.\n\nComparison: `{}`.\n\nLeft assessment: `{}`. Right assessment: `{}`.\n\nFrozen rule: {}. Eligible sources: {}. Quantity: {} ({}).\n\nAssessment cut: {}. Selector: {}. Frozen alpha: {}.\n\nPaired outcomes: {}. Unresolved pairs: {}. Unmatched targets or selections: {}. Arithmetic indeterminate: {}.\n\nObserved mean difference: {} ({}).\n\nWhole-population completion: {} ({}).\n\n| Site | Domain | Horizon | Outcome due | Status | Left minus right | Completion |\n|---|---|---|---|---|---:|---|\n",
+        "# Paired supplied-target assessment\n\n{method}\n\nScore: **{score}**. Source citations: **supplied, not verified**.\n\nComparison: `{}`.\n\nLeft assessment: `{}`. Right assessment: `{}`.\n\nFrozen rule: {}. Eligible sources: {}. Quantity: {} ({}).\n\nAssessment cut: {}. Selector: {}. Frozen alpha: {}.\n\nPaired outcomes: {}. Unresolved pairs: {}. Unmatched targets or selections: {}. Arithmetic indeterminate: {}.\n\nObserved mean difference: {} ({}).\n\nWhole-population completion: {} ({}).\n\n| Site | Domain | Horizon | Outcome due | Status | Left minus right | Completion |\n|---|---|---|---|---|---:|---|\n",
         report.digest,
         report.left_assessment,
         report.right_assessment,
@@ -390,6 +391,11 @@ pub(super) fn json(state: &Replay, report: &PairedAssessment) -> Result<String, 
     let schema = match report.score {
         PairedScore::Interval => "fmine.forecast-comparison.v1",
         PairedScore::Crps => "fmine.forecast-crps-comparison.v1",
+        PairedScore::Brier => {
+            return Err(super::invalid(
+                "Brier comparison requires explicit supplied targets",
+            ));
+        }
     };
     Ok(format!(
         "{{\"schema\":\"{schema}\",\"digest\":{},\"left_assessment\":{},\"right_assessment\":{},\"left_cohort\":{},\"right_cohort\":{},\"issuer\":{},\"metric\":{},\"unit\":{},\"ownership\":{},\"period\":{},\"alpha\":{},\"as_of\":{},\"selector\":{},\"method\":{},\"n_members\":{},\"n_paired\":{},\"n_unresolved\":{},\"n_unmatched\":{},\"n_arithmetic_indeterminate\":{},\"observed_status\":{},\"observed_mean_difference\":{},\"completion_status\":{},\"whole_population\":{},\"members\":[{members}]}}",
@@ -432,11 +438,13 @@ pub(super) fn markdown(report: &PairedAssessment) -> String {
     let title = match report.score {
         PairedScore::Interval => "Paired forecast assessment",
         PairedScore::Crps => "Paired full-distribution CRPS assessment",
+        PairedScore::Brier => "Paired binary-event Brier assessment",
     };
     let method = report.score.method();
     let alpha_label = match report.score {
         PairedScore::Interval => "Interval alpha",
         PairedScore::Crps => "Frozen alpha (compatibility only; CRPS uses all probability mass)",
+        PairedScore::Brier => "Frozen alpha (compatibility only; Brier uses binary event probabilities)",
     };
     let mut out = format!(
         "# {title}\n\n{method}\n\nComparison: `{}`\n\nLeft assessment: `{}`\n\nRight assessment: `{}`\n\nTarget: {} / {} / {} / {} / {}.\n\nAssessment cut: {}. Outcome selector: {}. {alpha_label}: {}.\n\nPaired outcomes: {}. Unresolved pairs: {}. Unmatched subjects or selections: {}.\n\nObserved mean difference: {} ({}).\n\nWhole-population completion: {} ({}).\n\n| Subject | Status | Left minus right | Completion |\n|---|---|---:|---|\n",

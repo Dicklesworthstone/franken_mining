@@ -925,7 +925,8 @@ fn parse_forecast_journal(
             let score = match fields.remove("--score").as_deref().unwrap_or("interval") {
                 "interval" => PairedScore::Interval,
                 "crps" => PairedScore::Crps,
-                _ => return Err("compare --score must be interval or crps".into()),
+                "brier" => PairedScore::Brier,
+                _ => return Err("compare --score must be interval, crps or brier".into()),
             };
             match fields.remove("--targets").as_deref().unwrap_or("public") {
                 "supplied" => Command::CompareSupplied {
@@ -935,6 +936,9 @@ fn parse_forecast_journal(
                     right,
                     score,
                 },
+                "public" if score == PairedScore::Brier => {
+                    return Err("compare --score brier requires --targets supplied".into());
+                }
                 "public" if score == PairedScore::Crps => Command::CompareCrps {
                     journal,
                     head,
@@ -2598,7 +2602,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal restate --journal <path> --head <hex> --cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
-                "forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps] [--targets public|supplied] [--head <hex>]",
+                "forecast journal compare --journal <path> --left <assessment-digest> --right <assessment-digest> [--score interval|crps|brier] [--targets public|supplied] [--head <hex>]",
                 "forecast journal correction --journal <path> (--assessment <digest> | --assessments <digests>) --forecast <alias> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 forecast_candidate::USAGE,

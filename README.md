@@ -3902,6 +3902,32 @@ intervals. Every frozen subject still contributes to the population checks, incl
 Mixed Gaussian/finite populations, intervals and quantile-only forecasts remain unsupported for paired CRPS.
 Replaying a comparison preserves both saved assessments and never appends to the forecast journal.
 
+### Compare saved event forecasts
+
+DESIGN (BD-048): saved supplied-outcome cohorts with prospectively frozen target metadata can also be
+compared using the proper binary-event Brier score:
+
+```bash
+cargo run -p fmine-cli -- forecast journal compare \
+  --journal runs/forecast-demo/history \
+  --left LEFT_ASSESSMENT_DIGEST --right RIGHT_ASSESSMENT_DIGEST \
+  --targets supplied --score brier --format markdown
+```
+
+Both complete cohorts must contain Bernoulli forecasts. Target identity, outcome deadlines, assessment
+cuts and full outcome citations must agree before a pair receives an observed score. The difference is
+left loss minus right loss, calculated exactly from the original frozen probabilities; zero and one
+are valid probabilities. Unresolved events retain their exact possible loss differences at outcomes
+zero and one. Whole-population bounds include those events, so a favorable score on the observed subset
+cannot silently stand in for the complete cohort. Missing forecasts, incompatible outcome selections
+or arithmetic capacity failures make affected aggregates unavailable.
+
+For example, probabilities 0.75 and 0.25 differ in Brier loss by -0.5 when the event occurs and +0.5
+when it does not. Before resolution, their difference is bounded by [-0.5, +0.5]. These are arithmetic
+completion bounds under the supplied target definitions, not confidence intervals or a calibration verdict.
+The command is read-only and preserves existing interval/CRPS receipts and journal history. Brier requires
+explicit `--targets supplied`; public-target comparisons retain their existing supported scores.
+
 ### Inspect an explicit forecast correction
 
 DESIGN (BD-049, plan §10.3): a complete saved assessment can propose a visible bias and interval

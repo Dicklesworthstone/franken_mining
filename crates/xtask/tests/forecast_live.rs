@@ -1951,3 +1951,125 @@ mod diagnostic_rendering {
         assert!(markdown.contains(&report.to_hex()));
     }
 }
+
+#[test]
+fn saved_binary_event_comparisons_reopen_without_clock_reads_or_journal_writes() {
+    struct NoComparisonClock;
+    impl WallClock for NoComparisonClock {
+        fn now_ns(&self) -> Result<i64, ClockError> {
+            panic!("saved comparisons must not sample the clock")
+        }
+    }
+
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    for (alias, model, site, probability) in [
+        ("la", "left", "A", "1"),
+        ("lb", "left", "B", "0.25"),
+        ("ra", "right", "A", "0"),
+        ("rb", "right", "B", "0.75"),
+    ] {
+        let request = format!(
+            "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{model}\"\noutcome_due = \"{DUE}\"\nkind = \"bernoulli\"\nprobability = \"{probability}\"\nfamily = \"synthetic-event\"\nauthor_role = \"synthetic-model-role\"\ndomain = \"synthetic-mill\"\nhorizon = \"synthetic complete processing hour\"\nsite = \"{site}\"\nquantity = \"event:complete_hour_meets_production_target\"\nunit = \"1\"\n"
+        );
+        journal.append(&request, ns("2030-01-02T00:00:00Z"));
+    }
+    for (name, members, floor) in [("left", "la,lb", "0.01"), ("right", "ra,rb", "0.1")] {
+        let frozen = cohort(members)
+            .replace("name = \"three-sites\"", &format!("name = \"{name}\""))
+            .replace(
+                "Synthetic annual output on a fixed basis",
+                "Supplied complete-hour binary production event",
+            )
+            .replace("outcome_hi = \"100\"", "outcome_hi = \"1\"");
+        journal.append(
+            &format!("{frozen}event_log_floor = \"{floor}\"\n"),
+            ns("2030-01-03T00:00:00Z"),
+        );
+    }
+    for alias in ["la", "ra"] {
+        journal.append(
+            &outcome(alias, 1, "2031-01-01T00:00:00Z", false),
+            ns("2031-01-02T00:00:00Z"),
+        );
+    }
+    let saved: Vec<_> = ["left", "right"]
+        .into_iter()
+        .map(|name| {
+            let result = journal.ok(
+                Command::Assess {
+                    journal: journal.path.clone(),
+                    head: journal.head,
+                    cohort: name.into(),
+                    as_of: CUT.into(),
+                    selector: "first-published".into(),
+                    expected_digest: None,
+                },
+                ns(CUT),
+            );
+            assessment_digest(&result)
+        })
+        .collect();
+    let command = Command::CompareSupplied {
+        journal: journal.path.clone(),
+        head: Some(journal.head),
+        left: saved[0],
+        right: saved[1],
+        score: fmine_calib::ledger::comparison::PairedScore::Brier,
+    };
+    let before = fs::read(&journal.path).unwrap();
+    let result = execute_with_clock(&command, &journal.root, &NoComparisonClock);
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    assert!(
+        result
+            .payload_json
+            .contains("\"schema\":\"fmine.forecast-supplied-brier-comparison.v1\"")
+    );
+    assert!(result.payload_json.contains("\"score\":\"brier\""));
+    assert!(
+        result
+            .payload_json
+            .contains("\"n_paired\":1,\"n_unresolved\":1,\"n_unmatched\":0")
+    );
+    assert!(
+        result
+            .payload_json
+            .contains("\"payload\":{\"kind\":\"bernoulli\",\"probability\":1}")
+    );
+    assert!(
+        result
+            .payload_json
+            .contains("\"payload\":{\"kind\":\"bernoulli\",\"probability\":0}")
+    );
+    assert!(result.payload_json.contains("Invented!A1"));
+    let markdown = result.rendered_markdown.as_deref().unwrap();
+    assert!(markdown.contains("binary-event Brier loss on frozen probabilities"));
+    assert!(markdown.contains("[-3/4, -1/4]"));
+    assert_eq!(fs::read(&journal.path).unwrap(), before);
+    let repeated = execute_with_clock(&command, &journal.root, &NoComparisonClock);
+    assert_eq!(repeated.to_json(), result.to_json());
+
+    let mut args = vec![
+        "forecast".into(),
+        "journal".into(),
+        "compare".into(),
+        "--journal".into(),
+        journal.path.to_str().unwrap().into(),
+        "--left".into(),
+        saved[0].to_hex(),
+        "--right".into(),
+        saved[1].to_hex(),
+        "--head".into(),
+        journal.head.to_hex(),
+        "--score".into(),
+        "brier".into(),
+        "--targets".into(),
+        "supplied".into(),
+    ];
+    let routed = fmine_cli::invoke(&args, &journal.root).0;
+    assert_eq!(routed.to_json(), result.to_json());
+    *args.last_mut().unwrap() = "public".into();
+    assert_ne!(fmine_cli::invoke(&args, &journal.root).0.exit_code, 0);
+    args.truncate(args.len() - 2);
+    assert_ne!(fmine_cli::invoke(&args, &journal.root).0.exit_code, 0);
+    assert_eq!(fs::read(&journal.path).unwrap(), before);
+}

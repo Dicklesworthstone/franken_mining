@@ -129,6 +129,7 @@ impl ForecastLedger {
     /// Explicitly compare two existing supplied-outcome assessments. This is never a fallback from
     /// public admission. Only frozen metadata determines the complete matching population.
     /// CRPS requires finite empirical distributions on every member, including unmatched forecasts.
+    /// Brier requires Bernoulli events throughout and uses their original probabilities without a floor.
     pub fn compare_supplied_assessments(
         &self,
         left_digest: Digest32,
@@ -258,6 +259,14 @@ impl ForecastLedger {
 }
 
 impl SuppliedPairedAssessment {
+    /// Method text is part of the separate receipt; existing interval and CRPS bytes are unchanged.
+    pub const fn method(&self) -> &'static str {
+        match self.score {
+            PairedScore::Brier => super::BRIER_METHOD,
+            PairedScore::Interval | PairedScore::Crps => METHOD,
+        }
+    }
+
     fn canonical_bytes(&self) -> Vec<u8> {
         fn rat(enc: &mut Encoder, value: Option<Rat>) {
             enc.put_u8(u8::from(value.is_some()));
@@ -269,11 +278,12 @@ impl SuppliedPairedAssessment {
         let tag = match self.score {
             PairedScore::Interval => *b"SINT",
             PairedScore::Crps => *b"SCRP",
+            PairedScore::Brier => *b"SBRI",
         };
         let mut enc = Encoder::new_frame(tag, 1);
         enc.put_fixed(&self.left_assessment.0);
         enc.put_fixed(&self.right_assessment.0);
-        enc.put_str(METHOD);
+        enc.put_str(self.method());
         enc.put_u64(self.members.len() as u64);
         for member in &self.members {
             member.target.encode(&mut enc);
