@@ -22,8 +22,20 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
   Every original alternative and the unconstrained ranking remain visible alongside eligible co-winners
   and the expected-value cost of the limit. An empty eligible set has no fallback. The risk Claim retains
   manifest SHA-256 and field locators, and limit/model/currency/basis changes bind receipt identity or
-  refuse. No information policy, safety constraint or calibrated risk estimate is supplied. Manifests
-  without a limit preserve their original canonical bytes and behavior;
+  refuse. No safety constraint or calibrated risk estimate is supplied. Manifests without a limit
+  preserve their original canonical bytes and behavior;
+  DESIGN (BD-225/227): comparison manifests optionally declare `information_option`, `signal` and
+  `likelihood` tables under `information_basis = "before_action_same_payoffs_explicit_delay_cost"`.
+  The shared decision-model parser admits exact nonnegative Money costs, integer delay days and complete
+  conditional signal distributions; the actual source state population is checked by `card::evaluate`.
+  Source-bound option Claims inherit every original input's evidence, confidentiality, UU and ancestry.
+  The existing finite evaluator owns EVSI, signal choices, net policy risk and downside screening.
+  Tests occur before one action and leave the source action payoffs unchanged by explicit assumption;
+  delay days do not infer a physical or financial adjustment. Unreachable signals remain visible,
+  losing tests remain in the receipt, and malformed or incomplete likelihoods refuse the whole result.
+  JSON and Markdown retain costs, likelihoods, posteriors, policy outcomes and all exact ties. Without
+  information rows, original declaration identities and output behavior remain unchanged. Synthetic
+  controls are in `valuation/comparison/tests.rs` and `fmine-cli/tests/production_comparison.rs`;
 - DESIGN (BD-225/229): `valuation::investment` derives mutually exclusive investment comparisons
   from complete, already evaluated operating cash receipts over explicitly declared periods. Initial
   capex is charged once; each period's unrounded same-state operating cash minus its do-nothing cash

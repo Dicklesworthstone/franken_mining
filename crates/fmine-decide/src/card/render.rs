@@ -500,6 +500,26 @@ impl EvaluatedCard {
         format!("{{{body},\"digest\":{}}}", js(&body_digest(&body)))
     }
 
+    /// Render the admitted test costs, full signal policies, posterior weights,
+    /// likelihoods and policy risk for composition into a source-derived report.
+    /// The monetary meaning remains the card's declared valuation basis.
+    #[must_use]
+    pub fn information_to_markdown(&self) -> Option<String> {
+        let information = self.summary().information.as_ref()?;
+        let mut out = String::new();
+        information_markdown(&mut out, information, &self.inputs.information_options);
+        Some(out)
+    }
+
+    /// Render the same act-now and fixed-policy downside screen as the full card.
+    #[must_use]
+    pub fn downside_to_markdown(&self) -> Option<String> {
+        self.summary()
+            .downside
+            .as_ref()
+            .map(downside::DownsideSummary::to_markdown)
+    }
+
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let s = self.summary();

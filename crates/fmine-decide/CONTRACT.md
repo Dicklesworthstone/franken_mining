@@ -131,6 +131,13 @@ The projection is an internal versioned replay input (version 2), not a new dura
   supplied source SHA-256 against the actual text, exact rational weights and likelihoods,
   at most four decimal money places, complete action/state membership and explicit positive finite UU exposure.
   All parsed Claims remain internal, Assumed and uncalibrated. Unknown fields cannot upgrade those labels.
+- DESIGN (BD-225/227): `card::model::parse_information_options` shares that strict option/signal/
+  likelihood grammar with source-derived operating and investment decisions. It returns values without
+  inventing source Claims or physical state membership: the adapter must inherit source metadata and
+  call `card::evaluate` against its complete admitted state law. `INFORMATION_BASIS` names the explicit
+  before-action, unchanged-payoff and declared-delay-cost assumption. `EvaluatedCard` exposes
+  `information_to_markdown` and `downside_to_markdown` so source-retaining receipts can render the same
+  complete policy and risk results without a second evaluator or loss of information-option choices.
 - `FlipMargin`, `DecisionCard` (`build`, `build_as_of`, `temporal_replay_bytes`)
 - `RetrospectiveDecisionCard`: immutable `card`, `cone` and `replay` accessors; scoped Markdown renderer
   (`render_one_pager_markdown`), which puts a "Historical check" section before the card

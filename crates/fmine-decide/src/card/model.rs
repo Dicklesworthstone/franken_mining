@@ -28,10 +28,73 @@ const BASIS: RefusalCode = RefusalCode::BasisMismatch105;
 const DOMAIN: RefusalCode = RefusalCode::OutsidePhysicalDomain109;
 const UU: RefusalCode = RefusalCode::UnbudgetedUnknowns204;
 
+/// Source-derived decisions observe the test before acting and explicitly keep
+/// the supplied action cash flows valid after its declared delay. Test and delay
+/// costs share that decision's monetary valuation basis; time shifts are not inferred.
+pub const INFORMATION_BASIS: &str = "before_action_same_payoffs_explicit_delay_cost";
+
 struct DeclaredAction {
     label: String,
     role: ActionRole,
     line: usize,
+}
+
+/// Parse the existing information-option grammar for a source-derived decision.
+///
+/// `rows` contains only `information_option`, `signal` and `likelihood` tables.
+/// The same parser as the standalone decision model checks costs, identifiers,
+/// duplicates, explicit zeros and each state's exact conditional probability sum.
+/// This does not establish which physical states exist: the caller must bind the
+/// returned values into source Claims and pass them to `card::evaluate`, which
+/// checks the complete likelihood matrix against the actual admitted population.
+pub fn parse_information_options(
+    rows: &[TomlRow],
+    model_key: &str,
+    currency: Currency,
+    valuation_basis: &str,
+) -> Result<Vec<InformationOption>, Refusal> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !clean(model_key) || !clean(valuation_basis) {
+        return Err(bad(INPUT, 1, "model key and valuation basis must be named"));
+    }
+    let mut information = InformationRows::default();
+    for row in rows {
+        match row.table.as_str() {
+            "information_option" => {
+                information.option(row, model_key, currency, valuation_basis)?
+            }
+            "signal" => information.signal(row)?,
+            "likelihood" => information.likelihood(row)?,
+            other => {
+                return Err(bad(
+                    INPUT,
+                    row.line,
+                    &format!("unknown information table {other}"),
+                ));
+            }
+        }
+    }
+    // Values here are unused: only the declared state keys enter matrix admission.
+    // The real population and its weights belong to the source-derived evaluator.
+    let states = information
+        .likelihoods
+        .keys()
+        .map(|(_, state, _)| (state.clone(), Rat::from_integer(1)))
+        .collect::<BTreeMap<_, _>>();
+    if !information.options.is_empty() && states.is_empty() {
+        return Err(bad(
+            BASIS,
+            1,
+            "information options require explicit state/signal likelihoods",
+        ));
+    }
+    Ok(information
+        .finish_values(&states)?
+        .into_iter()
+        .map(|(option, _)| option)
+        .collect())
 }
 
 /// Reads `fmine.decision-model.v1` with the registry TOML subset, checking the supplied source digest.
@@ -510,7 +573,10 @@ impl InformationRows {
             row.line,
             INPUT,
         )?;
-        for id in [option, state, signal] {
+        // Source-derived populations retain their admitted named state labels.
+        // strings() checks clean text; standalone state declarations separately
+        // enforce their stricter key grammar before matching these likelihoods.
+        for id in [option, signal] {
             key(id, row.line)?;
         }
         let probability = fraction(value, row.line, true)?;
@@ -537,6 +603,29 @@ impl InformationRows {
         unknowns: &[UuTerm],
         source: &SourceAnchor,
     ) -> Result<Vec<Claim<InformationOption>>, Refusal> {
+        Ok(self
+            .finish_values(states)?
+            .into_iter()
+            .map(|(option, line)| {
+                let id = &option.option_id;
+                let tag = option.canonical_tag();
+                let locator = format!("information option {id}, line {line}");
+                assumed(
+                    format!("decision.{}.information.{id}", option.model_key),
+                    option,
+                    &tag,
+                    AdditivityClass::NonAdditive,
+                    unknowns,
+                    located(source, &locator),
+                )
+            })
+            .collect())
+    }
+
+    fn finish_values(
+        self,
+        states: &BTreeMap<String, Rat>,
+    ) -> Result<Vec<(InformationOption, usize)>, Refusal> {
         if self.options.len() > super::MAX_INFORMATION_OPTIONS {
             return Err(bad(
                 DOMAIN,
@@ -567,7 +656,7 @@ impl InformationRows {
                 ));
             }
         }
-        let mut claims = Vec::new();
+        let mut options = Vec::new();
         for (id, (mut option, line)) in self.options {
             option.signals = self
                 .signals
@@ -611,17 +700,9 @@ impl InformationRows {
                     ));
                 }
             }
-            let tag = option.canonical_tag();
-            claims.push(assumed(
-                format!("decision.{}.information.{id}", option.model_key),
-                option,
-                &tag,
-                AdditivityClass::NonAdditive,
-                unknowns,
-                located(source, &format!("information option {id}, line {line}")),
-            ));
+            options.push((option, line));
         }
-        Ok(claims)
+        Ok(options)
     }
 }
 
@@ -925,6 +1006,87 @@ probability = "17/20"
 
     fn refusal(text: &str) -> Refusal {
         parse(text, source(text)).expect_err("invalid declared model must refuse")
+    }
+
+    #[test]
+    fn shared_information_parser_preserves_standalone_values_and_absent_legacy_options() {
+        assert!(
+            parse_information_options(&[], "", Currency::USD, "")
+                .unwrap()
+                .is_empty()
+        );
+        let text = format!("{MODEL}{INFORMATION}");
+        let standalone = parse(&text, source(&text)).unwrap();
+        let mut rows = parse_subset(INFORMATION).unwrap().rows;
+        let parsed = parse_information_options(
+            &rows,
+            "synthetic-choice",
+            Currency::USD,
+            "synthetic present value at declared cut",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            standalone
+                .information_options
+                .iter()
+                .map(|c| c.value.clone())
+                .collect::<Vec<_>>()
+        );
+        rows.reverse();
+        assert_eq!(
+            parsed,
+            parse_information_options(
+                &rows,
+                "synthetic-choice",
+                Currency::USD,
+                "synthetic present value at declared cut",
+            )
+            .unwrap()
+        );
+        let named = parse_information_options(
+            &rows,
+            "source comparison/v1",
+            Currency::USD,
+            "declared cash",
+        )
+        .unwrap();
+        assert_eq!(named[0].model_key, "source comparison/v1");
+        assert_eq!(named[0].test_cost.minor, 60_000_000_000);
+        assert_eq!(named[0].delay_cost.minor, 38_000_000_001);
+        let named_states = INFORMATION.replace("state = \"high\"", "state = \"hard ore/domain\"");
+        let rows = parse_subset(&named_states).unwrap().rows;
+        let named = parse_information_options(
+            &rows,
+            "source comparison/v1",
+            Currency::USD,
+            "declared cash",
+        )
+        .unwrap();
+        assert!(
+            named[0]
+                .likelihoods
+                .iter()
+                .any(|row| row.state_id == "hard ore/domain")
+        );
+        let standalone = format!("{MODEL}{named_states}");
+        assert!(parse(&standalone, source(&standalone)).is_err());
+        for invalid in [
+            INFORMATION.replace("17/20", "16/20"),
+            INFORMATION.replace("test_cost = \"6000000\"", "test_cost = \"-1\""),
+            INFORMATION.replace("[[signal]]", "[[unrecognized]]"),
+        ] {
+            let rows = parse_subset(&invalid).unwrap().rows;
+            assert!(
+                parse_information_options(
+                    &rows,
+                    "source comparison/v1",
+                    Currency::USD,
+                    "declared cash",
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

@@ -168,6 +168,25 @@ source paths are relative to the workspace root. The result compares individual 
 not establish a combined portfolio, causal counterfactual, calibrated forecast, project NPV or authority
 to operate the plant.
 
+DESIGN (BD-225/227): compare a declared test with acting immediately, directly from the retained
+operating source bundles:
+
+```bash
+cargo run -p fmine-cli -- decide production \
+  --manifest tests/decisions/production_testwork.toml --format markdown
+```
+
+The manifest supplies explicit test and delay costs, named signals and every state/signal likelihood,
+including zeros. Its `information_basis = "before_action_same_payoffs_explicit_delay_cost"` declaration
+assumes the result arrives before selecting an operating mode and that the original cash margins remain
+valid after the delay. Delay days do not infer lost production or shift operating dates. The existing
+exact decision evaluator reports EVSI, net VOI, posterior choices, realized policy risk and downside
+eligibility while preserving the original physical and commercial Claims. In the synthetic example,
+a perfect test is worth $596 before its $80 test cost and $20 delay cost, leaving $496 net VOI.
+An uninformative test has zero gross information value; missing likelihoods refuse the calculation.
+These are conditional arithmetic results under declared assumptions, not evidence of a real test's
+accuracy, calibrated probabilities or permission to operate.
+
 DESIGN (BD-176/181): the opt-in `fmine.plant-production.v2` worksheet declares available dry ore for
 every shared scenario. It processes the lesser of that supply and the grinding capacity over the scheduled
 exposure, retaining both quantities, unused feed and capacity, used exposure and the binding constraint:

@@ -57,36 +57,31 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| invalid(e.line, e.reason))?;
-    if doc.rows.len() > MAX_ALTERNATIVES + 1 {
-        return Err(invalid(
-            1,
-            "at most sixteen alternative source bundles and one downside limit are supported",
-        ));
+    let mut top_fields = vec![
+        "schema",
+        "model_key",
+        "question",
+        "shared_scenario_basis",
+        "boundary",
+        "circuit",
+        "material_domain",
+        "dry_basis",
+        "element",
+        "start_ns",
+        "end_ns",
+        "commercial_support",
+    ];
+    if doc.top_get("information_basis").is_some() {
+        top_fields.push("information_basis");
     }
-    let top = fields(
-        &doc.top,
-        &[
-            "schema",
-            "model_key",
-            "question",
-            "shared_scenario_basis",
-            "boundary",
-            "circuit",
-            "material_domain",
-            "dry_basis",
-            "element",
-            "start_ns",
-            "end_ns",
-            "commercial_support",
-        ],
-        1,
-    )?;
+    let top = fields(&doc.top, &top_fields, 1)?;
     if get(&top, "schema")?.0 != SCHEMA {
         return Err(invalid(1, format!("schema must be {SCHEMA}")));
     }
     let mut anchors = vec![source.clone()];
     let mut sources = BTreeMap::new();
     let mut downside_limit = None;
+    let mut information_rows = Vec::new();
     for row in &doc.rows {
         match row.table.as_str() {
             "alternative" => {
@@ -146,10 +141,13 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
                     policy_optimization: None,
                 });
             }
+            "information_option" | "signal" | "likelihood" => {
+                information_rows.push(row.clone());
+            }
             _ => {
                 return Err(invalid(
                     row.line,
-                    "only [[alternative]] and [[downside_limit]] tables are supported",
+                    "only alternative, downside_limit, information_option, signal and likelihood tables are supported",
                 ));
             }
         }
@@ -167,6 +165,28 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
             "two to sixteen alternative source bundles required",
         ));
     }
+    let information_basis = top
+        .get("information_basis")
+        .map(|(value, _)| (*value).to_owned());
+    match (information_basis.as_deref(), information_rows.is_empty()) {
+        (None, true) | (Some(INFORMATION_BASIS), false) => {}
+        _ => {
+            return Err(invalid(
+                1,
+                "information rows require information_basis = before_action_same_payoffs_explicit_delay_cost; the basis alone is not accepted",
+            ));
+        }
+    }
+    let information_options = if information_rows.is_empty() {
+        Vec::new()
+    } else {
+        card::model::parse_information_options(
+            &information_rows,
+            get(&top, "model_key")?.0,
+            Currency::USD,
+            VALUATION_BASIS,
+        )?
+    };
     for field in &doc.top {
         anchors.push(SourceAnchor::new(
             &source.artifact_path,
@@ -194,6 +214,8 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         commercial_support: get(&top, "commercial_support")?.0.into(),
         action_ids: sources.keys().cloned().collect(),
         downside_limit,
+        information_basis,
+        information_options,
     };
     if spec.start_ns >= spec.end_ns {
         return Err(invalid(
