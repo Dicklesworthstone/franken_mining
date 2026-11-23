@@ -1756,6 +1756,7 @@ The wider CapitalProgram and its M4 gates remain open.
 cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_ore.toml --json
 cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_ore_tonnes.toml --format markdown
 cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_blend.toml --format markdown
+cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_dry_blend.toml --format markdown
 ```
 
 The strict `fmine.recovery-bounds.v1` worksheet declares tested and untested recovery intervals,
@@ -1770,7 +1771,10 @@ guarantees the 85% recovery target under those assumptions. A share **above 50%*
 Exactly 50% can still meet the target at the upper recovery bound. The percentages refer to contained
 metal. With dry tonnages and grade ranges for both feeds, the same command also reports the fraction
 of dry feed that guarantees each outcome. Those windows hold across every grade and recovery admitted
-by the worksheet. A metal-share-only worksheet leaves the dry-feed fraction undefined.
+by the worksheet. In the synthetic gold dry-blend example, tested feed grades 1–2 g/t and untested feed
+grades 2–4 g/t. Up to **1/37 of dry feed** (about 2.7%) meets the 85% recovery target across those bounds.
+Above **one half of dry feed**, every admitted combination misses. At exactly one half, the most favourable
+combination still meets the target. A metal-share-only worksheet leaves the dry-feed fraction undefined.
 
 For the first synthetic worksheet, uncertain weights and tested recovery give an aggregate interval
 of **[19/25, 917/1000]**. At an 85% threshold the choice is unstable: a valid test raising the untested

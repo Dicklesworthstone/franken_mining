@@ -1,0 +1,39 @@
+# Synthetic gold feed parcels. Tonnes are dry metric tonnes and grades are grams of gold per tonne.
+schema = "fmine.recovery-bounds.v1"
+model_key = "dry_feed_blend"
+question = "Which dry-feed proportions meet the gold recovery target across both grade ranges?"
+route = "one additive gold route"
+metal = "Au"
+additivity_basis = "Assume each parcel retains its recovery on blending throughout the declared range."
+untested_bound_basis = "An assumed 40–80% recovery range for the untested feed."
+
+[[weights]]
+basis = "dry_tonnes_and_grade"
+tested_tonnes_lower = "1"
+tested_tonnes_upper = "99"
+tested_grade_g_per_t_lower = "1"
+tested_grade_g_per_t_upper = "2"
+untested_tonnes_lower = "0"
+untested_tonnes_upper = "99"
+untested_grade_g_per_t_lower = "2"
+untested_grade_g_per_t_upper = "4"
+
+[[recovery]]
+role = "tested"
+lower = "0.90"
+upper = "0.90"
+
+[[recovery]]
+role = "untested"
+lower = "0.40"
+upper = "0.80"
+
+[[decision]]
+rule = "proceed_if_at_least"
+threshold = "0.85"
+
+[[uu]]
+id = "unmodelled_blend_interaction"
+description = "A blend interaction could invalidate the declared additive recovery."
+trigger = "Mixed-feed test recovery falls outside the declared bounds."
+downside_usd_m = "1"
