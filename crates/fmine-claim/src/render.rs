@@ -183,8 +183,14 @@ pub fn build_fm_row<T>(
 
     let badge = evidence_badge(claim.evidence);
     let axis = epistemic_axis_label(claim.epistemic);
-    let color = color_label(&claim.color());
-    let cal_flag = calibration_flag(claim);
+    let projected = claim.color();
+    let cal_flag =
+        if projected.is_err() && !matches!(claim.evidence, EvidenceClass::Assertion { .. }) {
+            "calibration_failed"
+        } else {
+            calibration_flag(claim)
+        };
+    let color = color_label(&projected);
     let cal_detail = input
         .calibration_summary
         .map_or_else(|| cal_flag.to_string(), str::to_string);
@@ -434,25 +440,39 @@ mod tests {
             Vec::new(),
             vec![anchor.clone()],
         )
-        .with_regime(ValidityDomain::unconstrained(), "qaqc-2026q2");
+        .with_regime(
+            ValidityDomain::unconstrained().with("cost-usd-per-oz", 1440.0, 1460.0),
+            "qaqc-2026q2",
+        );
 
-        let row1 = build_fm_row(
-            &ClaimRenderInput {
-                claim: &measured,
-                value_range_text: "1,445–1,455",
-                unit: "$/oz sold (61.5% attributable)",
-                calibration_summary: None,
-                flip_margin: None,
-            },
-            &Confidentiality::public(),
-        )
-        .expect("render measured row");
+        let measured_input = ClaimRenderInput {
+            claim: &measured,
+            value_range_text: "1,445–1,455",
+            unit: "$/oz sold (61.5% attributable)",
+            calibration_summary: None,
+            flip_margin: None,
+        };
+        let row1 =
+            build_fm_row(&measured_input, &Confidentiality::public()).expect("render measured row");
 
         let expected_l1 = format!(
             "[{} | barrick.ngm.aisc_2026q2 | 1,445–1,455 $/oz sold (61.5% attributable) | MEASURED | KK | cal=not_applicable | flip=none | Validated(qaqc-2026q2)]",
             measured.claim_id
         );
         assert_eq!(render_level1(&row1), expected_l1);
+        let malformed = measured
+            .clone()
+            .with_regime(ValidityDomain::unconstrained(), "qaqc-2026q2");
+        let refused = build_fm_row(
+            &ClaimRenderInput {
+                claim: &malformed,
+                ..measured_input
+            },
+            &Confidentiality::public(),
+        )
+        .unwrap();
+        assert_eq!(refused.color_label, "Refused(FMINE-REF-205)");
+        assert_eq!(refused.calibration_flag, "calibration_failed");
 
         // 2. ModelledUncalibrated KU+UU Claim with flip margin & calibration track record.
         let modeled = Claim::new(

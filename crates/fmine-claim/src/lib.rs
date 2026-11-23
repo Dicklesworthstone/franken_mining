@@ -263,8 +263,13 @@ impl<T> Claim<T> {
         if self.calibration_failed {
             return Err(refused("calibration failed"));
         }
-        let color = project_color(self.evidence, self.color_basis.as_ref())
-            .ok_or_else(|| refused("an unreviewed assertion has no colour"))?;
+        let color = project_color(self.evidence, self.color_basis.as_ref()).ok_or_else(|| {
+            if matches!(self.evidence, EvidenceClass::Assertion { .. }) {
+                refused("an unreviewed assertion has no colour")
+            } else {
+                refused("invalid colour basis: check the enclosure, calibration domain, dataset or spread")
+            }
+        })?;
         if self.stale && color.rank() > fmine_evidence::color::ColorRank::Estimated {
             return Ok(Color::Estimated {
                 estimator: "state:stale".to_string(),
@@ -359,10 +364,15 @@ pub fn compose_binary<A, B, R>(
     let epistemic = left.epistemic.and(right.epistemic);
     let state = left.state.and(right.state);
     let confidentiality = left.confidentiality.join(&right.confidentiality);
-    let color_basis = match (left.color(), right.color()) {
-        (Ok(a), Ok(b)) => Some(compose(&a, &b, op)),
-        _ => None,
-    };
+    let left_color = left.color();
+    let right_color = right.color();
+    let invalid_calibration = (left_color.is_err()
+        && !matches!(left.evidence, EvidenceClass::Assertion { .. }))
+        || (right_color.is_err() && !matches!(right.evidence, EvidenceClass::Assertion { .. }));
+    let color_basis = left_color
+        .ok()
+        .zip(right_color.ok())
+        .map(|(a, b)| compose(&a, &b, op));
 
     let mut uu_terms = left.uu_terms.clone();
     for u in &right.uu_terms {
@@ -399,7 +409,8 @@ pub fn compose_binary<A, B, R>(
     );
     derived.color_basis = color_basis;
     derived.stale = left.stale || right.stale;
-    derived.calibration_failed = left.calibration_failed || right.calibration_failed;
+    derived.calibration_failed =
+        left.calibration_failed || right.calibration_failed || invalid_calibration;
     derived
 }
 
@@ -804,6 +815,16 @@ mod tests {
     fn test_with_regime_keeps_a_validated_basis_only_for_a_class_that_may_stand_on_one() {
         let stands = leaf("stands", EvidenceClass::Measured).with_regime(regime(), "qaqc-2026");
         assert_eq!(stands.color().map(|c| c.rank()), Ok(ColorRank::Validated));
+        let invalid = leaf("empty-regime", EvidenceClass::Measured)
+            .with_regime(ValidityDomain::unconstrained(), "qaqc-2026");
+        assert_eq!(invalid.color().unwrap_err().code, "FMINE-REF-205");
+        assert_eq!(
+            join("child-invalid", &stands, &invalid)
+                .color()
+                .unwrap_err()
+                .code,
+            "FMINE-REF-205"
+        );
 
         // Bare, a Measured claim has nothing to stand on yet.
         let bare = leaf("bare", EvidenceClass::Measured);

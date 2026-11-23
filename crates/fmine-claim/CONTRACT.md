@@ -64,6 +64,8 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - A write to any hashed field is refused by `check_id`, and by `ClaimDag::insert`, which then stores nothing. A write to an unhashed field is not detected: `test_edited_claim_is_refused_and_unhashed_fields_are_not`.
 - `downgraded` never raises a class. A changed claim gets a new id, and its `supersedes` names the old one: `test_downgraded_supersedes_and_never_raises`.
 - A colour cannot be set. Its basis is private (the `compile_fail,E0616` doctest on `Claim`). `with_regime` counts only for a class that `project_color` lets stand on an anchor: `test_with_regime_keeps_a_validated_basis_only_for_a_class_that_may_stand_on_one`.
+- DESIGN (bd-wiaq). A malformed basis used for projection refuses with `FMINE-REF-205`, including on
+  derived claims. Rendering identifies the refused colour and failed calibration.
 - An `Assertion` and a failed calibration have no colour, and the refusal passes to what they feed. A stale claim shows at most `Estimated`: `test_assertion_failed_calibration_and_staleness_never_show_a_strong_colour`.
 
 **Composition.**

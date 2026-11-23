@@ -12,10 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::{codec::Encoder, hash::blake3_hash};
-use fmine_evidence::{
-    Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode,
-    color::validate_color_payload,
-};
+use fmine_evidence::{Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_time::ValidTime;
 use fmine_units::{ExactQty, UnitsError};
 
@@ -301,13 +298,8 @@ pub(crate) fn admit_source_at_support<T>(
             "invalid supplied unknown-unknown metadata",
         ));
     }
-    if let Ok(color) = input.color() {
-        validate_color_payload(&color).map_err(|_| {
-            bad(
-                RefusalCode::CalibrationRequired205,
-                "invalid input colour metadata",
-            )
-        })?;
+    if !matches!(input.evidence, EvidenceClass::Assertion { .. }) {
+        input.color()?;
     }
     Ok(())
 }

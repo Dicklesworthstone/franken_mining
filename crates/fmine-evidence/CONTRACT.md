@@ -63,7 +63,10 @@ None is a Claim.
   - `test_plan_meanings_on_known_codes` spot-checks the number, exit and status of four codes: 401 and 104 (active), 505 and 506 (proposed). It also checks that 105's fix does not say "clamp".
 
 ## 5. Refusals
-This crate defines the codes; it raises none. `validate_color_payload` returns a typed `ColorPayloadError` (`InvalidIdentity`, `InvalidVerifiedInterval`, `InvalidValidatedRegime` or `InvalidEstimatedDispersion`), not a `Refusal`. `compose` does not refuse a malformed payload either: it demotes it to Estimated with `∞` dispersion. `project_color` returns `None` for an `Assertion`, and `fmine_claim::Claim::color` turns that into `FMINE-REF-205`.
+This crate defines the refusal codes. `validate_color_payload` identifies malformed identities, intervals,
+regimes and dispersions. `compose` demotes malformed inputs to Estimated with infinite dispersion.
+`project_color` returns `None` for an assertion or a malformed basis that would supply the projected
+colour. `fmine_claim::Claim::color` reports either case as `FMINE-REF-205`.
 
 The catalogue has 33 codes:
 - 25 `active`, the codes plan §8.4 lists;
@@ -86,7 +89,10 @@ Not applicable: no Claims are emitted. This crate defines the classes and states
 - **Colour payloads.** A Verified interval with a NaN, an inverted pair, or a point at infinity is malformed. A half-infinite or whole-line interval is valid but says nothing. A Validated colour needs a valid dataset identity and at least one axis, and every axis must be validly named, finite and ordered. An Estimated dispersion must be neither NaN nor negative. `ValidityDomain::with` reorders reversed finite bounds, and a NaN bound leaves the domain empty.
 - **`IntervalOp::Hull`** encloses the result only for operations whose value lies between its operands: min, max, selection and convex combination. `compose` cannot tell which operation the caller meant. `test_hull_is_not_used_for_difference` shows the hull missing a difference.
 - **Identities.** At most 256 bytes, ASCII letters and digits plus `-_./:@+=`, not blank, with no surrounding space or control character, and no placeholder token (`tbd`, `n/a`, …). A composed identity that would be longer, or that has an invalid part, becomes a BLAKE3 digest. That digest differs from frankensim's for the same inputs.
-- **`project_color` and a Verified basis.** §7.1 projects `ModelledCalibrated` and an in-AOA transfer to Validated, and reserves Verified for interval enclosures. Those two classes ignore a Verified basis (bd-wiaq). `Measured` and `Derived` keep one: `test_measured_and_derived_keep_a_verified_basis` pins `Measured`'s behaviour until the owner rules (Known gaps). In the tree today the basis comes only from `fmine_claim`: `with_regime` makes a Validated basis, and `compose_binary` composes the parents' colours. So no Verified basis reaches `project_color`.
+- **DESIGN (bd-wiaq, §7.1).** A measured claim with a QA/QC record and a bounded calibration domain can be
+  Validated. Verified requires a separately established interval enclosure. Measured and Derived preserve
+  a supplied, well-formed enclosure. The caller supplies its mathematical justification. Calibrated models
+  and transfers inside their applicability domain retain the Validated ceiling.
 - **Assertion sources.** When two assertions meet, the alphabetically first source survives (Known gaps).
 
 ## 9. Oracles
@@ -96,7 +102,8 @@ No external oracle or fixture.
 - `xtask check-refusals` checks the catalogue against plan §8.4 and the registry (`test_committed_registry_catalogue_and_plan_agree`).
 
 ## 10. Known gaps
-- **`Measured` keeps a Verified basis.** §7.1's Measured row is ambiguous between Validated only and Verified for interval enclosures such as mass-balance bounds. Today's behaviour stands until the owner rules (bd-wiaq).
+- **DESIGN (bd-wiaq).** Structural checks can reject invalid enclosures. A pair of ordered endpoints alone
+  carries no proof of how an enclosure was obtained.
 - **Owner questions.** Each has its working choice in force. They are recorded here and in the doc comments, with no bead:
   - **Plan erratum.** NL-2 says "the weakest input", but `Transferred` and `Elicited` are incomparable, so there may be no weakest. `meet` gives their lower bound, `Assumed`. It never promotes, and it demotes two mid-tier inputs.
   - **`AoaStatus`.** The plan names `Transferred{aoa}` without defining `aoa`. The working values are `Outside`, `NotAssessed` and `Inside`, weakest first.

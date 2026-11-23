@@ -8,7 +8,6 @@ use fmine_claim::{
     AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
 };
 use fmine_core::{Digest32, anchor::SourceAnchor};
-use fmine_evidence::color::validate_color_payload;
 use fmine_evidence::{
     Color, EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
@@ -196,13 +195,8 @@ pub(super) fn admit<T>(
             "invalid supplied UU metadata",
         ));
     }
-    if let Ok(color) = claim.color() {
-        validate_color_payload(&color).map_err(|_| {
-            bad(
-                RefusalCode::CalibrationRequired205,
-                "invalid input colour metadata",
-            )
-        })?;
+    if !matches!(claim.evidence, EvidenceClass::Assertion { .. }) {
+        claim.color()?;
     }
     Ok(())
 }
