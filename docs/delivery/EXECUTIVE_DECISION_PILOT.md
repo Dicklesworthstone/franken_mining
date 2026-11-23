@@ -39,11 +39,33 @@ measure the budget and schedule limits, without assigning a value to the vendor'
 | Closure funding | North cover releases $1.51m net cash by year-end after costs and rebonding. East requires $575k net cash but frees $4.2m of credit-line capacity and $1m of surety capacity. The treasurer can select the package that addresses the actual constraint. [Assurance instruments](../../tests/capital/executive_rehabilitation.toml) |
 | Original project estimates | Five original approvals stay visible. Only one comparable closeout was known before the latest approval. The original estimate misses by $2.5m and the illustrative adjustment misses by $0.5m. This single holdout cannot establish predictive performance. [Approval cohort](../../tests/capital/executive_estimates.toml) |
 
+## Shipment settlement and hedge cash calls
+
+**SYNTHETIC.** On 4 March the parent has $12m of unrestricted cash, an $8m floor and a $3m
+committed revolver available before broker calls. A buyer owes $11m for cargo NB-47. Its payment
+arrives after the broker cutoff on the value date. The plan assumes Tuesday 5 March.
+
+| Cash checkpoint | Buyer pays Tuesday | Buyer pays Friday | Additional credit needed under Friday collection |
+|---|---:|---:|---:|
+| Tuesday after $3m of payments, before collection | $9m | $9m | $0 |
+| Wednesday after $6m of payments, before $1m of credits | $14m | $3m | $2m |
+| Thursday after a $3m call, before $1m of credits | $12m | $1m | $4m |
+| Friday close, including $2m of broker credits | $15m | $15m | $0 |
+
+Cash in the middle columns excludes borrowing. On Thursday, the floor requires a $7m draw in the
+delayed case. The revolver supplies $3m, leaving $4m to arrange. With the current cutoff, collecting
+on Wednesday misses that morning's call. If the buyer can settle before calls, Wednesday also works.
+If the buyer can pay only part of the invoice early, $4m on Tuesday plus $7m on Friday is sufficient.
+The early $4m and the $3m revolver cover Thursday's $7m draw requirement. A dollar less paid early
+leaves a one-dollar shortfall. Friday's ending cash stays at $15m.
+The comparison holds the invoice value and broker amounts fixed. [Treasury worksheet](../../tests/capital/executive_hedge.toml)
+
 ## Reproduce the meeting insert
 
 ```sh
 cargo run -p fmine-cli -- decide program tests/capital/executive_purchase.toml --format markdown
 cargo run -p fmine-cli -- decide program tests/capital/executive_purchase_potash.toml --json
+cargo run -p fmine-cli -- decide program tests/capital/executive_hedge.toml --format markdown
 ```
 
 **Measurement boundary.** The fixtures exercise the calculations, evidence cutoff and change of decision. Operator preparation time, adoption, actual contract enforceability, physical execution and realized business benefit require independent observations. None is measured by this fictional pilot.
@@ -58,5 +80,6 @@ cargo run -p fmine-cli -- decide program tests/capital/executive_purchase_potash
 | bd-jg7w | Require a common commodity, unit and remaining interval. Apply site interests once. Reconcile group and site targets, enforce lapsed deadlines, and identify each indispensable site increment. | Attributable group example, missed intervention, basis mismatch, duplicate site, over-ownership and allocation mismatch. |
 | bd-zabr | Preserve all original approvals and their disposition. Admit only earlier comparable closeouts, retain scope changes and cancellations, and report original and adjusted holdout errors. | Five-project docket plus cohort timing, latest holdout, unknown actual and same-day outcome controls. |
 | bd-srg1 | Construct the fictional source terms, original decision insert, controller reconciliation, simulated minute, later outcome and second-commodity reuse. Keep the future result outside the original insert. | Two independent purchase known answers, source-byte hashes, deterministic replay and opposite decisions. Real-world outcomes remain unobserved. |
+| bd-ftw5 | Bind the parent, daily cash path, facility window and buyer cutoff. Replay both dates, retain the first and peak uncovered calls, find the latest feasible collection, and size the smallest advance against the delayed invoice. | Hand-worked copper cash bridge, cutoff reversal, exact credit limit, facility expiry, absent and duplicate days, opening breach, out-of-window collection, and a split invoice tested one dollar below the minimum. |
 
 The command-level regression cases are in [executive.rs](../../crates/fmine-cli/tests/executive.rs). The input controls run beside the [worksheet evaluator](../../crates/fmine-cli/src/capital/executive.rs).

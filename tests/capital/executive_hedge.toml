@@ -1,0 +1,72 @@
+# SYNTHETIC. Fixed net cargo proceeds and gross cash movements from an invented treasury stress.
+schema = "fmine.executive-decision.v1"
+decision = "hedge_liquidity"
+question = "How much additional committed credit would a late copper cargo require?"
+owner = "Group treasurer"
+as_of = "2030-03-04"
+scope = "North Basin parent treasury; one copper cargo; unrestricted whole USD"
+evidence = "synthetic"
+uncertainty = "Broker calls could settle earlier or at different amounts than the treasury stress"
+revisit_if = "The bank changes the draw cutoff or the buyer changes the value date"
+
+[[treasury]]
+source = "Invented cash report T42 and immediately drawable revolver R3"
+known_on = "2030-03-04"
+entity = "Parent"
+through = "2030-03-08"
+cash_basis = "unrestricted_excludes_undrawn_line_shipment_and_daily_flows"
+opening_cash_usd = "12000000"
+floor_usd = "8000000"
+committed_undrawn_usd = "3000000"
+line_from = "2030-03-01"
+line_through = "2030-03-31"
+
+[[shipment]]
+source = "Invented copper invoice NB-47 and settlement advice; net cash excludes broker flows"
+known_on = "2030-03-04"
+entity = "Parent"
+cargo = "NB-47 copper concentrate"
+net_receipt_usd = "11000000"
+planned_collection = "2030-03-05"
+delayed_collection = "2030-03-08"
+collection_cutoff = "after_calls"
+
+[[cash_day]]
+source = "Invented broker cash-call stress MC7 and AP schedule, day 1"
+known_on = "2030-03-04"
+entity = "Parent"
+date = "2030-03-05"
+broker_call_usd = "2000000"
+broker_credit_usd = "0"
+other_payment_usd = "1000000"
+other_receipt_usd = "0"
+
+[[cash_day]]
+source = "Invented broker cash-call stress MC7 and AP schedule, day 2"
+known_on = "2030-03-04"
+entity = "Parent"
+date = "2030-03-06"
+broker_call_usd = "5000000"
+broker_credit_usd = "1000000"
+other_payment_usd = "1000000"
+other_receipt_usd = "0"
+
+[[cash_day]]
+source = "Invented broker cash-call stress MC7 and collections schedule, day 3"
+known_on = "2030-03-04"
+entity = "Parent"
+date = "2030-03-07"
+broker_call_usd = "3000000"
+broker_credit_usd = "0"
+other_payment_usd = "0"
+other_receipt_usd = "1000000"
+
+[[cash_day]]
+source = "Invented broker cash-call stress MC7 and collections schedule, day 4"
+known_on = "2030-03-04"
+entity = "Parent"
+date = "2030-03-08"
+broker_call_usd = "0"
+broker_credit_usd = "2000000"
+other_payment_usd = "0"
+other_receipt_usd = "0"

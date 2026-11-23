@@ -35,6 +35,22 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release
     date leaves the net outcome unresolved once work is due.
+  - DESIGN (bd-ftw5). `hedge_liquidity` admits one entity's unrestricted USD cash, one committed
+    facility and a fixed net cargo receipt. Declare every calendar day after the opening date through the
+    horizon, including zero-flow days (up to 14). The undrawn line is available from the opening of its
+    first date through the close of its last date. A draw is assumed immediately available and repayable,
+    so any capacity reduction must be funded at the next open. Opening cash excludes the undrawn line,
+    shipment and daily flows. Daily broker calls and other payments settle at the calls checkpoint.
+    Broker credits and other receipts settle at close. The shipment enters exactly once, either before
+    calls or at close on its collection date. A date beyond the horizon contributes no cash.
+    The two scenarios differ only in the collection date. Broker flows are supplied in whole USD and
+    any fees or interest must already be in the other flows. The `liquidity` result retains the first
+    breach, first occurrence of maximum shortfall, peak draw required, and largest amount needed above
+    the effective line. It also tests each possible collection date against every checkpoint. The
+    result describes dated funding requirements under the submitted cash terms. For a delayed invoice
+    with a feasible earlier collection date, the peak uncovered amount is the minimum single advance
+    required by that date at the same cutoff. Deduct the advance from the delayed settlement. Zero
+    denotes an already-funded delayed case; advancing the entire invoice can also be insufficient.
   - Tenure compares renew, farm out and surrender on stated costs, option bounds and linked rights. A
     zero interest cannot specify retained option upside. Survey sensitivity uses the exploration kernel's
     cover attenuation. No presence probability follows from a sensitive negative result.

@@ -73,6 +73,72 @@ fn finding(c: &Json, needle: &str) -> bool {
 }
 
 #[test]
+fn delayed_copper_receipt_creates_an_intraday_shortfall_despite_identical_closing_cash() {
+    let c = card("hedge");
+    let summary = c.get("liquidity").expect("liquidity summary");
+    let get = |o: &Json, key: &str| o.get(key).and_then(Json::as_str).expect("field").to_owned();
+    assert_eq!(get(summary, "latest_collection_date"), "2030-03-05");
+    let advance = summary
+        .get("advance_against_delayed_invoice")
+        .expect("invoice split");
+    assert_eq!(get(advance, "amount_usd"), "4000000");
+    assert_eq!(get(advance, "by"), "2030-03-05");
+    assert_eq!(get(advance, "remaining_on_delayed_date_usd"), "7000000");
+    let planned = summary.get("planned").expect("original date");
+    let delayed = summary.get("delayed").expect("delayed date");
+    assert_eq!(get(planned, "additional_line_usd"), "0");
+    assert_eq!(planned.get("first_shortfall"), Some(&Json::Null));
+    for case in [planned, delayed] {
+        assert_eq!(get(case, "closing_cash_before_financing_usd"), "15000000");
+    }
+    assert_eq!(get(delayed, "peak_draw_needed_usd"), "7000000");
+    assert_eq!(get(delayed, "additional_line_usd"), "4000000");
+    for (key, date, gap) in [
+        ("first_shortfall", "2030-03-06", "2000000"),
+        ("peak_shortfall", "2030-03-07", "4000000"),
+    ] {
+        let point = delayed.get(key).expect("funding checkpoint");
+        assert_eq!(
+            (
+                get(point, "date"),
+                get(point, "phase"),
+                get(point, "additional_usd")
+            ),
+            (date.to_owned(), "calls".to_owned(), gap.to_owned())
+        );
+    }
+    let rows = c.get("rows").and_then(Json::as_array).expect("two ledgers");
+    assert_eq!(rows.len(), 26);
+    let checkpoint = rows
+        .iter()
+        .filter_map(Json::as_array)
+        .find(|r| {
+            r[0].as_str() == Some("delayed")
+                && r[1].as_str() == Some("2030-03-07")
+                && r[2].as_str() == Some("calls")
+        })
+        .expect("binding call");
+    let amounts: Vec<_> = checkpoint[3..]
+        .iter()
+        .map(|x| x.as_str().expect("whole USD"))
+        .collect();
+    assert_eq!(
+        amounts,
+        [
+            "-3000000", "0", "0", "1000000", "3000000", "7000000", "4000000"
+        ]
+    );
+    let paper = run("hedge", true);
+    assert!(paper.status.success());
+    let text = String::from_utf8(paper.stdout).expect("Markdown");
+    assert!(
+        text.contains("collect by 2030-03-05")
+            && text.contains("NB-47")
+            && text.contains("synthetic")
+    );
+}
+
+#[test]
 fn procurement_preserves_the_competing_project_and_prices_only_critical_delay() {
     let c = card("purchase");
     assert!(finding(&c, "Hold (250000 USD)"));

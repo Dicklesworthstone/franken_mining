@@ -15,6 +15,8 @@ use super::investment::{Fields, fields, get, invalid};
 use crate::{Envelope, json_string as js, worksheet_input};
 use worksheet_input::markdown_cell as cell;
 
+mod hedge;
+
 pub(super) const SCHEMA: &str = "fmine.executive-decision.v1";
 const BOUNDARY: &str = "Conditional on the submitted worksheet, dated sources and completeness of the declared scope. No calibrated probability, authenticated historical availability, real-world savings, execution authority or sign-off is inferred.";
 type Result<T> = std::result::Result<T, Refusal>;
@@ -102,7 +104,8 @@ struct Card {
     findings: Vec<String>,
     columns: Vec<&'static str>,
     rows: Vec<Vec<String>>,
-    purchase_limits: Option<PurchaseLimits>,
+    /// Optional mode-specific JSON member, built alongside the human findings.
+    detail: Option<(&'static str, String)>,
 }
 impl Card {
     fn new(columns: &[&'static str]) -> Self {
@@ -110,7 +113,7 @@ impl Card {
             findings: Vec::new(),
             columns: columns.to_vec(),
             rows: Vec::new(),
-            purchase_limits: None,
+            detail: None,
         }
     }
 }
@@ -144,6 +147,7 @@ pub(super) fn worksheet(doc: &TomlDoc, text: &str, source: &SourceAnchor) -> Res
     let mode = get(&f, "decision")?;
     let card = match mode {
         "purchase" => purchase(doc, as_of)?,
+        "hedge_liquidity" => hedge::compare(doc, as_of)?,
         "rehabilitation" => rehabilitation(doc, as_of)?,
         "tenure" => tenure(doc, as_of)?,
         "group_recovery" => group_recovery(doc, as_of)?,
@@ -217,11 +221,12 @@ pub(super) fn worksheet(doc: &TomlDoc, text: &str, source: &SourceAnchor) -> Res
         ));
     }
     let _ = writeln!(md, "\n{BOUNDARY}");
-    let limits = card.purchase_limits.as_ref().map_or_else(String::new, |v| {
-        format!(",\"procurement_limits\":{}", v.json())
-    });
+    let detail = card
+        .detail
+        .as_ref()
+        .map_or_else(String::new, |(key, value)| format!(",{}:{value}", js(key)));
     let payload = format!(
-        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"question\":{},\"owner\":{},\"support\":{},\"evidence_class\":\"assumed\",\"calibrated\":false,\"uncertainty\":{},\"revisit_if\":{},\"source_rows\":[{}],\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}{limits}}}",
+        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"question\":{},\"owner\":{},\"support\":{},\"evidence_class\":\"assumed\",\"calibrated\":false,\"uncertainty\":{},\"revisit_if\":{},\"source_rows\":[{}],\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}{detail}}}",
         js(mode),
         js(evidence),
         js(as_of),
@@ -541,7 +546,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             joint.to_string(),
         ]);
     }
-    c.purchase_limits = Some(limits);
+    c.detail = Some(("procurement_limits", limits.json()));
     Ok(c)
 }
 
@@ -1072,6 +1077,7 @@ mod tests {
     const CLOSURE: &str = include_str!("../../../../tests/capital/executive_rehabilitation.toml");
     const GROUP: &str = include_str!("../../../../tests/capital/executive_group.toml");
     const ESTIMATES: &str = include_str!("../../../../tests/capital/executive_estimates.toml");
+    const HEDGE: &str = include_str!("../../../../tests/capital/executive_hedge.toml");
     fn evaluate(text: &str) -> Result<Envelope> {
         let doc = parse_subset(text).expect("control uses valid TOML");
         let source = SourceAnchor::new(
@@ -1086,6 +1092,122 @@ mod tests {
             .expect("admitted")
             .rendered_markdown
             .expect("markdown")
+    }
+
+    #[test]
+    fn shipment_deadline_moves_only_with_usable_cash_and_the_actual_collection_cutoff() {
+        let data = |s: &str| evaluate(s).expect("valid cash window").payload_json;
+        let early = HEDGE.replace("after_calls", "before_calls");
+        assert!(data(&early).contains("\"latest_collection_date\":\"2030-03-06\""));
+        let at_limit = HEDGE.replace(
+            "committed_undrawn_usd = \"3000000\"",
+            "committed_undrawn_usd = \"7000000\"",
+        );
+        assert!(
+            data(&at_limit)
+                .contains("\"latest_collection_status\":\"receipt_not_needed_within_window\"")
+        );
+        assert!(
+            data(&at_limit.replace("7000000", "6999999")).contains("\"additional_line_usd\":\"1\"")
+        );
+        assert!(
+            data(&HEDGE.replace("11000000", "0"))
+                .contains("\"latest_collection_status\":\"no_feasible_date_in_window\"")
+        );
+        let outside = HEDGE.replace(
+            "delayed_collection = \"2030-03-08\"",
+            "delayed_collection = \"2030-03-19\"",
+        );
+        assert!(data(&outside).contains("\"closing_cash_before_financing_usd\":\"4000000\""));
+        let expires = at_limit.replace("2030-03-31", "2030-03-06");
+        assert!(data(&expires).contains("\"first_shortfall\":{\"date\":\"2030-03-07\",\"phase\":\"open\",\"additional_usd\":\"4000000\"}"));
+        let opening = HEDGE.replace("12000000", "4000000");
+        assert!(
+            data(&opening)
+                .contains("\"first_shortfall\":{\"date\":\"2030-03-04\",\"phase\":\"opening\"")
+        );
+        assert!(
+            data(&opening).contains("\"latest_collection_status\":\"no_feasible_date_in_window\"")
+        );
+    }
+
+    #[test]
+    fn hedge_cash_windows_refuse_missing_days_unavailable_sources_and_mixed_entities() {
+        for invalid in [
+            HEDGE.replace("date = \"2030-03-06\"", "date = \"2030-03-05\""),
+            HEDGE.replace("through = \"2030-03-08\"", "through = \"2030-03-09\""),
+            HEDGE.replacen("entity = \"Parent\"", "entity = \"JV\"", 1),
+            HEDGE.replace("known_on = \"2030-03-04\"", "known_on = \"2030-03-09\""),
+            HEDGE.replace("after_calls", "unknown"),
+            HEDGE.replace(
+                "line_through = \"2030-03-31\"",
+                "line_through = \"2030-02-28\"",
+            ),
+            HEDGE.replace(
+                "delayed_collection = \"2030-03-08\"",
+                "delayed_collection = \"2030-03-04\"",
+            ),
+            HEDGE.replace(
+                "broker_call_usd = \"5000000\"",
+                "broker_call_usd = \"-5000000\"",
+            ),
+        ] {
+            assert!(evaluate(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn advancing_part_of_the_delayed_invoice_is_sufficient_and_a_dollar_less_fails() {
+        let split = |early: u32| {
+            let text = HEDGE
+                .replace("11000000", &(11_000_000 - early).to_string())
+                .replacen(
+                    "other_receipt_usd = \"0\"",
+                    &format!("other_receipt_usd = \"{early}\""),
+                    1,
+                );
+            let json = evaluate(&text).expect("valid split").payload_json;
+            let parsed = fmine_io::omf::json::parse(json.as_bytes()).expect("JSON");
+            parsed
+                .get("liquidity")
+                .expect("summary")
+                .get("delayed")
+                .expect("late case")
+                .clone()
+        };
+        let covered = split(4_000_000);
+        let short = split(3_999_999);
+        for case in [&covered, &short] {
+            assert_eq!(
+                case.get("closing_cash_before_financing_usd")
+                    .and_then(|v| v.as_str()),
+                Some("15000000")
+            );
+        }
+        assert_eq!(
+            covered.get("additional_line_usd").and_then(|v| v.as_str()),
+            Some("0")
+        );
+        assert_eq!(
+            short.get("additional_line_usd").and_then(|v| v.as_str()),
+            Some("1")
+        );
+        let large_line = HEDGE.replace(
+            "committed_undrawn_usd = \"3000000\"",
+            "committed_undrawn_usd = \"7000000\"",
+        );
+        assert!(
+            evaluate(&large_line)
+                .expect("covered")
+                .payload_json
+                .contains("\"status\":\"not_needed\",\"amount_usd\":\"0\"")
+        );
+        assert!(
+            evaluate(&HEDGE.replace("11000000", "3999999"))
+                .expect("undersized invoice")
+                .payload_json
+                .contains("\"status\":\"insufficient_even_in_full\"")
+        );
     }
 
     #[test]
