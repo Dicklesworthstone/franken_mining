@@ -264,6 +264,73 @@ fn common_deck_reverses_gold_investment_ranking_and_retains_the_original_terms()
 }
 
 #[test]
+fn interruption_card_preserves_the_loss_bridge_and_both_exclusion_outcomes() {
+    let c = card("interruption");
+    assert_eq!(row(&c, "Economic loss")[1], "US$6,000,000");
+    assert_eq!(row(&c, "Policy-eligible loss")[1], "US$4,000,000");
+    let bridge = c.get("indemnity").expect("indemnity");
+    let exact = |obj: &Json| {
+        let field = |k| {
+            obj.get(k)
+                .and_then(Json::as_str)
+                .expect("half of a bound")
+                .to_owned()
+        };
+        (field("lower"), field("upper"))
+    };
+    let branches = bridge
+        .get("conditional_recovery")
+        .and_then(Json::as_array)
+        .expect("branches");
+    assert_eq!(branches.len(), 2);
+    for (branch, condition, amount) in [
+        (&branches[0], "no_exclusion_applies", "3000000"),
+        (&branches[1], "exclusion_applies", "0"),
+    ] {
+        assert_eq!(
+            branch.get("condition").and_then(Json::as_str),
+            Some(condition)
+        );
+        assert_eq!(
+            exact(branch.get("usd").expect("branch amounts")),
+            (amount.into(), amount.into())
+        );
+    }
+    let steps = bridge
+        .get("monetary_steps")
+        .and_then(Json::as_array)
+        .expect("two terms");
+    assert_eq!(steps.len(), 2);
+    assert_eq!(
+        steps[0].get("clause").and_then(Json::as_str),
+        Some("Schedule B, item 2")
+    );
+    assert_eq!(
+        exact(steps[0].get("remaining_usd").expect("after deductible")),
+        ("3500000".into(), "3500000".into())
+    );
+    assert_eq!(
+        exact(steps[1].get("remaining_usd").expect("after limit")),
+        ("3000000".into(), "3000000".into())
+    );
+    assert!(bridge.get("coverage_verdict").is_none());
+    let full = String::from_utf8(run("interruption", true).stdout).expect("Markdown");
+    assert!(full.contains("§6.4") && full.contains("whether any unresolved exclusion applies"));
+    let binary = run("interruption", false);
+    let envelope = parse(&binary.stdout).expect("full envelope");
+    let flags = envelope.get("flags").expect("flags");
+    for flag in [
+        "reserve_disclosure_claim",
+        "execution_authorized",
+        "geotechnical_signoff",
+        "regulatory_compliance_claim",
+    ] {
+        assert_eq!(flags.get(flag), Some(&Json::Bool(false)));
+    }
+    assert_eq!(binary.stdout, run("interruption", false).stdout);
+}
+
+#[test]
 fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_digest() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let brief = |model: &str, flags: &[&str]| {
@@ -283,6 +350,7 @@ fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_dige
         "hedge",
         "care",
         "deck",
+        "interruption",
         "purchase",
         "purchase_potash",
         "rehabilitation",

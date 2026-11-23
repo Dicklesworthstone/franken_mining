@@ -42,6 +42,19 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release
     date leaves the net outcome unresolved once work is due.
+  - DESIGN (bd-3ikw, synthetic slice of BD-354). `interruption_indemnity` admits synthetic evidence and
+    one insured entity and perimeter with whole, nominal USD and whole interruption days. One dated policy
+    interpretation requires explicit waiting, indemnity, deductible and limit clauses. Both time
+    periods start at occurrence under this model. The admitted loss rate is constant by scenario over
+    the outage and applies equally to the policy day window. Economic and policy-eligible loss have
+    separate bounds. Apply the two monetary clauses in the declared order, with a zero floor under the
+    deductible. Exclusions are explicitly absent or individually listed with dated states. An unresolved
+    exclusion preserves the zero and otherwise payable branches. An applying exclusion restricts all
+    conditional recovery to zero. The reported bounds use independent day and loss-rate intervals.
+    A driver flag means fixing that premise at its opposite endpoints changes the bounds of an admitted
+    branch. Terms, clause calculations and alternative branches remain visible in JSON. A confirmed
+    amount and payment date are separate Treasury inputs. Real policy interpretation and historical
+    loss baselines remain BD-354 work.
   - DESIGN (bd-ftw5). Executive worksheets accept `decide program <worksheet> --brief`. The meeting
     view retains the findings, decision alternatives, uncertainty, revisit condition and worksheet digest.
     Full Markdown and JSON give the line-by-line evidence and both treasury checkpoint ledgers.

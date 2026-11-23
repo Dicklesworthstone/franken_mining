@@ -19,6 +19,7 @@ use worksheet_input::markdown_cell as cell;
 mod care;
 mod deck;
 mod hedge;
+mod insurance;
 
 pub(super) const SCHEMA: &str = "fmine.executive-decision.v1";
 const BOUNDARY: &str = "Conditional on the submitted worksheet, dated sources and completeness of the declared scope. No calibrated probability, authenticated historical availability, real-world savings, execution authority or sign-off is inferred.";
@@ -231,6 +232,12 @@ fn evaluate(
         "common_price_deck" => deck::compare(doc, as_of, source, root)?,
         "operating_review" => care::compare(doc, as_of)?,
         "hedge_liquidity" => hedge::compare(doc, as_of)?,
+        "interruption_indemnity" if evidence == "synthetic" => insurance::evaluate(doc, as_of)?,
+        "interruption_indemnity" => {
+            return Err(invalid(
+                "interruption indemnity requires synthetic evidence",
+            ));
+        }
         "rehabilitation" => rehabilitation(doc, as_of)?,
         "tenure" => tenure(doc, as_of)?,
         "group_recovery" => group_recovery(doc, as_of)?,

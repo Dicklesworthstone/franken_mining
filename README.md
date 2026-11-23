@@ -90,6 +90,20 @@ periods on a common pre-tax ownership basis. The original plans, costs and disco
 Holding cash is a third choice. Full JSON retains the original submissions, paired prices and both valuation
 receipts. [Editable committee worksheet](tests/capital/executive_deck.toml)
 
+### What could offset the loss from a plant interruption?
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_interruption.toml --brief
+```
+
+**INFERENCE from a synthetic policy.** Six outage days at US$1 million a day give **US$6 million in
+economic loss**. The two-day wait leaves **US$4 million of eligible loss**. Subtracting the US$500,000
+deductible before applying the limit yields a **US$3 million conditional recovery**. If the unresolved
+exclusion applies, the conditional recovery is **zero**. Putting the limit first gives US$2.5 million
+on the branch where the exclusion does not apply. The worksheet shows the dated clauses and which
+unresolved inputs can narrow the recovery bounds. Treasury needs a separately confirmed payment
+amount and date for its cash forecast. [Editable synthetic worksheet](tests/capital/executive_interruption.toml)
+
 A miner's numbers are produced by a dozen systems that each pass along a single value and discard how sure they
 were. The result is predictable:
 - guidance that misses;
