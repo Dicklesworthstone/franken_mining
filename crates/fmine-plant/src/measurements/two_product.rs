@@ -61,13 +61,21 @@ pub struct Balance {
 }
 
 pub struct Receipt {
-    pub streams: [MaterialProjectionReceipt; 3],
-    pub claim: Claim<Balance>,
+    streams: [MaterialProjectionReceipt; 3],
+    claim: Claim<Balance>,
 }
 
 pub const ROLES: [&str; 3] = ["feed", "concentrate", "tailings"];
 
 impl Receipt {
+    pub fn streams(&self) -> &[MaterialProjectionReceipt; 3] {
+        &self.streams
+    }
+
+    pub fn claim(&self) -> &Claim<Balance> {
+        &self.claim
+    }
+
     pub fn to_json(&self) -> String {
         use crate::inventory::worksheet::{claim_json, exact, quoted};
         let optional = |q: Option<ExactQty>| q.map_or_else(|| "null".into(), exact);

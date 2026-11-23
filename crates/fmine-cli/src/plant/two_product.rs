@@ -29,8 +29,8 @@ fn kg(q: ExactQty) -> String {
 }
 
 fn render(receipt: &Receipt) -> Envelope {
-    let b = &receipt.claim.value;
-    let scope = &receipt.streams[0].summary().scope;
+    let b = &receipt.claim().value;
+    let scope = &receipt.streams()[0].summary().scope;
     let mut md = format!(
         "# Two-product plant balance\n\n{} · interval {} to {} ns\n\nDry matter residual (feed minus outlets): {} kg. Concentrate/feed dry mass: {}.\n\n",
         markdown_cell(&scope.boundary),
@@ -39,7 +39,7 @@ fn render(receipt: &Receipt) -> Envelope {
         kg(b.dry_residual_kg),
         percent(b.concentrate_over_feed_dry_mass)
     );
-    for (role, stream) in two_product::ROLES.into_iter().zip(&receipt.streams) {
+    for (role, stream) in two_product::ROLES.into_iter().zip(receipt.streams()) {
         let summary = stream.summary();
         let _ = writeln!(
             md,
