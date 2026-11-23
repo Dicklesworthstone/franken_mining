@@ -368,6 +368,11 @@ The merge ec60a12 dropped two test families from this list; bd-coro restores the
 
 ### Untested-ore recovery bounds (DESIGN; BD-351.S1, plan §17.4)
 
+The card also solves for the subset of its declared contained-metal shares that guarantees each choice.
+The lower recovery endpoints determine proceed (inclusive at equality) and the upper endpoints determine
+stop (strict). An empty window is `null`. This sensitivity is calculated from the existing receipted
+model and leaves the original card digest intact. A representability failure refuses the sensitivity.
+
 `bounds::evaluate` accepts one source-bound `Claim<RecoveryBoundModel>`. Tested and untested strata
 have explicit closed recovery intervals, a named route and metal, an additivity basis, an untested-bound
 basis, and one positive named UU scenario. Weights are either a contained-metal fraction interval or

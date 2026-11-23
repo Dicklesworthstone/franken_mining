@@ -6,7 +6,8 @@ use std::fmt::Write as _;
 use crate::card::render::{claim_json, js, rq};
 
 use super::{
-    BoundCard, BoundSummary, Interval, NO_CLAIM, RecoveryBoundModel, TestCondition, WeightBasis,
+    BoundCard, BoundSummary, Interval, NO_CLAIM, RecoveryBoundModel, ShareRange, TestCondition,
+    WeightBasis,
 };
 
 fn interval(value: Interval) -> String {
@@ -136,8 +137,25 @@ impl BoundCard {
     /// Deterministic exact report; the digest binds full input metadata and the checked summary.
     #[must_use]
     pub fn to_json(&self) -> String {
+        let range_json = |range: Option<ShareRange>| {
+            range.map_or_else(||"null".into(),|r| format!(
+            "{{\"lower\":{},\"upper\":{},\"lower_inclusive\":{},\"upper_inclusive\":{}}}",
+            rq(r.interval.lower),rq(r.interval.upper),r.lower_inclusive,r.upper_inclusive))
+        };
+        let shares = match self.share_ranges() {
+            Ok((proceed, stop)) => format!(
+                "{{\"rule\":\"additive-contained-metal-share/v1\",\"status\":\"ok\",\"proceed\":{},\"stop\":{}}}",
+                range_json(proceed),
+                range_json(stop)
+            ),
+            Err(e) => format!(
+                "{{\"rule\":\"additive-contained-metal-share/v1\",\"status\":\"refused\",\"code\":{},\"what\":{}}}",
+                js(e.code),
+                js(&e.what)
+            ),
+        };
         format!(
-            "{{\"schema\":\"fmine.recovery-bounds-card.v1\",\"digest\":{},\"calibration\":\"not_established\",\"disclosure_eligible\":false,\"no_claim\":{},\"inputs\":{},\"result\":{}}}",
+            "{{\"schema\":\"fmine.recovery-bounds-card.v1\",\"digest\":{},\"calibration\":\"not_established\",\"disclosure_eligible\":false,\"no_claim\":{},\"inputs\":{},\"result\":{},\"guaranteed_share_ranges\":{shares}}}",
             js(self.digest()),
             js(NO_CLAIM),
             claim_json(self.inputs(), &model_json(&self.inputs().value)),
@@ -163,6 +181,35 @@ impl BoundCard {
             interval_text(model.untested_recovery),
             interval_text(summary.recovery)
         );
+        out.push_str("## Untested share of contained metal\n\nWithin the declared share range, the following choices hold for every recovery in the stated bands. Shares outside both windows need more evidence.\n\n");
+        match self.share_ranges() {
+            Ok((proceed, stop)) => {
+                for (action, window) in [("Proceed", proceed), ("Stop", stop)] {
+                    let description = window.map_or_else(
+                        || "no admitted share".to_owned(),
+                        |r| {
+                            format!(
+                                "{}{}, {}{}",
+                                if r.lower_inclusive { "[" } else { "(" },
+                                ratio(r.interval.lower),
+                                ratio(r.interval.upper),
+                                if r.upper_inclusive { "]" } else { ")" }
+                            )
+                        },
+                    );
+                    let _ = writeln!(out, "- {action} — {description}");
+                }
+            }
+            Err(e) => {
+                let _ = writeln!(
+                    out,
+                    "Share calculation refused ({}). {}",
+                    e.code,
+                    md(&e.what)
+                );
+            }
+        }
+        out.push('\n');
         if let WeightBasis::DryTonnesAndGrade {
             tested_tonnes,
             tested_grade_g_per_t,

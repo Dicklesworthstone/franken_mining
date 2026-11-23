@@ -1,0 +1,33 @@
+# Invented blend envelope for a process planner. All recovery limits are declared assumptions.
+schema = "fmine.recovery-bounds.v1"
+model_key = "blend_share"
+question = "At which contained-metal shares does this route always meet the recovery target?"
+route = "one additive copper flotation route"
+metal = "Cu"
+additivity_basis = "Assume linear mixing on contained copper throughout the stated share range."
+untested_bound_basis = "A conditional stress range; a site must supply evidence for its own bounds."
+
+[[weights]]
+basis = "contained_metal"
+lower = "0.05"
+upper = "0.75"
+
+[[recovery]]
+role = "tested"
+lower = "0.90"
+upper = "0.90"
+
+[[recovery]]
+role = "untested"
+lower = "0.40"
+upper = "0.80"
+
+[[decision]]
+rule = "proceed_if_at_least"
+threshold = "0.85"
+
+[[uu]]
+id = "unmodelled_blend_interaction"
+description = "A blend interaction could invalidate the declared linear response."
+trigger = "Mixed-feed test results fall outside the additive envelope."
+downside_exposure_usd_m = "1.0"

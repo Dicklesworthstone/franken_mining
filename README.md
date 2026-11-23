@@ -69,6 +69,22 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 | Is there code? | **Yes, and the public lane runs.** `fmine assure public --issuer barrick` runs end to end on the 20 registered workbooks through 2026Q3 (not in git), evaluating 2,915 AISC identities and reproducing the source-epoch pin in `repro/barrick/expected.toml`. `--through 2026Q2` retains the earlier 18-source root. Q3 admission and its two source-grounded COS ownership corrections are recorded in E859–E860. The full M0 gate remains open |
 | Has anything been benchmarked? | **No benchmark suite.** One machine has timed `fmine-optimize`'s certified ultimate pit: MineLib's 2.1M-block mclaughlin in about 1.2 s, and a synthetic 10⁷-block model in under a minute (`crates/fmine-optimize/CONTRACT.md` §8). Every other speed and scale number in the plan is a TARGET |
 
+### Find a grade miss hidden by on-plan metal
+
+A mine geologist or metallurgist can compare planned and actual dry tonnes and contained metal for the
+same material at the same boundary. Supply one row per cohort, the site, period, element, ownership basis
+and the review tolerance. For example, run the supplied synthetic copper worksheet:
+
+```bash
+cargo run -p fmine-cli -- recon run --input tests/recon/matched_cohorts.toml --format markdown
+```
+
+In polygon A, 1,200 dry tonnes delivered the 10,000 kg Cu expected from 1,000 tonnes. Metal reached 100%
+of plan, but grade reached only 83.33%. The command flags that offset for investigation. Polygon B is
+exactly on the 5% tolerance boundary. The JSON gives exact ratios and the source line for each cohort.
+Different call and actual supports refuse. A period with zero movement retains zero tonnes and undefined grade.
+This screen does not estimate stockpile flows or identify the cause of a variance.
+
 ### Run declared plant accounting
 
 DESIGN: the plant CLI accepts explicit elemental inventory worksheets and preserves the submitted source
@@ -1738,6 +1754,7 @@ The wider CapitalProgram and its M4 gates remain open.
 ```sh
 cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_ore.toml --json
 cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_ore_tonnes.toml --format markdown
+cargo run -p fmine-cli -- decide recovery-bounds tests/decisions/untested_blend.toml --format markdown
 ```
 
 The strict `fmine.recovery-bounds.v1` worksheet declares tested and untested recovery intervals,
@@ -1745,6 +1762,12 @@ a contained-metal weight interval or explicit dry tonnes and grades, a decision 
 basis, the basis for the untested bound and one named positive UU exposure. All physical quantities use
 quoted exact decimals or fractions. The card reports exact recovery bounds, all eight endpoint witnesses,
 decision stability and the attainable test conditions that would settle the choice.
+
+The blend example asks a planner's inverse question. Tested ore recovers 90% and untested ore is assumed
+to recover 40–80%. Across the declared 5–75% range, an untested share of **5–10% of contained copper**
+guarantees the 85% recovery target under those assumptions. A share **above 50%** guarantees a miss.
+Exactly 50% can still meet the target at the upper recovery bound. The percentages refer to contained
+metal. Converting them to feeder tonnes requires the grades of both feeds.
 
 For the first synthetic worksheet, uncertain weights and tested recovery give an aggregate interval
 of **[19/25, 917/1000]**. At an 85% threshold the choice is unstable: a valid test raising the untested

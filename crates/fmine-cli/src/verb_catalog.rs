@@ -15,7 +15,7 @@ pub struct VerbSpec {
 }
 
 /// Every registered CLI verb, in registry order.
-pub const VERB_CATALOG: [VerbSpec; 78] = [
+pub const VERB_CATALOG: [VerbSpec; 79] = [
     VerbSpec {
         path: "decide card",
         subsystem: "Helm",
@@ -375,6 +375,12 @@ pub const VERB_CATALOG: [VerbSpec; 78] = [
         subsystem: "Adit",
         mutates_authority: false,
         description: "Emit machine-readable documentation for all CLI verbs, exit codes, and FMT-ENV-1 schemas",
+    },
+    VerbSpec {
+        path: "recon run",
+        subsystem: "Touchstone",
+        mutates_authority: false,
+        description: "Compare a matched material cohort's planned and actual tonnes, grade and contained metal and flag compensating variances",
     },
     VerbSpec {
         path: "plant balance",

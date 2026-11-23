@@ -363,6 +363,12 @@ mutates_authority = false
 description = "Emit machine-readable documentation for all CLI verbs, exit codes, and FMT-ENV-1 schemas"
 
 [[verb]]
+path = "recon run"
+subsystem = "Touchstone"
+mutates_authority = false
+description = "Compare a matched material cohort's planned and actual tonnes, grade and contained metal and flag compensating variances"
+
+[[verb]]
 path = "plant balance"
 subsystem = "Crucible"
 mutates_authority = false

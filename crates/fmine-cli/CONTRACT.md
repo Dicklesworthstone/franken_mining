@@ -1,7 +1,7 @@
 # CONTRACT.md — `fmine-cli`
 
 ## 1. Purpose
-The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-118`, `BD-071`), implementing all 78 registered verbs in `registries/verbs.toml` over the `FMT-ENV-1` response envelope, `doctor` diagnostics, `robot-docs` / `robot schema`, and `repair plan` / `repair apply <digest>` (`PO-ADIT-1`..`PO-ADIT-3`).
+The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-118`, `BD-071`), implementing all 79 registered verbs in `registries/verbs.toml` over the `FMT-ENV-1` response envelope, `doctor` diagnostics, `robot-docs` / `robot schema`, and `repair plan` / `repair apply <digest>` (`PO-ADIT-1`..`PO-ADIT-3`).
 
 - **Crate:** `fmine-cli`
 - **Layer:** U
@@ -31,6 +31,14 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 
 ## 2. Inputs
 ### Command grammars and domain formulation
+
+- DESIGN (BD-162). `recon run --input <matched-cohorts.toml>` screens declared planned and actual dry tonnes
+  and contained kg for a common site, period, element, ownership basis and matching material support.
+  `fmine.matched-cohorts.v1` requires unique supports and a tolerance of 1–9,999 basis points. Positive
+  planned masses define the denominators. Actual zero movement leaves grade undefined. The `fmine-flow`
+  compensation detector flags opposite tonnes and grade deviations. Ordinary breaches also remain visible.
+  JSON binds exact ratios and worksheet line numbers to the source hash. Markdown rounds for display.
+  Inputs are internal assumptions. Posterior uncertainty, inventory matching and period close remain open.
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
 - DESIGN (BD-061/225): `decide production --input <coupling> --grinding <worksheet>

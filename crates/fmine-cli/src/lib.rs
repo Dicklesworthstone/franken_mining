@@ -23,6 +23,7 @@ pub mod mirror;
 pub mod packet;
 pub mod pit;
 pub mod plant;
+mod recon;
 pub mod recovery;
 pub mod reliance;
 mod reliance_binding;
@@ -80,6 +81,8 @@ pub enum CliCommand {
     PlanOmf(schedule::omf::Command),
     /// Account or reconcile declared elemental inventory with original observations retained.
     Plant(plant::Command),
+    /// Compare planned and observed dry tonnes, grade and contained metal on matched material.
+    ReconRun(PathBuf),
     /// Project exact registered HTML cells with source-verified semantic labels into canonical Claims.
     HtmlClaims(html::Command),
     /// Compute complete registered reserve-replacement windows from explicitly selected PDF assertions.
@@ -581,6 +584,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 return "plan pit";
             }
             "plant" => return "plant",
+            "recon" => return "recon run",
             "html" => return "html claims",
             "mirror" => return "mirror",
             "reserve" => return "reserve replacement",
@@ -1127,6 +1131,7 @@ pub fn parse_args(
             | "plan design"
             | "html claims"
             | "plant"
+            | "recon run"
             | "doctor"
             | "robot schema"
             | "robot"
@@ -1165,6 +1170,18 @@ pub fn parse_args(
             "plan shells" | "plan design" => CliCommand::PlanOmf(schedule::omf::parse(&words)?),
             "plan schedule" => CliCommand::PlanSchedule(schedule::parse(&words)?),
             "plant" => CliCommand::Plant(plant::parse(&words)?),
+            "recon run" => match &words[..] {
+                [group, verb, flag, path]
+                    if group == "recon"
+                        && verb == "run"
+                        && flag == "--input"
+                        && !path.trim().is_empty()
+                        && !path.starts_with("--") =>
+                {
+                    CliCommand::ReconRun(PathBuf::from(path))
+                }
+                _ => return Err(recon::USAGE.to_owned()),
+            },
             "doctor" => {
                 let parsed = doctor::parse(&words)?;
                 if parsed.segments.is_empty() && parsed.journals.is_empty() {
@@ -2134,6 +2151,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::PlanSchedule(command) => schedule::execute(command, workspace_root),
         CliCommand::PlanOmf(command) => schedule::omf::execute(command, workspace_root),
         CliCommand::Plant(command) => plant::execute(command, workspace_root),
+        CliCommand::ReconRun(path) => recon::execute(path, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
         CliCommand::DecideCard { model } => decision::execute(model, workspace_root, false),
@@ -2471,6 +2489,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 schedule::omf::SHELLS_USAGE,
                 schedule::omf::DESIGN_USAGE,
                 plant::BALANCE_USAGE,
+                recon::USAGE,
                 plant::RECONCILE_USAGE,
                 plant::PROJECT_USAGE,
                 plant::TRANSFER_USAGE,

@@ -1,0 +1,23 @@
+# Synthetic copper grade-control calls compared with surveyed material on the same dig polygons.
+schema = "fmine.matched-cohorts.v1"
+site = "Example copper mine"
+period = "2026-10"
+element = "Cu"
+ownership_basis = "100% project"
+tolerance_bps = 500
+
+[[cohort]]
+call_support = "North pit / bench 240 / polygon A"
+actual_support = "North pit / bench 240 / polygon A"
+call_dry_tonnes = 1000
+actual_dry_tonnes = 1200
+call_contained_metal_kg = 10000
+actual_contained_metal_kg = 10000
+
+[[cohort]]
+call_support = "North pit / bench 240 / polygon B"
+actual_support = "North pit / bench 240 / polygon B"
+call_dry_tonnes = 1000
+actual_dry_tonnes = 950
+call_contained_metal_kg = 10000
+actual_contained_metal_kg = 9500

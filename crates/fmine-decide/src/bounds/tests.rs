@@ -100,6 +100,79 @@ fn known_answer_80_90_unstable_at_85() {
 }
 
 #[test]
+fn guaranteed_share_windows_match_both_recovery_extremes_and_strict_stop() {
+    let weights = range(0, 100, 100);
+    let cutoff = q(85, 100);
+    let inside_window = |w: Rat, window: Option<ShareRange>| {
+        window.is_some_and(|r| {
+            let lo = w.checked_cmp(r.interval.lower).unwrap();
+            let hi = w.checked_cmp(r.interval.upper).unwrap();
+            (lo.is_gt() || (lo.is_eq() && r.lower_inclusive))
+                && (hi.is_lt() || (hi.is_eq() && r.upper_inclusive))
+        })
+    };
+    for (tested, untested) in [
+        (range(90, 90, 100), range(40, 80, 100)),
+        (range(40, 80, 100), range(90, 90, 100)),
+        (range(85, 85, 100), range(85, 85, 100)),
+    ] {
+        let proceed = share_range(weights, tested.lower, untested.lower, cutoff, true).unwrap();
+        let stop = share_range(weights, tested.upper, untested.upper, cutoff, false).unwrap();
+        for i in 0..=100 {
+            let w = q(i, 100);
+            let mix = |a: Rat, b: Rat| {
+                a.checked_add(w.checked_mul(b.checked_sub(a).unwrap()).unwrap())
+                    .unwrap()
+            };
+            assert_eq!(
+                inside_window(w, proceed),
+                !mix(tested.lower, untested.lower)
+                    .checked_cmp(cutoff)
+                    .unwrap()
+                    .is_lt(),
+                "proceed at {i}%"
+            );
+            assert_eq!(
+                inside_window(w, stop),
+                mix(tested.upper, untested.upper)
+                    .checked_cmp(cutoff)
+                    .unwrap()
+                    .is_lt(),
+                "stop at {i}%"
+            );
+        }
+    }
+    let card = card(RecoveryBoundModel {
+        weights: WeightBasis::ContainedMetal {
+            untested_fraction: range(5, 75, 100),
+        },
+        tested_recovery: range(90, 90, 100),
+        untested_recovery: range(40, 80, 100),
+        threshold: cutoff,
+        ..model()
+    });
+    let (go, stop) = card.share_ranges().unwrap();
+    assert_eq!(
+        go,
+        Some(ShareRange {
+            interval: range(5, 10, 100),
+            lower_inclusive: true,
+            upper_inclusive: true
+        })
+    );
+    assert_eq!(
+        stop,
+        Some(ShareRange {
+            interval: range(50, 75, 100),
+            lower_inclusive: false,
+            upper_inclusive: true
+        })
+    );
+    assert!(card.to_markdown().contains("Stop — (1/2, 3/4]"));
+    assert!(card.to_json().contains("\"stop\":{\"lower\":\"1/2\",\"upper\":\"3/4\",\"lower_inclusive\":false,\"upper_inclusive\":true}"));
+}
+
+#[test]
 fn tonne_trap_weights_three_sevenths_and_lower_bound_24_35() {
     let m = RecoveryBoundModel {
         weights: WeightBasis::DryTonnesAndGrade {

@@ -29,6 +29,13 @@ pub struct Interval {
     pub upper: Rat,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShareRange {
+    interval: Interval,
+    lower_inclusive: bool,
+    upper_inclusive: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WeightBasis {
     /// Fraction of the combined contained metal, never a tonne fraction.
@@ -225,6 +232,63 @@ fn aggregate(weight: Rat, tested: Rat, untested: Rat) -> Result<Rat> {
         exact(exact(ONE.checked_sub(weight))?.checked_mul(tested))?
             .checked_add(exact(weight.checked_mul(untested))?),
     )
+}
+
+/// At fixed share the worst and best recoveries use paired lower and upper endpoints,
+/// respectively. Each is affine in share, so a nonconstant line crosses the cutoff at most once.
+fn share_range(
+    weights: Interval,
+    tested: Rat,
+    untested: Rat,
+    cutoff: Rat,
+    proceed: bool,
+) -> Result<Option<ShareRange>> {
+    let admits = |w| -> Result<bool> {
+        let below = exact(aggregate(w, tested, untested)?.checked_cmp(cutoff))?.is_lt();
+        Ok(if proceed { !below } else { below })
+    };
+    let left = admits(weights.lower)?;
+    let right = admits(weights.upper)?;
+    if left == right {
+        return Ok(left.then_some(ShareRange {
+            interval: weights,
+            lower_inclusive: true,
+            upper_inclusive: true,
+        }));
+    }
+    let slope = exact(untested.checked_sub(tested))?;
+    let crossing = exact(exact(cutoff.checked_sub(tested))?.checked_div(slope))?;
+    Ok(Some(ShareRange {
+        interval: Interval {
+            lower: if left { weights.lower } else { crossing },
+            upper: if right { weights.upper } else { crossing },
+        },
+        lower_inclusive: left || proceed,
+        upper_inclusive: right || proceed,
+    }))
+}
+
+impl BoundCard {
+    fn share_ranges(&self) -> Result<(Option<ShareRange>, Option<ShareRange>)> {
+        let w = self.summary().untested_metal_fraction;
+        let m = &self.inputs().value;
+        Ok((
+            share_range(
+                w,
+                m.tested_recovery.lower,
+                m.untested_recovery.lower,
+                m.threshold,
+                true,
+            )?,
+            share_range(
+                w,
+                m.tested_recovery.upper,
+                m.untested_recovery.upper,
+                m.threshold,
+                false,
+            )?,
+        ))
+    }
 }
 
 /// Solve both endpoint inequalities. At zero untested weight, the tested stratum alone
