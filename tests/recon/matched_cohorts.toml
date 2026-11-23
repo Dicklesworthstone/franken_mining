@@ -21,3 +21,11 @@ call_dry_tonnes = 1000
 actual_dry_tonnes = 950
 call_contained_metal_kg = 10000
 actual_contained_metal_kg = 9500
+
+[[cohort]]
+call_support = "East pit / unplanned cut"
+actual_support = "East pit / unplanned cut"
+call_dry_tonnes = 0
+actual_dry_tonnes = 200
+call_contained_metal_kg = 0
+actual_contained_metal_kg = 2500

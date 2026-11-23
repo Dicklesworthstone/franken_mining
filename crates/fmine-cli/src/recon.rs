@@ -82,11 +82,30 @@ fn percent(q: ExactQty) -> String {
     format!("{:.2}%", 100.0 * (q.num() as f64 / q.den() as f64))
 }
 
+fn ratio(actual: ExactQty, planned: ExactQty) -> Result<Option<ExactQty>, Refusal> {
+    if planned.signum() == 0 {
+        Ok(None)
+    } else {
+        actual.checked_div(planned).map(Some).map_err(physical)
+    }
+}
+
 fn markdown_cell(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('|', "\\|")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    let mut escaped = String::new();
+    for c in s.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\\' | '|' | '`' | '[' | ']' | '*' | '_' | '~' => {
+                escaped.push('\\');
+                escaped.push(c);
+            }
+            c if c.is_control() => escaped.push(' '),
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 struct Amounts {
@@ -128,21 +147,27 @@ impl Amounts {
     }
 }
 
+fn exceeds_tolerance(deviation: ExactQty, tolerance: ExactQty) -> Result<bool, Refusal> {
+    let magnitude = if deviation.signum() < 0 {
+        deviation.checked_neg().map_err(physical)?
+    } else {
+        deviation
+    };
+    Ok(magnitude.checked_cmp(tolerance).map_err(physical)?.is_gt())
+}
+
 fn classify(input: &WithinFactorInput) -> Result<&'static str, Refusal> {
     let verdict = detect_within_factor_compensation(input).map_err(|e| e.to_refusal())?;
     match verdict.class {
         CompensationClass::MaskedWithinTolerance => Ok("masked_within_metal_tolerance"),
         CompensationClass::PartiallyMaskedOpposing => Ok("partially_masked"),
         CompensationClass::None => {
-            let lower = verdict.tolerance.checked_neg().map_err(physical)?;
             for d in [
                 verdict.tonnes_deviation,
                 verdict.grade_deviation,
                 verdict.metal_deviation,
             ] {
-                if d.checked_cmp(lower).map_err(physical)?.is_lt()
-                    || d.checked_cmp(verdict.tolerance).map_err(physical)?.is_gt()
-                {
+                if exceeds_tolerance(d, verdict.tolerance)? {
                     return Ok("outside_tolerance");
                 }
             }
@@ -181,7 +206,7 @@ fn screen(text: &str, anchor: &SourceAnchor) -> Result<Envelope, Refusal> {
     let mut rows = Vec::new();
     let mut flagged = 0usize;
     let mut markdown = format!(
-        "# Matched-cohort reconciliation\n\n{} · {} · {} · {}\n\nActual as a percentage of plan, with a tolerance of {tol} basis points.\n\n| Material support | Source line | Dry tonnes | Grade | Contained metal | Finding |\n|---|---:|---:|---:|---:|---|\n",
+        "# Matched-cohort reconciliation\n\n{} · {} · {} · {}\n\nPercentages show actual divided by plan, rounded for display. Findings use the exact {tol} basis point tolerance. Differences are actual minus plan.\n\n| Material support | Source line | Dry tonnes | Grade | Contained metal | Finding | Difference (dry t) | Difference (kg metal) |\n|---|---:|---:|---:|---:|---|---:|---:|\n",
         markdown_cell(site),
         markdown_cell(period),
         markdown_cell(element),
@@ -230,46 +255,62 @@ fn screen(text: &str, anchor: &SourceAnchor) -> Result<Envelope, Refusal> {
             tonnes: quantity(f, "actual_dry_tonnes")?,
             metal: quantity(f, "actual_contained_metal_kg")?,
         };
-        let call_grade = call.grade()?.filter(|g| g.signum() > 0).ok_or_else(|| {
-            physical(format!(
-                "{support}: positive planned dry mass and metal required for actual/plan factors"
-            ))
-        })?;
-        let tonnes_ratio = actual.tonnes.checked_div(call.tonnes).map_err(physical)?;
-        let metal_ratio = actual.metal.checked_div(call.metal).map_err(physical)?;
-        let grade_ratio = actual
-            .grade()?
-            .map(|g| g.checked_div(call_grade))
-            .transpose()
-            .map_err(physical)?;
-        let finding = match grade_ratio {
-            None => "no_actual_tonnage",
-            Some(g) if g.signum() == 0 => "no_actual_metal",
-            Some(g) => classify(&WithinFactorInput {
+        let call_grade = call.grade()?;
+        let actual_grade = actual.grade()?;
+        let tonnes_ratio = ratio(actual.tonnes, call.tonnes)?;
+        let metal_ratio = ratio(actual.metal, call.metal)?;
+        let grade_ratio = match (actual_grade, call_grade) {
+            (Some(a), Some(c)) => ratio(a, c)?,
+            _ => None,
+        };
+        let tonnes_delta = actual.tonnes.checked_sub(call.tonnes).map_err(physical)?;
+        let metal_delta = actual.metal.checked_sub(call.metal).map_err(physical)?;
+        let finding = match (tonnes_ratio, metal_ratio, grade_ratio) {
+            (None, _, _) if actual.tonnes.signum() == 0 => "no_movement",
+            (None, _, _) => "unplanned_movement",
+            (Some(_), _, _) if actual.tonnes.signum() == 0 => "no_actual_tonnage",
+            (Some(_), None, _) if actual.metal.signum() > 0 => "unplanned_metal",
+            (Some(t), None, _) => {
+                let tolerance = ExactQty::new(i128::from(tol), 10_000).map_err(physical)?;
+                let difference = t.checked_sub(ExactQty::from_integer(1)).map_err(physical)?;
+                if exceeds_tolerance(difference, tolerance)? {
+                    "outside_tolerance"
+                } else {
+                    "within_tolerance"
+                }
+            }
+            (Some(_), Some(_), _) if actual.metal.signum() == 0 => "no_actual_metal",
+            (Some(t), Some(m), Some(g)) => classify(&WithinFactorInput {
                 site_id: site.into(),
                 period: period.into(),
                 factor_key: "matched_cohort.actual_over_call@v1".into(),
                 ownership_basis: basis.into(),
-                tonnes_ratio,
+                tonnes_ratio: t,
                 grade_ratio: g,
-                metal_ratio,
+                metal_ratio: m,
                 tol_bps: tol,
                 source_e_ids: vec![],
             })?,
+            _ => return Err(physical("inconsistent grade and metal denominators")),
         };
-        let investigate = finding != "within_tolerance";
+        let investigate = !matches!(finding, "within_tolerance" | "no_movement");
         flagged += usize::from(investigate);
-        rows.push(format!("{{\"support\":{},\"worksheet_line\":{},\"call\":{},\"actual\":{},\"tonnes_ratio\":{},\"grade_ratio\":{},\"metal_ratio\":{},\"finding\":{},\"review\":{investigate}}}",
-            quote(support),row.line,call.json(),actual.json(),quote(&fraction(tonnes_ratio)),
-            grade_ratio.map_or_else(||"null".into(),|g| quote(&fraction(g))),quote(&fraction(metal_ratio)),quote(finding)));
+        let json_ratio =
+            |q: Option<ExactQty>| q.map_or_else(|| "null".into(), |q| quote(&fraction(q)));
+        rows.push(format!("{{\"support\":{},\"worksheet_line\":{},\"call\":{},\"actual\":{},\"dry_tonnes_delta\":{},\"contained_metal_kg_delta\":{},\"tonnes_ratio\":{},\"grade_ratio\":{},\"metal_ratio\":{},\"finding\":{},\"review\":{investigate}}}",
+            quote(support),row.line,call.json(),actual.json(),quote(&fraction(tonnes_delta)),quote(&fraction(metal_delta)),
+            json_ratio(tonnes_ratio),json_ratio(grade_ratio),json_ratio(metal_ratio),quote(finding)));
+        let display = |q: Option<ExactQty>| q.map_or_else(|| "undefined".into(), percent);
         markdown.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
             markdown_cell(support),
             row.line,
-            percent(tonnes_ratio),
-            grade_ratio.map_or_else(|| "undefined".into(), percent),
-            percent(metal_ratio),
-            finding.replace('_', " ")
+            display(tonnes_ratio),
+            display(grade_ratio),
+            display(metal_ratio),
+            finding.replace('_', " "),
+            fraction(tonnes_delta),
+            fraction(metal_delta)
         ));
     }
     markdown.push_str(&format!("\n{flagged} of {} cohorts need review.\n\nSource {} (SHA-256 `{}`). Inputs are assumed and uncalibrated.\n\n{NO_CLAIM}\n",
@@ -364,13 +405,70 @@ mod tests {
                 RefusalCode::OutsidePhysicalDomain109.as_str()
             );
         }
+    }
+
+    #[test]
+    fn zero_calls_preserve_valid_cohorts_and_only_undefined_ratios_are_null() {
+        for (planned, moved, metal, ratios, finding, review) in [
+            (0, 0, 0, ("null", "null"), "no_movement", false),
+            (0, 10, 0, ("null", "null"), "unplanned_movement", true),
+            (0, 10, 12, ("null", "null"), "unplanned_movement", true),
+            (100, 95, 0, ("\"19/20\"", "null"), "within_tolerance", false),
+            (100, 94, 0, ("\"47/50\"", "null"), "outside_tolerance", true),
+            (
+                100,
+                105,
+                0,
+                ("\"21/20\"", "null"),
+                "within_tolerance",
+                false,
+            ),
+            (
+                100,
+                106,
+                0,
+                ("\"53/50\"", "null"),
+                "outside_tolerance",
+                true,
+            ),
+            (100, 100, 12, ("\"1/1\"", "null"), "unplanned_metal", true),
+            (100, 0, 0, ("\"0/1\"", "null"), "no_actual_tonnage", true),
+        ] {
+            let text = EXAMPLE
+                .replace(
+                    "call_dry_tonnes = 0",
+                    &format!("call_dry_tonnes = {planned}"),
+                )
+                .replace(
+                    "actual_dry_tonnes = 200",
+                    &format!("actual_dry_tonnes = {moved}"),
+                )
+                .replace(
+                    "actual_contained_metal_kg = 2500",
+                    &format!("actual_contained_metal_kg = {metal}"),
+                );
+            let json = run(&text).unwrap().payload_json;
+            assert!(json.contains("masked_within_metal_tolerance"));
+            let (tonnes_ratio, metal_ratio) = ratios;
+            assert!(json.contains(&format!("\"dry_tonnes_delta\":\"{}/1\",\"contained_metal_kg_delta\":\"{metal}/1\",\"tonnes_ratio\":{tonnes_ratio},\"grade_ratio\":null,\"metal_ratio\":{metal_ratio},\"finding\":\"{finding}\",\"review\":{review}", moved-planned)), "{json}");
+        }
+        assert_eq!(
+            run(&EXAMPLE.replace("call_contained_metal_kg = 0", "call_contained_metal_kg = 1"))
+                .unwrap_err()
+                .code,
+            "FMINE-REF-109"
+        );
+    }
+
+    #[test]
+    fn worksheet_labels_render_as_literal_text() {
+        let label = "[bench](west) | A_1 & <ore>";
+        let env = run(&EXAMPLE.replace("East pit / unplanned cut", label)).unwrap();
+        assert!(env.payload_json.contains(label));
         assert!(
-            run(&EXAMPLE.replacen(
-                "call_contained_metal_kg = 10000",
-                "call_contained_metal_kg = 0",
-                1
-            ))
-            .is_err()
+            env.rendered_markdown
+                .unwrap()
+                .contains(r"\[bench\](west) \| A\_1 &amp; &lt;ore&gt;")
         );
     }
 }

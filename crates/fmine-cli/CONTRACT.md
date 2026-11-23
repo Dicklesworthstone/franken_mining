@@ -35,7 +35,8 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 - DESIGN (BD-162). `recon run --input <matched-cohorts.toml>` screens declared planned and actual dry tonnes
   and contained kg for a common site, period, element, ownership basis and matching material support.
   `fmine.matched-cohorts.v1` requires unique supports and a tolerance of 1–9,999 basis points. Positive
-  planned masses define the denominators. Actual zero movement leaves grade undefined. The `fmine-flow`
+  planned masses define the denominators. A zero denominator leaves its ratio undefined. Unplanned
+  movement and unplanned metal carry the signed difference in dry tonnes and contained kg. The `fmine-flow`
   compensation detector flags opposite tonnes and grade deviations. Ordinary breaches also remain visible.
   JSON binds exact ratios and worksheet line numbers to the source hash. Markdown rounds for display.
   Inputs are internal assumptions. Posterior uncertainty, inventory matching and period close remain open.

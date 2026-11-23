@@ -133,29 +133,45 @@ fn condition_text(value: &TestCondition) -> String {
     }
 }
 
+fn windows_json(rule: &str, windows: super::Result<super::ShareWindows>) -> String {
+    let range_json = |range: Option<ShareRange>| match range {
+        None => "null".into(),
+        Some(r) => format!(
+            "{{\"lower\":{},\"upper\":{},\"lower_inclusive\":{},\"upper_inclusive\":{}}}",
+            rq(r.interval.lower),
+            rq(r.interval.upper),
+            r.lower_inclusive,
+            r.upper_inclusive
+        ),
+    };
+    match windows {
+        Ok((proceed, stop)) => format!(
+            "{{\"rule\":{},\"status\":\"ok\",\"proceed\":{},\"stop\":{}}}",
+            js(rule),
+            range_json(proceed),
+            range_json(stop)
+        ),
+        Err(e) => format!(
+            "{{\"rule\":{},\"status\":\"refused\",\"code\":{},\"what\":{},\"fix\":{}}}",
+            js(rule),
+            js(e.code),
+            js(&e.what),
+            js(e.fix)
+        ),
+    }
+}
+
 impl BoundCard {
     /// Deterministic exact report; the digest binds full input metadata and the checked summary.
     #[must_use]
     pub fn to_json(&self) -> String {
-        let range_json = |range: Option<ShareRange>| {
-            range.map_or_else(||"null".into(),|r| format!(
-            "{{\"lower\":{},\"upper\":{},\"lower_inclusive\":{},\"upper_inclusive\":{}}}",
-            rq(r.interval.lower),rq(r.interval.upper),r.lower_inclusive,r.upper_inclusive))
-        };
-        let shares = match self.share_ranges() {
-            Ok((proceed, stop)) => format!(
-                "{{\"rule\":\"additive-contained-metal-share/v1\",\"status\":\"ok\",\"proceed\":{},\"stop\":{}}}",
-                range_json(proceed),
-                range_json(stop)
-            ),
-            Err(e) => format!(
-                "{{\"rule\":\"additive-contained-metal-share/v1\",\"status\":\"refused\",\"code\":{},\"what\":{}}}",
-                js(e.code),
-                js(&e.what)
-            ),
-        };
+        let shares = windows_json("additive-contained-metal-share/v1", self.share_ranges());
+        let dry = self.dry_share_ranges().transpose().map_or_else(
+            || "null".into(),
+            |windows| windows_json("additive-dry-tonne-share/v1", windows),
+        );
         format!(
-            "{{\"schema\":\"fmine.recovery-bounds-card.v1\",\"digest\":{},\"calibration\":\"not_established\",\"disclosure_eligible\":false,\"no_claim\":{},\"inputs\":{},\"result\":{},\"guaranteed_share_ranges\":{shares}}}",
+            "{{\"schema\":\"fmine.recovery-bounds-card.v1\",\"digest\":{},\"calibration\":\"not_established\",\"disclosure_eligible\":false,\"no_claim\":{},\"inputs\":{},\"result\":{},\"guaranteed_share_ranges\":{shares},\"guaranteed_dry_tonne_share_ranges\":{dry}}}",
             js(self.digest()),
             js(NO_CLAIM),
             claim_json(self.inputs(), &model_json(&self.inputs().value)),
@@ -182,32 +198,39 @@ impl BoundCard {
             interval_text(summary.recovery)
         );
         out.push_str("## Untested share of contained metal\n\nWithin the declared share range, the following choices hold for every recovery in the stated bands. Shares outside both windows need more evidence.\n\n");
-        match self.share_ranges() {
-            Ok((proceed, stop)) => {
-                for (action, window) in [("Proceed", proceed), ("Stop", stop)] {
-                    let description = window.map_or_else(
-                        || "no admitted share".to_owned(),
-                        |r| {
-                            format!(
-                                "{}{}, {}{}",
-                                if r.lower_inclusive { "[" } else { "(" },
-                                ratio(r.interval.lower),
-                                ratio(r.interval.upper),
-                                if r.upper_inclusive { "]" } else { ")" }
-                            )
-                        },
-                    );
-                    let _ = writeln!(out, "- {action} — {description}");
+        let write_windows =
+            |out: &mut String, windows: super::Result<super::ShareWindows>| match windows {
+                Ok((proceed, stop)) => {
+                    for (action, window) in [("Proceed", proceed), ("Stop", stop)] {
+                        let description = window.map_or_else(
+                            || "no admitted share".to_owned(),
+                            |r| {
+                                format!(
+                                    "{}{}, {}{}",
+                                    if r.lower_inclusive { "[" } else { "(" },
+                                    ratio(r.interval.lower),
+                                    ratio(r.interval.upper),
+                                    if r.upper_inclusive { "]" } else { ")" }
+                                )
+                            },
+                        );
+                        let _ = writeln!(out, "- {action} — {description}");
+                    }
                 }
-            }
-            Err(e) => {
-                let _ = writeln!(
-                    out,
-                    "Share calculation refused ({}). {}",
-                    e.code,
-                    md(&e.what)
-                );
-            }
+                Err(e) => {
+                    let _ = writeln!(
+                        out,
+                        "Share calculation refused ({}). {} {}",
+                        e.code,
+                        md(&e.what),
+                        md(e.fix)
+                    );
+                }
+            };
+        write_windows(&mut out, self.share_ranges());
+        if let Some(windows) = self.dry_share_ranges().transpose() {
+            out.push_str("\n## Untested share of dry feed tonnes\n\nThese windows use the available dry tonnes and hold across both declared grade and recovery ranges.\n\n");
+            write_windows(&mut out, windows);
         }
         out.push('\n');
         if let WeightBasis::DryTonnesAndGrade {

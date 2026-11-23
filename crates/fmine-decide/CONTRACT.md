@@ -372,6 +372,9 @@ The card also solves for the subset of its declared contained-metal shares that 
 The lower recovery endpoints determine proceed (inclusive at equality) and the upper endpoints determine
 stop (strict). An empty window is `null`. This sensitivity is calculated from the existing receipted
 model and leaves the original card digest intact. A representability failure refuses the sensitivity.
+For dry tonnes and grades, the card also solves for the untested fraction of total dry feed. Each
+window must hold for every admitted grade and recovery at that dry share. The admissible shares
+come from the tonne intervals. A metal-share-only worksheet leaves the dry-share result undefined.
 
 `bounds::evaluate` accepts one source-bound `Claim<RecoveryBoundModel>`. Tested and untested strata
 have explicit closed recovery intervals, a named route and metal, an additivity basis, an untested-bound

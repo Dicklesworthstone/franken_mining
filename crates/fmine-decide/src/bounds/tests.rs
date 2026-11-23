@@ -99,18 +99,19 @@ fn known_answer_80_90_unstable_at_85() {
     );
 }
 
+fn inside_window(w: Rat, window: Option<ShareRange>) -> bool {
+    window.is_some_and(|r| {
+        let lo = w.checked_cmp(r.interval.lower).unwrap();
+        let hi = w.checked_cmp(r.interval.upper).unwrap();
+        (lo.is_gt() || (lo.is_eq() && r.lower_inclusive))
+            && (hi.is_lt() || (hi.is_eq() && r.upper_inclusive))
+    })
+}
+
 #[test]
 fn guaranteed_share_windows_match_both_recovery_extremes_and_strict_stop() {
     let weights = range(0, 100, 100);
     let cutoff = q(85, 100);
-    let inside_window = |w: Rat, window: Option<ShareRange>| {
-        window.is_some_and(|r| {
-            let lo = w.checked_cmp(r.interval.lower).unwrap();
-            let hi = w.checked_cmp(r.interval.upper).unwrap();
-            (lo.is_gt() || (lo.is_eq() && r.lower_inclusive))
-                && (hi.is_lt() || (hi.is_eq() && r.upper_inclusive))
-        })
-    };
     for (tested, untested) in [
         (range(90, 90, 100), range(40, 80, 100)),
         (range(40, 80, 100), range(90, 90, 100)),
@@ -169,7 +170,97 @@ fn guaranteed_share_windows_match_both_recovery_extremes_and_strict_stop() {
         })
     );
     assert!(card.to_markdown().contains("Stop — (1/2, 3/4]"));
+    assert!(
+        card.to_json()
+            .contains("\"guaranteed_dry_tonne_share_ranges\":null")
+    );
     assert!(card.to_json().contains("\"stop\":{\"lower\":\"1/2\",\"upper\":\"3/4\",\"lower_inclusive\":false,\"upper_inclusive\":true}"));
+}
+
+#[test]
+fn dry_share_windows_match_direct_metal_accounting_at_all_grade_and_recovery_corners() {
+    for (rt, ru, gt, gu) in [
+        ((90, 90), (40, 80), (1, 2), (2, 4)),
+        ((40, 80), (90, 90), (1, 2), (2, 4)),
+        ((85, 85), (85, 85), (1, 2), (0, 4)),
+        ((80, 90), (40, 70), (1, 2), (0, 0)),
+        ((80, 90), (86, 95), (1, 2), (0, 4)),
+    ] {
+        let c = card(RecoveryBoundModel {
+            weights: WeightBasis::DryTonnesAndGrade {
+                tested_tonnes: range(1, 99, 1),
+                untested_tonnes: range(0, 99, 1),
+                tested_grade_g_per_t: range(gt.0, gt.1, 1),
+                untested_grade_g_per_t: range(gu.0, gu.1, 1),
+            },
+            tested_recovery: range(rt.0, rt.1, 100),
+            untested_recovery: range(ru.0, ru.1, 100),
+            threshold: q(85, 100),
+            ..model()
+        });
+        let (proceed, stop) = c.dry_share_ranges().unwrap().unwrap();
+        for p in 0..=100 {
+            let mut all_meet = p <= 99;
+            let mut all_miss = p <= 99;
+            for tg in [gt.0, gt.1] {
+                for ug in [gu.0, gu.1] {
+                    let tested_grams = (100 - p) * tg;
+                    let untested_grams = p * ug;
+                    let target = 85 * (tested_grams + untested_grams);
+                    for tr in [rt.0, rt.1] {
+                        for ur in [ru.0, ru.1] {
+                            let recovered = tr * tested_grams + ur * untested_grams;
+                            all_meet &= recovered >= target;
+                            all_miss &= recovered < target;
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                inside_window(q(p, 100), proceed),
+                all_meet,
+                "proceed at {p}%"
+            );
+            assert_eq!(inside_window(q(p, 100), stop), all_miss, "stop at {p}%");
+        }
+        if rt == (90, 90) && ru == (40, 80) {
+            assert!(inside_window(q(1, 37), proceed));
+            assert!(!inside_window(q(1, 2), stop));
+            assert!(c.to_markdown().contains("Proceed — [0/1, 1/37]"));
+            assert!(c.to_markdown().contains("Stop — (1/2, 99/100]"));
+            assert!(c.to_json().contains("\"rule\":\"additive-dry-tonne-share/v1\",\"status\":\"ok\",\"proceed\":{\"lower\":\"0/1\",\"upper\":\"1/37\""));
+        }
+    }
+}
+
+#[test]
+fn dry_feed_admits_pure_metal_and_refuses_excess_grade_in_either_stratum() {
+    let pure = range(1_000_000, 1_000_000, 1);
+    let impossible = range(2_000_000, 2_000_001, 2);
+    let evaluate_grades = |tested, untested| {
+        evaluate(&input(RecoveryBoundModel {
+            weights: WeightBasis::DryTonnesAndGrade {
+                tested_tonnes: range(1, 1, 1),
+                tested_grade_g_per_t: tested,
+                untested_tonnes: range(0, 0, 1),
+                untested_grade_g_per_t: untested,
+            },
+            ..model()
+        }))
+    };
+    assert_eq!(
+        evaluate_grades(pure, pure)
+            .unwrap()
+            .summary()
+            .untested_metal_fraction,
+        range(0, 0, 1)
+    );
+    for (tested, untested) in [(pure, impossible), (impossible, pure)] {
+        assert_eq!(
+            evaluate_grades(tested, untested).unwrap_err().code,
+            "FMINE-REF-109"
+        );
+    }
 }
 
 #[test]

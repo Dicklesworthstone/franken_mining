@@ -81,8 +81,9 @@ cargo run -p fmine-cli -- recon run --input tests/recon/matched_cohorts.toml --f
 
 In polygon A, 1,200 dry tonnes delivered the 10,000 kg Cu expected from 1,000 tonnes. Metal reached 100%
 of plan, but grade reached only 83.33%. The command flags that offset for investigation. Polygon B is
-exactly on the 5% tolerance boundary. The JSON gives exact ratios and the source line for each cohort.
-Different call and actual supports refuse. A period with zero movement retains zero tonnes and undefined grade.
+exactly on the 5% tolerance boundary. An unplanned cut adds 200 dry tonnes and 2,500 kg Cu. The report
+shows both differences even though the actual-to-plan ratios are undefined. JSON includes exact ratios,
+signed differences and the source line for each cohort. Different call and actual supports refuse.
 This screen does not estimate stockpile flows or identify the cause of a variance.
 
 ### Run declared plant accounting
@@ -1767,7 +1768,9 @@ The blend example asks a planner's inverse question. Tested ore recovers 90% and
 to recover 40–80%. Across the declared 5–75% range, an untested share of **5–10% of contained copper**
 guarantees the 85% recovery target under those assumptions. A share **above 50%** guarantees a miss.
 Exactly 50% can still meet the target at the upper recovery bound. The percentages refer to contained
-metal. Converting them to feeder tonnes requires the grades of both feeds.
+metal. With dry tonnages and grade ranges for both feeds, the same command also reports the fraction
+of dry feed that guarantees each outcome. Those windows hold across every grade and recovery admitted
+by the worksheet. A metal-share-only worksheet leaves the dry-feed fraction undefined.
 
 For the first synthetic worksheet, uncertain weights and tested recovery give an aggregate interval
 of **[19/25, 917/1000]**. At an 85% threshold the choice is unstable: a valid test raising the untested

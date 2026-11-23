@@ -36,6 +36,8 @@ struct ShareRange {
     upper_inclusive: bool,
 }
 
+type ShareWindows = (Option<ShareRange>, Option<ShareRange>);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WeightBasis {
     /// Fraction of the combined contained metal, never a tonne fraction.
@@ -185,14 +187,43 @@ fn interval(value: Interval, fraction: bool) -> Result<()> {
     }
     Ok(())
 }
-fn product(a: Interval, b: Interval) -> Result<Interval> {
-    interval(a, false)?;
-    interval(b, false)?;
+fn contained_grams(tonnes: Interval, grade_g_per_t: Interval) -> Result<Interval> {
+    interval(tonnes, false)?;
+    interval(grade_g_per_t, false)?;
+    if exact(
+        grade_g_per_t
+            .upper
+            .checked_cmp(Rat::from_integer(1_000_000)),
+    )?
+    .is_gt()
+    {
+        return Err(bad(
+            RefusalCode::OutsidePhysicalDomain109,
+            "contained metal grade exceeds 1,000,000 g per dry tonne",
+        ));
+    }
     Ok(Interval {
-        lower: exact(a.lower.checked_mul(b.lower))?,
-        upper: exact(a.upper.checked_mul(b.upper))?,
+        lower: exact(tonnes.lower.checked_mul(grade_g_per_t.lower))?,
+        upper: exact(tonnes.upper.checked_mul(grade_g_per_t.upper))?,
     })
 }
+
+/// Extremes of U/(T+U) on two independent nonnegative mass intervals.
+fn untested_share(tested: Interval, untested: Interval) -> Result<Interval> {
+    Ok(Interval {
+        lower: exact(
+            untested
+                .lower
+                .checked_div(exact(untested.lower.checked_add(tested.upper))?),
+        )?,
+        upper: exact(
+            untested
+                .upper
+                .checked_div(exact(untested.upper.checked_add(tested.lower))?),
+        )?,
+    })
+}
+
 fn metal_weights(basis: &WeightBasis) -> Result<Interval> {
     let result = match basis {
         WeightBasis::ContainedMetal { untested_fraction } => *untested_fraction,
@@ -202,26 +233,15 @@ fn metal_weights(basis: &WeightBasis) -> Result<Interval> {
             untested_tonnes,
             untested_grade_g_per_t,
         } => {
-            let tested = product(*tested_tonnes, *tested_grade_g_per_t)?;
-            let untested = product(*untested_tonnes, *untested_grade_g_per_t)?;
+            let tested = contained_grams(*tested_tonnes, *tested_grade_g_per_t)?;
+            let untested = contained_grams(*untested_tonnes, *untested_grade_g_per_t)?;
             if exact(tested.lower.checked_add(untested.lower))? == ZERO {
                 return Err(bad(
                     RefusalCode::OutsidePhysicalDomain109,
                     "the admitted tonne/grade box includes zero combined contained metal",
                 ));
             }
-            Interval {
-                lower: exact(
-                    untested
-                        .lower
-                        .checked_div(exact(untested.lower.checked_add(tested.upper))?),
-                )?,
-                upper: exact(
-                    untested
-                        .upper
-                        .checked_div(exact(untested.upper.checked_add(tested.lower))?),
-                )?,
-            }
+            untested_share(tested, untested)?
         }
     };
     interval(result, true)?;
@@ -269,7 +289,7 @@ fn share_range(
 }
 
 impl BoundCard {
-    fn share_ranges(&self) -> Result<(Option<ShareRange>, Option<ShareRange>)> {
+    fn share_ranges(&self) -> Result<ShareWindows> {
         let w = self.summary().untested_metal_fraction;
         let m = &self.inputs().value;
         Ok((
@@ -288,6 +308,44 @@ impl BoundCard {
                 false,
             )?,
         ))
+    }
+
+    fn dry_share_ranges(&self) -> Result<Option<ShareWindows>> {
+        let m = &self.inputs().value;
+        let WeightBasis::DryTonnesAndGrade {
+            tested_tonnes,
+            tested_grade_g_per_t,
+            untested_tonnes,
+            untested_grade_g_per_t,
+        } = m.weights
+        else {
+            return Ok(None);
+        };
+        let dry = untested_share(tested_tonnes, untested_tonnes)?;
+        // At dry share p the threshold is met iff the mass-weighted sum of
+        // g*(recovery-threshold) is nonnegative. Total contained metal is positive
+        // everywhere in the admitted box. This also handles a zero-grade stratum.
+        let window = |proceed| {
+            let margin = |grades: Interval, recoveries: Interval| {
+                let r = if proceed {
+                    recoveries.lower
+                } else {
+                    recoveries.upper
+                };
+                let delta = exact(r.checked_sub(m.threshold))?;
+                let a = exact(grades.lower.checked_mul(delta))?;
+                let b = exact(grades.upper.checked_mul(delta))?;
+                if proceed { min(a, b) } else { max(a, b) }
+            };
+            share_range(
+                dry,
+                margin(tested_grade_g_per_t, m.tested_recovery)?,
+                margin(untested_grade_g_per_t, m.untested_recovery)?,
+                ZERO,
+                proceed,
+            )
+        };
+        Ok(Some((window(true)?, window(false)?)))
     }
 }
 
