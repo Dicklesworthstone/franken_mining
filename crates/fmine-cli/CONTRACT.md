@@ -31,6 +31,13 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     exercise credit. USD limits are whole decimal strings. Zero is attainable; null means no feasible
     price or fee, or no applicable live hold terms. A null delivery limit means the stated float extends
     past the four-digit worksheet calendar. Cancelled branches have no commissioning milestone to delay.
+    DESIGN (bd-5xc1). `decide journal record --model <purchase worksheet> --action <id>` accepts the
+    commercially available choices listed by that worksheet. `order-now` and `hold-slot` require
+    live terms at the worksheet date. `let-lapse` remains available with or without a priced replacement.
+    The writer records the explicit choice even if the displayed cash or schedule comparison is adverse.
+    The worksheet date must be no later than the earliest possible UTC date under the journal's declared
+    host-clock skew. The existing operation stores the original model bytes, complete comparison envelope,
+    calculation Claim identity and rationale. Pinning the head allows offline replay after changes to the quote.
   - Rehabilitation compares mutually exclusive, owner-eligible packages at one horizon. Work is paid on
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release

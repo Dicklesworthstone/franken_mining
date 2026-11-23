@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::Refusal;
 
 use crate::{Envelope, NextAction, worksheet_input};
@@ -10,12 +11,32 @@ use crate::{Envelope, NextAction, worksheet_input};
 mod executive;
 mod investment;
 
+pub(crate) use executive::ProcurementSnapshot;
+
+pub(crate) fn procurement_snapshot(
+    text: &str,
+    source: &SourceAnchor,
+    root: &Path,
+    action: &str,
+) -> Result<Option<ProcurementSnapshot>, Refusal> {
+    use fmine_registry::toml_subset::{TomlValue, parse_subset};
+    let Ok(doc) = parse_subset(text) else {
+        return Ok(None);
+    };
+    if !matches!(doc.top_get("schema").map(|f| &f.value), Some(TomlValue::Str(s)) if s == executive::SCHEMA)
+    {
+        return Ok(None);
+    }
+    executive::procurement_snapshot(&doc, text, source, root, action).map(Some)
+}
+
 pub(super) const USAGE: &str = "decide program <model-file>";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
     "\"schema\":\"fmine.capital-program.v1\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
     "\"executive_brief\":\"decide program <executive worksheet> --brief prints the meeting paper. Use --format markdown for the full tables and source locators.\",",
+    "\"procurement_journal\":\"Use decide journal record --model <procurement worksheet> with --action order-now, hold-slot or let-lapse. The evaluated card lists available journal_actions. The worksheet date must be on or before the earliest possible UTC recording date. Pinned show retains the original comparison, scope and rationale.\",",
     "\"executive_examples\":[\"tests/capital/executive_purchase.toml\",\"tests/capital/executive_purchase_potash.toml\",\"tests/capital/executive_tenure.toml\",\"tests/capital/executive_group.toml\",\"tests/capital/executive_rehabilitation.toml\",\"tests/capital/executive_estimates.toml\",\"tests/capital/executive_hedge.toml\",\"tests/capital/executive_care.toml\",\"tests/capital/executive_deck.toml\"],",
     "\"common_price_deck\":{\"decision\":\"common_price_deck\",\"comparison\":[\"element\",\"ownership_basis\",\"repricing_basis (fixed_plan_flat_royalty_pre_tax)\"],\"candidate (exactly two)\":[\"label\",\"investment (production investment manifest path)\",\"alternative\"],\"price (exactly one per period and shared state)\":[\"period\",\"state\",\"usd_per_kg (nonnegative exact decimal or n/d)\"],\"every_table\":[\"source\",\"known_on\"]},",
     "\"investment_schema\":\"fmine.capital-investments.v1\",",

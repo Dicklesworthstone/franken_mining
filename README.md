@@ -31,6 +31,12 @@ The supplier's quoted fee is $250,000.
 
 Use `--json` for the full submitted worksheet, source digest, findings, comparison rows and procurement limits. The operator
 declares source availability, payment terms and financial scope. An input dated after the meeting refuses.
+
+Use `decide journal record` with the purchase worksheet and one of its displayed action IDs
+(`order-now`, `hold-slot` or `let-lapse`). Pin the new head to recover the original comparison and
+your rationale after supplier terms change. The journal admits the worksheet once its decision date
+has arrived in UTC. [Decision journal walkthrough](#retain-a-decision-and-its-original-evaluated-evidence)
+
 The two-asset exercise and the independent controller arithmetic are in the [synthetic pilot](docs/delivery/EXECUTIVE_DECISION_PILOT.md).
 Other worksheets compare [tenure options](tests/capital/executive_tenure.toml),
 [attributable site offsets](tests/capital/executive_group.toml), [rehabilitation instruments](tests/capital/executive_rehabilitation.toml)
@@ -2115,8 +2121,7 @@ input metadata as well as the computed statistics. Editing an assumption changes
 leaves the numerical ranking unchanged. Model-file inputs remain **Assumed, internal and uncalibrated**; supplied
 probabilities do not become calibrated by passing arithmetic checks. The explicit unknown-risk terms remain
 outside the priced scenario matrix. This comparison supplies no feasibility approval, calibrated selection
-frequency, historical replay proof or durable decision-ledger entry. It does not pass the full
-BD-225 or Helm acceptance gates.
+frequency or historical replay proof. To retain this comparison with a choice, use the decision journal.
 
 #### Retain a decision and its original evaluated evidence
 
@@ -2189,8 +2194,8 @@ same card bytes and digests. Reading a v5 entry requires a v5-capable reader. Fo
 Action-only histories use v1 reports. Histories with information choices use v2 reports. A forecast link
 on any decision selects v3 for the whole report. An independently saved `--head` detects rollback or
 rewriting. Unpinned inspection cannot establish the original history or evaluation provenance. Host-clock accuracy
-and the code revision are declarations, not external time proof or authenticated human identity. Recording
-a choice grants no approval, sign-off or execution authority and does not close the full BD-225 gate.
+and the code revision are operator declarations. The journal records the choice and rationale supplied
+by the writer.
 
 To retain the registered forecasts behind a choice, add the complete option group to `record`:
 

@@ -27,6 +27,7 @@ const MODEL: &str = include_str!("../../../tests/decisions/expansion.toml");
 const INFORMATION: &str = include_str!("../../../tests/decisions/metallurgical_test.toml");
 const CONSTRAINED: &str = include_str!("../../../tests/decisions/constrained_testwork.toml");
 const SHIFT_FEED: &str = include_str!("../../../tests/decisions/stockpile_holdback.toml");
+const PURCHASE: &str = include_str!("../../../tests/capital/executive_purchase.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn binary() -> PathBuf {
@@ -926,6 +927,166 @@ fn json_field<'a>(value: &'a Json, keys: &[&str]) -> &'a Json {
             .get(key)
             .unwrap_or_else(|| panic!("missing {key}: {value:?}"))
     })
+}
+
+#[test]
+fn procurement_choice_pins_the_complete_comparison_and_survives_revised_terms() {
+    let f = Fixture::new();
+    let older = successful(execute_with_clock(
+        &f.record(f.initial, "earlier-action", "hold"),
+        &f.root,
+        &Clock(200),
+    ));
+    let prior = head(&older);
+    let old_bytes = operation_fields(&f, prior, 1);
+    // Fixed synthetic 2024 calendar so the actual command can admit it with a live clock.
+    let submitted = PURCHASE.replace("2030-", "2024-");
+    fs::write(&f.model, &submitted).unwrap();
+    let run = |args: &[&str]| {
+        let result = Process::new(binary())
+            .args(args)
+            .args(["--workspace", f.root.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    let model = f.model.to_str().unwrap();
+    let ledger = f.journal.to_str().unwrap();
+    let card = run(&["decide", "program", model, "--json"]);
+    let original = parse_json(card.as_bytes()).unwrap();
+    let eligible = json_field(&original, &["payload", "journal_actions"])
+        .as_array()
+        .unwrap();
+    let ids: Vec<_> = eligible
+        .iter()
+        .map(|row| row.get("id").unwrap().as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["order-now", "hold-slot", "let-lapse"]);
+
+    let reason =
+        "Hold the delivery slot through engineering review and preserve the substation budget";
+    let recorded = run(&[
+        "decide",
+        "journal",
+        "record",
+        "--journal",
+        ledger,
+        "--expected-head",
+        &prior.to_hex(),
+        "--model",
+        model,
+        "--decision",
+        "drive-delivery",
+        "--action",
+        "hold-slot",
+        "--reason",
+        reason,
+        "--code-revision",
+        REVISION,
+        "--trust-host-clock",
+        "--json",
+    ]);
+    let result = parse_json(recorded.as_bytes()).unwrap();
+    let decisions = json_field(&result, &["payload", "decisions"])
+        .as_array()
+        .unwrap();
+    let choice = json_field(&decisions[1], &["snapshot"]);
+    assert_eq!(
+        json_field(choice, &["selected_action"]).as_str(),
+        Some("hold-slot")
+    );
+    assert_eq!(json_field(choice, &["rationale"]).as_str(), Some(reason));
+    assert_eq!(
+        json_field(choice, &["model", "content"]).as_str(),
+        Some(submitted.as_str())
+    );
+    let saved = json_field(choice, &["artifact", "content"])
+        .as_str()
+        .unwrap();
+    assert_eq!(saved, card.trim_end());
+    assert_eq!(parse_json(saved.as_bytes()).unwrap(), original);
+    assert_eq!(
+        json_field(choice, &["artifact", "sha256"]).as_str(),
+        Some(sha256(saved.as_bytes()).to_hex().as_str())
+    );
+    let pin = json_field(&result, &["payload", "head"]).as_str().unwrap();
+    let pin_digest = Digest32(fmine_calib::record::parse_hex32(pin).unwrap());
+    assert_eq!(operation_fields(&f, pin_digest, 1), old_bytes);
+
+    fs::write(&f.model, submitted.replace("250000", "550000")).unwrap();
+    assert_ne!(run(&["decide", "program", model, "--json"]), card);
+    let show = run(&[
+        "decide",
+        "journal",
+        "show",
+        "--journal",
+        ledger,
+        "--head",
+        pin,
+        "--json",
+    ]);
+    let replay = parse_json(show.as_bytes()).unwrap();
+    assert_eq!(
+        json_field(&replay, &["payload", "decisions"]),
+        json_field(&result, &["payload", "decisions"])
+    );
+}
+
+#[test]
+fn procurement_record_refuses_unavailable_choices_and_future_dates_before_append() {
+    let f = Fixture::new();
+    fs::write(&f.model, PURCHASE).unwrap();
+    let day = fmine_time::CivilDate::new(2030, 3, 8)
+        .unwrap()
+        .to_epoch_days();
+    let first_possible = day * 86_400_000_000_000;
+    let hold = f.record(f.initial, "reserve-drive", "hold-slot");
+    // Header skew is ±10 ns. Even if the observed time is on March 8,
+    // an earliest bound on March 7 cannot support a March 8 worksheet.
+    f.refuses_without_append(&hold, first_possible + 9, "FMINE-REF-107");
+    f.refuses_without_append(
+        &f.record(f.initial, "unknown", "approve"),
+        first_possible + 10,
+        "FMINE-REF-105",
+    );
+    fs::write(
+        &f.model,
+        PURCHASE.replace("known_on = \"2030-03-07\"", "known_on = \"2030-03-09\""),
+    )
+    .unwrap();
+    f.refuses_without_append(&hold, first_possible + 10, "FMINE-REF-105");
+    fs::write(
+        &f.model,
+        include_str!("../../../tests/capital/executive_care.toml"),
+    )
+    .unwrap();
+    f.refuses_without_append(&hold, first_possible + 10, "FMINE-REF-105");
+    let expired = PURCHASE
+        .replace("expires = \"2030-03-08\"", "expires = \"2030-03-07\"")
+        .replace("accept_by = \"2030-03-08\"", "accept_by = \"2030-03-07\"");
+    fs::write(&f.model, expired).unwrap();
+    for unavailable in ["hold-slot", "order-now"] {
+        f.refuses_without_append(
+            &f.record(f.initial, "expired", unavailable),
+            first_possible + 10,
+            "FMINE-REF-105",
+        );
+    }
+    let lapse = successful(execute_with_clock(
+        &f.record(f.initial, "lapse", "let-lapse"),
+        &f.root,
+        &Clock(first_possible + 10),
+    ));
+    assert!(
+        lapse
+            .payload_json
+            .contains("\"selected_action\":\"let-lapse\"")
+    );
 }
 
 #[test]

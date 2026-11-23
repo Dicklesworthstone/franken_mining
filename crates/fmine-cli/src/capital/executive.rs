@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
+use std::path::Path;
 
 use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::Refusal;
@@ -109,6 +110,7 @@ struct Card {
     /// Optional mode-specific JSON member, built alongside the human findings.
     detail: Option<(&'static str, String)>,
     calculation_digest: Option<String>,
+    journal_actions: Vec<(&'static str, &'static str)>,
 }
 impl Card {
     fn new(columns: &[&'static str]) -> Self {
@@ -118,6 +120,7 @@ impl Card {
             rows: Vec::new(),
             detail: None,
             calculation_digest: None,
+            journal_actions: Vec::new(),
         }
     }
 }
@@ -126,8 +129,71 @@ pub(super) fn worksheet(
     doc: &TomlDoc,
     text: &str,
     source: &SourceAnchor,
-    root: &std::path::Path,
+    root: &Path,
     brief: bool,
+) -> Result<Envelope> {
+    evaluate(doc, text, source, root, brief, None)
+}
+
+pub(crate) struct ProcurementSnapshot {
+    pub card: String,
+    pub claim_id: String,
+    pub not_before_ns: i128,
+}
+
+pub(super) fn procurement_snapshot(
+    doc: &TomlDoc,
+    text: &str,
+    source: &SourceAnchor,
+    root: &Path,
+    action: &str,
+) -> Result<ProcurementSnapshot> {
+    use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+    use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
+    use fmine_registry::toml_subset::TomlValue;
+
+    let evaluated = evaluate(doc, text, source, root, false, Some(action))?;
+    let Some(TomlValue::Str(as_of)) = doc.top_get("as_of").map(|f| &f.value) else {
+        return Err(invalid(
+            "procurement worksheet is missing its decision date",
+        ));
+    };
+    let card = evaluated.to_json();
+    let tag = format!(
+        "procurement-worksheet/v1:{}",
+        fmine_core::hash::sha256(card.as_bytes())
+    );
+    // This Claim identifies the retained worksheet calculation. The human choice and
+    // rationale are separately supplied by the journal writer.
+    let binding = Claim::new(
+        "decision.procurement-worksheet/1",
+        (),
+        &tag,
+        Representation::Deterministic,
+        SpatialSupport::PeriodAggregate,
+        AdditivityClass::NonAdditive,
+        EvidenceClass::Assumed,
+        EpistemicStatus::KnownUnknown(KuKind::Parametric),
+        KnowledgeState::Estimated,
+        Confidentiality::internal(),
+        Vec::new(),
+        Vec::new(),
+        vec![source.clone()],
+    );
+    Ok(ProcurementSnapshot {
+        card,
+        claim_id: binding.claim_id.to_string(),
+        not_before_ns: i128::from(day(as_of)?) * 86_400_000_000_000,
+    })
+}
+
+fn evaluate(
+    doc: &TomlDoc,
+    text: &str,
+    source: &SourceAnchor,
+    root: &Path,
+    brief: bool,
+    selected_action: Option<&str>,
 ) -> Result<Envelope> {
     if text.len() > 65536 || doc.rows.is_empty() || doc.rows.len() > 16 {
         return Err(invalid(
@@ -155,6 +221,11 @@ pub(super) fn worksheet(
         return Err(invalid("evidence must be synthetic or operator_declared"));
     }
     let mode = get(&f, "decision")?;
+    if selected_action.is_some() && mode != "purchase" {
+        return Err(invalid(
+            "only procurement executive worksheets can be recorded in the decision journal",
+        ));
+    }
     let card = match mode {
         "purchase" => purchase(doc, as_of)?,
         "common_price_deck" => deck::compare(doc, as_of, source, root)?,
@@ -166,6 +237,13 @@ pub(super) fn worksheet(
         "project_estimates" => project_estimates(doc, as_of)?,
         _ => return Err(invalid("unknown executive decision type")),
     };
+    if let Some(action) = selected_action
+        && !card.journal_actions.iter().any(|(id, _)| *id == action)
+    {
+        return Err(invalid(format!(
+            "procurement action {action} is unavailable in the evaluated worksheet"
+        )));
+    }
     let array = |v: &[String]| {
         format!(
             "[{}]",
@@ -212,6 +290,18 @@ pub(super) fn worksheet(
     if let Some(digest) = &card.calculation_digest {
         let _ = writeln!(md, "\nInvestment comparison SHA-256: {digest}.");
     }
+    if !brief && !card.journal_actions.is_empty() {
+        let actions = card
+            .journal_actions
+            .iter()
+            .map(|(id, label)| format!("{label} (`{id}`)"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            md,
+            "\nChoices for `decide journal record --action` are {actions}."
+        );
+    }
     let mut sources = Vec::new();
     for r in &doc.rows {
         let text_field = |key| match r.get(key).map(|f| &f.value) {
@@ -246,8 +336,19 @@ pub(super) fn worksheet(
         .detail
         .as_ref()
         .map_or_else(String::new, |(key, value)| format!(",{}:{value}", js(key)));
+    let actions = if card.journal_actions.is_empty() {
+        String::new()
+    } else {
+        let rows = card
+            .journal_actions
+            .iter()
+            .map(|(id, label)| format!(r#"{{"id":{},"label":{}}}"#, js(id), js(label),))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(",\"journal_actions\":[{rows}]")
+    };
     let payload = format!(
-        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"question\":{},\"owner\":{},\"support\":{},\"evidence_class\":\"assumed\",\"calibrated\":false,\"uncertainty\":{},\"revisit_if\":{},\"source_rows\":[{}],\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}{detail}}}",
+        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"question\":{},\"owner\":{},\"support\":{},\"evidence_class\":\"assumed\",\"calibrated\":false,\"uncertainty\":{},\"revisit_if\":{},\"source_rows\":[{}],\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}{detail}{actions}}}",
         js(mode),
         js(evidence),
         js(as_of),
@@ -402,6 +503,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     });
     let mut paths = Vec::new();
     if as_of <= expiry {
+        c.journal_actions.push(("order-now", "Place the order"));
         paths.push(("Order / proceed", deposit, price, Some(0)));
         paths.push(("Order / cancel", deposit, cancel, None));
     } else {
@@ -427,6 +529,8 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             return Err(invalid("invalid slot hold credit or date order"));
         }
         if accept >= as_of && through >= review {
+            c.journal_actions
+                .push(("hold-slot", "Pay to hold the slot"));
             // At exercise the total is price + fee - credit; at cancellation it is
             // the fee alone. Credit cannot exceed either the fee or the order price.
             let cap = decision_room.min(review_room - (price - credit));
@@ -468,6 +572,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         c.findings
             .push("Hold unavailable: no documented supplier option.".into());
     }
+    c.journal_actions.push(("let-lapse", "Let the quote lapse"));
     paths.push(("Lapse / cancel", 0, 0, None));
     if doc.rows_of("wait").next().is_some() {
         let wait = row_fields(
