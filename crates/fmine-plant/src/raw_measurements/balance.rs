@@ -581,7 +581,7 @@ fn solve(input: &Parsed) -> Result<RawBalanceSummary> {
 /// but never supplies an admitted reconciliation Claim.
 pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult> {
     if text.len() as u64 > MAX_BYTES
-        || sha256(text.as_bytes()) != source.artifact_sha256
+        || sha256(text.as_bytes()).0 != source.artifact_sha256
         || source.artifact_path.is_empty()
     {
         return Err(bad(1, "source bytes must match the SHA-256 and the 1 MiB limit"));

@@ -444,7 +444,9 @@ pub(super) fn markdown(report: &PairedAssessment) -> String {
     let alpha_label = match report.score {
         PairedScore::Interval => "Interval alpha",
         PairedScore::Crps => "Frozen alpha (compatibility only; CRPS uses all probability mass)",
-        PairedScore::Brier => "Frozen alpha (compatibility only; Brier uses binary event probabilities)",
+        PairedScore::Brier => {
+            "Frozen alpha (compatibility only; Brier uses binary event probabilities)"
+        }
     };
     let mut out = format!(
         "# {title}\n\n{method}\n\nComparison: `{}`\n\nLeft assessment: `{}`\n\nRight assessment: `{}`\n\nTarget: {} / {} / {} / {} / {}.\n\nAssessment cut: {}. Outcome selector: {}. {alpha_label}: {}.\n\nPaired outcomes: {}. Unresolved pairs: {}. Unmatched subjects or selections: {}.\n\nObserved mean difference: {} ({}).\n\nWhole-population completion: {} ({}).\n\n| Subject | Status | Left minus right | Completion |\n|---|---|---:|---|\n",

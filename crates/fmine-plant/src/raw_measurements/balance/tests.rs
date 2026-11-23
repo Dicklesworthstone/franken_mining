@@ -3,7 +3,7 @@ use super::*;
 const FIXTURE: &str = include_str!("../../../../../tests/plant/raw_balance.toml");
 
 fn source(text: &str) -> SourceAnchor {
-    SourceAnchor::new("synthetic/raw_balance.toml", sha256(text.as_bytes()), "complete worksheet")
+    SourceAnchor::new("synthetic/raw_balance.toml", sha256(text.as_bytes()).0, "complete worksheet")
 }
 
 fn run(text: &str) -> WorksheetResult {
