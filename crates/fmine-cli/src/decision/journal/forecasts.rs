@@ -307,7 +307,7 @@ pub(super) fn review(
 ) -> Result<Envelope, Refusal> {
     let links = snapshot.forecasts.as_ref().ok_or_else(|| invalid(
         "this decision has no prospectively committed forecasts; links cannot be attached after recording"))?;
-    let assessments =
+    let (assessments, table) =
         decisions::assessments(forecast_path, forecast_head, &links.commitments, selected)?;
     let mut rows = Vec::new();
     let mut missing = 0;
@@ -317,11 +317,12 @@ pub(super) fn review(
         snapshot.choice.description(),
         snapshot.rationale
     );
+    markdown.push_str(&table);
     for cohort in &links.commitments.cohorts {
         let selected = assessments
             .iter()
             .filter(|assessment| assessment.cohort == cohort.digest)
-            .map(|assessment| assessment.report.clone())
+            .map(|assessment| assessment.report.as_str())
             .collect::<Vec<_>>();
         let state = if selected.is_empty() {
             missing += 1;

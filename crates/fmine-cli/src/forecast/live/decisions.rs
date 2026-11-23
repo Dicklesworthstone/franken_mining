@@ -119,7 +119,7 @@ pub(crate) fn assessments(
     head: Digest32,
     commitments: &Commitments,
     selected: &[Digest32],
-) -> Result<Vec<SavedAssessment>, Refusal> {
+) -> Result<(Vec<SavedAssessment>, String), Refusal> {
     if selected.is_empty() || selected.len() > 64 {
         return Err(invalid("select one through 64 saved forecast assessments"));
     }
@@ -181,23 +181,14 @@ pub(crate) fn assessments(
         let origin = version_counts(journal.records(), &state, Some(*digest))?
             .report_origin
             .ok_or_else(|| absent("saved decision assessment has no journal origin"))?;
-        let rendered = state.render_origin(
-            &assessment,
-            origin.checkpoint_head,
-            "journal_head",
-            "durable_journal",
-            "operator_declared_bounded_host_clock",
-            Some(origin.checkpoint_count),
-        )?;
-        let prefix = rendered
-            .strip_suffix('}')
-            .ok_or_else(|| invalid("invalid saved decision forecast report"))?;
         reports.push(SavedAssessment {
             cohort: assessment.cohort,
             digest: *digest,
-            report: format!("{prefix},{}}}", origin.versions.fields()),
+            report: origin.render(&state, &assessment)?,
         });
     }
     reports.sort_by_key(|report| (report.cohort, report.digest));
-    Ok(reports)
+    let table =
+        super::checkpoint_table(state.checkpoints.iter().filter(|c| seen.remove(&c.digest)));
+    Ok((reports, table))
 }

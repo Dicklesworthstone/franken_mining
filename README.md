@@ -1967,7 +1967,9 @@ fmine decide journal assess --journal decisions.journal --head "$FMINE_DECISION_
 
 This read-only comparison reconstructs the original forecast prefix before accepting its continuation.
 Every committed cohort remains visible, including those with no selected assessment. Saved scores retain
-their frozen denominators and outcome selections. Neither journal is changed. The result assesses the
+their frozen denominators and outcome selections. The Markdown overview lists each selected report once
+in journal order, with its cut, selector, calibration flag and resolved count. The full reports follow.
+Neither journal is changed. The result assesses the
 registered predictions; it does not identify the decision's causal effect or certify decision quality.
 
 #### Compare choices when scenario weights are contested

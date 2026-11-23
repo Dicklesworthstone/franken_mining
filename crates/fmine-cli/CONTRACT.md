@@ -1077,7 +1077,9 @@ any recorded member outcome prevents admission. Legacy v1/v2/v3 decision encodin
 `decide journal assess` is read-only and requires both current heads, a decision ID and saved assessment
 digests. It reconstructs the retained prefix, verifies its ancestry and identities, then retrieves only
 persisted digest-bound reports for the original cohorts. Every committed cohort remains visible, including
-unassessed cohorts. Neither journal is changed and no outcomes are invented. Relevance is operator-declared;
+unassessed cohorts. Markdown shows each selected digest once at its first saved checkpoint. Each row
+names the cohort, cut, selector, flag and resolved/total count before the full reports.
+Neither journal is changed and no outcomes are invented. Relevance is operator-declared;
 there is no automatic payoff-model linkage, causal decision-quality conclusion or external time proof.
 
 ### Issued-output reliance (BD-347)

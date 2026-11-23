@@ -1249,6 +1249,54 @@ fn a_feed_decision_keeps_its_frozen_forecasts_and_reads_the_saved_assessment() {
 }
 
 #[test]
+fn decision_review_lists_selected_verdicts_in_saved_order_before_the_reports() {
+    let f = Fixture::new();
+    let mut p = Predictions::new(&f.root, "shift-predictions");
+    let decision = successful(execute_with_clock(
+        &linked_record(&f, p.selection(&["primary", "secondary"])),
+        &f.root,
+        &Clock(1_000),
+    ));
+    let (pending, _) = p.assess("primary", "1970-01-01T00:00:01Z", 1_500_000_000);
+    p.publish();
+    let (updated, _) = p.assess("primary", "1970-01-01T00:00:03Z", 4_000_000_000);
+    let (unused, _) = p.assess("secondary", "1970-01-01T00:00:03Z", 4_000_000_020);
+    let (duplicate, _) = p.assess("primary", "1970-01-01T00:00:01Z", 4_000_000_040);
+    assert_eq!(pending, duplicate);
+    let bytes = (fs::read(&f.journal).unwrap(), fs::read(&p.journal).unwrap());
+    let reviewed = successful(execute_with_clock(
+        &decision_review(&f, head(&decision), &p, vec![updated, pending]),
+        &f.root,
+        &NoClock,
+    ));
+    let markdown = reviewed.rendered_markdown.unwrap();
+    let (overview, _) = markdown
+        .split_once("\n## primary\n")
+        .expect("overview before details");
+    let rows: Vec<_> = overview
+        .lines()
+        .filter(|line| line.starts_with("| primary |"))
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].contains(&format!("first-published | unscored | 0 / 2 | `{pending}`")));
+    assert!(rows[1].contains(&format!(
+        "first-published | descriptive | 1 / 2 | `{updated}`"
+    )));
+    assert!(!overview.contains(&unused.to_hex()));
+    assert!(
+        markdown
+            .split_once("\n## secondary\n")
+            .unwrap()
+            .1
+            .contains("no_assessment_selected")
+    );
+    assert_eq!(
+        bytes,
+        (fs::read(&f.journal).unwrap(), fs::read(&p.journal).unwrap())
+    );
+}
+
+#[test]
 fn decision_forecasts_retain_complete_members_and_retrieve_saved_weighted_scores() {
     struct LockedForecast<'a>(&'a Predictions);
     impl WallClock for LockedForecast<'_> {
@@ -1431,6 +1479,7 @@ fn decision_forecasts_retain_complete_members_and_retrieve_saved_weighted_scores
         } else {
             let markdown = String::from_utf8(output.stdout).unwrap();
             assert!(markdown.contains("# Forecast outcomes for decision prospective-choice"));
+            assert!(markdown.contains(&format!("| primary | 1970-01-01T00:00:03Z | first-published | descriptive | 1 / 2 | `{assessment}` | persisted_checkpoint |")));
             let secondary = markdown.split_once("\n## secondary\n").unwrap().1;
             assert!(secondary.contains("Status: `no_assessment_selected`."));
             let report = markdown

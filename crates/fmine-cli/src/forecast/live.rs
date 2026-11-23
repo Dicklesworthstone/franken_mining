@@ -1622,6 +1622,23 @@ struct ReportOrigin {
     versions: VersionCounts,
 }
 
+impl ReportOrigin {
+    fn render(self, state: &Replay, assessment: &Assessment) -> Result<String, Refusal> {
+        let report = state.render_origin(
+            assessment,
+            self.checkpoint_head,
+            "journal_head",
+            "durable_journal",
+            "operator_declared_bounded_host_clock",
+            Some(self.checkpoint_count),
+        )?;
+        let prefix = report
+            .strip_suffix('}')
+            .ok_or_else(|| invalid("invalid rendered forecast report"))?;
+        Ok(format!("{prefix},{}}}", self.versions.fields()))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PresentationContext {
     versions: VersionCounts,
@@ -1798,20 +1815,9 @@ fn presentation_at(
     };
     let report = assessment
         .map(|a| -> Result<String, Refusal> {
-            let origin = report_origin
-                .ok_or_else(|| absent("selected assessment has no stored operation prefix"))?;
-            let report = state.render_origin(
-                a,
-                origin.checkpoint_head,
-                "journal_head",
-                "durable_journal",
-                "operator_declared_bounded_host_clock",
-                Some(origin.checkpoint_count),
-            )?;
-            let prefix = report
-                .strip_suffix('}')
-                .ok_or_else(|| invalid("invalid rendered forecast report"))?;
-            Ok(format!("{prefix},{}}}", origin.versions.fields()))
+            report_origin
+                .ok_or_else(|| absent("selected assessment has no stored operation prefix"))?
+                .render(state, a)
         })
         .transpose()?
         .unwrap_or_else(|| "null".into());
@@ -1895,22 +1901,8 @@ fn markdown(
     if state.temporal_validation.is_some() {
         out.push_str("\nDeclared ancestry was checked at each forecast's registration. Supplied time metadata is not independently verified; generator replay was not performed. JSON includes the provenance-file hash and per-forecast cone digests.\n");
     }
-    if operation == "inspect" && !state.checkpoints.is_empty() {
-        out.push_str("\n## Saved assessments\n\nJournal order. Compare cuts for the same cohort and outcome selector.\n\n| Cohort | Assessment cut (UTC) | Outcome selector | Calibration flag | Resolved / members | Assessment digest | Digest binding |\n|---|---|---|---|---:|---|---|\n");
-        for checkpoint in &state.checkpoints {
-            let _ = writeln!(
-                out,
-                "| {} | {} | {} | {} | {} / {} | `{}` | {} |",
-                text(&checkpoint.cohort),
-                utc_text(checkpoint.as_of_ns),
-                selector_name(checkpoint.selector),
-                checkpoint.flag.as_str(),
-                checkpoint.resolved,
-                checkpoint.members,
-                checkpoint.digest,
-                checkpoint.binding()
-            );
-        }
+    if operation == "inspect" {
+        out.push_str(&checkpoint_table(state.checkpoints.iter()));
     }
     for (id, admission) in &state.correction_admissions {
         if assessment.is_none_or(|report| {
@@ -2119,6 +2111,28 @@ fn markdown(
         }
     }
     Ok(out)
+}
+
+fn checkpoint_table<'a>(rows: impl Iterator<Item = &'a super::Checkpoint>) -> String {
+    let mut out = String::new();
+    for row in rows {
+        if out.is_empty() {
+            out.push_str("\n## Saved assessments\n\nEach flag covers the whole frozen cohort. Rows follow journal order. Compare cuts for the same cohort and outcome selector.\n\n| Cohort | Assessment cut (UTC) | Outcome selector | Calibration flag | Resolved / members | Assessment digest | Digest binding |\n|---|---|---|---|---:|---|---|\n");
+        }
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} / {} | `{}` | {} |",
+            crate::guidance::text(&row.cohort),
+            utc_text(row.as_of_ns),
+            selector_name(row.selector),
+            row.flag.as_str(),
+            row.resolved,
+            row.members,
+            row.digest,
+            row.binding()
+        );
+    }
+    out
 }
 
 #[cfg(test)]
