@@ -12,7 +12,7 @@ use fmine_evidence::{
     EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
 use fmine_numerics::exact_feas::Rat;
-use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
+use fmine_registry::toml_subset::{TomlDoc, TomlField, TomlRow, TomlValue, parse_subset};
 use fmine_units::{Currency, Money};
 
 use super::{
@@ -57,6 +57,10 @@ struct DeclaredAction {
 /// The source names these assumptions; its hash does not establish that they are measured or calibrated.
 /// No evidence-upgrade, retrospective, confidentiality-downgrade or authority fields are accepted.
 pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal> {
+    inputs(&verified_document(text, &source)?, source)
+}
+
+fn verified_document(text: &str, source: &SourceAnchor) -> Result<TomlDoc, Refusal> {
     if !clean(&source.artifact_path) || !clean(&source.locator) {
         return Err(bad(
             INPUT,
@@ -71,7 +75,65 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
             "source SHA-256 does not match the exact model bytes",
         ));
     }
-    let doc = parse_subset(text).map_err(|e| bad(INPUT, e.line, &e.reason))?;
+    parse_subset(text).map_err(|e| bad(INPUT, e.line, &e.reason))
+}
+
+/// Evaluate an explicitly chosen action and return the complete canonical comparison and its result Claim.
+/// A recorded feed choice may miss the target or have an undefined recovery. Its card retains that verdict.
+pub fn evaluate_named_action(
+    text: &str,
+    source: SourceAnchor,
+    action: &str,
+) -> Result<(String, fmine_claim::ClaimId), Refusal> {
+    let doc = verified_document(text, &source)?;
+    let missing = |why| {
+        Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!("decision journal: {why}"),
+        )
+    };
+    if matches!(doc.top_get("schema").map(|f| &f.value), Some(TomlValue::Str(s)) if s == crate::bounds::model::SCHEMA)
+    {
+        let model = crate::bounds::model::from_verified_document(&doc, source)?;
+        let card = crate::bounds::evaluate(&model)?;
+        let lots = &card.summary().parcel_cases;
+        if lots.is_empty() {
+            return Err(missing(
+                "a feed choice requires a worksheet with named parcel rows",
+            ));
+        }
+        let selected_lot =
+            match action {
+                "all-feed" => None,
+                _ => Some(action.strip_prefix("hold-back:").ok_or_else(|| {
+                    missing("use all-feed or hold-back:<lot-id> for a feed choice")
+                })?),
+            };
+        if !lots
+            .iter()
+            .any(|row| row.held_back.as_deref() == selected_lot)
+        {
+            return Err(missing(
+                "selected feed lot is absent from the evaluated worksheet",
+            ));
+        }
+        return Ok((card.to_json(), card.claim().claim_id));
+    }
+    let card = super::evaluate(&inputs(&doc, source)?)?;
+    if !card
+        .summary()
+        .alternatives
+        .iter()
+        .any(|row| row.action_id == action)
+    {
+        return Err(missing(
+            "selected action is not an act-now alternative in the evaluated model",
+        ));
+    }
+    Ok((card.to_json(), card.claim().claim_id))
+}
+
+fn inputs(doc: &TomlDoc, source: SourceAnchor) -> Result<DecisionInputs, Refusal> {
     let [schema, model_key, question, currency, valuation_basis] = strings(
         &doc.top,
         [

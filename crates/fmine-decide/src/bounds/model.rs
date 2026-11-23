@@ -12,7 +12,7 @@ use fmine_core::hash::sha256;
 use fmine_evidence::{
     EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
-use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
+use fmine_registry::toml_subset::{TomlDoc, TomlField, TomlValue, parse_subset};
 
 use super::parcels::{FeedParcel, Testwork};
 use super::{INPUT_METRIC, Interval, Rat, RecoveryBoundModel, WeightBasis};
@@ -23,7 +23,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"input\":\"Bounded UTF-8 worksheet; source SHA-256 and original field tokens retained\",",
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"route\",\"metal\",\"additivity_basis\",\"untested_bound_basis\"],",
     "\"weights\":\"Either parcel rows or one weights row: contained_metal with lower/upper untested fraction, or dry_tonnes_and_grade with tested_tonnes, tested_grade_g_per_t, untested_tonnes, untested_grade_g_per_t, each suffixed _lower and _upper\",",
-    "\"parcel\":\"Each disjoint lot has id, role (tested or untested), dry_tonnes_lower/upper and grade_g_per_t_lower/upper. The card compares all feed and each whole-lot holdback with no replacement. Example: tests/decisions/stockpile_holdback.toml\",",
+    "\"parcel\":\"Each disjoint lot has id, role (tested or untested), dry_tonnes_lower/upper and grade_g_per_t_lower/upper. The card compares all feed and each whole-lot holdback with no replacement. Record the chosen row with decide journal record --action all-feed or --action hold-back:<lot-id>. Example: tests/decisions/stockpile_holdback.toml\",",
     "\"recovery\":\"Exactly two recovery rows, role tested or untested, with lower/upper fractions; explicit [0,1] physical bounds are permitted\",",
     "\"decision\":\"One decision row: threshold fraction and rule proceed_if_at_least; equality proceeds and stop is strictly below\",",
     "\"uu\":\"Exactly one uu row: id, description, trigger, positive finite downside_usd_m naming the untested-bound uncertainty\",",
@@ -56,6 +56,13 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<Claim<RecoveryBoundMode
         ));
     }
     let doc = parse_subset(text).map_err(|e| bad(INPUT, e.line, &e.reason))?;
+    from_verified_document(&doc, source)
+}
+
+pub(crate) fn from_verified_document(
+    doc: &TomlDoc,
+    source: SourceAnchor,
+) -> Result<Claim<RecoveryBoundModel>, Refusal> {
     let [
         schema,
         model_key,

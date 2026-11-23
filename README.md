@@ -1815,6 +1815,10 @@ target. Holding back the high-grade pocket guarantees at least **85.45%** recove
 bounds. It leaves **84 dry tonnes** and **73.6–82.4 g** recoverable. For the same grades and recoveries,
 that choice forgoes **18–51.2 g** of gold this shift.
 
+Record the chosen scenario with `decide journal record`. Use `--action all-feed` for the full feed
+or `--action hold-back:<lot-id>` for one named lot. A reviewer can then recover the exact worksheet,
+all the alternatives and the planner's rationale from the pinned journal head.
+
 JSON and Markdown preserve the source, input/output Claims, evidence, confidentiality and UU. The
 receipt binds that metadata as well as the numerical result. These are conditional identification
 bounds over declared assumptions, without probabilities, calibrated predictions, measured recovery,
@@ -1889,6 +1893,17 @@ the value independently of the journal. A stale expected head, reused decision i
 oversized record refuses without appending. A later choice uses a new decision id, preserving the earlier
 one. Any declared act-now alternative, including do nothing, can be recorded; selecting an action does
 not remove the other alternatives from the retained comparison.
+
+For a shift feed decision, use the same journal and its current head. For example, a planner choosing
+to meet the recovery target despite the lower metal output could record:
+
+```bash
+fmine decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model tests/decisions/stockpile_holdback.toml \
+  --decision shift-feed-01 --action hold-back:high-grade-pocket \
+  --reason "Meet the 85% recovery target and accept 18–51.2 g less recovered gold this shift" \
+  --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
+```
 
 To record buying testwork, select the information option and policy explicitly instead of `--action`:
 

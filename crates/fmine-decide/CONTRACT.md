@@ -391,6 +391,11 @@ zero total contained metal keeps the mass ranges and a typed refusal for its rec
 No throughput, revenue, spatial test coverage or dispatch decision is inferred. The known-answer fixture
 is `tests/decisions/stockpile_holdback.toml`.
 
+DESIGN (bd-225.1). A journal action selects the complete feed with `all-feed` or one evaluated
+counterfactual with `hold-back:<lot-id>`. The retained card includes the full comparison, its source
+anchors and the same result Claim as the standalone command. A lot with undefined recovery retains
+its refusal. The operator supplies the choice and rationale.
+
 Exact rational arithmetic enumerates all eight endpoint vertices and checks the closed-form extrema of
 `R = (1-w) * R_tested + w * R_untested`. The card retains witnesses and reports stable proceed, stable
 stop or unstable. Proceed means recovery is at least the declared threshold; stop is strictly below it.

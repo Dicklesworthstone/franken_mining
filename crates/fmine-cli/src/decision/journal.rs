@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use fmine_claim::forecast_journal::Entry;
 use fmine_core::hash::{Digest32, sha256};
-use fmine_decide::card;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::forecast::{Journal, MAX_REQUEST_BYTES};
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
@@ -688,9 +687,7 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                         "model exceeds the bounded journal operation capacity",
                     ));
                 }
-                let inputs = card::model::parse(&text, source.clone())?;
-                let evaluated = card::evaluate(&inputs)?;
-                let policy_snapshot = choice.snapshot(&evaluated)?;
+                let (card, claim_id, policy_snapshot) = choice.snapshot(&text, source.clone())?;
                 let prepared_forecasts = forecasts
                     .as_ref()
                     .map(|selection| ForecastLinks::admit(selection, root))
@@ -703,8 +700,8 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                     rationale: rationale.clone(),
                     model_path: source.artifact_path,
                     model: text,
-                    card: evaluated.to_json(),
-                    claim_id: evaluated.claim().claim_id.to_string(),
+                    card,
+                    claim_id,
                     code_revision: code_revision.clone(),
                     forecasts: prepared_forecasts.as_ref().map(|(_, links)| links.clone()),
                 };

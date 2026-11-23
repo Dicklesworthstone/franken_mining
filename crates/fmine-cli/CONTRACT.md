@@ -145,6 +145,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   `--head` checks the exact final prefix; unpinned inspection cannot detect rollback or a completely
   rewritten, self-consistent history. Stored byte integrity does not independently verify evaluation
   provenance, and `show` does not promote retained content into authenticated issuer or human evidence.
+
+- DESIGN (bd-225.1). Named feed worksheets use `--action all-feed` or `--action hold-back:<lot-id>`.
+  The writer admits the chosen row against the recovery comparison and retains the full original card.
+  A shift decision can use the same prospective forecast commitments and subsequent assessment review.
   Mutations use a declared bounded host clock. Records confer no human identity, external timestamp,
   approval, sign-off, execution authority or public disclosure permission. A nonoptimal known action
   may be recorded; the full unchanged comparison remains visible. Source retention, refusal atomicity,

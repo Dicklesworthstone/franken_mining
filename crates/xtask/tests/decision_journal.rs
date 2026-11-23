@@ -26,6 +26,7 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 const MODEL: &str = include_str!("../../../tests/decisions/expansion.toml");
 const INFORMATION: &str = include_str!("../../../tests/decisions/metallurgical_test.toml");
 const CONSTRAINED: &str = include_str!("../../../tests/decisions/constrained_testwork.toml");
+const SHIFT_FEED: &str = include_str!("../../../tests/decisions/stockpile_holdback.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn binary() -> PathBuf {
@@ -927,6 +928,93 @@ fn json_field<'a>(value: &'a Json, keys: &[&str]) -> &'a Json {
     })
 }
 
+#[test]
+fn feed_choices_replay_the_original_comparison_and_keep_refusals_atomic() {
+    let f = Fixture::new();
+    fs::write(&f.model, SHIFT_FEED).unwrap();
+    let (envelope, _) = fmine_cli::invoke(
+        &[
+            "decide".into(),
+            "recovery-bounds".into(),
+            f.model.display().to_string(),
+        ],
+        &f.root,
+    );
+    let comparison = successful(envelope);
+    let json = parse_json(comparison.payload_json.as_bytes()).unwrap();
+    let original_card = json.get("card").unwrap();
+    for action in ["hold", "hold-back:", "hold-back:no-such-lot"] {
+        f.refuses_without_append(
+            &f.record(f.initial, "unknown", action),
+            200,
+            "FMINE-REF-107",
+        );
+    }
+    f.refuses_without_append(
+        &f.information(
+            f.initial,
+            "bad-policy",
+            "base-stockpile",
+            PolicySelection::ExpectedValue,
+        ),
+        200,
+        "FMINE-REF-506",
+    );
+    let mut pin = f.initial;
+    let actions = [
+        "all-feed",
+        "hold-back:high-grade-pocket",
+        "hold-back:base-stockpile",
+    ];
+    for (i, action) in actions.iter().enumerate() {
+        let recorded = successful(execute_with_clock(
+            &f.record(pin, &format!("shift-{i}"), action),
+            &f.root,
+            &Clock(210 + 100 * i as i64),
+        ));
+        pin = head(&recorded);
+    }
+    fs::write(
+        &f.model,
+        include_str!("../../../tests/decisions/untested_ore.toml"),
+    )
+    .unwrap();
+    f.refuses_without_append(&f.record(pin, "no-lots", "all-feed"), 600, "FMINE-REF-107");
+    fs::write(
+        &f.model,
+        format!("{SHIFT_FEED}\n[[interaction]]\nkind = \"clay\"\n"),
+    )
+    .unwrap();
+    f.refuses_without_append(&f.record(pin, "invalid", "all-feed"), 600, "FMINE-REF-103");
+    let shown = successful(f.show(Some(pin)));
+    let replay = parse_json(shown.payload_json.as_bytes()).unwrap();
+    let rows = replay.get("decisions").unwrap().as_array().unwrap();
+    assert_eq!(rows.len(), actions.len());
+    for (row, action) in rows.iter().zip(actions) {
+        let row = row.get("snapshot").unwrap();
+        assert_eq!(row.get("selected_action").unwrap().as_str(), Some(action));
+        assert_eq!(
+            row.get("claim_id").unwrap(),
+            json_field(original_card, &["result", "id"])
+        );
+        assert_eq!(
+            json_field(row, &["model", "content"]).as_str(),
+            Some(SHIFT_FEED)
+        );
+        let bytes = json_field(row, &["artifact", "content"]).as_str().unwrap();
+        assert!(
+            comparison
+                .payload_json
+                .ends_with(&format!(",\"card\":{bytes}}}"))
+        );
+        assert_eq!(&parse_json(bytes.as_bytes()).unwrap(), original_card);
+        assert_eq!(
+            json_field(row, &["artifact", "sha256"]).as_str().unwrap(),
+            sha256(bytes.as_bytes()).to_hex()
+        );
+    }
+}
+
 struct Predictions {
     root: PathBuf,
     journal: PathBuf,
@@ -1057,6 +1145,49 @@ fn decision_review(
         forecast_head: p.head,
         assessments,
     }
+}
+
+#[test]
+fn a_feed_decision_keeps_its_frozen_forecasts_and_reads_the_saved_assessment() {
+    let f = Fixture::new();
+    let mut p = Predictions::new(&f.root, "shift-forecasts");
+    fs::write(&f.model, SHIFT_FEED).unwrap();
+    let mut command = linked_record(&f, p.selection(&["primary"]));
+    let Command::Record { choice, .. } = &mut command else {
+        panic!("record")
+    };
+    *choice = Choice::ActNow("hold-back:high-grade-pocket".into());
+    let recorded = successful(execute_with_clock(&command, &f.root, &Clock(1_000)));
+    let pinned_decision = head(&recorded);
+    let frozen_forecasts = p.head;
+    p.publish();
+    let (assessment, _) = p.assess("primary", "1970-01-01T00:00:03Z", 4_000_000_000);
+    fs::write(&f.model, MODEL).unwrap();
+    let before = (fs::read(&f.journal).unwrap(), fs::read(&p.journal).unwrap());
+    let review = successful(execute_with_clock(
+        &decision_review(&f, pinned_decision, &p, vec![assessment]),
+        &f.root,
+        &NoClock,
+    ));
+    let result = parse_json(review.payload_json.as_bytes()).unwrap();
+    assert_eq!(
+        json_field(&result, &["decision", "selected_action"]).as_str(),
+        Some("hold-back:high-grade-pocket")
+    );
+    assert_eq!(
+        json_field(&result, &["decision", "model", "content"]).as_str(),
+        Some(SHIFT_FEED)
+    );
+    assert!(review.payload_json.contains(&frozen_forecasts.to_hex()));
+    assert!(review.payload_json.contains(&assessment.to_hex()));
+    assert_eq!(
+        json_field(&result, &["n_selected_assessments"]).u64(),
+        Some(1)
+    );
+    assert_eq!(
+        before,
+        (fs::read(&f.journal).unwrap(), fs::read(&p.journal).unwrap())
+    );
 }
 
 #[test]

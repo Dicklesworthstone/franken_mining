@@ -2,7 +2,8 @@
 //! Determinism: Exact
 
 use super::{clean, invalid, js};
-use fmine_decide::card::{EvaluatedCard, information};
+use fmine_core::anchor::SourceAnchor;
+use fmine_decide::card::{self, information};
 use fmine_evidence::Refusal;
 use fmine_numerics::exact_feas::Rat;
 
@@ -69,24 +70,21 @@ impl Choice {
     /// Retains a small exact selection receipt alongside the complete evaluated card. The receipt
     /// names the original option Claim and policy family; identical option ids never imply that the
     /// unconstrained and downside-optimized signal mappings are interchangeable.
-    pub(super) fn snapshot(&self, evaluated: &EvaluatedCard) -> Result<Option<String>, Refusal> {
+    pub(super) fn snapshot(
+        &self,
+        text: &str,
+        source: SourceAnchor,
+    ) -> Result<(String, String, Option<String>), Refusal> {
         self.validate()?;
-        let summary = evaluated.summary();
         let (option_id, policy) = match self {
             Self::ActNow(action) => {
-                if !summary
-                    .alternatives
-                    .iter()
-                    .any(|row| row.action_id == *action)
-                {
-                    return Err(invalid(
-                        "selected action is not an act-now alternative in the evaluated model",
-                    ));
-                }
-                return Ok(None);
+                let (json, claim_id) = card::model::evaluate_named_action(text, source, action)?;
+                return Ok((json, claim_id.to_string(), None));
             }
             Self::InformationOption { option_id, policy } => (option_id, policy),
         };
+        let evaluated = card::evaluate(&card::model::parse(text, source)?)?;
+        let summary = evaluated.summary();
         let option = summary
             .information
             .as_ref()
@@ -170,7 +168,7 @@ impl Choice {
                 )
             }
         };
-        Ok(Some(format!(
+        let selection = format!(
             "{{\"schema\":\"fmine.decision-selected-policy.v1\",\"option_id\":{},\"policy_selection\":{},\"option_claim_id\":{},\"card_claim_id\":{},\"currency\":{},\"valuation_basis\":{},\"test_cost\":{},\"delay_cost\":{},\"total_cost\":{},\"delay_days\":{},\"nominal_mean\":{},\"nominal_loss_probability\":{},\"nominal_cvar95_loss\":{},\"signal_actions\":[{}],{policy_details}}}",
             js(option_id),
             js(policy.as_str()),
@@ -186,6 +184,11 @@ impl Choice {
             ratio(loss),
             ratio(cvar),
             mapping.join(","),
-        )))
+        );
+        Ok((
+            evaluated.to_json(),
+            evaluated.claim().claim_id.to_string(),
+            Some(selection),
+        ))
     }
 }
