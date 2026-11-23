@@ -126,7 +126,10 @@ fn supplied_weighted_models_have_exact_scores_and_complete_unresolved_bounds() {
     assert_eq!(compared.members[0].pair.difference, Some(r(-1, 2)));
     // A unit translation changes finite CRPS by -1 at the lower tail and +1 at the upper
     // tail; the CDF difference is nonnegative everywhere, so these are exact extrema.
-    assert_eq!(compared.members[1].pair.completion, Some((r(-1, 1), r(1, 1))));
+    assert_eq!(
+        compared.members[1].pair.completion,
+        Some((r(-1, 1), r(1, 1)))
+    );
     assert_eq!(compared.observed_mean_difference, Some(r(-1, 2)));
     assert_eq!(compared.whole_population, Some((r(-3, 4), r(1, 4))));
     assert_eq!(compared.members[0].target.site, "A");
@@ -140,8 +143,18 @@ fn supplied_weighted_models_have_exact_scores_and_complete_unresolved_bounds() {
         right[0]
     );
     assert_ne!(
-        compared.members[0].pair.left.as_ref().unwrap().selected_event,
-        compared.members[0].pair.right.as_ref().unwrap().selected_event
+        compared.members[0]
+            .pair
+            .left
+            .as_ref()
+            .unwrap()
+            .selected_event,
+        compared.members[0]
+            .pair
+            .right
+            .as_ref()
+            .unwrap()
+            .selected_event
     );
     assert_eq!(
         compared,
@@ -158,7 +171,10 @@ fn supplied_weighted_models_have_exact_scores_and_complete_unresolved_bounds() {
         .compare_supplied_assessments(l, rr, PairedScore::Interval)
         .unwrap();
     assert_eq!(interval.observed_mean_difference, Some(r(0, 1)));
-    assert_eq!(interval.members[1].pair.completion, Some((r(-4, 1), r(4, 1))));
+    assert_eq!(
+        interval.members[1].pair.completion,
+        Some((r(-4, 1), r(4, 1)))
+    );
     assert_eq!(interval.whole_population, Some((r(-2, 1), r(2, 1))));
     assert_ne!(interval.digest, compared.digest);
     assert!(ledger.compare_assessments(l, rr).is_err());
@@ -338,7 +354,9 @@ fn duplicate_targets_and_unknown_or_public_targets_cannot_enter_the_supplied_lan
     );
 
     let mut ledger = ForecastLedger::new();
-    let legacy = ledger.register_payload("legacy", 1, 10, payload(0.0)).unwrap();
+    let legacy = ledger
+        .register_payload("legacy", 1, 10, payload(0.0))
+        .unwrap();
     let cohort = ledger.freeze_cohort(spec("unknown", vec![legacy])).unwrap();
     let saved = assess(&mut ledger, cohort);
     assert!(
@@ -626,7 +644,7 @@ fn brier_pairing_refuses_incompatible_targets_and_keeps_source_mismatches() {
             &mut ledger,
             "right",
             changed,
-            if change == "due" { 11 } else { 10 },
+            if change == "due" { 9 } else { 10 },
             ForecastPayload::Bernoulli { probability: 1.0 },
         );
         let lc = ledger
