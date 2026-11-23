@@ -150,6 +150,52 @@ def joint_routes():
     assert fraction(supplied["selected"]["discounted_value"]) == 6
 
 
+def fractional_periods():
+    # The imported half-mill cycle is not a profitable whole-block seed.
+    # Keep that mining set and advance the independent half-mill block from
+    # period 1 to period 0: exact discounted value 22.5 becomes 25.
+    values = [[0, 40], [0, 0], [0, 10]]
+    uses = [[[0, 0], [2, 0]], [[0, 0], [0, 0]], [[0, 0], [0, 2]]]
+    requires, caps = [[1], [0], []], [[1, 1], [1, 1]]
+    text = ("NAME: split-periods\nTYPE: PCPSP\nNBLOCKS: 3\nNPERIODS: 2\n"
+            "NDESTINATIONS: 2\nNRESOURCE_SIDE_CONSTRAINTS: 2\n"
+            "NGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 1\nRESOURCE_CONSTRAINT_LIMITS:\n")
+    text += "".join(f"{r} {t} L {cap}\n" for r, row in enumerate(caps) for t, cap in enumerate(row))
+    text += "OBJECTIVE_FUNCTION:\n" + "".join(f"{b} {v[0]} {v[1]}\n" for b, v in enumerate(values))
+    text += "RESOURCE_CONSTRAINT_COEFFICIENTS:\n"
+    text += "".join(f"{b} {d} {r} {u}\n" for b in range(3) for d in range(2)
+                    for r, u in enumerate(uses[b][d])) + "EOF\n"
+    (ROOT / "model.pcpsp").write_text(text)
+    (ROOT / "model.prec").write_text("0 1 1\n1 1 0\n2 0\n")
+    source = "0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n2 0 1 0.5\n2 1 1 0.5\n"
+    (ROOT / "candidate.sol").write_text(source)
+    options = ["--candidate", "candidate.sol", "--share-decimals", "3"]
+    unchanged = verify(command([*options, "--rounds", "0"]), values, uses, requires, caps, Q(45, 2))
+    assert unchanged["selected"]["solution"] == source
+    report = command(options)
+    p = verify(report, values, uses, requires, caps, Q(25))
+    assert fraction(p["selected"]["discounted_value"]) == 25
+    assert p["selected"]["origin"] == "fractional_period_search"
+    assert p["candidate"] == unchanged["candidate"]
+    assert p["candidate"]["source"]["sha256"] == hashlib.sha256(source.encode()).hexdigest()
+    assert fraction(p["candidate"]["discounted_value"]) == Q(45, 2)
+    before, after = rows(source), rows(p["selected"]["solution"])
+    assert [(b, d, f) for b, d, _, f in before] == [(b, d, f) for b, d, _, f in after]
+    assert all(t == 0 for _, _, t, _ in after)
+    search = p["fractional_period_search"]
+    assert search["seed_origin"] == "external_candidate" and search["moves"] == 1
+    assert fraction(search["before"]) == Q(45, 2) and fraction(search["after"]) == 25
+    assert search["period_trials"] > 0 and search["work"] <= search["work_limit"] == 262144
+    assert not search["work_exhausted"]
+    assert search["destination_fractions_preserved"] and search["mined_set_preserved"]
+    assert command(options) == report
+    markdown = subprocess.run([str(BINARY), "plan", "schedule", "--pcpsp", "model.pcpsp",
+                              "--prec", "model.prec", "--candidate", "candidate.sol", "--format", "markdown",
+                              "--workspace", str(ROOT)], capture_output=True, text=True, check=False)
+    assert markdown.returncode == 0 and "Fixed-fraction period search" in markdown.stdout
+    assert "1 accepted moves" in markdown.stdout and "fractions" in markdown.stdout
+
+
 def generated_models():
     rng = random.Random(0x51A17)
     for case in range(16):
@@ -351,6 +397,7 @@ known_split()
 automatic_fractional()
 master_mixtures()
 joint_routes()
+fractional_periods()
 generated_models()
 lp_guidance()
-print("PASS: exact split and simultaneous-mixture oracles, joint route/period5-to6 improvement, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")
+print("PASS: exact split and simultaneous-mixture oracles, joint route/period5-to6 improvement, imported fixed-fraction period22.5-to25 improvement, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")

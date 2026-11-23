@@ -342,7 +342,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     `tests/planning/joint_route.pcpsp` is the synthetic discounted-value 5→6 example; zero rounds retains
     its initial schedule. Bounded price columns propose exact decimal-grid destination splits
     at fixed mining periods from internal and admitted external whole starts; only checked strict gains
-    are retained, with genuine external splits preferred on equal value. No external claimed bound, calibration, sampling confidence, reserve
+    are retained, with genuine external splits preferred on equal value. The selected split incumbent,
+    including an imported one, then receives bounded one-block period moves with every destination
+    fraction and the mined set preserved. Both periods' signed resource rows and both precedence
+    directions must remain feasible. `--rounds` and a 262,144-work-unit limit bound the pass; exhaustion
+    retains its checked incumbent. Optional `fractional_period_search` JSON/Markdown reports the seed,
+    exact before/after value and work counters, with that origin selected only on a strict gain. The
+    original external candidate assessment remains unchanged. No external claimed bound, calibration, sampling confidence, reserve
     status or execution permission is inferred. `xtask/tests/plan_schedule.rs` invokes a Python Fraction
     oracle against the actual binary, including independent exhaustive primal and dual-price checks.
     Optional `--lp-guidance` solves the PCPSP relaxation in this upper layer with `fmine-lp` PDLP,

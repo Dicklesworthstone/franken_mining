@@ -56,6 +56,45 @@ fn options(rounds: usize) -> Options {
     }
 }
 
+#[test]
+fn imported_split_periods_improve_without_rewriting_the_submitted_assessment() {
+    let mut m = model(
+        &[[0, 40], [0, 0], [0, 10]],
+        &[[0, 2], [0, 0], [0, 0]],
+        &[1, 1],
+        "1",
+        &[vec![1], vec![0], vec![]],
+    );
+    m.uses.push(vec![0, 0, 0, 0, 0, 2]);
+    m.limits.push(vec![1, 1]);
+    // A fractional same-period cycle supplies a mining set that whole search
+    // cannot construct profitably. Its third block can advance independently.
+    let source = "0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n2 0 1 0.5\n2 1 1 0.5\n";
+    let outside = candidate::parse_solution(source, &m, 3).unwrap();
+    let unchanged = solve(&m, options(0), Some(&outside)).unwrap();
+    assert_eq!(unchanged.origin, "external_candidate");
+    assert_eq!(unchanged.schedule, outside);
+    let p = solve(&m, options(8), Some(&outside)).unwrap();
+    assert_eq!(p.period_seed_origin, "external_candidate");
+    assert_eq!(p.origin, "fractional_period_search");
+    assert_eq!(p.candidate, unchanged.candidate);
+    assert_eq!(
+        p.candidate.as_ref().unwrap().checked.period_values,
+        [20_000, 5_000]
+    );
+    let search = p.fractional_periods.as_ref().unwrap();
+    assert_eq!(search.before, 22_500 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(search.after, 25_000 * i128::from(DISCOUNT_SCALE));
+    assert_eq!(search.moves, 1);
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n2 0 0 0.5\n2 1 0 0.5\n",
+    );
+    assert_eq!(candidate::write_solution(&outside), source);
+    assert_certificate(&m, &p);
+    assert_eq!(solve(&m, options(8), Some(&outside)).unwrap(), p);
+}
+
 /// Enumerate each block's unmined or (period, destination) choice and apply
 /// the mathematical constraints directly. No candidate or schedule checker is
 /// called; in particular, signed resource uses are added without truncation.

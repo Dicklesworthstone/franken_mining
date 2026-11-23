@@ -757,7 +757,8 @@ source perturbations and signed rounding, and exercise the built executable; the
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.
 It reads MineLib block/destination values, precedence arcs and per-period resource limits, constructs
 a whole-block schedule, improves its periods and destinations, then tries profitable fractional
-destination allocations at fixed mining periods. Every selected schedule is independently checked.
+destination allocations at fixed mining periods. The best split schedule can then improve its mining
+periods while retaining its exact destination fractions. Every selected schedule is independently checked.
 A global Lagrangian upper bound is recomputed from the returned prices over **every model
 block**, including negative-value material that can enable a blend.
 
@@ -790,7 +791,8 @@ total **33**, while satisfying a signed blending row exactly. An outside candida
 `block destination period fraction`, with zero-based indices and `%` comments. Fractions never round;
 each mined block must total exactly one, and every predecessor must be completely mined in the same
 or an earlier period. Whole-block candidates can seed further search. A better feasible split candidate
-is retained exactly; the solver does not silently round its destinations.
+retains its exact routing fractions and can seed period improvements; the solver does not silently round
+its destinations. Its original submitted value and feasibility assessment remain in the report.
 
 LP guidance can generate additional mining sets before local search and fractional polishing:
 
@@ -811,7 +813,7 @@ uses one worker and tolerance `1e-6`. An iteration-limited point may guide searc
 `[0,1]` share admission; its row residuals or floating objective never certify a schedule. JSON records
 termination, iterations, problem size, generated/searched starts, polished seeds and exact guided value;
 the selected schedule records its origin. Explicit size limits refuse excessive LP expansion before
-allocation. Omitting `--lp-guidance` retains the existing command behavior and output shape.
+allocation. Omitting `--lp-guidance` leaves those additional LP-guided starts disabled.
 
 Fractional allocations can also be generated without an outside candidate:
 
@@ -830,6 +832,22 @@ whole-block search would otherwise discard. Admitted external whole schedules an
 versions can also seed fractional allocations, including mining sets the internal start cannot construct.
 This is a heuristic over bounded pricing directions;
 it does not claim an optimal fractional destination assignment or alter mining periods during polishing.
+
+DESIGN (BD-252/253, plan §15.6): after selecting the best incumbent, a schedule with genuine destination
+splits receives a bounded period search, including when an imported candidate supplied those splits.
+Each accepted one-block move strictly improves exact discounted value while preserving all routing
+fractions and the mined set. It checks predecessor and dependent periods and every signed resource row
+in both the vacated and receiving periods: removing a negative blending credit must not make the old
+period infeasible. A final independent check recomputes feasibility and value before the global bound
+is replayed. The search uses `--rounds` and at most 262,144 block/precedence/resource/period work units;
+exhaustion retains its checked incumbent. `--rounds 0` disables these period moves.
+
+JSON includes `fractional_period_search` for a selected split incumbent, with its seed origin, exact
+before/after values, moves, rounds, trials and budget exhaustion. A strict improvement sets
+`selected.origin` to `fractional_period_search`. The independent synthetic CLI example advances an
+imported split schedule from **22.5 to 25** without changing any route fraction. This neighborhood does
+not change fractions, add or drop blocks, or move several blocks simultaneously; it supplies no new
+optimality claim.
 
 The JSON reports the input hashes, decimal scales, rounding counts, exact rational discounted value,
 resource usage, candidate infeasibility witnesses, bound prices and gap. `--list-schedule` includes

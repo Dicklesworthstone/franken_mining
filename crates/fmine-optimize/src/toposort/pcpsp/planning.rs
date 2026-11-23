@@ -11,7 +11,7 @@ use super::{PcpspImprovement, PcpspModel, candidate, fractional, greedy, improve
 use crate::toposort::{cpit::RATE_SCALE, lp::Lagrangian, search};
 
 /// Bounded work requested by the caller. Zero rounds skips whole-block local
-/// search; the bounded fractional destination pass still runs.
+/// search and fixed-fraction period moves; fractional destination pricing still runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     pub rounds: usize,
@@ -60,6 +60,11 @@ pub struct Plan {
     pub heuristic: PcpspImprovement,
     pub candidate: Option<CandidateAssessment>,
     pub guidance: Option<GuidanceSearch>,
+    /// Winning path before the optional fixed-fraction period search.
+    pub period_seed_origin: &'static str,
+    /// Present when the chosen incumbent contains genuine destination splits.
+    /// The original external assessment above is never rewritten by this search.
+    pub fractional_periods: Option<fractional::PeriodSearch>,
     pub bound: Lagrangian,
     /// `(bound * share_scale) - discounted_numerator`; same denominator as the selected value.
     pub gap_numerator: i128,
@@ -75,7 +80,8 @@ fn overflow() -> Refusal {
 /// Generate and improve a whole-block schedule, polish both initial and improved
 /// mining periods with exact fractional destinations, check an optional outside
 /// schedule, keep the best feasible incumbent (including the empty plan), then
-/// independently replay the best Lagrangian prices.
+/// search that incumbent's periods while preserving any exact destination splits.
+/// Finally independently replay the best Lagrangian prices.
 ///
 /// The result optimizes only the supplied, rounded integer model and the explicit integer discount factors.
 /// A nonzero bound gap is not a proof of suboptimality; the bound may be loose. Input calibration and sampling
@@ -215,7 +221,8 @@ fn solve_inner(
                 value = external_value;
                 origin = "external_candidate";
             }
-            // A whole-block candidate is a useful warm start. Genuine splits retain their original policy.
+            // Whole candidates seed the existing search. Genuine splits may
+            // enter the final period pass below without rounding their routes.
             if external.assignments().iter().all(|a| a.fraction == scale) {
                 let mut periods = vec![None; model.blocks()];
                 let mut outside_destinations = destination.clone();
@@ -292,6 +299,18 @@ fn solve_inner(
     } else {
         None
     };
+    let period_seed_origin = origin;
+    let fractional_periods = if selected.assignments().iter().any(|a| a.fraction != scale) {
+        let refined = fractional::reschedule(model, &selected, &factors, options.rounds)?;
+        if refined.search.after > value {
+            selected = refined.schedule;
+            value = refined.search.after;
+            origin = "fractional_period_search";
+        }
+        Some(refined.search)
+    } else {
+        None
+    };
     let checked = candidate::check(model, &selected)?;
     if !checked.feasible() || checked.discounted_value(&factors)? != value {
         return Err(refuse(
@@ -332,6 +351,8 @@ fn solve_inner(
         heuristic,
         candidate: assessment,
         guidance,
+        period_seed_origin,
+        fractional_periods,
         bound,
         gap_numerator: gap,
     })

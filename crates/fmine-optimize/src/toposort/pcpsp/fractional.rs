@@ -1,4 +1,4 @@
-//! Fractional destinations at fixed mining periods (plan §15.6).
+//! Exact fractional destinations and bounded period improvement (plan §15.6).
 //! Determinism: DeterministicPerIsa (Price proposes; exact integer checks admit).
 //!
 //! Price's whole-assignment columns guide the search. Each profitable column is
@@ -11,6 +11,8 @@
 //! of the destination LP optimum. No proposal or no representable gain
 //! returns the original feasible schedule. The candidate checker independently
 //! verifies the result; no floating weight or feasibility tolerance is admitted.
+//! [`reschedule`] then searches mining periods while retaining every destination
+//! fraction exactly, including those supplied by an outside planner.
 
 use fmine_evidence::Refusal;
 use fmine_numerics::exact_feas::Rat;
@@ -30,6 +32,36 @@ pub struct Improvement {
     /// Whole-assignment proposals used for line searches; the optional exact
     /// master mixture uses the same pricing pass and is not another direction.
     pub proposals: usize,
+}
+
+/// At most this many block/precedence/resource and target-period work units are
+/// examined by one exact period search, across all requested rounds.
+pub const PERIOD_WORK: usize = 262_144;
+
+/// Actual work and exact objective numerators for a fixed-fraction period search.
+/// A stopped search retains its feasible incumbent; it supplies no bound.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeriodSearch {
+    pub before: i128,
+    pub after: i128,
+    pub rounds: usize,
+    pub moves: usize,
+    pub trials: usize,
+    pub work: usize,
+    pub work_exhausted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rescheduled {
+    pub schedule: candidate::SplitSchedule,
+    pub checked: candidate::SplitCheck,
+    pub search: PeriodSearch,
+}
+
+struct PeriodBlock {
+    id: usize,
+    value: i128,
+    uses: Vec<i128>,
 }
 
 #[derive(Clone)]
@@ -259,6 +291,216 @@ pub fn polish(
         after,
         improved_periods,
         proposals,
+    })
+}
+
+/// Move already mined blocks between periods without changing their exact
+/// destination fractions. Blocks are visited in ID order; each takes its best
+/// strictly profitable feasible period, with the earliest period breaking ties.
+/// Both the vacated and receiving periods must retain every signed resource
+/// limit, and all mined predecessors and dependants must retain their order.
+/// No block is added or removed, no fraction is rounded, and no temporary
+/// infeasibility or loss is accepted. Cycles requiring simultaneous moves are
+/// outside this one-block neighborhood.
+///
+/// The caller supplies 0..=1,000 rounds. [`PERIOD_WORK`] additionally bounds the
+/// search across those rounds; input aggregation and the independent final
+/// candidate check are linear in the supplied model and assignments. Zero
+/// rounds, an empty schedule or equal factors retain the original schedule.
+///
+/// # Errors
+/// Structural candidate errors propagate. Infeasible schedules, missing or
+/// negative factors, more than 1,000 rounds, exact arithmetic overflow, or a
+/// failed final feasibility/value check refuse with `FMINE-REF-207`.
+pub fn reschedule(
+    model: &PcpspModel,
+    original: &candidate::SplitSchedule,
+    factors: &[i64],
+    rounds: usize,
+) -> Result<Rescheduled, Refusal> {
+    reschedule_bounded(model, original, factors, rounds, PERIOD_WORK)
+}
+
+fn reschedule_bounded(
+    model: &PcpspModel,
+    original: &candidate::SplitSchedule,
+    factors: &[i64],
+    rounds: usize,
+    budget: usize,
+) -> Result<Rescheduled, Refusal> {
+    let bad = |detail| refuse(format!("fractional periods: {detail}"));
+    if rounds > 1_000 {
+        return Err(bad("rounds must be 0..=1000"));
+    }
+    let checked = candidate::check(model, original)?;
+    if !checked.feasible() {
+        return Err(bad("starting schedule is infeasible"));
+    }
+    let before = checked.discounted_value(factors)?;
+    let mut search = PeriodSearch {
+        before,
+        after: before,
+        rounds: 0,
+        moves: 0,
+        trials: 0,
+        work: 0,
+        work_exhausted: false,
+    };
+    if rounds == 0 || original.assignments().is_empty() || factors.windows(2).all(|w| w[0] == w[1])
+    {
+        return Ok(Rescheduled {
+            schedule: original.clone(),
+            checked,
+            search,
+        });
+    }
+    let overflow = || bad("exact objective or resource arithmetic overflows i128");
+    let scale = i128::from(original.scale());
+    let mut periods = vec![None; model.blocks()];
+    let mut blocks: Vec<PeriodBlock> = Vec::new();
+    for a in original.assignments() {
+        let b = a.block as usize;
+        periods[b] = Some(a.period as usize);
+        if blocks.last().is_none_or(|block| block.id != b) {
+            blocks.push(PeriodBlock {
+                id: b,
+                value: 0,
+                uses: vec![0; model.resources()],
+            });
+        }
+        let at = b * model.destinations() + a.destination as usize;
+        let last = blocks.len() - 1;
+        let block = &mut blocks[last];
+        block.value = block
+            .value
+            .checked_add(i128::from(model.values[at]) * i128::from(a.fraction))
+            .ok_or_else(overflow)?;
+        for (used, row) in block.uses.iter_mut().zip(&model.uses) {
+            *used = used
+                .checked_add(i128::from(row[at]) * i128::from(a.fraction))
+                .ok_or_else(overflow)?;
+        }
+    }
+    let mut dependants = vec![Vec::new(); model.blocks()];
+    for block in &blocks {
+        for &required in &model.requires[block.id] {
+            dependants[required as usize].push(block.id);
+        }
+    }
+    let mut used = checked.used.clone();
+    'rounds: for _ in 0..rounds {
+        search.rounds += 1;
+        let mut changed = false;
+        for block in &blocks {
+            let b = block.id;
+            let scan = 1_usize
+                .saturating_add(model.requires[b].len())
+                .saturating_add(dependants[b].len());
+            if scan > budget - search.work {
+                search.work_exhausted = true;
+                break 'rounds;
+            }
+            search.work += scan;
+            if block.value == 0 {
+                continue;
+            }
+            let from = periods[b].ok_or_else(|| bad("mined block lost its period"))?;
+            let mut first = 0;
+            let mut last = model.periods() - 1;
+            for &required in &model.requires[b] {
+                if required as usize != b {
+                    first = first.max(
+                        periods[required as usize]
+                            .ok_or_else(|| bad("mined predecessor lost its period"))?,
+                    );
+                }
+            }
+            for &dependent in &dependants[b] {
+                if dependent != b {
+                    last = last.min(
+                        periods[dependent].ok_or_else(|| bad("mined dependant lost its period"))?,
+                    );
+                }
+            }
+            let mut best = None;
+            for (to, &factor) in factors.iter().enumerate().take(last + 1).skip(first) {
+                if to == from {
+                    continue;
+                }
+                let trial = 1 + model.resources();
+                if trial > budget - search.work {
+                    search.work_exhausted = true;
+                    break;
+                }
+                search.work += trial;
+                search.trials += 1;
+                let gain = block
+                    .value
+                    .checked_mul(i128::from(factor) - i128::from(factors[from]))
+                    .ok_or_else(overflow)?;
+                if gain <= best.map_or(0, |(_, gain)| gain) {
+                    continue;
+                }
+                let mut feasible = true;
+                for (r, &amount) in block.uses.iter().enumerate() {
+                    let vacated = used[r][from].checked_sub(amount).ok_or_else(overflow)?;
+                    let received = used[r][to].checked_add(amount).ok_or_else(overflow)?;
+                    // Negative blend credits are material: removing one can
+                    // violate the old period even when the new one has room.
+                    if vacated > i128::from(model.limits[r][from]) * scale
+                        || received > i128::from(model.limits[r][to]) * scale
+                    {
+                        feasible = false;
+                        break;
+                    }
+                }
+                if feasible {
+                    best = Some((to, gain));
+                }
+            }
+            if let Some((to, gain)) = best {
+                for (r, &amount) in block.uses.iter().enumerate() {
+                    used[r][from] = used[r][from].checked_sub(amount).ok_or_else(overflow)?;
+                    used[r][to] = used[r][to].checked_add(amount).ok_or_else(overflow)?;
+                }
+                periods[b] = Some(to);
+                search.after = search.after.checked_add(gain).ok_or_else(overflow)?;
+                search.moves += 1;
+                changed = true;
+            }
+            if search.work_exhausted {
+                break 'rounds;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let assignments = original
+        .assignments()
+        .iter()
+        .map(|a| {
+            let period =
+                periods[a.block as usize].ok_or_else(|| bad("output block lost its period"))?;
+            Ok(candidate::DestinationShare {
+                period: period as u32,
+                ..*a
+            })
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    let schedule = candidate::SplitSchedule::new(model, assignments, original.share_decimals())?;
+    let checked = candidate::check(model, &schedule)?;
+    if !checked.feasible()
+        || checked.used != used
+        || checked.discounted_value(factors)? != search.after
+        || search.after < search.before
+    {
+        return Err(bad("independent feasibility or value recomputation failed"));
+    }
+    Ok(Rescheduled {
+        schedule,
+        checked,
+        search,
     })
 }
 

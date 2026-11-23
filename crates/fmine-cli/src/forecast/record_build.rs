@@ -215,6 +215,11 @@ fn target_json(target: &Target) -> String {
         Some(TargetMetric::CopperC1 | TargetMetric::CopperAisc) => {
             Some("reported_rate_per_copper_pound_sold")
         }
+        Some(TargetMetric::CapexTotal) => Some("issuer_reported_total_capital_expenditures"),
+        Some(TargetMetric::CapexSustaining) => {
+            Some("issuer_reported_minesite_sustaining_capital_expenditures")
+        }
+        Some(TargetMetric::CapexProjects) => Some("issuer_reported_project_capital_expenditures"),
         None => None,
     };
     let outcome = match target.outcome {
@@ -532,4 +537,49 @@ fn render_markdown(report: &PublicCandidate) -> String {
         report.digest.to_hex()
     );
     out
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use fmine_io::omf::json::parse;
+
+    #[test]
+    fn capital_target_rendering_retains_printed_scope_and_quarterly_admission() {
+        for (field, basis) in [
+            ("capex_usd_m", "issuer_reported_total_capital_expenditures"),
+            (
+                "capex_sustaining_usd_m",
+                "issuer_reported_minesite_sustaining_capital_expenditures",
+            ),
+            (
+                "capex_projects_usd_m",
+                "issuer_reported_project_capital_expenditures",
+            ),
+        ] {
+            for outcome in [Outcome::QuarterQtd, Outcome::QuarterQtdNowcast] {
+                let mut target = Target {
+                    // A caller's alias must not turn a printed capital amount into production.
+                    id: "production".into(),
+                    quantity: "declared capital budget".into(),
+                    scored_quantity: "printed quarterly expenditure".into(),
+                    field: field.into(),
+                    outcome,
+                };
+                let rendered = parse(target_json(&target).as_bytes()).unwrap();
+                assert_eq!(rendered.get("id").unwrap().as_str(), Some("production"));
+                assert_eq!(rendered.get("field").unwrap().as_str(), Some(field));
+                assert_eq!(rendered.get("unit").unwrap().as_str(), Some("usd_m"));
+                assert_eq!(rendered.get("basis").unwrap().as_str(), Some(basis));
+
+                // A legacy annual or rate outcome cannot acquire capex semantics in rendering.
+                for legacy in [Outcome::FyMinus9m, Outcome::Q4Qtd] {
+                    target.outcome = legacy;
+                    let inadmissible = target_json(&target);
+                    assert!(inadmissible.contains("\"unit\":null,\"basis\":null"));
+                }
+            }
+        }
+    }
 }
