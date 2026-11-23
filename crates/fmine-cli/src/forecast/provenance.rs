@@ -7,7 +7,7 @@ use std::path::Path;
 use fmine_claim::dag::{Availability, ConeCut, ConeError, NodeKind, TemporalGraph, TemporalNode};
 use fmine_core::hash::sha256;
 use fmine_core::id::ObjectId;
-use fmine_time::{Anchor, RecordTime, TimeEvidence};
+use fmine_time::{Anchor, QuadTemporalStamp, RecordTime, TimeEvidence, ValidTime};
 
 use super::{
     Assessment, AssessmentFailure, Refusal, RefusalCode, Replay, Row, invalid, js, parse_subset,
@@ -25,6 +25,7 @@ struct Binding {
 struct Bundle {
     lane: String,
     graph: TemporalGraph,
+    observation_stamps: BTreeMap<ObjectId, QuadTemporalStamp>,
     anchors: BTreeMap<String, Anchor>,
     bindings: BTreeMap<String, Binding>,
 }
@@ -46,12 +47,18 @@ impl Bundle {
             .ok_or_else(|| invalid("provenance lane must be synthetic or supplied"))?
             .to_string();
         let mut nodes = Vec::new();
+        let mut observation_stamps = BTreeMap::new();
         let mut marks: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
         let mut bindings = BTreeMap::new();
         for entry in &doc.rows {
             let row = Row(entry);
             let result = match entry.table.as_str() {
-                "node" => node(&row).map(|node| nodes.push(node)),
+                "node" => node(&row).map(|(node, stamp)| {
+                    if let Some(stamp) = stamp {
+                        observation_stamps.insert(node.id, stamp);
+                    }
+                    nodes.push(node);
+                }),
                 "anchor" => (|| {
                     row.allowed(&["id", "cell", "seq"], &[])?;
                     let id = super::identifier(row.string("id")?)?;
@@ -98,6 +105,7 @@ impl Bundle {
         Ok(Self {
             lane,
             graph,
+            observation_stamps,
             anchors,
             bindings,
         })
@@ -164,9 +172,30 @@ impl Bundle {
                 .map(|id| js(&id.to_string()))
                 .collect::<Vec<_>>()
                 .join(",");
+            let observations = cone
+                .nodes()
+                .iter()
+                .filter_map(|id| {
+                    let node = self.graph.node(id)?;
+                    if node.kind != NodeKind::Observation
+                        || !matches!(node.availability, Availability::Source { .. })
+                    {
+                        return None;
+                    }
+                    let stamp = self
+                        .observation_stamps
+                        .get(id)
+                        .map_or_else(|| "null".into(), stamp_json);
+                    Some(format!(
+                        "{{\"id\":{},\"stamp\":{stamp}}}",
+                        js(&id.to_string())
+                    ))
+                })
+                .collect::<Vec<_>>()
+                .join(",");
             checked.push(format!(
-                "{{\"forecast\":{},\"forecast_id\":{},\"decision_cut\":{},\"anchor\":{},\"cone_digest\":{},\"nodes\":[{}]}}",
-                js(alias), js(&root.to_string()), utc(record.registered_ns), js(&binding.anchor), js(&cone.digest().to_hex()), nodes
+                "{{\"forecast\":{},\"forecast_id\":{},\"decision_cut\":{},\"anchor\":{},\"cone_digest\":{},\"nodes\":[{}],\"source_observations\":[{}]}}",
+                js(alias), js(&root.to_string()), utc(record.registered_ns), js(&binding.anchor), js(&cone.digest().to_hex()), nodes, observations
             ));
         }
         Ok(format!(
@@ -220,7 +249,22 @@ fn timestamp(text: &str) -> Result<i64, Refusal> {
     i64::try_from(i128::from(seconds) * 1_000_000_000 + nanos).map_err(|_| invalid_time())
 }
 
-fn node(row: &Row<'_>) -> Result<TemporalNode, Refusal> {
+fn stamp_json(stamp: &QuadTemporalStamp) -> String {
+    let valid = stamp.physical_valid_time();
+    let record = stamp.record_time();
+    format!(
+        "{{\"physical_valid_from\":{},\"physical_valid_through\":{},\"collected_at\":{},\"available_at\":{},\"recorded_at\":{},\"record_cell\":{},\"seq\":{}}}",
+        utc(valid.start_ns),
+        utc(valid.end_ns),
+        utc(stamp.collection_time()),
+        utc(stamp.availability_time()),
+        utc(record.wall_ns()),
+        js(record.cell()),
+        record.seq()
+    )
+}
+
+fn node(row: &Row<'_>) -> Result<(TemporalNode, Option<QuadTemporalStamp>), Refusal> {
     row.allowed(
         &[
             "id",
@@ -229,6 +273,9 @@ fn node(row: &Row<'_>) -> Result<TemporalNode, Refusal> {
             "origin",
             "available_at",
             "performed_at",
+            "physical_valid_from",
+            "physical_valid_through",
+            "collected_at",
             "record_cell",
             "seq",
             "recorded_at",
@@ -296,13 +343,41 @@ fn node(row: &Row<'_>) -> Result<TemporalNode, Refusal> {
             ));
         }
     };
-    Ok(TemporalNode {
-        id,
-        kind,
-        parents,
-        availability,
-        recorded_at,
-    })
+    let physical_from = row.optional_string("physical_valid_from")?;
+    let physical_through = row.optional_string("physical_valid_through")?;
+    let collection = row.optional_string("collected_at")?;
+    let is_source_observation =
+        kind == NodeKind::Observation && matches!(availability, Availability::Source { .. });
+    let stamp = match (physical_from, physical_through, collection) {
+        (None, None, None) => None,
+        (Some(from), Some(through), Some(collected)) if is_source_observation => {
+            let at = available_at
+                .ok_or_else(|| temporal("a stamped observation requires available_at".into()))?;
+            let record = recorded_at.as_ref().ok_or_else(|| {
+                temporal("a stamped observation requires ledger record metadata".into())
+            })?;
+            let valid = ValidTime::new(timestamp(from)?, timestamp(through)?)
+                .map_err(|e| temporal(e.to_string()))?;
+            let stamp = QuadTemporalStamp::new(valid, timestamp(collected)?, at, record.clone())
+                .map_err(|e| temporal(e.to_string()))?;
+            Some(stamp)
+        }
+        _ => {
+            return Err(temporal(
+                "physical_valid_from, physical_valid_through and collected_at belong together on a source observation".into(),
+            ));
+        }
+    };
+    Ok((
+        TemporalNode {
+            id,
+            kind,
+            parents,
+            availability,
+            recorded_at,
+        },
+        stamp,
+    ))
 }
 
 fn object_id(text: &str) -> Result<ObjectId, Refusal> {

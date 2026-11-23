@@ -35,6 +35,42 @@ mod tests {
     }
 
     #[test]
+    fn observation_stamps_show_assay_lag_and_preserve_missing_and_mixed_history() {
+        let id = "evd_11111111111111111111111111111111";
+        let stamped = check(BUNDLE, LEDGER).unwrap();
+        assert!(stamped.contains(r#""collected_at":"2026-06-10T16:00:00Z","available_at":"2026-06-15T00:00:00Z","recorded_at":"2026-06-15T01:00:00Z","record_cell":"observations","seq":10"#));
+        let legacy: String = BUNDLE
+            .lines()
+            .filter(|l| !l.starts_with("physical_valid_") && !l.starts_with("collected_at"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert!(
+            check(&legacy, LEDGER)
+                .unwrap()
+                .contains(&format!(r#""id":"{id}","stamp":null"#))
+        );
+        let mixed = BUNDLE.replace("kind = \"price_deck\"", "kind = \"observation\"");
+        let result = check(&mixed, LEDGER).unwrap();
+        assert!(result.contains(&format!(r#""id":"{id}","stamp":{{"physical_valid_from""#)));
+        assert!(result.contains(r#""id":"evd_33333333333333333333333333333333","stamp":null"#));
+        for invalid in [
+            BUNDLE.replace("collected_at = \"2026-06-10T16:00:00Z\"\n", ""),
+            BUNDLE.replace(
+                "collected_at = \"2026-06-10T16:00:00Z\"",
+                "collected_at = \"2026-06-16T00:00:00Z\"",
+            ),
+            BUNDLE.replace("2026-06-15T01:00:00Z", "2026-06-09T00:00:00Z"),
+            BUNDLE.replace("2026-06-10T08:00:00Z", "2026-06-11T08:00:00Z"),
+            BUNDLE.replace("kind = \"observation\"", "kind = \"price_deck\""),
+        ] {
+            assert_eq!(
+                check(&invalid, LEDGER).unwrap_err().refusal.code,
+                "FMINE-REF-110"
+            );
+        }
+    }
+
+    #[test]
     fn fitted_input_exclusion_and_deck_leaks_refuse_with_frontier_paths() {
         for (before, node) in [
             (

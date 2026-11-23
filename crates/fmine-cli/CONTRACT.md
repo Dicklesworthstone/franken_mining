@@ -1628,6 +1628,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   IDs, and checks every cohort member's complete declared ancestry at its registration time. The scoring
   `--as-of` time cannot admit later evidence. Forecast roots must be derived, name inputs and have a performed
   time equal to registration. Availability and cell/sequence anchor checks delegate to `fmine_claim::dag`.
+  Source observations may add `physical_valid_from`, `physical_valid_through` (inclusive UTC endpoints) and
+  `collected_at` together. The four-time constructor checks collection against both availability and recording.
+  Each forecast lists its source observations with their supplied timestamps and ledger coordinates, or a null
+  stamp for older bundles. The bundle SHA-256 binds the full stamps. The cone digest covers decision visibility.
   Missing members, missing times/parents, cycles, backdating and future ancestors refuse. Future-input
   refusals include structured frontier nodes and shortest paths in the envelope payload, without a score
   report. Successful payloads bind the bundle's SHA-256 and each cone digest. Without a bundle the status
