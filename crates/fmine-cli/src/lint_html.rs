@@ -24,7 +24,9 @@ use fmine_registry::sources::is_date;
 use crate::claim_inspection::canonical_claim_json;
 use crate::{Envelope, NextAction, json_string as js};
 
-pub(super) const NO_CLAIM: &str = "Checks supported equalities and separate exact production/sales period arithmetic against the selected registered HTML Claims. Source publication dates come from the current registry; historical availability of the mapping and registry is not established. Arithmetic over public assertions does not make a derived figure an issuer disclosure. Credit treatment is not inferred from AISC/TCC labels. This does not establish the truth of issuer assertions, verify other prose, authenticate a historical information set or authorize disclosure.";
+mod rate;
+
+pub(super) const NO_CLAIM: &str = "Checks supported equalities, exact production/sales period arithmetic and conditional sales-weighted quarterly gold cost rates against the selected registered HTML Claims. Source publication dates come from the current registry; historical availability of the mapping and registry is not established. Arithmetic over public assertions does not make a derived figure an issuer disclosure. Credit treatment is not inferred from AISC/TCC labels. This does not establish the truth of issuer assertions, verify other prose, authenticate a historical information set or authorize disclosure.";
 
 fn optional(value: Option<&str>) -> String {
     value.map_or_else(|| "null".into(), js)
@@ -627,6 +629,9 @@ fn arithmetic_report(
     let mut markdown = String::new();
     for finding in &lint.findings {
         if let Some((json, text)) = arithmetic_finding(draft, finding, snapshot)? {
+            findings.push(json);
+            markdown.push_str(&text);
+        } else if let Some((json, text)) = rate::finding(draft, finding, snapshot)? {
             findings.push(json);
             markdown.push_str(&text);
         }

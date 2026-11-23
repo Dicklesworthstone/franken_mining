@@ -3,6 +3,7 @@
 import argparse
 from fractions import Fraction
 import importlib.util
+from itertools import product
 import json
 from pathlib import Path
 import unittest
@@ -562,7 +563,8 @@ class HtmlArithmetic(unittest.TestCase):
         fixture = self.fixture([observation("20309M", "100.00", metric="AISC", unit="US$/oz sold"),
                                 observation("2030FY", "140.00", metric="AISC", unit="US$/oz sold")])
         payload = success(fixture.lint("Site A Q4 2030 100% basis AISC per ounce sold is $40.0/oz.", ("--discover",)))
-        self.assertEqual(payload["source_arithmetic"]["findings"], [])
+        self.assertEqual(payload["source_arithmetic"]["findings"][0]["status"], "not_available")
+        self.assertIsNone(payload["source_arithmetic"]["findings"][0]["derived_claim"])
 
     def test_direct_disclosures_and_explicit_bad_citations_are_not_replaced_by_arithmetic(self):
         fixture = self.fixture([observation("20309M", "100.00"), observation("2030FY", "140.00"),
@@ -580,6 +582,177 @@ class HtmlArithmetic(unittest.TestCase):
         self.assertEqual(bad["source_arithmetic"]["findings"], [])
 
 
+class RateFixture(Fixture):
+    """One invented filing carries all cumulative operands, with optional later-vintage competition."""
+
+    def __init__(self, binary, observations, copies=1):
+        super().__init__(binary)
+        self.observations = observations
+        self.documents = {}
+        self.mapping = FIXTURES.fields({"schema": "fmine.html-claims.v1", "issuer": ISSUER})
+        for copy in range(copies):
+            file = f"Rates{copy}.html"
+            tables = []
+            for index, row in enumerate(observations):
+                metric, unit = row["metric"], row["unit"]
+                basis = row.get("basis", "100%")
+                tables.append(
+                    f"<table><tr><th>Site A</th><th>{basis}</th></tr>"
+                    f"<tr><th>{metric}</th><th>{row['period']}</th></tr>"
+                    f"<tr><th>{unit}</th><td>{row['value']}</td></tr></table>"
+                )
+                self.mapping += "\n[[claim]]\n" + FIXTURES.fields({
+                    "id": f"rate_{copy}_{index}", "file": file, "table": index + 1, "cell": "B3",
+                    "subject_cell": "A1", "subject_label": "Site A",
+                    "period_cell": "B2", "period_label": row["period"],
+                    "metric_cell": "A2", "metric_label": metric,
+                    "unit_cell": "A3", "unit_label": unit,
+                    "ownership_cell": "B1", "ownership_label": basis,
+                })
+            self.documents[file] = ("".join(tables) + f"<!--{copy}-->").encode()
+
+    def write(self, omit=()):
+        registry = FIXTURES.fields({
+            "schema": "fmine.sources.v1", "issuer": ISSUER, "corpus_dir": "corpus",
+            "retrieved_utc": "2031-03-01T00:00:00Z", "url_prefix": "https://example.invalid/",
+        }) + '\n[[subject]]\nname = "Site A"\n'
+        for index, (file, data) in enumerate(self.documents.items()):
+            registry += "\n[[html]]\n" + FIXTURES.fields({
+                "file": file, "release": "2030Q4" if index == 0 else "2031Q1",
+                "url": f"https://example.invalid/{file}", "url_basis": "fetched and verified 2031-03-01",
+                "published_at": "2031-02-01" if index == 0 else "2031-03-01",
+                "published_at_basis": "FACT: invented fixture publication date",
+                "bytes": len(data), "sha256": FIXTURES.sha(data),
+            })
+            if file not in omit:
+                (self.root / "corpus" / file).write_bytes(data)
+        (self.root / "registries/sources" / f"{ISSUER}.toml").write_text(registry)
+        (self.root / MAPPING).write_text(self.mapping)
+
+
+def rate_rows(prior="20309M", current="2030FY", metric="AISC", values=None):
+    values = values or ("100.00", "100.000", "120.00", "200.000")
+    return [observation(period, value, metric=label, unit=unit)
+            for period, label, unit, value in zip(
+                (prior, prior, current, current),
+                (metric, "Gold sales", metric, "Gold sales"),
+                ("US$/oz sold", "koz", "US$/oz sold", "koz"), values)]
+
+
+def rate_bounds(values):
+    boxes = []
+    for value in values:
+        decimals = len(value.split(".")[1]) if "." in value else 0
+        center, radius = Fraction(value), Fraction(1, 2 * 10 ** decimals)
+        boxes.append((center - radius, center + radius))
+    # Independent exact expression preserves the denominator's repeated sales variables.
+    answers = [c + (c - a) * b / (d - b) for a, b, c, d in product(*boxes)]
+    return min(answers), max(answers)
+
+
+class HtmlQuarterRate(unittest.TestCase):
+    binary = None
+
+    def fixture(self, rows=None, copies=1, omit=()):
+        fixture = RateFixture(self.binary, rows or rate_rows(), copies)
+        fixture.write(omit)
+        return fixture
+
+    def assess(self, fixture, value="140.0", target="Q4 2030", metric="AISC", flags=(), discover=True):
+        draft = f"Site A {target} 100% basis {metric} per ounce sold is US${value}/oz.\n"
+        payload = success(fixture.lint(draft, (("--discover",) if discover else ()) + flags))
+        return payload, payload["source_arithmetic"]["findings"]
+
+    def test_all_quarters_and_cost_families_match_independent_exact_enclosures(self):
+        for metric in ("AISC", "Gold cost of sales"):
+            for prior, current, target in (("2030Q1", "2030H1", "Q2 2030"),
+                                            ("2030H1", "20309M", "Q3 2030"),
+                                            ("20309M", "2030FY", "Q4 2030")):
+                observations = rate_rows(prior, current, metric)
+                fixture = self.fixture(observations)
+                payload, rows = self.assess(fixture, target=target, metric=metric)
+                self.assertEqual(len(rows), 1, payload)
+                row = rows[0]
+                self.assertEqual(row["status"], "derived", row)
+                self.assertEqual(bounds(row["derived_claim"]), rate_bounds([r["value"] for r in observations]))
+                self.assertEqual(row["rule"], "public-disclosure.sales-weighted-quarter-rate/1")
+                self.assertEqual(row["derived_claim"]["value"]["ownership"], "100%")
+                self.assertIn("not independently established", row["assumption"])
+                self.assertEqual(set(row["derived_claim"]["parents"]),
+                                 {e["claim"]["claim_id"] for e in row["source_evidence"]})
+                self.assertEqual(len(row["source_evidence"]), 4)
+                self.assertEqual({e["publication"]["file"] for e in row["source_evidence"]}, {"Rates0.html"})
+                self.assertEqual(payload, self.assess(fixture, target=target, metric=metric)[0])
+
+    def test_precision_signed_costs_and_large_decimal_values_keep_exact_answers(self):
+        fixture = self.fixture()
+        for value, status in (("140.0", "derived"), ("140.000", "precision_not_established"), ("141.0", "contradicted")):
+            _, rows = self.assess(fixture, value=value)
+            self.assertEqual(rows[0]["status"], status)
+        for values, answer in ((("-100.00", "100.000", "-120.00", "200.000"), "-140.0"),
+                               (("9007199254740993.00", "100.000", "9007199254741013.00", "200.000"), "9007199254741033.0")):
+            fixture = self.fixture(rate_rows(values=values))
+            _, rows = self.assess(fixture, value=answer)
+            self.assertEqual(rows[0]["status"], "derived", rows)
+            self.assertEqual(bounds(rows[0]["derived_claim"]), rate_bounds(values))
+
+    def test_missing_unusable_conflicting_and_incompatible_operands_never_make_rates(self):
+        for mutation, expected, code in (
+            (lambda rows: rows.pop(), "not_available", None),
+            (lambda rows: rows[1].update(value="—"), "refused", "FMINE-REF-208"),
+            (lambda rows: rows[3].update(value="100.001"), "refused", "FMINE-REF-104"),
+            (lambda rows: rows[3].update(basis="Attributable (60%)"), "refused", "FMINE-REF-105"),
+        ):
+            observations = rate_rows()
+            mutation(observations)
+            _, rows = self.assess(self.fixture(observations))
+            self.assertEqual(rows[0]["status"], expected, rows)
+            self.assertIsNone(rows[0]["derived_claim"])
+            if code:
+                self.assertEqual(rows[0]["refusal"]["code"], code)
+        fixture = self.fixture(copies=2)
+        _, rows = self.assess(fixture)
+        self.assertEqual(rows[0]["status"], "ambiguous")
+        self.assertEqual(len(rows[0]["source_evidence"]), 8)
+        separate = ArithmeticFixture(self.binary, rate_rows())
+        separate.write()
+        _, rows = self.assess(separate)
+        self.assertEqual(rows[0]["refusal"]["code"], "FMINE-REF-105")
+
+    def test_publication_cut_source_mutations_and_direct_assertion_precedence_survive(self):
+        fixture = self.fixture(copies=2, omit=("Rates1.html",))
+        payload, rows = self.assess(fixture, flags=("--as-of", "2031-02-01"))
+        self.assertEqual(rows[0]["status"], "derived")
+        self.assertEqual([s["file"] for s in payload["html_projection"]["excluded_sources"]], ["Rates1.html"])
+        fixture = self.fixture()
+        first, rows = self.assess(fixture)
+        old_id = rows[0]["derived_claim"]["claim_id"]
+        mapping = fixture.root / MAPPING
+        mapping.write_text("# changed interpretation bytes\n" + fixture.mapping)
+        changed, rows = self.assess(fixture)
+        self.assertNotEqual(old_id, rows[0]["derived_claim"]["claim_id"])
+        self.assertNotEqual(first["source_arithmetic"]["digest"], changed["source_arithmetic"]["digest"])
+        fixture.documents["Rates0.html"] = fixture.documents["Rates0.html"].replace(b"120.00", b"121.00")
+        fixture.write()
+        _, rows = self.assess(fixture)
+        self.assertEqual(rows[0]["status"], "contradicted")
+        self.assertEqual(bounds(rows[0]["derived_claim"]), rate_bounds(("100.00", "100.000", "121.00", "200.000")))
+        source = fixture.root / "corpus/Rates0.html"
+        source.write_bytes(source.read_bytes() + b" ")
+        draft = "Site A Q4 2030 100% basis AISC per ounce sold is US$140.0/oz."
+        FIXTURES.refused(fixture.lint(draft), "FMINE-REF-505")
+        observations = rate_rows() + [observation("2030Q4", "99.00", metric="AISC", unit="US$/oz sold")]
+        fixture = self.fixture(observations)
+        payload, rows = self.assess(fixture)
+        self.assertEqual(findings(payload)[0]["verdict"], "value_mismatch")
+        self.assertEqual(rows, [])
+        _, rows = self.assess(fixture, discover=False)
+        self.assertEqual(rows[0]["status"], "direct_assertion_available")
+        prior = by_id(fixture.projection())["rate_0_0"]
+        cited = sentence(prior, "US$140.0/oz", "AISC per ounce sold", "Q4 2030")
+        self.assertEqual(success(fixture.lint(cited, ("--discover",)))["source_arithmetic"]["findings"], [])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
@@ -587,6 +760,7 @@ if __name__ == "__main__":
     options = parser.parse_args()
     HtmlLint.binary = options.binary.resolve()
     HtmlArithmetic.binary = options.binary.resolve()
+    HtmlQuarterRate.binary = options.binary.resolve()
     if options.fixture_only:
         fixture = Fixture(HtmlLint.binary)
         fixture.write()

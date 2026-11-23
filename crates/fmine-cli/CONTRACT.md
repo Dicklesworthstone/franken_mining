@@ -348,7 +348,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     directions must remain feasible. `--rounds` and a 262,144-work-unit limit bound the pass; exhaustion
     retains its checked incumbent. Optional `fractional_period_search` JSON/Markdown reports the seed,
     exact before/after value and work counters, with that origin selected only on a strict gain. The
-    original external candidate assessment remains unchanged. No external claimed bound, calibration, sampling confidence, reserve
+    original external candidate assessment remains unchanged. A subsequent bounded joint pass searches
+    each mined block's period and exact allocation between every destination pair. The optional
+    `joint_period_route_search` report retains the immediate seed origin, before/after values, move and
+    work counters; a strict gain selects that origin. Same-period rerouting is included. Both affected
+    periods' signed rows and both precedence directions must hold, and the final independent candidate
+    check and full-model bound replay remain mandatory. This pass has its own 262,144-work-unit limit,
+    uses `--rounds`, and preserves the mined set and original candidate receipt. Zero rounds disables it.
+    `tests/planning/joint_fractional.*` declares the synthetic 27.5→30 example checked by the existing
+    independent CLI oracle. No external claimed bound, calibration, sampling confidence, reserve
     status or execution permission is inferred. `xtask/tests/plan_schedule.rs` invokes a Python Fraction
     oracle against the actual binary, including independent exhaustive primal and dual-price checks.
     Optional `--lp-guidance` solves the PCPSP relaxation in this upper layer with `fmine-lp` PDLP,
@@ -695,6 +703,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     ownership conversion, historical mapping proof or issuer disclosure is inferred. The receipt binds
     the draft digest, complete selected Claim population and arithmetic findings. Independent exact
     source/CLI cases extend `xtask/tests/html_lint.rs` and its Python Fraction oracle.
+    DESIGN (BD-059/BD-345): the same receipt conditionally reconstructs quarterly gold AISC and cost
+    of sales from `(R_cumulative*Q_cumulative - R_prior*Q_prior)/(Q_cumulative-Q_prior)`.
+    All four rate/sold-gold Claims must be unique, share one filing and printed ownership basis, and
+    cover H1/Q1, 9M/H1 or FY/9M. The whole incremental-sales enclosure must be positive. Exact
+    vertex bounds preserve the repeated sales variables and signed rates. Same-definition/sold-denominator
+    assumptions accompany every result; credit treatment, accounting equivalence, issuer disclosure and
+    calibration remain unestablished. Missing or competing inputs retain source evidence without a result.
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;

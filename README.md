@@ -798,7 +798,8 @@ source perturbations and signed rounding, and exercise the built executable; the
 It reads MineLib block/destination values, precedence arcs and per-period resource limits, constructs
 a whole-block schedule, improves its periods and destinations, then tries profitable fractional
 destination allocations at fixed mining periods. The best split schedule can then improve its mining
-periods while retaining its exact destination fractions. Every selected schedule is independently checked.
+periods while retaining its exact destination fractions, then jointly improve a block's period and
+its allocation between two destinations. Every selected schedule is independently checked.
 A global Lagrangian upper bound is recomputed from the returned prices over **every model
 block**, including negative-value material that can enable a blend.
 
@@ -831,8 +832,9 @@ total **33**, while satisfying a signed blending row exactly. An outside candida
 `block destination period fraction`, with zero-based indices and `%` comments. Fractions never round;
 each mined block must total exactly one, and every predecessor must be completely mined in the same
 or an earlier period. Whole-block candidates can seed further search. A better feasible split candidate
-retains its exact routing fractions and can seed period improvements; the solver does not silently round
-its destinations. Its original submitted value and feasibility assessment remain in the report.
+retains its exact routing fractions as the search seed; later routing changes require a strict exact
+improvement on the declared share grid. Its original submitted value and feasibility assessment remain
+in the report.
 
 LP guidance can generate additional mining sets before local search and fractional polishing:
 
@@ -888,6 +890,27 @@ before/after values, moves, rounds, trials and budget exhaustion. A strict impro
 imported split schedule from **22.5 to 25** without changing any route fraction. This neighborhood does
 not change fractions, add or drop blocks, or move several blocks simultaneously; it supplies no new
 optimality claim.
+
+DESIGN (BD-252/253): the subsequent joint search can move one block and change its destination fractions
+in the same step, or improve its routing within the current period. It checks every destination pair
+against exact signed resource inequalities and chooses the best representable fraction on the declared
+decimal grid. Every accepted move preserves the mined set, precedence and feasibility in both affected
+periods. This crosses capacity traps that a fixed-fraction period move cannot cross.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/joint_fractional.pcpsp --prec tests/planning/joint_fractional.prec \
+  --candidate tests/planning/joint_fractional.sol --share-decimals 2 \
+  --list-schedule --format markdown
+```
+
+The synthetic input declares an imported schedule worth **27.5**. Its third block sends 75% to the mill
+in period 1. That allocation cannot fit in period 0; changing the mill allocation to 50% while moving
+the block earlier raises the total to **30**. `--rounds 0` retains the original schedule. The separate
+`joint_period_route_search` report shows the seed, exact values, route/period move counts and work budget.
+At most 262,144 work units and the requested rounds are used; exhaustion retains complete feasible
+improvements. Only one block moves at a time, and its new allocation uses at most two destinations.
+The method supplies no additional optimality claim; the independent full-model bound still applies.
 
 The JSON reports the input hashes, decimal scales, rounding counts, exact rational discounted value,
 resource usage, candidate infeasibility witnesses, bound prices and gap. `--list-schedule` includes
@@ -1219,6 +1242,15 @@ required period. Missing periods, unusable values and competing vintages remain 
 the full source ancestry and publication evidence, and its digest binds both the draft and selected sources.
 An arithmetic result is a derived Claim, not a new issuer disclosure; direct assertions and explicit citation
 verdicts remain visible, and intensive rates are not subtracted or summed.
+
+For gold AISC and gold cost of sales, the receipt can also derive a conditional quarterly rate from
+two cumulative rates and their matching gold sales in the **same filing**. It subtracts the implied
+cumulative costs and divides by incremental sales, preserving the sales variables shared by numerator
+and denominator. All four operands must have the same printed ownership basis; their complete rounding
+enclosures must establish positive incremental sales. Signed rates remain signed. The report shows the
+exact enclosure, four source Claims and the assumption of an unchanged issuer cost definition. It does
+not infer by-product/co-product treatment or turn the derived rate into an issuer disclosure. Missing
+sales, competing vintages, incompatible bases and denominators that could be zero remain explicit.
 
 ### Select affordable capital bundles under shared scenario risk
 

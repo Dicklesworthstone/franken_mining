@@ -2743,6 +2743,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(concat!(
                 ",\"html_lint\":{\"selection\":\"Explicit --html-definitions selects only mapped registered HTML Claims\",",
                 "\"equality\":\"Exact existing equality, precision, vintage and ambiguity checks; printed credit treatment is not inferred\",",
+                "\"period_arithmetic\":\"Exact production/sales cumulative differences and quarter sums; conditional gold AISC/cost-of-sales quarterly rates require four unique cumulative rate/sales operands in one filing, matching ownership and strictly positive incremental sales. Shared-variable rounding bounds retain signed rates, source Claims and explicit cost-definition assumptions; no rate subtraction or credit treatment is inferred\",",
                 "\"publication\":\"Optional --as-of filters future source bytes before reads; registered dates are reported separately from equality\",",
                 "\"mapping_history\":\"Current mapping and registry bytes are bound; historical mapping availability is not established\"}"
             ));

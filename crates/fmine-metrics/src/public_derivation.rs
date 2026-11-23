@@ -15,6 +15,8 @@ use fmine_numerics::exact_feas::{Interval, Rat};
 use crate::guidance::{Ownership, Period};
 use crate::roll_forward::quarter::Printed;
 
+pub mod quarter_rate;
+
 type Result<T> = std::result::Result<T, Refusal>;
 pub const INPUT_METRIC: &str = "public_disclosure.period_amount";
 pub const SHARE_METRIC: &str = "public_disclosure.ownership_share";
