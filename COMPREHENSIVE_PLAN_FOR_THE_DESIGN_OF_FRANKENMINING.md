@@ -5161,8 +5161,9 @@ pub struct ScenarioIndex {          // one draw ω of the enterprise world
 - **Hierarchy:** industry class → company random effect → project. The company effect updates from the company's
   **own** approvals in its bitemporal record.
 - **Adjustments are explicit and visible** (evidence class `Transferred`), never buried in the discount rate.
-- **Fit check (GB-32).** A single lognormal cannot reproduce Bertisen & Davis's three statistics together, so a
-  core-plus-blowout mixture is used. Gate GATE-CAP-02.
+- **Fit check (GB-32, DESIGN).** Compare both a single lognormal and a core-plus-blowout mixture with the three
+  registered targets. Before GATE-CAP-02 can qualify a historical fit, verify the paper's bias adjustment and
+  event denominators. A corporate forecast needs its own declared reference class.
 
 **Resource conversion and public-resource haircuts.**
 - Reserve-equivalent R = h_pub · (c_IR·M_ind + c_FI·c_IR·M_inf), where:
@@ -5325,17 +5326,22 @@ All numbers in this card are illustrative (GB-30).
   junior refuses terms → stake plus information rights.
 
 **GB-32 · The reference-class capex prior needs a blowout regime.**
-- **Targets** (X = final ÷ feasibility-study capex; Bertisen & Davis 2008): E[X] = 1.14; P(|X − 1| > 0.15) ≈ 0.5;
-  P(X ≥ 2) ≈ 1/13.
-- **A single lognormal fails.** Fitted to the mean and tail (μ = 0.020, σ = 0.472), it gives
+- **TARGET.** For X = final ÷ feasibility-study capex, compare E[X] to 1.14, P(|X − 1| > 0.15) to 0.5 and
+  P(X ≥ 2) to 1/13. FACT (E026, R7 §9.1): Bertisen & Davis (2008) studied 63 international mining and smelting
+  projects. Their abstract qualifies its accuracy finding for estimation bias and recommends a shifted lognormal.
+  OPEN (bd-2jow): verify how the study computes that band and the underlying denominators before treating these
+  targets as historical frequencies. [Bertisen & Davis, 2008](https://doi.org/10.1080/00137910802058533)
+- **Unshifted lognormal control.** Fitted to the mean and tail (μ = 0.020, σ = 0.472), it gives
   P(|X − 1| > 0.15) = **0.75**, not about 0.5.
-- **A mixture works.** 0.923·N(1.043, 0.20) + 0.077·Blowout(mean 2.3) gives:
-  - mean 1.140 ✓;
-  - outside ±15%: 0.505 ✓;
-  - P(X ≥ 2) ≈ 0.077 ✓.
-- **Applied.** A $1.6B feasibility estimate has a mean of $1.82B and P90 ≈ $2.31B, with P(≥ $3.2B) ≈ 7.7%.
-- **Intuition.** Overruns are a well-behaved core plus a separate blowout regime. One lognormal over-spreads the
-  core to fit the tail.
+- **DESIGN, illustrative mixture.** With probability 0.923, draw X from a normal with mean 1.043 and standard
+  deviation 0.20 conditioned on X > 0. With probability 0.077, set X = 2.3. The point mass specifies the blowout
+  distribution sufficiently to compute its tail and quantiles.
+- **INFERENCE under those assumptions.** The mean is 1.13979, the fraction outside ±15% is 0.50490 and the
+  probability of at least doubling is 0.07700. All three fall within the planning tolerance. The 90th percentile
+  falls below 2.3, at quantile 0.90/0.923 of the positive core, or X = 1.43527.
+- **Illustrative application.** At a $1.6B feasibility estimate, this declared model gives a mean of $1.82B,
+  P90 of $2.30B and a 7.7% probability of reaching $3.2B. Applying it to a mine requires evidence that the
+  mine belongs to the reference class.
 - **Flip.** The company's own ≥ 10 approvals show a lighter blowout share → a narrower posterior. The class choice
   (megaprojects vs Bertisen & Davis) is itself a decision (OPEN-HELM-5).
 
