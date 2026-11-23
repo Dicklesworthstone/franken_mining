@@ -1,5 +1,6 @@
 //! DESIGN: dated, source-bound alternatives for a single executive decision.
-//! Determinism: Exact. Worksheet inputs are declarations, including their claimed availability.
+//! Determinism: Exact
+//! Worksheet inputs are declarations, including their claimed availability.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
