@@ -35,6 +35,9 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release
     date leaves the net outcome unresolved once work is due.
+  - DESIGN (bd-ftw5). Executive worksheets accept `decide program <worksheet> --brief`. The meeting
+    view retains the findings, decision alternatives, uncertainty, revisit condition and worksheet digest.
+    Full Markdown and JSON give the line-by-line evidence and both treasury checkpoint ledgers.
   - DESIGN (bd-ftw5). `hedge_liquidity` admits one entity's unrestricted USD cash, one committed
     facility and a fixed net cargo receipt. Declare every calendar day after the opening date through the
     horizon, including zero-flow days (up to 14). The undrawn line is available from the opening of its

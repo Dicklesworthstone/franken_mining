@@ -39,7 +39,7 @@ and [original capital estimates against closeouts](tests/capital/executive_estim
 ### Can Treasury fund margin calls if a metal shipment pays late?
 
 ```bash
-cargo run -p fmine-cli -- decide program tests/capital/executive_hedge.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/executive_hedge.toml --brief
 ```
 
 In this synthetic copper case, both collection dates leave the parent with $15 million on Friday.
@@ -48,7 +48,8 @@ $4 million at Thursday's call **after** using the $3 million committed line. Tue
 collection date that preserves the $8 million cash floor under the buyer's after-call cutoff.
 Alternatively, collecting $4 million on Tuesday and the remaining $7 million on Friday covers every call.
 The treasurer can change the value date, cutoff, facility terms or daily flows and rerun the same paper.
-The JSON includes both cash ledgers, the first and largest shortfall, and the original source rows.
+Use `--format markdown` for the checkpoint ledger. The JSON includes both cash ledgers, the first and
+largest shortfall, and the original source rows. All executive worksheets also accept `--brief`.
 See the [treasury worksheet](tests/capital/executive_hedge.toml) and [worked cash calculation](docs/delivery/EXECUTIVE_DECISION_PILOT.md#shipment-settlement-and-hedge-cash-calls).
 
 A miner's numbers are produced by a dozen systems that each pass along a single value and discard how sure they

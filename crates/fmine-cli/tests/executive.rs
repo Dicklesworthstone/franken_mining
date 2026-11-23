@@ -139,6 +139,74 @@ fn delayed_copper_receipt_creates_an_intraday_shortfall_despite_identical_closin
 }
 
 #[test]
+fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_digest() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let brief = |model: &str, flags: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .current_dir(&root)
+            .args([
+                "decide",
+                "program",
+                &format!("tests/capital/{model}.toml"),
+                "--brief",
+            ])
+            .args(flags)
+            .output()
+            .expect("run brief")
+    };
+    for name in [
+        "hedge",
+        "purchase",
+        "purchase_potash",
+        "rehabilitation",
+        "tenure",
+        "group",
+        "estimates",
+    ] {
+        let c = card(name);
+        let result = brief(&format!("executive_{name}"), &[]);
+        assert!(result.status.success(), "{name}");
+        let text = String::from_utf8(result.stdout).expect("Markdown");
+        let full = String::from_utf8(run(name, true).stdout).expect("full Markdown");
+        let digest = c
+            .get("source")
+            .and_then(|s| s.get("sha256"))
+            .and_then(Json::as_str)
+            .expect("digest");
+        assert!(
+            text.contains(digest) && text.contains("Uncertainty:") && text.contains("Revisit if:")
+        );
+        assert!(full.contains("(known ") && !text.contains("(known "));
+        for finding in full
+            .lines()
+            .filter(|line| line.starts_with("- ") && !line.contains("(known "))
+        {
+            assert!(
+                text.lines().any(|line| line == finding),
+                "{name}: {finding}"
+            );
+        }
+        if name == "hedge" {
+            assert!(text.contains("US$4,000,000 of the invoice by 2030-03-05"));
+            assert!(text.contains("remaining US$7,000,000 on 2030-03-08"));
+            assert!(text.contains("First shortfall of US$2,000,000 on 2030-03-06"));
+            assert!(text.contains("Closing cash before financing is US$15,000,000"));
+            assert!(full.contains("| delayed |") && !text.contains("| delayed |"));
+        } else {
+            let alternatives: Vec<_> = full.lines().filter(|line| line.starts_with('|')).collect();
+            assert!(!alternatives.is_empty() && alternatives.iter().all(|&row| text.contains(row)));
+        }
+        assert!(text.len() < full.len(), "{name}");
+    }
+    for flags in [&["--json"][..], &["--format", "json"], &["--brief"]] {
+        assert_eq!(brief("executive_hedge", flags).status.code(), Some(2));
+    }
+    for model in ["gb30", "production_investments"] {
+        assert_eq!(brief(model, &[]).status.code(), Some(2));
+    }
+}
+
+#[test]
 fn procurement_preserves_the_competing_project_and_prices_only_critical_delay() {
     let c = card("purchase");
     assert!(finding(&c, "Hold (250000 USD)"));

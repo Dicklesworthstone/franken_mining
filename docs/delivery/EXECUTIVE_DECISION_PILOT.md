@@ -65,7 +65,7 @@ The comparison holds the invoice value and broker amounts fixed. [Treasury works
 ```sh
 cargo run -p fmine-cli -- decide program tests/capital/executive_purchase.toml --format markdown
 cargo run -p fmine-cli -- decide program tests/capital/executive_purchase_potash.toml --json
-cargo run -p fmine-cli -- decide program tests/capital/executive_hedge.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/executive_hedge.toml --brief
 ```
 
 **Measurement boundary.** The fixtures exercise the calculations, evidence cutoff and change of decision. Operator preparation time, adoption, actual contract enforceability, physical execution and realized business benefit require independent observations. None is measured by this fictional pilot.

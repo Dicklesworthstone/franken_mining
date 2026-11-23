@@ -118,7 +118,12 @@ impl Card {
     }
 }
 
-pub(super) fn worksheet(doc: &TomlDoc, text: &str, source: &SourceAnchor) -> Result<Envelope> {
+pub(super) fn worksheet(
+    doc: &TomlDoc,
+    text: &str,
+    source: &SourceAnchor,
+    brief: bool,
+) -> Result<Envelope> {
     if text.len() > 65536 || doc.rows.is_empty() || doc.rows.len() > 16 {
         return Err(invalid(
             "executive worksheets require 1–16 source rows within 64 KiB",
@@ -172,18 +177,22 @@ pub(super) fn worksheet(doc: &TomlDoc, text: &str, source: &SourceAnchor) -> Res
     for msg in &card.findings {
         let _ = writeln!(md, "- {}", cell(msg));
     }
-    let _ = writeln!(
-        md,
-        "\n| {} |\n|{}|",
-        columns.join(" | "),
-        vec!["---"; columns.len()].join("|")
-    );
-    for row in &card.rows {
+    // Other worksheets need their alternative rows to convey the decision. The treasury
+    // findings already give both cases, the binding dates and the invoice split.
+    if !brief || mode != "hedge_liquidity" {
         let _ = writeln!(
             md,
-            "| {} |",
-            row.iter().map(|s| cell(s)).collect::<Vec<_>>().join(" | ")
+            "\n| {} |\n|{}|",
+            columns.join(" | "),
+            vec!["---"; columns.len()].join("|")
         );
+        for row in &card.rows {
+            let _ = writeln!(
+                md,
+                "| {} |",
+                row.iter().map(|s| cell(s)).collect::<Vec<_>>().join(" | ")
+            );
+        }
     }
     let _ = writeln!(
         md,
@@ -204,14 +213,16 @@ pub(super) fn worksheet(doc: &TomlDoc, text: &str, source: &SourceAnchor) -> Res
         };
         let locator = text_field("source")?;
         let known_on = text_field("known_on")?;
-        let _ = writeln!(
-            md,
-            "- {} line {} (known {}): {}",
-            r.table,
-            r.line,
-            known_on,
-            cell(locator)
-        );
+        if !brief {
+            let _ = writeln!(
+                md,
+                "- {} line {} (known {}): {}",
+                r.table,
+                r.line,
+                known_on,
+                cell(locator)
+            );
+        }
         sources.push(format!(
             "{{\"table\":{},\"line\":{},\"known_on\":{},\"locator\":{}}}",
             js(&r.table),
@@ -1085,7 +1096,7 @@ mod tests {
             fmine_core::hash::sha256(text.as_bytes()).0,
             "worksheet",
         );
-        worksheet(&doc, text, &source)
+        worksheet(&doc, text, &source, false)
     }
     fn report(s: &str) -> String {
         evaluate(s)

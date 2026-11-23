@@ -5,6 +5,18 @@ use super::{Card, Result, date, day, get, headroom, invalid, js, qty, row_fields
 use fmine_registry::toml_subset::TomlDoc;
 use std::collections::BTreeMap;
 
+fn dollars(amount: i128) -> String {
+    let digits = amount.unsigned_abs().to_string();
+    let mut display = String::from(if amount < 0 { "-US$" } else { "US$" });
+    for (i, digit) in digits.bytes().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            display.push(',');
+        }
+        display.push(char::from(digit));
+    }
+    display
+}
+
 #[derive(Clone, Copy)]
 struct Point<'a> {
     date: &'a str,
@@ -107,12 +119,17 @@ impl<'a> Window<'a> {
         let outcome = self.assess(self.arrival(date), Some((case, card)))?;
         let funding = match (outcome.first_gap, outcome.worst_gap) {
             (Some((first, amount)), Some(worst)) => format!(
-                "First shortfall of {amount} USD on {} at {}. Peak additional funding of {} USD is needed on {} at {}.",
-                first.date, first.phase, outcome.extra, worst.date, worst.phase
+                "First shortfall of {} on {} at {}. Peak additional funding of {} is needed on {} at {}.",
+                dollars(amount),
+                first.date,
+                first.phase,
+                dollars(outcome.extra),
+                worst.date,
+                worst.phase
             ),
             _ => "The declared cash and committed line cover every checkpoint.".into(),
         };
-        card.findings.push(format!("For {case} collection on {date}, the peak draw needed to keep the cash floor is {} USD. {funding}", outcome.peak_draw));
+        card.findings.push(format!("For {case} collection on {date}, the peak draw needed to keep the cash floor is {}. {funding} Closing cash before financing is {}.", dollars(outcome.peak_draw), dollars(outcome.closing_cash)));
         Ok(outcome)
     }
 }
@@ -217,7 +234,8 @@ pub(super) fn compare(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         ));
     }
 
-    let mut cash = qty(&t, "opening_cash_usd")?;
+    let opening_cash = qty(&t, "opening_cash_usd")?;
+    let mut cash = opening_cash;
     let mut points = vec![Point {
         date: as_of,
         phase: "opening",
@@ -300,7 +318,7 @@ pub(super) fn compare(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     } else if let Some(by) = last {
         let amount = delayed_case.extra;
         let remaining = window.receipt - amount;
-        card.findings.push(format!("Alternatively, collect at least {amount} USD of the invoice by {by} at the same cutoff and collect the remaining {remaining} USD on {delayed}. This covers the delayed case with the existing line."));
+        card.findings.insert(0, format!("To cover every call with the existing line, collect at least {} of the invoice by {by} and the remaining {} on {delayed}, under the stated {} cutoff.", dollars(amount), dollars(remaining), cutoff.replace('_', " ")));
         format!(
             "{{\"status\":\"sufficient\",\"amount_usd\":\"{amount}\",\"by\":{},\"remaining_on_delayed_date_usd\":\"{remaining}\"}}",
             js(by)
@@ -308,7 +326,7 @@ pub(super) fn compare(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     } else {
         "{\"status\":\"insufficient_even_in_full\",\"amount_usd\":null,\"by\":null,\"remaining_on_delayed_date_usd\":null}".into()
     };
-    card.findings.push(format!("{} expects {} USD from {}. The cash floor is {} USD. Opening precedes the day's transactions. Broker and other credits settle after calls.", entity, window.receipt, get(&s, "cargo")?, window.floor));
+    card.findings.push(format!("{entity} opens with {} in unrestricted cash against a {} floor. The committed {} line is drawable {from} through {until}. {} is due on cargo {}. Broker and other credits settle after calls.", dollars(opening_cash), dollars(window.floor), dollars(committed), dollars(window.receipt), get(&s, "cargo")?));
     card.detail = Some((
         "liquidity",
         format!(

@@ -110,6 +110,9 @@ pub enum CliCommand {
     CapitalProgram {
         model: PathBuf,
     },
+    CapitalProgramBrief {
+        model: PathBuf,
+    },
     /// Compare public JV production, sales, capital and cost assertions on a common dated perimeter.
     Mirror(mirror::Command),
     /// Local issuance status, recall and owner-authorized journal events (BD-347).
@@ -1467,10 +1470,15 @@ pub fn parse_args(
     }
     if brief {
         if positional.first().map(String::as_str) != Some("decide")
-            || positional.get(1).map(String::as_str) != Some("card")
+            || !matches!(
+                positional.get(1).map(String::as_str),
+                Some("card" | "program")
+            )
             || explicit_json
         {
-            return Err("--brief requires decide card and Markdown output".into());
+            return Err(
+                "--brief requires decide card or decide program with Markdown output".into(),
+            );
         }
         format = OutputFormat::Markdown;
     }
@@ -1583,6 +1591,9 @@ pub fn parse_args(
                     model: PathBuf::from(model),
                 },
                 "recovery-bounds" => CliCommand::RecoveryBounds {
+                    model: PathBuf::from(model),
+                },
+                "program" if brief => CliCommand::CapitalProgramBrief {
                     model: PathBuf::from(model),
                 },
                 "program" => CliCommand::CapitalProgram {
@@ -2242,7 +2253,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::RecoveryBounds { model } => {
             decision::execute(model, workspace_root, decision::View::RecoveryBounds)
         }
-        CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root),
+        CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root, false),
+        CliCommand::CapitalProgramBrief { model } => capital::execute(model, workspace_root, true),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {
             reliance_explicit::execute(command, workspace_root)

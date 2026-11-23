@@ -15,6 +15,7 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
     "\"schema\":\"fmine.capital-program.v1\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
+    "\"executive_brief\":\"decide program <executive worksheet> --brief prints the meeting paper. Use --format markdown for the full tables and source locators.\",",
     "\"executive_examples\":[\"tests/capital/executive_purchase.toml\",\"tests/capital/executive_purchase_potash.toml\",\"tests/capital/executive_tenure.toml\",\"tests/capital/executive_group.toml\",\"tests/capital/executive_rehabilitation.toml\",\"tests/capital/executive_estimates.toml\",\"tests/capital/executive_hedge.toml\"],",
     "\"investment_schema\":\"fmine.capital-investments.v1\",",
     "\"investment_fields\":[\"schema\",\"model_key\",\"question\",\"currency (USD)\",\"budget\",\"tail_mass\",\"max_tail_loss (optional)\",\"payoff_convention (additive_discounted_incremental_cash)\",\"shared_scenario_basis\",\"additivity_basis\",\"reference_class_basis\"],",
@@ -44,7 +45,7 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "}",
 );
 
-pub(super) fn execute(model: &Path, root: &Path) -> Envelope {
+pub(super) fn execute(model: &Path, root: &Path, brief: bool) -> Envelope {
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) = worksheet_input::read_model(
             &root.join(model),
@@ -55,12 +56,18 @@ pub(super) fn execute(model: &Path, root: &Path) -> Envelope {
             && let Some(fmine_registry::toml_subset::TomlValue::Str(schema)) =
                 doc.top_get("schema").map(|f| &f.value)
         {
-            if schema == investment::SCHEMA {
+            if schema == investment::SCHEMA && !brief {
                 return investment::execute(&text, &source, root);
             }
             if schema == executive::SCHEMA {
-                return executive::worksheet(&doc, &text, &source);
+                return executive::worksheet(&doc, &text, &source, brief);
             }
+        }
+        if brief {
+            return Ok(Envelope::usage_error(
+                "decide program",
+                "--brief requires an executive decision worksheet (fmine.executive-decision.v1). Use --format markdown for other capital models.",
+            ));
         }
         let evaluated = fmine_capital::model::evaluate(&text, source.clone())?;
         let payload = format!(
