@@ -80,7 +80,8 @@ cargo run -p fmine-cli -- recon run --input tests/recon/matched_cohorts.toml --f
 ```
 
 In polygon A, 1,200 dry tonnes delivered the 10,000 kg Cu expected from 1,000 tonnes. Metal reached 100%
-of plan, but grade reached only 83.33%. The command flags that offset for investigation. Polygon B is
+of plan, but grade reached only 83.33%. The report puts that offset in kilograms. Extra tonnes contributed
++5,500/3 kg Cu and the lower grade contributed −5,500/3 kg Cu, for a net change of zero. Polygon B is
 exactly on the 5% tolerance boundary. An unplanned cut adds 200 dry tonnes and 2,500 kg Cu. The report
 shows both differences even though the actual-to-plan ratios are undefined. JSON includes exact ratios,
 signed differences and the source line for each cohort. Different call and actual supports refuse.

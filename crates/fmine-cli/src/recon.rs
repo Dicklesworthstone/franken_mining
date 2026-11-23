@@ -10,7 +10,7 @@ use fmine_flow::compensation::{
     CompensationClass, WithinFactorInput, detect_within_factor_compensation,
 };
 use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
-use fmine_units::ExactQty;
+use fmine_units::{ExactQty, UnitsError};
 
 use crate::{Envelope, json_string as quote, worksheet_input};
 
@@ -147,6 +147,28 @@ impl Amounts {
     }
 }
 
+/// DESIGN. Average the two orders in which tonnes and grade can change.
+/// The tonnes and grade terms sum to the change in contained kg for the same support.
+fn metal_split(
+    tonnes_delta: ExactQty,
+    metal_delta: ExactQty,
+    call_grade: ExactQty,
+    actual_grade: ExactQty,
+) -> Result<(ExactQty, ExactQty), UnitsError> {
+    let zero = ExactQty::from_integer(0);
+    if tonnes_delta == zero {
+        return Ok((zero, metal_delta));
+    }
+    if call_grade == actual_grade {
+        return Ok((metal_delta, zero));
+    }
+    let mean_grade = call_grade
+        .checked_add(actual_grade)?
+        .checked_div(ExactQty::from_integer(2))?;
+    let tonnes_effect = tonnes_delta.checked_mul(mean_grade)?;
+    Ok((tonnes_effect, metal_delta.checked_sub(tonnes_effect)?))
+}
+
 fn exceeds_tolerance(deviation: ExactQty, tolerance: ExactQty) -> Result<bool, Refusal> {
     let magnitude = if deviation.signum() < 0 {
         deviation.checked_neg().map_err(physical)?
@@ -206,7 +228,7 @@ fn screen(text: &str, anchor: &SourceAnchor) -> Result<Envelope, Refusal> {
     let mut rows = Vec::new();
     let mut flagged = 0usize;
     let mut markdown = format!(
-        "# Matched-cohort reconciliation\n\n{} · {} · {} · {}\n\nPercentages show actual divided by plan, rounded for display. Findings use the exact {tol} basis point tolerance. Differences are actual minus plan.\n\n| Material support | Source line | Dry tonnes | Grade | Contained metal | Finding | Difference (dry t) | Difference (kg metal) |\n|---|---:|---:|---:|---:|---|---:|---:|\n",
+        "# Matched-cohort reconciliation\n\n{} · {} · {} · {}\n\nPercentages show actual divided by plan, rounded for display. Findings use the exact {tol} basis point tolerance. Differences are actual minus plan. The metal split averages the tonnes-first and grade-first changes. Zero dry tonnes leave the corresponding grade undefined.\n\n| Material support | Source line | Dry tonnes | Grade | Contained metal | Finding | Difference (dry t) | Difference (kg metal) | From tonnes (kg) | From grade (kg) |\n|---|---:|---:|---:|---:|---|---:|---:|---:|---:|\n",
         markdown_cell(site),
         markdown_cell(period),
         markdown_cell(element),
@@ -295,14 +317,25 @@ fn screen(text: &str, anchor: &SourceAnchor) -> Result<Envelope, Refusal> {
         };
         let investigate = !matches!(finding, "within_tolerance" | "no_movement");
         flagged += usize::from(investigate);
+        let (split_status, split) = match (call_grade, actual_grade) {
+            (Some(c), Some(a)) => match metal_split(tonnes_delta, metal_delta, c, a) {
+                Ok(pair) => ("computed", Some(pair)),
+                Err(_) => ("outside_exact_range", None),
+            },
+            _ => ("undefined_grade", None),
+        };
         let json_ratio =
             |q: Option<ExactQty>| q.map_or_else(|| "null".into(), |q| quote(&fraction(q)));
-        rows.push(format!("{{\"support\":{},\"worksheet_line\":{},\"call\":{},\"actual\":{},\"dry_tonnes_delta\":{},\"contained_metal_kg_delta\":{},\"tonnes_ratio\":{},\"grade_ratio\":{},\"metal_ratio\":{},\"finding\":{},\"review\":{investigate}}}",
+        let (from_tonnes, from_grade) = split.unzip();
+        rows.push(format!("{{\"support\":{},\"worksheet_line\":{},\"call\":{},\"actual\":{},\"dry_tonnes_delta\":{},\"contained_metal_kg_delta\":{},\"tonnes_ratio\":{},\"grade_ratio\":{},\"metal_ratio\":{},\"finding\":{},\"review\":{investigate},\"metal_split\":{{\"status\":{},\"from_dry_tonnes_kg\":{},\"from_grade_kg\":{}}}}}",
             quote(support),row.line,call.json(),actual.json(),quote(&fraction(tonnes_delta)),quote(&fraction(metal_delta)),
-            json_ratio(tonnes_ratio),json_ratio(grade_ratio),json_ratio(metal_ratio),quote(finding)));
+            json_ratio(tonnes_ratio),json_ratio(grade_ratio),json_ratio(metal_ratio),quote(finding),
+            quote(split_status),json_ratio(from_tonnes),json_ratio(from_grade)));
         let display = |q: Option<ExactQty>| q.map_or_else(|| "undefined".into(), percent);
+        let display_kg =
+            |q: Option<ExactQty>| q.map_or_else(|| split_status.replace('_', " "), fraction);
         markdown.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             markdown_cell(support),
             row.line,
             display(tonnes_ratio),
@@ -310,7 +343,9 @@ fn screen(text: &str, anchor: &SourceAnchor) -> Result<Envelope, Refusal> {
             display(metal_ratio),
             finding.replace('_', " "),
             fraction(tonnes_delta),
-            fraction(metal_delta)
+            fraction(metal_delta),
+            display_kg(from_tonnes),
+            display_kg(from_grade)
         ));
     }
     markdown.push_str(&format!("\n{flagged} of {} cohorts need review.\n\nSource {} (SHA-256 `{}`). Inputs are assumed and uncalibrated.\n\n{NO_CLAIM}\n",
@@ -352,6 +387,69 @@ mod tests {
             text,
             &SourceAnchor::new("sample.toml", sha256(text.as_bytes()).0, "worksheet"),
         )
+    }
+
+    #[test]
+    fn metal_split_matches_both_change_orders_and_reverses_on_swapping_periods() {
+        let q = ExactQty::from_integer;
+        for t0 in [1, 5, 12] {
+            for t1 in [1, 7, 12] {
+                for g0 in [0, 2, 9] {
+                    for g1 in [0, 3, 9] {
+                        let dt = t1 - t0;
+                        let dm = t1 * g1 - t0 * g0;
+                        let (tonnes, grade) = metal_split(q(dt), q(dm), q(g0), q(g1)).unwrap();
+                        let mean = |n| ExactQty::new(n, 2).unwrap();
+                        assert_eq!(tonnes, mean(dt * g0 + dt * g1));
+                        assert_eq!(grade, mean((t0 + t1) * (g1 - g0)));
+                        assert_eq!(tonnes.checked_add(grade).unwrap(), q(dm));
+                        let reversed = metal_split(q(-dt), q(-dm), q(g1), q(g0)).unwrap();
+                        assert_eq!(
+                            reversed,
+                            (tonnes.checked_neg().unwrap(), grade.checked_neg().unwrap())
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unrepresentable_split_preserves_the_cohort_and_total_metal_delta() {
+        let text = EXAMPLE
+            .replacen(
+                "call_dry_tonnes = 1000",
+                "call_dry_tonnes = \"100000000000000000001\"",
+                1,
+            )
+            .replacen(
+                "actual_dry_tonnes = 1200",
+                "actual_dry_tonnes = \"100000000000000000002\"",
+                1,
+            )
+            .replacen(
+                "call_contained_metal_kg = 10000",
+                "call_contained_metal_kg = 1",
+                1,
+            )
+            .replacen(
+                "actual_contained_metal_kg = 10000",
+                "actual_contained_metal_kg = 1",
+                1,
+            );
+        let result = run(&text).unwrap();
+        assert!(
+            result
+                .payload_json
+                .contains(r#""contained_metal_kg_delta":"0/1""#)
+        );
+        assert!(result.payload_json.contains(r#""metal_split":{"status":"outside_exact_range","from_dry_tonnes_kg":null,"from_grade_kg":null}"#));
+        assert!(
+            result
+                .rendered_markdown
+                .unwrap()
+                .contains("0/1 | outside exact range | outside exact range")
+        );
     }
 
     #[test]

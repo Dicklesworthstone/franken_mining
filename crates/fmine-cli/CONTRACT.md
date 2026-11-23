@@ -38,6 +38,10 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   planned masses define the denominators. A zero denominator leaves its ratio undefined. Unplanned
   movement and unplanned metal carry the signed difference in dry tonnes and contained kg. The `fmine-flow`
   compensation detector flags opposite tonnes and grade deviations. Ordinary breaches also remain visible.
+  Per cohort, `metal_split` reports the change in dry tonnes times mean grade and the change in grade times
+  mean dry tonnes. Together they equal the contained-kg difference. The symmetric split is
+  arithmetic on declared quantities. Zero dry mass gives `undefined_grade`. An unrepresentable intermediate
+  gives `outside_exact_range`. Both retain the total difference and leave the two components null.
   JSON binds exact ratios and worksheet line numbers to the source hash. Markdown rounds for display.
   Inputs are internal assumptions. Posterior uncertainty, inventory matching and period close remain open.
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
