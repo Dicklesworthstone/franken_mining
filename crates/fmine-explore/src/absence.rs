@@ -7,6 +7,8 @@
 //! evidence that covered ground is barren. Unrecorded historical effort classifies as
 //! `A4EffortSuspectedUnrecorded` (`Unknown`) carrying explicit Manski bounds `[0, π_era_max]`.
 
+use std::collections::BTreeMap;
+
 use fmine_core::id::ObjectId;
 use fmine_evidence::KnowledgeState;
 use fmine_units::ExactQty;
@@ -129,12 +131,20 @@ pub fn classify_site_absence(
             });
         }
     }
+    // A reimport is the same survey. Resolve identities before any classification, including A3.
+    let mut surveys = BTreeMap::new();
     for eff in efforts {
         if eff.center.crs != site.crs {
             return Err(ExploreError::CrsMismatch {
                 left: site.crs,
                 right: eff.center.crs,
             });
+        }
+        if let Some(previous) = surveys.insert(eff.id, eff) {
+            if previous != eff {
+                return Err(ExploreError::ConflictingEffort(eff.id));
+            }
+            continue;
         }
         let _ = crate::model::MethodSpec::new(
             eff.spec.coverage_radius_m,
@@ -170,7 +180,7 @@ pub fn classify_site_absence(
     let mut max_q = zero;
     let mut cumulative_h = zero;
 
-    for eff in efforts {
+    for eff in surveys.values() {
         let d_sq = site.planar_dist_sq(&eff.center)?;
         let r_sq = eff
             .spec
@@ -271,6 +281,52 @@ mod tests {
             sha256(tag.as_bytes()).0,
             "p.1",
         )
+    }
+
+    #[test]
+    fn repeated_effort_does_not_strengthen_absence_evidence() {
+        let site = coord(500_000, 4_500_000, 0);
+        let one = ExactQty::from_integer(1);
+        let half = ExactQty::new(1, 2).unwrap();
+        let survey = |tag: &str| {
+            EffortRecord::build(
+                ObjectId::from_canonical_bytes(PrefixKind::Claim, tag.as_bytes()),
+                ExploreMethod::AircoreDrilling,
+                site.clone(),
+                2024,
+                2024,
+                MethodSpec::new(one, one, one, half, one).unwrap(),
+                anchor(tag),
+                CoverageConfidence::High,
+            )
+            .unwrap()
+        };
+        let assess = |records: &[EffortRecord]| {
+            classify_site_absence(&site, &[], records, one, ExactQty::from_integer(0), one)
+        };
+        let first = survey("survey-one");
+        let single = assess(std::slice::from_ref(&first)).unwrap();
+        assert_eq!(single.manski_pi_bounds.0, ExactQty::new(1, 3).unwrap());
+        let reimport = assess(&[first.clone(), first.clone()]).unwrap();
+        assert_eq!(reimport, single);
+
+        let second = survey("survey-two");
+        let independent = assess(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(independent.intersecting_effort_count, 2);
+        assert_eq!(independent.manski_pi_bounds.0, half);
+        assert_eq!(
+            assess(&[second, first.clone(), first.clone()]).unwrap(),
+            independent
+        );
+
+        let mut conflict = first.clone();
+        conflict.spec.effort_intensity = ExactQty::from_integer(2);
+        for records in [[first.clone(), conflict.clone()], [conflict, first]] {
+            assert_eq!(
+                assess(&records).unwrap_err().to_refusal().code,
+                "FMINE-REF-507"
+            );
+        }
     }
 
     #[test]

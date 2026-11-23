@@ -31,6 +31,9 @@ Lodestar K1 exploration data model, effort accounting, five-class absence taxono
 - **IDEA elicitation monotonicity (`§11.3`):** `ElicitationRecord` enforces `n90 <= n50 <= n10` and `PrefixKind::Calibration` on `seeds_scored`.
 
 ## 5. Refusals
+- DESIGN. A repeated effort ID with identical fields contributes once to intersecting effort and cumulative
+  detection hazard. Different records under one ID refuse with `FMINE-REF-507`. Separately identified surveys
+  still accumulate. Detecting one campaign filed under different IDs requires additional source lineage.
 - `ExploreError::CrsMismatch` → `FMINE-REF-106` (exit 3): attempting to combine or intersect points across incompatible `CrsId`s (`G-CRS-1`).
 - `ExploreError::InvalidSimplex` / `ExploreError::InvalidRecord` / `ExploreError::Overflow` → `FMINE-REF-109` (exit 3): probabilities not summing to `1`, negative physical depths/grades/tonnages, non-monotone elicitation quantiles, or arithmetic overflow.
 - `ExploreError::MissingProvenance` → `FMINE-REF-107` (exit 3): empty source locator or missing aggregation rule.

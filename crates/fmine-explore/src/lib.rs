@@ -24,6 +24,8 @@ pub enum ExploreError {
     InvalidSimplex { detail: String },
     /// Invalid physical depth, mark, time interval, elicitation order, or duplicate identifier.
     InvalidRecord { field: &'static str, detail: String },
+    /// Two different survey records claim the same exploration effort identity.
+    ConflictingEffort(fmine_core::id::ObjectId),
     /// Missing required `SourceAnchor`, locator, or aggregation rule identifier.
     MissingProvenance { field: &'static str, detail: String },
     /// Exact rational arithmetic overflow.
@@ -35,6 +37,9 @@ impl ExploreError {
     #[must_use]
     pub fn to_refusal(&self) -> Refusal {
         match self {
+            Self::ConflictingEffort(_) => {
+                Refusal::new(RefusalCode::FrozenRecordMutation507, self.to_string())
+            }
             Self::CrsMismatch { .. } => Refusal::new(
                 RefusalCode::CrsUnregisteredOrIncompatible106,
                 self.to_string(),
@@ -64,6 +69,7 @@ impl From<UnitsError> for ExploreError {
 impl fmt::Display for ExploreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConflictingEffort(id) => write!(f, "conflicting records for survey effort {id}"),
             Self::CrsMismatch { left, right } => {
                 write!(f, "G-CRS-1 CRS mismatch ({left:?} vs {right:?})")
             }
