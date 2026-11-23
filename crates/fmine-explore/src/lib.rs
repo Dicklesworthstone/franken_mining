@@ -26,6 +26,10 @@ pub enum ExploreError {
     InvalidRecord { field: &'static str, detail: String },
     /// Two different survey records claim the same exploration effort identity.
     ConflictingEffort(fmine_core::id::ObjectId),
+    /// Two different catalogue records claim the same occurrence identity.
+    ConflictingDeposit(fmine_core::id::ObjectId),
+    /// An absence-only query intersects uncensored catalogue observations.
+    KnownOccurrences(Vec<fmine_core::id::ObjectId>),
     /// Missing required `SourceAnchor`, locator, or aggregation rule identifier.
     MissingProvenance { field: &'static str, detail: String },
     /// Exact rational arithmetic overflow.
@@ -37,9 +41,10 @@ impl ExploreError {
     #[must_use]
     pub fn to_refusal(&self) -> Refusal {
         match self {
-            Self::ConflictingEffort(_) => {
+            Self::ConflictingEffort(_) | Self::ConflictingDeposit(_) => {
                 Refusal::new(RefusalCode::FrozenRecordMutation507, self.to_string())
             }
+            Self::KnownOccurrences(_) => Refusal::new(RefusalCode::OutsideAoa203, self.to_string()),
             Self::CrsMismatch { .. } => Refusal::new(
                 RefusalCode::CrsUnregisteredOrIncompatible106,
                 self.to_string(),
@@ -70,6 +75,14 @@ impl fmt::Display for ExploreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ConflictingEffort(id) => write!(f, "conflicting records for survey effort {id}"),
+            Self::ConflictingDeposit(id) => {
+                write!(f, "conflicting catalogue records for occurrence {id}")
+            }
+            Self::KnownOccurrences(ids) => write!(
+                f,
+                "{} known occurrence(s) intersect the absence query; use assess_site for their identities",
+                ids.len()
+            ),
             Self::CrsMismatch { left, right } => {
                 write!(f, "G-CRS-1 CRS mismatch ({left:?} vs {right:?})")
             }

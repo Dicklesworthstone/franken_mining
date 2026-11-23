@@ -27,7 +27,12 @@ Lodestar K1 exploration data model, effort accounting, five-class absence taxono
   - `A1LookedInsensitive` (e.g. soil geochem over deep transported cover where `q_j <= q_min`) → `KnowledgeState::NotObservable` (cover attenuates detection `q_j`, never existence `λ`);
   - `A2LookedSensitiveNothing` (effective hazard `H > 0`) → `KnowledgeState::Estimated`;
   - `A3FoundSubEconomic` (occurrence with censored mark) → `KnowledgeState::Known`;
-  - `A4EffortSuspectedUnrecorded` (`CoverageConfidence::Low | Unknown`) → `KnowledgeState::Unknown` with explicit Manski bound `π ∈ [0, π_era_max]`.
+  - `A4EffortSuspectedUnrecorded` (`CoverageConfidence::Low | Unknown`) → `KnowledgeState::Unknown`. When
+    only historical effort is present the bounds are `[0, π_era_max]`. With recorded surveys the lower bound
+    retains supported sensitive hazard and the upper bound also admits the historical contribution.
+- DESIGN. `assess_site` returns the matching uncensored catalogue IDs as positive observations. The absence-only
+  interface refuses those locations with `FMINE-REF-203`. A3 reports the nearest censored record, breaking ties
+  by ID. Its detection bounds describe the supplied surveys. Conflicting records for one ID refuse.
 - **IDEA elicitation monotonicity (`§11.3`):** `ElicitationRecord` enforces `n90 <= n50 <= n10` and `PrefixKind::Calibration` on `seeds_scored`.
 
 ## 5. Refusals
@@ -57,7 +62,7 @@ Data model and absence-class classifier preserve input provenance without upgrad
 ## 11. Public API
 - `ExploreError`
 - `model::{ExploreMethod, Ingredient, CoverageConfidence, GeoCoord, DepositTypeProbs, MarkRecord, DiscoveryEvent, DepositRecord, MethodSpec, EffortRecord, ElicitationRecord, Tract, TractMap}` (`BD-231`)
-- `absence::{AbsenceClass, AbsenceAssessment, effective_detection_q, classify_site_absence}` (`BD-231`, plan §11.3)
+- `absence::{AbsenceClass, AbsenceAssessment, SiteAssessment, assess_site, effective_detection_q, classify_site_absence}` (`BD-231`, plan §11.3)
 - `three_part::{UndiscoveredCountPmf, GradeTonnageDeposit, ThreePartEndowmentSummary, simulate_three_part_endowment, ks_two_sample_exact}` (`BD-235`, N0 MapMark4-degenerate three-part endowment simulator, `PO-LODE-5`)
 
 ## 12. Proof obligations

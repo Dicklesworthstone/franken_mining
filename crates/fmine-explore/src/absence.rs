@@ -57,8 +57,19 @@ pub struct AbsenceAssessment {
     pub knowledge_state: KnowledgeState,
     pub intersecting_effort_count: usize,
     /// Explicit Manski detection probability bounds `[pi_lo, pi_hi]`.
-    /// Tight (`[0, 0]`) for `A0`/`A1`, positive lower bound for `A2`, wide `[0, π_era_max]` for `A4`.
+    /// Applies to the supplied survey effort. A catalogue occurrence does not establish survey sensitivity.
     pub manski_pi_bounds: (ExactQty, ExactQty),
+}
+
+/// A catalogue presence is a positive observation outside the five absence classes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SiteAssessment {
+    KnownOccurrences {
+        /// Matching uncensored catalogue identities in canonical order.
+        deposit_ids: Vec<ObjectId>,
+        intersecting_effort_count: usize,
+    },
+    Absence(AbsenceAssessment),
 }
 
 /// Exact piecewise-linear cover attenuation `q_j(cover, DOI)`:
@@ -105,6 +116,30 @@ pub fn classify_site_absence(
     q_min: ExactQty,
     manski_era_pi_max: ExactQty,
 ) -> Result<AbsenceAssessment, ExploreError> {
+    match assess_site(
+        site,
+        deposits,
+        efforts,
+        occurrence_match_radius_m,
+        q_min,
+        manski_era_pi_max,
+    )? {
+        SiteAssessment::Absence(result) => Ok(result),
+        SiteAssessment::KnownOccurrences { deposit_ids, .. } => {
+            Err(ExploreError::KnownOccurrences(deposit_ids))
+        }
+    }
+}
+
+/// Match catalogue observations before interpreting a lack of detection (§11.3).
+pub fn assess_site(
+    site: &GeoCoord,
+    deposits: &[DepositRecord],
+    efforts: &[EffortRecord],
+    occurrence_match_radius_m: ExactQty,
+    q_min: ExactQty,
+    manski_era_pi_max: ExactQty,
+) -> Result<SiteAssessment, ExploreError> {
     let zero = ExactQty::from_integer(0);
     let one = ExactQty::from_integer(1);
     if site.cover_depth_m.signum() < 0
@@ -121,14 +156,18 @@ pub fn classify_site_absence(
                     .to_string(),
         });
     }
-    // Pre-pass: enforce G-CRS-1 (FMINE-REF-106) and positive MethodSpec bounds across all inputs
-    // deterministically before any early A3 return.
+    let mut catalogue = BTreeMap::new();
     for dep in deposits {
         if dep.coord.crs != site.crs {
             return Err(ExploreError::CrsMismatch {
                 left: site.crs,
                 right: dep.coord.crs,
             });
+        }
+        if let Some(previous) = catalogue.insert(dep.id, dep)
+            && previous != dep
+        {
+            return Err(ExploreError::ConflictingDeposit(dep.id));
         }
     }
     // A reimport is the same survey. Resolve identities before any classification, including A3.
@@ -156,22 +195,21 @@ pub fn classify_site_absence(
     }
 
     let occ_r_sq = occurrence_match_radius_m.checked_mul(occurrence_match_radius_m)?;
-    for dep in deposits {
+    let mut positives = Vec::new();
+    let mut nearest: Option<(ExactQty, &DepositRecord)> = None;
+    for dep in catalogue.into_values() {
         let d_sq = site.planar_dist_sq(&dep.coord)?;
-        if d_sq.checked_cmp(occ_r_sq)? != core::cmp::Ordering::Greater
-            && dep.marks.censored_sub_economic
-        {
-            let class = AbsenceClass::A3FoundSubEconomic {
-                deposit_id: dep.id,
-                censored_grade_g_per_t: dep.marks.grade_g_per_t,
-            };
-            let ks = class.knowledge_state();
-            return Ok(AbsenceAssessment {
-                class,
-                knowledge_state: ks,
-                intersecting_effort_count: 0,
-                manski_pi_bounds: (one, one),
-            });
+        if d_sq.checked_cmp(occ_r_sq)?.is_gt() {
+            continue;
+        }
+        if !dep.marks.censored_sub_economic {
+            positives.push(dep.id);
+        } else if match nearest {
+            None => true,
+            Some((best, _)) => d_sq.checked_cmp(best)?.is_lt(),
+        } {
+            // Equal distances retain the first (lowest canonical ID).
+            nearest = Some((d_sq, dep));
         }
     }
 
@@ -179,6 +217,7 @@ pub fn classify_site_absence(
     let mut saw_unrecorded = false;
     let mut max_q = zero;
     let mut cumulative_h = zero;
+    let mut recorded_h = zero;
 
     for eff in surveys.values() {
         let d_sq = site.planar_dist_sq(&eff.center)?;
@@ -193,6 +232,10 @@ pub fn classify_site_absence(
                 CoverageConfidence::Low | CoverageConfidence::Unknown
             ) {
                 saw_unrecorded = true;
+                continue;
+            }
+            if !positives.is_empty() {
+                continue;
             }
             let q = effective_detection_q(
                 eff.spec.baseline_q,
@@ -202,54 +245,60 @@ pub fn classify_site_absence(
             if q.checked_cmp(max_q)? == core::cmp::Ordering::Greater {
                 max_q = q;
             }
-            if q.checked_cmp(q_min)? == core::cmp::Ordering::Greater {
-                let h_j = eff.spec.effort_intensity.checked_mul(q)?;
+            let h_j = eff.spec.effort_intensity.checked_mul(q)?;
+            recorded_h = recorded_h.checked_add(h_j)?;
+            if q.checked_cmp(q_min)?.is_gt() {
                 cumulative_h = cumulative_h.checked_add(h_j)?;
             }
         }
     }
 
-    if intersecting == 0 {
-        let class = AbsenceClass::A0NotLooked;
-        return Ok(AbsenceAssessment {
-            knowledge_state: class.knowledge_state(),
-            class,
-            intersecting_effort_count: 0,
-            manski_pi_bounds: (zero, zero),
-        });
-    }
-    if saw_unrecorded {
-        let class = AbsenceClass::A4EffortSuspectedUnrecorded {
-            manski_pi_max: manski_era_pi_max,
-        };
-        return Ok(AbsenceAssessment {
-            knowledge_state: class.knowledge_state(),
-            class,
+    if !positives.is_empty() {
+        return Ok(SiteAssessment::KnownOccurrences {
+            deposit_ids: positives,
             intersecting_effort_count: intersecting,
-            manski_pi_bounds: (zero, manski_era_pi_max),
         });
     }
-    if cumulative_h.signum() <= 0 {
-        let class = AbsenceClass::A1LookedInsensitive { max_q };
-        return Ok(AbsenceAssessment {
-            knowledge_state: class.knowledge_state(),
-            class,
-            intersecting_effort_count: intersecting,
-            manski_pi_bounds: (zero, max_q),
-        });
-    }
-
-    // Rational conservative lower bound on `1 - exp(-H)`: `H / (1 + H) <= 1 - exp(-H)` for all H > 0.
+    // H/(1+H) <= 1-exp(-H) <= min(1,H). Weak looks contribute only to the upper
+    // bound. The union bound admits additional historical effort without assuming independence.
     let pi_lb = cumulative_h.checked_div(one.checked_add(cumulative_h)?)?;
-    let class = AbsenceClass::A2LookedSensitiveNothing {
-        cumulative_hazard_h: cumulative_h,
+    let unrecorded_upper = if saw_unrecorded {
+        manski_era_pi_max
+    } else {
+        zero
     };
-    Ok(AbsenceAssessment {
+    let pi_ub = if recorded_h
+        .checked_cmp(one.checked_sub(unrecorded_upper)?)?
+        .is_lt()
+    {
+        recorded_h.checked_add(unrecorded_upper)?
+    } else {
+        one
+    };
+    let class = if let Some((_, dep)) = nearest {
+        AbsenceClass::A3FoundSubEconomic {
+            deposit_id: dep.id,
+            censored_grade_g_per_t: dep.marks.grade_g_per_t,
+        }
+    } else if intersecting == 0 {
+        AbsenceClass::A0NotLooked
+    } else if saw_unrecorded {
+        AbsenceClass::A4EffortSuspectedUnrecorded {
+            manski_pi_max: manski_era_pi_max,
+        }
+    } else if cumulative_h.signum() == 0 {
+        AbsenceClass::A1LookedInsensitive { max_q }
+    } else {
+        AbsenceClass::A2LookedSensitiveNothing {
+            cumulative_hazard_h: cumulative_h,
+        }
+    };
+    Ok(SiteAssessment::Absence(AbsenceAssessment {
         knowledge_state: class.knowledge_state(),
         class,
         intersecting_effort_count: intersecting,
-        manski_pi_bounds: (pi_lb, one),
-    })
+        manski_pi_bounds: (pi_lb, pi_ub),
+    }))
 }
 
 #[cfg(test)]
@@ -327,6 +376,137 @@ mod tests {
                 "FMINE-REF-507"
             );
         }
+    }
+
+    #[test]
+    fn observed_occurrences_preclude_false_absences_and_survive_reordering() {
+        let site = coord(0, 0, 0);
+        let one = ExactQty::from_integer(1);
+        let occurrence = |tag: &str, e, censored| {
+            DepositRecord::build(
+                ObjectId::from_canonical_bytes(PrefixKind::Claim, tag.as_bytes()),
+                tag,
+                coord(e, 0, 0),
+                DepositTypeProbs::new(
+                    BTreeMap::from([("vein".into(), one)]),
+                    ExactQty::from_integer(0),
+                )
+                .unwrap(),
+                MarkRecord::new(one, one, one, "vein", censored).unwrap(),
+                None,
+                "one-collar",
+                vec![anchor(tag)],
+            )
+            .unwrap()
+        };
+        let survey = EffortRecord::build(
+            ObjectId::from_canonical_bytes(PrefixKind::Claim, b"survey"),
+            ExploreMethod::AircoreDrilling,
+            site,
+            2024,
+            2024,
+            MethodSpec::new(one, one, one, one, one).unwrap(),
+            anchor("survey"),
+            CoverageConfidence::High,
+        )
+        .unwrap();
+        let surveys = [survey.clone(), survey];
+        let zero = ExactQty::from_integer(0);
+        let radius = ExactQty::from_integer(2);
+        let assess = |deps: &[DepositRecord]| assess_site(&site, deps, &surveys, radius, zero, one);
+        let near = occurrence("near", 1, true);
+        let tie = occurrence("tie", -1, true);
+        let far = occurrence("far", 2, true);
+        let expected = near.id.min(tie.id);
+        for deps in [
+            [far.clone(), near.clone(), tie.clone()],
+            [tie, near.clone(), far.clone()],
+        ] {
+            let SiteAssessment::Absence(a) = assess(&deps).unwrap() else {
+                panic!("expected a censored occurrence")
+            };
+            assert!(
+                matches!(a.class, AbsenceClass::A3FoundSubEconomic { deposit_id, .. } if deposit_id == expected)
+            );
+            assert_eq!(a.intersecting_effort_count, 1);
+            assert_eq!(a.manski_pi_bounds, (ExactQty::new(1, 2).unwrap(), one));
+        }
+        let found = occurrence("found", 2, false);
+        let outside = occurrence("outside", 3, false);
+        let another = occurrence("another", 0, false);
+        let mut ids = vec![found.id, another.id];
+        ids.sort();
+        let records = vec![outside, near.clone(), found.clone(), another, found];
+        let mut reversed = records.clone();
+        reversed.reverse();
+        for deps in [&records, &reversed] {
+            assert_eq!(
+                assess(deps).unwrap(),
+                SiteAssessment::KnownOccurrences {
+                    deposit_ids: ids.clone(),
+                    intersecting_effort_count: 1,
+                }
+            );
+            let err = classify_site_absence(&site, deps, &[], radius, zero, one).unwrap_err();
+            assert_eq!(err.to_refusal().code, "FMINE-REF-203");
+            assert_eq!(err, ExploreError::KnownOccurrences(ids.clone()));
+        }
+        let mut conflicting = near.clone();
+        conflicting.marks.censored_sub_economic = false;
+        assert_eq!(
+            assess(&[near, conflicting]).unwrap_err().to_refusal().code,
+            "FMINE-REF-507"
+        );
+    }
+
+    #[test]
+    fn weak_recorded_effort_and_unrecorded_effort_enclose_detection() {
+        let site = coord(0, 0, 0);
+        let one = ExactQty::from_integer(1);
+        let zero = ExactQty::from_integer(0);
+        let q = |n, d| ExactQty::new(n, d).unwrap();
+        let survey = |tag: &str, sensitivity, intensity, coverage| {
+            EffortRecord::build(
+                ObjectId::from_canonical_bytes(PrefixKind::Claim, tag.as_bytes()),
+                ExploreMethod::AircoreDrilling,
+                site,
+                2024,
+                2024,
+                MethodSpec::new(one, one, one, sensitivity, intensity).unwrap(),
+                anchor(tag),
+                coverage,
+            )
+            .unwrap()
+        };
+        let assess = |records: &[EffortRecord]| {
+            classify_site_absence(&site, &[], records, one, q(1, 10), q(1, 20)).unwrap()
+        };
+        let weak = survey(
+            "weak",
+            q(1, 10),
+            ExactQty::from_integer(2),
+            CoverageConfidence::Medium,
+        );
+        let weak_result = assess(std::slice::from_ref(&weak));
+        assert!(matches!(
+            weak_result.class,
+            AbsenceClass::A1LookedInsensitive { .. }
+        ));
+        assert_eq!(weak_result.manski_pi_bounds, (zero, q(1, 5)));
+        let supported = survey("supported", q(1, 2), one, CoverageConfidence::High);
+        let unknown = survey(
+            "historic",
+            one,
+            ExactQty::from_integer(50),
+            CoverageConfidence::Low,
+        );
+        let mixed = assess(&[unknown, supported, weak]);
+        assert!(matches!(
+            mixed.class,
+            AbsenceClass::A4EffortSuspectedUnrecorded { .. }
+        ));
+        assert_eq!(mixed.intersecting_effort_count, 3);
+        assert_eq!(mixed.manski_pi_bounds, (q(1, 3), q(3, 4)));
     }
 
     #[test]
