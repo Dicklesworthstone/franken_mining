@@ -5325,7 +5325,7 @@ All numbers in this card are illustrative (GB-30).
 - **Flip.** The company's own-history c_FI prior ≥ 0.6 with tight spread, or P_dev ≥ 0.85 → the gap narrows. The
   junior refuses terms → stake plus information rights.
 
-**GB-32 · The reference-class capex prior needs a blowout regime.**
+**GB-32 · Check both ordinary capital-cost overruns and the risk of doubling.**
 - **TARGET.** For X = final ÷ feasibility-study capex, compare E[X] to 1.14, P(|X − 1| > 0.15) to 0.5 and
   P(X ≥ 2) to 1/13. FACT (E026, R7 §9.1): Bertisen & Davis (2008) studied 63 international mining and smelting
   projects. Their abstract qualifies its accuracy finding for estimation bias and recommends a shifted lognormal.
