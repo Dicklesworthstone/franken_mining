@@ -47,6 +47,53 @@ fn finite_decision_known_answers_pass_the_independent_python_oracle() {
     );
 }
 
+#[test]
+fn executive_one_pager_matches_the_expansion_golden_and_preserves_policy_constraints() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let brief = |model: &str| {
+        let result = Command::new(binary())
+            .current_dir(&root)
+            .args(["decide", "card", model, "--workspace", ".", "--brief"])
+            .output()
+            .expect("run executive view");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        String::from_utf8(result.stdout).expect("Markdown")
+    };
+    // 0.6 × 300m + 0.4 × (−200m) = 100m; 100m − 55m = 45m.
+    // The expected Claim id predates the brief and comes from the unchanged analyst card.
+    assert_eq!(
+        brief("tests/decisions/expansion.toml"),
+        concat!(
+            include_str!("../../../tests/decisions/expansion_brief.md"),
+            "\n"
+        )
+    );
+    let constrained = brief("tests/decisions/constrained_testwork.toml");
+    assert!(
+        constrained.contains("## Choices within the downside limit")
+            && constrained.contains("optimized test policy")
+            && constrained.contains("28.50")
+    );
+    let robust = brief("tests/decisions/wasserstein_information.toml");
+    assert!(
+        robust.contains("Including fixed test responses")
+            && robust.contains("**Stressed state weights.**")
+    );
+    for args in [
+        &["decide", "card", "unused", "--brief", "--json"][..],
+        &["decide", "card", "unused", "--format", "json", "--brief"],
+        &["decide", "program", "unused", "--brief"],
+        &["decide", "card", "unused", "--brief", "--brief"],
+    ] {
+        let owned: Vec<_> = args.iter().map(|s| (*s).to_owned()).collect();
+        assert!(fmine_cli::parse_args(&owned, &root).is_err());
+    }
+}
+
 fn rendering_parity(mut oracle: Command) {
     let fixture = oracle
         .arg("--fixture-only")

@@ -64,7 +64,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn evidence_name(value: EvidenceClass) -> &'static str {
+pub(super) fn evidence_name(value: EvidenceClass) -> &'static str {
     match value {
         EvidenceClass::Measured => "measured",
         EvidenceClass::Derived => "derived",

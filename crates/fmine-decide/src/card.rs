@@ -17,6 +17,7 @@ use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, Re
 use fmine_numerics::exact_feas::Rat;
 use fmine_units::{Currency, Money, UnitsError};
 
+pub mod brief;
 pub mod downside;
 pub mod information;
 pub mod model;

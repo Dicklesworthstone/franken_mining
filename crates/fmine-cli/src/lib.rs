@@ -88,17 +88,28 @@ pub enum CliCommand {
     /// Compute complete registered reserve-replacement windows from explicitly selected PDF assertions.
     ReserveReplacement(reserve::Command),
     /// Compare explicit monetary alternatives on one declared finite scenario set (BD-225).
-    DecideCard { model: PathBuf },
+    DecideCard {
+        model: PathBuf,
+    },
+    DecideCardBrief {
+        model: PathBuf,
+    },
     /// Derive immediate cash-margin alternatives from matched plant and commercial scenarios.
     DecideProduction(decision::production::Command),
     /// Compare discounted incremental production cash flows and explicit initial investment.
-    DecideInvestment { manifest: PathBuf },
+    DecideInvestment {
+        manifest: PathBuf,
+    },
     /// Retain an explicit choice, rationale and exact evaluated artifact in a local append-only history.
     DecisionJournal(decision_journal::Command),
     /// Bound recovery for explicit tested and untested strata on one additive route (BD-351.S1).
-    RecoveryBounds { model: PathBuf },
+    RecoveryBounds {
+        model: PathBuf,
+    },
     /// Construct affordable static project bundles on shared declared scenarios (BD-229).
-    CapitalProgram { model: PathBuf },
+    CapitalProgram {
+        model: PathBuf,
+    },
     /// Compare public JV production, sales, capital and cost assertions on a common dated perimeter.
     Mirror(mirror::Command),
     /// Local issuance status, recall and owner-authorized journal events (BD-347).
@@ -172,7 +183,9 @@ pub enum CliCommand {
         as_of: String,
     },
     /// Invented guidance, missing outcomes and restatements through the same cohort adapter.
-    TrackRecordCohortAsOfSynthetic { as_of: String },
+    TrackRecordCohortAsOfSynthetic {
+        as_of: String,
+    },
     /// Explicit one-axis cluster inference beside a source-bound dated track record.
     TrackRecordClusters(track_record_clusters::Command),
     /// Descriptive recovery comparison against an agreed historical grade/tails relation.
@@ -1246,6 +1259,8 @@ pub fn parse_args(
     let mut format = OutputFormat::Json;
     let mut workspace = default_root.to_path_buf();
     let mut positional = Vec::new();
+    let mut brief = false;
+    let mut explicit_json = false;
     let mut issuer: Option<String> = None;
     let mut synthetic = false;
     let mut through = None;
@@ -1271,6 +1286,7 @@ pub fn parse_args(
             "--format" => {
                 i += 1;
                 let val = args.get(i).ok_or("missing value for --format")?;
+                explicit_json |= val == "json";
                 format = match val.as_str() {
                     "json" => OutputFormat::Json,
                     "markdown" | "md" => OutputFormat::Markdown,
@@ -1281,7 +1297,16 @@ pub fn parse_args(
                     }
                 };
             }
-            "--json" => format = OutputFormat::Json,
+            "--json" => {
+                explicit_json = true;
+                format = OutputFormat::Json;
+            }
+            "--brief" => {
+                if brief {
+                    return Err("--brief may be supplied only once".into());
+                }
+                brief = true;
+            }
             "--workspace" => {
                 i += 1;
                 let val = args.get(i).ok_or("missing value for --workspace")?;
@@ -1440,6 +1465,15 @@ pub fn parse_args(
                 .to_string(),
         );
     }
+    if brief {
+        if positional.first().map(String::as_str) != Some("decide")
+            || positional.get(1).map(String::as_str) != Some("card")
+            || explicit_json
+        {
+            return Err("--brief requires decide card and Markdown output".into());
+        }
+        format = OutputFormat::Markdown;
+    }
 
     // The words each verb takes, the verb included. A surplus word or a flag the verb does not take is a usage
     // error, never ignored, so every next action that parses means what it says.
@@ -1542,6 +1576,9 @@ pub fn parse_args(
                 return Err(usage.into());
             }
             match subcommand.as_str() {
+                "card" if brief => CliCommand::DecideCardBrief {
+                    model: PathBuf::from(model),
+                },
                 "card" => CliCommand::DecideCard {
                     model: PathBuf::from(model),
                 },
@@ -2191,13 +2228,20 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::ReconRun(path) => recon::execute(path, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
-        CliCommand::DecideCard { model } => decision::execute(model, workspace_root, false),
+        CliCommand::DecideCard { model } => {
+            decision::execute(model, workspace_root, decision::View::Card)
+        }
+        CliCommand::DecideCardBrief { model } => {
+            decision::execute(model, workspace_root, decision::View::Brief)
+        }
         CliCommand::DecideProduction(command) => {
             decision::production::execute(command, workspace_root)
         }
         CliCommand::DecideInvestment { manifest } => investment::execute(manifest, workspace_root),
         CliCommand::DecisionJournal(command) => decision_journal::execute(command, workspace_root),
-        CliCommand::RecoveryBounds { model } => decision::execute(model, workspace_root, true),
+        CliCommand::RecoveryBounds { model } => {
+            decision::execute(model, workspace_root, decision::View::RecoveryBounds)
+        }
         CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {

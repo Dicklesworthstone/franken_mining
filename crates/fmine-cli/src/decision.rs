@@ -13,6 +13,7 @@ pub mod production;
 
 pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.decision-model.v1\",\"mode\":\"declared_model_comparison\",",
+    "\"brief\":\"decide card <model-file> --brief renders the executive Markdown view of the same evaluated Claim\",",
     "\"input\":\"Regular UTF-8 TOML file, at most 4 MiB; actual bytes are SHA-256 bound\",",
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"currency\",\"valuation_basis\"],",
     "\"tables\":{\"state\":[\"id\",\"weight\"],\"action\":[\"id\",\"label\",\"role\"],",
@@ -33,7 +34,15 @@ pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "\"example\":\"tests/decisions/expansion.toml\",\"information_example\":\"tests/decisions/metallurgical_test.toml\",\"robustness_example\":\"tests/decisions/wasserstein.toml\"}"
 );
 
-pub(crate) fn execute(model: &Path, root: &Path, recovery_bounds: bool) -> Envelope {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum View {
+    Card,
+    Brief,
+    RecoveryBounds,
+}
+
+pub(crate) fn execute(model: &Path, root: &Path, view: View) -> Envelope {
+    let recovery_bounds = view == View::RecoveryBounds;
     let (verb, mode, no_claim) = if recovery_bounds {
         (
             "decide recovery-bounds",
@@ -56,7 +65,17 @@ pub(crate) fn execute(model: &Path, root: &Path, recovery_bounds: bool) -> Envel
         } else {
             let inputs = card::model::parse(&text, source.clone())?;
             let evaluated = card::evaluate(&inputs)?;
-            (evaluated.to_json(), evaluated.to_markdown())
+            let markdown = if view == View::Brief {
+                format!(
+                    "{}\nWorksheet {} (SHA-256 `{}`).\n",
+                    evaluated.executive_brief()?.to_markdown(),
+                    worksheet_input::markdown_cell(&source.artifact_path),
+                    fmine_core::Digest32(source.artifact_sha256)
+                )
+            } else {
+                evaluated.to_markdown()
+            };
+            (evaluated.to_json(), markdown)
         };
         let payload = format!(
             "{{\"mode\":\"{mode}\",\"source\":{},\"card\":{}}}",
