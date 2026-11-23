@@ -2277,14 +2277,29 @@ mod tests {
             assert_eq!(metric.source_line(), line);
             assert_eq!(metric.guidance_basis_suffix(), Some(suffix));
             let csv = b"site,target,point,p10,p90,uncalibrated\nSynthetic A,production,-1.25,-2,-1,true\n";
-            for outcome in [Outcome::QuarterQtd, Outcome::QuarterQtdNowcast] {
-                rules.targets[0].outcome = outcome;
-                assert_eq!(TargetMetric::from_target(&rules.targets[0]), Some(metric));
-                assert!(parse_forecasts(csv, &rules).is_ok());
-            }
+            assert!(parse_forecasts(csv, &rules).is_ok());
+            let original_dates = rules.dates;
+            rules.targets[0].outcome = Outcome::QuarterQtdNowcast;
+            assert_eq!(TargetMetric::from_target(&rules.targets[0]), Some(metric));
+            assert!(
+                matches!(parse_forecasts(csv, &rules), Err(RecordError::Forecast { reason, .. })
+                    if reason.contains("declared earliest outcome release"))
+            );
+            rules.dates = RecordDates {
+                nowcast_from: parse_utc("2027-01-01T00:00:00Z").unwrap(),
+                proof_by: parse_utc("2027-01-10T23:59:59Z").unwrap(),
+            };
+            rules.nowcast_availability = Some(NowcastAvailability {
+                earliest_release_utc: parse_utc("2027-01-15T00:00:00Z").unwrap(),
+                basis: "DESIGN: invented earliest release including preliminary announcements".into(),
+            });
+            assert!(parse_forecasts(csv, &rules).is_ok());
+            rules.nowcast_availability = None;
+            rules.dates = original_dates;
             for outcome in [Outcome::FyMinus9m, Outcome::Q4Qtd] {
                 rules.targets[0].outcome = outcome;
                 assert!(TargetMetric::from_target(&rules.targets[0]).is_none());
+                assert!(!rules.targets[0].permits_signed_forecast());
                 assert!(parse_forecasts(csv, &rules).is_err());
             }
         }
