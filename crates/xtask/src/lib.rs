@@ -1628,7 +1628,8 @@ mod tests {
         // fmine-plant's three BitwisePortable custody/card modules (custody, cards/cu_speciation, cards/preg_rob; BD-179/180/182/288),
         // fmine-view's four BitwisePortable modules (lib, voxel_mesh, gltf, viewer; BD-256),
         // and fmine-gen's sixteen BitwisePortable modules (lib, seal, worlds, harness, geology, cu_au_world, biases, drillholes, dispatch, mill_balance, fa_book, metamorphic, plant_twin, pilot_power, review, det_families; BD-127..134, 141, 143, BD-356.S1/S2, BD-357.S1).
-        assert_eq!(report.bitwise_files, 116, "{report:?}");
+        // BD-162 adds the CLI's exact matched-cohort screen to the portable modules above.
+        assert_eq!(report.bitwise_files, 117, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

@@ -676,11 +676,18 @@ mod tests {
         validate_schema(decision_schema, &decision_sample, "decision").expect("decision validates");
 
         // 5. Negative controls: INV-002 violation, extra envelope field, and unregistered refusal fail.
-        let bad_inv002 = Parser::parse(&all_env.to_json().replace(
-            "\"execution_authorized\":false",
-            "\"execution_authorized\":true",
-        ))
-        .expect("parse mutated inv002");
+        let mut bad_inv002 = all_json.clone();
+        let JsonVal::Obj(envelope) = &mut bad_inv002 else {
+            panic!("expected envelope object")
+        };
+        let Some(JsonVal::Obj(flags)) = envelope.get_mut("flags") else {
+            panic!("expected envelope flags")
+        };
+        let flag = flags
+            .get_mut("execution_authorized")
+            .expect("execution flag");
+        assert_eq!(*flag, JsonVal::Bool(false));
+        *flag = JsonVal::Bool(true);
         assert!(validate_schema(envelope_schema, &bad_inv002, "bad_inv002").is_err());
 
         let bogus_code = format!("{}-999", "FMINE-REF");

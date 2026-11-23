@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 78
+[verbs] 79
 decide card
 decide production
 decide investment
@@ -134,6 +134,7 @@ doctor
 repair plan
 repair apply
 robot-docs
+recon run
 plant balance
 plant reconcile
 plant project
