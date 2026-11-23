@@ -15,6 +15,7 @@ mod two_product;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use fmine_core::Digest32;
 use fmine_evidence::Refusal;
 use fmine_plant::inventory::worksheet;
 pub use fmine_plant::inventory::worksheet::Mode;
