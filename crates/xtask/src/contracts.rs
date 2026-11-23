@@ -845,6 +845,10 @@ mod tests {
             ]
         );
         let cli_text = fs::read_to_string(&cli).expect("read");
+        let documented_budget = include_str!("../../fmine-cli/CONTRACT.md")
+            .lines()
+            .find(|line| line.starts_with("- **LOC budget:**"))
+            .expect("documented CLI budget");
         assert_eq!(
             cli_text,
             old_cli
@@ -852,10 +856,16 @@ mod tests {
                 .replace("- **Subsystem:** `Surfaces`", "- **Subsystem:** Adit")
                 .replace(
                     "- **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)",
-                    "- **LOC budget:** 40,000 planned / 46,000 ceiling",
+                    documented_budget,
                 )
         );
-        let f = findings("fmine-cli", &cli_text, Some(&cli_row()), &codes());
+        let budgets = crate::check_loc_budget(&root).expect("fixture registry");
+        let cli_budget = budgets
+            .rows
+            .iter()
+            .find(|row| row.name == "fmine-cli")
+            .expect("CLI row");
+        let f = findings("fmine-cli", &cli_text, Some(cli_budget), &codes());
         assert!(
             f.layer.is_empty() && f.subsystem.is_empty() && f.budget.is_empty(),
             "{f:?}"
