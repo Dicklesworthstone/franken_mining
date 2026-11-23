@@ -61,6 +61,13 @@ pub struct GeoCoord {
 }
 
 impl GeoCoord {
+    pub(crate) fn require_metric_crs(crs: CrsId) -> Result<(), ExploreError> {
+        match crs {
+            CrsId::Wgs84Utm { zone: 1..=60, .. } | CrsId::MineGrid { .. } => Ok(()),
+            _ => Err(ExploreError::InvalidProjectedCrs(crs)),
+        }
+    }
+
     /// Construct a validated CRS-tagged coordinate requiring `cover_depth_m >= 0`.
     pub fn new(
         crs: CrsId,
@@ -69,6 +76,7 @@ impl GeoCoord {
         elevation_m: ExactQty,
         cover_depth_m: ExactQty,
     ) -> Result<Self, ExploreError> {
+        Self::require_metric_crs(crs)?;
         if cover_depth_m.signum() < 0 {
             return Err(ExploreError::InvalidRecord {
                 field: "cover_depth_m",
@@ -93,6 +101,7 @@ impl GeoCoord {
                 right: other.crs,
             });
         }
+        Self::require_metric_crs(self.crs)?;
         let dx = self.easting_m.checked_sub(other.easting_m)?;
         let dy = self.northing_m.checked_sub(other.northing_m)?;
         Ok(dx.checked_mul(dx)?.checked_add(dy.checked_mul(dy)?)?)

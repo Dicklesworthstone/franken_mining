@@ -51,7 +51,8 @@ Data model and absence-class classifier preserve input provenance without upgrad
 
 ## 8. Validity domain
 - Exact rational exploration coordinates, cover depths, DOI thresholds, and simplex weights within `i128` `ExactQty` bounds.
-- Planar distance comparisons require identical projected `CrsId` (`G-CRS-1`); geodetic datum transforms use `fmine-crs` upstream.
+- Planar distance comparisons and site queries require a local metric grid or a valid UTM zone (1–60).
+  Geographic degree coordinates refuse with `FMINE-REF-106`. Project them using `fmine-crs` upstream.
 
 ## 9. Oracles
 - Data model construction, Good–Turing simplex closure, CRS mismatch refusal, IDEA elicitation checks, and all five §11.3 absence-class scenarios (`A0..A4`, including 60 m cover masking soil geochemistry and unrecorded 1987 RAB drilling producing Manski bounds) in `model::tests::test_explore_data_model_simplex_crs_and_elicitation` and `absence::tests::test_all_five_absence_classes_and_cover_thinning_law`.

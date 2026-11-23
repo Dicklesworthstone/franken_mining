@@ -140,6 +140,7 @@ pub fn assess_site(
     q_min: ExactQty,
     manski_era_pi_max: ExactQty,
 ) -> Result<SiteAssessment, ExploreError> {
+    GeoCoord::require_metric_crs(site.crs)?;
     let zero = ExactQty::from_integer(0);
     let one = ExactQty::from_integer(1);
     if site.cover_depth_m.signum() < 0
@@ -375,6 +376,62 @@ mod tests {
                 assess(&records).unwrap_err().to_refusal().code,
                 "FMINE-REF-507"
             );
+        }
+    }
+
+    #[test]
+    fn angular_coordinates_and_invalid_zones_cannot_match_a_metre_radius() {
+        let base = coord(1, 2, 0);
+        let zero = ExactQty::from_integer(0);
+        let one = ExactQty::from_integer(1);
+        for crs in [
+            CrsId::Epsg4326,
+            CrsId::Wgs84Utm {
+                zone: 0,
+                north: true,
+            },
+            CrsId::Wgs84Utm {
+                zone: 61,
+                north: false,
+            },
+        ] {
+            assert_eq!(
+                GeoCoord::new(crs, one, one, zero, zero)
+                    .unwrap_err()
+                    .to_refusal()
+                    .code,
+                "FMINE-REF-106"
+            );
+            let invalid = GeoCoord { crs, ..base };
+            assert_eq!(
+                invalid
+                    .planar_dist_sq(&invalid)
+                    .unwrap_err()
+                    .to_refusal()
+                    .code,
+                "FMINE-REF-106"
+            );
+            assert_eq!(
+                assess_site(&invalid, &[], &[], one, zero, one)
+                    .unwrap_err()
+                    .to_refusal()
+                    .code,
+                "FMINE-REF-106"
+            );
+        }
+        for crs in [
+            CrsId::Wgs84Utm {
+                zone: 1,
+                north: true,
+            },
+            CrsId::Wgs84Utm {
+                zone: 60,
+                north: false,
+            },
+            CrsId::MineGrid { grid_code: 1 },
+        ] {
+            let point = GeoCoord::new(crs, one, one, zero, zero).unwrap();
+            assert_eq!(point.planar_dist_sq(&point).unwrap(), zero);
         }
     }
 

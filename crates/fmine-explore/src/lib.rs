@@ -20,6 +20,8 @@ use fmine_units::UnitsError;
 pub enum ExploreError {
     /// `G-CRS-1`: attempted to intersect or compare geometry across different `CrsId`s.
     CrsMismatch { left: CrsId, right: CrsId },
+    /// A geographic CRS or invalid UTM zone cannot supply metre-valued planar distances.
+    InvalidProjectedCrs(CrsId),
     /// Probability simplex (including `k*` novel-type slot) failed non-negativity or sum = 1.
     InvalidSimplex { detail: String },
     /// Invalid physical depth, mark, time interval, elicitation order, or duplicate identifier.
@@ -45,7 +47,7 @@ impl ExploreError {
                 Refusal::new(RefusalCode::FrozenRecordMutation507, self.to_string())
             }
             Self::KnownOccurrences(_) => Refusal::new(RefusalCode::OutsideAoa203, self.to_string()),
-            Self::CrsMismatch { .. } => Refusal::new(
+            Self::CrsMismatch { .. } | Self::InvalidProjectedCrs(_) => Refusal::new(
                 RefusalCode::CrsUnregisteredOrIncompatible106,
                 self.to_string(),
             ),
@@ -86,6 +88,10 @@ impl fmt::Display for ExploreError {
             Self::CrsMismatch { left, right } => {
                 write!(f, "G-CRS-1 CRS mismatch ({left:?} vs {right:?})")
             }
+            Self::InvalidProjectedCrs(crs) => write!(
+                f,
+                "project coordinates into a metric CRS before measuring distance ({crs:?})"
+            ),
             Self::InvalidSimplex { detail } => write!(f, "invalid type simplex: {detail}"),
             Self::InvalidRecord { field, detail } => {
                 write!(f, "invalid explore record ({field}): {detail}")
