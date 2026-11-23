@@ -159,7 +159,7 @@ fn stockpile_holdbacks_match_independent_forward_lot_and_recovery_enumeration() 
     let fixture = Path::new("tests/decisions/stockpile_holdback.toml");
     let out = invoke(fixture, &root());
     assert!(out.rendered_markdown.as_ref().expect("lot comparison").contains(
-        "| Hold back high-grade-pocket | 84 | 84–88 | 73.60–82.40 | 85.45–94.29 | stable proceed |"
+            "| Hold back high-grade-pocket | 84 | 84–88 | 73.60–82.40 | 18–51.20 | 85.45–94.29 | stable proceed |"
     ));
     python(
         &out.to_json(),
@@ -172,16 +172,18 @@ lots = [
 cases = result["parcel_cases"]
 assert [c["held_back"] for c in cases] == [None, "base-stockpile", "high-grade-pocket", "marginal-pad"]
 for case in cases:
-    kept = [lot for lot in lots if lot[0] != case["held_back"]]
     completions = []
-    for shipment in itertools.product(*(itertools.product(t,g) for _,_,t,g in kept)):
+    for shipment in itertools.product(*(itertools.product(t,g) for _,_,t,g in lots)):
         for rt,ru in itertools.product([F(9,10),F(19,20)],[F(2,5),F(4,5)]):
-            dry = sum(t for t,_ in shipment)
-            grams = sum(t*g for t,g in shipment)
-            gold = sum(t*g*(rt if role=="tested" else ru)
-                       for (t,g),(_,role,_,_) in zip(shipment,kept))
-            completions.append((dry,grams,gold,gold/grams))
-    for field,values in zip(["dry_tonnes","contained_grams","recovered_grams","recovery"],zip(*completions)):
+            feed = [(key,t,t*g,t*g*(rt if role=="tested" else ru))
+                    for (t,g),(key,role,_,_) in zip(shipment,lots)]
+            kept = [row for row in feed if row[0] != case["held_back"]]
+            dry = sum(row[1] for row in kept)
+            grams = sum(row[2] for row in kept)
+            gold = sum(row[3] for row in kept)
+            lost = sum(row[3] for row in feed) - gold
+            completions.append((dry,grams,gold,lost,gold/grams))
+    for field,values in zip(["dry_tonnes","contained_grams","recovered_grams","forgone_recovered_grams","recovery"],zip(*completions)):
         assert pair(case[field]) == (min(values), max(values)), (case,field,values)
     lo,hi = pair(case["recovery"])
     assert case["refusal"] is None
@@ -189,6 +191,7 @@ for case in cases:
 assert pair(cases[0]["recovery"]) == pair(result["recovery"])
 assert [c["held_back"] for c in cases if c["stability"]=="stable_proceed"] == ["high-grade-pocket"]
 assert pair(cases[2]["recovered_grams"]) == (F("73.6"), F("82.4"))
+assert pair(cases[2]["forgone_recovered_grams"]) == (18, F("51.2"))
 assert pair(cases[0]["recovered_grams"]) == (F("91.6"), F("133.6"))
 "#,
     );

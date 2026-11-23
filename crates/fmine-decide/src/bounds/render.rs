@@ -72,10 +72,11 @@ fn case_json(case: &FeedCase) -> String {
         ),
     };
     format!(
-        r#"{{"held_back":{held},"dry_tonnes":{},"contained_grams":{},"recovered_grams":{},{assessment}}}"#,
+        r#"{{"held_back":{held},"dry_tonnes":{},"contained_grams":{},"recovered_grams":{},"forgone_recovered_grams":{},{assessment}}}"#,
         interval(case.dry_tonnes),
         interval(case.contained_grams),
-        interval(case.recovered_grams)
+        interval(case.recovered_grams),
+        interval(case.forgone_recovered_grams)
     )
 }
 
@@ -301,7 +302,7 @@ impl BoundCard {
             };
         write_windows(&mut out, self.share_ranges());
         if !summary.parcel_cases.is_empty() {
-            out.push_str("\n## Whole-lot holdbacks\n\nEach row uses the remaining feed without replacement. Recovery percentages are rounded for display. Verdicts use the exact bounds in the JSON card.\n\n| Feed scenario | Dry tonnes | Contained metal (g) | Recovered metal (g) | Recovery (%) | Target verdict |\n|---|---:|---:|---:|---:|---|\n");
+            out.push_str("\n## Whole-lot holdbacks\n\nEach row uses the remaining feed without replacement. Forgone metal is the recovery lost this period with the same feed and recovery assumptions. Recovery percentages are rounded for display. Verdicts use the exact bounds in the JSON card.\n\n| Feed scenario | Dry tonnes | Contained metal (g) | Recovered metal (g) | Forgone metal (g) | Recovery (%) | Target verdict |\n|---|---:|---:|---:|---:|---:|---|\n");
             for case in &summary.parcel_cases {
                 let label = case
                     .held_back
@@ -316,10 +317,11 @@ impl BoundCard {
                 };
                 let _ = writeln!(
                     out,
-                    "| {label} | {} | {} | {} | {recovery} | {status} |",
+                    "| {label} | {} | {} | {} | {} | {recovery} | {status} |",
                     lot_range(case.dry_tonnes, mass_text),
                     lot_range(case.contained_grams, mass_text),
-                    lot_range(case.recovered_grams, mass_text)
+                    lot_range(case.recovered_grams, mass_text),
+                    lot_range(case.forgone_recovered_grams, mass_text)
                 );
             }
         }

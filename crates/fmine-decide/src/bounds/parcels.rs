@@ -37,6 +37,8 @@ pub struct FeedCase {
     pub dry_tonnes: Interval,
     pub contained_grams: Interval,
     pub recovered_grams: Interval,
+    /// Full-feed production minus this case at the same mass, grade and recovery inputs.
+    pub forgone_recovered_grams: Interval,
     pub recovery: std::result::Result<(Interval, Stability), Refusal>,
 }
 
@@ -83,7 +85,12 @@ impl Totals {
         }
     }
 
-    fn case(self, held_back: Option<String>, model: &RecoveryBoundModel) -> Result<FeedCase> {
+    fn case(
+        self,
+        held_back: Option<String>,
+        forgone_recovered_grams: Interval,
+        model: &RecoveryBoundModel,
+    ) -> Result<FeedCase> {
         let recovery = positive_metal_share(self.tested, self.untested)
             .and_then(|w| recovery_range(w, model))
             .and_then(|r| Ok((r, stability(r, model.threshold)?)));
@@ -95,6 +102,7 @@ impl Totals {
                 recovered(self.tested, model.tested_recovery)?,
                 recovered(self.untested, model.untested_recovery)?,
             )?,
+            forgone_recovered_grams,
             recovery,
         })
     }
@@ -125,13 +133,17 @@ pub(super) fn compare(
     }
     let weights = positive_metal_share(total.tested, total.untested)?;
     let mut cases = Vec::with_capacity(lots.len() + 1);
-    cases.push(total.case(None, model)?);
+    cases.push(total.case(None, EMPTY, model)?);
     for (id, parcel, metal) in contributions {
         let mut kept = total;
         kept.tonnes = without(kept.tonnes, parcel.dry_tonnes)?;
         let bin = kept.metal_mut(parcel.testwork);
         *bin = without(*bin, metal)?;
-        cases.push(kept.case(Some(id.clone()), model)?);
+        let lot_recovery = match parcel.testwork {
+            Testwork::Tested => model.tested_recovery,
+            Testwork::Untested => model.untested_recovery,
+        };
+        cases.push(kept.case(Some(id.clone()), recovered(metal, lot_recovery)?, model)?);
     }
     Ok((weights, cases))
 }

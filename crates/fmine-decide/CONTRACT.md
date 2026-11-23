@@ -385,7 +385,8 @@ metal weights. A box admitting zero combined contained metal refuses.
 DESIGN (BD-351): disjoint named feed lots can replace aggregate weights. Each carries a tested or
 untested role and independent dry-tonne and g/t bounds for the declared metal. The result Claim binds
 the full-feed case and one counterfactual per lot, in ID order, with no replacement feed. Each retains
-exact ranges for dry tonnes, contained grams, recovered grams and recovery. An alternative admitting
+exact ranges for dry tonnes, contained grams, recovered grams and recovery. Forgone recovered grams are
+the matched difference from full-feed production at the same input values. An alternative admitting
 zero total contained metal keeps the mass ranges and a typed refusal for its recovery percentage.
 No throughput, revenue, spatial test coverage or dispatch decision is inferred. The known-answer fixture
 is `tests/decisions/stockpile_holdback.toml`.

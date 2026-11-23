@@ -1806,13 +1806,14 @@ produce the wrong recovery bound.
 For a shift feed assembled from stockpiles or deliveries, enter one `[[parcel]]` per disjoint lot.
 Give each lot an ID, a tested or untested role, dry metric tonnes and grade in grams per dry tonne,
 each quantity with its lower and upper bound. The card compares the full feed with holding back each
-lot in turn. Each comparison shows the remaining tonnes, contained metal, recovered metal and whether
-the recovery target holds. It assumes the same route and recovery ranges, with no replacement feed.
+lot in turn. Each comparison shows the remaining tonnes, contained metal, recovered metal, the metal
+forgone this period and whether the recovery target holds. It assumes the same route and recovery ranges,
+with no replacement feed.
 
 In the synthetic gold example, the full feed could recover **91.6–133.6 g**, and could miss the 85%
 target. Holding back the high-grade pocket guarantees at least **85.45%** recovery under the stated
-bounds. It also leaves only **84 dry tonnes** and **73.6–82.4 g** recoverable. A planner can see the
-cost in metal of meeting the percentage target before choosing a feed.
+bounds. It leaves **84 dry tonnes** and **73.6–82.4 g** recoverable. For the same grades and recoveries,
+that choice forgoes **18–51.2 g** of gold this shift.
 
 JSON and Markdown preserve the source, input/output Claims, evidence, confidentiality and UU. The
 receipt binds that metadata as well as the numerical result. These are conditional identification
