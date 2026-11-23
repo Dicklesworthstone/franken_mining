@@ -1022,6 +1022,64 @@ struct Predictions {
     requests: usize,
 }
 
+#[test]
+fn compact_feed_record_keeps_an_old_prefix_and_refuses_an_over_capacity_shift() {
+    let f = Fixture::new();
+    let first = successful(execute_with_clock(
+        &f.record(f.initial, "old", "hold"),
+        &f.root,
+        &Clock(200),
+    ));
+    let first_head = head(&first);
+    let first_bytes = fs::read(&f.journal).unwrap();
+    let (header, rows) = SHIFT_FEED.split_once("[[parcel]]").unwrap();
+    let (parcels, rest) = rows.split_once("[[recovery]]").unwrap();
+    let lots: Vec<_> = parcels.split("[[parcel]]").collect();
+    let shift = |count: usize| {
+        let mut text = header.to_owned();
+        for i in 0..count {
+            text.push_str("[[parcel]]");
+            text.push_str(&lots[i % lots.len()].replacen("id = \"", &format!("id = \"{i}-"), 1));
+        }
+        format!("{text}[[recovery]]{rest}")
+    };
+    let eight = shift(8);
+    fs::write(&f.model, &eight).unwrap();
+    let saved = successful(execute_with_clock(
+        &f.record(first_head, "eight-lots", "hold-back:2-high-grade-pocket"),
+        &f.root,
+        &Clock(300),
+    ));
+    let pin = head(&saved);
+    assert!(fs::read(&f.journal).unwrap().starts_with(&first_bytes));
+    assert_eq!(
+        operation_fields(&f, pin, 1)[0].1,
+        "fmine.decision-operation.v1"
+    );
+    let fields = operation_fields(&f, pin, 2);
+    assert_eq!(fields[0].1, "fmine.decision-operation.v5");
+    let card = &fields.iter().find(|(key, _)| key == "card_json").unwrap().1;
+    assert!(card.len() * 2 > fmine_io::forecast::MAX_REQUEST_BYTES);
+    assert!(!fields.iter().any(|(key, _)| key == "card_hex"));
+    fs::write(&f.model, shift(30)).unwrap();
+    f.refuses_without_append(
+        &f.record(pin, "too-large", "all-feed"),
+        400,
+        "FMINE-REF-107",
+    );
+    let shown = successful(f.show(Some(pin)));
+    let contents = parse_json(shown.payload_json.as_bytes()).unwrap();
+    let row = &contents.get("decisions").unwrap().as_array().unwrap()[1];
+    assert_eq!(
+        json_field(row, &["snapshot", "model", "content"]).as_str(),
+        Some(eight.as_str())
+    );
+    assert_eq!(
+        json_field(row, &["snapshot", "artifact", "content"]).as_str(),
+        Some(card.as_str())
+    );
+}
+
 impl Predictions {
     fn new(root: &Path, name: &str) -> Self {
         let journal = root.join(format!("{name}.forecast"));

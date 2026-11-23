@@ -149,6 +149,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 - DESIGN (bd-225.1). Named feed worksheets use `--action all-feed` or `--action hold-back:<lot-id>`.
   The writer admits the chosen row against the recovery comparison and retains the full original card.
   A shift decision can use the same prospective forecast commitments and subsequent assessment review.
+- DESIGN (bd-225.2). A new unlinked act-now choice uses v1 when it fits. If its encoded size exceeds
+  64 KiB the writer tries a v5 record with the original evaluated JSON as an escaped string. Both
+  encodings retain the exact model, card and SHA-256 digests. The same 64 KiB limit applies to v5.
   Mutations use a declared bounded host clock. Records confer no human identity, external timestamp,
   approval, sign-off, execution authority or public disclosure permission. A nonoptimal known action
   may be recorded; the full unchanged comparison remains visible. Source retention, refusal atomicity,

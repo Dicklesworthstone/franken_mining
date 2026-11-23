@@ -1932,6 +1932,8 @@ mutable model or recalculating the card with newer code. The complete encoded sn
 existing 64 KiB operation limit. Existing act-now v1 and information-choice v2 operations keep their
 original encoding and remain readable. New information choices use compact v3 operations, retaining
 card and policy JSON directly as quoted strings while preserving their exact bytes and digests.
+If an unlinked action would exceed the limit in v1, the writer tries compact v5, which retains the
+same card bytes and digests. Reading a v5 entry requires a v5-capable reader. Forecast-linked choices use v4.
 Mixed histories use v2 reports. An independently saved `--head` detects rollback or rewriting; unpinned
 inspection explicitly cannot establish the original history or evaluation provenance. Host-clock accuracy
 and the code revision are declarations, not external time proof or authenticated human identity. Recording

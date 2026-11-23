@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use fmine_claim::forecast_journal::Entry;
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_io::forecast::{Journal, MAX_REQUEST_BYTES};
+use fmine_io::forecast::{Journal, MAX_REQUEST_BYTES, decode_hex_field, encode_hex_field as hex};
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 use fmine_runtime::{HostWallClock, WallClock};
 
@@ -26,6 +26,7 @@ const OPERATION_SCHEMA: &str = "fmine.decision-operation.v1";
 const POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v2";
 const COMPACT_POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v3";
 const LINKED_OPERATION_SCHEMA: &str = "fmine.decision-operation.v4";
+const COMPACT_ACTION_SCHEMA: &str = "fmine.decision-operation.v5";
 const REPORT_SCHEMA: &str = "fmine.decision-journal.v1";
 const POLICY_REPORT_SCHEMA: &str = "fmine.decision-journal.v2";
 const LINKED_REPORT_SCHEMA: &str = "fmine.decision-journal.v3";
@@ -205,32 +206,9 @@ fn clean(value: &str, max: usize) -> bool {
     !value.trim().is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }
 
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
 fn unhex(value: &str) -> Result<String, Refusal> {
-    if !value.len().is_multiple_of(2)
-        || !value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err(integrity(
-            "retained content must use canonical lowercase hexadecimal",
-        ));
-    }
-    let nibble = |b: u8| if b <= b'9' { b - b'0' } else { b - b'a' + 10 };
-    let bytes: Vec<_> = value
-        .as_bytes()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|p| nibble(p[0]) * 16 + nibble(p[1]))
-        .collect();
+    let bytes = decode_hex_field(value)
+        .ok_or_else(|| integrity("retained content must use canonical lowercase hexadecimal"))?;
     String::from_utf8(bytes).map_err(|_| integrity("retained content is not UTF-8"))
 }
 
@@ -271,7 +249,7 @@ impl Snapshot {
             return Err(integrity("retained model and card must both be nonempty"));
         }
         match (&self.choice, &self.policy_snapshot) {
-            (Choice::ActNow(_), None) if self.compact_json == self.forecasts.is_some() => {}
+            (Choice::ActNow(_), None) => {}
             (Choice::InformationOption { .. }, Some(policy)) if !policy.is_empty() => {}
             _ => {
                 return Err(integrity(
@@ -299,9 +277,33 @@ impl Snapshot {
 
     fn operation(&self) -> Result<String, Refusal> {
         self.validate()?;
+        let mut out = self.encode(self.compact_json)?;
+        if out.len() > MAX_REQUEST_BYTES
+            && !self.compact_json
+            && matches!(self.choice, Choice::ActNow(_))
+        {
+            out = self.encode(true)?;
+        }
+        if out.len() > MAX_REQUEST_BYTES {
+            return Err(invalid(
+                "model and evaluated card exceed the 65536-byte journal operation limit",
+            ));
+        }
+        Ok(out)
+    }
+
+    fn encode(&self, compact: bool) -> Result<String, Refusal> {
         let mut fields = match &self.choice {
             Choice::ActNow(action) => vec![
-                ("schema", OPERATION_SCHEMA.to_owned()),
+                (
+                    "schema",
+                    if compact {
+                        COMPACT_ACTION_SCHEMA
+                    } else {
+                        OPERATION_SCHEMA
+                    }
+                    .to_owned(),
+                ),
                 ("decision_id", self.decision_id.clone()),
                 ("action", action.clone()),
             ],
@@ -310,7 +312,7 @@ impl Snapshot {
                     .policy_snapshot
                     .as_deref()
                     .ok_or_else(|| integrity("missing information-policy snapshot"))?;
-                let (schema, policy_field, policy_value) = if self.compact_json {
+                let (schema, policy_field, policy_value) = if compact {
                     (
                         COMPACT_POLICY_OPERATION_SCHEMA,
                         "policy_json",
@@ -341,7 +343,7 @@ impl Snapshot {
             ("claim_id", self.claim_id.clone()),
             ("code_revision", self.code_revision.clone()),
             ("model_hex", hex(self.model.as_bytes())),
-            if self.compact_json {
+            if compact {
                 ("card_json", self.card.clone())
             } else {
                 ("card_hex", hex(self.card.as_bytes()))
@@ -355,11 +357,6 @@ impl Snapshot {
         for (key, value) in fields {
             let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
             let _ = writeln!(out, "{key} = \"{escaped}\"");
-        }
-        if out.len() > MAX_REQUEST_BYTES {
-            return Err(invalid(
-                "model and evaluated card exceed the 65536-byte journal operation limit",
-            ));
         }
         Ok(out)
     }
@@ -379,17 +376,17 @@ impl Snapshot {
         let schema = take(&mut fields, "schema").map_err(integrity)?;
         let compact_json = matches!(
             schema.as_str(),
-            COMPACT_POLICY_OPERATION_SCHEMA | LINKED_OPERATION_SCHEMA
+            COMPACT_POLICY_OPERATION_SCHEMA | LINKED_OPERATION_SCHEMA | COMPACT_ACTION_SCHEMA
         );
         let (choice, policy_snapshot) = match schema.as_str() {
-            OPERATION_SCHEMA => (
-                Choice::ActNow(take(&mut fields, "action").map_err(integrity)?),
-                None,
-            ),
-            LINKED_OPERATION_SCHEMA if fields.contains_key("action") => (
-                Choice::ActNow(take(&mut fields, "action").map_err(integrity)?),
-                None,
-            ),
+            OPERATION_SCHEMA | COMPACT_ACTION_SCHEMA | LINKED_OPERATION_SCHEMA
+                if fields.contains_key("action") =>
+            {
+                (
+                    Choice::ActNow(take(&mut fields, "action").map_err(integrity)?),
+                    None,
+                )
+            }
             POLICY_OPERATION_SCHEMA | COMPACT_POLICY_OPERATION_SCHEMA | LINKED_OPERATION_SCHEMA => {
                 let choice = Choice::InformationOption {
                     option_id: take(&mut fields, "information_option").map_err(integrity)?,

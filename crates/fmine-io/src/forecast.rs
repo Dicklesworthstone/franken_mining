@@ -20,6 +20,33 @@ pub const MAX_JOURNAL_BYTES: u64 = forecast_journal::MAX_JOURNAL_BYTES as u64;
 pub const MAX_JOURNAL_RECORDS: usize = forecast_journal::MAX_RECORDS;
 pub const MAX_REQUEST_BYTES: usize = forecast_journal::MAX_OPERATION_BYTES;
 
+/// Lowercase, two-digit encoding of each byte in retained journal evidence.
+pub fn encode_hex_field(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Decode a canonical lowercase hex field. An empty field represents an empty byte sequence.
+pub fn decode_hex_field(value: &str) -> Option<Vec<u8>> {
+    let (pairs, remainder) = value.as_bytes().as_chunks::<2>();
+    if !remainder.is_empty() {
+        return None;
+    }
+    let nibble = |b| match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    };
+    pairs
+        .iter()
+        .map(|&[hi, lo]| Some(nibble(hi)? * 16 + nibble(lo)?))
+        .collect()
+}
+
 /// An open file holding a POSIX/OS lock that explicitly unlocks on drop so a concurrently
 /// forked child process cannot pin the open file description's lock past this handle's drop.
 #[derive(Debug)]
@@ -325,6 +352,19 @@ fn io_refusal(operation: &str, path: &Path, error: std::io::Error) -> Refusal {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn journal_hex_fields_round_trip_every_byte_and_refuse_noncanonical_text() {
+        let bytes: Vec<u8> = (0..=u8::MAX).collect();
+        let encoded = encode_hex_field(&bytes);
+        assert_eq!(encoded.len(), bytes.len() * 2);
+        assert!(encoded.starts_with("00010203") && encoded.ends_with("fcfdfeff"));
+        assert_eq!(decode_hex_field(&encoded), Some(bytes));
+        assert_eq!(decode_hex_field(""), Some(Vec::new()));
+        for invalid in ["0", "AF", "0x", "01 02", "é"] {
+            assert_eq!(decode_hex_field(invalid), None);
+        }
+    }
     use fmine_runtime::ClockError;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};

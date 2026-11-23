@@ -891,30 +891,10 @@ impl SourceAdmission {
     }
 }
 
-fn bytes_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 fn claim_body(hex: &str) -> Result<Vec<u8>, Refusal> {
-    if hex.is_empty()
-        || !hex.len().is_multiple_of(2)
-        || !hex
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err(invalid(
-            "source Claim body needs canonical lowercase hexadecimal bytes",
-        ));
-    }
-    hex.as_bytes()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| {
-            let nibble = |b: u8| if b <= b'9' { b - b'0' } else { b - b'a' + 10 };
-            Ok(nibble(pair[0]) * 16 + nibble(pair[1]))
-        })
-        .collect()
+    fmine_io::forecast::decode_hex_field(hex)
+        .filter(|bytes| !bytes.is_empty())
+        .ok_or_else(|| invalid("source Claim body needs canonical lowercase hexadecimal bytes"))
 }
 
 /// Select under the writer lock, and recheck during replay. A comparative cannot stand in for a
@@ -1018,7 +998,7 @@ fn source_request(
     put("claim_id", &receipt.source.claim.claim_id.to_string())?;
     put(
         "claim_body",
-        &bytes_hex(&receipt.source.claim.canonical_body()),
+        &fmine_io::forecast::encode_hex_field(&receipt.source.claim.canonical_body()),
     )?;
     match resolved {
         ResolvedOriginalOutcome::Published(outcome) => put("stored", &outcome.value.stored)?,
