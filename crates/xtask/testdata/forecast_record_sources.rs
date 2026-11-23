@@ -113,6 +113,7 @@ fn observation_on_sheet(
     assert!(keyed.is_ok(), "{keyed:?}");
     Observation {
         release: Quarter::parse(release).unwrap(),
+        canonical_subject: canonical_raw_subject(&profile, &raw),
         raw,
         keyed,
         printed: Rat::from_decimal_str(token).map_err(|e| e.to_string()),
@@ -227,12 +228,93 @@ fn capital_observation(
     assert!(keyed.is_ok(), "{keyed:?}");
     Observation {
         release: Quarter::parse(release).unwrap(),
+        canonical_subject: canonical_raw_subject(&profile, &raw),
         raw,
         keyed,
         printed: Rat::from_decimal_str(token).map_err(|e| e.to_string()),
         file,
         hash: sha256(&bytes).to_hex(),
     }
+}
+
+#[test]
+fn capex_alias_competitor_is_counted_even_when_its_source_claim_is_refused() {
+    let file = "invented-ambiguous-capex.xlsx";
+    let release = "2030Q4";
+    let bytes = build_minimal_xlsx(&[MinimalSheet {
+        name: "Minestats1".into(),
+        hidden: false,
+        cells: vec![
+            ("B2".into(), MinimalCell::Text("Site A (50%)".into())),
+            ("C2".into(), MinimalCell::Text("Capex Alias (0%)".into())),
+            ("A3".into(), MinimalCell::Text("For the three months ended".into())),
+            ("B3".into(), MinimalCell::Number(2030.0)),
+            ("C3".into(), MinimalCell::Number(2030.0)),
+            (
+                "A5".into(),
+                MinimalCell::Text("Total capital expenditures ($ millions)".into()),
+            ),
+            ("B5".into(), MinimalCell::Number(12.0)),
+            ("C5".into(), MinimalCell::Number(999.0)),
+        ],
+    }]);
+    let workbook = Workbook::from_bytes(file, &bytes).unwrap();
+    let mut profile = fmine_public::synthetic::synthetic_profile();
+    profile.sources.clear();
+    profile.shares.push(fmine_public::sources::RegisteredShare {
+        subject: "Site A".into(),
+        label: "Capex Alias".into(),
+        num: 1,
+        den: 2,
+        evidence: "DESIGN: invented alternate subject spelling".into(),
+    });
+    let read = read_mine_stats(&workbook, release, None).unwrap();
+    assert!(read.refusals.is_empty());
+    assert_eq!(read.values.len(), 2);
+    let mut observations = read.values.into_iter().map(|raw| {
+        let display = workbook
+            .sheet(&raw.sheet)
+            .unwrap()
+            .cells_by_coord
+            .values()
+            .find(|cell| cell.cell_ref == raw.cell)
+            .unwrap()
+            .displayed()
+            .unwrap()
+            .unwrap();
+        Observation {
+            release: Quarter::parse(release).unwrap(),
+            canonical_subject: canonical_raw_subject(&profile, &raw),
+            keyed: key::from_mine_stats(&profile, &workbook, release, &raw)
+                .map_err(|e| e.to_string()),
+            printed: Rat::from_decimal_str(&display.text()).map_err(|e| e.to_string()),
+            raw,
+            file: file.into(),
+            hash: sha256(&bytes).to_hex(),
+        }
+    }).collect::<Vec<_>>();
+    let bad_index = observations.iter().position(|o| o.raw.cell == "C5").unwrap();
+    let competitor = observations.remove(bad_index);
+    assert!(competitor.keyed.is_err(), "zero printed ownership cannot form a Claim");
+    assert_eq!(competitor.canonical_subject, "Site A");
+    assert_eq!(competitor.raw.site, "Capex Alias");
+    assert_eq!(competitor.raw.site_raw, "Capex Alias (0%)");
+    let bad_locator = competitor.locator();
+    let target = capex_target("capex_usd_m");
+    let quarter = Quarter { year: 2030, q: 4 };
+    let mut sources = inventory(observations);
+    let valid = infer_outcome(&mut sources, "Site A", &target, quarter).unwrap();
+    assert_eq!(number(&valid.value), Some(Rat::from_integer(12)));
+    sources.observations.push(competitor);
+    let ambiguous = infer_outcome(&mut sources, "Site A", &target, quarter).unwrap();
+    assert!(matches!(
+        ambiguous.value,
+        Availability::Unavailable(ref why) if why == "ambiguous original source cells"
+    ));
+    assert_eq!(ambiguous.locators.len(), 2);
+    let evidence = &sources.evidence.cells[&bad_locator];
+    assert!(evidence.contains("\"claim_id\":null"));
+    assert!(!evidence.contains("\"unusable\":null"));
 }
 
 #[test]

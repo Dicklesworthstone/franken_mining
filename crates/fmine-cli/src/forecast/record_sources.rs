@@ -257,8 +257,19 @@ impl Publication {
     }
 }
 
+/// Resolve only the registered subject spelling before Claim admission. This preserves raw labels
+/// and keeps a malformed competing capex cell in the canonical site's ambiguity count.
+fn canonical_raw_subject(profile: &IssuerProfile, raw: &MineStatsValue) -> String {
+    profile
+        .shares
+        .iter()
+        .find(|share| share.label == raw.site)
+        .map_or_else(|| raw.site.clone(), |share| share.subject.clone())
+}
+
 struct Observation {
     release: Quarter,
+    canonical_subject: String,
     raw: MineStatsValue,
     keyed: std::result::Result<KeyedCell, String>,
     printed: std::result::Result<Rat, String>,
@@ -536,6 +547,7 @@ impl Inventory {
                         });
                     this.observations.push(Observation {
                         release: *quarter,
+                        canonical_subject: canonical_raw_subject(profile, &raw),
                         raw,
                         keyed,
                         printed,
@@ -603,13 +615,17 @@ impl Inventory {
                         && (!matches!(period.kind, PeriodKind::Quarter(_)) || o.raw.sheet == "QTD")
                         && o.raw.label == target.field
                 };
+                let subject = if metric.is_capex() {
+                    o.canonical_subject.as_str()
+                } else {
+                    o.keyed
+                        .as_ref()
+                        .map_or(o.raw.site.as_str(), |c| c.key.subject.as_str())
+                };
                 o.release == release
                     && o.raw.period == period.code()
                     && field_matches
-                    && o.keyed
-                        .as_ref()
-                        .map_or(o.raw.site.as_str(), |c| c.key.subject.as_str())
-                        == site
+                    && subject == site
             })
             .collect::<Vec<_>>();
         let locators = candidates.iter().map(|c| c.locator()).collect::<Vec<_>>();
