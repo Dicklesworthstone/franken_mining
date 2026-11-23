@@ -155,6 +155,22 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   No global optimality claim is supplied. Exact controls cover complementary signed rows, two-node
   cycles, external precedence, removing credits from either old period, budget exhaustion and an
   independent tiny-model enumeration; the CLI oracle retains the original imported-candidate receipt.
+- DESIGN (BD-252/253, plan §15.6): `toposort::pcpsp::fractional::joint::improve` searches each mined
+  block's period and exact allocation between every destination pair, keeping other blocks fixed.
+  For a share `x` of the second destination, every resource row is `a*x <= b`; positive `a` gives an
+  integer upper bound, negative `a` an integer lower bound, and zero `a` either admits or rejects the
+  pair. Their intersection with `[0, share_scale]` supplies the objective-maximizing grid endpoint.
+  Both resource signs, the vacated period and predecessor/dependent periods are checked. Same-period
+  rerouting is included. Only strict exact gains are accepted, with deterministic period/pair ties;
+  larger existing splits survive unchanged unless an admitted pair improves them. The shared
+  `joint::WORK` limit is 262,144, plus the caller's 0–1,000 rounds. Exhaustion preserves complete
+  feasible improvements; arithmetic overflow refuses. Final candidate checking independently
+  recomputes all resource use and discounted value. The pass does not insert or drop blocks, move
+  several blocks at once, optimize allocations among three or more destinations, or certify optimality.
+  Both planner entry points run it after fixed-fraction period search for a nonempty incumbent and
+  positive rounds. `Plan::joint_seed_origin` and `joint_period_routes` retain the seed and counters;
+  `joint_period_route_search` becomes the selected origin only on a strict gain. The original external
+  candidate assessment remains intact, and the full-model Lagrangian certificate is still replayed.
 - One `i64` value per block, in a caller-chosen integer money unit; the caller scales and rounds, never this crate. The one exception is `pitflow::minelib`, which scales a UPIT file's decimals at the places the caller declares and rounds only when the caller asks.
 - For `pitflow::minelib`: the two files' text, the number of decimal places and a `Rounding`.
 - Precedence arcs `u → v`, read "taking `u` requires taking `v`", either as CSR (`ClosureProblem::new(weights, offsets, targets)`) or as one list per block (`from_requirements`). Duplicate arcs and self-loops are accepted. Cycles are accepted too: a cycle's blocks are taken together or not at all.

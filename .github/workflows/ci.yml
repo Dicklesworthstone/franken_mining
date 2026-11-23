@@ -18,6 +18,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build CLI for command integration tests
         run: cargo build -p fmine-cli --locked
+      - name: Exact production scheduling and independent command oracle
+        run: |
+          cargo test -p fmine-optimize --lib --locked
+          python3 -I crates/xtask/testdata/plan_schedule_oracle.py target/debug/fmine
       - name: Calibration, plant, valuation and capital known answers
         run: cargo test -p fmine-numerics -p fmine-calib -p fmine-plant -p fmine-decide -p fmine-metrics -p fmine-capital --lib --locked
       - name: Source-derived investment portfolios

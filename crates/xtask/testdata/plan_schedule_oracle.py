@@ -215,6 +215,56 @@ def fractional_periods():
     assert command(options) == paired_report
 
 
+def joint_fractional_periods():
+    # Enumerate all hundredth-grid splits at both periods independently of the
+    # candidate. Keeping the late 75% split cannot move early; re-pricing can.
+    for suffix in ("pcpsp", "prec"):
+        (ROOT / ("model." + suffix)).write_bytes(
+            (REPO / "tests/planning" / ("joint_fractional." + suffix)).read_bytes())
+    values = [[0, 40], [0, 0], [0, 20]]
+    uses = [[[0, 0], [2, 0]], [[0, 0], [0, 0]], [[0, 0], [0, 4]]]
+    requires, caps = [[1], [0], []], [[1, 1], [2, 3]]
+    cycle = [(0, 0, 0, Q(1, 2)), (0, 1, 0, Q(1, 2)), (1, 0, 0, Q(1))]
+    source = (REPO / "tests/planning/joint_fractional.sol").read_text()
+    (ROOT / "candidate.sol").write_text(source)
+    options = ["--candidate", "candidate.sol", "--share-decimals", "2"]
+    frozen = verify(command([*options, "--rounds", "0"]), values, uses, requires, caps)
+    assert fraction(frozen["selected"]["discounted_value"]) == Q(55, 2)
+    assert frozen["selected"]["solution"] == source
+    assert "joint_period_route_search" not in frozen
+    optimum = Q(0)
+    for period, mill in product(range(2), range(101)):
+        split = cycle + [(2, d, period, part) for d, part in
+                 [(0, 1-Q(mill, 100)), (1, Q(mill, 100))] if part]
+        value, feasible = value_and_feasible(values, uses, requires, 2, caps, split, [2**40, 2**39])
+        if feasible:
+            optimum = max(optimum, value)
+    assert optimum == 30
+    report = command(options)
+    p = verify(report, values, uses, requires, caps, optimum)
+    assert fraction(p["selected"]["discounted_value"]) == optimum
+    assert p["selected"]["origin"] == "joint_period_route_search"
+    assert rows(p["selected"]["solution"]) == cycle + [(2, 0, 0, Q(1, 2)), (2, 1, 0, Q(1, 2))]
+    assert p["candidate"] == frozen["candidate"]
+    search = p["joint_period_route_search"]
+    assert search["seed_origin"] == "external_candidate"
+    assert fraction(search["before"]) == Q(55, 2) and fraction(search["after"]) == 30
+    assert search["moves"] == search["period_moves"] == search["route_moves"] == 1
+    assert search["trials"] > 0 and 0 < search["work"] <= search["work_limit"] == 262144
+    assert not search["work_exhausted"] and search["mined_set_preserved"]
+    assert search["maximum_destinations_per_moved_block"] == 2
+    assert command(options) == report
+    (ROOT / "candidate.sol").write_text(p["selected"]["solution"])
+    replay = verify(command(options), values, uses, requires, caps, optimum)
+    assert replay["selected"]["solution"] == p["selected"]["solution"]
+    assert replay["joint_period_route_search"]["moves"] == 0
+    markdown = subprocess.run(
+        [str(BINARY), "plan", "schedule", "--pcpsp", "model.pcpsp", "--prec", "model.prec",
+         "--candidate", "candidate.sol", "--format", "markdown", "--workspace", str(ROOT)],
+        capture_output=True, text=True, check=False)
+    assert markdown.returncode == 0 and "Joint period and route search" in markdown.stdout
+
+
 def generated_models():
     rng = random.Random(0x51A17)
     for case in range(16):
@@ -417,6 +467,7 @@ automatic_fractional()
 master_mixtures()
 joint_routes()
 fractional_periods()
+joint_fractional_periods()
 generated_models()
 lp_guidance()
 print("PASS: exact split and simultaneous-mixture oracles, joint route/period5-to6 improvement, imported fixed-fraction period22.5-to25 improvement, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")

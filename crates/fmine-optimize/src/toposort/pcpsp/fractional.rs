@@ -20,6 +20,8 @@ use fmine_numerics::exact_feas::Rat;
 use super::{PcpspModel, candidate, price};
 use crate::toposort::refuse;
 
+pub mod joint;
+
 /// A feasible exact schedule, including the original when no direction improves
 /// it. Objective numerators use `checked.scale` times the caller's factor scale.
 #[derive(Debug, Clone, PartialEq, Eq)]

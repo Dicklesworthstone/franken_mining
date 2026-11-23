@@ -65,6 +65,9 @@ pub struct Plan {
     /// Present when the chosen incumbent contains genuine destination splits.
     /// The original external assessment above is never rewritten by this search.
     pub fractional_periods: Option<fractional::PeriodSearch>,
+    /// Winning path immediately before the joint period/two-route pass.
+    pub joint_seed_origin: &'static str,
+    pub joint_period_routes: Option<fractional::joint::JointSearch>,
     pub bound: Lagrangian,
     /// `(bound * share_scale) - discounted_numerator`; same denominator as the selected value.
     pub gap_numerator: i128,
@@ -311,6 +314,18 @@ fn solve_inner(
     } else {
         None
     };
+    let joint_seed_origin = origin;
+    let joint_period_routes = if options.rounds > 0 && !selected.assignments().is_empty() {
+        let refined = fractional::joint::improve(model, &selected, &factors, options.rounds)?;
+        if refined.search.after > value {
+            selected = refined.schedule;
+            value = refined.search.after;
+            origin = "joint_period_route_search";
+        }
+        Some(refined.search)
+    } else {
+        None
+    };
     let checked = candidate::check(model, &selected)?;
     if !checked.feasible() || checked.discounted_value(&factors)? != value {
         return Err(refuse(
@@ -353,6 +368,8 @@ fn solve_inner(
         guidance,
         period_seed_origin,
         fractional_periods,
+        joint_seed_origin,
+        joint_period_routes,
         bound,
         gap_numerator: gap,
     })
