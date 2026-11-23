@@ -808,10 +808,11 @@ remain open for those broader capabilities and their evidence gates.
 
 `trajectory::reconcile_trajectory` jointly estimates one conserved total elemental measurand in kg
 inside one complete physical storage boundary across 2..32 contiguous periods. Each period's total
-inflow and outflow must be genuine observed Claims, including explicit zero totals. Every boundary
-stock is either one genuine stocktake Claim or explicitly declared unmeasured. The same stock coordinate
-is used as closing inventory of one period and opening inventory of the next; no second observation,
-fake timestamp, covariance row, prior or balancing plug is created for a latent state.
+inflow and outflow is either a genuine observed Claim (including explicit zero totals) or a source-bound
+`UnmeasuredInflow`/`UnmeasuredOutflow` declaration with no numeric mass. Every boundary stock is either
+one genuine stocktake Claim or explicitly declared unmeasured. The same stock coordinate is used as
+closing inventory of one period and opening inventory of the next; no second observation, fake
+timestamp, covariance row, prior or balancing plug is created for a latent stock or flow.
 
 The source-bound population declares the full scope, strictly increasing shared endpoints, completeness
 and unmeasured states. `trajectory::observation_order` admits source identity, elemental mass basis,
@@ -819,7 +820,11 @@ exact physical time, support, evidence and usability before defining the full me
 `Claim<TrajectoryErrorModel>` binds the exact population and ordered source Claims, complete covariance
 including cross-period errors, named error basis, unbiased Gaussian assumption and diagnostic policy.
 The existing linear/partial GLS owners solve all period balances simultaneously. An entirely unmeasured
-stock trajectory has an unidentifiable common offset and refuses `FMINE-REF-104`. No rank is repaired.
+stock trajectory has an unidentifiable common offset and refuses `FMINE-REF-104`. An interval with
+both inflow and outflow unmeasured identifies only their difference and also refuses `FMINE-REF-104`.
+The joint solver refuses any remaining rank deficiency, including unknown transfer totals that cannot
+be separated by the available surveys. No rank is repaired. Coordinate order is measured stocks,
+inflows and outflows, then unmeasured stocks, inflows and outflows, chronologically within each group.
 
 `TrajectoryOutcome` retains immutable original Claims and the error model, every measured and inferred
 estimate, full measured/latent posterior covariance, adjustment covariance, correlated normalized
@@ -841,6 +846,16 @@ are SHA-256 bound before parsing. Work is bounded to 1 MiB, 32 periods, 97 fitte
 conditional stock standard deviations, all fitted flow coordinates and complete joint covariance appear
 in the versioned JSON result; Markdown exposes the trajectory, adjustments and investigation diagnostics.
 Worksheet inputs remain Assumed, Internal and uncalibrated.
+
+The additive `fmine.plant-trajectory.v2` worksheet permits the exact string `"unmeasured"` for an
+`inflow_kg` or `outflow_kg` total. Missing fields still refuse; a latent total must have no covariance
+row. A result with absent flows uses `fmine.plant-trajectory-result.v2`, exposes `inferred_flows` with
+null observed mass/source, its explicit declaration Claim ID and conditional variance/standard
+deviation, and uses PTRR frame version 2. New declaration tags use PTIN frame version 2; existing
+population, measured input, error-model and v1 receipt encodings remain unchanged. Markdown separates
+inferred totals from genuine observations. Independent affine-map tests cover every joint covariance
+entry for a missing inflow and stock with correlated measurement errors, outflow inference, retained
+negative fits, declaration provenance and unidentifiable transfers.
 
 `tests/plant/trajectory_survey.toml` is a synthetic worked example. Independent reduced-closure tests
 check the complete covariance with independent and correlated flow errors, retrospective conditioning,
