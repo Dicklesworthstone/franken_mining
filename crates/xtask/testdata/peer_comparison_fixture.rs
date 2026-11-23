@@ -63,6 +63,11 @@ impl Fixture {
         let hash = sha256(&pdf).to_hex();
         let (denominator, cost) = if self.metric.is_production() {
             ("produced", "")
+        } else if self.metric.is_capex() {
+            (
+                "none",
+                ";timing=cash;leases=included;exploration=included;stripping=included;capitalized_interest=included;acquisitions=excluded;disposal_proceeds=excluded",
+            )
         } else {
             (
                 "sold",

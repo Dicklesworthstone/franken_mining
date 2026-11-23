@@ -38,6 +38,9 @@ pub enum Metric {
     CopperProduction,
     CopperC1,
     CopperAisc,
+    CapexTotal,
+    CapexSustaining,
+    CapexProject,
 }
 
 impl Metric {
@@ -49,6 +52,9 @@ impl Metric {
             Self::CopperProduction => "copper-production",
             Self::CopperC1 => "copper-c1",
             Self::CopperAisc => "copper-aisc",
+            Self::CapexTotal => "capex-total",
+            Self::CapexSustaining => "capex-sustaining",
+            Self::CapexProject => "capex-project",
         }
     }
 
@@ -59,6 +65,7 @@ impl Metric {
             Self::GoldProduction => "koz",
             Self::CopperProduction => "kt",
             Self::CopperC1 | Self::CopperAisc => "USD/lb",
+            Self::CapexTotal | Self::CapexSustaining | Self::CapexProject => "USD_m",
         }
     }
 
@@ -68,15 +75,24 @@ impl Metric {
     }
 
     #[must_use]
+    pub const fn is_capex(self) -> bool {
+        matches!(
+            self,
+            Self::CapexTotal | Self::CapexSustaining | Self::CapexProject
+        )
+    }
+
+    #[must_use]
     pub const fn metal(self) -> &'static str {
         match self {
             Self::Aisc | Self::GoldProduction => "gold",
             Self::CopperProduction | Self::CopperC1 | Self::CopperAisc => "copper",
+            Self::CapexTotal | Self::CapexSustaining | Self::CapexProject => "all",
         }
     }
 
     const fn additivity(self) -> AdditivityClass {
-        if self.is_production() {
+        if self.is_production() || self.is_capex() {
             AdditivityClass::ExtensiveAdditive
         } else {
             AdditivityClass::IntensiveWeighted
@@ -103,6 +119,17 @@ const COST_FIELDS: &[&str] = &[
     "stripping",
     "accounting",
 ];
+// DESIGN (BD-355): monetary totals do not inherit sold-metal cost definitions. The capital
+// perimeter must explicitly retain these treatments in each issuer's own cited definition.
+const CAPEX_FIELDS: &[&str] = &[
+    "timing",
+    "leases",
+    "exploration",
+    "stripping",
+    "capitalized_interest",
+    "acquisitions",
+    "disposal_proceeds",
+];
 
 /// Every field is part of the agreed source interpretation, never a caller's restatement override.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,8 +146,9 @@ impl Definition {
                 COST_FIELDS
                     .iter()
                     .copied()
-                    .filter(|_| !metric.is_production()),
+                    .filter(|_| !metric.is_production() && !metric.is_capex()),
             )
+            .chain(CAPEX_FIELDS.iter().copied().filter(|_| metric.is_capex()))
             .chain(
                 ["royalties"]
                     .into_iter()
@@ -144,10 +172,13 @@ impl Definition {
                     value
                         == if metric.is_production() {
                             "produced"
+                        } else if metric.is_capex() {
+                            "none"
                         } else {
                             "sold"
                         }
                 }
+                "timing" => matches!(value.as_str(), "cash" | "accrual"),
                 "allocation" => matches!(value.as_str(), "by_product" | "co_product"),
                 "credits" => matches!(
                     value.as_str(),
@@ -158,7 +189,12 @@ impl Definition {
                 | "sustaining_leases"
                 | "minesite_exploration"
                 | "stripping"
-                | "royalties" => {
+                | "royalties"
+                | "leases"
+                | "exploration"
+                | "capitalized_interest"
+                | "acquisitions"
+                | "disposal_proceeds" => {
                     matches!(value.as_str(), "included" | "excluded")
                 }
                 "reclamation" => {

@@ -7,11 +7,15 @@ fn basis(metric: Metric) -> String {
         metric.metal(),
         if metric.is_production() {
             "produced"
+        } else if metric.is_capex() {
+            "none"
         } else {
             "sold"
         }
     );
-    let cost = if !metric.is_production() {
+    let cost = if metric.is_capex() {
+        ";timing=cash;leases=included;exploration=included;stripping=included;capitalized_interest=included;acquisitions=excluded;disposal_proceeds=excluded"
+    } else if !metric.is_production() {
         ";allocation=by_product;credits=separate_line;inventory=included;ga=included;sustaining_leases=included;minesite_exploration=included;reclamation=operating_only;stripping=included;accounting=as_reported"
     } else {
         ""
@@ -388,6 +392,147 @@ fn peer_gold_production_and_ordering_have_a_positive_path() {
     assert_eq!(
         compare(&req, &reversed).unwrap().claim.claim_id,
         report.claim.claim_id
+    );
+}
+
+#[test]
+fn capital_peer_ranks_preserve_scope_exact_signed_amounts_and_extensive_support() {
+    let mut identities = std::collections::BTreeSet::new();
+    for metric in [
+        Metric::CapexTotal,
+        Metric::CapexSustaining,
+        Metric::CapexProject,
+    ] {
+        let inputs = vec![
+            supplied("a", metric, "-1.25"),
+            supplied("b", metric, "0.00"),
+            supplied("c", metric, "2.50"),
+        ];
+        assert_eq!(metric.unit(), "USD_m");
+        assert_eq!(inputs[0].additivity, AdditivityClass::ExtensiveAdditive);
+        assert_eq!(inputs[0].value.interval.lo, Rat::new(-251, 200).unwrap());
+        assert_eq!(inputs[1].value.interval.hi, Rat::new(1, 200).unwrap());
+        let mut req = request(&inputs);
+        req.claim = Some(RankClaim {
+            issuer: "a".into(),
+            order: RankOrder::Lowest,
+            at_most: 1,
+        });
+        let report = compare(&req, &inputs).unwrap();
+        assert_eq!(report.claim.value.verdict, Some(Verdict::Supported));
+        for (i, issuer) in ["a", "b", "c"].into_iter().enumerate() {
+            assert_eq!(
+                rank(&report, issuer).ascending,
+                RankBounds {
+                    min: i + 1,
+                    max: i + 1
+                }
+            );
+        }
+        assert_eq!(report.claim.parents.len(), 3);
+        assert_eq!(report.claim.value.definition.fields["metal"], "all");
+        assert_eq!(report.claim.value.definition.fields["denominator"], "none");
+        assert!(
+            !report
+                .claim
+                .value
+                .definition
+                .fields
+                .contains_key("allocation")
+        );
+        identities.insert(report.claim.claim_id);
+        let mut reversed = inputs.clone();
+        reversed.reverse();
+        req.issuers.reverse();
+        assert_eq!(compare(&req, &reversed).unwrap(), report);
+    }
+    assert_eq!(
+        identities.len(),
+        3,
+        "capital scopes have distinct Claim identities"
+    );
+}
+
+#[test]
+fn capital_peer_definitions_cannot_hide_missing_or_different_treatments() {
+    let original = vec![
+        supplied("a", Metric::CapexTotal, "100.0"),
+        supplied("b", Metric::CapexTotal, "200.0"),
+    ];
+    let req = request(&original);
+    for (field, other) in [
+        ("timing", "accrual"),
+        ("leases", "excluded"),
+        ("exploration", "excluded"),
+        ("stripping", "excluded"),
+        ("capitalized_interest", "excluded"),
+        ("acquisitions", "included"),
+        ("disposal_proceeds", "included"),
+        ("ownership", "full"),
+        ("operations", "continuing"),
+    ] {
+        let mut inputs = original.clone();
+        let mut value = inputs[1].value.clone();
+        value.definition.fields.insert(field.into(), other.into());
+        inputs[1] = rebind(&inputs[1], value.clone());
+        assert!(
+            compare(&req, &inputs)
+                .unwrap_err()
+                .what
+                .contains(&format!("definition mismatch {field}"))
+        );
+        value.definition.fields.remove(field);
+        inputs[1] = rebind(&inputs[1], value);
+        assert!(
+            compare(&req, &inputs)
+                .unwrap_err()
+                .what
+                .contains(&format!("missing definition field {field}"))
+        );
+    }
+    for (from, to) in [
+        ("metal=all", "metal=gold"),
+        ("denominator=none", "denominator=sold"),
+        ("scope=company", "scope=site"),
+        ("metric=capex-total", "metric=capex-project"),
+        ("timing=cash", "timing=unstated"),
+        ("leases=included", "leases=unstated"),
+    ] {
+        let mut reading = row("a", Metric::CapexTotal, "100");
+        reading.basis = reading.basis.replace(from, to);
+        assert!(
+            source::bind(
+                "a",
+                Metric::CapexTotal,
+                2030,
+                &document("a"),
+                &reading,
+                EvidenceClass::Assumed
+            )
+            .is_err(),
+            "{from} -> {to}"
+        );
+    }
+    let mut reading = row("a", Metric::CapexTotal, "100");
+    reading.unit = "USD".into();
+    assert!(
+        source::bind(
+            "a",
+            Metric::CapexTotal,
+            2030,
+            &document("a"),
+            &reading,
+            EvidenceClass::Assumed
+        )
+        .is_err()
+    );
+    let inputs = vec![
+        original[0].clone(),
+        supplied("b", Metric::CapexProject, "200.0"),
+    ];
+    assert!(
+        compare(&req, &inputs).is_err(),
+        "a project amount cannot stand in for the total"
     );
 }
 

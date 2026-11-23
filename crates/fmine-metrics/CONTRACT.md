@@ -185,6 +185,13 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   Missing, extra or duplicate peers and differing fields refuse; no bridge or conversion
   is inferred. `comparison::source::bind` admits two-reader-agreed printed actuals from a selected
   registered financial or annual filing. The I/O owner authenticates bytes and complete reader agreement.
+- DESIGN (BD-355): `CapexTotal`, `CapexSustaining` and `CapexProject` extend the same exact ranking
+  path to signed annual capital amounts in `USD_m`. They are extensive, company-wide, all-metal
+  readings with `denominator=none`; their distinct metric keys fix the capital scope. Source-agreed
+  definitions must match ownership, operations, cash/accrual timing and included/excluded treatment
+  of leases, exploration, stripping, capitalized interest, acquisitions and disposal proceeds.
+  Missing or incompatible fields refuse; cost-per-sold-metal fields cannot fill capital definitions.
+  No total construction, component reclassification, currency conversion or accounting bridge is supplied.
 - DESIGN (BD-346.S5): `mirror::cost::compare` accepts canonical `Claim<CostReading>`s for cash costs,
   AISC or cost of sales in USD millions. Each original and signed adjustment retains its raw printed
   token, agreeing reader IDs, exact half-step bounds, own-document definition locator, publication

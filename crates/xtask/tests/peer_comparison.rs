@@ -84,6 +84,139 @@ fn public_peer_gold_production_is_a_positive_comparable_fallback() {
 }
 
 #[test]
+fn capital_peer_comparison_is_a_source_bound_positive_fallback() {
+    for metric in [
+        Metric::CapexTotal,
+        Metric::CapexSustaining,
+        Metric::CapexProject,
+    ] {
+        let fixture = Fixture::new_metric(metric);
+        for (issuer, token) in ISSUERS.into_iter().zip(["-1.25", "0.00", "2.50", "3.75"]) {
+            fixture.write_rows(issuer, token, &["reader_a", "reader_b"]);
+        }
+        let result = fixture.ok();
+        let json = &result.payload_json;
+        assert!(json.contains(&format!("\"metric\":\"{}\"", metric.as_str())));
+        assert!(json.contains("\"unit\":\"USD_m\""));
+        assert!(json.contains("\"peer_count\":4"));
+        assert!(json.contains("\"raw_token\":\"-1.25\""));
+        assert!(json.contains("\"num\":\"-251\",\"den\":\"200\""));
+        assert!(json.contains("\"verdict\":\"supported\""));
+        assert!(json.contains("\"timing\":\"cash\""));
+        assert!(json.contains("\"disposal_proceeds\":\"excluded\""));
+        assert!(!json.contains("\"allocation\":"));
+        for issuer in ISSUERS {
+            let pdf = fs::read(fixture.root.join(format!("documents/{issuer}.pdf"))).unwrap();
+            assert!(json.contains(&sha256(&pdf).to_hex()));
+            assert!(json.contains(&format!(
+                "{issuer}.pdf:p2:Invented reconciliation:Metric definition/2030"
+            )));
+        }
+        assert_eq!(fixture.ok().to_json(), result.to_json());
+        let mut args = fixture.args();
+        args.extend(["--format".into(), "markdown".into()]);
+        let (markdown, exit) = run(&args, &fixture.root);
+        assert_eq!(exit, 0, "{markdown}");
+        assert!(markdown.contains(metric.as_str()));
+        assert!(markdown.contains("USD_m"));
+        assert!(markdown.contains("Source and definition provenance"));
+    }
+}
+
+#[test]
+fn capital_peer_source_and_definition_mismatches_keep_the_complete_population() {
+    for (old, new, reason) in [
+        (
+            "timing=cash",
+            "timing=accrual",
+            "definition mismatch timing",
+        ),
+        (
+            "leases=included",
+            "leases=excluded",
+            "definition mismatch leases",
+        ),
+        (
+            "acquisitions=excluded",
+            "acquisitions=included",
+            "definition mismatch acquisitions",
+        ),
+        (
+            "disposal_proceeds=excluded",
+            "disposal_proceeds=included",
+            "definition mismatch disposal_proceeds",
+        ),
+        (
+            "ownership=attributable",
+            "ownership=full",
+            "definition mismatch ownership",
+        ),
+        (
+            "operations=all",
+            "operations=continuing",
+            "definition mismatch operations",
+        ),
+        (
+            ";timing=cash",
+            "",
+            "missing definition field timing",
+        ),
+        (
+            "metric=capex-total",
+            "metric=capex-project",
+            "unsupported definition metric",
+        ),
+        ("metal=all", "metal=copper", "unsupported definition metal"),
+        (
+            "denominator=none",
+            "denominator=sold",
+            "unsupported definition denominator",
+        ),
+        (
+            "unit = \"USD_m\"",
+            "unit = \"CAD_m\"",
+            "exact metric unit",
+        ),
+        (
+            "period = \"2030FY\"",
+            "period = \"2030H1\"",
+            "complete annual period",
+        ),
+    ] {
+        let fixture = Fixture::new_metric(Metric::CapexTotal);
+        fixture.change_rows("peer_d", old, new);
+        let result = fixture.invoke();
+        assert_ne!(result.exit_code, 0, "{old}: {}", result.to_json());
+        assert!(result.payload_json.contains("\"declared_peer_count\":4"));
+        assert!(result.payload_json.contains("\"comparison\":null"));
+        assert!(result.refusal.unwrap().what.contains(reason), "{old}");
+    }
+    let fixture = Fixture::new_metric(Metric::CapexSustaining);
+    fixture.write_rows("peer_d", "1700", &["reader_a"]);
+    assert_ne!(
+        fixture.invoke().exit_code,
+        0,
+        "pending reader must not disappear"
+    );
+
+    let fixture = Fixture::new_metric(Metric::CapexProject);
+    let mut args = fixture.args();
+    let at = args.iter().position(|s| s == "--as-of").unwrap() + 1;
+    args[at] = "2031-01-31".into();
+    assert_eq!(
+        invoke(&args, &fixture.root).0.refusal.unwrap().code,
+        "FMINE-REF-108"
+    );
+    let path = fixture.root.join("documents/peer_d.pdf");
+    let mut bytes = fs::read(&path).unwrap();
+    bytes[12] ^= 1;
+    fs::write(path, bytes).unwrap();
+    let changed = fixture.invoke();
+    assert_ne!(changed.exit_code, 0);
+    assert!(changed.to_json().to_ascii_lowercase().contains("sha256"));
+}
+
+#[test]
 fn public_peer_missing_or_incompatible_readings_refuse_the_complete_population() {
     for change in [
         "missing",
