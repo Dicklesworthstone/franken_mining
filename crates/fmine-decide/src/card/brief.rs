@@ -12,6 +12,7 @@ use super::{AlternativeStats, EvaluatedCard, ExactMoney, Result, arithmetic, cur
 pub struct EpistemicOnePager<'a> {
     card: &'a EvaluatedCard,
     primary: &'a AlternativeStats,
+    least_regret: &'a AlternativeStats,
     tie: Option<(ExactMoney, Vec<&'a AlternativeStats>)>,
 }
 
@@ -48,6 +49,7 @@ impl EvaluatedCard {
         Ok(EpistemicOnePager {
             card: self,
             primary,
+            least_regret: action(&s.minimax_regret_primary)?,
             tie,
         })
     }
@@ -81,20 +83,22 @@ impl EpistemicOnePager<'_> {
         let mut out = format!("# {}\n\n{}\n\n", md(&s.question), md(&s.valuation_basis));
         let _ = writeln!(
             out,
-            "**Act-now comparison.** The highest modeled average value belongs to {}. The smallest worst-case opportunity loss belongs to {}.\n",
+            "**Act-now comparison.** The highest modeled average value belongs to {}. The smallest worst-case opportunity loss is {} with {}.\n",
             names(&s.expected_value_winners),
+            money(self.least_regret.max_regret),
             names(&s.minimax_regret_winners)
         );
         let [lo, mid, hi] = a.p10_p50_p90;
         let _ = writeln!(
             out,
-            "**{} ({}).** The modeled 10th, 50th and 90th percentile payoffs are {}, {} and {}. The modeled average is {}.\n",
+            "**{} ({}).** The modeled 10th, 50th and 90th percentile payoffs are {}, {} and {}. The modeled average is {}. Choosing this action can forgo up to {} compared with the best action in hindsight.\n",
             md(&a.label),
             md(&a.action_id),
             money(lo),
             money(mid),
             money(hi),
-            money(a.mean)
+            money(a.mean),
+            money(a.max_regret)
         );
         if let Some((cost, rivals)) = &self.tie {
             let other = rivals

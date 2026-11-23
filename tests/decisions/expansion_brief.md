@@ -2,9 +2,9 @@
 
 Invented incremental NPV at 2026-01-01; real 2026 USD; 100% ownership; all cash flows already discounted
 
-**Act-now comparison.** The highest modeled average value belongs to Build the expansion (build). The smallest worst-case opportunity loss belongs to Smaller fixed-return option (smaller).
+**Act-now comparison.** The highest modeled average value belongs to Build the expansion (build). The smallest worst-case opportunity loss is 245 million USD with Smaller fixed-return option (smaller).
 
-**Build the expansion (build).** The modeled 10th, 50th and 90th percentile payoffs are -200 million USD, 300 million USD and 300 million USD. The modeled average is 100 million USD.
+**Build the expansion (build).** The modeled 10th, 50th and 90th percentile payoffs are -200 million USD, 300 million USD and 300 million USD. The modeled average is 100 million USD. Choosing this action can forgo up to 255 million USD compared with the best action in hindsight.
 
 **What changes the choice.** An additional cost of 45 million USD for build in every state ties Smaller fixed-return option (smaller) on average value.
 
