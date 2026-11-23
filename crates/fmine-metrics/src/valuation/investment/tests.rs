@@ -183,6 +183,181 @@ fn explicit_discounting_changes_the_choice_and_negative_investments_retain_do_no
 }
 
 #[test]
+fn discounted_post_capex_floor_changes_the_selected_investment_and_retains_every_choice() {
+    let inputs = bundles();
+    let base = MANIFEST.replace(
+        "initial_capex_usd = \"8000\"",
+        "initial_capex_usd = \"5000\"",
+    );
+    let unrestricted = manifest(&base).evaluate(&inputs).unwrap();
+    let limited = |floor: &str, cap: &str| {
+        manifest(&format!("{base}\n[[downside_limit]]\nfloor_usd = \"{floor}\"\nmax_breach_probability = \"{cap}\"\n"))
+            .evaluate(&inputs).unwrap()
+    };
+    let receipt = limited("0", "1/4");
+    let summary = receipt.decision().summary();
+    assert_eq!(summary.expected_value_winners, ["higher-power"]);
+    assert_eq!(
+        summary.alternatives,
+        unrestricted.decision().summary().alternatives
+    );
+    assert_ne!(receipt.digest(), unrestricted.digest());
+    assert_ne!(
+        receipt.declaration().value_tag(),
+        unrestricted.declaration().value_tag()
+    );
+    let screen = summary.downside.as_ref().unwrap();
+    assert_eq!(screen.nominal.winners.len(), 1);
+    assert_eq!(screen.nominal.winners[0].id, "process");
+    assert_eq!(screen.nominal.best_expected_value, Some(q(32962, 5)));
+    assert!(
+        receipt
+            .to_markdown()
+            .contains("| Nominal | process (act now) | 6592.40 | 2092.40 |")
+    );
+    assert_eq!(
+        screen.nominal.expected_value_cost_of_limit,
+        Some(q(10462, 5))
+    );
+    assert_eq!(screen.choices.len(), 3);
+    for choice in &screen.choices {
+        let risky = choice.choice.id == "higher-power";
+        assert_eq!(
+            choice.nominal_breach_probability,
+            if risky { q(1, 2) } else { ZERO }
+        );
+        assert_eq!(choice.nominal_eligible, !risky);
+    }
+    let limit = receipt.decision().inputs().downside_limit.as_ref().unwrap();
+    assert_eq!(limit.value.valuation_basis, VALUATION_BASIS);
+    assert!(receipt.decision().claim().parents.contains(&limit.claim_id));
+    for field in ["floor_usd", "max_breach_probability"] {
+        assert!(limit.anchors.iter().any(|a| a.artifact_sha256
+            == receipt.declaration().anchors[0].artifact_sha256
+            && a.locator.ends_with(&format!("downside_limit.{field}"))));
+    }
+    let equal = limited("212", "1/2");
+    let screen = equal.decision().summary().downside.as_ref().unwrap();
+    assert_eq!(screen.nominal.winners[0].id, "higher-power");
+    assert_eq!(
+        screen
+            .choices
+            .iter()
+            .find(|c| c.choice.id == "process")
+            .unwrap()
+            .nominal_breach_probability,
+        ZERO
+    );
+    let empty = limited("212.0001", "1/4");
+    let screen = empty.decision().summary().downside.as_ref().unwrap();
+    assert_eq!(
+        (
+            screen.nominal.best_expected_value,
+            screen.nominal.expected_value_cost_of_limit
+        ),
+        (None, None)
+    );
+    assert!(
+        empty
+            .to_markdown()
+            .contains("| Nominal | No eligible choice | — | — |")
+    );
+    let mut mismatched = receipt.declaration().clone();
+    mismatched
+        .value
+        .downside_limit
+        .as_mut()
+        .unwrap()
+        .valuation_basis = super::super::VALUATION_BASIS.into();
+    assert!(evaluate(&mismatched, &inputs).is_err());
+    assert_eq!(
+        evaluate(&rebound(mismatched.value, receipt.declaration()), &inputs)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-105"
+    );
+}
+
+#[test]
+fn investment_manifest_refuses_duplicate_or_unrepresentable_limits() {
+    let limit = "\n[[downside_limit]]\nfloor_usd = \"0\"\nmax_breach_probability = \"1/4\"\n";
+    for suffix in [
+        limit.repeat(2),
+        limit.replace("1/4", "5/4"),
+        limit.replace("\"0\"", "\"0.00001\""),
+    ] {
+        let text = format!("{MANIFEST}{suffix}");
+        assert_eq!(
+            worksheet::parse(&text, &source(&text, "investment.toml"))
+                .unwrap_err()
+                .code,
+            "FMINE-REF-506"
+        );
+    }
+}
+
+#[test]
+fn investment_screen_keeps_exact_ties_and_applies_the_floor_after_final_rounding() {
+    let text = MANIFEST.replace(
+        "initial_capex_usd = \"8000\"",
+        "initial_capex_usd = \"7092.4\"",
+    );
+    let inputs = bundles();
+    let screen = "\n[[downside_limit]]\nfloor_usd = \"212\"\nmax_breach_probability = \"1/2\"\n";
+    let tied = manifest(&format!("{text}{screen}"))
+        .evaluate(&inputs)
+        .unwrap();
+    let brief = tied
+        .decision()
+        .summary()
+        .downside
+        .as_ref()
+        .unwrap()
+        .decision_brief();
+    assert!(
+        brief.contains("| Nominal | higher-power (act now), process (act now) | 6592.40 | 0 |")
+    );
+
+    // The physical model retains binary64 inputs. Move the exact pre-rounding cash below the
+    // floor by adding capex, while keeping its final Money value exactly on the floor.
+    let text = text.replace(
+        "initial_capex_usd = \"1000\"",
+        "initial_capex_usd = \"1000.00004\"",
+    );
+    let strict = manifest(&format!("{text}{}", screen.replace("1/2", "0")))
+        .evaluate(&inputs)
+        .unwrap();
+    let soft = strict
+        .outcomes()
+        .iter()
+        .find(|p| p.alternative_id == "process" && p.scenario_id == "soft")
+        .unwrap();
+    let original = tied
+        .outcomes()
+        .iter()
+        .find(|p| p.alternative_id == "process" && p.scenario_id == "soft")
+        .unwrap();
+    assert_eq!(
+        soft.unrounded_value_usd,
+        original
+            .unrounded_value_usd
+            .checked_sub(q(1, 25_000))
+            .unwrap()
+    );
+    assert_eq!(
+        soft.unrounded_value_usd
+            .checked_sub(q(212, 1))
+            .unwrap()
+            .signum(),
+        -1
+    );
+    assert_eq!(soft.value.minor, 2_120_000);
+    let limit = strict.decision().summary().downside.as_ref().unwrap();
+    assert_eq!(limit.nominal.winners[0].id, "process");
+    assert_eq!(limit.nominal.eligible_order.len(), 1);
+}
+
+#[test]
 fn unrounded_baselines_and_periods_reach_one_final_rounding_boundary() {
     let m = manifest(MANIFEST);
     let mut spec = m.declaration().value.clone();

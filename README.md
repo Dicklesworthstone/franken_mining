@@ -210,9 +210,9 @@ and physical/commercial support must match, and every original worksheet and exa
 available. The card compares mutually exclusive investments with zero incremental value for do-nothing;
 it values only the declared cash window, with no inferred terminal value, tax, financing or project lifetime.
 
-The `decide production --manifest` comparison also supports a source-bound downside limit. It screens
-every alternative, including do-nothing, against the same declared cash floor and maximum probability of
-falling strictly below it. Add this section to the production comparison manifest:
+Both `decide investment` and `decide production --manifest` accept a downside limit. In an investment
+manifest the floor applies to the final discounted incremental value after capex over all declared periods.
+In an operating comparison it applies to the immediate cash margin. Each screen includes doing nothing.
 
 ```toml
 [[downside_limit]]
@@ -220,8 +220,13 @@ floor_usd = "0"
 max_breach_probability = "1/4"
 ```
 
+In the synthetic two-period investment example, changing higher-power initial capex to USD 5,000 raises
+its mean incremental value to USD 8,684.80. It loses money in one of the two equally weighted scenarios.
+Under the limit above, the original mode has the highest eligible mean at USD 6,592.40. The card shows
+the USD 2,092.40 of expected value forgone and the breach probability for each alternative.
+
 DESIGN (BD-225): values accept exact decimals or rational fractions; the floor must be exactly representable
-at the existing $0.0001 money boundary. The example retains the higher-power mode as the nominal
+at the existing $0.0001 money boundary. The operating comparison retains the higher-power mode as the nominal
 expected-value winner while selecting the original mode among the eligible choices: the higher-power
 mode loses cash in one of two equally weighted states, exceeding the declared one-quarter limit.
 Equality with the floor does not count as a breach, and equality with the probability limit passes.

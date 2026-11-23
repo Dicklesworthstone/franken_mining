@@ -195,6 +195,16 @@ fn empty_eligible_sets_are_complete_results_without_a_fallback_or_value_cost() {
     assert!(card.to_json().contains("\"status\":\"no_eligible_choice\""));
     assert!(card.to_markdown().contains("**No eligible choice.**"));
     assert!(card.to_markdown().contains("no fallback is selected"));
+    assert!(
+        result
+            .decision_brief()
+            .contains("| Nominal | No eligible choice | — | — |")
+    );
+    assert!(
+        result
+            .decision_brief()
+            .contains("| Stressed | No eligible choice | — | — |")
+    );
 }
 
 #[test]

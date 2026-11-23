@@ -2,12 +2,53 @@
 //! Determinism: DeterministicPerIsa (the inherited production receipt fixes the numerical inputs).
 
 use super::*;
-use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
+use fmine_decide::card::downside::DownsideLimit;
+use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 
 pub const SCHEMA: &str = "fmine.production-valuation.v1";
 pub const MAX_BYTES: u64 = 1024 * 1024;
 pub const NO_CLAIM: &str = super::NO_CLAIM;
 pub(super) type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
+
+pub(super) fn read_downside_limit(
+    slot: &mut Option<DownsideLimit>,
+    row: &TomlRow,
+    model_key: &str,
+    valuation_basis: &str,
+) -> Result<()> {
+    if slot.is_some() {
+        return Err(invalid(row.line, "at most one downside limit is supported"));
+    }
+    let f = fields(
+        &row.fields,
+        &["floor_usd", "max_breach_probability"],
+        row.line,
+    )?;
+    let minor = number(&f, "floor_usd")?
+        .checked_mul(Rat::from_integer(Money::SCALE))
+        .map_err(|_| invalid(row.line, "downside floor exceeds Money range"))?;
+    if minor.den() != 1 {
+        return Err(invalid(
+            get(&f, "floor_usd")?.1,
+            "downside floor must be exactly representable in 0.0001 USD; no rounding is applied",
+        ));
+    }
+    let maximum = number(&f, "max_breach_probability")?;
+    if maximum.num() < 0 || maximum.num() > maximum.den() {
+        return Err(invalid(
+            get(&f, "max_breach_probability")?.1,
+            "maximum breach probability must lie in [0,1]",
+        ));
+    }
+    *slot = Some(DownsideLimit {
+        model_key: model_key.into(),
+        valuation_basis: valuation_basis.into(),
+        floor: Money::from_minor(Currency::USD, minor.num()),
+        max_breach_probability: maximum,
+        policy_optimization: None,
+    });
+    Ok(())
+}
 
 pub(super) fn invalid(line: usize, message: impl AsRef<str>) -> Refusal {
     bad(

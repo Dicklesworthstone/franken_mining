@@ -356,8 +356,12 @@ impl ComparisonReceipt {
         use render::{md, monetary, shown};
         let spec = &self.declaration.value;
         let summary = self.decision.summary();
+        let brief = summary
+            .downside
+            .as_ref()
+            .map_or_else(String::new, |limit| limit.decision_brief());
         let mut out = format!(
-            "# Production alternatives\n\n{}\n\n{NO_CLAIM}\n\n**Shared scenario assumption:** {}.\n\n**Boundary / circuit:** {} / {}. **Physical interval:** [{}, {}). **Element:** {}.\n\n**Commercial support:** {}. **Evidence:** {:?}. **Confidentiality:** {}.\n\n",
+            "# Production alternatives\n\n{}\n\n{brief}{NO_CLAIM}\n\n**Shared scenario assumption:** {}.\n\n**Boundary / circuit:** {} / {}. **Physical interval:** [{}, {}). **Element:** {}.\n\n**Commercial support:** {}. **Evidence:** {:?}. **Confidentiality:** {}.\n\n",
             md(&spec.question),
             md(&spec.shared_scenario_basis),
             md(&spec.boundary),

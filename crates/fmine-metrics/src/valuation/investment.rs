@@ -2,6 +2,7 @@
 //! Determinism: DeterministicPerIsa (the inherited physical calculations); all new arithmetic is exact.
 
 use super::*;
+use fmine_decide::card::downside::DownsideLimit;
 
 mod render;
 #[cfg(test)]
@@ -51,6 +52,8 @@ pub struct InvestmentSpec {
     pub monetary_rounding: MonetaryRounding,
     pub periods: Vec<InvestmentPeriod>,
     pub alternatives: Vec<InvestmentAlternative>,
+    /// Applied to the final discounted incremental value after charging initial capex.
+    pub downside_limit: Option<DownsideLimit>,
 }
 
 impl InvestmentSpec {
@@ -129,6 +132,15 @@ fn invalid(message: &str) -> Refusal {
 }
 
 fn validate_spec(spec: &InvestmentSpec) -> Result<()> {
+    if spec
+        .downside_limit
+        .as_ref()
+        .is_some_and(|limit| limit.policy_optimization.is_some())
+    {
+        return Err(invalid(
+            "investment comparisons have no information policies to optimize",
+        ));
+    }
     if !(1..=MAX_ALTERNATIVES).contains(&spec.alternatives.len())
         || !(1..=MAX_PERIODS).contains(&spec.periods.len())
         || spec.currency != Currency::USD
@@ -410,7 +422,14 @@ pub fn evaluate(
         actions,
         information_options: Vec::new(),
         robustness: None,
-        downside_limit: None,
+        downside_limit: spec.downside_limit.as_ref().map(|limit| {
+            all_meta.claim(
+                "production.investment.downside_limit/1",
+                limit.clone(),
+                &limit.canonical_tag(),
+                AdditivityClass::NonAdditive,
+            )
+        }),
     })?;
     let mut enc = Encoder::new_frame(*b"PVIR", 1);
     enc.put_str(&super::render::claim(declaration));

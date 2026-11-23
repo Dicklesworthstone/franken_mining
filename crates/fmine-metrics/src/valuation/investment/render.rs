@@ -14,6 +14,9 @@ fn rat(q: Rat) -> String {
 }
 
 pub(super) fn spec(s: &InvestmentSpec) -> String {
+    let limit = s.downside_limit.as_ref().map_or_else(String::new, |limit| {
+        format!(",\"downside_limit\":{}", limit.to_json())
+    });
     let mut periods = s.periods.iter().collect::<Vec<_>>();
     periods.sort_by_key(|p| &p.id);
     let periods = periods
@@ -45,7 +48,7 @@ pub(super) fn spec(s: &InvestmentSpec) -> String {
         .join(",");
     format!(
         concat!(
-            r#"{{"model_key":{},"question":{},"shared_scenario_basis":{},"discount_basis":{},"cashflow_basis":{},"currency":{},"valuation_time_ns":"{}","boundary":{},"circuit":{},"material_domain":{},"dry_basis":{},"element":{},"commercial_support":{},"monetary_rounding":{},"periods":[{}],"alternatives":[{}]}}"#
+            r#"{{"model_key":{},"question":{},"shared_scenario_basis":{},"discount_basis":{},"cashflow_basis":{},"currency":{},"valuation_time_ns":"{}","boundary":{},"circuit":{},"material_domain":{},"dry_basis":{},"element":{},"commercial_support":{},"monetary_rounding":{},"periods":[{}],"alternatives":[{}]{}}}"#
         ),
         js(&s.model_key),
         js(&s.question),
@@ -62,7 +65,8 @@ pub(super) fn spec(s: &InvestmentSpec) -> String {
         js(&s.commercial_support),
         js(s.monetary_rounding.as_str()),
         periods,
-        alternatives
+        alternatives,
+        limit
     )
 }
 
@@ -106,8 +110,10 @@ impl InvestmentReceipt {
 
     pub fn to_markdown(&self) -> String {
         let s = &self.declaration.value;
+        let screen = self.decision.summary().downside.as_ref();
+        let brief = screen.map_or_else(String::new, |limit| limit.decision_brief());
         let mut out = format!(
-            "# Declared-period investment comparison\n\n{}\n\n{NO_CLAIM}\n\n**Shared scenario assumption:** {}.\n\n**Discount basis:** {}. **Valuation time:** {} ns. **Currency:** USD.\n\n**Boundary / circuit:** {} / {}. **Element:** {}. **Evidence:** {:?}.\n\n## Period assumptions\n\nEach discount factor multiplies that period's unrounded incremental cash directly. Gaps are outside the declared cash window; no rate or annualization is inferred.\n\n| Period | Start ns | End ns | Discount factor |\n|---|---:|---:|---:|\n",
+            "# Declared-period investment comparison\n\n{}\n\n{brief}{NO_CLAIM}\n\n**Shared scenario assumption:** {}.\n\n**Discount basis:** {}. **Valuation time:** {} ns. **Currency:** USD.\n\n**Boundary / circuit:** {} / {}. **Element:** {}. **Evidence:** {:?}.\n\n## Period assumptions\n\nEach discount factor multiplies that period's unrounded incremental cash directly. Gaps are outside the declared cash window; no rate or annualization is inferred.\n\n| Period | Start ns | End ns | Discount factor |\n|---|---:|---:|---:|\n",
             md(&s.question),
             md(&s.shared_scenario_basis),
             md(&s.discount_basis),
@@ -176,6 +182,22 @@ impl InvestmentReceipt {
                 shown(a.cvar95_loss.major),
                 shown(a.mean_regret.major)
             );
+        }
+        if let Some(screen) = screen {
+            out.push_str("\n### Investment downside by alternative\n\nThe floor applies to the final rounded discounted incremental cash after initial capex.\n\n| Alternative | Probability below floor | Eligibility |\n|---|---:|---|\n");
+            for choice in &screen.choices {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} |",
+                    md(&choice.choice.id),
+                    shown(choice.nominal_breach_probability),
+                    if choice.nominal_eligible {
+                        "eligible"
+                    } else {
+                        "rejected"
+                    }
+                );
+            }
         }
         let _ = writeln!(
             out,

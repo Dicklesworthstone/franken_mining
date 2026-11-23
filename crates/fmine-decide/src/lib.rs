@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::card::ExactMoney;
 use fmine_claim::Claim;
 use fmine_claim::dag::replay::ReplayCertificate;
 use fmine_claim::dag::{CheckedCone, ConeCut, TemporalGraph};
@@ -11,6 +12,7 @@ use fmine_core::codec::Encoder;
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Color, Refusal, RefusalCode};
 use fmine_numerics::voi::{VoiAnalysis, VoiError, VoiExperiment, VoiProblem, VoiSummary};
+use fmine_units::{Currency, ExactQty, ImportedValue, UNREGISTERED_UNIT};
 
 pub mod bounds;
 pub mod card;
@@ -19,37 +21,76 @@ pub mod card;
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlipMargin {
     pub parameter_name: String,
-    pub baseline_value: f64,
-    pub flip_value: f64,
+    pub baseline_value: ExactQty,
+    pub flip_value: ExactQty,
     pub units: String,
     pub switches_to_action: String,
 }
 
 impl FlipMargin {
-    /// Computes the linear break-even parameter value `flip_value` where an action with
-    /// advantage `npv_advantage_usd_m` (`>= 0`) and linear sensitivity `d_npv_d_param` (`!= 0`)
-    /// loses its optimality against `switches_to_action`.
-    #[must_use]
+    /// Linear tie with a challenger. The signed change in NPV advantage corresponds to the
+    /// signed parameter step. The mathematical threshold may lie outside a site's feasible range.
     pub fn from_linear_sensitivity(
         parameter_name: impl Into<String>,
-        baseline_value: f64,
-        npv_advantage_usd_m: f64,
-        d_npv_d_param: f64,
-        units: impl Into<String>,
+        baseline: &ImportedValue,
+        advantage: ExactMoney,
+        step: &ImportedValue,
+        change_in_advantage: ExactMoney,
         switches_to_action: impl Into<String>,
-    ) -> Self {
-        let delta = if d_npv_d_param.abs() > 1e-12 {
-            -npv_advantage_usd_m / d_npv_d_param
-        } else {
-            0.0
-        };
-        Self {
-            parameter_name: parameter_name.into(),
-            baseline_value,
-            flip_value: baseline_value + delta,
-            units: units.into(),
-            switches_to_action: switches_to_action.into(),
+    ) -> Result<Self, Refusal> {
+        if [baseline, step]
+            .iter()
+            .any(|p| p.unit() == UNREGISTERED_UNIT || p.unit().trim().is_empty())
+        {
+            return Err(Refusal::new(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                "the baseline and parameter step need registered units",
+            ));
         }
+        if baseline.unit() != step.unit()
+            || advantage.currency != Currency::USD
+            || change_in_advantage.currency != Currency::USD
+        {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                "the step must use the baseline unit and both NPV amounts must use USD",
+            ));
+        }
+        if advantage.major.signum() < 0 || step.value().signum() == 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "a linear break-even requires a nonnegative starting advantage and a nonzero parameter step",
+            ));
+        }
+        if change_in_advantage.major.signum() == 0 {
+            let why = if advantage.major.signum() == 0 {
+                "the actions tie throughout"
+            } else {
+                "the advantage never reaches zero"
+            };
+            return Err(Refusal::new(
+                RefusalCode::NoClaimInDomain201,
+                format!("constant payoff difference: {why}; no unique break-even"),
+            ));
+        }
+        let flip_value = advantage
+            .major
+            .checked_div(change_in_advantage.major)
+            .and_then(|steps| steps.checked_mul(step.value()))
+            .and_then(|shift| baseline.value().checked_sub(shift))
+            .map_err(|e| {
+                Refusal::new(
+                    RefusalCode::NumericalCertificateFailed207,
+                    format!("exact linear break-even: {e}"),
+                )
+            })?;
+        Ok(Self {
+            parameter_name: parameter_name.into(),
+            baseline_value: baseline.value(),
+            flip_value,
+            units: baseline.unit().into(),
+            switches_to_action: switches_to_action.into(),
+        })
     }
 }
 
@@ -206,7 +247,7 @@ pub struct DecisionCard {
     pub recommended_action: String,
     pub runner_up_action: String,
     pub expected_npv_usd_m: Claim<f64>,
-    pub cvar95_loss_usd_m: f64,
+    pub cvar95_loss: ExactMoney,
     pub flip_margins: Vec<FlipMargin>,
     pub top_voi_items: Vec<VoiRankedItem>,
     pub color: Color,
@@ -286,11 +327,12 @@ impl DecisionCard {
         recommended_action: impl Into<String>,
         runner_up_action: impl Into<String>,
         expected_npv_usd_m: Claim<f64>,
-        cvar95_loss_usd_m: f64,
+        cvar95_loss: ExactMoney,
         flip_margins: Vec<FlipMargin>,
         top_voi_items: Vec<VoiRankedItem>,
     ) -> Result<Self, Refusal> {
         expected_npv_usd_m.verify_uu_slot_for_decision()?;
+        Self::check_money(&expected_npv_usd_m, cvar95_loss)?;
         let color = expected_npv_usd_m.color()?;
         let title = title.into();
         let recommended_action = recommended_action.into();
@@ -307,11 +349,27 @@ impl DecisionCard {
             recommended_action,
             runner_up_action,
             expected_npv_usd_m,
-            cvar95_loss_usd_m,
+            cvar95_loss,
             flip_margins,
             top_voi_items,
             color,
         })
+    }
+
+    fn check_money(npv_usd_m: &Claim<f64>, tail: ExactMoney) -> Result<(), Refusal> {
+        if tail.currency != Currency::USD {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                "tail loss must use the expected-NPV currency (USD)",
+            ));
+        }
+        if !npv_usd_m.value.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "expected NPV must be finite",
+            ));
+        }
+        Ok(())
     }
 
     /// Seals this card only after its actual expected-NPV root and parents match the temporal graph and the
@@ -327,6 +385,7 @@ impl DecisionCard {
         replay: ReplayCertificate,
     ) -> Result<RetrospectiveDecisionCard, Refusal> {
         self.expected_npv_usd_m.check_id()?;
+        Self::check_money(&self.expected_npv_usd_m, self.cvar95_loss)?;
         self.expected_npv_usd_m.verify_uu_slot_for_decision()?;
         if self.color != self.expected_npv_usd_m.color()? {
             return Err(Refusal::new(
@@ -357,21 +416,21 @@ impl DecisionCard {
         })
     }
 
-    /// Internal replay projection, version 2: the rendered card, expected-NPV canonical Claim body and exact
+    /// Internal replay projection, version 3: the rendered card, expected-NPV canonical Claim body and exact
     /// bits of displayed numeric values, VOI totals and conditional policies. Exact bits prevent edits hidden
     /// by Markdown's decimal formatting from reusing a certificate. This is an in-process replay input, not a
     /// new durable card format.
     #[must_use]
     pub fn temporal_replay_bytes(&self) -> Vec<u8> {
-        let mut enc = Encoder::new_frame(*b"DCRP", 2);
+        let mut enc = Encoder::new_frame(*b"DCRP", 3);
         enc.put_str(&self.render_one_pager_markdown());
         enc.put_bytes(&self.expected_npv_usd_m.canonical_body());
         enc.put_u64(self.expected_npv_usd_m.value.to_bits());
-        enc.put_u64(self.cvar95_loss_usd_m.to_bits());
+        card::put_rat(&mut enc, self.cvar95_loss.major);
         enc.put_u64(self.flip_margins.len() as u64);
         for margin in &self.flip_margins {
-            enc.put_u64(margin.baseline_value.to_bits());
-            enc.put_u64(margin.flip_value.to_bits());
+            card::put_rat(&mut enc, margin.baseline_value);
+            card::put_rat(&mut enc, margin.flip_value);
         }
         enc.put_u64(self.expected_npv_usd_m.uu_terms.len() as u64);
         for term in &self.expected_npv_usd_m.uu_terms {
@@ -422,18 +481,20 @@ impl DecisionCard {
             self.recommended_action, self.runner_up_action
         ));
         out.push_str(&format!(
-            "- **Expected Value**: `${:.2}M` | **CVaR95 Tail Loss**: `${:.2}M`\n\n",
-            self.expected_npv_usd_m.value, self.cvar95_loss_usd_m
+            "- **Expected Value**: `${:.2}M` | **CVaR95 Tail Loss**: `{} {:?}`\n\n",
+            self.expected_npv_usd_m.value,
+            card::render::short_decimal(self.cvar95_loss.major),
+            self.cvar95_loss.currency
         ));
 
         out.push_str("## Flip Margins (What Flips the Decision)\n");
         for fm in &self.flip_margins {
             out.push_str(&format!(
-                "- **{}**: baseline `{:.3} {}` -> flips at `{:.3} {}` to `{}`\n",
+                "- **{}**: baseline `{} {}`, linear tie at `{} {}` with `{}`\n",
                 fm.parameter_name,
-                fm.baseline_value,
+                card::render::short_decimal(fm.baseline_value),
                 fm.units,
-                fm.flip_value,
+                card::render::short_decimal(fm.flip_value),
                 fm.units,
                 fm.switches_to_action
             ));
@@ -448,7 +509,9 @@ impl DecisionCard {
         }
 
         out.push_str("\n## Ranked Value-of-Information (`VOI`) Campaigns\n\n");
-        if !self.top_voi_items.is_empty() {
+        if self.top_voi_items.is_empty() {
+            out.push_str("No information campaigns were evaluated.\n");
+        } else {
             out.push_str(
                 "Finite-model values conditional on the supplied priors, payoffs and signal likelihoods; \
                  these probabilities do not establish calibration. State and action indices are zero-based \
@@ -564,24 +627,157 @@ mod tests {
         )
     }
 
+    fn usd(major: i128) -> ExactMoney {
+        ExactMoney {
+            currency: Currency::USD,
+            major: ExactQty::from_integer(major),
+        }
+    }
+
+    fn parameter(decimal: &str, unit: &str) -> ImportedValue {
+        ImportedValue::import(
+            ExactQty::from_decimal_str(decimal).unwrap(),
+            unit,
+            &["mass_fraction".into(), "g_per_t".into()],
+        )
+    }
+
     fn temporal_card(parents: Vec<ObjectId>) -> DecisionCard {
         DecisionCard::build(
             "Synthetic retrospective input control",
             "Collect information",
             "Do nothing",
             make_npv_claim_with_parents(true, EvidenceClass::ModelledCalibrated, parents),
-            40.0,
-            vec![FlipMargin::from_linear_sensitivity(
-                "head grade",
-                2.0,
-                10.0,
-                100.0,
-                "g/t",
-                "Do nothing",
-            )],
+            usd(40_000_000),
+            vec![
+                FlipMargin::from_linear_sensitivity(
+                    "head grade",
+                    &parameter("2", "g_per_t"),
+                    usd(10_000_000),
+                    &parameter("1", "g_per_t"),
+                    usd(100_000_000),
+                    "Do nothing",
+                )
+                .unwrap(),
+            ],
             vec![],
         )
         .expect("synthetic card")
+    }
+
+    #[test]
+    fn golden_linear_decision_card_shows_the_exact_tie_and_signed_tail_loss() {
+        // The committed digest uses the independent CLM1/BLAKE3 oracle in scripts/oracle.
+        assert_eq!(
+            temporal_card(vec![]).render_one_pager_markdown(),
+            include_str!("../../../tests/decisions/linear_card.md")
+        );
+    }
+
+    #[test]
+    fn flat_and_tiny_sensitivities_distinguish_absent_ties_from_finite_thresholds() {
+        let base = parameter("2", "g_per_t");
+        let step = parameter("1", "g_per_t");
+        let calc = |adv, step: &ImportedValue, change| {
+            FlipMargin::from_linear_sensitivity("grade", &base, adv, step, change, "defer")
+        };
+        for (adv, why) in [(usd(0), "tie throughout"), (usd(1), "never reaches zero")] {
+            let err = calc(adv, &step, usd(0)).unwrap_err();
+            assert_eq!(err.code, "FMINE-REF-201");
+            assert!(err.what.contains(why));
+        }
+        assert_eq!(
+            calc(usd(0), &step, usd(1)).unwrap().flip_value,
+            base.value()
+        );
+        let tiny = ExactMoney {
+            currency: Currency::USD,
+            major: ExactQty::new(1, 10_000_000_000_000).unwrap(),
+        };
+        assert_eq!(
+            calc(usd(1), &step, tiny).unwrap().flip_value,
+            ExactQty::from_integer(-9_999_999_999_998)
+        );
+        assert_eq!(
+            calc(usd(1), &parameter("-1", "g_per_t"), usd(2))
+                .unwrap()
+                .flip_value,
+            ExactQty::new(5, 2).unwrap()
+        );
+        assert_eq!(
+            calc(usd(-1), &step, usd(2)).unwrap_err().code,
+            "FMINE-REF-109"
+        );
+        assert_eq!(
+            calc(usd(1), &parameter("0", "g_per_t"), usd(2))
+                .unwrap_err()
+                .code,
+            "FMINE-REF-109"
+        );
+        assert_eq!(
+            calc(usd(1), &parameter("1", "mass_fraction"), usd(2))
+                .unwrap_err()
+                .code,
+            "FMINE-REF-105"
+        );
+        assert_eq!(
+            calc(usd(1), &parameter("1", "unknown"), usd(2))
+                .unwrap_err()
+                .code,
+            "FMINE-REF-107"
+        );
+        assert_eq!(
+            calc(usd(i128::MAX), &step, tiny).unwrap_err().code,
+            "FMINE-REF-207"
+        );
+        assert_eq!(
+            calc(
+                usd(1),
+                &step,
+                ExactMoney {
+                    currency: Currency::CAD,
+                    ..usd(3)
+                }
+            )
+            .unwrap_err()
+            .code,
+            "FMINE-REF-105"
+        );
+    }
+
+    #[test]
+    fn one_pager_rejects_bad_money_and_preserves_a_fractional_negative_loss() {
+        let npv = make_npv_claim(true, EvidenceClass::ModelledCalibrated);
+        let build = |claim, tail| {
+            DecisionCard::build("upgrade", "proceed", "hold", claim, tail, vec![], vec![])
+        };
+        let tail = ExactMoney {
+            currency: Currency::USD,
+            major: ExactQty::new(-1, 2).unwrap(),
+        };
+        assert!(
+            build(npv.clone(), tail)
+                .unwrap()
+                .render_one_pager_markdown()
+                .contains("`-0.50 USD`")
+        );
+        assert_eq!(
+            build(
+                npv.clone(),
+                ExactMoney {
+                    currency: Currency::CAD,
+                    ..tail
+                }
+            )
+            .unwrap_err()
+            .code,
+            "FMINE-REF-105"
+        );
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut bad = npv.clone();
+            bad.value = value;
+            assert_eq!(build(bad, tail).unwrap_err().code, "FMINE-REF-109");
+        }
     }
 
     fn temporal_fixture(card: &DecisionCard) -> (TemporalGraph, ConeCut, ReplayStore) {
@@ -791,12 +987,24 @@ mod tests {
             let mut edited = original.clone();
             match field {
                 0 => edited.expected_npv_usd_m.value += 0.000_01,
-                1 => edited.cvar95_loss_usd_m += 0.000_01,
-                2 => edited.flip_margins[0].baseline_value += 0.000_01,
-                3 => edited.flip_margins[0].flip_value += 0.000_01,
+                1 => {
+                    edited.cvar95_loss.major = ExactQty::from_decimal_str("40000000.00001").unwrap()
+                }
+                2 => {
+                    edited.flip_margins[0].baseline_value =
+                        ExactQty::from_decimal_str("2.00001").unwrap()
+                }
+                3 => {
+                    edited.flip_margins[0].flip_value =
+                        ExactQty::from_decimal_str("1.90001").unwrap()
+                }
                 _ => edited.expected_npv_usd_m.uu_terms[0].downside_exposure_usd_m += 0.000_01,
             }
-            assert_eq!(shown, edited.render_one_pager_markdown(), "field {field}");
+            if field == 0 || field == 4 {
+                assert_eq!(shown, edited.render_one_pager_markdown(), "field {field}");
+            } else {
+                assert_ne!(shown, edited.render_one_pager_markdown(), "field {field}");
+            }
             assert_ne!(bytes, edited.temporal_replay_bytes(), "field {field}");
         }
     }
@@ -811,7 +1019,7 @@ mod tests {
             "Proceed",
             "Defer",
             bad_claim,
-            40.0,
+            usd(40_000_000),
             vec![],
             vec![],
         )
@@ -831,7 +1039,7 @@ mod tests {
             "Proceed",
             "Defer",
             red_claim,
-            40.0,
+            usd(40_000_000),
             vec![],
             vec![],
         )
@@ -842,19 +1050,20 @@ mod tests {
         let ok_claim = make_npv_claim(true, EvidenceClass::ModelledCalibrated);
         let fm = FlipMargin::from_linear_sensitivity(
             "Au_Recovery",
-            0.86,
-            24.0,
-            300.0,
-            "fraction",
+            &parameter("0.86", "mass_fraction"),
+            usd(24_000_000),
+            &parameter("0.01", "mass_fraction"),
+            usd(3_000_000),
             "Leach Pad Only",
-        );
-        assert!((fm.flip_value - 0.78).abs() < 1e-9);
+        )
+        .unwrap();
+        assert_eq!(fm.flip_value, ExactQty::new(39, 50).unwrap());
         let card = DecisionCard::build(
             "Pushback 4",
             "Proceed Mill",
             "Leach Pad Only",
             ok_claim,
-            40.0,
+            usd(40_000_000),
             vec![fm],
             vec![],
         )
@@ -881,7 +1090,7 @@ mod tests {
             "Proceed Mill",
             "Leach Pad Only",
             anchored,
-            40.0,
+            usd(40_000_000),
             vec![],
             vec![],
         )

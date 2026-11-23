@@ -81,7 +81,7 @@ pub struct DecisionInputs {
     pub downside_limit: Option<Claim<downside::DownsideLimit>>,
 }
 
-fn put_rat(enc: &mut Encoder, value: Rat) {
+pub(crate) fn put_rat(enc: &mut Encoder, value: Rat) {
     enc.put_fixed(&value.num().to_le_bytes());
     enc.put_fixed(&value.den().to_le_bytes());
 }

@@ -2,7 +2,7 @@
 //! Determinism: Exact
 
 use super::*;
-use crate::card::render::{ids, js, md, ratio, rq};
+use crate::card::render::{ids, js, md, ratio, rq, short_decimal};
 use std::fmt::Write as _;
 
 fn choice_id(c: &DownsideChoiceId) -> String {
@@ -96,6 +96,66 @@ impl DownsideRanking {
 }
 
 impl DownsideSummary {
+    /// First-screen comparison of the choices that pass each requested probability screen.
+    /// The cost is relative to the unrestricted nominal optimum, including fixed test policies.
+    #[must_use]
+    pub fn decision_brief(&self) -> String {
+        let currency = currency_name(self.limit.floor.ccy);
+        let cap = self.limit.max_breach_probability;
+        let probability = cap
+            .checked_mul(Rat::from_integer(100))
+            .ok()
+            .filter(|percent| percent.den() == 1)
+            .map_or_else(|| ratio(cap), |percent| format!("{}%", percent.num()));
+        let mut out = format!(
+            "## Choices within the downside limit\n\nThe model allows a probability of at most {} that net payoff falls below {} {}. The scenario probabilities are uncalibrated.\n\n| Probability screen | Highest-value eligible choices | Nominal expected value ({currency}) | Expected value forgone ({currency}) |\n|---|---|---:|---:|\n",
+            probability,
+            money_text(self.limit.floor),
+            currency,
+        );
+        let mut row = |screen: &str, ranking: &DownsideRanking, policy: &str| {
+            let names = ranking
+                .winners
+                .iter()
+                .map(|choice| {
+                    let kind = match choice.kind {
+                        ChoiceKind::ActNow => "act now",
+                        ChoiceKind::InformationOption => policy,
+                    };
+                    format!("{} ({kind})", md(&choice.id))
+                })
+                .collect::<Vec<_>>();
+            let choices = if names.is_empty() {
+                "No eligible choice".into()
+            } else {
+                names.join(", ")
+            };
+            let _ = writeln!(
+                out,
+                "| {screen} | {choices} | {} | {} |",
+                ranking
+                    .best_expected_value
+                    .map_or_else(|| "—".into(), short_decimal),
+                ranking
+                    .expected_value_cost_of_limit
+                    .map_or_else(|| "—".into(), short_decimal)
+            );
+        };
+        row("Nominal", &self.nominal, "fixed test policy");
+        if let Some(robust) = &self.robust {
+            row("Stressed", robust, "fixed test policy");
+        }
+        if let Some(search) = &self.policy_optimization {
+            let screen = match search.configuration.screen {
+                PolicyScreen::Nominal => "Nominal with optimized test responses",
+                PolicyScreen::Wasserstein => "Stressed with optimized test responses",
+            };
+            row(screen, &search.overall, "optimized test policy");
+        }
+        out.push('\n');
+        out
+    }
+
     #[must_use]
     pub fn to_json(&self) -> String {
         let choices = self.choices.iter().map(|c| format!(

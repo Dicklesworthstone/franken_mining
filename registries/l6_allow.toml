@@ -120,22 +120,6 @@ kind = "generic"
 reason = "SpatialFrontPitMonitor covariance: nugget and sill variances of the caller's observed values, in their unit squared; the monitor is unit-agnostic (the range is a Qty<Length> since 2026-11-01)"
 
 [[allow]]
-crate = "fmine-decide"
-file = "src/lib.rs"
-fn = "from_linear_sensitivity"
-params = "baseline_value, npv_advantage_usd_m, d_npv_d_param"
-kind = "debt"
-reason = "FlipMargin: a parameter value whose unit is a string, NPV in USD millions and its derivative, passed bare"
-
-[[allow]]
-crate = "fmine-decide"
-file = "src/lib.rs"
-fn = "build"
-params = "cvar95_loss_usd_m"
-kind = "debt"
-reason = "DecisionCard CVaR loss in USD millions, passed bare beside a Claim for the expected NPV"
-
-[[allow]]
 crate = "fmine-geom"
 file = "src/winding.rs"
 fn = "build"

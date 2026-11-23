@@ -37,6 +37,20 @@ pub(crate) fn js(value: &str) -> String {
 pub(super) fn ratio(value: Rat) -> String {
     format!("{}/{}", value.num(), value.den())
 }
+
+/// Exact to two decimal places when possible. Finer values retain their fraction.
+pub(crate) fn short_decimal(value: Rat) -> String {
+    let (n, d) = (value.num(), value.den());
+    if d == 1 {
+        return n.to_string();
+    }
+    if 100 % d == 0 {
+        let sign = if n < 0 { "-" } else { "" };
+        let (n, d) = (n.unsigned_abs(), d as u128);
+        return format!("{sign}{}.{:02}", n / d, (n % d) * (100 / d));
+    }
+    ratio(value)
+}
 pub(crate) fn rq(value: Rat) -> String {
     js(&ratio(value))
 }
@@ -503,8 +517,13 @@ impl EvaluatedCard {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let s = self.summary();
+        let brief = s
+            .downside
+            .as_ref()
+            .map(|screen| screen.decision_brief())
+            .unwrap_or_default();
         let mut out = format!(
-            "# Draft decision comparison: {}\n\n{NO_CLAIM}\n\n**Model:** {}. **Currency:** {} in major units. **Valuation basis:** {}.\n\n**Evidence:** {}; **output colour:** estimated (no calibrated output is asserted); weakest input colour: {}.\n\n**Act-now expected-value co-winners:** {}. **Displayed primary / runner-up:** {} / {}.\n\n**Act-now minimax-regret co-winners:** {}.\n\n{TIE_RULE}\n\n",
+            "# Draft decision comparison: {}\n\n{brief}{NO_CLAIM}\n\n**Model:** {}. **Currency:** {} in major units. **Valuation basis:** {}.\n\n**Evidence:** {}; **output colour:** estimated (no calibrated output is asserted); weakest input colour: {}.\n\n**Act-now expected-value co-winners:** {}. **Displayed primary / runner-up:** {} / {}.\n\n**Act-now minimax-regret co-winners:** {}.\n\n{TIE_RULE}\n\n",
             md(&s.question),
             md(&s.model_key),
             currency_name(s.currency),

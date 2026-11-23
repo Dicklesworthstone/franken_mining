@@ -91,6 +91,11 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   digest binds complete declaration metadata, source receipts and final comparison. All arithmetic
   overflow, missing bundles, changed state weights and incompatible supports refuse the whole request.
 
+  DESIGN (BD-225.5): an optional `[[downside_limit]]` binds an exact USD floor and maximum breach
+  probability to the investment declaration. Every rounded post-capex outcome, including zero for
+  doing nothing, enters the same screen. The report gives each alternative's probability of falling
+  strictly below the floor, the eligible winners, and the expected value forgone under the limit.
+
   Synthetic example: `tests/decisions/production_investment.toml` uses two periods and factors 1 and
   1/2. Initial capex of 1,000/8,000 USD reverses the operating-margin ranking: the original mode's mean
   incremental value is 6,592.40 USD versus 5,684.80 USD for higher power. A second-period factor of one

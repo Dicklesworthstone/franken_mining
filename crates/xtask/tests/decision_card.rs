@@ -101,6 +101,37 @@ fn real_binary_and_library_keep_identical_json_and_markdown() {
 }
 
 #[test]
+fn downside_brief_matches_the_hand_calculated_fixed_and_optimized_choices() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let markdown = |model: &str| {
+        let output = Command::new(binary())
+            .current_dir(&root)
+            .args(["decide", "card", model, "--format", "markdown"])
+            .output()
+            .expect("execute the decision command");
+        assert!(output.status.success(), "{:?}", output.stderr);
+        String::from_utf8(output.stdout).expect("Markdown is UTF-8")
+    };
+    let fixed = markdown("tests/decisions/downside_limit.toml");
+    let (_, body) = fixed.split_once("\n\n").expect("decision title");
+    let (brief, _) = body
+        .split_once("\nDraft comparison")
+        .expect("scope below brief");
+    assert_eq!(
+        brief,
+        include_str!("../../../tests/decisions/downside_brief.md")
+    );
+    let optimized = markdown("tests/decisions/constrained_testwork.toml");
+    let (brief, _) = optimized
+        .split_once("\nDraft comparison")
+        .expect("scope below brief");
+    assert!(brief.contains("| Nominal | hold (act now) | 0 | 34 |"));
+    assert!(brief.contains(
+        "| Nominal with optimized test responses | testwork (optimized test policy) | 28.50 | 5.50 |"
+    ));
+}
+
+#[test]
 fn information_policy_keeps_identical_library_and_binary_rendering() {
     let mut oracle = oracle();
     oracle.arg("--with-information");

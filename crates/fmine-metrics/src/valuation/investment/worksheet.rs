@@ -2,7 +2,9 @@
 //! Determinism: Exact
 
 use super::*;
-use crate::valuation::worksheet::{fields, get, invalid as parse_error, number};
+use crate::valuation::worksheet::{
+    fields, get, invalid as parse_error, number, read_downside_limit,
+};
 use fmine_registry::toml_subset::parse_subset;
 
 pub const SCHEMA: &str = "fmine.production-investment.v1";
@@ -63,10 +65,10 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| parse_error(e.line, e.reason))?;
-    if doc.rows.len() > MAX_ALTERNATIVES + MAX_PERIODS + MAX_ALTERNATIVES * MAX_PERIODS + 16 {
+    if doc.rows.len() > MAX_ALTERNATIVES + MAX_PERIODS + MAX_ALTERNATIVES * MAX_PERIODS + 16 + 1 {
         return Err(parse_error(
             1,
-            "too many investment, period, bundle or UU rows",
+            "too many investment, period, bundle, downside limit or UU rows",
         ));
     }
     let top = fields(
@@ -100,6 +102,7 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         ));
     }
     let mut anchors = vec![source.clone()];
+    let mut downside_limit = None;
     let (mut periods, mut alternatives, mut sources, mut unknowns) =
         (Vec::new(), Vec::new(), BTreeMap::new(), BTreeMap::new());
     let time = |f: &crate::valuation::worksheet::Fields<'_>, key| {
@@ -158,6 +161,14 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
                     return Err(parse_error(row.line, "duplicate investment-period bundle"));
                 }
             }
+            "downside_limit" => {
+                read_downside_limit(
+                    &mut downside_limit,
+                    row,
+                    get(&top, "model_key")?.0,
+                    VALUATION_BASIS,
+                )?;
+            }
             "uu" => {
                 let f = fields(
                     &row.fields,
@@ -190,7 +201,7 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
             _ => {
                 return Err(parse_error(
                     row.line,
-                    "only period, alternative, bundle and uu tables are supported",
+                    "only period, alternative, bundle, downside_limit and uu tables are supported",
                 ));
             }
         }
@@ -224,6 +235,7 @@ pub fn parse(text: &str, source: &SourceAnchor) -> Result<Manifest> {
         element: get(&top, "element")?.0.into(),
         commercial_support: get(&top, "commercial_support")?.0.into(),
         monetary_rounding: MonetaryRounding::NearestTiesEvenFourPlaces,
+        downside_limit,
         periods,
         alternatives,
     };

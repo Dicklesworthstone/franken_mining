@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use super::parcels::FeedCase;
-use crate::card::render::{claim_json, js, rq};
+use crate::card::render::{claim_json, js, rq, short_decimal};
 
 use super::{
     BoundCard, BoundSummary, Interval, NO_CLAIM, RecoveryBoundModel, ShareRange, TestCondition,
@@ -167,18 +167,6 @@ fn interval_text(value: Interval) -> String {
     format!("[{}, {}]", ratio(value.lower), ratio(value.upper))
 }
 
-// Present short, exact decimal masses when possible, with fractions for finer precision.
-fn mass_text(value: super::Rat) -> String {
-    let (n, d) = (value.num(), value.den());
-    if d == 1 {
-        return n.to_string();
-    }
-    if 100 % d == 0 {
-        return format!("{}.{:02}", n / d, (n % d) * (100 / d));
-    }
-    ratio(value)
-}
-
 fn lot_range(bounds: Interval, format: impl Fn(super::Rat) -> String) -> String {
     let lower = format(bounds.lower);
     if bounds.lower == bounds.upper {
@@ -318,10 +306,10 @@ impl BoundCard {
                 let _ = writeln!(
                     out,
                     "| {label} | {} | {} | {} | {} | {recovery} | {status} |",
-                    lot_range(case.dry_tonnes, mass_text),
-                    lot_range(case.contained_grams, mass_text),
-                    lot_range(case.recovered_grams, mass_text),
-                    lot_range(case.forgone_recovered_grams, mass_text)
+                    lot_range(case.dry_tonnes, short_decimal),
+                    lot_range(case.contained_grams, short_decimal),
+                    lot_range(case.recovered_grams, short_decimal),
+                    lot_range(case.forgone_recovered_grams, short_decimal)
                 );
             }
         }

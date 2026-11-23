@@ -36,7 +36,8 @@ generator returns `DecisionCard::temporal_replay_bytes()`: rendered Markdown, th
 displayed numeric values, VOI calculation totals and the complete retained conditional policy. Thus changing a
 value beneath the displayed decimal precision cannot reuse a proof. Unrendered Claim metadata is subject to the
 existing Claim canonical-body limits.
-The projection is an internal versioned replay input (version 2), not a new durable `FMT-CARD-1` encoding.
+The internal replay projection uses version 3 and encodes the exact numerator and denominator of
+each break-even and tail loss. Durable journal records retain their original card bytes.
 
 ## 3. Outputs
 `DecisionCard` (`FMT-CARD-1`), `RetrospectiveDecisionCard` (`G-HELM-4`), `EvaluatedCard`, `FlipMargin`, `VoiCampaignRank`, and `RecoveryBoundCard` (JSON and Markdown renderers). `FMINE-REF-204` refuses a non-`KnownKnown` Claim with no UU term. The card type has no `authoritative`, `may_actuate`, `is_safe_certification` or `is_signing_basis` field. Those flags are not enforced here: they are not fields of `DecisionCard`, and this tree does not define them in `fmine-claim` or `fmine-evidence`.
@@ -249,6 +250,9 @@ The projection is an internal versioned replay input (version 2), not a new dura
 
   `DownsideSummary` retains every kind-qualified choice, each state's conditional breach probability,
   nominal/stressed probabilities and eligibility, and separate nominal/stressed eligible rankings.
+  DESIGN (BD-225.4): the Markdown card opens with the eligible co-winners and nominal value forgone
+  under each requested screen. An optimized signal response has a separate row from the fixed policy.
+  The hand-calculated first-screen example is in `tests/decisions/downside_brief.md`.
   Both rankings maximize nominal expected value, preserve every exact co-winner and report the loss
   relative to the unconstrained maximum nominal value. An empty eligible set is `NoEligibleChoice`, with
   empty ranks and null best-value/cost fields; doing nothing is never inserted as a fallback. Ordinary
@@ -351,15 +355,20 @@ section now renders the retained conditional action policy.
 
 `registries/loc_budget.toml` gives this crate layer E, subsystem Helm, 20,000 planned lines and a 23,000 ceiling. The `DecisionCard` shows the expected-NPV Claim's evidence class, epistemic status, state and colour. It assigns none of them. The CVaR, flip margins and VOI fields carry no evidence class.
 
-`FlipMargin::from_linear_sensitivity` is linear. A derivative whose magnitude is at most 1e-12 yields `flip_value = baseline_value`. The doc comment's non-negative NPV advantage is not checked, and non-finite inputs are not checked. `DecisionCard::build` does not check that `cvar95_loss_usd_m` is finite, and it does not tie the flip margins or the VOI items to the two named actions.
+DESIGN (BD-225.6): a linear break-even takes a baseline, a nonzero step in the same registered unit,
+and two exact USD amounts for starting advantage and its signed change over that step. A constant
+advantage has no unique crossing and returns `FMINE-REF-201`. A representable nonzero slope gives
+its exact mathematical tie. Site feasibility of that parameter value requires separate evidence.
+The card admits signed exact USD tail loss and a finite expected NPV. Ancillary inputs still lack
+independent Claim provenance.
 
-`DecisionCard::build` does not require a do-nothing alternative and does not compute regret. `card::evaluate` does both. Nothing in `DecisionCard::build` refuses a priced safety constraint, and there is no banner for an assumed top-3 sensitivity. VOI is shown without a Monte Carlo standard error. GATE-HELM-01 still needs two real retrospective cards. There is no golden card and no decision-ledger entry. The module docs label flip margins BD-227 and VOI ranking BD-225. The plan's BD-225 is the card schema and BD-227 is the VOI estimator.
+`DecisionCard::build` does not require a do-nothing alternative and does not compute regret. `card::evaluate` does both. Nothing in `DecisionCard::build` refuses a priced safety constraint, and there is no banner for an assumed top-3 sensitivity. VOI is shown without a Monte Carlo standard error. GATE-HELM-01 still needs two real retrospective cards. The one-page golden is `tests/decisions/linear_card.md`. The CLI records selected alternatives and the retained card in `decide journal record`, with offline replay covered by `crates/xtask/tests/decision_journal.rs`.
 
 The local outline names these tests for the properties above: `test_decision_card_uu_and_flip_margin_guards`, `retrospective_card_seals_actual_root_and_replayed_output`, `retrospective_card_refuses_unrelated_root_and_omitted_parents`, `retrospective_card_refuses_late_ancestor_and_changed_cut_or_cone`, `retrospective_card_refuses_output_or_claim_edits_after_replay`, `temporal_replay_projection_binds_subdisplay_numeric_edits`, `replay_projection_binds_subdisplay_policy_and_summary_edits`, `voi_campaigns_rank_by_net_value`, `gb29_ranking_exposes_the_observation_that_changes_the_action`, `campaign_and_action_ties_and_impossible_signals_are_retained`, `invalid_campaigns_refuse_the_whole_ranking`, `small_positive_cost_keeps_its_ratio_and_unrepresentable_ratios_refuse`, `gb29_exact_payoffs_regret_quantiles_and_signed_loss`, `overflow_refuses_instead_of_saturating_or_dropping_an_action`, `garbling_never_increases_information_value`, `invalid_material_information_never_drops_the_option`, and `exact_radius_bounds_every_independent_three_state_grid_stress`. The known-answer files named there are `crates/xtask/testdata/decision_card_oracle.py` and `decision_sensitivity_oracle.py`, driven by `crates/xtask/tests/decision_card.rs`.
 
 The merge ec60a12 dropped two test families from this list; bd-coro restores them. `PolicyRisk` is tested in `card/information/policy_risk.rs` (5): `actual_gb29_policy_has_more_tail_loss_despite_positive_net_information_value`, `fractional_tail_boundary_and_inverse_cdf_endpoints_are_exact`, `all_gain_signed_losses_and_uniform_cost_translation_are_preserved`, `incomplete_mass_wrong_mean_and_unrepresentable_net_outcomes_refuse` and `full_model_retains_unreachable_signals_and_exposes_risk_relevant_posterior_ties`. `risk_comparison` is tested in `card/information/ranking.rs` (4): `frontier_keeps_expected_value_tail_tradeoffs_and_drops_dominated_choices`, `tail_ranking_retains_exact_ties_and_uses_value_only_for_presentation`, `equal_expected_value_with_strictly_lower_tail_loss_dominates` and `exact_loss_probability_distinguishes_zero_from_negative_payoff`. The other counts are `card.rs` 15, `card/model.rs` 10, `card/render/sensitivity.rs` 5 and `lib.rs` 12.
 
-`registries/l6_allow.toml` in this tree has two `fmine-decide` rows, for `from_linear_sensitivity` and for `build` (`cvar95_loss_usd_m`).
+The Helm constructors take unit-bearing quantities and exact currency amounts under the workspace L-6 check.
 
 ## 11. Public API
 - `DecisionCard`, `RetrospectiveDecisionCard`, `FlipMargin`, `rank_voi_campaigns`, `render_one_pager_markdown`.
