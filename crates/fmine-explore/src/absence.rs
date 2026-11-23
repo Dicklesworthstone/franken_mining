@@ -292,7 +292,7 @@ mod tests {
             EffortRecord::build(
                 ObjectId::from_canonical_bytes(PrefixKind::Claim, tag.as_bytes()),
                 ExploreMethod::AircoreDrilling,
-                site.clone(),
+                site,
                 2024,
                 2024,
                 MethodSpec::new(one, one, one, half, one).unwrap(),
