@@ -102,6 +102,7 @@ struct Card {
     findings: Vec<String>,
     columns: Vec<&'static str>,
     rows: Vec<Vec<String>>,
+    purchase_limits: Option<PurchaseLimits>,
 }
 impl Card {
     fn new(columns: &[&'static str]) -> Self {
@@ -109,6 +110,7 @@ impl Card {
             findings: Vec::new(),
             columns: columns.to_vec(),
             rows: Vec::new(),
+            purchase_limits: None,
         }
     }
 }
@@ -215,8 +217,11 @@ pub(super) fn worksheet(doc: &TomlDoc, text: &str, source: &SourceAnchor) -> Res
         ));
     }
     let _ = writeln!(md, "\n{BOUNDARY}");
+    let limits = card.purchase_limits.as_ref().map_or_else(String::new, |v| {
+        format!(",\"procurement_limits\":{}", v.json())
+    });
     let payload = format!(
-        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"question\":{},\"owner\":{},\"support\":{},\"evidence_class\":\"assumed\",\"calibrated\":false,\"uncertainty\":{},\"revisit_if\":{},\"source_rows\":[{}],\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}}}",
+        "{{\"mode\":{},\"evidence\":{},\"as_of\":{},\"question\":{},\"owner\":{},\"support\":{},\"evidence_class\":\"assumed\",\"calibrated\":false,\"uncertainty\":{},\"revisit_if\":{},\"source_rows\":[{}],\"findings\":{},\"columns\":{},\"rows\":[{}],\"source\":{},\"worksheet\":{}{limits}}}",
         js(mode),
         js(evidence),
         js(as_of),
@@ -246,6 +251,30 @@ fn headroom(cash: i128, payment: i128, floor: i128) -> Result<i128> {
     let usd = |n| Money::from_major(Currency::USD, n);
     let (_, slack) = fmine_capital::cash_after_payment(usd(cash), usd(payment), usd(floor))?;
     Ok(slack.minor / Money::SCALE)
+}
+
+/// Whole USD are serialized as decimal strings, including zero. An impossible cash
+/// limit and a missing live hold credit each remain absent.
+struct PurchaseLimits {
+    replacement_price: Option<i128>,
+    latest_delivery: Option<String>,
+    hold_credit: Option<i128>,
+    hold_fee: Option<i128>,
+}
+
+impl PurchaseLimits {
+    fn json(&self) -> String {
+        let usd = |n: Option<i128>| n.map_or_else(|| "null".into(), |v| js(&v.to_string()));
+        format!(
+            "{{\"max_replacement_price_usd\":{},\"latest_on_time_delivery\":{},\"fixed_exercise_credit_usd\":{},\"max_hold_fee_usd\":{}}}",
+            usd(self.replacement_price),
+            self.latest_delivery
+                .as_deref()
+                .map_or_else(|| "null".into(), js),
+            usd(self.hold_credit),
+            usd(self.hold_fee),
+        )
+    }
 }
 
 fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
@@ -306,6 +335,25 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     let other = qty(&fund, "other_due_usd")?;
     let float = qty(&schedule, "float_days")?;
     let delay_rate = qty(&schedule, "delay_cost_usd_per_day")?;
+    let decision_room = headroom(now, 0, now_floor)?;
+    let review_room = headroom(later, other, later_floor)?;
+    let last_day = i128::from(day(delivery)?) + float;
+    // Worksheet dates have four-digit years. An unusually large float permits every
+    // representable future delivery; do not wrap or invent a calendar deadline.
+    let latest_delivery = if last_day <= i128::from(day("9999-12-31")?) {
+        let d = CivilDate::from_epoch_days(
+            i64::try_from(last_day).map_err(|_| invalid("delivery calendar overflow"))?,
+        );
+        Some(format!("{:04}-{:02}-{:02}", d.year, d.month, d.day))
+    } else {
+        None
+    };
+    let mut limits = PurchaseLimits {
+        replacement_price: (decision_room >= 0 && review_room >= 0).then_some(review_room),
+        latest_delivery,
+        hold_credit: None,
+        hold_fee: None,
+    };
     let mut c = Card::new(&[
         "Choice / outcome",
         "Pay now USD",
@@ -318,10 +366,18 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         "Slack with competing project USD",
     ]);
     c.findings.push(format!("Order deadline {expiry}; engineering review {review}; milestone {}. Cash belongs to {}. Competing project {} needs {other} USD at review.",get(&schedule,"milestone")?,get(&fund,"entity")?,get(&fund,"other_project")?));
+    let timing = limits.latest_delivery.as_ref().map_or_else(
+        || format!("the {float} days of float extend beyond the worksheet calendar"),
+        |date| format!("delivery must be on or before {date}"),
+    );
+    c.findings.push(match limits.replacement_price {
+        Some(cap) => format!("Replacement quote: at most {cap} USD payable at review and {timing}. Both conditions must hold."),
+        None => format!("Even a free replacement at review cannot preserve both treasury floors and the competing project. For the schedule, {timing}."),
+    });
     let mut paths = Vec::new();
     if as_of <= expiry {
-        paths.push(("Order / proceed", deposit, price, 0));
-        paths.push(("Order / cancel", deposit, cancel, 0));
+        paths.push(("Order / proceed", deposit, price, Some(0)));
+        paths.push(("Order / cancel", deposit, cancel, None));
     } else {
         c.findings
             .push("Order unavailable: quoted order deadline passed.".into());
@@ -345,8 +401,17 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             return Err(invalid("invalid slot hold credit or date order"));
         }
         if accept >= as_of && through >= review {
-            paths.push(("Hold / proceed", fee, price + fee - credit, 0));
-            paths.push(("Hold / cancel", fee, fee, 0));
+            // At exercise the total is price + fee - credit; at cancellation it is
+            // the fee alone. Credit cannot exceed either the fee or the order price.
+            let cap = decision_room.min(review_room - (price - credit));
+            limits.hold_credit = Some(credit);
+            limits.hold_fee = (cap >= credit).then_some(cap);
+            c.findings.push(match limits.hold_fee {
+                Some(max_fee) => format!("Maximum affordable hold fee: {max_fee} USD with the exercise credit fixed at {credit} USD. This preserves both treasury floors and the competing project on exercise or cancellation."),
+                None => format!("No hold fee consistent with the fixed {credit} USD exercise credit preserves both treasury floors and the competing project."),
+            });
+            paths.push(("Hold / proceed", fee, price + fee - credit, Some(0)));
+            paths.push(("Hold / cancel", fee, fee, None));
             c.findings.push(format!(
                 "Accept hold by {accept}; exercise or release at {review}."
             ));
@@ -377,7 +442,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         c.findings
             .push("Hold unavailable: no documented supplier option.".into());
     }
-    paths.push(("Lapse / cancel", 0, 0, 0));
+    paths.push(("Lapse / cancel", 0, 0, None));
     if doc.rows_of("wait").next().is_some() {
         let wait = row_fields(
             table(doc, "wait")?,
@@ -385,12 +450,30 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             as_of,
         )?;
         let arrival = date(&wait, "delivery")?;
+        let replacement_price = qty(&wait, "price_usd")?;
         if arrival < review {
             return Err(invalid("unreserved delivery precedes review"));
         }
         if date(&wait, "valid_through")? >= review {
-            let slip = (i128::from(day(arrival)? - day(delivery)?) - float).max(0);
-            paths.push(("Lapse / proceed", 0, qty(&wait, "price_usd")?, slip));
+            let slip = (i128::from(day(arrival)?) - last_day).max(0);
+            if let Some(cap) = limits.replacement_price {
+                let cut = (replacement_price - cap).max(0);
+                let mut concessions = Vec::new();
+                if cut > 0 {
+                    concessions.push(format!("reduce the price by at least {cut} USD"));
+                }
+                if slip > 0 {
+                    let unit = if slip == 1 { "day" } else { "days" };
+                    concessions.push(format!("bring delivery forward by at least {slip} {unit}"));
+                }
+                if !concessions.is_empty() {
+                    c.findings.push(format!(
+                        "For the current replacement offer to qualify, {}.",
+                        concessions.join(" and ")
+                    ));
+                }
+            }
+            paths.push(("Lapse / proceed", 0, replacement_price, Some(slip)));
         } else {
             c.findings
                 .push("Lapse / proceed unpriced: replacement quote expires before review.".into());
@@ -405,7 +488,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         ("Hold / proceed", "Hold / cancel"),
         ("Lapse / proceed", "Lapse / cancel"),
     ] {
-        if let (Some(&(_, upfront, cost, 0)), Some(&(_, _, cancelled, _))) = (
+        if let (Some(&(_, upfront, cost, Some(0))), Some(&(_, _, cancelled, None))) = (
             paths.iter().find(|p| p.0 == proceed),
             paths.iter().find(|p| p.0 == cancel_label),
         ) && headroom(now, upfront, now_floor)? >= 0
@@ -448,13 +531,17 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             upfront.to_string(),
             (total - upfront).to_string(),
             total.to_string(),
-            slip.to_string(),
-            (slip * delay_rate).to_string(),
+            slip.map_or_else(|| "not applicable".into(), |days| days.to_string()),
+            slip.map_or_else(
+                || "not applicable".into(),
+                |days| (days * delay_rate).to_string(),
+            ),
             initial.to_string(),
             closing.to_string(),
             joint.to_string(),
         ]);
     }
+    c.purchase_limits = Some(limits);
     Ok(c)
 }
 
@@ -1044,6 +1131,87 @@ mod tests {
         let floored = report(&PURCHASE.replace("float_days = \"12\"", "float_days = \"40\""));
         assert!(floored.contains("| Lapse / proceed | 0 | 21500000 | 21500000 | 0 | 0 |"));
         assert!(evaluate(&PURCHASE.replace("2030-11-15", "2030-02-30")).is_err());
+    }
+
+    #[test]
+    fn procurement_limits_match_the_forward_decision_at_and_across_each_boundary() {
+        let at_review_cap = PURCHASE.replace("fee_usd = \"250000\"", "fee_usd = \"500000\"");
+        assert!(report(&at_review_cap).contains("Hold (500000 USD)"));
+        assert!(
+            report(&at_review_cap.replace("fee_usd = \"500000\"", "fee_usd = \"500001\""))
+                .contains("No fully priced on-time alternative")
+        );
+
+        let at_upfront_cap = at_review_cap.replace("19500000", "18500000");
+        assert!(report(&at_upfront_cap).contains("Hold (500000 USD)"));
+        assert!(
+            report(&at_upfront_cap.replace("18500000", "18499999"))
+                .contains("Maximum affordable hold fee: 499999 USD")
+        );
+        assert!(
+            report(&at_upfront_cap.replace("18500000", "18499999"))
+                .contains("No fully priced on-time alternative")
+        );
+
+        let wait = PURCHASE
+            .replace("21500000", "20500000")
+            .replace("2030-12-15", "2030-11-27");
+        assert!(report(&wait).contains("Lapse (0 USD)"));
+        for (change, needed) in [
+            (
+                wait.replace("20500000", "20500001"),
+                "reduce the price by at least 1 USD.",
+            ),
+            (
+                wait.replace("2030-11-27", "2030-11-28"),
+                "bring delivery forward by at least 1 day.",
+            ),
+        ] {
+            let md = report(&change);
+            assert!(
+                md.contains("Hold (250000 USD)") && md.contains(needed),
+                "{md}"
+            );
+        }
+    }
+
+    #[test]
+    fn procurement_limits_distinguish_impossible_free_and_unquoted_terms() {
+        let payload = |s: &str| evaluate(s).expect("valid comparison").payload_json;
+        let no_money = PURCHASE.replace("45000000", "24499999");
+        assert!(payload(&no_money).contains("\"max_replacement_price_usd\":null"));
+        assert!(
+            payload(&no_money)
+                .contains("\"fixed_exercise_credit_usd\":\"0\",\"max_hold_fee_usd\":null")
+        );
+        assert!(
+            payload(&PURCHASE.replace("19500000", "17999999"))
+                .contains("\"max_replacement_price_usd\":null")
+        );
+        assert!(
+            payload(&PURCHASE.replace("45000000", "24500000"))
+                .contains("\"max_replacement_price_usd\":\"0\"")
+        );
+        let credit_too_large = PURCHASE.replace("19500000", "18100000").replace(
+            "credit_on_purchase_usd = \"0\"",
+            "credit_on_purchase_usd = \"200000\"",
+        );
+        assert!(
+            payload(&credit_too_large)
+                .contains("\"fixed_exercise_credit_usd\":\"200000\",\"max_hold_fee_usd\":null")
+        );
+        let expired = PURCHASE.replace("accept_by = \"2030-03-08\"", "accept_by = \"2030-03-07\"");
+        assert!(
+            payload(&expired)
+                .contains("\"fixed_exercise_credit_usd\":null,\"max_hold_fee_usd\":null")
+        );
+        let huge = PURCHASE.replace(
+            "float_days = \"12\"",
+            "float_days = \"9223372036854775807\"",
+        );
+        assert!(payload(&huge).contains("\"latest_on_time_delivery\":null"));
+        let leap = PURCHASE.replace("2030-11-15", "2032-02-17");
+        assert!(payload(&leap).contains("\"latest_on_time_delivery\":\"2032-02-29\""));
     }
 
     #[test]
