@@ -394,8 +394,22 @@ pub fn incumbent(
 }
 
 /// The Lagrangian bound's view of `model` over `blocks`: column `i` is block `blocks[i]`.
-fn priced<'a>(model: &'a PcpspModel, blocks: &[usize]) -> Result<Priced<'a>, Refusal> {
+fn priced<'a>(
+    model: &'a PcpspModel,
+    blocks: &[usize],
+    factors: &[i64],
+) -> Result<Priced<'a>, Refusal> {
     let index = columns(model, blocks)?;
+    // The pit-reduction proof uses nonnegative falling factors. On the complete
+    // model no reduction is used, so weak duality permits arbitrary factors.
+    if blocks.len() < model.blocks()
+        && (factors.iter().any(|&factor| factor < 0)
+            || factors.windows(2).any(|pair| pair[0] < pair[1]))
+    {
+        return Err(refuse(
+            "pcpsp lagrangian: a reduced block scope requires non-negative, non-increasing discount factors; use every model block for other factors".to_string(),
+        ));
+    }
     let requires = blocks
         .iter()
         .map(|&b| {
@@ -433,17 +447,20 @@ fn priced<'a>(model: &'a PcpspModel, blocks: &[usize]) -> Result<Priced<'a>, Ref
 /// The bound at `prices` over `blocks`, normally [`scope`]'s (see the module notes): one row per resource, one price
 /// per period, each at least 0, in units of the discounted value a unit of the resource. The schedule and
 /// destinations are over every block of the model; a block outside `blocks` is never scheduled.
+/// A reduced scope requires non-negative, non-increasing factors, including ties and zeros. With every model
+/// block present, arbitrary integer factors are permitted because no pit reduction is needed.
 ///
 /// # Errors
 /// `FMINE-REF-207` (proposed) when `blocks` is not in increasing order within the model or a block in it requires one
-/// that is not, and as [`crate::toposort::lp::lagrangian_value`] refuses.
+/// that is not, when a reduced scope uses negative or increasing factors, and as
+/// [`crate::toposort::lp::lagrangian_value`] refuses.
 pub fn lagrangian_value(
     model: &PcpspModel,
     blocks: &[usize],
     factors: &[i64],
     prices: &[Vec<i64>],
 ) -> Result<LagrangianValue, Refusal> {
-    let v = value_at(&priced(model, blocks)?, factors, prices)?;
+    let v = value_at(&priced(model, blocks, factors)?, factors, prices)?;
     let n = model.blocks();
     let (mut schedule, mut destination) = (vec![None; n], vec![None; n]);
     for (i, &b) in blocks.iter().enumerate() {
@@ -471,7 +488,7 @@ pub fn lagrangian_bound(
     target: i128,
     steps: usize,
 ) -> Result<Lagrangian, Refusal> {
-    bound(&priced(model, blocks)?, factors, target, steps)
+    bound(&priced(model, blocks, factors)?, factors, target, steps)
 }
 
 #[cfg(test)]
@@ -836,6 +853,61 @@ mod tests {
             2 * cases
         );
         assert!(negative > 0 && single > 0, "{negative} {single}");
+    }
+
+    #[test]
+    fn reduced_pit_bounds_require_nonnegative_nonincreasing_factors() {
+        // The static pit excludes both blocks: waste costs 10 and its ore earns 9.
+        // With increasing factors, mining waste first and ore later instead earns
+        // -10 * 1 + 9 * 2 = 8. A negative factor makes the waste itself profitable.
+        let m = parse(
+            "NAME: scope-domain\nTYPE: PCPSP\nNBLOCKS: 2\nNPERIODS: 2\nNDESTINATIONS: 1\nNRESOURCE_SIDE_CONSTRAINTS: 1\nNGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\nRESOURCE_CONSTRAINT_LIMITS:\n0 0 L 1\n0 1 L 1\nOBJECTIVE_FUNCTION:\n0 -10\n1 9\nRESOURCE_CONSTRAINT_COEFFICIENTS:\n0 0 0 1\n1 0 0 1\nEOF\n",
+            "0 0\n1 1 0\n",
+            0,
+            Rounding::Refuse,
+            0,
+        )
+        .unwrap();
+        let reduced = scope(&m).unwrap();
+        assert!(reduced.blocks.is_empty());
+        assert_eq!(reduced.pit_value, 0);
+        let all = [0, 1];
+        let prices = [vec![0, 0]];
+        let cpit = m.with_destinations(&[0, 0]).unwrap();
+        for (f, optimum) in [([1, 2], 8), ([-1, -2], 20), ([-2, -1], 20)] {
+            assert_eq!(best_by_enumeration(&m, &f), optimum);
+            for error in [
+                lagrangian_value(&m, &reduced.blocks, &f, &prices).unwrap_err(),
+                lagrangian_bound(&m, &reduced.blocks, &f, optimum, 20).unwrap_err(),
+            ] {
+                assert!(
+                    error.to_string().contains("non-negative, non-increasing"),
+                    "{error}"
+                );
+            }
+            // No pit reduction is used on the complete model, so weak duality
+            // still applies for arbitrary factors and matches the CPIT kernel.
+            let full = lagrangian_value(&m, &all, &f, &prices).unwrap();
+            assert_eq!(full.bound, optimum);
+            assert_eq!(
+                full,
+                crate::toposort::lp::lagrangian_value(&cpit, &f, &prices).unwrap()
+            );
+            let run = lagrangian_bound(&m, &all, &f, optimum, 20).unwrap();
+            assert_eq!(run.bound, optimum);
+            assert!(run.history.iter().all(|&bound| bound >= optimum));
+        }
+        for f in [[0, 0], [1, 1], [2, 1], [2, 0]] {
+            let optimum = best_by_enumeration(&m, &f);
+            let value = lagrangian_value(&m, &reduced.blocks, &f, &prices).unwrap();
+            assert_eq!(value.bound, optimum);
+            assert_eq!(
+                lagrangian_bound(&m, &reduced.blocks, &f, optimum, 20)
+                    .unwrap()
+                    .bound,
+                optimum
+            );
+        }
     }
 
     #[test]
