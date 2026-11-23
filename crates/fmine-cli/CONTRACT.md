@@ -54,6 +54,25 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     with a feasible earlier collection date, the peak uncovered amount is the minimum single advance
     required by that date at the same cutoff. Deduct the advance from the delayed settlement. Zero
     denotes an already-funded delayed case; advancing the entire invoice can also be insufficient.
+  - DESIGN (bd-0ln4). `operating_review` compares one decision through a future review date. The
+    submitted actual and counterfactual starting states use the same ownership basis, opening cash,
+    floor and nonnegative net realized price per payable tonne. Each of the six routes must have
+    dated terms or a dated reason it is unavailable. A feasible route with unknown costs or terminal
+    obligations cannot be priced. Each route points to the same basis ID.
+    Window cash equals payable tonnes × net price less upfront and period cash costs. Upfront cash is
+    paid before receipts. Period costs exclude upfront cash and costs already deducted in the net
+    price. Care and closure sell zero tonnes in this model. The comparable value adds the signed
+    net residual at review, including retained rights, aftercare and remaining obligations. Submit
+    each cash flow once and express all amounts on the same undiscounted basis. This is a single
+    review-period comparison. Cash sufficiency after the transition requires a dated treasury schedule.
+    The result retains the economic and upfront-funded winners, ties, the advantage over the next
+    funded route and each funding shortfall. It computes the exact price at which producing ties
+    the best funded nonproducing route and the first qualifying whole price, holding every other
+    term fixed. A zero-output ramp, no eligible comparator, and an unfunded restart have distinct
+    results. At the submitted metal price, the restart quote ceiling is the lesser of opening cash
+    above the floor and the restart's pre-upfront advantage over the best funded nonproducing route.
+    Without a funded comparator, only the cash ceiling applies. A negative ceiling means even a
+    free restart cannot qualify. `--brief` retains both starting states and every alternative.
   - Tenure compares renew, farm out and surrender on stated costs, option bounds and linked rights. A
     zero interest cannot specify retained option upside. Survey sensitivity uses the exploration kernel's
     cover attenuation. No presence probability follows from a sensitive negative result.

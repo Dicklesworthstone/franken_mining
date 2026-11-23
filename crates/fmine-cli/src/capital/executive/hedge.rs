@@ -1,21 +1,11 @@
 //! DESIGN (bd-ftw5). Cash calls and credits are submitted as settlement amounts for one entity.
 //! Determinism: Exact
 
-use super::{Card, Result, date, day, get, headroom, invalid, js, qty, row_fields, table, tables};
+use super::{
+    Card, Result, date, day, dollars, get, headroom, invalid, js, qty, row_fields, table, tables,
+};
 use fmine_registry::toml_subset::TomlDoc;
 use std::collections::BTreeMap;
-
-fn dollars(amount: i128) -> String {
-    let digits = amount.unsigned_abs().to_string();
-    let mut display = String::from(if amount < 0 { "-US$" } else { "US$" });
-    for (i, digit) in digits.bytes().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            display.push(',');
-        }
-        display.push(char::from(digit));
-    }
-    display
-}
 
 #[derive(Clone, Copy)]
 struct Point<'a> {

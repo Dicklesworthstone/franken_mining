@@ -1,0 +1,83 @@
+# SYNTHETIC. Invented nickel operation. Costs and residual obligations use the same ownership basis.
+schema = "fmine.executive-decision.v1"
+decision = "operating_review"
+question = "At this nickel price, should we keep the mine running or put it on care?"
+owner = "Group investment committee"
+as_of = "2030-03-31"
+scope = "North Basin nickel operation and its owner through 30 June 2030"
+evidence = "synthetic"
+uncertainty = "Restart ramp tonnes and remaining rehabilitation obligations are estimates"
+revisit_if = "The payable price, ramp schedule, closure estimate or available cash changes"
+
+[[review]]
+source = "Invented March committee deck, sale terms and parent treasury statement"
+known_on = "2030-03-31"
+basis_id = "NB-NICKEL-Q2-PARENT"
+ownership_basis = "100% owned parent cash flows and obligations"
+payable_product = "payable tonnes of contained nickel"
+review_date = "2030-06-30"
+starting_state = "operating"
+net_usd_per_payable_tonne = "11000"
+opening_cash_usd = "10000000"
+cash_floor_usd = "5000000"
+valuation_basis = "undiscounted_window_cash_plus_net_residual_at_review"
+
+[[route]]
+route = "continue"
+basis_id = "NB-NICKEL-Q2-PARENT"
+source = "Invented steady production and cash budget, plus net remaining site obligations"
+known_on = "2030-03-30"
+payable_tonnes = "1000"
+upfront_usd = "0"
+period_cost_usd = "12000000"
+net_residual_usd = "-3000000"
+
+[[route]]
+route = "suspend"
+basis_id = "NB-NICKEL-Q2-PARENT"
+source = "Invented stand-down and preservation quote plus carrying cash and residual obligations"
+known_on = "2030-03-30"
+payable_tonnes = "0"
+upfront_usd = "1200000"
+period_cost_usd = "800000"
+net_residual_usd = "-3000000"
+
+[[route]]
+route = "close_from_operating"
+basis_id = "NB-NICKEL-Q2-PARENT"
+source = "Invented direct closure estimate, including separate aftercare due beyond review"
+known_on = "2030-03-29"
+payable_tonnes = "0"
+upfront_usd = "4500000"
+period_cost_usd = "200000"
+net_residual_usd = "-1200000"
+
+[[route]]
+route = "restart"
+basis_id = "NB-NICKEL-Q2-PARENT"
+source = "Invented restart quote, ramp saleable output and separate operating cash budget"
+known_on = "2030-03-30"
+payable_tonnes = "800"
+upfront_usd = "3000000"
+period_cost_usd = "8800000"
+net_residual_usd = "-3000000"
+
+[[route]]
+route = "remain_on_care"
+basis_id = "NB-NICKEL-Q2-PARENT"
+source = "Invented site care budget and residual obligations at review"
+known_on = "2030-03-30"
+payable_tonnes = "0"
+upfront_usd = "0"
+period_cost_usd = "800000"
+net_residual_usd = "-3000000"
+
+[[route]]
+route = "close_from_care"
+basis_id = "NB-NICKEL-Q2-PARENT"
+source = "Invented closure estimate after stand-down with continuing aftercare"
+known_on = "2030-03-29"
+payable_tonnes = "0"
+upfront_usd = "3700000"
+period_cost_usd = "200000"
+net_residual_usd = "-1200000"

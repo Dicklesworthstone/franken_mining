@@ -15,6 +15,7 @@ use super::investment::{Fields, fields, get, invalid};
 use crate::{Envelope, json_string as js, worksheet_input};
 use worksheet_input::markdown_cell as cell;
 
+mod care;
 mod hedge;
 
 pub(super) const SCHEMA: &str = "fmine.executive-decision.v1";
@@ -152,6 +153,7 @@ pub(super) fn worksheet(
     let mode = get(&f, "decision")?;
     let card = match mode {
         "purchase" => purchase(doc, as_of)?,
+        "operating_review" => care::compare(doc, as_of)?,
         "hedge_liquidity" => hedge::compare(doc, as_of)?,
         "rehabilitation" => rehabilitation(doc, as_of)?,
         "tenure" => tenure(doc, as_of)?,
@@ -682,6 +684,18 @@ fn fraction(n: i128, d: i128) -> Result<String> {
     } else {
         format!("{}/{}", v.num(), v.den())
     })
+}
+
+fn dollars(amount: i128) -> String {
+    let digits = amount.unsigned_abs().to_string();
+    let mut display = String::from(if amount < 0 { "-US$" } else { "US$" });
+    for (i, digit) in digits.bytes().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            display.push(',');
+        }
+        display.push(char::from(digit));
+    }
+    display
 }
 
 fn tenure(doc: &TomlDoc, as_of: &str) -> Result<Card> {

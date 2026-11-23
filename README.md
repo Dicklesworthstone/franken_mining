@@ -52,6 +52,24 @@ Use `--format markdown` for the checkpoint ledger. The JSON includes both cash l
 largest shortfall, and the original source rows. All executive worksheets also accept `--brief`.
 See the [treasury worksheet](tests/capital/executive_hedge.toml) and [worked cash calculation](docs/delivery/EXECUTIVE_DECISION_PILOT.md#shipment-settlement-and-hedge-cash-calls).
 
+### At what metal price should a mine keep running or restart?
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_care.toml --brief
+```
+
+At **$11,000 per payable tonne** in the synthetic nickel example, the operating mine loses $1 million
+through the June review. Suspending costs $2 million over the same period. Both leave $3 million of net
+obligations at review, so continuing is ahead by $1 million. A mine that starts the quarter on care
+would pay $3 million to restart and sell fewer tonnes during ramp-up. It should stay on care under these terms.
+
+Continuing ties suspension at **$10,000/t**. Restarting ties staying on care at **$13,750/t**.
+At today's $11,000/t, the largest upfront restart quote the committee could accept is **$800,000**,
+a $2.2 million reduction from the submitted quote. One dollar more makes staying on care preferable.
+The calculation also compares permanent closure from each starting state, including aftercare. Change
+the transition cost, payable tonnes, remaining obligations or cash available today to see when the
+choice reverses. Each state retains its losing and unavailable choices. [Editable nickel worksheet](tests/capital/executive_care.toml)
+
 A miner's numbers are produced by a dozen systems that each pass along a single value and discard how sure they
 were. The result is predictable:
 - guidance that misses;

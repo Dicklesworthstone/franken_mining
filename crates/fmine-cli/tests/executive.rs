@@ -139,6 +139,58 @@ fn delayed_copper_receipt_creates_an_intraday_shortfall_despite_identical_closin
 }
 
 #[test]
+fn nickel_price_supports_continuing_but_leaves_a_mine_on_care_below_restart_price() {
+    let c = card("care");
+    let result = c.get("operating_review").expect("review");
+    assert_eq!(
+        result.get("starting_state").and_then(Json::as_str),
+        Some("operating")
+    );
+    let states = result.get("states").expect("both starting states");
+    for (state, winner, threshold, advantage) in [
+        ("operating", "continue", "10000", "1000000"),
+        ("care", "remain_on_care", "13750", "1300000"),
+    ] {
+        let analysis = states.get(state).expect("state");
+        let funded = analysis
+            .get("funded_best")
+            .and_then(Json::as_array)
+            .expect("funded choices");
+        assert_eq!(funded.len(), 1);
+        assert_eq!(funded[0].as_str(), Some(winner));
+        assert_eq!(
+            analysis
+                .get("advantage_over_next_funded_usd")
+                .and_then(Json::as_str),
+            Some(advantage)
+        );
+        for field in ["tie_usd_per_tonne", "first_whole_usd_per_tonne"] {
+            assert_eq!(analysis.get(field).and_then(Json::as_str), Some(threshold));
+        }
+    }
+    let rows = c.get("rows").and_then(Json::as_array).expect("choices");
+    assert_eq!(rows.len(), 6);
+    for (label, cash, value) in [
+        ("continue", "-1000000", "-4000000"),
+        ("suspend", "-2000000", "-5000000"),
+        ("close from operating", "-4700000", "-5900000"),
+        ("restart", "-3000000", "-6000000"),
+        ("remain on care", "-800000", "-3800000"),
+        ("close from care", "-3900000", "-5100000"),
+    ] {
+        let row = rows
+            .iter()
+            .filter_map(Json::as_array)
+            .find(|r| r[1].as_str() == Some(label))
+            .expect("route");
+        assert_eq!(
+            (row[4].as_str(), row[6].as_str()),
+            (Some(cash), Some(value))
+        );
+    }
+}
+
+#[test]
 fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_digest() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let brief = |model: &str, flags: &[&str]| {
@@ -156,6 +208,7 @@ fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_dige
     };
     for name in [
         "hedge",
+        "care",
         "purchase",
         "purchase_potash",
         "rehabilitation",
