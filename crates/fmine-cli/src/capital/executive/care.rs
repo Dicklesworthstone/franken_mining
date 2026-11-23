@@ -61,6 +61,18 @@ fn action(name: &str) -> &str {
     }
 }
 
+fn journal_action(route: &str) -> Result<(&'static str, &'static str)> {
+    match route {
+        "continue" => Ok(("operating:continue", "Continue from operating")),
+        "suspend" => Ok(("operating:suspend", "Suspend from operating")),
+        "close_from_operating" => Ok(("operating:close", "Close from operating")),
+        "restart" => Ok(("care:restart", "Restart from care")),
+        "remain_on_care" => Ok(("care:remain", "Remain on care")),
+        "close_from_care" => Ok(("care:close", "Close from care")),
+        _ => Err(invalid("unknown operating-review journal action")),
+    }
+}
+
 fn number(v: Option<i128>) -> String {
     v.map_or_else(|| "null".into(), |n| js(&n.to_string()))
 }
@@ -285,6 +297,11 @@ pub(super) fn compare(doc: &TomlDoc, as_of: &str) -> Result<Card> {
                         t.value(quote).to_string(),
                     ]);
                     priced.push((name, t));
+                    // Counterfactual starts remain in the comparison, but only the declared
+                    // current state's available routes meeting its upfront floor are recordable.
+                    if state == actual && t.shortfall == 0 {
+                        card.journal_actions.push(journal_action(name)?);
+                    }
                 }
             }
         }

@@ -11,14 +11,14 @@ use crate::{Envelope, NextAction, worksheet_input};
 mod executive;
 mod investment;
 
-pub(crate) use executive::ProcurementSnapshot;
+pub(crate) use executive::ExecutiveSnapshot;
 
-pub(crate) fn procurement_snapshot(
+pub(crate) fn executive_snapshot(
     text: &str,
     source: &SourceAnchor,
     root: &Path,
     action: &str,
-) -> Result<Option<ProcurementSnapshot>, Refusal> {
+) -> Result<Option<ExecutiveSnapshot>, Refusal> {
     use fmine_registry::toml_subset::{TomlValue, parse_subset};
     let Ok(doc) = parse_subset(text) else {
         return Ok(None);
@@ -27,7 +27,7 @@ pub(crate) fn procurement_snapshot(
     {
         return Ok(None);
     }
-    executive::procurement_snapshot(&doc, text, source, root, action).map(Some)
+    executive::journal_snapshot(&doc, text, source, root, action).map(Some)
 }
 
 pub(super) const USAGE: &str = "decide program <model-file>";
@@ -37,6 +37,7 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
     "\"executive_brief\":\"decide program <executive worksheet> --brief prints the meeting paper. Use --format markdown for the full tables and source locators.\",",
     "\"procurement_journal\":\"Use decide journal record --model <procurement worksheet> with --action order-now, hold-slot or let-lapse. The evaluated card lists available journal_actions. The worksheet date must be on or before the earliest possible UTC recording date. Pinned show retains the original comparison, scope and rationale.\",",
+    "\"operating_journal\":\"For operating_review, record only a journal_actions id from the declared starting_state: operating:continue, operating:suspend, operating:close or care:restart, care:remain, care:close. Unavailable routes and routes with an upfront cash-floor shortfall are excluded; the other starting state's counterfactual routes cannot be recorded. A lower-ranked available action remains an explicit human choice. The original worksheet, both-state comparison and rationale survive later source changes; date and history pins use the existing journal rules. This admission does not establish intra-period funding or operational authorization.\",",
     "\"executive_examples\":[\"tests/capital/executive_purchase.toml\",\"tests/capital/executive_purchase_potash.toml\",\"tests/capital/executive_tenure.toml\",\"tests/capital/executive_group.toml\",\"tests/capital/executive_rehabilitation.toml\",\"tests/capital/executive_estimates.toml\",\"tests/capital/executive_hedge.toml\",\"tests/capital/executive_care.toml\",\"tests/capital/executive_deck.toml\",\"tests/capital/executive_interruption.toml\"],",
     "\"interruption_indemnity\":\"Synthetic only. Use decide program with executive_interruption.toml. Match insured entity and perimeter across dated interruption, loss_rate and policy rows. Declare whole days and USD ranges, clauses, deductible_then_limit or limit_then_deductible, and none or listed exclusions. Each listed exclusion has a dated source and status applies, does_not_apply or unresolved. JSON retains separate economic and eligible loss, clause calculations, conditional branches and which inputs change the bounds.\",",
     "\"common_price_deck\":{\"decision\":\"common_price_deck\",\"comparison\":[\"element\",\"ownership_basis\",\"repricing_basis (fixed_plan_flat_royalty_pre_tax)\"],\"candidate (exactly two)\":[\"label\",\"investment (production investment manifest path)\",\"alternative\"],\"price (exactly one per period and shared state)\":[\"period\",\"state\",\"usd_per_kg (nonnegative exact decimal or n/d)\"],\"every_table\":[\"source\",\"known_on\"]},",

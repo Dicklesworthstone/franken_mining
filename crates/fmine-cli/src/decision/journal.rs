@@ -684,19 +684,19 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                         "model exceeds the bounded journal operation capacity",
                     ));
                 }
-                let procurement = match choice {
+                let executive = match choice {
                     Choice::ActNow(action) => {
-                        crate::capital::procurement_snapshot(&text, &source, root, action)?
+                        crate::capital::executive_snapshot(&text, &source, root, action)?
                     }
                     Choice::InformationOption { .. } => None,
                 };
                 let (card, claim_id, policy_snapshot, not_before_ns) =
-                    if let Some(procurement) = procurement {
+                    if let Some(executive) = executive {
                         (
-                            procurement.card,
-                            procurement.claim_id,
+                            executive.card,
+                            executive.claim_id,
                             None,
-                            Some(procurement.not_before_ns),
+                            Some(executive.not_before_ns),
                         )
                     } else {
                         let (card, claim_id, policy) = choice.snapshot(&text, source.clone())?;
@@ -732,7 +732,7 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                     let (earliest, latest) = header.time_bounds(record.observed_ns)?;
                     if not_before_ns.is_some_and(|bound| i128::from(earliest) < bound) {
                         return Err(invalid(
-                            "procurement worksheet date is after the earliest possible recording time (UTC)",
+                            "executive worksheet date is after the earliest possible recording time (UTC)",
                         ));
                     }
                     snapshot.validate_at(earliest, latest)

@@ -28,6 +28,7 @@ const INFORMATION: &str = include_str!("../../../tests/decisions/metallurgical_t
 const CONSTRAINED: &str = include_str!("../../../tests/decisions/constrained_testwork.toml");
 const SHIFT_FEED: &str = include_str!("../../../tests/decisions/stockpile_holdback.toml");
 const PURCHASE: &str = include_str!("../../../tests/capital/executive_purchase.toml");
+const OPERATING_REVIEW: &str = include_str!("../../../tests/capital/executive_care.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn binary() -> PathBuf {
@@ -1086,6 +1087,230 @@ fn procurement_record_refuses_unavailable_choices_and_future_dates_before_append
         lapse
             .payload_json
             .contains("\"selected_action\":\"let-lapse\"")
+    );
+}
+
+#[test]
+fn operating_choices_retain_actual_start_and_full_comparison_after_source_changes() {
+    for (state, actions) in [
+        (
+            "operating",
+            ["operating:continue", "operating:suspend", "operating:close"],
+        ),
+        ("care", ["care:restart", "care:remain", "care:close"]),
+    ] {
+        let f = Fixture::new();
+        let submitted = OPERATING_REVIEW.replace("2030-", "2024-").replace(
+            "starting_state = \"operating\"",
+            &format!("starting_state = \"{state}\""),
+        );
+        fs::write(&f.model, &submitted).unwrap();
+        let run = |args: &[&str]| {
+            let output = Process::new(binary())
+                .args(args)
+                .args(["--workspace", f.root.to_str().unwrap()])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let model = f.model.to_str().unwrap();
+        let journal = f.journal.to_str().unwrap();
+        let comparison = run(&["decide", "program", model, "--json"]);
+        let original = parse_json(comparison.as_bytes()).unwrap();
+        let available: Vec<_> = json_field(&original, &["payload", "journal_actions"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| json_field(row, &["id"]).as_str().unwrap())
+            .collect();
+        assert_eq!(available, actions);
+        assert_eq!(
+            json_field(
+                &original,
+                &["payload", "operating_review", "starting_state"]
+            )
+            .as_str(),
+            Some(state)
+        );
+        let mut pin = f.initial.to_hex();
+        let mut retained = Vec::new();
+        for action in actions {
+            // All funded choices are recordable, including lower-ranked suspension/restart.
+            let record = run(&[
+                "decide",
+                "journal",
+                "record",
+                "--journal",
+                journal,
+                "--expected-head",
+                &pin,
+                "--model",
+                model,
+                "--decision",
+                action,
+                "--action",
+                action,
+                "--reason",
+                "Retain this explicit operating commitment",
+                "--code-revision",
+                REVISION,
+                "--trust-host-clock",
+                "--json",
+            ]);
+            let result = parse_json(record.as_bytes()).unwrap();
+            let decisions = json_field(&result, &["payload", "decisions"])
+                .as_array()
+                .unwrap();
+            let snapshot = json_field(decisions.last().unwrap(), &["snapshot"]);
+            assert_eq!(
+                json_field(snapshot, &["selected_action"]).as_str(),
+                Some(action)
+            );
+            assert_eq!(
+                json_field(snapshot, &["model", "content"]).as_str(),
+                Some(submitted.as_str())
+            );
+            assert_eq!(
+                json_field(snapshot, &["model", "sha256"]).as_str(),
+                Some(sha256(submitted.as_bytes()).to_hex().as_str())
+            );
+            let saved = json_field(snapshot, &["artifact", "content"])
+                .as_str()
+                .unwrap();
+            assert_eq!(saved, comparison.trim_end());
+            assert_eq!(
+                json_field(snapshot, &["artifact", "sha256"]).as_str(),
+                Some(sha256(saved.as_bytes()).to_hex().as_str())
+            );
+            pin = json_field(&result, &["payload", "head"])
+                .as_str()
+                .unwrap()
+                .into();
+            retained = decisions.clone();
+        }
+        let history = fs::read(&f.journal).unwrap();
+        fs::write(&f.model, submitted.replace("\"11000\"", "\"18000\"")).unwrap();
+        assert_ne!(run(&["decide", "program", model, "--json"]), comparison);
+        // Replay also succeeds when the mutable source no longer parses.
+        fs::write(&f.model, "subsequent source is unavailable").unwrap();
+        let show = run(&[
+            "decide",
+            "journal",
+            "show",
+            "--journal",
+            journal,
+            "--head",
+            &pin,
+            "--json",
+        ]);
+        let shown = parse_json(show.as_bytes()).unwrap();
+        assert_eq!(
+            json_field(&shown, &["payload", "decisions"]).as_array(),
+            Some(&retained)
+        );
+        assert_eq!(fs::read(&f.journal).unwrap(), history);
+    }
+}
+
+#[test]
+fn operating_record_refuses_counterfactual_unavailable_unfunded_and_future_choices_atomically() {
+    let f = Fixture::new();
+    fs::write(&f.model, OPERATING_REVIEW).unwrap();
+    let date = fmine_time::CivilDate::new(2030, 3, 31)
+        .unwrap()
+        .to_epoch_days()
+        * 86_400_000_000_000;
+    let time = date + 10; // The fixture clock's earliest bound is exactly the decision date.
+    f.refuses_without_append(
+        &f.record(f.initial, "premature", "operating:continue"),
+        date + 9,
+        "FMINE-REF-107",
+    );
+    for action in [
+        "continue",
+        "operating:approve",
+        "care:restart",
+        "care:remain",
+        "care:close",
+    ] {
+        f.refuses_without_append(
+            &f.record(f.initial, "invalid", action),
+            time,
+            "FMINE-REF-105",
+        );
+    }
+    let care = OPERATING_REVIEW.replace(
+        "starting_state = \"operating\"",
+        "starting_state = \"care\"",
+    );
+    fs::write(&f.model, &care).unwrap();
+    for action in ["operating:continue", "operating:suspend", "operating:close"] {
+        f.refuses_without_append(
+            &f.record(f.initial, "counterfactual", action),
+            time,
+            "FMINE-REF-105",
+        );
+    }
+    let low_cash = care.replace(
+        "opening_cash_usd = \"10000000\"",
+        "opening_cash_usd = \"7000000\"",
+    );
+    fs::write(&f.model, low_cash).unwrap();
+    for action in ["care:restart", "care:close"] {
+        f.refuses_without_append(
+            &f.record(f.initial, "unfunded", action),
+            time,
+            "FMINE-REF-105",
+        );
+    }
+    let (before, restart) = care.split_once("[[route]]\nroute = \"restart\"\n").unwrap();
+    let (_, after) = restart.split_once("\n[[route]]").unwrap();
+    let unavailable = format!(
+        "{before}[[unavailable]]\nroute = \"restart\"\nbasis_id = \"NB-NICKEL-Q2-PARENT\"\nsource = \"Invented restart review\"\nknown_on = \"2030-03-30\"\nreason = \"Restart quote withdrawn\"\n\n[[route]]{after}"
+    );
+    fs::write(&f.model, unavailable).unwrap();
+    f.refuses_without_append(
+        &f.record(f.initial, "unavailable", "care:restart"),
+        time,
+        "FMINE-REF-105",
+    );
+    let (comparison, _) = fmine_cli::invoke(
+        &[
+            "decide".into(),
+            "program".into(),
+            f.model.display().to_string(),
+        ],
+        &f.root,
+    );
+    let comparison = successful(comparison);
+    let parsed = parse_json(comparison.payload_json.as_bytes()).unwrap();
+    let available: Vec<_> = json_field(&parsed, &["journal_actions"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| json_field(row, &["id"]).as_str().unwrap())
+        .collect();
+    assert_eq!(available, ["care:remain", "care:close"]);
+    fs::write(
+        &f.model,
+        care.replace("known_on = \"2030-03-30\"", "known_on = \"2030-04-01\""),
+    )
+    .unwrap();
+    f.refuses_without_append(
+        &f.record(f.initial, "future-source", "care:remain"),
+        time,
+        "FMINE-REF-105",
+    );
+    fs::write(&f.model, care.replace("starting_state = \"care\"\n", "")).unwrap();
+    f.refuses_without_append(
+        &f.record(f.initial, "missing-state", "care:remain"),
+        time,
+        "FMINE-REF-105",
     );
 }
 

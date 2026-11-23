@@ -38,6 +38,16 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     The worksheet date must be no later than the earliest possible UTC date under the journal's declared
     host-clock skew. The existing operation stores the original model bytes, complete comparison envelope,
     calculation Claim identity and rationale. Pinning the head allows offline replay after changes to the quote.
+  - DESIGN (BD-225, bd-0ln4). Operating-review worksheets also admit explicit journal choices.
+    Qualified action IDs distinguish `operating:continue|suspend|close` from `care:restart|remain|close`.
+    Only the declared actual starting state, available route terms and a zero upfront cash-floor
+    shortfall enter the admissible action set. The complete both-state comparison and original source
+    bytes remain in the saved envelope, including adverse and counterfactual alternatives.
+    The existing decision-date/host-clock-skew check applies before append. A separate
+    `decision.operating-review/1` Claim identity binds the calculation; procurement identities and
+    all journal encodings remain unchanged. This is an upfront funding screen, not future-liquidity
+    assurance or transition authority. Direct command and atomic-refusal controls are in
+    `xtask/tests/decision_journal.rs`.
   - Rehabilitation compares mutually exclusive, owner-eligible packages at one horizon. Work is paid on
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release

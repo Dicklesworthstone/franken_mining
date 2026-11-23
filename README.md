@@ -2176,6 +2176,27 @@ fmine decide journal record --journal decisions.journal \
   --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
 ```
 
+For an operating review, record a choice from the worksheet's declared current state. An operating
+mine exposes `operating:continue`, `operating:suspend` and `operating:close`; a mine on care exposes
+`care:restart`, `care:remain` and `care:close`. An action must have available terms and meet the
+declared upfront cash floor. The full comparison retains the other starting state, but it cannot be
+selected as though it were the mine's actual state.
+
+```bash
+fmine decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model operating-review.toml \
+  --decision quarterly-operating-review --action operating:suspend \
+  --reason "Preserve the chosen suspension terms and the compared operating alternatives" \
+  --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
+```
+
+Use your dated `fmine.executive-decision.v1` worksheet with `decision = "operating_review"`; its
+decision date must have arrived under the journal's clock-skew allowance. The supplied
+`tests/capital/executive_care.toml` is a synthetic 2030 example. Recording retains the original price,
+costs, residual obligations, funding comparison and source bytes after the editable worksheet changes.
+The funding screen covers the declared upfront commitment; it does not certify future liquidity or
+authorize a mine transition. Any eligible choice can be recorded, including one that is not ranked first.
+
 To record buying testwork, select the information option and policy explicitly instead of `--action`:
 
 ```bash
