@@ -6,6 +6,7 @@ use fmine_calib::ledger::ForecastMetadata;
 use fmine_calib::ledger::binding::{
     PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy,
 };
+use fmine_calib::ledger::comparison::supplied::SuppliedCrpsComparison;
 use fmine_calib::ledger::comparison::{PairStatus, PairedScore};
 use fmine_calib::{
     AssessmentPolicy, CohortSpec, ForecastLedger, ForecastPayload, OutcomeCitation, OutcomeKind,
@@ -179,6 +180,12 @@ fn supplied_weighted_models_have_exact_scores_and_complete_unresolved_bounds() {
     );
     assert_eq!(interval.whole_population, Some((r(-2, 1), r(2, 1))));
     assert_ne!(interval.digest, compared.digest);
+    assert_eq!(
+        ledger
+            .compare_supplied_assessments_full_crps(l, rr)
+            .unwrap(),
+        SuppliedCrpsComparison::Finite(compared.clone())
+    );
     assert!(ledger.compare_assessments(l, rr).is_err());
     assert!(ledger.compare_assessments_full_crps(l, rr).is_err());
 
@@ -820,4 +827,306 @@ fn brier_completion_bounds_match_every_binary_completion_through_ten_members() {
             ))
         );
     }
+}
+
+fn gaussian(mean: f64, std_dev: f64) -> ForecastPayload {
+    ForecastPayload::Gaussian { mean, std_dev }
+}
+
+fn near(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 5e-13,
+        "actual {actual}, expected {expected}"
+    );
+}
+
+#[test]
+fn supplied_gaussian_crps_keeps_full_distributions_missing_targets_and_saved_outcomes() {
+    let mut ledger = ForecastLedger::new();
+    let left: Vec<_> = [("A", 3.0, 1.0), ("B", 0.0, 1.0), ("C", 2.0, 0.5)]
+        .into_iter()
+        .map(|(site, mean, std_dev)| {
+            register(
+                &mut ledger,
+                "raw",
+                metadata(site),
+                10,
+                gaussian(mean, std_dev),
+            )
+        })
+        .collect();
+    let right: Vec<_> = [("A", 3.0, 2.0), ("B", 1.0, 1.0), ("C", 2.0, 0.5)]
+        .into_iter()
+        .map(|(site, mean, std_dev)| {
+            let mut metadata = metadata(site);
+            metadata.family = "synthetic-corrected-model".into();
+            metadata.author_role = "synthetic-other-author".into();
+            register(
+                &mut ledger,
+                "corrected",
+                metadata,
+                10,
+                gaussian(mean, std_dev),
+            )
+        })
+        .collect();
+    let lc = ledger.freeze_cohort(spec("raw", left.clone())).unwrap();
+    let rc = ledger
+        .freeze_cohort(spec("corrected", right.clone()))
+        .unwrap();
+    for id in [left[0], right[0]] {
+        publish(&mut ledger, id, "Synthetic!A1");
+    }
+    let (l, rr) = (assess(&mut ledger, lc), assess(&mut ledger, rc));
+    let compared = ledger
+        .compare_supplied_assessments_gaussian_crps(l, rr)
+        .unwrap();
+    assert_eq!(
+        ledger
+            .compare_supplied_assessments_full_crps(l, rr)
+            .unwrap(),
+        SuppliedCrpsComparison::Gaussian(compared.clone())
+    );
+    assert_eq!(
+        (
+            compared.n_paired,
+            compared.n_unresolved,
+            compared.n_unmatched
+        ),
+        (1, 2, 0)
+    );
+    // Independent closed form at the common mean:
+    // CRPS(N(mu,sigma²),mu) = sigma (sqrt(2)-1)/sqrt(pi).
+    let difference = -(2.0_f64.sqrt() - 1.0) / std::f64::consts::PI.sqrt();
+    near(compared.members[0].pair.difference.unwrap(), difference);
+    near(compared.observed_mean_difference.unwrap(), difference);
+    assert_eq!(compared.members[1].pair.completion, Some((-1.0, 1.0)));
+    assert_eq!(compared.members[2].pair.completion, Some((0.0, 0.0)));
+    let bounds = compared.whole_population.unwrap();
+    near(bounds.0, (difference - 1.0) / 3.0);
+    near(bounds.1, (difference + 1.0) / 3.0);
+    assert_eq!(compared.members[0].outcome_due_ns, 10);
+    assert_eq!(compared.members[0].target.site, "A");
+    assert_eq!(
+        compared.members[0].target.quantity,
+        "model_recovered_metal:Au"
+    );
+    let reverse = ledger
+        .compare_supplied_assessments_gaussian_crps(rr, l)
+        .unwrap();
+    near(reverse.observed_mean_difference.unwrap(), -difference);
+    near(reverse.whole_population.unwrap().0, -bounds.1);
+    near(reverse.whole_population.unwrap().1, -bounds.0);
+    // Comparing a saved assessment to itself is exactly zero, including its unresolved members.
+    let entirely_unresolved = ledger
+        .compare_supplied_assessments_gaussian_crps(l, l)
+        .unwrap();
+    assert_eq!(entirely_unresolved.whole_population, Some((0.0, 0.0)));
+    for id in [left[1], right[1], left[2], right[2]] {
+        ledger
+            .append_outcome(
+                id,
+                21,
+                22,
+                OutcomeKind::Published {
+                    value: 3.0,
+                    citation: OutcomeCitation {
+                        source: "synthetic:mill-report".into(),
+                        vintage: "invented-complete-hour".into(),
+                        locator: "Synthetic!Later".into(),
+                        sha256: [5; 32],
+                    },
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        ledger
+            .compare_supplied_assessments_gaussian_crps(l, rr)
+            .unwrap(),
+        compared
+    );
+    let newer: Vec<_> = [lc, rc]
+        .into_iter()
+        .map(|cohort| {
+            ledger
+                .assess(cohort, 30, OutcomeSelector::FirstPublished)
+                .unwrap()
+                .digest
+        })
+        .collect();
+    let completed = ledger
+        .compare_supplied_assessments_gaussian_crps(newer[0], newer[1])
+        .unwrap();
+    assert_eq!(completed.n_paired, 3);
+    let point = completed.observed_mean_difference.unwrap();
+    assert_eq!(completed.whole_population, Some((point, point)));
+    assert_ne!(completed.digest, compared.digest);
+}
+
+#[test]
+fn supplied_gaussian_comparison_checks_frozen_targets_and_keeps_source_mismatches() {
+    for change in [
+        "none",
+        "citation",
+        "outcome",
+        "domain",
+        "site",
+        "horizon",
+        "quantity",
+        "unit",
+        "deadline",
+        "rule",
+        "sources",
+        "alpha",
+        "cut",
+        "selector",
+        "duplicate",
+    ] {
+        let mut ledger = ForecastLedger::new();
+        let l = register(&mut ledger, "left", metadata("A"), 10, gaussian(3.0, 1.0));
+        let mut changed = metadata("A");
+        match change {
+            "domain" => changed.domain = "other circuit".into(),
+            "site" => changed.site = "other mine".into(),
+            "horizon" => changed.horizon = "other hour".into(),
+            "quantity" => changed.quantity = "contained metal".into(),
+            "unit" => changed.unit = "g".into(),
+            _ => {}
+        }
+        let rr = register(
+            &mut ledger,
+            "right",
+            changed,
+            if change == "deadline" { 9 } else { 10 },
+            gaussian(3.0, 2.0),
+        );
+        let mut left_members = vec![l];
+        if change == "duplicate" {
+            left_members.push(register(
+                &mut ledger,
+                "duplicate",
+                metadata("A"),
+                10,
+                gaussian(4.0, 1.0),
+            ));
+        }
+        let lc = ledger.freeze_cohort(spec("left", left_members)).unwrap();
+        let mut rs = spec("right", vec![rr]);
+        match change {
+            "rule" => rs.resolution_rule = "Other resolution rule".into(),
+            "sources" => rs.eligible_sources = vec!["other:source".into()],
+            "alpha" => rs.policy.alpha = 0.2,
+            _ => {}
+        }
+        let rc = ledger.freeze_cohort(rs).unwrap();
+        publish_event(&mut ledger, l, 3.0, "Synthetic!A1");
+        publish_event(
+            &mut ledger,
+            rr,
+            if change == "outcome" { 4.0 } else { 3.0 },
+            if change == "citation" {
+                "Other!A1"
+            } else {
+                "Synthetic!A1"
+            },
+        );
+        let left = assess(&mut ledger, lc);
+        let right = ledger
+            .assess(
+                rc,
+                if change == "cut" { 21 } else { 20 },
+                if change == "selector" {
+                    OutcomeSelector::LatestAsOf
+                } else {
+                    OutcomeSelector::FirstPublished
+                },
+            )
+            .unwrap()
+            .digest;
+        let report = ledger.compare_supplied_assessments_full_crps(left, right);
+        if matches!(
+            change,
+            "quantity"
+                | "unit"
+                | "deadline"
+                | "rule"
+                | "sources"
+                | "alpha"
+                | "cut"
+                | "selector"
+                | "duplicate"
+        ) {
+            assert!(report.is_err(), "{change}");
+            continue;
+        }
+        let SuppliedCrpsComparison::Gaussian(report) = report.unwrap() else {
+            panic!("homogeneous Gaussian forecasts need their approximate receipt")
+        };
+        if change == "none" {
+            assert_eq!(report.n_paired, 1);
+            assert!(report.whole_population.is_some());
+        } else {
+            assert_eq!(report.n_paired, 0, "{change}");
+            assert_eq!(
+                report.n_unmatched,
+                if matches!(change, "domain" | "site" | "horizon") {
+                    2
+                } else {
+                    1
+                }
+            );
+            assert_eq!(report.observed_mean_difference, None);
+            assert_eq!(report.whole_population, None);
+        }
+    }
+}
+
+#[test]
+fn gaussian_comparison_never_drops_mixed_or_unrepresentable_members() {
+    for other in [
+        payload(0.0),
+        ForecastPayload::Interval {
+            lo: 0.0,
+            hi: 4.0,
+            nominal: Some(0.5),
+        },
+        ForecastPayload::Bernoulli { probability: 0.5 },
+    ] {
+        let mut ledger = ForecastLedger::new();
+        let left = register(&mut ledger, "left", metadata("A"), 10, gaussian(0.0, 1.0));
+        let right = register(&mut ledger, "right", metadata("B"), 10, other);
+        let lc = ledger.freeze_cohort(spec("left", vec![left])).unwrap();
+        let rc = ledger.freeze_cohort(spec("right", vec![right])).unwrap();
+        let (l, rr) = (assess(&mut ledger, lc), assess(&mut ledger, rc));
+        for (a, b) in [(l, rr), (rr, l)] {
+            assert!(ledger.compare_supplied_assessments_full_crps(a, b).is_err());
+        }
+    }
+
+    let mut ledger = ForecastLedger::new();
+    let left = register(
+        &mut ledger,
+        "left",
+        metadata("A"),
+        10,
+        gaussian(-f64::MAX, 1.0),
+    );
+    let right = register(
+        &mut ledger,
+        "right",
+        metadata("A"),
+        10,
+        gaussian(f64::MAX, 1.0),
+    );
+    let lc = ledger.freeze_cohort(spec("left", vec![left])).unwrap();
+    let rc = ledger.freeze_cohort(spec("right", vec![right])).unwrap();
+    let (l, rr) = (assess(&mut ledger, lc), assess(&mut ledger, rc));
+    let report = ledger
+        .compare_supplied_assessments_gaussian_crps(l, rr)
+        .unwrap();
+    assert_eq!(report.n_unresolved, 1);
+    assert_eq!(report.n_arithmetic_indeterminate, 1);
+    assert_eq!(report.members.len(), 1);
+    assert_eq!(report.whole_population, None);
 }

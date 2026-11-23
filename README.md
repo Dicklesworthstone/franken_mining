@@ -4244,6 +4244,28 @@ intervals. Every frozen subject still contributes to the population checks, incl
 Mixed Gaussian/finite populations, intervals and quantile-only forecasts remain unsupported for paired CRPS.
 Replaying a comparison preserves both saved assessments and never appends to the forecast journal.
 
+### Compare saved supplied-outcome forecasts
+
+For registered plant forecasts and other cohorts with prospectively frozen target metadata, select the
+supplied-outcome path explicitly:
+
+```bash
+cargo run -p fmine-cli -- forecast journal compare \
+  --journal runs/forecast-demo/history \
+  --left LEFT_ASSESSMENT_DIGEST --right RIGHT_ASSESSMENT_DIGEST \
+  --targets supplied --score crps --format markdown
+```
+
+Both complete cohorts must use Gaussian distributions or both must use finite empirical distributions.
+Gaussian comparison retains the original means and standard deviations and uses the same approximate
+analytic completion extrema described above, under a separate supplied Gaussian receipt. Finite CRPS
+retains its exact rational arithmetic. Matching requires the complete frozen domain, site, horizon,
+quantity and unit, equal outcome deadlines, compatible assessment cuts and identical selected values and
+citations. Missing forecasts, unresolved outcomes and differing source selections stay visible; a missing
+forecast or incompatible selection prevents a whole-population result. Target declarations and citations
+remain supplied and unverified. Replay uses the saved evidence and never rereads the original source files
+or appends to the journal. Mixed Gaussian/finite populations refuse, including unmatched members.
+
 ### Compare saved event forecasts
 
 DESIGN (BD-048): saved supplied-outcome cohorts with prospectively frozen target metadata can also be

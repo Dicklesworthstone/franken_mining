@@ -1297,22 +1297,28 @@ sources, offline replay, CLI selection/refusal and legacy-default checks.
 
 ### Explicit supplied-target comparisons (BD-048/181, plan §10.2)
 
-`forecast journal compare --targets supplied` enables paired interval or finite CRPS comparison of
-registered plant and other prospectively tagged supplied-outcome cohorts. Omitted `--targets` and
+`forecast journal compare --targets supplied` enables paired interval, finite CRPS or Gaussian CRPS
+comparison of registered plant and other prospectively tagged supplied-outcome cohorts. Omitted `--targets` and
 explicit `--targets public` retain the public admission path. The supplied path requires the same frozen
 resolution rule, eligible sources, quantity, unit, alpha, saved assessment cut and outcome selector.
 Matching uses the complete unique domain/site/horizon/quantity/unit tuple and equal outcome deadlines.
 Duplicate targets, untagged legacy forecasts and public-bound cohorts refuse. Equal observed numbers
 are insufficient: both selected values and complete citations must match. Missing forecasts, unresolved
 outcomes and source mismatches remain visible; whole-population bounds require a compatible pair for
-every target. `--score crps` requires complete finite distributions even on unmatched targets.
+every target. `--score crps` requires either finite empirical distributions throughout both cohorts or
+Gaussian distributions throughout, including unmatched targets. Mixed Gaussian/finite populations refuse.
 
 The separate `fmine.forecast-supplied-comparison.v1` (SINT/v1) and
 `fmine.forecast-supplied-crps-comparison.v1` (SCRP/v1) receipts retain frozen distributions, model/author
 metadata, selected events and full citations. JSON and Markdown explicitly identify declarations and
 citations as supplied and unverified. The command samples no clock, opens no original source file,
 creates no assessment and appends nothing; public comparison and journal encodings remain unchanged.
-Independent kernel tests live in `xtask/tests/forecast_supplied_comparison.rs`. The actual plant command
+Supplied Gaussian comparison uses `fmine.forecast-supplied-gaussian-crps-comparison.v1` / SGCR/v1 and
+explicitly declares approximate arithmetic. It reuses the Gaussian CRPS owner for full-distribution
+losses and analytic completion extrema; those numerical extrema are not certified enclosures or
+confidence intervals. Existing public and exact supplied receipt encodings remain unchanged.
+Independent kernel tests live in `xtask/tests/forecast_supplied_comparison.rs`; saved Gaussian CLI replay
+without clock access or writes is exercised in `xtask/tests/forecast_live.rs`. The actual plant command
 control registers original and fitted forecasts, freezes cohorts before physical start, saves supplied
 outcomes and assessments, and compares them after original source paths disappear. Its exact synthetic
 example improves CRPS from `7/32` to `3/32`, with preceding unresolved difference bounds `[-1/8, 1/8]`.

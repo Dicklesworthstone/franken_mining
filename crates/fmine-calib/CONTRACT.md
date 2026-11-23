@@ -82,6 +82,15 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   Missing outcomes remain in the denominator, while missing forecasts, source mismatches and arithmetic
   failures keep affected aggregates unavailable. SBRI/v1 binds this separate comparison; existing
   interval, CRPS, forecast and assessment encodings remain unchanged.
+  DESIGN (BD-048/181): `compare_supplied_assessments_full_crps` dispatches homogeneous finite or Gaussian
+  populations; `compare_supplied_assessments_gaussian_crps` exposes the Gaussian owner directly.
+  Every union member is checked before scoring, including unmatched forecasts. Gaussian scores and
+  missing-outcome extrema reuse the public Gaussian calculation with approximate arithmetic, while the
+  full prospective target, deadline, source-selection and compatibility checks above remain in force.
+  `SuppliedGaussianAssessment` and SGCR/v1 keep these numerical diagnostics separate from exact receipts.
+  Missing pairs and unrepresentable arithmetic make the corresponding aggregate unavailable; no subset
+  is substituted for the whole union. Gaussian extrema are not certified numerical enclosures or
+  confidence intervals. Existing public Gaussian and exact supplied encodings remain unchanged.
 - DESIGN (BD-067/BD-334): `record::candidate::build_candidate` generates a complete draft live-site × target
   record from already selected quarterly observations. The named `pooled-quarterly-ratio-empirical-v1` model
   uses each target's frozen persistence pool and inverse empirical CDF: the latest observation times
