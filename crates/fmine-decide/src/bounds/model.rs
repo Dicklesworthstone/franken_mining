@@ -29,7 +29,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"quantities\":\"Quoted exact n/d or plain decimals, with no implicit units or normalization; closed independent intervals\",",
     "\"output\":\"Contained-metal weights, exact recovery bounds, eight endpoint witnesses, stable_proceed/stable_stop/unstable and attainable decisive test conditions\",",
     "\"scope\":\"Assumed internal decision support; no measured recovery, calibrated probabilities, spatial coverage inference, reserve classification or disclosure authority\",",
-    "\"example\":\"tests/decisions/untested_ore.toml\",\"tonne_example\":\"tests/decisions/untested_ore_tonnes.toml\"}"
+    "\"example\":\"tests/decisions/untested_ore.toml\",\"tonne_example\":\"tests/decisions/untested_ore_tonnes.toml\",\"blend_example\":\"tests/decisions/untested_blend.toml\"}"
 );
 const INPUT: RefusalCode = RefusalCode::InputMissingOrUnreadable506;
 const UU: RefusalCode = RefusalCode::UnbudgetedUnknowns204;
@@ -395,6 +395,16 @@ mod tests {
             sha256(text.as_bytes()).0,
             "complete declared worksheet",
         )
+    }
+
+    #[test]
+    fn blend_example_yields_the_two_planning_windows() {
+        let blend = include_str!("../../../../tests/decisions/untested_blend.toml");
+        let inputs = parse(blend, source(blend)).unwrap();
+        let card = crate::bounds::evaluate(&inputs).unwrap();
+        let report = card.to_markdown();
+        assert!(report.contains("Proceed — [1/20, 1/10]"));
+        assert!(report.contains("Stop — (1/2, 3/4]"));
     }
 
     #[test]
