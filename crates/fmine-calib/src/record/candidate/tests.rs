@@ -336,6 +336,56 @@ fn additive_changes_do_not_bridge_gaps_or_discard_zero_production_history() {
 }
 
 #[test]
+fn additive_production_candidates_restart_from_zero_but_ratios_still_require_positive_points() {
+    for field in ["au_prod_100_koz", "cu_prod_100_kt"] {
+        let mut rules = rules();
+        rules.targets[0].field = field.into();
+        let mut inputs = series();
+        for input in &mut inputs {
+            input.point = Some(i(0));
+        }
+        let candidate =
+            build_candidate_with_model(&rules, &inputs, 2, CandidateModel::PooledQuarterlyChange)
+                .unwrap();
+        // Independent changes [10, 22, 0, 25] have inverse-ECDF .1/.5/.9 quantiles 0/10/25.
+        for row in &candidate.exact_rows {
+            assert_eq!((row.lo, row.point, row.hi), (i(0), i(10), i(25)));
+        }
+        assert_eq!(candidate.serialized_rows, candidate.exact_rows);
+        assert!(build_candidate(&rules, &inputs, 2).is_err());
+        for missing_or_negative in [None, Some(i(-1))] {
+            inputs[0].point = missing_or_negative;
+            assert!(
+                build_candidate_with_model(
+                    &rules,
+                    &inputs,
+                    2,
+                    CandidateModel::PooledQuarterlyChange,
+                )
+                .is_err()
+            );
+        }
+    }
+    let (rules, mut inputs) = seasonal_fixture();
+    for input in &mut inputs {
+        input.history = [100, 125, 10_000, 1, 200, 250].map(|n| Some(i(n))).to_vec();
+        input.point = Some(i(0));
+    }
+    let seasonal =
+        build_candidate_with_model(&rules, &inputs, 2, CandidateModel::SeasonalQuarterlyChange)
+            .unwrap();
+    assert_eq!(seasonal.pools[0].changes, [i(25), i(50), i(25), i(50)]);
+    for row in &seasonal.exact_rows {
+        assert_eq!((row.lo, row.point, row.hi), (i(25), i(25), i(50)));
+    }
+    inputs[0].history[1] = Some(i(99));
+    let error =
+        build_candidate_with_model(&rules, &inputs, 2, CandidateModel::SeasonalQuarterlyChange)
+            .unwrap_err();
+    assert!(error.to_string().contains("nonnegative production domain"));
+}
+
+#[test]
 fn additive_forecasts_refuse_negative_production_before_decimal_rounding() {
     let mut rules = rules();
     let mut inputs = series();

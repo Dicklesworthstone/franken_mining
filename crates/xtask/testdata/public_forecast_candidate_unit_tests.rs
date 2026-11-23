@@ -786,6 +786,104 @@ fn additive_history_checks_ownership_and_status_on_previously_excluded_negative_
 }
 
 #[test]
+fn additive_zero_production_points_keep_original_numeric_claims_for_both_metals() {
+    for (field, header, unit) in [
+        ("au_prod_100_koz", "Gold produced (000s oz, 100%)", "koz"),
+        ("cu_prod_100_kt", "Copper produced (kt 100%)", "kt"),
+    ] {
+        let rules = RULES.replace("au_prod_100_koz", field);
+        let (registry, sources) = fixture(|q, sheet| {
+            replace_cell(sheet, "B2", MinimalCell::Text(header.into()));
+            if q == 3 {
+                replace_cell(sheet, "B3", MinimalCell::Number(0.0));
+                replace_cell(sheet, "B4", MinimalCell::Number(0.0));
+            }
+        });
+        let mut prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        let report = finish(prepared, sources.clone(), 2).unwrap();
+        for row in report
+            .candidate
+            .exact_rows
+            .iter()
+            .filter(|r| r.target == "production")
+        {
+            // The two original Q1->Q2 changes are 100-50 and 300-100, independent of the model.
+            assert_eq!(
+                (row.lo, row.point, row.hi),
+                (
+                    Rat::from_integer(50),
+                    Rat::from_integer(50),
+                    Rat::from_integer(200)
+                )
+            );
+        }
+        for row in report
+            .observations
+            .iter()
+            .filter(|r| r.target == "production" && r.role == "point")
+        {
+            assert_eq!(row.value, Some(Rat::from_integer(0)));
+            assert!(row.reason.is_none());
+            let source = row.claim.as_ref().unwrap();
+            assert_eq!(source.key.unit, unit);
+            assert_eq!(source.key.ownership_basis, OwnershipBasis::Consolidated100);
+            assert_eq!(source.key.reporting_vintage.file_sha256, row.sha256);
+            assert!(matches!(
+                source.claim.value,
+                PublicValue::Number {
+                    under_status: None,
+                    ..
+                }
+            ));
+        }
+        let prepared = prepare(rules.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        assert!(finish(prepared, sources, 2).is_err());
+    }
+}
+
+#[test]
+fn additive_zero_production_points_do_not_launder_statuses_placeholders_or_negative_values() {
+    for kind in [
+        key::StatusKind::Withheld,
+        key::StatusKind::Disposed,
+        key::StatusKind::CareAndMaintenance,
+    ] {
+        let (registry, sources) = fixture(|q, sheet| {
+            if q == 3 {
+                replace_cell(sheet, "B3", MinimalCell::Number(0.0));
+            }
+        });
+        let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        prepared.profile.subject_statuses.push(key::SubjectStatus {
+            subject: "Site A".into(),
+            kind,
+            first: (2030, 7),
+            last: Some((2030, 9)),
+            evidence: "DESIGN: invented unavailable point-quarter production".into(),
+        });
+        let error = finish(prepared, sources, 2).unwrap_err();
+        assert_eq!(error.code, RefusalCode::BasisMismatch105.as_str());
+        assert!(error.what.contains("status"));
+    }
+    for cell in [
+        MinimalCell::Text("—".into()),
+        MinimalCell::Text("n/a".into()),
+        MinimalCell::Number(-1.0),
+    ] {
+        let (registry, sources) = fixture(|q, sheet| {
+            if q == 3 {
+                replace_cell(sheet, "B3", cell.clone());
+            }
+        });
+        let mut prepared = prepare(RULES.as_bytes(), registry.as_bytes(), CUT).unwrap();
+        prepared.model = CandidateModel::PooledQuarterlyChange;
+        assert!(finish(prepared, sources, 2).is_err());
+    }
+}
+
+#[test]
 fn additive_cost_candidates_keep_zero_and_signed_history_without_relabelling_it_excluded() {
     for (field, header, unit) in [
         (

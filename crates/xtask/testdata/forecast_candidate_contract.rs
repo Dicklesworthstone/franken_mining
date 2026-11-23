@@ -176,6 +176,7 @@ fn workbook(
         4 => ["100.4", "-10.4", "200.4", "0.4"],
         5 => ["125.4", "0.4", "210.4", "-20.4"],
         6 => ["300.4", "0.4", "80.4", "-40.4"],
+        7 => ["0.4", "1500.4", "0.4", "3000.4"],
         _ => ["300.4", "1500.4", "80.4", "3000.4"],
     };
     build_minimal_xlsx_styled(
@@ -369,6 +370,91 @@ fn seasonal_cli_refuses_an_empty_selected_season_without_using_all_season_pairs(
         exit, 0,
         "the same source corpus supports the explicitly different model: {default:?}"
     );
+}
+
+#[test]
+fn additive_cli_forecasts_restart_from_displayed_zero_production_with_source_evidence() {
+    for (model, seasonal) in [(CHANGE_MODEL, false), (SEASONAL_CHANGE_MODEL, true)] {
+        let rules = if seasonal {
+            RULES
+                .replace("pool_from = \"2030Q1\"", "pool_from = \"2029Q1\"")
+                .replace("pool_through = \"2030Q2\"", "pool_through = \"2029Q4\"")
+        } else {
+            RULES.into()
+        };
+        let quarters = if seasonal {
+            vec![
+                (2029, 1, 1),
+                (2029, 2, 2),
+                (2029, 3, 4),
+                (2029, 4, 5),
+                (2030, 3, 7),
+            ]
+        } else {
+            vec![(2030, 1, 4), (2030, 2, 5), (2030, 3, 7)]
+        };
+        let fixture = Fixture::with_quarters(
+            &rules,
+            "Gold produced (000s oz, 100%)",
+            "All-in sustaining costs ($/oz)",
+            &quarters,
+        );
+        let mut args = fixture.args();
+        let model_arg = args.iter().position(|s| s == "--model").unwrap() + 1;
+        args[model_arg] = model.into();
+        let (exit, value, bytes) = invoke(&args);
+        assert_eq!(exit, 0, "{bytes}");
+        assert_eq!(invoke(&args).2, bytes);
+        let report = at(&value, &["payload"]);
+        let csv = at(report, &["forecasts_csv"]).as_str().unwrap();
+        let rows = parse_forecasts(csv.as_bytes(), &parse_rules(&rules).unwrap()).unwrap();
+        for row in rows.iter().filter(|r| r.target == "production") {
+            // Printed changes are 125-100 and 210-200; the displayed latest amounts are both zero.
+            assert_eq!(
+                (row.lo, row.point, row.hi),
+                (
+                    Rat::from_integer(10),
+                    Rat::from_integer(10),
+                    Rat::from_integer(25)
+                )
+            );
+        }
+        assert_eq!(at(report, &["issued"]).as_bool(), Some(false));
+        assert_eq!(at(report, &["uncalibrated"]).as_bool(), Some(true));
+        for row in at(report, &["observations"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                at(r, &["target"]).as_str() == Some("production")
+                    && at(r, &["role"]).as_str() == Some("point")
+            })
+        {
+            assert_eq!(at(row, &["value"]).as_str(), Some("0"));
+            assert_eq!(at(row, &["reason"]), &Json::Null);
+            assert_eq!(
+                at(row, &["claim", "value", "stored"]).as_str(),
+                Some("0.4")
+            );
+            assert_eq!(
+                at(row, &["claim", "value", "displayed"]).as_str(),
+                Some("0")
+            );
+            assert_eq!(at(row, &["sha256"]), at(row, &["claim", "sha256"]));
+        }
+        args.extend(["--format".into(), "markdown".into()]);
+        let markdown = output(&args);
+        assert!(markdown.status.success());
+        assert!(
+            String::from_utf8(markdown.stdout)
+                .unwrap()
+                .contains("Site A,production,10.00,10.00,25.00,true")
+        );
+        // Retaining the original ratio model must not silently select this restart assumption.
+        let (exit, refused, _) = invoke(&fixture.args());
+        assert_ne!(exit, 0);
+        assert_eq!(at(&refused, &["payload"]), &Json::Null);
+    }
 }
 
 #[test]
@@ -729,7 +815,7 @@ fn usage_requires_an_explicit_model_cut_and_unique_options() {
         (
             "--model",
             "unknown",
-            format!("--model requires {MODEL}|{SEASONAL_MODEL}"),
+            format!("--model requires {MODEL}|{SEASONAL_MODEL}|{CHANGE_MODEL}|{SEASONAL_CHANGE_MODEL}"),
         ),
         (
             "--decimal-places",
@@ -797,7 +883,12 @@ fn markdown_and_robot_docs_expose_candidate_status_and_export() {
             .iter()
             .map(Json::as_str)
             .collect::<Vec<_>>(),
-        vec![Some(MODEL), Some(SEASONAL_MODEL)]
+        vec![
+            Some(MODEL),
+            Some(SEASONAL_MODEL),
+            Some(CHANGE_MODEL),
+            Some(SEASONAL_CHANGE_MODEL)
+        ]
     );
 }
 

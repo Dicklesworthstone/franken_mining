@@ -251,12 +251,25 @@ pub fn build_candidate_with_model(
             .targets
             .iter()
             .any(|target| target.id == s.target && target.permits_signed_forecast());
-        if s.point.is_none_or(|x| x.signum() <= 0 && !signed) {
+        let nonnegative = model.is_additive()
+            && rules.targets.iter().any(|target| {
+                target.id == s.target
+                    && TargetMetric::from_target(target).is_some_and(TargetMetric::is_production)
+            });
+        if s.point
+            .is_none_or(|x| !signed && (x.signum() < 0 || (x.signum() == 0 && !nonnegative)))
+        {
             return Err(invalid(format!(
                 "{} / {} needs a {} point-quarter observation",
                 s.site,
                 s.target,
-                if signed { "numeric" } else { "positive" }
+                if signed {
+                    "numeric"
+                } else if nonnegative {
+                    "nonnegative"
+                } else {
+                    "positive"
+                }
             )));
         }
     }

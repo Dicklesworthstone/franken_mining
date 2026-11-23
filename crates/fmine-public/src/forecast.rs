@@ -462,13 +462,13 @@ fn observation(
         .and_then(|s| s.cells_by_coord.values().find(|c| c.cell_ref == raw.cell))
         .and_then(|c| c.displayed());
     let signed_point = role == "point" && !metric.is_production();
-    let additive_history = model.is_additive() && role == "history";
-    let zero_admissible = signed_point || additive_history;
+    let additive_observation = model.is_additive();
+    let zero_admissible = signed_point || additive_observation;
     let (value, mut reason) = match displayed {
         Some(Ok(display)) => match Rat::from_decimal_str(&display.text()) {
             Ok(value) => (
                 Some(value),
-                if additive_history {
+                if additive_observation {
                     (metric.is_production() && value.signum() < 0)
                         .then(|| "negative_printed_production_excluded_by_model".to_string())
                 } else {
