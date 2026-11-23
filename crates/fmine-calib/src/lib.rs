@@ -392,23 +392,63 @@ impl ReferenceClassPrior {
                 value: eps,
             });
         }
-        if !(base_mean.is_finite() && base_std.is_finite()) {
+        if !(base_mean.is_finite()
+            && base_std.is_finite()
+            && self.ref_mean_multiplier.is_finite()
+            && self.ref_std_multiplier.is_finite())
+        {
             return Err(ScoreError::NonFinite);
         }
         if base_std < 0.0 {
             return Err(ScoreError::NonPositiveStdDev(base_std));
         }
+        if self.ref_std_multiplier < 0.0 {
+            return Err(ScoreError::InvalidParameter {
+                name: "ref_std_multiplier",
+                value: self.ref_std_multiplier,
+            });
+        }
+        if eps == 0.0 {
+            return Ok((base_mean, base_std));
+        }
         let ref_mean = base_mean * self.ref_mean_multiplier;
         let ref_std = base_mean.abs() * self.ref_std_multiplier;
+        if !(ref_mean.is_finite() && ref_std.is_finite()) {
+            return Err(ScoreError::Arithmetic {
+                quantity: "reference component moments",
+            });
+        }
+        if eps == 1.0 || (ref_mean == base_mean && ref_std == base_std) {
+            return Ok((ref_mean, ref_std));
+        }
 
         let blended_mean = (1.0 - eps) * base_mean + eps * ref_mean;
         let m2_int = base_std * base_std + base_mean * base_mean;
         let m2_ref = ref_std * ref_std + ref_mean * ref_mean;
-        // A mixture's variance is non-negative; `max(0.0)` only removes a rounding residue of order ε·m2 when the
-        // two components coincide. It is not a domain clamp.
-        let blended_var =
-            ((1.0 - eps) * m2_int + eps * m2_ref - blended_mean * blended_mean).max(0.0);
-        Ok((blended_mean, blended_var.sqrt()))
+        let second = (1.0 - eps) * m2_int + eps * m2_ref;
+        let variance = second - blended_mean * blended_mean;
+        // Keep the pinned raw-moment evaluation when subtraction loses at most six binary digits.
+        // At small spreads or extreme scales, use the within- and between-component spreads directly.
+        let sd = if variance.is_normal() && variance >= second / 64.0 {
+            det::sqrt(variance)
+        } else {
+            let (w0, w1) = (det::sqrt(1.0 - eps), det::sqrt(eps));
+            let within = det::hypot(w0 * base_std, w1 * ref_std);
+            let delta = ref_mean - base_mean;
+            let weight = det::sqrt(eps * (1.0 - eps));
+            let between = if delta.is_finite() {
+                weight * delta
+            } else {
+                weight * ref_mean - weight * base_mean
+            };
+            det::hypot(within, between)
+        };
+        if !(sd.is_finite() && blended_mean.is_finite()) {
+            return Err(ScoreError::Arithmetic {
+                quantity: "blended moments",
+            });
+        }
+        Ok((blended_mean, sd))
     }
 }
 
@@ -1040,6 +1080,73 @@ mod tests {
         assert!(
             ledger.record_outcome(fid, 13_000, 1.0).is_ok(),
             "the refused write left the record open"
+        );
+    }
+
+    #[test]
+    fn reference_blend_preserves_spread_across_cost_scales_and_refuses_bad_components() {
+        let prior = ReferenceClassPrior {
+            class_id: "synthetic",
+            epsilon: 0.5,
+            ref_mean_multiplier: 1.0,
+            ref_std_multiplier: 1e-12,
+        };
+        let (mean, sd) = prior.blend(1e12, 1.0).expect("identical components");
+        assert_eq!(mean, 1e12);
+        assert!((sd - 1.0).abs() < 1e-15, "{sd}");
+        let (_, different) = prior.blend(1e12, 7.0).expect("two different spreads");
+        assert!((different - 5.0).abs() < 2e-15);
+        let (_, tiny) = prior.blend(0.0, 1e-200).expect("finite weighted spread");
+        assert!((tiny / 1e-200 - 0.5_f64.sqrt()).abs() < 1e-15);
+        let huge = ReferenceClassPrior {
+            ref_std_multiplier: 0.5,
+            ..prior
+        };
+        let (mean, sd) = huge
+            .blend(1e300, 5e299)
+            .expect("representable despite squared overflow");
+        assert_eq!(mean, 1e300);
+        assert!((sd / 5e299 - 1.0).abs() < 1e-15);
+        let opposite = ReferenceClassPrior {
+            ref_mean_multiplier: -1.0,
+            ref_std_multiplier: 0.0,
+            ..prior
+        };
+        assert_eq!(opposite.blend(f64::MAX, 0.0), Ok((0.0, f64::MAX)));
+        let zero = ReferenceClassPrior {
+            epsilon: 0.0,
+            ref_mean_multiplier: 2.0,
+            ..prior
+        };
+        assert_eq!(zero.blend(f64::MAX, 1.0), Ok((f64::MAX, 1.0)));
+        let one = ReferenceClassPrior {
+            epsilon: 1.0,
+            ..prior
+        };
+        assert_eq!(one.blend(1e12, f64::MAX), Ok((1e12, 1.0)));
+        assert!(
+            ReferenceClassPrior {
+                ref_std_multiplier: -1.0,
+                ..prior
+            }
+            .blend(1.0, 1.0)
+            .is_err()
+        );
+        assert!(
+            ReferenceClassPrior {
+                ref_mean_multiplier: f64::NAN,
+                ..prior
+            }
+            .blend(1.0, 1.0)
+            .is_err()
+        );
+        assert!(
+            ReferenceClassPrior {
+                ref_mean_multiplier: 2.0,
+                ..prior
+            }
+            .blend(f64::MAX, 0.0)
+            .is_err()
         );
     }
 

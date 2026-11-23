@@ -39,6 +39,11 @@ Pure calibration, forecast pre-registration (`INV-008`), strictly proper scoring
 Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT; plan §10.4's location score `tanh(z/2)` and centred dispersion score `tanh((z^2 - 1)/2) - c0`, each on a `ScoreBettingEProcess` with aGRAPA stakes at alpha/2).
 
 ## 3. Outputs
+DESIGN (bd-2jow.1). `ReferenceClassPrior::blend` reports the mean and standard deviation of a
+two-component mixture with declared parameters. A zero or unit mixture weight returns the active
+component. The within- and between-component variances preserve small spreads at large cost scales.
+These moments alone do not identify a cost-overrun probability or a project contingency percentile.
+
 Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) and monitors spatial front miscalibration (`G-CAL-1`), emitting typed assessment receipts, proper scores, calibration-gate verdicts, and exact rational completion bounds.
 
 ## 4. Invariants
