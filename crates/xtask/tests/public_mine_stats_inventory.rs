@@ -151,6 +151,257 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_minestats_block_is_named_beside_valid_blocks() {
+        let text = |s: &str| MinimalCell::Text(s.into());
+        for (year, site) in [
+            (Some(text("2030")), Some("Site B (100%)")),
+            (None, Some("Site B (100%)")),
+            (Some(MinimalCell::Number(2030.5)), Some("Site B (100%)")),
+            (Some(MinimalCell::Number(2030.0)), None),
+        ] {
+            let mut cells = vec![("A1".into(), text("Mine Statistics (Gold)"))];
+            for row in [3, 8, 13] {
+                cells.extend([
+                    (
+                        format!("A{row}"),
+                        text("For the three months ended March 31,"),
+                    ),
+                    (format!("A{}", row + 1), text("Recovery rate (percent)")),
+                    (format!("B{}", row + 1), MinimalCell::Number(91.0)),
+                ]);
+                if row == 8 {
+                    if let Some(year) = year.clone() {
+                        cells.push(("B8".into(), year));
+                    }
+                    if let Some(site) = site {
+                        cells.push(("B7".into(), text(site)));
+                    }
+                } else {
+                    cells.extend([
+                        (format!("B{row}"), MinimalCell::Number(2030.0)),
+                        (format!("B{}", row - 1), text("Site A (61.5%)1")),
+                    ]);
+                }
+            }
+            let bytes = build_minimal_xlsx(&[MinimalSheet {
+                name: "Minestats1".into(),
+                hidden: false,
+                cells,
+            }]);
+            let workbook = Workbook::from_bytes("partial.xlsx", &bytes).expect("workbook");
+            let read = read_mine_stats(&workbook, "2030Q1", None).expect("read");
+            assert_eq!((read.blocks, read.values.len()), (3, 2));
+            assert_eq!(
+                read.values
+                    .iter()
+                    .map(|v| (v.locator.as_str(), v.period.as_str(), v.site.as_str()))
+                    .collect::<Vec<_>>(),
+                [
+                    ("2030Q1:Minestats1!B4", "2030Q1", "Site A"),
+                    ("2030Q1:Minestats1!B14", "2030Q1", "Site A"),
+                ]
+            );
+            assert!(read.values.iter().all(|v| v.value
+                == MineStatsCell::Number {
+                    raw_text: "91".into(),
+                    value: 91.0,
+                }));
+            let mut expected = Vec::new();
+            if matches!(&year, Some(MinimalCell::Text(_))) {
+                expected.push(CellRefusal {
+                    locator: "2030Q1:Minestats1!B8".into(),
+                    reason: "Minestats year is stored as text; a numeric integer year is required"
+                        .into(),
+                });
+            }
+            if site.is_none() {
+                expected.push(CellRefusal {
+                    locator: "2030Q1:Minestats1!B7".into(),
+                    reason: "no site name at or left of this cell".into(),
+                });
+            }
+            expected.push(CellRefusal {
+                locator: "2030Q1:Minestats1!A8".into(),
+                reason: "Minestats block has no readable numeric-year columns with a site name"
+                    .into(),
+            });
+            assert_eq!(read.refusals, expected);
+            let source = LoadedSource {
+                file_name: "partial.xlsx".into(),
+                kind: SourceKind::MineStats,
+                quarter: "2030Q1".into(),
+                url: "https://example.invalid/partial.xlsx".into(),
+                url_basis: "synthetic".into(),
+                bytes: bytes.len() as u64,
+                census: workbook.cell_census(),
+                workbook,
+            };
+            let all = inventory(
+                &fmine_public::synthetic::synthetic_profile(),
+                &source,
+                &read,
+            );
+            expected.sort_by(|a, b| a.locator.cmp(&b.locator));
+            assert_eq!(all.refusals, expected);
+            assert_eq!(all.claims.len(), 2);
+        }
+    }
+
+    #[test]
+    fn text_year_column_is_named_without_dropping_numeric_neighbors() {
+        let text = |s: &str| MinimalCell::Text(s.into());
+        let bytes = build_minimal_xlsx(&[MinimalSheet {
+            name: "Minestats1".into(),
+            hidden: false,
+            cells: vec![
+                ("A1".into(), text("Mine Statistics (Gold)")),
+                ("B2".into(), text("Site A (61.5%)")),
+                ("C2".into(), text("Site B (100%)")),
+                ("D2".into(), text("Site C (100%)")),
+                ("A3".into(), text("For the three months ended March 31,")),
+                ("B3".into(), MinimalCell::Number(2030.0)),
+                ("C3".into(), text("2030")),
+                ("D3".into(), MinimalCell::Number(2029.0)),
+                ("E3".into(), text("")),
+                ("F3".into(), text("Notes")),
+                ("G3".into(), text(" \t")),
+                ("A4".into(), text("Recovery rate (percent)")),
+                ("B4".into(), MinimalCell::Number(91.0)),
+                ("C4".into(), MinimalCell::Number(92.0)),
+                ("D4".into(), text("n/a")),
+            ],
+        }]);
+        let workbook = Workbook::from_bytes("mixed-columns.xlsx", &bytes).expect("workbook");
+        let read = read_mine_stats(&workbook, "2030Q1", None).expect("read");
+        assert_eq!((read.blocks, read.values.len()), (1, 2));
+        assert_eq!(
+            read.values
+                .iter()
+                .map(|v| (v.locator.as_str(), v.period.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("2030Q1:Minestats1!B4", "2030Q1"),
+                ("2030Q1:Minestats1!D4", "2029Q1"),
+            ]
+        );
+        assert_eq!(read.count("number"), 1);
+        assert_eq!(read.count("na"), 1);
+        assert_eq!(
+            read.refusals,
+            vec![CellRefusal {
+                locator: "2030Q1:Minestats1!C3".into(),
+                reason: "Minestats year is stored as text; a numeric integer year is required"
+                    .into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn unreadable_summary_block_is_named_beside_valid_blocks() {
+        let text = |s: &str| MinimalCell::Text(s.into());
+        for (sheet, months, period) in [("QTD", "three", "2030Q2"), ("YTD", "six", "2030H1")] {
+            let mut cells = Vec::new();
+            for row in [3, 8, 13] {
+                cells.extend([
+                    (
+                        format!("A{row}"),
+                        text(&format!("For the {months} months ended June 30,")),
+                    ),
+                    (format!("B{row}"), MinimalCell::Number(2030.0)),
+                    (format!("A{}", row + 2), text("Site A (61.5%)")),
+                    (format!("B{}", row + 2), MinimalCell::Number(0.0)),
+                ]);
+                if row != 8 {
+                    cells.push((
+                        format!("B{}", row + 1),
+                        text("Gold produced (000s oz 100%)"),
+                    ));
+                }
+            }
+            let bytes = build_minimal_xlsx(&[MinimalSheet {
+                name: sheet.into(),
+                hidden: false,
+                cells,
+            }]);
+            let workbook = Workbook::from_bytes("partial-summary.xlsx", &bytes).expect("workbook");
+            let read = read_mine_stats(&workbook, "2030Q2", None).expect("read");
+            assert_eq!(
+                (read.blocks, read.values.len(), read.numeric_zeros()),
+                (3, 2, 2)
+            );
+            assert_eq!(
+                read.values
+                    .iter()
+                    .map(|v| v.locator.clone())
+                    .collect::<Vec<_>>(),
+                [format!("2030Q2:{sheet}!B5"), format!("2030Q2:{sheet}!B15")]
+            );
+            assert!(read.values.iter().all(|v| v.period == period));
+            assert_eq!(
+                read.refusals,
+                vec![CellRefusal {
+                    locator: format!("2030Q2:{sheet}!A8"),
+                    reason: "summary block has no readable metric columns with an unambiguous four-digit year"
+                        .into(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn empty_context_blocks_and_hidden_layouts_do_not_refuse_valid_observations() {
+        let text = |s: &str| MinimalCell::Text(s.into());
+        let period = "For the three months ended March 31,";
+        let bytes = build_minimal_xlsx(&[
+            MinimalSheet {
+                name: "QTD".into(),
+                hidden: false,
+                cells: vec![
+                    ("A3".into(), text(period)),
+                    ("B3".into(), MinimalCell::Number(2030.0)),
+                    ("B4".into(), text("Gold produced (000s oz 100%)")),
+                ],
+            },
+            MinimalSheet {
+                name: "Minestats1".into(),
+                hidden: false,
+                cells: vec![
+                    ("B2".into(), text("Site A (61.5%)")),
+                    ("A3".into(), text(period)),
+                    ("B3".into(), MinimalCell::Number(2030.0)),
+                    ("B7".into(), text("Site B (100%)")),
+                    ("A8".into(), text(period)),
+                    ("B8".into(), MinimalCell::Number(2030.0)),
+                    ("A9".into(), text("Recovery rate (percent)")),
+                    ("B9".into(), text("— ")),
+                ],
+            },
+            MinimalSheet {
+                name: "MinestatsHidden".into(),
+                hidden: true,
+                cells: vec![
+                    ("A3".into(), text(period)),
+                    ("B3".into(), text("2030")),
+                    ("A4".into(), text("Recovery rate (percent)")),
+                    ("B4".into(), MinimalCell::Number(99.0)),
+                ],
+            },
+        ]);
+        let workbook = Workbook::from_bytes("context.xlsx", &bytes).expect("workbook");
+        let read = read_mine_stats(&workbook, "2030Q1", None).expect("read");
+        assert_eq!((read.blocks, read.values.len()), (3, 1));
+        assert!(read.refusals.is_empty(), "{:?}", read.refusals);
+        assert_eq!(read.hidden_sheets, ["MinestatsHidden"]);
+        assert_eq!(read.values[0].locator, "2030Q1:Minestats1!B9");
+        assert_eq!(
+            read.values[0].value,
+            MineStatsCell::Nil {
+                token: "— ".into()
+            }
+        );
+    }
+
+    #[test]
     fn empty_source_refusal_survives_verified_assurance_and_claim_inventory() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -219,7 +470,34 @@ mod tests {
             ),
             reason: "recognized Mine Stats reporting blocks contain no typed observations".into(),
         };
-        assert_eq!(unobserved.refusals, vec![no_observations.clone()]);
+        let layout_refusals = vec![
+            CellRefusal {
+                locator: "2030Q1:QTD!A3".into(),
+                reason: "summary block has no readable metric columns with an unambiguous four-digit year"
+                    .into(),
+            },
+            CellRefusal {
+                locator: "2030Q1:Minestats3!B3".into(),
+                reason: "Minestats year is stored as text; a numeric integer year is required".into(),
+            },
+            CellRefusal {
+                locator: "2030Q1:Minestats3!A3".into(),
+                reason: "Minestats block has no readable numeric-year columns with a site name".into(),
+            },
+        ];
+        let mut unobserved_refusals = layout_refusals.clone();
+        unobserved_refusals.push(no_observations.clone());
+        assert_eq!(unobserved.refusals, unobserved_refusals);
+        for refusal in layout_refusals {
+            assert!(report.mine_stats_claims.refusals.contains(&refusal));
+            assert!(
+                report
+                    .public_claims
+                    .refusals
+                    .iter()
+                    .any(|r| { r.locator == refusal.locator && r.reason == refusal.reason })
+            );
+        }
         assert!(report.mine_stats_claims.refusals.contains(&no_observations));
         assert!(!report.instances.is_empty());
         assert_eq!(report.sources.len(), profile.sources.len());
