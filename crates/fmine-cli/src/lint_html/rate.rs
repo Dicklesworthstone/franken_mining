@@ -1,13 +1,17 @@
-//! Conditional quarterly gold cost rates from matching cumulative rates and sold quantities.
+//! Conditional quarterly gold/copper cost rates from matching cumulative rates and sold quantities.
 //! All operands must come from one filing; competing vintages never disappear through selection.
 
 use super::*;
+use fmine_metrics::public_derivation::CostRateUnit;
 use fmine_metrics::public_derivation::quarter_rate::{self, PrintedPeriod};
 
 fn family(cell: &KeyedCell) -> Option<&'static str> {
     match (cell.key.line.label.as_str(), cell.key.unit.as_str()) {
         ("html:aisc_usd_per_oz_sold", "usd_per_oz") => Some("aisc_per_oz"),
         ("html:cos_usd_per_oz_sold", "usd_per_oz") => Some("cos_per_oz"),
+        ("html:aisc_usd_per_lb_sold", "usd_per_lb") => Some("aisc_per_lb"),
+        ("html:c1_usd_per_lb_sold", "usd_per_lb") => Some("c1_per_lb"),
+        ("html:cos_usd_per_lb_sold", "usd_per_lb") => Some("cos_per_lb"),
         _ => None,
     }
 }
@@ -82,13 +86,23 @@ pub(super) fn finding(
     }) else {
         return Ok(None);
     };
+    let Some(unit) = quarter_rate::family_unit(family) else {
+        return Ok(None);
+    };
+    let sales_metric = match unit {
+        CostRateUnit::GoldKoz => "html:gold_sales_koz",
+        CostRateUnit::CopperMillionPounds => "html:copper_sales_mlb",
+    };
     let periods = match target.period.kind {
         PeriodKind::Quarter(2) => [PeriodKind::Quarter(1), PeriodKind::H1],
         PeriodKind::Quarter(3) => [PeriodKind::H1, PeriodKind::NineMonths],
         PeriodKind::Quarter(4) => [PeriodKind::NineMonths, PeriodKind::FullYear],
         _ => return Ok(None),
     };
-    let is_rate = |source: &HtmlClaim| source.cell.key.line.label == prototype.cell.key.line.label;
+    let is_rate = |source: &HtmlClaim| {
+        source.cell.key.line.label == prototype.cell.key.line.label
+            && source.cell.key.unit == unit.rate_unit()
+    };
     let mut sources: Vec<_> = snapshot
         .claims
         .iter()
@@ -100,8 +114,8 @@ pub(super) fn finding(
                 && ((is_rate(source)
                     && (periods.contains(&cell.key.valid_period.kind)
                         || cell.key.valid_period == target.period))
-                    || (cell.key.line.label == "html:gold_sales_koz"
-                        && cell.key.unit == "koz"
+                    || (cell.key.line.label == sales_metric
+                        && cell.key.unit == unit.denominator_unit()
                         && periods.contains(&cell.key.valid_period.kind)))
         })
         .collect();
@@ -114,7 +128,8 @@ pub(super) fn finding(
     });
     let mut status = "not_available";
     let mut reason =
-        "both cumulative periods require their own rate and sold-gold quantity".to_string();
+        "both cumulative periods require their own rate and matching sold-metal quantity"
+            .to_string();
     let mut derived = None;
     let mut draft_interval = None;
     let mut refusal = None;
@@ -225,10 +240,11 @@ pub(super) fn finding(
     };
     let value_json = |interval| {
         format!(
-            "{{\"issuer\":{},\"subject\":{},\"metric\":{},\"unit\":\"usd_per_oz\",\"ownership\":{},\"period\":{},\"interval\":{}}}",
+            "{{\"issuer\":{},\"subject\":{},\"metric\":{},\"unit\":{},\"ownership\":{},\"period\":{},\"interval\":{}}}",
             js(&prototype.cell.key.issuer),
             js(&prototype.cell.key.subject),
             js(family),
+            js(unit.rate_unit()),
             js(&ownership),
             js(&target.period.code()),
             interval_json(interval),
@@ -257,14 +273,15 @@ pub(super) fn finding(
         },
     );
     let json = format!(
-        "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"rule\":{},\"formula\":\"(current_rate*current_sales-prior_rate*prior_sales)/(current_sales-prior_sales)\",\"assumption\":{},\"target_period\":{},\"unit\":\"usd_per_oz\",\"draft_interval\":{},\"source_evidence\":[{evidence}],\"derived_claim\":{derived_json},\"refusal\":{refusal_json}}}",
+        "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"rule\":{},\"formula\":\"(current_rate*current_sales-prior_rate*prior_sales)/(current_sales-prior_sales)\",\"assumption\":{},\"target_period\":{},\"unit\":{},\"draft_interval\":{},\"source_evidence\":[{evidence}],\"derived_claim\":{derived_json},\"refusal\":{refusal_json}}}",
         finding.span.0,
         finding.span.1,
         js(status),
         js(&reason),
-        js(quarter_rate::RULE),
-        js(quarter_rate::ASSUMPTION),
+        js(quarter_rate::rule(unit)),
+        js(quarter_rate::assumption(unit)),
         js(&target.period.code()),
+        js(unit.rate_unit()),
         draft_interval.map_or_else(|| "null".into(), interval_json),
     );
     let mut markdown = format!(
@@ -273,17 +290,18 @@ pub(super) fn finding(
         finding.span.1,
         target.period.code(),
         crate::guidance::text(&reason),
-        quarter_rate::ASSUMPTION,
+        quarter_rate::assumption(unit),
     );
     if let Some(claim) = derived {
         let _ = writeln!(
             markdown,
-            "  - Derived Claim `{}`: [{}/{}, {}/{}] USD/oz.",
+            "  - Derived Claim `{}`: [{}/{}, {}/{}] {}.",
             claim.claim_id,
             claim.value.lo.num(),
             claim.value.lo.den(),
             claim.value.hi.num(),
-            claim.value.hi.den()
+            claim.value.hi.den(),
+            unit.display_unit()
         );
     }
     for source in sources {

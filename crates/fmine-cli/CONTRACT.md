@@ -938,9 +938,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     ownership conversion, historical mapping proof or issuer disclosure is inferred. The receipt binds
     the draft digest, complete selected Claim population and arithmetic findings. Independent exact
     source/CLI cases extend `xtask/tests/html_lint.rs` and its Python Fraction oracle.
-    DESIGN (BD-059/BD-345): the same receipt conditionally reconstructs quarterly gold AISC and cost
-    of sales from `(R_cumulative*Q_cumulative - R_prior*Q_prior)/(Q_cumulative-Q_prior)`.
-    All four rate/sold-gold Claims must be unique, share one filing and printed ownership basis, and
+    DESIGN (BD-059/BD-345): the same receipt conditionally reconstructs quarterly gold AISC/CoS and
+    copper AISC/C1/CoS from `(R_cumulative*Q_cumulative - R_prior*Q_prior)/(Q_cumulative-Q_prior)`.
+    Gold rates require sold koz; copper rates require explicitly printed sold Mlb, without inferring
+    production denominators or tonne/pound conversions. All four rate/sales Claims must be unique,
+    share one filing and printed ownership basis, and
     cover H1/Q1, 9M/H1 or FY/9M. The whole incremental-sales enclosure must be positive. Exact
     vertex bounds preserve the repeated sales variables and signed rates. Same-definition/sold-denominator
     assumptions accompany every result; credit treatment, accounting equivalence, issuer disclosure and

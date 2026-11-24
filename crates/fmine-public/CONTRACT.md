@@ -141,7 +141,9 @@ The public lane of M0 (`fmine assure public`).
   and whole-site recovery are supported. AISC and cost of sales include canonical copper summary/site
   rows with explicit pound-sold denominators and `usd_per_lb` units; their rounding, source identity and
   ownership checks are the same as for gold, with no ounce/pound conversion. The HTML source keys join
-  these same checks for gold/copper costs and production, and gold sales. Printed HTML AISC/TCC/C1 labels
+  these same checks for gold/copper costs and production, and gold sales. Explicitly printed copper-sales
+  Mlb rows supply typed extensive operands for conditional quarterly copper rates; copper tonnes and
+  production rows are not converted into sold pounds. Printed HTML AISC/TCC/C1 labels
   never establish by-/co-product treatment: an explicit credit-basis assertion remains unchecked.
   Explicitly printed gold co-product TCC and AISC stay distinct from by-product rates. Their cited and
   discovery checks require the co-product qualifier and retain original publication cuts, source hashes

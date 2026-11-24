@@ -310,6 +310,14 @@ fn metric_unit(metric: &str, unit: &str) -> Result<(&'static str, &'static str),
         }
         "gold production" | "gold produced" if gold_quantity => ("html:gold_production_koz", "koz"),
         "gold sales" | "gold sold" if gold_quantity => ("html:gold_sales_koz", "koz"),
+        "copper sales" | "copper sold"
+            if matches!(
+                unit.as_str(),
+                "mlb" | "million pounds" | "million copper pounds"
+            ) =>
+        {
+            ("html:copper_sales_mlb", "Mlb")
+        }
         "copper production" | "copper produced"
             if matches!(
                 unit.as_str(),

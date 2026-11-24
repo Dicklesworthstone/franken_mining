@@ -5,12 +5,40 @@
 //! so its extrema over the four printed rounding boxes occur at vertices.
 
 use super::{
-    AdditivityClass, Claim, EvidenceClass, Interval, Period, Printed, RefusalCode, Representation,
-    Result, SpatialSupport, checked, refusal, validate_source,
+    AdditivityClass, Claim, CostRateUnit, EvidenceClass, Interval, Period, Printed, RefusalCode,
+    Representation, Result, SpatialSupport, checked, refusal, validate_source,
 };
 
 pub const RULE: &str = "public-disclosure.sales-weighted-quarter-rate/1";
 pub const ASSUMPTION: &str = "Both cumulative rates use the same issuer-reported cost definition and matching sold-gold denominator in one filing. The quarter numerator is the difference of implied cumulative costs; credit treatment and accounting-definition equivalence are not independently established.";
+pub const COPPER_RULE: &str = "public-disclosure.copper-sales-weighted-quarter-rate/1";
+pub const COPPER_ASSUMPTION: &str = "Both cumulative rates use the same issuer-reported cost definition and matching sold-copper denominator in millions of pounds in one filing. The quarter numerator is the difference of implied cumulative costs; credit treatment and accounting-definition equivalence are not independently established. No production denominator or tonne/pound conversion is inferred.";
+
+/// The rate family fixes the sold-metal unit; the common cumulative sales scale cancels.
+#[must_use]
+pub fn family_unit(family: &str) -> Option<CostRateUnit> {
+    match family {
+        "aisc_per_oz" | "tcc_per_oz" | "cos_per_oz" => Some(CostRateUnit::GoldKoz),
+        "aisc_per_lb" | "c1_per_lb" | "cos_per_lb" => Some(CostRateUnit::CopperMillionPounds),
+        _ => None,
+    }
+}
+
+#[must_use]
+pub const fn rule(unit: CostRateUnit) -> &'static str {
+    match unit {
+        CostRateUnit::GoldKoz => RULE,
+        CostRateUnit::CopperMillionPounds => COPPER_RULE,
+    }
+}
+
+#[must_use]
+pub const fn assumption(unit: CostRateUnit) -> &'static str {
+    match unit {
+        CostRateUnit::GoldKoz => ASSUMPTION,
+        CostRateUnit::CopperMillionPounds => COPPER_ASSUMPTION,
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct PrintedPeriod {
@@ -38,7 +66,7 @@ pub fn bounds(prior: PrintedPeriod, current: PrintedPeriod) -> Result<Interval> 
     {
         return Err(refusal(
             RefusalCode::NonIdentifiableAttribution104,
-            "cumulative and incremental sold-gold enclosures must be strictly positive",
+            "cumulative and incremental sold-metal enclosures must be strictly positive",
         ));
     }
     let mut range: Option<Interval> = None;
@@ -87,8 +115,13 @@ pub fn derive<T>(
     prior: PrintedPeriod,
     current: PrintedPeriod,
 ) -> Result<Claim<Interval>> {
-    if !matches!(family, "aisc_per_oz" | "cos_per_oz")
-        || target.year == 0
+    let unit = family_unit(family).ok_or_else(|| {
+        refusal(
+            RefusalCode::BasisMismatch105,
+            "sales-weighted quarter requires a gold AISC/TCC/cost-of-sales or copper AISC/C1/cost-of-sales family",
+        )
+    })?;
+    if target.year == 0
         || !matches!(
             (target.first_month, target.last_month),
             (4, 6) | (7, 9) | (10, 12)
@@ -96,7 +129,7 @@ pub fn derive<T>(
     {
         return Err(refusal(
             RefusalCode::BasisMismatch105,
-            "sales-weighted quarter requires a gold AISC/cost-of-sales family and Q2, Q3 or Q4",
+            "sales-weighted quarter requires Q2, Q3 or Q4",
         ));
     }
     let first = sources[0];
@@ -115,7 +148,7 @@ pub fn derive<T>(
         if source.additivity != expected || parents.contains(&source.claim_id) {
             return Err(refusal(
                 RefusalCode::NonAdditiveAverage103,
-                "cost-rate operands require distinct weighted rates and extensive sold-gold quantities",
+                "cost-rate operands require distinct weighted rates and extensive sold-metal quantities",
             ));
         }
         evidence = evidence.meet(source.evidence);
@@ -132,19 +165,20 @@ pub fn derive<T>(
     }
     let interval = bounds(prior, current)?;
     let tag = format!(
-        "{family}:{}:{}-{}:{}/{}:{}/{}:{ASSUMPTION}",
+        "{family}:{}:{}-{}:{}/{}:{}/{}:{}",
         target.year,
         target.first_month,
         target.last_month,
         interval.lo.num(),
         interval.lo.den(),
         interval.hi.num(),
-        interval.hi.den()
+        interval.hi.den(),
+        assumption(unit)
     );
     anchors.sort();
     anchors.dedup();
     Ok(Claim::new(
-        RULE,
+        rule(unit),
         interval,
         &tag,
         Representation::Deterministic,

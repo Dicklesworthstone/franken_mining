@@ -1470,8 +1470,10 @@ the full source ancestry and publication evidence, and its digest binds both the
 An arithmetic result is a derived Claim, not a new issuer disclosure; direct assertions and explicit citation
 verdicts remain visible, and intensive rates are not subtracted or summed.
 
-For gold AISC and gold cost of sales, the receipt can also derive a conditional quarterly rate from
-two cumulative rates and their matching gold sales in the **same filing**. It subtracts the implied
+For gold AISC/cost of sales and copper AISC/C1/cost of sales, the receipt can also derive a conditional
+quarterly rate from two cumulative rates and their matching metal sales in the **same filing**.
+Gold sales must be printed in koz; copper sales must be printed in Mlb (millions of pounds). Production
+quantities and tonnes are not substituted or converted into a sold-pound denominator. It subtracts the implied
 cumulative costs and divides by incremental sales, preserving the sales variables shared by numerator
 and denominator. All four operands must have the same printed ownership basis; their complete rounding
 enclosures must establish positive incremental sales. Signed rates remain signed. The report shows the
