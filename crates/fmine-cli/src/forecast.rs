@@ -126,6 +126,9 @@ struct Replay {
     source_admissions: BTreeMap<(ObjectId, u64), live::SourceAdmission>,
     /// Replayed v9 plant registrations retain an earlier bound for prospective cohort membership.
     plant_registration_starts: BTreeMap<ObjectId, i64>,
+    /// Optional scope interpretation is demanded only by new source-derived plant outcome operations.
+    plant_outcome_scopes: BTreeMap<ObjectId, Result<plant::outcome::TargetScope, Refusal>>,
+    plant_outcome_admissions: BTreeMap<(ObjectId, u64), plant::outcome::Admission>,
     /// Prefix-verified raw/correction/corrected lineage, retained independently of later outcomes.
     correction_admissions: BTreeMap<ObjectId, correction::registration::Admission>,
     /// Source-bound technical-report assumptions; supplied outcomes cannot bypass their resolution rule.
@@ -653,9 +656,13 @@ impl Replay {
                 if report
                     .per_member
                     .iter()
-                    .any(|member| member.selected_event.is_some_and(|(seq, _)| self
-                        .source_admissions
-                        .contains_key(&(member.forecast_id, seq))))
+                    .any(|member| member.selected_event.is_some_and(|(seq, _)| {
+                        self.source_admissions
+                            .contains_key(&(member.forecast_id, seq))
+                            || self
+                                .plant_outcome_admissions
+                                .contains_key(&(member.forecast_id, seq))
+                    }))
                 {
                     "per_member_admission_evidence"
                 } else {
@@ -770,8 +777,17 @@ impl Replay {
         };
         let admission = member
             .selected_event
-            .and_then(|(seq, _)| self.source_admissions.get(&(member.forecast_id, seq)))
-            .map_or_else(|| "null".to_string(), live::SourceAdmission::to_json);
+            .and_then(|(seq, _)| {
+                self.source_admissions
+                    .get(&(member.forecast_id, seq))
+                    .map(live::SourceAdmission::to_json)
+                    .or_else(|| {
+                        self.plant_outcome_admissions
+                            .get(&(member.forecast_id, seq))
+                            .map(|admission| admission.json().to_string())
+                    })
+            })
+            .unwrap_or_else(|| "null".to_string());
         let metadata = segments::metadata_field(record.metadata.as_ref());
         let correction = self
             .correction_admissions

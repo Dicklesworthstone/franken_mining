@@ -346,6 +346,28 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   joint-distribution score, external time proof, source re-evaluation on replay, validated plant outcomes
   or calibration/field-gate claim. Complete source and binary controls live in
   `xtask/testdata/forecast_plant_controls.rs` and `plant_forecast_command.rs`.
+- DESIGN (BD-181/263): `forecast journal resolve-plant --journal <path> --head <hex> --cohort <name>
+  --forecast <alias> --input <observation.toml> --trust-host-clock` admits a recovery outcome from three
+  original `fmine.plant-material.v1` whole-material worksheets. The
+  `fmine.plant-recovery-observation.v1` descriptor declares the eligible source, vintage, availability,
+  exact target scope, total-element measurand, feed/concentrate/tailings paths and explicit
+  `complete-two-product/no-inventory-change` basis. The existing pure two-product owner must establish
+  exactly zero dry and selected-element residuals and positive feed metal. Recovery is the exact
+  concentrate/feed elemental-mass ratio in [0,1], with a retained binary64 scoring projection.
+  Only an original v9/v14 recovery registration is eligible; cohort membership and the
+  `plant-two-product-recovery/v1` rule must be frozen before physical start. Source, boundary, complete
+  UTC interval, circuit, blend, material domain, dry basis and element must match the frozen target.
+  The observation dry basis must be `total-non-water-dry-matter/v1`, matching the material worksheets'
+  whole-material assay interpretation; arbitrary matching labels do not establish a basis conversion.
+  Availability must strictly follow physical end and not exceed the writer's earliest possible time.
+  The opt-in v16 operation retains and rechecks the descriptor, all three worksheets, source hashes,
+  complete diagnostic receipt, exact ratio and record binding under the unchanged 64 KiB cap. Replay
+  reads no original files and leaves historical versions unchanged. Physical evidence identity excludes
+  forecast/cohort identifiers so identical observations can support paired comparisons. Existing outcomes
+  cannot be overwritten; failed admission appends nothing. JSON/Markdown label the result
+  `source_derived_unverified`; measurement accuracy, stream mapping, completeness and availability remain
+  supplied. This supplies no model-derived observation, tolerance, reconciliation, authentication,
+  calibration or field-gate claim. Real-writer controls live in `xtask/tests/forecast_plant_outcome.rs`.
 - DESIGN (BD-276): `forecast journal register-assumption --journal <path> --head <hex> --input <path>
   --trust-host-clock` admits one `fmine.report-assumption.v1` request from a registered technical report.
   Hash/size-verified source bytes and complete two-reader agreement supply the printed point or finite
