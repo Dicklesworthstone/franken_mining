@@ -240,14 +240,17 @@ impl<T> Claim<T> {
         next
     }
 
-    /// States the regime and dataset this claim is anchored to. They count only for a class `§7.1` lets stand on an
-    /// anchor ([`project_color`]), so this can never raise a colour by itself.
+    /// States the regime and dataset of a source claim. The evidence class still caps the colour
+    /// ([`project_color`]). A claim with parents keeps its existing basis so a source anchor cannot
+    /// replace the colour, dataset lineage, or validity intersection inherited from its inputs.
     #[must_use]
     pub fn with_regime(mut self, regime: ValidityDomain, dataset: impl Into<String>) -> Self {
-        self.color_basis = Some(Color::Validated {
-            regime,
-            dataset: dataset.into(),
-        });
+        if self.parents.is_empty() {
+            self.color_basis = Some(Color::Validated {
+                regime,
+                dataset: dataset.into(),
+            });
+        }
         self
     }
 
@@ -854,6 +857,38 @@ mod tests {
                 c.color().map(|c| c.rank()),
                 Ok(ColorRank::Estimated),
                 "{class:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_regime_attachment_preserves_parent_linked_evidence() {
+        let reference = |lo, hi| ValidityDomain::unconstrained().with("feed_grade", lo, hi);
+        let left =
+            leaf("left", EvidenceClass::Measured).with_regime(reference(1.0, 3.0), "assay-a");
+        let right =
+            leaf("right", EvidenceClass::Derived).with_regime(reference(2.0, 4.0), "assay-b");
+        let unanchored = leaf("unanchored", EvidenceClass::Measured);
+        let disjoint =
+            leaf("disjoint", EvidenceClass::Measured).with_regime(reference(5.0, 6.0), "assay-c");
+        let overlap = join("overlap", &left, &right);
+        let Color::Validated { regime, dataset } = overlap.color().unwrap() else {
+            panic!("overlapping source regimes should validate");
+        };
+        assert_eq!(regime.bounds()["feed_grade"], (2.0, 3.0));
+        assert!(dataset.contains("assay-a") && dataset.contains("assay-b"));
+        let weak = join("weak", &left, &unanchored);
+        let no_overlap = join("no-overlap", &left, &disjoint);
+        let declared = stating("parent-linked", EvidenceClass::Derived, vec![left.claim_id]);
+        for claim in [&weak, &no_overlap, &declared] {
+            assert_eq!(claim.color().unwrap().rank(), ColorRank::Estimated);
+        }
+        for claim in [weak, no_overlap, overlap, declared] {
+            let anchored = claim.clone().with_regime(reference(0.0, 10.0), "new-label");
+            assert_eq!(anchored, claim, "{}", claim.metric_key);
+            assert_eq!(
+                join("next", &anchored, &left).color(),
+                join("next", &claim, &left).color()
             );
         }
     }
