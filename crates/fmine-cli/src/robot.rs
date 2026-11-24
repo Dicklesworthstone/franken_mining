@@ -639,7 +639,7 @@ mod tests {
         }
 
         // 3. Validate every compiled verb in VERB_CATALOG against verbs schema (and reject unknown).
-        assert_eq!(VERB_CATALOG.len(), 82);
+        assert_eq!(VERB_CATALOG.len(), 83);
         assert!(VERB_CATALOG.iter().any(|v| v.path == "plant reconcile-raw"
             && v.subsystem == "Crucible"
             && !v.mutates_authority));
@@ -660,6 +660,11 @@ mod tests {
         assert!(
             VERB_CATALOG.iter().any(|v| v.path == "recon run"
                 && v.subsystem == "Touchstone"
+                && !v.mutates_authority)
+        );
+        assert!(
+            VERB_CATALOG.iter().any(|v| v.path == "forecast spatial-monitor"
+                && v.subsystem == "Plumb"
                 && !v.mutates_authority)
         );
         for spec in &VERB_CATALOG {

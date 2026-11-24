@@ -7,7 +7,7 @@ Pure calibration, forecast pre-registration (`INV-008`), strictly proper scoring
 - **Layer:** K0
 - **Subsystem:** Plumb
 - **LOC budget:** 27,000 planned / 31,000 ceiling
-- **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record", "guidance_scores"]`
+- **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record", "guidance_scores", "spatial"]`
 
 ## 2. Inputs
 ### Mathematical & Domain Formulation
@@ -716,8 +716,9 @@ Every module declares its `//! Determinism:` header checked by `xtask check-det`
 Calibration scoring never promotes evidence (`NL-1`, `NL-2`): `apply_calibration_gate` only lowers `ModelledCalibrated` and sets `calibration_failed` on `Overconfident`/`Biased` (irreversibly per `NL-4`). Descriptive guidance scores and completion bounds carry no predictive-skill or calibration verdict.
 
 ## 8. Validity domain
-A miscalibrated spatial front alarms when either score's wealth reaches `2 / alpha` (40 at `alpha = 0.05`). Nothing
-downstream reads the alarm yet: no claim is downgraded by it, and no InvestigationCase (plan §10.5) exists. Pure calibration and scoring kernel; does not perform file I/O (`L-3`). Depends on `fmine-core`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, `fmine-registry` (S0), and `fmine-units` (S0).
+A miscalibrated spatial front alarms when either score's wealth reaches `2 / alpha` (40 at `alpha = 0.05`). The
+source-bound `spatial` worksheet adapter exposes that alarm and its diagnostic Claims; it does not downgrade
+other Claims or create an InvestigationCase (plan §10.5). Pure calibration and scoring kernel; does not perform file I/O (`L-3`). Depends on `fmine-core`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, `fmine-registry` (S0), and `fmine-units` (S0).
 
 ## 9. Oracles
 - `scripts/oracle/score_known_answers.py`: numerical integration oracle for `gaussian_crps` and `gaussian_log_score` to `1e-12` relative.
@@ -827,3 +828,32 @@ the existing explicit nowcast normalization. `Q4Qtd` and `FyMinus9m` do not admi
 The metric exposes its exact canonical source line and issuer-reported guidance suffix.
 Capital points may be signed or zero; positive historical adjacency and exact pooled-ratio
 arithmetic remain unchanged. This adds target meanings without modifying frozen rule bytes.
+
+### Declared spatial-front assessments (BD-311)
+
+DESIGN: `spatial::evaluate(text, source)` checks the supplied worksheet's SHA-256 before strict subset parsing.
+It admits at most four MiB and 4,096 observations in strictly increasing declared availability order.
+`registered_ns`, `prediction_registered_ns` and `available_ns` are nonnegative UTC Unix nanoseconds.
+The policy precedes each prior-mean registration, which must precede its observation's availability. Every row
+repeats and matches the policy's target unit, metre coordinate frame and support; conversion is never inferred.
+The existing monitor's finite-parameter, neighbourhood and covariance checks remain in force. Unrepresentable
+conditional quantities, squared distances, residuals or log wealth refuse the whole assessment.
+
+The immutable receipt retains the policy and every observation as Assumed/Internal input Claims, each
+diagnostic row as a derived Claim with its predecessor and input parents, and a bound summary. It reports
+conditional means and standard deviations, standardized residuals, PIT values, both current and peak log
+wealths, threshold, separate sticky monitor alarms and the first crossing. The original source identity,
+policy, complete declared order, all row results and interpretive limits contribute to the receipt digest.
+JSON and Markdown retain the complete population, input quantities and declared chronology. Markdown
+separates observation values, conditional diagnostics and both monitor histories, and exposes each input,
+result and summary Claim's identity, value tag, parents and bound worksheet locators.
+A supplied locator remains a declaration attached to worksheet bytes, not authenticated field evidence.
+Nanosecond timestamps render as exact decimal strings in JSON. The command does not freeze a policy in a
+durable journal, prove prospective timing, infer calibration or causality, retrain, invalidate another Claim,
+or implement the human-resolved investigation lifecycle. The existing monitor kernel and its goldens are unchanged.
+
+DESIGN: direct tests in `spatial::tests` cover independent two-observation Gaussian conditioning answers,
+source and semantic changes, inherited evidence, chronology and dimensional mismatches, numerical overflow,
+population limits, sticky crossings through a separately evaluated prefix, deterministic JSON/Markdown,
+and complete Markdown inputs, diagnostics and source/Claim bindings.
+These are synthetic controls; no authentic-site or false-alarm qualification is asserted by this adapter.

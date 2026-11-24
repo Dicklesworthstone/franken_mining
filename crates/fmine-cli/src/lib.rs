@@ -32,6 +32,7 @@ mod repair;
 pub mod reserve;
 mod robot;
 pub mod schedule;
+mod spatial;
 mod tables;
 mod track_record;
 mod track_record_as_of;
@@ -233,6 +234,10 @@ pub enum CliCommand {
     },
     /// Register, resolve and assess forecasts in a durable journal using the declared host-clock policy.
     ForecastJournal(forecast_journal::Command),
+    /// Assess an explicitly declared mining-front sequence under a source-bound spatial model.
+    ForecastSpatial {
+        input: PathBuf,
+    },
     /// Score a time-proved frozen record against original outcomes and its registered baselines (BD-076).
     ForecastRecord(forecast_record::Command),
     /// Prepare an unissued empirical candidate from original source releases at an explicit cut.
@@ -628,6 +633,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--json" | "--trust-host-clock" => next += 1,
                         flag if flag.starts_with("--") => next += 2,
                         "journal" => return "forecast journal",
+                        "spatial-monitor" => return "forecast spatial-monitor",
                         "record" => {
                             next += 1;
                             while let Some(word) = args.get(next) {
@@ -1170,6 +1176,7 @@ pub fn parse_args(
         verb,
         "metrics cost"
             | "metrics geo"
+            | "forecast spatial-monitor"
             | "decide production"
             | "decide investment"
             | "compare"
@@ -1191,6 +1198,20 @@ pub fn parse_args(
         let command = match verb {
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
+            "forecast spatial-monitor" => match &words[..] {
+                [group, verb, flag, path]
+                    if group == "forecast"
+                        && verb == "spatial-monitor"
+                        && flag == "--input"
+                        && !path.trim().is_empty()
+                        && !path.starts_with("--") =>
+                {
+                    CliCommand::ForecastSpatial {
+                        input: PathBuf::from(path),
+                    }
+                }
+                _ => return Err(spatial::USAGE.to_owned()),
+            },
             "decide production" => {
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
             }
@@ -2280,6 +2301,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             envelope
         }
         CliCommand::ForecastJournal(command) => forecast_journal::execute(command, workspace_root),
+        CliCommand::ForecastSpatial { input } => spatial::execute(input, workspace_root),
         CliCommand::ForecastRecord(command) => forecast_record::execute(command, workspace_root),
         CliCommand::ForecastCandidate(command) => {
             forecast_candidate::execute(command, workspace_root)
@@ -2677,6 +2699,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal correction --journal <path> (--assessment <digest> | --assessments <digests>) --forecast <alias> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 forecast_candidate::USAGE,
+                spatial::USAGE,
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
                 doctor::USAGE,
                 repair::PLAN_USAGE,
@@ -2794,6 +2817,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(forecast::DISTRIBUTIONS_JSON);
             payload.push_str(",\"forecast_coverage_monitor\":");
             payload.push_str(forecast::COVERAGE_MONITOR_JSON);
+            payload.push_str(",\"forecast_spatial_monitor\":");
+            payload.push_str(spatial::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_cusum_monitor\":");
             payload.push_str(forecast::CUSUM_MONITOR_JSON);
             payload.push_str(",\"forecast_event_log\":");

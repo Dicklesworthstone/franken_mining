@@ -1,0 +1,54 @@
+# DESIGN: invented observations; no issuer data, independent timing or calibrated model claim.
+schema = "fmine.spatial-monitor.v1"
+model_id = "synthetic-front-model"
+target_unit = "g/t"
+coordinate_frame = "local-metre-grid"
+support = "mining_polygon"
+nugget_var = "0.25"
+sill_var = "0.75"
+range_m = "30"
+max_neighbors = 4
+alpha = "0.05"
+registered_ns = 10
+
+[[observation]]
+id = "polygon-1"
+available_ns = 30
+prediction_registered_ns = 20
+x_m = "0"
+y_m = "0"
+z_m = "0"
+prior_mean = "5"
+observed_value = "5"
+target_unit = "g/t"
+coordinate_frame = "local-metre-grid"
+support = "mining_polygon"
+locator = "synthetic survey:polygon-1"
+
+[[observation]]
+id = "polygon-2"
+available_ns = 50
+prediction_registered_ns = 40
+x_m = "10"
+y_m = "0"
+z_m = "0"
+prior_mean = "5"
+observed_value = "5.2"
+target_unit = "g/t"
+coordinate_frame = "local-metre-grid"
+support = "mining_polygon"
+locator = "synthetic survey:polygon-2"
+
+[[observation]]
+id = "polygon-3"
+available_ns = 70
+prediction_registered_ns = 60
+x_m = "20"
+y_m = "0"
+z_m = "0"
+prior_mean = "5"
+observed_value = "4.9"
+target_unit = "g/t"
+coordinate_frame = "local-metre-grid"
+support = "mining_polygon"
+locator = "synthetic survey:polygon-3"

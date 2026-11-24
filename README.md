@@ -162,6 +162,23 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 
 ---
 
+## Check a mining front for model drift
+
+**DESIGN.** Evaluate an explicitly declared sequence of mining polygons against one spatial model:
+
+```bash
+cargo run -p fmine-cli -- forecast spatial-monitor --input tests/forecasts/spatial_synthetic.toml --format markdown
+```
+
+The report retains the model parameters, physical support, target unit, coordinate frame and source hash.
+For each observation it shows the conditional prediction, standardized residual, probability integral
+transform and separate location and dispersion evidence. The first alarm stays visible after later
+observations. Declared availability must increase, and each prediction must precede its outcome.
+
+The example is synthetic. The command checks supplied records; it supplies no independent time proof,
+calibrated-model claim, automatic retraining or completed human investigation. Use `--json` for the
+source-bound Claim receipt and full ordered evidence.
+
 ## Honest status
 
 **FACT.** The CLI runs on supplied mine worksheets. A mine geologist can reconcile dry tonnes and

@@ -20,6 +20,7 @@ pub mod guidance_scores;
 pub mod ledger;
 pub mod record;
 pub mod scoring;
+pub mod spatial;
 pub use ledger::{
     Assessment, AssessmentPolicy, AssessmentSummary, Cohort, CohortSpec, CoverageMonitorAssessment,
     CoverageMonitorPolicy, CoverageObservation, CoverageSummary, DescriptiveSummary,

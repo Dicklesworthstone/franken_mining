@@ -183,7 +183,7 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
 - **LOC budget:** 44,000 planned / 51,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common
@@ -2482,3 +2482,22 @@ source reading and delegates physical admission, numerical fitting and result re
 result. Refused fitted candidates retain diagnostics without an admitted Claim. The verb is
 nonmutating, registered under Crucible and available in robot-docs with all required units,
 basis declarations, raw correlations and solver limits. Existing plant commands are unchanged.
+
+### Spatial mining-front assessment
+
+DESIGN (BD-051, BD-311; plan §10.4): `forecast spatial-monitor --input FILE` reads a bounded,
+SHA-256-bound `fmine.spatial-monitor.v1` worksheet through the shared regular-file reader and
+`fmine_calib::spatial::evaluate`. The model and every observation declare the same target unit,
+coordinate frame and physical support. Declared policy/forecast registration precedes the outcomes,
+whose availability order is strictly increasing. These are checked declarations, not external time proof.
+
+JSON and Markdown retain the complete ordered observation population, source anchors, conditional
+predictions, residuals, PIT values, two monitor evidence processes and sticky first alarm. Outputs stay
+Assumed and Internal. A diagnostic does not classify the cause of a miss, recalibrate the model, open
+an authoritative InvestigationCase or authorize any physical action. Source/parse/domain refusals
+produce the normal structured envelope without writing the input.
+
+The synthetic command fixture is `tests/forecasts/spatial_synthetic.toml`. Actual-binary controls in
+`crates/xtask/testdata/spatial_monitor_command.rs`, included by the CLI test target, cover deterministic
+replay and source mutation, time ordering, scope/unit mismatch, nonfinite observations, usage errors and
+robot registration. The broader control-mine acceptance and human investigation lifecycle remain open.
