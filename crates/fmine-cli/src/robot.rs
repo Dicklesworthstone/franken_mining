@@ -663,9 +663,11 @@ mod tests {
                 && !v.mutates_authority)
         );
         assert!(
-            VERB_CATALOG.iter().any(|v| v.path == "forecast spatial-monitor"
-                && v.subsystem == "Plumb"
-                && !v.mutates_authority)
+            VERB_CATALOG
+                .iter()
+                .any(|v| v.path == "forecast spatial-monitor"
+                    && v.subsystem == "Plumb"
+                    && !v.mutates_authority)
         );
         for spec in &VERB_CATALOG {
             validate_schema(
