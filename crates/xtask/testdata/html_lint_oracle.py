@@ -636,13 +636,15 @@ class RateFixture(Fixture):
         (self.root / MAPPING).write_text(self.mapping)
 
 
-def rate_rows(prior="20309M", current="2030FY", metric="AISC", values=None):
+def rate_rows(prior="20309M", current="2030FY", metric="AISC", values=None, copper=False):
     values = values or ("100.00", "100.000", "120.00", "200.000")
+    sales = "Copper sales" if copper else "Gold sales"
+    rate_unit, sales_unit = ("US$/lb sold", "Mlb") if copper else ("US$/oz sold", "koz")
     return [observation(period, value, metric=label, unit=unit)
             for period, label, unit, value in zip(
                 (prior, prior, current, current),
-                (metric, "Gold sales", metric, "Gold sales"),
-                ("US$/oz sold", "koz", "US$/oz sold", "koz"), values)]
+                (metric, sales, metric, sales),
+                (rate_unit, sales_unit, rate_unit, sales_unit), values)]
 
 
 def rate_bounds(values):
@@ -664,8 +666,10 @@ class HtmlQuarterRate(unittest.TestCase):
         fixture.write(omit)
         return fixture
 
-    def assess(self, fixture, value="140.0", target="Q4 2030", metric="AISC", flags=(), discover=True):
-        draft = f"Site A {target} 100% basis {metric} per ounce sold is US${value}/oz.\n"
+    def assess(self, fixture, value="140.0", target="Q4 2030", metric="AISC", flags=(), discover=True,
+               copper=False):
+        denominator, unit = ("pound", "lb") if copper else ("ounce", "oz")
+        draft = f"Site A {target} 100% basis {metric} per {denominator} sold is US${value}/{unit}.\n"
         payload = success(fixture.lint(draft, (("--discover",) if discover else ()) + flags))
         return payload, payload["source_arithmetic"]["findings"]
 
@@ -701,6 +705,83 @@ class HtmlQuarterRate(unittest.TestCase):
             _, rows = self.assess(fixture, value=answer)
             self.assertEqual(rows[0]["status"], "derived", rows)
             self.assertEqual(bounds(rows[0]["derived_claim"]), rate_bounds(values))
+
+    def test_copper_quarters_reuse_exact_shared_sales_arithmetic_with_copper_sources(self):
+        values = ("1.0000", "100.000", "1.2000", "200.000")
+        for source_metric, metric in (("Copper AISC", "AISC"), ("Copper C1 cash costs", "C1"),
+                                       ("Copper cost of sales", "cost of sales")):
+            for prior, current, target in (("2030Q1", "2030H1", "Q2 2030"),
+                                            ("2030H1", "20309M", "Q3 2030"),
+                                            ("20309M", "2030FY", "Q4 2030")):
+                observations = rate_rows(prior, current, source_metric, values, copper=True)
+                fixture = self.fixture(observations)
+                payload, rows = self.assess(fixture, "1.40", target, metric, copper=True)
+                self.assertEqual(len(rows), 1, payload)
+                row = rows[0]
+                self.assertEqual(row["status"], "derived", row)
+                self.assertEqual(row["rule"], "public-disclosure.copper-sales-weighted-quarter-rate/1")
+                self.assertEqual(row["unit"], "usd_per_lb")
+                self.assertEqual(row["derived_claim"]["value"]["unit"], "usd_per_lb")
+                self.assertEqual(bounds(row["derived_claim"]), rate_bounds(values))
+                self.assertIn("sold-copper denominator in millions of pounds", row["assumption"])
+                self.assertEqual(set(row["derived_claim"]["parents"]),
+                                 {e["claim"]["claim_id"] for e in row["source_evidence"]})
+                self.assertEqual(len(row["source_evidence"]), 4)
+                sales = [e for e in row["source_evidence"] if e["role"] == "cumulative_sales"]
+                self.assertEqual(len(sales), 2)
+                for evidence in sales:
+                    self.assertEqual(evidence["claim"]["metric_key"], "html:copper_sales_mlb")
+                    self.assertEqual(evidence["publication"]["file"], "Rates0.html")
+                rendered = fixture.run(("--format", "markdown", "--discover"), arguments=BASE)
+                self.assertEqual(rendered.returncode, 0, rendered.stderr)
+                self.assertIn("USD/lb", rendered.stdout)
+                self.assertNotIn("] USD/oz", rendered.stdout)
+                self.assertEqual(payload, self.assess(fixture, "1.40", target, metric, copper=True)[0])
+
+    def test_copper_denominator_metal_units_missing_sales_and_basis_are_not_inferred(self):
+        values = ("1.0000", "100.000", "1.2000", "200.000")
+        for mutation, expected, code in (
+            (lambda rows: rows.pop(), "not_available", None),
+            (lambda rows: rows[1].update(metric="Gold sales", unit="koz"), "not_available", None),
+            (lambda rows: rows[1].update(metric="Copper production", unit="kt"), "not_available", None),
+            (lambda rows: rows[1].update(value="—"), "refused", "FMINE-REF-208"),
+            (lambda rows: rows[3].update(value="100.001"), "refused", "FMINE-REF-104"),
+            (lambda rows: rows[3].update(basis="Attributable (60%)"), "refused", "FMINE-REF-105"),
+        ):
+            observations = rate_rows(metric="Copper C1 cash costs", values=values, copper=True)
+            mutation(observations)
+            _, rows = self.assess(self.fixture(observations), "1.40", metric="C1", copper=True)
+            self.assertEqual(rows[0]["status"], expected, rows)
+            self.assertIsNone(rows[0]["derived_claim"])
+            if code:
+                self.assertEqual(rows[0]["refusal"]["code"], code)
+        observations = rate_rows(metric="Copper C1 cash costs", values=values, copper=True)
+        observations[1]["unit"] = "kt"
+        fixture = self.fixture(observations)
+        FIXTURES.refused(fixture.invoke(), "FMINE-REF-208")
+
+    def test_copper_signed_rates_publication_competition_and_direct_disclosures_survive(self):
+        values = ("-1.0000", "100.000", "-1.2000", "200.000")
+        observations = rate_rows(metric="Copper C1 cash costs", values=values, copper=True)
+        fixture = self.fixture(observations)
+        for amount, status in (("-1.40", "derived"), ("-1.4000", "precision_not_established"),
+                               ("-1.50", "contradicted")):
+            _, rows = self.assess(fixture, amount, metric="C1", copper=True)
+            self.assertEqual(rows[0]["status"], status, rows)
+            self.assertEqual(bounds(rows[0]["derived_claim"]), rate_bounds(values))
+        fixture = self.fixture(observations, copies=2)
+        _, rows = self.assess(fixture, "-1.40", metric="C1", copper=True)
+        self.assertEqual(rows[0]["status"], "ambiguous")
+        self.assertEqual(len(rows[0]["source_evidence"]), 8)
+        fixture = self.fixture(observations, copies=2, omit=("Rates1.html",))
+        payload, rows = self.assess(fixture, "-1.40", metric="C1", copper=True,
+                                   flags=("--as-of", "2031-02-01"))
+        self.assertEqual(rows[0]["status"], "derived")
+        self.assertEqual([s["file"] for s in payload["html_projection"]["excluded_sources"]], ["Rates1.html"])
+        observations.append(observation("2030Q4", "-1.50", metric="Copper C1 cash costs", unit="US$/lb sold"))
+        payload, rows = self.assess(self.fixture(observations), "-1.40", metric="C1", copper=True)
+        self.assertEqual(findings(payload)[0]["verdict"], "value_mismatch")
+        self.assertEqual(rows, [])
 
     def test_missing_unusable_conflicting_and_incompatible_operands_never_make_rates(self):
         for mutation, expected, code in (

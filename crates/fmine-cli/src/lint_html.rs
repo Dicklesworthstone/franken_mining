@@ -26,7 +26,7 @@ use crate::{Envelope, NextAction, json_string as js};
 
 mod rate;
 
-pub(super) const NO_CLAIM: &str = "Checks supported equalities, exact production/sales period arithmetic and conditional sales-weighted quarterly gold cost rates against the selected registered HTML Claims. Source publication dates come from the current registry; historical availability of the mapping and registry is not established. Arithmetic over public assertions does not make a derived figure an issuer disclosure. Credit treatment is not inferred from AISC/TCC labels. This does not establish the truth of issuer assertions, verify other prose, authenticate a historical information set or authorize disclosure.";
+pub(super) const NO_CLAIM: &str = "Checks supported equalities, exact production/sales period arithmetic and conditional sales-weighted quarterly gold and copper cost rates against the selected registered HTML Claims. Copper quarterly rates require explicitly reported sold quantities in millions of pounds; no production denominator or tonne/pound conversion is inferred. Source publication dates come from the current registry; historical availability of the mapping and registry is not established. Arithmetic over public assertions does not make a derived figure an issuer disclosure. Credit treatment is not inferred from AISC/TCC/C1 labels. This does not establish the truth of issuer assertions, verify other prose, authenticate a historical information set or authorize disclosure.";
 
 fn optional(value: Option<&str>) -> String {
     value.map_or_else(|| "null".into(), js)

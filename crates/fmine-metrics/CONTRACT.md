@@ -636,13 +636,16 @@ The other modules have local errors with no refusal code:
 - **No cross-host digest** for `lib.rs`, `cutoff`, `cutoff::source`, the typed waterfall or `recovery`.
 - **The real-data gates are open.** Actual FY2023–FY2025 partner-source reproduction, the full synthetic power gate (BD-346.S6) and partner-filing capital coverage remain separate BD-346 work. The cost receipt does not complete the WGC real-data gate.
 - **The quarter work does not close the wider gates.** The additive quarter kernel and the quarter sums do not close the general derived-identity or the independently labelled disclosure-lint assessment gates.
-- DESIGN (BD-059/BD-345): `public_derivation::quarter_rate` derives a closed quarterly gold cost-rate
-  enclosure from two cumulative rates and their own sold-gold quantities. The exact 16-vertex calculation
+- DESIGN (BD-059/BD-345): `public_derivation::quarter_rate` derives a closed quarterly gold AISC/TCC/CoS
+  or copper AISC/C1/CoS enclosure from two cumulative rates and their own sold-metal quantities.
+  Gold uses koz; copper requires explicitly printed Mlb, with a separate derivation rule and no inferred
+  production denominator or tonne/pound conversion. The exact 16-vertex calculation
   preserves sales-variable dependence in numerator and denominator; both cumulative sales and their entire
   difference must be positive. Signed rates retain their signs. The source adapter owns calendar, filing,
   site, ownership and metric compatibility; the Claim wrapper retains all four parents, anchors, weakest
   evidence and explicit same-definition assumptions. Two exact kernel controls and the independent
-  HTML Fraction oracle cover arithmetic, source binding and refusals. This conditional arithmetic does not
+  HTML Fraction oracle cover arithmetic, source binding and refusals. Existing gold rule identities remain
+  unchanged. This conditional arithmetic does not
   establish accounting-definition equivalence, credit treatment, real-issuer acceptance or calibration.
 
 ## 11. Public API
