@@ -396,9 +396,66 @@ fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_dige
     for flags in [&["--json"][..], &["--format", "json"], &["--brief"]] {
         assert_eq!(brief("executive_hedge", flags).status.code(), Some(2));
     }
-    for model in ["gb30", "production_investments"] {
+    for model in ["recourse", "kpi_constraints"] {
         assert_eq!(brief(model, &[]).status.code(), Some(2));
     }
+    assert_eq!(brief("equity", &[]).status.code(), Some(3));
+}
+
+#[test]
+fn actual_capital_brief_names_the_current_choice_and_next_exact_limit() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |name: &str, flag: &str| {
+        let result = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .current_dir(&root)
+            .args([
+                "decide",
+                "program",
+                &format!("tests/capital/{name}.toml"),
+                flag,
+            ])
+            .output()
+            .expect("capital CLI");
+        assert!(result.status.success(), "{name}");
+        String::from_utf8(result.stdout).expect("UTF-8")
+    };
+    let gb30 = run("gb30", "--brief");
+    for text in [
+        "**Current co-winners:** A + D.",
+        "**Before the tail-loss limit:** A + E.",
+        "US$130,820,000",
+        "**First higher-value limit:** US$210,000,000 (US$60,000,000 more).",
+        "| A + D | US$241,180,000 | US$130,600,000 |",
+        "| Hold cash |",
+        "Cash slack is unavailable",
+    ] {
+        assert!(gb30.contains(text), "missing {text}");
+    }
+    for name in ["gb30", "production_investments"] {
+        let report = parse(run(name, "--json").as_bytes()).expect("comparison JSON");
+        let payload = report.get("payload").expect("payload");
+        let digest = payload
+            .get("program")
+            .and_then(|p| p.get("digest"))
+            .and_then(Json::as_str)
+            .expect("program digest");
+        let brief = run(name, "--brief");
+        assert!(brief.contains(digest), "{name}");
+        if name == "production_investments" {
+            assert!(
+                brief.contains("Mean discounted incremental cash")
+                    && brief.contains("Source receipt digest")
+            );
+            let source = payload
+                .get("digest")
+                .and_then(Json::as_str)
+                .expect("source digest");
+            assert!(brief.contains(source));
+        }
+    }
+    let stress = run("wasserstein", "--brief");
+    assert!(stress.contains("scenario-weight stress") && stress.contains("every stressed law"));
+    assert!(run("selection_stability", "--brief").contains("Conditional resampling"));
 }
 
 #[test]

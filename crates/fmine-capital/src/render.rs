@@ -7,6 +7,8 @@ use fmine_evidence::{AoaStatus, AssertionSource, Color};
 
 use super::*;
 
+mod brief;
+
 pub(super) fn js(value: &str) -> String {
     let mut out = String::from("\"");
     for c in value.chars() {

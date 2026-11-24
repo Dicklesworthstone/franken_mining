@@ -58,6 +58,11 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   - DESIGN (bd-ftw5). Executive worksheets accept `decide program <worksheet> --brief`. The meeting
     view retains the findings, decision alternatives, uncertainty, revisit condition and worksheet digest.
     Full Markdown and JSON give the line-by-line evidence and both treasury checkpoint ledgers.
+  - DESIGN (bd-g5nh). The same flag renders total-USD static and source-derived investment programs.
+    The brief retains the engine's nominal co-winners, budget, available minimum cash slack and the
+    first representable tail-loss cap admitting a higher-value or first feasible package. It reports
+    declared weight stresses and resampling results with the comparison digest. Use full Markdown
+    or JSON for per-share, staged and KPI comparisons.
   - DESIGN (bd-xm5k). `common_price_deck` compares two distinct source investment alternatives and
     holding cash by weighted, discounted incremental pre-tax USD over the declared periods. A dated
     `comparison` declares one element, a shared ownership/cash counterfactual basis and

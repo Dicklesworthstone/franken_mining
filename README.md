@@ -1389,6 +1389,7 @@ capital candidates. Run the invented GB-30 exercise:
 ```bash
 cargo run -p fmine-cli -- decide program tests/capital/gb30.toml --format markdown
 cargo run -p fmine-cli -- decide program tests/capital/gb30.toml --json
+cargo run -p fmine-cli -- decide program tests/capital/gb30.toml --brief
 ```
 
 The example has an USD 800M budget and three USD 400M packages: brownfield A, greenfield E and buyback D.
@@ -1397,6 +1398,12 @@ has the highest mean at USD 372M. Its worst-20% signed loss is USD 210M. A USD 1
 **A+D**, whose mean is USD 241.18M and tail loss USD 130.6M. The expected-value cost of that constraint is
 USD 130.82M. These exact answers use the plan's displayed rounded buyback inputs; they reproduce its
 one-decimal presentation of 241.2M and 130.8M without treating those rounded figures as exact inputs.
+
+The brief shows the threshold for the next decision. In GB-30, increasing the tail-loss limit by
+**US$60M to US$210M** first admits a higher-value package. A+E then adds **US$130.82M** of modeled
+expected value. The existing budget, funding and structural constraints still apply. The brief also
+shows both sets of co-winners, the hold-cash case and any declared stress and resampling results.
+It supports total-USD static programs and source-derived investment portfolios.
 
 The strict `fmine.capital-program.v1` model declares `budget`, `tail_mass`, optional `max_tail_loss`, a common
 USD valuation basis, the `additive_net_delta_nav` convention and explicit reference-class adjustment bases.

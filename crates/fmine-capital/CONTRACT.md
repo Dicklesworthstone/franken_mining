@@ -610,6 +610,13 @@ Invalid input and arithmetic overflow refuse the complete comparison (`FMINE-REF
 ## 9. Oracles
 ### Independent Python Fraction oracles and GB-30 known answers
 
+DESIGN (bd-g5nh). The total-USD static brief renders the evaluated program and computes the first
+worksheet-representable nominal tail-loss limit admitting a strictly better expected-value package.
+When the current limit admits no package, the first feasible limit is reported instead. The scan
+excludes budget, prerequisite, exclusivity and funding failures. Tail losses between monetary minor
+units round upward to an admissible cap, and every co-winner at that cap is retained. The brief also
+reports the engine's declared scenario-weight stress and resampling results when present.
+
 Direct GB-30 known answers use the plan's explicitly illustrative, displayed inputs: A+D mean $241.18M
 and risk cost $130.82M before adding streamed E, without treating rounded plan prose as an exact oracle.
 Tests also cover fractional tail mass, dependence, exact boundaries, prerequisite and exclusion constraints,
@@ -793,7 +800,8 @@ unadjusted basis; the system does not apply an unnamed adjustment. Conditional s
 the explicit bootstrap declaration; absent declarations remain unavailable. Conditional static and adaptive-policy
 Wasserstein comparisons and stressed declared-tail feasibility require the explicit geometry and radius
 declaration. Dynamic adversarial recourse and empirical model-uncertainty calibration are not supplied.
-Broad BD-229 and production-scale gates (`GATE-CAP-01`, `GATE-CAP-03`, `GATE-CAP-04`) remain open.
+The GB-30 known-answer tests cover BD-229's declared example. Production-scale gates
+(`GATE-CAP-01`, `GATE-CAP-03`, `GATE-CAP-04`) remain open.
 
 ## 11. Public API
 - `evaluate`, `ProgramPolicy`, `CapitalCandidate`, `ProgramFunding`, `FundingSchedule`, `ProgramInputs`

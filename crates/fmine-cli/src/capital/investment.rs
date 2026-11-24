@@ -694,7 +694,12 @@ fn rational(value: Rat) -> String {
     js(&format!("{}/{}", value.num(), value.den()))
 }
 
-pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<Envelope> {
+pub(super) fn execute(
+    text: &str,
+    source: &SourceAnchor,
+    root: &Path,
+    brief: bool,
+) -> Result<Envelope> {
     let d = parse(text, source)?;
     let mut loaded = BTreeMap::new();
     let mut snapshots = Vec::new();
@@ -895,6 +900,17 @@ pub(super) fn execute(text: &str, source: &SourceAnchor, root: &Path) -> Result<
         program.to_json(),
         js(&digest)
     );
+    if brief {
+        let mut envelope = Envelope::ok("decide program", payload, Vec::new());
+        envelope.no_claim = Some(no_claim);
+        envelope.rendered_markdown = Some(format!(
+            "{}\n\n**Shared scenario assumption** {}\n\n**Additivity assumption** {}\n\nSource receipt digest `{digest}`.\n\n{no_claim}\n",
+            program.to_brief()?,
+            md(&d.shared_scenario_basis),
+            md(&d.additivity_basis),
+        ));
+        return Ok(envelope);
+    }
     let rounding_notice = d.cash_rounding.as_ref().map_or_else(String::new, |rounding| {
         format!("**Cash settlement rounding:** `{}`. Unrounded cash and signed rounding deltas are retained in the JSON source-cash rows.\n\n", md(rounding))
     });

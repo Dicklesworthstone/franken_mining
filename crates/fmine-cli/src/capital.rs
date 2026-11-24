@@ -35,7 +35,7 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
     "\"schema\":\"fmine.capital-program.v1\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
-    "\"executive_brief\":\"decide program <executive worksheet> --brief prints the meeting paper. Use --format markdown for the full tables and source locators.\",",
+    "\"executive_brief\":\"decide program <worksheet> --brief prints the meeting paper for executive worksheets and total-USD static capital or source-derived investment programs. Static briefs preserve nominal co-winners, tail limit, minimum cash slack, the first representable limit that admits higher mean value (or the first feasible choice), and any declared weight stress or resampling. Use --format markdown for per-share, KPI, staged or detailed reports.\",",
     "\"procurement_journal\":\"Use decide journal record --model <procurement worksheet> with --action order-now, hold-slot or let-lapse. The evaluated card lists available journal_actions. The worksheet date must be on or before the earliest possible UTC recording date. Pinned show retains the original comparison, scope and rationale.\",",
     "\"executive_examples\":[\"tests/capital/executive_purchase.toml\",\"tests/capital/executive_purchase_potash.toml\",\"tests/capital/executive_tenure.toml\",\"tests/capital/executive_group.toml\",\"tests/capital/executive_rehabilitation.toml\",\"tests/capital/executive_estimates.toml\",\"tests/capital/executive_hedge.toml\",\"tests/capital/executive_care.toml\",\"tests/capital/executive_deck.toml\",\"tests/capital/executive_interruption.toml\"],",
     "\"interruption_indemnity\":\"Synthetic only. Use decide program with executive_interruption.toml. Match insured entity and perimeter across dated interruption, loss_rate and policy rows. Declare whole days and USD ranges, clauses, deductible_then_limit or limit_then_deductible, and none or listed exclusions. Each listed exclusion has a dated source and status applies, does_not_apply or unresolved. JSON retains separate economic and eligible loss, clause calculations, conditional branches and which inputs change the bounds.\",",
@@ -79,20 +79,30 @@ pub(super) fn execute(model: &Path, root: &Path, brief: bool) -> Envelope {
             && let Some(fmine_registry::toml_subset::TomlValue::Str(schema)) =
                 doc.top_get("schema").map(|f| &f.value)
         {
-            if schema == investment::SCHEMA && !brief {
-                return investment::execute(&text, &source, root);
+            if schema == investment::SCHEMA {
+                return investment::execute(&text, &source, root, brief);
             }
             if schema == executive::SCHEMA {
                 return executive::worksheet(&doc, &text, &source, root, brief);
             }
         }
-        if brief {
-            return Ok(Envelope::usage_error(
-                "decide program",
-                "--brief requires an executive decision worksheet (fmine.executive-decision.v1). Use --format markdown for other capital models.",
-            ));
-        }
         let evaluated = fmine_capital::model::evaluate(&text, source.clone())?;
+        let markdown = if brief {
+            let fmine_capital::model::EvaluatedModel::Static(program) = &evaluated else {
+                return Ok(Envelope::usage_error(
+                    "decide program",
+                    "--brief requires a static capital program or executive worksheet. Use --format markdown for staged and KPI models.",
+                ));
+            };
+            format!(
+                "{}\n\nWorksheet SHA-256 `{}`.\n\n{}\n",
+                program.to_brief()?,
+                fmine_core::Digest32(source.artifact_sha256),
+                program.no_claim(),
+            )
+        } else {
+            evaluated.to_markdown()
+        };
         let payload = format!(
             "{{\"mode\":\"{}\",\"source\":{},\"program\":{}}}",
             evaluated.mode(),
@@ -101,7 +111,7 @@ pub(super) fn execute(model: &Path, root: &Path, brief: bool) -> Envelope {
         );
         let mut envelope = Envelope::ok("decide program", payload, Vec::new());
         envelope.no_claim = Some(evaluated.no_claim());
-        envelope.rendered_markdown = Some(evaluated.to_markdown());
+        envelope.rendered_markdown = Some(markdown);
         Ok(envelope)
     };
     run().unwrap_or_else(|refusal| {
