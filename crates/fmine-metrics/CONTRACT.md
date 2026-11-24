@@ -4,6 +4,9 @@
 The public-lane metric kernels. Each one takes supplied numbers and computes a mining metric or a check on one:
 - AISC and AIC per ounce under a definition read from `registries/metrics.toml` (`definitions`), and as an exact cost receipt over declared Claims or a strict cost worksheet (`definitions::claims`, `definitions::worksheet`, BD-061);
 - exact production GEO under two to sixty-four named price decks, from declared Claims or a strict worksheet (`definitions::geo`, BD-062, GB-27);
+- exact definition-bound capital return from dated financial Claims, declared worksheets or agreed
+  registered filing transcriptions (`definitions::capital_return`, BD-061, plan §21.6); explicit earnings
+  treatment, capital-employed basis, ownership and annualization are retained in every result;
 - conditional immediate one-period cash margins from the complete shared plant production population,
   with explicit payable-metal, price, cost and royalty assumptions, fed directly to the existing decision
   evaluator (`valuation`, BD-061/225, plan §§9.5, 21.6, 23.4);
@@ -69,6 +72,32 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation", "comparison", "valuation"]`
 
 ## 2. Inputs
+
+- DESIGN (BD-061, plan §21.6): `definitions::capital_return::evaluate` admits exactly one definition
+  Claim, one earnings Claim, and the one or two capital observations required by that definition.
+  Issuer, subject, calendar reporting window, ownership, operating perimeter, accounting basis,
+  currency and monetary scale must match. The definition names pre-tax or after-tax earnings and
+  the included adjustment treatment, the capital-employed definition, and opening, closing,
+  opening/closing arithmetic mean or reported-average capital. Opening capital is dated at the
+  preceding reporting close; closing capital at the target close. A reported average and earnings
+  cover the complete target period. Annualization is absent or a separately named positive multiplier;
+  it is never inferred from period length. An explicit issuer exclusion refuses with its reason.
+
+  Amounts are exact rationals with an explicit nonnegative rounding step. Zero denotes exact declared
+  values; a positive step gives the closed half-step source-rounding box. Source transcriptions derive
+  the step from the printed decimal, never from a caller override. Negative earnings remain signed.
+  The selected capital base's entire enclosure must be positive. A positive opening/closing mean may
+  contain a nonpositive endpoint; endpoints are retained unchanged and no absolute-value correction
+  occurs. The declared definition determines this conditional calculation, not a performance verdict.
+
+  `capital_return::worksheet::evaluate` binds at most one MiB of `fmine.capital-return-worksheet.v1`
+  bytes, with strict field/role validation and Assumed/Internal input Claims. `capital_return::source::bind`
+  interprets agreed point readings from one registered financial filing, with a separately cited
+  definition, matching units, FACT publication evidence and at least two distinct agreeing readers.
+  Document-byte authentication and evidence-cut selection belong to the existing public loader and
+  CLI. The pure binder does no I/O and does not establish that its supplied bytes were read. Source
+  exclusions are retained after token/document checks, including for agreed ranges; ordinary ranges
+  cannot replace required point operands. The transcription loader does not accept dash/n/a as values.
 
 - DESIGN (BD-225/229): `valuation::investment::evaluate` admits a source-bound
   `Claim<InvestmentSpec>` and one `PeriodValuation` for every investment/period pair. The strict
@@ -284,6 +313,16 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
 ## 3. Outputs
+
+- DESIGN (BD-061): `CapitalReturnReceipt` retains the complete original input Claims, an intermediate
+  capital-base Claim and a non-additive result Claim. The result reports exact earnings and capital
+  points/enclosures, raw period return percent and separately labeled annualized return percent when
+  requested. Every definition field, original transcription token/reader/publication record, source
+  anchor, inherited metadata and final value is receipt-bound. Result ancestry includes all inputs
+  and the intermediate capital Claim; evidence/confidentiality/UU propagate without strengthening.
+  JSON and Markdown share this receipt. Closed rounding enclosures are arithmetic bounds, not
+  calibrated uncertainty or confidence intervals. `fmine metrics roce` exposes both declared and
+  authenticated filing modes without inventing a standardized IFRS capital-return definition.
 
 - DESIGN: CostBridge retains both selected definitions, every connected source operand, filing
   metadata, reader roles and the parent table-check digest. It emits two exact symmetric effects:
@@ -623,8 +662,10 @@ The other modules have local errors with no refusal code:
 - **Two GEO paths and two reserve-replacement paths.** The root `PriceDeck` and `compute_geo` are float and unchecked beside the exact `definitions::geo`. `ReserveReplacementBridge` is float beside `reserve_replacement` and `assess_with_metrics`.
 - **Much of plan §21.6 remains open.** The copper C1 table rule and the shared exact cost calculation
   accept supplied plans or actuals, including declared quantity/rate/fixed-cost drivers, but do not fit rates
-  or authenticate accounting inputs. ROCE and broader definition flags (credit location and inventory
-  adjustments) remain absent. The bounded single-driver fit below does not authenticate FA registers,
+  or authenticate accounting inputs. Capital-return arithmetic now supports explicitly stated earnings
+  and capital-employed definitions; automatic financial statement reconstruction, cross-definition
+  comparability and authentic issuer ROCE reproduction remain unestablished. Broader cost definition
+  flags (credit location and inventory adjustments) remain absent. The bounded single-driver fit below does not authenticate FA registers,
   infer driver measurement error, learn price-linked lines or establish prospective calibration.
 - **Code with no caller outside this crate's tests:**
   - `AiscConsolidationBridge`, `PriceDeck`, `compute_geo` and `ReserveReplacementBridge`;
@@ -649,6 +690,17 @@ The other modules have local errors with no refusal code:
   establish accounting-definition equivalence, credit treatment, real-issuer acceptance or calibration.
 
 ## 11. Public API
+
+DESIGN (BD-061): `definitions::capital_return` exposes `TaxBasis`, `CapitalBasis`, `Annualization`,
+`Applicability`, `Definition`, `Scope`, `Amount`, `InputValue`, `SourceRecord`, `Input`, `Enclosed`,
+`CapitalBase`, `Summary`, `CapitalReturnReceipt` and `evaluate`. The receipt exposes immutable source,
+capital-base and result Claims, `digest`, `to_json` and `to_markdown`. `source::bind` accepts one filing's
+agreed role readings; `source::{quantities, valid_series}` define the source selectors.
+`worksheet::evaluate` accepts the strict source-hashed declaration. Calendar windows are within one
+year (1900–9999); fiscal years spanning December, time-weighted capital trajectories, automatic earnings
+adjustments, FX/ownership bridges and cross-definition ranking remain outside this slice. Synthetic
+known-answer and adversarial controls are in `definitions/capital_return/tests.rs`; actual command
+and authenticated invented-filing controls are in `fmine-cli/tests/capital_return.rs`.
 
 DESIGN (BD-061, plan §21.6): `definitions::driver::fit` estimates one cost pool as fixed USD plus
 USD per declared driver unit × quantity, using exact centered OLS on 3..128 disjoint equal-duration

@@ -11,6 +11,7 @@ use fmine_registry::RegistryError;
 use fmine_registry::metrics::{CreditBasis, LineKind, MetricFamily, MetricRegistry, ProjectTest};
 use fmine_units::{ExactQty, UnitsError};
 
+pub mod capital_return;
 pub mod claims;
 mod declared;
 pub mod driver;

@@ -1,0 +1,35 @@
+# Invented example: exact earnings 12; capital 80 and 120; endpoint mean 100; return 12%.
+schema = "fmine.capital-return-worksheet.v1"
+issuer = "synthetic"
+subject = "synthetic_mine"
+period = "2026H1"
+ownership = "full"
+perimeter = "continuing operations"
+accounting_basis = "synthetic historical cost"
+currency = "USD"
+monetary_scale = "1000000"
+definition = "synthetic_pre_tax_return"
+version = "1"
+earnings_basis = "operating profit before interest and tax; no adjustments"
+tax_basis = "pre_tax"
+capital_employed_basis = "total assets less current liabilities"
+capital_basis = "opening_closing_mean"
+annualization = "explicit"
+annualization_factor = "2"
+annualization_basis = "declared two times half-year earnings; no seasonality correction"
+applicability = "applicable"
+
+[[earnings]]
+period = "2026H1"
+amount = "12"
+rounding_step = "0"
+
+[[opening]]
+as_of = "2025-12-31"
+amount = "80"
+rounding_step = "0"
+
+[[closing]]
+as_of = "2026-06-30"
+amount = "120"
+rounding_step = "0"
