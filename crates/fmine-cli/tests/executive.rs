@@ -441,6 +441,51 @@ fn staged_permit_binary_preserves_blocked_paths_and_the_source_bound_comparison(
     let paper = String::from_utf8(run(&["--format", "markdown"])).expect("Markdown");
     assert!(paper.contains("| NRC-42 | cleared | permission_documented | 2030-04-01 |"));
     assert!(paper.contains("| NRC-42 | pending | clock_elapsed | 2030-04-01 |"));
+    let brief = String::from_utf8(run(&["--brief"])).expect("committee brief");
+    for text in [
+        "**Best precommitted choice** Hold cash. **Net adaptive value** US$1,500,000.",
+        "**Initial commitment** early. **Initial planned cost** US$6,000,000.",
+        "**Review on 2030-04-02**",
+        "| clearance-documented | 1/2 | main | US$4,000,000 |",
+        "| no-clearance-documented | 1/2 | No additional commitment | US$0 |",
+        "| US$1,500,000 | US$5,000,000 | US$6,000,000 | US$2,000,000 | Current co-winner |",
+        "| NRC-42 | pending | clock elapsed | 2030-04-01 |",
+        "main requires documented permission for NRC-42",
+        "Comparison digest",
+        &hash,
+    ] {
+        assert!(brief.contains(text), "missing {text}\n{brief}");
+    }
+    assert!(brief.len() * 2 < paper.len());
+    assert_eq!(bytes, run(&["--json"]));
+}
+
+#[test]
+fn staged_equity_brief_keeps_shared_outcome_actions_and_exact_per_share_value() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let result = Command::new(env!("CARGO_BIN_EXE_fmine"))
+        .current_dir(root)
+        .args([
+            "decide",
+            "program",
+            "tests/capital/recourse.toml",
+            "--brief",
+        ])
+        .output()
+        .expect("staged equity brief");
+    assert!(result.status.success());
+    let brief = String::from_utf8(result.stdout).expect("Markdown");
+    for text in [
+        "**Net adaptive value** 19/120 USD/share.",
+        "Primary limit 1/10 USD/share.",
+        "**Initial commitment** study. **Initial planned cost** US$10.",
+        "| bad | 1/2 | No additional commitment | US$0 |",
+        "| good | 1/2 | issue + project | US$100 |",
+        "| 19/120 USD/share | 1/10 USD/share | US$10 | US$0 | Current co-winner |",
+    ] {
+        assert!(brief.contains(text), "missing {text}\n{brief}");
+    }
+    assert!(!brief.contains("**Net adaptive value** US$120"));
 }
 
 #[test]
@@ -510,9 +555,7 @@ fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_dige
     for flags in [&["--json"][..], &["--format", "json"], &["--brief"]] {
         assert_eq!(brief("executive_hedge", flags).status.code(), Some(2));
     }
-    for model in ["recourse", "kpi_constraints"] {
-        assert_eq!(brief(model, &[]).status.code(), Some(2));
-    }
+    assert_eq!(brief("kpi_constraints", &[]).status.code(), Some(2));
     assert_eq!(brief("equity", &[]).status.code(), Some(3));
 }
 

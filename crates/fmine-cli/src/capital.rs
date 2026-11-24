@@ -37,7 +37,7 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "\"staged_permit_example\":\"tests/capital/staged_permit.toml\",",
     "\"staged_permits\":\"Bind a recourse candidate to each required application using stage_permit rows. Declare permit terms and one permit_state record per application and shared state, with any state-specific permit_pause rows. Use exact n/d percentage points for scope change and reopen threshold. Sources must be available by observation_date in their scenario. An elapsed clock alone leaves main works blocked. The same permit checks apply in the static benchmark and all realized continuations. States with the same observation share one decision.\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
-    "\"executive_brief\":\"decide program <worksheet> --brief prints the meeting paper for executive worksheets and total-USD static capital or source-derived investment programs. Static briefs preserve nominal co-winners, tail limit, minimum cash slack, the first representable limit that admits higher mean value (or the first feasible choice), and any declared weight stress or resampling. Use --format markdown for per-share, KPI, staged or detailed reports.\",",
+    "\"executive_brief\":\"decide program <worksheet> --brief prints the meeting paper for executive worksheets, total-USD static or source-derived investment programs, and two-stage capital policies. Static briefs show the first tail limit that admits higher mean value or the first feasible choice. Staged briefs show initial and follow-on commitments, value over the best precommitted choice, retained co-winners, cash slack, risk limits and any permit or scenario-weight results. Use --format markdown for static per-share, KPI or detailed reports.\",",
     "\"procurement_journal\":\"Use decide journal record --model <procurement worksheet> with --action order-now, hold-slot or let-lapse. The evaluated card lists available journal_actions. The worksheet date must be on or before the earliest possible UTC recording date. Pinned show retains the original comparison, scope and rationale.\",",
     "\"operating_journal\":\"For operating_review, record only a journal_actions id from the declared starting_state: operating:continue, operating:suspend, operating:close or care:restart, care:remain, care:close. Unavailable routes and routes with an upfront cash-floor shortfall are excluded; the other starting state's counterfactual routes cannot be recorded. A lower-ranked available action remains an explicit human choice. The original worksheet, both-state comparison and rationale survive later source changes; date and history pins use the existing journal rules. This admission does not establish intra-period funding or operational authorization.\",",
     "\"executive_examples\":[\"tests/capital/executive_purchase.toml\",\"tests/capital/executive_purchase_potash.toml\",\"tests/capital/executive_tenure.toml\",\"tests/capital/executive_group.toml\",\"tests/capital/executive_rehabilitation.toml\",\"tests/capital/executive_estimates.toml\",\"tests/capital/executive_hedge.toml\",\"tests/capital/executive_care.toml\",\"tests/capital/executive_deck.toml\",\"tests/capital/executive_interruption.toml\",\"tests/capital/executive_permit.toml\"],",
@@ -92,17 +92,20 @@ pub(super) fn execute(model: &Path, root: &Path, brief: bool) -> Envelope {
         }
         let evaluated = fmine_capital::model::evaluate(&text, source.clone())?;
         let markdown = if brief {
-            let fmine_capital::model::EvaluatedModel::Static(program) = &evaluated else {
-                return Ok(Envelope::usage_error(
-                    "decide program",
-                    "--brief requires a static capital program or executive worksheet. Use --format markdown for staged and KPI models.",
-                ));
+            let report = match &evaluated {
+                fmine_capital::model::EvaluatedModel::Static(program) => program.to_brief()?,
+                fmine_capital::model::EvaluatedModel::Recourse(program) => program.to_brief()?,
+                fmine_capital::model::EvaluatedModel::Kpi(_) => {
+                    return Ok(Envelope::usage_error(
+                        "decide program",
+                        "Use --format markdown for a KPI capital comparison.",
+                    ));
+                }
             };
             format!(
-                "{}\n\nWorksheet SHA-256 `{}`.\n\n{}\n",
-                program.to_brief()?,
+                "{report}\n\nWorksheet SHA-256 `{}`.\n\n{}\n",
                 fmine_core::Digest32(source.artifact_sha256),
-                program.no_claim(),
+                evaluated.no_claim(),
             )
         } else {
             evaluated.to_markdown()

@@ -237,6 +237,13 @@ must never be added to policy NAV again. Every static subset embeds as a constan
 If either comparison population has no admissible winner, the difference is unavailable, not measured
 against an invented zero. Per-share objectives retain separate USD/share and total-USD quantities.
 
+DESIGN (bd-u91v): the two-stage brief uses the evaluated policies and static comparison by reference.
+It retains every current tie, names the initial commitment and one follow-on action for each observed
+class, and shows USD spending and minimum cash slack separately from the selected objective. It reports
+the applicable whole-policy risk limits and both outcomes when no feasible policy exists. Permit reviews,
+declared stress and conditional resampling reuse the same finished comparison. Full reports retain the
+complete rejected population, realized state ledgers and source anchors.
+
 DESIGN (BD-229, §22.5/§23.9): optional source-bound selection stability draws 200–2,000 multinomial
 resamples of the declared shared-state law, using an explicit seed, 1–4,096 draws per replicate and a
 sampling basis. This is a conditional sensitivity experiment; neither the draw count nor the frequencies

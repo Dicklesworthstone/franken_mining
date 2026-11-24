@@ -10,6 +10,8 @@ use crate::{
     RefusalCode, Result, arithmetic, bad,
 };
 
+mod recourse;
+
 struct TailStep<'a> {
     limit: Rat,
     mean: Rat,
@@ -141,8 +143,8 @@ fn stats(choice: &ProgramChoice) -> String {
 
 impl EvaluatedProgram {
     /// Render the total-USD static view and the first exact improvement if the
-    /// nominal tail-loss limit moves. Shares, staged policies and KPI gates have
-    /// different eligibility semantics and retain their full reports.
+    /// nominal tail-loss limit moves. Static per-share and KPI comparisons
+    /// retain their full reports.
     ///
     /// # Errors
     /// Refuses a per-share objective or an unrepresentable exact comparison.

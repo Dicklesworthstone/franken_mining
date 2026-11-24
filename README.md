@@ -125,8 +125,11 @@ that policy adds **US$1.5 million in expected net value** over the best precommi
 [Editable staged program](tests/capital/staged_permit.toml)
 
 ```bash
-cargo run -p fmine-cli -- decide program tests/capital/staged_permit.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/staged_permit.toml --brief
 ```
+
+The brief names the initial commitment, the actions and spending for each review outcome, and the minimum
+cash headroom across the policy. Full Markdown and JSON retain every alternative and its state ledgers.
 
 A miner's numbers are produced by a dozen systems that each pass along a single value and discard how sure they
 were. The result is predictable:

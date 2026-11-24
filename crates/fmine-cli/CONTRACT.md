@@ -80,6 +80,11 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   - DESIGN (bd-ftw5). Executive worksheets accept `decide program <worksheet> --brief`. The meeting
     view retains the findings, decision alternatives, uncertainty, revisit condition and worksheet digest.
     Full Markdown and JSON give the line-by-line evidence and both treasury checkpoint ledgers.
+  - DESIGN (bd-u91v). The same flag accepts evaluated two-stage capital programs in total USD or USD/share.
+    It shows all current co-winners, their initial and follow-on commitments, the best precommitted choice,
+    exact net adaptive value and risk cost, minimum policy cash slack, and any declared permit or weight
+    sensitivity results. The brief distinguishes structural infeasibility from tail-limit refusal and includes
+    the same worksheet SHA-256 and comparison digest as the complete reports.
   - DESIGN (bd-g5nh). The same flag renders total-USD static and source-derived investment programs.
     The brief retains the engine's nominal co-winners, budget, available minimum cash slack and the
     first representable tail-loss cap admitting a higher-value or first feasible package. It reports
