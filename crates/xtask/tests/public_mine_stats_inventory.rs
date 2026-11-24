@@ -86,6 +86,193 @@ mod tests {
     }
 
     #[test]
+    fn empty_mine_stats_coverage_is_a_named_workbook_refusal() {
+        let text = |s: &str| MinimalCell::Text(s.into());
+        let title = vec![("A1".into(), text("Mine Statistics (Gold)"))];
+        let block = vec![
+            ("A1".into(), text("Mine Statistics (Gold)")),
+            ("B2".into(), text("Site A (61.5%)1")),
+            ("A3".into(), text("For the three months ended March 31,")),
+            ("B3".into(), MinimalCell::Number(2030.0)),
+        ];
+        let mut populated = block.clone();
+        populated.extend([
+            ("A4".into(), text("Recovery rate (percent)")),
+            ("B4".into(), MinimalCell::Number(91.0)),
+        ]);
+        for (name, hidden, cells, blocks, reason) in [
+            (
+                "RenamedStatistics",
+                false,
+                populated.clone(),
+                0,
+                "no recognized visible QTD, YTD or Minestats worksheet",
+            ),
+            (
+                "Minestats1",
+                true,
+                populated,
+                0,
+                "no recognized visible QTD, YTD or Minestats worksheet",
+            ),
+            (
+                "Minestats1",
+                false,
+                title,
+                0,
+                "recognized Mine Stats worksheets contain no reporting blocks",
+            ),
+            (
+                "Minestats1",
+                false,
+                block,
+                1,
+                "recognized Mine Stats reporting blocks contain no typed observations",
+            ),
+        ] {
+            let bytes = build_minimal_xlsx(&[MinimalSheet {
+                name: name.into(),
+                hidden,
+                cells,
+            }]);
+            let workbook = Workbook::from_bytes("coverage.xlsx", &bytes).expect("workbook");
+            let read = read_mine_stats(&workbook, "2030Q1", None).expect("read");
+            assert_eq!(read.blocks, blocks, "{name}, hidden={hidden}");
+            assert!(read.values.is_empty(), "{name}, hidden={hidden}");
+            assert_eq!(
+                read.refusals,
+                vec![CellRefusal {
+                    locator: "coverage.xlsx".into(),
+                    reason: reason.into(),
+                }]
+            );
+            assert_eq!(read.hidden_sheets.len(), usize::from(hidden));
+        }
+    }
+
+    #[test]
+    fn empty_source_refusal_survives_verified_assurance_and_claim_inventory() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let ws = std::env::temp_dir().join(format!(
+            "fmine-empty-coverage-{}-{nonce}",
+            std::process::id()
+        ));
+        fmine_public::synthetic::write_issuer_workspace(&ws).expect("synthetic workspace");
+        let profile = load_issuer_profile(&ws, "synthetic").expect("registered sources");
+        let report =
+            fmine_public::run_public_assurance(&profile, &ws).expect("verified source bytes");
+        let file = fmine_public::synthetic::SYNTHETIC_LATER_STATS_FILE;
+        let source = report
+            .sources
+            .iter()
+            .find(|source| source.file_name == file)
+            .expect("verified empty source retained");
+        let registered = profile
+            .sources
+            .iter()
+            .find(|source| source.file_name == file)
+            .expect("empty source registered");
+        let registered_locator = format!("{}/{}", profile.corpus_dir, registered.file_name);
+        assert_eq!(source.workbook.artifact_path, registered_locator);
+        assert_eq!(source.bytes, registered.bytes);
+        assert_eq!(
+            Digest32(source.workbook.sha256).to_hex(),
+            registered.sha256_hex
+        );
+        let expected = CellRefusal {
+            locator: source.workbook.artifact_path.clone(),
+            reason: "recognized Mine Stats worksheets contain no reporting blocks".into(),
+        };
+        let (_, empty) = report
+            .mine_stats
+            .iter()
+            .find(|(name, _)| name == file)
+            .expect("empty source retained");
+        assert_eq!(empty.blocks, 0);
+        assert!(empty.values.is_empty());
+        assert_eq!(empty.refusals, vec![expected.clone()]);
+        assert!(report.mine_stats_claims.refusals.contains(&expected));
+        assert!(
+            report
+                .public_claims
+                .refusals
+                .iter()
+                .any(|r| r.locator == expected.locator && r.reason == expected.reason)
+        );
+        assert!(!report.public_claims.cells.is_empty());
+        // The reconstruction fixture prints its Minestats year as text; generic year anchors are numeric.
+        let (_, unobserved) = report
+            .mine_stats
+            .iter()
+            .find(|(name, _)| name == fmine_public::synthetic::SYNTHETIC_STATS_FILE)
+            .expect("original Mine Stats source retained");
+        assert!(unobserved.blocks > 0, "{unobserved:?}");
+        assert!(unobserved.values.is_empty(), "{unobserved:?}");
+        let no_observations = CellRefusal {
+            locator: format!(
+                "{}/{}",
+                profile.corpus_dir,
+                fmine_public::synthetic::SYNTHETIC_STATS_FILE
+            ),
+            reason: "recognized Mine Stats reporting blocks contain no typed observations".into(),
+        };
+        assert_eq!(unobserved.refusals, vec![no_observations.clone()]);
+        assert!(report.mine_stats_claims.refusals.contains(&no_observations));
+        assert!(!report.instances.is_empty());
+        assert_eq!(report.sources.len(), profile.sources.len());
+        let json = report.to_json();
+        assert!(json.contains(&format!("\"locator\":\"{}\"", expected.locator)));
+        assert!(json.contains(&expected.reason));
+        let loaded = load_claims(&profile, &ws).expect("verified direct inventory");
+        // Both entry points use load_registered_sources and its root-independent registry path.
+        assert!(loaded.refusals.contains(&CellRefusal {
+            locator: registered_locator,
+            reason: expected.reason.clone(),
+        }));
+        assert_eq!(loaded.digest, report.mine_stats_claims.digest);
+        let again = fmine_public::run_public_assurance(&profile, &ws).expect("rerun");
+        assert_eq!(json, again.to_json());
+    }
+
+    #[test]
+    fn zero_nil_and_missing_values_remain_observations() {
+        for (cell, kind) in [
+            (MinimalCell::Number(0.0), "number"),
+            (MinimalCell::Text("—".into()), "nil"),
+            (MinimalCell::Text("n/a".into()), "na"),
+        ] {
+            let (source, read, profile) = fixture(cell);
+            assert_eq!(
+                (read.blocks, read.values.len(), read.count(kind)),
+                (1, 1, 1)
+            );
+            assert!(inventory(&profile, &source, &read).refusals.is_empty());
+        }
+        let text = |s: &str| MinimalCell::Text(s.into());
+        let bytes = build_minimal_xlsx(&[MinimalSheet {
+            name: "QTD".into(),
+            hidden: false,
+            cells: vec![
+                ("A3".into(), text("For the three months ended March 31,")),
+                ("B3".into(), MinimalCell::Number(2030.0)),
+                ("B4".into(), text("Gold produced (000s oz 100%)")),
+                ("A5".into(), text("Site A (61.5%)")),
+            ],
+        }]);
+        let workbook = Workbook::from_bytes("missing-value.xlsx", &bytes).expect("workbook");
+        let read = read_mine_stats(&workbook, "2030Q1", None).expect("read");
+        assert!(read.refusals.is_empty(), "{:?}", read.refusals);
+        assert_eq!(
+            (read.blocks, read.values.len(), read.count("missing")),
+            (1, 1, 1)
+        );
+        assert_eq!(read.values[0].locator, "2030Q1:QTD!B5");
+    }
+
+    #[test]
     fn inventory_keeps_canonical_ids_values_anchors_and_digest() {
         let (source, read, p) = fixture(MinimalCell::Number(91.0));
         let all = inventory(&p, &source, &read);

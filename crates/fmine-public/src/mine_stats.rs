@@ -156,10 +156,10 @@ impl MineStatsValue {
     }
 }
 
-/// A cell, or a block header, the reader could not type.
+/// A cell, block header, or workbook whose content the reader could not recognize.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellRefusal {
-    /// `<quarter>:<sheet>!<cell>`.
+    /// `<quarter>:<sheet>!<cell>`, or the source workbook path for an empty-coverage refusal.
     pub locator: String,
     pub reason: String,
 }
@@ -247,7 +247,9 @@ pub type LabelVocabulary = BTreeSet<(Option<String>, String)>;
 ///
 /// With a `vocabulary`, a `Minestats*` data row whose `(section, label)` is not registered is refused by
 /// locator and not emitted, so a label first seen in a later vintage is named instead of read silently. Without
-/// one, every label is read.
+/// one, every label is read. A workbook with no recognized visible sheets, no reporting blocks, or
+/// no typed observations retains its empty counts and a document-level [`CellRefusal`]. This also
+/// makes a title-only source explicit; a zero, nil or missing value is still a typed observation.
 ///
 /// # Errors
 /// Refuses (`FMINE-REF-506`, a registered input that cannot be read) when `quarter` is not `YYYYQn`: the
@@ -287,12 +289,32 @@ pub fn read_mine_stats(
             .collect(),
         repeated: Vec::new(),
     };
+    let mut recognized_sheet = false;
     for sheet in &workbook.sheets {
         if sheet.name == "QTD" || sheet.name == "YTD" {
+            recognized_sheet = true;
             read_summary(sheet, fq, &mut read);
         } else if sheet.name.starts_with("Minestats") {
+            recognized_sheet = true;
             read_minestats(sheet, fq, vocabulary, &mut read);
         }
+    }
+    // DESIGN: a digest-valid but unrecognized layout cannot masquerade as a successful empty read.
+    // Keep the missing denominator explicit without inventing cells or reading quarantined sheets.
+    let coverage_refusal = if !recognized_sheet {
+        Some("no recognized visible QTD, YTD or Minestats worksheet")
+    } else if read.blocks == 0 {
+        Some("recognized Mine Stats worksheets contain no reporting blocks")
+    } else if read.values.is_empty() {
+        Some("recognized Mine Stats reporting blocks contain no typed observations")
+    } else {
+        None
+    };
+    if let Some(reason) = coverage_refusal {
+        read.refusals.push(CellRefusal {
+            locator: workbook.artifact_path.clone(),
+            reason: reason.to_string(),
+        });
     }
     Ok(read)
 }

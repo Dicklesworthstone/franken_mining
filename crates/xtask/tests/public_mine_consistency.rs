@@ -661,24 +661,50 @@ fn adjacent_mine_transitions_and_projection_digest_are_order_invariant() {
 
 #[test]
 fn hidden_mine_sheets_are_named_but_excluded_from_both_denominators() {
-    let (report, projection) = run(vec![
-        source(
-            "hidden.xlsx",
-            "2024Q1",
-            sheet("QTD", "100", "49", "50", 0, true),
-        ),
-        source(
-            "visible.xlsx",
-            "2025Q1",
-            sheet("QTD", "100", "50", "50", 2, false),
-        ),
-    ]);
-    assert!(
-        report
-            .mine_stats
-            .iter()
-            .any(|(file, read)| file == "hidden.xlsx" && read.hidden_sheets == ["QTD"])
+    let mut profile = synthetic::synthetic_profile();
+    profile.subjects = vec!["Site A".into()];
+    profile.reconstructions.clear();
+    profile.shares.clear();
+    profile.regions.clear();
+    profile.region_members.clear();
+    profile.subject_statuses.clear();
+    let report = assess(
+        &profile,
+        Lane::Synthetic,
+        vec![
+            source(
+                "hidden.xlsx",
+                "2024Q1",
+                sheet("QTD", "100", "49", "50", 0, true),
+            ),
+            source(
+                "visible.xlsx",
+                "2025Q1",
+                sheet("QTD", "100", "50", "50", 2, false),
+            ),
+        ],
     );
+    let projection = consistency(&report.mine_stats_claims, &report.mine_ledger);
+    let expected = fmine_public::mine_stats::CellRefusal {
+        locator: "hidden.xlsx".into(),
+        reason: "no recognized visible QTD, YTD or Minestats worksheet".into(),
+    };
+    let (_, hidden) = report
+        .mine_stats
+        .iter()
+        .find(|(file, _)| file == "hidden.xlsx")
+        .expect("hidden workbook remains named");
+    assert_eq!(hidden.hidden_sheets, ["QTD"]);
+    assert_eq!(hidden.blocks, 0);
+    assert!(hidden.values.is_empty());
+    assert_eq!(hidden.refusals, vec![expected.clone()]);
+    assert_eq!(report.mine_stats_claims.refusals, vec![expected]);
+    let (_, visible) = report
+        .mine_stats
+        .iter()
+        .find(|(file, _)| file == "visible.xlsx")
+        .expect("visible workbook remains named");
+    assert!(visible.refusals.is_empty(), "{:?}", visible.refusals);
     assert_eq!(projection.first_registered.values().sum::<usize>(), 1);
     assert_eq!(projection.all_files.values().sum::<usize>(), 1);
     assert_eq!(projection.histories[0].sequence[0].release, "2025Q1");
