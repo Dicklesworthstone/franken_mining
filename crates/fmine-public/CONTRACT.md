@@ -773,7 +773,12 @@ The public lane of M0 (`fmine assure public`).
     rescale a value. Unknown units, periods or source bindings produce named keying refusals.
   - `key::mine_stats::{KeyedClaims, build_claims, load_claims}` is a thin inventory over that same adapter,
     not another Claim implementation. `mine_stats_claims` reports its typed-value census, named refusals and
-    canonical `claims_digest`. The direct reader supports `fmine claim show` without running the identity solver.
+    canonical `claims_digest`. The `by_file` member includes each loaded Mine Stats workbook's SHA-256, accepted
+    value-kind counts, the `after_disposal` subset of numeric Claims and the count of refusals associated with
+    that workbook. Missing kinds count as zero. Even a verified workbook with no accepted Claims is listed.
+    Refusals without a verified workbook stay in the named global list. This reporting projection leaves Claim
+    identities and the underlying evidence root unchanged. The direct reader supports `fmine claim show` without
+    running the identity solver.
 - `key::consistency::{VintageReport, VintageState, compare_vintages_with_disclosures}` and
   `PublicAssuranceReport::{mine_stats_vintages, aisc_vintages}` add separate value-comparison populations
   under `issuer_consistency`. Every keyed appearance is counted. Comparisons retain both the earliest registered and

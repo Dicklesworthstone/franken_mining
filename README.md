@@ -786,7 +786,10 @@ unit, raw token, displayed value and source cell/hash. Numeric zeros at register
 
 The JSON payload includes `public_claims.cells` (the canonical AISC and Mine Stats Claims), `mine_stats_claims`
 (the Mine Stats census and digest), and `issuer_consistency.mine_stats_vintages` (counts and cited comparisons
-against both the earliest registered and previous releases). The comparison tests
+against both the earliest registered and previous releases). `mine_stats_claims.by_file` lists each verified
+Mine Stats workbook's SHA-256, typed Claim counts and refusal count, including workbooks with zero readable
+observations. `after_disposal` counts the numeric Claims that still carry a disposal flag, within `number`.
+The comparison tests
 reproduce E474 and all eight W1-DR-09 changes, while listing ownership conflicts and changed regional membership
 separately. The comparison population reconciles with W1 T16: 6,391 passes plus nine changes, with 30
 regional-membership changes listed separately. The nine changes are classified as `restated_silent` because

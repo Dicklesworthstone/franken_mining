@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use fmine_core::hash::Digest32;
 
-use super::{KeyedCell, NilReason, PublicValue, claims_digest, from_mine_stats};
+use super::{KeyedCell, NilReason, PublicValue, StatusKind, claims_digest, from_mine_stats};
 use crate::mine_stats::{CellRefusal, MineStatsRead};
 use crate::sources::{IssuerProfile, SourceKind};
 use crate::{LoadedSource, js};
@@ -20,6 +20,24 @@ pub struct KeyedClaims {
     pub subject_labels: BTreeMap<String, String>,
     /// The canonical digest of the successful keyed projection; refusals remain explicit in the inventory.
     pub digest: Digest32,
+    by_file: BTreeMap<String, WorkbookClaimCensus>,
+}
+
+#[derive(Debug, Clone)]
+struct WorkbookClaimCensus {
+    sha256: Digest32,
+    kinds: BTreeMap<&'static str, usize>,
+    after_disposal: usize,
+    refusals: usize,
+}
+
+fn counts_json(counts: &BTreeMap<&str, usize>) -> String {
+    let members = counts
+        .iter()
+        .map(|(k, n)| format!("{}:{n}", js(k)))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{{members}}}")
 }
 
 impl KeyedClaims {
@@ -31,10 +49,22 @@ impl KeyedClaims {
         for c in &self.claims {
             *kinds.entry(value_kind(&c.claim.value)).or_default() += 1;
         }
-        let counts = kinds
+        let files = self
+            .by_file
             .iter()
-            .map(|(k, n)| format!("{}:{n}", js(k)))
-            .collect::<Vec<_>>();
+            .map(|(file, census)| {
+                format!(
+                    "{}:{{\"sha256\":{},\"claims\":{},\"by_kind\":{},\"after_disposal\":{},\"refusals\":{}}}",
+                    js(file),
+                    js(&census.sha256.to_hex()),
+                    census.kinds.values().sum::<usize>(),
+                    counts_json(&census.kinds),
+                    census.after_disposal,
+                    census.refusals,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         let refused = self
             .refusals
             .iter()
@@ -47,10 +77,10 @@ impl KeyedClaims {
             })
             .collect::<Vec<_>>();
         format!(
-            "{{\"rules_version\":\"mine-stats-claims/1\",\"claims\":{},\"by_kind\":{{{}}},\
-             \"digest\":{},\"refusals\":[{}]}}",
+            "{{\"rules_version\":\"mine-stats-claims/1\",\"claims\":{},\"by_kind\":{},\
+             \"digest\":{},\"refusals\":[{}],\"by_file\":{{{files}}}}}",
             self.claims.len(),
-            counts.join(","),
+            counts_json(&kinds),
             js(&self.digest.to_hex()),
             refused.join(","),
         )
@@ -64,29 +94,58 @@ pub fn build_claims(
     sources: &[LoadedSource],
     reads: &[(String, MineStatsRead)],
 ) -> KeyedClaims {
-    let by_file: BTreeMap<&str, &LoadedSource> = sources
+    let mut by_file: BTreeMap<_, _> = sources
         .iter()
         .filter(|s| s.kind == SourceKind::MineStats)
-        .map(|s| (s.file_name.as_str(), s))
+        .map(|s| {
+            (
+                s.file_name.clone(),
+                (
+                    s,
+                    WorkbookClaimCensus {
+                        sha256: Digest32(s.workbook.sha256),
+                        kinds: BTreeMap::new(),
+                        after_disposal: 0,
+                        refusals: 0,
+                    },
+                ),
+            )
+        })
         .collect();
     let mut claims = Vec::new();
     let mut refusals = Vec::new();
     for (file, read) in reads {
         refusals.extend(read.refusals.iter().cloned());
+        let Some((source, census)) = by_file.get_mut(file) else {
+            refusals.extend(read.values.iter().map(|v| CellRefusal {
+                locator: format!("{file}:{}!{}", v.sheet, v.cell),
+                reason: "read has no verified source workbook".to_string(),
+            }));
+            continue;
+        };
+        census.refusals += read.refusals.len();
         for v in &read.values {
-            let result = by_file
-                .get(file.as_str())
-                .ok_or_else(|| "read has no verified source workbook".to_string())
-                .and_then(|s| {
-                    from_mine_stats(profile, &s.workbook, &s.quarter, v)
-                        .map_err(|reason| reason.to_string())
-                });
-            match result {
-                Ok(c) => claims.push(c),
-                Err(reason) => refusals.push(CellRefusal {
-                    locator: format!("{file}:{}!{}", v.sheet, v.cell),
-                    reason,
-                }),
+            match from_mine_stats(profile, &source.workbook, &source.quarter, v) {
+                Ok(c) => {
+                    *census.kinds.entry(value_kind(&c.claim.value)).or_default() += 1;
+                    if matches!(
+                        c.claim.value,
+                        PublicValue::Number {
+                            under_status: Some(StatusKind::Disposed),
+                            ..
+                        }
+                    ) {
+                        census.after_disposal += 1;
+                    }
+                    claims.push(c);
+                }
+                Err(reason) => {
+                    census.refusals += 1;
+                    refusals.push(CellRefusal {
+                        locator: format!("{file}:{}!{}", v.sheet, v.cell),
+                        reason: reason.to_string(),
+                    });
+                }
             }
         }
     }
@@ -104,6 +163,10 @@ pub fn build_claims(
         refusals,
         subject_labels,
         digest,
+        by_file: by_file
+            .into_iter()
+            .map(|(file, (_, census))| (file, census))
+            .collect(),
     }
 }
 

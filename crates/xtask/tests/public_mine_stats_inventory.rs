@@ -7,6 +7,7 @@ mod tests {
 
     use fmine_core::hash::Digest32;
     use fmine_evidence::EvidenceClass;
+    use fmine_io::omf::json::{Json, parse};
     use fmine_io::xlsx::{MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx};
     use fmine_public::LoadedSource;
     use fmine_public::key::mine_stats::{KeyedClaims, build_claims, load_claims, value_kind};
@@ -504,6 +505,25 @@ mod tests {
         let json = report.to_json();
         assert!(json.contains(&format!("\"locator\":\"{}\"", expected.locator)));
         assert!(json.contains(&expected.reason));
+        let body = parse(json.as_bytes()).expect("assurance JSON");
+        let coverage = body
+            .get("mine_stats_claims")
+            .and_then(|inventory| inventory.get("by_file"))
+            .and_then(|files| files.get(file))
+            .expect("verified workbook with no readable claims stays visible");
+        assert_eq!(
+            coverage.get("sha256").and_then(Json::as_str),
+            Some(registered.sha256_hex.as_str())
+        );
+        assert_eq!(coverage.get("claims"), Some(&Json::Number("0".into())));
+        assert!(
+            coverage
+                .get("by_kind")
+                .and_then(Json::as_object)
+                .expect("empty kind counts")
+                .is_empty()
+        );
+        assert_eq!(coverage.get("refusals"), Some(&Json::Number("1".into())));
         let loaded = load_claims(&profile, &ws).expect("verified direct inventory");
         // Both entry points use load_registered_sources and its root-independent registry path.
         assert!(loaded.refusals.contains(&CellRefusal {
@@ -769,6 +789,81 @@ mod tests {
                 ("missing", 6),
             ])
         );
+        // FACT: independent pre-Rust reader scripts/oracle/mine_stats_extract3.py, with E119 and
+        // the subject-status dates. Columns: number, unknown, disposed, withheld, n/a, missing,
+        // and the subset of numbers carrying the after_disposal flag.
+        let expected = [
+            ("2024Q1", [1082, 108, 0, 0, 190, 0, 0]),
+            ("2024Q2", [2204, 183, 0, 0, 373, 0, 0]),
+            ("2024Q3", [2210, 177, 0, 0, 373, 0, 0]),
+            ("2024Q4", [2213, 173, 0, 0, 372, 2, 0]),
+            ("2025Q1", [1095, 52, 0, 0, 145, 0, 0]),
+            ("2025Q2", [2213, 82, 0, 0, 288, 1, 0]),
+            ("2025Q3", [2220, 82, 0, 0, 281, 1, 0]),
+            ("2025Q4", [2266, 44, 0, 0, 306, 0, 0]),
+            ("2026Q1", [1063, 90, 3, 0, 152, 0, 0]),
+            ("2026Q2", [2202, 182, 4, 0, 298, 2, 1]),
+        ];
+        let kind_names = [
+            "number",
+            "nil_unknown",
+            "nil_disposed",
+            "nil_withheld",
+            "not_applicable",
+            "missing",
+        ];
+        let summary = all.summary_json();
+        let summary_body = parse(summary.as_bytes()).expect("inventory JSON");
+        let files = summary_body
+            .get("by_file")
+            .expect("verified workbook coverage");
+        assert_eq!(
+            files.as_object().expect("coverage map").len(),
+            expected.len()
+        );
+        for (release, counts) in expected {
+            let source = p
+                .sources
+                .iter()
+                .find(|s| s.kind == SourceKind::MineStats && s.quarter == release)
+                .expect("registered Mine Stats release");
+            let coverage = files.get(&source.file_name).expect("source coverage");
+            assert_eq!(
+                coverage.get("sha256").and_then(Json::as_str),
+                Some(source.sha256_hex.as_str()),
+                "{release}"
+            );
+            let wanted: BTreeMap<_, _> = kind_names
+                .into_iter()
+                .zip(counts)
+                .filter(|(_, n)| *n > 0)
+                .map(|(kind, n)| (kind, Json::Number(n.to_string())))
+                .collect();
+            let actual: BTreeMap<_, _> = coverage
+                .get("by_kind")
+                .and_then(Json::as_object)
+                .expect("source kind counts")
+                .iter()
+                .map(|(kind, n)| (kind.as_str(), n.clone()))
+                .collect();
+            assert_eq!(actual, wanted, "{release}");
+            assert_eq!(
+                coverage.get("claims"),
+                Some(&Json::Number(counts[..6].iter().sum::<usize>().to_string())),
+                "{release}"
+            );
+            assert_eq!(
+                coverage.get("after_disposal"),
+                Some(&Json::Number(counts[6].to_string())),
+                "{release}"
+            );
+            assert_eq!(
+                coverage.get("refusals"),
+                Some(&Json::Number("0".into())),
+                "{release}"
+            );
+        }
+
         let at = |locator: &str| {
             let (release, cell) = locator.split_once(':').expect("oracle locator");
             let file = p
@@ -782,15 +877,25 @@ mod tests {
                 .find(|c| c.locator == canonical)
                 .expect(locator)
         };
-        for locator in [
+        let tongon = [
             "2026Q1:Minestats3!F19",
             "2026Q2:Minestats3!F19",
             "2026Q2:Minestats3!F64",
+        ];
+        let hemlo = [
             "2026Q1:Minestats1!N27",
             "2026Q1:Minestats1!N28",
             "2026Q2:Minestats1!N27",
             "2026Q2:Minestats1!N28",
-        ] {
+        ];
+        for locator in tongon.into_iter().chain(hemlo) {
+            assert!(
+                reads.iter().any(|(_, read)| read
+                    .values
+                    .iter()
+                    .any(|v| v.locator == locator && v.is_numeric_zero())),
+                "raw reader retains numeric zero at {locator}"
+            );
             assert_eq!(
                 at(locator).claim.value,
                 PublicValue::Nil {
@@ -800,6 +905,38 @@ mod tests {
                 "{locator}"
             );
         }
+        let mut without_tongon = p.clone();
+        without_tongon
+            .subject_statuses
+            .retain(|status| !(status.subject == "Tongon" && status.kind == StatusKind::Disposed));
+        assert_eq!(
+            without_tongon.subject_statuses.len() + 1,
+            p.subject_statuses.len()
+        );
+        let counterfactual = build_claims(&without_tongon, &sources, &reads);
+        assert!(counterfactual.refusals.is_empty());
+        assert_eq!(counterfactual.claims.len(), all.claims.len());
+        assert_ne!(counterfactual.digest, all.digest);
+        let expected_changes: std::collections::BTreeSet<_> = tongon
+            .into_iter()
+            .map(|loc| at(loc).locator.as_str())
+            .collect();
+        let original_kinds: BTreeMap<_, _> = all
+            .claims
+            .iter()
+            .map(|c| (c.locator.as_str(), value_kind(&c.claim.value)))
+            .collect();
+        let mut changed = std::collections::BTreeSet::new();
+        for c in &counterfactual.claims {
+            if original_kinds[c.locator.as_str()] != value_kind(&c.claim.value) {
+                assert_eq!(original_kinds[c.locator.as_str()], "nil_disposed");
+                assert!(
+                    matches!(&c.claim.value, PublicValue::Number { stored, under_status: None, .. } if stored == "0")
+                );
+                changed.insert(c.locator.as_str());
+            }
+        }
+        assert_eq!(changed, expected_changes);
         let first = at("2024Q1:QTD!G23");
         let later = at("2025Q1:QTD!N22");
         assert_eq!(raw_token(&first.claim.value), "1479");
@@ -835,7 +972,9 @@ mod tests {
         ));
         let mut reversed = reads.clone();
         reversed.reverse();
-        assert_eq!(build_claims(&p, &sources, &reversed).digest, all.digest);
-        println!("{}", all.summary_json());
+        let reordered = build_claims(&p, &sources, &reversed);
+        assert_eq!(reordered.digest, all.digest);
+        assert_eq!(reordered.summary_json(), summary);
+        println!("{summary}");
     }
 }
