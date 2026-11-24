@@ -208,6 +208,30 @@ pub fn parse_transcriptions(
     issuer: &str,
     documents: &[DocumentRow],
 ) -> Result<TranscriptionRegistry, SourcesError> {
+    parse_transcriptions_in_period(text, issuer, documents, None)
+}
+
+/// Checks all registry rows, then selects one period before checking quantity uniqueness.
+/// Selection retains every reader at a matching locator, including a reader who disagrees about
+/// the period. Distinct comparative columns can coexist without supplying missing current values.
+pub fn parse_transcriptions_for_period(
+    text: &str,
+    issuer: &str,
+    documents: &[DocumentRow],
+    period: &str,
+) -> Result<TranscriptionRegistry, SourcesError> {
+    if period.trim().is_empty() {
+        return fail(0, "transcription period selection must be nonempty");
+    }
+    parse_transcriptions_in_period(text, issuer, documents, Some(period))
+}
+
+fn parse_transcriptions_in_period(
+    text: &str,
+    issuer: &str,
+    documents: &[DocumentRow],
+    selected_period: Option<&str>,
+) -> Result<TranscriptionRegistry, SourcesError> {
     let doc = parse_subset(text)?;
     let top = Fields {
         fields: &doc.top,
@@ -310,9 +334,10 @@ pub fn parse_transcriptions(
         {
             return fail(row.line, format!("{reader} enters {locator} twice"));
         }
-        if entries
-            .iter()
-            .any(|e| e.reader == reader && e.locator.doc == locator.doc && e.quantity == quantity)
+        if selected_period.is_none()
+            && entries.iter().any(|e| {
+                e.reader == reader && e.locator.doc == locator.doc && e.quantity == quantity
+            })
         {
             return fail(
                 quantity_line,
@@ -335,6 +360,26 @@ pub fn parse_transcriptions(
             line: row.line,
         });
     }
+    if let Some(period) = selected_period {
+        let locators: BTreeSet<Locator> = entries
+            .iter()
+            .filter(|entry| entry.period == period)
+            .map(|entry| entry.locator.clone())
+            .collect();
+        entries.retain(|entry| locators.contains(&entry.locator));
+        let mut seen = BTreeSet::new();
+        for entry in &entries {
+            if !seen.insert((&entry.reader, &entry.locator.doc, &entry.quantity)) {
+                return fail(
+                    entry.line,
+                    format!(
+                        "{} enters quantity {:?} twice in {:?} within selected period {period:?}",
+                        entry.reader, entry.quantity, entry.locator.doc
+                    ),
+                );
+            }
+        }
+    }
     Ok(TranscriptionRegistry {
         issuer: issuer.to_string(),
         entries,
@@ -352,6 +397,20 @@ pub fn load_transcriptions(
         reason: format!("cannot read {}: {e}", path.display()),
     })?;
     parse_transcriptions(&text, issuer, documents)
+}
+
+/// Reads a registry using the complete validation and locator-preserving period selection above.
+pub fn load_transcriptions_for_period(
+    path: &Path,
+    issuer: &str,
+    documents: &[DocumentRow],
+    period: &str,
+) -> Result<TranscriptionRegistry, SourcesError> {
+    let text = std::fs::read_to_string(path).map_err(|e| SourcesError {
+        line: 0,
+        reason: format!("cannot read {}: {e}", path.display()),
+    })?;
+    parse_transcriptions_for_period(&text, issuer, documents, period)
 }
 
 /// A value two or more readers agree on.
@@ -996,6 +1055,86 @@ mod tests {
             e.reason.contains("is not \"fmine.transcriptions.v1\""),
             "{e}"
         );
+    }
+
+    fn comparative_registry() -> String {
+        let current = golden();
+        let comparative: Vec<String> = current
+            .iter()
+            .map(|row| row.replace("2030", "2029"))
+            .collect();
+        registry(&[current, comparative].concat())
+    }
+
+    #[test]
+    fn test_period_selection_accepts_comparative_columns_without_changing_unscoped_admission() {
+        let text = comparative_registry();
+        assert!(parse_transcriptions(&text, "demo", &docs()).is_err());
+        for period in ["2029", "2030"] {
+            let selected = parse_transcriptions_for_period(&text, "demo", &docs(), period).unwrap();
+            assert_eq!(selected.entries.len(), 8);
+            let agreement = agree(&selected);
+            assert!(agreement.is_consistent());
+            assert!(agreement.single_reader.is_empty());
+            assert_eq!(agreement.accepted.len(), 4);
+            assert!(
+                agreement
+                    .accepted
+                    .iter()
+                    .all(|entry| entry.period == period)
+            );
+        }
+        let absent = parse_transcriptions_for_period(&text, "demo", &docs(), "2031").unwrap();
+        assert!(absent.entries.is_empty());
+        assert!(parse_transcriptions_for_period(&text, "demo", &docs(), " ").is_err());
+    }
+
+    #[test]
+    fn test_period_selection_retains_conflicting_reader_at_selected_locator() {
+        let text = comparative_registry().replacen(
+            "period = \"2030\"\nreader = \"reader_b\"",
+            "period = \"2029\"\nreader = \"reader_b\"",
+            1,
+        );
+        let selected = parse_transcriptions_for_period(&text, "demo", &docs(), "2030").unwrap();
+        assert_eq!(selected.entries.len(), 8);
+        let agreement = agree(&selected);
+        assert!(!agreement.is_consistent());
+        assert_eq!(agreement.disagreements.len(), 1);
+        assert_eq!(agreement.disagreements[0].fields, ["period"]);
+        assert_eq!(agreement.disagreements[0].readers, ["reader_a", "reader_b"]);
+        assert_eq!(agreement.accepted.len(), 3);
+    }
+
+    #[test]
+    fn test_period_selection_keeps_global_validation_and_selected_quantity_uniqueness() {
+        let text = comparative_registry();
+        let duplicate = entry(
+            "reader_a",
+            "Deck.pdf",
+            14,
+            "Depletion duplicate",
+            "(3.6)",
+            "depletion",
+        );
+        let error =
+            parse_transcriptions_for_period(&format!("{text}{duplicate}"), "demo", &docs(), "2030")
+                .unwrap_err();
+        assert!(error.reason.contains("enters quantity \"depletion\" twice"));
+        let off_period = duplicate.replace("2030", "2028");
+        // Even an unselected period must contain valid, source-bound entries and unique reader locators.
+        for bad in [
+            off_period.replace("(3.6)", "n/a"),
+            off_period.replace(SHA_D, SHA_E),
+            off_period.replace("Deck.pdf", "Other.pdf"),
+            off_period.replace("page = 14", "page = 16"),
+            format!("{off_period}{off_period}"),
+        ] {
+            assert!(
+                parse_transcriptions_for_period(&format!("{text}{bad}"), "demo", &docs(), "2030")
+                    .is_err()
+            );
+        }
     }
 
     fn scoped(rows: &[String]) -> Agreement {

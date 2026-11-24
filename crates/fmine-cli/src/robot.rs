@@ -670,11 +670,9 @@ mod tests {
                     && !v.mutates_authority)
         );
         assert!(
-            VERB_CATALOG
-                .iter()
-                .any(|v| v.path == "metrics capital-return"
-                    && v.subsystem == "Bullion"
-                    && !v.mutates_authority)
+            VERB_CATALOG.iter().any(|v| v.path == "metrics roce"
+                && v.subsystem == "Bullion"
+                && !v.mutates_authority)
         );
         for spec in &VERB_CATALOG {
             validate_schema(

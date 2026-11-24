@@ -1,5 +1,6 @@
 //! Definition-bound capital return over dated, source-bound financial Claims (BD-061, plan §21.6).
-//! Determinism: Exact; inherited floating metadata is retained by its exact bits, never used in arithmetic.
+//! Determinism: Exact
+//! Inherited floating metadata is retained by its exact bits, never used in arithmetic.
 //!
 //! DESIGN: ROCE is not a universal accounting definition. Earnings treatment, capital-employed basis,
 //! averaging, ownership and annualization must be stated. Rounded source values produce closed
@@ -868,9 +869,18 @@ impl CapitalReturnReceipt {
             self.capital.claim_id, self.claim.claim_id, self.digest
         );
         // Each JSON envelope is one escaped line; source text cannot create a closing fence.
+        out.push_str("## Source Claim receipts\n\nEach envelope preserves the original Claim and its ancestry.\n");
+        for input in &self.inputs {
+            let _ = writeln!(
+                out,
+                "\n### Input: {}\n\n```json\n{}\n```",
+                input.value.value.role(),
+                claim_json(input, &input_json(&input.value), false)
+            );
+        }
         let _ = writeln!(
             out,
-            "## Derived Claim receipts\n\nThe exact envelopes retain evidence, confidentiality, UU terms, parents and anchors.\n\n### Capital base\n\n```json\n{}\n```\n\n### Return assessment\n\n```json\n{}\n```",
+            "\n## Derived Claim receipts\n\nThe exact envelopes retain evidence, confidentiality, UU terms, parents and anchors.\n\n### Capital base\n\n```json\n{}\n```\n\n### Return assessment\n\n```json\n{}\n```",
             claim_json(&self.capital, &capital_json(&self.capital.value), false),
             claim_json(&self.claim, &summary_json(self.summary()), false)
         );

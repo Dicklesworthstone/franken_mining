@@ -179,6 +179,28 @@ The example is synthetic. The command checks supplied records; it supplies no in
 calibrated-model claim, automatic retraining or completed human investigation. Use `--json` for the
 source-bound Claim receipt and full ordered evidence.
 
+## Assess capital return on an explicit accounting basis
+
+**DESIGN.** Calculate an earnings-to-capital return with its definition, dates and source evidence retained:
+
+```bash
+cargo run -p fmine-cli -- metrics roce --input tests/metrics/capital_return.toml --format markdown
+```
+
+The synthetic worksheet declares the earnings treatment, ownership, monetary unit, reporting period and
+capital-employed definition. Select opening capital, closing capital, their arithmetic mean or an explicitly
+reported average. In the example, USD 12 million of earnings divided by the USD 100 million mean of opening
+and closing capital yields **12% for the half-year**. The declared two-times annualization yields **24%**.
+The report carries signed source-rounding bounds through the calculation. Losses and zero earnings remain
+visible. A nonpositive capital base cannot produce a return.
+
+Registered filing inputs can be selected with `--issuer`, `--document`, `--series`, `--period` and `--as-of`.
+That mode requires the existing verified-document and agreeing-reader transcription path; it does not
+substitute a worksheet for missing filing evidence. Use `fmine robot-docs --json` for the exact row roles and
+definition fields. Both JSON and Markdown retain source Claims, the selected capital-base Claim and the
+result. Issuer exclusions remain unavailable, and no accounting audit or cross-definition comparability is
+implied.
+
 ## Honest status
 
 **FACT.** The CLI runs on supplied mine worksheets. A mine geologist can reconcile dry tonnes and
@@ -972,24 +994,6 @@ Specify exactly one of `ounces_sold` (gold) or `pounds_sold` (copper), in actual
 The engine refuses an ounce/pound mismatch, a produced-unit substitution, ambiguous denominators
 and an allocation for another metal. Values and labels remain declared assumptions; the example
 does not reproduce a rounded issuer rate or establish an audited accounting population.
-
-### Calculate capital return under a stated definition
-
-```bash
-cargo run -p fmine-cli -- metrics capital-return \
-  --input tests/metrics/capital_return.toml --format markdown
-```
-
-The invented worksheet shows 12% for the half-year and 24% under its declared two-times
-annualization. Earnings of USD 12 million use the mean of the USD 80 million opening
-capital and USD 120 million closing capital. The report carries the definition, reporting
-perimeter, tax basis, original source Claims, and each point and rounding range.
-
-For a registered filing, select the issuer, filename, series key, reporting period, and
-evidence date with `--issuer`, `--document`, `--series`, `--period`, and `--as-of`.
-The series supplies `<series>_earnings` plus the capital roles required by its definition.
-The command verifies the registered file hash and requires two agreeing reader roles at
-each selected locator. Use a separate series key for each reporting window in a filing.
 
 ### Compare production GEO across named price decks
 

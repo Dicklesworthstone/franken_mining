@@ -75,12 +75,6 @@ mutates_authority = false
 description = "Calculate exact AISC or AIC from a declared cost worksheet under an explicit registered definition, retaining treatment and Claim evidence"
 
 [[verb]]
-path = "metrics capital-return"
-subsystem = "Bullion"
-mutates_authority = false
-description = "Calculate exact definition-bound capital return from a declared worksheet or one registered filing, retaining source Claims and rounding enclosures"
-
-[[verb]]
 path = "metrics geo"
 subsystem = "Bullion"
 mutates_authority = false
@@ -505,3 +499,9 @@ path = "forecast spatial-monitor"
 subsystem = "Plumb"
 mutates_authority = false
 description = "Assess a declared mining-front sequence with the existing spatial calibration monitor, retaining physical scope, source evidence and the first alarm"
+
+[[verb]]
+path = "metrics roce"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Assess definition-bound capital return from dated earnings and capital Claims, retaining source rounding, ownership, annualization and issuer exclusions"

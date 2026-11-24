@@ -86,7 +86,6 @@ decide program
 assure public
 assure challenges
 metrics cost
-metrics capital-return
 metrics geo
 compare
 plan pit
@@ -158,3 +157,4 @@ assure issue
 reliance export
 recall
 forecast spatial-monitor
+metrics roce
