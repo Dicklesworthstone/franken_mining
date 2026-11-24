@@ -9,9 +9,11 @@ use fmine_evidence::Refusal;
 use fmine_numerics::norm_cdf;
 use fmine_units::ExactQty;
 
+use crate::CalibrationFlag;
+
 use super::{
-    ForecastLedger, ForecastPayload, MemberAssessment, MemberOutcome, OutcomeSelector, absent,
-    domain, floats, optional_float,
+    Assessment, ForecastLedger, ForecastPayload, MemberAssessment, MemberOutcome, OutcomeSelector,
+    absent, domain, floats, optional_float,
 };
 
 pub mod coverage;
@@ -21,6 +23,7 @@ pub mod quantiles;
 pub const SCOPE: &str = "Descriptive diagnostics within one frozen cohort, not calibration verdicts, independence estimates, confidence intervals or predictive-skill claims. Unsupported distributions and unresolved members remain visible.";
 pub const BIN_RULE: &str = "Fixed deciles [lower, upper), with the final bin including 1; exact edge values enter the bin on their right. Completion bounds retain every unresolved member and are not simultaneous confidence intervals.";
 pub const PIT_METHOD: &str = "Gaussian Phi((outcome-mean)/std_dev), using fmine_numerics::norm_cdf; approximate CDF values and floating-point tail saturation are retained without clipping or randomization.";
+pub const GAUSSIAN_CALIBRATION_METHOD: &str = "One frozen Gaussian model and metadata key at 80% nominal coverage. The score subtracts the greater of the scaled coverage error and the two-sided PIT CDF distance from one, with the penalty capped at one. The PIT distance requires a complete cohort. A non-calibrated flag gives zero. This diagnostic leaves the saved flag unchanged.";
 pub const EMPIRICAL_METHOD: &str = "Uniform empirical CDF bounds [F(y-),F(y)] = [below/n,(below+equal)/n], retaining exact sample counts and ties. Closed rank intervals are counted in each fixed decile as definite when wholly contained, and possible when intersecting. Every unresolved member contributes to each whole-population upper bound. Integer comparisons determine bin membership; no randomized PIT, uniformity or calibration is inferred.";
 pub const WEIGHTED_METHOD: &str = "Weighted empirical CDF bounds [F(y-),F(y)] retain the exact declared probability mass below, equal to and above the selected outcome. No resampling, normalization or floating-point probability conversion occurs. Closed intervals have definite/possible decile membership; every unresolved forecast remains in whole-population completion bounds. This population is separate from uniform empirical and Gaussian diagnostics. No randomized PIT, uniformity or calibration is inferred.";
 const EDGES: [f64; 11] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
@@ -114,6 +117,18 @@ pub struct PitHistogram {
     pub bins: [PitBin; 10],
 }
 
+/// Supplementary NL-8 calculation from one homogeneous Gaussian assessment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaussianCalibrationScore {
+    pub n_members: usize,
+    pub n_resolved: usize,
+    pub inside_80: usize,
+    /// Two-sided distance to the uniform CDF, computed only for complete cohorts.
+    pub pit_ks: Option<f64>,
+    pub flag: CalibrationFlag,
+    pub score: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReliabilityBin {
     pub lower: f64,
@@ -146,6 +161,8 @@ pub struct AssessmentDiagnostics {
     pub selector: OutcomeSelector,
     pub members: Vec<DiagnosticMember>,
     pub gaussian_pit: Option<PitHistogram>,
+    /// Recomputable from the bound assessment, frozen members and PIT values.
+    pub gaussian_calibration_score: Option<GaussianCalibrationScore>,
     pub bernoulli_reliability: Option<ReliabilityDiagram>,
     pub empirical_rank: Option<EmpiricalRankDiagram>,
     /// Counts of forecasts in each rank bin; scenario probabilities are retained per member.
@@ -222,7 +239,75 @@ fn weighted_bin(mass: ExactQty) -> usize {
         .unwrap_or(9)
 }
 
+fn uniform_pit_distance(values: &mut [f64]) -> f64 {
+    values.sort_unstable_by(f64::total_cmp);
+    let n = values.len() as f64;
+    values
+        .iter()
+        .enumerate()
+        .fold(0.0_f64, |distance, (i, &pit)| {
+            distance
+                .max((i + 1) as f64 / n - pit)
+                .max(pit - i as f64 / n)
+        })
+}
+
 impl ForecastLedger {
+    fn gaussian_calibration_score(
+        &self,
+        assessment: &Assessment,
+        members: &[DiagnosticMember],
+        histogram: &PitHistogram,
+    ) -> Option<GaussianCalibrationScore> {
+        if histogram.n_members != members.len()
+            || self.cohort(assessment.cohort)?.spec.policy.alpha != 0.2
+        {
+            return None;
+        }
+        let first = self.forecast(members.first()?.member.forecast_id)?;
+        let metadata = first.metadata.as_ref()?;
+        if !members.iter().all(|item| {
+            self.forecast(item.member.forecast_id)
+                .is_some_and(|member| {
+                    member.model_key == first.model_key
+                        && member.metadata.as_ref() == Some(metadata)
+                })
+        }) {
+            return None;
+        }
+        let inside_80 = assessment.summary.coverage?.inside;
+        let pit_ks = if histogram.n_unresolved == 0 {
+            // The histogram checked every PIT. Require the whole population, including ties.
+            let mut values = members
+                .iter()
+                .map(|item| match item.value {
+                    DiagnosticValue::GaussianPit(pit) => pit,
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(uniform_pit_distance(&mut values))
+        } else {
+            None
+        };
+        let flag = assessment.summary.flag;
+        let score = if let (CalibrationFlag::Calibrated, Some(ks)) = (flag, pit_ks) {
+            // |coverage - 4/5| / (1/5), with exact integer cancellation before conversion.
+            let n = histogram.n_members as u128;
+            let error = (5 * inside_80 as u128).abs_diff(4 * n) as f64 / n as f64;
+            1.0 - error.max(ks).min(1.0)
+        } else {
+            0.0
+        };
+        Some(GaussianCalibrationScore {
+            n_members: histogram.n_members,
+            n_resolved: histogram.n_resolved,
+            inside_80,
+            pit_ks,
+            flag,
+            score,
+        })
+    }
+
     /// Derive diagnostics only from a saved assessment's selected publications and missing outcomes.
     /// Cohort admission already keeps declared family, quantity and unit compatible. The dimensionless
     /// views do not pool across cohorts or retrospectively infer absent legacy metadata.
@@ -395,6 +480,9 @@ impl ForecastLedger {
             cohort: assessment.cohort,
             as_of_ns: assessment.as_of_ns,
             selector: assessment.selector,
+            gaussian_calibration_score: gaussian_pit
+                .as_ref()
+                .and_then(|pit| self.gaussian_calibration_score(assessment, &members, pit)),
             members,
             gaussian_pit,
             bernoulli_reliability,
@@ -560,6 +648,17 @@ impl AssessmentDiagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uniform_pit_distance_checks_both_sides_of_tied_ecdf_jumps() {
+        assert_eq!(uniform_pit_distance(&mut [0.75, 0.75, 0.75, 0.75]), 0.75);
+        assert_eq!(uniform_pit_distance(&mut [0.25, 0.25, 0.25, 0.25]), 0.75);
+        assert_eq!(
+            uniform_pit_distance(&mut [0.875, 0.125, 0.625, 0.375]),
+            0.125
+        );
+        assert_eq!(uniform_pit_distance(&mut [1.0, 0.0]), 0.5);
+    }
 
     #[test]
     fn weighted_edges_keep_sub_float_mass_and_the_largest_denominator_exact() {

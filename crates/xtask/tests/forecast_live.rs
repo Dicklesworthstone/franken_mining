@@ -596,6 +596,139 @@ fn outcome(alias: &str, value: i64, available: &str, restated: bool) -> String {
 }
 
 #[test]
+fn gaussian_calibration_score_uses_the_saved_family_coverage_and_pit_population() {
+    fn score_view(json: &str) -> Option<&str> {
+        assessment(json)
+            .split_once("\"gaussian_calibration_score\":")
+            .and_then(|(_, fields)| fields.split_once(",\"diagnostics\":"))
+            .map(|(score, _)| score)
+    }
+
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    let aliases: Vec<String> = (0..40).map(|i| format!("run-{i}")).collect();
+    for (index, alias) in aliases
+        .iter()
+        .map(String::as_str)
+        .chain(["other-model", "other-site"])
+        .enumerate()
+    {
+        let model = if alias == "other-model" {
+            "other-v1"
+        } else {
+            "production-v1"
+        };
+        let site = if alias == "other-site" {
+            "other-site"
+        } else {
+            "mine-a"
+        };
+        journal.append(
+            &format!(
+                "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"{model}\"\noutcome_due = \"{DUE}\"\nkind = \"gaussian\"\nmean = \"10\"\nstd_dev = \"1\"\nfamily = \"annual-production\"\nauthor_role = \"model:planning\"\ndomain = \"mine-total\"\nhorizon = \"one-year\"\nsite = \"{site}\"\nquantity = \"gold-production-100pct\"\nunit = \"koz\"\n"
+            ),
+            ns("2030-01-02T00:00:00Z") + index as i64 * SECOND,
+        );
+    }
+    let request = cohort(&aliases.join(",")).replace("rho_high = \"0.5\"", "rho_high = \"0\"");
+    journal.append(&request, ns("2030-01-03T00:00:00Z"));
+    journal.append(
+        &request
+            .replace("three-sites", "different-level")
+            .replace("alpha = \"0.2\"", "alpha = \"0.1\""),
+        ns("2030-01-03T00:00:00Z"),
+    );
+    for (name, members) in [
+        ("two-models", "run-0,other-model"),
+        ("two-sites", "run-0,other-site"),
+    ] {
+        journal.append(
+            &cohort(members).replace("three-sites", name),
+            ns("2030-01-03T00:00:00Z"),
+        );
+    }
+    let early_cut = "2031-01-03T00:00:01Z";
+    for (index, alias) in aliases.iter().enumerate() {
+        if index == 32 {
+            let early = journal.assess(early_cut, "first-published", None, ns(early_cut));
+            let score = score_view(&early).expect("incomplete declared Gaussian family");
+            assert!(score.contains("\"n_members\":40,\"n_resolved\":32,"));
+            assert!(score.contains("\"pit_ks\":null,\"flag\":\"descriptive\",\"score\":0,"));
+        }
+        let (value, recorded) = if index < 32 {
+            (10, "2031-01-02T00:00:00Z")
+        } else {
+            (12, "2031-01-04T00:00:00Z")
+        };
+        journal.append(&outcome(alias, value, recorded, false), ns(recorded));
+    }
+    let original = journal.assess(CUT, "latest-as-of", None, ns(CUT));
+    let original_digest = assessment_digest(&original);
+    let score = score_view(&original).expect("complete declared Gaussian family");
+    assert_eq!(
+        string_field(score, "assessment_digest"),
+        original_digest.to_hex()
+    );
+    assert!(score.contains("\"coverage_80\":{\"num\":32,\"den\":40}"));
+    // At PIT=0.5 the empirical CDF jumps from 0 to 32/40. The left-side gap 0.5 dominates.
+    assert!(
+        score.contains("\"pit_ks\":0.5,\"flag\":\"calibrated\",\"score\":0.5,"),
+        "{score}"
+    );
+    for name in ["different-level", "two-models", "two-sites"] {
+        let output = journal.ok(
+            Command::Assess {
+                journal: journal.path.clone(),
+                head: journal.head,
+                cohort: name.into(),
+                as_of: CUT.into(),
+                selector: "first-published".into(),
+                expected_digest: None,
+            },
+            ns(CUT),
+        );
+        assert!(score_view(&output).is_none(), "{name}");
+    }
+
+    let revised_cut = "2031-01-12T00:00:00Z";
+    for (index, alias) in aliases.iter().enumerate() {
+        let value = if index < 19 {
+            9
+        } else if index < 37 {
+            11
+        } else {
+            12
+        };
+        let recorded = "2031-01-11T00:00:00Z";
+        journal.append(&outcome(alias, value, recorded, true), ns(recorded));
+    }
+    let revised = journal.assess(revised_cut, "latest-as-of", None, ns(revised_cut));
+    let score = score_view(&revised).expect("revised Gaussian family");
+    assert!(score.contains("\"coverage_80\":{\"num\":37,\"den\":40}"));
+    // The two-sided PIT distance is below 0.4. The exact coverage penalty is 25/40.
+    assert!(
+        score.contains("\"flag\":\"calibrated\",\"score\":0.375,"),
+        "{score}"
+    );
+    let before = fs::read(&journal.path).unwrap();
+    let reopened = journal.run(
+        &Command::Report {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            assessment: original_digest,
+            provenance: None,
+            timestamp: None,
+        },
+        0,
+    );
+    assert_eq!(reopened.exit_code, 0, "{}", reopened.to_json());
+    assert_eq!(assessment(&reopened.payload_json), assessment(&original));
+    let markdown = reopened.rendered_markdown.as_deref().unwrap();
+    assert!(markdown.contains("**0.5** under the saved `calibrated` flag."));
+    assert!(markdown.contains("Of 40 resolved forecasts, 32 fell inside the 80% interval."));
+    assert_eq!(fs::read(&journal.path).unwrap(), before);
+}
+
+#[test]
 fn supplied_quantile_losses_match_normal_and_saved_reports_without_reselecting_evidence() {
     fn projection(json: &str) -> &str {
         assessment(json)

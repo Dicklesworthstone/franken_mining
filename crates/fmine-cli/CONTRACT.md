@@ -576,6 +576,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   missing weighted members in `xtask/tests/forecast_live.rs`; plant registration controls use the same path.
   Missing members remain in full-population completion bounds; resolved and full probability averages are
   separate. Empty bins have absent averages, and unsupported distributions remain explicit.
+  DESIGN (BD-042, NL-8). An eligible Gaussian report adds `gaussian_calibration_score` alongside
+  the diagnostics. JSON retains the parent and PIT digests, population, observed coverage fraction,
+  PIT distance and saved flag. Markdown displays the same score and its inputs. Only cohorts with a
+  single explicit model and full metadata key at the frozen 80% level get this view. The calculation
+  uses the same saved outcome vintages when an earlier assessment is reopened.
   A sibling `interval_coverage` object (`fmine.forecast-coverage.v1`, CVG1/v1) adds central 50/80/95%
   coverage with per-member bounds, hits, miss sides and explicit unsupported-level reasons. Fractions use
   the complete supported population; unresolved and unsupported counts remain separate, and empty

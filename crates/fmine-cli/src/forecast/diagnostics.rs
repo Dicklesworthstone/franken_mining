@@ -5,7 +5,8 @@ use std::fmt::Write as _;
 
 use fmine_calib::Assessment;
 use fmine_calib::ledger::diagnostics::{
-    BIN_RULE, DiagnosticValue, EMPIRICAL_METHOD, PIT_METHOD, SCOPE, WEIGHTED_METHOD,
+    BIN_RULE, DiagnosticValue, EMPIRICAL_METHOD, GAUSSIAN_CALIBRATION_METHOD, PIT_METHOD, SCOPE,
+    WEIGHTED_METHOD,
 };
 use fmine_evidence::Refusal;
 use fmine_units::ExactQty;
@@ -127,6 +128,24 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
         format!(",\"empirical_rank\":{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"method\":{},\"bins\":[{bins}]}}", ranks.n_members, ranks.n_resolved, ranks.n_unresolved, js(EMPIRICAL_METHOD))
     });
     let version = diagnostics.version();
+    let gaussian_calibration = diagnostics.gaussian_calibration_score.map_or_else(String::new, |score| {
+        let coverage = if score.n_resolved == 0 {
+            "null".into()
+        } else {
+            fraction(score.inside_80, score.n_resolved)
+        };
+        format!(
+            ",\"gaussian_calibration_score\":{{\"assessment_digest\":{},\"pit_digest\":{},\"n_members\":{},\"n_resolved\":{},\"coverage_80\":{coverage},\"pit_ks\":{},\"flag\":{},\"score\":{},\"method\":{}}}",
+            js(&diagnostics.assessment_digest.to_hex()),
+            js(&diagnostics.digest.to_hex()),
+            score.n_members,
+            score.n_resolved,
+            optional_number(score.pit_ks),
+            js(score.flag.as_str()),
+            score.score,
+            js(GAUSSIAN_CALIBRATION_METHOD),
+        )
+    });
     let weighted = diagnostics.weighted_empirical_rank.as_ref().map_or_else(String::new, |ranks| {
         let bins = ranks.bins.iter().map(|bin| format!(
             "{{\"lower\":{},\"upper\":{},\"upper_inclusive\":{},\"resolved_definite_count\":{},\"resolved_possible_count\":{},\"whole_population_fraction\":{}}}",
@@ -137,7 +156,7 @@ pub(super) fn assessment_json(state: &Replay, report: &Assessment) -> Result<Str
         format!(",\"weighted_empirical_rank\":{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"method\":{},\"bins\":[{bins}]}}", ranks.n_members, ranks.n_resolved, ranks.n_unresolved, js(WEIGHTED_METHOD))
     });
     Ok(format!(
-        ",\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v{version}\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli}{empirical}{weighted},\"members\":[{members}]}},\"interval_coverage\":{coverage},\"quantile_losses\":{quantiles},\"gaussian_log_scores\":{gaussian_log}",
+        "{gaussian_calibration},\"diagnostics\":{{\"schema\":\"fmine.forecast-diagnostics.v{version}\",\"assessment_digest\":{},\"cohort\":{},\"digest\":{},\"as_of\":{},\"selector\":{},\"scope\":{},\"bin_rule\":{},\"n_members\":{},\"gaussian_pit\":{gaussian},\"bernoulli_reliability\":{bernoulli}{empirical}{weighted},\"members\":[{members}]}},\"interval_coverage\":{coverage},\"quantile_losses\":{quantiles},\"gaussian_log_scores\":{gaussian_log}",
         js(&diagnostics.assessment_digest.to_hex()),
         js(&diagnostics.cohort.to_hex()),
         js(&diagnostics.digest.to_hex()),
@@ -161,6 +180,18 @@ pub(super) fn assessment_markdown(
         "\n## Predictive diagnostics\n\n{SCOPE}\n\n{BIN_RULE}\n\nParent assessment: `{}`. Diagnostic report: `{}`.\n",
         diagnostics.assessment_digest, diagnostics.digest
     );
+    if let Some(score) = diagnostics.gaussian_calibration_score {
+        let _ = writeln!(
+            out,
+            "### Gaussian calibration score\n\n**{}** under the saved `{}` flag. Of {} resolved forecasts, {} fell inside the 80% interval. The frozen cohort has {} members. PIT CDF distance is {}.\n\n{GAUSSIAN_CALIBRATION_METHOD}\n",
+            score.score,
+            score.flag.as_str(),
+            score.n_resolved,
+            score.inside_80,
+            score.n_members,
+            display_or(score.pit_ks, "unavailable"),
+        );
+    }
     if let Some(pit) = &diagnostics.gaussian_pit {
         let _ = writeln!(
             out,

@@ -3703,6 +3703,15 @@ Markdown preserve the selected sources and parent assessment digest, so later ou
 rewrite an earlier diagnostic report. These are descriptive diagnostics, not calibration verdicts, confidence
 intervals or claims of independent observations.
 
+DESIGN (BD-042, NL-8). Saved Gaussian assessments with one frozen model, one explicit metadata key,
+and 80% nominal coverage also report a `gaussian_calibration_score` between zero and one. It
+uses the worse of the scaled coverage error and the two-sided distance from the saved PIT values
+to a uniform CDF. For example, 32 hits out of 40 meet the coverage target, but if those 32 outcomes
+land at the forecast mean and the others are two standard deviations above it, the PIT distance is
+0.5 and the score is 0.5. The report shows both inputs and which assessment supplied them. Any
+non-calibrated flag yields zero, and an incomplete cohort has no PIT distance. The score leaves
+the saved flag unchanged and applies only to the displayed cohort.
+
 The separate `gaussian_log_scores` projection reports **negative log predictive density** for Gaussian
 members, in nats relative to the frozen target unit. Lower scores are better; a negative score is valid for
 a density and is never clamped to zero. The projection retains every selected source, unresolved Gaussian

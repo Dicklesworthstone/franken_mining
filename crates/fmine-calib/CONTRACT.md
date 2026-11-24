@@ -255,6 +255,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   Missing Gaussian outcomes widen each bin's whole-population completion bounds; missing event outcomes
   stay in their original probability bins. Full-population and resolved-only mean probabilities are separate,
   and empty-bin averages remain absent. The normal CDF retains its existing approximate tail saturation.
+  DESIGN (BD-042, NL-8). For a Gaussian cohort with the same explicit model and full metadata key
+  at a frozen 80% nominal level, the supplemental score is
+  `1 − min(1, max(|cov80 − 0.8| / 0.2, KS_PIT))` under the saved calibrated flag. Other flags
+  yield zero. The two-sided empirical CDF distance uses both limits at every sorted PIT value
+  and requires every outcome. The score is recomputed from the saved assessment and its bound
+  PIT values. DGN1 identities and the existing calibration flag remain unchanged.
   Empirical forecasts yield exact counts below, equal to and above the selected outcome, with closed bounds
   `[F(y-), F(y)] = [below/n, (below+equal)/n]`. One linear scan uses comparisons without sorting or subtraction;
   signed zeros are equal and ties remain intervals. Separate empirical decile bins count resolved intervals
