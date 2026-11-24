@@ -709,6 +709,8 @@ pub(super) fn assess(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
     use super::*;
 
     #[test]
@@ -986,6 +988,7 @@ mod tests {
     fn quarterly_guidance_workspace(
         entries: &[(&str, &str, &str, &str)],
     ) -> (std::path::PathBuf, Loaded, IssuerProfile) {
+        static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
         let mut loaded = loaded();
         for target in &mut loaded.rules.targets {
             target.outcome = record::Outcome::QuarterQtd;
@@ -997,13 +1000,15 @@ mod tests {
         }
         loaded.manifest.information_cutoff_utc = parse_utc("2030-12-31T00:00:00Z").unwrap();
         let root = std::env::temp_dir().join(format!(
-            "fmine-quarterly-guidance-{}-{}",
+            "fmine-quarterly-guidance-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT_WORKSPACE.fetch_add(1, AtomicOrdering::Relaxed),
         ));
+        std::fs::create_dir(&root).unwrap();
         std::fs::create_dir_all(root.join("corpus")).unwrap();
         std::fs::create_dir_all(root.join("registries/transcriptions")).unwrap();
         let document = b"Invented Example Mine guidance: Q1 2031 production 90 - 110 koz; FY2031 production 1000 koz, both at 100%.";
