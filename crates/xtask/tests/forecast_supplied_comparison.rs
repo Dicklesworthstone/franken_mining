@@ -1015,7 +1015,9 @@ fn supplied_gaussian_comparison_checks_frozen_targets_and_keeps_source_mismatche
         let mut rs = spec("right", vec![rr]);
         match change {
             "rule" => rs.resolution_rule = "Other resolution rule".into(),
-            "sources" => rs.eligible_sources = vec!["other:source".into()],
+            // Both cohorts can assess the observed mill report. Only the
+            // comparison should refuse the different frozen source lists.
+            "sources" => rs.eligible_sources.push("other:source".into()),
             "alpha" => rs.policy.alpha = 0.2,
             _ => {}
         }
@@ -1045,17 +1047,14 @@ fn supplied_gaussian_comparison_checks_frozen_targets_and_keeps_source_mismatche
             .unwrap()
             .digest;
         let report = ledger.compare_supplied_assessments_full_crps(left, right);
+        if change == "sources" {
+            let refusal = report.expect_err("different frozen source lists must refuse");
+            assert!(refusal.what.contains("eligible sources"));
+            continue;
+        }
         if matches!(
             change,
-            "quantity"
-                | "unit"
-                | "deadline"
-                | "rule"
-                | "sources"
-                | "alpha"
-                | "cut"
-                | "selector"
-                | "duplicate"
+            "quantity" | "unit" | "deadline" | "rule" | "alpha" | "cut" | "selector" | "duplicate"
         ) {
             assert!(report.is_err(), "{change}");
             continue;

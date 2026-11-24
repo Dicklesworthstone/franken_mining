@@ -1191,7 +1191,7 @@ fn operating_choices_retain_actual_start_and_full_comparison_after_source_change
                 .as_str()
                 .unwrap()
                 .into();
-            retained = decisions.clone();
+            retained = decisions.to_vec();
         }
         let history = fs::read(&f.journal).unwrap();
         fs::write(&f.model, submitted.replace("\"11000\"", "\"18000\"")).unwrap();
@@ -1211,7 +1211,7 @@ fn operating_choices_retain_actual_start_and_full_comparison_after_source_change
         let shown = parse_json(show.as_bytes()).unwrap();
         assert_eq!(
             json_field(&shown, &["payload", "decisions"]).as_array(),
-            Some(&retained)
+            Some(retained.as_slice())
         );
         assert_eq!(fs::read(&f.journal).unwrap(), history);
     }
