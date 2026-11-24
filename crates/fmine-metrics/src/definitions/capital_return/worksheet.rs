@@ -66,7 +66,8 @@ fn number(text: &str) -> Result<ExactQty, Refusal> {
     })
 }
 
-pub(super) fn period(text: &str) -> Result<Period, Refusal> {
+/// Parse the same calendar reporting period for worksheet and filing mode.
+pub fn period(text: &str) -> Result<Period, Refusal> {
     crate::definitions::declared::period(text)
         .ok_or_else(|| bad(1, "period must be YYYYFY, YYYYQ1..Q4 or YYYYH1..H2"))
 }

@@ -562,6 +562,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   No tonne/pound, ownership or FX conversion is implicit. The invented copper worksheet and independent
   Python Fraction oracle exercise C1/AISC arithmetic, source binding and the refusal matrix; this does
   not establish authentic issuer-rate parity or complete the broader BD-061 gate.
+- DESIGN (BD-061). `metrics capital-return` runs one declared worksheet or one selected registered
+  filing through the exact capital-return kernel. Filing mode requires issuer, document, series,
+  reporting period, and as-of date. The source loader authenticates document bytes and retains every
+  reader at selected locators. Definition and capital-basis agreement, snapshot support, declared
+  annualization, and source-rounding enclosures are enforced by the kernel. JSON and Markdown use the
+  same receipt. Native controls are in `tests/capital_return.rs` and use invented inputs.
 - DESIGN (BD-048/049): forecast assessment JSON and saved-journal Markdown include the calibration
   kernel's immutable Gaussian PIT, Bernoulli reliability and empirical CDF rank diagnostics. The separate
   DGN1 digest binds the saved assessment, selected events, source evidence and diagnostic values. Empirical

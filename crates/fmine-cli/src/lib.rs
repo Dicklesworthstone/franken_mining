@@ -2,6 +2,7 @@
 
 mod assure_report;
 mod capital;
+mod capital_return;
 mod claim_inspection;
 mod compare;
 pub mod cost;
@@ -70,6 +71,8 @@ pub enum OutputFormat {
 pub enum CliCommand {
     /// Calculate a declared complete cost population under an explicitly selected AISC/AIC definition.
     MetricsCost(cost::Command),
+    /// Calculate capital return under a declared or cited reporting definition.
+    MetricsCapitalReturn(capital_return::Command),
     /// Compare unchanged production quantities under explicit named and versioned price decks.
     MetricsGeo(geo::Command),
     /// Compare source-bound peer metrics without dropping incompatible or unavailable issuers.
@@ -587,6 +590,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--format" | "--workspace" => next += 2,
                         "--json" => next += 1,
                         "geo" => return "metrics geo",
+                        "capital-return" => return "metrics capital-return",
                         _ => return "metrics cost",
                     }
                 }
@@ -1176,6 +1180,7 @@ pub fn parse_args(
         verb,
         "metrics cost"
             | "metrics geo"
+            | "metrics capital-return"
             | "forecast spatial-monitor"
             | "decide production"
             | "decide investment"
@@ -1198,6 +1203,9 @@ pub fn parse_args(
         let command = match verb {
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
+            "metrics capital-return" => {
+                CliCommand::MetricsCapitalReturn(capital_return::parse(&words)?)
+            }
             "forecast spatial-monitor" => match &words[..] {
                 [group, verb, flag, path]
                     if group == "forecast"
@@ -2265,6 +2273,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     match cmd {
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
+        CliCommand::MetricsCapitalReturn(command) => {
+            capital_return::execute(command, workspace_root)
+        }
         CliCommand::Compare(command) => compare::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
         CliCommand::PlanSchedule(command) => schedule::execute(command, workspace_root),
@@ -2769,6 +2780,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(reserve::ROBOT_DOCS_JSON);
             payload.push_str(",\"cost_worksheet\":");
             payload.push_str(cost::ROBOT_DOCS_JSON);
+            payload.push_str(",\"capital_return\":");
+            payload.push_str(capital_return::ROBOT_DOCS_JSON);
             payload.push_str(",\"guidance_clusters\":");
             payload.push_str(track_record_clusters::ROBOT_DOCS_JSON);
             payload.push_str(",\"production_geo\":");

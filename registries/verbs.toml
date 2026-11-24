@@ -75,6 +75,12 @@ mutates_authority = false
 description = "Calculate exact AISC or AIC from a declared cost worksheet under an explicit registered definition, retaining treatment and Claim evidence"
 
 [[verb]]
+path = "metrics capital-return"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Calculate exact definition-bound capital return from a declared worksheet or one registered filing, retaining source Claims and rounding enclosures"
+
+[[verb]]
 path = "metrics geo"
 subsystem = "Bullion"
 mutates_authority = false

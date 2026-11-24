@@ -973,6 +973,24 @@ The engine refuses an ounce/pound mismatch, a produced-unit substitution, ambigu
 and an allocation for another metal. Values and labels remain declared assumptions; the example
 does not reproduce a rounded issuer rate or establish an audited accounting population.
 
+### Calculate capital return under a stated definition
+
+```bash
+cargo run -p fmine-cli -- metrics capital-return \
+  --input tests/metrics/capital_return.toml --format markdown
+```
+
+The invented worksheet shows 12% for the half-year and 24% under its declared two-times
+annualization. Earnings of USD 12 million use the mean of the USD 80 million opening
+capital and USD 120 million closing capital. The report carries the definition, reporting
+perimeter, tax basis, original source Claims, and each point and rounding range.
+
+For a registered filing, select the issuer, filename, series key, reporting period, and
+evidence date with `--issuer`, `--document`, `--series`, `--period`, and `--as-of`.
+The series supplies `<series>_earnings` plus the capital roles required by its definition.
+The command verifies the registered file hash and requires two agreeing reader roles at
+each selected locator. Use a separate series key for each reporting window in a filing.
+
 ### Compare production GEO across named price decks
 
 `metrics geo` applies each versioned price deck to the same declared production quantities, showing each

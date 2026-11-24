@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 83
+[verbs] 84
 decide card
 decide production
 decide investment
@@ -86,6 +86,7 @@ decide program
 assure public
 assure challenges
 metrics cost
+metrics capital-return
 metrics geo
 compare
 plan pit

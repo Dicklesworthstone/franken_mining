@@ -15,7 +15,7 @@ pub struct VerbSpec {
 }
 
 /// Every registered CLI verb, in registry order.
-pub const VERB_CATALOG: [VerbSpec; 83] = [
+pub const VERB_CATALOG: [VerbSpec; 84] = [
     VerbSpec {
         path: "decide card",
         subsystem: "Helm",
@@ -87,6 +87,12 @@ pub const VERB_CATALOG: [VerbSpec; 83] = [
         subsystem: "Bullion",
         mutates_authority: false,
         description: "Calculate exact AISC or AIC from a declared cost worksheet under an explicit registered definition, retaining treatment and Claim evidence",
+    },
+    VerbSpec {
+        path: "metrics capital-return",
+        subsystem: "Bullion",
+        mutates_authority: false,
+        description: "Calculate exact definition-bound capital return from a declared worksheet or one registered filing, retaining source Claims and rounding enclosures",
     },
     VerbSpec {
         path: "metrics geo",
