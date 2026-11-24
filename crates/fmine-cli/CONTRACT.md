@@ -48,6 +48,17 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     all journal encodings remain unchanged. This is an upfront funding screen, not future-liquidity
     assurance or transition authority. Direct command and atomic-refusal controls are in
     `xtask/tests/decision_journal.rs`.
+  - DESIGN (BD-225/229). Directly declared static `fmine.capital-program.v1` models expose
+    `journal_actions` with eligible bundle IDs and candidate membership. The decision journal admits
+    any such explicit choice, including a lower-ranked bundle or hold when permitted. Admission
+    preserves structural, nominal primary/secondary tail-risk and declared robust tail-risk limits.
+    The full model and command comparison, including rejected alternatives and the existing output
+    Claim ID, remain in the snapshot under the capital command's canonical source locator.
+    Existing journal formats and its 65,536-byte operation cap remain unchanged; complete receipts
+    that exceed it refuse atomically. KPI, staged-policy and source-derived investment models are
+    outside this static handoff. Recording grants no approval or execution authority. Direct CLI
+    replay, lower-ranked choices, risk/funding refusals and oversize atomicity are covered by
+    `capital_bundle_` controls in `xtask/tests/decision_journal.rs`.
   - Rehabilitation compares mutually exclusive, owner-eligible packages at one horizon. Work is paid on
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release

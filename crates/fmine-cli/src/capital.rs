@@ -4,9 +4,9 @@
 use std::path::Path;
 
 use fmine_core::anchor::SourceAnchor;
-use fmine_evidence::Refusal;
+use fmine_evidence::{Refusal, RefusalCode};
 
-use crate::{Envelope, NextAction, worksheet_input};
+use crate::{Envelope, NextAction, json_string as js, worksheet_input};
 
 mod executive;
 mod investment;
@@ -30,12 +30,106 @@ pub(crate) fn executive_snapshot(
     executive::journal_snapshot(&doc, text, source, root, action).map(Some)
 }
 
+const MODEL_LOCATOR: &str = "declared static capital program";
+
+fn journal_choices(program: &fmine_capital::EvaluatedProgram) -> Vec<&fmine_capital::ProgramChoice> {
+    let summary = program.summary();
+    summary
+        .choices
+        .iter()
+        .filter(|choice| {
+            choice.structural_rejections.is_empty()
+                && choice.statistics.is_some()
+                && !choice.risk_rejected
+                && summary.robustness.as_ref().is_none_or(|stress| {
+                    stress.declared_tail_limits == 0
+                        || stress.robust_tail_feasible.contains(&choice.bundle_id)
+                })
+        })
+        .collect()
+}
+
+fn comparison_envelope(
+    evaluated: &fmine_capital::model::EvaluatedModel,
+    source: &SourceAnchor,
+    bytes: usize,
+) -> Envelope {
+    let actions = match evaluated {
+        fmine_capital::model::EvaluatedModel::Static(program) => format!(
+            ",\"journal_actions\":[{}]",
+            journal_choices(program)
+                .iter()
+                .map(|choice| {
+                    let candidates = choice.selected.iter().map(|id| js(id)).collect::<Vec<_>>();
+                    format!(
+                        "{{\"id\":{},\"candidates\":[{}]}}",
+                        js(&choice.bundle_id),
+                        candidates.join(",")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        _ => String::new(),
+    };
+    let payload = format!(
+        "{{\"mode\":\"{}\",\"source\":{},\"program\":{}{actions}}}",
+        evaluated.mode(),
+        worksheet_input::source_json(source, bytes),
+        evaluated.to_json(),
+    );
+    let mut envelope = Envelope::ok("decide program", payload, Vec::new());
+    envelope.no_claim = Some(evaluated.no_claim());
+    envelope
+}
+
+/// Retain the same complete comparison as the command; choosing a bundle never changes its ranking.
+pub(crate) fn static_program_snapshot(
+    text: &str,
+    source: &SourceAnchor,
+    action: &str,
+) -> Result<Option<(String, String)>, Refusal> {
+    use fmine_capital::model::EvaluatedModel;
+    use fmine_registry::toml_subset::{TomlValue, parse_subset};
+    let Ok(doc) = parse_subset(text) else {
+        return Ok(None);
+    };
+    if !matches!(doc.top_get("schema").map(|f| &f.value), Some(TomlValue::Str(s)) if s == "fmine.capital-program.v1")
+    {
+        return Ok(None);
+    }
+    // The regular command and journal reader use different input labels. Preserve the command's
+    // established capital locator so every input Claim and the retained output have identical ids.
+    let source = SourceAnchor::new(&source.artifact_path, source.artifact_sha256, MODEL_LOCATOR);
+    let evaluated = fmine_capital::model::evaluate(text, source.clone())?;
+    let EvaluatedModel::Static(program) = &evaluated else {
+        return Err(Refusal::new(
+            RefusalCode::BasisMismatch105,
+            "capital journal choices require a directly declared static program; staged policies and KPI-constrained models need their own choice semantics",
+        ));
+    };
+    if !journal_choices(program)
+        .iter()
+        .any(|choice| choice.bundle_id == action)
+    {
+        return Err(Refusal::new(
+            RefusalCode::BasisMismatch105,
+            "capital journal action is absent or fails a declared structural, nominal tail-risk or robust tail-risk constraint",
+        ));
+    }
+    Ok(Some((
+        comparison_envelope(&evaluated, &source, text.len()).to_json(),
+        program.claim().claim_id.to_string(),
+    )))
+}
+
 pub(super) const USAGE: &str = "decide program <model-file>";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
     "\"schema\":\"fmine.capital-program.v1\",",
     "\"staged_permit_example\":\"tests/capital/staged_permit.toml\",",
     "\"staged_permits\":\"Bind a recourse candidate to each required application using stage_permit rows. Declare permit terms and one permit_state record per application and shared state, with any state-specific permit_pause rows. Use exact n/d percentage points for scope change and reopen threshold. Sources must be available by observation_date in their scenario. An elapsed clock alone leaves main works blocked. The same permit checks apply in the static benchmark and all realized continuations. States with the same observation share one decision.\",",
+    "\"static_journal\":\"Use decide journal record --model <directly declared static program> --action <bundle id>. Choose an id from journal_actions; candidate membership and all alternatives remain in the complete comparison. Admission enforces structural, nominal tail-risk and any declared robust tail-risk limits, including per-share and secondary-entity limits. A feasible lower-ranked bundle remains an explicit human choice. The original model, Claims and full evaluated JSON must fit the existing 65536-byte operation limit; oversize refuses without appending. Source-derived investment manifests, staged policies and KPI-constrained programs are not admitted by this static handoff. Recording supplies no approval or execution authority.\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
     "\"executive_brief\":\"decide program <worksheet> --brief prints the meeting paper for executive worksheets and total-USD static capital or source-derived investment programs. Static briefs preserve nominal co-winners, tail limit, minimum cash slack, the first representable limit that admits higher mean value (or the first feasible choice), and any declared weight stress or resampling. Use --format markdown for per-share, KPI, staged or detailed reports.\",",
     "\"procurement_journal\":\"Use decide journal record --model <procurement worksheet> with --action order-now, hold-slot or let-lapse. The evaluated card lists available journal_actions. The worksheet date must be on or before the earliest possible UTC recording date. Pinned show retains the original comparison, scope and rationale.\",",
@@ -77,7 +171,7 @@ pub(super) fn execute(model: &Path, root: &Path, brief: bool) -> Envelope {
         let (text, source) = worksheet_input::read_model(
             &root.join(model),
             "capital program",
-            "declared static capital program",
+            MODEL_LOCATOR,
         )?;
         if let Ok(doc) = fmine_registry::toml_subset::parse_subset(&text)
             && let Some(fmine_registry::toml_subset::TomlValue::Str(schema)) =
@@ -107,14 +201,7 @@ pub(super) fn execute(model: &Path, root: &Path, brief: bool) -> Envelope {
         } else {
             evaluated.to_markdown()
         };
-        let payload = format!(
-            "{{\"mode\":\"{}\",\"source\":{},\"program\":{}}}",
-            evaluated.mode(),
-            worksheet_input::source_json(&source, text.len()),
-            evaluated.to_json(),
-        );
-        let mut envelope = Envelope::ok("decide program", payload, Vec::new());
-        envelope.no_claim = Some(evaluated.no_claim());
+        let mut envelope = comparison_envelope(&evaluated, &source, text.len());
         envelope.rendered_markdown = Some(markdown);
         Ok(envelope)
     };

@@ -2228,6 +2228,27 @@ costs, residual obligations, funding comparison and source bytes after the edita
 The funding screen covers the declared upfront commitment; it does not certify future liquidity or
 authorize a mine transition. Any eligible choice can be recorded, including one that is not ranked first.
 
+For a directly declared static capital program (`fmine.capital-program.v1`), inspect
+`decide program capital-review.toml --json` and choose a bundle ID from `payload.journal_actions`.
+The list includes eligible lower-ranked portfolios and holding cash when permitted. Candidate membership
+and every rejected alternative remain in the complete comparison.
+
+```bash
+fmine decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model capital-review.toml \
+  --decision capital-committee-review --action "$FMINE_CAPITAL_BUNDLE" \
+  --reason "Retain the committee's chosen portfolio and its evaluated alternatives" \
+  --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
+```
+
+Set `FMINE_CAPITAL_BUNDLE` to the ID selected from that worksheet's action list. Admission enforces its
+budget, dependencies, exclusions, cash and share constraints, nominal tail limits and any declared robust
+tail limits. The journal retains the original source and complete evaluated JSON with its existing Claim
+identity. The full receipt must fit the existing 65,536-byte operation limit; larger comparisons refuse
+without appending. This handoff supports directly declared static programs; staged policies, KPI-constrained
+models and source-derived investment manifests need their own choice semantics. Recording does not grant
+approval or execution authority.
+
 To record buying testwork, select the information option and policy explicitly instead of `--action`:
 
 ```bash
