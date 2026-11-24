@@ -41,9 +41,12 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   clearance and canonical identity. `PublicInspection` retains the canonical body, ancestry, source anchors,
   UU terms and recorded guard results; it establishes neither complete ancestry nor decision authority.
 - **`compose_binary -> Claim<R>`.**
-  - Class: the meet of the parents' classes.
+  - Class: the meet of the parents' classes, with `ModelledCalibrated` demoted to `ModelledUncalibrated`
+    and `Transferred { Inside }` to `Transferred { NotAssessed }` (NL-4). The derived family has no own
+    calibration or applicability record, even when support is unchanged. Other classes stay at their meet.
   - Epistemic status and knowledge state: the `and` of the parents'.
-  - Colour: the parents' colours composed under `op`, or none when either parent has none.
+  - Colour: the parents' colours composed under `op`, capped at `Estimated` by the NL-4 class demotion,
+    or none when either parent has none. Measurement and nonforecast `Derived` validation remains admissible.
   - Label: the join of the parents' labels.
   - `stale` and `calibration_failed`: the OR of the parents'.
   - UU terms: the left list, plus the right's terms with a new `scenario_id`.
@@ -70,7 +73,12 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 
 **Composition.**
 - One worked example covers class, state, status, label, UU terms and colour: `test_nl1_to_nl8_non_laundering_composition`.
-- `test_random_claim_dags_nl1_nl2_nl5_100k` builds 100,000 random binary trees of 2 to 6 leaves. The leaves draw from nine classes and five states, and half carry a regime. No node outranks a parent in class or state, or its weakest leaf in colour. A node is refused exactly when a leaf under it is. The run must see both refused and `Validated` nodes.
+- `test_random_claim_dags_nl1_nl2_nl5_100k` builds 100,000 random binary trees of 2 to 6 leaves. The leaves draw from nine classes and five states, and half carry a regime. No node outranks a parent in class or state, or its weakest leaf in colour, and none inherits model calibration or an in-AOA transfer. A node is refused exactly when a leaf under it is. The run must see both refused and `Validated` nodes.
+- `test_nl4_model_and_transfer_calibration_do_not_cross_derivation_or_support` checks nine class pairs in
+  both orders at every support variant. Model outputs stay uncalibrated; transferred applicability stays
+  unassessed or outside. Adding a regime cannot restore their validation, subsequent derivation stays weak,
+  and G-DISC refuses them. Their ancestry, source anchors and canonical identity remain valid. The separate
+  measured/derived positive chain retains `Validated` colour and passes G-DISC's evidence clauses.
 
 **Labels.**
 - Join and `leq` satisfy the semilattice laws, checked exhaustively: `test_join_semilattice_laws_exhaustive`.
@@ -201,7 +209,8 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **Floats** appear only in `UuTerm::downside_exposure_usd_m` and the infinite dispersion of a stale colour. Neither is hashed.
 
 ## 7. Evidence class of outputs
-- **The crate assigns no class from data.** `Claim::new` takes the caller's class. `compose_binary` gives the meet of the parents' classes, and `downgraded` can only lower one.
+- **The crate assigns no class from data.** `Claim::new` takes the caller's class. `compose_binary` gives the
+  parents' meet with the NL-4 calibration/applicability demotions in §3, and `downgraded` can only lower one.
 - **Colour** comes from `fmine_evidence::color::project_color`, over the class and the anchor basis, capped at `Estimated` when stale.
 - **The other outputs carry no evidence class.**
   - A `CheckedCone` says the supplied metadata was admissible at the cut, not that it is complete or authentic.
@@ -248,8 +257,10 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   - The random test checks colour, class and state over trees. It has no `Stale` state and no shared parents.
   - It is a seeded loop, not a proptest.
   - Only one example covers the label join and UU terms.
-  - NL-3 (attestation is orthogonal) and NL-4 (calibration is not inherited) have no test.
-- **NL-4 may be unmet.** A claim composed from two `ModelledCalibrated` parents stays `ModelledCalibrated`, and its colour can be `Validated`. The owner should confirm whether the plan's NL-4 forbids that.
+  - NL-3 (attestation is orthogonal) has no test. NL-4 has the class/support cases and random-tree check above.
+- **Composition has no output-family calibration admission.** It cannot attach an independently scored
+  output-family record or reassessed transfer AOA. Model-derived values remain uncalibrated rather than
+  borrowing their parents' scored outcomes. `Claim::new` still trusts explicitly supplied source classes.
 - **The code's NL labels differ from the plan's.** The code calls staleness NL-7, but the plan's NL-7 is the confidentiality join. The code calls `calibration_failed` NL-8, but the plan's NL-8 is a computed `calibration_score`, which does not exist here.
 - **`Claim::new` trusts the caller's class and parents.** A claim can state `Derived` over an issuer figure. G-DISC catches that only when the issuer figure is a listed parent. A `Derived` claim with no parents passes its walk.
 - **The id leaves fields unhashed.** Representation, support, additivity, UU terms, `supersedes` and the value itself are outside the body, and every field stays `pub`. Widening the body moves every claim id. That is an owner decision.

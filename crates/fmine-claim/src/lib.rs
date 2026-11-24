@@ -9,7 +9,8 @@ use fmine_core::codec::Encoder;
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::color::{IntervalOp, ValidityDomain, compose};
 use fmine_evidence::{
-    Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode, project_color,
+    AoaStatus, Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode,
+    project_color,
 };
 
 /// Type alias for a `clm_...` content-addressed [`ObjectId`].
@@ -339,7 +340,8 @@ pub fn verify_unweighted_additive(
 
 /// Composes two parent claims `left` and `right` into a derived `Claim<R>` using `NL-1..NL-8` (`BD-042`).
 ///
-/// - `evidence = left.evidence.meet(right.evidence)` (NL-2, never upgrades)
+/// - evidence is the parents' meet (NL-2), with model calibration removed and an in-AOA transfer
+///   marked `NotAssessed`: this new family has no own calibration or applicability record (NL-4)
 /// - `epistemic = left.epistemic.and(right.epistemic)`, `state = left.state.and(right.state)` (NL-5)
 /// - the colour composes both parents' colours under `op` (NL-1); with either refused it stays refused (NL-6)
 /// - `confidentiality = left.confidentiality.join(&right.confidentiality)` (`INV-007`)
@@ -360,7 +362,15 @@ pub fn compose_binary<A, B, R>(
     additivity: AdditivityClass,
     op: IntervalOp,
 ) -> Claim<R> {
-    let evidence = left.evidence.meet(right.evidence);
+    let evidence = match left.evidence.meet(right.evidence) {
+        EvidenceClass::ModelledCalibrated => EvidenceClass::ModelledUncalibrated,
+        EvidenceClass::Transferred {
+            aoa: AoaStatus::Inside,
+        } => EvidenceClass::Transferred {
+            aoa: AoaStatus::NotAssessed,
+        },
+        other => other,
+    };
     let epistemic = left.epistemic.and(right.epistemic);
     let state = left.state.and(right.state);
     let confidentiality = left.confidentiality.join(&right.confidentiality);
@@ -635,7 +645,7 @@ mod tests {
     use super::*;
     use fmine_core::rand::{PhiloxStream, RngKey};
     use fmine_evidence::color::ColorRank;
-    use fmine_evidence::{AoaStatus, AssertionSource, KuKind};
+    use fmine_evidence::{AssertionSource, KuKind};
 
     fn sample_anchor() -> SourceAnchor {
         SourceAnchor::new("synthetic/aisc.xlsx", [0x11; 32], "Synthetic AISC!L14")
@@ -849,6 +859,99 @@ mod tests {
     }
 
     #[test]
+    fn test_nl4_model_and_transfer_calibration_do_not_cross_derivation_or_support() {
+        let transferred = EvidenceClass::Transferred {
+            aoa: AoaStatus::Inside,
+        };
+        let unassessed = EvidenceClass::Transferred {
+            aoa: AoaStatus::NotAssessed,
+        };
+        let outside = EvidenceClass::Transferred {
+            aoa: AoaStatus::Outside,
+        };
+        let cases = [
+            (
+                EvidenceClass::ModelledCalibrated,
+                EvidenceClass::ModelledCalibrated,
+                EvidenceClass::ModelledUncalibrated,
+            ),
+            (
+                EvidenceClass::ModelledCalibrated,
+                EvidenceClass::Measured,
+                EvidenceClass::ModelledUncalibrated,
+            ),
+            (
+                EvidenceClass::ModelledCalibrated,
+                EvidenceClass::Derived,
+                EvidenceClass::ModelledUncalibrated,
+            ),
+            (transferred, transferred, unassessed),
+            (transferred, EvidenceClass::Measured, unassessed),
+            (transferred, EvidenceClass::Derived, unassessed),
+            (transferred, EvidenceClass::ModelledCalibrated, unassessed),
+            (unassessed, EvidenceClass::Measured, unassessed),
+            (outside, EvidenceClass::Measured, outside),
+        ];
+        let supports = [
+            SpatialSupport::PointCore,
+            SpatialSupport::Composite { length_mm: 1000 },
+            SpatialSupport::SmuBlock {
+                dx_cm: 100,
+                dy_cm: 100,
+                dz_cm: 100,
+            },
+            SpatialSupport::MiningPolygon,
+            SpatialSupport::PlantLot,
+            SpatialSupport::PeriodAggregate,
+        ];
+        let measured = leaf("measured", EvidenceClass::Measured).with_regime(regime(), "qaqc");
+        for (a, b, expected) in cases {
+            for (left_class, right_class) in [(a, b), (b, a)] {
+                let left = leaf("left", left_class).with_regime(regime(), "parent-left");
+                let right = leaf("right", right_class).with_regime(regime(), "parent-right");
+                let mut dag = ClaimDag::new();
+                dag.insert(&left).unwrap();
+                dag.insert(&right).unwrap();
+                for support in supports {
+                    let child = compose_binary(
+                        "derived-family",
+                        &left,
+                        &right,
+                        4.2,
+                        "4.2",
+                        Representation::Deterministic,
+                        support,
+                        AdditivityClass::ExtensiveAdditive,
+                        IntervalOp::Add,
+                    );
+                    assert_eq!(child.evidence, expected, "{left_class:?}, {right_class:?}");
+                    assert!(child.evidence.no_stronger_than(left_class));
+                    assert!(child.evidence.no_stronger_than(right_class));
+                    assert_eq!(child.color().map(|c| c.rank()), Ok(ColorRank::Estimated));
+                    assert!(!child.calibration_failed, "uncalibrated is not failed");
+                    assert_eq!(child.check_id(), Ok(()));
+                    assert_eq!(child.parents, vec![left.claim_id, right.claim_id]);
+                    assert_eq!(child.anchors, vec![sample_anchor()]);
+                    assert_eq!(
+                        dag.guard_disclosure_export(&child).unwrap_err().code,
+                        "FMINE-REF-304"
+                    );
+                    // A dataset name cannot substitute for this family's resolved outcomes or AOA.
+                    let reanchored = child.with_regime(regime(), "parent-left");
+                    assert_eq!(
+                        reanchored.color().map(|c| c.rank()),
+                        Ok(ColorRank::Estimated)
+                    );
+                    assert_eq!(
+                        join("next-family", &reanchored, &measured).evidence,
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_assertion_failed_calibration_and_staleness_never_show_a_strong_colour() {
         // An assertion has no colour, with or without a regime, and passes that refusal on (NL-6).
         let issuer = leaf("issuer", EvidenceClass::ISSUER).with_regime(regime(), "report-2025");
@@ -927,12 +1030,13 @@ mod tests {
 
     #[test]
     fn test_g_disc_accepts_measured_derived_chain() {
-        let a = leaf("a", EvidenceClass::Measured);
-        let b = leaf("b", EvidenceClass::Derived);
-        let c = leaf("c", EvidenceClass::ModelledCalibrated);
+        let a = leaf("a", EvidenceClass::Measured).with_regime(regime(), "qaqc-a");
+        let b = leaf("b", EvidenceClass::Derived).with_regime(regime(), "qaqc-b");
+        let c = leaf("c", EvidenceClass::Measured).with_regime(regime(), "qaqc-c");
         let ab = join("ab", &a, &b);
         let top = join("top", &ab, &c);
-        assert_eq!(top.evidence, EvidenceClass::ModelledCalibrated);
+        assert_eq!(top.evidence, EvidenceClass::Derived);
+        assert_eq!(top.color().map(|c| c.rank()), Ok(ColorRank::Validated));
         let mut dag = ClaimDag::new();
         for claim in [&a, &b, &c, &ab] {
             assert_eq!(dag.insert(claim), Ok(()));
@@ -975,7 +1079,8 @@ mod tests {
     }
 
     /// PO-PLUMB-1 through `Claim` itself: random trees of 2 to 6 leaves, each pair joined by `compose_binary`. A node
-    /// never outranks either parent in class, state or colour, and is refused exactly when some leaf under it is.
+    /// never outranks either parent in class, state or colour, never inherits calibration (NL-4), and is refused
+    /// exactly when some leaf under it is.
     #[test]
     fn test_random_claim_dags_nl1_nl2_nl5_100k() {
         const CASES: usize = 100_000;
@@ -1042,7 +1147,14 @@ mod tests {
                     && child.evidence.no_stronger_than(r.evidence);
                 let state_holds = child.state.and(l.state) == child.state
                     && child.state.and(r.state) == child.state;
-                if !(colour_holds && class_holds && state_holds) {
+                let calibration_holds = !matches!(
+                    child.evidence,
+                    EvidenceClass::ModelledCalibrated
+                        | EvidenceClass::Transferred {
+                            aoa: AoaStatus::Inside
+                        }
+                );
+                if !(colour_holds && class_holds && state_holds && calibration_holds) {
                     violations += 1;
                 }
                 match color {
