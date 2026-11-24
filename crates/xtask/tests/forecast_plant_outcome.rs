@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as Process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_calib::record::{format_utc, parse_hex32, parse_utc};
@@ -19,6 +20,7 @@ use fmine_runtime::{ClockError, WallClock};
 const NS: i64 = 1_000_000_000;
 const HOUR: i64 = 3_600 * NS;
 const RULE: &str = "plant-two-product-recovery/v1";
+const PRODUCTION_RULE: &str = "plant-two-product-production/v1";
 
 struct Clock(i64);
 impl WallClock for Clock {
@@ -36,6 +38,18 @@ impl WallClock for NoClock {
 fn field<'a>(value: &'a Json, path: &[&str]) -> &'a Json {
     path.iter()
         .fold(value, |value, key| value.get(key).expect(key))
+}
+
+fn binary() -> PathBuf {
+    if let Some(path) = std::env::var_os("FMINE_TEST_BINARY") {
+        return PathBuf::from(path);
+    }
+    let executable = std::env::current_exe().unwrap();
+    let profile = executable
+        .ancestors()
+        .find(|path| path.ends_with("debug") || path.ends_with("release"))
+        .expect("Cargo profile directory; set FMINE_TEST_BINARY for another layout");
+    profile.join(format!("fmine{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn utc(ns: i64) -> String {
@@ -189,11 +203,16 @@ impl Fixture {
     }
 
     fn freeze(&mut self, name: &str, members: &str, rule: &str, at: i64) {
+        let path = self.cohort_request(name, members, rule);
+        self.ok("freeze", &["--request", &path], at);
+    }
+
+    fn cohort_request(&self, name: &str, members: &str, rule: &str) -> String {
         let path = format!("{name}.toml");
         fs::write(self.root.join(&path), format!(
             "[[cohort]]\nname = \"{name}\"\nmembers = \"{members}\"\nresolution_rule = \"{rule}\"\neligible_sources = \"synthetic:plant-balance\"\nalpha = \"0.2\"\n"
         )).unwrap();
-        self.ok("freeze", &["--request", &path], at);
+        path
     }
 
     fn resolve(&self, cohort: &str, alias: &str) -> Command {
@@ -210,7 +229,7 @@ impl Fixture {
         )
     }
 
-    fn refuse(&self, command: &Command, clock: &dyn WallClock) {
+    fn refuse(&self, command: &Command, clock: &dyn WallClock) -> Envelope {
         let before = fs::read(self.root.join("journal")).unwrap();
         let result = execute_with_clock(command, &self.root, clock);
         assert_ne!(
@@ -227,6 +246,7 @@ impl Fixture {
                 .head(),
             self.head
         );
+        result
     }
 
     fn change(&self, path: &str, from: &str, to: &str) {
@@ -234,6 +254,20 @@ impl Fixture {
         let original = fs::read_to_string(&path).unwrap();
         assert!(original.contains(from), "{from}");
         fs::write(path, original.replace(from, to)).unwrap();
+    }
+
+    fn production_observation(&mut self) {
+        self.change(
+            "observations/observation.toml",
+            "fmine.plant-recovery-observation.v1",
+            "fmine.plant-production-observation.v1",
+        );
+        self.freeze(
+            "production",
+            "prediction",
+            PRODUCTION_RULE,
+            self.start - 30 * NS,
+        );
     }
 }
 
@@ -428,6 +462,220 @@ fn identical_physical_observation_keeps_identical_citations_for_two_frozen_model
         field(&compared, &["comparison", "n_unmatched"]).u64(),
         Some(0)
     );
+}
+
+#[test]
+fn closed_material_balance_resolves_three_exact_production_targets_and_scores_after_replay() {
+    for (target, unit, calculation, numerator, denominator, scalar) in [
+        (
+            "dry-tonnes",
+            "dry_metric_tonnes",
+            "feed-dry-kg/1000",
+            "3",
+            "2",
+            1.5,
+        ),
+        ("contained-metal", "kg", "feed-metal-kg", "3", "200", 0.015),
+        (
+            "recovered-metal",
+            "kg",
+            "concentrate-metal-kg",
+            "3",
+            "250",
+            0.012,
+        ),
+    ] {
+        let mut fixture = Fixture::new(target);
+        fixture.production_observation();
+        for (role, dry, assay) in [
+            ("feed", "1500", "10"),
+            ("concentrate", "150", "80"),
+            ("tailings", "1350", "20/9"),
+        ] {
+            fs::write(
+                fixture.root.join(format!("observations/{role}.toml")),
+                material(role, dry, assay, fixture.start),
+            )
+            .unwrap();
+        }
+        let admission = fixture.resolve("production", "prediction");
+        let end = fixture.start + HOUR;
+        fixture.refuse(&fixture.resolve("monthly", "prediction"), &NoClock);
+        fixture.refuse(&admission, &Clock(end + 2 * NS - 1));
+        let resolved = execute_with_clock(&admission, &fixture.root, &Clock(end + 2 * NS));
+        assert_eq!(resolved.exit_code, 0, "{}", resolved.to_json());
+        fixture.update_head(&resolved);
+        let payload = parse(resolved.payload_json.as_bytes()).unwrap();
+        assert_eq!(
+            field(&payload, &["operation_version_counts", "v17"]).u64(),
+            Some(1)
+        );
+        let evidence = field(&payload, &["source_admissions"]).as_array().unwrap();
+        assert_eq!(evidence.len(), 1);
+        let evidence = field(&evidence[0], &["evidence"]);
+        let observation = field(evidence, &["observation"]);
+        for (name, value) in [
+            ("target", target),
+            ("unit", unit),
+            ("calculation", calculation),
+            ("source_class", "source_derived_unverified"),
+        ] {
+            assert_eq!(field(observation, &[name]).as_str(), Some(value));
+        }
+        assert_eq!(
+            field(observation, &["exact_value", "numerator"]).as_str(),
+            Some(numerator)
+        );
+        assert_eq!(
+            field(observation, &["exact_value", "denominator"]).as_str(),
+            Some(denominator)
+        );
+        assert_eq!(field(observation, &["value"]).f64(), Some(scalar));
+        let markdown = resolved.rendered_markdown.unwrap();
+        assert!(markdown.contains(&format!("Exact amount: {numerator}/{denominator} ({unit})")));
+        fixture.refuse(&fixture.resolve("production", "prediction"), &NoClock);
+
+        for path in ["observation", "feed", "concentrate", "tailings"] {
+            fs::write(
+                fixture.root.join(format!("observations/{path}.toml")),
+                "edited after append",
+            )
+            .unwrap();
+        }
+        let report = fixture.ok(
+            "assess",
+            &["--cohort", "production", "--as-of", &utc(end + 3 * NS)],
+            end + 5 * NS,
+        );
+        let assessment = field(&report, &["report", "assessment"]);
+        let summary = field(assessment, &["summary"]);
+        assert_eq!(field(summary, &["n_members"]).u64(), Some(1));
+        assert_eq!(field(summary, &["n_resolved"]).u64(), Some(1));
+        assert!(
+            field(summary, &["crps", "observed_mean"])
+                .f64()
+                .is_some_and(f64::is_finite)
+        );
+        let member = &field(assessment, &["members"]).as_array().unwrap()[0];
+        assert_eq!(field(member, &["source_admission"]), evidence);
+        let digest = field(assessment, &["digest"]).as_str().unwrap();
+        let reopened = Process::new(binary())
+            .current_dir(&fixture.root)
+            .args([
+                "forecast",
+                "journal",
+                "report",
+                "--journal",
+                "journal",
+                "--head",
+                &fixture.head.to_hex(),
+                "--assessment",
+                digest,
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            reopened.status.success(),
+            "{}",
+            String::from_utf8_lossy(&reopened.stdout)
+        );
+        let reopened = parse(&reopened.stdout).unwrap();
+        assert_eq!(
+            field(&reopened, &["payload", "report", "assessment"]),
+            assessment
+        );
+    }
+}
+
+#[test]
+fn production_admission_refuses_capacity_substitution_wrong_scope_and_mutated_operations() {
+    for target in ["throughput", "recovery"] {
+        let fixture = Fixture::new(target);
+        let request = fixture.cohort_request("production", "prediction", PRODUCTION_RULE);
+        fixture.refuse(
+            &fixture.command("freeze", &["--request", &request]),
+            &Clock(fixture.start - 30 * NS),
+        );
+        fixture.change(
+            "observations/observation.toml",
+            "fmine.plant-recovery-observation.v1",
+            "fmine.plant-production-observation.v1",
+        );
+        fixture.refuse(&fixture.resolve("monthly", "prediction"), &NoClock);
+    }
+    let mut fixture = Fixture::new("recovered-metal");
+    fixture.production_observation();
+    fs::write(fixture.root.join("supplied.toml"), format!(
+        "[[outcome]]\nforecast = \"prediction\"\nkind = \"published\"\navailable_at = \"{}\"\nvalue = \"0.008\"\nsource = \"synthetic:plant-balance\"\nvintage = \"fake\"\nlocator = \"unverified value\"\nsha256 = \"{}\"\n",
+        utc(fixture.start + HOUR + NS), Digest32::default().to_hex(),
+    )).unwrap();
+    let supplied = fixture.refuse(
+        &fixture.command("outcome", &["--request", "supplied.toml"]),
+        &Clock(fixture.start + HOUR + 3 * NS),
+    );
+    assert_eq!(supplied.refusal.unwrap().code, "FMINE-REF-105");
+    let feed = "observations/feed.toml";
+    fixture.change(feed, "synthetic-plant/v1", "other-plant/v1");
+    fixture.refuse(&fixture.resolve("production", "prediction"), &NoClock);
+    fixture.change(feed, "other-plant/v1", "synthetic-plant/v1");
+    fixture.change(feed, "value = \"10\"", "value = \"11\"");
+    fixture.refuse(&fixture.resolve("production", "prediction"), &NoClock);
+    fixture.change(feed, "value = \"11\"", "value = \"10\"");
+
+    let result = execute_with_clock(
+        &fixture.resolve("production", "prediction"),
+        &fixture.root,
+        &Clock(fixture.start + HOUR + 3 * NS),
+    );
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    fixture.update_head(&result);
+    let records = Journal::open_read(&fixture.root.join("journal"), Some(fixture.head))
+        .unwrap()
+        .records()
+        .to_vec();
+    for (name, replacements) in [
+        (
+            "old-op",
+            vec![
+                (
+                    "fmine.forecast-operation.v17",
+                    "fmine.forecast-operation.v16",
+                ),
+                ("[[plant_production_outcome]]", "[[plant_outcome]]"),
+            ],
+        ),
+        (
+            "wrong-target",
+            vec![(
+                r#"\"target\":\"recovered-metal\""#,
+                r#"\"target\":\"contained-metal\""#,
+            )],
+        ),
+        (
+            "wrong-unit",
+            vec![(r#"\"unit\":\"kg\""#, r#"\"unit\":\"g\""#)],
+        ),
+    ] {
+        let mut copy = records.clone();
+        let Entry::Operation(operation) = &mut copy.last_mut().unwrap().entry else {
+            panic!("plant production operation")
+        };
+        for (from, to) in replacements {
+            assert!(operation.contains(from), "{name} requires {from}");
+            *operation = operation.replacen(from, to, 1);
+        }
+        let head = rewrite_history(&fixture.root, name, copy);
+        let result = execute_with_clock(
+            &Command::Inspect {
+                journal: name.into(),
+                head: Some(head),
+            },
+            &fixture.root,
+            &NoClock,
+        );
+        assert_ne!(result.exit_code, 0, "{name}: {}", result.to_json());
+    }
 }
 
 #[test]

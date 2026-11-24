@@ -1,6 +1,6 @@
-//! DESIGN (BD-181/263): derive a recovery outcome from complete stock-neutral material observations.
-//! The exact measurement owner supplies concentrate/feed metal; no prediction or assay-implied split
-//! becomes an observation. Every original worksheet remains in the bounded journal operation.
+//! DESIGN (BD-181/263): derive plant outcomes from complete stock-neutral material observations.
+//! No prediction or assay-implied split becomes an observation. Every original worksheet remains
+//! in the bounded journal operation.
 //! Determinism: Exact source arithmetic with an explicit binary64 scoring projection.
 
 use std::path::{Path, PathBuf};
@@ -18,20 +18,39 @@ use super::super::{Replay, Row, absent, hex, identifier, invalid, js, time};
 use super::{Target, registration_start, retained_field, retained_text};
 
 pub(in crate::forecast) const RULE: &str = "plant-two-product-recovery/v1";
-const SCHEMA: &str = "fmine.plant-recovery-observation.v1";
+const RECOVERY_SCHEMA: &str = "fmine.plant-recovery-observation.v1";
+const PRODUCTION_SCHEMA: &str = "fmine.plant-production-observation.v1";
+const PRODUCTION_RULE: &str = "plant-two-product-production/v1";
 const BASIS: &str = "complete-two-product/no-inventory-change";
 const DRY_BASIS: &str = "total-non-water-dry-matter/v1";
 const ZERO: ExactQty = ExactQty::from_integer(0);
 const ONE: ExactQty = ExactQty::from_integer(1);
 
-pub(in crate::forecast) const NO_CLAIM: &str = "Recovery is the exact concentrate/feed total-element mass ratio from declared whole-material observations. Complete feed, concentrate and tailings, unchanged circuit inventory and exact dry/elemental closure are required. Source bytes and arithmetic are checked, but measurement accuracy, stream mapping, availability and completeness remain supplied and unverified. No assay-implied, reconciled or modelled value is substituted. The exact ratio and its binary64 scoring projection are retained; no calibration, P754 compliance, external time proof or operating authority is established.";
+const RECOVERY_NO_CLAIM: &str = "Recovery is the exact concentrate/feed total-element mass ratio from declared whole-material observations. Complete feed, concentrate and tailings, unchanged circuit inventory and exact dry/elemental closure are required. Source bytes and arithmetic are checked, but measurement accuracy, stream mapping, availability and completeness remain supplied and unverified. No assay-implied, reconciled or modelled value is substituted. The exact ratio and its binary64 scoring projection are retained; no calibration, P754 compliance, external time proof or operating authority is established.";
+pub(in crate::forecast) const NO_CLAIM: &str = "Plant outcomes come from declared whole-material observations with unchanged inventory and exact dry and selected-element closure. Source bytes and arithmetic are checked. Measurement accuracy, stream mapping, completeness and availability remain supplied and unverified. Scoring uses the retained binary64 projection of the exact amount. This receipt grants no operating authority or calibration status.";
 
-pub(in crate::forecast) const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal resolve-plant --journal <path> --head <hex> --cohort <name> --forecast <alias> --input <observation.toml> --trust-host-clock","target":"A previously registered plant recovery forecast, weighted v14 or legacy quantile v9; other targets refuse","cohort":"Membership must be frozen before physical start, with resolution_rule plant-two-product-recovery/v1 and the observation source among its eligible_sources","schema":"fmine.plant-recovery-observation.v1","observation_fields":["source","vintage","available_at","circuit","blend","material_domain","dry_basis","element","measurand","balance_basis","feed","concentrate","tailings"],"layout":"One schema field and one [[observation]] table; values are quoted. Material paths are relative to the observation descriptor directory unless absolute","basis":"balance_basis = complete-two-product/no-inventory-change; dry_basis = total-non-water-dry-matter/v1; measurand = total-<element>/all-phases","sources":"Three existing fmine.plant-material.v1 whole-material worksheets with distinct material identities; boundary and positive UTC interval must equal the frozen forecast support, and declared circuit/blend/material-domain/dry-basis/element must match","calculation":"Exact concentrate/feed elemental kg, with positive feed metal and exact zero dry and selected-element residuals; no assay-implied split, fitted value, tolerance or clamp","time":"Declared availability must strictly follow physical end and not exceed the writer clock's earliest possible time","journal":"Opt-in operation v16 retains the descriptor, three source worksheets, source SHA-256 values, exact ratio, scalar bits and complete diagnostic receipt under the unchanged 64 KiB operation cap; older operation bytes retain their semantics","replay":"Recompute only the retained material observations, never current source files or the prediction model. Existing outcomes cannot be overwritten; missing evidence refuses atomically","interpretation":"source_derived_unverified; supplied observations and support declarations are not independently authenticated measurements or a calibration claim"}"#;
+pub(in crate::forecast) const ROBOT_DOCS_JSON: &str = concat!(
+    r#"{"command":"forecast journal resolve-plant --journal <path> --head <hex> --cohort <name> --forecast <alias> --input <observation.toml> --trust-host-clock","#,
+    r#""target":"Registered plant recovery, dry-tonnes, contained-metal or recovered-metal in v14 or legacy v9. The frozen forecast selects the quantity. Operating-capacity throughput requires different evidence","#,
+    r#""schema":"fmine.plant-recovery-observation.v1","#,
+    r#""recovery":{"schema":"fmine.plant-recovery-observation.v1","resolution_rule":"plant-two-product-recovery/v1","calculation":"Concentrate metal kg divided by positive feed metal kg","operation":"v16"},"#,
+    r#""production":{"schema":"fmine.plant-production-observation.v1","resolution_rule":"plant-two-product-production/v1","calculation":"Dry feed kg divided by 1000 for metric tonnes, feed metal kg for contained metal, and concentrate metal kg for recovered metal","operation":"v17"},"#,
+    r#""cohort":"Freeze membership before the physical interval starts with the matching resolution_rule and observation source among eligible_sources","#,
+    r#""observation_fields":["source","vintage","available_at","circuit","blend","material_domain","dry_basis","element","measurand","balance_basis","feed","concentrate","tailings"],"#,
+    r#""layout":"One schema field and one [[observation]] table; values are quoted. Relative material paths resolve against the descriptor directory","#,
+    r#""basis":"balance_basis = complete-two-product/no-inventory-change; dry_basis = total-non-water-dry-matter/v1; measurand = total-<element>/all-phases","#,
+    r#""sources":"Three fmine.plant-material.v1 whole-material worksheets with distinct stream identities. Boundary and exact UTC interval must match the frozen forecast. Circuit, blend, material domain, dry basis and element must match","#,
+    r#""calculation":"Require exact dry and selected-element closure and use the original stream amounts without fitted values or tolerances","#,
+    r#""time":"Declared availability must strictly follow physical end and be at or before the earliest writer clock bound","#,
+    r#""journal":"The descriptor, source worksheets and SHA-256, exact amount, binary64 scoring projection and diagnostic receipt must all fit in 64 KiB. Earlier operation semantics are preserved","#,
+    r#""replay":"Recompute from the retained observations with exact dry and selected-element closure. Admission refuses duplicate outcomes and missing evidence atomically","#,
+    r#""interpretation":"source_derived_unverified. Accuracy, stream mapping, completeness and availability remain source declarations"}"#,
+);
 
 type Result<T> = std::result::Result<T, Refusal>;
 
 fn fail(code: RefusalCode, what: impl Into<String>) -> Refusal {
-    Refusal::new(code, format!("plant recovery outcome: {}", what.into()))
+    Refusal::new(code, format!("plant outcome: {}", what.into()))
 }
 
 fn changed(what: impl Into<String>) -> Refusal {
@@ -64,6 +83,7 @@ fn label(value: &str) -> Result<String> {
 /// interpretation cannot alter its replay; only the new outcome operation requires this complete scope.
 #[derive(Debug, Clone)]
 pub(in crate::forecast) struct TargetScope {
+    target: Target,
     boundary: String,
     circuit: String,
     blend: String,
@@ -84,13 +104,9 @@ pub(in crate::forecast) fn registered_scope(row: &Row<'_>, operation: &str) -> R
         })
         .ok_or_else(|| absent("plant registration evidence missing"))?;
     let retained = parse(retained.as_bytes()).map_err(invalid)?;
-    if retained_text(&retained, "target")? != Target::Recovery.as_str()
-        || retained_text(&retained, "unit")? != "fraction"
-    {
-        return Err(fail(
-            RefusalCode::BasisMismatch105,
-            "only an originally registered plant recovery target is supported",
-        ));
+    let target = Target::parse(retained_text(&retained, "target")?)?;
+    if retained_text(&retained, "unit")? != target.unit() {
+        return Err(changed("registration and retained target units differ"));
     }
     let production = retained_field(retained_field(&retained, "source_receipt")?, "production")?;
     if !matches!(
@@ -100,7 +116,8 @@ pub(in crate::forecast) fn registered_scope(row: &Row<'_>, operation: &str) -> R
         != retained_text(&retained, "receipt_digest")?
         || row.string("model_key")?
             != format!(
-                "plant-production:recovery:{}",
+                "plant-production:{}:{}",
+                target.as_str(),
                 retained_text(&retained, "receipt_digest")?
             )
     {
@@ -115,6 +132,7 @@ pub(in crate::forecast) fn registered_scope(row: &Row<'_>, operation: &str) -> R
             .map_err(|_| invalid("retained plant support needs signed nanoseconds"))
     };
     let result = TargetScope {
+        target,
         boundary: label(retained_text(scope, "boundary")?)?,
         circuit: label(retained_text(scope, "circuit")?)?,
         blend: label(retained_text(scope, "blend")?)?,
@@ -128,7 +146,7 @@ pub(in crate::forecast) fn registered_scope(row: &Row<'_>, operation: &str) -> R
         || result.end_ns != row.time("outcome_due")?
         || row.string("site")? != result.boundary
         || row.string("domain")? != format!("{}/{}", result.circuit, result.blend)
-        || row.string("quantity")? != Target::Recovery.quantity(&result.element)
+        || row.string("quantity")? != target.quantity(&result.element)
     {
         return Err(changed(
             "registration metadata and retained physical scope differ",
@@ -137,7 +155,97 @@ pub(in crate::forecast) fn registered_scope(row: &Row<'_>, operation: &str) -> R
     Ok(result)
 }
 
+fn target_scope(state: &Replay, id: ObjectId) -> Result<&TargetScope> {
+    state
+        .plant_outcome_scopes
+        .get(&id)
+        .ok_or_else(|| absent("outcome needs an original plant registration"))?
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+pub(in crate::forecast) fn validate_cohort(state: &Replay, name: &str) -> Result<()> {
+    let cohort = state
+        .cohorts
+        .get(name)
+        .and_then(|id| state.ledger.cohort(*id))
+        .ok_or_else(|| absent("frozen plant cohort missing"))?;
+    if cohort.spec.resolution_rule != PRODUCTION_RULE {
+        return Ok(());
+    }
+    let mut basis = None;
+    for id in &cohort.spec.members {
+        let scope = target_scope(state, *id)?;
+        let element = (scope.target != Target::DryTonnes).then_some(scope.element.as_str());
+        let member_basis = (scope.target, element);
+        if !ObservationKind::Production.accepts(scope.target)
+            || basis.is_some_and(|previous| previous != member_basis)
+            || state.public_bound(*id)?
+        {
+            return Err(fail(
+                RefusalCode::BasisMismatch105,
+                "a production cohort requires original plant forecasts of the same mass target and, for metal, the same element",
+            ));
+        }
+        basis = Some(member_basis);
+    }
+    Ok(())
+}
+
+pub(in crate::forecast) fn guard_supplied_outcome(state: &Replay, row: &Row<'_>) -> Result<()> {
+    let id = state.forecast_id(row.string("forecast")?)?;
+    let unresolved_missing =
+        row.string("kind")? == "missing" && state.ledger.outcomes(id).is_empty();
+    if !unresolved_missing
+        && state.cohorts.values().any(|cohort_id| {
+            state.ledger.cohort(*cohort_id).is_some_and(|cohort| {
+                cohort.spec.resolution_rule == PRODUCTION_RULE && cohort.spec.members.contains(&id)
+            })
+        })
+    {
+        return Err(fail(
+            RefusalCode::BasisMismatch105,
+            "the frozen plant production rule requires resolve-plant and retained materials for a numeric outcome",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObservationKind {
+    Recovery,
+    Production,
+}
+
+impl ObservationKind {
+    const fn table(self) -> &'static str {
+        match self {
+            Self::Recovery => "plant_outcome",
+            Self::Production => "plant_production_outcome",
+        }
+    }
+
+    const fn rule(self) -> &'static str {
+        match self {
+            Self::Recovery => RULE,
+            Self::Production => PRODUCTION_RULE,
+        }
+    }
+
+    const fn accepts(self, target: Target) -> bool {
+        matches!(
+            (self, target),
+            (Self::Recovery, Target::Recovery)
+                | (
+                    Self::Production,
+                    Target::DryTonnes | Target::ContainedMetal | Target::RecoveredMetal
+                )
+        )
+    }
+}
+
 struct Observation {
+    kind: ObservationKind,
     source: String,
     vintage: String,
     available_ns: i64,
@@ -153,15 +261,22 @@ struct Observation {
 impl Observation {
     fn parse(text: &str) -> Result<Self> {
         let doc = parse_subset(text).map_err(|error| invalid(error.to_string()))?;
-        if doc.top.len() != 1
-            || !matches!(doc.top_get("schema").map(|f| &f.value), Some(TomlValue::Str(value)) if value == SCHEMA)
-            || doc.rows.len() != 1
-            || doc.rows[0].table != "observation"
-        {
-            return Err(invalid(format!(
-                "plant observation needs schema = {SCHEMA} and one [[observation]] table"
-            )));
+        if doc.top.len() != 1 || doc.rows.len() != 1 || doc.rows[0].table != "observation" {
+            return Err(invalid(
+                "plant observation needs one schema and one [[observation]] table",
+            ));
         }
+        let kind = match doc.top_get("schema").map(|f| &f.value) {
+            Some(TomlValue::Str(value)) if value == RECOVERY_SCHEMA => ObservationKind::Recovery,
+            Some(TomlValue::Str(value)) if value == PRODUCTION_SCHEMA => {
+                ObservationKind::Production
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "plant observation schema must be {RECOVERY_SCHEMA} or {PRODUCTION_SCHEMA}"
+                )));
+            }
+        };
         let row = Row(&doc.rows[0]);
         row.allowed(
             &[
@@ -203,6 +318,7 @@ impl Observation {
             ));
         }
         Ok(Self {
+            kind,
             source: identifier(row.string("source")?)?.into(),
             vintage: label(row.string("vintage")?)?,
             available_ns: time(row.string("available_at")?)?,
@@ -302,15 +418,21 @@ fn calculate(
     cohort_name: &str,
     alias: &str,
     descriptor: &Snapshot,
+    observation: &Observation,
     sources: &[Snapshot; 3],
 ) -> Result<Candidate> {
     let id = state.forecast_id(alias)?;
-    let scope = state
-        .plant_outcome_scopes
-        .get(&id)
-        .ok_or_else(|| absent("outcome needs an original plant registration"))?
-        .as_ref()
-        .map_err(Clone::clone)?;
+    let scope = target_scope(state, id)?;
+    if !observation.kind.accepts(scope.target) {
+        return Err(fail(
+            RefusalCode::BasisMismatch105,
+            if scope.target == Target::Throughput {
+                "a material balance measures output over its physical interval, and cannot establish operating-capacity throughput"
+            } else {
+                "observation schema does not match the originally registered target"
+            },
+        ));
+    }
     let forecast = state
         .ledger
         .forecast(id)
@@ -324,7 +446,7 @@ fn calculate(
     if !state.ledger.outcomes(id).is_empty() {
         return Err(fail(
             RefusalCode::FrozenRecordMutation507,
-            "this recovery forecast already has an outcome event; no replacement is inferred",
+            "this plant forecast already has an outcome event; no replacement is inferred",
         ));
     }
     let cohort_id = *state
@@ -335,15 +457,14 @@ fn calculate(
         .ledger
         .cohort(cohort_id)
         .ok_or_else(|| absent("frozen plant cohort missing"))?;
-    let observation = Observation::parse(&descriptor.text)?;
     if !cohort.spec.members.contains(&id)
         || cohort.spec.frozen_at_ns >= scope.start_ns
-        || cohort.spec.resolution_rule != RULE
+        || cohort.spec.resolution_rule != observation.kind.rule()
         || !cohort.spec.eligible_sources.contains(&observation.source)
     {
         return Err(fail(
             RefusalCode::BasisMismatch105,
-            "frozen cohort must include this forecast before physical start and declare the exact recovery rule and eligible source",
+            "frozen cohort must include this forecast before physical start and declare the exact plant outcome rule and eligible source",
         ));
     }
     if observation.circuit != scope.circuit
@@ -364,10 +485,7 @@ fn calculate(
             "observation availability must strictly follow the complete physical interval",
         ));
     }
-    for (path, source) in material_paths(descriptor, &observation)?
-        .iter()
-        .zip(sources)
-    {
+    for (path, source) in material_paths(descriptor, observation)?.iter().zip(sources) {
         if source.source.artifact_path != path.to_string_lossy() {
             return Err(changed(
                 "retained material path differs from the observation declaration",
@@ -407,24 +525,43 @@ fn calculate(
             "all three streams need the selected total-element assay",
         ));
     };
-    if feed.signum() <= 0 {
-        return Err(fail(
-            RefusalCode::OutsidePhysicalDomain109,
-            "positive feed metal is required to define recovery",
-        ));
-    }
-    let ratio = exact(concentrate.checked_div(feed))?;
-    if ratio.signum() < 0 || exact(ratio.checked_cmp(ONE))?.is_gt() {
-        return Err(fail(
-            RefusalCode::OutsidePhysicalDomain109,
-            "recovery is outside [0, 1]",
-        ));
-    }
-    let value = ratio.to_f64();
-    if !value.is_finite() || (value == 0.0 && ratio.signum() != 0) {
+    let [feed_stream, _, _] = receipt.streams();
+    let dry = feed_stream.summary().amounts.dry_solids_kg;
+    let (amount, calculation) = match scope.target {
+        Target::Recovery => {
+            if feed.signum() <= 0 {
+                return Err(fail(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    "positive feed metal is required to define recovery",
+                ));
+            }
+            let ratio = exact(concentrate.checked_div(feed))?;
+            if ratio.signum() < 0 || exact(ratio.checked_cmp(ONE))?.is_gt() {
+                return Err(fail(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    "recovery is outside [0, 1]",
+                ));
+            }
+            (ratio, "concentrate/feed")
+        }
+        Target::DryTonnes => (
+            exact(dry.checked_div(ExactQty::from_integer(1000)))?,
+            "feed-dry-kg/1000",
+        ),
+        Target::ContainedMetal => (feed, "feed-metal-kg"),
+        Target::RecoveredMetal => (concentrate, "concentrate-metal-kg"),
+        Target::Throughput => {
+            return Err(fail(
+                RefusalCode::BasisMismatch105,
+                "operating-capacity throughput requires its own evidence",
+            ));
+        }
+    };
+    let value = amount.to_f64();
+    if !value.is_finite() || (value == 0.0 && amount.signum() != 0) {
         return Err(fail(
             RefusalCode::NumericalCertificateFailed207,
-            "the exact recovery has no finite non-underflowing binary64 scoring projection",
+            "the exact observation has no finite non-underflowing binary64 scoring projection",
         ));
     }
     let quantity = |q: ExactQty| {
@@ -436,40 +573,67 @@ fn calculate(
     };
     // Source evidence deliberately excludes model and cohort identities: comparing two forecasts of
     // the same physical observation must retain identical complete outcome citations.
-    let evidence = format!(
-        "{{\"schema\":\"fmine.plant-recovery-evidence.v1\",\"method\":{},\"source_class\":\"source_derived_unverified\",\"unit\":\"fraction\",\"feed_metal_kg\":{},\"concentrate_metal_kg\":{},\"exact_value\":{},\"value\":{value},\"scalar_projection\":\"binary64_from_exact_ratio\",\"descriptor\":{},\"sources\":{{\"feed\":{},\"concentrate\":{},\"tailings\":{}}},\"balance\":{},\"no_claim\":{}}}",
-        js(RULE),
-        quantity(feed),
-        quantity(concentrate),
-        quantity(ratio),
-        descriptor.json(),
-        sources[0].json(),
-        sources[1].json(),
-        sources[2].json(),
-        receipt.to_json(),
-        js(NO_CLAIM),
-    );
+    let evidence = if observation.kind == ObservationKind::Recovery {
+        format!(
+            "{{\"schema\":\"fmine.plant-recovery-evidence.v1\",\"method\":{},\"source_class\":\"source_derived_unverified\",\"unit\":\"fraction\",\"feed_metal_kg\":{},\"concentrate_metal_kg\":{},\"exact_value\":{},\"value\":{value},\"scalar_projection\":\"binary64_from_exact_ratio\",\"descriptor\":{},\"sources\":{{\"feed\":{},\"concentrate\":{},\"tailings\":{}}},\"balance\":{},\"no_claim\":{}}}",
+            js(RULE),
+            quantity(feed),
+            quantity(concentrate),
+            quantity(amount),
+            descriptor.json(),
+            sources[0].json(),
+            sources[1].json(),
+            sources[2].json(),
+            receipt.to_json(),
+            js(RECOVERY_NO_CLAIM),
+        )
+    } else {
+        format!(
+            "{{\"schema\":\"fmine.plant-production-evidence.v1\",\"method\":{},\"source_class\":\"source_derived_unverified\",\"target\":{},\"unit\":{},\"calculation\":{},\"exact_value\":{},\"value\":{value},\"scalar_projection\":\"binary64_from_exact_ratio\",\"descriptor\":{},\"sources\":{{\"feed\":{},\"concentrate\":{},\"tailings\":{}}},\"balance\":{},\"no_claim\":{}}}",
+            js(PRODUCTION_RULE),
+            js(scope.target.as_str()),
+            js(scope.target.unit()),
+            js(calculation),
+            quantity(amount),
+            descriptor.json(),
+            sources[0].json(),
+            sources[1].json(),
+            sources[2].json(),
+            receipt.to_json(),
+            js(NO_CLAIM),
+        )
+    };
     let evidence_digest = sha256(evidence.as_bytes());
     let citation = OutcomeCitation {
-        source: observation.source,
-        vintage: observation.vintage,
+        source: observation.source.clone(),
+        vintage: observation.vintage.clone(),
         locator: format!(
-            "{}#concentrate/feed:{}",
+            "{}#{calculation}:{}",
             descriptor.source.artifact_path, scope.element
         ),
         sha256: evidence_digest.0,
     };
-    let markdown = format!(
-        "\n## Source-derived plant recovery\n\n{}\n\nExact recovery: {}/{} (fraction); binary64 scoring value: {value}. Feed metal: {}/{} kg. Concentrate metal: {}/{} kg. Dry and selected-element residuals are exactly zero.\n\nObservation evidence SHA-256: {}. Source class: source_derived_unverified.\n\n<details><summary>Retained observation sources and exact balance</summary>\n\n~~~json\n{evidence}\n~~~\n\n</details>\n",
-        NO_CLAIM,
-        ratio.num(),
-        ratio.den(),
-        feed.num(),
-        feed.den(),
-        concentrate.num(),
-        concentrate.den(),
-        evidence_digest,
-    );
+    let markdown = if observation.kind == ObservationKind::Recovery {
+        format!(
+            "\n## Source-derived plant recovery\n\n{}\n\nExact recovery: {}/{} (fraction); binary64 scoring value: {value}. Feed metal: {}/{} kg. Concentrate metal: {}/{} kg. Dry and selected-element residuals are exactly zero.\n\nObservation evidence SHA-256: {}. Source class: source_derived_unverified.\n\n<details><summary>Retained observation sources and exact balance</summary>\n\n~~~json\n{evidence}\n~~~\n\n</details>\n",
+            RECOVERY_NO_CLAIM,
+            amount.num(),
+            amount.den(),
+            feed.num(),
+            feed.den(),
+            concentrate.num(),
+            concentrate.den(),
+            evidence_digest,
+        )
+    } else {
+        format!(
+            "\n## Source-derived plant production\n\n{NO_CLAIM}\n\nTarget `{}`. Exact amount: {}/{} ({}), computed as `{calculation}`. Binary64 scoring value: {value}. Dry and selected-element residuals are exactly zero.\n\nObservation evidence SHA-256: {evidence_digest}. Source class: source_derived_unverified.\n\n<details><summary>Retained observation sources and exact balance</summary>\n\n~~~json\n{evidence}\n~~~\n\n</details>\n",
+            scope.target.as_str(),
+            amount.num(),
+            amount.den(),
+            scope.target.unit(),
+        )
+    };
     Ok(Candidate {
         id,
         cohort: cohort_id,
@@ -481,9 +645,9 @@ fn calculate(
     })
 }
 
-fn request(alias: &str, cohort: &str, candidate: &Candidate) -> String {
+fn request(table: &str, alias: &str, cohort: &str, candidate: &Candidate) -> String {
     format!(
-        "[[plant_outcome]]\nforecast = {}\nforecast_id = {}\ncohort = {}\ncohort_digest = {}\nvalue_bits = \"{:016x}\"\nevidence = {}\n",
+        "[[{table}]]\nforecast = {}\nforecast_id = {}\ncohort = {}\ncohort_digest = {}\nvalue_bits = \"{:016x}\"\nevidence = {}\n",
         js(alias),
         js(&candidate.id.to_string()),
         js(cohort),
@@ -499,21 +663,28 @@ pub(in crate::forecast) fn prepare(
     cohort: &str,
     alias: &str,
     input: &Path,
-) -> Result<String> {
-    let descriptor = Snapshot::read(&root.join(input), "plant recovery observation")?;
+) -> Result<(String, &'static str)> {
+    let mut descriptor = Snapshot::read(&root.join(input), "plant recovery observation")?;
     let observation = Observation::parse(&descriptor.text)?;
+    let locator = if observation.kind == ObservationKind::Recovery {
+        "plant recovery material"
+    } else {
+        descriptor.source.locator = "plant production observation".into();
+        "plant production material"
+    };
     let [feed, concentrate, tailings] = material_paths(&descriptor, &observation)?
         .each_ref()
-        .map(|path| Snapshot::read(path, "plant recovery material"));
+        .map(|path| Snapshot::read(path, locator));
     let sources = [feed?, concentrate?, tailings?];
-    let candidate = calculate(state, cohort, alias, &descriptor, &sources)?;
-    let request = request(alias, cohort, &candidate);
+    let candidate = calculate(state, cohort, alias, &descriptor, &observation, &sources)?;
+    let table = observation.kind.table();
+    let request = request(table, alias, cohort, &candidate);
     if request.len() > MAX_OPERATION_BYTES {
         return Err(invalid(
             "complete plant outcome evidence exceeds the 64 KiB operation cap",
         ));
     }
-    Ok(request)
+    Ok((request, table))
 }
 
 pub(in crate::forecast) fn apply(
@@ -535,6 +706,12 @@ pub(in crate::forecast) fn apply(
     )?;
     let retained = parse(row.string("evidence")?.as_bytes()).map_err(invalid)?;
     let descriptor = Snapshot::retained(retained_field(&retained, "descriptor")?)?;
+    let observation = Observation::parse(&descriptor.text)?;
+    if row.0.table != observation.kind.table() {
+        return Err(changed(
+            "observation schema does not match the stored plant outcome operation",
+        ));
+    }
     let sources = retained_field(&retained, "sources")?;
     let sources = [
         Snapshot::retained(retained_field(sources, "feed")?)?,
@@ -546,6 +723,7 @@ pub(in crate::forecast) fn apply(
         row.string("cohort")?,
         row.string("forecast")?,
         &descriptor,
+        &observation,
         &sources,
     )?;
     if row.string("forecast_id")? != candidate.id.to_string()
@@ -554,7 +732,7 @@ pub(in crate::forecast) fn apply(
         || row.string("evidence")? != candidate.evidence
     {
         return Err(changed(
-            "retained recovery binding, scalar or complete evidence differs from recomputation",
+            "retained plant outcome binding, scalar or complete evidence differs from recomputation",
         ));
     }
     if candidate.available_ns > lower {

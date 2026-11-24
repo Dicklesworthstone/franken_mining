@@ -470,7 +470,7 @@ pub const VERB_CATALOG: [VerbSpec; 81] = [
         path: "forecast journal resolve-plant",
         subsystem: "Plumb",
         mutates_authority: true,
-        description: "Resolve a frozen recovery forecast from retained feed, concentrate and tailings observations with exact dry and elemental closure",
+        description: "Resolve frozen plant recovery, tonnage or metal forecasts from retained feed, concentrate and tailings observations with exact closure",
     },
     VerbSpec {
         path: "forecast journal verify-plant",

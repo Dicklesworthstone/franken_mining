@@ -389,6 +389,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   `source_derived_unverified`; measurement accuracy, stream mapping, completeness and availability remain
   supplied. This supplies no model-derived observation, tolerance, reconciliation, authentication,
   calibration or field-gate claim. Real-writer controls live in `xtask/tests/forecast_plant_outcome.rs`.
+- DESIGN (bd-181.2). The opt-in v17 production outcome uses the separate
+  `fmine.plant-production-observation.v1` descriptor and `plant-two-product-production/v1` cohort
+  rule with the same observation fields and exact closure. A cohort must contain one original mass
+  target and one element for metal. It admits dry feed metric tonnes (feed dry kg divided by 1,000),
+  contained feed metal kg or recovered concentrate metal kg. The original forecast fixes the quantity
+  and unit. The production rule requires retained source admission for numeric outcomes, so an ordinary
+  caller-supplied scalar cannot substitute. Operating-capacity throughput has a different physical
+  basis and is ineligible. The operation retains the original descriptors, worksheets, exact amount,
+  binary64 scoring value and full balance. V16 recovery replay keeps its original receipt and rule.
 - DESIGN (BD-276): `forecast journal register-assumption --journal <path> --head <hex> --input <path>
   --trust-host-clock` admits one `fmine.report-assumption.v1` request from a registered technical report.
   Hash/size-verified source bytes and complete two-reader agreement supply the printed point or finite

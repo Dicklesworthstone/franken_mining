@@ -445,7 +445,7 @@ whole-material observations: feed, concentrate and tailings. It uses the exact c
 elemental-mass ratio, requires positive feed metal and exactly closed dry and selected-element balances,
 and requires an explicit complete-two-product, unchanged-inventory declaration. The observation must
 match the frozen forecast's boundary, complete UTC interval, circuit, blend, material domain, dry basis
-and element. This first source-derived plant outcome path supports recovery targets only.
+and element.
 
 Freeze the cohort before the physical interval starts with
 `resolution_rule = "plant-two-product-recovery/v1"` and the observation's source in `eligible_sources`.
@@ -490,6 +490,17 @@ Missing assays, nonclosing balances, mismatched scope, duplicate outcomes and ov
 without advancing the journal. The result is labelled `source_derived_unverified`: source bytes and
 arithmetic are checked, while measurement accuracy, stream mapping, completeness and availability remain
 supplied declarations. No assay-inferred split, reconciled or modelled value is substituted for observations.
+
+DESIGN (bd-181.2). The same command resolves `dry-tonnes`, `contained-metal` and `recovered-metal`
+registrations. Freeze `resolution_rule = "plant-two-product-production/v1"` and use the descriptor above
+with `schema = "fmine.plant-production-observation.v1"`. Use one mass target per cohort and, for metal,
+one element. The original forecast selects the quantity. Dry tonnes are feed dry kilograms divided by
+1,000, contained metal is total feed element kilograms, and recovered metal is total concentrate
+element kilograms. Source admission retains the same complete balance and checks both time boundaries.
+The v17 operation binds the exact amount and unit to the original observations and supports existing
+assessment and comparison commands. Numeric caller-supplied outcomes refuse under the production rule.
+The `throughput` forecast represents operating capacity. A material balance over a scheduled interval
+can include idle or feed-limited hours and cannot establish that capacity.
 
 DESIGN: a saved plant forecast can also be numerically verified from its retained worksheets:
 

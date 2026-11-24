@@ -48,6 +48,7 @@ const V13_SCHEMA: &str = "fmine.forecast-operation.v13";
 const V14_SCHEMA: &str = "fmine.forecast-operation.v14";
 const V15_SCHEMA: &str = "fmine.forecast-operation.v15";
 const V16_SCHEMA: &str = "fmine.forecast-operation.v16";
+const V17_SCHEMA: &str = "fmine.forecast-operation.v17";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,7 @@ enum OperationVersion {
     V14 = 13,
     V15 = 14,
     V16 = 15,
+    V17 = 16,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -100,6 +102,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V14_SCHEMA => Ok(OperationVersion::V14),
             V15_SCHEMA => Ok(OperationVersion::V15),
             V16_SCHEMA => Ok(OperationVersion::V16),
+            V17_SCHEMA => Ok(OperationVersion::V17),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -114,7 +117,9 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if expected_table == "plant_outcome" {
+    let schema = if expected_table == "plant_production_outcome" {
+        V17_SCHEMA
+    } else if expected_table == "plant_outcome" {
         V16_SCHEMA
     } else if matches!(expected_table, "assumption_forecast" | "assumption_outcome") {
         V15_SCHEMA
@@ -617,11 +622,11 @@ fn perform(
             forecast,
             input,
             ..
-        } => (
-            super::plant::outcome::prepare(root, &state, cohort, forecast, input)?,
-            "plant_outcome",
-            None,
-        ),
+        } => {
+            let (request, table) =
+                super::plant::outcome::prepare(root, &state, cohort, forecast, input)?;
+            (request, table, None)
+        }
         Command::RegisterCorrection {
             id,
             forecast,
@@ -1430,10 +1435,15 @@ fn apply(
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
     let vintage_declared = row.get("public_vintages").is_some();
     let weighted_declared = matches!(row.get("kind").map(|field| &field.value), Some(TomlValue::Str(kind)) if kind == "weighted_empirical");
-    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16};
+    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17};
     // A feature's accepted schemas and each schema's required operation are separate constraints.
     // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
     let features: &[(bool, &[OperationVersion], &str)] = &[
+        (
+            row.table == "plant_production_outcome",
+            &[V17],
+            "source-derived plant production",
+        ),
         (
             row.table == "plant_outcome",
             &[V16],
@@ -1506,6 +1516,7 @@ fn apply(
             "assumption_forecast" | "assumption_outcome"
         ),
         V16 => row.table == "plant_outcome",
+        V17 => row.table == "plant_production_outcome",
         _ => true,
     };
     if !required {
@@ -1540,7 +1551,7 @@ fn apply(
         "assumption_outcome" => {
             super::assumption::apply_outcome(state, row, lower, upper)?;
         }
-        "plant_outcome" => {
+        "plant_outcome" | "plant_production_outcome" => {
             super::plant::outcome::apply(state, row, lower, upper)?;
         }
         "corrected_forecast" => {
@@ -1600,6 +1611,7 @@ fn apply(
             state.cohort_at(row, Some(authority_ns))?;
             super::correction::registration::validate_cohort(state, &name)?;
             super::assumption::validate_cohort(state, &name, upper)?;
+            super::plant::outcome::validate_cohort(state, &name)?;
         }
         "outcome" => {
             if row.time("available_at")? > lower {
@@ -1607,6 +1619,7 @@ fn apply(
                     "outcome availability exceeds the writer's earliest possible clock time",
                 ));
             }
+            super::plant::outcome::guard_supplied_outcome(state, &row)?;
             state.outcome_at(row, Some(authority_ns))?;
         }
         "registered_outcome" | "registered_missing" | "registered_restatement" => {
@@ -1642,7 +1655,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 16]);
+struct VersionCounts([usize; 17]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {
