@@ -11,7 +11,8 @@ use super::{PcpspImprovement, PcpspModel, candidate, fractional, greedy, improve
 use crate::toposort::{cpit::RATE_SCALE, lp::Lagrangian, search};
 
 /// Bounded work requested by the caller. Zero rounds skips whole-block local
-/// search and fixed-fraction period moves; fractional destination pricing still runs.
+/// search, fixed-fraction period moves and fractional block insertions;
+/// fractional destination pricing still runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     pub rounds: usize,
@@ -65,6 +66,11 @@ pub struct Plan {
     /// Present when the chosen incumbent contains genuine destination splits.
     /// The original external assessment above is never rewritten by this search.
     pub fractional_periods: Option<fractional::PeriodSearch>,
+    /// Winning path after fixed-fraction period moves, before block insertion.
+    pub insertion_seed_origin: &'static str,
+    /// Present for positive rounds, including an initially empty mining set.
+    /// Existing assignments and the original external assessment are preserved.
+    pub fractional_insertions: Option<fractional::joint::InsertionSearch>,
     /// Winning path immediately before the joint period/two-route pass.
     pub joint_seed_origin: &'static str,
     pub joint_period_routes: Option<fractional::joint::JointSearch>,
@@ -84,6 +90,8 @@ fn overflow() -> Refusal {
 /// mining periods with exact fractional destinations, check an optional outside
 /// schedule, keep the best feasible incumbent (including the empty plan), then
 /// search that incumbent's periods while preserving any exact destination splits.
+/// Add profitable predecessor-ready blocks using exact two-route fractions,
+/// including from an empty plan, then jointly improve mined periods and routes.
 /// Finally independently replay the best Lagrangian prices.
 ///
 /// The result optimizes only the supplied, rounded integer model and the explicit integer discount factors.
@@ -314,6 +322,18 @@ fn solve_inner(
     } else {
         None
     };
+    let insertion_seed_origin = origin;
+    let fractional_insertions = if options.rounds > 0 {
+        let inserted = fractional::joint::insert(model, &selected, &factors, options.rounds)?;
+        if inserted.search.after > value {
+            selected = inserted.schedule;
+            value = inserted.search.after;
+            origin = "fractional_insertion";
+        }
+        Some(inserted.search)
+    } else {
+        None
+    };
     let joint_seed_origin = origin;
     let joint_period_routes = if options.rounds > 0 && !selected.assignments().is_empty() {
         let refined = fractional::joint::improve(model, &selected, &factors, options.rounds)?;
@@ -368,6 +388,8 @@ fn solve_inner(
         guidance,
         period_seed_origin,
         fractional_periods,
+        insertion_seed_origin,
+        fractional_insertions,
         joint_seed_origin,
         joint_period_routes,
         bound,

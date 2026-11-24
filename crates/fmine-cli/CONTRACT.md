@@ -526,7 +526,16 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     directions must remain feasible. `--rounds` and a 262,144-work-unit limit bound the pass; exhaustion
     retains its checked incumbent. Optional `fractional_period_search` JSON/Markdown reports the seed,
     exact before/after value and work counters, with that origin selected only on a strict gain. The
-    original external candidate assessment remains unchanged. A subsequent bounded joint pass searches
+    original external candidate assessment remains unchanged. A bounded insertion pass then admits
+    complete predecessor-ready blocks using one or two destinations, even from an empty schedule.
+    It preserves existing assignments, checks exact signed resource rows on the declared share grid,
+    and accepts only strict positive gains. `fractional_insertion_search` retains seed, exact values,
+    inserted count and work counters; a strict gain selects `fractional_insertion`. This pass has its
+    own 262,144-work-unit limit and shares `--rounds`; zero rounds disables it. Nontrivial cycles,
+    loss-making prerequisite bundles and simultaneous admissions are outside its search. The
+    `tests/planning/split_only.*` example admits a block worth 10 through its only feasible 50/50
+    split, with no external candidate. The existing independent CLI oracle checks this construction.
+    A subsequent bounded joint pass searches
     each mined block's period and exact allocation between every destination pair. The optional
     `joint_period_route_search` report retains the immediate seed origin, before/after values, move and
     work counters; a strict gain selects that origin. Same-period rerouting is included. Both affected

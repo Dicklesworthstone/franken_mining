@@ -1044,6 +1044,26 @@ imported split schedule from **22.5 to 25** without changing any route fraction.
 not change fractions, add or drop blocks, or move several blocks simultaneously; it supplies no new
 optimality claim.
 
+DESIGN (BD-252/253): exact block insertion also searches unmined blocks, including from an empty
+incumbent. A block can enter when its predecessors are already mined and a complete allocation across
+one or two destinations fits every signed resource row. This fills a gap in whole-route starts: some
+blocks are feasible only as a split.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/split_only.pcpsp --prec tests/planning/split_only.prec \
+  --share-decimals 2 --list-schedule --format markdown
+```
+
+In this synthetic example, either whole route exceeds a different resource limit. The exact 50/50 split
+admits one complete block worth **10**, without an external candidate. Every accepted insertion strictly
+increases discounted value while preserving existing assignments. An exact share absent from the
+declared decimal grid is not rounded into feasibility. The search uses `--rounds` and its own 262,144
+work-unit limit; `--rounds 0` disables it. `fractional_insertion_search` reports the seed, inserted count,
+exact values and consumed work. Nontrivial precedence cycles, loss-making prerequisite bundles,
+simultaneous insertions and new allocations across three or more destinations remain outside this
+bounded search. Final feasibility and the full-model upper bound are independently recomputed.
+
 DESIGN (BD-252/253): the subsequent joint search can move one block and change its destination fractions
 in the same step, or improve its routing within the current period. It checks every destination pair
 against exact signed resource inequalities and chooses the best representable fraction on the declared
