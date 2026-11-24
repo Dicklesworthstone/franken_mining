@@ -534,9 +534,7 @@ fn insert_bounded(
                         let value = (i128::from(model.values[at + left]) * (scale - x))
                             .checked_add(i128::from(model.values[at + right]) * x)
                             .ok_or_else(overflow)?;
-                        let gain = value
-                            .checked_mul(i128::from(factor))
-                            .ok_or_else(overflow)?;
+                        let gain = value.checked_mul(i128::from(factor)).ok_or_else(overflow)?;
                         if gain <= best.as_ref().map_or(0, |m| m.gain) {
                             continue;
                         }
@@ -603,7 +601,9 @@ fn insert_bounded(
         || checked.discounted_value(factors)? != search.after
         || search.after < search.before
     {
-        return Err(bad("independent insertion feasibility or value recomputation failed"));
+        return Err(bad(
+            "independent insertion feasibility or value recomputation failed",
+        ));
     }
     Ok(Inserted {
         schedule,

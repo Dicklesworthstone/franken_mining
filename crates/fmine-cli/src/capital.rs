@@ -32,7 +32,9 @@ pub(crate) fn executive_snapshot(
 
 const MODEL_LOCATOR: &str = "declared static capital program";
 
-fn journal_choices(program: &fmine_capital::EvaluatedProgram) -> Vec<&fmine_capital::ProgramChoice> {
+fn journal_choices(
+    program: &fmine_capital::EvaluatedProgram,
+) -> Vec<&fmine_capital::ProgramChoice> {
     let summary = program.summary();
     summary
         .choices
@@ -168,11 +170,8 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
 
 pub(super) fn execute(model: &Path, root: &Path, brief: bool) -> Envelope {
     let run = || -> Result<Envelope, Refusal> {
-        let (text, source) = worksheet_input::read_model(
-            &root.join(model),
-            "capital program",
-            MODEL_LOCATOR,
-        )?;
+        let (text, source) =
+            worksheet_input::read_model(&root.join(model), "capital program", MODEL_LOCATOR)?;
         if let Ok(doc) = fmine_registry::toml_subset::parse_subset(&text)
             && let Some(fmine_registry::toml_subset::TomlValue::Str(schema)) =
                 doc.top_get("schema").map(|f| &f.value)

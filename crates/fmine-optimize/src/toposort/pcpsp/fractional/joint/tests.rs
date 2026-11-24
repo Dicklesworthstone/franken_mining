@@ -281,7 +281,10 @@ fn inserts_a_profitable_block_that_is_feasible_only_as_a_split() {
         assert!(!candidate::check(&m, &whole).unwrap().feasible());
     }
     let p = insert(&m, &empty, &[3], 4).unwrap();
-    assert_eq!((p.search.before, p.search.after, p.search.insertions), (0, 330, 1));
+    assert_eq!(
+        (p.search.before, p.search.after, p.search.insertions),
+        (0, 330, 1)
+    );
     assert_eq!(p.checked.used, [vec![10], vec![10]]);
     assert_eq!(p.checked.mined, 1);
     assert_eq!(
@@ -378,9 +381,8 @@ fn every_single_block_insertion_matches_independent_signed_grid_enumeration() {
         let mut oracle = 0_i128;
         for (t, factor) in [3, 2].into_iter().enumerate() {
             for x in 0..=10_i64 {
-                if (0..2).all(|r| {
-                    use_rows[r][0] * (10 - x) + use_rows[r][1] * x <= caps[r][t] * 10
-                }) {
+                if (0..2).all(|r| use_rows[r][0] * (10 - x) + use_rows[r][1] * x <= caps[r][t] * 10)
+                {
                     oracle =
                         oracle.max(i128::from((values[0] * (10 - x) + values[1] * x) * factor));
                 }
@@ -405,7 +407,10 @@ fn insertion_checks_remaining_capacity_against_existing_signed_uses() {
     assert_eq!(without_credit.search.insertions, 1);
     // Block 0's credit is insufficient: block 1 requires right share at least
     // 3/4 in the first row and at most 1/2 in the second.
-    assert_eq!(candidate::write_solution(&without_credit.schedule), "0 0 0 1\n");
+    assert_eq!(
+        candidate::write_solution(&without_credit.schedule),
+        "0 0 0 1\n"
+    );
     let mut m = m;
     m.uses[0][0..2].copy_from_slice(&[-3, -3]);
     let original = candidate::parse_solution("0 0 0 0.4\n0 1 0 0.6\n", &m, 1).unwrap();
@@ -511,7 +516,10 @@ fn insertion_checks_every_route_pair_and_preserves_existing_larger_splits() {
     };
     let original = candidate::parse_solution("0 0 0 0.1\n0 1 0 0.2\n0 2 0 0.7\n", &m, 1).unwrap();
     let p = insert(&m, &original, &[1], 4).unwrap();
-    assert_eq!((p.search.before, p.search.after, p.search.insertions), (10, 80, 1));
+    assert_eq!(
+        (p.search.before, p.search.after, p.search.insertions),
+        (10, 80, 1)
+    );
     assert_eq!(
         candidate::write_solution(&p.schedule),
         "0 0 0 0.1\n0 1 0 0.2\n0 2 0 0.7\n1 1 0 0.5\n1 2 0 0.5\n"

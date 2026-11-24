@@ -2409,7 +2409,11 @@ fn capital_bundle_choice_retains_complete_comparison_and_lower_ranked_human_choi
         .unwrap(),
     );
     assert_eq!(operation_fields(&f, pin, 1), old_fields);
-    fs::write(&f.model, submitted.replace("value = \"8\"", "value = \"9\"")).unwrap();
+    fs::write(
+        &f.model,
+        submitted.replace("value = \"8\"", "value = \"9\""),
+    )
+    .unwrap();
     assert_ne!(run(&["decide", "program", model, "--json"]), comparison);
     fs::write(&f.model, "the source is no longer a capital model").unwrap();
     let replay = successful(f.show(Some(pin)));
@@ -2508,7 +2512,10 @@ value = "95"
         .as_array()
         .unwrap();
     assert_eq!(available.len(), 1);
-    assert_eq!(json_field(&available[0], &["id"]).as_str(), Some("bundle_00"));
+    assert_eq!(
+        json_field(&available[0], &["id"]).as_str(),
+        Some("bundle_00")
+    );
     assert!(
         json_field(&artifact, &["payload", "program", "summary", "robustness"])
             .get("robust_tail_rejections")
