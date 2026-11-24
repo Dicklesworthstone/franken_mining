@@ -768,6 +768,107 @@ fn wrong_basis_changed_bytes_and_missing_original_never_append_an_outcome() {
 }
 
 #[test]
+fn a_source_verified_missing_original_cannot_be_replaced_by_a_numeric_reissue() {
+    for vintages in [None, Some("registered_comparatives")] {
+        let mut fixture =
+            Fixture::with_vintages("production_koz", "100%", "2030FY", 350, 450, vintages);
+        let mut annual = sheet(
+            "YTD",
+            "twelve",
+            "400.4",
+            "All-in sustaining costs ($/oz)",
+            "December 31",
+        );
+        annual
+            .cells
+            .iter_mut()
+            .find(|(cell, _)| cell == "B5")
+            .unwrap()
+            .1 = MinimalCell::Text("—".into());
+        fixture.replace_workbook(&[annual]);
+        let original_digest = fixture.source_digest;
+        fixture.ok(fixture.resolve(), ns(AVAILABLE));
+        let missing = assess_revision(&mut fixture, CUT, "first-published");
+        let saved = digest_field(assessment(&missing.payload_json), "digest");
+        assert!(
+            missing
+                .payload_json
+                .contains("\"n_resolved\":0,\"n_unresolved\":1")
+        );
+
+        // A newly registered hash cannot revise the assertion already retained for this release.
+        let replacement = workbook(&fixture.root, "2030Q4", Some("2031-02-15"));
+        assert_ne!(replacement, original_digest);
+        fixture.refuse(
+            &fixture.resolve(),
+            ns("2031-02-18T00:00:00Z"),
+            "FMINE-REF-507",
+        );
+        let reopened = reopen_revision(&fixture, saved);
+        assert_eq!(
+            assessment(&reopened.payload_json),
+            assessment(&missing.payload_json)
+        );
+        assert!(reopened.payload_json.contains(&original_digest.to_hex()));
+        let latest = assess_revision(&mut fixture, "2031-02-19T00:00:00Z", "latest-as-of");
+        assert!(
+            latest
+                .payload_json
+                .contains("\"n_resolved\":0,\"n_unresolved\":1")
+        );
+
+        // A pending forecast with no admitted source assertion can still resolve normally.
+        let mut pending =
+            Fixture::with_vintages("production_koz", "100%", "2030FY", 350, 450, vintages);
+        let before_release =
+            assess_revision(&mut pending, "2030-12-30T00:00:00Z", "first-published");
+        assert!(
+            before_release
+                .payload_json
+                .contains("\"n_resolved\":0,\"n_unresolved\":1")
+        );
+        pending.ok(pending.resolve(), ns(AVAILABLE));
+        let journal =
+            DurableJournal::open_read(&pending.root.join(JOURNAL), Some(pending.head)).unwrap();
+        let numeric_receipt = journal
+            .records()
+            .iter()
+            .find_map(|record| match &record.entry {
+                Entry::Operation(text) if text.contains("[[registered_outcome]]") => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        drop(journal);
+
+        // Recomputing a valid journal frame cannot bypass the same semantic rule during replay.
+        let mut writer =
+            DurableJournal::open_write(&fixture.root.join(JOURNAL), fixture.head).unwrap();
+        writer
+            .append(
+                &numeric_receipt,
+                &FixedClock(ns("2031-02-20T00:00:00Z")),
+                |_, _| Ok(()),
+            )
+            .unwrap();
+        fixture.head = writer.head();
+        drop(writer);
+        let before = fixture.bytes();
+        let replay = execute_with_clock(
+            &Command::Inspect {
+                journal: JOURNAL.into(),
+                head: Some(fixture.head),
+            },
+            &fixture.root,
+            &NeverClock,
+        );
+        assert_eq!(replay.refusal.unwrap().code, "FMINE-REF-507");
+        assert_eq!(fixture.bytes(), before);
+    }
+}
+
+#[test]
 fn original_registered_dash_becomes_durable_not_published_without_denominator_leak() {
     let mut fixture = Fixture::with_vintages(
         "production_koz",

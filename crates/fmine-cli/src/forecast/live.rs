@@ -1188,6 +1188,20 @@ fn apply_source(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<()
     let (policy, vintages) = state.public_policy_with_vintages(cohort, forecast)?;
     let release = row.string("vintage")?;
     vintages.validate_release(policy.period, release, restatement)?;
+    // A verified original dash is a frozen assertion too. An unresolved forecast with no source
+    // admission can still accept its first publication; revisions use the explicit restatement path.
+    if !restatement
+        && state
+            .ledger
+            .outcomes(forecast)
+            .iter()
+            .any(|event| state.source_admissions.contains_key(&(forecast, event.seq)))
+    {
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            "the original public source assertion is already recorded; a reissue cannot replace it",
+        ));
+    }
     let cohort_digest = super::hex(row.string("cohort_digest")?)?;
     if state.cohorts.get(cohort) != Some(&cohort_digest) || row.string("source")? != policy.issuer {
         return Err(invalid(
