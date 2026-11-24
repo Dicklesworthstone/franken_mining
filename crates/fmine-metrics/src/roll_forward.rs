@@ -157,14 +157,18 @@ pub(crate) fn bind_reading(
 ) -> Result<SourceCell, String> {
     let matches: Vec<_> = readings
         .iter()
-        .filter(|a| a.locator.doc == doc && a.quantity == quantity)
+        .filter(|a| a.locator.doc == doc && a.quantity == quantity && a.period == period)
         .collect();
     let a = match matches.as_slice() {
         [a] => *a,
-        [] => return Err(format!("no agreed reading for quantity {quantity}")),
+        [] => {
+            return Err(format!(
+                "no agreed reading for quantity {quantity} in {period}"
+            ));
+        }
         _ => {
             return Err(format!(
-                "quantity {quantity} has multiple candidate readings"
+                "quantity {quantity} in {period} has multiple candidate readings"
             ));
         }
     };
@@ -190,9 +194,9 @@ pub(crate) fn bind_reading(
             "ambiguous rendered locator from distinct source labels",
         ));
     }
-    if a.unit != unit || a.basis != basis || a.period != period {
+    if a.unit != unit || a.basis != basis {
         return Err(refuse(
-            "unit, basis or period differs from the explicit declaration",
+            "unit or basis differs from the explicit declaration",
         ));
     }
     if a.doc_sha256 != document.sha256

@@ -492,31 +492,51 @@ impl TableIdentityRegistry {
     /// Complete source selection for all declared arithmetic, reserve assertions and quoted price decks.
     #[must_use]
     pub fn quantities_by_document(&self) -> BTreeMap<String, Vec<String>> {
-        let mut selected: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut documents: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for ((doc, _), quantities) in self.quantities_by_document_period() {
+            documents.entry(doc).or_default().extend(quantities);
+        }
+        documents
+            .into_iter()
+            .map(|(doc, keys)| (doc, keys.into_iter().collect()))
+            .collect()
+    }
+
+    /// Transcription keys grouped by exact document and declared reporting period.
+    #[must_use]
+    pub fn quantities_by_document_period(&self) -> BTreeMap<(String, String), Vec<String>> {
+        let mut selected: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+        let mut select = |doc: &str, period: &str, quantity: &str| {
+            selected
+                .entry((doc.to_owned(), period.to_owned()))
+                .or_default()
+                .insert(quantity.to_owned());
+        };
         for identity in &self.identities {
-            let quantities = selected.entry(identity.doc.clone()).or_default();
-            quantities.insert(identity.total.clone());
-            quantities.extend(identity.terms.iter().map(|t| t.quantity.clone()));
+            select(&identity.doc, &identity.total_period, &identity.total);
+            for term in &identity.terms {
+                select(&identity.doc, &term.period, &term.quantity);
+            }
         }
         for row in &self.reserve_rows {
-            let quantities = selected.entry(row.doc.clone()).or_default();
-            quantities.insert(row.quantity.clone());
-            quantities.extend(
-                [&row.gold_price_quantity, &row.copper_price_quantity]
+            select(&row.doc, &row.period, &row.quantity);
+            if let Some(period) = &row.deck_period {
+                for price in [&row.gold_price_quantity, &row.copper_price_quantity]
                     .into_iter()
                     .flatten()
-                    .cloned(),
-            );
+                {
+                    select(&row.doc, period, price);
+                }
+            }
         }
         for cutoff in &self.cutoffs {
-            selected
-                .entry(cutoff.doc.clone())
-                .or_default()
-                .extend(cutoff.inputs.iter().map(|input| input.quantity.clone()));
+            for input in &cutoff.inputs {
+                select(&cutoff.doc, &cutoff.period, &input.quantity);
+            }
         }
         selected
             .into_iter()
-            .map(|(doc, keys)| (doc, keys.into_iter().collect()))
+            .map(|(key, quantities)| (key, quantities.into_iter().collect()))
             .collect()
     }
 

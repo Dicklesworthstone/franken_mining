@@ -494,6 +494,79 @@ def assert_refusal(root, code, exit_code):
 
 
 class TableScenarios(unittest.TestCase):
+    def test_comparative_columns_share_keys_with_exact_period_binding(self):
+        root = workspace("comparative")
+        definitions = 'schema = "fmine.table-identities.v1"\nissuer = "table_test"\n'
+        header = 'schema = "fmine.transcriptions.v1"\nissuer = "table_test"\n'
+        rows = []
+        for year, values in ((2024, (100, 60, 40)), (2025, (85, 80, 5))):
+            period = f"{year}FY"
+            identity = f"balance_{year}"
+            definitions += (
+                f'\n[[identity]]\nid = "{identity}"\ndoc = "{FILE}"\nfamily = "balances"\n'
+                f'kind = "sum"\ntotal = "total"\ntotal_period = "{period}"\n'
+                'unit = "koz"\nbasis = "100%"\nconstruction = "rounded_once"\nconvention = "closed"\n'
+            )
+            for quantity in ("left", "right"):
+                definitions += (
+                    f'\n[[term]]\nidentity = "{identity}"\nquantity = "{quantity}"\n'
+                    f'period = "{period}"\nsign = 1\nrole = "member"\n'
+                )
+            for quantity, value in zip(("total", "left", "right"), values, strict=True):
+                for reader in ("reader_a", "reader_b"):
+                    row = (
+                        f'\n[[entry]]\ndoc = "{FILE}"\ndoc_sha256 = "{digest(DOCUMENT)}"\npage = 1\n'
+                        f'table = "Balances"\nrow = "{quantity}"\ncol = "{period}"\n'
+                        f'token = "{value}"\nquantity = "{quantity}"\nunit = "koz"\nbasis = "100%"\n'
+                        f'period = "{period}"\nreader = "{reader}"\n'
+                    )
+                    rows.append((period, quantity, reader, row))
+        (root / DEFINITIONS).write_text(definitions, encoding="utf-8")
+        transcript = root / "registries/transcriptions/table_test.toml"
+
+        def write_rows(transform=None):
+            entries = [row[-1] if transform is None else transform(*row) for row in rows]
+            transcript.write_text(
+                header + "".join(entries), encoding="utf-8"
+            )
+
+        write_rows()
+        result, _ = successful(root)
+        checks = result["payload"]["checks"]
+        self.assertEqual(checks["refused"], [])
+        self.assertEqual(len(checks["components"]), 2)
+        by_identity = {tuple(component["identities"]): component for component in checks["components"]}
+        sources = {cell["source"]["locator"]: cell["source"] for cell in checks["cells"]}
+        for year, tokens in ((2024, ("100", "60", "40")), (2025, ("85", "80", "5"))):
+            component = by_identity[(f"balance_{year}",)]
+            self.assertEqual(component["verdict"], "feasible")
+            self.assertTrue(component["checked"])
+            self.assertEqual(len(component["cells"]), 3)
+            selected = [sources[locator] for locator in component["cells"]]
+            self.assertEqual({cell["period"] for cell in selected}, {f"{year}FY"})
+            self.assertEqual(
+                {cell["quantity"]: cell["token"] for cell in selected},
+                dict(zip(("total", "left", "right"), tokens, strict=True)),
+            )
+
+        # With the current total absent, a comparative reading using the same key cannot substitute.
+        write_rows(lambda period, key, _, row: "" if (period, key) == ("2025FY", "total") else row)
+        missing, _ = successful(root)
+        report = missing["payload"]["checks"]
+        self.assertEqual(len(report["components"]), 1)
+        self.assertEqual([r["identity"] for r in report["refused"]], ["balance_2025"])
+
+        def disagree(period, key, reader, row):
+            if (period, key, reader) == ("2025FY", "total", "reader_b"):
+                return row.replace('period = "2025FY"', 'period = "2026FY"')
+            return row
+
+        write_rows(disagree)
+        assert_refusal(root, "FMINE-REF-202", 3)
+        write_rows()
+        (root / "documents" / FILE).write_bytes(b"!" + DOCUMENT[1:])
+        assert_refusal(root, "FMINE-REF-505", 8)
+
     def test_registered_pdf_rollforward_and_explicit_multiyear_membership_are_solved(self):
         root = workspace("positive")
         envelope, _ = successful(root)

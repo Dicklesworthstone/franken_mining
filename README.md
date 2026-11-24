@@ -2744,7 +2744,9 @@ cargo run -p fmine-cli -- check tables --issuer demo --definitions local/reserve
 cargo run -p fmine-cli -- check tables --issuer demo --definitions local/reserve_tables.toml --as-of 2025-03-01 --json
 ```
 
-The definitions mode reads only its named documents and quantities. Each document must be registered under
+The definitions mode selects each source by document, quantity, and declared period. A filing can reuse
+one quantity key in current and comparative columns. The command retains all readers at a selected
+locator, including a reader who recorded a different period. Each document must be registered under
 the selected issuer and match its registered SHA-256 and size, even when no reading has yet been entered.
 Values come from the existing two-reader transcription registry. Definitions contain membership and rules;
 they contain no source values. Optional `--as-of YYYY-MM-DD` requires every declared document's registered

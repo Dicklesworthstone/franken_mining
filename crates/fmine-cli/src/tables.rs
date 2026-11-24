@@ -1,7 +1,7 @@
 //! Cited table inspection: workbook identities and declared PDF sums, roll-forwards and replacement ratios.
 //! Determinism: DeterministicPerIsa (exact table algebra; cut-off fixed-point cross-check uses floats).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -10,7 +10,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_metrics::roll_forward::{self, TableReport};
 use fmine_numerics::exact_feas::{BlameOutcome, CorrectionLabel, Interval, Outcome};
 use fmine_public::sources::{IssuerProfile, load_issuer_profile, transcriptions_path};
-use fmine_public::transcribe::{check_docs, load_transcription_quantities_as_of};
+use fmine_public::transcribe::{check_docs, load_transcription_quantities_for_period_as_of};
 use fmine_public::{PublicAssuranceReport, run_public_assurance, run_synthetic_assurance};
 use fmine_registry::metrics::MetricRegistry;
 use fmine_registry::sources::is_date;
@@ -122,11 +122,12 @@ fn document_tables(
         })?;
 
     // Verify even a declared document with no transcribed rows: an absent member must not hide absent bytes.
-    let quantities = definitions.quantities_by_document();
+    let quantities = definitions.quantities_by_document_period();
+    let declared_docs: BTreeSet<_> = quantities.keys().map(|(doc, _)| doc.as_str()).collect();
     let mut documents: Vec<_> = profile
         .documents
         .iter()
-        .filter(|d| quantities.contains_key(d.file.as_str()))
+        .filter(|d| declared_docs.contains(d.file.as_str()))
         .collect();
     documents.sort_by(|a, b| a.file.cmp(&b.file));
     if let Some(cut) = as_of {
@@ -148,14 +149,15 @@ fn document_tables(
     let checked = check_docs(&documents, root)?;
     let mut accepted = Vec::new();
     let mut pending = Vec::new();
-    for (doc, keys) in &quantities {
+    for ((doc, period), keys) in &quantities {
         // With no explicit cut, inspect the currently registered named documents retrospectively.
-        let Some(report) = load_transcription_quantities_as_of(
+        let Some(report) = load_transcription_quantities_for_period_as_of(
             profile,
             root,
             as_of.unwrap_or("9999-12-31"),
             keys,
             Some(doc),
+            period,
         )?
         else {
             return Err(Refusal::new(
