@@ -1,0 +1,228 @@
+# SYNTHETIC known answer for BD-297, using the North Range Copper expansion.
+# The initial US$6m early phase and readiness review are separately permitted in this scenario.
+# The reviewer distinguishes the recorded clearance from the still-pending case at April 2.
+# Initial net NAV is -US$5m on either path, including the fallback recovery value.
+# Main work adds US$13m versus that fallback, giving US$8m on the cleared path.
+# Equal scenario weights give expected adaptive value US$1.5m versus waiting.
+schema = "fmine.capital-program.v1"
+model_key = "north_range_permit_recourse"
+question = "Should we buy the early-work option and fund the main works only if the April review documents permission?"
+currency = "USD"
+valuation_basis = "Synthetic parent net incremental NAV versus waiting, including fallback recovery and continuation effects once"
+budget = "10000000"
+tail_mass = "1/5"
+payoff_convention = "additive_net_delta_nav"
+reference_class_basis = "Synthetic readiness cases and exact illustrative scenario weights"
+
+[[state]]
+id = "cleared"
+weight = "1/2"
+
+[[state]]
+id = "pending"
+weight = "1/2"
+
+[[candidate]]
+id = "early"
+label = "Separately documented early works and the dated readiness review"
+cost = "6000000"
+reference_class_basis = "Synthetic commitment and review; fallback recovery gives a US$5m net loss"
+
+[[candidate]]
+id = "main"
+label = "Commit the expansion main works"
+cost = "4000000"
+reference_class_basis = "Synthetic incremental value against the early-phase fallback, conditional on permission"
+
+[[requires]]
+candidate = "main"
+prerequisite = "early"
+
+[[payoff]]
+candidate = "early"
+state = "cleared"
+value = "-5000000"
+
+[[payoff]]
+candidate = "early"
+state = "pending"
+value = "-5000000"
+
+[[payoff]]
+candidate = "main"
+state = "cleared"
+value = "13000000"
+
+[[payoff]]
+candidate = "main"
+state = "pending"
+value = "13000000"
+
+[[funding_schedule]]
+cash_basis = "Synthetic parent unrestricted nominal USD"
+opening_date = "2030-02-10"
+
+[[cash_period]]
+id = "early_phase"
+cash_period = "2030-02-10/2030-04-01"
+minimum_cash = "15000000"
+
+[[cash_period]]
+id = "continuation"
+cash_period = "2030-04-02/2030-12-31"
+minimum_cash = "15000000"
+
+[[opening_cash]]
+state = "cleared"
+value = "26000000"
+
+[[opening_cash]]
+state = "pending"
+value = "26000000"
+
+[[baseline_cash_flow]]
+period = "early_phase"
+state = "cleared"
+value = "0"
+
+[[baseline_cash_flow]]
+period = "early_phase"
+state = "pending"
+value = "0"
+
+[[baseline_cash_flow]]
+period = "continuation"
+state = "cleared"
+value = "0"
+
+[[baseline_cash_flow]]
+period = "continuation"
+state = "pending"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "early_phase"
+candidate = "early"
+state = "cleared"
+value = "-6000000"
+
+[[candidate_cash_flow]]
+period = "early_phase"
+candidate = "early"
+state = "pending"
+value = "-6000000"
+
+[[candidate_cash_flow]]
+period = "early_phase"
+candidate = "main"
+state = "cleared"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "early_phase"
+candidate = "main"
+state = "pending"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "continuation"
+candidate = "early"
+state = "cleared"
+value = "1000000"
+
+[[candidate_cash_flow]]
+period = "continuation"
+candidate = "early"
+state = "pending"
+value = "1000000"
+
+[[candidate_cash_flow]]
+period = "continuation"
+candidate = "main"
+state = "cleared"
+value = "-4000000"
+
+[[candidate_cash_flow]]
+period = "continuation"
+candidate = "main"
+state = "pending"
+value = "-4000000"
+
+[[recourse]]
+information_candidate = "early"
+observation_date = "2030-04-02"
+information_basis = "Synthetic paid review of the documented scope, permit disposition and confirmation at the observation date"
+
+[[candidate_stage]]
+candidate = "early"
+stage = "initial"
+
+[[candidate_stage]]
+candidate = "main"
+stage = "recourse"
+
+[[state_observation]]
+state = "cleared"
+observation = "clearance-documented"
+
+[[state_observation]]
+state = "pending"
+observation = "no-clearance-documented"
+
+[[uu]]
+id = "redesign"
+description = "Synthetic unmodeled redesign constraint that removes the benefit of early works"
+trigger = "Updated engineering scope invalidates the forecast schedule saving"
+downside_usd_m = "5"
+
+[[permit]]
+application = "NRC-42"
+authority = "North Range Project Review Office"
+filed_on = "2030-02-05"
+clock_start = "2030-02-10"
+clock_days = "40"
+deemed_rule = "confirmation_required"
+reopen_at_pct = "10/1"
+change_basis = "Rated throughput increase from the lodged design"
+known_on = "2030-02-10"
+source = "Synthetic application receipt and clock terms NRC-42"
+
+[[permit_state]]
+application = "NRC-42"
+state = "cleared"
+status = "deeming_confirmed"
+effective_on = "2030-04-01"
+scope_change_pct = "7/1"
+change_basis = "Rated throughput increase from the lodged design"
+known_on = "2030-04-02"
+source = "Synthetic written confirmation A-42 and design change review D-17"
+
+[[permit_state]]
+application = "NRC-42"
+state = "pending"
+status = "pending"
+effective_on = "2030-04-01"
+scope_change_pct = "7/1"
+change_basis = "Rated throughput increase from the lodged design"
+known_on = "2030-04-02"
+source = "Synthetic unresolved approval register A-42 and design change review D-17"
+
+[[permit_pause]]
+application = "NRC-42"
+state = "cleared"
+from = "2030-02-20"
+resumed_on = "2030-03-02"
+known_on = "2030-03-02"
+source = "Synthetic clock pause and restart notice NR-13"
+
+[[permit_pause]]
+application = "NRC-42"
+state = "pending"
+from = "2030-02-20"
+resumed_on = "2030-03-02"
+known_on = "2030-03-02"
+source = "Synthetic clock pause and restart notice NR-13"
+
+[[stage_permit]]
+candidate = "main"
+application = "NRC-42"

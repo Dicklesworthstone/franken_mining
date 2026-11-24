@@ -500,8 +500,11 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
                 claim_json(claim, &claim.value.to_json())
             )
         });
+    let permits = inputs.permits.as_ref().map_or_else(String::new, |claim| {
+        format!(",\"permits\":{}", claim_json(claim, &claim.value.to_json()))
+    });
     format!(
-        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}{valuations}{stability}{robustness}}}",
+        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}{valuations}{stability}{robustness}{permits}}}",
         claim_json(&inputs.policy, &policy_json(&inputs.policy.value)),
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value)),
         inputs.funding.as_ref().map_or_else(
@@ -553,6 +556,18 @@ pub(super) fn equity_assessment_json(equity: &EquityAssessment) -> String {
 
 pub(super) fn rejection_json(r: &StructuralRejection) -> String {
     match r {
+        StructuralRejection::PermitUnavailable {
+            candidate,
+            application,
+            state_id,
+            review,
+        } => format!(
+            "{{\"kind\":\"permit_unavailable\",\"candidate\":{},\"application\":{},\"state_id\":{},\"review\":{}}}",
+            js(candidate),
+            js(application),
+            js(state_id),
+            review.to_json(),
+        ),
         StructuralRejection::BudgetExceeded => "{\"kind\":\"budget_exceeded\"}".into(),
         StructuralRejection::MissingPrerequisite {
             candidate,
@@ -741,8 +756,26 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
     } else {
         ""
     };
+    let permit_reviews = if s.permit_reviews.is_empty() {
+        String::new()
+    } else {
+        let rows = s
+            .permit_reviews
+            .iter()
+            .map(|((application, state), review)| {
+                format!(
+                    "{{\"application\":{},\"state_id\":{},\"review\":{}}}",
+                    js(application),
+                    js(state),
+                    review.to_json(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(",\"permit_reviews\":[{rows}]")
+    };
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"{robustness}{cash_objective}}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"{robustness}{cash_objective}{permit_reviews}}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
@@ -868,6 +901,8 @@ impl EvaluatedProgram {
                 row.structural_rejections
                     .iter()
                     .map(|r| match r {
+                        StructuralRejection::PermitUnavailable { candidate, application, state_id, review } =>
+                            format!("{candidate} requires permit {application} in {state_id} ({})", review.state.label()),
                         StructuralRejection::BudgetExceeded => "budget exceeded".into(),
                         StructuralRejection::MissingPrerequisite {
                             candidate,

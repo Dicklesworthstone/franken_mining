@@ -875,6 +875,7 @@ pub(super) fn execute(
         entity_valuations: Vec::new(),
         selection_stability,
         robustness,
+        permits: None,
     })?;
     let mut enc = Encoder::new_frame(*b"PCIR", 1);
     enc.put_str(text);

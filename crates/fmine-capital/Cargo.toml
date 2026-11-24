@@ -9,6 +9,7 @@ description = "Exact source-bound static capital program comparison over shared 
 
 [dependencies]
 fmine-core = { path = "../fmine-core" }
+fmine-time = { path = "../fmine-time" }
 fmine-units = { path = "../fmine-units" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-claim = { path = "../fmine-claim" }

@@ -336,7 +336,17 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
     entity::valuation::check_work_bound(program, (1_usize << candidate_count) + policy_count)?;
     stability::check_work(program, (1_usize << candidate_count) + policy_count)?;
     robustness::check_population_work(program, (1_usize << candidate_count) + policy_count)?;
-    let (mut metadata, transport) = super::validate(program)?;
+    let (mut metadata, transport, _) = super::validate(program)?;
+    if let Some(permits) = &program.permits
+        && (permits.value.as_of != basis.observation_date
+            || permits.value.requirements.iter().any(|(candidate, _)| {
+                stages.get(candidate.as_str()) != Some(&DecisionStage::Recourse)
+            }))
+    {
+        return Err(invalid(
+            "permit conditions require the observation date and a recourse-stage candidate",
+        ));
+    }
     if basis.model_key != program.policy.value.model_key
         || basis.currency != program.policy.value.currency
         || basis.valuation_basis != program.policy.value.valuation_basis
@@ -611,7 +621,8 @@ impl Layout {
 
 fn rejection_state(reason: &StructuralRejection) -> Option<&str> {
     match reason {
-        StructuralRejection::LiquidityShortfall { state_id, .. }
+        StructuralRejection::PermitUnavailable { state_id, .. }
+        | StructuralRejection::LiquidityShortfall { state_id, .. }
         | StructuralRejection::CashScheduleShortfall { state_id, .. }
         | StructuralRejection::EntityCashShortfall { state_id, .. }
         | StructuralRejection::EntityCapitalCallShortfall { state_id, .. }

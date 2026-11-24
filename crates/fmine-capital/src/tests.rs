@@ -314,6 +314,7 @@ pub(crate) fn inputs(
         entity_valuations: vec![],
         selection_stability: None,
         robustness: None,
+        permits: None,
     }
 }
 fn row<'a>(report: &'a EvaluatedProgram, members: &[&str]) -> &'a ProgramChoice {

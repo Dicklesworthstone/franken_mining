@@ -25,6 +25,7 @@ use fmine_units::{Currency, Money, UnitsError};
 
 pub mod entity;
 pub mod model;
+pub mod permit;
 pub mod recourse;
 mod render;
 pub mod robustness;
@@ -272,6 +273,7 @@ pub struct ProgramInputs {
     pub entity_valuations: Vec<Claim<EntityValuation>>,
     pub selection_stability: Option<Claim<stability::SelectionStabilityDesign>>,
     pub robustness: Option<Claim<robustness::RobustnessDesign>>,
+    pub permits: Option<Claim<permit::ProgramPermits>>,
 }
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
@@ -327,6 +329,12 @@ fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StructuralRejection {
+    PermitUnavailable {
+        candidate: String,
+        application: String,
+        state_id: String,
+        review: permit::Review,
+    },
     BudgetExceeded,
     MissingPrerequisite {
         candidate: String,
@@ -452,6 +460,7 @@ pub struct ProgramSummary {
     pub expected_per_share_cost_of_risk_limit: Option<ExactPerShare>,
     pub selection_stability: Option<stability::SelectionStabilitySummary>,
     pub robustness: Option<robustness::RobustnessSummary>,
+    pub permit_reviews: BTreeMap<(String, String), permit::Review>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1016,7 +1025,7 @@ fn validate_equity_values(
     Ok(())
 }
 
-fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>)> {
+fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>, permit::Checked)> {
     if !(1..=MAX_CANDIDATES).contains(&inputs.candidates.len())
         || !(1..=MAX_STATES).contains(&inputs.weights.value.states.len())
     {
@@ -1305,7 +1314,19 @@ fn validate(inputs: &ProgramInputs) -> Result<(Metadata, Option<TransportPlan>)>
             metadata.include(claim)?;
         }
     }
-    Ok((metadata, robustness::prepare(inputs)?))
+    let permits = if let Some(claim) = &inputs.permits {
+        let checked = claim.value.check(&policy.model_key, &candidates, &states)?;
+        admit(
+            claim,
+            &claim.value.canonical_tag(),
+            AdditivityClass::NonAdditive,
+        )?;
+        metadata.include(claim)?;
+        checked
+    } else {
+        permit::Checked::default()
+    };
+    Ok((metadata, robustness::prepare(inputs)?, permits))
 }
 
 struct FundingIndex<'a> {
@@ -1924,7 +1945,7 @@ fn populate_statistics(
 
 /// Enumerates all declared binary subsets; infeasibility remains in the returned population.
 pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
-    let (metadata, transport) = validate(inputs)?;
+    let (metadata, transport, permits) = validate(inputs)?;
     let mut inputs = inputs.clone();
     inputs
         .candidates
@@ -2033,6 +2054,9 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         }
         let mut groups: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         for c in &selected {
+            if let Some(reasons) = permits.rejected.get(&c.candidate_id) {
+                rejected.extend(reasons.iter().cloned());
+            }
             for required in &c.requires {
                 if !ids.contains(required) {
                     rejected.push(StructuralRejection::MissingPrerequisite {
@@ -2268,6 +2292,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         expected_per_share_cost_of_risk_limit: per_share_risk_cost,
         selection_stability,
         robustness,
+        permit_reviews: permits.reviews,
     };
     let mut binding = Encoder::new_frame(*b"CAPP", 1);
     binding.put_str(&render::inputs_json(&inputs));

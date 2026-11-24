@@ -2,111 +2,19 @@
 //! Determinism: Exact
 
 use super::{
-    Card, CivilDate, ExactQty, Result, TomlDoc, date, day, dollars, flag, fraction, get, headroom,
-    invalid, js, qty, row_fields, table, tables,
+    Card, Result, TomlDoc, date, dollars, flag, fraction, get, headroom, invalid, js, qty,
+    row_fields, table, tables,
 };
 use crate::capital::investment::number;
-
-struct Clock {
-    deadline: Option<i64>,
-    paused_days: i128,
-}
-
-fn deadline(value: i128) -> Result<i64> {
-    if value > i128::from(day("9999-12-31")?) {
-        return Err(invalid("clock deadline exceeds the worksheet calendar"));
-    }
-    i64::try_from(value).map_err(|_| invalid("clock deadline is unrepresentable"))
-}
-
-fn date_label(epoch_day: i64) -> String {
-    let d = CivilDate::from_epoch_days(epoch_day);
-    format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
-}
-
-fn clock(
-    doc: &TomlDoc,
-    as_of: &str,
-    application: &str,
-    start: i64,
-    length: i128,
-    resolved: Option<i64>,
-) -> Result<Clock> {
-    if length == 0 {
-        return Err(invalid("the declared clock must have at least one day"));
-    }
-    let through = resolved.unwrap_or(day(as_of)?);
-    let mut periods = Vec::new();
-    for row in doc.rows_of("pause") {
-        let f = row_fields(row, &["application", "from", "resumed_on"], as_of)?;
-        let from = day(date(&f, "from")?)?;
-        let known = day(date(&f, "known_on")?)?;
-        let end = match get(&f, "resumed_on")? {
-            "open" => None,
-            _ => Some(day(date(&f, "resumed_on")?)?),
-        };
-        if get(&f, "application")? != application
-            || from > known
-            || end.is_some_and(|d| d <= from || d > known)
-        {
-            return Err(invalid(
-                "pauses must refer to this application and use observed, correctly ordered dates",
-            ));
-        }
-        if resolved.is_some_and(|d| from >= d || end.is_some_and(|resume| resume > d)) {
-            return Err(invalid(
-                "the statutory clock cannot pause or restart after disposition",
-            ));
-        }
-        periods.push((from, end));
-    }
-    periods.sort_unstable();
-    let mut boundary = deadline(i128::from(start) + length)?;
-    let mut previous_end = start;
-    let mut paused_days = 0;
-    for (index, (from, resume)) in periods.iter().copied().enumerate() {
-        if from < previous_end || from >= boundary {
-            return Err(invalid(
-                "pauses require a running, unexpired clock and cannot overlap",
-            ));
-        }
-        let Some(resume) = resume else {
-            if index + 1 != periods.len() {
-                return Err(invalid("an open pause must be the last pause"));
-            }
-            return Ok(Clock {
-                deadline: None,
-                paused_days: paused_days + i128::from(through - from),
-            });
-        };
-        let paused = i128::from(resume - from);
-        paused_days += paused;
-        boundary = deadline(i128::from(boundary) + paused)?;
-        previous_end = resume;
-    }
-    Ok(Clock {
-        deadline: Some(boundary),
-        paused_days,
-    })
-}
+use fmine_capital::permit::{
+    DeemedRule, Disposition, GateState, Pause, Record, Review, Terms, review,
+};
 
 struct PermitGate<'a> {
-    authority: &'a str,
     application: &'a str,
-    filed: &'a str,
-    start: &'a str,
-    clock_days: i128,
-    approval_status: &'a str,
-    effective: &'a str,
-    clock: Clock,
-    state: &'static str,
-    scope_reopens: bool,
-    main_admitted: bool,
-    deeming_review_due: bool,
-    threshold: ExactQty,
-    change: ExactQty,
-    change_basis: &'a str,
-    deemed_rule: &'a str,
+    terms: Terms,
+    record: Record,
+    review: Review,
 }
 
 fn gate<'a>(doc: &'a TomlDoc, as_of: &str, project: &str) -> Result<PermitGate<'a>> {
@@ -137,94 +45,51 @@ fn gate<'a>(doc: &'a TomlDoc, as_of: &str, project: &str) -> Result<PermitGate<'
         as_of,
     )?;
     let application = get(&permit, "application")?;
-    let change_basis = get(&permit, "change_basis")?;
-    if get(&permit, "project")? != project
-        || get(&status, "application")? != application
-        || get(&status, "change_basis")? != change_basis
-    {
+    if get(&permit, "project")? != project || get(&status, "application")? != application {
         return Err(invalid(
-            "permit, evidence and schedule require matching project, application and scope-change basis",
+            "permit, evidence and schedule require matching project and application",
         ));
     }
-    let filed = date(&permit, "filed_on")?;
-    let start = date(&permit, "clock_start")?;
-    let effective = date(&status, "effective_on")?;
-    if !(filed <= start
-        && start <= date(&permit, "known_on")?
-        && start <= effective
-        && effective <= date(&status, "known_on")?)
-    {
-        return Err(invalid(
-            "require filing before clock start, and both the start and effective status known by their source dates",
-        ));
-    }
-    let approval_status = get(&status, "status")?;
-    let effective_day = day(effective)?;
-    let resolved = matches!(
-        approval_status,
-        "written_grant" | "written_refusal" | "deeming_confirmed"
-    )
-    .then_some(effective_day);
-    let clock_days = qty(&permit, "clock_days")?;
-    let time = clock(doc, as_of, application, day(start)?, clock_days, resolved)?;
-    let deemed_rule = get(&permit, "deemed_rule")?;
-    if !matches!(deemed_rule, "none" | "confirmation_required") {
-        return Err(invalid("deemed_rule must be none or confirmation_required"));
-    }
-    if approval_status == "deeming_confirmed"
-        && (deemed_rule != "confirmation_required"
-            || time.deadline.is_none_or(|d| effective_day < d))
-    {
-        return Err(invalid(
-            "confirmed deeming requires the declared rule and an effective date at or after the running clock's deadline",
-        ));
-    }
-    let (change, threshold) = (
-        number(get(&status, "scope_change_pct")?)?,
-        number(get(&permit, "reopen_at_pct")?)?,
-    );
-    if change.signum() < 0 || threshold.signum() <= 0 {
-        return Err(invalid(
-            "scope change must be nonnegative and its reopening threshold positive",
-        ));
-    }
-    let scope_reopens = !change
-        .checked_cmp(threshold)
-        .map_err(|e| invalid(e.to_string()))?
-        .is_lt();
-    let today = day(as_of)?;
-    let state = match approval_status {
-        "written_refusal" => "refused",
-        "pending" | "written_grant" | "deeming_confirmed" if scope_reopens => {
-            "requires_reopen_review"
-        }
-        "written_grant" | "deeming_confirmed" => "permission_documented",
-        "pending" if time.deadline.is_none() => "clock_paused",
-        "pending" if time.deadline.is_some_and(|d| today >= d) => "clock_elapsed",
-        "pending" => "clock_running",
-        _ => {
-            return Err(invalid(
-                "permit status requires pending, written_grant, written_refusal or deeming_confirmed",
-            ));
-        }
+    let terms = Terms {
+        authority: get(&permit, "authority")?.into(),
+        filed_on: get(&permit, "filed_on")?.into(),
+        clock_start: get(&permit, "clock_start")?.into(),
+        clock_days: u64::try_from(qty(&permit, "clock_days")?)
+            .map_err(|_| invalid("clock_days requires a nonnegative whole number"))?,
+        deemed_rule: DeemedRule::parse(get(&permit, "deemed_rule")?)?,
+        reopen_at_pct: number(get(&permit, "reopen_at_pct")?)?,
+        change_basis: get(&permit, "change_basis")?.into(),
+        source: get(&permit, "source")?.into(),
+        known_on: get(&permit, "known_on")?.into(),
     };
+    let record = Record {
+        disposition: Disposition::parse(get(&status, "status")?)?,
+        effective_on: get(&status, "effective_on")?.into(),
+        scope_change_pct: number(get(&status, "scope_change_pct")?)?,
+        change_basis: get(&status, "change_basis")?.into(),
+        source: get(&status, "source")?.into(),
+        known_on: get(&status, "known_on")?.into(),
+    };
+    let mut pauses = Vec::new();
+    for row in doc.rows_of("pause") {
+        let f = row_fields(row, &["application", "from", "resumed_on"], as_of)?;
+        if get(&f, "application")? != application {
+            return Err(invalid("pauses must refer to this application"));
+        }
+        let resumed = get(&f, "resumed_on")?;
+        pauses.push(Pause {
+            from: get(&f, "from")?.into(),
+            resumed_on: (resumed != "open").then(|| resumed.into()),
+            source: get(&f, "source")?.into(),
+            known_on: get(&f, "known_on")?.into(),
+        });
+    }
+    let review = review(&terms, &record, &pauses, as_of)?;
     Ok(PermitGate {
-        authority: get(&permit, "authority")?,
         application,
-        filed,
-        start,
-        clock_days,
-        approval_status,
-        effective,
-        clock: time,
-        state,
-        scope_reopens,
-        main_admitted: state == "permission_documented",
-        deeming_review_due: state == "clock_elapsed" && deemed_rule == "confirmation_required",
-        threshold,
-        change,
-        change_basis,
-        deemed_rule,
+        terms,
+        record,
+        review,
     })
 }
 
@@ -299,9 +164,10 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         qty(&schedule, "critical_days_saved")? * qty(&schedule, "critical_day_value_usd")?;
     let gain = schedule_value - (spend - credit);
     let loss = spend - recovery;
-    let blocker = if gate.main_admitted {
+    let main_admitted = gate.review.state == GateState::PermissionDocumented;
+    let blocker = if main_admitted {
         Some("Main permission is already documented. The approval-dependent comparison has resolved.".into())
-    } else if gate.state == "refused" {
+    } else if gate.review.state == GateState::Refused {
         Some("The documented refusal rules out this early-work comparison.".into())
     } else if as_of >= needed {
         Some(format!(
@@ -329,21 +195,21 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     };
 
     let mut card = Card::new(&["Early works compared with waiting", "Value", "Basis"]);
-    let clock_deadline = gate.clock.deadline.map(date_label);
-    let clock_summary = clock_deadline.as_deref().map_or(
+    let clock_deadline = gate.review.clock_deadline.as_deref();
+    let clock_summary = clock_deadline.map_or(
         "Clock paused with no recorded restart date".to_owned(),
         |d| format!("Declared clock deadline {d}"),
     );
     card.findings.push(format!(
         "{clock_summary}. Application {} to {} was filed {}. The clock started {} and has {} paused days as of this worksheet.",
-        gate.application, gate.authority, gate.filed, gate.start, gate.clock.paused_days,
+        gate.application, gate.terms.authority, gate.terms.filed_on, gate.terms.clock_start, gate.review.paused_days,
     ));
-    card.findings.push(match gate.state {
-        "permission_documented" => "The worksheet records main permission for the declared scope.".into(),
-        "refused" => "The main application is refused under the stated record.".into(),
-        "requires_reopen_review" => "The declared scope change meets the threshold for reopening. Main works remain blocked pending review.".into(),
-        "clock_elapsed" if gate.deeming_review_due => "The clock has elapsed. Deeming requires a separate confirmation, so main works remain on hold.".into(),
-        "clock_elapsed" => "The clock has elapsed. The main decision is still pending.".into(),
+    card.findings.push(match gate.review.state {
+        GateState::PermissionDocumented => "The worksheet records main permission for the declared scope.".into(),
+        GateState::Refused => "The main application is refused under the stated record.".into(),
+        GateState::RequiresReopenReview => "The declared scope change meets the threshold for reopening. Main works remain blocked pending review.".into(),
+        GateState::Elapsed if gate.review.deeming_review_due => "The clock has elapsed. Deeming requires a separate confirmation, so main works remain on hold.".into(),
+        GateState::Elapsed => "The clock has elapsed. The main decision is still pending.".into(),
         _ => "The main decision is still pending.".into(),
     });
     card.findings.push(format!(
@@ -390,8 +256,14 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         ],
     ];
     let string_or_null = |value: Option<&str>| value.map_or_else(|| "null".into(), js);
-    let change = fraction(gate.change.num(), gate.change.den())?;
-    let reopen_at = fraction(gate.threshold.num(), gate.threshold.den())?;
+    let change = fraction(
+        gate.record.scope_change_pct.num(),
+        gate.record.scope_change_pct.den(),
+    )?;
+    let reopen_at = fraction(
+        gate.terms.reopen_at_pct.num(),
+        gate.terms.reopen_at_pct.den(),
+    )?;
     let max_spend = if max_spend >= 0 {
         js(&max_spend.to_string())
     } else {
@@ -403,22 +275,22 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             r#"{{"project":{},"application":{},"authority":{},"filed_on":{},"clock_start":{},"clock_days":"{}","clock_deadline":{},"paused_days":"{}","recorded_status":{},"status_effective_on":{},"status":{},"main_terms_admitted":{},"deemed_rule":{},"deeming_review_due":{},"scope_change_pct":{},"reopen_at_pct":{},"change_basis":{},"scope_change_requires_review":{},"early_works":{{"instrument":{},"available_through":{},"documented_for_scope":{has_early_permission},"comparison_eligible":{eligible},"approval_needed_by":{},"spend_usd":"{spend}","maximum_spend_preserving_floor_usd":{max_spend},"cash_slack_usd":"{slack}","schedule_value_usd":"{schedule_value}","gain_if_proceed_usd":"{gain}","loss_if_no_proceed_usd":"{loss}","break_even_proceed_probability":{}}}}}"#,
             js(project),
             js(gate.application),
-            js(gate.authority),
-            js(gate.filed),
-            js(gate.start),
-            gate.clock_days,
-            string_or_null(clock_deadline.as_deref()),
-            gate.clock.paused_days,
-            js(gate.approval_status),
-            js(gate.effective),
-            js(gate.state),
-            gate.main_admitted,
-            js(gate.deemed_rule),
-            gate.deeming_review_due,
+            js(&gate.terms.authority),
+            js(&gate.terms.filed_on),
+            js(&gate.terms.clock_start),
+            gate.terms.clock_days,
+            string_or_null(clock_deadline),
+            gate.review.paused_days,
+            js(gate.record.disposition.label()),
+            js(&gate.record.effective_on),
+            js(gate.review.state.label()),
+            main_admitted,
+            js(gate.terms.deemed_rule.label()),
+            gate.review.deeming_review_due,
             js(&change),
             js(&reopen_at),
-            js(gate.change_basis),
-            gate.scope_reopens,
+            js(&gate.terms.change_basis),
+            gate.review.scope_reopens,
             js(instrument),
             js(valid_through),
             js(needed),

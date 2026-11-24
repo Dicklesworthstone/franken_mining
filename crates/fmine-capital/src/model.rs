@@ -15,6 +15,7 @@ use crate::recourse::{
 mod entity;
 mod entity_valuation;
 mod kpi;
+mod permit;
 mod robustness;
 mod stability;
 #[cfg(test)]
@@ -400,8 +401,12 @@ fn parse_model(text: &str, source: SourceAnchor, allow_recourse: bool) -> Result
     let mut kpi_rows = kpi::Rows::default();
     let mut entity_rows = entity::EntityRows::default();
     let mut valuation_rows = entity_valuation::ValuationRows::default();
+    let mut permit_rows = permit::Rows::default();
     for row in &doc.rows {
         match row.table.as_str() {
+            "permit" | "permit_state" | "permit_pause" | "stage_permit" if allow_recourse => {
+                permit_rows.push(row, &source)?;
+            }
             "kpi_constraint" | "kpi_baseline" | "kpi_increment" if allow_recourse => {
                 kpi_rows.push(row)?
             }
@@ -1096,6 +1101,7 @@ fn parse_model(text: &str, source: SourceAnchor, allow_recourse: bool) -> Result
         stability::finish(stability_row, &source, &doc.top, &unknowns, &uu_anchors);
     let robustness = robustness_rows.finish(&states, &source, &doc.top, &unknowns, &uu_anchors)?;
     let kpis = kpi_rows.finish(model_key, &source, &doc.top, &unknowns, &uu_anchors)?;
+    let permits = permit_rows.finish(model_key, information.as_ref(), &unknowns, &uu_anchors)?;
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()
@@ -1153,6 +1159,7 @@ fn parse_model(text: &str, source: SourceAnchor, allow_recourse: bool) -> Result
         entity_valuations,
         selection_stability,
         robustness,
+        permits,
     };
     validate(&inputs)?;
     Ok(ParsedModel {

@@ -260,6 +260,21 @@ fn status(policy: &PolicyChoice) -> &'static str {
 
 fn rejection_text(reason: &StructuralRejection) -> String {
     match reason {
+        StructuralRejection::PermitUnavailable {
+            candidate,
+            application,
+            state_id,
+            review,
+        } => {
+            format!(
+                "{candidate} requires permit {application} in {state_id} ({}{})",
+                review.state.label(),
+                review
+                    .clock_deadline
+                    .as_ref()
+                    .map_or_else(String::new, |day| format!(", clock deadline {day}"))
+            )
+        }
         StructuralRejection::BudgetExceeded => "budget exceeded".into(),
         StructuralRejection::MissingPrerequisite {
             candidate,
@@ -434,6 +449,24 @@ impl EvaluatedRecourseProgram {
                 md(&observation.state_id),
                 md(&observation.observation_id)
             );
+        }
+        if let Some(input) = &self.inputs().program.permits {
+            out.push_str("\n## Declared permit conditions\n\nThe static comparison and every continuation apply the same permit requirements. A continuation must be feasible in every state within its observation class.\n\n| Candidate | Required application |\n|---|---|\n");
+            for (candidate, application) in &input.value.requirements {
+                let _ = writeln!(out, "| {} | {} |", md(candidate), md(application));
+            }
+            out.push_str("\n| Application | Shared state | Review at observation | Clock deadline |\n|---|---|---|---|\n");
+            for ((application, state), review) in &baseline.permit_reviews {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} | {} |",
+                    md(application),
+                    md(state),
+                    review.state.label(),
+                    review.clock_deadline.as_deref().unwrap_or("unresolved")
+                );
+            }
+            claim_markdown(&mut out, input);
         }
         out.push_str("\n## Complete policy outcomes in USD\n\nTotal-USD NAV statistics remain distinct from per-share statistics. Initial spending, continuation spending, path budgets and cash ledgers are always USD.\n\n| Policy | Mean net NAV | P10 | P50 | P90 | Tail loss | CVaR95 loss | Mean regret | Max regret | Status |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
         for policy in &s.policies {

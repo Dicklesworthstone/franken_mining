@@ -41,6 +41,7 @@ dependencies = [
  "fmine-evidence",
  "fmine-numerics",
  "fmine-registry",
+ "fmine-time",
  "fmine-units",
 ]
 
