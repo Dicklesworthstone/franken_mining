@@ -268,6 +268,98 @@ def joint_fractional_periods():
     assert markdown.returncode == 0 and "Joint period and route search" in markdown.stdout
 
 
+def split_only_insertions():
+    # Neither whole destination is feasible. Enumerate the decimal lattice
+    # independently: the only complete allocation is exactly one half each.
+    for suffix in ("pcpsp", "prec"):
+        (ROOT / ("model." + suffix)).write_bytes(
+            (REPO / "tests/planning" / ("split_only." + suffix)).read_bytes())
+    original = (ROOT / "model.pcpsp").read_text()
+    values, uses, requires, caps = [[10, 10]], [[[2, 0], [0, 2]]], [[]], [[1], [1]]
+    feasible = []
+    for amount in range(101):
+        allocation = [(0, d, 0, part) for d, part in
+                      [(0, 1-Q(amount, 100)), (1, Q(amount, 100))] if part]
+        value, fits = value_and_feasible(values, uses, requires, 1, caps, allocation, [2**40])
+        if fits:
+            feasible.append((value, allocation))
+    assert feasible == [(Q(10), [(0, 0, 0, Q(1, 2)), (0, 1, 0, Q(1, 2))])]
+    disabled = verify(command(["--rounds", "0"]), values, uses, requires, caps)
+    assert fraction(disabled["selected"]["discounted_value"]) == 0
+    assert "fractional_insertion_search" not in disabled
+    whole = verify(command(["--share-decimals", "0"]), values, uses, requires, caps)
+    assert fraction(whole["selected"]["discounted_value"]) == 0
+    assert whole["fractional_insertion_search"]["insertions"] == 0
+    report = command(["--share-decimals", "2"])
+    p = verify(report, values, uses, requires, caps, Q(10))
+    assert p["candidate"] is None
+    assert p["selected"]["origin"] == "fractional_insertion"
+    assert rows(p["selected"]["solution"]) == feasible[0][1]
+    search = p["fractional_insertion_search"]
+    assert search["seed_origin"] == "empty" and search["insertions"] == 1
+    assert fraction(search["before"]) == 0 and fraction(search["after"]) == 10
+    assert search["trials"] > 0 and 0 < search["work"] <= search["work_limit"] == 262144
+    assert not search["work_exhausted"] and search["existing_assignments_preserved"]
+    assert search["maximum_destinations_per_inserted_block"] == 2
+    assert p["joint_period_route_search"]["seed_origin"] == "fractional_insertion"
+    assert command(["--share-decimals", "2"]) == report
+    markdown = subprocess.run(
+        [str(BINARY), "plan", "schedule", "--pcpsp", "model.pcpsp", "--prec", "model.prec",
+         "--format", "markdown", "--workspace", str(ROOT)],
+        capture_output=True, text=True, check=False)
+    assert markdown.returncode == 0 and "Exact block insertion" in markdown.stdout
+    assert "1 complete blocks added" in markdown.stdout
+
+    # A required fraction of exactly one third is absent from every finite
+    # decimal grid. Neither a rounded route nor an incomplete block is valid.
+    thirds = original.replace("0 0 L 1", "0 0 L 2")
+    thirds = thirds.replace("0 0 0 2", "0 0 0 3").replace("0 1 1 2", "0 1 1 3")
+    (ROOT / "model.pcpsp").write_text(thirds)
+    for digits in (1, 2, 9):
+        assert 10**digits % 3 != 0
+        q = verify(command(["--share-decimals", str(digits)]), values,
+                   [[[3, 0], [0, 3]]], requires, [[2], [1]])
+        assert rows(q["selected"]["solution"]) == []
+        assert q["fractional_insertion_search"]["insertions"] == 0
+
+    # Signed blending rows impose a lower as well as an upper share bound.
+    signed = original.replace("0 0 L 1", "0 0 L 0").replace("1 0 L 1", "1 0 L 0")
+    signed = signed.replace("0 0 0 2\n0 1 1 2", "0 0 0 2\n0 0 1 -2\n0 1 0 -2\n0 1 1 2")
+    (ROOT / "model.pcpsp").write_text(signed)
+    signed_report = verify(command(), values, [[[2, -2], [-2, 2]]], requires, [[0], [0]], Q(10))
+    assert rows(signed_report["selected"]["solution"]) == feasible[0][1]
+
+    # A later-ID prerequisite must be inserted before its dependent is
+    # reconsidered. Separate resource pairs force both new blocks to split.
+    values = [[10, 10], [10, 10]]
+    uses = [[[2, 0, 0, 0], [0, 2, 0, 0]], [[0, 0, 2, 0], [0, 0, 0, 2]]]
+    requires, caps = [[1], []], [[1], [1], [1], [1]]
+    text = ("NAME: split-precedence\nTYPE: PCPSP\nNBLOCKS: 2\nNPERIODS: 1\n"
+            "NDESTINATIONS: 2\nNRESOURCE_SIDE_CONSTRAINTS: 4\n"
+            "NGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\nRESOURCE_CONSTRAINT_LIMITS:\n")
+    text += "".join(f"{r} 0 L 1\n" for r in range(4))
+    text += "OBJECTIVE_FUNCTION:\n0 10 10\n1 10 10\nRESOURCE_CONSTRAINT_COEFFICIENTS:\n"
+    text += "".join(f"{b} {d} {r} {u}\n" for b in range(2) for d in range(2)
+                    for r, u in enumerate(uses[b][d])) + "EOF\n"
+    (ROOT / "model.pcpsp").write_text(text)
+    (ROOT / "model.prec").write_text("0 1 1\n1 0\n")
+    one_round = verify(command(["--rounds", "1"]), values, uses, requires, caps, Q(10))
+    assert fraction(one_round["selected"]["discounted_value"]) == 10
+    assert all(b == 1 for b, _, _, _ in rows(one_round["selected"]["solution"]))
+    complete = verify(command(), values, uses, requires, caps, Q(20))
+    assert complete["fractional_insertion_search"]["insertions"] == 2
+    assert fraction(complete["selected"]["discounted_value"]) == 20
+    # Nontrivial cycles need simultaneous admission, outside this neighborhood.
+    (ROOT / "model.prec").write_text("0 1 1\n1 1 0\n")
+    cyclic = verify(command(), values, uses, [[1], [0]], caps)
+    assert rows(cyclic["selected"]["solution"]) == []
+    # A profitable dependent cannot make its loss-making prerequisite disappear.
+    (ROOT / "model.prec").write_text("0 1 1\n1 0\n")
+    (ROOT / "model.pcpsp").write_text(text.replace("1 10 10", "1 -1 -1"))
+    loss = verify(command(), [[10, 10], [-1, -1]], uses, requires, caps)
+    assert rows(loss["selected"]["solution"]) == []
+
+
 def generated_models():
     rng = random.Random(0x51A17)
     for case in range(16):
@@ -471,6 +563,7 @@ master_mixtures()
 joint_routes()
 fractional_periods()
 joint_fractional_periods()
+split_only_insertions()
 generated_models()
 lp_guidance()
-print("PASS: exact split and simultaneous-mixture oracles, joint route/period5-to6 improvement, imported fixed-fraction period22.5-to25 improvement, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")
+print("PASS: exact split and simultaneous-mixture oracles, joint route/period5-to6 improvement, imported fixed-fraction period22.5-to25 improvement, split-only block insertion with independent decimal enumeration, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")

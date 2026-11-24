@@ -1,4 +1,4 @@
-//! Exact joint mining-period and two-route moves for a fixed mined set.
+//! Exact joint mining-period/two-route moves and profitable two-route insertions.
 //! Determinism: BitwisePortable
 //!
 //! For one block, a destination pair and a proposed period, every signed
@@ -6,7 +6,8 @@
 //! the best feasible point on the declared decimal grid without an LP solve.
 //! Other blocks retain their periods and routes. This bounded neighborhood
 //! can cross a period move that is infeasible at the original route fractions;
-//! it does not certify the full joint scheduling optimum.
+//! it does not certify the full joint scheduling optimum. A separate insertion
+//! pass admits previously unmined blocks while preserving every existing assignment.
 
 use fmine_evidence::Refusal;
 
@@ -37,6 +38,39 @@ pub struct Improvement {
     pub schedule: candidate::SplitSchedule,
     pub checked: candidate::SplitCheck,
     pub search: JointSearch,
+}
+
+/// Exact objective numerators and bounded work for adding previously unmined
+/// blocks. Existing periods and destination fractions never change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsertionSearch {
+    pub before: i128,
+    pub after: i128,
+    pub rounds: usize,
+    pub insertions: usize,
+    pub trials: usize,
+    pub work: usize,
+    pub work_exhausted: bool,
+}
+
+impl InsertionSearch {
+    fn charge(&mut self, budget: usize, amount: usize) -> bool {
+        if amount > budget - self.work {
+            self.work_exhausted = true;
+            return false;
+        }
+        self.work += amount;
+        true
+    }
+}
+
+/// A checked extension of the original mining set, including the original
+/// unchanged when no strictly profitable feasible insertion is found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inserted {
+    pub schedule: candidate::SplitSchedule,
+    pub checked: candidate::SplitCheck,
+    pub search: InsertionSearch,
 }
 
 struct Block {
@@ -369,6 +403,209 @@ fn improve_bounded(
         return Err(bad("independent feasibility or value recomputation failed"));
     }
     Ok(Improvement {
+        schedule,
+        checked,
+        search,
+    })
+}
+
+/// Add profitable unmined blocks, including blocks feasible only when split
+/// between two destinations. Every new block is mined completely in one period;
+/// its at-most-two fractions sum to exactly one on the original decimal grid.
+/// Existing assignments remain unchanged, including any larger splits.
+///
+/// Blocks are visited in ID order. All required blocks must already be mined
+/// by the proposed period (a self arc is harmless). Every period and destination
+/// pair is considered in ID order, and only a strict positive exact gain is
+/// retained. Equal gains keep the first proposal. Later rounds may admit a
+/// block unlocked by an earlier insertion, but no nontrivial precedence cycle,
+/// loss-making prerequisite bundle or coordinated block insertion is searched.
+///
+/// Every signed resource limit remains feasible after each insertion. At most
+/// [`WORK`] block scans, precedence scans, period scans and destination-pair
+/// row units, and at most 1,000 rounds, are used. Exhaustion retains all complete
+/// checked gains. This bounded neighborhood supplies no optimality claim.
+///
+/// # Errors
+/// Invalid or infeasible starts, invalid factors, more than 1,000 rounds,
+/// arithmetic overflow or failed independent final verification refuse.
+pub fn insert(
+    model: &PcpspModel,
+    original: &candidate::SplitSchedule,
+    factors: &[i64],
+    rounds: usize,
+) -> Result<Inserted, Refusal> {
+    insert_bounded(model, original, factors, rounds, WORK)
+}
+
+fn insert_bounded(
+    model: &PcpspModel,
+    original: &candidate::SplitSchedule,
+    factors: &[i64],
+    rounds: usize,
+    budget: usize,
+) -> Result<Inserted, Refusal> {
+    if rounds > 1_000 {
+        return Err(bad("insertion rounds must be 0..=1000"));
+    }
+    let checked = candidate::check(model, original)?;
+    if !checked.feasible() {
+        return Err(bad("insertion starting schedule is infeasible"));
+    }
+    let before = checked.discounted_value(factors)?;
+    let mut search = InsertionSearch {
+        before,
+        after: before,
+        rounds: 0,
+        insertions: 0,
+        trials: 0,
+        work: 0,
+        work_exhausted: false,
+    };
+    if rounds == 0 || checked.mined == model.blocks() {
+        return Ok(Inserted {
+            schedule: original.clone(),
+            checked,
+            search,
+        });
+    }
+    let original_mined = checked.mined;
+    let scale = i128::from(original.scale());
+    let mut periods = vec![None; model.blocks()];
+    let mut assignments = original.assignments().to_vec();
+    for a in &assignments {
+        periods[a.block as usize] = Some(a.period as usize);
+    }
+    let mut used = checked.used;
+    'rounds: for _ in 0..rounds {
+        search.rounds += 1;
+        let mut changed = false;
+        for b in 0..model.blocks() {
+            if !search.charge(budget, 1) {
+                break 'rounds;
+            }
+            if periods[b].is_some() {
+                continue;
+            }
+            if !search.charge(budget, model.requires[b].len()) {
+                break 'rounds;
+            }
+            let mut first = 0;
+            let mut ready = true;
+            for &required in &model.requires[b] {
+                if required as usize == b {
+                    continue;
+                }
+                if let Some(period) = periods[required as usize] {
+                    first = first.max(period);
+                } else {
+                    ready = false;
+                    break;
+                }
+            }
+            if !ready {
+                continue;
+            }
+            let mut best: Option<Move> = None;
+            'periods: for (to, &factor) in factors.iter().enumerate().skip(first) {
+                if !search.charge(budget, model.resources().saturating_add(1)) {
+                    break;
+                }
+                let room = model
+                    .limits
+                    .iter()
+                    .enumerate()
+                    .map(|(r, limits)| {
+                        (i128::from(limits[to]) * scale)
+                            .checked_sub(used[r][to])
+                            .ok_or_else(overflow)
+                    })
+                    .collect::<Result<Vec<_>, Refusal>>()?;
+                let at = b * model.destinations();
+                for left in 0..model.destinations() {
+                    for right in left..model.destinations() {
+                        if !search.charge(budget, model.resources().saturating_add(1)) {
+                            break 'periods;
+                        }
+                        search.trials += 1;
+                        let Some(x) = fraction(model, b, left, right, &room, scale)? else {
+                            continue;
+                        };
+                        let value = (i128::from(model.values[at + left]) * (scale - x))
+                            .checked_add(i128::from(model.values[at + right]) * x)
+                            .ok_or_else(overflow)?;
+                        let gain = value
+                            .checked_mul(i128::from(factor))
+                            .ok_or_else(overflow)?;
+                        if gain <= best.as_ref().map_or(0, |m| m.gain) {
+                            continue;
+                        }
+                        let mut routes = Vec::with_capacity(2);
+                        for (d, q) in [(left, scale - x), (right, x)] {
+                            if q > 0 {
+                                routes.push((d as u32, i64::try_from(q).map_err(|_| overflow())?));
+                            }
+                        }
+                        let uses = model
+                            .uses
+                            .iter()
+                            .map(|row| {
+                                (i128::from(row[at + left]) * (scale - x))
+                                    .checked_add(i128::from(row[at + right]) * x)
+                                    .ok_or_else(overflow)
+                            })
+                            .collect::<Result<Vec<_>, Refusal>>()?;
+                        best = Some(Move {
+                            period: to,
+                            routes,
+                            value,
+                            uses,
+                            gain,
+                        });
+                    }
+                }
+            }
+            if let Some(next) = best {
+                for (r, row) in used.iter_mut().enumerate() {
+                    row[next.period] = row[next.period]
+                        .checked_add(next.uses[r])
+                        .ok_or_else(overflow)?;
+                }
+                search.after = search.after.checked_add(next.gain).ok_or_else(overflow)?;
+                search.insertions += 1;
+                periods[b] = Some(next.period);
+                for (destination, fraction) in next.routes {
+                    assignments.push(candidate::DestinationShare {
+                        block: b as u32,
+                        destination,
+                        period: next.period as u32,
+                        fraction,
+                    });
+                }
+                changed = true;
+                if original_mined + search.insertions == model.blocks() {
+                    break 'rounds;
+                }
+            }
+            if search.work_exhausted {
+                break 'rounds;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let schedule = candidate::SplitSchedule::new(model, assignments, original.share_decimals())?;
+    let checked = candidate::check(model, &schedule)?;
+    if !checked.feasible()
+        || checked.used != used
+        || checked.mined != original_mined + search.insertions
+        || checked.discounted_value(factors)? != search.after
+        || search.after < search.before
+    {
+        return Err(bad("independent insertion feasibility or value recomputation failed"));
+    }
+    Ok(Inserted {
         schedule,
         checked,
         search,

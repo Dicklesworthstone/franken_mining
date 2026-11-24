@@ -698,6 +698,11 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                             None,
                             Some(executive.not_before_ns),
                         )
+                    } else if let Choice::ActNow(action) = choice
+                        && let Some((card, claim_id)) =
+                            crate::capital::static_program_snapshot(&text, &source, action)?
+                    {
+                        (card, claim_id, None, None)
                     } else {
                         let (card, claim_id, policy) = choice.snapshot(&text, source.clone())?;
                         (card, claim_id, policy, None)

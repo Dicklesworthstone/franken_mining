@@ -155,6 +155,19 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   No global optimality claim is supplied. Exact controls cover complementary signed rows, two-node
   cycles, external precedence, removing credits from either old period, budget exhaustion and an
   independent tiny-model enumeration; the CLI oracle retains the original imported-candidate receipt.
+- DESIGN (BD-252/253, plan §15.6): `toposort::pcpsp::fractional::joint::insert` admits complete unmined
+  blocks using the same exact two-destination fraction interval, including from an empty incumbent.
+  All non-self predecessors must already be mined no later than the proposed period; both signed
+  row bounds and the declared decimal lattice are enforced. Existing assignments remain unchanged.
+  Only strict positive discounted gains enter, with deterministic block/period/pair order. Each pass
+  has its own `joint::WORK` limit and 0–1,000 rounds; exhaustion retains complete feasible insertions.
+  Both planner entry points run it before joint rerouting for positive rounds. `insertion_seed_origin`
+  and `fractional_insertions` retain the immediate seed and counters; a strict gain selects
+  `fractional_insertion`. The final independent schedule check and full-model bound still apply.
+  Nontrivial cycles, loss-making prerequisite bundles, simultaneous admission and new allocations
+  across three or more destinations are outside this neighborhood. The independent CLI oracle
+  enumerates a split-only feasible block, checks signed rows, prerequisite ordering, decimal-grid
+  impossibility and zero-round opt-out without requiring an external candidate.
 - DESIGN (BD-252/253, plan §15.6): `toposort::pcpsp::fractional::joint::improve` searches each mined
   block's period and exact allocation between every destination pair, keeping other blocks fixed.
   For a share `x` of the second destination, every resource row is `a*x <= b`; positive `a` gives an
@@ -167,7 +180,7 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   feasible improvements; arithmetic overflow refuses. Final candidate checking independently
   recomputes all resource use and discounted value. The pass does not insert or drop blocks, move
   several blocks at once, optimize allocations among three or more destinations, or certify optimality.
-  Both planner entry points run it after fixed-fraction period search for a nonempty incumbent and
+  Both planner entry points run it after fixed-fraction period search and block insertion for a nonempty incumbent and
   positive rounds. `Plan::joint_seed_origin` and `joint_period_routes` retain the seed and counters;
   `joint_period_route_search` becomes the selected origin only on a strict gain. The original external
   candidate assessment remains intact, and the full-model Lagrangian certificate is still replayed.

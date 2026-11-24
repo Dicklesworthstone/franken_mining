@@ -551,7 +551,10 @@ fn every_price_iterate_bounds_an_independent_exhaustive_oracle_on_signed_tiny_mo
         } else {
             assert!(matches!(
                 p.origin,
-                "fractional_greedy" | "fractional_improved"
+                "fractional_greedy"
+                    | "fractional_improved"
+                    | "fractional_insertion"
+                    | "joint_period_route_search"
             ));
         }
     }
@@ -638,4 +641,67 @@ fn work_scale_and_exact_objective_overflow_refuse() {
     )
     .unwrap_err();
     assert!(error.what.contains("overflows i128"), "{error}");
+}
+
+#[test]
+fn discovers_split_only_feasible_blocks_from_an_empty_plan_with_a_global_certificate() {
+    let mut m = model(&[[10, 12]], &[[2, 0]], &[1], "0", &[vec![]]);
+    m.uses.push(vec![0, 2]);
+    m.limits.push(vec![1]);
+    let frozen = solve(&m, options(0), None).unwrap();
+    assert_eq!(frozen.origin, "empty");
+    assert_eq!(frozen.checked.mined, 0);
+    assert!(frozen.fractional_insertions.is_none());
+    let plan = solve(&m, options(8), None).unwrap();
+    assert_eq!(plan.origin, "fractional_insertion");
+    assert_eq!(plan.insertion_seed_origin, "empty");
+    assert_eq!(plan.joint_seed_origin, "fractional_insertion");
+    assert_eq!(plan.checked.mined, 1);
+    assert_eq!(
+        plan.discounted_numerator,
+        11_000 * i128::from(DISCOUNT_SCALE)
+    );
+    let inserted = plan.fractional_insertions.as_ref().unwrap();
+    assert_eq!((inserted.before, inserted.insertions), (0, 1));
+    assert_eq!(inserted.after, plan.discounted_numerator);
+    assert_eq!(
+        candidate::write_solution(&plan.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n"
+    );
+    assert_certificate(&m, &plan);
+    assert_eq!(solve(&m, options(8), None).unwrap(), plan);
+}
+
+#[test]
+fn adding_split_only_blocks_preserves_the_original_external_candidate_assessment() {
+    let mut m = model(
+        &[[0, 40], [0, 0], [10, 12]],
+        &[[0, 2], [0, 0], [0, 0]],
+        &[1],
+        "0",
+        &[vec![1], vec![0], vec![]],
+    );
+    m.uses.push(vec![0, 0, 0, 0, 2, 0]);
+    m.limits.push(vec![1]);
+    m.uses.push(vec![0, 0, 0, 0, 0, 2]);
+    m.limits.push(vec![1]);
+    let source = "0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n";
+    let outside = candidate::parse_solution(source, &m, 3).unwrap();
+    let frozen = solve(&m, options(0), Some(&outside)).unwrap();
+    assert_eq!(frozen.origin, "external_candidate");
+    let plan = solve(&m, options(8), Some(&outside)).unwrap();
+    assert_eq!(plan.origin, "fractional_insertion");
+    assert_eq!(plan.insertion_seed_origin, "external_candidate");
+    assert_eq!(plan.candidate, frozen.candidate);
+    assert_eq!(
+        plan.discounted_numerator,
+        31_000 * i128::from(DISCOUNT_SCALE)
+    );
+    assert_eq!(plan.fractional_insertions.as_ref().unwrap().insertions, 1);
+    assert_eq!(
+        candidate::write_solution(&plan.schedule),
+        "0 0 0 0.5\n0 1 0 0.5\n1 0 0 1\n2 0 0 0.5\n2 1 0 0.5\n"
+    );
+    assert_eq!(candidate::write_solution(&outside), source);
+    assert_certificate(&m, &plan);
 }

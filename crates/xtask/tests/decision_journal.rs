@@ -31,6 +31,94 @@ const PURCHASE: &str = include_str!("../../../tests/capital/executive_purchase.t
 const OPERATING_REVIEW: &str = include_str!("../../../tests/capital/executive_care.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
+const CAPITAL_BASE: &str = r#"schema = "fmine.capital-program.v1"
+model_key = "journal-capital"
+question = "Which synthetic capital bundle should be retained?"
+currency = "USD"
+valuation_basis = "Synthetic net USD; capital is already included"
+budget = "100"
+tail_mass = "1/2"
+max_tail_loss = "0"
+payoff_convention = "additive_net_delta_nav"
+reference_class_basis = "Unadjusted synthetic assumptions"
+
+[[state]]
+id = "good"
+weight = "3/4"
+
+[[state]]
+id = "bad"
+weight = "1/4"
+
+[[candidate]]
+id = "risky"
+label = "Synthetic state-sensitive investment"
+cost = "100"
+reference_class_basis = "Unadjusted synthetic assumptions"
+
+[[payoff]]
+candidate = "risky"
+state = "good"
+value = "20"
+
+[[payoff]]
+candidate = "risky"
+state = "bad"
+value = "-12"
+
+[[uu]]
+id = "omitted"
+description = "An omitted regime changes these synthetic returns"
+trigger = "Observed returns leave the supplied support"
+downside_usd_m = "1"
+"#;
+
+const CAPITAL_SAFE: &str = r#"
+[[candidate]]
+id = "safe"
+label = "Synthetic constant-return investment"
+cost = "100"
+reference_class_basis = "Unadjusted synthetic assumptions"
+
+[[payoff]]
+candidate = "safe"
+state = "good"
+value = "8"
+
+[[payoff]]
+candidate = "safe"
+state = "bad"
+value = "8"
+"#;
+
+const CAPITAL_STRESS: &str = r#"
+[[robustness]]
+method = "wasserstein_1"
+radius = "1/4"
+metric_basis = "Synthetic unit distance between the two states"
+radius_basis = "Declared stress only; no calibrated coverage"
+
+[[transport_distance]]
+from = "good"
+to = "good"
+value = "0/1"
+
+[[transport_distance]]
+from = "good"
+to = "bad"
+value = "1/1"
+
+[[transport_distance]]
+from = "bad"
+to = "good"
+value = "1/1"
+
+[[transport_distance]]
+from = "bad"
+to = "bad"
+value = "0/1"
+"#;
+
 fn binary() -> PathBuf {
     if let Some(path) = std::env::var_os("FMINE_TEST_BINARY") {
         return PathBuf::from(path);
@@ -2206,4 +2294,257 @@ fn decision_forecast_cli_requires_complete_pins_and_read_only_review() {
         omitted.drain(position..position + 2);
         assert!(parse_args(&omitted, &root).is_err());
     }
+}
+
+#[test]
+fn capital_bundle_choice_retains_complete_comparison_and_lower_ranked_human_choice() {
+    let f = Fixture::new();
+    let earlier = successful(execute_with_clock(
+        &f.record(f.initial, "earlier-action", "hold"),
+        &f.root,
+        &Clock(200),
+    ));
+    let prior = head(&earlier);
+    let old_fields = operation_fields(&f, prior, 1);
+    let submitted = format!("{CAPITAL_BASE}{CAPITAL_SAFE}");
+    fs::write(&f.model, &submitted).unwrap();
+    let run = |args: &[&str]| {
+        let output = Process::new(binary())
+            .args(args)
+            .args(["--workspace", f.root.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let model = f.model.to_str().unwrap();
+    let ledger = f.journal.to_str().unwrap();
+    let comparison = run(&["decide", "program", model, "--json"]);
+    let original = parse_json(comparison.as_bytes()).unwrap();
+    let actions: Vec<_> = json_field(&original, &["payload", "journal_actions"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| json_field(row, &["id"]).as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["bundle_00", "bundle_01", "bundle_02"]);
+    // Independent known answer: risky mean = 3/4*20 - 1/4*12 = 12; safe = 8.
+    let winners = json_field(
+        &original,
+        &["payload", "program", "summary", "feasible_winners"],
+    )
+    .as_array()
+    .unwrap();
+    assert_eq!(winners.len(), 1);
+    assert_eq!(winners[0].as_str(), Some("bundle_01"));
+    let recorded = run(&[
+        "decide",
+        "journal",
+        "record",
+        "--journal",
+        ledger,
+        "--expected-head",
+        &prior.to_hex(),
+        "--model",
+        model,
+        "--decision",
+        "committee-capital-choice",
+        "--action",
+        "bundle_02",
+        "--reason",
+        "Prefer the lower-ranked constant-return bundle under this declared model",
+        "--code-revision",
+        REVISION,
+        "--trust-host-clock",
+        "--json",
+    ]);
+    let result = parse_json(recorded.as_bytes()).unwrap();
+    let retained = json_field(&result, &["payload", "decisions"])
+        .as_array()
+        .unwrap()
+        .to_vec();
+    let snapshot = json_field(retained.last().unwrap(), &["snapshot"]);
+    assert_eq!(
+        json_field(snapshot, &["selected_action"]).as_str(),
+        Some("bundle_02")
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "content"]).as_str(),
+        Some(submitted.as_str())
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "sha256"]).as_str(),
+        Some(sha256(submitted.as_bytes()).to_hex().as_str())
+    );
+    let saved = json_field(snapshot, &["artifact", "content"])
+        .as_str()
+        .unwrap();
+    assert_eq!(saved, comparison.trim_end());
+    assert_eq!(
+        json_field(snapshot, &["artifact", "sha256"]).as_str(),
+        Some(sha256(saved.as_bytes()).to_hex().as_str())
+    );
+    assert_eq!(
+        json_field(snapshot, &["claim_id"]),
+        json_field(&original, &["payload", "program", "claim", "id"])
+    );
+    assert_eq!(
+        json_field(
+            &parse_json(saved.as_bytes()).unwrap(),
+            &["payload", "program", "summary", "choices"]
+        )
+        .as_array()
+        .unwrap()
+        .len(),
+        4
+    );
+    let pin = Digest32(
+        fmine_calib::record::parse_hex32(
+            json_field(&result, &["payload", "head"]).as_str().unwrap(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(operation_fields(&f, pin, 1), old_fields);
+    fs::write(&f.model, submitted.replace("value = \"8\"", "value = \"9\"")).unwrap();
+    assert_ne!(run(&["decide", "program", model, "--json"]), comparison);
+    fs::write(&f.model, "the source is no longer a capital model").unwrap();
+    let replay = successful(f.show(Some(pin)));
+    let replay = parse_json(replay.payload_json.as_bytes()).unwrap();
+    assert_eq!(
+        json_field(&replay, &["decisions"]).as_array().unwrap(),
+        retained.as_slice()
+    );
+}
+
+#[test]
+fn capital_bundle_journal_enforces_declared_limits_without_inventing_a_policy() {
+    let f = Fixture::new();
+    let submitted = format!("{CAPITAL_BASE}{CAPITAL_SAFE}");
+    fs::write(&f.model, &submitted).unwrap();
+    for action in ["bundle_ff", "bundle_03"] {
+        // The first id is absent; the second spends 200 against the 100 budget.
+        f.refuses_without_append(
+            &f.record(f.initial, "invalid-bundle", action),
+            300,
+            "FMINE-REF-105",
+        );
+    }
+    let downside = CAPITAL_BASE.replace("value = \"-12\"", "value = \"-24\"");
+    fs::write(&f.model, downside).unwrap();
+    // Worst half: (-24/4 + 20/4) / (1/2) = -2, so signed loss 2 exceeds zero.
+    f.refuses_without_append(
+        &f.record(f.initial, "tail-breach", "bundle_01"),
+        300,
+        "FMINE-REF-105",
+    );
+    let liquidity = format!(
+        r#"{CAPITAL_BASE}
+[[funding]]
+cash_period = "2030-01-01/2030-12-31"
+cash_basis = "Synthetic cash envelope before the selected investment"
+minimum_cash = "10"
+
+[[available_cash]]
+state = "good"
+value = "100"
+
+[[available_cash]]
+state = "bad"
+value = "100"
+
+[[cash_requirement]]
+candidate = "risky"
+state = "good"
+value = "80"
+
+[[cash_requirement]]
+candidate = "risky"
+state = "bad"
+value = "95"
+"#
+    );
+    fs::write(&f.model, liquidity).unwrap();
+    f.refuses_without_append(
+        &f.record(f.initial, "cash-breach", "bundle_01"),
+        300,
+        "FMINE-REF-105",
+    );
+    for unsupported in [
+        include_str!("../../../tests/capital/kpi_constraints.toml"),
+        include_str!("../../../tests/capital/staged_permit.toml"),
+    ] {
+        fs::write(&f.model, unsupported).unwrap();
+        f.refuses_without_append(
+            &f.record(f.initial, "policy-not-a-bundle", "bundle_00"),
+            300,
+            "FMINE-REF-105",
+        );
+    }
+    let stressed = format!("{CAPITAL_BASE}{CAPITAL_STRESS}");
+    fs::write(&f.model, stressed).unwrap();
+    // The nominally winning bundle passes the nominal tail limit, but moving a quarter of
+    // probability to bad makes its worst-half signed loss 12. Hold passes at equality.
+    f.refuses_without_append(
+        &f.record(f.initial, "robust-tail-breach", "bundle_01"),
+        300,
+        "FMINE-REF-105",
+    );
+    let held = successful(execute_with_clock(
+        &f.record(f.initial, "retain-cash", "bundle_00"),
+        &f.root,
+        &Clock(300),
+    ));
+    let record = parse_json(held.payload_json.as_bytes()).unwrap();
+    let snapshot = json_field(&record, &["decisions"]).as_array().unwrap();
+    let artifact = json_field(&snapshot[0], &["snapshot", "artifact", "content"])
+        .as_str()
+        .unwrap();
+    let artifact = parse_json(artifact.as_bytes()).unwrap();
+    let available = json_field(&artifact, &["payload", "journal_actions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(available.len(), 1);
+    assert_eq!(json_field(&available[0], &["id"]).as_str(), Some("bundle_00"));
+    assert!(
+        json_field(&artifact, &["payload", "program", "summary", "robustness"])
+            .get("robust_tail_rejections")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id.as_str() == Some("bundle_01"))
+    );
+}
+
+#[test]
+fn capital_bundle_journal_refuses_oversize_complete_receipts_without_append() {
+    let f = Fixture::new();
+    let submitted = format!(
+        "{CAPITAL_BASE}#{}\n",
+        "x".repeat(32_000 - CAPITAL_BASE.len() - 2)
+    );
+    assert_eq!(submitted.len(), 32_000);
+    fs::write(&f.model, submitted).unwrap();
+    let before = fs::read(&f.journal).unwrap();
+    let result = execute_with_clock(
+        &f.record(f.initial, "oversize-comparison", "bundle_00"),
+        &f.root,
+        &Clock(300),
+    );
+    assert_ne!(result.exit_code, 0);
+    assert_eq!(result.refusal.as_ref().unwrap().code, "FMINE-REF-107");
+    assert!(
+        result
+            .refusal
+            .as_ref()
+            .unwrap()
+            .what
+            .contains("65536-byte journal operation limit")
+    );
+    assert_eq!(fs::read(&f.journal).unwrap(), before);
+    successful(f.show(Some(f.initial)));
 }

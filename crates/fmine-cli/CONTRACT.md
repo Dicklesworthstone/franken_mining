@@ -48,6 +48,17 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     all journal encodings remain unchanged. This is an upfront funding screen, not future-liquidity
     assurance or transition authority. Direct command and atomic-refusal controls are in
     `xtask/tests/decision_journal.rs`.
+  - DESIGN (BD-225/229). Directly declared static `fmine.capital-program.v1` models expose
+    `journal_actions` with eligible bundle IDs and candidate membership. The decision journal admits
+    any such explicit choice, including a lower-ranked bundle or hold when permitted. Admission
+    preserves structural, nominal primary/secondary tail-risk and declared robust tail-risk limits.
+    The full model and command comparison, including rejected alternatives and the existing output
+    Claim ID, remain in the snapshot under the capital command's canonical source locator.
+    Existing journal formats and its 65,536-byte operation cap remain unchanged; complete receipts
+    that exceed it refuse atomically. KPI, staged-policy and source-derived investment models are
+    outside this static handoff. Recording grants no approval or execution authority. Direct CLI
+    replay, lower-ranked choices, risk/funding refusals and oversize atomicity are covered by
+    `capital_bundle_` controls in `xtask/tests/decision_journal.rs`.
   - Rehabilitation compares mutually exclusive, owner-eligible packages at one horizon. Work is paid on
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release
@@ -520,7 +531,16 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     directions must remain feasible. `--rounds` and a 262,144-work-unit limit bound the pass; exhaustion
     retains its checked incumbent. Optional `fractional_period_search` JSON/Markdown reports the seed,
     exact before/after value and work counters, with that origin selected only on a strict gain. The
-    original external candidate assessment remains unchanged. A subsequent bounded joint pass searches
+    original external candidate assessment remains unchanged. A bounded insertion pass then admits
+    complete predecessor-ready blocks using one or two destinations, even from an empty schedule.
+    It preserves existing assignments, checks exact signed resource rows on the declared share grid,
+    and accepts only strict positive gains. `fractional_insertion_search` retains seed, exact values,
+    inserted count and work counters; a strict gain selects `fractional_insertion`. This pass has its
+    own 262,144-work-unit limit and shares `--rounds`; zero rounds disables it. Nontrivial cycles,
+    loss-making prerequisite bundles and simultaneous admissions are outside its search. The
+    `tests/planning/split_only.*` example admits a block worth 10 through its only feasible 50/50
+    split, with no external candidate. The existing independent CLI oracle checks this construction.
+    A subsequent bounded joint pass searches
     each mined block's period and exact allocation between every destination pair. The optional
     `joint_period_route_search` report retains the immediate seed origin, before/after values, move and
     work counters; a strict gain selects that origin. Same-period rerouting is included. Both affected

@@ -1047,6 +1047,26 @@ imported split schedule from **22.5 to 25** without changing any route fraction.
 not change fractions, add or drop blocks, or move several blocks simultaneously; it supplies no new
 optimality claim.
 
+DESIGN (BD-252/253): exact block insertion also searches unmined blocks, including from an empty
+incumbent. A block can enter when its predecessors are already mined and a complete allocation across
+one or two destinations fits every signed resource row. This fills a gap in whole-route starts: some
+blocks are feasible only as a split.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/split_only.pcpsp --prec tests/planning/split_only.prec \
+  --share-decimals 2 --list-schedule --format markdown
+```
+
+In this synthetic example, either whole route exceeds a different resource limit. The exact 50/50 split
+admits one complete block worth **10**, without an external candidate. Every accepted insertion strictly
+increases discounted value while preserving existing assignments. An exact share absent from the
+declared decimal grid is not rounded into feasibility. The search uses `--rounds` and its own 262,144
+work-unit limit; `--rounds 0` disables it. `fractional_insertion_search` reports the seed, inserted count,
+exact values and consumed work. Nontrivial precedence cycles, loss-making prerequisite bundles,
+simultaneous insertions and new allocations across three or more destinations remain outside this
+bounded search. Final feasibility and the full-model upper bound are independently recomputed.
+
 DESIGN (BD-252/253): the subsequent joint search can move one block and change its destination fractions
 in the same step, or improve its routing within the current period. It checks every destination pair
 against exact signed resource inequalities and chooses the best representable fraction on the declared
@@ -2230,6 +2250,27 @@ decision date must have arrived under the journal's clock-skew allowance. The su
 costs, residual obligations, funding comparison and source bytes after the editable worksheet changes.
 The funding screen covers the declared upfront commitment; it does not certify future liquidity or
 authorize a mine transition. Any eligible choice can be recorded, including one that is not ranked first.
+
+For a directly declared static capital program (`fmine.capital-program.v1`), inspect
+`decide program capital-review.toml --json` and choose a bundle ID from `payload.journal_actions`.
+The list includes eligible lower-ranked portfolios and holding cash when permitted. Candidate membership
+and every rejected alternative remain in the complete comparison.
+
+```bash
+fmine decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model capital-review.toml \
+  --decision capital-committee-review --action "$FMINE_CAPITAL_BUNDLE" \
+  --reason "Retain the committee's chosen portfolio and its evaluated alternatives" \
+  --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
+```
+
+Set `FMINE_CAPITAL_BUNDLE` to the ID selected from that worksheet's action list. Admission enforces its
+budget, dependencies, exclusions, cash and share constraints, nominal tail limits and any declared robust
+tail limits. The journal retains the original source and complete evaluated JSON with its existing Claim
+identity. The full receipt must fit the existing 65,536-byte operation limit; larger comparisons refuse
+without appending. This handoff supports directly declared static programs; staged policies, KPI-constrained
+models and source-derived investment manifests need their own choice semantics. Recording does not grant
+approval or execution authority.
 
 To record buying testwork, select the information option and policy explicitly instead of `--action`:
 
