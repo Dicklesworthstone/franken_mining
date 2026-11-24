@@ -453,6 +453,12 @@ mutates_authority = true
 description = "Register a source-bound weighted plant forecast before its physical period and retain both time boundaries and complete input evidence"
 
 [[verb]]
+path = "forecast journal resolve-plant"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Resolve a frozen recovery forecast from retained feed, concentrate and tailings observations with exact dry and elemental closure"
+
+[[verb]]
 path = "forecast journal verify-plant"
 subsystem = "Plumb"
 mutates_authority = false

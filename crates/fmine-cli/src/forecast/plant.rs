@@ -2,6 +2,8 @@
 //! The complete source receipt remains in the hashed operation as admission evidence. Replay verifies
 //! those retained bytes and the forecast transitions; it does not re-evaluate the plant calculation.
 
+pub(in crate::forecast) mod outcome;
+
 use std::path::Path;
 
 use fmine_calib::ledger::{ForecastMetadata, ForecastPayload};
@@ -13,6 +15,8 @@ use fmine_io::omf::json::{Json, parse as parse_json};
 use fmine_plant::production::{ProductionPoint, ProductionReceipt};
 
 use super::{Row, hex, identifier, invalid, js, time};
+
+pub const OUTCOME_DOCS_JSON: &str = outcome::ROBOT_DOCS_JSON;
 
 const NS_PER_SECOND: i64 = 1_000_000_000;
 const LEGACY_EVIDENCE_PREFIX: &str = "# fmine.plant-forecast-admission.v1 ";

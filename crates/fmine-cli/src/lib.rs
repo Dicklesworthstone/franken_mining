@@ -798,7 +798,7 @@ fn parse_forecast_journal(
     let (mut fields, words) = journal_arguments(args, &["--json", "--trust-host-clock"])?;
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|register-plant|verify-plant|register-correction|freeze|outcome|resolve|restate|assess|inspect|report|compare|correction"
+            "expected forecast journal init|register|register-plant|resolve-plant|verify-plant|register-correction|freeze|outcome|resolve|restate|assess|inspect|report|compare|correction"
                 .to_string(),
         );
     };
@@ -879,6 +879,13 @@ fn parse_forecast_journal(
             journal,
             head: digest(&take(&mut fields, "--head")?)?,
             forecast: take(&mut fields, "--forecast")?,
+        },
+        "resolve-plant" => Command::ResolvePlant {
+            journal,
+            head: digest(&take(&mut fields, "--head")?)?,
+            cohort: take(&mut fields, "--cohort")?,
+            forecast: take(&mut fields, "--forecast")?,
+            input: PathBuf::from(take(&mut fields, "--input")?),
         },
         "register-plant" => Command::RegisterPlant {
             journal,
@@ -2794,6 +2801,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(forecast::CORRECTION_REGISTRATION_JSON);
             payload.push_str(",\"forecast_plant_verification\":");
             payload.push_str(forecast::plant::VERIFICATION_DOCS_JSON);
+            payload.push_str(",\"forecast_plant_outcome\":");
+            payload.push_str(forecast::plant::OUTCOME_DOCS_JSON);
             payload.push_str(",\"peer_comparison\":");
             payload.push_str(compare::ROBOT_DOCS_JSON);
             payload.push_str(",\"capital_program\":");

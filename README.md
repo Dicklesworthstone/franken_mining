@@ -440,6 +440,57 @@ journal. Existing `freeze`, `outcome` and `assess` commands handle cohort member
 observations and scoring. Supplied plant outcomes remain unverified; this is no external timestamp proof
 or claim that a real monthly forecasting gate has passed. `fmine robot-docs` documents the fields.
 
+DESIGN (BD-181/263): `forecast journal resolve-plant` derives a recovery outcome from three original
+whole-material observations: feed, concentrate and tailings. It uses the exact concentrate/feed
+elemental-mass ratio, requires positive feed metal and exactly closed dry and selected-element balances,
+and requires an explicit complete-two-product, unchanged-inventory declaration. The observation must
+match the frozen forecast's boundary, complete UTC interval, circuit, blend, material domain, dry basis
+and element. This first source-derived plant outcome path supports recovery targets only.
+
+Freeze the cohort before the physical interval starts with
+`resolution_rule = "plant-two-product-recovery/v1"` and the observation's source in `eligible_sources`.
+After the interval ends, supply an observation descriptor with the following shape; its scope labels
+must match the original forecast, and its three `fmine.plant-material.v1` worksheets must describe that
+same boundary and interval:
+
+```toml
+schema = "fmine.plant-recovery-observation.v1"
+
+[[observation]]
+source = "plant-observations"
+vintage = "shift-2031-02-17"
+available_at = "2031-02-18T01:00:00Z"
+circuit = "synthetic-ball-mill"
+blend = "synthetic-shift-blend"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Cu"
+measurand = "total-Cu/all-phases"
+balance_basis = "complete-two-product/no-inventory-change"
+feed = "observed-feed.toml"
+concentrate = "observed-concentrate.toml"
+tailings = "observed-tailings.toml"
+```
+
+```bash
+cargo run -p fmine-cli -- forecast journal resolve-plant \
+  --journal forecasts.journal --head <latest-head> --cohort plant-recovery \
+  --forecast recovery-forecast --input observed-recovery.toml --trust-host-clock
+```
+
+This observation path requires `dry_basis = "total-non-water-dry-matter/v1"`, matching the whole-material
+worksheets' explicit total-element, all-non-water assay basis. No conversion from another dry basis is inferred.
+Material paths are relative to the observation descriptor. Declared availability must strictly follow
+physical end and be no later than the writer clock's earliest possible time. The v16 operation retains
+the complete descriptor, three worksheets, hashes, exact ratio, binary64 scoring projection and balance
+receipt under the existing 64 KiB cap. Reopening the journal recomputes these retained observations without
+reading the original files. Existing `assess`, `report` and supplied-target `compare` commands can then
+score the outcome; the physical evidence identity is independent of the prediction being evaluated.
+Missing assays, nonclosing balances, mismatched scope, duplicate outcomes and oversized evidence refuse
+without advancing the journal. The result is labelled `source_derived_unverified`: source bytes and
+arithmetic are checked, while measurement accuracy, stream mapping, completeness and availability remain
+supplied declarations. No assay-inferred split, reconciled or modelled value is substituted for observations.
+
 DESIGN: a saved plant forecast can also be numerically verified from its retained worksheets:
 
 ```bash
