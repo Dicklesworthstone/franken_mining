@@ -244,6 +244,11 @@ the applicable whole-policy risk limits and both outcomes when no feasible polic
 declared stress and conditional resampling reuse the same finished comparison. Full reports retain the
 complete rejected population, realized state ledgers and source anchors.
 
+DESIGN (bd-w770): the journal adapter can serialize one evaluated policy through the same renderer as
+the complete comparison. The adapter pins the original comparison digest and takes its own clock and
+eligibility checks from the CLI journal path. The optimizer's evaluated policy carries the same realized
+state outcomes, cash checkpoints and independent equity ledgers in either report.
+
 DESIGN (BD-229, §22.5/§23.9): optional source-bound selection stability draws 200–2,000 multinomial
 resamples of the declared shared-state law, using an explicit seed, 1–4,096 draws per replicate and a
 sampling basis. This is a conditional sensitivity experiment; neither the draw count nor the frequencies

@@ -22,6 +22,9 @@ use fmine_io::omf::json::{Json, parse as parse_json};
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 use fmine_runtime::{ClockError, WallClock};
 
+#[path = "decision_journal/staged_capital.rs"]
+mod staged_capital;
+
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const MODEL: &str = include_str!("../../../tests/decisions/expansion.toml");
 const INFORMATION: &str = include_str!("../../../tests/decisions/metallurgical_test.toml");

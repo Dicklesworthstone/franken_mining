@@ -2319,9 +2319,26 @@ Set `FMINE_CAPITAL_BUNDLE` to the ID selected from that worksheet's action list.
 budget, dependencies, exclusions, cash and share constraints, nominal tail limits and any declared robust
 tail limits. The journal retains the original source and complete evaluated JSON with its existing Claim
 identity. The full receipt must fit the existing 65,536-byte operation limit; larger comparisons refuse
-without appending. This handoff supports directly declared static programs; staged policies, KPI-constrained
-models and source-derived investment manifests need their own choice semantics. Recording does not grant
-approval or execution authority.
+without appending. This handoff supports directly declared static programs. KPI-constrained models and
+source-derived investment manifests require separate choice semantics. Recording grants no approval or
+execution authority.
+
+For a **two-stage capital program**, copy the full `id` from `decide program <model> --json` under
+`payload.journal_actions`. The `policy_id@comparison_digest` form pins the reviewed comparison. A worksheet
+edit invalidates the selector. Record before the UTC observation date, allowing for the journal's declared
+clock skew. The synthetic early-works model offers both holding cash and the clearance-dependent policy.
+
+```bash
+fmine decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model tests/capital/staged_permit.toml \
+  --decision staged-early-works --action "$FMINE_STAGED_ACTION" \
+  --reason "Fund early works and revisit the construction commitment after permit review" \
+  --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
+```
+
+The retained record contains the original worksheet, the chosen policy with its initial commitment and
+every contingent action, and the complete comparison digest. Pinned `show` retrieves them after source
+edits. The follow-on decision still requires an actual observation and authorization. [Editable synthetic model](tests/capital/staged_permit.toml)
 
 To record buying testwork, select the information option and policy explicitly instead of `--action`:
 

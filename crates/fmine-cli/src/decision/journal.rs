@@ -269,6 +269,15 @@ impl Snapshot {
     }
 
     fn validate_at(&self, earliest_ns: i64, latest_ns: i64) -> Result<(), Refusal> {
+        if let Choice::ActNow(action) = &self.choice {
+            crate::capital::staged_journal::validate_at(
+                &self.card,
+                &self.model,
+                action,
+                &self.claim_id,
+                latest_ns,
+            )?;
+        }
         if let Some(links) = &self.forecasts {
             links.validate_at(earliest_ns, latest_ns)?;
         }
@@ -700,7 +709,7 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                         )
                     } else if let Choice::ActNow(action) = choice
                         && let Some((card, claim_id)) =
-                            crate::capital::static_program_snapshot(&text, &source, action)?
+                            crate::capital::program_snapshot(&text, &source, action)?
                     {
                         (card, claim_id, None, None)
                     } else {

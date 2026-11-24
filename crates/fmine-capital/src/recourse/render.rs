@@ -349,6 +349,16 @@ fn rejection_text(reason: &StructuralRejection) -> String {
 }
 
 impl EvaluatedRecourseProgram {
+    /// Serialize one evaluated policy in the same form as the complete comparison.
+    #[must_use]
+    pub fn policy_json(&self, id: &str) -> Option<String> {
+        self.summary()
+            .policies
+            .iter()
+            .find(|policy| policy.policy_id == id)
+            .map(policy_json)
+    }
+
     #[must_use]
     pub fn to_json(&self) -> String {
         let summary = summary_json(self.summary());
