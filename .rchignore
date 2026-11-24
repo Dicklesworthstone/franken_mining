@@ -17,3 +17,11 @@ tenancy/
 runs/
 out/
 ws/
+
+# The website (web/): dependencies, build output and the wasm build are local only.
+web/node_modules/
+web/out/
+web/.wrangler/
+web/wasm/target/
+web/wasm/pkg/
+web/.preview/
