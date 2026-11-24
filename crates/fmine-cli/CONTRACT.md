@@ -854,7 +854,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     `fmine_io::source`; CLI envelopes and established input refusal text remain unchanged.
     MineLib UPIT report composition now lives in `fmine-io::minelib_report`; the CLI retains bounded
     file reads and envelopes while its existing payload and candidate semantics stay unchanged.
-  - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
+  - `metrics cost --input <worksheet.toml> --definition <registered-id> [--fit-driver <history.toml> ...]`
+    (BD-061): reads the actual
     worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
     SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC
     rule determines each line's inclusion, exclusion or credit, including inherited rules. JSON schema
@@ -867,6 +868,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     an optional fixed USD amount. The metrics kernel computes and validates those costs under the same
     selected definition; JSON and Markdown retain the operands and source locators. The runnable example
     `tests/costs/planned_drivers.toml` gives USD 10.0001/oz from invented assumptions, with no fitted rates.
+    Repeatable `--fit-driver` admits up to 64 distinct fitted cost pools through the same definition owner;
+    each history is bounded to 1 MiB and retains its source Claim population, exact OLS fit, prediction,
+    monetary rounding boundary and conditional variances. Duplicate paths or pools, overlaps with direct
+    or declared-driver rows, excluded fitted pools and mismatched scopes refuse the complete command.
+    A single card retains the existing `fitted_driver` JSON shape; multiple cards use `fitted_drivers` in
+    canonical item order with `joint_uncertainty.status = "not_estimated"`. Cross-pool error dependence
+    is undeclared, so variances are not summed and no independent-errors or calibrated-forecast claim is
+    made. The example combines `tests/costs/fitted_multi_costs.toml`, `fitted_driver.toml` and
+    `fitted_labour_driver.toml` into exactly USD 855 over 100 sold ounces (171/20 USD/oz).
   - `html claims --issuer <registered> --definitions <mapping.toml> [--as-of YYYY-MM-DD]` (BD-057/BD-059):
     delegates to `fmine-public::html::run` to load registered HTML bytes and strict, value-free label mappings.
     The `fmine.html_claims.v1` payload returns full canonical Claim bodies and their semantic keys, exact

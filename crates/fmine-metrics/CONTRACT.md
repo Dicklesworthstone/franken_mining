@@ -722,14 +722,33 @@ existing cost-definition evaluator with a source-bound signed line, without chan
 
 `definitions::driver::worksheet::evaluate` admits source-hashed `fmine.cost-driver.v1` text up to 1 MiB;
 all worksheet observations remain Assumed and Internal. The existing CLI exposes it through
-`metrics cost --fit-driver FILE`. `worksheet::evaluate_with_fitted_driver` includes the resulting line
-in the declared complete cost population and refuses duplicate items or incompatible scopes. JSON retains
-the model receipt and original inputs; Markdown shows the fit, validity, covariance and source references.
+`metrics cost --fit-driver FILE`. The option may be repeated for up to 64 explicitly named cost pools.
+`worksheet::evaluate_with_fitted_driver` retains its single-card API;
+`worksheet::evaluate_with_fitted_drivers` admits the complete card population through the same cost
+definition owner. Each history's explicit `item` maps to exactly one pool. Duplicate paths or pool names,
+overlaps with direct or declared-driver lines, incompatible scopes and cards excluded by the selected
+definition refuse the complete calculation. A zero fitted cost is still an included line, not an unused
+card. Every admitted pool retains its own exact mean, explicit one-time monetary rounding, original
+history, accounting references, fit Claim and predicted-line Claim. Argument order does not change the
+cost receipt or CLI report. Single-card JSON retains `fitted_driver`; multiple cards use `fitted_drivers`
+in item order. Markdown renders every model. Individual fitted variances are not summed: joint cost
+uncertainty is explicitly unestimated because cross-pool error dependence is undeclared. The extension
+does not infer independent errors, a multivariate fit or calibrated cost forecasts.
 Synthetic `tests/costs/fitted_driver.toml` fits fixed USD 150 and rate 9/5, predicts USD 600 at 250 dry tonnes,
 and has residual variance 9000, mean variance 2250 and new-observation variance 11250 USD². Focused exact
 known-answer, source-mutation, sign, monetary-rounding, rank/domain and scope/time tests accompany this
 owner; `xtask/tests/cost_worksheet.rs` exercises the CLI-to-AISC path. This slice supplies no certified
 accounting data, multivariate/price-linked fit, driver-error model or frozen prospective forecast.
+
+The invented second pool in `tests/costs/fitted_labour_driver.toml` fits `50 + 6 × hours` and predicts
+230 USD at 30 hours. `tests/costs/fitted_multi_costs.toml` combines those two fitted pools with a declared
+25 USD driver line, 100 USD leases and 100 USD credits: 855 USD / 100 sold ounces = 171/20 USD/oz.
+Direct controls retain every ancestor, preserve the one-card result and permutation invariance, check
+separate rounding and source-byte sensitivity, reject duplicate/unused/incompatible cards, and
+exercise existing copper C1 and co-product allocation rules. The command controls verify complete
+JSON/Markdown output, every retained source, a change to the second pool, missing history files and
+whole-plan refusals. The declared completeness flag remains an assumption about the supplied population;
+the calculation cannot establish that a real accounting cost pool has not been omitted.
 
 - **`consolidation`:** `RATE_RULES_VERSION`, `Printed`, `Column`, `Table`, `Difference`,
   `RateComparison`, `Comparison` and `compare`. `Table` and `Comparison` expose `canonical_tag`;

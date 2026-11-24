@@ -973,6 +973,24 @@ declared `nearest_ties_even_0_0001_usd` policy applies only where the fitted amo
 type, with the exact amount and rounding delta retained. Certificate identifiers are declarations, not
 authenticated accounting certificates. Without `--fit-driver`, the existing worksheet output is unchanged.
 
+To combine fitted costs for several named pools, repeat `--fit-driver`:
+
+```bash
+cargo run -p fmine-cli -- metrics cost \
+  --input tests/costs/fitted_multi_costs.toml --definition aisc@wgc-2018 \
+  --fit-driver tests/costs/fitted_driver.toml \
+  --fit-driver tests/costs/fitted_labour_driver.toml --format markdown
+```
+
+This invented plan combines USD 600 of fitted mining costs and USD 230 of fitted administration costs
+with declared community costs, leases and credits. Its exact numerator is USD 855 over 100 sold ounces,
+or USD 8.55/oz. Up to 64 cards are accepted; each must supply a different cost pool included by the chosen
+definition and match the plan's scope. Duplicate files or pools, overlaps with direct or declared-driver
+rows, unused fitted pools and incompatible scopes refuse. Every history, model and prediction remains
+in the output, ordered by item regardless of argument order. Each fit crosses its monetary rounding
+boundary separately. Joint cost uncertainty remains unestimated because dependence between pools is
+undeclared; individual fitted variances are not summed.
+
 The worksheet's cost classification and completeness remain **Assumed, Internal and uncalibrated**. Declaring
 a complete population is not independent evidence that omitted costs are zero. This command calculates the
 chosen rule; it does not verify issuer filings or close the broader metric-reproduction work.
