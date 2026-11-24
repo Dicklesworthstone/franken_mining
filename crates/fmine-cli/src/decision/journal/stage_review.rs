@@ -1,8 +1,11 @@
 //! DESIGN (bd-sk59): dated observation of a frozen capital policy at its review boundary.
 //! Determinism: Exact
 
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+
 use fmine_calib::record::{parse_date, parse_utc};
-use fmine_io::omf::json::Json;
+use fmine_io::omf::json::{Json, parse};
 
 use super::{
     Choice, Digest32, History, Journal, Refusal, RefusalCode, Snapshot, clean, digest, integrity,
@@ -115,7 +118,128 @@ fn text<'a>(record: &'a Json, name: &str) -> Result<&'a str, Refusal> {
     record
         .get(name)
         .and_then(Json::as_str)
-        .ok_or_else(|| integrity(format!("retained initial policy lacks {name}")))
+        .ok_or_else(|| integrity(format!("retained stage record lacks {name}")))
+}
+
+#[derive(Default)]
+pub(super) struct ReviewQueue<'a>(BTreeMap<Digest32, ReviewRow<'a>>);
+
+struct ReviewRow<'a> {
+    decision: &'a str,
+    date: String,
+    needs_attention: bool,
+    status: String,
+}
+
+// Keep evidence locators and exact IDs literal even when they contain Markdown syntax.
+fn literal(value: &str) -> String {
+    let run = value.split(|ch| ch != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(run + 1);
+    format!("{fence} {value} {fence}")
+}
+
+impl<'a> ReviewQueue<'a> {
+    pub(super) fn add(&mut self, head: Digest32, snapshot: &'a Snapshot) -> Result<(), Refusal> {
+        if let Some(card) = retained_policy(&snapshot.card) {
+            let date = text(&card?, "observation_date_utc")?.to_owned();
+            self.0.insert(
+                head,
+                ReviewRow {
+                    decision: &snapshot.decision_id,
+                    date,
+                    needs_attention: true,
+                    status:
+                        "**Awaiting evidence.** Record the observation on or after the review date."
+                            .into(),
+                },
+            );
+        } else if snapshot.card.starts_with(PREFIX) {
+            let card = parse(snapshot.card.as_bytes())
+                .map_err(|_| integrity("retained stage review JSON is invalid"))?;
+            let initial = digest(text(&card, "initial_head")?).map_err(integrity)?;
+            let row = self
+                .0
+                .get_mut(&initial)
+                .ok_or_else(|| integrity("stage review has no initial policy in the report"))?;
+            let signal = card.get("observation").and_then(Json::as_str);
+            let continuation = card
+                .get("modeled_continuation")
+                .ok_or_else(|| integrity("retained stage review lacks its modeled continuation"))?;
+            row.needs_attention = continuation == &Json::Null;
+            row.status = if row.needs_attention {
+                "**Outside the frozen policy.** Return to committee for fresh review.".into()
+            } else {
+                let actions = continuation
+                    .get("selected")
+                    .and_then(Json::as_array)
+                    .ok_or_else(|| integrity("retained stage review lacks selected actions"))?;
+                let spend = text(continuation, "spend")?;
+                let unit = text(continuation, "spending_unit")?;
+                let outcome = if actions.is_empty() {
+                    "**Modeled hold.**".into()
+                } else {
+                    let actions = actions
+                        .iter()
+                        .map(|action| {
+                            action.as_str().map(literal).ok_or_else(|| {
+                                integrity("retained stage review has an invalid selected action")
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    format!("**Modeled follow-on.** {}.", actions.join(", "))
+                };
+                format!(
+                    "{outcome} Additional modeled spend {} {unit}.",
+                    spend.strip_suffix("/1").unwrap_or(spend),
+                )
+            };
+            if let Some(signal) = signal {
+                let _ = write!(row.status, " Signal {}.", literal(signal));
+            }
+            let _ = write!(
+                row.status,
+                " Review {} observed at {} and available at {}. Evidence {} from {}.",
+                literal(&snapshot.decision_id),
+                text(&card, "observed_at")?,
+                text(&card, "available_at")?,
+                literal(text(&card, "evidence")?),
+                literal(text(&card, "source")?),
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn render(self, out: &mut String, pinned: bool) {
+        if self.0.is_empty() {
+            return;
+        }
+        let mut rows: Vec<_> = self.0.into_iter().collect();
+        rows.sort_unstable_by(|(_, a), (_, b)| {
+            (!a.needs_attention, &a.date, a.decision).cmp(&(
+                !b.needs_attention,
+                &b.date,
+                b.decision,
+            ))
+        });
+        let head_status = if pinned {
+            "Journal head checked against the supplied pin."
+        } else {
+            "Journal head is unpinned. Supply the independently saved head to check for rollback."
+        };
+        let _ = writeln!(
+            out,
+            "\n## Staged capital reviews\n\n{head_status} Amounts are modeled. Spending requires separate authorization.\n"
+        );
+        for (head, row) in rows {
+            let _ = writeln!(
+                out,
+                "- {} · review date {} UTC. {} Initial record head `{head}`.",
+                literal(row.decision),
+                row.date,
+                row.status,
+            );
+        }
+    }
 }
 
 impl Observation {

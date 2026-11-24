@@ -26,6 +26,16 @@ fn binary_json(f: &Fixture, args: &[&str]) -> Json {
 }
 
 fn initial(f: &Fixture, policy: &str, fixture: &str) -> Digest32 {
+    initial_named(f, f.initial, "initial-policy", policy, fixture)
+}
+
+fn initial_named(
+    f: &Fixture,
+    expected: Digest32,
+    decision: &str,
+    policy: &str,
+    fixture: &str,
+) -> Digest32 {
     fs::write(&f.model, fixture).unwrap();
     let preview = binary_json(f, &["decide", "program", f.model.to_str().unwrap()]);
     let actions = json_field(&preview, &["payload", "journal_actions"])
@@ -37,7 +47,7 @@ fn initial(f: &Fixture, policy: &str, fixture: &str) -> Digest32 {
         .unwrap();
     let action = json_field(action, &["id"]).as_str().unwrap();
     head(&successful(execute_with_clock(
-        &f.record(f.initial, "initial-policy", action),
+        &f.record(expected, decision, action),
         &f.root,
         &Clock(200),
     )))
@@ -225,6 +235,131 @@ fn stage_review_distinguishes_a_planned_hold_an_unmodeled_signal_and_a_common_co
             );
         }
     }
+}
+
+#[test]
+fn staged_review_markdown_surfaces_unresolved_policies_and_exact_observed_outcomes() {
+    let f = Fixture::new();
+    let earlier = STAGED.replace("2030-", "2001-");
+    let cleared = initial_named(&f, f.initial, "clearance", "policy_004", &earlier);
+    let pending = initial_named(&f, cleared, "pending", "policy_000", STAGED);
+    let held = initial_named(&f, pending, "hold", "policy_004", &earlier);
+    let scoped = initial_named(&f, held, "scope", "policy_004", &earlier);
+    let show = |pin: Option<Digest32>, format: &str| {
+        let mut cmd = Process::new(binary());
+        cmd.args([
+            "decide",
+            "journal",
+            "show",
+            "--journal",
+            f.journal.to_str().unwrap(),
+            "--workspace",
+            f.root.to_str().unwrap(),
+            "--format",
+            format,
+        ]);
+        if let Some(pin) = pin {
+            cmd.args(["--head", &pin.to_hex()]);
+        }
+        let output = cmd.output().unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let before = show(Some(scoped), "markdown");
+    assert_eq!(before.matches("**Awaiting evidence.**").count(), 4);
+    assert!(!before.contains("Additional modeled spend"));
+
+    let mut pin = scoped;
+    for (initial, parent, review, signal) in [
+        (
+            "clearance",
+            cleared,
+            "clearance-review",
+            "clearance-documented",
+        ),
+        ("hold", held, "hold-review", "no-clearance-documented"),
+        ("scope", scoped, "scope-review", "footprint-redesign"),
+    ] {
+        let source = worksheet(parent, Some(signal))
+            .replace("initial-policy", initial)
+            .replace(
+                "Synthetic scope-matched permit review memorandum RV-42",
+                "Review [RV-42](https://example.invalid) ``scope`` <mark>",
+            );
+        fs::write(&f.model, source).unwrap();
+        pin = head(&successful(execute_with_clock(
+            &f.record(pin, review, "observe-stage"),
+            &f.root,
+            &Clock(timestamp(AVAILABLE) + 10),
+        )));
+    }
+    let json_before_edit = show(Some(pin), "json");
+    let markdown = show(Some(pin), "markdown");
+    assert!(markdown.contains("Journal head checked against the supplied pin."));
+    assert!(show(None, "markdown").contains("Journal head is unpinned."));
+    let review_rows: Vec<_> = markdown
+        .lines()
+        .filter(|line| line.starts_with("- ` "))
+        .collect();
+    assert_eq!(review_rows.len(), 4);
+    for (line, initial, date, status, record_head) in [
+        (
+            review_rows[0],
+            "scope",
+            "2001-04-02",
+            "Outside the frozen policy.",
+            scoped,
+        ),
+        (
+            review_rows[1],
+            "pending",
+            "2030-04-02",
+            "Awaiting evidence.",
+            pending,
+        ),
+        (
+            review_rows[2],
+            "clearance",
+            "2001-04-02",
+            "Modeled follow-on.",
+            cleared,
+        ),
+        (review_rows[3], "hold", "2001-04-02", "Modeled hold.", held),
+    ] {
+        assert!(
+            line.starts_with(&format!("- ` {initial} ` · review date {date} UTC.")),
+            "{line}"
+        );
+        assert!(line.contains(status), "{line}");
+        assert!(
+            line.ends_with(&format!("Initial record head `{record_head}`.")),
+            "{line}"
+        );
+    }
+    assert!(review_rows[0].contains("Return to committee for fresh review."));
+    assert!(review_rows[0].contains("Signal ` footprint-redesign `."));
+    assert!(!review_rows[0].contains("Additional modeled spend"));
+    assert!(!review_rows[1].contains("Additional modeled spend"));
+    assert!(review_rows[2].contains("` main `. Additional modeled spend 4000000 USD."));
+    assert!(review_rows[2].contains(&format!(
+        "observed at {OBSERVED} and available at {AVAILABLE}"
+    )));
+    assert!(review_rows[2].contains("Evidence ` synthetic ` from ``` Review [RV-42](https://example.invalid) ``scope`` <mark> ```"));
+    assert!(review_rows[3].contains("Additional modeled spend 0 USD."));
+    assert!(markdown.contains("Spending requires separate authorization."));
+    assert!(!json_before_edit.contains("Staged capital reviews"));
+    assert_eq!(
+        rows(json_field(
+            &parse_json(json_before_edit.as_bytes()).unwrap(),
+            &["payload"]
+        ))
+        .len(),
+        7
+    );
+
+    fs::write(&f.model, "# Edited worksheet\n").unwrap();
+    assert_eq!(show(Some(pin), "markdown"), markdown);
+    assert_eq!(show(Some(pin), "json"), json_before_edit);
 }
 
 #[test]

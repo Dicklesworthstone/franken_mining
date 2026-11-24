@@ -570,11 +570,18 @@ fn report(
         journal.head(),
         snapshots.len()
     );
+    let summary_start = markdown.len();
+    let showing_history = verb == "decide journal show";
+    let mut stage_reviews = stage_review::ReviewQueue::default();
     for (record, snapshot) in journal.records().iter().skip(1).zip(snapshots) {
         let (earliest, latest) = journal.header().time_bounds(record.observed_ns)?;
+        let record_head = record.chain_head()?;
+        if showing_history {
+            stage_reviews.add(record_head, snapshot)?;
+        }
         rows.push(format!(
             "{{\"sequence\":{},\"record_head\":{},\"observed_ns\":{},\"time_bounds_ns\":[{},{}],\"snapshot\":{}}}",
-            record.sequence, js(&record.chain_head()?.to_hex()), js(&record.observed_ns.to_string()),
+            record.sequence, js(&record_head.to_hex()), js(&record.observed_ns.to_string()),
             js(&earliest.to_string()), js(&latest.to_string()), snapshot.json()?,
         ));
         let _ = writeln!(
@@ -603,6 +610,9 @@ fn report(
             );
         }
     }
+    let mut summary = String::new();
+    stage_reviews.render(&mut summary, journal.is_pinned());
+    markdown.insert_str(summary_start, &summary);
     let schema = if linked {
         LINKED_REPORT_SCHEMA
     } else if snapshots.iter().any(|s| s.policy_snapshot.is_some()) {
@@ -629,7 +639,7 @@ fn report(
     );
     envelope.no_claim = Some(no_claim);
     envelope.rendered_markdown = Some(markdown);
-    if !journal.is_pinned() && verb == "decide journal show" {
+    if showing_history && !journal.is_pinned() {
         envelope.warnings.push(
             "No independently retained final head was supplied; prefix rollback and whole-history rewriting are not checked, and evaluation provenance is unverified.".into(),
         );

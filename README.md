@@ -2368,6 +2368,13 @@ outside the policy, the receipt preserves it for fresh review and leaves the con
 with a common continuation, omit the `observation` field. The record carries the supplied evidence and keeps
 execution authorization false.
 
+DESIGN (bd-pn3z). Open the pinned journal with `decide journal show --journal decisions.journal --head "$FMINE_DECISION_HEAD"`
+and `--format markdown` to see staged reviews before the full receipts. Entries awaiting evidence and
+signals outside the frozen policy appear first, ordered by review date. Each row gives the initial record
+head that identifies the policy. Recorded observations show their source and evidence class, and a matched
+branch shows the exact additional modeled spend. A modeled hold and a signal requiring fresh review have
+distinct outcomes.
+
 To record buying testwork, select the information option and policy explicitly instead of `--action`:
 
 ```bash
