@@ -250,6 +250,9 @@ pub type LabelVocabulary = BTreeSet<(Option<String>, String)>;
 /// one, every label is read. A workbook with no recognized visible sheets, no reporting blocks, or
 /// no typed observations retains its empty counts and a document-level [`CellRefusal`]. This also
 /// makes a title-only source explicit; a zero, nil or missing value is still a typed observation.
+/// A recognized block with no readable columns is refused at its header even when another block
+/// supplies values. Empty blocks with usable column headers remain valid layout context.
+/// A four-digit text year under a site is named as an unsupported column header, never coerced.
 ///
 /// # Errors
 /// Refuses (`FMINE-REF-506`, a registered input that cannot be read) when `quarter` is not `YYYYQn`: the
@@ -376,6 +379,16 @@ fn read_summary(sheet: &Sheet, fq: u8, read: &mut MineStatsRead) {
                 Err(reason) => refuse(read, sheet, header_row, c, reason),
             }
         }
+        if fields.is_empty() {
+            refuse(
+                read,
+                sheet,
+                r,
+                1,
+                "summary block has no readable metric columns with an unambiguous four-digit year"
+                    .into(),
+            );
+        }
         while let Some(site_cell) = py_str(sheet, rr, 1) {
             if footnote_line(&site_cell) || site_cell.starts_with("For the") {
                 break;
@@ -437,6 +450,23 @@ fn read_minestats(
         let mut columns = Vec::new();
         for (&(_, c), _) in cells.range((r, 2)..=(r, u32::MAX)) {
             let Some(year) = integer_text(sheet, r, c) else {
+                // A printed year under a site identifies a candidate column even when Excel stores
+                // it as text. Naming that unsupported header keeps a neighboring valid column from
+                // hiding lost observations; blanks, notes and stray formulas remain outside it.
+                if sheet.cell(r, c).is_some_and(|cell| {
+                    matches!(&cell.value, CellValue::Text(year)
+                        if year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit()))
+                }) && site_at_or_left(sheet, site_row, c).is_some()
+                {
+                    refuse(
+                        read,
+                        sheet,
+                        r,
+                        c,
+                        "Minestats year is stored as text; a numeric integer year is required"
+                            .into(),
+                    );
+                }
                 continue;
             };
             match site_at_or_left(sheet, site_row, c) {
@@ -449,6 +479,15 @@ fn read_minestats(
                     "no site name at or left of this cell".to_string(),
                 ),
             }
+        }
+        if columns.is_empty() {
+            refuse(
+                read,
+                sheet,
+                r,
+                1,
+                "Minestats block has no readable numeric-year columns with a site name".into(),
+            );
         }
         let mut parent: Option<String> = None;
         let mut seen: BTreeMap<(Option<String>, String), u32> = BTreeMap::new();
