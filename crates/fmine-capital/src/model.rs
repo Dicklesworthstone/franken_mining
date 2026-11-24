@@ -1101,7 +1101,7 @@ fn parse_model(text: &str, source: SourceAnchor, allow_recourse: bool) -> Result
         stability::finish(stability_row, &source, &doc.top, &unknowns, &uu_anchors);
     let robustness = robustness_rows.finish(&states, &source, &doc.top, &unknowns, &uu_anchors)?;
     let kpis = kpi_rows.finish(model_key, &source, &doc.top, &unknowns, &uu_anchors)?;
-    let permits = permit_rows.finish(model_key, information.as_ref(), &unknowns, &uu_anchors)?;
+    let permits = permit_rows.finish(model_key, information.as_ref(), &unknowns)?;
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()

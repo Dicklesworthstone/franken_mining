@@ -34,6 +34,8 @@ pub(super) const USAGE: &str = "decide program <model-file>";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
     "\"schema\":\"fmine.capital-program.v1\",",
+    "\"staged_permit_example\":\"tests/capital/staged_permit.toml\",",
+    "\"staged_permits\":\"Bind a recourse candidate to each required application using stage_permit rows. Declare permit terms and one permit_state record per application and shared state, with any state-specific permit_pause rows. Use exact n/d percentage points for scope change and reopen threshold. Sources must be available by observation_date in their scenario. An elapsed clock alone leaves main works blocked. The same permit checks apply in the static benchmark and all realized continuations. States with the same observation share one decision.\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
     "\"executive_brief\":\"decide program <worksheet> --brief prints the meeting paper for executive worksheets and total-USD static capital or source-derived investment programs. Static briefs preserve nominal co-winners, tail limit, minimum cash slack, the first representable limit that admits higher mean value (or the first feasible choice), and any declared weight stress or resampling. Use --format markdown for per-share, KPI, staged or detailed reports.\",",
     "\"procurement_journal\":\"Use decide journal record --model <procurement worksheet> with --action order-now, hold-slot or let-lapse. The evaluated card lists available journal_actions. The worksheet date must be on or before the earliest possible UTC recording date. Pinned show retains the original comparison, scope and rationale.\",",

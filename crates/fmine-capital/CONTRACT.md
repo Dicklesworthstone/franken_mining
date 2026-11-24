@@ -7,10 +7,24 @@ E-layer Helm capital-program comparison (`BD-229`, `BD-314`). Enumerates declare
 - **Layer:** E
 - **Subsystem:** Helm
 - **LOC budget:** 25,000 planned / 29,000 ceiling
-- **Allowed Module Families:** `["model", "render", "recourse", "entity", "stability", "robustness"]`
+- **Allowed Module Families:** `["model", "render", "recourse", "permit", "entity", "stability", "robustness"]`
 
 ## 2. Inputs
 ### Mathematical & Domain Formulation
+
+DESIGN (BD-297): `stage_permit` binds a recourse candidate to each main-work application it needs.
+`permit` supplies the named authority, dated calendar terms and the exact, inclusive scope-change
+threshold. `permit_state` supplies a dated disposition and scope record for every application and
+shared state. `permit_pause` adds observed, nonoverlapping half-open pauses for that state.
+All evidence must be available by the observation date in its assumed scenario. An elapsed clock
+requires recorded confirmation under the stated rule. Written refusal, pending permission and a
+scope change at or above the threshold block construction. Missing matrices, duplicate bindings
+and inconsistent dates refuse the model. Each candidate must satisfy all of its bound applications.
+The static benchmark applies these requirements in every shared state. An adaptive policy applies
+them in each realized state and uses one continuation for the entire observation class. Initial
+commitments and their effects remain in every path. The assumed cases establish conditional
+feasibility for the model and supply no jurisdiction rules or execution authority. The executive
+worksheet continues to screen the separate early-work instrument. [Synthetic program](../../tests/capital/staged_permit.toml)
 
 For each subset, spending is the exact sum of declared candidate costs. Joint scenario delta-NAV is the sum
 of selected candidates' **net** payoffs at the same named state. Costs constrain spending and are not

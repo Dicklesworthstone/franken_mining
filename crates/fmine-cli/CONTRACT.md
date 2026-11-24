@@ -75,8 +75,8 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     Compare the value of time saved minus unreused spend with late or abandoned recovery minus spend.
     Cash, reuse and recovery are whole nominal USD. The comparison treats stated branch values as
     directly comparable and returns a break-even input conditional on those values. Permission odds and
-    legal or execution authority are outside the calculation. The staged capital optimizer still requires
-    integration with permit state (BD-297).
+    legal or execution authority are outside the calculation. The same clock and disposition review runs
+    in `fmine-capital` when a staged capital program binds a recourse candidate to main-work permission.
   - DESIGN (bd-ftw5). Executive worksheets accept `decide program <worksheet> --brief`. The meeting
     view retains the findings, decision alternatives, uncertainty, revisit condition and worksheet digest.
     Full Markdown and JSON give the line-by-line evidence and both treasury checkpoint ledgers.

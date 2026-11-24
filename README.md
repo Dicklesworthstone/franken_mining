@@ -118,6 +118,16 @@ after recovery. Break-even requires a **38.46%** chance of proceeding by May 10.
 its own confidence and decides whether the offer merits that risk. The clock and reopen threshold are
 declared terms for this scenario. [Editable synthetic worksheet](tests/capital/executive_permit.toml)
 
+The staged capital optimizer can also enforce a main-work permit requirement in each scenario.
+In the synthetic program, the US$6 million early commitment survives in both branches. Construction
+is selected only where permission is documented at the April review. At equal illustrative weights,
+that policy adds **US$1.5 million in expected net value** over the best precommitted program.
+[Editable staged program](tests/capital/staged_permit.toml)
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/staged_permit.toml --format markdown
+```
+
 A miner's numbers are produced by a dozen systems that each pass along a single value and discard how sure they
 were. The result is predictable:
 - guidance that misses;

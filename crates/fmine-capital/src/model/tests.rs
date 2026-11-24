@@ -7,6 +7,7 @@ mod capital_call;
 mod debt;
 mod entity_valuation;
 mod kpi;
+mod permit;
 mod robustness;
 mod stability;
 

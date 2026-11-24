@@ -134,7 +134,6 @@ impl Rows {
         model_key: &str,
         information: Option<&Claim<RecourseBasis>>,
         unknowns: &[UuTerm],
-        uu_anchors: &[SourceAnchor],
     ) -> Result<Option<Claim<ProgramPermits>>> {
         if self.anchors.is_empty() {
             return Ok(None);
@@ -150,7 +149,6 @@ impl Rows {
             requirements: self.requirements,
         };
         self.anchors.extend(information.anchors.iter().cloned());
-        self.anchors.extend_from_slice(uu_anchors);
         let tag = declaration.canonical_tag();
         Ok(Some(assumed(
             format!("capital.{model_key}.stage-permits"),

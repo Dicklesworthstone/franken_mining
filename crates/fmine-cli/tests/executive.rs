@@ -375,6 +375,75 @@ fn early_works_values_both_paths_when_elapsed_clock_still_requires_confirmation(
 }
 
 #[test]
+fn staged_permit_binary_preserves_blocked_paths_and_the_source_bound_comparison() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let file = "tests/capital/staged_permit.toml";
+    let run = |flags: &[&str]| {
+        let result = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .current_dir(&root)
+            .args(["decide", "program", file])
+            .args(flags)
+            .output()
+            .expect("staged capital CLI");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        result.stdout
+    };
+    let bytes = run(&["--json"]);
+    assert_eq!(bytes, run(&["--json"]));
+    let envelope = parse(&bytes).expect("JSON envelope");
+    let payload = envelope.get("payload").expect("payload");
+    let hash = sha256(&std::fs::read(root.join(file)).expect("source bytes")).to_string();
+    assert_eq!(
+        payload
+            .get("source")
+            .and_then(|s| s.get("sha256"))
+            .and_then(Json::as_str),
+        Some(hash.as_str())
+    );
+    let program = payload.get("program").expect("program");
+    let summary = program.get("summary").expect("policy summary");
+    assert_eq!(
+        summary.get("net_adaptive_value").and_then(Json::as_str),
+        Some("1500000/1")
+    );
+    let static_summary = program
+        .get("static_comparison")
+        .and_then(|v| v.get("summary"))
+        .expect("static summary");
+    let review = static_summary
+        .get("permit_reviews")
+        .and_then(Json::as_array)
+        .expect("all gate outcomes");
+    assert_eq!(review.len(), 2);
+    assert_eq!(
+        review[1].get("state_id").and_then(Json::as_str),
+        Some("pending")
+    );
+    assert_eq!(
+        review[1]
+            .get("review")
+            .and_then(|r| r.get("status"))
+            .and_then(Json::as_str),
+        Some("clock_elapsed")
+    );
+    for flag in [
+        "reserve_disclosure_claim",
+        "execution_authorized",
+        "geotechnical_signoff",
+        "regulatory_compliance_claim",
+    ] {
+        assert_eq!(program.get(flag), Some(&Json::Bool(false)));
+    }
+    let paper = String::from_utf8(run(&["--format", "markdown"])).expect("Markdown");
+    assert!(paper.contains("| NRC-42 | cleared | permission_documented | 2030-04-01 |"));
+    assert!(paper.contains("| NRC-42 | pending | clock_elapsed | 2030-04-01 |"));
+}
+
+#[test]
 fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_digest() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let brief = |model: &str, flags: &[&str]| {
