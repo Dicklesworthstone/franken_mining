@@ -10,12 +10,18 @@ use fmine_evidence::Refusal;
 use fmine_numerics::exact_feas::Rat;
 
 use super::super::binding::PublicResolutionPolicy;
-use super::super::{Assessment, Cohort, ForecastLedger, MemberAssessment, OutcomeSelector};
+use super::super::{
+    Assessment, Cohort, ForecastLedger, ForecastPayload, MemberAssessment, OutcomeSelector,
+};
+use super::gaussian::{self, GaussianPairedMember};
 use super::{
-    PairStatus, PairedMember, PairedScore, absent, domain, saved, score_member, select_pair,
+    PairStatus, PairedMember, PairedScore, SelectedPair, absent, domain, saved, score_member,
+    select_pair,
 };
 
 pub const METHOD: &str = "Explicit supplied-target paired scoring, left minus right. Physical targets are the exact domain, site, horizon, quantity and unit labels frozen with each forecast; matched targets also require identical outcome deadlines. Each cohort must contain at most one forecast per complete target. Frozen resolution rule, eligible sources, quantity, unit, alpha, assessment cut and selector must agree. Public-bound and unclassified legacy cohorts refuse. Observed pairs require identical selected numeric values and complete citations; equality alone does not establish physical support. Missing forecasts, unresolved outcomes and source-selection mismatches remain in the union. The existing exact interval or finite-distribution CRPS owner computes scores and missing-outcome extrema. Whole-population completion bounds require a forecast and compatible selection on both sides for every target. These are descriptive arithmetic bounds, not confidence intervals, model-race significance, calibration or predictive skill. Target declarations and outcome citations remain supplied and unverified; no authenticated public-outcome claim is implied. Model families, authors, registration times and information sets may differ.";
+
+pub const GAUSSIAN_METHOD: &str = "Explicit supplied-target paired Gaussian full-distribution CRPS, left minus right. Negative differences favor the left forecast. Complete frozen domain, site, horizon, quantity and unit labels identify each target; matched targets require identical outcome deadlines. Resolution rules, eligible sources, alpha, assessment cut and selector must agree. Every forecast, including unmatched targets, must be Gaussian. Observed pairs require identical selected values and complete citations. The union retains unresolved, unmatched and source-mismatched targets. Missing-outcome extrema use both infinite-tail limits and the unique normal-CDF crossing, or monotonicity at equal scales. The existing Gaussian owner computes approximate values and extrema, not exact rational results or certified numerical enclosures. Whole-population completion requires both forecasts and compatible selections for every target. These are descriptive arithmetic diagnostics, not confidence intervals, sequential significance, calibration or predictive skill. Target declarations and citations remain supplied and unverified; model families, authors, registration times and information sets may differ. Saved assessments and durable journal bytes remain unchanged.";
 
 /// Complete prospective target labels, kept as separate fields to avoid ambiguous concatenation.
 /// A declared horizon is not parsed into a calendar period or converted to another physical support.
@@ -78,6 +84,58 @@ pub struct SuppliedPairedAssessment {
     pub digest: Digest32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SuppliedGaussianMember {
+    pub target: SuppliedTarget,
+    pub outcome_due_ns: i64,
+    pub pair: GaussianPairedMember,
+}
+
+/// Approximate Gaussian results remain separate from the exact finite-distribution receipt.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SuppliedGaussianAssessment {
+    pub left_assessment: Digest32,
+    pub right_assessment: Digest32,
+    pub left_cohort: Digest32,
+    pub right_cohort: Digest32,
+    pub resolution_rule: String,
+    pub eligible_sources: Vec<String>,
+    pub quantity: String,
+    pub unit: String,
+    pub alpha: f64,
+    pub as_of_ns: i64,
+    pub selector: OutcomeSelector,
+    pub members: Vec<SuppliedGaussianMember>,
+    pub n_paired: usize,
+    pub n_unresolved: usize,
+    pub n_unmatched: usize,
+    pub n_arithmetic_indeterminate: usize,
+    pub observed_mean_difference: Option<f64>,
+    pub whole_population: Option<(f64, f64)>,
+    pub digest: Digest32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SuppliedCrpsComparison {
+    Finite(SuppliedPairedAssessment),
+    Gaussian(SuppliedGaussianAssessment),
+}
+
+struct SuppliedSelection<'a> {
+    target: SuppliedTarget,
+    outcome_due_ns: i64,
+    pair: SelectedPair<'a>,
+}
+
+struct SuppliedInputs<'a> {
+    left: &'a Assessment,
+    right: &'a Assessment,
+    cohort: &'a Cohort,
+    quantity: String,
+    unit: String,
+    members: Vec<SuppliedSelection<'a>>,
+}
+
 fn cohort<'a>(ledger: &'a ForecastLedger, assessment: &Assessment) -> Result<&'a Cohort, Refusal> {
     let cohort = ledger
         .cohorts
@@ -125,6 +183,73 @@ fn targets<'a>(
     Ok(targets)
 }
 
+fn paired_inputs(
+    ledger: &ForecastLedger,
+    left_digest: Digest32,
+    right_digest: Digest32,
+) -> Result<SuppliedInputs<'_>, Refusal> {
+    let (left, right) = (saved(ledger, left_digest)?, saved(ledger, right_digest)?);
+    let (lc, rc) = (cohort(ledger, left)?, cohort(ledger, right)?);
+    if left.as_of_ns != right.as_of_ns || left.selector != right.selector {
+        return Err(domain(
+            "supplied comparisons require the same assessment cut and outcome selector",
+        ));
+    }
+    if lc.spec.resolution_rule != rc.spec.resolution_rule
+        || lc.spec.eligible_sources != rc.spec.eligible_sources
+        || lc.spec.policy.alpha.to_bits() != rc.spec.policy.alpha.to_bits()
+    {
+        return Err(domain(
+            "supplied comparisons require identical frozen resolution rules, eligible sources and alpha",
+        ));
+    }
+    let (lt, rt) = (targets(ledger, left)?, targets(ledger, right)?);
+    let first = lt
+        .keys()
+        .next()
+        .ok_or_else(|| absent("supplied comparison has no frozen targets"))?;
+    if lt
+        .keys()
+        .chain(rt.keys())
+        .any(|target| target.quantity != first.quantity || target.unit != first.unit)
+    {
+        return Err(domain(
+            "supplied comparisons require identical frozen quantities and units",
+        ));
+    }
+    let names: BTreeSet<_> = lt.keys().chain(rt.keys()).cloned().collect();
+    let mut members = Vec::with_capacity(names.len());
+    for target in names {
+        let l = lt.get(&target).copied();
+        let r = rt.get(&target).copied();
+        if let (Some((_, a)), Some((_, b))) = (l, r)
+            && a != b
+        {
+            return Err(domain(
+                "matched supplied targets require identical frozen outcome deadlines",
+            ));
+        }
+        let outcome_due_ns = l
+            .or(r)
+            .ok_or_else(|| absent("supplied target has no forecast"))?
+            .1;
+        let pair = select_pair(target.label(), l.map(|x| x.0), r.map(|x| x.0));
+        members.push(SuppliedSelection {
+            target,
+            outcome_due_ns,
+            pair,
+        });
+    }
+    Ok(SuppliedInputs {
+        left,
+        right,
+        cohort: lc,
+        quantity: first.quantity.clone(),
+        unit: first.unit.clone(),
+        members,
+    })
+}
+
 impl ForecastLedger {
     /// Explicitly compare two existing supplied-outcome assessments. This is never a fallback from
     /// public admission. Only frozen metadata determines the complete matching population.
@@ -136,57 +261,22 @@ impl ForecastLedger {
         right_digest: Digest32,
         score: PairedScore,
     ) -> Result<SuppliedPairedAssessment, Refusal> {
-        let (left, right) = (saved(self, left_digest)?, saved(self, right_digest)?);
-        let (lc, rc) = (cohort(self, left)?, cohort(self, right)?);
-        if left.as_of_ns != right.as_of_ns || left.selector != right.selector {
-            return Err(domain(
-                "supplied comparisons require the same assessment cut and outcome selector",
-            ));
-        }
-        if lc.spec.resolution_rule != rc.spec.resolution_rule
-            || lc.spec.eligible_sources != rc.spec.eligible_sources
-            || lc.spec.policy.alpha.to_bits() != rc.spec.policy.alpha.to_bits()
+        let SuppliedInputs {
+            left,
+            right,
+            cohort: lc,
+            quantity,
+            unit,
+            members: selected,
+        } = paired_inputs(self, left_digest, right_digest)?;
+        let mut members = Vec::with_capacity(selected.len());
+        for SuppliedSelection {
+            target,
+            outcome_due_ns,
+            pair,
+        } in selected
         {
-            return Err(domain(
-                "supplied comparisons require identical frozen resolution rules, eligible sources and alpha",
-            ));
-        }
-        let (lt, rt) = (targets(self, left)?, targets(self, right)?);
-        let first = lt
-            .keys()
-            .next()
-            .ok_or_else(|| absent("supplied comparison has no frozen targets"))?;
-        if lt
-            .keys()
-            .chain(rt.keys())
-            .any(|target| target.quantity != first.quantity || target.unit != first.unit)
-        {
-            return Err(domain(
-                "supplied comparisons require identical frozen quantities and units",
-            ));
-        }
-        let names: BTreeSet<_> = lt.keys().chain(rt.keys()).cloned().collect();
-        let mut members = Vec::with_capacity(names.len());
-        for target in names {
-            let l = lt.get(&target).copied();
-            let r = rt.get(&target).copied();
-            if let (Some((_, a)), Some((_, b))) = (l, r)
-                && a != b
-            {
-                return Err(domain(
-                    "matched supplied targets require identical frozen outcome deadlines",
-                ));
-            }
-            let outcome_due_ns = l
-                .or(r)
-                .ok_or_else(|| absent("supplied target has no forecast"))?
-                .1;
-            let pair = score_member(
-                self,
-                select_pair(target.label(), l.map(|x| x.0), r.map(|x| x.0)),
-                lc.spec.policy.alpha,
-                score,
-            )?;
+            let pair = score_member(self, pair, lc.spec.policy.alpha, score)?;
             members.push(SuppliedPairedMember {
                 target,
                 outcome_due_ns,
@@ -236,8 +326,8 @@ impl ForecastLedger {
             right_cohort: right.cohort,
             resolution_rule: lc.spec.resolution_rule.clone(),
             eligible_sources: lc.spec.eligible_sources.clone(),
-            quantity: first.quantity.clone(),
-            unit: first.unit.clone(),
+            quantity,
+            unit,
             alpha: lc.spec.policy.alpha,
             as_of_ns: left.as_of_ns,
             selector: left.selector,
@@ -255,6 +345,131 @@ impl ForecastLedger {
         };
         result.digest = blake3_hash(&result.canonical_bytes());
         Ok(result)
+    }
+
+    /// Dispatch homogeneous complete distributions. Each selected owner validates every member,
+    /// including unmatched forecasts; Gaussian/finite mixtures never become a selected subset.
+    pub fn compare_supplied_assessments_full_crps(
+        &self,
+        left_digest: Digest32,
+        right_digest: Digest32,
+    ) -> Result<SuppliedCrpsComparison, Refusal> {
+        let first = saved(self, left_digest)?
+            .per_member
+            .first()
+            .and_then(|member| self.records.get(&member.forecast_id))
+            .ok_or_else(|| absent("supplied comparison has no frozen forecast"))?;
+        if matches!(first.payload, ForecastPayload::Gaussian { .. }) {
+            self.compare_supplied_assessments_gaussian_crps(left_digest, right_digest)
+                .map(SuppliedCrpsComparison::Gaussian)
+        } else {
+            self.compare_supplied_assessments(left_digest, right_digest, PairedScore::Crps)
+                .map(SuppliedCrpsComparison::Finite)
+        }
+    }
+
+    /// Approximate Gaussian CRPS on the same prospectively frozen supplied-target population as the
+    /// exact finite comparison. No public source authority is inferred from supplied citations.
+    pub fn compare_supplied_assessments_gaussian_crps(
+        &self,
+        left_digest: Digest32,
+        right_digest: Digest32,
+    ) -> Result<SuppliedGaussianAssessment, Refusal> {
+        let SuppliedInputs {
+            left,
+            right,
+            cohort,
+            quantity,
+            unit,
+            members: selected,
+        } = paired_inputs(self, left_digest, right_digest)?;
+        let mut members = Vec::with_capacity(selected.len());
+        for SuppliedSelection {
+            target,
+            outcome_due_ns,
+            pair,
+        } in selected
+        {
+            members.push(SuppliedGaussianMember {
+                target,
+                outcome_due_ns,
+                pair: gaussian::score_member(self, pair)?,
+            });
+        }
+        let n_paired = members
+            .iter()
+            .filter(|m| m.pair.status == PairStatus::Paired)
+            .count();
+        let n_unresolved = members
+            .iter()
+            .filter(|m| m.pair.status == PairStatus::Unresolved)
+            .count();
+        let observed_mean_difference = gaussian::mean(
+            members
+                .iter()
+                .filter(|m| m.pair.status == PairStatus::Paired)
+                .map(|m| m.pair.difference),
+        );
+        let whole_population =
+            gaussian::mean(members.iter().map(|m| m.pair.completion.map(|b| b.0))).zip(
+                gaussian::mean(members.iter().map(|m| m.pair.completion.map(|b| b.1))),
+            );
+        let mut result = SuppliedGaussianAssessment {
+            left_assessment: left.digest,
+            right_assessment: right.digest,
+            left_cohort: left.cohort,
+            right_cohort: right.cohort,
+            resolution_rule: cohort.spec.resolution_rule.clone(),
+            eligible_sources: cohort.spec.eligible_sources.clone(),
+            quantity,
+            unit,
+            alpha: cohort.spec.policy.alpha,
+            as_of_ns: left.as_of_ns,
+            selector: left.selector,
+            n_paired,
+            n_unresolved,
+            n_unmatched: members.len() - n_paired - n_unresolved,
+            n_arithmetic_indeterminate: members
+                .iter()
+                .filter(|m| m.pair.arithmetic_indeterminate)
+                .count(),
+            members,
+            observed_mean_difference,
+            whole_population,
+            digest: Digest32::default(),
+        };
+        result.digest = blake3_hash(&result.canonical_bytes());
+        Ok(result)
+    }
+}
+
+impl SuppliedGaussianAssessment {
+    fn canonical_bytes(&self) -> Vec<u8> {
+        fn number(enc: &mut Encoder, value: Option<f64>) {
+            enc.put_u8(u8::from(value.is_some()));
+            if let Some(value) = value {
+                enc.put_u64(value.to_bits());
+            }
+        }
+        let mut enc = Encoder::new_frame(*b"SGCR", 1);
+        enc.put_fixed(&self.left_assessment.0);
+        enc.put_fixed(&self.right_assessment.0);
+        enc.put_str(GAUSSIAN_METHOD);
+        enc.put_u64(self.members.len() as u64);
+        for member in &self.members {
+            member.target.encode(&mut enc);
+            enc.put_i64(member.outcome_due_ns);
+            let pair = &member.pair;
+            enc.put_str(pair.status.as_str());
+            enc.put_u8(u8::from(pair.arithmetic_indeterminate));
+            number(&mut enc, pair.difference);
+            number(&mut enc, pair.completion.map(|b| b.0));
+            number(&mut enc, pair.completion.map(|b| b.1));
+        }
+        number(&mut enc, self.observed_mean_difference);
+        number(&mut enc, self.whole_population.map(|b| b.0));
+        number(&mut enc, self.whole_population.map(|b| b.1));
+        enc.finish()
     }
 }
 

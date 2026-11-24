@@ -38,6 +38,16 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     The worksheet date must be no later than the earliest possible UTC date under the journal's declared
     host-clock skew. The existing operation stores the original model bytes, complete comparison envelope,
     calculation Claim identity and rationale. Pinning the head allows offline replay after changes to the quote.
+  - DESIGN (BD-225, bd-0ln4). Operating-review worksheets also admit explicit journal choices.
+    Qualified action IDs distinguish `operating:continue|suspend|close` from `care:restart|remain|close`.
+    Only the declared actual starting state, available route terms and a zero upfront cash-floor
+    shortfall enter the admissible action set. The complete both-state comparison and original source
+    bytes remain in the saved envelope, including adverse and counterfactual alternatives.
+    The existing decision-date/host-clock-skew check applies before append. A separate
+    `decision.operating-review/1` Claim identity binds the calculation; procurement identities and
+    all journal encodings remain unchanged. This is an upfront funding screen, not future-liquidity
+    assurance or transition authority. Direct command and atomic-refusal controls are in
+    `xtask/tests/decision_journal.rs`.
   - Rehabilitation compares mutually exclusive, owner-eligible packages at one horizon. Work is paid on
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release
@@ -1292,22 +1302,28 @@ sources, offline replay, CLI selection/refusal and legacy-default checks.
 
 ### Explicit supplied-target comparisons (BD-048/181, plan §10.2)
 
-`forecast journal compare --targets supplied` enables paired interval or finite CRPS comparison of
-registered plant and other prospectively tagged supplied-outcome cohorts. Omitted `--targets` and
+`forecast journal compare --targets supplied` enables paired interval, finite CRPS or Gaussian CRPS
+comparison of registered plant and other prospectively tagged supplied-outcome cohorts. Omitted `--targets` and
 explicit `--targets public` retain the public admission path. The supplied path requires the same frozen
 resolution rule, eligible sources, quantity, unit, alpha, saved assessment cut and outcome selector.
 Matching uses the complete unique domain/site/horizon/quantity/unit tuple and equal outcome deadlines.
 Duplicate targets, untagged legacy forecasts and public-bound cohorts refuse. Equal observed numbers
 are insufficient: both selected values and complete citations must match. Missing forecasts, unresolved
 outcomes and source mismatches remain visible; whole-population bounds require a compatible pair for
-every target. `--score crps` requires complete finite distributions even on unmatched targets.
+every target. `--score crps` requires either finite empirical distributions throughout both cohorts or
+Gaussian distributions throughout, including unmatched targets. Mixed Gaussian/finite populations refuse.
 
 The separate `fmine.forecast-supplied-comparison.v1` (SINT/v1) and
 `fmine.forecast-supplied-crps-comparison.v1` (SCRP/v1) receipts retain frozen distributions, model/author
 metadata, selected events and full citations. JSON and Markdown explicitly identify declarations and
 citations as supplied and unverified. The command samples no clock, opens no original source file,
 creates no assessment and appends nothing; public comparison and journal encodings remain unchanged.
-Independent kernel tests live in `xtask/tests/forecast_supplied_comparison.rs`. The actual plant command
+Supplied Gaussian comparison uses `fmine.forecast-supplied-gaussian-crps-comparison.v1` / SGCR/v1 and
+explicitly declares approximate arithmetic. It reuses the Gaussian CRPS owner for full-distribution
+losses and analytic completion extrema; those numerical extrema are not certified enclosures or
+confidence intervals. Existing public and exact supplied receipt encodings remain unchanged.
+Independent kernel tests live in `xtask/tests/forecast_supplied_comparison.rs`; saved Gaussian CLI replay
+without clock access or writes is exercised in `xtask/tests/forecast_live.rs`. The actual plant command
 control registers original and fitted forecasts, freezes cohorts before physical start, saves supplied
 outcomes and assessments, and compares them after original source paths disappear. Its exact synthetic
 example improves CRPS from `7/32` to `3/32`, with preceding unresolved difference bounds `[-1/8, 1/8]`.

@@ -2231,3 +2231,163 @@ fn supplied_brier_comparison_replays_saved_event_evidence_without_clock_or_write
     assert_eq!(replayed_json.get("comparison").unwrap(), report);
     assert_eq!(fs::read(&journal.path).unwrap(), retained);
 }
+
+#[test]
+fn supplied_gaussian_crps_comparison_reopens_saved_sources_without_clock_or_writes() {
+    use fmine_calib::ledger::comparison::PairedScore;
+    use fmine_io::omf::json::parse;
+
+    struct NoComparisonClock;
+    impl WallClock for NoComparisonClock {
+        fn now_ns(&self) -> Result<i64, ClockError> {
+            panic!("saved Gaussian comparisons must not sample a clock")
+        }
+    }
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    for (alias, model, site, mean, std_dev) in [
+        ("la", "left", "A", 3, 1),
+        ("lb", "left", "B", 0, 1),
+        ("ra", "right", "A", 3, 2),
+        ("rb", "right", "B", 1, 1),
+    ] {
+        journal.append(
+            &format!(
+                "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{model}\"\noutcome_due = \"{DUE}\"\nkind = \"gaussian\"\nmean = \"{mean}\"\nstd_dev = \"{std_dev}\"\nfamily = \"synthetic-{model}\"\nauthor_role = \"synthetic-model-role\"\ndomain = \"mill\"\nhorizon = \"synthetic FY2030\"\nsite = \"{site}\"\nquantity = \"supplied recovered gold\"\nunit = \"kg\"\n"
+            ),
+            ns("2030-01-02T00:00:00Z"),
+        );
+    }
+    for (model, members) in [("left", "la,lb"), ("right", "ra,rb")] {
+        journal.append(
+            &format!(
+                "[[cohort]]\nname = \"{model}\"\nmembers = \"{members}\"\nresolution_rule = \"Supplied FY2030 recovered gold on the complete frozen support\"\neligible_sources = \"synthetic:issuer\"\nalpha = \"0.2\"\n"
+            ),
+            ns("2030-01-03T00:00:00Z"),
+        );
+    }
+    for alias in ["la", "ra"] {
+        journal.append(
+            &outcome(alias, 3, "2031-01-01T00:00:00Z", false),
+            ns("2031-01-02T00:00:00Z"),
+        );
+    }
+    let saved: Vec<_> = ["left", "right"]
+        .into_iter()
+        .map(|name| {
+            let result = journal.ok(
+                Command::Assess {
+                    journal: journal.path.clone(),
+                    head: journal.head,
+                    cohort: name.into(),
+                    as_of: CUT.into(),
+                    selector: "first-published".into(),
+                    expected_digest: None,
+                },
+                ns(CUT),
+            );
+            assessment_digest(&result)
+        })
+        .collect();
+    let command = Command::CompareSupplied {
+        journal: journal.path.clone(),
+        head: Some(journal.head),
+        left: saved[0],
+        right: saved[1],
+        score: PairedScore::Crps,
+    };
+    let before = fs::read(&journal.path).unwrap();
+    let result = execute_with_clock(&command, &journal.root, &NoComparisonClock);
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    let json = parse(result.payload_json.as_bytes()).unwrap();
+    let report = json.get("comparison").unwrap();
+    assert_eq!(
+        report.get("schema").unwrap().as_str(),
+        Some("fmine.forecast-supplied-gaussian-crps-comparison.v1")
+    );
+    assert_eq!(
+        report.get("arithmetic").unwrap().as_str(),
+        Some("approximate")
+    );
+    assert_eq!(
+        report.get("source_citations").unwrap().as_str(),
+        Some("supplied_not_verified")
+    );
+    assert_eq!(report.get("n_members").unwrap().u64(), Some(2));
+    assert_eq!(report.get("n_paired").unwrap().u64(), Some(1));
+    assert_eq!(report.get("n_unresolved").unwrap().u64(), Some(1));
+    assert!(
+        result
+            .payload_json
+            .contains("\"observed_mean_difference\":-0.233")
+    );
+    assert!(
+        result
+            .payload_json
+            .contains("\"kind\":\"gaussian\",\"mean\":3,\"std_dev\":1")
+    );
+    assert!(
+        result
+            .payload_json
+            .contains("\"kind\":\"gaussian\",\"mean\":3,\"std_dev\":2")
+    );
+    assert!(result.payload_json.contains("Invented!A1"));
+    assert!(result.payload_json.contains(&"11".repeat(32)));
+    let markdown = result.rendered_markdown.as_deref().unwrap();
+    assert!(markdown.contains("Paired supplied-target Gaussian CRPS assessment"));
+    assert!(markdown.contains("not certified numerical enclosures"));
+    assert!(markdown.contains("supplied, not verified"));
+    assert!(markdown.contains("synthetic FY2030"));
+    assert!(markdown.contains("Invented!A1"));
+    assert!(markdown.contains("-0.233"));
+    let args = vec![
+        "forecast".into(),
+        "journal".into(),
+        "compare".into(),
+        "--journal".into(),
+        journal.path.display().to_string(),
+        "--left".into(),
+        saved[0].to_hex(),
+        "--right".into(),
+        saved[1].to_hex(),
+        "--targets".into(),
+        "supplied".into(),
+        "--score".into(),
+        "crps".into(),
+        "--head".into(),
+        journal.head.to_hex(),
+    ];
+    assert_eq!(
+        fmine_cli::invoke(&args, &journal.root).0.to_json(),
+        result.to_json()
+    );
+    assert_eq!(fs::read(&journal.path).unwrap(), before);
+    for alias in ["lb", "rb"] {
+        journal.append(
+            &outcome(alias, 1, "2031-01-20T00:00:00Z", false),
+            ns("2031-01-21T00:00:00Z"),
+        );
+    }
+    for i in 0..journal.next_request {
+        fs::rename(
+            journal.root.join(format!("request-{i}.toml")),
+            journal.root.join(format!("retired-request-{i}.toml")),
+        )
+        .unwrap();
+    }
+    let retained = fs::read(&journal.path).unwrap();
+    let replayed = execute_with_clock(
+        &Command::CompareSupplied {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            left: saved[0],
+            right: saved[1],
+            score: PairedScore::Crps,
+        },
+        &journal.root,
+        &NoComparisonClock,
+    );
+    assert_eq!(replayed.exit_code, 0, "{}", replayed.to_json());
+    let replayed_json = parse(replayed.payload_json.as_bytes()).unwrap();
+    assert_eq!(replayed_json.get("comparison").unwrap(), report);
+    assert_eq!(fs::read(&journal.path).unwrap(), retained);
+}

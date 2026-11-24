@@ -136,38 +136,48 @@ pub(super) fn worksheet(
     evaluate(doc, text, source, root, brief, None)
 }
 
-pub(crate) struct ProcurementSnapshot {
+pub(crate) struct ExecutiveSnapshot {
     pub card: String,
     pub claim_id: String,
     pub not_before_ns: i128,
 }
 
-pub(super) fn procurement_snapshot(
+pub(super) fn journal_snapshot(
     doc: &TomlDoc,
     text: &str,
     source: &SourceAnchor,
     root: &Path,
     action: &str,
-) -> Result<ProcurementSnapshot> {
+) -> Result<ExecutiveSnapshot> {
     use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
     use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
     use fmine_registry::toml_subset::TomlValue;
 
     let evaluated = evaluate(doc, text, source, root, false, Some(action))?;
     let Some(TomlValue::Str(as_of)) = doc.top_get("as_of").map(|f| &f.value) else {
-        return Err(invalid(
-            "procurement worksheet is missing its decision date",
-        ));
+        return Err(invalid("executive worksheet is missing its decision date"));
+    };
+    let (metric, domain) = match doc.top_get("decision").map(|f| &f.value) {
+        // Existing procurement receipts retain their original identity domain.
+        Some(TomlValue::Str(mode)) if mode == "purchase" => (
+            "decision.procurement-worksheet/1",
+            "procurement-worksheet/v1",
+        ),
+        Some(TomlValue::Str(mode)) if mode == "operating_review" => {
+            ("decision.operating-review/1", "operating-review/v1")
+        }
+        _ => {
+            return Err(invalid(
+                "executive worksheet does not support a journal choice",
+            ));
+        }
     };
     let card = evaluated.to_json();
-    let tag = format!(
-        "procurement-worksheet/v1:{}",
-        fmine_core::hash::sha256(card.as_bytes())
-    );
+    let tag = format!("{domain}:{}", fmine_core::hash::sha256(card.as_bytes()));
     // This Claim identifies the retained worksheet calculation. The human choice and
     // rationale are separately supplied by the journal writer.
     let binding = Claim::new(
-        "decision.procurement-worksheet/1",
+        metric,
         (),
         &tag,
         Representation::Deterministic,
@@ -181,7 +191,7 @@ pub(super) fn procurement_snapshot(
         Vec::new(),
         vec![source.clone()],
     );
-    Ok(ProcurementSnapshot {
+    Ok(ExecutiveSnapshot {
         card,
         claim_id: binding.claim_id.to_string(),
         not_before_ns: i128::from(day(as_of)?) * 86_400_000_000_000,
@@ -222,9 +232,9 @@ fn evaluate(
         return Err(invalid("evidence must be synthetic or operator_declared"));
     }
     let mode = get(&f, "decision")?;
-    if selected_action.is_some() && mode != "purchase" {
+    if selected_action.is_some() && !matches!(mode, "purchase" | "operating_review") {
         return Err(invalid(
-            "only procurement executive worksheets can be recorded in the decision journal",
+            "only procurement and operating-review executive worksheets can be recorded in the decision journal",
         ));
     }
     let card = match mode {
@@ -248,7 +258,7 @@ fn evaluate(
         && !card.journal_actions.iter().any(|(id, _)| *id == action)
     {
         return Err(invalid(format!(
-            "procurement action {action} is unavailable in the evaluated worksheet"
+            "{mode} action {action} is unavailable in the evaluated worksheet"
         )));
     }
     let array = |v: &[String]| {

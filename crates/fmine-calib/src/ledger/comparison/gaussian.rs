@@ -179,7 +179,7 @@ fn scores(
     }
 }
 
-fn mean(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+pub(super) fn mean(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     let values = values.collect::<Option<Vec<_>>>()?;
     if values.is_empty() {
         return None;
@@ -199,6 +199,48 @@ fn mean(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     finite((sum / values.len() as f64) * scale)
 }
 
+pub(super) fn score_member(
+    ledger: &ForecastLedger,
+    selected: SelectedPair<'_>,
+) -> Result<GaussianPairedMember, Refusal> {
+    let SelectedPair {
+        subject,
+        left,
+        right,
+        status,
+        value,
+    } = selected;
+    let parameters =
+        |member: Option<&MemberAssessment>| -> Result<Option<GaussianParameters>, Refusal> {
+            member
+                .map(|member| {
+                    let forecast = ledger
+                        .records
+                        .get(&member.forecast_id)
+                        .ok_or_else(|| absent("paired Gaussian forecast is unavailable"))?;
+                    GaussianParameters::from_payload(&forecast.payload)
+                })
+                .transpose()
+        };
+    let lp = parameters(left)?;
+    let rp = parameters(right)?;
+    let eligible = matches!(status, PairStatus::Paired | PairStatus::Unresolved);
+    let completion = eligible.then(|| scores(lp?, rp?, value)).flatten();
+    Ok(GaussianPairedMember {
+        subject,
+        left: left.cloned(),
+        right: right.cloned(),
+        left_parameters: lp,
+        right_parameters: rp,
+        status,
+        difference: (status == PairStatus::Paired)
+            .then(|| completion.map(|b| b.0))
+            .flatten(),
+        completion,
+        arithmetic_indeterminate: eligible && completion.is_none(),
+    })
+}
+
 impl ForecastLedger {
     /// Approximate Gaussian CRPS differences with analytic global completion extrema. Existing exact
     /// interval and finite-distribution comparison identities and all saved parents remain unchanged.
@@ -215,43 +257,8 @@ impl ForecastLedger {
             members: selected,
         } = paired_inputs(self, left_digest, right_digest)?;
         let mut members = Vec::with_capacity(selected.len());
-        for SelectedPair {
-            subject,
-            left: l,
-            right: r,
-            status,
-            value,
-        } in selected
-        {
-            let parameters =
-                |member: Option<&MemberAssessment>| -> Result<Option<GaussianParameters>, Refusal> {
-                    member
-                        .map(|member| {
-                            let forecast = self
-                                .records
-                                .get(&member.forecast_id)
-                                .ok_or_else(|| absent("paired Gaussian forecast is unavailable"))?;
-                            GaussianParameters::from_payload(&forecast.payload)
-                        })
-                        .transpose()
-                };
-            let lp = parameters(l)?;
-            let rp = parameters(r)?;
-            let eligible = matches!(status, PairStatus::Paired | PairStatus::Unresolved);
-            let completion = eligible.then(|| scores(lp?, rp?, value)).flatten();
-            members.push(GaussianPairedMember {
-                subject,
-                left: l.cloned(),
-                right: r.cloned(),
-                left_parameters: lp,
-                right_parameters: rp,
-                status,
-                difference: (status == PairStatus::Paired)
-                    .then(|| completion.map(|b| b.0))
-                    .flatten(),
-                completion,
-                arithmetic_indeterminate: eligible && completion.is_none(),
-            });
+        for selected in selected {
+            members.push(score_member(self, selected)?);
         }
         let n_paired = members
             .iter()
