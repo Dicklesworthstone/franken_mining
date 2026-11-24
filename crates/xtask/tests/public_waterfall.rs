@@ -12,8 +12,11 @@ use fmine_io::xlsx::{
     col_index_to_letters,
 };
 use fmine_numerics::exact_feas::Rat;
+use fmine_public::key::{Period, PeriodKind, parse_period_code};
 use fmine_public::sources::{IssuerProfile, RegisteredShare, SourceKind, load_issuer_profile};
-use fmine_public::waterfall::{BarPoint, Bridge, PairOutcome, WaterfallReport, pair_sites};
+use fmine_public::waterfall::{
+    BarPoint, Bridge, PairOutcome, WaterfallReport, pair_sites, pair_sites_between,
+};
 use fmine_public::{
     Lane, LoadedSource, PublicAssuranceReport, assess, load_registered_sources, synthetic,
 };
@@ -272,6 +275,336 @@ fn bridge(report: &WaterfallReport, name: &str) -> Bridge {
         .outcome
         .clone()
         .unwrap_or_else(|r| panic!("{name}: {r}"))
+}
+
+fn selected(
+    profile: &IssuerProfile,
+    report: &PublicAssuranceReport,
+    from: Period,
+    to: Period,
+) -> Result<WaterfallReport, fmine_evidence::Refusal> {
+    pair_sites_between(
+        profile,
+        &report.sources,
+        &report.mine_stats,
+        &report.public_claims,
+        &report.instances,
+        &report.mine_ledger,
+        (from, to),
+    )
+}
+
+fn quarter(code: &str) -> Period {
+    parse_period_code(code).unwrap()
+}
+
+// The known quantities are unchanged; both original workbook bodies and their release metadata name
+// the requested quarters. Later comparative sheets never manufacture an original release.
+fn quarter_fixture(from: Period, to: Period) -> (IssuerProfile, PublicAssuranceReport) {
+    let (profile, mut sources) = fixture(|file, sheets| {
+        let period = if file.starts_with("2030") { from } else { to };
+        let PeriodKind::Quarter(q) = period.kind else {
+            panic!("quarter fixture");
+        };
+        if file.ends_with("aisc.xlsx") {
+            sheets[0].name = format!("Q{q} {}", period.year);
+        } else {
+            let ends = ["March 31", "June 30", "September 30", "December 31"];
+            let end = ends[usize::from(q - 1)];
+            for sheet in sheets {
+                for (at, cell) in &mut sheet.cells {
+                    if at == "A3" {
+                        *cell = text(&format!("For the three months ended {end},"));
+                    } else if fmine_io::xlsx::parse_a1_ref(at).is_some_and(|(row, _)| row == 3) {
+                        *cell = number(i64::from(period.year));
+                    }
+                }
+            }
+        }
+    });
+    for source in &mut sources {
+        source.quarter = if source.file_name.starts_with("2030") {
+            from.code()
+        } else {
+            to.code()
+        };
+    }
+    let report = assess(&profile, Lane::Synthetic, sources);
+    (profile, report)
+}
+
+#[test]
+fn explicit_quarter_bridges_recover_known_effects_across_calendar_boundaries() {
+    for (from, to) in [
+        ("2030Q4", "2031Q1"),
+        ("2030Q1", "2030Q3"),
+        ("2028Q2", "2031Q2"),
+    ] {
+        let (from, to) = (quarter(from), quarter(to));
+        let (profile, report) = quarter_fixture(from, to);
+        let selected = selected(&profile, &report, from, to).unwrap();
+        assert_eq!(selected.pairs.len(), 4);
+        assert!(selected.pairs.iter().all(|p| p.from == from && p.to == to));
+        assert_eq!(site(&selected, "Lmdi Site").kind(), "lmdi");
+        assert_eq!(site(&selected, "Heap Site").kind(), "additive_fallback");
+        assert_eq!(site(&selected, "Zero Site").kind(), "refused");
+        assert_eq!(site(&selected, "Basis Site").kind(), "refused");
+        for name in ["Lmdi Site", "Heap Site"] {
+            let bridge = bridge(&selected, name);
+            assert_eq!(bridge.gap().total_delta, Rat::from_integer(300));
+            assert_eq!(bridge.gap().printed_rate_gap, Rat::from_integer(0));
+            assert!(
+                (bridge.bars().iter().map(|b| b.point.as_f64()).sum::<f64>() - 300.0).abs() < 1e-9
+            );
+            assert!(site(&selected, name).inputs.iter().all(|c| {
+                c.key.valid_period.code() == c.key.reporting_vintage.release
+                    && [from.code(), to.code()].contains(&c.key.reporting_vintage.release)
+            }));
+        }
+        assert!(report.waterfall.pairs.is_empty());
+    }
+}
+
+#[test]
+fn explicit_year_on_year_selection_preserves_default_values_and_order() {
+    let (profile, mut sources) = fixture(|_, _| {});
+    let report = assess(&profile, Lane::Synthetic, sources.clone());
+    let before = (quarter("2030Q2"), quarter("2031Q2"));
+    let picked = selected(&profile, &report, before.0, before.1).unwrap();
+    assert_eq!(picked.to_json(), report.waterfall.to_json());
+    assert_eq!(picked.digest(), report.waterfall.digest());
+    sources.reverse();
+    let reordered = assess(&profile, Lane::Synthetic, sources);
+    let after = selected(&profile, &reordered, before.0, before.1).unwrap();
+    assert_eq!(picked.to_json(), after.to_json());
+    assert_eq!(picked.digest(), after.digest());
+}
+
+#[test]
+fn explicit_bridge_retains_subjects_when_an_original_endpoint_is_missing() {
+    for keep in ["2030", "2031"] {
+        let (profile, mut sources) = fixture(|file, sheets| {
+            if file == "2031_aisc.xlsx" {
+                sheets.extend(aisc(2030));
+            }
+        });
+        sources.retain(|s| s.file_name.starts_with(keep));
+        let report = assess(&profile, Lane::Synthetic, sources);
+        let picked = selected(&profile, &report, quarter("2030Q2"), quarter("2031Q2")).unwrap();
+        assert_eq!(picked.pairs.len(), 4);
+        for p in &picked.pairs {
+            assert!(
+                p.outcome
+                    .as_ref()
+                    .unwrap_err()
+                    .what
+                    .contains("first_published_aisc_missing")
+            );
+            assert_eq!((p.from, p.to), (quarter("2030Q2"), quarter("2031Q2")));
+            assert!(!p.context.is_empty());
+        }
+        assert!(report.waterfall.pairs.is_empty());
+    }
+}
+
+#[test]
+fn explicit_bridge_rejects_incompatible_periods_and_an_empty_selection() {
+    let (profile, sources) = fixture(|_, _| {});
+    let report = assess(&profile, Lane::Synthetic, sources);
+    for (from, to) in [
+        (quarter("2031Q2"), quarter("2030Q2")),
+        (quarter("2030Q2"), quarter("2030Q2")),
+        (quarter("2030H1"), quarter("2031Q2")),
+        (quarter("2030Q2"), quarter("2031FY")),
+        (
+            Period {
+                year: 2030,
+                kind: PeriodKind::Quarter(0),
+            },
+            quarter("2031Q2"),
+        ),
+        (
+            quarter("2030Q2"),
+            Period {
+                year: 2031,
+                kind: PeriodKind::Quarter(5),
+            },
+        ),
+    ] {
+        assert_eq!(
+            selected(&profile, &report, from, to).unwrap_err().code,
+            "FMINE-REF-105"
+        );
+    }
+    let empty = selected(&profile, &report, quarter("2032Q1"), quarter("2032Q2"));
+    assert!(
+        empty
+            .unwrap_err()
+            .what
+            .contains("no first-published site inputs")
+    );
+}
+
+#[test]
+fn explicit_waterfall_cli_reads_registered_workbooks_and_preserves_citations() {
+    use std::fmt::Write as _;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let root = std::env::temp_dir().join(format!(
+        "fmine-selected-waterfall-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("corpus")).unwrap();
+    std::fs::create_dir_all(root.join("registries/sources")).unwrap();
+    let styles = MinimalStyles {
+        num_fmts: vec![(164, "0;(0);\"—\"".into())],
+        xfs: vec![0, 2, 9, 164],
+    };
+    let (profile, mut sources) = fixture(|file, sheets| {
+        if file == "2031_stats.xlsx" {
+            let mut ytd = sheets.iter().find(|s| s.name == "QTD").unwrap().clone();
+            ytd.name = "YTD".to_string();
+            for (at, cell) in &mut ytd.cells {
+                if at == "A3" {
+                    *cell = text("For the six months ended June 30,");
+                } else if fmine_io::xlsx::parse_a1_ref(at)
+                    .is_some_and(|(row, col)| (5..=8).contains(&row) && (2..=4).contains(&col))
+                {
+                    let MinimalCell::Number(value) = cell else {
+                        panic!("known cumulative flow");
+                    };
+                    *value *= 2.0;
+                }
+            }
+            sheets.push(ytd);
+            let site_sheet = sheets.iter_mut().find(|s| s.name == "Minestats1").unwrap();
+            let mut cumulative = site_sheet.cells.clone();
+            cumulative.retain(|(at, _)| at != "A1");
+            for (at, cell) in &mut cumulative {
+                let (row, col) = fmine_io::xlsx::parse_a1_ref(at).unwrap();
+                if at == "A3" {
+                    *cell = text("For the six months ended June 30,");
+                } else if [4, 8, 9].contains(&row)
+                    && let MinimalCell::Number(value) = cell
+                {
+                    *value *= 2.0;
+                }
+                *at = format!("{}{}", col_index_to_letters(col), row + 13);
+            }
+            site_sheet.cells.extend(cumulative);
+        }
+        let bytes = build_minimal_xlsx_styled(sheets, Some(&styles));
+        std::fs::write(root.join("corpus").join(file), bytes).unwrap();
+    });
+    // Q2's cumulative summary needs its independently published Q1 operand. A source selection
+    // that drops this support produces state (v), which must still protect the selected bridge.
+    let incomplete = assess(&profile, Lane::Synthetic, sources.clone());
+    let missing_support =
+        selected(&profile, &incomplete, quarter("2030Q2"), quarter("2031Q2")).unwrap();
+    assert!(
+        site(&missing_support, "Lmdi Site")
+            .outcome
+            .as_ref()
+            .unwrap_err()
+            .what
+            .contains("operand_state_v")
+    );
+    let mut prior_sheets = stats(2031);
+    for sheet in &mut prior_sheets {
+        for (at, cell) in &mut sheet.cells {
+            if at == "A3" {
+                *cell = text("For the three months ended March 31,");
+            }
+        }
+    }
+    let prior_file = "2031_q1_stats.xlsx";
+    let bytes = build_minimal_xlsx_styled(&prior_sheets, Some(&styles));
+    std::fs::write(root.join("corpus").join(prior_file), &bytes).unwrap();
+    let workbook = Workbook::from_bytes(prior_file, &bytes).unwrap();
+    sources.push(LoadedSource {
+        file_name: prior_file.to_string(),
+        kind: SourceKind::MineStats,
+        quarter: "2031Q1".to_string(),
+        url: "synthetic".to_string(),
+        url_basis: "synthetic".to_string(),
+        bytes: bytes.len() as u64,
+        census: workbook.cell_census(),
+        workbook,
+    });
+    let complete = assess(&profile, Lane::Synthetic, sources.clone());
+    let supported = selected(&profile, &complete, quarter("2030Q2"), quarter("2031Q2")).unwrap();
+    assert_eq!(site(&supported, "Lmdi Site").kind(), "lmdi");
+    let mut registry = String::from(
+        "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\n\
+         retrieved_utc = \"synthetic\"\nurl_prefix = \"https://example.invalid/\"\n",
+    );
+    for source in &sources {
+        writeln!(
+            registry,
+            "\n[[source]]\nfile = \"{}\"\nkind = \"{}\"\nquarter = \"{}\"\n\
+             path = \"{}\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"",
+            source.file_name,
+            source.kind.as_str(),
+            source.quarter,
+            source.file_name,
+            source.bytes,
+            fmine_core::Digest32(source.workbook.sha256).to_hex()
+        )
+        .unwrap();
+    }
+    for subject in &profile.subjects {
+        writeln!(registry, "\n[[subject]]\nname = \"{subject}\"").unwrap();
+    }
+    for share in &profile.shares {
+        writeln!(
+            registry,
+            "\n[[share]]\nsubject = \"{}\"\nnum = {}\nden = {}\nevidence = \"{}\"",
+            share.subject, share.num, share.den, share.evidence
+        )
+        .unwrap();
+    }
+    // The selected read must not require unrelated workbook bytes merely because they are registered.
+    writeln!(
+        registry,
+        "\n[[source]]\nfile = \"unselected.xlsx\"\nkind = \"mine_stats\"\nquarter = \"2035Q1\"\n\
+         path = \"unselected.xlsx\"\nurl_basis = \"W1 table\"\nbytes = 1\nsha256 = \"{}\"",
+        fmine_core::hash::sha256(b"x").to_hex()
+    )
+    .unwrap();
+    std::fs::write(root.join("registries/sources/synthetic.toml"), registry).unwrap();
+    let args = [
+        "metrics",
+        "waterfall",
+        "--issuer",
+        "synthetic",
+        "--from",
+        "2030Q2",
+        "--to",
+        "2031Q2",
+        "--site",
+        "Lmdi Site",
+    ]
+    .map(str::to_string);
+    let (envelope, _) = fmine_cli::invoke(&args, &root);
+    assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
+    assert!(envelope.payload_json.contains("\"lane\":\"synthetic\""));
+    assert!(envelope.payload_json.contains("\"kind\":\"lmdi\""));
+    assert!(envelope.payload_json.contains("\"exact\":\"300\""));
+    assert!(!envelope.payload_json.contains("\"subject\":\"Heap Site\""));
+    let markdown = envelope.rendered_markdown.as_ref().unwrap();
+    assert!(markdown.contains("Lmdi Site") && markdown.contains("2030_aisc.xlsx"));
+    assert_eq!(
+        envelope.to_json(),
+        fmine_cli::invoke(&args, &root).0.to_json()
+    );
+    std::fs::write(root.join("corpus/2030_aisc.xlsx"), b"altered source").unwrap();
+    let (refused, _) = fmine_cli::invoke(&args, &root);
+    assert_eq!(refused.exit_code, 8, "{}", refused.to_json());
+    assert_eq!(refused.refusal.unwrap().code, "FMINE-REF-505");
 }
 
 #[test]
