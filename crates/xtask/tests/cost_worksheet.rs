@@ -73,6 +73,162 @@ fn fitted_driver_cost_reaches_registered_aisc_with_its_full_model_receipt() {
     );
 }
 
+const MINING_HISTORY: &str = include_str!("../../../tests/costs/fitted_driver.toml");
+const LABOUR_HISTORY: &str = include_str!("../../../tests/costs/fitted_labour_driver.toml");
+const MULTI_COSTS: &str = include_str!("../../../tests/costs/fitted_multi_costs.toml");
+
+fn multi_driver_fixture() -> Fixture {
+    let fixture = Fixture::new(MULTI_COSTS);
+    fs::write(fixture.0.join("mining.toml"), MINING_HISTORY).unwrap();
+    fs::write(fixture.0.join("labour.toml"), LABOUR_HISTORY).unwrap();
+    fixture
+}
+
+fn with_drivers(paths: &[&str]) -> Vec<String> {
+    let mut args = Fixture::args("aisc@wgc-2018");
+    for path in paths {
+        args.extend(["--fit-driver".into(), (*path).into()]);
+    }
+    args
+}
+
+#[test]
+fn complete_multi_pool_cost_plan_keeps_all_models_and_has_order_independent_reports() {
+    let fixture = multi_driver_fixture();
+    let args = with_drivers(&["mining.toml", "labour.toml"]);
+    let (result, _) = invoke(&args, &fixture.0);
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    // Independent expected cost: mining 600 + administration 230 + community 25;
+    // the separate 100 USD lease cost and by-product credit cancel.
+    assert_eq!(string_field(&result.payload_json, "numerator_usd"), "855");
+    assert_eq!(string_field(&result.payload_json, "usd_per_oz"), "171/20");
+    assert!(result.payload_json.contains("\"fitted_drivers\":["));
+    assert!(!result.payload_json.contains("\"fitted_driver\":"));
+    assert_eq!(
+        result
+            .payload_json
+            .matches("fmine.cost-driver-result.v1")
+            .count(),
+        2
+    );
+    for source in [MINING_HISTORY, LABOUR_HISTORY, MULTI_COSTS] {
+        assert!(
+            result
+                .payload_json
+                .contains(&sha256(source.as_bytes()).to_hex())
+        );
+    }
+    for expected in [
+        "synthetic-register-2026",
+        "synthetic-labour-register-2029",
+        "\"fixed_usd\":\"50\"",
+        "\"usd_per_unit\":\"6\"",
+        "\"mean_variance_usd2\":\"2250\"",
+        "\"mean_variance_usd2\":\"300\"",
+        "\"status\":\"not_estimated\"",
+        "individual fitted variances are not summed",
+        "\"calibrated\":false",
+        "community_costs_current_operations",
+    ] {
+        assert!(result.payload_json.contains(expected), "missing {expected}");
+    }
+    let markdown = result.rendered_markdown.as_ref().unwrap();
+    assert!(markdown.contains("Joint cost uncertainty is not estimated"));
+    assert_eq!(markdown.matches("## Fitted cost driver\n").count(), 2);
+    assert!(markdown.contains("on_site_general_and_administrative"));
+    assert!(markdown.contains("on_site_mining_costs"));
+    assert_eq!(
+        invoke(&with_drivers(&["labour.toml", "mining.toml"]), &fixture.0)
+            .0
+            .to_json(),
+        result.to_json()
+    );
+    let mut markdown_args = args.clone();
+    markdown_args.extend(["--format".into(), "markdown".into()]);
+    assert_eq!(run(&markdown_args, &fixture.0), (markdown.clone(), 0));
+
+    // Changing only the second pool's target by five hours increases its mean by 30 USD.
+    let changed_history = LABOUR_HISTORY.replacen("quantity = \"30\"", "quantity = \"35\"", 1);
+    fs::write(fixture.0.join("labour.toml"), &changed_history).unwrap();
+    let changed = invoke(&args, &fixture.0).0;
+    assert_eq!(changed.exit_code, 0, "{}", changed.to_json());
+    assert_eq!(string_field(&changed.payload_json, "usd_per_oz"), "177/20");
+    assert!(
+        changed
+            .payload_json
+            .contains(&sha256(changed_history.as_bytes()).to_hex())
+    );
+    assert!(
+        changed
+            .payload_json
+            .contains(&sha256(MINING_HISTORY.as_bytes()).to_hex())
+    );
+    assert_ne!(
+        string_field(&changed.payload_json, "digest"),
+        string_field(&result.payload_json, "digest")
+    );
+}
+
+#[test]
+fn any_missing_duplicate_excluded_or_incompatible_card_refuses_the_complete_cost_plan() {
+    let fixture = multi_driver_fixture();
+    let args = with_drivers(&["mining.toml", "labour.toml"]);
+    for (text, code, detail) in [
+        (
+            LABOUR_HISTORY.replace("on_site_general_and_administrative", "on_site_mining_costs"),
+            "FMINE-REF-105",
+            "on_site_mining_costs",
+        ),
+        (
+            LABOUR_HISTORY.replace("on_site_general_and_administrative", "income_tax"),
+            "FMINE-REF-105",
+            "income_tax is unused",
+        ),
+        (
+            LABOUR_HISTORY.replace("Example Mine", "Another Site"),
+            "FMINE-REF-105",
+            "inputs differ",
+        ),
+        (
+            LABOUR_HISTORY.replacen("quantity = \"30\"", "quantity = \"41\"", 1),
+            "FMINE-REF-203",
+            "outside",
+        ),
+    ] {
+        fs::write(fixture.0.join("labour.toml"), &text).unwrap();
+        let result = invoke(&args, &fixture.0).0;
+        assert_ne!(result.exit_code, 0);
+        let refusal = result.refusal.unwrap();
+        assert_eq!(refusal.code, code);
+        assert!(refusal.what.contains(detail), "{}", refusal.what);
+        assert!(!result.payload_json.contains("\"usd_per_oz\""));
+        assert!(!result.payload_json.contains("\"fitted_drivers\""));
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("labour.toml")).unwrap(),
+            text
+        );
+    }
+    let missing = invoke(&with_drivers(&["mining.toml", "missing.toml"]), &fixture.0).0;
+    assert_eq!(missing.refusal.unwrap().code, "FMINE-REF-506");
+    assert!(!missing.payload_json.contains("\"usd_per_oz\""));
+    assert!(parse_args(&with_drivers(&["mining.toml", "mining.toml"]), &fixture.0).is_err());
+    // A second file cannot evade the unique item mapping even if its pathname differs.
+    fs::write(fixture.0.join("copy.toml"), MINING_HISTORY).unwrap();
+    assert_eq!(
+        invoke(&with_drivers(&["mining.toml", "copy.toml"]), &fixture.0)
+            .0
+            .refusal
+            .unwrap()
+            .code,
+        "FMINE-REF-105"
+    );
+    let paths = (0..65)
+        .map(|i| format!("driver-{i}.toml"))
+        .collect::<Vec<_>>();
+    let paths = paths.iter().map(String::as_str).collect::<Vec<_>>();
+    assert!(parse_args(&with_drivers(&paths), &fixture.0).is_err());
+}
+
 fn worksheet(lines: &[(&str, &str)]) -> String {
     let mut text = String::from(
         "schema = \"fmine.cost-worksheet.v1\"\nissuer = \"invented\"\nsubject = \"Site A\"\n\

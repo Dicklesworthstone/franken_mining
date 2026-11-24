@@ -1,0 +1,50 @@
+# Invented cost-pool history, not issuer accounting data.
+# OLS y = 50 + 6*x; at 30 hours the predicted cost is 230 USD.
+# Residual variance = 1000 USD^2; mean variance = 300 USD^2.
+# These residuals co-move with fitted_driver.toml; their variances must not be summed.
+schema = "fmine.cost-driver.v1"
+issuer = "invented"
+subject = "Example Mine"
+basis = "nominal USD accrual"
+ownership = "full"
+currency = "USD"
+item = "on_site_general_and_administrative"
+driver = "labour"
+unit = "hour"
+period = "2030FY"
+quantity = "30"
+domain_min = "10"
+domain_max = "40"
+valid_from = "2030FY"
+valid_through = "2031FY"
+information_cut = "2029FY"
+error_basis = "iid_homoskedastic_cost_errors_fixed_driver"
+monetary_rounding = "nearest_ties_even_0_0001_usd"
+
+[[observation]]
+period = "2026FY"
+quantity = "10"
+usd = "100"
+available = "2026FY"
+accounting_certificate = "synthetic-labour-register-2026"
+
+[[observation]]
+period = "2027FY"
+quantity = "20"
+usd = "200"
+available = "2027FY"
+accounting_certificate = "synthetic-labour-register-2027"
+
+[[observation]]
+period = "2028FY"
+quantity = "30"
+usd = "200"
+available = "2028FY"
+accounting_certificate = "synthetic-labour-register-2028"
+
+[[observation]]
+period = "2029FY"
+quantity = "40"
+usd = "300"
+available = "2029FY"
+accounting_certificate = "synthetic-labour-register-2029"

@@ -1,0 +1,30 @@
+# Complete invented cost population using two independently fitted cost-pool cards.
+# "Independently fitted" describes two fits, not an assumption of independent errors.
+# fmine metrics cost --input tests/costs/fitted_multi_costs.toml --definition aisc@wgc-2018 --fit-driver tests/costs/fitted_driver.toml --fit-driver tests/costs/fitted_labour_driver.toml
+# Mining 600 + administration 230 + community 25 + leases 100 - credits 100 = 855 USD.
+# Over 100 ounces sold, AISC = 171/20 USD/oz. Joint uncertainty remains unestimated.
+schema = "fmine.cost-worksheet.v1"
+issuer = "invented"
+subject = "Example Mine"
+period = "2030FY"
+ownership = "full"
+basis = "nominal USD accrual"
+currency = "USD"
+complete = "true"
+ounces_sold = "100"
+
+[[cost]]
+item = "lease_payments"
+usd = "100"
+
+[[cost]]
+item = "by_product_credits"
+usd = "100"
+
+[[driver_cost]]
+item = "community_costs_current_operations"
+driver = "labour"
+unit = "hour"
+quantity = "100"
+usd_per_unit = "0.2"
+fixed_usd = "5"

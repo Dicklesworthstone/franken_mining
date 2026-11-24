@@ -6,6 +6,8 @@ use fmine_evidence::{EvidenceClass, KnowledgeState};
 
 const TEXT: &str = include_str!("../../../../../tests/costs/fitted_driver.toml");
 const COSTS: &str = include_str!("../../../../../tests/costs/fitted_costs.toml");
+const LABOUR: &str = include_str!("../../../../../tests/costs/fitted_labour_driver.toml");
+const MULTI_COSTS: &str = include_str!("../../../../../tests/costs/fitted_multi_costs.toml");
 const REGISTRY: &str = include_str!("../../../../../registries/metrics.toml");
 
 fn q(n: i128, d: i128) -> Rat {
@@ -83,6 +85,189 @@ fn exact_fit_retains_signed_residuals_covariance_and_cost_definition_lineage() {
     assert_eq!(away.summary().mean_usd, q(780, 1));
     assert_eq!(away.summary().mean_variance_usd2, q(4050, 1));
     assert_eq!(away.summary().observation_variance_usd2, q(13050, 1));
+}
+
+fn multi_costs(
+    text: &str,
+    definition: &str,
+    fits: &[DriverReceipt],
+) -> std::result::Result<super::super::claims::CostReceipt, Refusal> {
+    super::super::worksheet::evaluate_with_fitted_drivers(
+        text,
+        anchor(text),
+        REGISTRY,
+        anchor(REGISTRY),
+        definition,
+        fits,
+    )
+}
+
+#[test]
+fn multiple_cost_pools_reach_one_exact_definition_with_every_ancestor_retained() {
+    let mining = run(TEXT);
+    let labour = run(LABOUR);
+    // Separate hand arithmetic: labour xbar=25, ybar=200, Sxx=500, Sxy=3000,
+    // so fixed=50, slope=6, predicted at 30=230. The complete numerator is
+    // 600 + 230 + (100 * 0.2 + 5) + 100 - 100 = 855 USD.
+    assert_eq!(labour.summary().fixed_usd, q(50, 1));
+    assert_eq!(labour.summary().usd_per_unit, q(6, 1));
+    assert_eq!(labour.summary().mean_variance_usd2, q(300, 1));
+    let fits = [mining, labour];
+    let receipt = multi_costs(MULTI_COSTS, "aisc@wgc-2018", &fits).unwrap();
+    assert_eq!(receipt.summary().numerator_usd, q(855, 1));
+    assert_eq!(receipt.summary().usd_per_unit, q(171, 20));
+    assert_eq!(receipt.summary().contributions.len(), 5);
+    assert_eq!(receipt.inputs().len(), 7);
+    assert_eq!(receipt.claim().state, KnowledgeState::Estimated);
+    assert_eq!(receipt.claim().evidence, EvidenceClass::Assumed);
+    for fit in &fits {
+        let predicted = fit.predicted_line();
+        assert!(receipt.inputs().contains(&predicted));
+        assert!(receipt.claim().parents.contains(&predicted.claim_id));
+        assert!(predicted.parents.contains(&fit.claim().claim_id));
+        for input in fit.inputs() {
+            assert!(fit.claim().parents.contains(&input.claim_id));
+            for source in &input.anchors {
+                assert!(receipt.claim().anchors.contains(source));
+            }
+        }
+    }
+    let reordered = multi_costs(
+        MULTI_COSTS,
+        "aisc@wgc-2018",
+        &[fits[1].clone(), fits[0].clone()],
+    )
+    .unwrap();
+    assert_eq!(receipt, reordered);
+    let single = super::super::worksheet::evaluate_with_fitted_driver(
+        COSTS,
+        anchor(COSTS),
+        REGISTRY,
+        anchor(REGISTRY),
+        "aisc@wgc-2018",
+        &fits[0],
+    )
+    .unwrap();
+    assert_eq!(
+        single,
+        multi_costs(COSTS, "aisc@wgc-2018", &fits[..1]).unwrap()
+    );
+}
+
+#[test]
+fn every_fitted_pool_is_used_once_and_overlaps_or_incompatible_scopes_refuse() {
+    let mining = run(TEXT);
+    let labour = run(LABOUR);
+    let duplicate = multi_costs(
+        MULTI_COSTS,
+        "aisc@wgc-2018",
+        &[mining.clone(), mining.clone()],
+    )
+    .unwrap_err();
+    assert_eq!(duplicate.code, "FMINE-REF-105");
+    assert!(duplicate.what.contains("on_site_mining_costs"));
+    for item in ["lease_payments", "community_costs_current_operations"] {
+        let overlap = run(&LABOUR.replace("on_site_general_and_administrative", item));
+        let refusal =
+            multi_costs(MULTI_COSTS, "aisc@wgc-2018", &[mining.clone(), overlap]).unwrap_err();
+        assert_eq!(refusal.code, "FMINE-REF-105");
+        assert!(refusal.what.contains(item));
+    }
+    let excluded = run(&LABOUR.replace("on_site_general_and_administrative", "income_tax"));
+    let unused =
+        multi_costs(MULTI_COSTS, "aisc@wgc-2018", &[mining.clone(), excluded]).unwrap_err();
+    assert_eq!(unused.code, "FMINE-REF-105");
+    assert!(unused.what.contains("income_tax is unused"));
+    for edit in [
+        LABOUR.replace("Example Mine", "Other Mine"),
+        LABOUR.replace("nominal USD accrual", "other accounting basis"),
+        LABOUR.replace("period = \"2030FY\"", "period = \"2031FY\""),
+        LABOUR.replace(
+            "ownership = \"full\"",
+            "ownership = \"attributable\"\nownership_share = \"1/2\"",
+        ),
+    ] {
+        let refusal =
+            multi_costs(MULTI_COSTS, "aisc@wgc-2018", &[mining.clone(), run(&edit)]).unwrap_err();
+        assert_eq!(refusal.code, "FMINE-REF-105");
+    }
+    assert_eq!(
+        multi_costs(MULTI_COSTS, "aisc@wgc-2018", &[])
+            .unwrap_err()
+            .code,
+        "FMINE-REF-506"
+    );
+    assert_eq!(
+        multi_costs(
+            MULTI_COSTS,
+            "aisc@wgc-2018",
+            &vec![labour; super::super::worksheet::MAX_FITTED_DRIVERS + 1],
+        )
+        .unwrap_err()
+        .code,
+        "FMINE-REF-506"
+    );
+}
+
+#[test]
+fn multi_pool_predictions_keep_single_line_rounding_and_live_source_dependencies() {
+    let mining = run(&TEXT.replace("quantity = \"250\"", "quantity = \"250.00003\""));
+    // Only the target changes; the third training observation also has quantity 30.
+    let labour_text = LABOUR.replacen("quantity = \"30\"", "quantity = \"30.00001\"", 1);
+    let labour = run(&labour_text);
+    assert_eq!(mining.summary().mean_usd, q(300000027, 500000));
+    assert_eq!(labour.summary().mean_usd, q(11500003, 50000));
+    let receipt = multi_costs(
+        MULTI_COSTS,
+        "aisc@wgc-2018",
+        &[mining.clone(), labour.clone()],
+    )
+    .unwrap();
+    // Each pool rounds once: 600.0001 + 230.0001 + 25 = 855.0002 USD.
+    assert_eq!(receipt.summary().numerator_usd, q(4275001, 5000));
+    let edited = run(&format!("{labour_text}\n# changed source evidence\n"));
+    let changed = multi_costs(MULTI_COSTS, "aisc@wgc-2018", &[mining, edited]).unwrap();
+    assert_eq!(
+        receipt.summary().numerator_usd,
+        changed.summary().numerator_usd
+    );
+    assert_eq!(
+        receipt.summary().usd_per_unit,
+        changed.summary().usd_per_unit
+    );
+    assert_ne!(receipt.digest(), changed.digest());
+}
+
+#[test]
+fn multiple_fits_share_existing_copper_and_co_product_definition_semantics() {
+    let fits = [run(TEXT), run(LABOUR)];
+    let allocated = MULTI_COSTS.replace(
+        "ounces_sold = \"100\"",
+        "ounces_sold = \"100\"\ngold_share = \"3/4\"",
+    );
+    let gold = multi_costs(&allocated, "aisc.co_product@wgc-2018", &fits).unwrap();
+    // Co-product excludes the 100 credit and allocates all 955 USD by the declared 3/4.
+    assert_eq!(gold.summary().numerator_usd, q(2865, 4));
+    assert_eq!(gold.summary().usd_per_unit, q(573, 80));
+    let copper_text = COSTS
+        .replace("ounces_sold", "pounds_sold")
+        .replace("lease_payments", "depreciation_amortization_removed")
+        .replace("by_product_credits", "costs_allocated_to_by_products");
+    let copper_fits = [
+        run(&TEXT.replace("on_site_mining_costs", "cost_of_sales")),
+        run(&LABOUR.replace(
+            "on_site_general_and_administrative",
+            "treatment_refining_charges",
+        )),
+    ];
+    let copper = multi_costs(&copper_text, "c1.copper@barrick-q2-2026", &copper_fits).unwrap();
+    // C1=(600 + 230 - 100 depreciation - 100 by-product allocation)/100 pounds.
+    assert_eq!(copper.summary().numerator_usd, q(630, 1));
+    assert_eq!(copper.summary().usd_per_unit, q(63, 10));
+    assert_eq!(
+        copper.summary().unit,
+        super::super::CostUnit::CopperPoundSold
+    );
 }
 
 #[test]

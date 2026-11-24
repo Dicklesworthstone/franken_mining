@@ -1,7 +1,7 @@
 //! Strict declared cost worksheets and their exact, evidence-preserving receipts (BD-061).
 //! Determinism: Exact (monetary inputs never pass through floating point).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use fmine_claim::UuTerm;
@@ -20,6 +20,8 @@ use crate::guidance::{Ownership, Period};
 
 pub const SCHEMA: &str = "fmine.cost-worksheet.v1";
 const MAX_ROWS: usize = 4096;
+/// Bounded population of separately fitted, explicitly named cost pools in one plan.
+pub const MAX_FITTED_DRIVERS: usize = 64;
 
 fn bad(line: usize, message: impl AsRef<str>) -> Refusal {
     Refusal::new(
@@ -95,7 +97,7 @@ pub fn evaluate(
     metrics_source: SourceAnchor,
     definition: &str,
 ) -> Result<CostReceipt, Refusal> {
-    evaluate_inner(text, source, metrics_text, metrics_source, definition, None)
+    evaluate_inner(text, source, metrics_text, metrics_source, definition, &[])
 }
 
 /// Add an admitted fitted cost line to the explicitly complete population. A duplicated
@@ -108,13 +110,41 @@ pub fn evaluate_with_fitted_driver(
     definition: &str,
     driver: &super::driver::DriverReceipt,
 ) -> Result<CostReceipt, Refusal> {
+    evaluate_with_fitted_drivers(
+        text,
+        source,
+        metrics_text,
+        metrics_source,
+        definition,
+        std::slice::from_ref(driver),
+    )
+}
+
+/// Include one fitted line per explicitly named cost pool in the same complete plan.
+/// Every card must be used by the selected definition exactly once. Direct lines and declared
+/// drivers cannot duplicate a fitted pool. The cards retain their individual error models;
+/// summing their point predictions does not assert independent errors or a joint variance.
+pub fn evaluate_with_fitted_drivers(
+    text: &str,
+    source: SourceAnchor,
+    metrics_text: &str,
+    metrics_source: SourceAnchor,
+    definition: &str,
+    drivers: &[super::driver::DriverReceipt],
+) -> Result<CostReceipt, Refusal> {
+    if drivers.is_empty() || drivers.len() > MAX_FITTED_DRIVERS {
+        return Err(bad(
+            1,
+            format!("supply 1..{MAX_FITTED_DRIVERS} fitted cost-pool cards"),
+        ));
+    }
     evaluate_inner(
         text,
         source,
         metrics_text,
         metrics_source,
         definition,
-        Some(driver),
+        drivers,
     )
 }
 
@@ -124,7 +154,7 @@ fn evaluate_inner(
     metrics_text: &str,
     metrics_source: SourceAnchor,
     definition: &str,
-    driver: Option<&super::driver::DriverReceipt>,
+    drivers: &[super::driver::DriverReceipt],
 ) -> Result<CostReceipt, Refusal> {
     for (bytes, anchor) in [(text, &source), (metrics_text, &metrics_source)] {
         if sha256(bytes.as_bytes()).0 != anchor.artifact_sha256 {
@@ -357,10 +387,44 @@ fn evaluate_inner(
             )
         })
         .collect::<Vec<_>>();
-    if let Some(driver) = driver {
+    let mut fitted_items = BTreeSet::new();
+    for driver in drivers {
+        let item = driver.summary().item.as_str();
+        if !fitted_items.insert(item) {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!("cost worksheet: more than one fitted card maps to cost pool {item}"),
+            ));
+        }
+        if inputs.iter().any(|input| match &input.value.value {
+            CostValue::Line { item: existing, .. }
+            | CostValue::DriverLine { item: existing, .. } => existing == item,
+            _ => false,
+        }) {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!(
+                    "cost worksheet: fitted cost pool {item} is already supplied by another line"
+                ),
+            ));
+        }
         inputs.push(driver.predicted_line());
     }
-    claims::evaluate(&registry, &inputs)
+    let receipt = claims::evaluate(&registry, &inputs)?;
+    for contribution in &receipt.summary().contributions {
+        if fitted_items.contains(contribution.item.as_str())
+            && contribution.treatment == claims::Treatment::Excluded
+        {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!(
+                    "cost worksheet: fitted cost pool {} is unused by definition {definition}; select a definition that includes it or remove the card",
+                    contribution.item
+                ),
+            ));
+        }
+    }
+    Ok(receipt)
 }
 
 pub(super) fn scope_json(scope: &Scope) -> String {
