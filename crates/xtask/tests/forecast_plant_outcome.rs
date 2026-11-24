@@ -188,7 +188,10 @@ impl Fixture {
             self.head.to_hex(),
         ];
         args.extend(options.iter().map(|value| value.to_string()));
-        if !matches!(verb, "report" | "inspect" | "compare" | "verify-plant") {
+        if !matches!(
+            verb,
+            "report" | "inspect" | "compare" | "verify-plant" | "explain-plant-change"
+        ) {
             args.push("--trust-host-clock".into());
         }
         let (command, _, _) = fmine_cli::parse_args(&args, &self.root).unwrap();
@@ -217,7 +220,7 @@ impl Fixture {
     }
 
     fn cohort_request(&self, name: &str, members: &str, rule: &str) -> String {
-        let path = format!("{name}.toml");
+        let path = format!("cohort-{name}.toml");
         fs::write(self.root.join(&path), format!(
             "[[cohort]]\nname = \"{name}\"\nmembers = \"{members}\"\nresolution_rule = \"{rule}\"\neligible_sources = \"synthetic:plant-balance\"\nalpha = \"0.2\"\n"
         )).unwrap();
@@ -980,6 +983,233 @@ fn head_grade_preserves_the_element_and_scores_the_original_dry_feed() {
         assessment
     );
     fixture.native_reader(&["verify-plant", "--forecast", "prediction"]);
+}
+
+#[test]
+fn exact_plant_change_accounts_for_tonnage_grade_and_recovery_from_pinned_source() {
+    let mut fixture = Fixture::new("recovered-metal");
+    fixture.production_observation();
+    let earlier = fixture.start;
+    let later = earlier + HOUR;
+    let end = later + HOUR;
+    for file in ["production.toml", "grinding.toml", "recovery.toml"] {
+        fixture.change(
+            file,
+            &format!("end_ns = \"{later}\""),
+            &format!("end_ns = \"{end}\""),
+        );
+        fixture.change(
+            file,
+            &format!("start_ns = \"{earlier}\""),
+            &format!("start_ns = \"{later}\""),
+        );
+    }
+    for (alias, clock, rule) in [
+        ("later", -28, PRODUCTION_RULE),
+        ("zero-metal", -24, PRODUCTION_RULE),
+        ("manual", -20, "synthetic-manual"),
+    ] {
+        fixture.ok(
+            "register-plant",
+            &[
+                "--input",
+                "production.toml",
+                "--grinding",
+                "grinding.toml",
+                "--recovery",
+                "recovery.toml",
+                "--id",
+                alias,
+                "--target",
+                "recovered-metal",
+                "--author-role",
+                alias,
+                "--time-basis",
+                "utc-unix-ns",
+            ],
+            earlier + clock * NS,
+        );
+        fixture.freeze(alias, alias, rule, earlier + (clock + 2) * NS);
+    }
+    let read = |fixture: &Fixture, baseline, current| {
+        fixture.command(
+            "explain-plant-change",
+            &["--baseline", baseline, "--current", current],
+        )
+    };
+    let unresolved = fixture.refuse(&read(&fixture, "prediction", "later"), &NoClock);
+    assert!(
+        unresolved
+            .refusal
+            .unwrap()
+            .what
+            .contains("source-resolved recovered-metal outcome")
+    );
+    let base = fixture.ok(
+        "resolve-plant",
+        &[
+            "--cohort",
+            "production",
+            "--forecast",
+            "prediction",
+            "--input",
+            "observations/observation.toml",
+        ],
+        later + 2 * NS,
+    );
+    let base_pin = fixture.head;
+    fixture.change(
+        "observations/observation.toml",
+        &utc(later + NS),
+        &utc(end + NS),
+    );
+    fixture.change("observations/observation.toml", "first-hour", "second-hour");
+    for (role, dry, grade) in [
+        ("feed", "2000", "20"),
+        ("concentrate", "100", "200"),
+        ("tailings", "1900", "200/19"),
+    ] {
+        fs::write(
+            fixture.root.join(format!("observations/{role}.toml")),
+            material_period(role, dry, grade, later, end),
+        )
+        .unwrap();
+    }
+    let current = fixture.ok(
+        "resolve-plant",
+        &[
+            "--cohort",
+            "later",
+            "--forecast",
+            "later",
+            "--input",
+            "observations/observation.toml",
+        ],
+        end + 2 * NS,
+    );
+    fixture.change("observations/observation.toml", "second-hour", "zero-metal");
+    for (role, dry) in [
+        ("feed", "2000"),
+        ("concentrate", "100"),
+        ("tailings", "1900"),
+    ] {
+        fs::write(
+            fixture.root.join(format!("observations/{role}.toml")),
+            material_period(role, dry, "0", later, end),
+        )
+        .unwrap();
+    }
+    fixture.ok(
+        "resolve-plant",
+        &[
+            "--cohort",
+            "zero-metal",
+            "--forecast",
+            "zero-metal",
+            "--input",
+            "observations/observation.toml",
+        ],
+        end + 4 * NS,
+    );
+    fs::write(fixture.root.join("supplied.toml"), format!(
+        "[[outcome]]\nforecast = \"manual\"\nkind = \"published\"\navailable_at = \"{}\"\nvalue = \"0.020\"\nsource = \"synthetic:plant-balance\"\nvintage = \"manual\"\nlocator = \"supplied scalar\"\nsha256 = \"{}\"\n",
+        utc(end + NS), sha256(b"synthetic scalar").to_hex(),
+    )).unwrap();
+    fixture.ok("outcome", &["--request", "supplied.toml"], end + 5 * NS);
+    fixture.refuse(&read(&fixture, "prediction", "manual"), &NoClock);
+    let wrong_order = fixture.refuse(&read(&fixture, "later", "prediction"), &NoClock);
+    assert_eq!(wrong_order.refusal.unwrap().code, "FMINE-REF-102");
+    let no_grade = fixture.refuse(&read(&fixture, "prediction", "zero-metal"), &NoClock);
+    assert_eq!(no_grade.refusal.unwrap().code, "FMINE-REF-109");
+    let stale = Command::ExplainPlantChange {
+        journal: "journal".into(),
+        head: base_pin,
+        baseline: "prediction".into(),
+        current: "later".into(),
+    };
+    fixture.refuse(&stale, &NoClock);
+
+    for file in [
+        "production.toml",
+        "observations/observation.toml",
+        "observations/feed.toml",
+        "observations/concentrate.toml",
+        "observations/tailings.toml",
+    ] {
+        fs::write(fixture.root.join(file), "edited after change evidence").unwrap();
+    }
+    let before = fs::read(fixture.root.join("journal")).unwrap();
+    let explained = execute_with_clock(
+        &read(&fixture, "prediction", "later"),
+        &fixture.root,
+        &NoClock,
+    );
+    assert_eq!(explained.exit_code, 0, "{}", explained.to_json());
+    let payload = parse(explained.payload_json.as_bytes()).unwrap();
+    let shown = fixture.native_reader(&[
+        "explain-plant-change",
+        "--baseline",
+        "prediction",
+        "--current",
+        "later",
+    ]);
+    assert_eq!(field(&shown, &["payload"]), &payload);
+    assert_eq!(
+        field(&payload, &["baseline", "recovered_kg"]).as_str(),
+        Some("1/125")
+    );
+    assert_eq!(
+        field(&payload, &["current", "recovered_kg"]).as_str(),
+        Some("1/50")
+    );
+    assert_eq!(
+        field(&payload, &["baseline", "head_grade_g_per_dry_t"]).as_str(),
+        Some("10")
+    );
+    assert_eq!(
+        field(&payload, &["current", "head_grade_g_per_dry_t"]).as_str(),
+        Some("20")
+    );
+    assert_eq!(field(&payload, &["change_kg"]).as_str(), Some("3/250"));
+    for (driver, answer) in [
+        ("dry_tonnes", "19/2000"),
+        ("head_grade", "19/2000"),
+        ("recovery", "-7/1000"),
+    ] {
+        assert_eq!(
+            field(&payload, &["effects_kg", driver]).as_str(),
+            Some(answer)
+        );
+    }
+    let source_hash = |payload: &Json| {
+        let admissions = field(payload, &["source_admissions"]).as_array().unwrap();
+        field(
+            admissions.last().unwrap(),
+            &["evidence", "observation_sha256"],
+        )
+        .clone()
+    };
+    assert_eq!(
+        *field(&payload, &["baseline", "evidence_sha256"]),
+        source_hash(&base)
+    );
+    let new_admissions = field(&current, &["source_admissions"]).as_array().unwrap();
+    let later_id = field(&payload, &["current", "forecast_id"]);
+    let later_evidence = new_admissions
+        .iter()
+        .find(|entry| field(entry, &["forecast_id"]) == later_id)
+        .unwrap();
+    assert_eq!(
+        field(&payload, &["current", "evidence_sha256"]),
+        field(later_evidence, &["evidence", "observation_sha256"])
+    );
+    assert!(
+        explained
+            .rendered_markdown
+            .unwrap()
+            .contains("| **Total change** | **3/250** |")
+    );
+    assert_eq!(fs::read(fixture.root.join("journal")).unwrap(), before);
 }
 
 #[test]

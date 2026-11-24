@@ -465,6 +465,12 @@ mutates_authority = false
 description = "Recompute retained plant worksheets and verify the original receipt and forecast projection without modifying journal history"
 
 [[verb]]
+path = "forecast journal explain-plant-change"
+subsystem = "Touchstone"
+mutates_authority = false
+description = "Explain recovered-metal change across two pinned plant periods by dry tonnes, head grade and recovery"
+
+[[verb]]
 path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false

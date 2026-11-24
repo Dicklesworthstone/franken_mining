@@ -280,6 +280,13 @@ pub enum Command {
         head: Option<Digest32>,
         forecast: String,
     },
+    /// Explain two source-resolved recovered-metal outcomes from an exact pinned history.
+    ExplainPlantChange {
+        journal: PathBuf,
+        head: Digest32,
+        baseline: String,
+        current: String,
+    },
     /// Retrieve an existing persisted assessment without sampling a clock or extending the journal.
     Report {
         journal: PathBuf,
@@ -345,6 +352,7 @@ impl Command {
             Self::Assess { .. } => "assess",
             Self::Inspect { .. } => "inspect",
             Self::VerifyPlant { .. } => "verify-plant",
+            Self::ExplainPlantChange { .. } => "explain-plant-change",
             Self::Report { .. } => "report",
             Self::Compare { .. } | Self::CompareCrps { .. } | Self::CompareSupplied { .. } => {
                 "compare"
@@ -370,6 +378,8 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
             let mut envelope = Envelope::ok(&verb, payload, actions);
             envelope.no_claim = Some(if matches!(command, Command::VerifyPlant { .. }) {
                 super::plant::VERIFICATION_NO_CLAIM
+            } else if matches!(command, Command::ExplainPlantChange { .. }) {
+                super::plant::change::NO_CLAIM
             } else if matches!(command, Command::ResolvePlant { .. }) {
                 super::plant::outcome::NO_CLAIM
             } else if matches!(
@@ -553,6 +563,17 @@ fn perform(
                 }
             }
             return Err(invalid("selected forecast has no retained plant registration").into());
+        }
+        Command::ExplainPlantChange {
+            journal,
+            head,
+            baseline,
+            current,
+        } => {
+            let journal = Journal::open_read(&root.join(journal), Some(*head))?;
+            let state = replay(&journal)?;
+            return super::plant::change::report(&state, *head, baseline, current)
+                .map_err(Into::into);
         }
         Command::Report {
             journal,

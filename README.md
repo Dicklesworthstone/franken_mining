@@ -519,6 +519,24 @@ mass for the exact grade. This lets the operator read feed grade, tonnage and re
 their separate bases. A zero metal assay on positive dry feed is a grade of zero. With zero dry feed,
 head grade is undefined.
 
+#### Explain a change in recovered metal
+
+DESIGN (bd-t773). After resolving two `recovered-metal` forecasts from their original balances, use
+the pinned journal to compare the observed periods:
+
+```bash
+fmine forecast journal explain-plant-change --journal forecasts.journal \
+  --head <saved-head> --baseline <earlier-forecast> --current <later-forecast> \
+  --format markdown
+```
+
+The periods must be ordered, nonoverlapping and equal in elapsed duration, with the same boundary,
+circuit, dry basis and element. Each row retains its own blend, material domain and source citation.
+The bridge averages the effects across all six orders of changing tonnes, grade and recovery. It
+reports the signed contribution of each in kilograms and checks their sum against the exact change
+in recovered metal. Both balances must have positive dry feed and feed element mass. The report
+explains the arithmetic and leaves the causes of the physical changes for investigation.
+
 DESIGN: a saved plant forecast can also be numerically verified from its retained worksheets:
 
 ```bash

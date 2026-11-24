@@ -798,7 +798,7 @@ fn parse_forecast_journal(
     let (mut fields, words) = journal_arguments(args, &["--json", "--trust-host-clock"])?;
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|register-plant|resolve-plant|verify-plant|register-correction|freeze|outcome|resolve|restate|assess|inspect|report|compare|correction"
+            "expected forecast journal init|register|register-plant|resolve-plant|verify-plant|explain-plant-change|register-correction|freeze|outcome|resolve|restate|assess|inspect|report|compare|correction"
                 .to_string(),
         );
     };
@@ -819,7 +819,7 @@ fn parse_forecast_journal(
     let trust_host_clock = fields.remove("--trust-host-clock").is_some();
     let read_only = matches!(
         *verb,
-        "inspect" | "verify-plant" | "report" | "compare" | "correction"
+        "inspect" | "verify-plant" | "explain-plant-change" | "report" | "compare" | "correction"
     );
     if !read_only && !trust_host_clock {
         return Err(
@@ -975,6 +975,12 @@ fn parse_forecast_journal(
                 .map(|value| digest(&value))
                 .transpose()?,
             forecast: take(&mut fields, "--forecast")?,
+        },
+        "explain-plant-change" => Command::ExplainPlantChange {
+            journal,
+            head: digest(&take(&mut fields, "--head")?)?,
+            baseline: take(&mut fields, "--baseline")?,
+            current: take(&mut fields, "--current")?,
         },
         "compare" => {
             let head = fields
@@ -2657,8 +2663,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal register --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal register-assumption --journal <path> --head <hex> --input <assumption.toml> --trust-host-clock",
                 "forecast journal resolve-assumption --journal <path> --head <hex> --forecast <alias> --trust-host-clock",
-                "forecast journal register-plant --journal <path> --head <hex> --input <coupling.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target recovery|throughput|dry-tonnes|contained-metal|recovered-metal --author-role <role> --time-basis utc-unix-ns --trust-host-clock",
+                "forecast journal register-plant --journal <path> --head <hex> --input <coupling.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target <plant-target> --author-role <role> --time-basis utc-unix-ns --trust-host-clock",
                 "forecast journal verify-plant --journal <path> --forecast <alias> [--head <hex>]",
+                "forecast journal explain-plant-change --journal <path> --head <hex> --baseline <earlier-forecast> --current <later-forecast>",
                 "forecast journal register-correction --journal <path> --head <hex> --id <new-alias> --forecast <raw-alias> (--assessment <digest> | --assessments <digests>) --expected-proposal <digest> --model-key <corrected-model> --author-role <role> --trust-host-clock",
                 "forecast journal freeze --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
@@ -2777,6 +2784,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(plant::PRODUCTION_DOCS_JSON);
             payload.push_str(",\"plant_forecast_registration\":");
             payload.push_str(forecast::plant::ROBOT_DOCS_JSON);
+            payload.push_str(",\"plant_change\":");
+            payload.push_str(forecast::plant::CHANGE_DOCS_JSON);
             payload.push_str(",\"plant_trajectory\":");
             payload.push_str(plant::TRAJECTORY_DOCS_JSON);
             payload.push_str(",\"html_claims\":");

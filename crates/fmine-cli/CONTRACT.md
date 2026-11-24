@@ -411,6 +411,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   dry kg, multiplied by 1,000,000. Element and support remain bound to the frozen forecast and use the
   same exact dry and elemental closure. One zero-feed scenario refuses the entire forecast with its
   probability mass intact. This target requires weighted registration and has no legacy quantile mode.
+- DESIGN (bd-t773). `forecast journal explain-plant-change` is a read-only comparison of two pinned,
+  source-resolved recovered-metal outcomes. It reuses the replayed v17 material amounts, requires
+  matching boundary/circuit/dry basis/element and ordered nonoverlapping equal-duration periods,
+  and exposes both exact citations and the original blend/domain. It attributes the recovered kg change
+  to dry tonnes, feed element mass per dry tonne and the recovered fraction by equally weighting all
+  six orders. It checks exact footing, requires positive dry feed and feed element mass, and refuses
+  caller-supplied scalars or unresolved members. It reads no clock or editable worksheet.
 - DESIGN (BD-276): `forecast journal register-assumption --journal <path> --head <hex> --input <path>
   --trust-host-clock` admits one `fmine.report-assumption.v1` request from a registered technical report.
   Hash/size-verified source bytes and complete two-reader agreement supply the printed point or finite

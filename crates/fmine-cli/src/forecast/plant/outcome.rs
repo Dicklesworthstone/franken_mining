@@ -85,14 +85,14 @@ fn label(value: &str) -> Result<String> {
 #[derive(Debug, Clone)]
 pub(in crate::forecast) struct TargetScope {
     target: Target,
-    boundary: String,
-    circuit: String,
-    blend: String,
-    material_domain: String,
-    dry_basis: String,
-    element: String,
-    start_ns: i64,
-    end_ns: i64,
+    pub(super) boundary: String,
+    pub(super) circuit: String,
+    pub(super) blend: String,
+    pub(super) material_domain: String,
+    pub(super) dry_basis: String,
+    pub(super) element: String,
+    pub(super) start_ns: i64,
+    pub(super) end_ns: i64,
 }
 
 pub(in crate::forecast) fn registered_scope(row: &Row<'_>, operation: &str) -> Result<TargetScope> {
@@ -156,7 +156,7 @@ pub(in crate::forecast) fn registered_scope(row: &Row<'_>, operation: &str) -> R
     Ok(result)
 }
 
-fn target_scope(state: &Replay, id: ObjectId) -> Result<&TargetScope> {
+pub(super) fn target_scope(state: &Replay, id: ObjectId) -> Result<&TargetScope> {
     state
         .plant_outcome_scopes
         .get(&id)
@@ -404,12 +404,21 @@ struct Candidate {
     citation: OutcomeCitation,
     evidence: String,
     markdown: String,
+    masses: Option<BalanceMasses>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BalanceMasses {
+    pub dry_feed_kg: ExactQty,
+    pub feed_element_kg: ExactQty,
+    pub recovered_element_kg: ExactQty,
 }
 
 #[derive(Debug, Clone)]
 pub(in crate::forecast) struct Admission {
     json: String,
     markdown: String,
+    pub(super) masses: Option<BalanceMasses>,
 }
 
 impl Admission {
@@ -672,6 +681,11 @@ fn calculate(
         citation,
         evidence,
         markdown,
+        masses: (scope.target == Target::RecoveredMetal).then_some(BalanceMasses {
+            dry_feed_kg: dry,
+            feed_element_kg: feed,
+            recovered_element_kg: concentrate,
+        }),
     })
 }
 
@@ -780,6 +794,7 @@ pub(in crate::forecast) fn apply(
             candidate.evidence,
         ),
         markdown: candidate.markdown,
+        masses: candidate.masses,
     };
     let seq = state.ledger.append_outcome(
         candidate.id,
