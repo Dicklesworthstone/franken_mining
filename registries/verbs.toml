@@ -456,7 +456,7 @@ description = "Register a source-bound weighted plant forecast before its physic
 path = "forecast journal resolve-plant"
 subsystem = "Plumb"
 mutates_authority = true
-description = "Resolve frozen plant recovery, tonnage, metal or elapsed-period rate forecasts from retained material observations with exact closure"
+description = "Resolve frozen plant recovery, head grade, tonnage, metal or elapsed-period rate from retained material observations with exact closure"
 
 [[verb]]
 path = "forecast journal verify-plant"

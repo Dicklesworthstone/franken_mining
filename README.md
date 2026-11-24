@@ -424,7 +424,7 @@ establish interim funding sufficiency or bound the amount lost. Existing manifes
 limit retain their prior declaration identities.
 
 `forecast journal register-plant` registers a selected recovery, capacity throughput, period throughput,
-dry-tonnage, contained-metal or recovered-metal target. It takes the same three source
+head grade, dry-tonnage, contained-metal or recovered-metal target. It takes the same three source
 paths plus `--journal`, `--head`, `--id`, `--target`, `--author-role`,
 `--time-basis utc-unix-ns` and `--trust-host-clock`. The explicit time basis requires whole-second UTC
 Unix nanoseconds; the demonstration's relative times must not be treated as future calendar dates.
@@ -510,6 +510,14 @@ that target with `plant-two-product-production/v1` and resolve it using the same
 descriptor. Feed dry kilograms are converted to metric tonnes and divided by the exact elapsed hours.
 The journal retains the distinct quantity and uses dry metric tonnes per hour for scoring. The existing
 `throughput` target still describes capacity at the modeled grinding conditions.
+
+DESIGN (bd-181.4). Register with `--target head-grade` to score the element-specific feed grade in grams
+per dry metric tonne. The complete weighted forecast retains each declared grade. All scenarios must
+process positive dry feed. For the outcome, freeze `plant-two-product-production/v1` and submit the
+same production observation descriptor. The closed balance provides the original feed metal and dry
+mass for the exact grade. This lets the operator read feed grade, tonnage and recovery scores on
+their separate bases. A zero metal assay on positive dry feed is a grade of zero. With zero dry feed,
+head grade is undefined.
 
 DESIGN: a saved plant forecast can also be numerically verified from its retained worksheets:
 

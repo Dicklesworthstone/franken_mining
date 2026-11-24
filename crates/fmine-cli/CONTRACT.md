@@ -405,6 +405,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   1,000 and the same elapsed hours. Its separate quantity identity prevents capacity and period rates
   from sharing a scoring basis. Legacy v9 quantiles do not accept this target. The existing `throughput`
   registration still represents operating capacity.
+- DESIGN (bd-181.4). Weighted `head-grade` registers `dry_feed_head_grade:<element>` in `g_per_dry_t`.
+  Each original joint scenario supplies its declared feed grade and must have positive processed dry
+  feed. V17 resolves it through the production rule as total feed element kg divided by positive feed
+  dry kg, multiplied by 1,000,000. Element and support remain bound to the frozen forecast and use the
+  same exact dry and elemental closure. One zero-feed scenario refuses the entire forecast with its
+  probability mass intact. This target requires weighted registration and has no legacy quantile mode.
 - DESIGN (BD-276): `forecast journal register-assumption --journal <path> --head <hex> --input <path>
   --trust-host-clock` admits one `fmine.report-assumption.v1` request from a registered technical report.
   Hash/size-verified source bytes and complete two-reader agreement supply the printed point or finite

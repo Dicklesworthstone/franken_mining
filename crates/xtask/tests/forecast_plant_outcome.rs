@@ -278,6 +278,28 @@ impl Fixture {
             self.start - 30 * NS,
         );
     }
+
+    fn native_reader(&self, args: &[&str]) -> Json {
+        let output = Process::new(binary())
+            .current_dir(&self.root)
+            .args(["forecast", "journal"])
+            .args(args)
+            .args([
+                "--journal",
+                "journal",
+                "--head",
+                &self.head.to_hex(),
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        parse(&output.stdout).unwrap()
+    }
 }
 
 #[test]
@@ -830,6 +852,134 @@ fn elapsed_period_throughput_forecasts_and_scores_the_same_feed_basis() {
         assessment
     );
     run(&["verify-plant", "--forecast", "prediction"]);
+}
+
+#[test]
+fn head_grade_preserves_the_element_and_scores_the_original_dry_feed() {
+    let production = include_str!("../../../tests/plant/production_supply_limited.toml");
+    let mut fixture = Fixture::with_sources(
+        "head-grade",
+        "total-non-water-dry-matter/v1",
+        production,
+        HOUR,
+    );
+    let inspected = fixture.native_reader(&["inspect"]);
+    let forecast = &field(&inspected, &["payload", "forecasts"])
+        .as_array()
+        .unwrap()[0];
+    assert_eq!(
+        field(forecast, &["metadata", "quantity"]).as_str(),
+        Some("dry_feed_head_grade:Au")
+    );
+    assert_eq!(
+        field(forecast, &["metadata", "unit"]).as_str(),
+        Some("g_per_dry_t")
+    );
+    let grades = field(forecast, &["payload", "samples"]).as_array().unwrap();
+    assert_eq!(
+        grades.iter().map(Json::f64).collect::<Vec<_>>(),
+        [Some(4.0), Some(1.0)]
+    );
+
+    // Leave the hard scenario intact. Zero feed is undefined even in only one weighted scenario.
+    fixture.change(
+        "production.toml",
+        "available_dry_tonnes = \"100\"\n\n[[scenario]]",
+        "available_dry_tonnes = \"0\"\n\n[[scenario]]",
+    );
+    let register = fixture.command(
+        "register-plant",
+        &[
+            "--input",
+            "production.toml",
+            "--grinding",
+            "grinding.toml",
+            "--recovery",
+            "recovery.toml",
+            "--id",
+            "partly-idle-grade",
+            "--target",
+            "head-grade",
+            "--author-role",
+            "synthetic",
+            "--time-basis",
+            "utc-unix-ns",
+        ],
+    );
+    let refusal = fixture.refuse(&register, &NoClock).refusal.unwrap();
+    assert_eq!(refusal.code, "FMINE-REF-109");
+    assert!(refusal.what.contains("soft with zero processed dry feed"));
+
+    fixture.production_observation();
+    let descriptor = "observations/observation.toml";
+    let original = fs::read_to_string(fixture.root.join(descriptor)).unwrap();
+    fs::write(fixture.root.join(descriptor), original.replace("Au", "Cu")).unwrap();
+    let refusal = fixture
+        .refuse(&fixture.resolve("production", "prediction"), &NoClock)
+        .refusal
+        .unwrap();
+    assert_eq!(refusal.code, "FMINE-REF-102");
+    fs::write(fixture.root.join(descriptor), original).unwrap();
+
+    // 2.5 g of feed gold in 1 t. Concentrate and tails contain 2 and 0.5 g, respectively.
+    for (role, dry, assay) in [
+        ("feed", "1000", "5/2"),
+        ("concentrate", "100", "20"),
+        ("tailings", "900", "5/9"),
+    ] {
+        fs::write(
+            fixture.root.join(format!("observations/{role}.toml")),
+            material(role, dry, assay, fixture.start),
+        )
+        .unwrap();
+    }
+    let end = fixture.start + HOUR;
+    let result = execute_with_clock(
+        &fixture.resolve("production", "prediction"),
+        &fixture.root,
+        &Clock(end + 2 * NS),
+    );
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    fixture.update_head(&result);
+    let payload = parse(result.payload_json.as_bytes()).unwrap();
+    let admission = &field(&payload, &["source_admissions"]).as_array().unwrap()[0];
+    let observation = field(admission, &["evidence", "observation"]);
+    assert_eq!(field(observation, &["unit"]).as_str(), Some("g_per_dry_t"));
+    assert_eq!(
+        field(observation, &["exact_value", "numerator"]).as_str(),
+        Some("5")
+    );
+    assert_eq!(
+        field(observation, &["exact_value", "denominator"]).as_str(),
+        Some("2")
+    );
+
+    for file in [
+        "production.toml",
+        "observations/observation.toml",
+        "observations/feed.toml",
+        "observations/concentrate.toml",
+        "observations/tailings.toml",
+    ] {
+        fs::write(fixture.root.join(file), "edited after head-grade admission").unwrap();
+    }
+    let report = fixture.ok(
+        "assess",
+        &["--cohort", "production", "--as-of", &utc(end + 3 * NS)],
+        end + 5 * NS,
+    );
+    let assessment = field(&report, &["report", "assessment"]);
+    let summary = field(assessment, &["summary"]);
+    assert_eq!(field(summary, &["n_resolved"]).u64(), Some(1));
+    // Equal weights at 1 and 4 around 2.5 give CRPS 1.5 - 0.75.
+    assert_eq!(field(summary, &["crps", "observed_mean"]).f64(), Some(0.75));
+    let digest = field(assessment, &["digest"]).as_str().unwrap();
+    let reopened = fixture.native_reader(&["report", "--assessment", digest]);
+    assert_eq!(
+        field(&reopened, &["payload", "report", "assessment"]),
+        assessment
+    );
+    fixture.native_reader(&["verify-plant", "--forecast", "prediction"]);
 }
 
 #[test]

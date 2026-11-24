@@ -31,10 +31,11 @@ pub(in crate::forecast) const NO_CLAIM: &str = "Plant outcomes come from declare
 
 pub(in crate::forecast) const ROBOT_DOCS_JSON: &str = concat!(
     r#"{"command":"forecast journal resolve-plant --journal <path> --head <hex> --cohort <name> --forecast <alias> --input <observation.toml> --trust-host-clock","#,
-    r#""target":"Registered recovery, dry-tonnes, contained-metal, recovered-metal or weighted period-throughput. The frozen forecast selects the quantity. Operating-capacity throughput requires different evidence","#,
+    r#""target":"Registered recovery, dry-tonnes, contained-metal, recovered-metal, weighted period-throughput or weighted head-grade. The frozen forecast selects the quantity. Operating-capacity throughput requires different evidence","#,
     r#""schema":"fmine.plant-recovery-observation.v1","#,
     r#""recovery":{"schema":"fmine.plant-recovery-observation.v1","resolution_rule":"plant-two-product-recovery/v1","calculation":"Concentrate metal kg divided by positive feed metal kg","operation":"v16"},"#,
     r#""production":{"schema":"fmine.plant-production-observation.v1","resolution_rule":"plant-two-product-production/v1","calculation":"Dry feed kg divided by 1000 for metric tonnes, feed metal kg for contained metal, concentrate metal kg for recovered metal, or dry feed tonnes divided by complete elapsed UTC hours for period throughput","operation":"v17"},"#,
+    r#""head_grade":"Divide total feed metal kg for the frozen element by positive dry feed kg, then multiply by 1000000 for grams per dry metric tonne. Uses the production observation schema and rule","#,
     r#""cohort":"Freeze membership before the physical interval starts with the matching resolution_rule and observation source among eligible_sources","#,
     r#""observation_fields":["source","vintage","available_at","circuit","blend","material_domain","dry_basis","element","measurand","balance_basis","feed","concentrate","tailings"],"#,
     r#""layout":"One schema field and one [[observation]] table; values are quoted. Relative material paths resolve against the descriptor directory","#,
@@ -178,7 +179,7 @@ pub(in crate::forecast) fn validate_cohort(state: &Replay, name: &str) -> Result
         let scope = target_scope(state, *id)?;
         let element = matches!(
             scope.target,
-            Target::ContainedMetal | Target::RecoveredMetal
+            Target::HeadGrade | Target::ContainedMetal | Target::RecoveredMetal
         )
         .then_some(scope.element.as_str());
         let member_basis = (scope.target, element);
@@ -188,7 +189,7 @@ pub(in crate::forecast) fn validate_cohort(state: &Replay, name: &str) -> Result
         {
             return Err(fail(
                 RefusalCode::BasisMismatch105,
-                "a production cohort requires original plant forecasts of the same target and, for metal, the same element",
+                "a production cohort requires original plant forecasts of the same target and, for element-specific targets, the same element",
             ));
         }
         basis = Some(member_basis);
@@ -246,6 +247,7 @@ impl ObservationKind {
                         | Target::ContainedMetal
                         | Target::RecoveredMetal
                         | Target::PeriodThroughput
+                        | Target::HeadGrade
                 )
         )
     }
@@ -565,6 +567,19 @@ fn calculate(
         }
         Target::ContainedMetal => (feed, "feed-metal-kg"),
         Target::RecoveredMetal => (concentrate, "concentrate-metal-kg"),
+        Target::HeadGrade => {
+            if dry.signum() <= 0 {
+                return Err(fail(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    "positive dry feed is required to define head grade",
+                ));
+            }
+            let mass_fraction = exact(feed.checked_div(dry))?;
+            (
+                exact(mass_fraction.checked_mul(ExactQty::from_integer(1_000_000)))?,
+                "feed-metal-kg/feed-dry-kg*1000000",
+            )
+        }
         Target::Throughput => {
             return Err(fail(
                 RefusalCode::BasisMismatch105,
