@@ -13,12 +13,14 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::omf::json::{Json, parse as parse_json};
 use fmine_plant::production::{ProductionPoint, ProductionReceipt};
+use fmine_units::ExactQty;
 
 use super::{Row, hex, identifier, invalid, js, time};
 
 pub const OUTCOME_DOCS_JSON: &str = outcome::ROBOT_DOCS_JSON;
 
 const NS_PER_SECOND: i64 = 1_000_000_000;
+const NS_PER_HOUR: i128 = 3_600_000_000_000;
 const LEGACY_EVIDENCE_PREFIX: &str = "# fmine.plant-forecast-admission.v1 ";
 const LEGACY_FAMILY: &str = "conditional-plant-production-quantiles/1";
 const LEGACY_NO_CLAIM: &str = "Conditional plant-model quantiles from declared weighted joint scenarios, not calibrated probabilities or measured production. Only p10, p50 and p90 are registered; interval scoring is available at alpha 0.2, not CRPS or full-distribution scoring. The complete source receipt is retained as admission evidence in the journal operation. Replay verifies the retained bytes, not the original calculation or current source files. Outcomes remain supplied and unverified; registering a prediction neither freezes a cohort nor authorizes operation.";
@@ -27,13 +29,14 @@ const FAMILY: &str = "conditional-plant-production-weighted/2";
 pub const NO_CLAIM: &str = "Conditional plant-model distribution from the complete declared weighted joint scenarios, not calibrated probabilities or measured production. Every selected target value and its exact probability are registered without normalization or resampling; CRPS and central interval scoring retain that marginal distribution. Weighted central levels interpret alpha through its canonical shortest decimal spelling, with exact cumulative mass and no interpolation. The complete source receipt and scenario identities remain admission evidence in the journal operation. Replay verifies retained bytes and transitions, not the original calculation or current source files. Outcomes remain supplied and unverified; registering a prediction neither freezes a cohort nor authorizes operation. No joint forecast scoring or calibrated scenario probabilities are inferred.";
 pub const VERIFICATION_NO_CLAIM: &str = "Offline recomputation uses the current plant implementation and only the three retained worksheets. Source SHA-256, complete calculated receipt and original forecast projection must match exactly. This is conditional numerical reproduction in the DeterministicPerIsa class, not an independent model oracle, external source audit, calibrated forecast, timestamp proof or plant validation. The journal and its historical interpretation remain unchanged; an unpinned self-consistent replacement history cannot be authenticated by this check.";
 pub const VERIFICATION_DOCS_JSON: &str = r#"{"command":"forecast journal verify-plant --journal <path> --forecast <alias> [--head <hex>]","input":"One saved plant registration, weighted v14 or legacy quantile v9; all three exact worksheets and their original source anchors must be retained","verification":"Recompute grinding, recovery and joint production; compare every retained source and result field, receipt digest, scenario identity/order, exact probability, physical support and forecast projection","correction_fit":"An optional source-bound aligned paired recovery fit is recomputed from the retained worksheets. Its evidence_cut_ns must be less than or equal to the earliest possible registration time under the saved record's clock bound. A cut before physical start is insufficient if it follows registration. This check establishes no calibration; absent-fit v9/v14 semantics are unchanged","io":"Read-only journal lock; no clock sample, current worksheet reads or journal writes; retained paths are provenance only","compatibility":"Ordinary replay and durable operation bytes are unchanged. Explicit verification uses current numerical implementations in DeterministicPerIsa class; differences refuse instead of rewriting historical values","limits":"Source/model declarations remain assumed and uncalibrated. No independent oracle, external timestamp or authenticity proof for an unpinned replacement history"}"#;
-pub const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal register-plant --journal <path> --head <hex> --input <production.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target <target> --author-role <role> --time-basis utc-unix-ns --trust-host-clock","targets":["recovery","throughput","dry-tonnes","contained-metal","recovered-metal"],"source":"Admits the complete joint production calculation through its grinding, recovery and explicit grade/exposure worksheets; scenario identities and order, exact probabilities, physical support, units and element are retained","supply_limited_v2":"Dry-tonnes, contained-metal and recovered-metal targets use the explicitly supply-limited production in each state. Throughput retains its operating-capacity meaning; the source receipt separately reports the effective rate over scheduled exposure. V2 feed is available at start and curtailment reduces exposure at the unchanged operating point","correction_fit":"An optional source-bound aligned paired recovery fit must have evidence_cut_ns less than or equal to the earliest registration clock bound; this is checked before append. verify-plant recomputes the fit from retained worksheets and checks the saved registration bound. The fit establishes no calibration, and absent-fit semantics are unchanged","payload":"Complete weighted empirical marginal distribution, with every target value and exact positive probability; CRPS and central interval scoring, no normalization or resampling. Weighted interval alpha uses its canonical shortest decimal spelling and exact inverse-CDF comparisons; no interpolation","time":"Whole-second UTC Unix-nanosecond physical support is explicitly declared, never inferred or rounded; registration and cohort membership clock upper bounds must precede physical start; supplied outcomes must become available after physical end","journal":"Opt-in operation v14 retains the complete weighted payload, separate registration_before=start and outcome_due=end boundaries and complete source admission evidence; both boundaries are checked on replay; legacy v9 quantile evidence and identities retain their original interpretation","size":"The complete versioned operation must fit the existing 64 KiB cap; oversized evidence is refused, never truncated","interpretation":"Conditional model outputs and supplied unverified outcomes; no calibration, measured-production, joint-distribution scoring or control-authority claim. Replay authenticates retained bytes and transitions, not the original plant calculation or current source files"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"command":"forecast journal register-plant --journal <path> --head <hex> --input <production.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target <target> --author-role <role> --time-basis utc-unix-ns --trust-host-clock","targets":["recovery","throughput","dry-tonnes","contained-metal","recovered-metal","period-throughput"],"period_throughput":"Each scenario's dry tonnes divided by the elapsed UTC hours of the complete frozen interval. Scheduled hours must fit inside that interval. This target uses the weighted operation only and can resolve from the retained production balance","source":"Admits the complete joint production calculation through its grinding, recovery and explicit grade/exposure worksheets; scenario identities and order, exact probabilities, physical support, units and element are retained","supply_limited_v2":"Dry-tonnes, contained-metal and recovered-metal targets use the explicitly supply-limited production in each state. Throughput retains its operating-capacity meaning; the source receipt separately reports the effective rate over scheduled exposure. V2 feed is available at start and curtailment reduces exposure at the unchanged operating point","correction_fit":"An optional source-bound aligned paired recovery fit must have evidence_cut_ns less than or equal to the earliest registration clock bound; this is checked before append. verify-plant recomputes the fit from retained worksheets and checks the saved registration bound. The fit establishes no calibration, and absent-fit semantics are unchanged","payload":"Complete weighted empirical marginal distribution, with every target value and exact positive probability; CRPS and central interval scoring, no normalization or resampling. Weighted interval alpha uses its canonical shortest decimal spelling and exact inverse-CDF comparisons; no interpolation","time":"Whole-second UTC Unix-nanosecond physical support is explicitly declared, never inferred or rounded; registration and cohort membership clock upper bounds must precede physical start; supplied outcomes must become available after physical end","journal":"Opt-in operation v14 retains the complete weighted payload, separate registration_before=start and outcome_due=end boundaries and complete source admission evidence; both boundaries are checked on replay; legacy v9 quantile evidence and identities retain their original interpretation","size":"The complete versioned operation must fit the existing 64 KiB cap; oversized evidence is refused, never truncated","interpretation":"Conditional model outputs and supplied unverified outcomes; no calibration, measured-production, joint-distribution scoring or control-authority claim. Replay authenticates retained bytes and transitions, not the original plant calculation or current source files"}"#;
 
 /// A physical target is fixed by the adapter, never inferred from a caller-supplied unit label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     Recovery,
     Throughput,
+    PeriodThroughput,
     DryTonnes,
     ContainedMetal,
     RecoveredMetal,
@@ -44,11 +47,12 @@ impl Target {
         match value {
             "recovery" => Ok(Self::Recovery),
             "throughput" => Ok(Self::Throughput),
+            "period-throughput" => Ok(Self::PeriodThroughput),
             "dry-tonnes" => Ok(Self::DryTonnes),
             "contained-metal" => Ok(Self::ContainedMetal),
             "recovered-metal" => Ok(Self::RecoveredMetal),
             _ => Err(invalid(
-                "plant forecast target must be recovery, throughput, dry-tonnes, contained-metal or recovered-metal",
+                "plant forecast target must be recovery, throughput, period-throughput, dry-tonnes, contained-metal or recovered-metal",
             )),
         }
     }
@@ -57,6 +61,7 @@ impl Target {
         match self {
             Self::Recovery => "recovery",
             Self::Throughput => "throughput",
+            Self::PeriodThroughput => "period-throughput",
             Self::DryTonnes => "dry-tonnes",
             Self::ContainedMetal => "contained-metal",
             Self::RecoveredMetal => "recovered-metal",
@@ -66,7 +71,7 @@ impl Target {
     fn unit(self) -> &'static str {
         match self {
             Self::Recovery => "fraction",
-            Self::Throughput => "dry_metric_tonnes_per_hour",
+            Self::Throughput | Self::PeriodThroughput => "dry_metric_tonnes_per_hour",
             Self::DryTonnes => "dry_metric_tonnes",
             Self::ContainedMetal | Self::RecoveredMetal => "kg",
         }
@@ -76,25 +81,37 @@ impl Target {
         match self {
             Self::Recovery => format!("model_recovery_fraction:{element}"),
             Self::Throughput => "dry_feed_throughput".into(),
+            Self::PeriodThroughput => "dry_feed_tonnes_per_elapsed_utc_hour".into(),
             Self::DryTonnes => "dry_feed_mass".into(),
             Self::ContainedMetal => format!("contained_feed_metal:{element}"),
             Self::RecoveredMetal => format!("model_recovered_metal:{element}"),
         }
     }
 
-    fn sample(self, point: &ProductionPoint) -> f64 {
-        match self {
+    fn sample(self, point: &ProductionPoint, elapsed: ExactQty) -> Result<f64, Refusal> {
+        Ok(match self {
             Self::Recovery => point.recovery_fraction.value(),
             Self::Throughput => point.throughput.value(),
+            Self::PeriodThroughput => {
+                let dry = point.dry_tonnes.value();
+                let rate = dry / elapsed.to_f64();
+                if !rate.is_finite() || (dry > 0.0 && rate == 0.0) {
+                    return Err(Refusal::new(
+                        RefusalCode::NumericalCertificateFailed207,
+                        "period throughput loses binary64 range",
+                    ));
+                }
+                rate
+            }
             Self::DryTonnes => point.dry_tonnes.value(),
             Self::ContainedMetal => point.contained_metal.value(),
             Self::RecoveredMetal => point.recovered_metal.value(),
-        }
+        })
     }
 
-    fn quantiles(self, receipt: &ProductionReceipt) -> [f64; 3] {
+    fn quantiles(self, receipt: &ProductionReceipt) -> Result<[f64; 3], Refusal> {
         let summary = receipt.summary();
-        match self {
+        Ok(match self {
             Self::Recovery => [
                 summary.recovery.p10.value(),
                 summary.recovery.p50.value(),
@@ -105,6 +122,11 @@ impl Target {
                 summary.throughput.p50.value(),
                 summary.throughput.p90.value(),
             ],
+            Self::PeriodThroughput => {
+                return Err(invalid(
+                    "period throughput requires a weighted plant forecast",
+                ));
+            }
             Self::DryTonnes => [
                 summary.dry_tonnes.p10.value(),
                 summary.dry_tonnes.p50.value(),
@@ -120,8 +142,18 @@ impl Target {
                 summary.recovered_metal.p50.value(),
                 summary.recovered_metal.p90.value(),
             ],
-        }
+        })
     }
+}
+
+fn elapsed_hours(start_ns: i64, end_ns: i64) -> Result<ExactQty, Refusal> {
+    if start_ns >= end_ns {
+        return Err(invalid(
+            "plant forecast needs a positive elapsed UTC interval",
+        ));
+    }
+    ExactQty::new(i128::from(end_ns) - i128::from(start_ns), NS_PER_HOUR)
+        .map_err(|_| invalid("cannot represent elapsed plant hours"))
 }
 
 pub(super) struct Registration<'a> {
@@ -187,12 +219,15 @@ fn from_receipt(
     receipt: &ProductionReceipt,
     source_json: &str,
 ) -> Result<Prepared, Refusal> {
+    let interval = receipt.summary().grinding_scope.interval;
+    // The production receipt has already admitted each exact schedule against this interval.
+    let elapsed = elapsed_hours(interval.start_ns, interval.end_ns)?;
     let payload = ForecastPayload::WeightedEmpirical {
         samples: receipt
             .points()
             .iter()
-            .map(|point| registration.target.sample(point))
-            .collect(),
+            .map(|point| registration.target.sample(point, elapsed))
+            .collect::<Result<_, _>>()?,
         weights: receipt.points().iter().map(|point| point.weight).collect(),
     };
     from_projection(registration, receipt, source_json, payload)
@@ -206,7 +241,7 @@ fn legacy_from_receipt(
 ) -> Result<Prepared, Refusal> {
     let payload = ForecastPayload::Quantiles {
         levels: vec![0.1, 0.5, 0.9],
-        values: registration.target.quantiles(receipt).to_vec(),
+        values: registration.target.quantiles(receipt)?.to_vec(),
     };
     from_projection(registration, receipt, source_json, payload)
 }
@@ -341,6 +376,11 @@ fn validate_projection(target: Target, payload: &ForecastPayload) -> Result<(), 
             samples
         }
         ForecastPayload::Quantiles { levels, values } => {
+            if target == Target::PeriodThroughput {
+                return Err(invalid(
+                    "period throughput requires a weighted plant forecast",
+                ));
+            }
             if levels != &[0.1, 0.5, 0.9]
                 || values.len() != 3
                 || values.windows(2).any(|pair| pair[0] > pair[1])
@@ -456,7 +496,7 @@ pub(super) fn registration_start(row: &Row<'_>, operation: &str) -> Result<i64, 
     }
     let quantity = row.string("quantity")?;
     let expected = match target {
-        Target::Throughput | Target::DryTonnes => target.quantity(""),
+        Target::Throughput | Target::PeriodThroughput | Target::DryTonnes => target.quantity(""),
         _ => {
             let prefix = target.quantity("");
             let element = quantity

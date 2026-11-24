@@ -31,10 +31,10 @@ pub(in crate::forecast) const NO_CLAIM: &str = "Plant outcomes come from declare
 
 pub(in crate::forecast) const ROBOT_DOCS_JSON: &str = concat!(
     r#"{"command":"forecast journal resolve-plant --journal <path> --head <hex> --cohort <name> --forecast <alias> --input <observation.toml> --trust-host-clock","#,
-    r#""target":"Registered plant recovery, dry-tonnes, contained-metal or recovered-metal in v14 or legacy v9. The frozen forecast selects the quantity. Operating-capacity throughput requires different evidence","#,
+    r#""target":"Registered recovery, dry-tonnes, contained-metal, recovered-metal or weighted period-throughput. The frozen forecast selects the quantity. Operating-capacity throughput requires different evidence","#,
     r#""schema":"fmine.plant-recovery-observation.v1","#,
     r#""recovery":{"schema":"fmine.plant-recovery-observation.v1","resolution_rule":"plant-two-product-recovery/v1","calculation":"Concentrate metal kg divided by positive feed metal kg","operation":"v16"},"#,
-    r#""production":{"schema":"fmine.plant-production-observation.v1","resolution_rule":"plant-two-product-production/v1","calculation":"Dry feed kg divided by 1000 for metric tonnes, feed metal kg for contained metal, and concentrate metal kg for recovered metal","operation":"v17"},"#,
+    r#""production":{"schema":"fmine.plant-production-observation.v1","resolution_rule":"plant-two-product-production/v1","calculation":"Dry feed kg divided by 1000 for metric tonnes, feed metal kg for contained metal, concentrate metal kg for recovered metal, or dry feed tonnes divided by complete elapsed UTC hours for period throughput","operation":"v17"},"#,
     r#""cohort":"Freeze membership before the physical interval starts with the matching resolution_rule and observation source among eligible_sources","#,
     r#""observation_fields":["source","vintage","available_at","circuit","blend","material_domain","dry_basis","element","measurand","balance_basis","feed","concentrate","tailings"],"#,
     r#""layout":"One schema field and one [[observation]] table; values are quoted. Relative material paths resolve against the descriptor directory","#,
@@ -176,7 +176,11 @@ pub(in crate::forecast) fn validate_cohort(state: &Replay, name: &str) -> Result
     let mut basis = None;
     for id in &cohort.spec.members {
         let scope = target_scope(state, *id)?;
-        let element = (scope.target != Target::DryTonnes).then_some(scope.element.as_str());
+        let element = matches!(
+            scope.target,
+            Target::ContainedMetal | Target::RecoveredMetal
+        )
+        .then_some(scope.element.as_str());
         let member_basis = (scope.target, element);
         if !ObservationKind::Production.accepts(scope.target)
             || basis.is_some_and(|previous| previous != member_basis)
@@ -184,7 +188,7 @@ pub(in crate::forecast) fn validate_cohort(state: &Replay, name: &str) -> Result
         {
             return Err(fail(
                 RefusalCode::BasisMismatch105,
-                "a production cohort requires original plant forecasts of the same mass target and, for metal, the same element",
+                "a production cohort requires original plant forecasts of the same target and, for metal, the same element",
             ));
         }
         basis = Some(member_basis);
@@ -238,7 +242,10 @@ impl ObservationKind {
             (Self::Recovery, Target::Recovery)
                 | (
                     Self::Production,
-                    Target::DryTonnes | Target::ContainedMetal | Target::RecoveredMetal
+                    Target::DryTonnes
+                        | Target::ContainedMetal
+                        | Target::RecoveredMetal
+                        | Target::PeriodThroughput
                 )
         )
     }
@@ -544,10 +551,18 @@ fn calculate(
             }
             (ratio, "concentrate/feed")
         }
-        Target::DryTonnes => (
-            exact(dry.checked_div(ExactQty::from_integer(1000)))?,
-            "feed-dry-kg/1000",
-        ),
+        Target::DryTonnes | Target::PeriodThroughput => {
+            let tonnes = exact(dry.checked_div(ExactQty::from_integer(1000)))?;
+            if scope.target == Target::PeriodThroughput {
+                let hours = super::elapsed_hours(scope.start_ns, scope.end_ns)?;
+                (
+                    exact(tonnes.checked_div(hours))?,
+                    "feed-dry-kg/1000/elapsed-utc-hours",
+                )
+            } else {
+                (tonnes, "feed-dry-kg/1000")
+            }
+        }
         Target::ContainedMetal => (feed, "feed-metal-kg"),
         Target::RecoveredMetal => (concentrate, "concentrate-metal-kg"),
         Target::Throughput => {

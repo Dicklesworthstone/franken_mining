@@ -423,8 +423,8 @@ of 212.0001 USD with zero permitted breach probability leaves no eligible altern
 establish interim funding sufficiency or bound the amount lost. Existing manifests without a downside
 limit retain their prior declaration identities.
 
-`forecast journal register-plant` registers a selected recovery, throughput, dry-tonnage, contained-metal
-or recovered-metal target through the existing durable forecast journal. It takes the same three source
+`forecast journal register-plant` registers a selected recovery, capacity throughput, period throughput,
+dry-tonnage, contained-metal or recovered-metal target. It takes the same three source
 paths plus `--journal`, `--head`, `--id`, `--target`, `--author-role`,
 `--time-basis utc-unix-ns` and `--trust-host-clock`. The explicit time basis requires whole-second UTC
 Unix nanoseconds; the demonstration's relative times must not be treated as future calendar dates.
@@ -501,6 +501,15 @@ The v17 operation binds the exact amount and unit to the original observations a
 assessment and comparison commands. Numeric caller-supplied outcomes refuse under the production rule.
 The `throughput` forecast represents operating capacity. A material balance over a scheduled interval
 can include idle or feed-limited hours and cannot establish that capacity.
+
+DESIGN (bd-181.3). To forecast the average dry feed rate actually delivered over a period, register
+with `--target period-throughput`. Each scenario's processed dry tonnes are divided by the complete
+elapsed time between the frozen UTC start and end, in hours. Scheduled hours may be shorter than the
+period and must fit inside it exactly. Feed limits and unprocessed hours lower the period rate. Freeze
+that target with `plant-two-product-production/v1` and resolve it using the same production observation
+descriptor. Feed dry kilograms are converted to metric tonnes and divided by the exact elapsed hours.
+The journal retains the distinct quantity and uses dry metric tonnes per hour for scoring. The existing
+`throughput` target still describes capacity at the modeled grinding conditions.
 
 DESIGN: a saved plant forecast can also be numerically verified from its retained worksheets:
 

@@ -742,6 +742,14 @@ fn legacy_v9_plant_records_replay_original_quantiles_without_acquiring_crps() {
         &loaded.to_json(),
     )
     .expect("preserved original v9 source-bound request");
+    let error = legacy_from_receipt(
+        &registration(Target::PeriodThroughput),
+        loaded.receipt(),
+        &loaded.to_json(),
+    )
+    .err()
+    .expect("period throughput uses the complete weighted distribution only");
+    assert!(error.what.contains("requires a weighted plant forecast"));
     assert!(
         prepared
             .request

@@ -57,9 +57,12 @@ fn utc(ns: i64) -> String {
 }
 
 fn material(role: &str, dry: &str, assay: &str, start: i64) -> String {
+    material_period(role, dry, assay, start, start + HOUR)
+}
+
+fn material_period(role: &str, dry: &str, assay: &str, start: i64, end: i64) -> String {
     format!(
-        "# retained-observation-marker-{role}\nschema = \"fmine.plant-material.v1\"\nboundary = \"synthetic-plant/v1\"\nmaterial = \"{role}\"\nstart_ns = \"{start}\"\nend_ns = \"{}\"\nassay_basis = \"total_element/all_non_water_dry_matter\"\nwhole_material_support = \"true\"\n\n[[mass]]\nrole = \"dry\"\nvalue = \"{dry}\"\nunit = \"kg\"\n\n[[mass]]\nrole = \"water\"\nvalue = \"0\"\nunit = \"kg\"\n\n[[assay]]\nelement = \"Au\"\nmeasurand = \"total-Au/all-phases\"\nvalue = \"{assay}\"\nunit = \"g_per_t\"\n",
-        start + HOUR,
+        "# retained-observation-marker-{role}\nschema = \"fmine.plant-material.v1\"\nboundary = \"synthetic-plant/v1\"\nmaterial = \"{role}\"\nstart_ns = \"{start}\"\nend_ns = \"{end}\"\nassay_basis = \"total_element/all_non_water_dry_matter\"\nwhole_material_support = \"true\"\n\n[[mass]]\nrole = \"dry\"\nvalue = \"{dry}\"\nunit = \"kg\"\n\n[[mass]]\nrole = \"water\"\nvalue = \"0\"\nunit = \"kg\"\n\n[[assay]]\nelement = \"Au\"\nmeasurand = \"total-Au/all-phases\"\nvalue = \"{assay}\"\nunit = \"g_per_t\"\n",
     )
 }
 
@@ -75,6 +78,15 @@ impl Fixture {
     }
 
     fn with_dry_basis(target: &str, dry_basis: &str) -> Self {
+        Self::with_sources(
+            target,
+            dry_basis,
+            include_str!("../../../tests/plant/production_joint.toml"),
+            HOUR,
+        )
+    }
+
+    fn with_sources(target: &str, dry_basis: &str, production: &str, duration: i64) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = loop {
             let path = std::env::temp_dir().join(format!(
@@ -90,10 +102,7 @@ impl Fixture {
         };
         let start = parse_utc("2030-01-02T00:00:00Z").unwrap() * NS;
         for (name, text) in [
-            (
-                "production",
-                include_str!("../../../tests/plant/production_joint.toml"),
-            ),
+            ("production", production),
             (
                 "grinding",
                 include_str!("../../../tests/plant/grinding_joint.toml"),
@@ -107,7 +116,7 @@ impl Fixture {
                 .replace("start_ns = \"0\"", &format!("start_ns = \"{start}\""))
                 .replace(
                     "end_ns = \"3600000000000\"",
-                    &format!("end_ns = \"{}\"", start + HOUR),
+                    &format!("end_ns = \"{}\"", start + duration),
                 )
                 .replace("total-non-water-dry-matter/v1", dry_basis);
             fs::write(root.join(format!("{name}.toml")), text).unwrap();
@@ -157,13 +166,13 @@ impl Fixture {
         ] {
             fs::write(
                 result.root.join(format!("observations/{role}.toml")),
-                material(role, dry, assay, start),
+                material_period(role, dry, assay, start, start + duration),
             )
             .unwrap();
         }
         fs::write(result.root.join("observations/observation.toml"), format!(
             "schema = \"fmine.plant-recovery-observation.v1\"\n\n[[observation]]\nsource = \"synthetic:plant-balance\"\nvintage = \"first-hour\"\navailable_at = \"{}\"\ncircuit = \"synthetic-ball-mill\"\nblend = \"synthetic-shift-blend\"\nmaterial_domain = \"invented-ore-domain\"\ndry_basis = \"total-non-water-dry-matter/v1\"\nelement = \"Au\"\nmeasurand = \"total-Au/all-phases\"\nbalance_basis = \"complete-two-product/no-inventory-change\"\nfeed = \"feed.toml\"\nconcentrate = \"concentrate.toml\"\ntailings = \"tailings.toml\"\n",
-            utc(start + HOUR + NS),
+            utc(start + duration + NS),
         )).unwrap();
         result
     }
@@ -676,6 +685,151 @@ fn production_admission_refuses_capacity_substitution_wrong_scope_and_mutated_op
         );
         assert_ne!(result.exit_code, 0, "{name}: {}", result.to_json());
     }
+}
+
+#[test]
+fn elapsed_period_throughput_forecasts_and_scores_the_same_feed_basis() {
+    let production = include_str!("../../../tests/plant/production_supply_limited.toml");
+    let mut fixture = Fixture::with_sources(
+        "period-throughput",
+        "total-non-water-dry-matter/v1",
+        production,
+        2 * HOUR,
+    );
+    let inspected = execute_with_clock(&fixture.command("inspect", &[]), &fixture.root, &NoClock);
+    assert_eq!(inspected.exit_code, 0, "{}", inspected.to_json());
+    let payload = parse(inspected.payload_json.as_bytes()).unwrap();
+    let forecast = &field(&payload, &["forecasts"]).as_array().unwrap()[0];
+    assert_eq!(
+        field(forecast, &["metadata", "quantity"]).as_str(),
+        Some("dry_feed_tonnes_per_elapsed_utc_hour")
+    );
+    assert_eq!(
+        field(forecast, &["metadata", "unit"]).as_str(),
+        Some("dry_metric_tonnes_per_hour")
+    );
+    // The supplied blend can process only 80 or 100 t in its single scheduled hour.
+    // The frozen output basis is the full two hours, giving 40 or 50 t/h.
+    let rates = field(forecast, &["payload", "samples"]).as_array().unwrap();
+    assert_eq!(
+        rates.iter().map(Json::f64).collect::<Vec<_>>(),
+        [Some(40.0), Some(50.0)]
+    );
+
+    let register = fixture.command(
+        "register-plant",
+        &[
+            "--input",
+            "production.toml",
+            "--grinding",
+            "grinding.toml",
+            "--recovery",
+            "recovery.toml",
+            "--id",
+            "impossible-schedule",
+            "--target",
+            "period-throughput",
+            "--author-role",
+            "synthetic",
+            "--time-basis",
+            "utc-unix-ns",
+        ],
+    );
+    fixture.change(
+        "production.toml",
+        "scheduled_hours = \"1\"",
+        "scheduled_hours = \"20000000000000001/10000000000000000\"",
+    );
+    let refusal = fixture.refuse(&register, &NoClock);
+    let refusal = refusal.refusal.unwrap();
+    assert_eq!(refusal.code, "FMINE-REF-109");
+    assert!(refusal.what.contains("hours within its physical interval"));
+    fixture.production_observation();
+    let end = fixture.start + 2 * HOUR;
+    for (role, dry, assay) in [
+        ("feed", "90000", "10"),
+        ("concentrate", "9000", "80"),
+        ("tailings", "81000", "20/9"),
+    ] {
+        fs::write(
+            fixture.root.join(format!("observations/{role}.toml")),
+            material_period(role, dry, assay, fixture.start, end),
+        )
+        .unwrap();
+    }
+    let result = execute_with_clock(
+        &fixture.resolve("production", "prediction"),
+        &fixture.root,
+        &Clock(end + 2 * NS),
+    );
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    fixture.update_head(&result);
+    let payload = parse(result.payload_json.as_bytes()).unwrap();
+    let admission = &field(&payload, &["source_admissions"]).as_array().unwrap()[0];
+    let observation = field(admission, &["evidence", "observation"]);
+    assert_eq!(
+        field(observation, &["exact_value", "numerator"]).as_str(),
+        Some("45")
+    );
+    assert_eq!(
+        field(observation, &["exact_value", "denominator"]).as_str(),
+        Some("1")
+    );
+    assert_eq!(
+        field(observation, &["calculation"]).as_str(),
+        Some("feed-dry-kg/1000/elapsed-utc-hours")
+    );
+
+    for source in [
+        "observations/observation.toml",
+        "observations/feed.toml",
+        "observations/concentrate.toml",
+        "observations/tailings.toml",
+        "production.toml",
+    ] {
+        fs::write(fixture.root.join(source), "edited after append").unwrap();
+    }
+    let assessed = fixture.ok(
+        "assess",
+        &["--cohort", "production", "--as-of", &utc(end + 3 * NS)],
+        end + 5 * NS,
+    );
+    let assessment = field(&assessed, &["report", "assessment"]);
+    let stats = field(assessment, &["summary"]);
+    assert_eq!(field(stats, &["n_resolved"]).u64(), Some(1));
+    // At 45 t/h: E|X-y| = 5 and half the expected forecast-forecast separation is 2.5.
+    assert_eq!(field(stats, &["crps", "observed_mean"]).f64(), Some(2.5));
+    let run = |args: &[&str]| {
+        let result = Process::new(binary())
+            .current_dir(&fixture.root)
+            .args(["forecast", "journal"])
+            .args(args)
+            .args([
+                "--journal",
+                "journal",
+                "--head",
+                &fixture.head.to_hex(),
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        parse(&result.stdout).unwrap()
+    };
+    let reopened = run(&[
+        "report",
+        "--assessment",
+        field(assessment, &["digest"]).as_str().unwrap(),
+    ]);
+    assert_eq!(
+        field(&reopened, &["payload", "report", "assessment"]),
+        assessment
+    );
+    run(&["verify-plant", "--forecast", "prediction"]);
 }
 
 #[test]

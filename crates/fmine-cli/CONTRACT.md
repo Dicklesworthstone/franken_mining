@@ -398,6 +398,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   caller-supplied scalar cannot substitute. Operating-capacity throughput has a different physical
   basis and is ineligible. The operation retains the original descriptors, worksheets, exact amount,
   binary64 scoring value and full balance. V16 recovery replay keeps its original receipt and rule.
+- DESIGN (bd-181.3). The weighted plant target `period-throughput` registers `dry_feed_tonnes_per_elapsed_utc_hour`
+  in `dry_metric_tonnes_per_hour`. Each complete v14 scenario divides realized dry tonnes after declared
+  supply limits by the full elapsed UTC hours of the frozen support. Each schedule must fit inside that
+  support by exact comparison. A v17 production outcome uses the exact feed dry kilograms divided by
+  1,000 and the same elapsed hours. Its separate quantity identity prevents capacity and period rates
+  from sharing a scoring basis. Legacy v9 quantiles do not accept this target. The existing `throughput`
+  registration still represents operating capacity.
 - DESIGN (BD-276): `forecast journal register-assumption --journal <path> --head <hex> --input <path>
   --trust-host-clock` admits one `fmine.report-assumption.v1` request from a registered technical report.
   Hash/size-verified source bytes and complete two-reader agreement supply the printed point or finite
