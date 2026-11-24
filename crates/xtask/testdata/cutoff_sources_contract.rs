@@ -536,7 +536,16 @@ fn cutoff_cli_cannot_scope_away_a_conflicting_readers_quantity() {
 
 #[test]
 fn cutoff_cli_refuses_unit_basis_period_and_range_substitutions() {
-    for mutation in ["unit", "basis", "period", "range"] {
+    let unit_or_basis = "unit or basis differs from the explicit declaration";
+    for (mutation, expected) in [
+        ("unit", unit_or_basis),
+        ("basis", unit_or_basis),
+        (
+            "period",
+            "no agreed reading for quantity constant_cutoff_cost in effective_2024_12_31",
+        ),
+        ("range", "printed point"),
+    ] {
         let mut fixture = Fixture::new(mutation, &[Model::Constant]);
         fixture.change("constant_cutoff_cost", |e| match mutation {
             "unit" => e.unit = "usd_per_short_ton".into(),
@@ -546,15 +555,7 @@ fn cutoff_cli_refuses_unit_basis_period_and_range_substitutions() {
             _ => unreachable!(),
         });
         let output = fixture.successful(&[]);
-        assert_row_refused(
-            &output,
-            "constant_cutoff",
-            if mutation == "range" {
-                "printed point"
-            } else {
-                "unit, basis or period differs"
-            },
-        );
+        assert_row_refused(&output, "constant_cutoff", expected);
     }
 }
 
