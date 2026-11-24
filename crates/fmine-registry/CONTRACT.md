@@ -166,6 +166,12 @@ Validated `RegistryCatalog`, `SiteCalendars`, `MetricRegistry`, `SourcesRegistry
   accepted rows without readers, so a third reader who agrees reproduces it. Locators are cited
   `<doc>:p<page>:<table>:<row>/<col>`: bd-plx1's form with the table added, since one page can print two tables
   with the same labels.
+  `parse_transcriptions_for_period` and `load_transcriptions_for_period` select an explicitly requested
+  period before applying per-reader/document/quantity uniqueness. All rows still undergo syntax,
+  registered-document, digest, page and per-reader/locator validation. Selection retains every reader at
+  each matching locator, including conflicting period or quantity assignments, so comparative columns
+  cannot substitute for missing current values or conceal disagreement. Unscoped parsing and agreement
+  remain conservative when a document presents one quantity at multiple locators.
   DESIGN (BD-341): track-record adapters admit one-sided guidance into the existing bound scorer, with
   inclusive hit/rounding-boundary behavior and no midpoint or normalized range statistic. Finite-interval
   baselines and point-only physical/table consumers refuse these tokens. Tie discovery includes point

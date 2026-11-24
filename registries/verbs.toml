@@ -499,3 +499,9 @@ path = "forecast spatial-monitor"
 subsystem = "Plumb"
 mutates_authority = false
 description = "Assess a declared mining-front sequence with the existing spatial calibration monitor, retaining physical scope, source evidence and the first alarm"
+
+[[verb]]
+path = "metrics roce"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Assess definition-bound capital return from dated earnings and capital Claims, retaining source rounding, ownership, annualization and issuer exclusions"

@@ -868,9 +868,18 @@ impl CapitalReturnReceipt {
             self.capital.claim_id, self.claim.claim_id, self.digest
         );
         // Each JSON envelope is one escaped line; source text cannot create a closing fence.
+        out.push_str("## Source Claim receipts\n\nEach envelope preserves the original Claim and its ancestry.\n");
+        for input in &self.inputs {
+            let _ = writeln!(
+                out,
+                "\n### Input: {}\n\n```json\n{}\n```",
+                input.value.value.role(),
+                claim_json(input, &input_json(&input.value), false)
+            );
+        }
         let _ = writeln!(
             out,
-            "## Derived Claim receipts\n\nThe exact envelopes retain evidence, confidentiality, UU terms, parents and anchors.\n\n### Capital base\n\n```json\n{}\n```\n\n### Return assessment\n\n```json\n{}\n```",
+            "\n## Derived Claim receipts\n\nThe exact envelopes retain evidence, confidentiality, UU terms, parents and anchors.\n\n### Capital base\n\n```json\n{}\n```\n\n### Return assessment\n\n```json\n{}\n```",
             claim_json(&self.capital, &capital_json(&self.capital.value), false),
             claim_json(&self.claim, &summary_json(self.summary()), false)
         );

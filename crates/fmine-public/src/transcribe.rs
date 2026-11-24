@@ -23,6 +23,7 @@ use fmine_numerics::exact_feas::{Convention, Rat};
 use fmine_registry::sources::is_date;
 use fmine_registry::transcriptions::{
     Accepted, Agreement, Decimal, Locator, Token, agree, load_transcriptions,
+    load_transcriptions_for_period,
 };
 
 use crate::js;
@@ -239,7 +240,27 @@ pub fn load_transcription_quantities_as_of(
         profile,
         root,
         Some(as_of),
-        Some(QuantitySelection::Keys(quantities, document)),
+        Some(QuantitySelection::Keys(quantities, document, None)),
+        false,
+    )
+}
+
+/// Select exact quantity keys in one reporting period and optional filing before reader agreement.
+/// Every reader at a selected locator remains, including one who disagrees about period or quantity;
+/// comparative columns cannot become duplicate current-period quantities or substitute for missing rows.
+pub fn load_transcription_quantities_for_period_as_of(
+    profile: &IssuerProfile,
+    root: &Path,
+    as_of: &str,
+    quantities: &[String],
+    document: Option<&str>,
+    period: &str,
+) -> Result<Option<TranscriptionReport>, Refusal> {
+    load_report(
+        profile,
+        root,
+        Some(as_of),
+        Some(QuantitySelection::Keys(quantities, document, Some(period))),
         false,
     )
 }
@@ -281,7 +302,7 @@ pub fn load_transcription_prefixes_for_period(
 }
 
 enum QuantitySelection<'a> {
-    Keys(&'a [String], Option<&'a str>),
+    Keys(&'a [String], Option<&'a str>, Option<&'a str>),
     Prefixes(&'a [&'a str], Option<&'a str>),
 }
 
@@ -323,8 +344,19 @@ fn load_report(
         return Ok(None);
     }
     let registry = format!("registries/transcriptions/{}.toml", profile.issuer);
-    let mut reg = load_transcriptions(&path, &profile.issuer, &profile.documents)
-        .map_err(|e| crate::input_refusal(format!("transcription registry {registry}: {e}")))?;
+    let period = match &quantities {
+        Some(QuantitySelection::Keys(_, _, period) | QuantitySelection::Prefixes(_, period)) => {
+            *period
+        }
+        None => None,
+    };
+    let mut reg = match period {
+        Some(period) => {
+            load_transcriptions_for_period(&path, &profile.issuer, &profile.documents, period)
+        }
+        None => load_transcriptions(&path, &profile.issuer, &profile.documents),
+    }
+    .map_err(|e| crate::input_refusal(format!("transcription registry {registry}: {e}")))?;
     if let Some(cut) = as_of {
         reg.entries.retain(|e| {
             profile
@@ -338,8 +370,10 @@ fn load_report(
             .entries
             .iter()
             .filter(|e| match &selection {
-                QuantitySelection::Keys(keys, document) => {
-                    keys.contains(&e.quantity) && document.is_none_or(|doc| e.locator.doc == doc)
+                QuantitySelection::Keys(keys, document, period) => {
+                    keys.contains(&e.quantity)
+                        && document.is_none_or(|doc| e.locator.doc == doc)
+                        && period.is_none_or(|period| e.period == period)
                 }
                 QuantitySelection::Prefixes(prefixes, period) => {
                     period.is_none_or(|period| e.period == period)

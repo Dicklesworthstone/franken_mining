@@ -179,6 +179,27 @@ The example is synthetic. The command checks supplied records; it supplies no in
 calibrated-model claim, automatic retraining or completed human investigation. Use `--json` for the
 source-bound Claim receipt and full ordered evidence.
 
+## Assess capital return on an explicit accounting basis
+
+**DESIGN.** Calculate an earnings-to-capital return with its definition, dates and source evidence retained:
+
+```bash
+cargo run -p fmine-cli -- metrics roce --input tests/metrics/capital_return.toml --format markdown
+```
+
+The synthetic worksheet declares the earnings treatment, ownership, monetary unit, reporting period and
+capital-employed definition. Select opening capital, closing capital, their arithmetic mean or an explicitly
+reported average. The report keeps the original period return separate from any declared annualization,
+and carries signed source-rounding bounds through the calculation. Losses and zero earnings remain visible;
+a nonpositive capital base cannot produce a return.
+
+Registered filing inputs can be selected with `--issuer`, `--document`, `--series`, `--period` and `--as-of`.
+That mode requires the existing verified-document and agreeing-reader transcription path; it does not
+substitute a worksheet for missing filing evidence. Use `fmine robot-docs --json` for the exact row roles and
+definition fields. Both JSON and Markdown retain source Claims, the selected capital-base Claim and the
+result. Issuer exclusions remain unavailable, and no accounting audit or cross-definition comparability is
+implied.
+
 ## Honest status
 
 **FACT.** The CLI runs on supplied mine worksheets. A mine geologist can reconcile dry tonnes and

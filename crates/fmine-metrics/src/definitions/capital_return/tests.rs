@@ -478,17 +478,35 @@ fn filing_exclusion_preserves_its_reason_without_relaxing_source_verification() 
 #[test]
 fn markdown_retains_derived_claim_metadata_and_escapes_source_text() {
     let mut rows = inputs();
+    let upstream = rows
+        .iter()
+        .find(|row| row.value.value.role() == "earnings")
+        .unwrap()
+        .claim_id;
     for row in &mut rows {
         let mut value = row.value.clone();
         value.scope.subject = "<script>alert(`x`)</script> | [invented](unsafe) *mine*".into();
         *row = rebind(row, value);
     }
+    let earnings = rows
+        .iter_mut()
+        .find(|row| row.value.value.role() == "earnings")
+        .unwrap();
+    let previous = earnings.claim_id;
+    earnings.parents.push(upstream);
+    *earnings = rebind(earnings, earnings.value.clone());
+    earnings.supersedes = Some(previous);
     let result = evaluate(&rows).unwrap();
     let markdown = result.to_markdown();
-    let visible = markdown.split("## Derived Claim receipts").next().unwrap();
+    let visible = markdown.split("## Source Claim receipts").next().unwrap();
     assert!(!visible.contains("<script>"));
     assert!(visible.contains("&lt;script&gt;alert(\\`x\\`)&lt;/script&gt;"));
     assert!(visible.contains("\\| \\[invented\\](unsafe) \\*mine\\*"));
+    assert!(markdown.contains(&upstream.to_string()));
+    assert!(markdown.contains(&format!("\"supersedes\":\"{previous}\"")));
+    for input in result.inputs() {
+        assert!(markdown.contains(&claim_json(input, &input_json(&input.value), false)));
+    }
     assert!(markdown.contains(&claim_json(
         result.capital_claim(),
         &capital_json(&result.capital_claim().value),

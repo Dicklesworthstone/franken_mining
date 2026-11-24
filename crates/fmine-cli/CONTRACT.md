@@ -182,8 +182,8 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     completed cost outcomes known strictly before that approval enter the lower-median actual/approval
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
-- **LOC budget:** 44,000 planned / 51,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **LOC budget:** 54,000 planned / 62,000 ceiling
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common
@@ -2506,3 +2506,22 @@ The synthetic command fixture is `tests/forecasts/spatial_synthetic.toml`. Actua
 `crates/xtask/testdata/spatial_monitor_command.rs`, included by the CLI test target, cover deterministic
 replay and source mutation, time ordering, scope/unit mismatch, nonfinite observations, usage errors and
 robot registration. The broader control-mine acceptance and human investigation lifecycle remain open.
+
+### Definition-bound capital return
+
+DESIGN (BD-061, plan §21.6): `metrics roce --input FILE` reads a bounded, SHA-256-bound
+`fmine.capital-return-worksheet.v1` declaration. The alternative selectors `--issuer`, `--document`,
+`--series`, `--period` and `--as-of` use the existing registered-document loader and agreeing-reader
+transcriptions. The pure `fmine_metrics::definitions::capital_return` kernel owns both calculations.
+The source adapter requires matching filing identity, publication cut, scope, monetary unit and the
+complete cited earnings/capital definition. Opening and closing capital use exact reporting boundaries;
+reported averages cover the full target window. Unused balances never substitute for a missing basis.
+
+JSON and Markdown retain original inputs, the selected capital-base Claim, period return, separately
+declared annualized return and exact closed source-rounding enclosures. Signed or zero earnings are
+admissible; a capital enclosure touching or crossing zero refuses. Issuer exclusions retain a typed
+refusal. Declared worksheets remain Assumed/Internal; accepted filing assertions retain their source
+classification and confidentiality through derivation. Neither mode authenticates accounting judgment,
+establishes comparability across definitions or grants physical/disclosure authority. The registered
+read-only Bullion verb and robot-docs expose both input modes. `tests/metrics/capital_return.toml` is an
+invented example; no authentic issuer ROCE coverage is claimed.
