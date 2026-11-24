@@ -20,6 +20,7 @@ mod care;
 mod deck;
 mod hedge;
 mod insurance;
+mod permit;
 
 pub(super) const SCHEMA: &str = "fmine.executive-decision.v1";
 const BOUNDARY: &str = "Conditional on the submitted worksheet, dated sources and completeness of the declared scope. No calibrated probability, authenticated historical availability, real-world savings, execution authority or sign-off is inferred.";
@@ -246,6 +247,12 @@ fn evaluate(
         "interruption_indemnity" => {
             return Err(invalid(
                 "interruption indemnity requires synthetic evidence",
+            ));
+        }
+        "permit_early_works" if evidence == "synthetic" => permit::evaluate(doc, as_of)?,
+        "permit_early_works" => {
+            return Err(invalid(
+                "the early-works permit worksheet requires synthetic evidence",
             ));
         }
         "rehabilitation" => rehabilitation(doc, as_of)?,

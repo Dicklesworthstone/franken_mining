@@ -1,0 +1,69 @@
+# SYNTHETIC, BD-297 known answer. Forty calendar days plus ten paused days end on April 1.
+# US$9m of schedule value less US$1m of unreused spend gives US$8m versus waiting.
+# If approval is late or never arrives, US$1m net recovery against US$6m spend loses US$5m.
+schema = "fmine.executive-decision.v1"
+decision = "permit_early_works"
+question = "Should the committee fund mill expansion early works while the main approval is pending?"
+owner = "Capital committee and project delivery"
+as_of = "2030-04-02"
+scope = "Invented North Range Copper mill expansion · nominal USD"
+evidence = "synthetic"
+uncertainty = "The decision date, whether approval will be documented in time and the critical-path value"
+revisit_if = "Main permission is documented, the project scope changes or the early-work offer expires"
+
+[[permit]]
+project = "Mill expansion"
+authority = "North Range Project Review Office"
+application = "NRC-42"
+filed_on = "2030-02-05"
+clock_start = "2030-02-10"
+clock_days = "40"
+deemed_rule = "confirmation_required"
+reopen_at_pct = "10"
+change_basis = "Rated throughput increase from the lodged design"
+source = "Synthetic application receipt and clock terms NRC-42"
+known_on = "2030-02-10"
+
+[[pause]]
+application = "NRC-42"
+from = "2030-02-20"
+resumed_on = "2030-03-02"
+source = "Synthetic clock pause and restart notice NR-13"
+known_on = "2030-03-02"
+
+[[permit_status]]
+application = "NRC-42"
+status = "pending"
+effective_on = "2030-04-01"
+scope_change_pct = "7"
+change_basis = "Rated throughput increase from the lodged design"
+source = "Synthetic approval register A-42 and design change review D-17"
+known_on = "2030-04-02"
+
+[[early_works]]
+project = "Mill expansion"
+entity = "North Range Copper"
+instrument = "EW-7"
+separate_permission = "yes"
+current_scope_eligible = "yes"
+available_through = "2030-04-12"
+spend_usd = "6000000"
+credit_on_proceed_usd = "5000000"
+recovery_if_no_proceed_usd = "1000000"
+source = "Synthetic preassembly approval and supplier quote EW-7 rev 3"
+known_on = "2030-04-01"
+
+[[schedule]]
+project = "Mill expansion"
+approval_needed_by = "2030-05-10"
+critical_days_saved = "30"
+critical_day_value_usd = "300000"
+source = "Synthetic critical path S-14 and Controller's schedule value V-4"
+known_on = "2030-04-01"
+
+[[cash]]
+entity = "North Range Copper"
+cash_usd = "22000000"
+floor_usd = "15000000"
+source = "Synthetic treasury cash position T-5 and minimum reserve R-8"
+known_on = "2030-04-02"

@@ -104,6 +104,20 @@ on the branch where the exclusion does not apply. The worksheet shows the dated 
 unresolved inputs can narrow the recovery bounds. Treasury needs a separately confirmed payment
 amount and date for its cash forecast. [Editable synthetic worksheet](tests/capital/executive_interruption.toml)
 
+### Should we fund early works before the main approval?
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_permit.toml --brief
+```
+
+**INFERENCE from a synthetic copper project.** A 40-day clock plus a 10-day pause reaches April 1.
+The stated terms still require written confirmation. A separate early-work offer requires **US$6 million**
+and would leave **US$1 million above the Treasury floor**. If permission arrives in time to proceed, the work
+adds **US$8 million versus waiting**. If the project cannot proceed in time, it loses **US$5 million**
+after recovery. Break-even requires a **38.46%** chance of proceeding by May 10. The committee supplies
+its own confidence and decides whether the offer merits that risk. The clock and reopen threshold are
+declared terms for this scenario. [Editable synthetic worksheet](tests/capital/executive_permit.toml)
+
 A miner's numbers are produced by a dozen systems that each pass along a single value and discard how sure they
 were. The result is predictable:
 - guidance that misses;

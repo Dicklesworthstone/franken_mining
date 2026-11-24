@@ -331,6 +331,50 @@ fn interruption_card_preserves_the_loss_bridge_and_both_exclusion_outcomes() {
 }
 
 #[test]
+fn early_works_values_both_paths_when_elapsed_clock_still_requires_confirmation() {
+    let payload = card("permit");
+    let permit = payload.get("permit_gate").expect("permit");
+    let works = permit.get("early_works").expect("early works");
+    assert_eq!(permit.get("main_terms_admitted"), Some(&Json::Bool(false)));
+    assert_eq!(works.get("comparison_eligible"), Some(&Json::Bool(true)));
+    for (field, value) in [
+        ("spend_usd", "6000000"),
+        ("maximum_spend_preserving_floor_usd", "7000000"),
+        ("cash_slack_usd", "1000000"),
+        ("schedule_value_usd", "9000000"),
+        ("gain_if_proceed_usd", "8000000"),
+        ("loss_if_no_proceed_usd", "5000000"),
+        ("break_even_proceed_probability", "5/13"),
+    ] {
+        assert_eq!(
+            works.get(field).and_then(Json::as_str),
+            Some(value),
+            "{field}"
+        );
+    }
+    assert!(finding(&payload, "2030-04-01"));
+    assert!(finding(&payload, "main works remain on hold"));
+    assert!(finding(&payload, "5/13 (38.46%)"));
+    let binary = run("permit", false);
+    let envelope = parse(&binary.stdout).expect("valid JSON");
+    let flags = envelope.get("flags").expect("flags");
+    for flag in [
+        "reserve_disclosure_claim",
+        "execution_authorized",
+        "geotechnical_signoff",
+        "regulatory_compliance_claim",
+    ] {
+        assert_eq!(flags.get(flag), Some(&Json::Bool(false)));
+    }
+    assert_eq!(binary.stdout, run("permit", false).stdout);
+    let markdown = run("permit", true);
+    assert!(markdown.status.success());
+    let text = String::from_utf8(markdown.stdout).expect("Markdown");
+    assert!(text.contains("Synthetic clock pause and restart notice NR-13"));
+    assert!(text.contains("-US$5,000,000"));
+}
+
+#[test]
 fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_digest() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let brief = |model: &str, flags: &[&str]| {
@@ -351,6 +395,7 @@ fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_dige
         "care",
         "deck",
         "interruption",
+        "permit",
         "purchase",
         "purchase_potash",
         "rehabilitation",

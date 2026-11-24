@@ -65,6 +65,18 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     branch. Terms, clause calculations and alternative branches remain visible in JSON. A confirmed
     amount and payment date are separate Treasury inputs. Real policy interpretation and historical
     loss baselines remain BD-354 work.
+  - DESIGN (bd-9bsy, synthetic slice of BD-297). `permit_early_works` compares a separately documented
+    early-work package with waiting for main approval. The declared start plus whole calendar days and
+    observed pauses gives the deadline. Pauses are half-open intervals and an open pause leaves the
+    deadline unresolved. Only a dated written grant or documented confirmation of deeming admits the
+    original scope. The material-change threshold is inclusive on the declared measurement basis, and
+    reaching it sends main scope back to review. The early package requires current scope coverage,
+    unexpired terms, a future approval deadline and unrestricted cash at or above the floor after payment.
+    Compare the value of time saved minus unreused spend with late or abandoned recovery minus spend.
+    Cash, reuse and recovery are whole nominal USD. The comparison treats stated branch values as
+    directly comparable and returns a break-even input conditional on those values. Permission odds and
+    legal or execution authority are outside the calculation. The staged capital optimizer still requires
+    integration with permit state (BD-297).
   - DESIGN (bd-ftw5). Executive worksheets accept `decide program <worksheet> --brief`. The meeting
     view retains the findings, decision alternatives, uncertainty, revisit condition and worksheet digest.
     Full Markdown and JSON give the line-by-line evidence and both treasury checkpoint ledgers.
