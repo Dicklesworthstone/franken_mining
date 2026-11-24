@@ -22,6 +22,8 @@ use fmine_io::omf::json::{Json, parse as parse_json};
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 use fmine_runtime::{ClockError, WallClock};
 
+#[path = "decision_journal/stage_review.rs"]
+mod stage_review;
 #[path = "decision_journal/staged_capital.rs"]
 mod staged_capital;
 

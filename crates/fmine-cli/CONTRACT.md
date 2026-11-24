@@ -69,6 +69,17 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     the retained bindings and clock interval without opening the live worksheet or observing a clock.
     Initial commitments and contingent actions are recorded intent. Each realized branch still needs
     its own observed evidence and human authorization.
+  - DESIGN (bd-sk59). `decide journal record --action observe-stage` takes a
+    `fmine.capital-stage-observation.v1` worksheet. Its `initial_decision` and `initial_head` must
+    identify the same earlier staged-policy record. The worksheet names the source and its evidence
+    class and supplies whole-second UTC observation and availability times. The observation must be on
+    or after the original review date at midnight UTC. The source must be available by the earliest
+    possible journal write time. One observation per initial record is permitted. If the policy bought
+    the information gate, the observation label matches its archived branch exactly. An unexpected
+    label is retained with `outside_policy` and no modeled continuation. A policy with a single common
+    continuation takes no observation label. The receipt links the original Claim and comparison,
+    retains the exact observation worksheet and reproduces the mapping on replay. It records a supplied
+    observation, and authority flags remain false.
   - Rehabilitation compares mutually exclusive, owner-eligible packages at one horizon. Work is paid on
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release

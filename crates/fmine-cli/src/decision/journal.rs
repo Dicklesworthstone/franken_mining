@@ -15,6 +15,8 @@ use fmine_runtime::{HostWallClock, WallClock};
 
 use crate::{Envelope, NextAction, OutputFormat, json_string as js, worksheet_input};
 
+mod stage_review;
+
 mod choice;
 mod forecasts;
 pub use choice::{Choice, PolicySelection};
@@ -502,7 +504,14 @@ impl Snapshot {
     }
 }
 
-fn replay(journal: &Journal) -> Result<Vec<Snapshot>, Refusal> {
+#[derive(Default)]
+struct History {
+    snapshots: Vec<Snapshot>,
+    ids: BTreeMap<String, usize>,
+    stage_reviews: BTreeSet<Digest32>,
+}
+
+fn replay(journal: &Journal) -> Result<History, Refusal> {
     if !journal
         .header()
         .cell_id
@@ -511,8 +520,7 @@ fn replay(journal: &Journal) -> Result<Vec<Snapshot>, Refusal> {
     {
         return Err(integrity("this is not a decision journal"));
     }
-    let mut ids = BTreeSet::new();
-    let mut snapshots = Vec::new();
+    let mut history = History::default();
     for record in journal.records().iter().skip(1) {
         let Entry::Operation(operation) = &record.entry else {
             return Err(integrity("unexpected repeated genesis"));
@@ -520,12 +528,27 @@ fn replay(journal: &Journal) -> Result<Vec<Snapshot>, Refusal> {
         let snapshot = Snapshot::decode(operation)?;
         let (earliest, latest) = journal.header().time_bounds(record.observed_ns)?;
         snapshot.validate_at(earliest, latest)?;
-        if !ids.insert(snapshot.decision_id.clone()) {
+        if let Some(observation) = stage_review::retained(&snapshot)? {
+            let (expected, claim_id) =
+                observation.prepare(journal, &history, &snapshot.choice, &snapshot.model)?;
+            if snapshot.card != expected || snapshot.claim_id != claim_id {
+                return Err(integrity(
+                    "stage review differs from the worksheet and frozen policy",
+                ));
+            }
+            observation.available_at(earliest)?;
+            history.stage_reviews.insert(observation.initial_head);
+        }
+        if history
+            .ids
+            .insert(snapshot.decision_id.clone(), history.snapshots.len())
+            .is_some()
+        {
             return Err(integrity("a decision id occurs more than once"));
         }
-        snapshots.push(snapshot);
+        history.snapshots.push(snapshot);
     }
-    Ok(snapshots)
+    Ok(history)
 }
 
 fn report(
@@ -644,8 +667,8 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
             }
             Command::Show { journal, head } => {
                 let journal = Journal::open_read(&root.join(journal), *head)?;
-                let snapshots = replay(&journal)?;
-                report(&journal, &snapshots, command.verb())
+                let history = replay(&journal)?;
+                report(&journal, &history.snapshots, command.verb())
             }
             Command::Assess {
                 journal,
@@ -656,12 +679,12 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                 assessments,
             } => {
                 let journal = Journal::open_read(&root.join(journal), Some(*head))?;
-                let snapshots = replay(&journal)?;
+                let history = replay(&journal)?;
                 let (record, snapshot) = journal
                     .records()
                     .iter()
                     .skip(1)
-                    .zip(&snapshots)
+                    .zip(&history.snapshots)
                     .find(|(_, snapshot)| snapshot.decision_id == *decision_id)
                     .ok_or_else(|| invalid("decision id is absent from the pinned journal"))?;
                 forecasts::review(
@@ -693,14 +716,17 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                         "model exceeds the bounded journal operation capacity",
                     ));
                 }
-                let executive = match choice {
-                    Choice::ActNow(action) => {
-                        crate::capital::executive_snapshot(&text, &source, root, action)?
-                    }
-                    Choice::InformationOption { .. } => None,
-                };
-                let (card, claim_id, policy_snapshot, not_before_ns) =
-                    if let Some(executive) = executive {
+                let observation = stage_review::parse_if(&text)?;
+                // Regular comparisons need no journal state. A stage review must use the frozen
+                // initial record under the same writer lock as the new append.
+                let evaluated = if observation.is_none() {
+                    let executive = match choice {
+                        Choice::ActNow(action) => {
+                            crate::capital::executive_snapshot(&text, &source, root, action)?
+                        }
+                        Choice::InformationOption { .. } => None,
+                    };
+                    Some(if let Some(executive) = executive {
                         (
                             executive.card,
                             executive.claim_id,
@@ -715,11 +741,30 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                     } else {
                         let (card, claim_id, policy) = choice.snapshot(&text, source.clone())?;
                         (card, claim_id, policy, None)
-                    };
+                    })
+                } else {
+                    None
+                };
                 let prepared_forecasts = forecasts
                     .as_ref()
                     .map(|selection| ForecastLinks::admit(selection, root))
                     .transpose()?;
+                let mut journal = Journal::open_write(&root.join(journal), *expected_head)?;
+                let mut history = replay(&journal)?;
+                if history.ids.contains_key(decision_id) {
+                    return Err(Refusal::new(
+                        RefusalCode::FrozenRecordMutation507,
+                        "decision journal: decision id already exists; retain the original and use a new id",
+                    ));
+                }
+                let (card, claim_id, policy_snapshot, not_before_ns) =
+                    if let Some(observation) = &observation {
+                        let (card, claim_id) =
+                            observation.prepare(&journal, &history, choice, &text)?;
+                        (card, claim_id, None, None)
+                    } else {
+                        evaluated.ok_or_else(|| integrity("decision comparison is missing"))?
+                    };
                 let snapshot = Snapshot {
                     decision_id: decision_id.clone(),
                     choice: choice.clone(),
@@ -734,14 +779,6 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                     forecasts: prepared_forecasts.as_ref().map(|(_, links)| links.clone()),
                 };
                 let operation = snapshot.operation()?;
-                let mut journal = Journal::open_write(&root.join(journal), *expected_head)?;
-                let mut snapshots = replay(&journal)?;
-                if snapshots.iter().any(|old| old.decision_id == *decision_id) {
-                    return Err(Refusal::new(
-                        RefusalCode::FrozenRecordMutation507,
-                        "decision journal: decision id already exists; retain the original and use a new id",
-                    ));
-                }
                 journal.append(&operation, clock, |record, header| {
                     let (earliest, latest) = header.time_bounds(record.observed_ns)?;
                     if not_before_ns.is_some_and(|bound| i128::from(earliest) < bound) {
@@ -749,11 +786,14 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                             "executive worksheet date is after the earliest possible recording time (UTC)",
                         ));
                     }
+                    if let Some(observation) = &observation {
+                        observation.available_at(earliest)?;
+                    }
                     snapshot.validate_at(earliest, latest)
                 })?;
                 drop(prepared_forecasts);
-                snapshots.push(snapshot);
-                report(&journal, &snapshots, command.verb())
+                history.snapshots.push(snapshot);
+                report(&journal, &history.snapshots, command.verb())
             }
         }
     };

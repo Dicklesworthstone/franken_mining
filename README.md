@@ -2340,6 +2340,34 @@ The retained record contains the original worksheet, the chosen policy with its 
 every contingent action, and the complete comparison digest. Pinned `show` retrieves them after source
 edits. The follow-on decision still requires an actual observation and authorization. [Editable synthetic model](tests/capital/staged_permit.toml)
 
+At the review, record the observation against the initial policy's `record_head` from the journal.
+Use the current journal head for `--expected-head`, even if other decisions followed the initial policy.
+For the synthetic early-works case, the observation worksheet can read:
+
+```toml
+schema = "fmine.capital-stage-observation.v1"
+initial_decision = "staged-early-works"
+initial_head = "<record_head from the initial staged-early-works decision>"
+observation = "clearance-documented"
+observed_at = "2030-04-02T12:00:00Z"
+available_at = "2030-04-02T12:30:00Z"
+source = "Synthetic scope-matched permit review memorandum RV-42"
+evidence = "synthetic"
+```
+
+```bash
+fmine decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model stage-observation.toml \
+  --decision staged-early-works-review --action observe-stage \
+  --reason "Record the review evidence against the frozen capital policy" \
+  --code-revision "$FMINE_CODE_REVISION" --trust-host-clock
+```
+
+The receipt identifies the original planned continuation for the declared observation. If the signal falls
+outside the policy, the receipt preserves it for fresh review and leaves the continuation empty. For a policy
+with a common continuation, omit the `observation` field. The record carries the supplied evidence and keeps
+execution authorization false.
+
 To record buying testwork, select the information option and policy explicitly instead of `--action`:
 
 ```bash

@@ -12,6 +12,17 @@ use crate::json_string as js;
 
 const PREFIX: &str = r#"{"schema":"fmine.capital-policy-decision.v1","#;
 
+pub(crate) fn retained_policy(card: &str) -> Option<Result<Json, Refusal>> {
+    card.starts_with(PREFIX).then(|| {
+        parse(card.as_bytes()).map_err(|_| {
+            Refusal::new(
+                RefusalCode::DigestMismatch505,
+                "retained staged policy JSON is invalid",
+            )
+        })
+    })
+}
+
 fn eligible(program: &EvaluatedRecourseProgram) -> impl Iterator<Item = &PolicyChoice> {
     let summary = program.summary();
     summary.policies.iter().filter(|policy| {
@@ -102,16 +113,16 @@ pub(crate) fn validate_at(
     claim_id: &str,
     latest_ns: i64,
 ) -> Result<(), Refusal> {
-    if !card.starts_with(PREFIX) {
+    let Some(retained) = retained_policy(card) else {
         return Ok(());
-    }
+    };
     let mismatch = || {
         Refusal::new(
             RefusalCode::DigestMismatch505,
             "retained staged decision disagrees with its action, worksheet or comparison Claim",
         )
     };
-    let retained = parse(card.as_bytes()).map_err(|_| mismatch())?;
+    let retained = retained?;
     let (id, comparison) = action.split_once('@').ok_or_else(mismatch)?;
     let eligible = retained
         .get("eligible_policy_ids")
