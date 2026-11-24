@@ -20,15 +20,20 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   - Procurement uses whole nominal USD and two checkpoints at one expressly named paying entity. Cash
     balances exclude **both** proposed expenditures at both dates. The deposit is credited on purchase.
     Total cancellation cost includes forfeiture and is settled net of the deposit at review; a negative
-    settlement is a declared refund. A hold preserves the quoted price and delivery; its specified credit
-    applies only on exercise. Full remaining supplier amounts settle on review in this bounded model.
+    settlement is a declared refund. A hold preserves the reserved delivery. The optional quoted whole-USD
+    `exercise_price_usd` on `[[hold]]` gives the supplier's firm price before the credit. When the field is
+    absent, the hold preserves the immediate-order price. The credit applies only on exercise and cannot
+    exceed either the hold fee or the exercise price. Full remaining supplier amounts settle on review in
+    this bounded model. Break-even comparisons use the separate prices and can favor the hold below a
+    cancellation probability threshold when it costs less to exercise and more to cancel.
     Delay exposure is separate from cash at review. Cash headroom uses the same primitive as capital-program
     opening checkpoints. The minimum upfront payment and the minimum cancellation loss each require
     preserving the competing expenditure and both floors under proceed and cancel. Named scenario
     arithmetic supplies no probabilities or engineering validation. `procurement_limits` carries the
     largest replacement price consistent with both floors and the competing project, and the latest
     delivery that fits inside float. For a live hold it gives the maximum affordable fee at the fixed
-    exercise credit. USD limits are whole decimal strings. Zero is attainable; null means no feasible
+    exercise credit and includes `fixed_exercise_price_usd` when that price was declared on the hold row.
+    USD limits are whole decimal strings. Zero is attainable; null means no feasible
     price or fee, or no applicable live hold terms. A null delivery limit means the stated float extends
     past the four-digit worksheet calendar. Cancelled branches have no commissioning milestone to delay.
     DESIGN (bd-5xc1). `decide journal record --model <purchase worksheet> --action <id>` accepts the

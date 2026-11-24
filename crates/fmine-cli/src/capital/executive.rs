@@ -28,9 +28,18 @@ type Result<T> = std::result::Result<T, Refusal>;
 
 /// Fields common to every decision row include the source locator and the date it became available.
 fn row_fields<'a>(row: &'a TomlRow, names: &[&str], as_of: &str) -> Result<Fields<'a>> {
+    row_fields_with_optional(row, names, &[], as_of)
+}
+
+fn row_fields_with_optional<'a>(
+    row: &'a TomlRow,
+    names: &[&str],
+    optional: &[&str],
+    as_of: &str,
+) -> Result<Fields<'a>> {
     let mut all = vec!["source", "known_on"];
     all.extend_from_slice(names);
-    let f = fields(&row.fields, &all, &[])?;
+    let f = fields(&row.fields, &all, optional)?;
     if date(&f, "known_on")? > as_of {
         return Err(invalid(format!(
             "line {}: source was unavailable on the decision date",
@@ -411,13 +420,19 @@ struct PurchaseLimits {
     latest_delivery: Option<String>,
     hold_credit: Option<i128>,
     hold_fee: Option<i128>,
+    explicit_exercise_price: Option<i128>,
 }
 
 impl PurchaseLimits {
     fn json(&self) -> String {
         let usd = |n: Option<i128>| n.map_or_else(|| "null".into(), |v| js(&v.to_string()));
+        let exercise_price = self
+            .explicit_exercise_price
+            .map_or_else(String::new, |price| {
+                format!(",\"fixed_exercise_price_usd\":{}", js(&price.to_string()))
+            });
         format!(
-            "{{\"max_replacement_price_usd\":{},\"latest_on_time_delivery\":{},\"fixed_exercise_credit_usd\":{},\"max_hold_fee_usd\":{}}}",
+            "{{\"max_replacement_price_usd\":{},\"latest_on_time_delivery\":{},\"fixed_exercise_credit_usd\":{},\"max_hold_fee_usd\":{}{exercise_price}}}",
             usd(self.replacement_price),
             self.latest_delivery
                 .as_deref()
@@ -504,6 +519,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         latest_delivery,
         hold_credit: None,
         hold_fee: None,
+        explicit_exercise_price: None,
     };
     let mut c = Card::new(&[
         "Choice / outcome",
@@ -535,7 +551,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             .push("Order unavailable: quoted order deadline passed.".into());
     }
     if doc.rows_of("hold").next().is_some() {
-        let hold = row_fields(
+        let hold = row_fields_with_optional(
             table(doc, "hold")?,
             &[
                 "accept_by",
@@ -543,46 +559,66 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
                 "fee_usd",
                 "credit_on_purchase_usd",
             ],
+            &["exercise_price_usd"],
             as_of,
         )?;
         let fee = qty(&hold, "fee_usd")?;
         let credit = qty(&hold, "credit_on_purchase_usd")?;
+        let explicit_exercise_price = hold
+            .contains_key("exercise_price_usd")
+            .then(|| qty(&hold, "exercise_price_usd"))
+            .transpose()?;
+        // Original worksheets declare that the hold preserves the order price.
+        let exercise_price = explicit_exercise_price.unwrap_or(price);
         let accept = date(&hold, "accept_by")?;
         let through = date(&hold, "valid_through")?;
-        if credit > fee || credit > price || through < accept {
+        if credit > fee || credit > exercise_price || through < accept {
             return Err(invalid("invalid slot hold credit or date order"));
         }
         if accept >= as_of && through >= review {
             c.journal_actions
                 .push(("hold-slot", "Pay to hold the slot"));
-            // At exercise the total is price + fee - credit; at cancellation it is
-            // the fee alone. Credit cannot exceed either the fee or the order price.
-            let cap = decision_room.min(review_room - (price - credit));
+            // On exercise the fee and the net purchase price are due across the two dates.
+            // Cancellation costs the fee alone. The net purchase price is nonnegative.
+            let net_exercise_price = exercise_price - credit;
+            let exercise_total = fee + net_exercise_price;
+            let cap = decision_room.min(review_room - net_exercise_price);
+            limits.explicit_exercise_price = explicit_exercise_price;
             limits.hold_credit = Some(credit);
             limits.hold_fee = (cap >= credit).then_some(cap);
+            if let Some(exercise_price) = explicit_exercise_price {
+                c.findings.push(format!(
+                    "The hold fixes an exercise price of {exercise_price} USD before its {credit} USD credit."
+                ));
+            }
             c.findings.push(match limits.hold_fee {
                 Some(max_fee) => format!("Maximum affordable hold fee: {max_fee} USD with the exercise credit fixed at {credit} USD. This preserves both treasury floors and the competing project on exercise or cancellation."),
                 None => format!("No hold fee consistent with the fixed {credit} USD exercise credit preserves both treasury floors and the competing project."),
             });
-            paths.push(("Hold / proceed", fee, price + fee - credit, Some(0)));
+            paths.push(("Hold / proceed", fee, exercise_total, Some(0)));
             paths.push(("Hold / cancel", fee, fee, None));
             c.findings.push(format!(
                 "Accept hold by {accept}; exercise or release at {review}."
             ));
             if as_of <= expiry {
-                let extra = fee - credit;
+                let extra = exercise_total - price;
                 let saving = cancel - fee;
                 let comparison = if extra == 0 && saving == 0 {
                     "Equal supplier cost in both outcomes".into()
-                } else if saving < 0 {
-                    "Ordering costs no more in either outcome".into()
-                } else if extra == 0 {
+                } else if extra <= 0 && saving >= 0 {
                     "Holding costs no more in either outcome".into()
+                } else if extra >= 0 && saving < 0 {
+                    "Ordering costs no more in either outcome".into()
                 } else {
-                    let p = ExactQty::new(extra, extra + saving)
+                    let (numerator, denominator, direction) = if extra < 0 {
+                        (-extra, -extra - saving, "below")
+                    } else {
+                        (extra, extra + saving, "above")
+                    };
+                    let p = ExactQty::new(numerator, denominator)
                         .map_err(|_| invalid("break-even overflow"))?;
                     format!(
-                        "Break-even cancellation probability {}/{}; holding costs no more at or above this threshold",
+                        "Break-even cancellation probability {}/{}; holding costs no more at or {direction} this threshold",
                         p.num(),
                         p.den()
                     )
@@ -1456,6 +1492,69 @@ mod tests {
                 md.contains("Hold (250000 USD)") && md.contains(needed),
                 "{md}"
             );
+        }
+    }
+
+    #[test]
+    fn separately_quoted_hold_price_controls_the_review_payment_and_funding_limit() {
+        let at_limit = PURCHASE.replace(
+            "credit_on_purchase_usd = \"0\"",
+            "credit_on_purchase_usd = \"0\"\nexercise_price_usd = \"20250000\"",
+        );
+        let admitted = evaluate(&at_limit).expect("firm slot and exercise quote");
+        assert!(
+            admitted.payload_json.contains(
+                "\"max_hold_fee_usd\":\"250000\",\"fixed_exercise_price_usd\":\"20250000\""
+            )
+        );
+        let shown = admitted.rendered_markdown.expect("committee comparison");
+        assert!(shown.contains("Hold (250000 USD)"));
+        assert!(shown.contains(
+            "| Hold / proceed | 250000 | 20250000 | 20500000 | 0 | 0 | 1250000 | 6500000 | 0 |"
+        ));
+        assert!(shown.contains("probability 2/21"));
+
+        let above_limit = at_limit.replace("20250000", "20250001");
+        let shown = report(&above_limit);
+        assert!(shown.contains("No fully priced on-time alternative"));
+        assert!(shown.contains("Maximum affordable hold fee: 249999 USD"));
+        assert!(
+            shown.contains("Hold / proceed displaces North Ridge substation at review by 1 USD.")
+        );
+
+        let expired =
+            above_limit.replace("accept_by = \"2030-03-08\"", "accept_by = \"2030-03-07\"");
+        let evaluated = evaluate(&expired).expect("expired terms remain visible");
+        assert!(
+            !evaluated
+                .payload_json
+                .contains("\"fixed_exercise_price_usd\"")
+        );
+        assert!(evaluated.payload_json.contains("Hold unavailable"));
+        assert!(!evaluated.payload_json.contains("\"hold-slot\""));
+    }
+
+    #[test]
+    fn cheaper_exercise_terms_can_reverse_the_break_even_or_dominate() {
+        let discounted = PURCHASE.replace(
+            "credit_on_purchase_usd = \"0\"",
+            "credit_on_purchase_usd = \"0\"\nexercise_price_usd = \"19000000\"",
+        );
+        assert!(report(&discounted).contains("Holding costs no more in either outcome"));
+        let full_refund =
+            discounted.replace("total_cancel_usd = \"5000000\"", "total_cancel_usd = \"0\"");
+        assert!(
+            report(&full_refund).contains("probability 3/4; holding costs no more at or below")
+        );
+
+        let admissible_credit = discounted.replace(
+            "credit_on_purchase_usd = \"0\"",
+            "credit_on_purchase_usd = \"1\"",
+        );
+        assert!(evaluate(&admissible_credit).is_ok());
+        assert!(evaluate(&admissible_credit.replace("19000000", "0")).is_err());
+        for malformed in ["-1", "20250000.5", "9223372036854775808"] {
+            assert!(evaluate(&discounted.replace("19000000", malformed)).is_err());
         }
     }
 

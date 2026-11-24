@@ -29,6 +29,12 @@ by $1 million **and** deliver 18 days earlier to preserve first ore and the subs
 up to $500,000 for the existing hold at its stated exercise credit. That ceiling measures liquidity.
 The supplier's quoted fee is $250,000.
 
+If the supplier quotes a different price to exercise the hold, put that firm price in `[[hold]]` as
+`exercise_price_usd = "20250000"` (whole USD before any credit). In the synthetic example this raises the
+amount due at review to $20.25 million and cuts the affordable hold fee to $250,000. A one-dollar increase
+in the exercise quote would displace part of the substation funding at the original hold fee. Omit the
+field when the hold explicitly preserves the original order price.
+
 Use `--json` for the full submitted worksheet, source digest, findings, comparison rows and procurement limits. The operator
 declares source availability, payment terms and financial scope. An input dated after the meeting refuses.
 
