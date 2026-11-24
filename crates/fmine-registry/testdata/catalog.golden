@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 81
+[verbs] 82
 decide card
 decide production
 decide investment
@@ -151,6 +151,7 @@ plant production
 forecast journal register-plant
 forecast journal resolve-plant
 forecast journal verify-plant
+forecast journal explain-plant-change
 robot schema
 assure issue
 reliance export
