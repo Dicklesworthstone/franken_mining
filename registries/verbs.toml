@@ -81,6 +81,12 @@ mutates_authority = false
 description = "Compare exact production GEO across named versioned price decks on one declared physical population, retaining contributions and source-bound Claims"
 
 [[verb]]
+path = "metrics waterfall"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Explain public AISC changes between two explicitly selected original quarterly releases, retaining source Claims, rounding enclosures, printed-rate gaps and named refusals"
+
+[[verb]]
 path = "compare"
 subsystem = "Bullion"
 mutates_authority = false

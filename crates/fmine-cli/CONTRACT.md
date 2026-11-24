@@ -1606,6 +1606,15 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 - The `waterfall` payload (BD-333) reports first-published year-on-year public AISC bridges, signed additive
   fallbacks and named refusals. Bars carry rounding intervals and source citations; exact printed-rate gaps
   remain separate. It is descriptive and non-identifying, and its digest is bound into the M0AS v8 certificate.
+- DESIGN (BD-333): `metrics waterfall --issuer <issuer> --from YYYYQn --to YYYYQn [--site <subject>]`
+  exposes the same checked bridge for any two explicitly selected, increasing calendar quarters, including
+  Q4 to Q1 and nonadjacent years. It loads their original registered workbooks and preceding same-year
+  Mine Stats originals needed by cumulative identity checks. Later comparatives never replace a missing
+  original. All subjects observed at either endpoint remain in the result unless an exact named site is
+  requested; missing counterparts, incompatible ownership, aggregates and unsupported copper bases retain
+  named refusals. JSON (`fmine.selected-waterfall.v1`) and Markdown retain source Claim IDs, locators,
+  hashes, rounding enclosures, arithmetic methods and the separate printed-rate gap. The selected result
+  has its own digest and does not change the normal assurance population or claim M0 acceptance.
 - DESIGN (BD-273): assurance JSON adds `aisc_component_comparisons` (`fmine.aisc_component_comparisons.v1`),
   with the same registered region/subtotal comparisons in Markdown. The adapter binds complete selected
   columns from one AISC table, full-period membership, original numeric Claims, labels and workbook hashes;

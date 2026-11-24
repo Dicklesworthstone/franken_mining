@@ -5367,6 +5367,29 @@ card (§34.5).
 
 ---
 
+## Explain an AISC change between selected quarters
+
+DESIGN (BD-333). Select two original quarterly releases to inspect the source-bound cost bridge:
+
+```bash
+cargo run -p fmine-cli -- metrics waterfall --issuer barrick \
+  --from 2026Q1 --to 2026Q2 --site "North Mara" --format markdown
+```
+
+The selection also accepts Q4 to the following Q1, or quarters in nonadjacent years. Omit `--site`
+to retain every subject observed at either endpoint, including named refusals when its counterpart
+is missing. The ordinary assurance report continues to use its same-quarter year-on-year population.
+
+The bridge uses each selected quarter's own registered AISC and Mine Stats workbooks. Earlier original
+Mine Stats releases from the selected years support the cumulative identity checks; a later comparative
+never fills a missing original. The files must match their registered lengths and SHA-256 hashes.
+Unavailable evidence, incompatible ownership, aggregate scope and unsupported copper bases remain explicit.
+
+The output shows the recomputed and printed rates, component effects, rounding enclosures, and source
+Claims with cell locators. It keeps the printed-rate gap separate from the decomposition. These are
+descriptive arithmetic effects, not identified operating causes or confidence intervals. Use the default
+JSON format for the complete source inputs and the selected result's deterministic digest.
+
 ## Read HTML filing tables with source provenance
 
 The I/O layer provides a bounded HTML table reader for explicitly closed filing tables, including

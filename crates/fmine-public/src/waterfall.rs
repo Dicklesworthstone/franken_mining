@@ -1,4 +1,5 @@
-//! DESIGN (BD-333.S2): source-cited, descriptive gold-site bridges between the same quarter in adjacent years.
+//! DESIGN (BD-333.S2): source-cited, descriptive gold-site bridges between explicitly selected quarters,
+//! or between the same quarter in adjacent years for the automatic assurance population.
 //! A release is eligible only for its own quarter. Later comparatives, hidden sheets, and aggregate scope
 //! never supply a missing site input. Arithmetic closure does not identify a cause.
 
@@ -373,6 +374,89 @@ pub fn pair_sites(
         aisc_instances,
         mine_ledger,
     };
+    let endpoints = endpoints(profile, sources, reads);
+    let mut pairs = Vec::new();
+    for ((subject, to), later) in &endpoints {
+        let Some(year) = to.year.checked_sub(1) else {
+            continue;
+        };
+        let from = Period {
+            year,
+            kind: to.kind,
+        };
+        let Some(earlier) = endpoints.get(&(subject.clone(), from)) else {
+            continue;
+        };
+        pairs.push(pair(&cx, subject, from, *to, earlier, later));
+    }
+    WaterfallReport { pairs }
+}
+
+/// Compare two explicit, chronologically increasing calendar quarters. Every subject appearing at either
+/// endpoint stays in the population, including a subject with no original release at the other endpoint.
+/// The caller supplies the same verified sources, keyed Claims and identity ledgers as an assurance run,
+/// including earlier original releases required by the selected endpoints' cumulative identity checks.
+/// This selection does not change the automatic year-on-year assurance population or its certificate.
+pub fn pair_sites_between(
+    profile: &IssuerProfile,
+    sources: &[LoadedSource],
+    reads: &[(String, MineStatsRead)],
+    claims: &AiscClaimIndex,
+    aisc_instances: &[IdentityInstance],
+    mine_ledger: &MineLedger,
+    periods: (Period, Period),
+) -> Result<WaterfallReport, Refusal> {
+    let (from, to) = periods;
+    if [from, to].iter().any(|p| {
+        !matches!(p.kind, PeriodKind::Quarter(1..=4))
+            || key::parse_period_code(&p.code()) != Some(*p)
+    }) || from >= to
+    {
+        return Err(basis_refusal(
+            "explicit waterfall periods must be distinct increasing calendar quarters (YYYYQ1..YYYYQ4)",
+        ));
+    }
+    let cx = Context {
+        profile,
+        sources,
+        claims,
+        reads,
+        aisc_instances,
+        mine_ledger,
+    };
+    let endpoints = endpoints(profile, sources, reads);
+    let subjects: BTreeSet<_> = endpoints
+        .keys()
+        .filter(|(_, period)| *period == from || *period == to)
+        .map(|(subject, _)| subject.as_str())
+        .collect();
+    if subjects.is_empty() {
+        return Err(refuse(format!(
+            "no first-published site inputs for the requested quarters {} and {}",
+            from.code(),
+            to.code()
+        )));
+    }
+    let absent = Endpoint::default();
+    let pairs = subjects
+        .into_iter()
+        .map(|subject| {
+            let at = |period| {
+                endpoints
+                    .get(&(subject.to_string(), period))
+                    .unwrap_or(&absent)
+            };
+            pair(&cx, subject, from, to, at(from), at(to))
+        })
+        .collect();
+    Ok(WaterfallReport { pairs })
+}
+
+fn endpoints<'a>(
+    profile: &IssuerProfile,
+    sources: &'a [LoadedSource],
+    reads: &'a [(String, MineStatsRead)],
+) -> BTreeMap<(String, Period), Endpoint<'a>> {
     let mut endpoints: BTreeMap<(String, Period), Endpoint<'_>> = BTreeMap::new();
     for source in sources
         .iter()
@@ -441,21 +525,7 @@ pub fn pair_sites(
                 .push((source, v));
         }
     }
-    let mut pairs = Vec::new();
-    for ((subject, to), later) in &endpoints {
-        let Some(year) = to.year.checked_sub(1) else {
-            continue;
-        };
-        let from = Period {
-            year,
-            kind: to.kind,
-        };
-        let Some(earlier) = endpoints.get(&(subject.clone(), from)) else {
-            continue;
-        };
-        pairs.push(pair(&cx, subject, from, *to, earlier, later));
-    }
-    WaterfallReport { pairs }
+    endpoints
 }
 
 fn pair(

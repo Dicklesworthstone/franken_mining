@@ -877,6 +877,15 @@ The public lane of M0 (`fmine assure public`).
     `waterfall.closure` and cites the union of bar and rate inputs, both at `m0-waterfall/1`. The `WFLW` v1
     digest binds structured values, rule identifiers, Claim digests and source contexts. Refusal prose is
     excluded; changing a refusal code or interpretation changes the digest.
+  - `pair_sites_between` selects any two distinct increasing calendar quarters on the same three-month
+    support kind, including Q4 to Q1 and nonadjacent years. It reuses the original-release source selection,
+    basis checks, identity-state guards and arithmetic kernel, including earlier originals needed to check
+    cumulative identities. The full subject union is retained: a missing
+    original endpoint produces a named refusal rather than a dropped subject or a borrowed comparative.
+    Equal, reversed, invalid or nonquarter periods refuse; a selection with neither endpoint represented
+    refuses explicitly. This optional projection has its own period-bound digest and does not change the
+    automatic year-on-year assurance population or certificate. It remains descriptive, with no seasonal
+    normalization or causal attribution.
   - Cross-crate checks live in `xtask/tests/public_waterfall.rs`; the independent reader and high-precision
     known answers are in `repro/barrick/waterfall_census.py`. The existing synthetic CLI profile has no
     year-on-year source pair; the four-outcome synthetic bridge fixture is an integration test.

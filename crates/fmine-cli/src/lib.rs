@@ -42,6 +42,7 @@ pub mod track_record_clusters;
 mod track_record_data;
 mod track_record_price;
 pub mod verb_catalog;
+pub mod waterfall;
 mod worksheet_input;
 
 pub use decision::journal as decision_journal;
@@ -73,6 +74,8 @@ pub enum CliCommand {
     MetricsCost(cost::Command),
     /// Compare unchanged production quantities under explicit named and versioned price decks.
     MetricsGeo(geo::Command),
+    /// Explain a selected change in public AISC using the original releases for two quarters.
+    MetricsWaterfall(waterfall::Command),
     /// Assess capital return with explicit earnings definitions, dated balances and source evidence.
     CapitalReturn(capital_return::Command),
     /// Compare source-bound peer metrics without dropping incompatible or unavailable issuers.
@@ -590,6 +593,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--format" | "--workspace" => next += 2,
                         "--json" => next += 1,
                         "geo" => return "metrics geo",
+                        "waterfall" => return "metrics waterfall",
                         "roce" => return "metrics roce",
                         _ => return "metrics cost",
                     }
@@ -1180,6 +1184,7 @@ pub fn parse_args(
         verb,
         "metrics cost"
             | "metrics geo"
+            | "metrics waterfall"
             | "metrics roce"
             | "forecast spatial-monitor"
             | "decide production"
@@ -1203,6 +1208,7 @@ pub fn parse_args(
         let command = match verb {
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
+            "metrics waterfall" => CliCommand::MetricsWaterfall(waterfall::parse(&words)?),
             "metrics roce" => CliCommand::CapitalReturn(capital_return::parse(&words)?),
             "forecast spatial-monitor" => match &words[..] {
                 [group, verb, flag, path]
@@ -2271,6 +2277,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     match cmd {
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
+        CliCommand::MetricsWaterfall(command) => waterfall::execute(command, workspace_root),
         CliCommand::CapitalReturn(command) => capital_return::execute(command, workspace_root),
         CliCommand::Compare(command) => compare::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
@@ -2624,6 +2631,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             let verbs = [
                 cost::USAGE,
                 geo::USAGE,
+                waterfall::USAGE,
                 capital_return::USAGE,
                 compare::USAGE,
                 pit::USAGE,
