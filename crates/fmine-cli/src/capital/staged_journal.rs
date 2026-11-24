@@ -76,12 +76,19 @@ pub(super) fn snapshot(
     let claim_id = program.claim().claim_id.to_string();
     let summary = program.summary();
     let winners = ids(summary.feasible_winners.iter().map(String::as_str));
+    let objective_unit = if summary.per_share_objective {
+        "USD/share"
+    } else {
+        "USD"
+    };
     let artifact = format!(
-        r#"{PREFIX}"decision_stage":"initial","model_sha256":{},"comparison_digest":{},"claim_id":{},"observation_date_utc":{},"eligible_policy_ids":{},"nominal_winners":{winners},"policy":{policy},"reserve_disclosure_claim":false,"execution_authorized":false,"geotechnical_signoff":false,"regulatory_compliance_claim":false}}"#,
+        r#"{PREFIX}"decision_stage":"initial","model_sha256":{},"comparison_digest":{},"claim_id":{},"observation_date_utc":{},"spending_unit":"USD","objective_unit":{},"valuation_basis":{},"eligible_policy_ids":{},"nominal_winners":{winners},"policy":{policy},"reserve_disclosure_claim":false,"execution_authorized":false,"geotechnical_signoff":false,"regulatory_compliance_claim":false}}"#,
         js(&Digest32(source.artifact_sha256).to_hex()),
         js(reviewed),
         js(&claim_id),
         js(&summary.information.observation_date),
+        js(objective_unit),
+        js(&summary.information.valuation_basis),
         ids(eligible_ids),
     );
     Ok((artifact, claim_id))

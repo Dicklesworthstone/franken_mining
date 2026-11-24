@@ -127,6 +127,28 @@ fn staged_policy_command_keeps_the_reviewed_branches_and_reopens_after_model_cha
         saved.get("decision_stage").and_then(Json::as_str),
         Some("initial")
     );
+    assert_eq!(
+        saved.get("spending_unit").and_then(Json::as_str),
+        Some("USD")
+    );
+    assert_eq!(
+        saved.get("objective_unit").and_then(Json::as_str),
+        Some("USD")
+    );
+    assert_eq!(
+        saved.get("valuation_basis"),
+        Some(json_field(
+            &report,
+            &[
+                "payload",
+                "program",
+                "inputs",
+                "information",
+                "value",
+                "valuation_basis"
+            ]
+        ))
+    );
     let selected = json_field(&saved, &["policy"]);
     let policies = json_field(&report, &["payload", "program", "summary", "policies"])
         .as_array()
@@ -228,6 +250,14 @@ fn staged_policy_journal_preserves_and_enforces_separate_equity_risk() {
         .as_str()
         .unwrap();
     let artifact = parse_json(artifact.as_bytes()).unwrap();
+    assert_eq!(
+        artifact.get("objective_unit").and_then(Json::as_str),
+        Some("USD/share")
+    );
+    assert_eq!(
+        artifact.get("spending_unit").and_then(Json::as_str),
+        Some("USD")
+    );
     let secondaries = json_field(&artifact, &["policy", "entity_valuations"])
         .as_array()
         .unwrap();

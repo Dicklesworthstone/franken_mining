@@ -63,7 +63,8 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     Recording requires that exact selector, a policy passing all structural, nominal and declared
     robust tail limits, and a writer clock interval entirely before midnight UTC on the observation
     date. The existing action operation retains the original worksheet, selected evaluated policy and
-    all its branches and ledgers, eligible IDs, nominal winners, exact comparison digest and Claim ID.
+    all its branches and ledgers, units and valuation basis, eligible IDs, nominal winners, the exact
+    comparison digest and Claim ID.
     The complete comparison stays available through the evaluation command. Pinned replay validates
     the retained bindings and clock interval without opening the live worksheet or observing a clock.
     Initial commitments and contingent actions are recorded intent. Each realized branch still needs
