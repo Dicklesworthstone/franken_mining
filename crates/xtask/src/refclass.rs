@@ -89,4 +89,46 @@ mod tests {
         assert!(report.verified >= 5);
         assert!(report.unverified >= 1);
     }
+
+    #[test]
+    fn test_seeded_broken_refclass_registry_fails() {
+        let tmp =
+            std::env::temp_dir().join(format!("fmine_xtask_refclass_neg_{}", std::process::id()));
+        let reg_dir = tmp.join("registries");
+        fs::create_dir_all(&reg_dir).expect("mkdir");
+
+        // Case 1: baseline GB-32 row downgraded to unverified must fail check_refclass.
+        let bad_unverified = r#"
+schema_version = 1
+[[refclass]]
+id = "REFCLASS-CAPEX-GREENFIELD"
+domain = "capex_greenfield"
+population = "p"
+n = 63
+period = "1980-2001"
+inclusion_rule = "r"
+similarity_justification = "j"
+status = "unverified"
+epsilon_bps = 2500
+ref_mean_multiplier_bps = 12800
+ref_std_multiplier_bps = 3500
+source_document = "Bertisen & Davis"
+source_e_ids = "E001,GB-32"
+"#;
+        fs::write(reg_dir.join("refclass.toml"), bad_unverified).expect("write");
+        let errs = check_refclass(&tmp).expect_err("unverified GB-32 row must fail");
+        assert!(
+            errs.iter().any(|e| e.contains("REFCLASS-CAPEX-GREENFIELD")),
+            "{errs:?}"
+        );
+
+        // Case 2: unknown key in registries/refclass.toml must fail check_refclass.
+        let bad_key = bad_unverified.replace("status = \"unverified\"", "status = \"verified\"")
+            + "extra_typo = \"bad\"\n";
+        fs::write(reg_dir.join("refclass.toml"), bad_key).expect("write");
+        let errs2 = check_refclass(&tmp).expect_err("unknown field must fail");
+        assert!(errs2.iter().any(|e| e.contains("unknown")), "{errs2:?}");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }

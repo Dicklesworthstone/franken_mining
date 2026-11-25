@@ -160,6 +160,12 @@ impl ArtifactLedger {
         self.by_id.get(id)
     }
 
+    /// Whether a logical `slot_key` is already frozen in this ledger.
+    #[must_use]
+    pub fn contains_slot(&self, slot_key: &str) -> bool {
+        self.by_slot.contains_key(slot_key)
+    }
+
     /// Verify that `candidate_bytes` still match the frozen digest stored for `id`.
     /// Refuses unknown id with `FMINE-REF-201` and mutated bytes with `FMINE-REF-507`.
     pub fn verify_unmutated(&self, id: &ObjectId, candidate_bytes: &[u8]) -> Result<(), Refusal> {
@@ -418,6 +424,15 @@ pub fn evaluate_early_kill(
     best_subset_envelopes: &[PowerEnvelope],
     power_bar_target: f64,
 ) -> EarlyKillOutcome {
+    if !power_bar_target.is_finite() || power_bar_target <= 0.0 || power_bar_target > 1.0 {
+        return EarlyKillOutcome {
+            fires: true,
+            reason: format!(
+                "invalid power_bar_target ({power_bar_target}); fail-closed early kill recommends opening alternate site ({EARLY_KILL_ALTERNATE_SITES})"
+            ),
+            alternate_recommendation: Some(EARLY_KILL_ALTERNATE_SITES.to_string()),
+        };
+    }
     if best_subset_envelopes.is_empty() {
         return EarlyKillOutcome {
             fires: true,
@@ -429,12 +444,18 @@ pub fn evaluate_early_kill(
     }
     let mut failing = Vec::new();
     for env in best_subset_envelopes {
-        if env.identifiability_refusal.is_some() || env.min_power < power_bar_target {
+        if env.twins_evaluated < 2
+            || !env.min_power.is_finite()
+            || !env.max_power.is_finite()
+            || env.identifiability_refusal.is_some()
+            || env.min_power < power_bar_target
+        {
             failing.push(format!(
-                "{} ([{:.3}, {:.3}] < bar {:.3})",
+                "{} ([{:.3}, {:.3}], k={} < bar {:.3})",
                 env.cause.as_str(),
                 env.min_power,
                 env.max_power,
+                env.twins_evaluated,
                 power_bar_target
             ));
         }
@@ -460,6 +481,14 @@ pub fn evaluate_early_kill(
             alternate_recommendation: Some(EARLY_KILL_ALTERNATE_SITES.to_string()),
         }
     }
+}
+
+fn sanitize_inline(s: &str) -> String {
+    s.replace("\r\n", " ").replace(['\r', '\n'], " ")
+}
+
+fn escape_md_cell(s: &str) -> String {
+    sanitize_inline(s).replace('|', "\\|")
 }
 
 fn escape_json_str(s: &str) -> String {
@@ -618,19 +647,27 @@ impl PilotProtocolCard {
     pub fn render_markdown(&self) -> Result<String, Refusal> {
         self.validate()?;
         let mut md = String::new();
-        let _ = writeln!(md, "# Pilot Protocol Card — {}", self.site);
+        let _ = writeln!(
+            md,
+            "# Pilot Protocol Card — {}",
+            sanitize_inline(&self.site)
+        );
         let _ = writeln!(md);
         let _ = writeln!(md, "- **Disclaimer:** {}", self.label);
-        let _ = writeln!(md, "- **Mechanism:** {}", self.mechanism);
+        let _ = writeln!(md, "- **Mechanism:** {}", sanitize_inline(&self.mechanism));
         let _ = writeln!(
             md,
             "- **Pre-registered attribution question:** {}",
-            self.attribution_question
+            sanitize_inline(&self.attribution_question)
         );
         let _ = writeln!(md, "- **Analysis plan ID:** `{}`", self.analysis_plan_id);
         let _ = writeln!(md, "- **Card digest (BLAKE3):** `{}`", self.card_digest);
         let _ = writeln!(md, "- **Inputs digest (BLAKE3):** `{}`", self.inputs_digest);
-        let _ = writeln!(md, "- **Code revision:** `{}`", self.code_rev);
+        let _ = writeln!(
+            md,
+            "- **Code revision:** `{}`",
+            sanitize_inline(&self.code_rev)
+        );
         let _ = writeln!(md, "- **Twin family size:** `K = {}`", self.k_twins);
         let _ = writeln!(md);
         let _ = writeln!(md, "> {NO_CLAIM_BANNER}");
@@ -668,18 +705,26 @@ impl PilotProtocolCard {
             let _ = writeln!(
                 md,
                 "| `{}` | {} | {} | {} |",
-                row.name,
-                label_text.replace('|', "\\|"),
-                row.reason.replace('|', "\\|"),
-                env_parts.join("; ").replace('|', "\\|"),
+                escape_md_cell(&row.name),
+                escape_md_cell(&label_text),
+                escape_md_cell(&row.reason),
+                escape_md_cell(&env_parts.join("; ")),
             );
         }
 
         let _ = writeln!(md, "\n## Early-Kill Rule\n");
         let _ = writeln!(md, "- **Early kill fires:** `{}`", self.early_kill.fires);
-        let _ = writeln!(md, "- **Outcome:** {}", self.early_kill.reason);
+        let _ = writeln!(
+            md,
+            "- **Outcome:** {}",
+            sanitize_inline(&self.early_kill.reason)
+        );
         if let Some(alt) = &self.early_kill.alternate_recommendation {
-            let _ = writeln!(md, "- **Alternate site recommendation (§37.3):** {alt}");
+            let _ = writeln!(
+                md,
+                "- **Alternate site recommendation (§37.3):** {}",
+                sanitize_inline(alt)
+            );
         }
         Ok(md)
     }
@@ -688,6 +733,9 @@ impl PilotProtocolCard {
 /// Build and pre-register a complete [`PilotProtocolCard`] from a [`TwinFamily`] (`S1`),
 /// [`PilotTwinRegistrySpec`], and [`AnalysisPlan`], enforcing `INV-008` freeze order,
 /// `S2` multi-twin power envelopes + robustness labels, and §37.3 early-kill evaluation.
+///
+/// Atomic with respect to `ledger`: all validations and power computations run before
+/// registering the slot, so a refused build never mutates `ledger`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_pilot_protocol_card(
     family: &TwinFamily,
@@ -708,15 +756,41 @@ pub fn build_pilot_protocol_card(
             "build_pilot_protocol_card requires a TwinFamily with at least 2 twins",
         ));
     }
+    require_non_empty("mechanism", mechanism)?;
     let plan_bytes = plan.canonical_bytes()?;
-    let slot_key = format!("{}/analysis_plan", plan.site.trim());
-    let analysis_plan_id = ledger.register_slot(
-        &slot_key,
-        FrozenArtifactKind::AnalysisPlan,
-        &plan_bytes,
-        registered_ns,
-        first_request_ns,
-    )?;
+    let site = plan.site.trim();
+    if site != spec.site.trim() || site != family.site.trim() {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!(
+                "site mismatch across plan ('{site}'), spec ('{}'), and twin family ('{}')",
+                spec.site, family.site
+            ),
+        ));
+    }
+    if !plan.seeds.contains(&seed_root) {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!(
+                "simulation seed_root ({seed_root}) must be declared in AnalysisPlan.seeds so card_digest binds it"
+            ),
+        ));
+    }
+    if registered_ns >= first_request_ns {
+        return Err(Refusal::new(
+            RefusalCode::NotObservable202,
+            format!(
+                "INV-008 late registration refused: registered_ns ({registered_ns}) must strictly precede first_request_ns ({first_request_ns})"
+            ),
+        ));
+    }
+    let slot_key = format!("{site}/analysis_plan");
+    if ledger.contains_slot(&slot_key) {
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            format!("frozen slot '{slot_key}' is already registered; mutation refused"),
+        ));
+    }
 
     let labelled = label_candidate_files(family, &spec.candidate_files, top_n)?;
     let desc_map: BTreeMap<&str, &str> = spec
@@ -777,8 +851,17 @@ pub fn build_pilot_protocol_card(
     sorted_seeds.dedup();
     let card_digest = compute_card_digest(inputs_digest, &sorted_seeds, &plan.code_rev)?;
 
+    // Register in ledger only after every validation and simulation succeeded (atomic on refusal).
+    let analysis_plan_id = ledger.register_slot(
+        &slot_key,
+        FrozenArtifactKind::AnalysisPlan,
+        &plan_bytes,
+        registered_ns,
+        first_request_ns,
+    )?;
+
     let card = PilotProtocolCard {
-        site: plan.site.trim().to_string(),
+        site: site.to_string(),
         mechanism: mechanism.trim().to_string(),
         attribution_question: plan.attribution_question.trim().to_string(),
         k_twins: family.twins.len(),
@@ -1126,5 +1209,50 @@ mod tests {
         assert!(md.contains("`regulatory_compliance_claim` | `false`"));
         assert!(md.contains(&card.analysis_plan_id.to_string()));
         assert!(md.contains(&card.card_digest.to_hex()));
+
+        // Regression: failed build (e.g. undeclared seed_root, site mismatch, or replicates < 200)
+        // must refuse BEFORE mutating ArtifactLedger, and NaN power_bar fails closed.
+        let mut atomic_ledger = ArtifactLedger::new();
+        let bad_seed_err = build_pilot_protocol_card(
+            &family,
+            &spec,
+            "Cu flotation recovery",
+            &plan,
+            &mut atomic_ledger,
+            100,
+            500,
+            &[sha256(b"lumwana")],
+            200,
+            999_999, // not in plan.seeds
+            3,
+        )
+        .expect_err("undeclared seed_root must refuse");
+        assert_eq!(bad_seed_err.code, "FMINE-REF-107");
+        assert!(!atomic_ledger.contains_slot("lumwana/analysis_plan"));
+
+        let mut wrong_site_plan = plan.clone();
+        wrong_site_plan.site = "kibali".to_string();
+        assert_eq!(
+            build_pilot_protocol_card(
+                &family,
+                &spec,
+                "Cu flotation recovery",
+                &wrong_site_plan,
+                &mut atomic_ledger,
+                100,
+                500,
+                &[sha256(b"lumwana")],
+                200,
+                2_026_356,
+                3,
+            )
+            .unwrap_err()
+            .code,
+            "FMINE-REF-107"
+        );
+        assert!(!atomic_ledger.contains_slot("kibali/analysis_plan"));
+
+        let nan_ek = evaluate_early_kill(&[], f64::NAN);
+        assert!(nan_ek.fires);
     }
 }

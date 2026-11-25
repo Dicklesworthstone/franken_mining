@@ -19,8 +19,8 @@
 //!    `SupersedingPublication` retains history while elevating the latest vintage, and conflicting
 //!    same-rank values stay `KnowledgeState::Conflicted` (never averaged).
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::{self, Write as _};
 
 use fmine_core::codec::Encoder;
 use fmine_core::det::{norm_ppf, sqrt};
@@ -306,6 +306,24 @@ pub struct OriginAccountingResult {
     pub result_digest: Digest32,
 }
 
+fn escape_json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 impl OriginAccountingResult {
     /// Render structured E2E log `{origins, relations, groups, var_model, interval, ...}` (`BD-352`).
     #[must_use]
@@ -313,7 +331,7 @@ impl OriginAccountingResult {
         let origins_json: Vec<String> = self
             .active_origin_ids
             .iter()
-            .map(|o| format!("\"{}\"", o.as_str()))
+            .map(|o| format!("\"{}\"", escape_json_str(o.as_str())))
             .collect();
         let rels_json: Vec<String> = self
             .relation_tags
@@ -326,7 +344,10 @@ impl OriginAccountingResult {
             .map(|g| {
                 format!(
                     "{{\"group\":\"{}\",\"n\":{},\"mean\":{:.6},\"var\":{:.8}}}",
-                    g.group_key, g.active_observations, g.group_mean, g.group_mean_var
+                    escape_json_str(&g.group_key),
+                    g.active_observations,
+                    g.group_mean,
+                    g.group_mean_var
                 )
             })
             .collect();
@@ -380,14 +401,33 @@ fn canonical_relation_encoding(enc: &mut Encoder, rel: &OriginRelation) {
     }
 }
 
-fn reading_sort_key(r: &OriginReading) -> (String, String, &'static str, u64, u64) {
-    (
-        r.origin_id.as_str().to_string(),
-        r.reading_id.clone(),
-        r.relation.kind_tag(),
-        r.vintage_rank,
-        canonical_f64_bits(r.value),
-    )
+fn encode_one_reading(enc: &mut Encoder, r: &OriginReading) {
+    enc.put_str(&r.reading_id);
+    enc.put_str(r.origin_id.as_str());
+    enc.put_u64(canonical_f64_bits(r.value));
+    enc.put_u64(r.vintage_rank);
+    match r.rounding_interval {
+        Some(ri) => {
+            enc.put_u8(1);
+            enc.put_u64(canonical_f64_bits(ri.lo));
+            enc.put_u64(canonical_f64_bits(ri.hi));
+        }
+        None => enc.put_u8(0),
+    }
+    canonical_relation_encoding(enc, &r.relation);
+    match &r.status {
+        RelationStatus::Reviewed { reviewer_role } => {
+            enc.put_u8(1);
+            enc.put_str(reviewer_role);
+        }
+        RelationStatus::ProposedAssertion => enc.put_u8(0),
+    }
+}
+
+fn canonical_reading_bytes(r: &OriginReading) -> Vec<u8> {
+    let mut enc = Encoder::new_frame(*b"ORD1", 1);
+    encode_one_reading(&mut enc, r);
+    enc.finish()
 }
 
 fn compute_inputs_digest(sorted_readings: &[OriginReading], model: &BatchBiasModel) -> Digest32 {
@@ -397,28 +437,35 @@ fn compute_inputs_digest(sorted_readings: &[OriginReading], model: &BatchBiasMod
     enc.put_u64(canonical_f64_bits(model.nominal_level));
     enc.put_u64(sorted_readings.len() as u64);
     for r in sorted_readings {
-        enc.put_str(&r.reading_id);
-        enc.put_str(r.origin_id.as_str());
-        enc.put_u64(canonical_f64_bits(r.value));
-        enc.put_u64(r.vintage_rank);
-        match r.rounding_interval {
-            Some(ri) => {
-                enc.put_u8(1);
-                enc.put_u64(canonical_f64_bits(ri.lo));
-                enc.put_u64(canonical_f64_bits(ri.hi));
-            }
-            None => enc.put_u8(0),
-        }
-        canonical_relation_encoding(&mut enc, &r.relation);
-        match &r.status {
-            RelationStatus::Reviewed { reviewer_role } => {
-                enc.put_u8(1);
-                enc.put_str(reviewer_role);
-            }
-            RelationStatus::ProposedAssertion => enc.put_u8(0),
-        }
+        encode_one_reading(&mut enc, r);
     }
     blake3_hash(&enc.finish())
+}
+
+fn has_supersession_cycle(edges: &BTreeMap<OriginId, BTreeSet<OriginId>>) -> bool {
+    for start in edges.keys() {
+        let mut visited = BTreeSet::new();
+        let mut queue = VecDeque::new();
+        if let Some(nexts) = edges.get(start) {
+            for n in nexts {
+                queue.push_back(n);
+            }
+        }
+        while let Some(curr) = queue.pop_front() {
+            if curr == start {
+                return true;
+            }
+            if !visited.insert(curr) {
+                continue;
+            }
+            if let Some(nexts) = edges.get(curr) {
+                for n in nexts {
+                    queue.push_back(n);
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Run evidence-origin accounting and the exact batch-bias GLS measurement kernel (`BD-352`).
@@ -466,7 +513,63 @@ pub fn evaluate_origin_batch_model(
             ));
         }
     }
-    sorted.sort_by_key(reading_sort_key);
+    let all_origin_ids: BTreeSet<OriginId> = sorted.iter().map(|r| r.origin_id.clone()).collect();
+    for r in &sorted {
+        match (&r.relation, &r.status) {
+            (
+                OriginRelation::SupersedingPublication {
+                    supersedes,
+                    vintage_rank,
+                },
+                _,
+            ) => {
+                if supersedes == &r.origin_id {
+                    return Err(Refusal::new(
+                        RefusalCode::FrozenRecordMutation507,
+                        format!(
+                            "OriginReading '{}' cannot supersede its own origin_id '{}'",
+                            r.reading_id, r.origin_id
+                        ),
+                    ));
+                }
+                if r.vintage_rank != *vintage_rank {
+                    return Err(Refusal::new(
+                        RefusalCode::UndeclaredUnitBasisOrTz107,
+                        format!(
+                            "OriginReading '{}' vintage_rank ({}) disagrees with SupersedingPublication.vintage_rank ({vintage_rank})",
+                            r.reading_id, r.vintage_rank
+                        ),
+                    ));
+                }
+            }
+            (
+                OriginRelation::PublicationCopy { of_origin }
+                | OriginRelation::RepeatedReading { of_origin },
+                RelationStatus::Reviewed { .. },
+            ) => {
+                if of_origin == &r.origin_id {
+                    return Err(Refusal::new(
+                        RefusalCode::FrozenRecordMutation507,
+                        format!(
+                            "OriginReading '{}' cannot reference itself as of_origin '{}'",
+                            r.reading_id, r.origin_id
+                        ),
+                    ));
+                }
+                if !all_origin_ids.contains(of_origin) {
+                    return Err(Refusal::new(
+                        RefusalCode::NoClaimInDomain201,
+                        format!(
+                            "OriginReading '{}' references absent of_origin '{of_origin}'",
+                            r.reading_id
+                        ),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    sorted.sort_by_cached_key(canonical_reading_bytes);
 
     let result_digest = compute_inputs_digest(&sorted, &model);
     let relation_tags: Vec<&'static str> = sorted
@@ -476,9 +579,10 @@ pub fn evaluate_origin_batch_model(
         .into_iter()
         .collect();
 
-    // 1. Track reviewed supersessions (E692) and detect conflicting same-rank superseding values.
+    // 1. Track reviewed supersessions (E692) and detect cycles, vintage inversion, and same-rank conflicts.
     // Map: superseded OriginId -> list of reviewed superseding readings targeting it.
     let mut superseding_by_target: BTreeMap<OriginId, Vec<&OriginReading>> = BTreeMap::new();
+    let mut sup_edges: BTreeMap<OriginId, BTreeSet<OriginId>> = BTreeMap::new();
     let mut unreviewed_assertions = 0usize;
     let mut any_unknown_dependence = false;
 
@@ -496,6 +600,10 @@ pub fn evaluate_origin_batch_model(
                 OriginRelation::SupersedingPublication { supersedes, .. },
                 RelationStatus::Reviewed { .. },
             ) => {
+                sup_edges
+                    .entry(r.origin_id.clone())
+                    .or_default()
+                    .insert(supersedes.clone());
                 superseding_by_target
                     .entry(supersedes.clone())
                     .or_default()
@@ -505,17 +613,23 @@ pub fn evaluate_origin_batch_model(
         }
     }
 
+    if has_supersession_cycle(&sup_edges) {
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            "supersession graph contains a cycle",
+        ));
+    }
+
     let mut conflicted = false;
     let mut superseded_origins: BTreeSet<OriginId> = BTreeSet::new();
     let mut dropped_lower_supersessions: BTreeSet<OriginId> = BTreeSet::new();
     let mut retained_history: Vec<RetainedSupersession> = Vec::new();
+    let mut collapsed_copies = 0usize;
 
-    // Index base readings by OriginId so we can retain exact superseded values.
-    let mut base_value_by_origin: BTreeMap<OriginId, (f64, u64)> = BTreeMap::new();
+    // Index base readings by OriginId so we can retain exact superseded values and check copies.
+    let mut base_by_origin: BTreeMap<OriginId, &OriginReading> = BTreeMap::new();
     for r in &sorted {
-        base_value_by_origin
-            .entry(r.origin_id.clone())
-            .or_insert((r.value, r.vintage_rank));
+        base_by_origin.entry(r.origin_id.clone()).or_insert(r);
     }
 
     for (target_id, candidates) in &superseding_by_target {
@@ -538,22 +652,51 @@ pub fn evaluate_origin_batch_model(
             })
             .collect();
 
+        // Check vintage ordering against the target origin (never allow an older rank to supersede a newer one).
+        if let Some(target_row) = base_by_origin.get(target_id) {
+            if max_rank < target_row.vintage_rank {
+                return Err(Refusal::new(
+                    RefusalCode::StaleAnchor502,
+                    format!(
+                        "vintage inversion: superseding rank ({max_rank}) is older than target '{}' rank ({})",
+                        target_id, target_row.vintage_rank
+                    ),
+                ));
+            }
+            if max_rank == target_row.vintage_rank
+                && top
+                    .iter()
+                    .any(|c| (c.value - target_row.value).abs() > 1e-12)
+            {
+                conflicted = true;
+            }
+        }
+
         // Check for conflicting top-rank superseding values (distinct values at the same top vintage rank).
+        // When multiple top-rank rows AGREE on the exact value, collapse duplicates onto `top[0]` so
+        // they NEVER double-count sample size or narrow variance!
         if top.len() > 1 {
             let v0 = top[0].value;
             if top.iter().any(|c| (c.value - v0).abs() > 1e-12) {
                 conflicted = true;
+            } else {
+                for redundant in &top[1..] {
+                    if redundant.origin_id != top[0].origin_id {
+                        dropped_lower_supersessions.insert(redundant.origin_id.clone());
+                        collapsed_copies += 1;
+                    }
+                }
             }
         }
 
         if let Some(winner) = top.first() {
             superseded_origins.insert(target_id.clone());
-            if let Some(&(old_val, old_rank)) = base_value_by_origin.get(target_id) {
+            if let Some(target_row) = base_by_origin.get(target_id) {
                 retained_history.push(RetainedSupersession {
                     superseded_origin: target_id.clone(),
-                    superseded_value: old_val,
+                    superseded_value: target_row.value,
                     superseded_by: winner.origin_id.clone(),
-                    superseded_vintage_rank: old_rank,
+                    superseded_vintage_rank: target_row.vintage_rank,
                     current_vintage_rank: max_rank,
                 });
             }
@@ -576,9 +719,9 @@ pub fn evaluate_origin_batch_model(
 
     // 2. Collapse reviewed PublicationCopy and RepeatedReading rows onto their canonical origin
     //    BEFORE statistical aggregation (reprints NEVER narrow measurement intervals).
-    //    Intersect deterministic rounding intervals per canonical origin (E698).
+    //    Intersect deterministic rounding intervals per canonical origin (E698) and flag
+    //    contradictory printed values on copies.
     let mut rounding_by_origin: BTreeMap<OriginId, RoundingInterval> = BTreeMap::new();
-    let mut collapsed_copies = 0usize;
     let mut active_rows: Vec<&OriginReading> = Vec::new();
     let mut seen_active_origins: BTreeSet<OriginId> = BTreeSet::new();
 
@@ -591,6 +734,26 @@ pub fn evaluate_origin_batch_model(
         match (&r.relation, &r.status) {
             (OriginRelation::PublicationCopy { of_origin }, RelationStatus::Reviewed { .. }) => {
                 collapsed_copies += 1;
+                if let Some(base) = base_by_origin.get(of_origin) {
+                    match (base.rounding_interval, r.rounding_interval) {
+                        (None, None) => {
+                            if (base.value - r.value).abs() > 1e-12 {
+                                conflicted = true;
+                            }
+                        }
+                        (Some(bi), None) => {
+                            if r.value < bi.lo - 1e-12 || r.value > bi.hi + 1e-12 {
+                                conflicted = true;
+                            }
+                        }
+                        (None, Some(ci)) => {
+                            if base.value < ci.lo - 1e-12 || base.value > ci.hi + 1e-12 {
+                                conflicted = true;
+                            }
+                        }
+                        (Some(_), Some(_)) => {}
+                    }
+                }
                 if let Some(ri) = r.rounding_interval {
                     match rounding_by_origin.get(of_origin).copied() {
                         None => {
@@ -1074,5 +1237,171 @@ mod tests {
         assert_eq!(res_unrev.unreviewed_assertions, 1);
         assert_eq!(res_unrev.var_model, "conservative_rho_1_unknown_dependence");
         assert!(res_unrev.measurement_var.unwrap() >= res_rep.measurement_var.unwrap());
+    }
+
+    #[test]
+    fn test_bd352_fresh_eyes_audit_regressions() {
+        let model = BatchBiasModel {
+            sigma_b: 0.05,
+            sigma_eps: 0.20,
+            nominal_level: 0.95,
+        };
+
+        // 1. Dangling PublicationCopy referencing an absent origin refuses with FMINE-REF-201.
+        let dangling = vec![copy_reading(
+            "d1",
+            "copy-of-missing",
+            "nonexistent-origin",
+            2.50,
+            None,
+        )];
+        assert_eq!(
+            evaluate_origin_batch_model(&dangling, model)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-201"
+        );
+
+        // 2. Contradictory value on a PublicationCopy without rounding interval flags Conflicted.
+        let base = batch_reading("r0", "assay-0", 2.50, "batch-1");
+        let bad_copy = copy_reading("c0", "copy-0", "assay-0", 9.99, None);
+        let conf_copy = evaluate_origin_batch_model(&[base.clone(), bad_copy], model).unwrap();
+        assert_eq!(conf_copy.knowledge_state, KnowledgeState::Conflicted);
+        assert!(conf_copy.estimate.is_none());
+
+        // 3. Self-supersession and 2-node supersession cycle refuse with FMINE-REF-507.
+        let self_sup = OriginReading {
+            reading_id: "s0".to_string(),
+            origin_id: OriginId::parse("orig-self").unwrap(),
+            value: 1.0,
+            rounding_interval: None,
+            relation: OriginRelation::SupersedingPublication {
+                supersedes: OriginId::parse("orig-self").unwrap(),
+                vintage_rank: 2,
+            },
+            status: reviewed(),
+            vintage_rank: 2,
+        };
+        assert_eq!(
+            evaluate_origin_batch_model(&[self_sup], model)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-507"
+        );
+
+        let cyc_a = OriginReading {
+            reading_id: "ca".to_string(),
+            origin_id: OriginId::parse("cyc-a").unwrap(),
+            value: 1.0,
+            rounding_interval: None,
+            relation: OriginRelation::SupersedingPublication {
+                supersedes: OriginId::parse("cyc-b").unwrap(),
+                vintage_rank: 2,
+            },
+            status: reviewed(),
+            vintage_rank: 2,
+        };
+        let cyc_b = OriginReading {
+            reading_id: "cb".to_string(),
+            origin_id: OriginId::parse("cyc-b").unwrap(),
+            value: 1.0,
+            rounding_interval: None,
+            relation: OriginRelation::SupersedingPublication {
+                supersedes: OriginId::parse("cyc-a").unwrap(),
+                vintage_rank: 3,
+            },
+            status: reviewed(),
+            vintage_rank: 3,
+        };
+        assert_eq!(
+            evaluate_origin_batch_model(&[cyc_a, cyc_b], model)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-507"
+        );
+
+        // 4. Vintage inversion (older rank claiming to supersede newer rank) refuses with FMINE-REF-502.
+        let newer = OriginReading {
+            reading_id: "v5".to_string(),
+            origin_id: OriginId::parse("orig-v5").unwrap(),
+            value: 10.0,
+            rounding_interval: None,
+            relation: OriginRelation::NewObservation,
+            status: reviewed(),
+            vintage_rank: 5,
+        };
+        let older_sup = OriginReading {
+            reading_id: "v2".to_string(),
+            origin_id: OriginId::parse("orig-v2").unwrap(),
+            value: 9.0,
+            rounding_interval: None,
+            relation: OriginRelation::SupersedingPublication {
+                supersedes: OriginId::parse("orig-v5").unwrap(),
+                vintage_rank: 2,
+            },
+            status: reviewed(),
+            vintage_rank: 2,
+        };
+        assert_eq!(
+            evaluate_origin_batch_model(&[newer, older_sup], model)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-502"
+        );
+
+        // 5. Duplicate top-rank superseding rows with matching values collapse instead of halving variance!
+        let v1 = OriginReading {
+            reading_id: "e1".to_string(),
+            origin_id: OriginId::parse("orig-e1").unwrap(),
+            value: 6.7,
+            rounding_interval: None,
+            relation: OriginRelation::NewObservation,
+            status: reviewed(),
+            vintage_rank: 1,
+        };
+        let v2a = OriginReading {
+            reading_id: "e2a".to_string(),
+            origin_id: OriginId::parse("orig-e2a").unwrap(),
+            value: 79.0,
+            rounding_interval: None,
+            relation: OriginRelation::SupersedingPublication {
+                supersedes: OriginId::parse("orig-e1").unwrap(),
+                vintage_rank: 2,
+            },
+            status: reviewed(),
+            vintage_rank: 2,
+        };
+        let v2b = OriginReading {
+            reading_id: "e2b".to_string(),
+            origin_id: OriginId::parse("orig-e2b").unwrap(),
+            value: 79.0,
+            rounding_interval: None,
+            relation: OriginRelation::SupersedingPublication {
+                supersedes: OriginId::parse("orig-e1").unwrap(),
+                vintage_rank: 2,
+            },
+            status: reviewed(),
+            vintage_rank: 2,
+        };
+        let one_sup = evaluate_origin_batch_model(&[v1.clone(), v2a.clone()], model).unwrap();
+        let dup_sup = evaluate_origin_batch_model(&[v1, v2a, v2b], model).unwrap();
+        assert_eq!(dup_sup.active_origin_ids.len(), 1);
+        assert_eq!(dup_sup.collapsed_copies, 1);
+        assert_eq!(dup_sup.measurement_var, one_sup.measurement_var);
+
+        // 6. JSON escaping: quotes and backslashes inside OriginId produce escaped JSON.
+        let special = OriginReading {
+            reading_id: "sp".to_string(),
+            origin_id: OriginId::parse("cell\"A\\1").unwrap(),
+            value: 2.0,
+            rounding_interval: None,
+            relation: OriginRelation::NewObservation,
+            status: reviewed(),
+            vintage_rank: 1,
+        };
+        let log = evaluate_origin_batch_model(&[special], model)
+            .unwrap()
+            .to_json_log();
+        assert!(log.contains("cell\\\"A\\\\1"), "{log}");
     }
 }

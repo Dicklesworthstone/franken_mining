@@ -54,6 +54,17 @@ pub fn dense_cholesky_batch_gls(
             "values and batch_indices must be non-empty and equal length",
         ));
     }
+    if !sigma_b.is_finite()
+        || sigma_b < 0.0
+        || !sigma_eps.is_finite()
+        || sigma_eps <= 0.0
+        || values.iter().any(|v| !v.is_finite())
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "dense_cholesky_batch_gls requires finite values, sigma_b >= 0, and sigma_eps > 0",
+        ));
+    }
     let var_b = sigma_b * sigma_b;
     let var_eps = sigma_eps * sigma_eps;
     let mut sigma = vec![0.0_f64; n * n];
@@ -91,6 +102,12 @@ pub fn run_origin_coverage_experiment(
     model: BatchBiasModel,
 ) -> Result<OriginCoverageReport, Refusal> {
     model.validate()?;
+    if !true_mean.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            format!("true_mean ({true_mean}) must be finite"),
+        ));
+    }
     if replicates < 200 {
         return Err(Refusal::new(
             RefusalCode::OutsidePhysicalDomain109,

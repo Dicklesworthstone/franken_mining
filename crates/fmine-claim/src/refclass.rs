@@ -124,6 +124,29 @@ impl RefClassRegistry {
         let flush = |fields: BTreeMap<String, String>,
                      records: &mut BTreeMap<RefClassId, RefClassRecord>|
          -> Result<(), Refusal> {
+            const ALLOWED_KEYS: [&str; 13] = [
+                "id",
+                "domain",
+                "population",
+                "n",
+                "period",
+                "inclusion_rule",
+                "similarity_justification",
+                "status",
+                "epsilon_bps",
+                "ref_mean_multiplier_bps",
+                "ref_std_multiplier_bps",
+                "source_document",
+                "source_e_ids",
+            ];
+            for k in fields.keys() {
+                if !ALLOWED_KEYS.contains(&k.as_str()) {
+                    return Err(Refusal::new(
+                        RefusalCode::UndeclaredUnitBasisOrTz107,
+                        format!("registries/refclass.toml: unknown [[refclass]] field '{k}'"),
+                    ));
+                }
+            }
             let req = |k: &str| -> Result<String, Refusal> {
                 fields
                     .get(k)
@@ -267,12 +290,19 @@ impl RefClassRegistry {
                     }
                 }
                 Some(map) => {
-                    let parsed = if let Some(inner) =
-                        val.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
-                    {
+                    let parsed = if let Some(rest) = val.strip_prefix('"') {
+                        let Some(inner) = rest.strip_suffix('"') else {
+                            return Err(Refusal::new(
+                                RefusalCode::UndeclaredUnitBasisOrTz107,
+                                format!(
+                                    "registries/refclass.toml:{}: unclosed quote on field '{key}'",
+                                    idx + 1
+                                ),
+                            ));
+                        };
                         inner.to_string()
                     } else {
-                        val.to_string()
+                        val.split('#').next().unwrap_or(val).trim().to_string()
                     };
                     if map.insert(key.to_string(), parsed).is_some() {
                         return Err(Refusal::new(
@@ -426,9 +456,11 @@ impl EpsilonContamination {
 
     /// Moment-matched Huber ε-contaminated mixture `(1 - ε) * P_model + ε * Q_ref` (`GB-32`, §9.3).
     ///
-    /// Uses `fmine_core::det::{sqrt, hypot}` (`BitwisePortable`). Refuses non-finite inputs or
-    /// negative `base_std` with `FMINE-REF-109`. Returns `(base_mean, base_std)` unchanged when
-    /// `epsilon_bps == 0`.
+    /// Uses `fmine_core::det::{sqrt, hypot}` (`BitwisePortable`). Refuses non-finite inputs,
+    /// negative `base_std`, or non-positive `base_mean` when `epsilon_bps > 0` (multiplicative
+    /// reference-class multipliers apply only to strictly positive scale baselines such as capex,
+    /// schedule duration, grade, or recovery) with `FMINE-REF-109`. Returns `(base_mean, base_std)`
+    /// unchanged when `epsilon_bps == 0`.
     pub fn blend_moments(&self, base_mean: f64, base_std: f64) -> Result<(f64, f64), Refusal> {
         if !base_mean.is_finite() || !base_std.is_finite() || base_std < 0.0 {
             return Err(Refusal::new(
@@ -438,6 +470,14 @@ impl EpsilonContamination {
         }
         if self.epsilon_bps == 0 {
             return Ok((base_mean, base_std));
+        }
+        if base_mean <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!(
+                    "multiplicative reference-class blend requires strictly positive base_mean (got {base_mean})"
+                ),
+            ));
         }
         let Some(rec) = &self.ref_class else {
             return Err(Refusal::new(
@@ -581,6 +621,52 @@ source_e_ids = "E001"
         assert_eq!(
             RefClassRegistry::parse(dup).unwrap_err().code,
             "FMINE-REF-107"
+        );
+
+        // Unknown field typo refuses with FMINE-REF-107 instead of being silently ignored.
+        let unknown_key = r#"
+schema_version = 1
+[[refclass]]
+id = "REFCLASS-TYPO"
+domain = "d"
+population = "p"
+n = 10
+period = "2000-2020"
+inclusion_rule = "r"
+similarity_justification = "j"
+status = "verified"
+epsilon_bps = 1000
+ref_mean_multiplier_bps = 11000
+ref_std_multiplier_bps = 2000
+source_document = "doc"
+source_e_ids = "E001"
+bogus_extra_field = "nope"
+"#;
+        assert_eq!(
+            RefClassRegistry::parse(unknown_key).unwrap_err().code,
+            "FMINE-REF-107"
+        );
+
+        // Unclosed quote refuses with FMINE-REF-107.
+        let unclosed = unknown_key
+            .replace("bogus_extra_field = \"nope\"\n", "")
+            .replace("domain = \"d\"", "domain = \"unclosed");
+        assert_eq!(
+            RefClassRegistry::parse(&unclosed).unwrap_err().code,
+            "FMINE-REF-107"
+        );
+
+        // Multiplicative blend refuses base_mean <= 0 when epsilon > 0 (prevents sign-flip/shrinkage).
+        let reg = load_workspace_registry();
+        let gf =
+            EpsilonContamination::from_registry(&reg, "REFCLASS-CAPEX-GREENFIELD", None).unwrap();
+        assert_eq!(
+            gf.blend_moments(0.0, 100.0).unwrap_err().code,
+            "FMINE-REF-109"
+        );
+        assert_eq!(
+            gf.blend_moments(-50.0, 100.0).unwrap_err().code,
+            "FMINE-REF-109"
         );
     }
 }

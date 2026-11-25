@@ -254,7 +254,7 @@ Not applicable: no Claims are emitted.
 - `refclass::{check_refclass, RefClassCheckReport}` (`GATE-PLUMB-E4`, `bd-050`; command `check-refclass`, run by `check-all`): validates `registries/refclass.toml` via `fmine_claim::refclass::RefClassRegistry::parse` and verifies the baseline verified `REFCLASS-CAPEX-GREENFIELD` row.
 
 ## 12. Proof obligations
-- GATE-PLUMB-E4 (reference-class registry schema and completeness): `refclass::check_refclass`. Test: `test_workspace_refclass_registry_passes_gate_plumb_e4`.
+- GATE-PLUMB-E4 (reference-class registry schema and completeness): `refclass::check_refclass`. Tests: `test_workspace_refclass_registry_passes_gate_plumb_e4`, `test_seeded_broken_refclass_registry_fails`.
 - PO-NUM-3 (kernel determinism class and thread-count verification on certified paths, no unlisted threaded kernel): `kernels::check_kernels`. Tests:
   - `kernels::tests::test_workspace_kernels_registry_passes`;
   - `kernels::tests::test_unlisted_threaded_kernel_is_refused`;

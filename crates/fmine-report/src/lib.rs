@@ -100,9 +100,14 @@ pub struct ReportCertificateRef {
 }
 
 /// Checked Claim entry ready for deterministic report rendering.
+///
+/// Retains the claim's [`Confidentiality`] label privately so [`render_report`] can enforce
+/// `INV-007` clearance against `ReportSpec::reader_clearance` even when an entry was constructed
+/// under a higher clearance elsewhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportClaimEntry {
     pub row: FmClaimRow,
+    confidentiality: Confidentiality,
 }
 
 impl ReportClaimEntry {
@@ -114,13 +119,25 @@ impl ReportClaimEntry {
         reader: &Confidentiality,
     ) -> Result<Self, Refusal> {
         let row = build_fm_row(input, reader)?;
-        Ok(Self { row })
+        Ok(Self {
+            row,
+            confidentiality: input.claim.confidentiality.clone(),
+        })
     }
 
-    /// Wrap an already-checked [`FmClaimRow`].
+    /// Wrap an already-checked [`FmClaimRow`] together with its explicit [`Confidentiality`] label.
     #[must_use]
-    pub fn from_row(row: FmClaimRow) -> Self {
-        Self { row }
+    pub fn from_row(row: FmClaimRow, confidentiality: Confidentiality) -> Self {
+        Self {
+            row,
+            confidentiality,
+        }
+    }
+
+    /// Confidentiality label carried by this entry (`INV-007`).
+    #[must_use]
+    pub fn confidentiality(&self) -> &Confidentiality {
+        &self.confidentiality
     }
 }
 
@@ -285,16 +302,34 @@ struct NormalizedSection {
     notes: Vec<String>,
 }
 
-fn normalize_sections(raw: &[ReportSection]) -> Result<Vec<NormalizedSection>, Refusal> {
+fn normalize_sections(
+    raw: &[ReportSection],
+    reader_clearance: &Confidentiality,
+) -> Result<Vec<NormalizedSection>, Refusal> {
     let mut out = Vec::with_capacity(raw.len());
     for sec in raw {
         let heading = require_non_empty("section.heading", &sec.heading)?;
         let summary = sanitize_block(&sec.summary).trim().to_string();
-        let mut rows: Vec<FmClaimRow> = sec.entries.iter().map(|e| e.row.clone()).collect();
+        let mut rows = Vec::with_capacity(sec.entries.len());
+        for entry in &sec.entries {
+            if let Some(code) = entry.confidentiality.refusal_over(reader_clearance) {
+                return Err(Refusal::new(
+                    code,
+                    format!(
+                        "fmine-report: claim '{}' is labelled {}; report reader_clearance is {reader_clearance}",
+                        entry.row.metric_key, entry.confidentiality
+                    ),
+                ));
+            }
+            rows.push(entry.row.clone());
+        }
         rows.sort_by(|a, b| {
             a.metric_key
                 .cmp(&b.metric_key)
                 .then_with(|| a.claim_id.cmp(&b.claim_id))
+                .then_with(|| a.display_value.cmp(&b.display_value))
+                .then_with(|| a.unit.cmp(&b.unit))
+                .then_with(|| a.plain_sentence.cmp(&b.plain_sentence))
         });
         let notes: Vec<String> = sec
             .notes
@@ -364,6 +399,12 @@ fn encode_canonical_inputs(
             enc.put_str(&r.flip_margin_coded);
             enc.put_str(&r.uu_summary);
             enc.put_u8(u8::from(r.stale));
+            enc.put_str(&r.clickable_link);
+            enc.put_str(&r.plain_sentence);
+            enc.put_u64(r.anchor_locators.len() as u64);
+            for loc in &r.anchor_locators {
+                enc.put_str(loc);
+            }
         }
         enc.put_u64(s.notes.len() as u64);
         for n in &s.notes {
@@ -390,7 +431,7 @@ pub fn render_report(spec: &ReportSpec) -> Result<RenderedReport, Refusal> {
 
     let anchors = canonicalize_anchors(&spec.anchors)?;
     let certificates = canonicalize_certificates(&spec.certificates)?;
-    let sections = normalize_sections(&spec.sections)?;
+    let sections = normalize_sections(&spec.sections, &spec.reader_clearance)?;
 
     let canonical_inputs_digest = encode_canonical_inputs(
         &title,
@@ -544,6 +585,21 @@ pub fn render_report(spec: &ReportSpec) -> Result<RenderedReport, Refusal> {
 /// Recompute SHA-256 and BLAKE3 digests over `report.markdown` and verify mandatory `NO_CLAIM_BANNER`
 /// presence (`BD-124`). Refuses any single-byte modification with `FMINE-REF-505`.
 pub fn verify_rendered_report(report: &RenderedReport) -> Result<(), Refusal> {
+    if report.format_version != REPORT_FORMAT_VERSION {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            format!(
+                "unsupported report format_version {} (expected {REPORT_FORMAT_VERSION})",
+                report.format_version
+            ),
+        ));
+    }
+    if report.markdown.contains('\r') {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            "rendered report contains non-canonical CR byte",
+        ));
+    }
     let actual_sha256 = sha256(report.markdown.as_bytes());
     if actual_sha256 != report.markdown_sha256 {
         return Err(Refusal::new(
@@ -911,7 +967,7 @@ mod tests {
             EvidenceClass::Measured,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            Confidentiality::mnpi(wall),
+            Confidentiality::mnpi(wall.clone()),
             Vec::new(),
             Vec::new(),
             vec![anchor.clone()],
@@ -1022,5 +1078,87 @@ mod tests {
             render_report(&bad_anchor).unwrap_err().code,
             "FMINE-REF-107"
         );
+
+        // 5. Cross-clearance defense (INV-007): an MNPI entry built under MNPI clearance MUST
+        //    still be refused by render_report when placed into a Public ReportSpec (FMINE-REF-301),
+        //    and a Venture-A entry MUST be refused in a Venture-B ReportSpec (FMINE-REF-302).
+        let mnpi_clearance = Confidentiality::mnpi(wall);
+        let mnpi_entry = ReportClaimEntry::from_claim(
+            &ClaimRenderInput {
+                claim: &mnpi_claim,
+                value_range_text: "14.2",
+                unit: "g/t",
+                calibration_summary: None,
+                flip_margin: None,
+            },
+            &mnpi_clearance,
+        )
+        .expect("mnpi reader may construct mnpi entry");
+        let leaked_public_spec = ReportSpec {
+            title: "Attempted Public Export of MNPI Entry".to_string(),
+            subtitle: None,
+            lane_label: "public".to_string(),
+            issuer_disclaimer: None,
+            reader_clearance: Confidentiality::public(),
+            anchors: sample_anchor_refs(),
+            certificates: sample_cert_refs(),
+            sections: vec![ReportSection {
+                heading: "Leak Attempt".to_string(),
+                summary: String::new(),
+                entries: vec![mnpi_entry],
+                notes: Vec::new(),
+            }],
+        };
+        let leak_err = render_report(&leaked_public_spec)
+            .expect_err("render_report must refuse MNPI entry on Public clearance");
+        assert_eq!((leak_err.code, leak_err.exit_code), ("FMINE-REF-301", 7));
+
+        let vreg = LabelRegistry::new(["ngm", "pv"], []).expect("venture reg");
+        let v_ngm = Confidentiality::venture(vreg.venture("ngm").unwrap());
+        let v_pv = Confidentiality::venture(vreg.venture("pv").unwrap());
+        let ngm_claim = Claim::new(
+            "ngm.unit_cost",
+            1200.0_f64,
+            "1200",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::IntensiveWeighted,
+            EvidenceClass::Measured,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
+            v_ngm.clone(),
+            Vec::new(),
+            Vec::new(),
+            vec![sample_anchor_obj()],
+        );
+        let ngm_entry = ReportClaimEntry::from_claim(
+            &ClaimRenderInput {
+                claim: &ngm_claim,
+                value_range_text: "1200",
+                unit: "$/oz",
+                calibration_summary: None,
+                flip_margin: None,
+            },
+            &v_ngm,
+        )
+        .expect("ngm entry");
+        let cross_venture_spec = ReportSpec {
+            title: "PV Partner Report".to_string(),
+            subtitle: None,
+            lane_label: "venture".to_string(),
+            issuer_disclaimer: None,
+            reader_clearance: v_pv,
+            anchors: sample_anchor_refs(),
+            certificates: sample_cert_refs(),
+            sections: vec![ReportSection {
+                heading: "Cross-Venture Leak".to_string(),
+                summary: String::new(),
+                entries: vec![ngm_entry],
+                notes: Vec::new(),
+            }],
+        };
+        let v_err = render_report(&cross_venture_spec)
+            .expect_err("render_report must refuse NGM entry on PV clearance");
+        assert_eq!((v_err.code, v_err.exit_code), ("FMINE-REF-302", 7));
     }
 }
