@@ -207,13 +207,25 @@ fn calib_rest_bits(key: RngKey) -> Vec<u64> {
     }
     let mut ledger = ForecastLedger::new();
     for (i, &(mean, std_dev, y)) in inputs.iter().step_by(100).enumerate() {
-        let t = i as i64;
+        let t = 3 * i as i64;
         let scored = ledger
-            .register("digest", t, t, mean, std_dev)
-            .and_then(|id| ledger.record_outcome(id, t + 1, y));
+            .register("digest", t, t + 1, mean, std_dev)
+            .and_then(|id| ledger.record_outcome(id, t + 2, y));
         bits.push(scored.map_or(u64::MAX, |()| 0));
     }
-    match ledger.evaluate_model("digest") {
+    // The frozen probe predates strict registration; retain its historical reduction order only.
+    let report = ledger.evaluate_model_ordered_by("digest", |record| {
+        let ForecastPayload::Gaussian { mean, std_dev } = &record.payload else {
+            return record.forecast_id;
+        };
+        let t = record.registered_ns / 3;
+        let ordering_label = format!("digest:{t}:{t}:{mean:.8}:{std_dev:.8}");
+        fmine_core::id::ObjectId::from_canonical_bytes(
+            fmine_core::id::PrefixKind::Forecast,
+            ordering_label.as_bytes(),
+        )
+    });
+    match report {
         Ok(r) => bits.extend(
             [
                 r.mean_crps,

@@ -320,6 +320,11 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
   Payloads are Gaussian, a uniform empirical distribution, an interval with a stated or explicitly absent
   level, quantiles, or an event probability.
+  Both legacy Gaussian and exact-payload registrations require record time strictly before the outcome
+  boundary. Equal-time and late attempts refuse before changing the population or time watermark;
+  `ledger::tests::legacy_registration_requires_strict_precedence_without_advancing_history` covers this
+  boundary and the valid one-nanosecond-before case. Numerical probes preserve their historical reduction
+  order without admitting invalid timestamps or changing the committed cross-host golden values.
   Forecast registrations, cohort freezes and outcomes share a monotone record-time watermark: an already
   observed miss cannot be excluded by backdating a new cohort containing only other, unresolved members.
 - DESIGN: `ledger::binding::PublicResolutionPolicy` freezes registered-public resolution semantics in the

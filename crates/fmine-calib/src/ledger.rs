@@ -688,8 +688,8 @@ impl ForecastLedger {
     }
 
     fn insert_forecast(&mut self, record: FrozenForecast) -> Result<ObjectId, Refusal> {
-        if record.registered_ns > record.freeze_time_ns {
-            return Err(late("registration is after the outcome time"));
+        if record.registered_ns >= record.freeze_time_ns {
+            return Err(late("registration must precede the outcome time"));
         }
         if record.model_key.trim().is_empty() {
             return Err(domain("forecast model key is empty"));
@@ -1242,6 +1242,29 @@ impl ForecastLedger {
             .values()
             .filter(|r| r.model_key == model_key)
             .collect();
+        self.evaluate_records(records)
+    }
+
+    // DESIGN: numerical probes retain historical reduction order without admitting invalid timestamps.
+    // The complete model population is always retained; durable assessments do not use this hook.
+    pub(super) fn evaluate_model_ordered_by<K: Ord>(
+        &self,
+        model_key: &str,
+        mut key: impl FnMut(&FrozenForecast) -> K,
+    ) -> Result<CalibrationReport, ScoreError> {
+        let mut records: Vec<&FrozenForecast> = self
+            .records
+            .values()
+            .filter(|r| r.model_key == model_key)
+            .collect();
+        records.sort_by_key(|record| key(record));
+        self.evaluate_records(records)
+    }
+
+    fn evaluate_records(
+        &self,
+        records: Vec<&FrozenForecast>,
+    ) -> Result<CalibrationReport, ScoreError> {
         if records
             .iter()
             .any(|r| !matches!(r.payload, ForecastPayload::Gaussian { .. }))
@@ -2713,6 +2736,40 @@ mod tests {
                 .observed_mean,
             Some(70.0)
         );
+    }
+
+    #[test]
+    fn legacy_registration_requires_strict_precedence_without_advancing_history() {
+        let mut ledger = ForecastLedger::new();
+        let existing = ledger
+            .register("existing", 10, 100, 3.5, 0.4)
+            .expect("existing future forecast");
+        let original = ledger.forecast(existing).expect("existing record").clone();
+
+        for registered_ns in [20, 21] {
+            let refusal = ledger
+                .register("boundary", registered_ns, 20, 3.5, 0.4)
+                .expect_err("registration at or after the outcome time must refuse");
+            assert_eq!(refusal.code, "FMINE-REF-206");
+            assert_eq!(ledger.records.len(), 1);
+            assert_eq!(ledger.latest_record_ns, Some(10));
+            assert_eq!(ledger.forecast(existing), Some(&original));
+            assert!(ledger.outcomes.is_empty());
+        }
+
+        // A failed future write must not seal history or prevent a valid earlier registration.
+        let id = ledger
+            .register("boundary", 19, 20, 3.5, 0.4)
+            .expect("one nanosecond before the outcome time is admissible");
+        ledger.record_outcome(id, 21, 3.5).expect("later outcome");
+        let report = ledger.evaluate_model("boundary").expect("legacy score");
+        assert_eq!(
+            (report.n_members, report.n_scored, report.n_unresolved),
+            (1, 1, 0)
+        );
+        assert_eq!(report.empirical_coverage_80, 1.0);
+        assert_eq!(report.mean_standardized_bias, 0.0);
+        assert_eq!(ledger.forecast(existing), Some(&original));
     }
 
     #[test]
