@@ -1,0 +1,19 @@
+[package]
+name = "fmine-report"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Deterministic plain-Markdown report renderer (FD-FMD-00 fallback) with anchors, certificates, G-EXEC suppression, INV-002 no-claim lines, and digest verification (BD-123, BD-124)."
+
+[lints]
+workspace = true
+
+[dependencies]
+fmine-claim = { path = "../fmine-claim" }
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }

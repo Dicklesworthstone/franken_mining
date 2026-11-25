@@ -314,6 +314,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-report"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+]
+
+[[package]]
 name = "fmine-runtime"
 version = "0.1.0"
 

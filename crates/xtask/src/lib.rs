@@ -1641,7 +1641,8 @@ mod tests {
         // BD-144 adds fmine-gen's portable simulation-based calibration module (sbc.rs).
         // BD-253 adds the core PlanCertificate codec and optimizer certificate builders.
         // BD-050 adds fmine-claim's portable reference-class ε-contamination module (refclass.rs).
-        assert_eq!(report.bitwise_files, 123, "{report:?}");
+        // BD-123/BD-124 adds fmine-report's portable plain-Markdown report renderer (lib.rs).
+        assert_eq!(report.bitwise_files, 124, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
