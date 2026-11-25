@@ -1352,10 +1352,12 @@ fn test_pair_order_and_missing_claim() {
 }
 
 #[test]
-#[ignore = "needs all registered public workbooks; independent source-only waterfall_census.py pins the counts"]
+#[ignore = "needs registered public workbooks through 2026Q2; waterfall_census.py pins the historical counts"]
 fn barrick_waterfall_counts_and_north_mara_match_independent_census() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let profile = load_issuer_profile(&root, "barrick").unwrap();
+    let profile = load_issuer_profile(&root, "barrick")
+        .and_then(|profile| profile.through("2026Q2"))
+        .expect("historical waterfall census source population");
     let report = assess(
         &profile,
         Lane::Public,
