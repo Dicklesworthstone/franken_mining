@@ -28,6 +28,7 @@ fn model() -> RecoveryBoundModel {
         tested_recovery: range(90, 90, 100),
         untested_recovery: range(40, 90, 100),
         threshold: q(85, 100),
+        partial_holdback: None,
         interactions: Vec::new(),
     }
 }

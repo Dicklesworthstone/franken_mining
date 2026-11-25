@@ -2409,9 +2409,24 @@ target. Holding back the high-grade pocket guarantees at least **85.45%** recove
 bounds. It leaves **84 dry tonnes** and **73.6–82.4 g** recoverable. For the same grades and recoveries,
 that choice forgoes **18–51.2 g** of gold this shift.
 
+To find the minimum holdback for a divisible lot, append this table to the same worksheet.
+
+```toml
+[[partial_holdback]]
+lot = "high-grade-pocket"
+basis = "proportional_same_grade"
+```
+
+The result is **71/72 of the lot's dry mass** for the example's 85% target. The same fraction of
+contained metal is held back at each admitted grade. The card checks the retained feed and reports
+held and retained dry tonnes, recovered metal and forgone recovery. It can also show that all feed
+already meets the target, or that splitting this lot cannot guarantee it with positive retained metal. This
+calculation assumes the split preserves grade and recovery bounds, with no replacement feed.
+
 Record the chosen scenario with `decide journal record`. Use `--action all-feed` for the full feed
 or `--action hold-back:<lot-id>` for one named lot. A reviewer can then recover the exact worksheet,
-all the alternatives and the planner's rationale from the pinned journal head.
+all the alternatives and the planner's rationale from the pinned journal head. Those action IDs refer
+to the full feed and whole-lot choices.
 
 JSON and Markdown preserve the source, input/output Claims, evidence, confidentiality and UU. The
 receipt binds that metadata as well as the numerical result. These are conditional identification

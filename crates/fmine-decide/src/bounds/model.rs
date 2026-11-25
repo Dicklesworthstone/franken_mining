@@ -24,6 +24,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"route\",\"metal\",\"additivity_basis\",\"untested_bound_basis\"],",
     "\"weights\":\"Either parcel rows or one weights row: contained_metal with lower/upper untested fraction, or dry_tonnes_and_grade with tested_tonnes, tested_grade_g_per_t, untested_tonnes, untested_grade_g_per_t, each suffixed _lower and _upper\",",
     "\"parcel\":\"Each disjoint lot has id, role (tested or untested), dry_tonnes_lower/upper and grade_g_per_t_lower/upper. The card compares all feed and each whole-lot holdback with no replacement. Record the chosen row with decide journal record --action all-feed or --action hold-back:<lot-id>. Example: tests/decisions/stockpile_holdback.toml\",",
+    "\"partial_holdback\":\"Optional single row with one existing lot ID in lot and basis=proportional_same_grade. Find the exact minimum fraction of that lot to hold back for the declared target, scaling each admitted mass by the same fraction at its original grade. Reports the retained and forgone production bounds. Journal action hold-back:<lot-id> continues to describe a whole-lot action.\",",
     "\"recovery\":\"Exactly two recovery rows, role tested or untested, with lower/upper fractions; explicit [0,1] physical bounds are permitted\",",
     "\"decision\":\"One decision row: threshold fraction and rule proceed_if_at_least; equality proceeds and stop is strictly below\",",
     "\"uu\":\"Exactly one uu row: id, description, trigger, positive finite downside_usd_m naming the untested-bound uncertainty\",",
@@ -94,6 +95,7 @@ pub(crate) fn from_verified_document(
     let mut tested = None;
     let mut untested = None;
     let mut threshold = None;
+    let mut partial_holdback = None;
     let mut unknown = None;
     let mut interactions = BTreeSet::new();
     let mut anchors = vec![source.clone()];
@@ -215,6 +217,18 @@ pub(crate) fn from_verified_document(
                 }
                 threshold = Some(rational(value, row.line)?);
             }
+            "partial_holdback" => {
+                let [lot, basis] = strings(&row.fields, ["lot", "basis"], row.line, INPUT)?;
+                identifier(lot, row.line)?;
+                if basis != "proportional_same_grade" || partial_holdback.is_some() {
+                    return Err(bad(
+                        INPUT,
+                        row.line,
+                        "partial holdback requires exactly one named lot and basis proportional_same_grade",
+                    ));
+                }
+                partial_holdback = Some(lot.to_string());
+            }
             "interaction" => {
                 let [kind] = strings(&row.fields, ["kind"], row.line, INPUT)?;
                 if !interactions.insert(kind.to_string()) {
@@ -299,6 +313,7 @@ pub(crate) fn from_verified_document(
         untested_recovery: untested
             .ok_or_else(|| bad(INPUT, 1, "missing untested recovery row"))?,
         threshold: threshold.ok_or_else(|| bad(INPUT, 1, "missing decision row"))?,
+        partial_holdback,
         interactions: interactions.into_iter().collect(),
     };
     let uu = unknown.ok_or_else(|| bad(UU, 1, "one explicit UU term is required"))?;

@@ -69,6 +69,8 @@ pub struct RecoveryBoundModel {
     pub untested_recovery: Interval,
     /// Proceed iff aggregate recovery is at least this fraction; stop is strictly below it.
     pub threshold: Rat,
+    /// Select one named lot for a proportional dry-mass split at unchanged grade.
+    pub partial_holdback: Option<String>,
     /// Any declared interaction makes additive averaging inadmissible.
     pub interactions: Vec<String>,
 }
@@ -127,6 +129,8 @@ pub struct BoundSummary {
     pub vertices: Vec<Vertex>,
     /// All feed, then each whole-lot holdback. Empty for aggregate weight declarations.
     pub parcel_cases: Vec<parcels::FeedCase>,
+    /// Exact minimum removal for the optional named lot, with its retained-feed witness.
+    pub partial_holdback: Option<parcels::PartialHoldback>,
 }
 
 /// Immutable source/model/output snapshot; the digest also binds metadata not in generic Claim ids.
@@ -229,7 +233,7 @@ fn untested_share(tested: Interval, untested: Interval) -> Result<Interval> {
     })
 }
 
-fn weights_and_cases(model: &RecoveryBoundModel) -> Result<(Interval, Vec<parcels::FeedCase>)> {
+fn weights_and_cases(model: &RecoveryBoundModel) -> Result<parcels::FeedComparison> {
     let result = match &model.weights {
         WeightBasis::Parcels(lots) => return parcels::compare(lots, model),
         WeightBasis::ContainedMetal { untested_fraction } => *untested_fraction,
@@ -244,8 +248,18 @@ fn weights_and_cases(model: &RecoveryBoundModel) -> Result<(Interval, Vec<parcel
             positive_metal_share(tested, untested)?
         }
     };
+    if model.partial_holdback.is_some() {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "partial holdback requires named feed parcels",
+        ));
+    }
     interval(result, true)?;
-    Ok((result, Vec::new()))
+    Ok(parcels::FeedComparison {
+        weights: result,
+        cases: Vec::new(),
+        partial_holdback: None,
+    })
 }
 
 fn positive_metal_share(tested: Interval, untested: Interval) -> Result<Interval> {
@@ -487,7 +501,8 @@ pub fn evaluate(inputs: &Claim<RecoveryBoundModel>) -> Result<BoundCard> {
         },
         true,
     )?;
-    let (weights, parcel_cases) = weights_and_cases(m)?;
+    let feed = weights_and_cases(m)?;
+    let weights = feed.weights;
     let mut vertices = Vec::with_capacity(8);
     let (mut lower, mut upper) = (ONE, ZERO);
     for w in [weights.lower, weights.upper] {
@@ -532,7 +547,8 @@ pub fn evaluate(inputs: &Claim<RecoveryBoundModel>) -> Result<BoundCard> {
             false,
         )?,
         vertices,
-        parcel_cases,
+        parcel_cases: feed.cases,
+        partial_holdback: feed.partial_holdback,
     };
     let mut binding = Encoder::new_frame(*b"UBND", 1);
     binding.put_str(&crate::card::render::claim_json(

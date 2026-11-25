@@ -48,7 +48,7 @@ fn invoke(path: &Path, workspace: &Path) -> fmine_cli::Envelope {
     result
 }
 
-fn declared(text: &str) -> fmine_cli::Envelope {
+fn worksheet(text: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
@@ -61,7 +61,11 @@ fn declared(text: &str) -> fmine_cli::Envelope {
     std::fs::create_dir_all(&directory).expect("create synthetic worksheet directory");
     let path = directory.join("model.toml");
     std::fs::write(&path, text).expect("write synthetic worksheet");
-    invoke(&path, &root())
+    path
+}
+
+fn declared(text: &str) -> fmine_cli::Envelope {
+    invoke(&worksheet(text), &root())
 }
 
 fn python(json: &str, checks: &str) {
@@ -194,6 +198,153 @@ assert pair(cases[2]["recovered_grams"]) == (F("73.6"), F("82.4"))
 assert pair(cases[2]["forgone_recovered_grams"]) == (18, F("51.2"))
 assert pair(cases[0]["recovered_grams"]) == (F("91.6"), F("133.6"))
 "#,
+    );
+}
+
+#[test]
+fn minimum_partial_lot_holdback_matches_every_concrete_endpoint_and_binary() {
+    let original = include_str!("../../../tests/decisions/stockpile_holdback.toml");
+    let with_holdback = format!(
+        "{original}\n[[partial_holdback]]\nlot = \"high-grade-pocket\"\nbasis = \"proportional_same_grade\"\n"
+    );
+    let path = worksheet(&with_holdback);
+    let output = Command::new(binary())
+        .args(["decide", "recovery-bounds"])
+        .arg(&path)
+        .args(["--format", "json", "--workspace"])
+        .arg(root())
+        .output()
+        .expect("execute the partial holdback worksheet");
+    assert!(output.status.success(), "{:?}", output);
+    let json = String::from_utf8(output.stdout).expect("UTF-8 report");
+    assert_eq!(json, format!("{}\n", invoke(&path, &root()).to_json()));
+    python(
+        &json,
+        r#"
+partial = result["partial_holdback"]
+assert model["partial_holdback"] == {"lot":"high-grade-pocket", "basis":"proportional_same_grade"}
+assert partial["lot"] == "high-grade-pocket" and partial["status"] == "minimum"
+assert any("partial_holdback" in a["locator"] and "proportional_same_grade" in a["locator"] for a in inputs["anchors"])
+endpoints = []
+cutoff = F(17,20)
+for (pad, ore, grade, rt, ru) in itertools.product([1,2], [15,16], [3,4], [F(9,10),F(19,20)], [F(2,5),F(4,5)]):
+    tonnes = [F(80), F(4), F(ore)]
+    contained = [F(80), F(4*pad), F(ore*grade)]
+    recovered = [contained[0]*rt, contained[1]*ru, contained[2]*ru]
+    endpoints.append((tonnes, contained, recovered))
+
+def after(f, endpoint):
+    tonnes, contained, recovered = endpoint
+    retained_tonnes = sum(tonnes)-f*tonnes[2]
+    retained_metal = sum(contained)-f*contained[2]
+    retained_gold = sum(recovered)-f*recovered[2]
+    return (retained_tonnes, retained_metal, retained_gold, f*recovered[2], retained_gold/retained_metal)
+
+roots = [F(0)]
+for tonnes, contained, recovered in endpoints:
+    if sum(recovered)/sum(contained) < cutoff:
+        roots.append((cutoff*sum(contained)-sum(recovered))/(cutoff*contained[2]-recovered[2]))
+minimum = max(roots)
+assert minimum == F(71,72) and F(partial["minimum_dry_tonne_fraction"]) == minimum
+assert pair(partial["held_dry_tonnes"]) == (minimum*15, minimum*16)
+outcomes = [after(minimum, e) for e in endpoints]
+for key, values in zip(["dry_tonnes","contained_grams","recovered_grams","forgone_recovered_grams","recovery"],zip(*outcomes)):
+    assert pair(partial["retained_feed"][key]) == (min(values), max(values)), key
+assert min(v[-1] for v in outcomes) == cutoff
+assert min(after(minimum-F(1,1000), e)[-1] for e in endpoints) < cutoff
+assert partial["retained_feed"]["stability"] == "stable_proceed"
+"#,
+    );
+    let human = Command::new(binary())
+        .args(["decide", "recovery-bounds"])
+        .arg(&path)
+        .args(["--format", "markdown", "--workspace"])
+        .arg(root())
+        .output()
+        .expect("render the minimum holdback in Markdown");
+    assert!(human.status.success());
+    assert!(
+        String::from_utf8(human.stdout)
+            .unwrap()
+            .contains("Hold back **71/72 of the dry mass of high-grade-pocket**")
+    );
+}
+
+#[test]
+fn proportional_holdback_distinguishes_zero_full_and_unattainable_amounts() {
+    let base = include_str!("../../../tests/decisions/stockpile_holdback.toml");
+    for (cutoff, lot, check) in [
+        (
+            "0.1",
+            "high-grade-pocket",
+            r#"assert F(result["partial_holdback"]["minimum_dry_tonne_fraction"]) == 0"#,
+        ),
+        (
+            "47/55",
+            "high-grade-pocket",
+            r#"assert F(result["partial_holdback"]["minimum_dry_tonne_fraction"]) == 1"#,
+        ),
+        (
+            "0.85",
+            "base-stockpile",
+            r#"assert result["partial_holdback"]["reason"] == "target_unattainable""#,
+        ),
+        (
+            "0.99",
+            "high-grade-pocket",
+            r#"assert result["partial_holdback"]["reason"] == "target_unattainable""#,
+        ),
+    ] {
+        let base = base.replace("threshold = \"0.85\"", &format!("threshold = \"{cutoff}\""));
+        let sheet = format!(
+            "{base}\n[[partial_holdback]]\nlot = \"{lot}\"\nbasis = \"proportional_same_grade\"\n"
+        );
+        python(&declared(&sheet).to_json(), check);
+    }
+    let (_, remainder) = base
+        .split_once("[[parcel]]\nid = \"high-grade-pocket\"")
+        .unwrap();
+    let (header, _) = base.split_once("[[parcel]]").unwrap();
+    let only_lot = format!(
+        "{header}[[parcel]]\nid = \"high-grade-pocket\"{remainder}\n[[partial_holdback]]\nlot = \"high-grade-pocket\"\nbasis = \"proportional_same_grade\"\n"
+    );
+    python(
+        &declared(&only_lot).to_json(),
+        r#"assert result["partial_holdback"]["reason"] == "zero_possible_retained_metal""#,
+    );
+    let invalid = |lot: &str, basis: &str, base: &str| {
+        let sheet = format!("{base}\n[[partial_holdback]]\nlot = \"{lot}\"\nbasis = \"{basis}\"\n");
+        declared(&sheet).refusal.expect("invalid partial holdback")
+    };
+    assert_eq!(
+        invalid("absent", "proportional_same_grade", base).code,
+        "FMINE-REF-105"
+    );
+    assert_eq!(
+        invalid("high-grade-pocket", "unmodelled_split", base).code,
+        "FMINE-REF-506"
+    );
+    assert_eq!(
+        invalid("high-grade-pocket", "proportional_same_grade", MODEL).code,
+        "FMINE-REF-105"
+    );
+
+    let tested_is_slower = base
+        .replace(
+            "lower = \"0.90\"\nupper = \"0.95\"",
+            "lower = \"0.40\"\nupper = \"0.95\"",
+        )
+        .replace(
+            "lower = \"0.40\"\nupper = \"0.80\"",
+            "lower = \"0.90\"\nupper = \"0.95\"",
+        )
+        .replace("threshold = \"0.85\"", "threshold = \"0.75\"");
+    let sheet = format!(
+        "{tested_is_slower}\n[[partial_holdback]]\nlot = \"base-stockpile\"\nbasis = \"proportional_same_grade\"\n"
+    );
+    python(
+        &declared(&sheet).to_json(),
+        r#"assert F(result["partial_holdback"]["minimum_dry_tonne_fraction"]) == F(59,80)"#,
     );
 }
 

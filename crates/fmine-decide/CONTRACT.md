@@ -413,6 +413,13 @@ zero total contained metal keeps the mass ranges and a typed refusal for its rec
 No throughput, revenue, spatial test coverage or dispatch decision is inferred. The known-answer fixture
 is `tests/decisions/stockpile_holdback.toml`.
 
+DESIGN (bd-zpu6.5). An optional `partial_holdback` row names one lot and requires
+`basis = "proportional_same_grade"`. The worst-case weighted recovery margin at the target is
+affine in the removed fraction. The evaluator solves its first nonnegative point exactly and
+rechecks the retained feed by the same recovery kernel. The result includes matched retained and
+forgone amounts, or explains why no fraction guarantees the target with positive retained metal.
+The split scales each admitted mass at its original grade under the same recovery bounds.
+
 DESIGN (bd-225.1). A journal action selects the complete feed with `all-feed` or one evaluated
 counterfactual with `hold-back:<lot-id>`. The retained card includes the full comparison, its source
 anchors and the same result Claim as the standalone command. A lot with undefined recovery retains
