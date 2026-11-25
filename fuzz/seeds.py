@@ -470,10 +470,11 @@ def main() -> None:
                         b"\x00" + frame(b"LDGR", 1, v1), b"\x01" + frame(b"LDGR", 0, v0)[:-4] + bytes(4)]
 
     # segment: the target writes the clean segment itself, so a seed is a mode, a selector, a 16-bit cut and
-    # edits ([kind, offset lo, offset hi, n], then a fill byte or n bytes). A crash cutting batch 2 short with its
-    # first 255 bytes lost; one cutting the seal; a planted length and frame magic inside batch 1; the first three
-    # bytes of the last batch's length prefix overwritten; and a cut open segment with the rest of the input
-    # appended.
+    # edits: [kind, offset lo, offset hi, n], then a fill byte (kind 0) or n bytes to write (1) or insert (2). In a
+    # crash an even kind zeros n bytes and an odd one sets them to 0xFF (fuzz_targets/segment.rs). A crash cutting
+    # batch 2 short with its first 255 bytes lost; one cutting the seal; a planted length and frame magic inside
+    # batch 1; the first three bytes of the last batch's length prefix overwritten; and a cut open segment with
+    # the rest of the input appended.
     seeds["segment"] += [b"\x00\x02\x40\x02" + bytes([0, 0, 0, 0xFF]),
                          b"\x00\x06\x10\x00",
                          b"\x01\x01\x00\x00" + bytes([1, 8, 0, 8]) + struct.pack("<I", 40) + b"FMNE",

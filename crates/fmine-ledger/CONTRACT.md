@@ -60,12 +60,14 @@ Not applicable: Bedrock emits authority storage, proofs, and verification receip
 ## 9. Oracles
 - `fixtures/fmine-ledger/rfc6962_probes.txt`: `transparency-dev/merkle` commit `c39fbf350a405f68571bf4c42a6a518eb0a46a4b` (Apache-2.0) inclusion and consistency probes.
 - Known-answer unit tests in `batch.rs`, `segment.rs`, `cell.rs`, and `verify.rs`, including exhaustive byte-by-byte post-header truncation recovery and 1-bit flip refusal sweeps.
-- `crates/fmine-verify/tests/f7_lab.rs` (T layer): the `F7` lab test. A crash at every byte of an append and of a seal, and `LabRuntime` seeds 0..999 that also lose sectors of the write in flight (zeros or stale bytes) and cut the repair short once; each state is detected, refused for writes, repaired with its evidence kept, and resumed to bytes identical to a crash-free segment.
+- `crates/fmine-verify/tests/f7_lab.rs` (T layer): the `F7` lab test. A crash at every byte of two appends (into an empty segment, and one over two sectors long) and of a seal, and `LabRuntime` seeds 0..999 that also lose sectors of the write in flight (zeros or stale bytes) and cut the repair short once; each state is detected, refused for writes, repaired with its evidence kept, and resumed to bytes identical to a crash-free segment.
 - Fuzz target `fuzz/fuzz_targets/ledger.rs` for `FMT-LEDGER-1`, and `fuzz/fuzz_targets/segment.rs` for the `FMT-SEG-1` scanner: crash states must read as a torn tail at the old end, damage inside one record with a whole record after it must never read as torn, and every torn tail's verified prefix must inspect clean.
 
 ## 10. Known gaps
 - `BD-081`'s 24-hour fuzz run for `fuzz/fuzz_targets/ledger.rs` started on 2026-11-25 and has no result yet (`bd-081` remains `in_progress`).
 - No multi-segment directory catalog, `FMT-CAS-1` chunk store (`BD-090`), or `SyncCert` wire protocol (`BD-103`) yet. `LabRuntime` DPOR over lease transfer (`PO-BED-1`, `BD-101`) is not built; the `F7` lab test covers crash recovery only.
+- A torn batch whose payload holds a whole `FMT-LEDGER-1` batch or segment footer frame, with its length prefix, reads as interior corruption and is refused, not repaired: the scanner cannot tell that frame from a record written after the damage.
+- OPEN (owner): damage to the last acknowledged records with no whole record after it, such as bit rot rather than a crash, reads as a torn tail, and `repair apply` truncates it with the complete bytes kept as evidence. Nothing in a segment tells the two causes apart.
 - Self-verified only; no independent external review or multi-ISA CI run of the new modules yet.
 
 ## 11. Public API
@@ -73,7 +75,7 @@ Not applicable: Bedrock emits authority storage, proofs, and verification receip
 - `batch::{DeltaBatch, DeltaOp, DeltaKind, Witness, WitnessKind, CrossCellRef, LedgerError, TAG_LEDGER_BATCH, FMT_LEDGER_V1, FMT_LEDGER_MIN_VERSION, GENESIS_PREV_HASH}`
 - `segment::{SegmentHeader, SegmentFooter, SegmentWriter, SegmentReader, SegmentInspection, SegmentState, inspect_segment_bytes, TAG_SEGMENT_HEADER, TAG_SEGMENT_FOOTER, FMT_SEG_V1}`
 - `cell::{CellLease, CellAuthority, ConflictRecord, AdmitOutcome, GluingIssue, GluingReport, check_gluing, TAG_CELL_LEASE, FMT_LEASE_V1}`
-- `verify::{SegmentVerification, RepairAction, SegmentRepairPlan, SegmentRepairReceipt, verify_segment, plan_segment_repair, apply_segment_repair}`
+- `verify::{SegmentVerification, RepairAction, SegmentRepairPlan, SegmentRepairReceipt, verify_segment, plan_segment_repair, apply_segment_repair, retain_repair_evidence}`
 - `l0::{L0Ledger, L0Error, KeyVersion, CellSnapshot}` (`BD-080`: L0 in-memory reference ledger and semantic oracle for L1 parity)
 - `as_of_replay::{AsOfReplayError, ReplayRun, run_as_of, assert_bit_identical_replay}` (`BD-053`: bit-identical as-of replay harness bound by `FMT-CERT-1`)
 

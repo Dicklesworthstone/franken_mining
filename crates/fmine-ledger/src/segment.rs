@@ -659,15 +659,22 @@ fn after_damage(bytes: &[u8], cursor: usize) -> AfterDamage {
         else {
             continue;
         };
+        // Only the decoder for the frame's own tag runs, so each candidate's CRC is computed once.
         let tag = &frame[4..8];
-        if tag != TAG_LEDGER_BATCH && tag != TAG_SEGMENT_FOOTER {
+        let is_batch = tag == TAG_LEDGER_BATCH;
+        if !is_batch && tag != TAG_SEGMENT_FOOTER {
             continue;
         }
         let Some(left) = budget.checked_sub(frame_len) else {
             return AfterDamage::TooManyCandidates;
         };
         budget = left;
-        if DeltaBatch::from_bytes(frame).is_ok() || SegmentFooter::from_bytes(frame).is_ok() {
+        let whole = if is_batch {
+            DeltaBatch::from_bytes(frame).is_ok()
+        } else {
+            SegmentFooter::from_bytes(frame).is_ok()
+        };
+        if whole {
             return AfterDamage::Record(magic - 4);
         }
     }

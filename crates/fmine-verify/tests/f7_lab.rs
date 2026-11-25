@@ -50,7 +50,7 @@ const SEEDS: u64 = 1000;
 const MAX_ACKED: u64 = 5;
 
 /// Batch `seq` of the lab cell. Payload sizes cycle through 24, 300 and 900 bytes, so frames range from
-/// well inside one sector to across three, and the fencing epoch rises every fourth batch.
+/// well inside one sector to over two sectors long, and the fencing epoch rises every fourth batch.
 fn batch(seq: u64, prev_hash: Digest32) -> DeltaBatch {
     let epoch = 1 + seq / 4;
     let payload_len = [24_usize, 300, 900][(seq % 3) as usize];

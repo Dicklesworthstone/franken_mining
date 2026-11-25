@@ -414,13 +414,10 @@ fn apply_journal_repair(
         ));
     };
 
-    // Archive complete pre-repair bytes BEFORE truncating (`F7`); a retry after a crash keeps them.
-    retain_repair_evidence(&evidence_path, &original_bytes).map_err(|e| {
-        Refusal::new(
-            RefusalCode::InputMissingOrUnreadable506,
-            format!("cannot archive evidence {}: {e}", evidence_path.display()),
-        )
-    })?;
+    // Archive complete pre-repair bytes BEFORE truncating (`F7`); a retry after a crash keeps them. Its
+    // refusals carry the same codes as a segment repair's: a foreign file at the evidence path is 505, an
+    // I/O failure 506.
+    retain_repair_evidence(&evidence_path, &original_bytes).map_err(|e| e.to_refusal())?;
 
     // Truncate target journal to verified prefix, sync, and re-verify from byte 0.
     locked
@@ -984,6 +981,38 @@ mod tests {
         assert_eq!(j_apply_env.exit_code, 0);
         assert!(j_apply_env.payload_json.contains("\"retained_records\":2"));
         assert!(fmine_io::forecast::Journal::open_read(&j_path, None).is_ok());
+
+        // A foreign file at the next repair's evidence path is refused with the code a segment repair
+        // gives (FMINE-REF-505), and the torn journal is left as it is.
+        {
+            let mut f = OpenOptions::new().append(true).open(&j_path).expect("open");
+            f.write_all(b"464d4e45deadbeef").expect("tear line again");
+            f.sync_all().expect("sync");
+        }
+        let torn_again = std::fs::read(&j_path).expect("read torn journal");
+        let j_plan2_env = execute(&j_plan_cmd, &root);
+        assert_eq!(j_plan2_env.exit_code, 0);
+        let j_evidence = extract_json_field(&j_plan2_env.payload_json, "evidence_path");
+        std::fs::write(&j_evidence, b"not this repair's bytes").expect("foreign evidence file");
+        let j_apply2_cmd = parse(&[
+            "repair".into(),
+            "apply".into(),
+            extract_json_field(&j_plan2_env.payload_json, "plan_digest"),
+            "--journal".into(),
+            j_path.to_string_lossy().into_owned(),
+        ])
+        .expect("parse j apply 2");
+        let j_apply2_env = execute(&j_apply2_cmd, &root);
+        assert_eq!(j_apply2_env.exit_code, 8);
+        assert_eq!(
+            j_apply2_env.refusal.as_ref().map(|r| r.code),
+            Some("FMINE-REF-505")
+        );
+        assert_eq!(std::fs::read(&j_path).expect("journal kept"), torn_again);
+        assert_eq!(
+            std::fs::read(&j_evidence).expect("foreign file kept"),
+            b"not this repair's bytes"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

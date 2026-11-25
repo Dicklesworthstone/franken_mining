@@ -1,13 +1,13 @@
 //! The `FMT-SEG-1` segment scanner (`fmine_ledger::segment::inspect_segment_bytes`; BD-082, BD-088, `F7`).
 //!
-//! The target writes one clean segment once: six batches whose frames run from inside one 512-byte sector to
-//! across three, then a seal. Each input damages a copy of it: a mode byte, a selector byte, a 16-bit cut,
-//! then edits, each `[kind, offset lo, offset hi, n]`, whose offset counts back from the end of its range when
-//! its top bit is set. By `kind % 3` an edit fills `n` bytes with the next input byte, writes the next `n`
-//! input bytes, or inserts them, as stray bytes would. Modes, by `mode % 3`:
+//! The target writes one clean segment once: six batches whose frames run from well inside one 512-byte sector
+//! to over two sectors long, then a seal. Each input damages a copy of it: a mode byte, a selector byte, a
+//! 16-bit cut, then edits, each `[kind, offset lo, offset hi, n]`, whose offset counts back from the end of its
+//! range when its top bit is set. Outside a crash, by `kind % 3`, an edit fills `n` bytes with the next input
+//! byte, writes the next `n` input bytes, or inserts them, as stray bytes would. Modes, by `mode % 3`:
 //! - 0, a crash: keep the first `k` batches, cut the write in flight (batch `k`, or the seal) anywhere, and set
-//!   any ranges of what reached the disk to zeros or 0xFF. Inspection must succeed, keep the `k` batches with
-//!   their head hash, and read any damage as a torn tail at the old end.
+//!   `n`-byte ranges of what reached the disk to zeros (`kind` even) or 0xFF (`kind` odd). Inspection must
+//!   succeed, keep the `k` batches with their head hash, and read any damage as a torn tail at the old end.
 //! - 1, damage inside one record: edits land only on batch `r`'s bytes, and insertions anywhere from its first
 //!   byte to just after its last, so a whole record (a batch or the footer) still follows. Inspection must
 //!   never read a torn tail, which repair would truncate (`INV-003`).
@@ -16,7 +16,8 @@
 //!
 //! In every mode a torn tail must be consistent (its offset is the verified length, and the verified prefix
 //! inspects as an open segment with the same batches and head hash) and a clean read verifies every byte.
-//! The search after damage is bounded, so `scripts/fuzz.sh`'s 10-second timeout also catches a slow scan.
+//! Inputs stay small (libFuzzer's default limit is 4 KiB), so this target cannot show a scan that slows with
+//! file size; `segment::tests::test_crafted_overlapping_candidates_refuse_within_the_decode_budget` covers that.
 #![no_main]
 
 use std::sync::OnceLock;
