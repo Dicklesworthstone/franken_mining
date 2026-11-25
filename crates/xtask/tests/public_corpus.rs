@@ -124,6 +124,47 @@ mod corpus {
             .expect("bound")
     }
 
+    /// A root for the independent readers that holds only `profile`'s registered workbooks, linked from the
+    /// workspace corpus, beside links to `registries/` and `scripts/`. The readers list the corpus directory, so
+    /// run on the workspace root they read every vintage downloaded there while the Rust run stops at the
+    /// profile's bound. Once the Q3 2026 files arrived, public CI (2026-11-22) compared 2,915 E823 instances with
+    /// 2,595. The readers' bytes are unchanged. The directory is removed on drop, a failing test included, and
+    /// removal deletes the links, never what they point to.
+    struct ReaderRoot(PathBuf);
+
+    impl ReaderRoot {
+        fn new(profile: &IssuerProfile, root: &Path) -> Self {
+            use std::os::unix::fs::symlink;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let made = Self(std::env::temp_dir().join(format!(
+                "fmine-reader-root-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            )));
+            let corpus = made.0.join(&profile.corpus_dir);
+            std::fs::create_dir_all(&corpus).expect("reader root");
+            for s in &profile.sources {
+                let from = root.join(&profile.corpus_dir).join(&s.file_name);
+                symlink(&from, corpus.join(&s.file_name)).expect("link a registered workbook");
+            }
+            for d in ["registries", "scripts"] {
+                symlink(root.join(d), made.0.join(d)).expect("link a reader input");
+            }
+            made
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ReaderRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// BD-331.S4: exact company-layer bounds from an independent openpyxl/Fraction reader with exhaustive
     /// weight-vertex enumeration, recorded before the candidate projection was run. Never regenerate these
     /// expected values from FrankenMining's output; this test also binds every answer to its original bytes.
@@ -761,9 +802,10 @@ mod corpus {
         let script = "import json, sys\nsys.path.insert(0, 'scripts/oracle')\nimport census2\n\
                       _, res = census2.run('.', displayed=True)\n\
                       for x in res:\n    print(json.dumps([x[0], x[1], x[2], x[4], x[5], str(x[6])]))\n";
+        let readers = ReaderRoot::new(&profile, &root);
         let out = std::process::Command::new("python3")
             .args(["-I", "-c", script])
-            .current_dir(&root)
+            .current_dir(readers.path())
             .output()
             .expect("python3 runs");
         assert!(
@@ -1301,11 +1343,12 @@ mod corpus {
         let profile = barrick_to_2026q2(&root);
         let r =
             run_public_assurance(&profile, &root).expect("registered files present and unaltered");
+        let readers = ReaderRoot::new(&profile, &root);
         let out = std::process::Command::new("python3")
             .arg("-I")
             .arg(root.join("scripts/oracle/one_cell_cos.py"))
-            .arg(&root)
-            .current_dir(&root)
+            .arg(readers.path())
+            .current_dir(readers.path())
             .output()
             .expect("python3 runs");
         assert!(
@@ -1723,11 +1766,12 @@ mod corpus {
                 r#"{"regions": 3, "refuted": 1, "not_refuted": 2, "refused": 0}"#,
             ),
         ];
+        let readers = ReaderRoot::new(&profile, &root);
         for (scope, instances, flags, summary) in scopes {
             let out = std::process::Command::new("python3")
                 .args(["-I", "-c", script])
                 .args(flags)
-                .current_dir(&root)
+                .current_dir(readers.path())
                 .output()
                 .expect("python3 runs");
             assert!(
@@ -1881,11 +1925,12 @@ mod corpus {
             for k, d in enumerate(x['implied']):\n            for loc in sorted(d):\n                \
             lo, hi = d[loc]\n                \
             print('\\t'.join([x['component'], str(k), loc, 'unbounded' if 'unbounded' in (lo, hi) else lo + ',' + hi]))\n";
+        let readers = ReaderRoot::new(&profile, &root);
         let census = |flags: &[&str]| {
             let out = std::process::Command::new("python3")
                 .args(["-I", "-c", script])
                 .args(flags)
-                .current_dir(&root)
+                .current_dir(readers.path())
                 .output()
                 .expect("python3 runs");
             assert!(
