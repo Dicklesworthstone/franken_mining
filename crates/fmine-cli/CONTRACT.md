@@ -1059,6 +1059,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
   - `forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <pem>`:
     authenticated frozen-record assessment and common-population baseline comparison in JSON or Markdown (BD-076);
+  - `forecast record check --record <directory>`: read-only preflight of prepared rules, manifest, complete
+    forecast rows and declared source bytes before timestamping, with canonical digests in JSON or Markdown
+    (BD-334); it neither writes files nor verifies external timestamp receipts;
   - `reliance init|issue|reissue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
     status and exact artifact reuse, with capability-authorized mutations and generic recipient roles (BD-347);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
@@ -1697,6 +1700,13 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   injected clock capability for callers/tests. Trust in an injected clock belongs to its caller, not request data.
 - `forecast_record::{Command, execute}`: a read-only adapter over exact frozen record bytes, explicit RFC 3161
   trust roots and registered original sources; numerical scoring delegates to `fmine-calib`.
+- DESIGN (BD-334): `forecast_preflight::{Command, execute}` validates prepared `rules.toml`, `manifest.toml`
+  and `forecasts.csv` through the existing parsers, complete-cohort and baseline-declaration checks.
+  Declared manifest inputs must agree with their registry identity, publication metadata, size and source
+  bytes. The information cut must leave time for a proof before the frozen deadline. The reported framed
+  digests describe the exact supplied record bytes. No source attestation is inferred or authenticated,
+  no future outcome is read, and no model or baseline values are recomputed. External timestamp proofs
+  and issuance remain unverified; an existing receipt is not treated as evidence by this command.
 - DESIGN (BD-067/BD-334): `forecast_candidate::{Command, execute}` exposes `forecast record build` with
   required rules, explicit `--model pooled-quarterly-ratio-empirical-v1` or
   `--model seasonal-quarterly-ratio-empirical-v1`, and an explicit UTC evidence cut. It uses

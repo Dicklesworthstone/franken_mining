@@ -3990,6 +3990,22 @@ The rows use the registered retrieval upper bound as one whole-second UTC timest
 the original retrieval window and the separately calculated availability bound. Append the rows below the
 reviewed manifest header, which carries the author's role, contact status and attestation.
 
+DESIGN (BD-334): check the prepared bundle before requesting its external timestamps:
+
+```bash
+cargo run -p fmine-cli -- forecast record check --record path/to/prepared-record
+cargo run -p fmine-cli -- forecast record check --record path/to/prepared-record --format markdown
+```
+
+The directory must contain `rules.toml`, `manifest.toml` and `forecasts.csv`. This read-only check validates
+the complete live-site/target forecast population, the declared baseline rules, the reviewed manifest and
+the available time window for a proof. Each declared input must match its registered identity, publication
+metadata, byte count and actual source hash. The report gives the canonical rules and record digests without
+writing digest files. Missing or changed inputs and an information cut at or after the proof deadline refuse.
+It does not read future outcomes, recompute the chosen model or baseline values, authenticate the author's
+attestation, or verify timestamp receipts. Its success means the supplied bundle passes these preflight
+checks; external proof and issuance remain separate.
+
 The existing record-hash, external timestamp and record-score workflow remains responsible for freezing and
 scoring a reviewed forecast. Synthetic source fixtures are explicitly labelled in JSON and Markdown.
 

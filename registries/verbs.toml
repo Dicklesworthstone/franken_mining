@@ -183,6 +183,12 @@ mutates_authority = false
 description = "Prepare a complete uncalibrated empirical draft from original registered quarterly sources at an explicit evidence cut, retaining exact values and the CSV export"
 
 [[verb]]
+path = "forecast record check"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Validate a prepared forecast record and its original source evidence, reporting canonical digests without writing files or asserting external timestamp proof"
+
+[[verb]]
 path = "forecast record score"
 subsystem = "Plumb"
 mutates_authority = false

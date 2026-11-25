@@ -48,6 +48,7 @@ mod worksheet_input;
 pub use decision::journal as decision_journal;
 pub use forecast::live as forecast_journal;
 pub use forecast::record_build as forecast_candidate;
+pub use forecast::record_check as forecast_preflight;
 pub use forecast::record_score as forecast_record;
 
 use std::path::{Path, PathBuf};
@@ -248,6 +249,8 @@ pub enum CliCommand {
     ForecastRecord(forecast_record::Command),
     /// Prepare an unissued empirical candidate from original source releases at an explicit cut.
     ForecastCandidate(forecast_candidate::Command),
+    /// Check a prepared record and its source evidence before obtaining external timestamp proofs.
+    ForecastPreflight(forecast_preflight::Command),
     /// Issue, withdraw, supersede, inspect and gate reuse of exact report artifacts (BD-347).
     Reliance(reliance::Command),
     /// `fmine doctor` (`BD-115`).
@@ -649,6 +652,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                                     "--json" => next += 1,
                                     flag if flag.starts_with("--") => next += 2,
                                     "build" => return "forecast record build",
+                                    "check" => return "forecast record check",
                                     _ => return "forecast record score",
                                 }
                             }
@@ -1301,6 +1305,10 @@ pub fn parse_args(
     if verb_hint(args) == "forecast record build" {
         return forecast_candidate::parse(args, default_root)
             .map(|(command, format, root)| (CliCommand::ForecastCandidate(command), format, root));
+    }
+    if verb_hint(args) == "forecast record check" {
+        return forecast_preflight::parse(args, default_root)
+            .map(|(command, format, root)| (CliCommand::ForecastPreflight(command), format, root));
     }
     if let Some(command) = parse_reliance_args(args, default_root)? {
         return Ok(command);
@@ -2320,6 +2328,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::ForecastCandidate(command) => {
             forecast_candidate::execute(command, workspace_root)
         }
+        CliCommand::ForecastPreflight(command) => {
+            forecast_preflight::execute(command, workspace_root)
+        }
         CliCommand::CheckTables {
             issuer,
             through,
@@ -2715,6 +2726,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal correction --journal <path> (--assessment <digest> | --assessments <digests>) --forecast <alias> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 forecast_candidate::USAGE,
+                forecast_preflight::USAGE,
                 spatial::USAGE,
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
                 doctor::USAGE,
@@ -2766,6 +2778,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(fmine_decide::bounds::model::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_candidate\":");
             payload.push_str(forecast_candidate::ROBOT_DOCS_JSON);
+            payload.push_str(",\"forecast_record_check\":");
+            payload.push_str(forecast_preflight::ROBOT_DOCS_JSON);
             payload.push_str(concat!(
                 ",\"table_checks\":{\"schema\":\"fmine.table-check.v1\",",
                 "\"workbooks\":\"Existing assurance identities, source citations and ledger certificate\",",

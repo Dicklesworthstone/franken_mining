@@ -305,6 +305,252 @@ fn cli_exports_manifest_inputs_with_actual_retrieval_bounds() {
     assert!(String::from_utf8(markdown.stdout).unwrap().contains(rows));
 }
 
+fn prepared_record_fixture() -> Fixture {
+    let mut rules = RULES.to_string();
+    for target in ["production", "unit_cost"] {
+        writeln!(rules, "\n[[baseline]]\nid = \"issuer_guidance\"\ntarget = \"{target}\"\nrule = \"declared matching issuer range\"\nsource = \"synthetic guidance\"").unwrap();
+    }
+    let fixture = Fixture::with_metrics(&rules,
+        "Gold produced (000s oz, 100%)", "All-in sustaining costs ($/oz)");
+    let registry_path = fixture.root.join("registries/sources/synthetic.toml");
+    let mut registry = std::fs::read_to_string(&registry_path).unwrap();
+    for (index, day) in ["2030-05-01", "2030-08-01", "2030-10-02"].iter().enumerate() {
+        let path = format!("path = \"Invented_Q{}.xlsx\"\n", index + 1);
+        registry = registry.replacen(&path, &format!(
+            "{path}published_at = \"{day}\"\npublished_at_basis = \"FACT: synthetic release day\"\n"
+        ), 1);
+    }
+    std::fs::write(registry_path, registry).unwrap();
+    let (exit, built, text) = invoke(&fixture.args());
+    assert_eq!(exit, 0, "{text}");
+    let candidate = at(&built, &["payload"]);
+    let rows = at(candidate, &["manifest_inputs_toml"]).as_str().unwrap();
+    let digest = at(candidate, &["rules_digest"]).as_str().unwrap();
+    let dir = fixture.root.join("record");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("rules.toml"), rules).unwrap();
+    std::fs::write(dir.join("forecasts.csv"), at(candidate, &["forecasts_csv"]).as_str().unwrap()).unwrap();
+    std::fs::write(dir.join("manifest.toml"), format!(
+        "record_id = \"invented-cli-record\"\nauthor_role = \"synthetic-test-author\"\n\
+         information_cutoff_utc = \"{CUT}\"\nlabel = \"nowcast\"\ncontact = \"pre-contact\"\n\
+         attestation = \"{ATTESTATION}\"\nrules_sha256 = \"{digest}\"\n{rows}"
+    )).unwrap();
+    fixture
+}
+
+fn record_check_args(fixture: &Fixture) -> Vec<String> {
+    ["forecast", "record", "check", "--record", "record", "--workspace"]
+        .into_iter().map(str::to_string).chain([fixture.root.to_str().unwrap().to_string()]).collect()
+}
+
+fn replace_record_rules(fixture: &Fixture, rules: &str) {
+    let dir = fixture.root.join("record");
+    let path = dir.join("rules.toml");
+    let old = fmine_calib::record::rules_digest(&std::fs::read(&path).unwrap()).to_hex();
+    let new = fmine_calib::record::rules_digest(rules.as_bytes()).to_hex();
+    let manifest_path = dir.join("manifest.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace(&old, &new);
+    std::fs::write(path, rules).unwrap();
+    std::fs::write(manifest_path, manifest).unwrap();
+}
+
+#[test]
+fn cli_checks_exported_record_inputs_without_proofs_outcomes_or_writes() {
+    let fixture = prepared_record_fixture();
+    let args = record_check_args(&fixture);
+    let dir = fixture.root.join("record");
+    let paths = ["rules.toml", "manifest.toml", "forecasts.csv"];
+    let before = paths.map(|path| std::fs::read(dir.join(path)).unwrap());
+    let (exit, checked, text) = invoke(&args);
+    assert_eq!(exit, 0, "{text}");
+    assert_eq!(invoke(&args).2, text, "preflight is deterministic");
+    let report = at(&checked, &["payload"]);
+    for (key, expected) in [("schema", "fmine.forecast-record-check.v1"), ("status", "inputs_valid"),
+        ("lane", "synthetic"), ("outcome_quarter", "2030Q4"), ("timestamp_verification", "not_performed"),
+        ("author_attestation", ATTESTATION)] {
+        assert_eq!(at(report, &[key]).as_str(), Some(expected));
+    }
+    assert_eq!(at(report, &["n_forecasts"]).i64(), Some(4));
+    assert_eq!(at(report, &["n_live_sites"]).i64(), Some(2));
+    assert_eq!(at(report, &["n_targets"]).i64(), Some(2));
+    assert_eq!(at(report, &["not_published_sites"]).as_array().unwrap()[0].as_str(), Some("Retired Site"));
+    assert_eq!(at(report, &["inputs"]).as_array().unwrap().len(), 3);
+    for source in at(report, &["inputs"]).as_array().unwrap() {
+        assert_eq!(at(source, &["bytes_verified"]).as_bool(), Some(true));
+    }
+    for field in ["model_reproduced", "baseline_values_checked", "outcomes_read", "issued",
+        "stored_rules_digest_checked", "stored_record_digest_checked", "gate_eligible"] {
+        assert_eq!(at(report, &[field]).as_bool(), Some(false));
+    }
+    let rules_digest = fmine_calib::record::rules_digest(&before[0]).to_hex();
+    let record_digest = fmine_calib::record::record_digest(&before[1], &before[2]).to_hex();
+    assert_eq!(at(report, &["rules_sha256"]).as_str(), Some(rules_digest.as_str()));
+    assert_eq!(at(report, &["record_sha256"]).as_str(), Some(record_digest.as_str()));
+    let markdown = output(&[args.clone(), vec!["--format".into(), "markdown".into()]].concat());
+    assert!(markdown.status.success());
+    let markdown = String::from_utf8(markdown.stdout).unwrap();
+    assert!(markdown.contains(&record_digest) && markdown.contains("No future outcome files"));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "check creates no hashes or receipts");
+    assert_eq!(paths.map(|path| std::fs::read(dir.join(path)).unwrap()), before);
+    std::fs::write(dir.join("rules.sha256"), format!("{rules_digest}\n")).unwrap();
+    std::fs::write(dir.join("record.sha256"), format!("{record_digest}\n")).unwrap();
+    let (exit, checked, text) = invoke(&args);
+    assert_eq!(exit, 0, "{text}");
+    assert_eq!(at(&checked, &["payload", "stored_record_digest_checked"]).as_bool(), Some(true));
+    std::fs::write(dir.join("record.sha256"), format!("{}\n", "0".repeat(64))).unwrap();
+    let (exit, refused, _) = invoke(&args);
+    assert_eq!(exit, 8);
+    assert_eq!(at(&refused, &["refusal", "code"]).as_str(), Some("FMINE-REF-505"));
+    assert_eq!(std::fs::read_to_string(dir.join("record.sha256")).unwrap(), format!("{}\n", "0".repeat(64)));
+    let (exit, docs, _) = invoke(&["robot-docs".into()]);
+    assert_eq!(exit, 0);
+    assert_eq!(at(&docs, &["payload", "forecast_record_check", "schema"]).as_str(), Some("fmine.forecast-record-check.v1"));
+}
+
+#[test]
+fn cli_record_check_refuses_changed_unknown_or_unreadable_declared_sources() {
+    for change in ["bytes", "missing", "unknown", "url", "publication", "retrieval"] {
+        let fixture = prepared_record_fixture();
+        let source = fixture.root.join("invented/Invented_Q1.xlsx");
+        let manifest_path = fixture.root.join("record/manifest.toml");
+        let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+        match change {
+            "bytes" => {
+                let mut bytes = std::fs::read(&source).unwrap();
+                bytes[0] ^= 1;
+                std::fs::write(&source, bytes).unwrap();
+            }
+            "missing" => std::fs::rename(&source, source.with_extension("unavailable")).unwrap(),
+            "unknown" => std::fs::write(&manifest_path, manifest.replace("Invented_Q1.xlsx", "Unregistered.xlsx")).unwrap(),
+            "url" => std::fs::write(&manifest_path, manifest.replace("https://example.invalid/", "https://changed.invalid/")).unwrap(),
+            "publication" => std::fs::write(&manifest_path, manifest.replace("2030-05-01", "2030-05-02")).unwrap(),
+            "retrieval" => std::fs::write(&manifest_path, manifest.replacen("2030-10-02T10:01:00Z", "2030-04-30T23:59:59Z", 1)).unwrap(),
+            _ => unreachable!(),
+        }
+        let (exit, refused, text) = invoke(&record_check_args(&fixture));
+        assert_ne!(exit, 0, "{change}: {text}");
+        assert_eq!(at(&refused, &["payload"]), &Json::Null);
+        assert!(at(&refused, &["refusal", "what"]).as_str().unwrap().contains(
+            if change == "unknown" { "Unregistered.xlsx" } else { "Invented_Q1.xlsx" }
+        ), "{change}: {text}");
+    }
+}
+
+#[test]
+fn cli_record_check_preserves_declared_same_day_retrieval_without_inventing_time_evidence() {
+    let fixture = prepared_record_fixture();
+    let path = fixture.root.join("record/manifest.toml");
+    let manifest = std::fs::read_to_string(&path).unwrap();
+    // Scoring uses the frozen author's retrieval declaration, not the candidate builder's
+    // conservative publication-day upper bound. The preflight retains that distinction.
+    std::fs::write(&path, manifest.replace(CUT, "2030-10-02T12:00:00Z")).unwrap();
+    let (exit, checked, text) = invoke(&record_check_args(&fixture));
+    assert_eq!(exit, 0, "{text}");
+    let input = &at(&checked, &["payload", "inputs"]).as_array().unwrap()[2];
+    assert_eq!(at(input, &["registered_publication_date"]).as_str(), Some("2030-10-02"));
+    assert_eq!(at(input, &["declared_retrieved_utc"]).as_str(), Some("2030-10-02T10:01:00Z"));
+    assert_eq!(at(input, &["availability_basis"]).as_str(), Some("frozen_manifest_retrieval_declaration"));
+    assert_eq!(at(&checked, &["payload", "timestamp_verification"]).as_str(), Some("not_performed"));
+    std::fs::write(&path, manifest.replace(CUT, "2030-10-02T09:00:00Z")).unwrap();
+    let (exit, refused, text) = invoke(&record_check_args(&fixture));
+    assert_ne!(exit, 0, "{text}");
+    assert_eq!(at(&refused, &["payload"]), &Json::Null);
+}
+
+#[test]
+fn cli_record_check_keeps_population_attestation_and_both_baselines_mandatory() {
+    for change in ["population", "attestation", "baseline"] {
+        let fixture = prepared_record_fixture();
+        let dir = fixture.root.join("record");
+        match change {
+            "population" => {
+                let path = dir.join("forecasts.csv");
+                let csv = std::fs::read_to_string(&path).unwrap().lines()
+                    .filter(|line| !line.starts_with("Site A,production,"))
+                    .map(|line| format!("{line}\n")).collect::<String>();
+                std::fs::write(path, csv).unwrap();
+            }
+            "attestation" => {
+                let path = dir.join("manifest.toml");
+                let manifest = std::fs::read_to_string(&path).unwrap().replace(ATTESTATION, "not supplied");
+                std::fs::write(path, manifest).unwrap();
+            }
+            "baseline" => {
+                let text = std::fs::read_to_string(dir.join("rules.toml")).unwrap();
+                let text = text.split("\n[[baseline]]\nid = \"issuer_guidance\"").next().unwrap();
+                replace_record_rules(&fixture, text);
+            }
+            _ => unreachable!(),
+        }
+        let (exit, refused, text) = invoke(&record_check_args(&fixture));
+        assert_ne!(exit, 0, "{change}: {text}");
+        assert_eq!(at(&refused, &["payload"]), &Json::Null);
+    }
+}
+
+#[test]
+fn cli_record_check_refuses_impossible_labels_and_integer_second_proof_windows() {
+    let fixture = prepared_record_fixture();
+    let dir = fixture.root.join("record");
+    let rules = std::fs::read_to_string(dir.join("rules.toml")).unwrap();
+    let path = dir.join("manifest.toml");
+    let manifest = std::fs::read_to_string(&path).unwrap();
+    for cutoff in ["2030-12-31T23:59:59Z", "2031-01-01T00:00:00Z"] {
+        std::fs::write(&path, manifest.replace(CUT, cutoff)).unwrap();
+        let (exit, refused, text) = invoke(&record_check_args(&fixture));
+        assert_ne!(exit, 0, "{text}");
+        assert_eq!(at(&refused, &["refusal", "code"]).as_str(), Some("FMINE-REF-206"));
+    }
+    std::fs::write(&path, manifest.replace("label = \"nowcast\"", "label = \"forecast\"")).unwrap();
+    replace_record_rules(&fixture, &rules.replace("2030-10-01T00:00:00Z", "2030-10-03T00:00:01Z"));
+    let (exit, refused, text) = invoke(&record_check_args(&fixture));
+    assert_ne!(exit, 0, "{text}");
+    assert_eq!(at(&refused, &["refusal", "code"]).as_str(), Some("FMINE-REF-206"));
+    replace_record_rules(&fixture, &rules.replace("2030-10-01T00:00:00Z", "2030-10-03T00:00:02Z"));
+    let (exit, _, text) = invoke(&record_check_args(&fixture));
+    assert_eq!(exit, 0, "one possible second before the nowcast boundary: {text}");
+}
+
+#[test]
+fn cli_record_check_handles_post_quarter_drafts_without_opening_future_outcomes() {
+    let fixture = prepared_record_fixture();
+    let dir = fixture.root.join("record");
+    let rules = std::fs::read_to_string(dir.join("rules.toml")).unwrap()
+        .replace("fy_minus_9m", "quarter_qtd_nowcast")
+        .replace("q4_qtd", "quarter_qtd_nowcast")
+        .replace("2030-10-01T00:00:00Z", "2031-01-01T00:00:00Z")
+        .replace("2030-12-31T23:59:59Z", "2031-01-14T23:59:59Z")
+        .replacen("[[target]]",
+            "earliest_outcome_release_utc = \"2031-01-15T00:00:00Z\"\noutcome_release_basis = \"Synthetic preliminary release\"\n\n[[target]]", 1);
+    replace_record_rules(&fixture, &rules);
+    let manifest_path = dir.join("manifest.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace(CUT, "2031-01-02T00:00:00Z");
+    std::fs::write(&manifest_path, &manifest).unwrap();
+    let registry_path = fixture.root.join("registries/sources/synthetic.toml");
+    let mut registry = std::fs::read_to_string(&registry_path).unwrap();
+    // Metadata for an outcome deliberately absent on disk; it supplies a publication boundary only.
+    writeln!(registry,
+        "\n[[source]]\nfile = \"Future_Q4.xlsx\"\nkind = \"mine_stats\"\nquarter = \"2030Q4\"\n\
+         path = \"Future_Q4.xlsx\"\nurl_basis = \"fetched and verified 2031-01-15\"\n\
+         bytes = 1\nsha256 = \"{}\"\npublished_at = \"2031-01-15\"\n\
+         published_at_basis = \"FACT: invented outcome publication day\"\n",
+        sha256(b"x").to_hex()
+    ).unwrap();
+    std::fs::write(&registry_path, registry).unwrap();
+    let (exit, report, text) = invoke(&record_check_args(&fixture));
+    assert_eq!(exit, 0, "{text}");
+    assert_eq!(at(&report, &["payload", "outcomes_read"]).as_bool(), Some(false));
+    assert_eq!(at(&report, &["payload", "inputs"]).as_array().unwrap().len(), 3);
+    std::fs::write(&manifest_path, manifest.replace("label = \"nowcast\"", "label = \"forecast\"")).unwrap();
+    let (exit, refused, text) = invoke(&record_check_args(&fixture));
+    assert_ne!(exit, 0, "{text}");
+    assert_eq!(at(&refused, &["refusal", "code"]).as_str(), Some("FMINE-REF-206"));
+    std::fs::write(&manifest_path, manifest.replace("2031-01-02T00:00:00Z", "2031-01-15T00:00:00Z")).unwrap();
+    let (exit, refused, text) = invoke(&record_check_args(&fixture));
+    assert_ne!(exit, 0, "{text}");
+    assert_eq!(at(&refused, &["refusal", "code"]).as_str(), Some("FMINE-REF-206"));
+}
+
 #[test]
 fn seasonal_cli_builds_a_distinct_source_bound_forecast_with_complete_off_season_audit() {
     let rules = RULES
