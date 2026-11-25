@@ -98,7 +98,7 @@ pub const VERB_CATALOG: [VerbSpec; 85] = [
         path: "metrics waterfall",
         subsystem: "Bullion",
         mutates_authority: false,
-        description: "Explain public AISC changes between two explicitly selected original quarterly releases, retaining source Claims, rounding enclosures, printed-rate gaps and named refusals",
+        description: "Explain public AISC or TCC changes between two explicitly selected original quarterly releases, retaining source Claims, rounding enclosures, printed-rate gaps and named refusals",
     },
     VerbSpec {
         path: "compare",

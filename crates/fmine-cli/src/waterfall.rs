@@ -1,4 +1,4 @@
-//! DESIGN (BD-333): explicitly selected, source-bound quarterly public AISC bridges.
+//! DESIGN (BD-064, BD-333): selected, source-bound quarterly public AISC and TCC bridges.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -7,14 +7,16 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_metrics::lmdi::WATERFALL_NO_CLAIM;
 use fmine_public::key::{Period, PeriodKind, parse_period_code};
 use fmine_public::sources::{SourceKind, is_issuer_name, load_issuer_profile};
-use fmine_public::waterfall::{BarPoint, WaterfallReport, pair_sites_between};
+use fmine_public::waterfall::{
+    BarPoint, WaterfallMetric, WaterfallReport, pair_sites_between_for_metric,
+};
 use fmine_public::{Lane, assess, load_registered_sources};
 
 use crate::guidance::{number, text};
 use crate::{Envelope, NextAction, json_string as js};
 
 pub const USAGE: &str =
-    "metrics waterfall --issuer <issuer> --from YYYYQn --to YYYYQn [--site <subject>]";
+    "metrics waterfall --issuer <issuer> --from YYYYQn --to YYYYQn [--site <subject>] [--metric aisc|tcc]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -22,6 +24,7 @@ pub struct Command {
     pub from: Period,
     pub to: Period,
     pub site: Option<String>,
+    pub metric: WaterfallMetric,
 }
 
 fn quarter(value: &str) -> Result<Period, String> {
@@ -40,7 +43,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     {
         return Err(USAGE.into());
     }
-    let (mut issuer, mut from, mut to, mut site) = (None, None, None, None);
+    let (mut issuer, mut from, mut to, mut site, mut metric) = (None, None, None, None, None);
     let mut i = 2;
     while i < args.len() {
         let flag = args[i].as_str();
@@ -49,6 +52,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             "--from" => &mut from,
             "--to" => &mut to,
             "--site" => &mut site,
+            "--metric" => &mut metric,
             _ => return Err(format!("metrics waterfall: unknown option {flag}; {USAGE}")),
         };
         let value = args
@@ -72,17 +76,24 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     if from >= to {
         return Err("metrics waterfall requires --from earlier than --to".into());
     }
+    let metric = match metric.as_deref() {
+        None | Some("aisc") => WaterfallMetric::Aisc,
+        Some("tcc") => WaterfallMetric::TotalCashCost,
+        Some(_) => return Err("metrics waterfall --metric must be aisc or tcc".into()),
+    };
     Ok(Command {
         issuer,
         from,
         to,
         site,
+        metric,
     })
 }
 
 fn markdown(command: &Command, report: &WaterfallReport) -> String {
     let mut out = format!(
-        "# Quarterly AISC cost bridge\n\n{}: {} to {}.\n\nOnly each selected quarter's original registered release supplies its bridge inputs. Earlier original Mine Stats releases from each selected year support the existing cumulative identity checks. Later comparative columns never fill a missing original. Amounts below are USD per sold gold ounce. Rounding enclosures are not confidence intervals.\n\nDigest: {}.\n\n",
+        "# Quarterly {} cost bridge\n\n{}: {} to {}.\n\nOnly each selected quarter's original registered release supplies its bridge inputs. Earlier original Mine Stats releases from each selected year support the existing cumulative identity checks. Later comparative columns never fill a missing original. Amounts below are USD per sold gold ounce. Rounding enclosures are not confidence intervals.\n\nDigest: {}.\n\n",
+        command.metric.display_name(),
         text(&command.issuer),
         command.from.code(),
         command.to.code(),
@@ -182,7 +193,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             Lane::Public
         };
         let snapshot = assess(&profile, lane, sources);
-        let mut report = pair_sites_between(
+        let mut report = pair_sites_between_for_metric(
             &profile,
             &snapshot.sources,
             &snapshot.mine_stats,
@@ -190,6 +201,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             &snapshot.instances,
             &snapshot.mine_ledger,
             (command.from, command.to),
+            command.metric,
         )?;
         if let Some(site) = &command.site {
             report.pairs.retain(|pair| &pair.subject == site);
@@ -200,8 +212,16 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                 ));
             }
         }
+        let (schema, metric_field) = match command.metric {
+            WaterfallMetric::Aisc => ("fmine.selected-waterfall.v1", String::new()),
+            WaterfallMetric::TotalCashCost => (
+                "fmine.selected-waterfall.v2",
+                format!("\"metric\":{},", js(command.metric.as_str())),
+            ),
+        };
         let payload = format!(
-            "{{\"schema\":\"fmine.selected-waterfall.v1\",\"issuer\":{},\"lane\":{},\"from\":{},\"to\":{},\"site\":{},\"waterfall_digest\":{},\"waterfall\":{}}}",
+            "{{\"schema\":{},{metric_field}\"issuer\":{},\"lane\":{},\"from\":{},\"to\":{},\"site\":{},\"waterfall_digest\":{},\"waterfall\":{}}}",
+            js(schema),
             js(&command.issuer),
             js(if lane == Lane::Synthetic {
                 "synthetic"
@@ -265,6 +285,45 @@ mod tests {
         assert_eq!(selected.from.code(), "2030Q4");
         assert_eq!(selected.to.code(), "2031Q1");
         assert_eq!(selected.site.as_deref(), Some("North Mara"));
+        assert_eq!(selected.metric, WaterfallMetric::Aisc);
+    }
+
+    #[test]
+    fn cost_metric_selection_is_explicit_and_defaults_to_aisc() {
+        let base = args(&[
+            "--issuer",
+            "barrick",
+            "--from",
+            "2030Q4",
+            "--to",
+            "2031Q1",
+        ]);
+        let default = parse(&base).unwrap();
+        for (name, metric) in [
+            ("aisc", WaterfallMetric::Aisc),
+            ("tcc", WaterfallMetric::TotalCashCost),
+        ] {
+            let mut input = base.clone();
+            input.extend(["--metric".into(), name.into()]);
+            let parsed = parse(&input).unwrap();
+            assert_eq!(parsed.metric, metric);
+            if metric == WaterfallMetric::Aisc {
+                assert_eq!(parsed, default);
+            }
+            let (routed, _, _) = crate::parse_args(&input, Path::new(".")).unwrap();
+            assert_eq!(routed, crate::CliCommand::MetricsWaterfall(parsed));
+        }
+        for tail in [
+            vec!["--metric"],
+            vec!["--metric", "c1"],
+            vec!["--metric", "TCC"],
+            vec!["--metric", "tcc", "--metric", "aisc"],
+        ] {
+            let mut input = base.clone();
+            input.extend(tail.into_iter().map(str::to_string));
+            let (envelope, _) = crate::invoke(&input, Path::new("."));
+            assert_eq!(envelope.exit_code, 2, "{}", envelope.to_json());
+        }
     }
 
     #[test]

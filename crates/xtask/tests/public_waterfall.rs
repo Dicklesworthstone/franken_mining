@@ -15,7 +15,8 @@ use fmine_numerics::exact_feas::Rat;
 use fmine_public::key::{Period, PeriodKind, parse_period_code};
 use fmine_public::sources::{IssuerProfile, RegisteredShare, SourceKind, load_issuer_profile};
 use fmine_public::waterfall::{
-    BarPoint, Bridge, PairOutcome, WaterfallReport, pair_sites, pair_sites_between,
+    BarPoint, Bridge, PairOutcome, WaterfallMetric, WaterfallReport, pair_sites, pair_sites_between,
+    pair_sites_between_for_metric,
 };
 use fmine_public::{
     Lane, LoadedSource, PublicAssuranceReport, assess, load_registered_sources, synthetic,
@@ -296,6 +297,219 @@ fn selected(
 
 fn quarter(code: &str) -> Period {
     parse_period_code(code).unwrap()
+}
+
+fn selected_metric(
+    profile: &IssuerProfile,
+    report: &PublicAssuranceReport,
+    metric: WaterfallMetric,
+) -> WaterfallReport {
+    pair_sites_between_for_metric(
+        profile,
+        &report.sources,
+        &report.mine_stats,
+        &report.public_claims,
+        &report.instances,
+        &report.mine_ledger,
+        (quarter("2030Q2"), quarter("2031Q2")),
+        metric,
+    )
+    .unwrap()
+}
+
+#[test]
+fn tcc_waterfall_recovers_selected_rate_and_signed_first_block_known_answers() {
+    let (profile, mut sources) = fixture(|_, _| {});
+    let report = assess(&profile, Lane::Synthetic, sources.clone());
+    let explicit_aisc = selected_metric(&profile, &report, WaterfallMetric::Aisc);
+    assert_eq!(explicit_aisc.to_json(), report.waterfall.to_json());
+    assert_eq!(explicit_aisc.digest(), report.waterfall.digest());
+
+    let tcc = selected_metric(&profile, &report, WaterfallMetric::TotalCashCost);
+    assert_eq!(tcc.metric, WaterfallMetric::TotalCashCost);
+    assert_eq!(tcc.pairs.len(), 4);
+    assert_eq!(site(&tcc, "Lmdi Site").kind(), "lmdi");
+    assert_eq!(site(&tcc, "Heap Site").kind(), "additive_fallback");
+    assert_eq!(site(&tcc, "Zero Site").kind(), "refused");
+    assert_eq!(site(&tcc, "Basis Site").kind(), "refused");
+    for name in ["Lmdi Site", "Heap Site"] {
+        let result = bridge(&tcc, name);
+        assert_eq!(result.gap().total_delta, Rat::from_integer(250));
+        assert_eq!(result.gap().printed_rate_gap_0, Rat::from_integer(0));
+        assert_eq!(result.gap().printed_rate_gap_1, Rat::from_integer(0));
+        assert_eq!(result.gap().printed_rate_gap, Rat::from_integer(0));
+        assert!((result.bars().iter().map(|b| b.point.as_f64()).sum::<f64>() - 250.0).abs() < 1e-9);
+        for bar in result.bars() {
+            assert!(
+                bar.enclosure[0] <= bar.point.as_f64() && bar.point.as_f64() <= bar.enclosure[1]
+            );
+        }
+    }
+    let fallback = bridge(&tcc, "Heap Site");
+    let mut actual: Vec<_> = fallback
+        .bars()
+        .iter()
+        .map(|bar| match bar.point {
+            BarPoint::Exact(value) => value,
+            _ => panic!("exact TCC fallback"),
+        })
+        .collect();
+    actual.sort_by(|a, b| a.checked_cmp(*b).unwrap());
+    // Hand calculation: average inverse sales is 11/600; average TCC is 125/2.
+    // Gross change is 50, NCI change is -25 and inverse-sales change is -1/300.
+    assert_eq!(
+        actual,
+        vec![
+            Rat::new(-1375, 3).unwrap(),
+            Rat::new(-625, 3).unwrap(),
+            Rat::new(2750, 3).unwrap(),
+        ]
+    );
+    assert!(
+        fallback
+            .bars()
+            .iter()
+            .any(|bar| bar.id.contains("non-controlling interests"))
+    );
+    assert!(
+        fallback
+            .bars()
+            .iter()
+            .all(|bar| !bar.id.contains("total_cash_costs_aggregate"))
+    );
+    let inputs = &site(&tcc, "Lmdi Site").inputs;
+    for cell in ["B4", "B5", "B6", "B9", "B11"] {
+        assert!(
+            inputs
+                .iter()
+                .any(|input| input.locator == format!("2030_aisc.xlsx:Q2 2030!{cell}"))
+        );
+    }
+    assert!(inputs.iter().all(|input| {
+        !input.locator.contains("_aisc.xlsx:")
+            || !input
+                .locator
+                .rsplit_once('!')
+                .and_then(|(_, cell)| fmine_io::xlsx::parse_a1_ref(cell))
+                .is_some_and(|(row, _)| matches!(row, 7 | 8 | 10 | 12))
+    }));
+    let json = tcc.to_json();
+    assert!(json.contains("\"schema\":\"fmine.waterfall.v2\""));
+    assert!(json.contains("\"metric\":\"tcc\""));
+    assert!(json.contains("\"rules_version\":\"m0-tcc-waterfall/1\""));
+    assert!(json.contains("\"tcc_0\":"));
+    assert!(json.contains("\"printed_tcc_1\":"));
+    assert!(!json.contains("\"aisc_0\":"));
+    assert_ne!(tcc.digest(), explicit_aisc.digest());
+
+    sources.reverse();
+    let reordered = assess(&profile, Lane::Synthetic, sources);
+    let repeated = selected_metric(&profile, &reordered, WaterfallMetric::TotalCashCost);
+    assert_eq!(tcc.to_json(), repeated.to_json());
+    assert_eq!(tcc.digest(), repeated.digest());
+}
+
+#[test]
+fn tcc_waterfall_ignores_unselected_sustaining_and_printed_rate_failures() {
+    let (profile, sources) = fixture(|_, _| {});
+    let baseline = assess(&profile, Lane::Synthetic, sources);
+    let original = selected_metric(&profile, &baseline, WaterfallMetric::TotalCashCost);
+    for (cell, value) in [
+        ("C7", text("n/a")),
+        ("C8", number(999)),
+        ("C10", number(0)),
+        ("C12", number(0)),
+    ] {
+        let (profile, sources) = fixture(|file, sheets| {
+            if file == "2031_aisc.xlsx" {
+                replace(sheets, "Q2 2031", cell, value.clone());
+            }
+        });
+        let report = assess(&profile, Lane::Synthetic, sources);
+        if matches!(cell, "C7" | "C8") {
+            assert!(site(&report.waterfall, "Lmdi Site").outcome.is_err(), "{cell}");
+        }
+        let tcc = selected_metric(&profile, &report, WaterfallMetric::TotalCashCost);
+        let before = bridge(&original, "Lmdi Site");
+        let after = bridge(&tcc, "Lmdi Site");
+        assert_eq!(before.gap(), after.gap(), "{cell}");
+        assert_eq!(before.bars().len(), after.bars().len(), "{cell}");
+        for (a, b) in before.bars().iter().zip(after.bars()) {
+            assert_eq!(a.id, b.id, "{cell}");
+            assert_eq!(a.point, b.point, "{cell}");
+            assert_eq!(a.enclosure, b.enclosure, "{cell}");
+        }
+        // Arithmetic does not use these cells; the receipt still binds their workbook bytes.
+        assert_ne!(original.digest(), tcc.digest(), "{cell}");
+    }
+}
+
+#[test]
+fn tcc_waterfall_moves_with_reconciled_first_block_source_values() {
+    let (profile, sources) = fixture(|_, _| {});
+    let baseline = assess(&profile, Lane::Synthetic, sources);
+    let original = selected_metric(&profile, &baseline, WaterfallMetric::TotalCashCost);
+    let (profile, sources) = fixture(|file, sheets| {
+        if file == "2031_aisc.xlsx" {
+            for (cell, value) in [
+                ("C4", 180),
+                ("C5", -90),
+                ("C6", 90),
+                ("C8", 105),
+                ("C10", 1500),
+                ("C11", 1500),
+                ("C12", 1751),
+            ] {
+                replace(sheets, "Q2 2031", cell, number(value));
+            }
+        } else if file == "2031_stats.xlsx" {
+            for (sheet, cell, value) in [
+                ("Minestats1", "C10", 1500),
+                ("Minestats1", "C12", 1500),
+                ("Minestats1", "C13", 1751),
+                ("QTD", "E5", 1500),
+                ("QTD", "F5", 1500),
+                ("QTD", "G5", 1751),
+            ] {
+                replace(sheets, sheet, cell, number(value));
+            }
+        }
+    });
+    let report = assess(&profile, Lane::Synthetic, sources);
+    let changed = selected_metric(&profile, &report, WaterfallMetric::TotalCashCost);
+    let result = bridge(&changed, "Lmdi Site");
+    // Original TCC is 1000 USD/oz; the revised source gives 1000 * 90/60 = 1500.
+    assert_eq!(result.gap().total_delta, Rat::from_integer(500));
+    assert_eq!(result.gap().printed_rate_gap, Rat::from_integer(0));
+    assert!((result.bars().iter().map(|bar| bar.point.as_f64()).sum::<f64>() - 500.0).abs() < 1e-9);
+    assert_ne!(original.digest(), changed.digest());
+}
+
+#[test]
+fn tcc_waterfall_refuses_selected_values_and_changed_component_frontiers() {
+    for (cell, value) in [
+        ("C4", text("n/a")),
+        ("C6", number(95)),
+        ("C9", number(0)),
+        ("C11", text("n/a")),
+        ("A5", text("Other cash adjustment")),
+    ] {
+        let (profile, sources) = fixture(|file, sheets| {
+            if file == "2031_aisc.xlsx" {
+                replace(sheets, "Q2 2031", cell, value.clone());
+            }
+        });
+        let report = assess(&profile, Lane::Synthetic, sources);
+        let selected = selected_metric(&profile, &report, WaterfallMetric::TotalCashCost);
+        let subject = if cell == "A5" {
+            "Heap Site"
+        } else {
+            "Lmdi Site"
+        };
+        let outcome = site(&selected, subject);
+        assert!(outcome.outcome.is_err(), "{cell}");
+        assert!(!outcome.context.is_empty(), "{cell}");
+    }
 }
 
 // The known quantities are unchanged; both original workbook bodies and their release metadata name
@@ -612,10 +826,36 @@ fn explicit_waterfall_cli_reads_registered_workbooks_and_preserves_citations() {
         envelope.to_json(),
         fmine_cli::invoke(&args, &root).0.to_json()
     );
+    let mut explicit_aisc = args.to_vec();
+    explicit_aisc.extend(["--metric".to_string(), "aisc".to_string()]);
+    assert_eq!(
+        envelope.to_json(),
+        fmine_cli::invoke(&explicit_aisc, &root).0.to_json()
+    );
+    let mut tcc_args = args.to_vec();
+    tcc_args.extend(["--metric".to_string(), "tcc".to_string()]);
+    let (tcc, _) = fmine_cli::invoke(&tcc_args, &root);
+    assert_eq!(tcc.exit_code, 0, "{}", tcc.to_json());
+    assert!(tcc.payload_json.contains("\"metric\":\"tcc\""));
+    assert!(tcc.payload_json.contains("\"kind\":\"lmdi\""));
+    assert!(tcc.payload_json.contains("\"exact\":\"250\""));
+    assert!(tcc.rendered_markdown.as_ref().unwrap().contains("# Quarterly TCC cost bridge"));
+    let tcc_citation = format!(r"2030\_aisc.xlsx:Q2 2030!B11; SHA-256 {original_hash}.");
+    assert!(
+        tcc.rendered_markdown
+            .as_ref()
+            .unwrap()
+            .lines()
+            .any(|line| line.starts_with("- Source Claim ") && line.ends_with(&tcc_citation))
+    );
+    assert_eq!(tcc.to_json(), fmine_cli::invoke(&tcc_args, &root).0.to_json());
     std::fs::write(root.join("corpus/2030_aisc.xlsx"), b"altered source").unwrap();
     let (refused, _) = fmine_cli::invoke(&args, &root);
     assert_eq!(refused.exit_code, 8, "{}", refused.to_json());
     assert_eq!(refused.refusal.unwrap().code, "FMINE-REF-505");
+    let (refused_tcc, _) = fmine_cli::invoke(&tcc_args, &root);
+    assert_eq!(refused_tcc.exit_code, 8, "{}", refused_tcc.to_json());
+    assert_eq!(refused_tcc.refusal.unwrap().code, "FMINE-REF-505");
 }
 
 #[test]

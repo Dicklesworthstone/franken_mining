@@ -74,7 +74,7 @@ pub enum CliCommand {
     MetricsCost(cost::Command),
     /// Compare unchanged production quantities under explicit named and versioned price decks.
     MetricsGeo(geo::Command),
-    /// Explain a selected change in public AISC using the original releases for two quarters.
+    /// Explain public AISC or TCC changes using two quarters' original releases.
     MetricsWaterfall(waterfall::Command),
     /// Assess capital return with explicit earnings definitions, dated balances and source evidence.
     CapitalReturn(capital_return::Command),
