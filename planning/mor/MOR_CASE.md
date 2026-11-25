@@ -2027,3 +2027,16 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     matching roots and rejected each local negative control (wrong Q2, wrong Q3 and missing Q3).
     Bash syntax, ShellCheck and Actionlint passed. The Linux namespace step remains on Linux, and
     macOS runs the registered-workbook stages. The hosted Ubuntu/macOS comparison is still due.
+
+- **E874** Runtime citation checks for rendered ledger exceptions (FACT, 2026-11-25 UTC, bd-sjrh.2).
+  - The previous typed validator accepted a changed hidden-sheet total and a divergent visible
+    footing certificate. `hidden_exception_operands_must_match_the_loaded_sheet` and
+    `rendered_footing_certificate_must_match_its_calculation_and_operands` reproduced both cases.
+  - The existing validator now resolves operands of rendered hidden exceptions and checks their
+    cached arithmetic. In both scopes the printed total, component sum, residual, cell references
+    and first sign-flip witness must agree with the checked calculation and its operands. Each
+    planted mutation now refuses with `FMINE-REF-208` at the relevant exception path.
+  - All 13 citation tests passed. Native CLI JSON was byte-identical to the E873 receipts for both
+    source epochs. Each run included 19 hidden exceptions and five footing discrepancy certificates
+    (four visible, one hidden). The pinned anchors and state roots matched. The universal CLI
+    citation coverage gate remains open.
