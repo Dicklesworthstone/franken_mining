@@ -25,14 +25,18 @@ def change(text, key, value):
     return changed
 
 
-def command(text, success=True):
+def invoke(text, mode, success=True):
     MODEL.write_text(text)
     run = subprocess.run(
-        [str(BINARY), "decide", "card", str(MODEL), "--workspace", str(REPO), "--json"],
+        [str(BINARY), "decide", "card", str(MODEL), "--workspace", str(REPO), mode],
         capture_output=True, text=True, check=False,
     )
     assert (run.returncode == 0) == success, (run.returncode, run.stdout, run.stderr)
-    return json.loads(run.stdout)
+    return run.stdout
+
+
+def command(text, success=True):
+    return json.loads(invoke(text, "--json", success))
 
 
 def check(text):
@@ -126,7 +130,38 @@ for cap in ["0/1", "1/100", "1/20", "1/1"]:
     text = change(change(BASE, "screen", '"wasserstein"'), "max_breach_probability", json.dumps(cap)) + geometry
     check(text)
 
+def fee_preview(text, expected, current_outcome, at_ceiling, above_ceiling):
+    brief = invoke(text, "--brief")
+    row = next((row for row in brief.splitlines() if "Nominal downside fee headroom" in row), None)
+    assert row is not None, brief
+    assert f"Up to {expected} USD more in test fees" in row
+    assert f"current {current_outcome} USD outcome reaches the payoff floor" in row
+    assert (f"Breach probability is {at_ceiling} at the ceiling and "
+            f"{above_ceiling} immediately above it.") in row
+
+
+# This policy has P(net=-51)=1/100 and P(net=-1)=69/100. At +9 the -1 outcome
+# becomes -10, which is a tie with the floor. One 0.0001 USD step more breaches.
+fee_preview(BASE, 9, -1, "1/100", "7/10")
+at_ceiling = change(BASE, "test_cost", '"10"')
+above_ceiling = change(BASE, "test_cost", '"10.0001"')
+fee_preview(at_ceiling, 0, -10, "1/100", "7/10")
+at_report = check(at_ceiling)["payload"]["card"]["summary"]["downside"]["policy_optimization"]
+above_report = check(above_ceiling)["payload"]["card"]["summary"]["downside"]["policy_optimization"]
+assert at_report["overall"]["winners"] == [{"kind": "information_option", "id": "testwork"}]
+assert above_report["options"][0]["optimum"] is None
+assert "Nominal downside fee headroom" not in invoke(above_ceiling, "--brief")
+
+# The fixed EV policy acts after medium as well as strong. Its original breach
+# mass is exactly the allowed 1/10. A separate USD 2 delay charge stays fixed.
+fixed = re.sub(r"(?s)\n\[\[policy_optimization\]\].*?(?=\n\[\[uu\]\])", "", BASE)
+fixed = change(change(fixed, "max_breach_probability", '"1/10"'), "delay_cost", '"2"')
+fee_preview(fixed, 7, -3, "1/10", "3/5")
+assert "allows any additional fee" in invoke(change(BASE, "max_breach_probability", '"1/1"'), "--brief")
+stressed = change(change(BASE, "screen", '"wasserstein"'), "max_breach_probability", '"1/1"') + geometry
+assert "Nominal downside fee headroom" not in invoke(stressed, "--brief")
+
 for key in ["max_policies", "max_work"]:
     refused = command(change(BASE, key, "1"), success=False)
     assert refused["payload"] is None and "no policy optimum" in refused["refusal"]["what"]
-print("PASS: 29 exact policy laws, nominal and two-state Wasserstein constraints, ties, infeasible sets, act-now comparisons, deterministic output and work-budget refusals")
+print("PASS: 31 exact policy laws and fee-preview controls, nominal and two-state Wasserstein constraints, ties, infeasible sets, act-now comparisons, deterministic output and work-budget refusals")

@@ -3,10 +3,15 @@
 
 use std::fmt::Write as _;
 
-use super::downside::PolicyScreen;
-use super::information::{ChoiceKind, InformationStats};
-use super::render::{md, short_decimal};
-use super::{AlternativeStats, EvaluatedCard, ExactMoney, Result, arithmetic, currency_name};
+use fmine_numerics::risk::exact::compare;
+use fmine_units::Money;
+
+use super::downside::{DownsideLimit, PolicyScreen};
+use super::information::{ChoiceKind, InformationStats, PolicyRisk};
+use super::render::{md, ratio, short_decimal};
+use super::{
+    AlternativeStats, EvaluatedCard, ExactMoney, ONE, Rat, Result, ZERO, arithmetic, currency_name,
+};
 
 /// The action-specific range and the first uniform extra cost that would tie another act-now choice.
 /// A missing challenger means the admitted comparison contained just one feasible action.
@@ -59,6 +64,74 @@ fn write_fixed_responses(out: &mut String, heading: &str, option: &InformationSt
             ))
         }),
     );
+}
+
+struct FeeHeadroom {
+    extra_fee: Rat,
+    limiting_payoff: Rat,
+    breach_at_ceiling: Rat,
+    breach_above_ceiling: Rat,
+}
+
+fn nominal_fee_headroom(limit: &DownsideLimit, policy: &PolicyRisk) -> Result<Option<FeeHeadroom>> {
+    if limit.max_breach_probability == ONE {
+        return Ok(None);
+    }
+    let floor = arithmetic(Rat::new(limit.floor.minor, Money::SCALE))?;
+    let mut breached = ZERO;
+    // The admitted law has one bin per payoff in ascending order. When a uniform fee
+    // moves this bin to the floor, only the earlier bins breach the strict floor.
+    for bin in &policy.distribution {
+        let next = arithmetic(breached.checked_add(bin.probability))?;
+        if compare(next, limit.max_breach_probability).is_gt() {
+            let extra_fee = arithmetic(bin.net_payoff.major.checked_sub(floor))?;
+            if extra_fee.signum() >= 0 {
+                return Ok(Some(FeeHeadroom {
+                    extra_fee,
+                    limiting_payoff: bin.net_payoff.major,
+                    breach_at_ceiling: breached,
+                    breach_above_ceiling: next,
+                }));
+            }
+            break;
+        }
+        breached = next;
+    }
+    Err(super::refusal(
+        fmine_evidence::RefusalCode::NumericalCertificateFailed207,
+        "eligible test policy has no nonnegative fee boundary for the declared nominal cap",
+    ))
+}
+
+fn write_fee_headroom(out: &mut String, option: &str, limit: &DownsideLimit, policy: &PolicyRisk) {
+    let option = md(option);
+    let currency = currency_name(limit.floor.ccy);
+    match nominal_fee_headroom(limit, policy) {
+        Ok(Some(boundary)) => {
+            let _ = writeln!(
+                out,
+                "**Nominal downside fee headroom for {option}.** Up to {} {currency} more in test fees with responses and delay cost held fixed. The current {} {currency} outcome reaches the payoff floor at that fee. Breach probability is {} at the ceiling and {} immediately above it. Recheck the economic ranking at the revised fee.\n",
+                short_decimal(boundary.extra_fee),
+                short_decimal(boundary.limiting_payoff),
+                ratio(boundary.breach_at_ceiling),
+                ratio(boundary.breach_above_ceiling)
+            );
+        }
+        Ok(None) => {
+            let _ = writeln!(
+                out,
+                "**Nominal downside fee headroom for {option}.** The 100% nominal cap allows any additional fee for this policy. Recheck the economic ranking at the revised fee.\n"
+            );
+        }
+        Err(e) => {
+            let _ = writeln!(
+                out,
+                "**Nominal downside fee headroom for {option}.** Unavailable ({}). {}\n",
+                e.code,
+                md(&e.what)
+            );
+        }
+    }
 }
 
 impl EvaluatedCard {
@@ -153,6 +226,9 @@ impl EpistemicOnePager<'_> {
                                 Some((signal.as_str(), action.as_deref()?))
                             }),
                         );
+                        if search.configuration.screen == PolicyScreen::Nominal {
+                            write_fee_headroom(&mut out, &winner.id, &risk.limit, &policy.risk);
+                        }
                     }
                 }
             } else if let Some(info) = &s.information {
@@ -173,6 +249,14 @@ impl EpistemicOnePager<'_> {
                         .any(|w| w.kind == ChoiceKind::InformationOption && w.id == o.option_id)
                 }) {
                     write_fixed_responses(&mut out, heading, option);
+                    if risk.robust.is_none() {
+                        write_fee_headroom(
+                            &mut out,
+                            &option.option_id,
+                            &risk.limit,
+                            &option.policy_risk,
+                        );
+                    }
                 }
             }
             out.push_str("## Unrestricted nominal comparison\n\n");
