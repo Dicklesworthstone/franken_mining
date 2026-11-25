@@ -728,6 +728,11 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `toposort::pcpsp::planning::{solve, solve_with_guidance}`, `Options` (`rounds`, `bound_steps`, `share_decimals`), `CandidateAssessment` (`checked`, `discounted_numerator`), `GuidanceSearch` (`starts`, `searched`, `polished`, `best_numerator`) and `Plan` (`schedule`, `checked`, `discounted_numerator`, `origin`, `factors`, `heuristic`, `candidate`, `guidance`, `bound`, `gap_numerator`). Guidance never replaces the independent exact checks or the full-model numerical certificate.
 - `toposort::lp::relaxation`, `toposort::lp::Relaxation` (`cost`, `matrix`, `row_lo`, `row_hi`, `col_lo`, `col_hi`), `toposort::lp::Shares` (`new`, `blocks`, `periods`, `share`, `expected`, `medians`), `toposort::lp::starts`, `toposort::lp::Start` (`threshold`, `released`, `schedule`), `toposort::lp::incumbent`, `toposort::lp::Incumbent` (`searched`, `best`, `schedule`), `toposort::lp::THRESHOLDS`. `Shares::ranks` is crate-only: `starts` takes its thresholds from `THRESHOLDS`, and a public bare-`f64` threshold would need an L-6 exception.
 - `toposort::lp::lagrangian_value`, `toposort::lp::LagrangianValue` (`bound`, `shift`, `schedule`, `used`), `toposort::lp::lagrangian_bound`, `toposort::lp::Lagrangian` (`bound`, `prices`, `history`), `toposort::lp::STALL` (`bd-oq7d`). Prices and target are integers; no public parameter is a bare `f64` (L-6).
+- DESIGN (bd-zgqi): `plan_cert::certify_whole_block_schedule` replays the declared discount,
+  primal feasibility, integer objective and full-model Lagrangian prices. It binds scaled block
+  values, precedence, periods, resource uses, limits and discount in the model digest. The witness
+  digest binds the selected periods and the replayed bound and prices. The objective denominator
+  is the base value scale times `DISCOUNT_SCALE`.
 - `toposort::pcpsp::lp::scope`, `toposort::pcpsp::lp::Scope` (`blocks`, `pit_blocks`, `pit_value`, `whole`), `toposort::pcpsp::lp::relaxation`, `toposort::pcpsp::lp::Solution` (`new`, `shares`, `destinations`), `toposort::pcpsp::lp::starts`, `toposort::pcpsp::lp::Start` (`threshold`, `released`, `schedule`, `destination`), `toposort::pcpsp::lp::incumbent`, `toposort::pcpsp::lp::Incumbent` (`searched`, `best`, `chosen`)
 
 ## 12. Proof obligations

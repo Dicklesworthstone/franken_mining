@@ -1503,6 +1503,23 @@ eight-million-arc bound before slope construction. Unsupported geometry, ambiguo
 or capacity attributes, invalid candidate periods and oversized expansions refuse. OMF schedules use one
 destination per block; the MineLib path above provides destination splits and optional LP guidance.
 
+#### Share the schedule and its checked bound
+
+Pass the currency already used by the block values and choose a planning horizon. The command
+exports the same scaled incumbent and integer Lagrangian upper bound shown in its report.
+
+```bash
+fmine plan schedule --omf model.omf --spec schedule.json \
+  --certificate-currency USD --certificate-horizon tactical --json \
+  | jq -er '.payload.plan_certificate.bytes_hex' | xxd -r -p > schedule.plancert
+fmine-verify plancert schedule.plancert --inputs-dir .
+```
+
+The certificate binds the OMF archive, JSON declaration and any imported LP value files by
+workspace-relative path and SHA-256. Share those exact files with the certificate. A schedule
+selected from LP guidance still uses the replayed integer bound. The MPS-only export is a
+separate command mode. Sampling, VSS and calibration are unmeasured.
+
 #### Solve the OMF relaxation with an external solver
 
 Export the source-bound LP without running the schedule search:

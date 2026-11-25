@@ -130,3 +130,21 @@ pub(super) fn render(cert: &PlanCertificate) -> Result<(String, String), Refusal
         ),
     ))
 }
+
+pub(super) fn attach(
+    cert: &PlanCertificate,
+    json: &mut String,
+    markdown: &mut String,
+) -> Result<(), Refusal> {
+    let (cert_json, cert_markdown) = render(cert)?;
+    if json.pop() != Some('}') {
+        return Err(Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            "cannot attach a plan certificate to a malformed report",
+        ));
+    }
+    json.push_str(&cert_json);
+    json.push('}');
+    markdown.push_str(&cert_markdown);
+    Ok(())
+}

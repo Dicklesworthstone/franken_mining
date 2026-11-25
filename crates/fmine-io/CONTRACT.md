@@ -81,6 +81,10 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   are in `xtask/tests/omf_schedule_cli.rs`. This is a
   deterministic declared-model certificate, with no LP-guidance, multi-destination or operational claim.
   `omf::pit_report` similarly owns the source-bound ultimate-pit report used by the CLI.
+- DESIGN (bd-zgqi): `omf::scheduling::evaluate_with_witness` retains the exact scaled problem,
+  integer factors, selected whole-block incumbent and Lagrangian prices for a portable certificate.
+  It uses the same selected plan when imported primal guidance wins. The binary64 LP bound remains
+  a distinct report value and never enters the portable integer certificate.
 - DESIGN: `omf::shells_report::evaluate` binds an OMF archive and strict `fmine.omf-shells.v1`
   declaration, admits matching nonempty revenue/cost unit labels, and runs `PitModel::shells` for
   1..64 strictly increasing exact positive rational factors. No unit conversion or factor sorting is

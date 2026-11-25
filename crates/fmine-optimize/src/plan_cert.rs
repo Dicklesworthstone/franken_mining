@@ -1,6 +1,6 @@
 //! Determinism: BitwisePortable (`i64` / `i128` integer arithmetic and SHA-256 only; no floating point or threads).
 //!
-//! Three-gap `PlanCertificate` builders wired directly to `pitflow` and `toposort::pcpsp::planning`
+//! Three-gap `PlanCertificate` builders for closure pits, whole-block and split schedules
 //! (`BD-253`, `GOAL-010`, `NS-16`, plan §15.2).
 //!
 //! Every constructor independently re-verifies the primal feasibility, objective value, and dual/closure
@@ -19,7 +19,8 @@ use fmine_evidence::{Refusal, RefusalCode};
 use crate::pitflow::{self, ClosureProblem, PitSolution};
 use crate::toposort::cpit::RATE_SCALE;
 use crate::toposort::pcpsp::{self, PcpspModel};
-use crate::toposort::search::{DISCOUNT_SCALE, discount_factors};
+use crate::toposort::search::{DISCOUNT_SCALE, discount_factors, discounted_value};
+use crate::toposort::{ScheduleProblem, check, lp};
 
 /// Caller-supplied plan metadata, sampling/VSS gaps, and calibration status for [`PlanCertificate`] sealing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +39,105 @@ pub struct PlanCertMetadata {
     pub calibration: PlanCalibrationStatus,
     pub inputs: Vec<InputDigest>,
     pub extra_refusal_codes: Vec<String>,
+}
+
+/// Recheck a whole-block schedule and full-model Lagrangian bound before sealing it.
+/// `meta.value_scale_denominator` is the base value scale before discounting.
+///
+/// # Errors
+/// Refuses inconsistent discount factors, an infeasible or misvalued schedule, unreplayable
+/// prices or a mismatched bound, and invalid certificate metadata.
+pub fn certify_whole_block_schedule(
+    meta: &PlanCertMetadata,
+    problem: &ScheduleProblem,
+    discount: [i64; 2],
+    factors: &[i64],
+    schedule: &[Option<u32>],
+    primal: i128,
+    bound: &lp::Lagrangian,
+) -> Result<PlanCertificate, Refusal> {
+    let failed = |detail| Refusal::new(RefusalCode::NumericalCertificateFailed207, detail);
+    if factors != discount_factors(discount[0], discount[1], problem.periods())? {
+        return Err(failed(
+            "plan_cert: discount factors disagree with the declared rate",
+        ));
+    }
+    if !check(problem, schedule)?.feasible()
+        || discounted_value(problem, schedule, factors)? != primal
+    {
+        return Err(failed(
+            "plan_cert: whole-block schedule failed feasibility or value replay",
+        ));
+    }
+    let upper = lp::lagrangian_value(problem, factors, &bound.prices)?.bound;
+    if upper != bound.bound || upper < primal {
+        return Err(failed(
+            "plan_cert: whole-block Lagrangian bound failed replay",
+        ));
+    }
+    let denominator = meta
+        .value_scale_denominator
+        .checked_mul(DISCOUNT_SCALE as u128)
+        .ok_or_else(|| failed("plan_cert: value and discount scale product overflows u128"))?;
+
+    let mut model = Encoder::new_frame(*b"WBPM", 1);
+    model.put_bytes(closure_model_digest(problem.blocks()).as_bytes());
+    model.put_u64(problem.periods() as u64);
+    model.put_i64(discount[0]);
+    model.put_i64(discount[1]);
+    for &factor in factors {
+        model.put_i64(factor);
+    }
+    model.put_u64(problem.resources() as u64);
+    for resource in 0..problem.resources() {
+        // DESIGN: ScheduleProblem fixes these lengths to blocks and periods at construction.
+        for &qty in problem.usage(resource).unwrap_or(&[]) {
+            model.put_i64(qty);
+        }
+        for &limit in problem.limits(resource).unwrap_or(&[]) {
+            model.put_i64(limit);
+        }
+    }
+
+    let mut witness = Encoder::new_frame(*b"WBLG", 1);
+    witness.put_u64(schedule.len() as u64);
+    for &period in schedule {
+        witness.put_u32(period.unwrap_or(u32::MAX));
+    }
+    witness.put_i128(upper);
+    witness.put_u64(bound.prices.len() as u64);
+    for row in &bound.prices {
+        witness.put_u64(row.len() as u64);
+        for &price in row {
+            witness.put_i64(price);
+        }
+    }
+
+    PlanCertificate::build(PlanCertificateRequest {
+        plan_id: meta.plan_id.clone(),
+        horizon: meta.horizon,
+        code_revision: meta.code_revision.clone(),
+        model_digest: sha256(&model.finish()),
+        opt_set_id: meta.opt_set_id.clone(),
+        currency_code: meta.currency_code.clone(),
+        value_scale_denominator: denominator,
+        primal_scaled: primal,
+        bound: Some(CertifiedBound {
+            lower_scaled: upper,
+            upper_scaled: upper,
+            kind: BoundKind::Lagrangian {
+                iters: u32::try_from(bound.history.len().max(1)).unwrap_or(u32::MAX),
+            },
+            witness_digest: sha256(&witness.finish()),
+            verifier_id: "fmine-optimize::toposort::lp::lagrangian_value".into(),
+        }),
+        saa: meta.saa.clone(),
+        vss: meta.vss.clone(),
+        calibration: meta.calibration.clone(),
+        inputs: meta.inputs.clone(),
+        refusal_codes: meta.extra_refusal_codes.clone(),
+    })
+    .map_err(map_cert_error)
 }
 
 fn map_cert_error(err: PlanCertError) -> Refusal {
@@ -408,6 +508,44 @@ mod tests {
         .expect("uncalibrated pit cert");
         assert_eq!(uncal.opt_gap_numerator, Some(0));
         assert_eq!(uncal.color, PlanColor::Estimated);
+    }
+
+    #[test]
+    fn test_whole_block_certificate_refuses_changed_proof_inputs() {
+        let closure = ClosureProblem::from_requirements(vec![-4, 10], &[vec![], vec![0]])
+            .expect("valid closure");
+        let problem = ScheduleProblem::new(closure, 2, vec![vec![1, 1]], vec![vec![1, 1]])
+            .expect("valid schedule problem");
+        let discount = [1, 10];
+        let factors = discount_factors(discount[0], discount[1], 2).expect("valid rate");
+        let schedule = [Some(0), Some(1)];
+        let primal = -4 * i128::from(DISCOUNT_SCALE) + 10 * i128::from(factors[1]);
+        let bound = lp::lagrangian_bound(&problem, &factors, primal, 8).expect("bound");
+        let mut meta = base_meta(PlanCalibrationStatus::Uncalibrated);
+        meta.saa = None;
+        meta.value_scale_denominator = 100;
+        let build = |discount, schedule: &[Option<u32>], primal, bound: &lp::Lagrangian| {
+            certify_whole_block_schedule(
+                &meta, &problem, discount, &factors, schedule, primal, bound,
+            )
+        };
+        let cert = build(discount, &schedule, primal, &bound).expect("checked witness");
+        assert_eq!(cert.primal_scaled, primal);
+        assert_eq!(cert.value_scale_denominator, 100 * DISCOUNT_SCALE as u128);
+        assert_eq!(cert.opt_gap_numerator, Some(bound.bound - primal));
+        assert_eq!(cert.color, PlanColor::Estimated);
+        let wrong_bound = lp::Lagrangian {
+            bound: bound.bound + 1,
+            ..bound.clone()
+        };
+        for attempt in [
+            build([2, 10], &schedule, primal, &bound),
+            build(discount, &[Some(0), Some(0)], primal, &bound),
+            build(discount, &schedule, primal + 1, &bound),
+            build(discount, &schedule, primal, &wrong_bound),
+        ] {
+            assert_eq!(attempt.expect_err("bad proof").code, "FMINE-REF-207");
+        }
     }
 
     #[test]

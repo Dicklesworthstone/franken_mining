@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use fmine_evidence::{Refusal, RefusalCode};
+use fmine_evidence::Refusal;
 use fmine_io::{
     minelib_report,
     omf::{
@@ -197,16 +197,7 @@ fn append_certificate(
 ) -> Result<(), Refusal> {
     if let Some(meta) = meta {
         let certificate = certify_ultimate_pit(&meta, &witness.problem, &witness.solution)?;
-        let (cert_json, cert_markdown) = plan_certificate::render(&certificate)?;
-        if json.pop() != Some('}') {
-            return Err(Refusal::new(
-                RefusalCode::NumericalCertificateFailed207,
-                "plan pit: cannot attach a certificate to a malformed report",
-            ));
-        }
-        json.push_str(&cert_json);
-        json.push('}');
-        markdown.push_str(&cert_markdown);
+        plan_certificate::attach(&certificate, json, markdown)?;
     }
     Ok(())
 }

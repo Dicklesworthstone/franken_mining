@@ -3,13 +3,17 @@
 
 use std::path::{Path, PathBuf};
 
-use fmine_evidence::Refusal;
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::omf::{design_report, scheduling, shells_report};
 use scheduling::external_lp::{self, Request, ValueFiles};
 
-use crate::{Envelope, NextAction, worksheet_input};
+use crate::{
+    Envelope, NextAction,
+    plan_certificate::{self, CertificateBasis},
+    worksheet_input,
+};
 
-pub const USAGE: &str = "plan schedule --omf <model.omf> --spec <schedule.json> [--list-schedule] [--export-lp | --lp-sha256 <hex> [--lp-primal <values.txt>] [--lp-dual <values.txt>]]";
+pub const USAGE: &str = "plan schedule --omf <model.omf> --spec <schedule.json> [--list-schedule] [--export-lp | --lp-sha256 <hex> [--lp-primal <values.txt>] [--lp-dual <values.txt>]] [--certificate-currency CODE --certificate-horizon strategic|tactical|short_term]";
 pub const SHELLS_USAGE: &str = "plan shells --omf <model.omf> --spec <shells.json> [--list-blocks]";
 pub const DESIGN_USAGE: &str = "plan design --omf <model.omf> --spec <design.json> [--list-blocks]";
 
@@ -39,6 +43,7 @@ pub struct Command {
     pub export_lp: bool,
     pub lp_sha256: Option<String>,
     pub lp_values: [Option<PathBuf>; 2],
+    certificate: Option<CertificateBasis>,
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -57,6 +62,8 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     {
         return Err(format!("{verb}: option values must be nonempty"));
     }
+    let currency = fields.remove("--certificate-currency");
+    let horizon = fields.remove("--certificate-horizon");
     let command = Command {
         kind,
         omf: fields
@@ -71,12 +78,15 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         export_lp: fields.remove("--export-lp").is_some(),
         lp_sha256: fields.remove("--lp-sha256"),
         lp_values: ["--lp-primal", "--lp-dual"].map(|key| fields.remove(key).map(PathBuf::from)),
+        certificate: CertificateBasis::parse(verb, currency.as_deref(), horizon.as_deref())?,
     };
     let imported = command.lp_values.iter().any(Option::is_some);
     if !fields.is_empty()
         || imported != command.lp_sha256.is_some()
         || (command.export_lp && imported)
-        || (kind != Kind::Schedule && (command.export_lp || imported))
+        || (kind != Kind::Schedule
+            && (command.export_lp || imported || command.certificate.is_some()))
+        || (command.export_lp && command.certificate.is_some())
     {
         return Err(format!("{verb}: incompatible or unknown OMF options"));
     }
@@ -99,7 +109,44 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             .as_deref()
             .map(|digest| values.request(digest))
             .or(command.export_lp.then_some(Request::Export));
-        let report = if request.is_some() {
+        let report = if let Some(basis) = &command.certificate {
+            let external_sources = match request {
+                Some(Request::Import { primal, dual, .. }) => [
+                    primal.map(|(_, source)| ("lp_primal", source)),
+                    dual.map(|(_, source)| ("lp_dual", source)),
+                ],
+                _ => [None, None],
+            };
+            let (mut report, witness) = scheduling::evaluate_with_witness(
+                &bytes,
+                &source,
+                &spec,
+                &spec_source,
+                command.list_items,
+                request,
+            )?;
+            let witness = witness.ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::NumericalCertificateFailed207,
+                    "the OMF report has no selected schedule to certify",
+                )
+            })?;
+            let metadata = basis.metadata(
+                &witness.model_name,
+                "declared-omf-schedule",
+                u128::from(witness.value_per_unit),
+                root,
+                [("omf", &source), ("spec", &spec_source)]
+                    .into_iter()
+                    .chain(external_sources.into_iter().flatten()),
+            )?;
+            plan_certificate::attach(
+                &witness.certify(&metadata)?,
+                &mut report.json,
+                &mut report.markdown,
+            )?;
+            report
+        } else if request.is_some() {
             scheduling::evaluate_with_lp(
                 &bytes,
                 &source,

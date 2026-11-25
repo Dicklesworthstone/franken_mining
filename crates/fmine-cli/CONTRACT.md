@@ -838,6 +838,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     resource use, bound prices and gap on that same objective. Listed periods use original OMF order.
     MineLib-only flags refuse. Uniform slope, single-destination, upper-limit and uncalibrated-input
     limits remain explicit. `omf::pit_report` also owns existing ultimate-pit composition and rendering.
+    DESIGN (bd-zgqi): the shared certificate currency and horizon opt in to `FMT-PCERT-1` for
+    OMF scheduling, including imported LP guidance. It binds exact OMF, declaration and LP value-file
+    bytes with relative locators and carries the full-model integer bound from the report. An
+    MPS-only export refuses certificate flags because it produces no selected schedule.
     DESIGN (plan §15.4, bd-06kg): `plan schedule --omf --export-lp` emits deterministic MPS text
     and its SHA-256 before scheduling; header comments bind the complete OMF/spec byte digests.
     Import requires `--lp-sha256` and at least one of `--lp-primal` or `--lp-dual`, using complete

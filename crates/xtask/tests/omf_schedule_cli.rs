@@ -8,7 +8,13 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_cli::{Envelope, OutputFormat, invoke};
-use fmine_core::{anchor::SourceAnchor, sha256};
+use fmine_core::{
+    anchor::SourceAnchor,
+    cert::InputDigest,
+    plan_cert::{BoundKind, PlanCertificate, PlanColor},
+    sha256,
+};
+use fmine_io::forecast::decode_hex_field;
 use fmine_io::omf::json::{Json, parse};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -1039,9 +1045,8 @@ fn external_lp_text_budget_refuses_before_relaxation_allocation() {
     assert!(!e.payload_json.contains("\"mps\""));
 }
 
-#[test]
-fn external_lp_commands_match_the_actual_binary_json_and_markdown() {
-    let executable = std::env::var_os("FMINE_TEST_BINARY")
+fn binary() -> PathBuf {
+    std::env::var_os("FMINE_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             let current = std::env::current_exe().unwrap();
@@ -1054,7 +1059,126 @@ fn external_lp_commands_match_the_actual_binary_json_and_markdown() {
                 .and_then(Path::parent)
                 .unwrap();
             profile.join(format!("fmine{}", std::env::consts::EXE_SUFFIX))
-        });
+        })
+}
+
+#[test]
+fn omf_schedule_certificate_replays_the_selected_plan_and_binds_external_guidance() {
+    let root = root();
+    let bytes = fixture(
+        &root,
+        [3, 1, 1],
+        &[
+            ("value", vec![Some(6.0), Some(5.0), Some(5.0)]),
+            ("tonnes", vec![Some(3.0), Some(2.0), Some(2.0)]),
+        ],
+    );
+    let spec = one_period_spec().replace("\"value_per_unit\":1", "\"value_per_unit\":4");
+    let (_, exported) = export_lp(&root, &spec);
+    let digest = string(&exported, "mps_sha256");
+    let primal = "C0 0\nC1 1\nC2 1\n";
+    let dual = "R0 -2.5\n";
+    fs::write(root.join("primal.txt"), primal).unwrap();
+    fs::write(root.join("dual.txt"), dual).unwrap();
+    let flags = [
+        "--certificate-currency",
+        "USD",
+        "--certificate-horizon",
+        "tactical",
+    ];
+    let run_binary = |extra: &[&str]| {
+        Command::new(binary())
+            .args(args())
+            .args(extra)
+            .arg("--json")
+            .arg("--workspace")
+            .arg(&root)
+            .output()
+            .unwrap()
+    };
+    let assert_certificate = |extra: &[&str], expected, inputs: &[InputDigest]| {
+        let baseline = run_binary(extra);
+        let certified_flags = [extra, &flags].concat();
+        let certified = run_binary(&certified_flags);
+        assert!(
+            baseline.status.success() && certified.status.success(),
+            "{}",
+            String::from_utf8_lossy(&certified.stdout)
+        );
+        assert_eq!(certified.stdout, run_binary(&certified_flags).stdout);
+        let envelope = parse(&certified.stdout).unwrap();
+        let payload = field(&envelope, "payload");
+        let mut ordinary_fields = payload.as_object().unwrap().to_vec();
+        ordinary_fields.retain(|(key, _)| key != "plan_certificate");
+        assert_eq!(
+            &Json::Object(ordinary_fields),
+            field(&parse(&baseline.stdout).unwrap(), "payload")
+        );
+        let preview = field(payload, "plan_certificate");
+        assert_eq!(string(preview, "format"), "FMT-PCERT-1");
+        let cert =
+            PlanCertificate::from_bytes(&decode_hex_field(string(preview, "bytes_hex")).unwrap())
+                .unwrap();
+        assert_eq!(string(preview, "digest"), cert.certificate_digest.to_hex());
+        assert_eq!(cert.inputs, inputs);
+        assert_eq!(cert.plan_id, "section");
+        assert_eq!(cert.color, PlanColor::Estimated);
+        assert!(cert.saa.is_none() && cert.vss.is_none());
+        assert_eq!(cert.primal_scaled, expected);
+        assert_eq!(cert.value_scale_denominator, 4 * SCALE as u128);
+        let reported = field(payload, "certificate");
+        let upper = numerator(field(reported, "upper_bound"));
+        let bound = cert.bound.as_ref().unwrap();
+        assert!(matches!(bound.kind, BoundKind::Lagrangian { .. }));
+        assert_eq!(bound.upper_scaled, upper);
+        assert_eq!(cert.opt_gap_numerator, Some(upper - expected));
+        assert_eq!(
+            cert.opt_gap_numerator,
+            Some(numerator(field(reported, "gap")))
+        );
+        cert
+    };
+    let archive_input = InputDigest::new("omf", "section.omf", sha256(&bytes));
+    let spec_input = InputDigest::new("spec", "schedule.json", sha256(spec.as_bytes()));
+    let baseline = assert_certificate(
+        &[],
+        24 * SCALE,
+        &[archive_input.clone(), spec_input.clone()],
+    );
+    let guided = assert_certificate(
+        &[
+            "--lp-sha256",
+            digest,
+            "--lp-primal",
+            "primal.txt",
+            "--lp-dual",
+            "dual.txt",
+        ],
+        40 * SCALE,
+        &[
+            InputDigest::new("lp_dual", "dual.txt", sha256(dual.as_bytes())),
+            InputDigest::new("lp_primal", "primal.txt", sha256(primal.as_bytes())),
+            archive_input,
+            spec_input,
+        ],
+    );
+    assert_eq!(baseline.model_digest, guided.model_digest);
+    assert_ne!(
+        baseline.bound.unwrap().witness_digest,
+        guided.bound.unwrap().witness_digest
+    );
+    assert_eq!(run_binary(&flags[..2]).status.code(), Some(2));
+    assert_eq!(
+        run_binary(&[&flags[..], &["--export-lp"]].concat())
+            .status
+            .code(),
+        Some(2)
+    );
+}
+
+#[test]
+fn external_lp_commands_match_the_actual_binary_json_and_markdown() {
+    let executable = binary();
     let root = root();
     fixture(&root, [5, 1, 3], &section(9.25, None));
     let (_, exported) = export_lp(&root, SPEC);
