@@ -14,7 +14,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** not budgeted (dev-only tool; no row in registries/loc_budget.toml)
-- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "verbs", "int_as", "beads", "contracts", "sbom"]`
+- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "kernels", "oracle", "forecast", "refusals", "verbs", "int_as", "beads", "contracts", "sbom"]`
 
 ## 2. Inputs
 - **The tree.** Member `Cargo.toml` files, `crates/**/*.rs` and `crates/*/CONTRACT.md`. Also:
@@ -23,7 +23,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
   - `.beads/issues.jsonl`, `deny.toml` and `franken-stack.lock`;
   - `Cargo.lock` and `rust-toolchain.toml`, for `sbom`;
   - the plan's §8.4 codes and its Appendix F.1 rows.
-- **Registries.** `registries/`: `loc_budget.toml`, `lifts.toml`, `lift_drift.toml`, `refusals.toml`, `l6_allow.toml`, `sources/*.toml`, `calendars.toml` and `zones.toml`.
+- **Registries.** `registries/`: `loc_budget.toml`, `lifts.toml`, `lift_drift.toml`, `refusals.toml`, `l6_allow.toml`, `kernels.toml`, `sources/*.toml`, `calendars.toml` and `zones.toml`.
 - **External programs, read-only:**
   - `cargo tree`, for `check-int-as-001a`, `check-oracle` and `sbom`;
   - `git rev-parse`, `diff`, `ls-files`, `ls-tree` and `show`, for `check-amend`, `check-lifts --upstream`, `check-lift-drift` and `forecast-rules-order`;
@@ -249,8 +249,13 @@ Not applicable: no Claims are emitted.
   - It refuses a package the lock lacks or holds more than once, a path outside the workspace, a registry other than crates.io, a crates.io package without a checksum, a git source without a commit, and a tree whose single root is not `fmine-cli`.
   - `the_workspace_bill_is_the_manifest_closure` checks the real bill against the closure read from the member manifests without cargo. `.github/workflows/blind-binary.yml` uploads the bill beside the blind binary.
 - `forecast::rules_order` (BD-334.S2; command `forecast-rules-order`): the commit adding `forecasts/fy2026/rules.toml` is a strict ancestor of every commit touching `forecasts/fy2026/forecasts.csv`. It refuses a shallow clone, whose history cannot show the order.
+- `kernels::{check_kernels, parse_kernels_toml, KernelRow, KernelCheckReport}` (`PO-NUM-3`, `bd-dm2z`; command `check-kernels`, run by `check-all`): validates `registries/kernels.toml`, verifies K/E `//! Determinism:` header agreement and referenced regression test existence, and refuses any unlisted `std::thread::` kernel in S0/K/E library code.
 
 ## 12. Proof obligations
+- PO-NUM-3 (kernel determinism class and thread-count verification on certified paths, no unlisted threaded kernel): `kernels::check_kernels`. Tests:
+  - `kernels::tests::test_workspace_kernels_registry_passes`;
+  - `kernels::tests::test_unlisted_threaded_kernel_is_refused`;
+  - `kernels::tests::test_order_sensitive_reduction_negative_control_detects_unsafe_parallel_sum`.
 - PO-NUM-2 (no std transcendental in a BitwisePortable module): `check_det`. Tests:
   - `test_seeded_std_transcendental_in_bitwise_portable_fails`;
   - `test_seeded_method_call_ln_in_bitwise_portable_fails`;

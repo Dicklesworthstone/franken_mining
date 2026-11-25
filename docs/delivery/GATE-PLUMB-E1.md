@@ -2,8 +2,11 @@
 
 - **Gate ID:** `GATE-PLUMB-E1` (plan §10.6, `PO-PLUMB-1`, `BD-042`)
 - **Claim type:** Known answers / algebraic invariant property tests (NOT reconciliation or performance)
-- **Verdict:** `PASS` (self-verified via RCH `ovh-a`; independent GitHub Actions CI run pending)
 - **Date:** 2026-11-25
+
+Verdict: PASS
+
+The implementing agent verified the gate on RCH `ovh-a`. Independent GitHub Actions CI is pending.
 
 ## 1. Scope Verified
 

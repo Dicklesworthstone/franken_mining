@@ -1510,15 +1510,17 @@ exports the same scaled incumbent and integer Lagrangian upper bound shown in it
 
 ```bash
 fmine plan schedule --omf model.omf --spec schedule.json \
-  --certificate-currency USD --certificate-horizon tactical --json \
-  | jq -er '.payload.plan_certificate.bytes_hex' | xxd -r -p > schedule.plancert
+  --certificate-currency USD --certificate-horizon tactical --list-schedule \
+  --json > schedule-report.json
+jq -er '.payload.plan_certificate.bytes_hex' schedule-report.json | xxd -r -p > schedule.plancert
 fmine-verify plancert schedule.plancert --inputs-dir .
 ```
 
 The certificate binds the OMF archive, JSON declaration and any imported LP value files by
-workspace-relative path and SHA-256. Share those exact files with the certificate. A schedule
-selected from LP guidance still uses the replayed integer bound. The MPS-only export is a
-separate command mode. Sampling, VSS and calibration are unmeasured.
+workspace-relative path and SHA-256. Share those files, the certificate and the JSON report,
+which contains the selected periods in OMF block order. The producer replays the integer bound,
+including when LP guidance supplies the selected schedule. The offline verifier checks the
+sealed frame and rehashes the inputs. Sampling, VSS and calibration are unmeasured.
 
 #### Solve the OMF relaxation with an external solver
 
