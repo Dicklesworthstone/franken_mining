@@ -1815,3 +1815,33 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     is bound by the source registry independently of disclosure coverage. Removing the note leaves different
     memberships incomparable, as tested by
     `xtask::public_mine_stats_vintages::tests::disclosure_preserves_region_exclusions_glyphs_and_reversions`.
+
+- **E863** Mine Stats comparison against the independent T16 census (FACT and INFERENCE, 2026-11-24,
+  bd-504e.3).
+  - **Independent baseline.** W1 §5.1 T16 records 6,391 matching and nine changed comparatives from the
+    ten Mine Stats workbooks in E861. W1 §3 excludes 30 changes of regional membership. W1 §6 names E474
+    and W1-DR-09's eight changes, and records Porgera's printed share correction as W1-DR-01.
+  - **Product replay.** `fmine assure public --issuer barrick --through 2026Q2 --json` emitted
+    `.payload.issuer_consistency.mine_stats_vintages` under anchor
+    `anc_81413afd2e7cfa34b7969c5fb4e35f85`, root
+    `0effa0b43ff122299e95b8d12cdfa57319b26a1f2a7a71fce4ea7367d0e2f264`. The verified registry report
+    classified 22,732 appearances, including 6,430 later comparisons. Counting cited later
+    `items` by `against_first.state` and `reason` gives the following reconciliation with T16.
+
+    | Later comparison | Count |
+    | --- | ---: |
+    | Unchanged | 6,310 |
+    | Changed without an applicable registered note, six tokens and three values | 9 |
+    | Conflict, registered ownership basis correction | 20 |
+    | Not comparable, display refused | 61 |
+    | Not comparable, region membership changed | 30 |
+    | Total | 6,430 |
+
+  - **Difference in classification.** The 81 additional display and ownership findings account for the
+    gap from W1's 6,391 matches. The report emits each pair's locator, SHA-256 and reason. Examples are
+    Porgera `Barrick_Q2_2024_Mine_Stats.xlsx:QTD!C15` against `Barrick_Q2_2025_Mine_Stats.xlsx:QTD!J14`,
+    and the display refusal at `Barrick_Q1_2024_Mine_Stats.xlsx:Minestats1!B8` against
+    `Barrick_Q1_2025_Mine_Stats.xlsx:Minestats1!C8`.
+  - **Regression.** `xtask::public_mine_stats_vintages::tests::real_mine_stats_vintages_keep_e474_and_basis_conflicts`
+    checks the six T16 vintage denominators, all nine changed source locations, 30 cited E461 regional
+    exclusions and W1-DR-01. The disclosure negative control records the rule described in E862.
