@@ -556,13 +556,32 @@ mod corpus {
             .find(|c| c.starts_with(&format!("{{{printed}")))
             .is_some_and(|c| c.contains(sum) && c.contains(residual));
         assert!(cert, "Kibali O11 certificate is not the cited triple");
-        let (_, records) = json.split_once("\"instances\":[").expect("instances array");
-        let records = records.split_once("],\"one_cell_cos\"").expect("end").0;
-        let n_records = records.matches("{\"at\":").count();
-        let n_cited = records.matches("\"cited\":{\"operands\":[{").count();
-        assert_eq!((n_records, n_cited), (r.instances.len(), r.instances.len()));
+        use fmine_io::omf::json::{Json, parse};
+        let payload = parse(json.as_bytes()).expect("assurance JSON");
+        let records = payload
+            .get("instances")
+            .and_then(Json::as_array)
+            .expect("top-level identity records");
+        let n_records = records.len();
+        assert_eq!(n_records, r.instances.len());
+        for (record, instance) in records.iter().zip(&r.instances) {
+            let at = format!("{}:{}!{}", instance.file, instance.sheet, instance.cell);
+            assert_eq!(record.get("at").and_then(Json::as_str), Some(at.as_str()));
+            assert_eq!(
+                record.get("family").and_then(Json::as_str),
+                Some(instance.family.as_str()),
+                "{at}"
+            );
+            let cited = record
+                .get("cited")
+                .and_then(|cited| cited.get("operands"))
+                .and_then(Json::as_array)
+                .expect("cited operands");
+            assert_eq!(cited.len(), instance.operands.len(), "{at}");
+            assert!(!cited.is_empty(), "{at}");
+        }
         println!(
-            "{{\"test\":\"real_cited\",\"records\":{n_records},\"with_operands\":{n_cited},\"payload_bytes\":{}}}",
+            "{{\"test\":\"real_cited\",\"records\":{n_records},\"with_operands\":{n_records},\"payload_bytes\":{}}}",
             json.len()
         );
 
