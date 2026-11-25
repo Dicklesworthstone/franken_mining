@@ -73,10 +73,31 @@ fn executive_one_pager_matches_the_expansion_golden_and_preserves_policy_constra
         )
     );
     let constrained = brief("tests/decisions/constrained_testwork.toml");
+    let risk = constrained
+        .find("## Choices within the downside limit")
+        .expect("risk screen");
+    let act_now = constrained
+        .find("**Act-now comparison.**")
+        .expect("act-now comparison");
     assert!(
-        constrained.contains("## Choices within the downside limit")
+        risk < act_now
             && constrained.contains("optimized test policy")
             && constrained.contains("28.50")
+    );
+    assert!(constrained.contains(
+        "**Optimized responses within the nominal downside screen for testwork.** low → hold, medium → hold, strong → act."
+    ));
+    assert!(!constrained.contains("medium → act"));
+    assert!(constrained.contains("before applying the downside limit"));
+    let unconstrained = brief("tests/decisions/metallurgical_test.toml");
+    assert!(
+        unconstrained.contains("**Nominal responses for met\\_test.** high → build, low → hold.")
+    );
+    let stressed = brief("tests/decisions/downside_limit.toml");
+    assert!(stressed.contains("| Stressed | safe (act now) | 30000000 | 37500000 |"));
+    assert!(
+        !stressed.contains(" → "),
+        "no test passes the stressed screen"
     );
     let robust = brief("tests/decisions/wasserstein_information.toml");
     assert!(

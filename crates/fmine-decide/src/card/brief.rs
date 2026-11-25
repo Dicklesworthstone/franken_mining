@@ -3,7 +3,8 @@
 
 use std::fmt::Write as _;
 
-use super::information::ChoiceKind;
+use super::downside::PolicyScreen;
+use super::information::{ChoiceKind, InformationStats};
 use super::render::{md, short_decimal};
 use super::{AlternativeStats, EvaluatedCard, ExactMoney, Result, arithmetic, currency_name};
 
@@ -14,6 +15,50 @@ pub struct EpistemicOnePager<'a> {
     primary: &'a AlternativeStats,
     least_regret: &'a AlternativeStats,
     tie: Option<(ExactMoney, Vec<&'a AlternativeStats>)>,
+}
+
+fn write_responses<'a>(
+    out: &mut String,
+    heading: &str,
+    option: &str,
+    mut responses: impl Iterator<Item = (&'a str, &'a str)>,
+) {
+    const MAX_SHOWN: usize = 6;
+    let rows = responses
+        .by_ref()
+        .take(MAX_SHOWN)
+        .map(|(signal, action)| format!("{} → {}", md(signal), md(action)))
+        .collect::<Vec<_>>();
+    if !rows.is_empty() {
+        let _ = writeln!(
+            out,
+            "**{heading} for {}.** {}.",
+            md(option),
+            rows.join(", ")
+        );
+        let remaining = responses.count();
+        if remaining > 0 {
+            let _ = writeln!(
+                out,
+                "See the full DecisionCard for the remaining {remaining}."
+            );
+        }
+        out.push('\n');
+    }
+}
+
+fn write_fixed_responses(out: &mut String, heading: &str, option: &InformationStats) {
+    write_responses(
+        out,
+        heading,
+        &option.option_id,
+        option.signals.iter().filter_map(|signal| {
+            Some((
+                signal.signal_id.as_str(),
+                signal.selected_action.as_deref()?,
+            ))
+        }),
+    );
 }
 
 impl EvaluatedCard {
@@ -81,6 +126,57 @@ impl EpistemicOnePager<'_> {
         };
         let a = self.primary;
         let mut out = format!("# {}\n\n{}\n\n", md(&s.question), md(&s.valuation_basis));
+        if let Some(risk) = &s.downside {
+            out.push_str(&risk.decision_brief());
+            if let Some(search) = &risk.policy_optimization {
+                let heading = match search.configuration.screen {
+                    PolicyScreen::Nominal => {
+                        "Optimized responses within the nominal downside screen"
+                    }
+                    PolicyScreen::Wasserstein => {
+                        "Optimized responses within the stressed downside screen"
+                    }
+                };
+                for winner in &search.overall.winners {
+                    if winner.kind == ChoiceKind::InformationOption
+                        && let Some(policy) = search
+                            .options
+                            .iter()
+                            .find(|o| o.option_id == winner.id)
+                            .and_then(|o| o.optimum.as_ref())
+                    {
+                        write_responses(
+                            &mut out,
+                            heading,
+                            &winner.id,
+                            policy.signal_actions.iter().filter_map(|(signal, action)| {
+                                Some((signal.as_str(), action.as_deref()?))
+                            }),
+                        );
+                    }
+                }
+            } else if let Some(info) = &s.information {
+                let (heading, ranking) = match &risk.robust {
+                    Some(stressed) => (
+                        "Fixed responses within the stressed downside screen",
+                        stressed,
+                    ),
+                    None => (
+                        "Fixed responses within the nominal downside screen",
+                        &risk.nominal,
+                    ),
+                };
+                for option in info.options.iter().filter(|o| {
+                    ranking
+                        .winners
+                        .iter()
+                        .any(|w| w.kind == ChoiceKind::InformationOption && w.id == o.option_id)
+                }) {
+                    write_fixed_responses(&mut out, heading, option);
+                }
+            }
+            out.push_str("## Unrestricted nominal comparison\n\n");
+        }
         let _ = writeln!(
             out,
             "**Act-now comparison.** The highest modeled average value belongs to {}. The smallest worst-case opportunity loss is {} with {}.\n",
@@ -139,7 +235,12 @@ impl EpistemicOnePager<'_> {
                 .join(", ");
             let _ = writeln!(
                 out,
-                "**Test before committing.** Including the cost of the test and the delay, the highest modeled average value belongs to {winners}.\n"
+                "**Nominal testwork comparison.** Including the cost of the test and the delay, {}the highest modeled average value belongs to {winners}.\n",
+                if s.downside.is_some() {
+                    "before applying the downside limit, "
+                } else {
+                    ""
+                }
             );
             for option in info
                 .options
@@ -157,6 +258,15 @@ impl EpistemicOnePager<'_> {
                 );
             }
             out.push('\n');
+            if s.downside.is_none() {
+                for option in info.options.iter().filter(|o| {
+                    info.overall_winners
+                        .iter()
+                        .any(|w| w.kind == ChoiceKind::InformationOption && w.id == o.option_id)
+                }) {
+                    write_fixed_responses(&mut out, "Nominal responses", option);
+                }
+            }
         }
         if let Some(robust) = &s.robustness {
             let _ = writeln!(
@@ -182,9 +292,6 @@ impl EpistemicOnePager<'_> {
                     "Including fixed test responses, the highest worst-case mean belongs to {winners}.\n"
                 );
             }
-        }
-        if let Some(risk) = &s.downside {
-            out.push_str(&risk.decision_brief());
         }
         for u in &claim.uu_terms {
             let _ = writeln!(
@@ -224,5 +331,60 @@ mod tests {
         let brief = card.executive_brief().expect("bind brief").to_markdown();
         assert!(brief.contains("highest modeled average value belongs to Build the expansion (build), Smaller fixed-return option (smaller)"));
         assert!(brief.contains("already ties Smaller fixed-return option (smaller)"));
+    }
+
+    #[test]
+    fn response_preview_skips_unreachable_signals_and_names_its_limit() {
+        let fixture = include_str!("../../../../tests/decisions/metallurgical_test.toml");
+        let mut text = fixture.to_owned();
+        for signal in [
+            "unreachable",
+            "result-a",
+            "result-b",
+            "result-c",
+            "result-d",
+            "result-e",
+        ] {
+            text.push_str(&format!(
+                r#"
+[[signal]]
+option = "met_test"
+id = "{signal}"
+"#
+            ));
+            for (state, mass) in [("high", "17/120"), ("low", "1/40")] {
+                let probability = if signal == "unreachable" { "0/1" } else { mass };
+                text.push_str(&format!(
+                    r#"
+[[likelihood]]
+option = "met_test"
+state = "{state}"
+signal = "{signal}"
+probability = "{probability}"
+"#
+                ));
+            }
+        }
+        // Split the original reachable high signal into six identical readings.
+        let text = text
+            .replace(
+                "signal = \"high\"\nprobability = \"17/20\"",
+                "signal = \"high\"\nprobability = \"17/120\"",
+            )
+            .replace(
+                "signal = \"high\"\nprobability = \"3/20\"",
+                "signal = \"high\"\nprobability = \"1/40\"",
+            );
+        let anchor = SourceAnchor {
+            artifact_path: "synthetic-response-preview.toml".into(),
+            artifact_sha256: sha256(text.as_bytes()).0,
+            locator: "whole worksheet".into(),
+        };
+        let inputs = model::parse(&text, anchor).expect("valid signal split");
+        let card = evaluate(&inputs).expect("evaluate");
+        let brief = card.executive_brief().expect("bind brief").to_markdown();
+        assert_eq!(brief.matches(" → ").count(), 6);
+        assert!(!brief.contains("unreachable"));
+        assert!(brief.contains("See the full DecisionCard for the remaining 1."));
     }
 }
