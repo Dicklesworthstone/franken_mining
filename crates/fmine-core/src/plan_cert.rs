@@ -1313,13 +1313,27 @@ mod tests {
             Err(PlanCertError::ColorLaundering { .. })
         ));
 
-        // 4. Forged INV-002 authority flag re-sealed with fresh digest MUST fail verify
-        let mut forged_auth =
+        // 4. A malformed wire flag must still fail after both checksums are re-computed.
+        let cert =
             PlanCertificate::build(sample_request(PlanCalibrationStatus::Uncalibrated)).unwrap();
-        forged_auth.reserve_disclosure_claim = true;
-        forged_auth.certificate_digest = forged_auth.compute_digest().unwrap();
+        let mut body_encoder = Encoder::new_frame(TAG_PLAN_CERT_BODY, cert.format_version);
+        cert.encode_body_fields(&mut body_encoder).unwrap();
+        let mut body = body_encoder.finish();
+        let body_crc = body.len() - 4;
+        body[body_crc - 4] = 1; // Four authority bytes precede the frame CRC.
+        let checksum = crate::codec::crc32c(&body[..body_crc]);
+        body[body_crc..].copy_from_slice(&checksum.to_le_bytes());
+        let digest = sha256(&body);
+
+        let mut bytes = cert.to_bytes().unwrap();
+        let crc_offset = bytes.len() - 4;
+        let digest_offset = crc_offset - digest.as_bytes().len();
+        bytes[digest_offset - 4] = 1; // The outer frame inserts its digest before the CRC.
+        bytes[digest_offset..crc_offset].copy_from_slice(digest.as_bytes());
+        let checksum = crate::codec::crc32c(&bytes[..crc_offset]);
+        bytes[crc_offset..].copy_from_slice(&checksum.to_le_bytes());
         assert!(matches!(
-            forged_auth.verify(),
+            PlanCertificate::from_bytes(&bytes),
             Err(PlanCertError::AuthorityClaimForbidden {
                 flag: "reserve_disclosure_claim"
             })

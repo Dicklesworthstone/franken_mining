@@ -515,7 +515,7 @@ EOF
     assert_eq!(code, 8, "tampered input file must exit 8: {stdout}");
     assert!(stdout.contains("FMINE-REF-505"), "{stdout}");
 
-    // 6. Attack C: Semantic forgery (Validated color on Miscalibrated, INV-002 flag = true, tampered wire) -> exit 8!
+    // 6. The reader rejects a forged color and a forbidden authority byte.
     let mut forged = pcpsp_cert.clone();
     forged.color = PlanColor::Validated;
     forged.certificate_digest = forged.compute_digest().expect("recompute digest");
@@ -523,21 +523,18 @@ EOF
         forged.verify().is_err(),
         "forged Validated color must fail verify()"
     );
-    let mut forged_auth = pcpsp_cert.clone();
-    forged_auth.reserve_disclosure_claim = true;
-    forged_auth.certificate_digest = forged_auth.compute_digest().expect("recompute digest");
-    assert!(
-        forged_auth.verify().is_err(),
-        "forged INV-002 flag must fail verify()"
-    );
     let mut forged_bytes = pcpsp_cert.to_bytes().expect("raw");
-    let flip_idx = forged_bytes.len() - 10;
-    forged_bytes[flip_idx] ^= 0x01;
+    let crc_offset = forged_bytes.len() - 4;
+    let flags_offset = crc_offset - 32 - 4; // Four flags, SHA-256, then CRC32C.
+    forged_bytes[flags_offset] = 1;
+    let checksum = fmine_core::codec::crc32c(&forged_bytes[..crc_offset]);
+    forged_bytes[crc_offset..].copy_from_slice(&checksum.to_le_bytes());
     let forged_path = tmp.path().join("forged.fpcert");
     fs::write(&forged_path, &forged_bytes).expect("write forged");
     let (code, stdout) = run_bin(&["plancert", forged_path.to_str().unwrap()]);
     assert_eq!(code, 8, "forged plancert must exit 8: {stdout}");
     assert!(stdout.contains("FMINE-REF-505"), "{stdout}");
+    assert!(stdout.contains("reserve_disclosure_claim"), "{stdout}");
 
     // 7. Missing file -> exit 5 (FMINE-REF-506).
     let missing = tmp.path().join("missing.fpcert");
