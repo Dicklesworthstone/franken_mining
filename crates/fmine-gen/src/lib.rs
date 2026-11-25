@@ -11,6 +11,7 @@ pub mod geology;
 pub mod harness;
 pub mod metamorphic;
 pub mod mill_balance;
+pub mod origin_coverage;
 pub mod pilot_card;
 pub mod pilot_power;
 pub mod plant_twin;

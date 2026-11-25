@@ -17,6 +17,10 @@ The universal Claim and the checks around it:
 - `refclass` (`BD-050`, plan §9.3, `GATE-PLUMB-E4`) parses `registries/refclass.toml`, enforces zero ε without a
   registered `REFCLASS-` record (`EpsilonContamination`), provides `BitwisePortable` moment-matched Huber
   ε-contamination (`GB-32`), and guards `G-DISC` against unverified reference classes and unverified ancestors.
+- `origin` (`BD-352`, plan §7.1–§7.3, `E692`, `E698`) tracks explicit `OriginId`s and typed dependence relations
+  (`OriginRelation`, `RelationStatus`) with an exact block-GLS batch-bias measurement kernel (`σ_b² + σ_ε²/n`),
+  reprint collapse, conservative `ρ = 1` unknown-dependence handling, separate rounding vs. measurement intervals,
+  and supersession history retention.
 
 It does no I/O. Storage, locking and key custody belong to the callers in `fmine-io` and `fmine-cli`.
 
@@ -24,7 +28,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **Layer:** S0
 - **Subsystem:** Plumb
 - **LOC budget:** 16,000 planned / 18,000 ceiling
-- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal", "inspection", "render", "representation", "refclass"]`
+- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal", "inspection", "render", "representation", "refclass", "origin"]`
 
 ## 2. Inputs
 - **`Claim::new`** takes 13 arguments: metric key, value, canonical value tag, representation, support, additivity, evidence class, epistemic status, knowledge state, label, UU terms, parents and anchors. It takes the evidence class and parents as given. Nothing checks that they agree. `stale`, `calibration_failed` and `supersedes` start false or `None`. They are `pub` fields that callers set afterwards.
@@ -278,6 +282,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   - `downgraded`, `with_regime`, `authority`, `with_authority`, `attest`, `with_calibration_score`, `calibration_score`, `fallback`, `fallback_active`, `epsilon_contamination`, `with_epsilon_contamination`, `with_checked_epsilon` and `with_ref_class`;
   - `color`, `verify_export_clearance` and `verify_uu_slot_for_decision`.
 - **`refclass`.** `RefClassId::parse`, `RefClassStatus::parse`, `RefClassRecord`, `RefClassRegistry::{parse, get, lookup, len, is_empty, iter}`, and `EpsilonContamination::{none, try_new, from_registry, ref_class, epsilon_bps, epsilon, status, blend_moments}` (private fields, `compile_fail,E0451`).
+- **`origin`.** `OriginId`, `BatchGroupId`, `RoundingInterval`, `OriginRelation`, `RelationStatus`, `OriginReading`, `BatchBiasModel`, `RetainedSupersession`, `ResolvedGroupSummary`, `OriginAccountingResult` (with `to_json_log`), and `evaluate_origin_batch_model`.
 - **Labels.** `Confidentiality`, with `public`, `internal`, `venture`, `mnpi`, `join`, `leq`, `is_public`, `ventures`, `walls` and `refusal_over`. `LabelRegistry`, with `new`, `venture` and `wall`. `VentureId`, `WallId` and `LabelError`.
 - **Free functions.** `verify_support_compatible`, `verify_unweighted_additive`, `compose_binary` and `compose_binary_with_fallback`.
 - **Provenance index.** `DagNode`, and `ClaimDag`, with `new`, `insert`, `guard_disclosure_export`, `invalidate_and_propagate` and `is_stale`.
@@ -310,3 +315,4 @@ The plan defines no `PO-CLAIM-*`. The old contract's PO-CLAIM-1 to PO-CLAIM-3 we
 - **PO-PLUMB-15** (`Refused` never becomes a number without a declared fallback): discharged at the Claim composition layer by `compose_binary`, `compose_binary_with_fallback`, `test_nl6_refusal_absorption_and_declared_fallback_bounds`, and `test_gate_plumb_e1_nl1_to_nl8_100k_dags`.
 - **GATE-PLUMB-E1** (no-laundering proptests 100%): `docs/delivery/GATE-PLUMB-E1.md` (`test_gate_plumb_e1_nl1_to_nl8_100k_dags`, 0 violations across 100,000 DAGs).
 - **GATE-PLUMB-E4** (no ε without a RefClass; no unverified reference class on disclosure-facing claims): discharged by `refclass::EpsilonContamination` (`compile_fail,E0451`), `ClaimDag::guard_disclosure_export`, `test_gate_plumb_e4_zero_eps_without_refclass_and_gb32_blend`, `test_refclass_registry_refuses_malformed_and_duplicate_rows`, and `test_gate_plumb_e4_claim_refclass_and_g_disc_blocks_unverified_and_ancestors` (`docs/delivery/GATE-PLUMB-E4.md`).
+- **BD-352** (evidence-origin accounting, exact batch-bias variance `σ_b² + σ_ε²/n`, reprint invariance, `E698`/`E692` known answers, and canonical identity): discharged by `origin::evaluate_origin_batch_model`, `test_bd352_worked_example_table_and_reprint_invariance`, `test_bd352_e698_rounding_vs_measurement_and_e692_superseding_and_conflict`, and `test_bd352_unknown_dependence_replicates_reprints_permutation_and_canonical_identity` (paired with sealed-truth empirical coverage proof in `fmine-gen::origin_coverage`).

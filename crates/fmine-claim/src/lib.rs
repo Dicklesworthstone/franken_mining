@@ -72,6 +72,7 @@ pub mod dag;
 pub mod forecast_journal;
 pub mod inspection;
 mod label;
+pub mod origin;
 pub mod refclass;
 pub mod reliance;
 pub mod render;
