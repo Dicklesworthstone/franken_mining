@@ -27,6 +27,20 @@ fn source(file: &str, kind: SourceKind, bytes: &[u8]) -> LoadedSource {
 }
 
 fn fixture(cost: &str, share: &str, withheld: bool) -> (IssuerProfile, Vec<LoadedSource>) {
+    fixture_with_sold_header(
+        cost,
+        share,
+        withheld,
+        "Gold sold (000s ozs attributable share)",
+    )
+}
+
+fn fixture_with_sold_header(
+    cost: &str,
+    share: &str,
+    withheld: bool,
+    sold_header: &str,
+) -> (IssuerProfile, Vec<LoadedSource>) {
     let mut profile = synthetic::synthetic_profile();
     profile.subjects = vec!["Site H".into()];
     profile.regions.clear();
@@ -80,7 +94,7 @@ fn fixture(cost: &str, share: &str, withheld: bool) -> (IssuerProfile, Vec<Loade
                     "C4".into(),
                     text("Gold produced (000s ozs attributable share)"),
                 ),
-                ("D4".into(), text("Gold sold (000s ozs attributable share)")),
+                ("D4".into(), text(sold_header)),
                 ("E4".into(), text("Cost of sales ($/oz)")),
                 ("F4".into(), text("Total cash costs ($/oz)")),
                 ("G4".into(), text("All-in sustaining costs ($/oz)")),
@@ -266,6 +280,67 @@ fn rate_basis_requires_the_gold_title_attributable_denominator_and_matching_labe
     let mismatch = assess(&profile, Lane::Synthetic, sources);
     for row in &mismatch.workbook_comparisons.rows {
         assert_eq!(row.state, WorkbookState::Unavailable);
+    }
+}
+
+#[test]
+fn unregistered_shares_use_only_explicit_sold_and_cost_basis_evidence() {
+    for (sold_header, cos_footnote) in [
+        ("Gold sold (000s ozs attributable share)", true),
+        ("Gold sold (000s ozs attributable share)", false),
+        ("Gold sold (000s ozs 100% basis)", true),
+    ] {
+        let (mut profile, mut sources) = fixture_with_sold_header("2000", "75", false, sold_header);
+        profile.shares.clear();
+        if !cos_footnote {
+            let mut cells = synthetic::synthetic_aisc_cells();
+            for (at, value) in &mut cells {
+                match at.as_str() {
+                    "A1" => *value = MinimalCell::Text("Reconciliation of gold cost of sales to total cash costs and all-in sustaining costs".into()),
+                    "A30" => *value = MinimalCell::Text("No cost basis is stated.".into()),
+                    _ => {}
+                }
+            }
+            let bytes = build_minimal_xlsx_styled(
+                &[MinimalSheet {
+                    name: "Q1 2030".into(),
+                    hidden: false,
+                    cells,
+                }],
+                Some(&synthetic::synthetic_aisc_styles()),
+            );
+            sources[0] = source("aisc.xlsx", SourceKind::AiscReconciliation, &bytes);
+        }
+        let report = assess(&profile, Lane::Synthetic, sources);
+        let sold = report
+            .workbook_comparisons
+            .rows
+            .iter()
+            .find(|row| row.metric == "au_sold_attr_koz")
+            .expect("sold comparison");
+        let cost = cost(&report);
+        for (row, admitted, citation_count) in [
+            (sold, sold_header.contains("attributable share"), 3),
+            (cost, cos_footnote, 4),
+        ] {
+            assert_eq!(
+                row.reconciliation[0].key.ownership_basis,
+                fmine_public::key::OwnershipBasis::Unprinted
+            );
+            if admitted {
+                assert_eq!(row.state, WorkbookState::Equal);
+                assert_eq!(row.confirmed_share, Some(Rat::new(3, 4).unwrap()));
+                assert_eq!(row.basis_citations.len(), citation_count);
+                assert_eq!(row.basis_citations[2].at, "stats.xlsx:QTD!A5");
+                if citation_count == 4 {
+                    assert_eq!(row.basis_citations[3].at, "aisc.xlsx:Q1 2030!A30");
+                }
+            } else {
+                assert_eq!(row.reason, Some("ownership_unprinted"));
+                assert!(row.basis_citations.is_empty());
+                assert!(row.difference.is_none());
+            }
+        }
     }
 }
 

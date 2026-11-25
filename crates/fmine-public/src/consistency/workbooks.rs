@@ -63,7 +63,7 @@ pub struct WorkbookComparison {
     pub state: WorkbookState,
     pub reason: Option<&'static str>,
     pub difference: Option<Difference>,
-    /// Only the existing gold-table bridge may supply an otherwise unprinted rate basis.
+    /// Only the existing gold-table bridge may supply an otherwise unprinted basis.
     pub confirmed_share: Option<Rat>,
     pub basis_citations: Vec<BasisCitation>,
 }
@@ -126,18 +126,21 @@ fn number(cell: &KeyedCell) -> Result<(Rat, Rat), &'static str> {
     Ok((point, half_step))
 }
 
-fn confirm_rate_basis(
-    profile: &IssuerProfile,
-    sources: &[LoadedSource],
-    row: &mut WorkbookComparison,
-) {
-    if !matches!(row.metric, "tcc_usd_per_oz" | "aisc_usd_per_oz") {
-        return;
-    }
+fn confirm_basis(profile: &IssuerProfile, sources: &[LoadedSource], row: &mut WorkbookComparison) {
     let ([a], [b]) = (row.reconciliation.as_slice(), row.mine_stats.as_slice()) else {
         return;
     };
     if a.key.ownership_basis != OwnershipBasis::Unprinted {
+        return;
+    }
+    // The summary reader's sold field also accepts older shorthand. A comparison that recovers
+    // ownership needs the attributable wording on this source, not just the canonical field id.
+    if row.metric == "au_sold_attr_koz"
+        && !b
+            .label_as_printed
+            .as_deref()
+            .is_some_and(|label| label.to_lowercase().ends_with(" attributable share)"))
+    {
         return;
     }
     let confirmed = (|| {
@@ -149,7 +152,7 @@ fn confirm_rate_basis(
         })?;
         let sheet = source.workbook.sheets.iter().find(|s| s.name == sheet)?;
         let table = aisc::locate_table(sheet, &profile.subjects).ok()??;
-        let basis = aisc::bridge_basis(
+        let mut basis = aisc::bridge_basis(
             profile,
             sources,
             source,
@@ -159,6 +162,14 @@ fn confirm_rate_basis(
             b.key.ownership_basis,
         )
         .ok()?;
+        // The sold-ounce row proves the denominator. CoS also needs an explicit statement that
+        // the numerator is attributable. The TCC/AISC bridges already cover the net numerators.
+        if row.metric == "cos_usd_per_oz" {
+            let footnote = aisc::find_share_footnote(sheet)?;
+            basis
+                .evidence
+                .push(format!("{file}:{}!{footnote}", sheet.name));
+        }
         let citations = basis
             .evidence
             .iter()
@@ -315,7 +326,7 @@ pub fn compare(
                     .then_with(|| a.to_json().cmp(&b.to_json()))
             });
         }
-        confirm_rate_basis(profile, sources, row);
+        confirm_basis(profile, sources, row);
         match classify(row) {
             Ok((state, difference)) => {
                 row.state = state;

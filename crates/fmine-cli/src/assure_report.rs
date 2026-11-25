@@ -610,7 +610,7 @@ fn workbook_comparisons(out: &mut String, report: &PublicAssuranceReport) {
         if !comparison.basis_citations.is_empty() {
             let _ = writeln!(
                 out,
-                "\nExplicit rate-basis evidence for {} / {} / {}: {}.\n",
+                "\nOwnership evidence for {} / {} / {}. {}.\n",
                 text(&comparison.release),
                 text(&comparison.subject),
                 text(comparison.metric),

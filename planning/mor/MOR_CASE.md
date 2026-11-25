@@ -1952,3 +1952,21 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     The separately checked AISC operand references match the Claim ID, locator and registered hash.
     A Q2 receipt that changed Tongon's disposed zero to a number failed, as did a receipt with
     an unbound AISC operand. E867's publisher assertions and evidence boundaries apply.
+
+- **E869** Same-release sold-ounce and cost-of-sales basis (FACT, 2026-11-25 UTC, bd-504e).
+  - An independent openpyxl scan of the nine original-quarter AISC sheets found the attributable
+    sold-ounce headings and the explicit attributable-numerator cost-of-sales footnotes. The W1
+    Mine Stats extraction independently found both rows, the attributable sold header and the
+    printed site shares for Kibali, Porgera and Veladero. The format reader matched all 54 displayed
+    pairs. Porgera's two 2024Q3 comparisons retain the W1-DR-01 share conflict and stay unavailable.
+  - The native assurance replay moved 46 of 736 comparisons from unavailable to equal through Q2
+    and 52 of 804 through Q3. All newly admitted pairs matched the independent locators and
+    displayed values. The Q3 split is 440 equal, 12 not published and 352 unavailable.
+    Kibali's 2026Q3 AISC workbook `Q3 2026!L18` and Mine Stats `QTD!D16` both show 93 koz sold.
+    Their cost rates at `L19` and `E16` both show $1,555/oz, with the AISC basis statement at
+    `Q3 2026!A32`. All 26 newly resolved cost-rate pairs retain this kind of footnote citation.
+  - All other comparison rows, both source Claims in every changed row, the cross-vintage ledger,
+    and the E864 assurance roots and anchors agreed with the prior receipts. The workbook
+    comparison projects the existing typed Claims and has its own digest. Synthetic controls
+    with missing CoS language and a 100%-basis sold header refused their respective comparisons.
+    The census covers the 54 named gold workbook pairs and leaves the complete T18 census open.
