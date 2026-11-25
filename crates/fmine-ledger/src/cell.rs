@@ -548,10 +548,15 @@ mod tests {
         other_cell.cell_id = "CELL-SITE(other)".to_string();
         let mut ahead = lease_e2.clone();
         ahead.epoch = 3;
+        // Each batch carries its lease's own epoch, so only the check that the lease is the one granted can
+        // refuse it.
         for lease in [&forged, &other_cell, &ahead] {
             assert!(
                 matches!(
-                    cell.commit_with_lease(lease, sample_batch("CELL-SITE(lumwana)", 2, 1, d0)),
+                    cell.commit_with_lease(
+                        lease,
+                        sample_batch("CELL-SITE(lumwana)", lease.epoch, 1, d0)
+                    ),
                     Err(LedgerError::LeaseViolation { .. })
                 ),
                 "{lease:?}"
