@@ -44,6 +44,8 @@ pub enum CostValue {
         item: String,
         driver: DeclaredDriver,
     },
+    /// Declared project facts are classified under an explicitly bound registered rule.
+    ProjectLine(super::project::DeclaredProject),
     /// Gold ounces sold, not produced ounces or thousands of ounces.
     SoldOunces(ExactQty),
     /// Copper pounds sold, not produced copper, metric tonnes or millions of pounds.
@@ -101,6 +103,7 @@ impl CostInput {
             CostValue::SoldOunces(_) | CostValue::SoldPounds(_) => (1, ""),
             CostValue::GoldShare(_) | CostValue::CopperShare(_) => (2, ""),
             CostValue::Line { item, .. } | CostValue::DriverLine { item, .. } => (3, item),
+            CostValue::ProjectLine(project) => (4, &project.id),
         }
     }
 
@@ -109,6 +112,7 @@ impl CostInput {
         match self.value {
             CostValue::Line { .. }
             | CostValue::DriverLine { .. }
+            | CostValue::ProjectLine(_)
             | CostValue::SoldOunces(_)
             | CostValue::SoldPounds(_) => AdditivityClass::ExtensiveAdditive,
             CostValue::GoldShare(_) | CostValue::CopperShare(_) | CostValue::Rule { .. } => {
@@ -126,6 +130,7 @@ impl CostInput {
             CostValue::SoldPounds(_) => 4,
             CostValue::CopperShare(_) => 5,
             CostValue::DriverLine { .. } => 6,
+            CostValue::ProjectLine(_) => 7,
             _ => self.key().0,
         });
         match &self.value {
@@ -138,6 +143,7 @@ impl CostInput {
                 enc.put_str(item);
                 enc.put_str(&driver.json_fields());
             }
+            CostValue::ProjectLine(project) => enc.put_str(&project.json_fields()),
             CostValue::SoldOunces(value)
             | CostValue::SoldPounds(value)
             | CostValue::GoldShare(value)
@@ -294,6 +300,7 @@ pub struct CostSummary {
     pub primary_metal_share: Option<ExactQty>,
     pub usd_per_unit: ExactQty,
     pub contributions: Vec<Contribution>,
+    pub project_classifications: Vec<super::project::Classification>,
 }
 
 /// Immutable admitted inputs and result. Cloning a returned Claim cannot alter this receipt.
@@ -476,7 +483,7 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
     {
         return Err(bad(
             RefusalCode::BasisMismatch105,
-            "duplicate rule, sold quantity, allocation or cost item",
+            "duplicate rule, sold quantity, allocation, cost item or project id",
         ));
     }
     let CostValue::Rule {
@@ -524,8 +531,28 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
     let share = allocation.map(|(_, q)| q);
     let mut lines = Vec::new();
     let mut amounts = Vec::new();
+    let mut project_classifications = Vec::new();
     for input in &inputs {
-        if let Some((item, amount)) = input.value.value.cost_line()? {
+        let line = if let CostValue::ProjectLine(project) = &input.value.value {
+            let classification =
+                super::project::classify(registry, definition, project, input.claim_id)?;
+            if inputs.iter().any(|other| {
+                matches!(&other.value.value,
+                    CostValue::Line { item, .. } | CostValue::DriverLine { item, .. }
+                        if item == classification.item)
+            }) {
+                return Err(bad(
+                    RefusalCode::BasisMismatch105,
+                    "a classified project item overlaps a direct or driver cost line; supply disjoint project expenditures",
+                ));
+            }
+            let item = classification.item;
+            project_classifications.push(classification);
+            Some((item, project.amount))
+        } else {
+            input.value.value.cost_line()?
+        };
+        if let Some((item, amount)) = line {
             if !named(item) || amount.ccy != Currency::USD {
                 return Err(bad(
                     RefusalCode::BasisMismatch105,
@@ -612,8 +639,14 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         primary_metal_share: share,
         usd_per_unit: calculated.usd_per_unit,
         contributions,
+        project_classifications,
     };
-    let mut enc = Encoder::new_frame(*b"CSTR", 1);
+    let version = if summary.project_classifications.is_empty() {
+        1
+    } else {
+        2
+    };
+    let mut enc = Encoder::new_frame(*b"CSTR", version);
     enc.put_u64(inputs.len() as u64);
     for input in &inputs {
         put_envelope(&mut enc, input);
@@ -625,6 +658,9 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         enc.put_str(&contribution.item);
         enc.put_str(contribution.treatment.as_str());
         put_qty(&mut enc, contribution.numerator_usd);
+    }
+    for project in &summary.project_classifications {
+        enc.put_str(&project.to_json());
     }
     CostReceipt::from_admitted(
         inputs,

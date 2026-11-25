@@ -16,6 +16,7 @@ pub mod claims;
 mod declared;
 pub mod driver;
 pub mod geo;
+pub mod project;
 pub mod worksheet;
 
 /// The registry as committed.

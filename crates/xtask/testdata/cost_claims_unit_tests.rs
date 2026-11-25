@@ -208,7 +208,7 @@ mod tests {
         for mutation in [
             "duplicate",
             "incomplete",
-            "growth",
+            "unknown_item",
             "currency",
             "zero_sold",
             "extra_share",
@@ -232,8 +232,8 @@ mod tests {
                     });
                     "FMINE-REF-201"
                 }
-                "growth" => {
-                    inputs.push(line("capital_expenditure_non_sustaining", 100));
+                "unknown_item" => {
+                    inputs.push(line("unregistered_project_cost", 100));
                     "FMINE-REF-105"
                 }
                 "currency" => {

@@ -2579,3 +2579,14 @@ classification and confidentiality through derivation. Neither mode authenticate
 establishes comparability across definitions or grants physical/disclosure authority. The registered
 read-only Bullion verb and robot-docs expose both input modes. `tests/metrics/capital_return.toml` is an
 invented example; no authentic issuer ROCE coverage is claimed.
+
+### Project assumptions in declared cost worksheets
+
+DESIGN (BD-060/061): `metrics cost` accepts optional `project_cost` rows in the existing
+`fmine.cost-worksheet.v1` format. The metrics owner classifies explicit existing-operation or
+extension inputs against the chosen inherited registry rule and feeds the selected cost line through
+the same AISC/AIC calculation. JSON and Markdown preserve project assumptions, source Claims,
+registered thresholds, condition results and included/excluded treatment. The command continues to
+bind the worksheet and registry hashes and retain all four authority flags as false. Missing facts,
+unsupported rules and overlapping direct/driver/project items refuse. These are conditional declared
+classifications, not authenticated accounting decisions or completed WGC reproduction gates.

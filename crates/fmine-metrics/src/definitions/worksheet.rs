@@ -169,7 +169,10 @@ fn evaluate_inner(
     let definition_tag = claims::definition_tag(&registry, definition)?;
     let doc = parse_subset(text).map_err(|e| bad(e.line, e.reason))?;
     if doc.rows.len() > MAX_ROWS {
-        return Err(bad(1, "worksheet permits at most 4096 cost/driver/UU rows"));
+        return Err(bad(
+            1,
+            "worksheet permits at most 4096 cost/driver/project/UU rows",
+        ));
     }
     let top = fields(
         &doc.top,
@@ -248,7 +251,7 @@ fn evaluate_inner(
         values.push((CostValue::CopperShare(quantity(share, *line)?), *line));
     }
     let mut unknowns = BTreeMap::new();
-    let mut driver_anchors = BTreeMap::new();
+    let mut row_anchors = BTreeMap::new();
     for row in &doc.rows {
         match row.table.as_str() {
             "cost" => {
@@ -303,7 +306,93 @@ fn evaluate_inner(
                         format!("line {}: driver_cost.fixed_usd defaults to 0 USD", row.line),
                     ));
                 }
-                driver_anchors.insert(row.line, anchors);
+                row_anchors.insert(row.line, anchors);
+            }
+            "project_cost" => {
+                let f = fields(
+                    &row.fields,
+                    &[
+                        "id",
+                        "cost_kind",
+                        "usd",
+                        "classification_rule",
+                        "project_kind",
+                    ],
+                    &[
+                        "uplift_percent",
+                        "months_to_net_cash",
+                        "duration_months",
+                        "ore_phase_years",
+                    ],
+                    row.line,
+                    bad,
+                )?;
+                let whole_months = |key| -> Result<i64, Refusal> {
+                    let (value, line) = get(&f, key)?;
+                    value
+                        .parse::<i64>()
+                        .ok()
+                        .filter(|n| *n >= 0)
+                        .ok_or_else(|| bad(line, "months must be a nonnegative whole number"))
+                };
+                let assumptions = match get(&f, "project_kind")?.0 {
+                    "existing_operation"
+                        if !f.contains_key("duration_months")
+                            && !f.contains_key("ore_phase_years") =>
+                    {
+                        let (uplift, line) = get(&f, "uplift_percent")?;
+                        let months_to_net_cash = match get(&f, "months_to_net_cash")?.0 {
+                            "never" => None,
+                            _ => Some(whole_months("months_to_net_cash")?),
+                        };
+                        super::Project::AtExistingOperation {
+                            uplift_percent: quantity(uplift, line)?,
+                            months_to_net_cash,
+                        }
+                    }
+                    "extension"
+                        if !f.contains_key("uplift_percent")
+                            && !f.contains_key("months_to_net_cash") =>
+                    {
+                        let (years, line) = get(&f, "ore_phase_years")?;
+                        super::Project::Extension {
+                            duration_months: whole_months("duration_months")?,
+                            ore_phase_years: quantity(years, line)?,
+                        }
+                    }
+                    _ => {
+                        return Err(bad(
+                            row.line,
+                            "project_kind requires existing_operation with uplift_percent and months_to_net_cash, or extension with duration_months and ore_phase_years; unknown or mixed facts refuse",
+                        ));
+                    }
+                };
+                let (usd, line) = get(&f, "usd")?;
+                let (kind, kind_line) = get(&f, "cost_kind")?;
+                let classification_rule = get(&f, "classification_rule")?.0;
+                values.push((
+                    CostValue::ProjectLine(super::project::DeclaredProject {
+                        id: get(&f, "id")?.0.into(),
+                        cost_kind: super::project::CostKind::parse(kind)
+                            .ok_or_else(|| bad(kind_line, "unsupported project cost_kind"))?,
+                        amount: money(usd, line)?,
+                        classification_rule: classification_rule.into(),
+                        rule_tag: super::project::rule_tag(&registry, classification_rule)?,
+                        assumptions,
+                    }),
+                    row.line,
+                ));
+                let mut anchors: Vec<_> = f
+                    .iter()
+                    .map(|(key, (_, line))| {
+                        anchored(&source, format!("line {line}: project_cost.{key}"))
+                    })
+                    .collect();
+                anchors.push(anchored(
+                    &metrics_source,
+                    format!("project_test {classification_rule}: exact classification thresholds"),
+                ));
+                row_anchors.insert(row.line, anchors);
             }
             "uu" => {
                 let f = fields(
@@ -361,7 +450,7 @@ fn evaluate_inner(
                 &source,
                 format!("line {line}: declared cost worksheet input"),
             )];
-            anchors.extend(driver_anchors.remove(&line).unwrap_or_default());
+            anchors.extend(row_anchors.remove(&line).unwrap_or_default());
             let rule = matches!(value, CostValue::Rule { .. });
             if rule {
                 anchors.push(anchored(
@@ -452,6 +541,9 @@ fn input_json(input: &CostInput) -> String {
             js(item),
             driver.json_fields()
         ),
+        CostValue::ProjectLine(project) => {
+            format!("{{\"kind\":\"project_cost\",{}}}", project.json_fields())
+        }
         CostValue::SoldOunces(q) => {
             format!("{{\"kind\":\"ounces_sold\",\"value\":{}}}", js(&qty(*q)))
         }
@@ -492,8 +584,16 @@ impl CostReceipt {
             CostUnit::GoldOunceSold => ("ounces_sold", "gold_share", "usd_per_oz"),
             CostUnit::CopperPoundSold => ("pounds_sold", "copper_share", "usd_per_lb"),
         };
+        let projects = if s.project_classifications.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ",\"project_classifications\":[{}]",
+                join_json(&s.project_classifications, |p| p.to_json())
+            )
+        };
         let summary = format!(
-            "{{\"scope\":{},\"definition\":{},\"definition_tag\":{},\"superseded_by\":{},\"declared_complete\":{},\"currency\":\"USD\",\"numerator_usd\":{},\"{quantity_key}\":{},\"{share_key}\":{},\"{rate_key}\":{},\"contributions\":[{contributions}]}}",
+            "{{\"scope\":{},\"definition\":{},\"definition_tag\":{},\"superseded_by\":{},\"declared_complete\":{},\"currency\":\"USD\",\"numerator_usd\":{},\"{quantity_key}\":{},\"{share_key}\":{},\"{rate_key}\":{},\"contributions\":[{contributions}]{projects}}}",
             scope_json(&s.scope),
             js(&s.definition),
             js(&s.definition_tag),
@@ -605,6 +705,53 @@ impl CostReceipt {
             out.push_str("\n## Declared cost drivers\n\nCost = quantity × USD per stated unit + fixed USD; no fitted rates or unit conversion.\n\n| Cost item | Driver | Quantity and unit | USD per unit | Fixed USD |\n|---|---|---:|---:|---:|\n");
             out.push_str(&drivers.join("\n"));
             out.push('\n');
+        }
+        if !s.project_classifications.is_empty() {
+            out.push_str("\n## Conditional project classifications\n\nThe registered rule is applied to declared project facts. Both conditions must hold for non-sustaining treatment. Facts and account classification are not independently authenticated. `never` explicitly declares no incremental net cash; an unknown timing is not accepted.\n\n");
+            for p in &s.project_classifications {
+                let t = &p.thresholds;
+                let assumptions = match p.project.assumptions {
+                    super::Project::AtExistingOperation {
+                        uplift_percent,
+                        months_to_net_cash,
+                    } => format!(
+                        "existing operation; largest declared uplift {}%; first incremental net cash {}",
+                        qty(uplift_percent),
+                        months_to_net_cash
+                            .map_or_else(|| "never".into(), |n| format!("at month {n}"))
+                    ),
+                    super::Project::Extension {
+                        duration_months,
+                        ore_phase_years,
+                    } => format!(
+                        "extension; duration {duration_months} months; ore phase {} years",
+                        qty(ore_phase_years)
+                    ),
+                };
+                let (first, second) = p.condition_names();
+                let _ = writeln!(
+                    out,
+                    "### {}\n\n{}; declared category `{}`.\n\nRule `{}`: uplift ≥ {}%; incremental net cash after {} months or never; extension duration ≥ {} months and ore phase > {} years.\n\n- `{first}`: **{}**.\n- `{second}`: **{}**.\n- Classification: **{}**; cost item `{}`.\n- Input Claim: `{}`; rule digest `{}`.\n",
+                    text(&p.project.id),
+                    assumptions,
+                    p.project.cost_kind.as_str(),
+                    text(&t.definition),
+                    t.material_uplift_percent,
+                    t.net_cash_months,
+                    t.extension_months,
+                    t.ore_phase_years,
+                    p.first_condition,
+                    p.second_condition,
+                    if p.non_sustaining {
+                        "non-sustaining"
+                    } else {
+                        "sustaining"
+                    },
+                    p.item,
+                    p.input_claim_id,
+                    p.project.rule_tag
+                );
+            }
         }
         let _ = write!(
             out,

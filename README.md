@@ -947,6 +947,39 @@ inputs use major USD units with at most four decimal places. Quantities and shar
 fractions. The calculation does not pass through floating point, and JSON retains exact rational results
 and complete canonical input/output Claims, bound to the actual worksheet and metric-registry hashes.
 
+### Classify project costs before calculating AISC and AIC
+
+DESIGN (BD-060/061): optional `[[project_cost]]` rows carry the assumptions needed by the registered
+sustaining/non-sustaining test. The calculation retains each project's inputs, both condition results,
+the exact thresholds, its source Claim and the resulting cost-line treatment.
+
+```bash
+cargo run -p fmine-cli -- metrics cost --input tests/costs/classified_projects.toml --definition aisc@wgc-2018 --format markdown
+cargo run -p fmine-cli -- metrics cost --input tests/costs/classified_projects.toml --definition aic@wgc-2018 --format markdown
+```
+
+In the invented example, USD 800 of operating costs plus a USD 200 sustaining pit extension produce
+**USD 10/oz AISC** on 100 sold ounces. A USD 400 expansion meets the declared non-sustaining tests:
+its largest production, NPV or reserve uplift is 10%, and incremental net cash begins in month 13.
+Including that expansion gives **USD 14/oz AIC**. Changing its net-cash assumption to month 12 moves
+the same USD 400 into AISC. The pit extension lasts 12 months but has an ore phase of exactly five years,
+so it remains sustaining under the registered strict greater-than-five-years test.
+
+A project row names a unique `id`, `cost_kind`, quoted `usd`, and
+`classification_rule = "aisc@wgc-2018"`. Its explicit assumptions are:
+
+| `project_kind` | Required fields | Registered non-sustaining condition |
+|---|---|---|
+| `existing_operation` | `uplift_percent`, `months_to_net_cash` | Largest uplift at least 10%, and first incremental net cash after month 12 or explicitly `"never"` |
+| `extension` | `duration_months`, `ore_phase_years` | Duration at least 12 months and ore phase strictly longer than five years |
+
+All values are quoted. Supported cost kinds are `capital_expenditure`, `exploration_and_study`,
+`capital_exploration` and `capitalised_stripping_and_underground_development`. Missing assumptions
+refuse; an absent cash date never means `"never"`. The selected cost definition must inherit the stated
+classification rule. Direct, declared-driver or fitted-driver lines cannot overlap a generated project
+item, and multiple distinct projects retain separate contributions. These are calculations conditional
+on the submitted assumptions; the evidence remains Assumed, Internal and uncalibrated.
+
 Planned costs can instead declare physical quantities and USD rates in `[[driver_cost]]` rows. Each row
 computes **quantity × rate + fixed cost**, then enters the same definition and allocation calculation as a
 direct cost. The [planned-driver example](tests/costs/planned_drivers.toml) replaces the USD 800.01 mining

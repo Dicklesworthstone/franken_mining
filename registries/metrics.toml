@@ -259,6 +259,24 @@ item = "lease_payments"
 definition = "aisc@wgc-2013"
 item = "income_tax"
 
+# DESIGN (BD-060/061; E853): AISC explicitly excludes the four project categories that
+# AIC includes above. Child inclusion rules override these inherited exclusions.
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "exploration_and_study_non_sustaining"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "capital_exploration_non_sustaining"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "capitalised_stripping_and_underground_development_non_sustaining"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "capital_expenditure_non_sustaining"
+
 [[excluded]]
 definition = "aisc@wgc-2013"
 item = "working_capital_changes"

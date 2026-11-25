@@ -13,7 +13,188 @@ use fmine_core::hash::sha256;
 
 const REGISTRY: &str = include_str!("../../../registries/metrics.toml");
 const SOURCE: &str = "worksheet.toml";
+const PROJECTS: &str = include_str!("../../../tests/costs/classified_projects.toml");
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn classified_project_costs_reach_aisc_aic_with_all_assumptions_and_excluded_amounts() {
+    let fixture = Fixture::new(PROJECTS);
+    let aisc = fixture.ok("aisc@wgc-2018");
+    let aic = fixture.ok("aic@wgc-2018");
+    // The 400 expansion clears both thresholds. The 200 extension's five-year ore
+    // phase does not strictly exceed five years, so it remains sustaining.
+    assert_eq!(string_field(&aisc.payload_json, "numerator_usd"), "1000");
+    assert_eq!(string_field(&aisc.payload_json, "usd_per_oz"), "10");
+    assert_eq!(string_field(&aic.payload_json, "numerator_usd"), "1400");
+    assert_eq!(string_field(&aic.payload_json, "usd_per_oz"), "14");
+    for result in [&aisc, &aic] {
+        for expected in [
+            "\"project_classifications\":[",
+            "\"id\":\"plant-expansion\"",
+            "\"id\":\"pit-extension\"",
+            "\"classification\":\"non_sustaining\"",
+            "\"classification\":\"sustaining\"",
+            "\"material_uplift_percent\":\"10\"",
+            "\"duration_at_least_threshold\":true",
+            "\"ore_phase_strictly_above_threshold\":false",
+            "project_cost.uplift_percent",
+            "project_cost.duration_months",
+            "project_test aisc@wgc-2018: exact classification thresholds",
+        ] {
+            assert!(
+                result.payload_json.contains(expected),
+                "{expected}: {}",
+                result.payload_json
+            );
+        }
+        assert!(
+            result
+                .payload_json
+                .contains(&sha256(PROJECTS.as_bytes()).to_hex())
+        );
+        assert!(
+            result
+                .payload_json
+                .contains(&sha256(REGISTRY.as_bytes()).to_hex())
+        );
+        assert!(result.to_json().contains("\"execution_authorized\":false"));
+        let markdown = result.rendered_markdown.as_ref().unwrap();
+        assert!(markdown.contains("Conditional project classifications"));
+        assert!(markdown.contains("ore phase > 5 years"));
+        assert!(markdown.contains("at month 13"));
+    }
+    assert!(aisc.payload_json.contains(
+        "\"amount_minor\":\"4000000\",\"treatment\":\"excluded\",\"numerator_usd\":\"0\""
+    ));
+    assert_eq!(fixture.ok("aisc@wgc-2018").to_json(), aisc.to_json());
+    fixture.write(&PROJECTS.replace("months_to_net_cash = \"13\"", "months_to_net_cash = \"12\""));
+    let cash_within_window = fixture.ok("aisc@wgc-2018");
+    assert_eq!(
+        string_field(&cash_within_window.payload_json, "usd_per_oz"),
+        "14"
+    );
+    assert_ne!(
+        string_field(&cash_within_window.payload_json, "digest"),
+        string_field(&aisc.payload_json, "digest")
+    );
+    fixture.write(&PROJECTS.replace("ore_phase_years = \"5\"", "ore_phase_years = \"5.0001\""));
+    assert_eq!(
+        string_field(&fixture.ok("aisc@wgc-2018").payload_json, "usd_per_oz"),
+        "8"
+    );
+    fixture.write(&PROJECTS.replace(
+        "months_to_net_cash = \"13\"",
+        "months_to_net_cash = \"never\"",
+    ));
+    let never = fixture.ok("aisc@wgc-2018");
+    assert_eq!(string_field(&never.payload_json, "usd_per_oz"), "10");
+    assert_ne!(
+        string_field(&never.payload_json, "digest"),
+        string_field(&aisc.payload_json, "digest")
+    );
+}
+
+#[test]
+fn multiple_projects_keep_separate_contributions_and_refuse_ambiguous_coverage() {
+    let extra = "\n[[project_cost]]\nid = \"second-expansion\"\ncost_kind = \"capital_expenditure\"\nusd = \"50\"\nclassification_rule = \"aisc@wgc-2018\"\nproject_kind = \"existing_operation\"\nuplift_percent = \"10\"\nmonths_to_net_cash = \"13\"\n";
+    let text = format!("{PROJECTS}{extra}");
+    let fixture = Fixture::new(&text);
+    let aic = fixture.ok("aic@wgc-2018");
+    assert_eq!(string_field(&aic.payload_json, "numerator_usd"), "1450");
+    assert_eq!(string_field(&aic.payload_json, "usd_per_oz"), "29/2");
+    assert_eq!(
+        string_field(&fixture.ok("aisc@wgc-2018").payload_json, "usd_per_oz"),
+        "10"
+    );
+    for replacement in [
+        text.replace("second-expansion", "plant-expansion"),
+        format!(
+            "{PROJECTS}\n[[cost]]\nitem = \"capital_expenditure_non_sustaining\"\nusd = \"1\"\n"
+        ),
+        format!(
+            "{PROJECTS}\n[[driver_cost]]\nitem = \"capital_expenditure_non_sustaining\"\ndriver = \"labour\"\nunit = \"hour\"\nquantity = \"1\"\nusd_per_unit = \"1\"\n"
+        ),
+    ] {
+        fixture.write(&replacement);
+        assert_eq!(
+            fixture.invoke("aic@wgc-2018").refusal.unwrap().code,
+            "FMINE-REF-105"
+        );
+    }
+    fixture.write(PROJECTS);
+    fs::write(
+        fixture.0.join("driver.toml"),
+        MINING_HISTORY
+            .replace("on_site_mining_costs", "capital_expenditure_non_sustaining")
+            .replace("Example Mine", "Site A"),
+    )
+    .unwrap();
+    let mut args = Fixture::args("aic@wgc-2018");
+    args.extend(["--fit-driver".into(), "driver.toml".into()]);
+    let refusal = invoke(&args, &fixture.0).0.refusal.unwrap();
+    assert_eq!(refusal.code, "FMINE-REF-105");
+    assert!(refusal.what.contains("overlaps a direct or driver"));
+}
+
+#[test]
+fn missing_project_facts_unknown_rules_and_inapplicable_assumptions_refuse() {
+    let fixture = Fixture::new(PROJECTS);
+    for text in [
+        PROJECTS.replace("months_to_net_cash = \"13\"\n", ""),
+        PROJECTS.replace(
+            "months_to_net_cash = \"13\"",
+            "months_to_net_cash = \"unknown\"",
+        ),
+        PROJECTS.replace(
+            "months_to_net_cash = \"13\"",
+            "months_to_net_cash = \"12.5\"",
+        ),
+        PROJECTS.replace("months_to_net_cash = \"13\"", "months_to_net_cash = \"-1\""),
+        PROJECTS.replace(
+            "project_kind = \"existing_operation\"",
+            "project_kind = \"new_operation\"",
+        ),
+        PROJECTS.replace(
+            "project_kind = \"extension\"",
+            "project_kind = \"extension\"\nuplift_percent = \"10\"",
+        ),
+        PROJECTS.replace("ore_phase_years = \"5\"", "ore_phase_years = \"-1\""),
+        PROJECTS.replace("usd = \"400\"", "usd = \"-400\""),
+        PROJECTS.replace(
+            "classification_rule = \"aisc@wgc-2018\"",
+            "classification_rule = \"unregistered\"",
+        ),
+        PROJECTS.replace(
+            "cost_kind = \"capital_expenditure\"",
+            "cost_kind = \"unknown\"",
+        ),
+    ] {
+        fixture.write(&text);
+        let result = fixture.invoke("aisc@wgc-2018");
+        assert_ne!(result.exit_code, 0, "accepted {text}");
+        assert!(!result.payload_json.contains("\"usd_per_oz\""));
+    }
+    fixture.write(PROJECTS);
+    assert_eq!(
+        fixture.invoke("aisc@wgc-2013").refusal.unwrap().code,
+        "FMINE-REF-105"
+    );
+    let baseline = fixture.ok("aisc@wgc-2018");
+    fs::write(
+        fixture.0.join("registries/metrics.toml"),
+        REGISTRY.replace(
+            "material_uplift_percent = \"10\"",
+            "material_uplift_percent = \"11\"",
+        ),
+    )
+    .unwrap();
+    let changed = fixture.ok("aisc@wgc-2018");
+    assert_eq!(string_field(&changed.payload_json, "usd_per_oz"), "14");
+    assert_ne!(
+        string_field(&changed.payload_json, "digest"),
+        string_field(&baseline.payload_json, "digest")
+    );
+}
 
 #[test]
 fn fitted_driver_cost_reaches_registered_aisc_with_its_full_model_receipt() {
@@ -564,7 +745,7 @@ fn missing_or_ambiguous_cost_inputs_refuse_without_a_result() {
         original.replace("usd = \"800\"", "usd = \"1.00001\""),
         original.replace("currency = \"USD\"", "currency = \"CAD\""),
         original.replace("ownership = \"full\"", "ownership = \"attributable\""),
-        original.replace("on_site_mining_costs", "capital_expenditure_non_sustaining"),
+        original.replace("on_site_mining_costs", "unregistered_project_cost"),
         format!("{original}\n[[cost]]\nitem = \"on_site_mining_costs\"\nusd = \"800\"\n"),
     ];
     for text in malformed {

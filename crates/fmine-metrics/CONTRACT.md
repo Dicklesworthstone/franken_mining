@@ -669,7 +669,6 @@ The other modules have local errors with no refusal code:
   infer driver measurement error, learn price-linked lines or establish prospective calibration.
 - **Code with no caller outside this crate's tests:**
   - `AiscConsolidationBridge`, `PriceDeck`, `compute_geo` and `ReserveReplacementBridge`;
-  - `is_non_sustaining` (`all_in_cost_per_oz` is reached through `definitions::claims` and `fmine metrics cost`);
   - the legacy `LmdiState` and `decompose_aisc_lmdi`;
   - the single-period `compare_history` and `check_witness`.
   - `solve_cutoff_grade` runs only inside the cut-off cross-checks.
@@ -797,3 +796,20 @@ Guards and gates:
 - **G-BULL-6** (no metric without `rules_version` and basis) is not enforced here. Rendering happens in `fmine-public`.
 - **GATE-BULL-01** has no scorer in this crate. The crate supplies kernels only.
 - **GATE-BULL-02 and GATE-BULL-03** need the FrankenAccounting book and a site pilot. Neither exists here.
+
+### Declared project classification in cost worksheets
+
+DESIGN (BD-060/061; plan §21.6): optional `project_cost` rows bind a registered project test and
+explicit existing-operation or extension assumptions to each named USD cost. The shared
+`definitions::project` owner recomputes both conditions, selects the sustaining/non-sustaining
+line and retains the exact thresholds and input Claim. The selected cost definition must inherit
+the declared classification rule. AISC excludes the four registered non-sustaining project lines;
+AIC explicitly includes them through its existing child definition. Excluded amounts stay visible.
+
+Unique project IDs retain separate contributions even when they map to one item. Direct, declared-driver
+and fitted-driver amounts cannot overlap generated project items. Missing/inapplicable facts, unknown
+rules, changed threshold bindings and incompatible cost definitions refuse. An absent cash time does
+not become the explicit `never` assumption. Source anchors bind submitted field values and the actual
+metric registry bytes. Inputs remain Assumed/Internal and uncalibrated; no accounting judgment,
+completeness audit or authentic WGC example reproduction is inferred. The invented example is
+`tests/costs/classified_projects.toml`; direct regressions are in the existing cost worksheet tests.

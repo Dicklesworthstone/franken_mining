@@ -45,23 +45,19 @@ mod tests {
         assert_eq!(got.superseded_by, None);
     }
 
-    /// AIC is AISC plus the non-sustaining lines. The same line is refused under AISC, because AISC neither counts
-    /// nor excludes it: growth capital cannot slip through either metric unseen.
+    /// AIC includes non-sustaining lines; AISC explicitly excludes them and retains their names.
     #[test]
-    fn test_non_sustaining_capital_is_in_aic_and_refused_in_aisc() {
+    fn test_non_sustaining_capital_is_in_aic_and_explicitly_excluded_in_aisc() {
         let lines = [
             line("on_site_mining_costs", "800"),
             line("capital_expenditure_non_sustaining", "400"),
         ];
         let aic = cost("aic@wgc-2018", &lines).expect("computes");
         assert_eq!(aic.usd_per_oz, usd("12"));
-        assert_eq!(
-            cost(AISC, &lines),
-            Err(MetricFailure::UnregisteredItem {
-                definition: AISC.to_string(),
-                item: "capital_expenditure_non_sustaining".to_string(),
-            })
-        );
+        let aisc = cost(AISC, &lines).expect("explicit registered exclusion");
+        assert_eq!(aisc.usd_per_oz, usd("8"));
+        assert_eq!(aisc.left_out, vec!["capital_expenditure_non_sustaining"]);
+        assert_eq!(aisc.counted, vec!["on_site_mining_costs"]);
     }
 
     /// One item, two versions: the same inputs differ by the lease line, and the older result says it is superseded.

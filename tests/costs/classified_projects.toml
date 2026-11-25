@@ -1,0 +1,35 @@
+# DESIGN: invented project assumptions, not an issuer filing or an accounting classification.
+# Independent arithmetic: AISC = (800 + 200) / 100 = 10 USD/oz;
+# AIC = (800 + 400 + 200) / 100 = 14 USD/oz.
+schema = "fmine.cost-worksheet.v1"
+issuer = "invented"
+subject = "Site A"
+period = "2030FY"
+ownership = "full"
+basis = "nominal USD accrual"
+currency = "USD"
+complete = "true"
+ounces_sold = "100"
+
+[[cost]]
+item = "on_site_mining_costs"
+usd = "800"
+
+[[project_cost]]
+id = "plant-expansion"
+cost_kind = "capital_expenditure"
+usd = "400"
+classification_rule = "aisc@wgc-2018"
+project_kind = "existing_operation"
+# Largest declared uplift in annual/LOM production, NPV or reserves at the operation level.
+uplift_percent = "10"
+months_to_net_cash = "13"
+
+[[project_cost]]
+id = "pit-extension"
+cost_kind = "capitalised_stripping_and_underground_development"
+usd = "200"
+classification_rule = "aisc@wgc-2018"
+project_kind = "extension"
+duration_months = "12"
+ore_phase_years = "5"
