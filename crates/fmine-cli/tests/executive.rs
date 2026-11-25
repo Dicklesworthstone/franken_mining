@@ -622,8 +622,48 @@ fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_dige
     for flags in [&["--json"][..], &["--format", "json"], &["--brief"]] {
         assert_eq!(brief("executive_hedge", flags).status.code(), Some(2));
     }
-    assert_eq!(brief("kpi_constraints", &[]).status.code(), Some(2));
     assert_eq!(brief("equity", &[]).status.code(), Some(3));
+}
+
+#[test]
+fn kpi_brief_shows_the_first_value_gain_and_matches_the_full_comparison() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let model = "tests/capital/kpi_constraints.toml";
+    let run = |format: &[&str]| {
+        let result = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .current_dir(&root)
+            .args(["decide", "program", model])
+            .args(format)
+            .output()
+            .expect("run KPI comparison");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        result.stdout
+    };
+    let json = parse(&run(&["--json"])).expect("full KPI JSON");
+    let payload = json.get("payload").expect("payload");
+    let digest = payload
+        .get("program")
+        .and_then(|report| report.get("digest"))
+        .and_then(Json::as_str)
+        .expect("comparison digest");
+    let source = sha256(&std::fs::read(root.join(model)).expect("fixture")).to_hex();
+    let brief = String::from_utf8(run(&["--brief"])).expect("brief Markdown");
+    for expected in [
+        "| Original eligibility | growth | 100 USD |",
+        "| All declared KPI limits | efficient | 80 USD |",
+        "**Expected value given up** 20 USD.",
+        "inclusive cap of **3/2 USD/oz_t_au**",
+        "**First higher-value limit** 2 USD/oz_t_au. Co-winners: growth. Expected value 100 USD.",
+    ] {
+        assert!(brief.contains(expected), "{expected}\n{brief}");
+    }
+    assert!(brief.contains(&format!("Comparison digest `{digest}`.")));
+    assert!(brief.contains(&format!("Worksheet SHA-256 `{source}`.")));
+    assert!(brief.len() * 2 < run(&["--format", "markdown"]).len());
 }
 
 #[test]

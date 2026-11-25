@@ -349,6 +349,11 @@ ties cost zero when any original winner remains. These are finite portfolio diff
 derivatives, causal estimates or a single hidden score. Each frontier uses the same original finite
 population, so loosening a metric never resurrects a structurally or risk-rejected bundle.
 
+DESIGN (bd-229.3). The meeting brief reads these evaluated frontiers. It reports the first looser
+limit with a strictly higher objective when a current solution exists and the first feasible limit
+when it does not. Co-winners, unavailable values, exact USD or USD/share and the comparison digest
+come from the complete report.
+
 `model::evaluate` accepts `kpi_constraint`, `kpi_baseline` and `kpi_increment` tables in the existing capital
 worksheet and returns `EvaluatedModel::Kpi`. The constraint's `reporting_period` is an inclusive date range,
 distinct from cash-row `period` identifiers; its output `period` retains that range. Components and limits are quoted exact signed `n/d`

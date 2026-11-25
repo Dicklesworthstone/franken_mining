@@ -160,7 +160,7 @@ fn frontiers_hold_other_kpis_fixed_and_empty_sets_never_invent_zero_cost() {
         );
     }
     d.constraints.push(roce);
-    let report = evaluate(&program, &source(d)).unwrap();
+    let report = evaluate(&program, &source(d.clone())).unwrap();
     assert!(report.summary().constrained_winners.is_empty());
     assert_eq!(report.summary().constrained_objective, None);
     assert_eq!(report.summary().opportunity_cost, None);
@@ -178,6 +178,21 @@ fn frontiers_hold_other_kpis_fixed_and_empty_sets_never_invent_zero_cost() {
             .windows(2)
             .all(|w| exact_compare(w[0].limit, w[1].limit).is_gt())
     );
+    let brief = report.to_brief();
+    assert!(brief.contains("| All declared KPI limits | none | unavailable |"));
+    assert!(brief.contains("**Expected value given up** unavailable."));
+    assert!(brief.contains("**First feasible limit** 2 USD/oz_t_au. Co-winners: growth."));
+    assert!(brief.contains("**First feasible limit** 1/10 USD/USD. Co-winners: efficient."));
+
+    d.constraints[0].limit = r(1, 2);
+    d.constraints[1].limit = ONE;
+    let blocked = evaluate(&program, &source(d)).unwrap().to_brief();
+    assert_eq!(
+        blocked
+            .matches("No feasible bundle from loosening this limit alone")
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -194,10 +209,18 @@ fn ties_keep_every_winner_and_the_minimum_economic_sacrifice() {
     assert_eq!(tight.summary().baseline_winners, ["bundle_01", "bundle_02"]);
     assert_eq!(tight.summary().constrained_winners, ["bundle_01"]);
     assert_eq!(tight.summary().opportunity_cost, Some(ZERO));
+    let brief = tight.to_brief();
+    assert!(brief.contains("| Original eligibility | efficient, growth | 100 USD |"));
+    assert!(brief.contains("No higher value from loosening this limit alone."));
     let relaxed = evaluate(&program, &source(design(&program, r(2, 1)))).unwrap();
     assert_eq!(
         relaxed.summary().constrained_winners,
         ["bundle_01", "bundle_02"]
+    );
+    assert!(
+        relaxed
+            .to_brief()
+            .contains("| All declared KPI limits | efficient, growth | 100 USD |")
     );
 }
 
@@ -237,6 +260,9 @@ fn equity_objective_is_priced_in_actual_usd_per_share() {
     assert_eq!(report.summary().baseline_objective, Some(ONE));
     assert_eq!(report.summary().constrained_objective, Some(r(4, 5)));
     assert_eq!(report.summary().opportunity_cost, Some(r(1, 5)));
+    let brief = report.to_brief();
+    assert!(brief.contains("**Expected value given up** 1/5 USD/share."));
+    assert!(brief.contains("Expected value 1 USD/share."));
 }
 
 #[test]

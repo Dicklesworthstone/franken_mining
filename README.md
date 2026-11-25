@@ -2594,6 +2594,12 @@ the worksheet after changing the cap to get a new action ID. A pinned record ret
 original comparison, including rejected bundles and the KPI result Claim. An empty feasible set has
 an empty action list. The same journal operation limit applies.
 
+Use `fmine decide program tests/capital/kpi_constraints.toml --brief` for the meeting view. The
+declared AISC cap selects the efficient investment at **US$80**, giving up **US$20** of modeled
+expected value. The first higher-value cap is **2 USD per troy ounce of gold**, which admits
+growth at **US$100**. The brief gives the first useful step for each cap or floor subject to every
+other declared constraint. Its worksheet and comparison digests identify the full review.
+
 For a **two-stage capital program**, copy the full `id` from `decide program <model> --json` under
 `payload.journal_actions`. The `policy_id@comparison_digest` form pins the reviewed comparison. A worksheet
 edit invalidates the selector. Record before the UTC observation date, allowing for the journal's declared

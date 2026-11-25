@@ -136,8 +136,11 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   - DESIGN (bd-g5nh). The same flag renders total-USD static and source-derived investment programs.
     The brief retains the engine's nominal co-winners, budget, available minimum cash slack and the
     first representable tail-loss cap admitting a higher-value or first feasible package. It reports
-    declared weight stresses and resampling results with the comparison digest. Use full Markdown
-    or JSON for per-share, staged and KPI comparisons.
+    declared weight stresses and resampling results with the comparison digest.
+  - DESIGN (bd-229.3). The KPI brief retains the original and constrained co-winners, available exact
+    expected values and the opportunity cost in the reported objective unit. For each declared cap
+    or floor it selects the first looser evaluated threshold that improves the value or admits a
+    first feasible bundle. The worksheet SHA-256 and comparison digest agree with the full report.
   - DESIGN (bd-xm5k). `common_price_deck` compares two distinct source investment alternatives and
     holding cash by weighted, discounted incremental pre-tax USD over the declared periods. A dated
     `comparison` declares one element, a shared ownership/cash counterfactual basis and

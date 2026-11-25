@@ -5,9 +5,10 @@ use std::cmp::Ordering::{Equal, Greater, Less};
 use std::fmt::Write as _;
 
 use super::{evidence, md, ratio};
+use crate::robustness::kpi::{Aggregation, Direction, EvaluatedKpiProgram};
 use crate::{
     CASH_PAYOFF_CONVENTION, EvaluatedProgram, Money, ProgramChoice, ProgramSummary, Rat,
-    RefusalCode, Result, arithmetic, bad,
+    RefusalCode, Result, arithmetic, bad, exact_compare,
 };
 
 mod recourse;
@@ -141,10 +142,99 @@ fn stats(choice: &ProgramChoice) -> String {
     )
 }
 
+impl EvaluatedKpiProgram {
+    /// DESIGN (bd-229.3). Render choices and the first decision-relevant row
+    /// of each already evaluated one-limit frontier.
+    pub fn to_brief(&self) -> String {
+        let result = self.summary();
+        let original = self.static_program().summary();
+        let exact = |qty: Rat| {
+            if qty.den() == 1 {
+                qty.num().to_string()
+            } else {
+                ratio(qty)
+            }
+        };
+        let value = |qty: Option<Rat>| {
+            qty.map_or_else(
+                || "unavailable".into(),
+                |qty| format!("{} {}", exact(qty), result.objective_unit),
+            )
+        };
+        let mut out = format!(
+            "# KPI capital brief\n\n{}\n\n| Comparison | Co-winners | Expected value |\n|---|---|---:|\n| Original eligibility | {} | {} |\n| All declared KPI limits | {} | {} |\n\n**Expected value given up** {}.\n",
+            md(&result.model_key),
+            names(original, &result.baseline_winners),
+            value(result.baseline_objective),
+            names(original, &result.constrained_winners),
+            value(result.constrained_objective),
+            value(result.opportunity_cost),
+        );
+        out.push_str("\n## Decision thresholds\n\nEach step varies one limit subject to every other declared constraint.\n");
+        // Evaluation builds both in the same canonical constraint order.
+        for (constraint, frontier) in self
+            .design()
+            .value
+            .constraints
+            .iter()
+            .zip(&result.frontiers)
+        {
+            let direction = match constraint.direction {
+                Direction::Upper => "cap",
+                Direction::Lower => "floor",
+            };
+            let aggregation = match constraint.aggregation {
+                Aggregation::RatioOfExpectedTotals => "ratio of expected totals",
+                Aggregation::EveryState => "every original state",
+            };
+            let unit = constraint.metric.unit();
+            let _ = writeln!(
+                out,
+                "\n- **{}** ({}) uses an inclusive {direction} of **{} {unit}** for {} over {}. Basis: {}.",
+                md(&constraint.id),
+                constraint.metric.as_str(),
+                exact(constraint.limit),
+                aggregation,
+                md(&constraint.period),
+                md(&constraint.basis),
+            );
+            let current = result.constrained_objective;
+            let next = frontier
+                .points
+                .iter()
+                .skip_while(|point| !point.at_declared_limit)
+                .skip(1)
+                .find(|point| {
+                    point.objective_mean.is_some_and(|next| {
+                        current.is_none_or(|now| exact_compare(next, now).is_gt())
+                    })
+                });
+            let step = match (current, next) {
+                (None, Some(_)) => "First feasible limit",
+                (Some(_), Some(_)) => "First higher-value limit",
+                (None, None) => "No feasible bundle from loosening this limit alone",
+                (Some(_), None) => "No higher value from loosening this limit alone",
+            };
+            if let Some(point) = next {
+                let _ = writeln!(
+                    out,
+                    "  **{step}** {} {unit}. Co-winners: {}. Expected value {}.",
+                    exact(point.limit),
+                    names(original, &point.winners),
+                    value(point.objective_mean),
+                );
+            } else {
+                let _ = writeln!(out, "  {step}.");
+            }
+        }
+        let _ = writeln!(out, "\nComparison digest `{}`.", self.digest());
+        out
+    }
+}
+
 impl EvaluatedProgram {
     /// Render the total-USD static view and the first exact improvement if the
-    /// nominal tail-loss limit moves. Static per-share and KPI comparisons
-    /// retain their full reports.
+    /// nominal tail-loss limit moves. Static per-share comparisons use the full report.
     ///
     /// # Errors
     /// Refuses a per-share objective or an unrepresentable exact comparison.
