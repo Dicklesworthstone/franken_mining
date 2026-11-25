@@ -70,7 +70,7 @@ impl fmt::Display for TimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidInterval { start_ns, end_ns } => {
-                write!(f, "invalid time interval [{start_ns}, {end_ns}]")
+                write!(f, "invalid time interval [{start_ns}, {end_ns})")
             }
             Self::InvalidCivilDate { year, month, day } => {
                 write!(f, "invalid civil date {year:04}-{month:02}-{day:02}")
@@ -257,7 +257,8 @@ impl Anchor {
     }
 }
 
-/// Physical validity interval `[start_ns, end_ns]` (`UTC` nanoseconds since Unix epoch).
+/// Physical validity interval `[start_ns, end_ns)` (`UTC` nanoseconds since Unix epoch; plan §25.4).
+/// Equal bounds represent a single instant, rather than an empty interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ValidTime {
     pub start_ns: i64,
@@ -265,7 +266,7 @@ pub struct ValidTime {
 }
 
 impl ValidTime {
-    /// Constructs a validated interval `[start_ns, end_ns]` with `start_ns <= end_ns`.
+    /// Constructs a validated half-open interval, or an instant when `start_ns == end_ns`.
     pub fn new(start_ns: i64, end_ns: i64) -> Result<Self, TimeError> {
         if end_ns < start_ns {
             return Err(TimeError::InvalidInterval { start_ns, end_ns });
@@ -273,7 +274,7 @@ impl ValidTime {
         Ok(Self { start_ns, end_ns })
     }
 
-    /// Instantaneous valid time `[t, t]`.
+    /// Instantaneous valid time at `utc_ns`, encoded by equal bounds.
     #[must_use]
     pub const fn instant(utc_ns: i64) -> Self {
         Self {
@@ -282,16 +283,37 @@ impl ValidTime {
         }
     }
 
-    /// Returns `true` if `self` overlaps `other`.
+    /// Whether the periods share physical time. A cutoff belongs only to the period starting there;
+    /// two equal instants overlap, and an instant overlaps a period only before its exclusive end.
     #[must_use]
     pub const fn overlaps(self, other: Self) -> bool {
-        self.start_ns <= other.end_ns && other.start_ns <= self.end_ns
+        if self.start_ns == self.end_ns {
+            other.contains_instant(self.start_ns)
+        } else if other.start_ns == other.end_ns {
+            self.contains_instant(other.start_ns)
+        } else {
+            self.start_ns < other.end_ns && other.start_ns < self.end_ns
+        }
     }
 
     /// Returns `true` if `self` is wholly contained within `period`.
     #[must_use]
     pub const fn contained_in(self, period: Self) -> bool {
-        self.start_ns >= period.start_ns && self.end_ns <= period.end_ns
+        if self.start_ns == self.end_ns {
+            period.contains_instant(self.start_ns)
+        } else {
+            period.start_ns < period.end_ns
+                && self.start_ns >= period.start_ns
+                && self.end_ns <= period.end_ns
+        }
+    }
+
+    const fn contains_instant(self, at_ns: i64) -> bool {
+        if self.start_ns == self.end_ns {
+            at_ns == self.start_ns
+        } else {
+            self.start_ns <= at_ns && at_ns < self.end_ns
+        }
     }
 }
 
@@ -745,6 +767,67 @@ mod tests {
     use fmine_core::rand::{PhiloxStream, RngKey};
 
     #[test]
+    fn test_valid_time_half_open_boundaries_and_instant_containment() {
+        let earlier = ValidTime::new(0, 10).unwrap();
+        let later = ValidTime::new(10, 20).unwrap();
+        let cut = ValidTime::instant(10);
+        assert!(!earlier.overlaps(later));
+        assert!(!later.overlaps(earlier));
+        assert!(!cut.overlaps(earlier));
+        assert!(!earlier.overlaps(cut));
+        assert!(cut.overlaps(later));
+        assert!(later.overlaps(cut));
+        assert!(cut.overlaps(cut));
+        assert!(!cut.overlaps(ValidTime::instant(11)));
+        assert!(!cut.contained_in(earlier));
+        assert!(cut.contained_in(later));
+        assert!(cut.contained_in(cut));
+        assert!(!later.contained_in(cut));
+        assert!(earlier.contained_in(earlier));
+
+        // No end-plus-one arithmetic: the entire i64 nanosecond domain remains representable.
+        let span = ValidTime::new(i64::MIN, i64::MAX).unwrap();
+        assert!(ValidTime::instant(i64::MIN).contained_in(span));
+        assert!(!ValidTime::instant(i64::MAX).contained_in(span));
+        assert!(ValidTime::instant(i64::MAX).overlaps(ValidTime::instant(i64::MAX)));
+    }
+
+    #[test]
+    fn test_valid_time_operations_match_discrete_physical_time_sets() {
+        // Independent set oracle at half-nanosecond resolution distinguishes a one-nanosecond
+        // period from an instant. Exhaust all small periods and instants.
+        let points = |start: i64, end: i64| -> std::collections::BTreeSet<i64> {
+            if start == end {
+                [2 * start].into_iter().collect()
+            } else {
+                (2 * start..2 * end).collect()
+            }
+        };
+        for start in -3..=3 {
+            for end in start..=3 {
+                let left = ValidTime::new(start, end).unwrap();
+                let left_points = points(start, end);
+                for other_start in -3..=3 {
+                    for other_end in other_start..=3 {
+                        let right = ValidTime::new(other_start, other_end).unwrap();
+                        let right_points = points(other_start, other_end);
+                        assert_eq!(
+                            left.overlaps(right),
+                            !left_points.is_disjoint(&right_points),
+                            "overlap {left:?}, {right:?}"
+                        );
+                        assert_eq!(
+                            left.contained_in(right),
+                            left_points.is_subset(&right_points),
+                            "containment {left:?}, {right:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_civil_calendar_roundtrip_1900_to_2200() {
         let start = CivilDate::new(1900, 1, 1)
             .expect("1900-01-01")
@@ -1002,6 +1085,54 @@ mod tests {
             ..close_query
         };
         assert_eq!(early_close.check_admissible(&stamp), Ok(false));
+    }
+
+    #[test]
+    fn test_physical_period_cut_assigns_movements_once_with_late_assays() {
+        let cut = CivilDate::new(2026, 4, 1).unwrap().to_epoch_days() * NS_PER_DAY;
+        let periods = [
+            ValidTime::new(cut - NS_PER_DAY, cut).unwrap(),
+            ValidTime::new(cut, cut + NS_PER_DAY).unwrap(),
+        ];
+        let available = cut + 3 * NS_PER_DAY;
+        for (physical, expected) in [
+            (ValidTime::instant(cut - 1), [true, false]),
+            (ValidTime::instant(cut), [false, true]),
+            (ValidTime::instant(cut + 1), [false, true]),
+            (
+                ValidTime::new(cut - NS_PER_HOUR, cut).unwrap(),
+                [true, false],
+            ),
+            (
+                ValidTime::new(cut, cut + NS_PER_HOUR).unwrap(),
+                [false, true],
+            ),
+        ] {
+            let stamp = QuadTemporalStamp::new(
+                physical,
+                physical.start_ns,
+                available,
+                RecordTime::new(SITE, 1, available, TimeEvidence::HostSynced),
+            )
+            .unwrap();
+            for purpose in [
+                QueryPurpose::OperationalDecision,
+                QueryPurpose::RetrospectiveAccounting,
+            ] {
+                let admitted = periods.map(|period| {
+                    AsOfQuery {
+                        as_of_decision_ns: available,
+                        anchor: site_at(1),
+                        for_physical_period: period,
+                        purpose,
+                    }
+                    .check_admissible(&stamp)
+                    .unwrap()
+                });
+                assert_eq!(admitted, expected, "{physical:?}, {purpose:?}");
+                assert_eq!(admitted.into_iter().filter(|seen| *seen).count(), 1);
+            }
+        }
     }
 
     /// BD-309: fire-assay turnarounds of 3 to 21 days (plan §6.3). Every routing decision taken while the
