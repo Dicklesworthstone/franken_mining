@@ -419,16 +419,20 @@ impl LeafCheck {
 }
 
 /// `{"leaves","instances","pass","failed","skipped","by_role","by_family","by_perturbation",
-/// "skipped_by_reason","elapsed_ms"}`.
+/// "perturbed_by_file","skipped_by_reason","elapsed_ms"}`.
 #[must_use]
 pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
     let render = |m: &BTreeMap<&str, usize>| {
-        let parts: Vec<String> = m.iter().map(|(k, v)| format!("\"{k}\":{v}")).collect();
+        let parts: Vec<String> = m
+            .iter()
+            .map(|(k, v)| format!("{}:{v}", crate::js(k)))
+            .collect();
         format!("{{{}}}", parts.join(","))
     };
     let mut by_role = BTreeMap::new();
     let mut by_family = BTreeMap::new();
     let mut by_perturbation = BTreeMap::new();
+    let mut perturbed_by_file = BTreeMap::new();
     let mut skipped = BTreeMap::new();
     let mut instances: Vec<&str> = Vec::new();
     for c in checks {
@@ -437,6 +441,9 @@ pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
         *by_family.entry(family).or_insert(0) += 1;
         if let Some(p) = c.perturbation {
             *by_perturbation.entry(p.as_str()).or_insert(0) += 1;
+            if let Some((file, _)) = c.leaf.split_once(':') {
+                *perturbed_by_file.entry(file).or_insert(0) += 1;
+            }
         }
         if let Some(s) = c.skipped {
             *skipped.entry(s).or_insert(0) += 1;
@@ -448,7 +455,7 @@ pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
     let failed = checks.iter().filter(|c| c.failure.is_some()).count();
     format!(
         "{{\"leaves\":{},\"instances\":{},\"pass\":{},\"failed\":{failed},\"skipped\":{},\"by_role\":{},\
-         \"by_family\":{},\"by_perturbation\":{},\"skipped_by_reason\":{},\"elapsed_ms\":{elapsed_ms}}}",
+         \"by_family\":{},\"by_perturbation\":{},\"perturbed_by_file\":{},\"skipped_by_reason\":{},\"elapsed_ms\":{elapsed_ms}}}",
         checks.len(),
         instances.len(),
         checks.iter().filter(|c| c.pass()).count(),
@@ -456,6 +463,7 @@ pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
         render(&by_role),
         render(&by_family),
         render(&by_perturbation),
+        render(&perturbed_by_file),
         render(&skipped)
     )
 }
@@ -889,8 +897,7 @@ pub fn prove_leaves(
     prove_leaves_in(base, run, &|_, _, _| true)
 }
 
-/// The sample frame of the real lane (BD-338.S3): one leaf per instance, the operand at index i mod n of the
-/// i-th instance (n operands), so every instance and, across instances, every role is reached.
+/// The original modulo frame (BD-338.S3): operand i mod n of instance i with n operands.
 #[must_use]
 pub fn one_leaf_per_instance(instance: usize, operand: usize, n_operands: usize) -> bool {
     n_operands > 0 && operand == instance % n_operands
@@ -918,6 +925,42 @@ pub fn prove_leaves_in(
                 .map(move |(_, o)| (i, o))
         })
         .collect();
+    check_leaves(base, run, &before, &leaves)
+}
+
+fn sampled_operand(index: usize, instance: &IdentityInstance) -> Option<&Operand> {
+    let operands = &instance.operands;
+    let start = index.checked_rem(operands.len())?;
+    operands[start..]
+        .iter()
+        .chain(&operands[..start])
+        .find(|operand| plan(instance, operand).is_ok())
+        .or_else(|| operands.get(start))
+}
+
+/// Select one operand per visible instance before running any perturbations.
+/// Start at the original modulo choice and scan cyclically for a planned mutation. Keep the
+/// original skip when none has a plan. The selected check's result is final.
+pub fn prove_one_leaf_per_instance(
+    base: &[LoadedSource],
+    run: &(dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport + Sync),
+) -> Vec<LeafCheck> {
+    let before = run(base.to_vec());
+    let leaves: Vec<_> = before
+        .instances
+        .iter()
+        .enumerate()
+        .filter_map(|(index, instance)| sampled_operand(index, instance).map(|o| (instance, o)))
+        .collect();
+    check_leaves(base, run, &before, &leaves)
+}
+
+fn check_leaves(
+    base: &[LoadedSource],
+    run: &(dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport + Sync),
+    before: &PublicAssuranceReport,
+    leaves: &[(&IdentityInstance, &Operand)],
+) -> Vec<LeafCheck> {
     let workers = std::thread::available_parallelism()
         .map_or(1, std::num::NonZeroUsize::get)
         .clamp(1, leaves.len().max(1));
@@ -925,7 +968,6 @@ pub fn prove_leaves_in(
     let mut parts: Vec<Vec<LeafCheck>> = vec![Vec::new(); workers];
     std::thread::scope(|scope| {
         for (w, part) in parts.iter_mut().enumerate() {
-            let (leaves, before) = (&leaves, &before);
             scope.spawn(move || {
                 *part = leaves
                     .iter()

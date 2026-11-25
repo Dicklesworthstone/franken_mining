@@ -227,3 +227,62 @@ fn test_live_leaves_threaded_matches_sequential() {
     assert!(threaded.len() > 50, "{}", threaded.len());
     assert_eq!(threaded, sequential);
 }
+
+#[test]
+fn test_leaf_sample_falls_back_to_first_planned_mutation() {
+    let base = synthetic_sources();
+    let before = assess_synthetic(base.clone());
+    let all = prove_leaves(&base, &assess_synthetic);
+    let sample = prove_one_leaf_per_instance(&base, &assess_synthetic);
+    assert_eq!(sample.len(), before.instances.len());
+    let mut remaining = all.as_slice();
+    let mut replacements = 0;
+    let mut skips = 0;
+    for (index, (instance, actual)) in before.instances.iter().zip(&sample).enumerate() {
+        let (leaves, rest) = remaining.split_at(instance.operands.len());
+        remaining = rest;
+        let start = index % leaves.len();
+        let original = &leaves[start];
+        let expected = leaves[start..]
+            .iter()
+            .chain(&leaves[..start])
+            .find(|check| check.perturbation.is_some())
+            .unwrap_or(original);
+        assert_eq!(actual, expected);
+        replacements += usize::from(actual != original);
+        skips += usize::from(actual.skipped.is_some());
+    }
+    assert!(remaining.is_empty());
+    assert!(replacements > 0, "the fixture must exercise the fallback");
+    assert!(
+        skips > 0,
+        "the fixture must exercise an instance with no plan"
+    );
+}
+
+#[test]
+fn test_leaf_sample_preserves_failed_original_selection() {
+    let literal = |sources| {
+        let mut report = assess_synthetic(sources);
+        report.instances.retain(|instance| {
+            instance.cell == "C8" && instance.family == crate::aisc::IdentityFamily::TccFooting
+        });
+        for instance in &mut report.instances {
+            if let IdentityState::IssuerDiscrepancy(discrepancy) = &mut instance.state {
+                discrepancy.printed = 350;
+            }
+        }
+        report
+    };
+    let checks = prove_one_leaf_per_instance(&synthetic_sources(), &literal);
+    let [check] = checks.as_slice() else {
+        panic!("expected one sampled check, got {}", checks.len());
+    };
+    let at = format!(
+        "{}:{}!C8",
+        synthetic::SYNTHETIC_AISC_FILE,
+        synthetic::SYNTHETIC_TABLE_SHEET
+    );
+    assert_eq!(check.leaf, at);
+    assert_eq!(check.failure, Some(format!("value did not move: {at}")));
+}

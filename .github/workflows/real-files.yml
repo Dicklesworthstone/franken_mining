@@ -1,8 +1,8 @@
 name: Real files
 
 # The real lane in CI (BD-339.S3). repro/barrick/ci_real_files.sh fetches the registered Barrick workbooks from
-# the issuer and checks every size and sha256. It then runs the ignored real-file tests, which check the root and
-# anchor of repro/barrick/expected.toml's last row, and checks that no workbook is in git. Issuer files live only
+# the issuer and checks every size and sha256. It then runs the ignored real-file tests, checks both pinned
+# source epochs, and checks that no workbook is in git. Issuer files live only
 # in this repository's Actions cache: never in an artifact, never in a log of cell values (RISK-31, OPEN-R7-1).
 
 on:
@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       root: ${{ steps.run.outputs.root }}
+      root_q3: ${{ steps.run.outputs.root_q3 }}
     steps:
       - uses: actions/checkout@v4
       - id: cache
@@ -87,6 +88,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       root: ${{ steps.run.outputs.root }}
+      root_q3: ${{ steps.run.outputs.root_q3 }}
     steps:
       - uses: actions/checkout@v4
       - id: cache
@@ -105,15 +107,21 @@ jobs:
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
   determinism:
-    name: same root on Ubuntu and macOS
+    name: same Q2 and Q3 roots on Ubuntu and macOS
     needs: [ubuntu, macos]
     runs-on: ubuntu-latest
     steps:
       - env:
           UBUNTU_ROOT: ${{ needs.ubuntu.outputs.root }}
           MACOS_ROOT: ${{ needs.macos.outputs.root }}
+          UBUNTU_ROOT_Q3: ${{ needs.ubuntu.outputs.root_q3 }}
+          MACOS_ROOT_Q3: ${{ needs.macos.outputs.root_q3 }}
         run: |
           equal=false
-          if [ -n "$UBUNTU_ROOT" ] && [ "$UBUNTU_ROOT" = "$MACOS_ROOT" ]; then equal=true; fi
-          echo "{\"stage\":\"determinism\",\"ubuntu_root\":\"$UBUNTU_ROOT\",\"macos_root\":\"$MACOS_ROOT\",\"equal\":$equal}"
+          if [ -n "$UBUNTU_ROOT" ] && [ "$UBUNTU_ROOT" = "$MACOS_ROOT" ] &&
+             [ -n "$UBUNTU_ROOT_Q3" ] && [ "$UBUNTU_ROOT_Q3" = "$MACOS_ROOT_Q3" ]; then
+            equal=true
+          fi
+          printf '{"stage":"determinism","ubuntu_root":"%s","macos_root":"%s","ubuntu_root_q3":"%s","macos_root_q3":"%s","equal":%s}\n' \
+            "$UBUNTU_ROOT" "$MACOS_ROOT" "$UBUNTU_ROOT_Q3" "$MACOS_ROOT_Q3" "$equal"
           [ "$equal" = true ]

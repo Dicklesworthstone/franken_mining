@@ -2420,7 +2420,7 @@ mod tests {
         use fmine_public::aisc::{IdentityInstance, IdentityState, OperandRole, rate_holds};
         use fmine_public::live::{
             CheckKind, LabelCheck, LeafCheck, LiveCheck, LiveReport, Perturbation, leaf_summary,
-            one_leaf_per_instance, prove_files, prove_labels, prove_leaves, prove_leaves_in,
+            prove_files, prove_labels, prove_leaves, prove_leaves_in, prove_one_leaf_per_instance,
             rate_flip_down, rate_flip_up,
         };
         use fmine_public::sources::{IssuerProfile, load_issuer_profile};
@@ -2754,7 +2754,7 @@ mod tests {
             (profile, sources)
         }
 
-        /// BD-338.S3, leaves, on the real lane: frame `one_leaf_per_instance`, so 2,595 leaves, one per instance.
+        /// BD-338.S3, leaves, on the real lane: one planned perturbation per instance.
         /// Prints the summary and any failure. Both carry locators, codes and counts, never cell values (RISK-31).
         #[test]
         #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
@@ -2766,7 +2766,7 @@ mod tests {
             let run =
                 |s: Vec<LoadedSource>| fmine_public::assess_memo(&profile, Lane::Public, s, &memo);
             let start = std::time::Instant::now();
-            let checks = prove_leaves_in(&sources, &run, &one_leaf_per_instance);
+            let checks = prove_one_leaf_per_instance(&sources, &run);
             let summary = leaf_summary(&checks, start.elapsed().as_millis());
             let stats_files: Vec<String> = sources
                 .iter()
@@ -2780,17 +2780,24 @@ mod tests {
                 })
                 .count();
             println!(
-                "{{\"frame\":\"one_leaf_per_instance\",\"summary\":{summary},\
+                "{{\"frame\":\"one_leaf_per_instance_with_planned_fallback\",\"summary\":{summary},\
                  \"mine_stats_memo\":{{\"hits\":{},\"misses\":{},\"mine_stats_leaf_runs\":{stats_runs}}}}}",
                 memo.hits(),
                 memo.misses()
             );
-            let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
-            for f in &failures {
-                println!("{f}");
+            for check in checks.iter().filter(|check| !check.pass()) {
+                println!("{}", check.to_json());
             }
             assert_eq!(checks.len(), 2595);
-            assert!(failures.is_empty(), "{} failures", failures.len());
+            assert_eq!(
+                checks
+                    .iter()
+                    .filter(|check| check.pass()
+                        && check.perturbation.is_some()
+                        && check.root_moved)
+                    .count(),
+                2595
+            );
             // The base run and each Mine Stats leaf compute the section; every other run reuses it.
             assert_eq!(memo.misses(), 1 + stats_runs as u64);
         }

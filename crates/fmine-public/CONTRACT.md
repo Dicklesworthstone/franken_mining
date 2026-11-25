@@ -685,14 +685,19 @@ The public lane of M0 (`fmine assure public`).
     threads, so `run` must be `Sync`. The result is in instance and operand order, equal to a sequential pass
     (`test_live_leaves_threaded_matches_sequential`).
   - **Not yet:** hidden-scope instances.
-- `live::{prove_leaves_in, one_leaf_per_instance, prove_labels, LabelCheck}` (BD-338.S3): the real-lane
+- `live::{prove_one_leaf_per_instance, prove_labels, LabelCheck}` (BD-338.S3): the real-lane
   frame and the label sample.
+  - The sample starts at the original modulo choice in each instance and scans cyclically until an
+    operand has a perturbation plan. Selection happens before any mutation is run. A selected
+    failure is reported, and if no operand has a plan the original skip is reported.
+  - The run reports attempted perturbations by source file. The historical gate requires an attempted
+    pass with a moved root for each of its 2,595 instances.
   - `prove_labels` mutates each of the seven anchor labels of a located table (append "x"; prepend it for the
     ounces prefix). Each must give a table refusal or changed instances.
   - **Real lane** (ignored, local runs):
     - files: 54 of 54;
-    - leaves (one per instance): 2,492 pass, 0 fail, 103 skipped, all `nci_not_decisive` (2026-10-30; it was
-      2,444, 0 and 151 at 38a62ae, and the change is not attributed commit by commit);
+    - leaves (one per instance): 2,595 pass, 0 fail and 0 skipped through 2026Q2 (E872). The previous
+      modulo-only sample passed 2,492 and explicitly skipped 103 non-decisive NCI operands (E871);
     - labels: 56 of 56 table refusals;
     - the Kibali O11 literal mutant is caught.
   - **Finding, fixed:** a broken cost-of-sales label made `locate_table` return `Ok(None)`, so the table dropped

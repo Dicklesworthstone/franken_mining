@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # The real-lane run (BD-339.S3), as .github/workflows/real-files.yml runs it and as an owner can run it by hand:
-# fetch and verify the registered Barrick workbooks, run the ignored real-file tests (which check the root and
-# anchor of repro/barrick/expected.toml's last row), print the root, and check that no workbook is in git.
+# Fetch and verify the registered Barrick workbooks, run the ignored real-file tests, print the Q2 and Q3 roots,
+# and check that no workbook is in git.
 #
 # Output: {"stage","ok","elapsed_s"} per stage, plus fetch.sh's lines, {"stage":"root",...} and
 # {"stage":"offline_root",...}. It stops at the first failed stage with exit 1. Under GitHub Actions the root is also
-# written to $GITHUB_OUTPUT as root=<hex>.
+# written to $GITHUB_OUTPUT as root=<hex> for Q2 and root_q3=<hex> for Q3.
 # BD-338.S3's live-dependency proof runs in two places:
 # - its file checks and the real M1, inside test_public_integration;
-# - its leaf sample (one leaf per instance, about 2,600 reruns of the pipeline), as the release-mode stage
+# - its leaf sample (one planned perturbation per instance, about 2,600 reruns of the pipeline), as the release-mode stage
 #   live_leaves. The reruns reuse the Mine Stats section unless a leaf is in a Mine Stats file, and run on
 #   every core (bd-r7lp). Release, 2026-10-30: 55 s on 36 cores, 751 s on one thread.
-set -u
+set -u -o pipefail
 cd "$(dirname "$0")/../.." || exit 1
 
 stage() {
@@ -23,18 +23,19 @@ stage() {
 }
 
 root() {
-  local env
-  env="$(cargo run -q -p fmine-cli -- assure public --issuer barrick --through 2026Q2)" || return 1
-  python3 -I -c '
+  local through="$1" output_key="$2"
+  cargo run --locked -q -p fmine-cli -- assure public --issuer barrick --through "$through" --json | python3 -I -c '
 import json, os, sys
-env = json.loads(sys.stdin.read())
+env = json.load(sys.stdin)
 root, anchor = env["certificate"], env["anchor_id"]
-print(json.dumps({"stage": "root", "root": root, "anchor_id": anchor}, separators=(",", ":")))
+if not isinstance(root, str) or len(root) != 64 or any(c not in "0123456789abcdef" for c in root):
+    raise SystemExit("assurance did not return a state root")
+print(json.dumps({"stage": "root", "through": sys.argv[1], "root": root, "anchor_id": anchor}, separators=(",", ":")))
 out = os.environ.get("GITHUB_OUTPUT")
 if out:
     with open(out, "a") as f:
-        f.write(f"root={root}\n")
-' <<<"$env"
+        f.write(f"{sys.argv[2]}={root}\n")
+' "$through" "$output_key"
 }
 
 xlsx_guard() {
@@ -75,6 +76,9 @@ stage live_leaves cargo test --release -p xtask --test public_report_contract --
 stage test_cli cargo test -p fmine-cli -- --ignored \
   --skip test_real_recovery_is_embedded_in_assurance_with_separate_digest \
   --skip barrick_pdf_packets_cover_registered_conflicts
-stage root root
+stage root root 2026Q2 root
+stage root_q3 root 2026Q3 root_q3
 stage xlsx_guard xlsx_guard
-stage offline offline
+if [[ "$(uname -s)" == Linux ]]; then
+  stage offline offline
+fi

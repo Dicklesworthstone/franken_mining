@@ -2001,3 +2001,29 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     parsed-cell results. The existing release-mode label run supplies the 56-control result.
   - The four real-corpus tests affected by the bounded-reader fix (`740fc70`) also passed.
     The CI gate verdict and decisive perturbations for the skipped real instances remain open.
+
+- **E872** Decisive live-dependency sample through 2026Q2 (FACT, 2026-11-25 UTC, bd-r7lp).
+  - The exact release-mode `public_report_contract` test
+    `tests::live_dependency::barrick_live_leaves_one_per_instance` passed on the registered workbooks.
+    It attempted one perturbation in each of 2,595 instances, with 2,595 passes, zero failures and
+    zero skips. The changed input affected the expected value or state and moved the root each time.
+  - The sampler kept every planned modulo choice. The 103 skipped NCI choices in E871 were replaced by
+    label perturbations for the same instances, selected before observing the mutation results.
+    There were 2,555 perturbations in eight AISC workbooks and 40 in eight Mine Stats workbooks.
+    Counts by release (AISC / Mine Stats) were 2024Q3 420 / 5, 2024Q4 335 / 5, 2025Q1 250 / 5,
+    2025Q2 419 / 6, 2025Q3 345 / 5, 2025Q4 276 / 4, 2026Q1 196 / 4 and 2026Q2 314 / 6.
+    The separate 54 file and 56 anchor controls retain their E871 denominators.
+  - The synthetic regressions `test_leaf_sample_falls_back_to_first_planned_mutation` and
+    `test_leaf_sample_preserves_failed_original_selection` passed. They retain a skip when no operand
+    has a plan and catch the seeded literal without retrying another operand. This is sampled proof for
+    visible Q2-bounded instances. The all-leaf obligations and hosted verdict remain open.
+
+- **E873** Paired public assurance roots through 2026Q2 and 2026Q3 (FACT, 2026-11-25 UTC, bd-s4oy.3).
+  - Native arm64 macOS `fmine assure public --issuer barrick --through <quarter> --json` runs exited zero.
+    Q2 returned `0effa0b43ff122299e95b8d12cdfa57319b26a1f2a7a71fce4ea7367d0e2f264` and Q3
+    returned `a969738fca74d44e0907045d6603a82035784ada6fe50909ba579a698ddf025a`.
+    Both anchor IDs and certificates equal the pins for their respective epochs in `repro/barrick/expected.toml`.
+  - The reproduction job writes `root` and `root_q3`. Its paired comparison predicate accepts both
+    matching roots and rejected each local negative control (wrong Q2, wrong Q3 and missing Q3).
+    Bash syntax, ShellCheck and Actionlint passed. The Linux namespace step remains on Linux, and
+    macOS runs the registered-workbook stages. The hosted Ubuntu/macOS comparison is still due.
