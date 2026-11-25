@@ -13,10 +13,19 @@
 use core::cmp::Ordering;
 use std::collections::BTreeSet;
 
+use fmine_claim::{
+    AdditivityClass, Claim, ClaimDag, DeclaredFallback, Representation, SpatialSupport,
+    compose_binary, compose_binary_with_fallback,
+};
 use fmine_core::rand::{PhiloxStream, RngKey};
+use fmine_evidence::Refusal;
+use fmine_evidence::color::IntervalOp;
 use fmine_units::ExactQty;
 
 use crate::ExploreError;
+
+/// Canonical fallback identifier for USGS MapMark4-degenerate three-part assessment (`§7.3`, `NL-6`).
+pub const MAPMARK4_DEGENERATE_FALLBACK_ID: &str = "mapmark4-degenerate-n0";
 
 /// Exact 256-bit unsigned product `(hi, lo)` of two `u128` integers for overflow-free exact sorting.
 fn mul_u128_wide(a: u128, b: u128) -> (u128, u128) {
@@ -410,6 +419,83 @@ pub fn ks_two_sample_exact(
     Ok(max_diff)
 }
 
+/// Composed three-part endowment claim and its in-memory provenance index (`BD-042`, `BD-235`).
+///
+/// Wires Lodestar's MapMark4-degenerate three-part endowment output directly through
+/// `fmine_claim::compose_binary` / `compose_binary_with_fallback` and `ClaimDag` so `NL-1..NL-8`,
+/// staleness propagation (`INV-013`), and `G-DISC` disclosure guards run in production K1 code.
+#[derive(Debug, Clone)]
+pub struct ThreePartClaimLineage {
+    /// Derived tract metal-endowment claim carrying exact rational `p50` metal (`kt`).
+    pub endowment_claim: Claim<ExactQty>,
+    /// Provenance DAG linking the elicited count and grade-tonnage parent claims to `endowment_claim`.
+    pub provenance_dag: ClaimDag,
+    /// Diagnostic `G-DISC` disclosure-export check on the composed exploration claim.
+    pub disclosure_export_guard: Result<(), Refusal>,
+}
+
+/// Compose an elicited undiscovered-deposit count [`Claim`] and a grade-tonnage [`Claim`] with a
+/// simulated [`ThreePartEndowmentSummary`] into a derived [`Claim<ExactQty>`] and [`ClaimDag`].
+///
+/// Uses [`compose_binary`] by default (preserving `NL-6` refusal absorption), or engages
+/// [`compose_binary_with_fallback`] when `fallback` is supplied (e.g. [`MAPMARK4_DEGENERATE_FALLBACK_ID`]).
+/// All parent claims and the derived claim are checked and inserted into `ClaimDag`.
+pub fn compose_three_part_endowment_claim(
+    count_claim: &Claim<UndiscoveredCountPmf>,
+    grade_tonnage_claim: &Claim<ExactQty>,
+    summary: &ThreePartEndowmentSummary,
+    fallback: Option<&DeclaredFallback>,
+) -> Result<ThreePartClaimLineage, Refusal> {
+    let metric_key = format!("lodestar.three_part.endowment_kt.{}", summary.tract_id);
+    let value_tag = format!(
+        "{}/{}",
+        summary.p50_metal_kt.num(),
+        summary.p50_metal_kt.den()
+    );
+    let repr = Representation::EnsembleSummary {
+        n: summary.n_draws,
+        mean: summary.empirical_mean_metal_kt.to_f64(),
+        p10: summary.p10_metal_kt.to_f64(),
+        p50: summary.p50_metal_kt.to_f64(),
+        p90: summary.p90_metal_kt.to_f64(),
+    };
+    let endowment_claim = match fallback {
+        Some(fb) => compose_binary_with_fallback(
+            metric_key,
+            count_claim,
+            grade_tonnage_claim,
+            summary.p50_metal_kt,
+            &value_tag,
+            repr,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            IntervalOp::Mul,
+            fb,
+        )?,
+        None => compose_binary(
+            metric_key,
+            count_claim,
+            grade_tonnage_claim,
+            summary.p50_metal_kt,
+            &value_tag,
+            repr,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            IntervalOp::Mul,
+        ),
+    };
+    let mut provenance_dag = ClaimDag::new();
+    provenance_dag.insert(count_claim)?;
+    provenance_dag.insert(grade_tonnage_claim)?;
+    provenance_dag.insert(&endowment_claim)?;
+    let disclosure_export_guard = provenance_dag.guard_disclosure_export(&endowment_claim);
+    Ok(ThreePartClaimLineage {
+        endowment_claim,
+        provenance_dag,
+        disclosure_export_guard,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +597,146 @@ mod tests {
         .unwrap();
         assert_eq!(cmp_exact_qty_total(huge_a, huge_b), Ordering::Greater);
         assert_eq!(cmp_exact_qty_total(huge_b, huge_a), Ordering::Less);
+    }
+
+    #[test]
+    fn test_three_part_claim_composition_dag_and_mapmark_fallback() {
+        use fmine_claim::{Confidentiality, LabelRegistry, UuTerm};
+        use fmine_core::anchor::SourceAnchor;
+        use fmine_evidence::color::ColorRank;
+        use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
+
+        let reg = LabelRegistry::new(["ven_lode"], ["W-EXPLORE"]).unwrap();
+        let ven = Confidentiality::venture(reg.venture("ven_lode").unwrap());
+        let mnpi = Confidentiality::mnpi(reg.wall("W-EXPLORE").unwrap());
+        let anchor = SourceAnchor::new("synthetic/tract.toml", [0x33; 32], "Tract!A1");
+
+        let pmf = UndiscoveredCountPmf::from_usgs_mark3b_quantiles(1, 3, 6).unwrap();
+        let gt_model = vec![
+            GradeTonnageDeposit {
+                deposit_id: "dep-1".to_string(),
+                tonnage_kt: ExactQty::from_integer(100_000),
+                grade_fraction: q(5, 1000),
+            },
+            GradeTonnageDeposit {
+                deposit_id: "dep-2".to_string(),
+                tonnage_kt: ExactQty::from_integer(200_000),
+                grade_fraction: q(6, 1000),
+            },
+        ];
+        let key = RngKey {
+            seed_root: 0x2350_0042,
+            partition: 1,
+            domain: 1,
+            var_group: 1,
+            realization: 0,
+            brick: 0,
+        };
+        let summary =
+            simulate_three_part_endowment("tract-andes", &pmf, &gt_model, 500, key).unwrap();
+
+        let count_claim = Claim::new(
+            "lodestar.elicited_count",
+            pmf.clone(),
+            "n90=1;n50=3;n10=6",
+            Representation::Quantiles {
+                p10: 1.0,
+                p50: 3.0,
+                p90: 6.0,
+            },
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            EvidenceClass::Elicited,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
+            ven.clone(),
+            vec![UuTerm {
+                scenario_id: "UU-COVER-01".to_string(),
+                description: "Deep transported cover masks porphyry halo".to_string(),
+                downside_exposure_usd_m: 45.0,
+                trigger_indicator: "Drill cover > 150 m".to_string(),
+            }],
+            vec![],
+            vec![anchor.clone()],
+        );
+        let gt_claim = Claim::new(
+            "lodestar.gt_mean_metal_kt",
+            summary.analytical_mean_metal_kt,
+            "850",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            EvidenceClass::Transferred {
+                aoa: fmine_evidence::AoaStatus::Inside,
+            },
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
+            mnpi.clone(),
+            vec![],
+            vec![],
+            vec![anchor.clone()],
+        );
+
+        let mut lineage =
+            compose_three_part_endowment_claim(&count_claim, &gt_claim, &summary, None)
+                .expect("compose normal three-part lineage");
+        // NL-2 meet of incomparable Elicited and Transferred is Assumed; NL-7 joins venture + MNPI.
+        assert_eq!(lineage.endowment_claim.evidence, EvidenceClass::Assumed);
+        assert_eq!(lineage.endowment_claim.confidentiality, ven.join(&mnpi));
+        assert_eq!(
+            lineage.endowment_claim.color().unwrap().rank(),
+            ColorRank::Estimated
+        );
+        assert_eq!(lineage.endowment_claim.calibration_score(), 0.0);
+        // G-DISC refuses disclosure export of an exploration endowment claim.
+        assert_eq!(
+            lineage.disclosure_export_guard.unwrap_err().code,
+            "FMINE-REF-304"
+        );
+        // INV-013 staleness propagates through ClaimDag when elicitation is invalidated.
+        let affected = lineage
+            .provenance_dag
+            .invalidate_and_propagate(count_claim.claim_id, None);
+        assert!(affected.contains(&lineage.endowment_claim.claim_id));
+        assert!(
+            lineage
+                .provenance_dag
+                .is_stale(lineage.endowment_claim.claim_id)
+        );
+
+        // NL-6 MapMark4-degenerate fallback when count input is an unreviewed Assertion.
+        let asserted_count = Claim::new(
+            "lodestar.asserted_count",
+            pmf,
+            "n90=1;n50=3;n10=6",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            EvidenceClass::ISSUER,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Unknown,
+            Confidentiality::public(),
+            vec![],
+            vec![],
+            vec![anchor],
+        );
+        let fb = DeclaredFallback {
+            fallback_id: MAPMARK4_DEGENERATE_FALLBACK_ID.to_string(),
+            mechanism: "USGS MapMark4-degenerate N0 model".to_string(),
+            fallback_active: true,
+        };
+        let fb_lineage =
+            compose_three_part_endowment_claim(&asserted_count, &gt_claim, &summary, Some(&fb))
+                .expect("MapMark4 fallback recovers Estimated endowment claim");
+        assert!(fb_lineage.endowment_claim.fallback_active());
+        assert_eq!(
+            fb_lineage.endowment_claim.color().unwrap().rank(),
+            ColorRank::Estimated
+        );
+        assert_eq!(fb_lineage.endowment_claim.evidence, EvidenceClass::Assumed);
+        assert_eq!(
+            fb_lineage.disclosure_export_guard.unwrap_err().code,
+            "FMINE-REF-304"
+        );
     }
 }

@@ -64,9 +64,10 @@ Data model and absence-class classifier preserve input provenance without upgrad
 - `ExploreError`
 - `model::{ExploreMethod, Ingredient, CoverageConfidence, GeoCoord, DepositTypeProbs, MarkRecord, DiscoveryEvent, DepositRecord, MethodSpec, EffortRecord, ElicitationRecord, Tract, TractMap}` (`BD-231`)
 - `absence::{AbsenceClass, AbsenceAssessment, SiteAssessment, assess_site, effective_detection_q, classify_site_absence}` (`BD-231`, plan §11.3)
-- `three_part::{UndiscoveredCountPmf, GradeTonnageDeposit, ThreePartEndowmentSummary, simulate_three_part_endowment, ks_two_sample_exact}` (`BD-235`, N0 MapMark4-degenerate three-part endowment simulator, `PO-LODE-5`)
+- `three_part::{MAPMARK4_DEGENERATE_FALLBACK_ID, UndiscoveredCountPmf, GradeTonnageDeposit, ThreePartEndowmentSummary, ThreePartClaimLineage, simulate_three_part_endowment, ks_two_sample_exact, compose_three_part_endowment_claim}` (`BD-235`, `BD-042`, N0 MapMark4-degenerate three-part endowment simulator and `Claim`/`ClaimDag` provenance composition, `PO-LODE-5`)
 
 ## 12. Proof obligations
 - `BD-231` (deposits, effort, elicitation, tract map, CRS enforcement): `model::tests::test_explore_data_model_simplex_crs_and_elicitation`.
 - `BD-231` / §11.3 (all five absence classes `A0..A4` and cover-vs-DOI detection thinning): `absence::tests::test_all_five_absence_classes_and_cover_thinning_law`.
 - `BD-235` / `PO-LODE-5` (N0 three-part endowment Wald mean & exact two-sample KS < 0.02): `three_part::tests::test_three_part_n0_endowment_wald_mean_and_ks_stability`.
+- `BD-042` / `NL-1..NL-8` (production K1 `compose_binary`/`ClaimDag`/MapMark4 fallback wiring): `three_part::tests::test_three_part_claim_composition_dag_and_mapmark_fallback`.

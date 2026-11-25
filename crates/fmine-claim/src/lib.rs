@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use fmine_core::anchor::SourceAnchor;
 use fmine_core::codec::Encoder;
+use fmine_core::hash::Digest32;
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::color::{IntervalOp, ValidityDomain, compose};
 use fmine_evidence::{
@@ -88,6 +89,130 @@ pub struct UuTerm {
     pub trigger_indicator: String,
 }
 
+/// Orthogonal authority metadata for a [`Claim`] (`§7.3`, `NL-3`, `BD-042`).
+///
+/// Signatures and attestations live strictly on `authority`; they NEVER upgrade `evidence`,
+/// `color`, `epistemic`, `state`, or `calibration_score`. Roles use institutional titles rather
+/// than personal names to keep personal data out of the ledger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaimAuthority {
+    /// Produced algorithmically without human sign-off (default).
+    Computed { module: String, version: String },
+    /// Structured expert judgment elicited under a named protocol (e.g. `IDEA`).
+    Elicited {
+        expert_role: String,
+        protocol: String,
+    },
+    /// Signed by a human authority role (`CP`, `QP`, `EoR`, `controller`, `ITRB`).
+    /// Strictly orthogonal to epistemic strength (`NL-3`).
+    Attested {
+        role: String,
+        sig_digest: Digest32,
+        scope: String,
+    },
+}
+
+impl Default for ClaimAuthority {
+    fn default() -> Self {
+        Self::Computed {
+            module: "fmine-claim".to_string(),
+            version: "0.1.0".to_string(),
+        }
+    }
+}
+
+/// Declared deterministic fallback linkage for `NL-6` / `NL-8` / `PO-PLUMB-15`.
+///
+/// Refusals remain absorbing unless an active, named fallback mechanism (e.g. MapMark4-degenerate
+/// mode or Manski bounds) is explicitly declared and recorded on the derived claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredFallback {
+    pub fallback_id: String,
+    pub mechanism: String,
+    pub fallback_active: bool,
+}
+
+/// Computed family calibration score (`§7.3`, `NL-8`, `BD-042`).
+///
+/// Never hand-entered: fields are private so callers can obtain a `CalibrationScore` ONLY through
+/// [`CalibrationScore::compute`], which evaluates `1 − min(1, max(|cov80 − 0.8| / 0.2, ks_pit))`
+/// and forces `0.0` whenever `calibrated == false`.
+///
+/// ```compile_fail,E0451
+/// let _forged = fmine_claim::CalibrationScore {
+///     score: 0.99,
+///     cov80: 0.80,
+///     ks_pit: 0.01,
+///     calibrated: true,
+/// };
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CalibrationScore {
+    score: f64,
+    cov80: f64,
+    ks_pit: f64,
+    calibrated: bool,
+}
+
+impl CalibrationScore {
+    /// Compute the `NL-8` calibration score from empirical 80% coverage (`cov80 ∈ [0, 1]`) and
+    /// two-sided PIT Kolmogorov–Smirnov distance (`ks_pit ∈ [0, 1]`).
+    ///
+    /// Returns `score = 0.0` strictly when `calibrated == false` (`Uncalibrated`). Refuses any
+    /// non-finite or out-of-`[0, 1]` input with `FMINE-REF-109` (no silent clamping).
+    pub fn compute(calibrated: bool, cov80: f64, ks_pit: f64) -> Result<Self, Refusal> {
+        if !cov80.is_finite() || !(0.0..=1.0).contains(&cov80) {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("NL-8 calibration_score: cov80 ({cov80}) must be finite and in [0, 1]"),
+            ));
+        }
+        if !ks_pit.is_finite() || !(0.0..=1.0).contains(&ks_pit) {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("NL-8 calibration_score: ks_pit ({ks_pit}) must be finite and in [0, 1]"),
+            ));
+        }
+        let score = if calibrated {
+            let cov_err = (cov80 - 0.8).abs() / 0.2;
+            let penalty = cov_err.max(ks_pit).min(1.0);
+            (1.0 - penalty).max(0.0)
+        } else {
+            0.0
+        };
+        Ok(Self {
+            score,
+            cov80,
+            ks_pit,
+            calibrated,
+        })
+    }
+
+    /// Computed score in `[0.0, 1.0]` (`0.0` whenever uncalibrated).
+    #[must_use]
+    pub const fn score(&self) -> f64 {
+        self.score
+    }
+
+    /// Empirical 80% coverage supplied to [`Self::compute`].
+    #[must_use]
+    pub const fn cov80(&self) -> f64 {
+        self.cov80
+    }
+
+    /// Two-sided PIT KS distance supplied to [`Self::compute`].
+    #[must_use]
+    pub const fn ks_pit(&self) -> f64 {
+        self.ks_pit
+    }
+
+    /// Whether the underlying claim family holds a passing calibration status.
+    #[must_use]
+    pub const fn is_calibrated(&self) -> bool {
+        self.calibrated
+    }
+}
+
 /// Universal epistemic envelope wrapping any value `T` (`§8.1`, `BD-040`).
 ///
 /// A claim's colour is computed, never set by a caller (NL-1). No constructor takes one, and what it is computed
@@ -120,6 +245,12 @@ pub struct Claim<T> {
     pub supersedes: Option<ClaimId>,
     pub stale: bool,
     pub calibration_failed: bool,
+    /// Orthogonal authority/attestation metadata (`NL-3`). Unhashed so pinned public claim IDs stay invariant.
+    authority: ClaimAuthority,
+    /// Computed `NL-8` calibration score record (private so callers cannot hand-enter a score).
+    calibration_score: Option<CalibrationScore>,
+    /// Declared deterministic fallback recorded when `NL-6` fallback mode was engaged.
+    fallback: Option<DeclaredFallback>,
     /// The anchor's colour on a leaf, the composition of the parents' colours on a derived claim.
     color_basis: Option<Color>,
     /// The value's canonical text, hashed into the id in place of `value`.
@@ -172,9 +303,102 @@ impl<T> Claim<T> {
             supersedes: None,
             stale: false,
             calibration_failed: false,
+            authority: ClaimAuthority::default(),
+            calibration_score: None,
+            fallback: None,
             color_basis: None,
             value_tag: canonical_value_tag.to_string(),
         }
+    }
+
+    /// Returns the orthogonal authority/attestation metadata (`NL-3`).
+    #[must_use]
+    pub fn authority(&self) -> &ClaimAuthority {
+        &self.authority
+    }
+
+    /// Sets orthogonal authority metadata (`NL-3`). Does not alter `evidence`, `color`, `epistemic`,
+    /// `state`, `confidentiality`, `calibration_failed`, or `canonical_body`.
+    #[must_use]
+    pub fn with_authority(mut self, authority: ClaimAuthority) -> Self {
+        self.authority = authority;
+        self
+    }
+
+    /// Attaches an institutional attestation signature (`CP`, `QP`, `EoR`, `controller`, `ITRB`)
+    /// strictly on `authority` (`NL-3`). Refuses blank `role`/`scope` or all-zero `sig_digest`
+    /// with `FMINE-REF-304`. Never upgrades `evidence`, `color`, `epistemic`, `state`, or
+    /// `calibration_score`.
+    pub fn attest(
+        &self,
+        role: impl Into<String>,
+        sig_digest: Digest32,
+        scope: impl Into<String>,
+    ) -> Result<Self, Refusal>
+    where
+        T: Clone,
+    {
+        let role = role.into();
+        let scope = scope.into();
+        if role.trim().is_empty() || scope.trim().is_empty() || sig_digest == Digest32([0u8; 32]) {
+            return Err(Refusal::new(
+                RefusalCode::MissingHumanToken304,
+                "NL-3 attestation requires non-empty role, scope, and non-zero signature digest",
+            ));
+        }
+        let mut next = self.clone();
+        next.authority = ClaimAuthority::Attested {
+            role,
+            sig_digest,
+            scope,
+        };
+        Ok(next)
+    }
+
+    /// Attaches a computed [`CalibrationScore`] to a parent-free claim (`NL-8`).
+    ///
+    /// Derived claims (`!parents.is_empty()`) ignore external calibration scores to enforce `NL-4`
+    /// (calibration is never inherited across derivation without a new family's own resolved record).
+    #[must_use]
+    pub fn with_calibration_score(mut self, score: CalibrationScore) -> Self {
+        if self.parents.is_empty() {
+            self.calibration_score = Some(score);
+        }
+        self
+    }
+
+    /// Returns the claim's computed `NL-8` calibration score in `[0.0, 1.0]`.
+    ///
+    /// Strictly returns `0.0` when the claim has no score, is uncalibrated, failed calibration, is
+    /// stale, has an evidence class below `ModelledCalibrated`, or has an active fallback.
+    #[must_use]
+    pub fn calibration_score(&self) -> f64 {
+        if self.calibration_failed
+            || self.stale
+            || self.fallback_active()
+            || !matches!(
+                self.evidence,
+                EvidenceClass::Measured
+                    | EvidenceClass::Derived
+                    | EvidenceClass::ModelledCalibrated
+            )
+        {
+            return 0.0;
+        }
+        self.calibration_score.map_or(0.0, |record| record.score())
+    }
+
+    /// Returns the declared fallback record if a fallback was attached (`NL-6`, `PO-PLUMB-15`).
+    #[must_use]
+    pub fn fallback(&self) -> Option<&DeclaredFallback> {
+        self.fallback.as_ref()
+    }
+
+    /// Mirrors `FallbackPolicy::should_fallback` (`NL-8`): true iff an active declared fallback was
+    /// engaged on this claim or propagated from an input.
+    #[must_use]
+    pub fn fallback_active(&self) -> bool {
+        self.fallback.as_ref().is_some_and(|f| f.fallback_active)
     }
 
     /// The value's canonical text, as hashed into the id.
@@ -345,11 +569,14 @@ pub fn verify_unweighted_additive(
 ///
 /// - evidence is the parents' meet (NL-2), with model calibration removed and an in-AOA transfer
 ///   marked `NotAssessed`: this new family has no own calibration or applicability record (NL-4)
+/// - `authority` resets to `ClaimAuthority::default()` (`Computed`) — parent attestations never
+///   transfer automatically to a new derived claim (NL-3)
 /// - `epistemic = left.epistemic.and(right.epistemic)`, `state = left.state.and(right.state)` (NL-5)
 /// - the colour composes both parents' colours under `op` (NL-1); with either refused it stays refused (NL-6)
-/// - `confidentiality = left.confidentiality.join(&right.confidentiality)` (`INV-007`)
-/// - `stale = left.stale || right.stale` (`NL-7`)
-/// - `calibration_failed = left.calibration_failed || right.calibration_failed` (`NL-8`)
+/// - `confidentiality = left.confidentiality.join(&right.confidentiality)` (`NL-7`, `INV-007`)
+/// - `stale = left.stale || right.stale` (`INV-013`)
+/// - `calibration_failed = left.calibration_failed || right.calibration_failed` and `calibration_score = None` (`NL-4`/`NL-8`)
+/// - `fallback` propagates if either parent already ran under an active declared fallback (`NL-6`/`NL-8`)
 /// - `uu_terms` = deduplicated union of `left.uu_terms` and `right.uu_terms` (`NL-5`)
 /// - `parents` = `[left.claim_id, right.claim_id]`
 // Nine arguments, each a distinct part of the composed Claim; a parameter struct would only rename them.
@@ -424,7 +651,89 @@ pub fn compose_binary<A, B, R>(
     derived.stale = left.stale || right.stale;
     derived.calibration_failed =
         left.calibration_failed || right.calibration_failed || invalid_calibration;
+    derived.fallback = left
+        .fallback
+        .as_ref()
+        .filter(|f| f.fallback_active)
+        .or_else(|| right.fallback.as_ref().filter(|f| f.fallback_active))
+        .cloned();
     derived
+}
+
+/// Composes two parent claims with an explicit [`DeclaredFallback`] (`NL-6`, `NL-8`, `PO-PLUMB-15`).
+///
+/// - When neither parent is refused (`left.color().is_ok() && right.color().is_ok()`), this behaves
+///   identically to [`compose_binary`] without activating the fallback.
+/// - When either parent is refused (`color().is_err()`), the refusal remains absorbing unless
+///   `fallback.fallback_active` is `true` and both `fallback_id` and `mechanism` are non-empty;
+///   otherwise returns `Err(FMINE-REF-205)`.
+/// - When engaged, the derived claim is bounded strictly to `EvidenceClass::Assumed` (never
+///   upgraded above the weakest non-assertion class), `KnowledgeState` no stronger than `Estimated`
+///   (`state.and(KnowledgeState::Estimated)`), `Color::Estimated` labelled `fallback:<id>`,
+///   `calibration_score() == 0.0`, full confidentiality join (`NL-7`), and `uu_terms` union.
+#[allow(clippy::too_many_arguments)]
+pub fn compose_binary_with_fallback<A, B, R>(
+    metric_key: impl Into<String>,
+    left: &Claim<A>,
+    right: &Claim<B>,
+    value: R,
+    canonical_value_tag: &str,
+    representation: Representation,
+    support: SpatialSupport,
+    additivity: AdditivityClass,
+    op: IntervalOp,
+    fallback: &DeclaredFallback,
+) -> Result<Claim<R>, Refusal> {
+    let metric_key = metric_key.into();
+    let normal = compose_binary(
+        metric_key.clone(),
+        left,
+        right,
+        value,
+        canonical_value_tag,
+        representation.clone(),
+        support,
+        additivity,
+        op,
+    );
+    if normal.color().is_ok() {
+        return Ok(normal);
+    }
+    if !fallback.fallback_active
+        || fallback.fallback_id.trim().is_empty()
+        || fallback.mechanism.trim().is_empty()
+    {
+        return Err(Refusal::new(
+            RefusalCode::CalibrationRequired205,
+            format!(
+                "NL-6 on '{metric_key}': refused parent cannot yield a value without an active declared fallback"
+            ),
+        ));
+    }
+    let fallback_state = normal.state.and(KnowledgeState::Estimated);
+    let mut degraded = Claim::new(
+        metric_key,
+        normal.value,
+        canonical_value_tag,
+        representation,
+        support,
+        additivity,
+        EvidenceClass::Assumed,
+        normal.epistemic,
+        fallback_state,
+        normal.confidentiality,
+        normal.uu_terms,
+        normal.parents,
+        normal.anchors,
+    );
+    degraded.stale = normal.stale;
+    degraded.calibration_failed = false;
+    degraded.fallback = Some(fallback.clone());
+    degraded.color_basis = Some(Color::Estimated {
+        estimator: format!("fallback:{}", fallback.fallback_id.trim()),
+        dispersion: f64::INFINITY,
+    });
+    Ok(degraded)
 }
 
 // Eight arguments, each a hashed field of the claim; a parameter struct would only rename them.
@@ -1760,5 +2069,509 @@ mod tests {
                 .evidence,
             EvidenceClass::Assumed
         );
+    }
+
+    /// NL-3 (`§7.3`): institutional attestation changes `authority` ONLY and NEVER upgrades
+    /// `evidence`, `epistemic`, `state`, `color`, `confidentiality`, `calibration_score`, or
+    /// `canonical_body`; blank metadata or zero signature digest refuses with `FMINE-REF-304`.
+    #[test]
+    fn test_nl3_attestation_is_strictly_orthogonal() {
+        let sig = Digest32([0x5A; 32]);
+        for class in [
+            EvidenceClass::ISSUER,
+            EvidenceClass::Assumed,
+            EvidenceClass::Elicited,
+            EvidenceClass::ModelledUncalibrated,
+            EvidenceClass::ModelledCalibrated,
+            EvidenceClass::Measured,
+        ] {
+            let base = leaf("qp_target", class);
+            let attested = base
+                .attest("QP", sig, "NI-43-101 Table 14-1")
+                .expect("valid attestation");
+            assert_eq!(
+                attested.authority(),
+                &ClaimAuthority::Attested {
+                    role: "QP".to_string(),
+                    sig_digest: sig,
+                    scope: "NI-43-101 Table 14-1".to_string(),
+                }
+            );
+            assert_eq!(attested.evidence, base.evidence);
+            assert_eq!(attested.epistemic, base.epistemic);
+            assert_eq!(attested.state, base.state);
+            assert_eq!(attested.color(), base.color());
+            assert_eq!(attested.confidentiality, base.confidentiality);
+            assert_eq!(attested.calibration_failed, base.calibration_failed);
+            assert_eq!(attested.calibration_score(), base.calibration_score());
+            assert_eq!(attested.canonical_body(), base.canonical_body());
+            assert_eq!(attested.claim_id, base.claim_id);
+        }
+
+        // Composing two attested parents resets authority to Computed (parent sign-off never auto-transfers).
+        let a = leaf("a", EvidenceClass::Measured)
+            .attest("CP", sig, "JORC")
+            .unwrap();
+        let b = leaf("b", EvidenceClass::Assumed)
+            .attest("EoR", sig, "GISTM")
+            .unwrap();
+        let child = join("ab", &a, &b);
+        assert_eq!(child.authority(), &ClaimAuthority::default());
+        assert_eq!(child.evidence, EvidenceClass::Assumed);
+
+        // Blank role/scope or zero digest refuses cleanly with FMINE-REF-304.
+        assert_eq!(
+            a.attest("", sig, "scope").unwrap_err().code,
+            "FMINE-REF-304"
+        );
+        assert_eq!(a.attest("QP", sig, " ").unwrap_err().code, "FMINE-REF-304");
+        assert_eq!(
+            a.attest("QP", Digest32([0u8; 32]), "scope")
+                .unwrap_err()
+                .code,
+            "FMINE-REF-304"
+        );
+    }
+
+    /// NL-6 & PO-PLUMB-15: refusals stay absorbing unless an active declared fallback is supplied,
+    /// and an active fallback never launders colour above `Estimated` or drops confidentiality/UU.
+    #[test]
+    fn test_nl6_refusal_absorption_and_declared_fallback_bounds() {
+        let reg = LabelRegistry::new(["ven_a"], ["W-MNPI"]).unwrap();
+        let mnpi = Confidentiality::mnpi(reg.wall("W-MNPI").unwrap());
+        let ven = Confidentiality::venture(reg.venture("ven_a").unwrap());
+
+        let valid_parent = Claim::new(
+            "measured_mass",
+            100.0_f64,
+            "100.0",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            EvidenceClass::Measured,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
+            ven.clone(),
+            vec![],
+            vec![],
+            vec![sample_anchor()],
+        )
+        .with_regime(regime(), "qaqc-2026");
+
+        let refused_parent = Claim::new(
+            "issuer_grade",
+            1.5_f64,
+            "1.5",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::IntensiveWeighted,
+            EvidenceClass::ISSUER,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Unknown,
+            mnpi.clone(),
+            vec![UuTerm {
+                scenario_id: "UU-FALLBACK-1".to_string(),
+                description: "Unverified assay split".to_string(),
+                downside_exposure_usd_m: 10.0,
+                trigger_indicator: "Lab check variance > 15%".to_string(),
+            }],
+            vec![],
+            vec![sample_anchor()],
+        );
+
+        // Without fallback, refusal is strictly absorbing.
+        let bare_child = join("no_fallback", &valid_parent, &refused_parent);
+        assert_eq!(bare_child.color().unwrap_err().code, "FMINE-REF-205");
+        assert!(!bare_child.fallback_active());
+
+        // Inactive or blank fallback MUST still refuse.
+        let inactive = DeclaredFallback {
+            fallback_id: "mapmark4-degenerate-n0".to_string(),
+            mechanism: "USGS MapMark4-degenerate bounds".to_string(),
+            fallback_active: false,
+        };
+        let err = compose_binary_with_fallback(
+            "inactive_fb",
+            &valid_parent,
+            &refused_parent,
+            150.0_f64,
+            "150.0",
+            Representation::Interval {
+                lo: 80.0,
+                hi: 220.0,
+            },
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            IntervalOp::Mul,
+            &inactive,
+        )
+        .expect_err("inactive fallback must refuse");
+        assert_eq!(err.code, "FMINE-REF-205");
+
+        let blank_id = DeclaredFallback {
+            fallback_id: " ".to_string(),
+            mechanism: "Manski bounds".to_string(),
+            fallback_active: true,
+        };
+        assert_eq!(
+            compose_binary_with_fallback(
+                "blank_fb",
+                &valid_parent,
+                &refused_parent,
+                150.0_f64,
+                "150.0",
+                Representation::Interval {
+                    lo: 80.0,
+                    hi: 220.0
+                },
+                SpatialSupport::PeriodAggregate,
+                AdditivityClass::ExtensiveAdditive,
+                IntervalOp::Mul,
+                &blank_id,
+            )
+            .unwrap_err()
+            .code,
+            "FMINE-REF-205"
+        );
+
+        // Active declared fallback recovers an Estimated-only claim with full taint & UU union.
+        let active = DeclaredFallback {
+            fallback_id: "mapmark4-degenerate-n0".to_string(),
+            mechanism: "USGS MapMark4-degenerate bounds".to_string(),
+            fallback_active: true,
+        };
+        let degraded = compose_binary_with_fallback(
+            "active_fb",
+            &valid_parent,
+            &refused_parent,
+            150.0_f64,
+            "150.0",
+            Representation::Interval {
+                lo: 80.0,
+                hi: 220.0,
+            },
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            IntervalOp::Mul,
+            &active,
+        )
+        .expect("active declared fallback produces bounded Estimated claim");
+        assert!(degraded.fallback_active());
+        assert_eq!(degraded.evidence, EvidenceClass::Assumed);
+        assert_eq!(degraded.state, KnowledgeState::Unknown);
+        assert_eq!(degraded.color().unwrap().rank(), ColorRank::Estimated);
+        assert_eq!(degraded.calibration_score(), 0.0);
+        assert_eq!(degraded.confidentiality, ven.join(&mnpi));
+        assert_eq!(degraded.uu_terms.len(), 1);
+        // Downstream composition preserves fallback_active flag.
+        let downstream = join("downstream", &degraded, &valid_parent);
+        assert!(downstream.fallback_active());
+        assert_eq!(downstream.color().unwrap().rank(), ColorRank::Estimated);
+        assert_eq!(downstream.calibration_score(), 0.0);
+    }
+
+    /// NL-8 (`§7.3`): `CalibrationScore::compute` matches `1 - min(1, max(|cov80 - 0.8|/0.2, ks_pit))`,
+    /// forces `0.0` whenever uncalibrated, refuses out-of-domain inputs without clamping, and never
+    /// transfers to derived claims (`NL-4`).
+    #[test]
+    fn test_nl8_calibration_score_formula_and_refusals() {
+        let perfect = CalibrationScore::compute(true, 0.80, 0.0).unwrap();
+        assert!((perfect.score() - 1.0).abs() < 1e-15);
+
+        let cov_limited = CalibrationScore::compute(true, 0.70, 0.05).unwrap();
+        // |0.70 - 0.80| / 0.20 = 0.50 > 0.05 => 1 - 0.50 = 0.50
+        assert!((cov_limited.score() - 0.50).abs() < 1e-12);
+
+        let ks_limited = CalibrationScore::compute(true, 0.81, 0.35).unwrap();
+        // |0.81 - 0.80| / 0.20 = 0.05 < 0.35 => 1 - 0.35 = 0.65
+        assert!((ks_limited.score() - 0.65).abs() < 1e-12);
+
+        let capped = CalibrationScore::compute(true, 0.50, 0.10).unwrap();
+        // |0.50 - 0.80| / 0.20 = 1.50 -> capped at 1.0 => score = 0.0
+        assert_eq!(capped.score(), 0.0);
+
+        // Uncalibrated MUST yield 0.0 even with ideal empirical coverage and KS = 0.
+        let uncal = CalibrationScore::compute(false, 0.80, 0.0).unwrap();
+        assert_eq!(uncal.score(), 0.0);
+        assert!(!uncal.is_calibrated());
+
+        // Non-finite or out-of-[0,1] inputs refuse cleanly with FMINE-REF-109.
+        for (cov, ks) in [
+            (-0.01, 0.0),
+            (1.01, 0.0),
+            (f64::NAN, 0.0),
+            (0.80, -0.01),
+            (0.80, 1.01),
+            (0.80, f64::INFINITY),
+        ] {
+            assert_eq!(
+                CalibrationScore::compute(true, cov, ks).unwrap_err().code,
+                "FMINE-REF-109",
+                "cov={cov}, ks={ks}"
+            );
+        }
+
+        // Leaf ModelledCalibrated claim carries score; derived claim MUST NOT inherit it (NL-4 + NL-8).
+        let model_a =
+            leaf("model_a", EvidenceClass::ModelledCalibrated).with_calibration_score(ks_limited);
+        let model_b = leaf("model_b", EvidenceClass::Measured).with_calibration_score(perfect);
+        assert!((model_a.calibration_score() - 0.65).abs() < 1e-12);
+        assert!((model_b.calibration_score() - 1.0).abs() < 1e-15);
+        let derived = join("derived_ab", &model_a, &model_b);
+        assert_eq!(derived.calibration_score(), 0.0);
+        // Attempting to attach a score to a derived claim is ignored (NL-4).
+        let attempted = derived.with_calibration_score(perfect);
+        assert_eq!(attempted.calibration_score(), 0.0);
+        // Failed calibration or staleness zeroes the score.
+        let mut stale_a = model_a.clone();
+        stale_a.stale = true;
+        assert_eq!(stale_a.calibration_score(), 0.0);
+        let mut failed_a = model_a;
+        failed_a.calibration_failed = true;
+        assert_eq!(failed_a.calibration_score(), 0.0);
+    }
+
+    /// Full `GATE-PLUMB-E1` / `PO-PLUMB-1` property gate: 100,000 seeded Philox provenance DAGs
+    /// (including shared-ancestor diamonds) verifying ALL EIGHT non-laundering laws `NL-1..NL-8`:
+    /// - `NL-1`: derived colour never exceeds weakest input colour;
+    /// - `NL-2`: derived evidence class is no stronger than either parent;
+    /// - `NL-3`: attestation changes `authority` only (zero impact on evidence/color/state/score);
+    /// - `NL-4`: model calibration & in-AOA transfer are never inherited across derivation;
+    /// - `NL-5`: knowledge states never upgrade across all 9 variants (`NotObservable`, `Redacted`, `Stale`, etc.);
+    /// - `NL-6`: refusals are absorbing without fallback, and declared fallback never exceeds `Estimated`/`Assumed`;
+    /// - `NL-7`: confidentiality is a monotone join (`left <= child && right <= child`), enforced by export clearance;
+    /// - `NL-8`: `calibration_score` is strictly `0.0` on uncalibrated/derived claims and bounded in `[0, 1]`.
+    #[test]
+    fn test_gate_plumb_e1_nl1_to_nl8_100k_dags() {
+        const CASES: usize = 100_000;
+        let reg = LabelRegistry::new(["ven_a", "ven_b"], ["W-1", "W-2"]).unwrap();
+        let labels = [
+            Confidentiality::public(),
+            Confidentiality::internal(),
+            Confidentiality::venture(reg.venture("ven_a").unwrap()),
+            Confidentiality::venture(reg.venture("ven_b").unwrap()),
+            Confidentiality::mnpi(reg.wall("W-1").unwrap()),
+            Confidentiality::mnpi(reg.wall("W-2").unwrap()),
+            Confidentiality::venture(reg.venture("ven_a").unwrap())
+                .join(&Confidentiality::mnpi(reg.wall("W-1").unwrap())),
+            Confidentiality::venture(reg.venture("ven_a").unwrap())
+                .join(&Confidentiality::venture(reg.venture("ven_b").unwrap()))
+                .join(&Confidentiality::mnpi(reg.wall("W-2").unwrap())),
+        ];
+        let classes = [
+            EvidenceClass::Measured,
+            EvidenceClass::Derived,
+            EvidenceClass::ModelledCalibrated,
+            EvidenceClass::ModelledUncalibrated,
+            EvidenceClass::Elicited,
+            EvidenceClass::Transferred {
+                aoa: AoaStatus::Inside,
+            },
+            EvidenceClass::Transferred {
+                aoa: AoaStatus::NotAssessed,
+            },
+            EvidenceClass::Assumed,
+            EvidenceClass::ISSUER,
+        ];
+        let states = [
+            KnowledgeState::Known,
+            KnowledgeState::Estimated,
+            KnowledgeState::Unknown,
+            KnowledgeState::Conflicted,
+            KnowledgeState::Stale,
+            KnowledgeState::NotObservable,
+            KnowledgeState::Redacted,
+            KnowledgeState::Indeterminate,
+            KnowledgeState::NotApplicable,
+        ];
+        let key = RngKey {
+            seed_root: 0x000E_1000_0042,
+            partition: 8,
+            domain: 1,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        };
+        let mut rng = PhiloxStream::new(key);
+        let fallback = DeclaredFallback {
+            fallback_id: "mapmark4-degenerate-n0".to_string(),
+            mechanism: "declared-degenerate-bounds".to_string(),
+            fallback_active: true,
+        };
+        let sig = Digest32([0x77; 32]);
+        let good_score = CalibrationScore::compute(true, 0.80, 0.04).unwrap();
+
+        let mut violations = 0_u64;
+        let mut validated = 0_u64;
+        let mut refused = 0_u64;
+        let mut fallback_engaged = 0_u64;
+        let mut attested_checked = 0_u64;
+        let mut mnpi_tainted = 0_u64;
+        let mut diamond_edges = 0_u64;
+
+        for case in 0..CASES {
+            let n_leaves = 2 + (rng.next_u64() % 4) as usize;
+            let mut nodes: Vec<(Claim<f64>, Option<ColorRank>)> = Vec::with_capacity(n_leaves + 4);
+            for i in 0..n_leaves {
+                let class = classes[(rng.next_u64() % classes.len() as u64) as usize];
+                let state = states[(rng.next_u64() % states.len() as u64) as usize];
+                let conf = labels[(rng.next_u64() % labels.len() as u64) as usize].clone();
+                let mut claim = Claim::new(
+                    if i % 2 == 0 { "leaf_a" } else { "leaf_b" },
+                    1.0 + i as f64,
+                    "1.0",
+                    Representation::Deterministic,
+                    SpatialSupport::PeriodAggregate,
+                    AdditivityClass::ExtensiveAdditive,
+                    class,
+                    EpistemicStatus::KnownKnown,
+                    state,
+                    conf,
+                    vec![],
+                    vec![],
+                    vec![sample_anchor()],
+                );
+                if rng.next_u64().is_multiple_of(2) {
+                    claim = claim.with_regime(regime(), "qaqc-2026");
+                }
+                if rng.next_u64().is_multiple_of(3) {
+                    claim = claim.with_calibration_score(good_score);
+                }
+                if rng.next_u64().is_multiple_of(11) {
+                    claim.calibration_failed = true;
+                }
+                if rng.next_u64().is_multiple_of(5) {
+                    let before_ev = claim.evidence;
+                    let before_col = claim.color();
+                    let before_state = claim.state;
+                    let before_score = claim.calibration_score();
+                    let before_id = claim.claim_id;
+                    claim = claim.attest("QP", sig, "scope-e1").unwrap();
+                    attested_checked += 1;
+                    // NL-3: attestation must change authority only.
+                    if claim.evidence != before_ev
+                        || claim.color() != before_col
+                        || claim.state != before_state
+                        || claim.calibration_score().to_bits() != before_score.to_bits()
+                        || claim.claim_id != before_id
+                    {
+                        violations += 1;
+                    }
+                }
+                let rank = claim.color().ok().map(|c| c.rank());
+                nodes.push((claim, rank));
+            }
+
+            // Build 2..=4 derived DAG nodes allowing shared ancestors (diamonds) by sampling from all prior nodes.
+            let n_derived = 2 + (rng.next_u64() % 3) as usize;
+            let mut used_indices = BTreeSet::new();
+            for step in 0..n_derived {
+                let li = (rng.next_u64() % nodes.len() as u64) as usize;
+                let ri = (rng.next_u64() % nodes.len() as u64) as usize;
+                if !used_indices.insert(li) || !used_indices.insert(ri) {
+                    diamond_edges += 1;
+                }
+                let (l, l_rank) = &nodes[li];
+                let (r, r_rank) = &nodes[ri];
+
+                let child = compose_binary(
+                    if step == 0 { "mid" } else { "top" },
+                    l,
+                    r,
+                    2.5,
+                    "2.5",
+                    Representation::Deterministic,
+                    SpatialSupport::PeriodAggregate,
+                    AdditivityClass::ExtensiveAdditive,
+                    IntervalOp::Add,
+                );
+                let expected_bound = l_rank.zip(*r_rank).map(|(a, b)| a.min(b));
+                let child_rank = child.color().ok().map(|c| c.rank());
+
+                // NL-1 & NL-6 (no fallback): colour never exceeds weakest parent and refusals absorb.
+                let nl1_nl6 = match (child_rank, expected_bound) {
+                    (None, None) => true,
+                    (Some(c), Some(b)) => c <= b,
+                    _ => false,
+                };
+                // NL-2: evidence class never upgrades.
+                let nl2 = child.evidence.no_stronger_than(l.evidence)
+                    && child.evidence.no_stronger_than(r.evidence);
+                // NL-3: derived authority resets to Computed.
+                let nl3 = child.authority() == &ClaimAuthority::default();
+                // NL-4: model calibration & in-AOA transfer are never inherited.
+                let nl4 = !matches!(
+                    child.evidence,
+                    EvidenceClass::ModelledCalibrated
+                        | EvidenceClass::Transferred {
+                            aoa: AoaStatus::Inside
+                        }
+                );
+                // NL-5: knowledge state never upgrades (including Stale, NotObservable, Redacted, etc.).
+                let nl5 = child.state.and(l.state) == child.state
+                    && child.state.and(r.state) == child.state;
+                // NL-7: confidentiality is monotone join and public export refuses any non-public child.
+                let nl7 = l.confidentiality.leq(&child.confidentiality)
+                    && r.confidentiality.leq(&child.confidentiality)
+                    && (child.confidentiality.is_public()
+                        || child
+                            .verify_export_clearance(&Confidentiality::public())
+                            .is_err());
+                // NL-8: derived claim never inherits parent calibration_score (must be 0.0).
+                let nl8 = child.calibration_score() == 0.0;
+
+                if !(nl1_nl6 && nl2 && nl3 && nl4 && nl5 && nl7 && nl8) {
+                    violations += 1;
+                }
+
+                if child.confidentiality.walls().next().is_some() {
+                    mnpi_tainted += 1;
+                }
+                match child_rank {
+                    None => {
+                        refused += 1;
+                        // Exercise NL-6 declared fallback on a subset of refused pairs.
+                        if case % 5 == 0 {
+                            let fb = compose_binary_with_fallback(
+                                "fb_node",
+                                l,
+                                r,
+                                2.5,
+                                "2.5",
+                                Representation::Interval { lo: 1.0, hi: 4.0 },
+                                SpatialSupport::PeriodAggregate,
+                                AdditivityClass::ExtensiveAdditive,
+                                IntervalOp::Add,
+                                &fallback,
+                            )
+                            .unwrap();
+                            fallback_engaged += 1;
+                            if fb.evidence != EvidenceClass::Assumed
+                                || fb.color().ok().map(|c| c.rank()) != Some(ColorRank::Estimated)
+                                || !fb.fallback_active()
+                                || fb.calibration_score() != 0.0
+                                || !l.confidentiality.leq(&fb.confidentiality)
+                                || !r.confidentiality.leq(&fb.confidentiality)
+                            {
+                                violations += 1;
+                            }
+                        }
+                    }
+                    Some(ColorRank::Validated) => validated += 1,
+                    Some(_) => {}
+                }
+
+                nodes.push((child, child_rank));
+            }
+        }
+
+        println!(
+            "{{\"gate\":\"GATE-PLUMB-E1\",\"cases\":{CASES},\"violations\":{violations},\
+              \"validated\":{validated},\"refused\":{refused},\"fallback_engaged\":{fallback_engaged},\
+              \"attested\":{attested_checked},\"mnpi_tainted\":{mnpi_tainted},\"diamond_edges\":{diamond_edges}}}"
+        );
+        assert_eq!(violations, 0);
+        assert!(validated > 0 && refused > 0 && fallback_engaged > 0);
+        assert!(attested_checked > 0 && mnpi_tainted > 0 && diamond_edges > 0);
     }
 }

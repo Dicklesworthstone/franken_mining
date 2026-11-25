@@ -76,14 +76,11 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   derived claims. Rendering identifies the refused colour and failed calibration.
 - An `Assertion` and a failed calibration have no colour, and the refusal passes to what they feed. A stale claim shows at most `Estimated`: `test_assertion_failed_calibration_and_staleness_never_show_a_strong_colour`.
 
-**Composition.**
-- One worked example covers class, state, status, label, UU terms and colour: `test_nl1_to_nl8_non_laundering_composition`.
-- `test_random_claim_dags_nl1_nl2_nl5_100k` builds 100,000 random binary trees of 2 to 6 leaves. The leaves draw from nine classes and five states, and half carry a regime. No node outranks a parent in class or state, or its weakest leaf in colour, and none inherits model calibration or an in-AOA transfer. A node is refused exactly when a leaf under it is. The run must see both refused and `Validated` nodes.
-- `test_nl4_model_and_transfer_calibration_do_not_cross_derivation_or_support` checks nine class pairs in
-  both orders at every support variant. Model outputs stay uncalibrated; transferred applicability stays
-  unassessed or outside. Adding a regime cannot restore their validation, subsequent derivation stays weak,
-  and G-DISC refuses them. Their ancestry, source anchors and canonical identity remain valid. The separate
-  measured/derived positive chain retains `Validated` colour and passes G-DISC's evidence clauses.
+- **Composition.**
+  - One worked example covers class, state, status, label, UU terms and colour: `test_nl1_to_nl8_non_laundering_composition`.
+  - `test_random_claim_dags_nl1_nl2_nl5_100k` builds 100,000 random binary trees of 2 to 6 leaves.
+  - `test_gate_plumb_e1_nl1_to_nl8_100k_dags` (`GATE-PLUMB-E1`, `PO-PLUMB-1`) builds 100,000 seeded Philox DAGs with shared ancestors (diamonds), sampling all 9 evidence classes, all 9 knowledge states (`Known`..`NotApplicable`), 8 confidentiality lattice points (`NL-7`), random `attest(...)` calls (`NL-3`), `CalibrationScore` (`NL-8`), and both no-fallback absorption and `DeclaredFallback` bounds (`NL-6`), asserting zero violations and positive non-vacuity counts.
+  - Dedicated law tests: `test_nl3_attestation_is_strictly_orthogonal`, `test_nl4_model_and_transfer_calibration_do_not_cross_derivation_or_support`, `test_nl6_refusal_absorption_and_declared_fallback_bounds`, and `test_nl8_calibration_score_formula_and_refusals` (plus `compile_fail,E0451` preventing hand-entered `CalibrationScore`).
 
 **Labels.**
 - Join and `leq` satisfy the semilattice laws, checked exhaustively: `test_join_semilattice_laws_exhaustive`.
@@ -254,21 +251,15 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   - `compose_binary` calls neither guard.
   - `verify_support_compatible` and `verify_unweighted_additive` have no caller outside this crate's tests.
 - **The old contract said "every claim enforces Confidentiality isolation".** It holds only where a caller runs `verify_export_clearance`. The callers are `fmine-public`'s `key/inspect.rs`, `fmine-cli`'s `reliance_binding.rs` and `fmine-metrics`'s recovery tests.
-- **Composition and the provenance index have no production caller.**
-  - `compose_binary` is called only from tests here and in `xtask`.
-  - `ClaimDag`, including `guard_disclosure_export`, has no caller outside this crate.
-  - The callers outside this crate are: `downgraded` (`fmine-calib`), `TemporalGraph` (`fmine-cli` forecast provenance and `fmine-decide`), replay certificates (`fmine-decide`), and `RelianceLedger` (`fmine-io`, `fmine-cli`).
-- **PO-PLUMB-1 is only partly discharged.**
-  - The random test checks colour, class and state over trees. It has no `Stale` state and no shared parents.
-  - It is a seeded loop, not a proptest.
-  - Only one example covers the label join and UU terms.
-  - NL-3 (attestation is orthogonal) has no test. NL-4 has the class/support cases and random-tree check above.
+- **Production callers of composition and provenance index.**
+  - `fmine-explore::three_part::compose_three_part_endowment_claim` calls `compose_binary`, `compose_binary_with_fallback`, `ClaimDag::insert`, and `ClaimDag::guard_disclosure_export` in production K1 code.
+  - Other callers outside this crate are: `downgraded` (`fmine-calib`), `TemporalGraph` (`fmine-cli` forecast provenance and `fmine-decide`), replay certificates (`fmine-decide`), and `RelianceLedger` (`fmine-io`, `fmine-cli`).
+- **PO-PLUMB-1 (`GATE-PLUMB-E1`)** is discharged by `test_gate_plumb_e1_nl1_to_nl8_100k_dags` across 100,000 seeded Philox DAGs with shared ancestors covering `NL-1..NL-8` (deterministic Philox stream rather than `proptest` shrinking; self-verified on RCH, independent CI pending).
 - **Composition has no output-family calibration admission.** It cannot attach an independently scored
   output-family record or reassessed transfer AOA. Model-derived values remain uncalibrated rather than
   borrowing their parents' scored outcomes. `Claim::new` still trusts explicitly supplied source classes.
-- **The code's NL labels differ from the plan's.** The code calls staleness NL-7, but the plan's NL-7 is the confidentiality join. The code calls `calibration_failed` NL-8, but the plan's NL-8 is a computed `calibration_score`, which does not exist here.
 - **`Claim::new` trusts the caller's class and parents.** A claim can state `Derived` over an issuer figure. G-DISC catches that only when the issuer figure is a listed parent. A `Derived` claim with no parents passes its walk.
-- **The id leaves fields unhashed.** Representation, support, additivity, UU terms, `supersedes` and the value itself are outside the body, and every field stays `pub`. Widening the body moves every claim id. That is an owner decision.
+- **The id leaves fields unhashed.** Representation, support, additivity, UU terms, `supersedes`, `authority`, `calibration_score`, `fallback`, and the value itself are outside `CLM1` schema 2 so pinned M0 Barrick claim IDs remain invariant. Widening the body moves every claim id and is an owner decision.
 - **§31.1 writes the labels as a chain.** The product lattice refines it, so two ventures or two walls never collapse into one tier. The owner should confirm the refinement.
 - **G-DISC is incomplete (GATE-PLUMB-E4).** `Claim` has no RefClass or attestation field. FrankenMining's own public report is not a disclosure and does not call the guard.
 - **Three codes are proposed, not active:** 110, 505 and 507.
@@ -279,12 +270,12 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **A code comment points at the old layout.** It sits on `canonical_body` in `src/lib.rs` and cites "CONTRACT §2". The hashed-body rule is now in Inputs.
 
 ## 11. Public API
-- **Claim.** `ClaimId`, `Representation`, `SpatialSupport`, `AdditivityClass` and `UuTerm`. `Claim<T>`, with:
+- **Claim.** `ClaimId`, `Representation`, `SpatialSupport`, `AdditivityClass`, `UuTerm`, `ClaimAuthority`, `DeclaredFallback`, and `CalibrationScore` (`compute`, `score`, `cov80`, `ks_pit`, `is_calibrated`). `Claim<T>`, with:
   - `new`, `value_tag`, `canonical_body` and `check_id`;
-  - `downgraded` and `with_regime`;
+  - `downgraded`, `with_regime`, `authority`, `with_authority`, `attest`, `with_calibration_score`, `calibration_score`, `fallback` and `fallback_active`;
   - `color`, `verify_export_clearance` and `verify_uu_slot_for_decision`.
 - **Labels.** `Confidentiality`, with `public`, `internal`, `venture`, `mnpi`, `join`, `leq`, `is_public`, `ventures`, `walls` and `refusal_over`. `LabelRegistry`, with `new`, `venture` and `wall`. `VentureId`, `WallId` and `LabelError`.
-- **Free functions.** `verify_support_compatible`, `verify_unweighted_additive` and `compose_binary`.
+- **Free functions.** `verify_support_compatible`, `verify_unweighted_additive`, `compose_binary` and `compose_binary_with_fallback`.
 - **Provenance index.** `DagNode`, and `ClaimDag`, with `new`, `insert`, `guard_disclosure_export`, `invalidate_and_propagate` and `is_stale`.
 - **`dag`.** `RULES_VERSION`, `NodeKind`, `Availability`, `TemporalNode`, `ConeCut`, `CheckedCone`, `FrontierViolation`, `ConeViolation`, `TimeField` and `ConeError` (with `refusal`). `TemporalGraph`, with `new`, `node`, `nodes`, `verify_claim` and `check`.
 - **`dag::replay`.** `ReplayStore`, `ReadReceipt`, `RunReceipt`, `ReplayError`, `ReplayView`, `ReplayCertificate` and `verify_replay`.
@@ -302,18 +293,16 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 
 ## 12. Proof obligations
 The plan defines no `PO-CLAIM-*`. The old contract's PO-CLAIM-1 to PO-CLAIM-3 were local labels. Their properties are tested here, under Invariants. The plan's rows that name this crate's work:
-- **PO-PLUMB-1** (NL-1 to NL-8 over 10⁵ random provenance DAGs): partly discharged.
-  - Colour, class and state: `test_random_claim_dags_nl1_nl2_nl5_100k`.
-  - The rest is example-only or untested (Known gaps).
+- **PO-PLUMB-1** (NL-1 to NL-8 over 10⁵ random provenance DAGs): discharged by `test_gate_plumb_e1_nl1_to_nl8_100k_dags` plus `test_nl3_attestation_is_strictly_orthogonal`, `test_nl4_model_and_transfer_calibration_do_not_cross_derivation_or_support`, `test_nl6_refusal_absorption_and_declared_fallback_bounds`, and `test_nl8_calibration_score_formula_and_refusals`.
   - The plan's "fs-evidence `compose`" is `fmine_evidence::color::compose` here.
 - **PO-PLUMB-2** (taint monotone; no Full-basis bytes in Public exports): not discharged here.
-  - The label join is monotone: `test_join_semilattice_laws_exhaustive`.
+  - The label join is monotone: `test_join_semilattice_laws_exhaustive` and `test_gate_plumb_e1_nl1_to_nl8_100k_dags`.
   - A reliance issuance accepts only a public label.
   - The Full-basis taint and the export fuzz are not in this crate.
 - **PO-PLUMB-8** (append-only, hash-chained ledger; bit-identical as-of replay): partly discharged.
   - The reliance journal is hash-chained and append-only, and gives as-of status.
   - `dag::replay` requires bit-identical output.
   - The forecast-scoring clause is outside this crate.
-- **PO-PLUMB-15** (`Refused` never becomes a number without a declared fallback): partly discharged. A colour refusal survives composition (the random test, and `test_assertion_failed_calibration_and_staleness_never_show_a_strong_colour`). No declared-fallback mechanism exists.
-- **GATE-PLUMB-E1** (no-laundering proptests 100%): the random test asserts zero violations, within PO-PLUMB-1's limits.
+- **PO-PLUMB-15** (`Refused` never becomes a number without a declared fallback): discharged at the Claim composition layer by `compose_binary`, `compose_binary_with_fallback`, `test_nl6_refusal_absorption_and_declared_fallback_bounds`, and `test_gate_plumb_e1_nl1_to_nl8_100k_dags`.
+- **GATE-PLUMB-E1** (no-laundering proptests 100%): `docs/delivery/GATE-PLUMB-E1.md` (`test_gate_plumb_e1_nl1_to_nl8_100k_dags`, 0 violations across 100,000 DAGs).
 - **GATE-PLUMB-E4** (no ε without a RefClass; no unverified reference class on disclosure-facing claims): not met. `Claim` has no RefClass.
