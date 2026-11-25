@@ -103,6 +103,25 @@
 .ld-ev .ev {
   font-size: 0.6rem;
 }
+/* In a node too narrow for a two-word grade ("Modelled · cal.", a 1,024px screen) the grade takes a second line,
+   as a tag rather than a pill */
+.ld-node {
+  container-type: inline-size;
+}
+.ld-ev {
+  min-width: 0;
+}
+.ld-ev .ev {
+  max-width: 100%;
+  white-space: normal;
+}
+@container (max-width: 8.4rem) {
+  .ld-ev .ev {
+    border-radius: 0.45rem;
+    line-height: 1.25;
+    padding-block: 0.12rem 0.14rem;
+  }
+}
 .ld-id {
   display: none;
   grid-column: 1 / -1;

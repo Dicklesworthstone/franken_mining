@@ -307,11 +307,11 @@ export default function mount(fig: HTMLElement) {
     if (on) place();
   };
 
-  // On a narrow screen the evidence opens under the row that was picked.
+  // Where the evidence will not fit beside the waterfall (the CSS's breakpoint), it opens under the row that was picked.
   const main = $(host, ".lg-main");
   const slot = document.createElement("li");
   slot.className = "lg-slot";
-  const narrow = matchMedia("(max-width: 999px)");
+  const narrow = matchMedia("(max-width: 1199px)");
   const place = () => {
     if (narrow.matches) {
       slot.append(ev);

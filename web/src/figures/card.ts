@@ -195,7 +195,14 @@ ${rangeHtml("prior", "Chance the ore recovers well, before testing", 5, 95, 1, 6
     const RH = narrow ? 30 : 29;
     const IND = narrow ? 18 : 30;
     const X0 = 12;
-    const two = (r: Row) => narrow && !!r.sub && r.sub.length > 18;
+    // A sub-line goes under its label where the row has no room for both beside its value (estimated from the type:
+    // 12.5px Inter is about 7.4px a character, the 11px mono sub-line 6.6px, the 12px mono value 7.2px).
+    const two = (r: Row) => {
+      if (!r.sub) return false;
+      if (narrow) return r.sub.length > 18;
+      const need = X0 + r.depth * IND + 13 + r.label.length * 7.4 + 8 + r.sub.length * 6.6;
+      return need > W - 18 - (r.value?.length ?? 0) * 7.2;
+    };
     const ys: number[] = [];
     let acc = 4;
     for (const r of list) {

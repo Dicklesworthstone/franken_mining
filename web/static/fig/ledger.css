@@ -45,7 +45,7 @@
 
 /* The waterfall: one button per line */
 .lg-fall {
-  --cols: minmax(0, 14.5rem) 6.4rem minmax(0, 1fr) 7.6rem;
+  --cols: minmax(0, 14.5rem) 6.4rem minmax(7rem, 1fr) 7.6rem;
   min-width: 0;
 }
 .lg-axis {
@@ -75,6 +75,15 @@
 }
 .lg-ticks i:last-child {
   transform: translateX(-100%);
+}
+/* Five labels need about 14rem of track; below that the axis keeps $0, 800 and 1,600 over the same quarter lines */
+.lg-ticks {
+  container-type: inline-size;
+}
+@container (max-width: 14rem) {
+  .lg-ticks i:nth-child(even) {
+    display: none;
+  }
 }
 .lg-rows {
   display: grid;
@@ -186,8 +195,13 @@
   align-items: center;
   gap: 0.4rem;
   height: 100%;
-  font: 500 0.74rem var(--mono);
+  font: 500 0.74rem/1.2 var(--mono);
   color: var(--muted);
+}
+/* Where the track is short of room for "every line ÷ 120,000 oz" the words take a second line, inside the row */
+.lg-row.oz .lg-track {
+  height: auto;
+  min-height: 1.45rem;
 }
 .lg-div svg {
   width: 0.8rem;
@@ -455,7 +469,8 @@
   line-height: 1.55;
 }
 
-@media (max-width: 999px) {
+/* The waterfall beside the evidence needs about 1,190px; below that the evidence goes underneath */
+@media (max-width: 1199px) {
   .lg-main {
     grid-template-columns: 1fr;
   }

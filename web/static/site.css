@@ -544,7 +544,12 @@ kbd {
     padding-inline: 0.55rem;
   }
 }
-@media (max-width: 1020px) {
+/* The eight chapter links sit centred between the brand and the tools: below 1100px the search keeps to its icon and
+   the links draw closer, and below 1000px there is no room for them at all, so the menu takes their place. */
+@media (max-width: 1100px) {
+  .chapters a {
+    padding-inline: 0.42rem;
+  }
   .find span,
   .find kbd {
     display: none;
@@ -556,7 +561,7 @@ kbd {
 .menu {
   display: none;
 }
-@media (max-width: 899px) {
+@media (max-width: 999px) {
   .chapters {
     display: none;
   }
