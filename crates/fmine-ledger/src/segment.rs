@@ -557,7 +557,7 @@ pub fn inspect_segment_bytes(bytes: &[u8]) -> Result<SegmentInspection, LedgerEr
 /// Classifies the bytes from `cursor`, which do not form a verified record (`F7`).
 ///
 /// They are a crash-torn tail unless a whole record follows them: a length prefix starting at or after
-/// `cursor + 4`, in range, then that many bytes that decode as an `FMT-LEDGER-1` batch or a segment footer,
+/// `cursor`, in range, then that many bytes that decode as an `FMT-LEDGER-1` batch or a segment footer,
 /// frame CRC included. Torn bytes cannot pass that CRC, so such a record means written history lies beyond
 /// the damage; that is refused as interior corruption and never truncated. A crash can leave any part of the
 /// in-flight write on disk, even its later sectors without its length prefix, and a batch embeds its anchor
@@ -632,9 +632,11 @@ enum AfterDamage {
 /// file.
 const CANDIDATE_BYTES_PER_TAIL_BYTE: usize = 2;
 
-/// Looks for a whole batch or footer record whose length prefix starts at or after `cursor + 4`.
+/// Looks for a whole batch or footer record whose length prefix starts at or after `cursor`. The record at
+/// `cursor` itself has already failed with these bytes; one that starts a byte to three bytes later overlaps
+/// its length prefix, as after a few stray bytes before a record, and must still count.
 fn after_damage(bytes: &[u8], cursor: usize) -> AfterDamage {
-    let Some(first_magic) = cursor.checked_add(8) else {
+    let Some(first_magic) = cursor.checked_add(4) else {
         return AfterDamage::Nothing;
     };
     let Some(tail) = bytes.get(first_magic..) else {
@@ -1306,6 +1308,50 @@ mod tests {
                 assert_eq!(offset, cursor as u64);
             }
             other => panic!("expected interior corruption, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    /// A few stray bytes before a whole record put its length prefix one to three bytes after the damage,
+    /// overlapping the unreadable length read there. That record still follows the damage, so the segment is
+    /// refused, never truncated before it (`INV-003`).
+    #[test]
+    fn test_stray_bytes_before_a_whole_record_refuse_instead_of_truncating() {
+        let path = scratch_path("stray");
+        let mut writer = SegmentWriter::create(
+            &path,
+            "CELL-SITE(lumwana)",
+            0,
+            GENESIS_PREV_HASH,
+            Vec::new(),
+        )
+        .expect("create");
+        let mut prev = GENESIS_PREV_HASH;
+        let mut ends = Vec::new();
+        for seq in 0..2 {
+            prev = writer
+                .append(&sample_batch("CELL-SITE(lumwana)", 1, seq, prev))
+                .expect("append");
+            ends.push(std::fs::metadata(&path).expect("len").len() as usize);
+        }
+        writer.seal().expect("seal");
+        let full = std::fs::read(&path).expect("read");
+
+        // Before the second batch, then before the footer.
+        for at in ends {
+            for stray in 1..=7_usize {
+                let mut damaged = full[..at].to_vec();
+                damaged.extend(std::iter::repeat_n(0xA5, stray));
+                damaged.extend_from_slice(&full[at..]);
+                match inspect_segment_bytes(&damaged) {
+                    Err(LedgerError::InteriorCorruption { offset, .. }) => {
+                        assert_eq!(offset, at as u64, "{stray} stray bytes at {at}");
+                    }
+                    other => panic!(
+                        "{stray} stray bytes at {at}: expected interior corruption, got {other:?}"
+                    ),
+                }
+            }
         }
         let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
     }

@@ -133,3 +133,10 @@ path = "fuzz_targets/ledger.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "segment"
+path = "fuzz_targets/segment.rs"
+test = false
+doc = false
+bench = false

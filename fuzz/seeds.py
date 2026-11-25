@@ -431,7 +431,8 @@ def main() -> None:
     root, out = Path(sys.argv[1]), Path(sys.argv[2])
     seeds: dict[str, list[bytes]] = {t: [] for t in
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
-                                      "cli", "cli_run", "pit", "cpit", "pcpsp", "omf", "ledger")}
+                                      "cli", "cli_run", "pit", "cpit", "pcpsp", "omf", "ledger",
+                                      "segment")}
 
     # omf: every geometry and attribute type in v1 and v2 pages, then with pages and row groups split small and
     # bit-packed levels; then the omf-rust samples, when FMINE_OMF_DIR names a checkout.
@@ -467,6 +468,17 @@ def main() -> None:
     seeds["ledger"] += [b"\x02" + ledger_body(0, 0, [], [], []), b"\x02" + v0, b"\x05" + v1,
                         b"\x05" + ledger_body(1, 0, deltas[:1], witnesses[:1], refs[:1]),
                         b"\x00" + frame(b"LDGR", 1, v1), b"\x01" + frame(b"LDGR", 0, v0)[:-4] + bytes(4)]
+
+    # segment: the target writes the clean segment itself, so a seed is a mode, a selector, a 16-bit cut and
+    # edits ([kind, offset lo, offset hi, n], then a fill byte or n bytes). A crash cutting batch 2 short with its
+    # first 255 bytes lost; one cutting the seal; a planted length and frame magic inside batch 1; the first three
+    # bytes of the last batch's length prefix overwritten; and a cut open segment with the rest of the input
+    # appended.
+    seeds["segment"] += [b"\x00\x02\x40\x02" + bytes([0, 0, 0, 0xFF]),
+                         b"\x00\x06\x10\x00",
+                         b"\x01\x01\x00\x00" + bytes([1, 8, 0, 8]) + struct.pack("<I", 40) + b"FMNE",
+                         b"\x01\x05\xff\xff" + bytes([0, 0, 0, 3, 0xA5]),
+                         b"\x02\x03\x00\x02" + bytes([1, 0x20, 0, 4]) + b"LDGR" + b"FMNE" + bytes(16)]
 
     # journal: a forecast genesis record as a wrapped body (selector 8), a hex line (1), a one-line journal (2), and a
     # reliance body that starts with a zero previous head (11).
