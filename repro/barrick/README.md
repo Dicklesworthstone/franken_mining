@@ -52,6 +52,23 @@ candidate therefore has two more consistent outcomes and two fewer refusals than
 The original reader outputs and expected-root row are retained; tests check the two named corrections and
 all remaining census and family-count expectations.
 
+To verify every Mine Stats cross-vintage source pair and classification (E867), Mine Stats Claim key and
+value, and AISC operand linkage (E868) through 2026Q3, use Python 3.11 or newer and openpyxl 3.1.5.
+Run from the repository root after fetching the registered files.
+Choose an empty scratch directory for `$scratch`.
+
+```sh
+wb=corpus_of_input_docs/downloaded/mine_stats
+python3 -I scripts/oracle/mine_stats_extract3.py "$scratch/extract.json" \
+  "$wb"/Barrick_Q[1-4]_2024_Mine_Stats.xlsx "$wb"/Barrick_Q[1-4]_2025_Mine_Stats.xlsx \
+  "$wb"/Barrick_Q[1-3]_2026_Mine_Stats.xlsx
+cargo run -q -p fmine-cli -- assure public --issuer barrick --through 2026Q3 --json > "$scratch/assurance.json"
+python3 -B scripts/oracle/mine_stats_vintage_census.py registries/sources/barrick.toml \
+  "$wb" "$scratch/extract.json" "$scratch/assurance.json"
+```
+
+For the historical Q2 comparison, use `--through 2026Q2` and limit the 2026 extractor inputs to `Q[12]`.
+
 For the historical through-2026Q2 counts in E861, pass a separate workspace root as the script's argument.
 Place `registries/sources/barrick.toml` from revision `08b06594558d635e09efe5183b38a3d6b6ab7431` in that root,
 link the repository's `scripts/` directory, and link only the 18 sources from that registry under

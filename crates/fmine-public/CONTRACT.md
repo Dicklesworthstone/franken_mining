@@ -989,10 +989,11 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
 ## 9. Oracles
 - `crates/xtask/tests/public_exact_feas_oracle.rs` (closed-form rate/footing oracle), `public_exact_feas_blame.rs`, `public_laap_2023.rs`, `public_registry.rs`, `public_mine_stats_inventory.rs`, `public_mine_stats_vintages.rs`, `public_transcriptions.rs`, `public_mine_ledger.rs`, `public_report_contract.rs`, `public_citations.rs`, `public_track_record.rs`.
 - `GATE-BULL-01` (parts 1–3a/3b/3c): Mine Stats population reproduces T16 and all nine known changes with 30 region-map exclusions citing E461.
+- E866–E867 independently match all registered cross-vintage workbook pairs and dispositions through 2026Q3.
 
 ## 10. Known gaps
-- Complete `GATE-BULL-01` issuer-consistency delivery record and Q3 2026 workbook ingestion remain open.
-- Full all-verb JSON uncited-number validator (`BD-329`), authentic corpus cross-vintage census acceptance (`BD-331.S8`), and two-way cluster inference (`BD-341.S4`) remain open.
+- Complete `GATE-BULL-01` issuer-consistency delivery record and prospective Q4 blind-layout run remain open.
+- Full all-verb JSON uncited-number validator (`BD-329`) and two-way cluster inference (`BD-341.S4`) remain open.
 - See scope notes below under Public API / Proof obligations.
 
 ## 11. Public API
@@ -1288,8 +1289,8 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
   cases are named exclusions. Both source Claim ids, locators and hashes survive even for unchanged
   comparisons; ambiguous releases retain all assertions without a minimal-set claim. Existing within-vintage
   counts, first/single appearances and source-value classifications are unchanged. This is accounting of
-  registered assertions, not an arithmetic conflict certificate or a choice of the true vintage; authentic
-  corpus census acceptance remains separate.
+  registered assertions, not an arithmetic conflict certificate or a choice of the true vintage. The independent
+  census in E866–E867 matched 7,670 Mine Stats and 4,498 AISC pairs in the registered through-2026Q3 corpus.
 - DESIGN (BD-340.S5): `transcribe::check_docs` exposes the existing byte/digest verification for explicitly
   declared PDF tables. A consumer can require a document even when it has no transcription rows, so missing
   evidence cannot hide a missing or changed file. The consumer still owns identity definitions and arithmetic.

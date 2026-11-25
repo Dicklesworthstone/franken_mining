@@ -1910,3 +1910,45 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     reconstructed (ii). All 20 Porgera basis conflicts are (iii). The 30 E461 region exclusions
     and six token changes carry no numeric state. These are named Mine Stats checks. Independent
     reconstruction of all Mine Stats source pairs remains open.
+
+- **E867** Independent cross-vintage ledger census through 2026Q3 (FACT, 2026-11-25 UTC, bd-prmn.7).
+  - Ran the original W1 openpyxl extractor (`scripts/oracle/mine_stats_extract3.py`, openpyxl 3.1.5)
+    on the 10 registered Mine Stats workbooks through Q2 and again on all 11 through Q3. The reads
+    returned 22,732 and 25,348 rows. `scripts/oracle/mine_stats_vintage_census.py` independently
+    groups the source rows, applies the evidenced W1 copper label correction and compares earliest
+    and later locators. It checks registered workbook bytes, both receipt citations, exact displayed
+    decimals, token classes, dispositions and totals. The receipt does not supply the expected pairs.
+  - At E864's Q2 root, all 6,430 pairs matched: 5,417 (i), three reconstructed (ii), 20 (iii), and
+    990 exclusions (899 nonnumeric, 61 display refusals and 30 E461 region-map cases). Six of the
+    nonnumeric pairs changed token class. At E864's Q3 root, all 7,670 matched: 6,450 (i), four
+    reconstructed (ii), 20 (iii), and 1,196 exclusions (1,083 nonnumeric, 71 display refusals and
+    42 E461 region-map cases). Seven nonnumeric pairs changed token class. Neither run had a
+    missing or extra pair, stated explanation, glyph-only change or mismatched disposition.
+  - The added numeric revision is North Mara's 2025Q3 underground mining cost per tonne:
+    `Barrick_Q3_2025_Mine_Stats.xlsx:Minestats3!H11` reads 52.23 and
+    `Barrick_Q3_2026_Mine_Stats.xlsx:Minestats2!I11` reads 55.23. The added token change is
+    Loulo-Gounkoto's 2025Q3 strip ratio, blank at `Barrick_Q3_2025_Mine_Stats.xlsx:Minestats3!B8`,
+    dash at `Barrick_Q3_2026_Mine_Stats.xlsx:Minestats2!C8`. The coexisting assertions do not
+    establish which reading is correct.
+  - Extended the E866 AISC method to all nine registered AISC workbooks. The unchanged OOXML
+    reader identified 4,388 pairs. The separately located co-product row added the same 110 pairs
+    as in E866. All 4,498 pairs matched the Q3 receipt by both source locators, including 4,357
+    numeric agreements and 141 nonnumeric exclusions. E866's Kibali and Pueblo Viejo states persist.
+  - The through-Q2 within-vintage AISC ledger matches the prior E822-lineage receipt per family:
+    2,595 instances; (i) 2,436, (ii) 3, (iii) 4, (iv) 92, (v) 0 and 60 not published.
+    Changing a source digest, removing one pair, changing one state or inflating the comparison total
+    caused the census to fail in all four controls. These are known-file parity checks. The broader
+    M0 acceptance and prospective Q4 blind-layout run remain open.
+
+- **E868** Registered workbook Claim conformance (FACT, 2026-11-25 UTC, bd-a28f).
+  - Checked the public assurance Claim index against every E867 independently extracted Mine Stats
+    locator. Through Q2, all 22,732 Claims and 26,120 AISC operand references matched. Through Q3,
+    all 25,348 Claims and 29,142 AISC operand references matched. Both receipts have unique
+    Claim IDs and locators. The Mine Stats comparison covers subject (including the registered E457
+    alias), release, valid period, registered source hash, required comparison keys and typed values.
+    Numeric values match the independent stored-value read. Text placeholders retain their tokens;
+    the seven Hemlo and Tongon recovery zeros retain their zero token and `disposed` reason.
+  - The Q3 Mine Stats totals are 20,925 numbers, 3,007 not applicable, 1,410 Nil and six missing.
+    The separately checked AISC operand references match the Claim ID, locator and registered hash.
+    A Q2 receipt that changed Tongon's disposed zero to a number failed, as did a receipt with
+    an unbound AISC operand. E867's publisher assertions and evidence boundaries apply.
