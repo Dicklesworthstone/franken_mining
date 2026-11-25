@@ -809,7 +809,14 @@ fn a_source_verified_missing_original_cannot_be_replaced_by_a_numeric_reissue() 
             assessment(&reopened.payload_json),
             assessment(&missing.payload_json)
         );
-        assert!(reopened.payload_json.contains(&original_digest.to_hex()));
+        let expected_citation = format!(
+            "\"source_locator\":\"2030Q4.xlsx:YTD!B5\",\"source_sha256\":\"{}\"",
+            original_digest.to_hex()
+        );
+        assert!(
+            assessment(&reopened.payload_json).contains(&expected_citation),
+            "{expected_citation}"
+        );
         let latest = assess_revision(&mut fixture, "2031-02-19T00:00:00Z", "latest-as-of");
         assert!(
             latest

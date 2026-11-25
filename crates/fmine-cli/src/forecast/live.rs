@@ -926,10 +926,12 @@ impl SourceAdmission {
                 available_at_ns,
             } => {
                 let mut value = format!(
-                    "\"exact_value\":null,\"displayed\":null,\"source_value_kind\":{},\"source_token\":{},\"missing_reason\":{}",
+                    "\"exact_value\":null,\"displayed\":null,\"source_value_kind\":{},\"source_token\":{},\"missing_reason\":{},\"source_locator\":{},\"source_sha256\":{}",
                     js(&receipt.value_kind),
                     js(&receipt.token),
                     js(missing_name(receipt.reason)),
+                    js(&self.citation.locator),
+                    js(&Digest32(self.citation.sha256).to_hex()),
                 );
                 if let Some(status) = &receipt.status {
                     let _ = write!(

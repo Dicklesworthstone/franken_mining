@@ -1276,7 +1276,9 @@ numeric value. Replay reconstructs the original source Claim from the frozen pol
 checking its complete canonical body and identity before restoring either event. This prevents value, placeholder,
 subject, period, basis or anchor substitution.
 `source_admissions` and each selected member's `source_admission` distinguish recorded source verification
-from unverified supplied outcomes. Replay does not re-read source files or assert present file availability.
+from unverified supplied outcomes. A source-verified missing member carries `source_locator` and `source_sha256`
+in that admission, so a saved report shows which workbook and cell established the non-resolution.
+Replay does not re-read source files or assert present file availability.
 The journal head binds admission evidence; the existing assessment digest binds the cohort, numeric event
 and citations. Refused resolutions leave members unresolved in the frozen denominator.
 
