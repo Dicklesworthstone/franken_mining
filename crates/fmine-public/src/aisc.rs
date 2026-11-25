@@ -1085,9 +1085,9 @@ fn period_basis(
 /// keeping every reporting vintage. The anchored gold table's `Total` / `Total Gold` column is keyed as
 /// `Total Gold`, with its printed header retained; it does not enter the registered identity population.
 /// Other subjects are read from the cell's own registered column, including regional member columns.
-/// An attributable-basis row label or cost-of-sales-per-ounce footnote needs share confirmation in the
-/// reporting release and every quarter in the observation. Co-product rates have their own semantic line
-/// and never inherit the by-product identity verdicts.
+/// Comparative and cumulative attributable rows and footnoted cost-of-sales rates need share confirmation
+/// in the reporting release and every quarter in the observation. An original-quarter attributable row
+/// uses its registered share. Co-product rates keep their own semantic line and identity scope.
 #[must_use]
 pub fn key_aisc_operands(
     profile: &IssuerProfile,
@@ -1312,14 +1312,22 @@ fn key_aisc_operand(
     };
     let confirmed = basis_cell.as_deref().and_then(|at| {
         if row != table.cos_rate_row && period.code() == source.quarter {
-            let share = shares.get(source.quarter.as_str())?.get(subject)?;
-            // DESIGN: preserve the established Claim encoding for verified original-quarter basis
-            // inputs. The waterfall also binds their same-release label in its own evidence.
+            let share = profile
+                .shares
+                .iter()
+                .find(|share| share.subject == subject)?;
+            // DESIGN: keep original-quarter assertions available from a standalone AISC filing.
+            // The waterfall checks and binds its same-release label independently.
             let evidence = format!(
                 "{}; {}:{}!{at}",
                 share.evidence, source.file_name, sheet.name
             );
-            Some((share.ownership(), evidence, Vec::new()))
+            let basis = OwnershipBasis::Attributable {
+                num: share.num,
+                den: share.den,
+                source: ShareSource::Registry,
+            };
+            Some((basis, evidence, Vec::new()))
         } else {
             period_basis(source, sheet, at, subject, period, shares)
         }

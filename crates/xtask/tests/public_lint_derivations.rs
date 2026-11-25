@@ -2802,6 +2802,28 @@ fn gold_aisc_cost_of_sales_refuses_missing_or_mixed_ownership_evidence() {
             assert!(!report.payload_json.contains("\"basis_bridge\":"));
             continue;
         }
+        if fault == "comparative" {
+            use fmine_public::key::{OwnershipBasis, PublicValue};
+
+            // Period evidence is required before the comparative can supply an attributable rate target.
+            let profile = load_issuer_profile(&root, DERIVATION_ISSUER).expect("fixture profile");
+            let snapshot =
+                fmine_public::run_public_assurance(&profile, &root).expect("source Claims");
+            let sold = &snapshot.public_claims.cells["Costs.xlsx:Q1 2029!B13"];
+            assert_eq!(sold.key.ownership_basis, OwnershipBasis::Unprinted);
+            assert!(
+                matches!(&sold.claim.value, PublicValue::Number { stored, .. } if stored == "100")
+            );
+            assert!(rate.starts_with("null"), "{}", report.to_json());
+            assert!(
+                report
+                    .payload_json
+                    .contains("\"reason\":\"no_unique_supported_semantic_target\"")
+            );
+            assert!(!report.payload_json.contains("\"basis_bridge\":"));
+            continue;
+        }
+        assert!(rate.starts_with('{'), "{fault}: {}", report.to_json());
         assert_eq!(
             string_field(rate, "status"),
             "refused",

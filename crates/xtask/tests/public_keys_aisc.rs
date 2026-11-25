@@ -295,11 +295,8 @@ mod tests {
             .filter(|s| s.kind != SourceKind::MineStats)
             .cloned()
             .collect();
-        let unconfirmed_first = key_aisc_operands(&profile, &without_mine_stats, &base.instances);
-        assert_eq!(
-            unconfirmed_first.cells[&sold_at].key.ownership_basis,
-            OwnershipBasis::Unprinted
-        );
+        let standalone = key_aisc_operands(&profile, &without_mine_stats, &base.instances);
+        assert_eq!(standalone.cells[&sold_at], *sold);
         assert_eq!(
             base.public_claims.cells[&synthetic_at("K16")]
                 .key
