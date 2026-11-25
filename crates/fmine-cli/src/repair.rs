@@ -14,8 +14,10 @@
 //!   a crash keeps an archive that already holds those bytes), then truncates to `verified_bytes` and
 //!   re-verifies from byte 0.
 //! - Interior corruption, hash-chain breaks, and tampered footers are refused (`FMINE-REF-505`). So is a
-//!   last record written whole that does not verify: a segment frame, or a terminated journal line, whose
-//!   CRC verifies (a newer record version, say, or a duplicated record) is never truncated as torn.
+//!   last record written whole that does not verify: a segment frame with a readable length prefix, or a
+//!   terminated journal line, whose CRC verifies (a newer record version, say, or a duplicated record) is
+//!   never truncated as torn. A whole segment frame whose own length prefix is damaged still reads as torn
+//!   (an OPEN owner decision in `fmine-ledger`'s CONTRACT).
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom};
