@@ -214,10 +214,8 @@ No fixture under `fixtures/` (§33.2).
 - **Weighted bootstrap is conditional sensitivity.** It does not establish that input scenarios are independent
   observed samples, estimate a defensible effective sample size, calibrate their weights, or cover model misspecification.
 - **The four original kernels are not lifts.** Beyond its refusal test, each has one example test of its statistics or algebra (Ville, EVSI monotone, CVaR coherence, duality). `voi` also has GB-29's known answers, the exhaustive policy check and GATE-HELM-02, and `eproc` the score e-process's Ville test with its planted negative. The refusals make bad input visible; they do not make the kernels correct in general. A real lift waits on bd-022.
-- **GATE-HELM-02 passes locally only, and bd-227 stays open.**
-  - CI has not run it.
-  - There is no gate record in `docs/delivery/`.
-  - br will not claim bd-227 while bd-022 and bd-225 are open.
+- **GATE-HELM-02 measures the finite-model estimator.** The native result and hosted status are in
+  [the delivery record](../../docs/delivery/GATE-HELM-02.md).
 - **The Monte Carlo estimator is not nested.** Plan §22.4's general estimator is nested Monte Carlo. This one computes the posterior exactly, which only a finite problem allows (Validity domain).
 - **No caller uses the Monte Carlo estimate yet.** `fmine_decide::rank_voi_campaigns` ranks by the closed form and reports no SE or status (G-HELM-6).
 - **PO-NUM-1 holds for `lib.rs` only.** Every other module is DeterministicPerIsa, with no cross-host digest.
@@ -305,6 +303,10 @@ variances 1e20 and 1e-20 in either coordinate order.
   - `VoiProblem`: `validate() -> Result<ValidatedVoiProblem, VoiError>`, `compute_evpi() -> Result<(best_action, prior_ev, evpi), VoiError>`, `compute_evsi(likelihood, cost) -> Result<VoiSummary, VoiError>`, `evaluate(experiment) -> Result<VoiAnalysis, VoiError>` and `estimate_evsi_mc(likelihood, cost, n_samples, key) -> Result<McEvsi, VoiError>`.
   - `ValidatedVoiProblem` borrows the problem immutably and checks it once for many experiments: `evaluate(experiment)` and `estimate_evsi_mc(experiment, n_samples, key)`.
   - `McEvsi { prior_best_action, evsi, se, n_samples, net_voi, status, changes_choice }`, and `VoiStatus::{Positive, Negative, Indeterminate { se }}` with `at_two_se(net, se)`.
+  - DESIGN (BD-227). The Monte Carlo estimate scales its running moments before squaring to preserve
+    finite standard errors across payoff magnitudes. Out-of-range paired differences, moments and net
+    values return `VoiError::Arithmetic`. If the sample is constant despite gains varying on the
+    declared positive-mass support, the estimate reports zero sample SE and an indeterminate sign.
   - `VoiError::is_numerical_failure`.
 - **`risk::{TailRiskSummary, RiskError}`**, with `compute_cvar(losses, alpha) -> Result<TailRiskSummary, RiskError>` and `max_drawdown(trajectory) -> Result<f64, RiskError>`.
 - **`risk::exact::{ExactDistribution, compare, MAX_OUTCOMES}`** (BD-229, PO-CAP-2): exact rational payoff laws for

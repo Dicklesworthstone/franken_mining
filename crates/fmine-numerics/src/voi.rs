@@ -178,7 +178,7 @@ pub enum VoiStatus {
     Positive,
     /// `net_voi + 2·se < 0`.
     Negative,
-    /// Neither: the sign is unresolved at 2·SE. A net VOI of exactly 0 with no sampling error is here too.
+    /// The sign is unresolved at 2·SE or the draws missed variation in the declared paired gains.
     Indeterminate { se: f64 },
 }
 
@@ -208,7 +208,7 @@ pub struct McEvsi {
     pub n_samples: usize,
     /// `evsi − cost`.
     pub net_voi: f64,
-    /// The sign of `net_voi` at 2·`se`.
+    /// The sign of `net_voi` at 2·`se`. A constant sample from a variable gain law is indeterminate.
     pub status: VoiStatus,
     /// Whether some signal makes another action strictly better than the prior one in expected value. When none
     /// does, EVSI is exactly 0 and nothing is sampled: "no test result changes the choice" (plan §22.4, GB-29).
@@ -532,8 +532,8 @@ impl ValidatedVoiProblem<'_> {
     /// `key`.
     ///
     /// # Errors
-    /// Whatever [`ValidatedVoiProblem::evaluate`] refuses, and [`VoiError::TooFewSamples`] for fewer than two
-    /// draws.
+    /// Whatever [`ValidatedVoiProblem::evaluate`] refuses, [`VoiError::TooFewSamples`] for fewer than two
+    /// draws, and [`VoiError::Arithmetic`] when a paired difference or a reported moment is out of range.
     pub fn estimate_evsi_mc(
         &self,
         experiment: VoiExperiment<'_>,
@@ -573,27 +573,67 @@ impl ValidatedVoiProblem<'_> {
         }
         let (state_probs, payoffs) = (&self.problem.state_probs, &self.problem.payoffs);
         let mut rng = PhiloxStream::new(key);
-        // Welford's running mean and sum of squared deviations.
+        // Welford's moments in units of the largest power of two seen in the differences.
+        // Squaring the unscaled differences can overflow or underflow even for a representable SE.
+        const EXPONENT_MASK: u64 = 0x7ff0_0000_0000_0000;
+        let mut scale = f64::MIN_POSITIVE;
         let mut mean = 0.0_f64;
         let mut m2 = 0.0_f64;
         for i in 0..n_samples {
             let s = draw_index(state_probs, rng.next_f64_open01());
             let z = draw_index(&experiment.likelihood[s], rng.next_f64_open01());
-            let d = payoffs[s][rule[z]] - payoffs[s][prior];
-            let delta = d - mean;
-            mean += delta / (i + 1) as f64;
-            m2 += delta * (d - mean);
+            let d = finite(
+                payoffs[s][rule[z]] - payoffs[s][prior],
+                "paired payoff difference",
+            )?;
+            let draw_scale = f64::from_bits(d.to_bits() & EXPONENT_MASK);
+            if draw_scale > scale {
+                let ratio = scale / draw_scale;
+                mean *= ratio;
+                m2 *= ratio * ratio;
+                scale = draw_scale;
+            }
+            let delta = d / scale - mean;
+            let count = (i + 1) as f64;
+            mean += delta / count;
+            // This form keeps the variance of adjacent floats even if the new mean rounds to d.
+            m2 += delta * delta * (i as f64 / count);
         }
         let n = n_samples as f64;
-        let se = fmine_core::det::sqrt(m2 / (n - 1.0) / n);
-        let net_voi = mean - cost;
+        let se = finite(
+            scale * fmine_core::det::sqrt(m2 / (n - 1.0) / n),
+            "Monte Carlo standard error",
+        )?;
+        if m2 > 0.0 && se == 0.0 {
+            return Err(VoiError::Arithmetic {
+                quantity: "Monte Carlo standard error (underflow)",
+            });
+        }
+        let evsi = finite(scale * mean, "Monte Carlo sample-information value")?;
+        let net_voi = finite(evsi - cost, "Monte Carlo net information value")?;
+        let missed_variation = se == 0.0
+            && state_probs
+                .iter()
+                .zip(payoffs)
+                .zip(experiment.likelihood)
+                .any(|((&probability, payoff), likelihood)| {
+                    probability > 0.0
+                        && likelihood.iter().zip(&rule).any(|(&mass, &action)| {
+                            mass > 0.0 && payoff[action] - payoff[prior] != evsi
+                        })
+                });
+        let status = if missed_variation {
+            VoiStatus::Indeterminate { se }
+        } else {
+            VoiStatus::at_two_se(net_voi, se)
+        };
         Ok(McEvsi {
             prior_best_action: prior,
-            evsi: mean,
+            evsi,
             se,
             n_samples,
             net_voi,
-            status: VoiStatus::at_two_se(net_voi, se),
+            status,
             changes_choice: true,
         })
     }
@@ -1229,6 +1269,112 @@ mod tests {
             .estimate_evsi_mc(&lik, 9.8, 500, key(0, 0, 8))
             .expect("valid");
         assert_ne!(a.evsi.to_bits(), c.evsi.to_bits());
+    }
+
+    #[test]
+    fn test_mc_evsi_standard_error_survives_extreme_payoff_scales() {
+        // Perfect information gains 4 exactly when the second state is drawn. Counting those
+        // draws gives a two-point known answer for both the sample mean and its standard error.
+        let k = key(0, 0, 7);
+        let draws = 64;
+        let cost = 2.0;
+        let likelihood = [vec![1.0, 0.0], vec![0.0, 1.0]];
+        let mut rng = PhiloxStream::new(k);
+        let hits = (0..draws)
+            .filter(|_| {
+                let second = rng.next_f64_open01() >= 0.75;
+                rng.next_f64_open01();
+                second
+            })
+            .count();
+        let frequency = hits as f64 / draws as f64;
+        let expected_mean = 4.0 * frequency;
+        let expected_se = 4.0 * (frequency * (1.0 - frequency) / (draws - 1) as f64).sqrt();
+        assert!(expected_se > 0.0 && cost - expected_mean > 2.0 * expected_se);
+
+        for scale in [1.0, 2.0_f64.powi(900), 2.0_f64.powi(-900)] {
+            let problem = VoiProblem {
+                state_probs: vec![0.75, 0.25],
+                payoffs: vec![vec![4.0 * scale, 0.0], vec![0.0, 4.0 * scale]],
+            };
+            let result = problem
+                .estimate_evsi_mc(&likelihood, cost * scale, draws, k)
+                .expect("the scaled estimate is representable");
+            assert!((result.evsi / scale - expected_mean).abs() < 1e-14);
+            assert!(
+                (result.se / scale - expected_se).abs() < 1e-14,
+                "scale {scale:e}, se {:e}, expected {:e}",
+                result.se,
+                expected_se * scale
+            );
+            assert!((result.net_voi / scale - (expected_mean - cost)).abs() < 1e-14);
+            assert_eq!(result.status, VoiStatus::Negative);
+        }
+    }
+
+    #[test]
+    fn test_mc_evsi_constant_sample_keeps_a_rare_gain_indeterminate() {
+        let problem = VoiProblem {
+            state_probs: vec![0.999, 0.001],
+            payoffs: vec![vec![4.0, 0.0], vec![0.0, 400.0]],
+        };
+        let likelihood = [vec![1.0, 0.0], vec![0.0, 1.0]];
+        let exact = problem.compute_evsi(&likelihood, 0.2).expect("valid model");
+        assert!(exact.net_voi > 0.0);
+        let sample = problem
+            .estimate_evsi_mc(&likelihood, 0.2, 2, key(0, 0, 7))
+            .expect("valid sample");
+        assert_eq!((sample.evsi, sample.se, sample.net_voi), (0.0, 0.0, -0.2));
+        assert!(sample.changes_choice);
+        assert_eq!(sample.status, VoiStatus::Indeterminate { se: 0.0 });
+    }
+
+    #[test]
+    fn test_mc_evsi_deterministic_gain_keeps_its_sign() {
+        // Hold is best before sampling. Each perfectly revealing signal picks a different action,
+        // both worth the same gain over Hold. With a constant gain law the zero SE is exact.
+        let problem = VoiProblem {
+            state_probs: vec![0.5, 0.5, 0.0],
+            payoffs: vec![
+                vec![0.0, 2.0, -4.0],
+                vec![0.0, -4.0, 2.0],
+                vec![0.0, 100.0, -100.0],
+            ],
+        };
+        let likelihood = [vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 0.0]];
+        let sample = problem
+            .estimate_evsi_mc(&likelihood, 1.0, 2, key(0, 0, 7))
+            .expect("valid model");
+        assert_eq!((sample.evsi, sample.se, sample.net_voi), (2.0, 0.0, 1.0));
+        assert!(sample.changes_choice);
+        assert_eq!(sample.status, VoiStatus::Positive);
+    }
+
+    #[test]
+    fn test_mc_evsi_refuses_unrepresentable_sample_net_value() {
+        let payoff = f64::MAX / 2.0;
+        let problem = VoiProblem {
+            state_probs: vec![0.75, 0.25],
+            payoffs: vec![vec![payoff, 0.0], vec![0.0, payoff]],
+        };
+        let likelihood = [vec![0.9, 0.1], vec![0.1, 0.9]];
+        assert!(problem.compute_evsi(&likelihood, f64::MAX).is_ok());
+        let k = (0..100)
+            .map(|seed| key(0, 0, seed))
+            .find(|&key| {
+                let mut rng = PhiloxStream::new(key);
+                let first_state = rng.next_f64_open01();
+                let first_signal = rng.next_f64_open01();
+                let second_state = rng.next_f64_open01();
+                first_state < 0.75 && first_signal >= 0.9 && second_state < 0.75
+            })
+            .expect("a false positive followed by a zero or negative gain");
+        assert_eq!(
+            problem.estimate_evsi_mc(&likelihood, f64::MAX, 2, k),
+            Err(VoiError::Arithmetic {
+                quantity: "Monte Carlo net information value"
+            })
+        );
     }
 
     #[test]
