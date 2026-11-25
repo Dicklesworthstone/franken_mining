@@ -195,6 +195,9 @@ The public lane of M0 (`fmine assure public`).
   effective value. The numeric identity root remains independent of timing metadata; candidate receipts
   and public-record comparison digests retain their relevant timing evidence. Retrieval and publication
   remain distinct, including for undated sources and intervals that cross midnight.
+  FACT (BD-055). The source inventory reports each loaded workbook's registered filed reconciliation
+  page, PDF digest and optional SEC accession. These references apply to the selected workbook
+  vintage and do not enter the numeric state root. The workbook run verifies the workbook bytes.
 - `aisc`: a label-anchored reader for the AISC reconciliation tables. It finds rows by column-A label and the
   header row by registered subjects, so no coordinate is fixed. It also builds the identity ledger
   (`GATE-BULL-01` part 2, plan §21.6).

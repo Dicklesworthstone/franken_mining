@@ -135,6 +135,26 @@ fn source_inventory(out: &mut String, report: &PublicAssuranceReport) {
             ],
         );
     }
+    if !report.workbook_filings.is_empty() {
+        out.push_str("\n### Registered filed reconciliation pages\n\nThe PDF links identify cited reconciliation pages. This workbook run checks the workbook bytes and carries the declared PDF digest.\n\n");
+        for source in &report.sources {
+            if let Some(filing) = report.workbook_filings.get(&source.file_name) {
+                let accession = filing
+                    .accession
+                    .as_ref()
+                    .map_or_else(String::new, |value| format!(" · SEC accession `{value}`"));
+                let _ = writeln!(
+                    out,
+                    "- {} · [p. {}]({}#page={}){accession} · PDF SHA-256 `{}`",
+                    text(&source.file_name),
+                    filing.page,
+                    filing.pdf_url,
+                    filing.page,
+                    filing.pdf_sha256,
+                );
+            }
+        }
+    }
 }
 
 fn counts<F: ConsistencyFamily>(out: &mut String, heading: &str, values: &FamilyCounts<F>) {

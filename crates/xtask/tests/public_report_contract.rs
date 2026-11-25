@@ -1855,7 +1855,10 @@ mod tests {
             .len();
         let added = "\n[[source]]\nfile = \"Barrick_Q3_2099_Mine_Stats.xlsx\"\nkind = \"mine_stats\"\n\
                      quarter = \"2099Q3\"\npath = \"2099/q3/Barrick_Q3_2099_Mine_Stats.xlsx\"\n\
-                     url_basis = \"W1 naming rule\"\nbytes = 1\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000001\"\n";
+                     url_basis = \"W1 naming rule\"\nbytes = 1\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000001\"\n\
+                     filing_pdf_url = \"https://example.invalid/2099-q3-test-fixture.pdf\"\n\
+                     filing_pdf_sha256 = \"0000000000000000000000000000000000000000000000000000000000000002\"\n\
+                     filing_page = 1\n";
         std::fs::write(reg_dir.join("barrick.toml"), format!("{text}{added}")).expect("write");
         let profile = load_issuer_profile(&ws, "barrick").expect("extended registry");
         assert_eq!(profile.sources.len(), base + 1);

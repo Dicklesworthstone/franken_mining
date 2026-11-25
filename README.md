@@ -908,6 +908,9 @@ filings, later corrections, verified disclosure notes and explicit comparability
 Source cells, document hashes and Claim IDs remain available in the report. Hidden/template scope has a
 separate appendix. PDF transcriptions, recovery-model outputs and any published-cutoff reference
 calculations carry their own evidence boundaries; they do not enlarge the identity-ledger certificate.
+The workbook inventory links to the registered filed reconciliation pages and gives the PDF SHA-256
+and SEC accession for each Barrick workbook. New releases in that registry require a reviewed PDF URL,
+digest and page before admission. The vintage helper carries these fields for known-file replays.
 The JSON envelope and state root are the same for either presentation. A synthetic report remains
 ineligible for a public-lane gate, and a readable report does not turn the current implementation into
 a complete M0 gate pass.

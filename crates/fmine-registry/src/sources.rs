@@ -106,6 +106,17 @@ pub struct SourceRow {
     pub published_at: Option<String>,
     /// Required with the date; uses the same FACT/INFERENCE citation convention as documents.
     pub published_at_basis: Option<String>,
+    /// Registered reference to the same release's filed reconciliation.
+    pub filed_reconciliation: Option<FiledReconciliation>,
+}
+
+/// Cited page in an issuer's PDF rendering of a filed report (BD-055).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FiledReconciliation {
+    pub pdf_url: String,
+    pub pdf_sha256: String,
+    pub page: u64,
+    pub accession: Option<String>,
 }
 
 /// One registered reconstruction (plan §21.6 state (ii)).
@@ -729,6 +740,79 @@ impl<'a> Fields<'a> {
     }
 }
 
+fn filed_reconciliation(
+    f: &Fields<'_>,
+    required: bool,
+) -> Result<Option<FiledReconciliation>, SourcesError> {
+    let keys = [
+        "filing_pdf_url",
+        "filing_pdf_sha256",
+        "filing_page",
+        "filing_accession",
+    ];
+    if !required
+        && !f
+            .fields
+            .iter()
+            .any(|field| keys.contains(&field.key.as_str()))
+    {
+        return Ok(None);
+    }
+    let (pdf_url, url_line) = f.string("filing_pdf_url")?;
+    let (pdf_sha256, hash_line) = f.string("filing_pdf_sha256")?;
+    let (page, _) = f.positive_int("filing_page")?;
+    let accession = f.optional_string("filing_accession")?;
+    let valid_url = pdf_url
+        .strip_prefix("https://")
+        .and_then(|url| url.split_once('/'))
+        .is_some_and(|(host, path)| {
+            !host.is_empty()
+                && host
+                    .bytes()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'-'))
+                && path.ends_with(".pdf")
+                && path.bytes().all(|ch| {
+                    ch.is_ascii_alphanumeric()
+                        || matches!(ch, b'/' | b'.' | b'-' | b'_' | b'%' | b'~')
+                })
+        });
+    if !valid_url {
+        return fail(
+            url_line,
+            "filing_pdf_url must be an HTTPS PDF URL without a query or fragment",
+        );
+    }
+    if !is_lower_hex64(&pdf_sha256) {
+        return fail(
+            hash_line,
+            "filing_pdf_sha256 must be 64 lowercase hex characters",
+        );
+    }
+    if let Some(accession) = &accession {
+        let bytes = accession.as_bytes();
+        if bytes.len() != 20
+            || !bytes.iter().enumerate().all(|(i, byte)| {
+                if matches!(i, 10 | 13) {
+                    *byte == b'-'
+                } else {
+                    byte.is_ascii_digit()
+                }
+            })
+        {
+            return fail(
+                f.line,
+                "filing_accession must be a hyphenated SEC accession number",
+            );
+        }
+    }
+    Ok(Some(FiledReconciliation {
+        pdf_url,
+        pdf_sha256,
+        page,
+        accession,
+    }))
+}
+
 /// Parses and checks one sources registry.
 pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesError> {
     let doc = parse_subset(text)?;
@@ -743,7 +827,13 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         "corpus_dir",
         "retrieved_utc",
         "url_prefix",
+        "workbook_filing",
     ])?;
+    let require_filing = match top.optional_string("workbook_filing")?.as_deref() {
+        None => false,
+        Some("required") => true,
+        Some(_) => return fail(top.line, "workbook_filing must be required when declared"),
+    };
     let (schema, schema_line) = top.string("schema")?;
     if schema != SOURCES_SCHEMA {
         return fail(
@@ -817,6 +907,10 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "retrieved_utc",
             "published_at",
             "published_at_basis",
+            "filing_pdf_url",
+            "filing_pdf_sha256",
+            "filing_page",
+            "filing_accession",
         ])?;
         let (file, file_line) = f.string("file")?;
         let (kind, kind_line) = f.string("kind")?;
@@ -894,6 +988,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             retrieved_utc: source_retrieved,
             published_at,
             published_at_basis,
+            filed_reconciliation: filed_reconciliation(&f, require_filing)?,
         });
     }
     let mut documents = Vec::new();
@@ -2222,6 +2317,51 @@ mod tests {
             "",
         ));
         assert!(e.reason.contains("url_basis"), "{e}");
+    }
+
+    #[test]
+    fn barrick_requires_a_valid_filed_reconciliation_for_each_workbook() {
+        let text = include_str!("../../../registries/sources/barrick.toml");
+        let parsed = parse_sources_registry(text).expect("valid public-source links");
+        assert!(
+            parsed
+                .sources
+                .iter()
+                .all(|row| row.filed_reconciliation.is_some())
+        );
+        for (kind, page) in [("mine_stats", 48), ("aisc_reconciliation", 47)] {
+            let row = parsed
+                .sources
+                .iter()
+                .find(|row| row.kind == kind && row.quarter == "2026Q3")
+                .expect("Q3 2026 workbook");
+            let filing = row.filed_reconciliation.as_ref().expect("filed MD&A");
+            assert_eq!(filing.page, page);
+            assert_eq!(filing.accession.as_deref(), Some("0001193125-26-453391"));
+            assert!(
+                filing
+                    .pdf_url
+                    .ends_with("/2026/q3/Barrick_Q3_2026_MD-A.pdf")
+            );
+        }
+        for (field, invalid, expected) in [
+            ("filing_page = 59", "# missing page", "filing_page"),
+            ("filing_page = 59", "filing_page = 0", "positive integer"),
+            (
+                "filing_accession = \"0001193125-24-128219\"",
+                "filing_accession = \"invalid\"",
+                "accession number",
+            ),
+            (
+                "filing_pdf_sha256 = \"09a50ed4ce1eb71351692ba5beaaa851c472ac1a979b582280190d1812a5583d\"",
+                "filing_pdf_sha256 = \"invalid\"",
+                "64 lowercase hex",
+            ),
+        ] {
+            let broken = text.replacen(field, invalid, 1);
+            assert_ne!(broken, text, "mutation must touch the registry");
+            assert!(refusal(&broken).reason.contains(expected));
+        }
     }
 
     /// The real registry: every row's basis is registered (default CI, no corpus).

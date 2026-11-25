@@ -117,10 +117,12 @@ the files existed (bd-s9j3; GATE-BULL-01's blind-layout clause). Barrick's Quart
    `corpus_of_input_docs/incoming/<stamp>/`. It runs the independent readers and seals their output before any
    fmine run, then prints candidate `[[source]]` rows, each carrying its own conservative `retrieved_utc`.
    Each sealed extraction census includes the fetched workbook's SHA-256. A dry run carries forward
-   reviewed publication evidence when the candidate matches the registered source identity.
+   reviewed publication evidence and filed-page references when the candidate matches the registered source identity.
    Keep the registry's historical retrieval default unchanged.
 4. **Commit the rows alone.** Paste them into `registries/sources/barrick.toml`, then confirm each `kind`. Edit
-   nothing else: subjects and labels were frozen before the release. Then run `repro/barrick/fetch.sh`.
+   the candidate rows to add the same-quarter MD&A PDF URL, the digest of the retrieved PDF and the one-based
+   PDF page where the reconciliation starts. Record its SEC accession when available. Keep the frozen subjects
+   and labels. Then run `repro/barrick/fetch.sh`.
 5. **Run `scripts/register_vintage.sh --run 2026Q2 <incoming dir>`.** It refuses unless the seal holds and the
    binary matches `blind_record.json`. It then prints the roots and diffs against the sealed readers. A
    child failure or disagreement in the workbook hashes or census returns nonzero. The two invocation

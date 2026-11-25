@@ -36,6 +36,7 @@ fn example(metric: PublicMetric) -> (PublicResolutionPolicy, ObjectId, SourceRow
         retrieved_utc: None,
         published_at: Some("2031-02-15".into()),
         published_at_basis: Some("FACT: invented test release date".into()),
+        filed_reconciliation: None,
     };
     let key = PublicKey {
         issuer: policy.issuer.clone(),

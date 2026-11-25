@@ -255,6 +255,8 @@ pub struct PublicAssuranceReport {
     pub retrieved_utc: String,
     /// Effective retrieval evidence for each workbook, separate from publication and the numeric state root.
     pub source_retrievals: BTreeMap<String, String>,
+    /// Registered filed-page citations for the loaded workbooks.
+    pub workbook_filings: BTreeMap<String, fmine_registry::sources::FiledReconciliation>,
     /// The `--through YYYYQn` bound the run applied, if any. Not in the state root: the sources it kept are.
     pub through: Option<String>,
     pub sources: Vec<LoadedSource>,
@@ -918,11 +920,20 @@ impl PublicAssuranceReport {
         );
         for (n, s) in self.sources.iter().enumerate() {
             let c = &s.census;
+            let filing = self.workbook_filings.get(&s.file_name).map_or_else(String::new, |f| {
+                format!(
+                    ",\"filed_reconciliation\":{{\"pdf_url\":{},\"pdf_sha256\":{},\"page\":{},\"accession\":{}}}",
+                    js(&f.pdf_url),
+                    js(&f.pdf_sha256),
+                    f.page,
+                    f.accession.as_deref().map_or_else(|| "null".into(), js),
+                )
+            });
             let _ = write!(
                 o,
                 "{}{{\"file\":{},\"kind\":{},\"quarter\":{},\"url\":{},\"url_basis\":{},\"retrieved_utc\":{},\"bytes\":{},\
                  \"sha256\":{},\"visible_sheets\":{},\"hidden_sheets\":{},\"numeric_cells\":{},\
-                 \"placeholder_cells\":{},\"formula_error_cells\":{},\"text_cells\":{},\"numeric_digest\":{}}}",
+                 \"placeholder_cells\":{},\"formula_error_cells\":{},\"text_cells\":{},\"numeric_digest\":{}{filing}}}",
                 if n == 0 { "" } else { "," },
                 js(&s.file_name),
                 js(s.kind.as_str()),
@@ -2050,6 +2061,16 @@ fn assess_inner(
                     s.file_name.clone(),
                     s.retrieval(&profile.retrieved_utc).to_string(),
                 )
+            })
+            .collect(),
+        workbook_filings: sources
+            .iter()
+            .filter_map(|source| {
+                profile
+                    .workbook_filings
+                    .get(&source.file_name)
+                    .cloned()
+                    .map(|filing| (source.file_name.clone(), filing))
             })
             .collect(),
         through: profile.through.clone(),

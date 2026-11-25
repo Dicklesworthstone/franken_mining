@@ -151,6 +151,8 @@ ws2="$scratch/ws2"
 registry "$ws2" "$(digest "$aisc")"
 printf 'published_at = "2026-08-10"\npublished_at_basis = "different source"\n' \
   >>"$ws2/registries/sources/barrick.toml"
+printf 'filing_pdf_url = "https://example.invalid/q2-fixture.pdf"\nfiling_pdf_sha256 = "%s"\nfiling_page = 1\n' "$zeros" \
+  >>"$ws2/registries/sources/barrick.toml"
 vintage "$ws2" t2 "${urls[@]}"
 dir2="$ws2/corpus_of_input_docs/incoming/t2"
 duplicate() {
@@ -163,7 +165,8 @@ check registered_sha256_prints_no_row "exit $code" duplicate
 vintage "$ws2" t3 --dry-run "${urls[@]}"
 dry() {
   [[ $code -eq 0 && "$out" == *'"count":2'* ]] &&
-    ! has "$ws2/corpus_of_input_docs/incoming/t3/rows.toml" 'published_at'
+    ! has "$ws2/corpus_of_input_docs/incoming/t3/rows.toml" 'published_at' &&
+    ! has "$ws2/corpus_of_input_docs/incoming/t3/rows.toml" 'filing_'
 }
 check dry_run_prints_registered_row "exit $code" dry
 
@@ -172,6 +175,8 @@ registry "$ws3" "$zeros"
 cat "$dir1/rows.toml" >>"$ws3/registries/sources/barrick.toml"
 printf 'published_at = "2026-11-09"\npublished_at_basis = "invented release marker"\n' \
   >>"$ws3/registries/sources/barrick.toml"
+printf 'filing_pdf_url = "https://example.invalid/q3-fixture.pdf"\nfiling_pdf_sha256 = "%s"\nfiling_page = 47\n' "$zeros" \
+  >>"$ws3/registries/sources/barrick.toml"
 vintage "$ws3" t4 --dry-run "${urls[@]}"
 publication_evidence() {
   [[ $code -eq 0 ]] && python3 -I - "$ws3/corpus_of_input_docs/incoming/t4/rows.toml" <<'PY'
@@ -179,8 +184,12 @@ import sys
 from pathlib import Path
 _, stats, aisc = Path(sys.argv[1]).read_text().split("[[source]]")
 assert "published_at" not in stats
+assert "filing_" not in stats
 assert 'published_at = "2026-11-09"\n' in aisc
 assert 'published_at_basis = "invented release marker"\n' in aisc
+assert 'filing_pdf_url = "https://example.invalid/q3-fixture.pdf"\n' in aisc
+assert 'filing_pdf_sha256 = "' + "0" * 64 + '"\n' in aisc
+assert "filing_page = 47\n" in aisc
 PY
 }
 check dry_run_retains_reviewed_publication_evidence "exit $code: $err" publication_evidence

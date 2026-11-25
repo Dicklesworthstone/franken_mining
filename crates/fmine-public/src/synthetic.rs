@@ -110,6 +110,7 @@ pub fn synthetic_profile() -> IssuerProfile {
         corpus_dir: String::new(),
         retrieved_utc: String::new(),
         sources: Vec::new(),
+        workbook_filings: Default::default(),
         subjects: SYNTHETIC_SUBJECTS.iter().map(|x| s(x)).collect(),
         regions: vec![s("Region North")],
         shares: SYNTHETIC_SHARES

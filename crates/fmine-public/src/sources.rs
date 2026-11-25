@@ -7,11 +7,13 @@
 //!
 //! No affiliation: the issuer's files are public disclosures read as published.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::sources::{
-    BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
+    BasisRow, FiledReconciliation, SourcesRegistry, SubjectStatusRow, is_quarter,
+    load_sources_registry,
 };
 pub use fmine_registry::sources::{
     DocumentRow, HtmlSourceRow, MineStatsLabelAlias, PrintedShareCorrection, PublicationCut,
@@ -74,6 +76,7 @@ pub struct IssuerProfile {
     pub corpus_dir: String,
     pub retrieved_utc: String,
     pub sources: Vec<RegisteredSource>,
+    pub workbook_filings: BTreeMap<String, FiledReconciliation>,
     /// Reporting subjects (sites, joint ventures, regions) as printed in AISC table headers, before the
     /// issuer's one-letter footnote suffix.
     pub subjects: Vec<String>,
@@ -120,6 +123,16 @@ impl IssuerProfile {
                 .find(|f| f.as_str() == name)
                 .ok_or_else(|| format!("family {name:?} has no IdentityFamily"))
         };
+        let workbook_filings = reg
+            .sources
+            .iter()
+            .filter_map(|source| {
+                source
+                    .filed_reconciliation
+                    .clone()
+                    .map(|filing| (source.file.clone(), filing))
+            })
+            .collect();
         let sources = reg
             .sources
             .into_iter()
@@ -183,6 +196,7 @@ impl IssuerProfile {
             corpus_dir: reg.corpus_dir,
             retrieved_utc: reg.retrieved_utc,
             sources,
+            workbook_filings,
             subjects: reg.subjects,
             regions: reg.regions,
             shares,
@@ -237,6 +251,8 @@ impl IssuerProfile {
     /// workbook covers the requested periods).
     pub fn through(mut self, bound: &str) -> Result<Self, Refusal> {
         self.sources.retain(|s| s.quarter.as_str() <= bound);
+        self.workbook_filings
+            .retain(|file, _| self.sources.iter().any(|s| &s.file_name == file));
         if self.sources.is_empty() {
             return Err(Refusal::new(
                 RefusalCode::NoClaimInDomain201,

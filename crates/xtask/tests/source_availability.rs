@@ -116,6 +116,7 @@ fn typed_registered_projection_keeps_the_original_publication_citation() {
         retrieved_utc: None,
         published_at: Some("2031-01-15".into()),
         published_at_basis: Some("FACT: invented release".into()),
+        filed_reconciliation: None,
     })
     .unwrap();
     assert_eq!(source.kind, SourceKind::MineStats);

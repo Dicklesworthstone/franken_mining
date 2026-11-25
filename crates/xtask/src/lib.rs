@@ -1787,7 +1787,15 @@ mod tests {
             .arg(root.join("scripts/register_vintage.py"))
             .args(["row", "barrick", prefix])
             .arg(format!("{prefix}2099/q3/AISC_Q3_2099.xlsx"))
-            .args(["51234", &sha, "2099-11-10T11:05:00Z"])
+            .args([
+                "51234",
+                &sha,
+                "2099-11-10T11:05:00Z",
+                "https://issuer.example/2099/q3/report.pdf",
+                &"cd".repeat(32),
+                "27",
+                "0000000000-99-123456",
+            ])
             .output()
             .expect("python3 runs");
         assert!(
@@ -1804,6 +1812,8 @@ mod tests {
             "path = \"2099/q3/AISC_Q3_2099.xlsx\"\n",
             "url_basis = \"fetched and verified 2099-11-10\"\n",
             "bytes = 51_234\n",
+            "filing_page = 27\n",
+            "filing_accession = \"0000000000-99-123456\"\n",
         ] {
             assert!(row.contains(want), "{want:?} not in {row}");
         }

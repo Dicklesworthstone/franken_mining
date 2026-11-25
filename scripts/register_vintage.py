@@ -1,7 +1,7 @@
 """Helper of scripts/register_vintage.sh (bd-s9j3.2). Standard library only; reads no fmine code.
 
 Subcommands, each printing one JSON line per step:
-  row <issuer> <url_prefix> <url> <bytes> <sha256> <utc>   one candidate [[source]] row, as TOML, for a file
+  row <issuer> <url_prefix> <url> <bytes> <sha256> <utc> [<filing-pdf-url> <filing-sha256> <page> [<accession>]]
   rows <workspace> <dir> [--dry-run]                     candidate rows for dir/fetch.jsonl into dir/rows.toml
   oracle <workspace> <dir>                               the independent reader on the fetched files, blind
   diff <workspace> <dir> <bound>                         dir/run_all.json and dir/run_through.json vs the oracle
@@ -18,6 +18,7 @@ import datetime, hashlib, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "oracle"))
+FILING_FIELDS = ("filing_pdf_url", "filing_pdf_sha256", "filing_page", "filing_accession")
 
 
 def line(**kw):
@@ -118,6 +119,10 @@ def fetched(dir_):
     return jsonl(os.path.join(dir_, "fetch.jsonl"))
 
 
+def filing_toml(row):
+    return "".join("%s = %s\n" % (key, json.dumps(row[key])) for key in FILING_FIELDS if key in row)
+
+
 def cmd_rows(ws, dir_, dry_run):
     top, rows = registry(ws)
     known = {r.get("sha256"): r for r in rows}
@@ -127,6 +132,8 @@ def cmd_rows(ws, dir_, dry_run):
                                         f["utc"])
         registered = known.get(f["sha256"])
         already = registered is not None
+        if not already and top.get("workbook_filing") == "required":
+            warnings.append("add the reviewed filed PDF URL, SHA-256 and page before registry-check")
         line(stage="row", file_name=row["file"], quarter=row["quarter"], already_registered=already,
              warnings=warnings)
         if registered is not None:
@@ -135,9 +142,10 @@ def cmd_rows(ws, dir_, dry_run):
                 continue
             # A dry run can repeat reviewed metadata for the exact same source identity.
             publication = ("published_at", "published_at_basis")
-            if (all(row[key] == registered.get(key) for key in ("file", "kind", "quarter", "path", "bytes"))
-                    and all(registered.get(key) for key in publication)):
-                text += "".join('%s = "%s"\n' % (key, registered[key]) for key in publication)
+            if all(row[key] == registered.get(key) for key in ("file", "kind", "quarter", "path", "bytes")):
+                if all(registered.get(key) for key in publication):
+                    text += "".join('%s = "%s"\n' % (key, registered[key]) for key in publication)
+                text += filing_toml(registered)
         out.append(text)
     with open(os.path.join(dir_, "rows.toml"), "w", encoding="utf-8") as h:
         h.write("\n".join(out))
@@ -278,8 +286,15 @@ def cmd_diff(ws, dir_, bound):
 
 if __name__ == "__main__":
     a = sys.argv[1:]
-    if a[:1] == ["row"] and len(a) == 7:
+    if a[:1] == ["row"] and len(a) in (7, 10, 11):
         _, text, warnings = candidate(a[1], a[2], a[3], int(a[4]), a[5], a[6])
+        if len(a) > 7:
+            filing = dict(zip(FILING_FIELDS, a[7:]))
+            try:
+                filing["filing_page"] = int(filing["filing_page"])
+            except ValueError:
+                refuse("filing-page must be an integer")
+            text += filing_toml(filing)
         sys.stdout.write(text)
     elif a[:1] == ["rows"] and len(a) in (3, 4):
         cmd_rows(a[1], a[2], a[3:] == ["--dry-run"])
