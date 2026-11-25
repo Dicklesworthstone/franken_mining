@@ -743,6 +743,10 @@ The public lane of M0 (`fmine assure public`).
     token, length-prefixed. `public_claim` combines it with the typed-value digest for `Claim::new`, so a
     different key, token or typed interpretation has a different claim id. `series` retains and sorts every
     vintage rather than overwriting comparative figures.
+    AISC cost of sales per ounce receives an exact attributable share when the same sheet states the applicable
+    footnote and the registered share matches the Mine Stats ownership label in the release and in every quarter
+    of the printed period. The rate Claim anchors the footnote and those workbook cells. A missing or conflicting
+    label leaves the rate basis `Unprinted`. The rate arithmetic verdict and published value stay separate.
   - `parse_sheet_period`: `Qn YYYY`, `YTD Q2 YYYY` (H1), `YTD Q3 YYYY` and `YTD Sept 30 YYYY` (nine months),
     `YTD Dec 31 YYYY` and `YYYY` (full year). Anything else refuses. `parse_period_code` reads the Mine Stats
     reader's corresponding `YYYYQn`, `YYYYH1`, `YYYY9M` and `YYYYFY` codes without inferring a calendar.

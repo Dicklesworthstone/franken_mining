@@ -182,12 +182,13 @@ pub fn why_json(cell: &KeyedCell) -> String {
 #[must_use]
 pub fn trace_json(cell: &KeyedCell, profile: &IssuerProfile) -> String {
     let claim = &cell.claim;
-    let anchors = claim.anchors.iter().map(|anchor| {
+    let anchors = claim.anchors.iter().enumerate().map(|(index, anchor)| {
         let digest = Digest32(anchor.artifact_sha256).to_hex();
         let filename = std::path::Path::new(&anchor.artifact_path).file_name().and_then(|p| p.to_str());
         let registered = profile.sources.iter().find(|source| {
             Some(source.file_name.as_str()) == filename && source.sha256_hex == digest
-                && source.quarter == cell.key.reporting_vintage.release
+                && (source.quarter == cell.key.reporting_vintage.release
+                    || (index > 0 && source.quarter < cell.key.reporting_vintage.release))
         });
         let source = registered.map_or_else(|| "null".into(), |source| format!(
             "{{\"file\":{},\"kind\":{},\"release\":{},\"url\":{},\"url_basis\":{},\"retrieved_utc\":{}}}",

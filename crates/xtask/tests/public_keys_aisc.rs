@@ -46,7 +46,20 @@ mod tests {
                 let at = format!("{}:{}!{}", operand.file, operand.sheet, operand.cell);
                 let cell = index.cells.get(&at).expect("every numeric operand keyed");
                 assert_eq!(cell.key.reporting_vintage.release, "2030Q1");
-                assert_eq!(cell.claim.anchors.len(), 1);
+                let value_anchor = format!("{}!{}", operand.sheet, operand.cell);
+                let mut expected_anchors = vec![value_anchor.as_str()];
+                match operand.cell.as_str() {
+                    "K14" => expected_anchors.extend(["Q1 2030!A30", "QTD!A5"]),
+                    "L14" => expected_anchors.extend(["Q1 2030!A30", "QTD!A6"]),
+                    _ => {}
+                }
+                let actual_anchors: Vec<_> = cell
+                    .claim
+                    .anchors
+                    .iter()
+                    .map(|anchor| anchor.locator.as_str())
+                    .collect();
+                assert_eq!(actual_anchors, expected_anchors, "{at}");
             }
         }
         assert_eq!(index.cells[&synthetic_at("C8")].key.subject, "Site B");
@@ -239,6 +252,98 @@ mod tests {
             OwnershipBasis::Unprinted
         );
         assert!(missing.cells[&synthetic_at("K13")].basis_evidence.is_none());
+    }
+
+    #[test]
+    fn test_cos_rate_basis_requires_footnote_and_period_labels() {
+        use fmine_io::xlsx::{MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx};
+
+        let profile = synthetic::synthetic_profile();
+        let base = fmine_public::run_synthetic_assurance(&[]).expect("synthetic assurance");
+        let rate_at = synthetic_at("K14");
+        let share = OwnershipBasis::Attributable {
+            num: 3,
+            den: 4,
+            source: ShareSource::Registry,
+        };
+        let rate = &base.public_claims.cells[&rate_at];
+        assert_eq!(rate.key.ownership_basis, share);
+        assert_eq!(rate.printed_basis, OwnershipBasis::Unprinted);
+        assert_eq!(rate.claim.anchors.len(), 3);
+        assert!(rate.claim.anchors.iter().any(|a| a.locator == "QTD!A5"));
+        let no_footnote = fmine_public::run_synthetic_assurance(&[text("A30", "Unrelated note")])
+            .expect("synthetic assurance without footnote");
+        assert_eq!(
+            no_footnote.public_claims.cells[&rate_at]
+                .key
+                .ownership_basis,
+            OwnershipBasis::Unprinted
+        );
+        assert_eq!(
+            base.public_claims.cells[&synthetic_at("K16")]
+                .key
+                .ownership_basis,
+            OwnershipBasis::Unprinted
+        );
+
+        let reprint_stats = |label: &str| {
+            let file = "reprint-mine-stats.xlsx";
+            let mut cells = synthetic::synthetic_share_label_cells(label);
+            cells[1].1 = MinimalCell::Text("For the three months ended June 30,".into());
+            let bytes = build_minimal_xlsx(&[MinimalSheet {
+                name: "QTD".into(),
+                hidden: false,
+                cells,
+            }]);
+            let workbook = Workbook::from_bytes(file, &bytes).expect("comparative fixture");
+            LoadedSource {
+                file_name: file.into(),
+                kind: SourceKind::MineStats,
+                quarter: "2030Q2".into(),
+                url: String::new(),
+                url_basis: "synthetic".into(),
+                bytes: bytes.len() as u64,
+                census: workbook.cell_census(),
+                workbook,
+            }
+        };
+        let mut sources = base.sources.clone();
+        sources
+            .iter_mut()
+            .find(|s| s.file_name == synthetic::SYNTHETIC_AISC_FILE)
+            .expect("AISC source")
+            .quarter = "2030Q2".into();
+        sources.push(reprint_stats("Site H (75%)"));
+
+        let reprint = key_aisc_operands(&profile, &sources, &base.instances);
+        let comparative = &reprint.cells[&rate_at];
+        assert_eq!(comparative.key.series_key(), rate.key.series_key());
+        assert_ne!(comparative.claim.claim_id, rate.claim.claim_id);
+        assert_eq!(comparative.claim.anchors.len(), 4);
+        assert!(
+            comparative
+                .basis_evidence
+                .as_deref()
+                .expect("basis")
+                .contains("reprint-mine-stats.xlsx:QTD!A5")
+        );
+
+        sources.pop();
+        sources.push(reprint_stats("Site H (80%)"));
+        let conflicting_label = key_aisc_operands(&profile, &sources, &base.instances);
+        assert_eq!(
+            conflicting_label.cells[&rate_at].key.ownership_basis,
+            OwnershipBasis::Unprinted
+        );
+        sources.pop();
+        sources.push(reprint_stats("Site H (75%)"));
+        sources.retain(|s| s.kind != SourceKind::MineStats || s.quarter == "2030Q2");
+        let no_prior_label = key_aisc_operands(&profile, &sources, &base.instances);
+        assert_eq!(
+            no_prior_label.cells[&rate_at].key.ownership_basis,
+            OwnershipBasis::Unprinted
+        );
+        assert_eq!(no_prior_label.cells[&rate_at].claim.anchors.len(), 1);
     }
 
     fn keying_fixture(file: &str, release: &str, col: &str, shift: u32) -> LoadedSource {
@@ -654,6 +759,23 @@ mod tests {
                 "{at}"
             );
         }
+        // FACT E826: the North Mara rate has a stated share even though the recorded arithmetic misses it.
+        let north_mara = &index.cells["Barrick_Q2_2026_AISC.xlsx:Q2 2026!M19"];
+        assert_eq!(
+            north_mara.key.ownership_basis,
+            OwnershipBasis::Attributable {
+                num: 21,
+                den: 25,
+                source: ShareSource::Registry
+            }
+        );
+        assert!(
+            north_mara
+                .claim
+                .anchors
+                .iter()
+                .any(|anchor| anchor.locator == "Q2 2026!A32")
+        );
     }
 
     fn sheet_of(
