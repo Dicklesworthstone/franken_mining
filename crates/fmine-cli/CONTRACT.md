@@ -1617,6 +1617,15 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   named refusals. JSON (`fmine.selected-waterfall.v1`) and Markdown retain source Claim IDs, locators,
   hashes, rounding enclosures, arithmetic methods and the separate printed-rate gap. The selected result
   has its own digest and does not change the normal assurance population or claim M0 acceptance.
+- DESIGN (BD-064/BD-333): the selected bridge also accepts `--metric aisc|tcc`, defaulting to AISC.
+  TCC uses its own reported total, per-sold-ounce rate and signed first-block reconciliation components.
+  Sustaining adjustments do not enter its arithmetic; unrelated AISC and cost-of-sales identity failures
+  cannot block it. Original-source, ownership and physical-input guards remain in force. TCC JSON uses
+  `fmine.selected-waterfall.v2` and `fmine.waterfall.v2` with `metric:"tcc"`; Markdown names TCC.
+  Explicit or default AISC retains the existing v1 output and digest. The new source-backed regression
+  cases in `xtask/tests/public_waterfall.rs` cover independent exact answers, signed NCI, omitted
+  adjustments, source mutations, unavailable selected inputs and default compatibility. This option
+  still requires the existing gold reconciliation layout and claims no complete issuer-corpus acceptance.
 - DESIGN (BD-273): assurance JSON adds `aisc_component_comparisons` (`fmine.aisc_component_comparisons.v1`),
   with the same registered region/subtotal comparisons in Markdown. The adapter binds complete selected
   columns from one AISC table, full-period membership, original numeric Claims, labels and workbook hashes;

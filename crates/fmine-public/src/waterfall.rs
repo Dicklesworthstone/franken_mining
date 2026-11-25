@@ -1,4 +1,4 @@
-//! DESIGN (BD-333.S2): source-cited, descriptive gold-site bridges between explicitly selected quarters,
+//! DESIGN (BD-064, BD-333.S2): cited, descriptive gold-site AISC or TCC bridges between selected quarters,
 //! or between the same quarter in adjacent years for the automatic assurance population.
 //! A release is eligible only for its own quarter. Later comparatives, hidden sheets, and aggregate scope
 //! never supply a missing site input. Arithmetic closure does not identify a cause.
@@ -21,6 +21,40 @@ use crate::mine_ledger::{MineLedger, rat_text};
 use crate::mine_stats::{MineStatsRead, MineStatsValue, View};
 use crate::sources::{IssuerProfile, SourceKind};
 use crate::{LoadedSource, js};
+
+/// DESIGN: the selected numerator keeps its own printed total, rate and component population.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WaterfallMetric {
+    #[default]
+    Aisc,
+    TotalCashCost,
+}
+
+impl WaterfallMetric {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Aisc => "aisc",
+            Self::TotalCashCost => "tcc",
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Aisc => "AISC",
+            Self::TotalCashCost => "TCC",
+        }
+    }
+
+    #[must_use]
+    pub const fn rules_version(self) -> &'static str {
+        match self {
+            Self::Aisc => WATERFALL_RULES_VERSION,
+            Self::TotalCashCost => "m0-tcc-waterfall/1",
+        }
+    }
+}
 
 /// A classified candidate, including inputs retained when a later validation refuses the bridge.
 #[derive(Debug, Clone)]
@@ -48,6 +82,7 @@ impl PairOutcome {
 
 #[derive(Debug, Clone, Default)]
 pub struct WaterfallReport {
+    pub metric: WaterfallMetric,
     pub pairs: Vec<PairOutcome>,
 }
 
@@ -55,8 +90,18 @@ impl WaterfallReport {
     /// The frame binds exact reconciliations, all citations/refusals, and the IEEE bits of approximate bars.
     #[must_use]
     pub fn digest(&self) -> Digest32 {
-        let mut enc = Encoder::new_frame(*b"WFLW", 1);
-        enc.put_str(WATERFALL_RULES_VERSION);
+        let mut enc = Encoder::new_frame(
+            *b"WFLW",
+            if self.metric == WaterfallMetric::Aisc {
+                1
+            } else {
+                2
+            },
+        );
+        enc.put_str(self.metric.rules_version());
+        if self.metric != WaterfallMetric::Aisc {
+            enc.put_str(self.metric.as_str());
+        }
         enc.put_u64(self.pairs.len() as u64);
         for p in &self.pairs {
             for s in [&p.subject, &p.from.code(), &p.to.code(), p.scope] {
@@ -152,18 +197,32 @@ impl WaterfallReport {
         let pairs = self
             .pairs
             .iter()
-            .map(pair_json)
+            .map(|pair| pair_json(pair, self.metric))
             .collect::<Vec<_>>()
             .join(",");
+        let (schema, metric, frontier) = match self.metric {
+            WaterfallMetric::Aisc => (
+                "fmine.waterfall.v1",
+                String::new(),
+                "reported total cash costs (aggregate) plus signed block-2 AISC adjustments",
+            ),
+            WaterfallMetric::TotalCashCost => (
+                "fmine.waterfall.v2",
+                format!("\"metric\":{},", js(self.metric.as_str())),
+                "signed block-1 total cash cost components with reported ownership adjustments",
+            ),
+        };
         format!(
-            "{{\"schema\":\"fmine.waterfall.v1\",\"rules_version\":{},\"descriptive_only\":true,\
+            "{{\"schema\":{},{metric}\"rules_version\":{},\"descriptive_only\":true,\
              \"identifying\":false,\"interpretation\":\"non_identifying\",\"interpretation_note\":{},\
              \"vintage_policy\":\"registered release equals the observed quarter; no later comparative substitution\",\
              \"intervals\":\"conservative displayed-rounding enclosures; not confidence intervals\",\
-             \"additive_frontier\":\"reported total cash costs (aggregate) plus signed block-2 AISC adjustments\",\
+             \"additive_frontier\":{},\
              \"counts\":{{\"pairs\":{},\"bars\":{bars},\"sign_not_determined\":{sign_nd},{counts}}},\"pairs\":[{pairs}]}}",
-            js(WATERFALL_RULES_VERSION),
+            js(schema),
+            js(self.metric.rules_version()),
             js(WATERFALL_NO_CLAIM),
+            js(frontier),
             self.pairs.len()
         )
     }
@@ -180,18 +239,18 @@ fn strings(values: &[String]) -> String {
     values.iter().map(|s| js(s)).collect::<Vec<_>>().join(",")
 }
 
-fn derived(v: Rat, rule: &str, inputs: &[String]) -> String {
+fn derived(v: Rat, rule: &str, inputs: &[String], metric: WaterfallMetric) -> String {
     format!(
         "{{\"v\":{},\"exact\":{},\"rule\":{},\"rules_version\":{},\"in\":[{}]}}",
         v.to_f64(),
         js(&rat_text(v)),
         js(rule),
-        js(WATERFALL_RULES_VERSION),
+        js(metric.rules_version()),
         strings(inputs)
     )
 }
 
-fn bar_json(b: &Bar) -> String {
+fn bar_json(b: &Bar, metric: WaterfallMetric) -> String {
     let exact = match b.point {
         BarPoint::Exact(r) => js(&rat_text(r)),
         BarPoint::Approx(_) => "null".to_string(),
@@ -202,7 +261,7 @@ fn bar_json(b: &Bar) -> String {
         js(&b.id),
         b.point.as_f64(),
         js(b.rule),
-        js(WATERFALL_RULES_VERSION),
+        js(metric.rules_version()),
         strings(&b.inputs),
         b.enclosure[0],
         b.enclosure[1],
@@ -210,7 +269,7 @@ fn bar_json(b: &Bar) -> String {
     )
 }
 
-fn pair_json(p: &PairOutcome) -> String {
+fn pair_json(p: &PairOutcome, metric: WaterfallMetric) -> String {
     let inputs = p
         .inputs
         .iter()
@@ -240,11 +299,17 @@ fn pair_json(p: &PairOutcome) -> String {
                 Bridge::Lmdi { .. } => "null".to_string(),
             };
             let g = bridge.gap();
+            let rate_names = match metric {
+                WaterfallMetric::Aisc => ["aisc_0", "aisc_1", "printed_aisc_0", "printed_aisc_1"],
+                WaterfallMetric::TotalCashCost => {
+                    ["tcc_0", "tcc_1", "printed_tcc_0", "printed_tcc_1"]
+                }
+            };
             let endpoints = [
-                ("aisc_0", g.aisc_0),
-                ("aisc_1", g.aisc_1),
-                ("printed_aisc_0", g.printed_aisc_0),
-                ("printed_aisc_1", g.printed_aisc_1),
+                (rate_names[0], g.aisc_0),
+                (rate_names[1], g.aisc_1),
+                (rate_names[2], g.printed_aisc_0),
+                (rate_names[3], g.printed_aisc_1),
                 ("total_delta", g.total_delta),
                 ("printed_rate_gap_0", g.printed_rate_gap_0),
                 ("printed_rate_gap_1", g.printed_rate_gap_1),
@@ -255,7 +320,7 @@ fn pair_json(p: &PairOutcome) -> String {
                 format!(
                     "{}:{}",
                     js(name),
-                    derived(value, "waterfall.rate_reconciliation", &g.inputs)
+                    derived(value, "waterfall.rate_reconciliation", &g.inputs, metric)
                 )
             })
             .collect::<Vec<_>>()
@@ -278,7 +343,7 @@ fn pair_json(p: &PairOutcome) -> String {
             let bars = bridge
                 .bars()
                 .iter()
-                .map(bar_json)
+                .map(|bar| bar_json(bar, metric))
                 .collect::<Vec<_>>()
                 .join(",");
             (
@@ -287,7 +352,7 @@ fn pair_json(p: &PairOutcome) -> String {
                 format!(
                     "\"bars\":[{bars}],{endpoints},\"closure_residual\":{{\"v\":{residual},\
                  \"rule\":\"waterfall.closure\",\"rules_version\":{},\"in\":[{}]}}",
-                    js(WATERFALL_RULES_VERSION),
+                    js(metric.rules_version()),
                     strings(&closure_inputs)
                 ),
             )
@@ -324,6 +389,7 @@ struct Context<'a> {
     reads: &'a [(String, MineStatsRead)],
     aisc_instances: &'a [IdentityInstance],
     mine_ledger: &'a MineLedger,
+    metric: WaterfallMetric,
 }
 
 #[derive(Default)]
@@ -373,6 +439,7 @@ pub fn pair_sites(
         reads,
         aisc_instances,
         mine_ledger,
+        metric: WaterfallMetric::Aisc,
     };
     let endpoints = endpoints(profile, sources, reads);
     let mut pairs = Vec::new();
@@ -389,7 +456,10 @@ pub fn pair_sites(
         };
         pairs.push(pair(&cx, subject, from, *to, earlier, later));
     }
-    WaterfallReport { pairs }
+    WaterfallReport {
+        metric: WaterfallMetric::Aisc,
+        pairs,
+    }
 }
 
 /// Compare two explicit, chronologically increasing calendar quarters. Every subject appearing at either
@@ -405,6 +475,35 @@ pub fn pair_sites_between(
     aisc_instances: &[IdentityInstance],
     mine_ledger: &MineLedger,
     periods: (Period, Period),
+) -> Result<WaterfallReport, Refusal> {
+    pair_sites_between_for_metric(
+        profile,
+        sources,
+        reads,
+        claims,
+        aisc_instances,
+        mine_ledger,
+        periods,
+        WaterfallMetric::Aisc,
+    )
+}
+
+/// DESIGN: explicitly select gold AISC or TCC on the same authenticated quarterly sources.
+/// TCC uses its own signed numerator components, total and printed per-sold-ounce rate.
+/// It retains physical and ownership checks without borrowing unrelated AISC adjustments.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "same authenticated source context plus the explicitly selected metric"
+)]
+pub fn pair_sites_between_for_metric(
+    profile: &IssuerProfile,
+    sources: &[LoadedSource],
+    reads: &[(String, MineStatsRead)],
+    claims: &AiscClaimIndex,
+    aisc_instances: &[IdentityInstance],
+    mine_ledger: &MineLedger,
+    periods: (Period, Period),
+    metric: WaterfallMetric,
 ) -> Result<WaterfallReport, Refusal> {
     let (from, to) = periods;
     if [from, to].iter().any(|p| {
@@ -423,6 +522,7 @@ pub fn pair_sites_between(
         reads,
         aisc_instances,
         mine_ledger,
+        metric,
     };
     let endpoints = endpoints(profile, sources, reads);
     let subjects: BTreeSet<_> = endpoints
@@ -449,7 +549,7 @@ pub fn pair_sites_between(
             pair(&cx, subject, from, to, at(from), at(to))
         })
         .collect();
-    Ok(WaterfallReport { pairs })
+    Ok(WaterfallReport { metric, pairs })
 }
 
 fn endpoints<'a>(
@@ -697,7 +797,12 @@ fn prepare(
     let mut lines = Vec::new();
     let mut component_half_step = Rat::from_integer(0);
     let mut block1_half_step = Rat::from_integer(0);
-    for row in t.table.block1.iter().chain(&t.table.block2) {
+    for row in t.table.block1.iter().chain(
+        t.table
+            .block2
+            .iter()
+            .filter(|_| cx.metric == WaterfallMetric::Aisc),
+    ) {
         let q = quantity(*row, true, inputs)?;
         // Signed amounts add their rounding radii; different displayed precisions never become k/2.
         component_half_step = component_half_step
@@ -708,7 +813,7 @@ fn prepare(
                 .checked_add(q.half_step)
                 .map_err(|_| refuse("TCC half-width overflow"))?;
         }
-        if t.table.block2.contains(row) {
+        if cx.metric == WaterfallMetric::TotalCashCost || t.table.block2.contains(row) {
             let c = inputs
                 .cells
                 .get(&q.at)
@@ -718,9 +823,14 @@ fn prepare(
     }
     let mut tcc = quantity(t.table.tcc_row, false, inputs)?;
     tcc.half_step = block1_half_step;
-    lines.push(("total_cash_costs_aggregate".to_string(), tcc));
+    if cx.metric == WaterfallMetric::Aisc {
+        lines.push(("total_cash_costs_aggregate".to_string(), tcc.clone()));
+    }
     lines.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut cost = quantity(t.table.aisc_row, false, inputs)?;
+    let mut cost = match cx.metric {
+        WaterfallMetric::Aisc => quantity(t.table.aisc_row, false, inputs)?,
+        WaterfallMetric::TotalCashCost => tcc,
+    };
     cost.half_step = component_half_step;
     let mut at_row = |row, unit| {
         read_quantity(
@@ -734,7 +844,11 @@ fn prepare(
         )
     };
     let oz_sold = at_row(t.table.ounces_row, "koz")?;
-    let printed_rate = at_row(t.table.aisc_rate_row, "usd_per_oz")?;
+    let rate_row = match cx.metric {
+        WaterfallMetric::Aisc => t.table.aisc_rate_row,
+        WaterfallMetric::TotalCashCost => t.table.tcc_rate_row,
+    };
+    let printed_rate = at_row(rate_row, "usd_per_oz")?;
     let mut physical = |name, label, section, unit| {
         physical_factor(cx, endpoint, name, label, section, unit, inputs)
     };
@@ -941,11 +1055,15 @@ fn guard_states(
     release: &str,
     inputs: &Inputs,
 ) -> Result<(), Refusal> {
-    for i in cx
-        .aisc_instances
-        .iter()
-        .filter(|i| i.subject == subject && matches!(i.state.code(), "iii" | "v"))
-    {
+    for i in cx.aisc_instances.iter().filter(|i| {
+        i.subject == subject
+            && matches!(i.state.code(), "iii" | "v")
+            && (cx.metric == WaterfallMetric::Aisc
+                || matches!(
+                    i.family,
+                    aisc::IdentityFamily::TccFooting | aisc::IdentityFamily::TccPerOunce
+                ))
+    }) {
         if !cx
             .sources
             .iter()

@@ -896,6 +896,18 @@ The public lane of M0 (`fmine assure public`).
     refuses explicitly. This optional projection has its own period-bound digest and does not change the
     automatic year-on-year assurance population or certificate. It remains descriptive, with no seasonal
     normalization or causal attribution.
+  - DESIGN (BD-064/BD-333): `pair_sites_between_for_metric` accepts `WaterfallMetric::TotalCashCost`.
+    It selects signed block-1 components, the TCC total and the printed TCC rate. Component uncertainty
+    includes only those block-1 rounding radii; gross cost and negative ownership adjustments keep their
+    original signs and source Claims. TCC checks its footing and per-ounce identity families alongside
+    the unchanged physical-input guards, without borrowing sustaining adjustments or unrelated rate
+    verdicts. Missing selected inputs and incompatible ownership refuse; an additive fallback also refuses
+    changed component populations rather than inferring an absent component's value.
+    The TCC `WFLW` v2 frame binds `metric:"tcc"` and `m0-tcc-waterfall/1`; JSON v2 names its endpoint
+    fields `tcc_0`, `tcc_1` and `printed_tcc_*`. Existing AISC wrappers, v1 bytes and the automatic
+    assurance population are unchanged. Whole-workbook hashes remain bound even when an edited
+    sustaining cell does not change TCC arithmetic. Standalone TCC-only and copper layouts remain outside
+    this adapter's accepted source grammar.
   - Cross-crate checks live in `xtask/tests/public_waterfall.rs`; the independent reader and high-precision
     known answers are in `repro/barrick/waterfall_census.py`. The existing synthetic CLI profile has no
     year-on-year source pair; the four-outcome synthetic bridge fixture is an integration test.
