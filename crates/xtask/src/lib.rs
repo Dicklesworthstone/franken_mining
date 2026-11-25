@@ -1645,7 +1645,8 @@ mod tests {
         // BD-356.S3 adds fmine-gen's portable PilotProtocolCard & AnalysisPlan ledger (pilot_card.rs).
         // BD-352 adds fmine-claim::origin and fmine-gen::origin_coverage (2 portable modules).
         // BD-314 adds fmine-econ::entity_graph (CapitalEntityGraph & Barrick portfolio waterfalls).
-        assert_eq!(report.bitwise_files, 128, "{report:?}");
+        // BD-289 adds fmine-plant::cards::calibration (Turquoise Ridge 71-pair recovery calibration card).
+        assert_eq!(report.bitwise_files, 129, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

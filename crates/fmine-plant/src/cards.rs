@@ -16,6 +16,7 @@ use fmine_time::ValidTime;
 use fmine_units::{ExactQty, Qty};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod calibration;
 pub mod cu_speciation;
 pub mod ensemble;
 pub mod fit;
