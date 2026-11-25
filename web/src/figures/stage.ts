@@ -46,6 +46,9 @@ export interface StageOptions {
   labelCeiling?: () => number;
   /** What is laid over the view (its cards, a hint line) that labels keep out from under. */
   avoid?: string;
+  /** Words laid over the view that the scene shows through (a headline): labels keep off them, but a point under them
+   * keeps its label, since what it names can still be seen. */
+  keepOff?: string;
 }
 
 export interface Orbit {
@@ -444,7 +447,32 @@ void main(){
   }
 
   /* ---------- Labels ---------- */
-  type Pin = { el: HTMLElement; at: THREE.Vector3 | THREE.Object3D; off: THREE.Vector3; on: boolean; free?: boolean; nat?: number; h?: number; cap?: string };
+  type Pin = { el: HTMLElement; at: THREE.Vector3 | THREE.Object3D; off: THREE.Vector3; on: boolean; free?: boolean; nat?: number; h?: number; cap?: string; capW?: number };
+  // A capped label wraps, and a wrapped box keeps the width it was capped to however short its lines, which would leave
+  // a hanging label's dot short of its point. Its widest line: plain words and numbers line by line, a bordered chip by
+  // its box, and the dot (a ::before, so taken from the CSS: 0.5rem and a 0.45rem gap) after the last of them when the
+  // label hangs to the left. The paddings only swap sides. Never wider than the cap it was given.
+  const fitWidth = (el: HTMLElement, cap: number) => {
+    const box = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const range = document.createRange();
+    let right = box.left;
+    let last = box.left;
+    for (const c of el.children) {
+      const ccs = getComputedStyle(c);
+      if (parseFloat(ccs.borderLeftWidth) > 0 || parseFloat(ccs.paddingLeft) > 0) last = c.getBoundingClientRect().right;
+      else {
+        range.selectNodeContents(c);
+        last = box.left;
+        for (const r of range.getClientRects()) last = Math.max(last, r.right);
+      }
+      right = Math.max(right, last);
+    }
+    if (el.classList.contains("flip")) right = Math.max(right, last + 0.95 * rem);
+    const w = Math.ceil(right - box.left + parseFloat(cs.paddingRight) + parseFloat(cs.borderRightWidth)) + 1;
+    return Math.min(cap, w);
+  };
   const pins = new Set<Pin>();
   // A label measured before the web fonts arrived has the fallback font's size: measure every label again once they do.
   document.fonts?.addEventListener?.("loadingdone", () => {
@@ -460,19 +488,38 @@ void main(){
   };
   let area: [number, number, number, number] = [-0.15, -0.1, 1.15, 1.1];
   let ceilingAt = -Infinity;
-  // The cards and notes laid over the view, as boxes in its pixels [left, top, right, bottom]. A label whose point is
-  // under one hides (what it names cannot be seen); the rest keep clear of them as they keep clear of each other.
-  // Measured when one of them or the view changes size, just after layout, so a frame never asks for it.
+  // The cards, notes and words laid over the view, as boxes in its pixels [left, top, right, bottom]. Every label keeps
+  // clear of them as it keeps clear of the others; a label whose point is under a card (not under see-through words)
+  // hides, since what it names cannot be seen. Measured when one of them or the view changes size, just after layout,
+  // so a frame never asks for it.
   let cover: [number, number, number, number][] = [];
+  let solid: [number, number, number, number][] = [];
+  let soft: [number, number, number, number][] = [];
   // Some figures lay their cards inside the view, others beside it in a wrapper; only the ones over the view count.
-  const overlays = [...(view.closest("figure, section") ?? view.parentElement ?? view).querySelectorAll<HTMLElement>(o.avoid ?? ".hud-card, [data-avoid]")];
+  const scope = view.closest("figure, section") ?? view.parentElement ?? view;
+  const cards = [...scope.querySelectorAll<HTMLElement>(o.avoid ?? ".hud-card, [data-avoid]")];
+  const words = o.keepOff ? [...scope.querySelectorAll<HTMLElement>(o.keepOff)] : [];
+  const overlays = [...cards, ...words];
   const measureCover = () => {
     const v = view.getBoundingClientRect();
     cover = [];
+    solid = [];
+    soft = [];
     for (const el of overlays) {
-      const r = el.getBoundingClientRect();
-      if (r.width < 2 || r.height < 2 || r.right <= v.left || r.left >= v.right || r.bottom <= v.top || r.top >= v.bottom) continue;
-      cover.push([r.left - v.left, r.top - v.top, r.right - v.left, r.bottom - v.top]);
+      const card = cards.includes(el);
+      // A paragraph or headline counts line by line: its box is as wide as its longest line, the others are shorter.
+      let rects: DOMRect[] = [el.getBoundingClientRect()];
+      if (!card && getComputedStyle(el).display === "block") {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        rects = [...range.getClientRects()];
+      }
+      for (const r of rects) {
+        if (r.width < 2 || r.height < 2 || r.right <= v.left || r.left >= v.right || r.bottom <= v.top || r.top >= v.bottom) continue;
+        const box: [number, number, number, number] = [r.left - v.left, r.top - v.top, r.right - v.left, r.bottom - v.top];
+        cover.push(box);
+        (card ? solid : soft).push(box);
+      }
     }
   };
   if (overlays.length) {
@@ -489,7 +536,7 @@ void main(){
       const world = (pin.at instanceof THREE.Vector3 ? tmp.copy(base) : base).add(pin.off);
       const s = project(world);
       const [l, tp, r, b] = area;
-      const under = !pin.free && !!s && cover.some(([cl, ct, cr, cb]) => s.x > cl && s.x < cr && s.y > ct && s.y < cb);
+      const under = !pin.free && !!s && solid.some(([cl, ct, cr, cb]) => s.x > cl && s.x < cr && s.y > ct && s.y < cb);
       if (!s || s.x < l * width || s.x > r * width || s.y < tp * height || s.y > b * height || under) {
         pin.el.style.visibility = "hidden";
         continue;
@@ -509,19 +556,30 @@ void main(){
         pin.el.style.maxWidth = "";
         pin.el.classList.remove("capped");
         pin.cap = "";
+        pin.capW = undefined;
         pin.nat = pin.el.offsetWidth;
         pin.h = pin.el.offsetHeight;
       }
       // Near the right edge a label hangs to the left of its point; one too long for its side takes the roomier
       // side, and one too long for either is capped (its words take a line of their own above its number).
       // Labels keep to the label area (a little wider), so none runs over the page's text beside the scene.
-      const leftB = clamp((area[0] - 0.03) * width, 6, width);
-      const rightB = clamp((area[2] + 0.1) * width, 0, width - 6);
+      let leftB = clamp((area[0] - 0.03) * width, 6, width);
+      let rightB = clamp((area[2] + 0.1) * width, 0, width - 6);
+      // Words over the scene level with the label (a headline's line) are an edge too: the label keeps to its side of
+      // them, capped if it must be, where lifting it clear would take it out of the label area.
+      // Level means across the label's own height above its point, as it stands (capped or not).
+      const lh = pin.h ?? 0;
+      for (const [cl, ct, cr, cb] of soft) {
+        if (cb <= s.y - lh || ct >= s.y) continue;
+        if (cr <= s.x) leftB = Math.max(leftB, cr + 6);
+        else if (cl >= s.x) rightB = Math.min(rightB, cl - 6);
+      }
       const roomR = rightB - s.x + 11;
       const roomL = s.x + 11 - leftB;
       let flip = s.x > width * 0.62;
       if (!flip && pin.nat > roomR && roomL > roomR) flip = true;
       else if (flip && pin.nat > roomL && roomR > roomL) flip = false;
+      if (pin.el.classList.contains("flip") !== flip) pin.el.classList.toggle("flip", flip);
       const room = flip ? roomL : roomR;
       // Caps move in 8 px steps, so a label drifting across the view does not re-wrap (and re-measure) every frame.
       const cap = pin.nat > room ? `${Math.max(80, Math.floor(room / 8) * 8)}px` : "";
@@ -530,9 +588,14 @@ void main(){
         // A capped label puts its words on a line of their own (in the CSS) instead of cutting them short.
         pin.el.classList.toggle("capped", !!cap);
         pin.cap = cap;
+        pin.capW = undefined;
+        if (cap) {
+          pin.capW = fitWidth(pin.el, parseFloat(cap));
+          pin.el.style.maxWidth = `${pin.capW}px`;
+        }
         pin.h = pin.el.offsetHeight;
       }
-      placed.push({ pin, x: s.x, y: s.y, w: Math.min(pin.nat, room), h: pin.h ?? 0, flip, lift: 0 });
+      placed.push({ pin, x: s.x, y: s.y, w: Math.min(pin.nat, room, pin.capW ?? Infinity), h: pin.h ?? 0, flip, lift: 0 });
     }
     // Labels never sit on one another: from the lowest on screen up, a label that would overlap one already placed
     // lifts clear of it, and a leader line runs back down to its point.

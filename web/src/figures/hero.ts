@@ -44,8 +44,9 @@ export default async function mount(fig: HTMLElement) {
     labelArea: () => (wide() ? [0.47, 0.12, 0.88, 0.76] : [0.03, ctaLine() + 0.03, 0.97, 0.62]),
     // On a phone the scene runs on under the headline: no label reaches over the buttons.
     labelCeiling: () => (wide() ? -Infinity : ctaLine() + 0.01),
-    // The words over the scene. On a narrow desktop (1024px) the lede reaches past the label area's left edge.
-    avoid: ".hero-copy > *, .console",
+    // The words over the scene, which it shows through. On a narrow desktop (1024px) the lede reaches past the label
+    // area's left edge.
+    keepOff: ".hero-copy > *, .console",
   });
   s.orbit.minDistance = 260;
   s.orbit.maxDistance = 2200;

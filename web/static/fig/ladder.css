@@ -115,7 +115,8 @@
   max-width: 100%;
   white-space: normal;
 }
-@container (max-width: 8.4rem) {
+/* The one-line grade is 111.4px wide: a node's content box narrower than that wraps it */
+@container (max-width: 6.95rem) {
   .ld-ev .ev {
     border-radius: 0.45rem;
     line-height: 1.25;

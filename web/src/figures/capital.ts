@@ -172,6 +172,43 @@ export default async function mount(fig: HTMLElement) {
       s += `<text x="${X(pick.tail) - 16}" y="${(Y(free.mean) + Y(pick.mean)) / 2 + 4}" text-anchor="end" class="cc-gap">−${money(free.mean - pick.mean)}</text>`;
     }
     s = `<defs><marker id="cc-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="${PINK}"/></marker></defs>` + s;
+    // Each point's words go on the side with room, else the other side, else the nearest height clear of the words
+    // already placed: two programmes close in mean would otherwise print over each other. The chosen one goes first.
+    const words = (p: (typeof programs)[number]) => ({
+      lab: p.affordable ? p.label : narrow ? `${p.label}: over budget` : `${p.label}, over the $800M budget`,
+      val: narrow ? "" : `${money(p.mean)} · ${money(p.tail)}`,
+    });
+    const taken: number[][] = [];
+    const place = new Map<(typeof programs)[number], { right: boolean; dy: number }>();
+    for (const p of [pick, ...programs.filter((q) => q !== pick)]) {
+      const x = X(p.tail);
+      const y = Y(p.mean);
+      const { lab, val } = words(p);
+      const off = p === pick ? 18 : 12;
+      // 12.5px Inter is about 6.6px a character, 10.5px mono 6.3px.
+      const wide = Math.max(lab.length * 6.6, val.length * 6.3);
+      const box = (right: boolean, dy: number) => {
+        const l = right ? x + off : x - off - wide;
+        return [l, y - 18 + dy, l + wide, y + (val ? 11 : -3) + dy];
+      };
+      const clear = (b: number[]) => !taken.some((o) => b[0]! < o[2]! && b[2]! > o[0]! && b[1]! < o[3]! && b[3]! > o[1]!);
+      const prefer = x + 14 + Math.max(lab.length * 6.6, 104) < W;
+      const room = (right: boolean) => (right ? x + off + wide < W : x - off - wide > L);
+      let at = { right: prefer, dy: 0 };
+      if (!clear(box(prefer, 0))) {
+        if (room(!prefer) && clear(box(!prefer, 0))) at = { right: !prefer, dy: 0 };
+        else
+          for (let k = 2; k <= 60; k += 2) {
+            const dy = [k, -k].find((d) => clear(box(prefer, d)));
+            if (dy !== undefined) {
+              at = { right: prefer, dy };
+              break;
+            }
+          }
+      }
+      place.set(p, at);
+      taken.push(box(at.right, at.dy));
+    }
     for (const p of programs) {
       const x = X(p.tail);
       const y = Y(p.mean);
@@ -189,11 +226,11 @@ export default async function mount(fig: HTMLElement) {
         return `<circle cx="${x - (p.ids.length - 1) * 4 + i * 8}" cy="${y + 15}" r="2.6" fill="${pr.colour}"/>`;
       });
       s += dots.join("");
-      const lab = p.affordable ? p.label : narrow ? `${p.label}: over budget` : `${p.label}, over the $800M budget`;
-      const right = x + 14 + Math.max(lab.length * 6.6, 104) < W;
+      const { lab, val } = words(p);
+      const { right, dy } = place.get(p)!;
       const off = chosen ? 18 : 12;
-      s += `<text x="${right ? x + off : x - off}" y="${y - 7}" text-anchor="${right ? "start" : "end"}" class="pl">${lab}</text>`;
-      if (!narrow) s += `<text x="${right ? x + off : x - off}" y="${y + 7}" text-anchor="${right ? "start" : "end"}" class="pv">${money(p.mean)} · ${money(p.tail)}</text>`;
+      s += `<text x="${right ? x + off : x - off}" y="${y - 7 + dy}" text-anchor="${right ? "start" : "end"}" class="pl">${lab}</text>`;
+      if (val) s += `<text x="${right ? x + off : x - off}" y="${y + 7 + dy}" text-anchor="${right ? "start" : "end"}" class="pv">${val}</text>`;
       s += `</g>`;
     }
     chart.setAttribute("viewBox", `0 0 ${W} ${H}`);
