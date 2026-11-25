@@ -3,6 +3,7 @@ name = "fmine-verify"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 license.workspace = true
 authors.workspace = true
 description = "Std-only offline verifier of FMT-CERT-1 certificates, FMT-CAS-1 roots, SyncCert MMR consistency proofs, and FMT-SEG-1 ledger segments (BD-140, GOAL-024)."

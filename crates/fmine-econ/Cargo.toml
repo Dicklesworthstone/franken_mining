@@ -3,6 +3,7 @@ name = "fmine-econ"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 license.workspace = true
 authors.workspace = true
 description = "Helm K1 versioned price decks, exact-Money NSR, price-contingent royalties and tax, and CountryRegime rows (BD-228, BD-296, plan §23.4)."

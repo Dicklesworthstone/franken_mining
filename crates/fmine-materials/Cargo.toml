@@ -3,6 +3,7 @@ name = "fmine-materials"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 license.workspace = true
 authors.workspace = true
 description = "Strata K0 sealed geomaterial corpora in frankensim.matdb-manifest.v1 format and L3 empirical correlation cards (BD-241, plan §13.10)."

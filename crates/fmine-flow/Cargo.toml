@@ -3,6 +3,7 @@ name = "fmine-flow"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 license.workspace = true
 authors.workspace = true
 description = "Touchstone K1 material-flow graph, stockpiles, and exact extensive conservation laws (BD-146, plan §20.1–§20.2, INV-005)."

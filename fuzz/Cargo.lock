@@ -71,6 +71,7 @@ dependencies = [
  "fmine-evidence",
  "fmine-numerics",
  "fmine-registry",
+ "fmine-time",
  "fmine-units",
 ]
 
@@ -95,6 +96,7 @@ dependencies = [
  "fmine-crs",
  "fmine-decide",
  "fmine-evidence",
+ "fmine-explore",
  "fmine-flow",
  "fmine-io",
  "fmine-ledger",
@@ -140,6 +142,17 @@ name = "fmine-evidence"
 version = "0.1.0"
 dependencies = [
  "fmine-core",
+]
+
+[[package]]
+name = "fmine-explore"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-crs",
+ "fmine-evidence",
+ "fmine-units",
 ]
 
 [[package]]

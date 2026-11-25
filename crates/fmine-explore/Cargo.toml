@@ -3,6 +3,7 @@ name = "fmine-explore"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 license.workspace = true
 authors.workspace = true
 description = "Lodestar K1 exploration deposits, effort records, five-class absence semantics, and detection-thinning data model (BD-231, plan §11.3)."

@@ -218,7 +218,7 @@ refused missing_site "no unit_cost forecast for Kibali" xt forecast-record-hash 
 
 d="$(copy sold_site)"
 printf 'Hemlo,production,1,1,1,true\n' >>"$d/forecasts.csv"
-refused sold_site "not_published" xt forecast-record-hash "$d"
+refused sold_site "frozen NotPublished site" xt forecast-record-hash "$d"
 
 d="$(copy changed_rules)"
 printf '# changed after hashing\n' >>"$d/rules.toml"

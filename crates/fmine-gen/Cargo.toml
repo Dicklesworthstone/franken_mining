@@ -3,6 +3,7 @@ name = "fmine-gen"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 license.workspace = true
 authors.workspace = true
 description = "Testpit T-layer synthetic mines and districts generator with sealed truth and scoring harness (BD-127, plan §33.3, GATE-GEN-01)."
