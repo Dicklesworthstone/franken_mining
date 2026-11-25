@@ -12,7 +12,7 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use fmine_core::codec::{CodecError, Decoder, Encoder, MAX_FRAME_BYTES};
+use fmine_core::codec::{CodecError, Decoder, Encoder, MAX_FRAME_BYTES, crc32c};
 use fmine_core::hash::{Digest32, sha256};
 
 use crate::batch::{DeltaBatch, GENESIS_PREV_HASH, LedgerError, MAX_ID_BYTES, TAG_LEDGER_BATCH};
@@ -556,13 +556,14 @@ pub fn inspect_segment_bytes(bytes: &[u8]) -> Result<SegmentInspection, LedgerEr
 
 /// Classifies the bytes from `cursor`, which do not form a verified record (`F7`).
 ///
-/// They are a crash-torn tail unless a whole record follows them: a length prefix starting at or after
-/// `cursor`, in range, then that many bytes that decode as an `FMT-LEDGER-1` batch or a segment footer,
-/// frame CRC included. Torn bytes cannot pass that CRC, so such a record means written history lies beyond
-/// the damage; that is refused as interior corruption and never truncated. A crash can leave any part of the
-/// in-flight write on disk, even its later sectors without its length prefix, and a batch embeds its anchor
-/// as a complete frame of its own, so finding `FMNE` alone in the tail proves nothing. The search is bounded:
-/// a tail whose candidate frames cost too much to decode is refused too ([`AfterDamage::TooManyCandidates`]).
+/// They are a crash-torn tail unless a whole record starts at or after `cursor`: a length prefix, in range,
+/// then that many bytes forming an `FMNE` frame tagged as an `FMT-LEDGER-1` batch or a segment footer whose
+/// CRC verifies. Torn bytes cannot pass that CRC, so such a frame was written whole: history beyond the
+/// damage, or a record this build cannot decode (a newer format version, say), even at `cursor` itself.
+/// Either is refused as interior corruption and never truncated. A crash can leave any part of the in-flight
+/// write on disk, even its later sectors without its length prefix, and a batch embeds its anchor as a
+/// complete frame of its own, so finding `FMNE` alone in the tail proves nothing. The search is bounded: a
+/// tail whose candidate frames cost too much to check is refused too ([`AfterDamage::TooManyCandidates`]).
 #[allow(
     clippy::too_many_arguments,
     reason = "internal tail-vs-interior classifier"
@@ -584,7 +585,9 @@ fn torn_or_interior(
         AfterDamage::Record(offset) => {
             return Err(LedgerError::InteriorCorruption {
                 offset: cursor as u64,
-                detail: format!("{reason}; a whole record follows at byte {offset}"),
+                detail: format!(
+                    "{reason}; a whole batch or footer frame (its CRC verifies) starts at byte {offset}"
+                ),
             });
         }
         AfterDamage::TooManyCandidates => {
@@ -616,25 +619,26 @@ fn torn_or_interior(
 /// What follows the unreadable bytes at `cursor` (see [`torn_or_interior`]).
 #[derive(Debug, PartialEq, Eq)]
 enum AfterDamage {
-    /// No whole record follows: the bytes are a torn tail.
+    /// No whole record starts at or after `cursor`: the bytes are a torn tail.
     Nothing,
     /// The offset of the length prefix of the first whole batch or footer record found.
     Record(usize),
-    /// Decoding the candidate frames would cost more than [`CANDIDATE_BYTES_PER_TAIL_BYTE`] times the bytes
-    /// from `cursor`. Each decode checks a CRC over the candidate's whole declared length, and candidates can
-    /// overlap, so a crafted tail would otherwise take time quadratic in its size. Candidates that do not
+    /// Checking the candidate frames would cost more than [`CANDIDATE_BYTES_PER_TAIL_BYTE`] times the bytes
+    /// from `cursor`. Each check computes a CRC over the candidate's whole declared length, and candidates
+    /// can overlap, so a crafted tail would otherwise take time quadratic in its size. Candidates that do not
     /// overlap cost at most the bytes from `cursor` in all, and a crash tail holds none outside its one write.
     /// Such a tail is refused, as interior corruption is, so the budget never lets damage read as torn.
     TooManyCandidates,
 }
 
-/// Decode budget for [`after_damage`], in candidate frame bytes per byte from the damage to the end of the
+/// Check budget for [`after_damage`], in candidate frame bytes per byte from the damage to the end of the
 /// file.
 const CANDIDATE_BYTES_PER_TAIL_BYTE: usize = 2;
 
-/// Looks for a whole batch or footer record whose length prefix starts at or after `cursor`. The record at
-/// `cursor` itself has already failed with these bytes; one that starts a byte to three bytes later overlaps
-/// its length prefix, as after a few stray bytes before a record, and must still count.
+/// Looks for a whole batch or footer record whose length prefix starts at or after `cursor`. That includes
+/// the record at `cursor` itself: it failed to decode, and if its CRC verifies, not because a crash tore it.
+/// One that starts a byte to three bytes later overlaps its length prefix, as after a few stray bytes before
+/// a record, and must still count.
 fn after_damage(bytes: &[u8], cursor: usize) -> AfterDamage {
     let Some(first_magic) = cursor.checked_add(4) else {
         return AfterDamage::Nothing;
@@ -659,22 +663,17 @@ fn after_damage(bytes: &[u8], cursor: usize) -> AfterDamage {
         else {
             continue;
         };
-        // Only the decoder for the frame's own tag runs, so each candidate's CRC is computed once.
         let tag = &frame[4..8];
-        let is_batch = tag == TAG_LEDGER_BATCH;
-        if !is_batch && tag != TAG_SEGMENT_FOOTER {
+        if tag != TAG_LEDGER_BATCH && tag != TAG_SEGMENT_FOOTER {
             continue;
         }
         let Some(left) = budget.checked_sub(frame_len) else {
             return AfterDamage::TooManyCandidates;
         };
         budget = left;
-        let whole = if is_batch {
-            DeltaBatch::from_bytes(frame).is_ok()
-        } else {
-            SegmentFooter::from_bytes(frame).is_ok()
-        };
-        if whole {
+        // The frame CRC alone decides: a record that verifies but does not decode was still written whole.
+        let (body, crc) = frame.split_at(frame_len - 4);
+        if crc32c(body).to_le_bytes()[..] == *crc {
             return AfterDamage::Record(magic - 4);
         }
     }
@@ -1061,6 +1060,7 @@ pub(crate) fn read_bounded(file: &mut File, path: &Path) -> Result<Vec<u8>, Ledg
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::batch::FMT_LEDGER_V1;
     use crate::batch::tests::sample_batch;
     use crate::mmr::{leaf_hash, verify_consistency, verify_inclusion};
 
@@ -1269,11 +1269,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
     }
 
-    /// Candidate frames after damage can overlap, and each decode checks a CRC over its whole declared
-    /// length. A crafted tail of overlapping candidates is refused within the decode budget, so a hostile
+    /// Candidate frames after damage can overlap, and each check computes a CRC over its whole declared
+    /// length. A crafted tail of overlapping candidates is refused within the check budget, so a hostile
     /// segment cannot make inspection take time quadratic in its size.
     #[test]
-    fn test_crafted_overlapping_candidates_refuse_within_the_decode_budget() {
+    fn test_crafted_overlapping_candidates_refuse_within_the_check_budget() {
         const UNITS: usize = 4096;
         let path = scratch_path("crafted");
         let mut writer = SegmentWriter::create(
@@ -1359,6 +1359,49 @@ mod tests {
                     ),
                 }
             }
+        }
+        let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    /// A last record whose frame CRC verifies was written whole, even if this build cannot decode it (here a
+    /// newer `FMT-LEDGER-1` version). It is refused, never read as a torn tail that repair would truncate.
+    #[test]
+    fn test_whole_last_record_this_build_cannot_decode_refuses_instead_of_truncating() {
+        let path = scratch_path("newer");
+        let mut writer = SegmentWriter::create(
+            &path,
+            "CELL-SITE(lumwana)",
+            0,
+            GENESIS_PREV_HASH,
+            Vec::new(),
+        )
+        .expect("create");
+        let d0 = writer
+            .append(&sample_batch("CELL-SITE(lumwana)", 1, 0, GENESIS_PREV_HASH))
+            .expect("b0");
+        drop(writer);
+        let clean = std::fs::read(&path).expect("read");
+
+        let mut newer = sample_batch("CELL-SITE(lumwana)", 1, 1, d0)
+            .to_bytes()
+            .expect("b1 bytes");
+        newer[8..10].copy_from_slice(&(FMT_LEDGER_V1 + 1).to_le_bytes());
+        let body_end = newer.len() - 4;
+        let crc = crc32c(&newer[..body_end]);
+        newer[body_end..].copy_from_slice(&crc.to_le_bytes());
+        assert!(matches!(
+            DeltaBatch::from_bytes(&newer),
+            Err(LedgerError::Codec(CodecError::UnsupportedVersion { .. }))
+        ));
+
+        let mut extended = clean.clone();
+        extended.extend_from_slice(&u32::try_from(newer.len()).expect("small").to_le_bytes());
+        extended.extend_from_slice(&newer);
+        match inspect_segment_bytes(&extended) {
+            Err(LedgerError::InteriorCorruption { offset, .. }) => {
+                assert_eq!(offset, clean.len() as u64);
+            }
+            other => panic!("expected interior corruption, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
     }

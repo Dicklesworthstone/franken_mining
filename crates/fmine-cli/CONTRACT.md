@@ -2252,7 +2252,7 @@ Every failure is a usage error (exit 2) or a typed `Refusal` (exits 3–9). Unkn
 
 ## 12. Proof obligations
 - `PO-ADIT-1`: `Envelope` pins all four `INV-002` flags `false` (`tests/e2e_envelope.sh`, `test_po_adit_1_golden_every_verb`).
-- `PO-ADIT-3`: `repair apply` refuses any mismatched `plan_digest` (`FMINE-REF-505`, exit 8) with zero bytes written, archives full original torn bytes before truncating, and re-verifies from byte 0 (`repair::tests::test_po_adit_3_repair_plan_and_apply_on_torn_segment_and_journal`).
+- `PO-ADIT-3`: `repair apply` refuses any mismatched `plan_digest` (`FMINE-REF-505`, exit 8) with zero bytes written, archives full original torn bytes before truncating, and re-verifies from byte 0 (`repair::tests::test_po_adit_3_repair_plan_and_apply_on_torn_segment_and_journal`). Evidence goes through `fmine_ledger::verify::retain_repair_evidence` for segments and journals alike: a retry after a crash keeps an archive that already holds the same bytes, and a different file, a symbolic link or (on Unix) a hard link at the evidence path is refused (`FMINE-REF-505`) with the target untouched.
 - `BD-116`: `robot schema` emits Draft 2020-12 JSON Schema pinning all four `INV-002` flags `const: false` and enumerating live `CATALOG` refusals and `registries/verbs.toml` (`robot::tests::test_robot_schema_emits_all_targets_pins_inv_002_and_includes_live_catalogs`).
 
 ### Detailed command proof controls (`PO-*`)

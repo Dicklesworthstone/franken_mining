@@ -259,7 +259,9 @@ pub fn apply_segment_repair(
 /// The caller holds the target's exclusive lock. A crash between this step and the truncation leaves the
 /// target as it was, so the retry plans the same repair and the same evidence path: a file there that
 /// already holds exactly `original` is kept as it is (synced again, with its directory, since the crash
-/// may have come before the rename was durable), and any other file there is refused. The bytes are
+/// may have come before the rename was durable), and any other file there is refused. So is a symbolic
+/// link there and, on Unix, a hard link, since either could lead to the target itself and be truncated
+/// with it. The bytes are
 /// written first to `<evidence_path>.partial`, synced, and renamed into place, so `evidence_path` never
 /// holds a partial copy. A `.partial` file left by a crash is a partial copy and is replaced; it is
 /// removed and created afresh, so a link planted at that name is never followed.
@@ -268,8 +270,32 @@ pub fn retain_repair_evidence(evidence_path: &Path, original: &[u8]) -> Result<(
         operation,
         detail: format!("{}: {e}", path.display()),
     };
-    match File::open(evidence_path) {
-        Ok(existing) => {
+    let refuse = |what: &str| LedgerError::InvalidField {
+        field: "evidence_path",
+        detail: format!("{} already exists and {what}", evidence_path.display()),
+    };
+    match std::fs::symlink_metadata(evidence_path) {
+        Ok(found) => {
+            // Only a regular file with one name may stand as the evidence. A symbolic or hard link could
+            // lead to the target itself, which the caller truncates next, and a FIFO would block the open.
+            if !found.file_type().is_file() {
+                return Err(refuse("is not a regular file"));
+            }
+            let existing = File::open(evidence_path)
+                .map_err(|e| io("open_evidence_file", evidence_path, e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                let opened = existing
+                    .metadata()
+                    .map_err(|e| io("stat_evidence_file", evidence_path, e))?;
+                if (opened.dev(), opened.ino()) != (found.dev(), found.ino()) || opened.nlink() != 1
+                {
+                    return Err(refuse(
+                        "has another name, or was replaced while it was checked",
+                    ));
+                }
+            }
             let mut kept = Vec::with_capacity(original.len());
             (&existing)
                 .take(original.len() as u64 + 1)
@@ -284,16 +310,10 @@ pub fn retain_repair_evidence(evidence_path: &Path, original: &[u8]) -> Result<(
                     .map_err(|e| io("sync_kept_evidence_file", evidence_path, e))?;
                 return sync_parent_dir(evidence_path);
             }
-            return Err(LedgerError::InvalidField {
-                field: "evidence_path",
-                detail: format!(
-                    "{} already exists and does not hold this repair's original bytes",
-                    evidence_path.display()
-                ),
-            });
+            return Err(refuse("does not hold this repair's original bytes"));
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {}
-        Err(e) => return Err(io("open_evidence_file", evidence_path, e)),
+        Err(e) => return Err(io("stat_evidence_file", evidence_path, e)),
     }
 
     let mut partial = evidence_path.as_os_str().to_os_string();
@@ -620,6 +640,42 @@ mod tests {
             std::fs::read(&evidence2).expect("foreign file kept"),
             b"not this repair's bytes"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A link at the evidence path to the segment holds exactly the original bytes, but the truncation would
+    /// cut it too, so the evidence would be lost. It is refused, and the segment is not touched (`F7`).
+    #[cfg(unix)]
+    #[test]
+    fn test_f7_repair_refuses_a_link_at_the_evidence_path() {
+        let dir = scratch_dir("f7-evidence-link");
+        let seg = dir.join("cell-site.fmseg");
+        let (torn, _) = torn_segment(&seg);
+        let plan = plan_segment_repair(&seg).expect("plan");
+        let evidence = plan.evidence_path.clone().expect("evidence path");
+
+        let links: [fn(&Path, &Path) -> std::io::Result<()>; 2] = [
+            |from, to| std::fs::hard_link(from, to),
+            |from, to| std::os::unix::fs::symlink(from, to),
+        ];
+        for link in links {
+            link(&seg, &evidence).expect("link the segment at the evidence path");
+            assert!(matches!(
+                apply_segment_repair(&seg, plan.plan_digest),
+                Err(LedgerError::InvalidField {
+                    field: "evidence_path",
+                    ..
+                })
+            ));
+            assert_eq!(std::fs::read(&seg).expect("segment"), torn);
+            std::fs::remove_file(&evidence).expect("unlink");
+        }
+
+        let receipt =
+            apply_segment_repair(&seg, plan.plan_digest).expect("repair without the link");
+        assert_eq!(receipt.retained_records, 2);
+        assert_eq!(std::fs::read(&evidence).expect("evidence"), torn);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

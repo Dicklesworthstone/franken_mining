@@ -527,9 +527,9 @@ mod tests {
         assert_eq!(cell.mmr().len(), 2);
     }
 
-    /// `PO-BED-1`: one holder per epoch. A lease the cell did not grant is refused even at the live
-    /// epoch, as is a lease for another cell and a batch whose epoch is not its lease's; none of them
-    /// changes the cell.
+    /// `PO-BED-1`: one holder per epoch. A lease the cell did not grant is refused, whether it names
+    /// another holder at the live epoch or the live holder at a later epoch, as is a lease for another
+    /// cell and a batch whose epoch is not its lease's; none of them changes the cell.
     #[test]
     fn test_po_bed_1_one_holder_per_epoch_refuses_leases_the_cell_did_not_grant() {
         let mut cell = CellAuthority::new("CELL-SITE(lumwana)", "node-a").expect("init cell");
@@ -548,8 +548,8 @@ mod tests {
         other_cell.cell_id = "CELL-SITE(other)".to_string();
         let mut ahead = lease_e2.clone();
         ahead.epoch = 3;
-        // Each batch carries its lease's own epoch, so only the check that the lease is the one granted can
-        // refuse it.
+        // Each batch carries its lease's own epoch, so the batch-epoch check cannot be what refuses it: the
+        // cell-id check refuses `other_cell`, and the check that the lease is the one granted the other two.
         for lease in [&forged, &other_cell, &ahead] {
             assert!(
                 matches!(

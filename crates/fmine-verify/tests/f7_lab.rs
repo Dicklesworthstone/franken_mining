@@ -1,6 +1,6 @@
-//! `F7` lab test (`BD-088`; plan §26.7 and the §26.11 failure table): a crash at every write boundary of an
-//! `FMT-SEG-1` segment, then detection at open, read-only degraded mode, the digest-bound repair, and resumed
-//! writes.
+//! `F7` lab test (`BD-088`; plan §26.7 and the §26.11 failure table): crashes part way through the writes of
+//! an `FMT-SEG-1` segment, then detection at open, read-only degraded mode, the digest-bound repair, and
+//! resumed writes.
 //!
 //! Crash model. `SegmentWriter` syncs after every frame, so a crash can damage only the write in flight: an
 //! append's length prefix and batch frame, or the seal's footer. Every acknowledged record survives. Of the

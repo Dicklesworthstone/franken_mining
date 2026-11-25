@@ -17,7 +17,7 @@
 //! In every mode a torn tail must be consistent (its offset is the verified length, and the verified prefix
 //! inspects as an open segment with the same batches and head hash) and a clean read verifies every byte.
 //! Inputs stay small (libFuzzer's default limit is 4 KiB), so this target cannot show a scan that slows with
-//! file size; `segment::tests::test_crafted_overlapping_candidates_refuse_within_the_decode_budget` covers that.
+//! file size; `segment::tests::test_crafted_overlapping_candidates_refuse_within_the_check_budget` covers that.
 #![no_main]
 
 use std::sync::OnceLock;
