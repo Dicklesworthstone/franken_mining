@@ -1,0 +1,46 @@
+[package]
+name = "fmine-wasm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+publish = false
+description = "The frankenmining.com figures' bridge to the workspace's own kernels: pitflow, nested shells, TopoSort, the spatial PIT monitor, Bond grinding, VOI and CVaR, as plain wasm32 exports."
+
+# Its own workspace: the root workspace lists its members explicitly and does not claim this crate.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Path dependencies only; the root Cargo.lock's zero-external-crate policy holds here too.
+[dependencies]
+fmine-calib = { path = "../../crates/fmine-calib" }
+fmine-claim = { path = "../../crates/fmine-claim" }
+fmine-core = { path = "../../crates/fmine-core" }
+fmine-evidence = { path = "../../crates/fmine-evidence" }
+fmine-numerics = { path = "../../crates/fmine-numerics" }
+fmine-optimize = { path = "../../crates/fmine-optimize" }
+fmine-plant = { path = "../../crates/fmine-plant" }
+fmine-time = { path = "../../crates/fmine-time" }
+fmine-units = { path = "../../crates/fmine-units" }
+
+[lints.rust]
+# deny, not forbid: src/lib.rs `exports` must allow `#[unsafe(no_mangle)]`; every logic module forbids unsafe code.
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
