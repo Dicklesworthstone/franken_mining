@@ -13,14 +13,16 @@
 //!   pre-repair bytes to `<path>.torn.<sha12>.evidence` (synced, then renamed into place; a retry after
 //!   a crash keeps an archive that already holds those bytes), then truncates to `verified_bytes` and
 //!   re-verifies from byte 0.
-//! - Interior corruption, hash-chain breaks, and tampered footers are refused (`FMINE-REF-505`).
+//! - Interior corruption, hash-chain breaks, and tampered footers are refused (`FMINE-REF-505`). So is a
+//!   last record written whole that does not verify: a segment frame, or a terminated journal line, whose
+//!   CRC verifies (a newer record version, say, or a duplicated record) is never truncated as torn.
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use fmine_claim::forecast_journal;
-use fmine_core::codec::Encoder;
+use fmine_core::codec::{Encoder, crc32c};
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_ledger::verify::{
@@ -523,6 +525,12 @@ fn plan_journal_from_bytes(
             ),
         )
     })?;
+    if bytes.ends_with(b"\n") && line_is_whole_frame(&bytes[cut..bytes.len() - 1]) {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            "the final journal line is a whole frame (its CRC verifies) that this build cannot accept; a crash cannot leave one, so it is not truncated (history is never rewritten)",
+        ));
+    }
     let torn_bytes = (bytes.len() - cut) as u64;
     let evidence_path = evidence_path_for(path, &original_sha256);
     let reason = if !bytes.ends_with(b"\n") {
@@ -556,6 +564,30 @@ fn plan_journal_from_bytes(
         evidence_path: Some(evidence_path),
         reason,
     })
+}
+
+/// Whether a journal line (without its LF) is lowercase hex of a whole `FMNE` frame, whatever its tag:
+/// at least 14 bytes, with the frame CRC32C verifying. Torn bytes cannot pass that CRC, so a terminated
+/// final line that does is a record written whole, even if this build refuses it (a newer record version,
+/// say, or one that breaks the chain), and repair must not truncate it (`F7`, `INV-003`).
+fn line_is_whole_frame(line: &[u8]) -> bool {
+    let hex = |b: u8| match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    };
+    if !line.len().is_multiple_of(2) || line.len() < 28 {
+        return false;
+    }
+    let mut frame = Vec::with_capacity(line.len() / 2);
+    for pair in line.as_chunks::<2>().0 {
+        let (Some(high), Some(low)) = (hex(pair[0]), hex(pair[1])) else {
+            return false;
+        };
+        frame.push((high << 4) | low);
+    }
+    let (body, crc) = frame.split_at(frame.len() - 4);
+    body.starts_with(b"FMNE") && crc32c(body).to_le_bytes()[..] == *crc
 }
 
 fn detect_journal_kind(bytes: &[u8]) -> Result<JournalKind, Refusal> {
@@ -1012,6 +1044,92 @@ mod tests {
         assert_eq!(
             std::fs::read(&j_evidence).expect("foreign file kept"),
             b"not this repair's bytes"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A terminated final journal line whose frame CRC verifies was written whole, so `repair plan` refuses
+    /// it (`FMINE-REF-505`) instead of truncating it as torn, whether it breaks the chain (a duplicated
+    /// record) or this build cannot decode it (a newer record version). The journal is left as it was.
+    #[test]
+    fn test_f7_journal_repair_refuses_a_whole_final_line_it_cannot_verify() {
+        let dir = scratch_dir("whole-line");
+        let root = workspace_root();
+        let j_path = dir.join("forecast.fjr");
+        let mut j = fmine_io::forecast::Journal::create(
+            &j_path,
+            "CELL-PUBLIC(barrick)",
+            1_000_000,
+            &FixedClock(1_700_000_000_000_000_000),
+        )
+        .expect("create journal");
+        j.append(
+            "op-1",
+            &FixedClock(1_700_000_001_000_000_000),
+            |_, _| Ok(()),
+        )
+        .expect("append");
+        drop(j);
+        let clean = std::fs::read(&j_path).expect("read journal");
+        let last_line = clean[..clean.len() - 1]
+            .rsplit(|&b| b == b'\n')
+            .next()
+            .expect("last line")
+            .to_vec();
+
+        let hex_frame = |line: &[u8]| -> Vec<u8> {
+            line.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|p| u8::from_str_radix(std::str::from_utf8(p).expect("hex"), 16).expect("hex"))
+                .collect()
+        };
+        let mut newer = hex_frame(&last_line);
+        newer[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        let body_end = newer.len() - 4;
+        let crc = crc32c(&newer[..body_end]);
+        newer[body_end..].copy_from_slice(&crc.to_le_bytes());
+        let newer_line: String = newer.iter().map(|b| format!("{b:02x}")).collect();
+
+        let plan_cmd = parse(&[
+            "repair".into(),
+            "plan".into(),
+            "--journal".into(),
+            j_path.to_string_lossy().into_owned(),
+        ])
+        .expect("parse plan");
+        for (label, final_line) in [
+            ("duplicated", last_line),
+            ("newer", newer_line.into_bytes()),
+        ] {
+            let mut damaged = clean.clone();
+            damaged.extend_from_slice(&final_line);
+            damaged.push(b'\n');
+            std::fs::write(&j_path, &damaged).expect("write journal");
+            let env = execute(&plan_cmd, &root);
+            assert_eq!(env.exit_code, 8, "{label}: {}", env.payload_json);
+            assert_eq!(
+                env.refusal.as_ref().map(|r| r.code),
+                Some("FMINE-REF-505"),
+                "{label}"
+            );
+            assert_eq!(
+                std::fs::read(&j_path).expect("journal kept"),
+                damaged,
+                "{label}"
+            );
+        }
+
+        // A terminated final line that is not a whole frame is still torn, and still repaired.
+        let mut torn = clean.clone();
+        torn.extend_from_slice(b"464d4e45deadbeef\n");
+        std::fs::write(&j_path, &torn).expect("write torn journal");
+        let env = execute(&plan_cmd, &root);
+        assert_eq!(env.exit_code, 0, "{}", env.payload_json);
+        assert!(
+            env.payload_json
+                .contains("\"action\":\"truncate_torn_tail\"")
         );
 
         let _ = std::fs::remove_dir_all(&dir);
