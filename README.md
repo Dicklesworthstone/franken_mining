@@ -791,11 +791,16 @@ Mine Stats workbook's SHA-256, typed Claim counts and refusal count, including w
 observations. `after_disposal` counts the numeric Claims that still carry a disposal flag, within `number`.
 The comparison tests
 reproduce E474 and all eight W1-DR-09 changes, while listing ownership conflicts and changed regional membership
-separately. The comparison population reconciles with W1 T16: 6,391 passes plus nine changes, with 30
-regional-membership changes listed separately. The nine changes are classified as `restated_silent` because
-no applicable verified note is registered. All 30 region-map exclusions cite E461's exact workbook note and
+separately. For the historical window through 2026Q2, the comparison population reconciles with W1 T16:
+6,391 passes plus nine changes, with 30 regional-membership changes listed separately. The nine changes are
+classified as `restated_silent` because no applicable verified note is registered. All 30 region-map exclusions
+cite E461's exact workbook note and
 remain `not_comparable`. A difference does not identify which publication is correct, and this classification
 does not establish whether an explanation exists outside the registered evidence.
+
+Visible identity checks and their exception records include `cited.operands[].claim_id` for operands
+with an accepted Claim at the same workbook cell and SHA-256. Use the ID to find its period, release,
+ownership basis, units and typed value in `public_claims.cells` or with `fmine claim show`.
 
 The same engine compares the AISC workbooks under `issuer_consistency.aisc_vintages`. Its frozen original
 population through 2026Q2 contains 9,541 appearances, 5,819 series and 3,722 later comparisons, including

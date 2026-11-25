@@ -709,6 +709,16 @@ impl PublicAssuranceReport {
     /// One cited identity instance as a JSON object; `scope` labels a hidden-scope instance. Report surfaces
     /// use this projection to retain the ledger's exact arithmetic and source locators in review packets.
     pub fn exception_json(&self, i: &IdentityInstance, scope: Option<&str>) -> String {
+        // DESIGN: review packets retain their existing canonical evidence bytes.
+        self.project_exception(i, scope, None)
+    }
+
+    fn project_exception(
+        &self,
+        i: &IdentityInstance,
+        scope: Option<&str>,
+        claims: Option<&aisc::AiscClaimIndex>,
+    ) -> String {
         let mut o = format!(
             "{{\"state\":{},\"label\":{},\"file\":{},\"sha256\":{},\"sheet\":{},\"cell\":{},\
              \"subject\":{},\"family\":{},\"detail\":{}",
@@ -784,7 +794,11 @@ impl PublicAssuranceReport {
             _ => {}
         }
         o.push_str(",\"evidence\":\"Assertion\",\"source\":\"issuer\"");
-        let _ = write!(o, ",\"cited\":{}", citation::cited_json(i, &sha_of));
+        let _ = write!(
+            o,
+            ",\"cited\":{}",
+            citation::cited_json_with_claims(i, &sha_of, claims)
+        );
         o.push('}');
         o
     }
@@ -796,7 +810,7 @@ impl PublicAssuranceReport {
             js(&format!("{}:{}!{}", i.file, i.sheet, i.cell)),
             js(i.family.as_str()),
             js(i.state.code()),
-            citation::cited_json(i, &|f| self.source_sha(f))
+            citation::cited_json_with_claims(i, &|f| self.source_sha(f), Some(&self.public_claims))
         )
     }
 
@@ -1082,7 +1096,7 @@ impl PublicAssuranceReport {
             .instances
             .iter()
             .filter(|i| matches!(i.state.code(), "ii" | "iii" | "iv"))
-            .map(|i| self.exception_json(i, None))
+            .map(|i| self.project_exception(i, None, Some(&self.public_claims)))
             .collect();
         o.push_str(&exceptions.join(","));
         o.push_str("],");

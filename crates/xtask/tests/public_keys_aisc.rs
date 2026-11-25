@@ -2,15 +2,17 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
+    use fmine_io::omf::json::{Json, parse};
     use fmine_public::LoadedSource;
     use fmine_public::aisc::{
-        AiscClaimIndex, IdentityInstance, OperandRole, OperandValue, key_aisc_operands,
-        ledger_for_table, locate_table,
+        AiscClaimIndex, IdentityInstance, IdentityState, NotPublishedReason, OperandRole,
+        OperandValue, key_aisc_operands, ledger_for_table, locate_table,
     };
     use fmine_public::key::{
         KeyedCell, NilReason, OwnershipBasis, PublicValue, ShareSource, StatusKind, SubjectStatus,
+        parse_sheet_period, status_for,
     };
     use fmine_public::sources::{IssuerProfile, SourceKind};
     use fmine_public::synthetic;
@@ -61,6 +63,73 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_assurance_operands_link_to_canonical_claims() {
+        fn field<'a>(json: &'a Json, key: &str) -> &'a Json {
+            json.get(key).unwrap_or_else(|| panic!("missing {key}"))
+        }
+
+        let report = fmine_public::run_synthetic_assurance(&[]).expect("synthetic assurance");
+        let json = parse(report.to_json().as_bytes()).expect("assurance JSON");
+        let instances = field(&json, "instances").as_array().expect("instances");
+        let exceptions = field(field(&json, "identity_ledger"), "exceptions")
+            .as_array()
+            .expect("exceptions");
+        assert!(!exceptions.is_empty());
+        let claims: BTreeMap<_, _> = field(field(&json, "public_claims"), "cells")
+            .as_array()
+            .expect("canonical Claims")
+            .iter()
+            .map(|cell| (field(cell, "at").as_str().expect("claim locator"), cell))
+            .collect();
+
+        let mut label_checks = 0;
+        let mut links = 0;
+        let mut unbound_components = 0;
+        for instance in instances.iter().chain(exceptions) {
+            let cited = field(instance, "cited");
+            for operand in field(cited, "operands").as_array().expect("cited operands") {
+                if field(operand, "role").as_str() == Some("label_check") {
+                    label_checks += 1;
+                    assert!(operand.get("claim_id").is_none());
+                } else {
+                    let at = field(operand, "at").as_str().expect("operand locator");
+                    let Some(cell) = claims.get(at) else {
+                        assert_eq!(at, "Synthetic_Mine_Stats.xlsx:Minestats3!B32");
+                        assert_eq!(field(operand, "role").as_str(), Some("component"));
+                        assert!(operand.get("claim_id").is_none());
+                        unbound_components += 1;
+                        continue;
+                    };
+                    links += 1;
+                    assert_eq!(field(operand, "claim_id"), field(cell, "claim_id"), "{at}");
+                    assert_eq!(field(operand, "sha256"), field(cell, "sha256"), "{at}");
+                }
+            }
+            for value in field(cited, "derived")
+                .as_array()
+                .expect("cited derivations")
+            {
+                assert!(value.get("claim_id").is_none());
+            }
+        }
+        assert!(links > 0 && label_checks > 0);
+        assert_eq!(unbound_components, 4);
+
+        let hidden = field(field(&json, "hidden_scope"), "exceptions")
+            .as_array()
+            .expect("hidden exceptions");
+        assert!(!hidden.is_empty());
+        for instance in hidden {
+            let operands = field(field(instance, "cited"), "operands")
+                .as_array()
+                .expect("cited operands");
+            for operand in operands {
+                assert!(operand.get("claim_id").is_none());
+            }
+        }
     }
 
     #[test]
@@ -465,6 +534,49 @@ mod tests {
             fmine_public::run_public_assurance(&profile, &root).expect("registered corpus");
         let index = key_aisc_operands(&profile, &report.sources, &report.instances);
         assert!(index.refusals.is_empty(), "{:?}", index.refusals);
+        let aisc_files: BTreeSet<_> = report
+            .sources
+            .iter()
+            .filter(|source| source.kind == SourceKind::AiscReconciliation)
+            .map(|source| source.file_name.as_str())
+            .collect();
+        let mut all_zero = BTreeSet::new();
+        let mut operands = 0;
+        for instance in &report.instances {
+            for operand in &instance.operands {
+                if operand.role != OperandRole::LabelCheck
+                    && aisc_files.contains(operand.file.as_str())
+                {
+                    let at = fmine_public::citation::locator(operand);
+                    assert!(index.cells.contains_key(&at), "missing Claim for {at}");
+                    operands += 1;
+                }
+            }
+            if matches!(
+                instance.state,
+                IdentityState::NotPublished {
+                    reason: NotPublishedReason::AllZeroColumn
+                }
+            ) {
+                let at = format!("{}:{}!{}", instance.file, instance.sheet, instance.column);
+                let period =
+                    parse_sheet_period(&instance.sheet).expect("period of all-zero column");
+                let registered =
+                    status_for(&profile.subject_statuses, &instance.subject, &period).is_some();
+                assert_eq!(
+                    registered,
+                    !index.unregistered_all_zero.contains(&at),
+                    "{at}"
+                );
+                all_zero.insert(at);
+            }
+        }
+        assert_eq!(operands, 26_120);
+        assert_eq!(all_zero.len(), 12);
+        assert_eq!(
+            index.unregistered_all_zero,
+            ["Barrick_Q1_2025_AISC.xlsx:Q1 2024!L"]
+        );
         for (a, b) in [
             (
                 "Barrick_Q2_2025_AISC.xlsx:YTD Q2 2025!J18",

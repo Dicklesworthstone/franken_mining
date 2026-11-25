@@ -524,8 +524,10 @@ mod tests {
             .and_then(|p| p.parent())
             .expect("workspace")
             .to_path_buf();
-        let profile =
-            fmine_public::sources::load_issuer_profile(&root, "barrick").expect("profile");
+        let profile = fmine_public::sources::load_issuer_profile(&root, "barrick")
+            .expect("profile")
+            .through("2026Q2")
+            .expect("W1 source population");
         let sources =
             fmine_public::load_registered_sources(&profile, &root).expect("verified sources");
         let vocabulary = profile.mine_stats_labels.iter().cloned().collect();

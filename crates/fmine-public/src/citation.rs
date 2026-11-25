@@ -8,7 +8,9 @@
 //!
 //! The payload is not in the state root; nothing here moves it.
 
-use crate::aisc::{Calc, IdentityInstance, Operand, OperandRole, OperandValue, implied_rate_text};
+use crate::aisc::{
+    AiscClaimIndex, Calc, IdentityInstance, Operand, OperandRole, OperandValue, implied_rate_text,
+};
 use crate::js;
 
 mod validation;
@@ -159,10 +161,33 @@ pub fn derived(i: &IdentityInstance) -> Vec<(&'static str, Cited)> {
 /// The `cited` object of one instance: `{"operands":[{"role",…extracted}],"derived":[{"name",…derived}]}`.
 #[must_use]
 pub fn cited_json(i: &IdentityInstance, sha_of: &dyn Fn(&str) -> String) -> String {
+    cited_json_with_claims(i, sha_of, None)
+}
+
+pub(crate) fn cited_json_with_claims(
+    i: &IdentityInstance,
+    sha_of: &dyn Fn(&str) -> String,
+    claims: Option<&AiscClaimIndex>,
+) -> String {
     let operands: Vec<String> = i
         .operands
         .iter()
-        .map(|o| with_key("role", o.role.as_str(), &extracted(o, sha_of).to_json()))
+        .map(|o| {
+            let citation = extracted(o, sha_of);
+            let json = with_key("role", o.role.as_str(), &citation.to_json());
+            let claim = match &citation {
+                Cited::Extracted { at, sha256, .. } if o.role != OperandRole::LabelCheck => {
+                    claims.and_then(|index| index.cells.get(at)).filter(|cell| {
+                        cell.locator == *at && cell.key.reporting_vintage.file_sha256 == *sha256
+                    })
+                }
+                _ => None,
+            };
+            match claim {
+                Some(cell) => with_key("claim_id", &cell.claim.claim_id.to_string(), &json),
+                None => json,
+            }
+        })
         .collect();
     let derived: Vec<String> = derived(i)
         .iter()

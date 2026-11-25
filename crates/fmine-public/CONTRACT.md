@@ -764,6 +764,9 @@ The public lane of M0 (`fmine assure public`).
     Each accepted cell carries its Claim id, `file:sheet!cell`, file SHA-256, complete key, original and
     effective basis with evidence, typed value and authority. This is part of the existing command, not a
     new mode or endpoint.
+    Visible instance and exception operands carry `claim_id` when the canonical inventory accepts their
+    exact locator and source digest. The optional field is absent from label checks, derived values and
+    hidden-scope records. Review packets still use their canonical evidence projection.
   - `from_mine_stats`: binds the reader's release/cell locator and exact stored numeric bits/text or token to
     the workbook. With a source registry it also requires matching filename, SHA-256 and release. It retains
     the printed ownership basis while applying the registered correction, keeps the original row label and
