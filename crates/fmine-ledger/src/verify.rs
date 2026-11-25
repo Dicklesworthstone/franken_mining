@@ -258,7 +258,8 @@ pub fn apply_segment_repair(
 ///
 /// The caller holds the target's exclusive lock. A crash between this step and the truncation leaves the
 /// target as it was, so the retry plans the same repair and the same evidence path: a file there that
-/// already holds exactly `original` is kept as it is, and any other file there is refused. The bytes are
+/// already holds exactly `original` is kept as it is (synced again, with its directory, since the crash
+/// may have come before the rename was durable), and any other file there is refused. The bytes are
 /// written first to `<evidence_path>.partial`, synced, and renamed into place, so `evidence_path` never
 /// holds a partial copy. A `.partial` file left by a crash is a partial copy and is replaced; it is
 /// removed and created afresh, so a link planted at that name is never followed.
@@ -270,12 +271,18 @@ pub fn retain_repair_evidence(evidence_path: &Path, original: &[u8]) -> Result<(
     match File::open(evidence_path) {
         Ok(existing) => {
             let mut kept = Vec::with_capacity(original.len());
-            existing
+            (&existing)
                 .take(original.len() as u64 + 1)
                 .read_to_end(&mut kept)
                 .map_err(|e| io("read_evidence_file", evidence_path, e))?;
             if kept == original {
-                return Ok(());
+                // The crash may have come before the earlier run synced the rename, so make the kept file
+                // and its directory entry durable before the caller truncates the target.
+                #[cfg(unix)]
+                existing
+                    .sync_all()
+                    .map_err(|e| io("sync_kept_evidence_file", evidence_path, e))?;
+                return sync_parent_dir(evidence_path);
             }
             return Err(LedgerError::InvalidField {
                 field: "evidence_path",

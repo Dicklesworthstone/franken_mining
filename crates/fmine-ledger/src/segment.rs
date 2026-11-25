@@ -561,7 +561,8 @@ pub fn inspect_segment_bytes(bytes: &[u8]) -> Result<SegmentInspection, LedgerEr
 /// frame CRC included. Torn bytes cannot pass that CRC, so such a record means written history lies beyond
 /// the damage; that is refused as interior corruption and never truncated. A crash can leave any part of the
 /// in-flight write on disk, even its later sectors without its length prefix, and a batch embeds its anchor
-/// as a complete frame of its own, so finding `FMNE` alone in the tail proves nothing.
+/// as a complete frame of its own, so finding `FMNE` alone in the tail proves nothing. The search is bounded:
+/// a tail whose candidate frames cost too much to decode is refused too ([`AfterDamage::TooManyCandidates`]).
 #[allow(
     clippy::too_many_arguments,
     reason = "internal tail-vs-interior classifier"
@@ -578,11 +579,22 @@ fn torn_or_interior(
     head_hash: Digest32,
     last_epoch: u64,
 ) -> Result<SegmentInspection, LedgerError> {
-    if let Some(offset) = whole_record_after(bytes, cursor) {
-        return Err(LedgerError::InteriorCorruption {
-            offset: cursor as u64,
-            detail: format!("{reason}; a whole record follows at byte {offset}"),
-        });
+    match after_damage(bytes, cursor) {
+        AfterDamage::Nothing => {}
+        AfterDamage::Record(offset) => {
+            return Err(LedgerError::InteriorCorruption {
+                offset: cursor as u64,
+                detail: format!("{reason}; a whole record follows at byte {offset}"),
+            });
+        }
+        AfterDamage::TooManyCandidates => {
+            return Err(LedgerError::InteriorCorruption {
+                offset: cursor as u64,
+                detail: format!(
+                    "{reason}; the bytes after it hold more overlapping candidate frames than a crash leaves"
+                ),
+            });
+        }
     }
     Ok(SegmentInspection {
         header,
@@ -601,25 +613,63 @@ fn torn_or_interior(
     })
 }
 
-/// The offset of the length prefix of the first whole batch or footer record that starts at or after
-/// `cursor + 4` (see [`torn_or_interior`]).
-fn whole_record_after(bytes: &[u8], cursor: usize) -> Option<usize> {
-    let first_magic = cursor.checked_add(8)?;
-    let candidates = bytes.get(first_magic..)?.windows(4).enumerate();
+/// What follows the unreadable bytes at `cursor` (see [`torn_or_interior`]).
+#[derive(Debug, PartialEq, Eq)]
+enum AfterDamage {
+    /// No whole record follows: the bytes are a torn tail.
+    Nothing,
+    /// The offset of the length prefix of the first whole batch or footer record found.
+    Record(usize),
+    /// Decoding the candidate frames would cost more than [`CANDIDATE_BYTES_PER_TAIL_BYTE`] times the bytes
+    /// from `cursor`. Each decode checks a CRC over the candidate's whole declared length, and candidates can
+    /// overlap, so a crafted tail would otherwise take time quadratic in its size. Candidates that do not
+    /// overlap cost at most the bytes from `cursor` in all, and a crash tail holds none outside its one write.
+    /// Such a tail is refused, as interior corruption is, so the budget never lets damage read as torn.
+    TooManyCandidates,
+}
+
+/// Decode budget for [`after_damage`], in candidate frame bytes per byte from the damage to the end of the
+/// file.
+const CANDIDATE_BYTES_PER_TAIL_BYTE: usize = 2;
+
+/// Looks for a whole batch or footer record whose length prefix starts at or after `cursor + 4`.
+fn after_damage(bytes: &[u8], cursor: usize) -> AfterDamage {
+    let Some(first_magic) = cursor.checked_add(8) else {
+        return AfterDamage::Nothing;
+    };
+    let Some(tail) = bytes.get(first_magic..) else {
+        return AfterDamage::Nothing;
+    };
+    let mut budget = bytes
+        .len()
+        .saturating_sub(cursor)
+        .saturating_mul(CANDIDATE_BYTES_PER_TAIL_BYTE);
+    let candidates = tail.windows(4).enumerate();
     for (magic, _) in candidates.filter(|(_, w)| *w == b"FMNE") {
         let magic = first_magic + magic;
         let frame_len = read_u32_le(bytes, magic - 4) as usize;
         if !(14..=MAX_FRAME_BYTES).contains(&frame_len) {
             continue;
         }
-        let Some(frame) = bytes.get(magic..magic + frame_len) else {
+        let Some(frame) = magic
+            .checked_add(frame_len)
+            .and_then(|end| bytes.get(magic..end))
+        else {
             continue;
         };
+        let tag = &frame[4..8];
+        if tag != TAG_LEDGER_BATCH && tag != TAG_SEGMENT_FOOTER {
+            continue;
+        }
+        let Some(left) = budget.checked_sub(frame_len) else {
+            return AfterDamage::TooManyCandidates;
+        };
+        budget = left;
         if DeltaBatch::from_bytes(frame).is_ok() || SegmentFooter::from_bytes(frame).is_ok() {
-            return Some(magic - 4);
+            return AfterDamage::Record(magic - 4);
         }
     }
-    None
+    AfterDamage::Nothing
 }
 
 fn verify_footer(
@@ -1204,6 +1254,56 @@ mod tests {
         match inspect_segment_bytes(&damaged) {
             Err(LedgerError::InteriorCorruption { offset, .. }) => {
                 assert_eq!(offset, header_end as u64);
+            }
+            other => panic!("expected interior corruption, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    /// Candidate frames after damage can overlap, and each decode checks a CRC over its whole declared
+    /// length. A crafted tail of overlapping candidates is refused within the decode budget, so a hostile
+    /// segment cannot make inspection take time quadratic in its size.
+    #[test]
+    fn test_crafted_overlapping_candidates_refuse_within_the_decode_budget() {
+        const UNITS: usize = 4096;
+        let path = scratch_path("crafted");
+        let mut writer = SegmentWriter::create(
+            &path,
+            "CELL-SITE(lumwana)",
+            0,
+            GENESIS_PREV_HASH,
+            Vec::new(),
+        )
+        .expect("create");
+        writer
+            .append(&sample_batch("CELL-SITE(lumwana)", 1, 0, GENESIS_PREV_HASH))
+            .expect("b0");
+        drop(writer);
+        let clean = std::fs::read(&path).expect("read");
+
+        // A zero length prefix, then 16-byte units: a length prefix declaring a frame that runs to the end of
+        // the file, and the start of a batch frame. Each unit is a candidate overlapping every unit after it.
+        let total = clean.len() + 4 + 16 * UNITS;
+        let mut crafted = clean.clone();
+        crafted.extend_from_slice(&[0u8; 4]);
+        for _ in 0..UNITS {
+            let magic = crafted.len() + 4;
+            let frame_len = u32::try_from(total - magic).expect("small file");
+            crafted.extend_from_slice(&frame_len.to_le_bytes());
+            crafted.extend_from_slice(b"FMNE");
+            crafted.extend_from_slice(&TAG_LEDGER_BATCH);
+            crafted.extend_from_slice(&[0u8; 4]);
+        }
+        assert_eq!(crafted.len(), total);
+
+        let cursor = clean.len();
+        assert_eq!(
+            after_damage(&crafted, cursor),
+            AfterDamage::TooManyCandidates
+        );
+        match inspect_segment_bytes(&crafted) {
+            Err(LedgerError::InteriorCorruption { offset, .. }) => {
+                assert_eq!(offset, cursor as u64);
             }
             other => panic!("expected interior corruption, got {other:?}"),
         }

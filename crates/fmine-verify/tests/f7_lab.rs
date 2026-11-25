@@ -13,8 +13,8 @@
 //!   surviving length with no sector lost;
 //! - seeded: `LabRuntime` seeds `0..SEEDS` choose how many batches were acknowledged, which write is in flight,
 //!   the surviving length, the lost sectors and their fill, and whether the repair itself is cut short once
-//!   (a partial evidence copy, or the evidence kept and the target untouched). A rerun of a seed must give
-//!   the same trace digest and the same bytes.
+//!   (a partial evidence copy, or the evidence kept and the target untouched). Every 50th seed runs twice,
+//!   in a fresh directory, and must give the same trace digest and the same bytes.
 //!
 //! Oracles, for every crash state:
 //! 1. Durability: every acknowledged record verifies, with its head hash. The record in flight counts only if
