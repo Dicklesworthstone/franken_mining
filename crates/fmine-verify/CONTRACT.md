@@ -3,7 +3,10 @@
 ## 1. Purpose
 Std-only offline auditor verifier (`BD-140`, `GOAL-024`, plan §33.6). Verifies certificates, CAS object bundles, MMR prefix-consistency proofs, and ledger segments offline without running any FrankenMining service or network stack:
 - `FMT-CERT-1` execution certificates (`fmine_core::cert::Certificate`), including optional on-disk re-hashing of every `InputDigest` in the certificate's closure;
-- `FMT-PCERT-1` three-gap mine-plan certificates (`fmine_core::plan_cert::PlanCertificate`, `BD-253`, plan §15.2), re-verifying optimization dual/closure bounds, disjoint SAA/VSS sampling sets, calibration-honesty `PlanColor` caps (`NL-1`/`NL-4`), `INV-002` false authority flags, and optional on-disk `--inputs-dir` hashes;
+- `FMT-PCERT-1` three-gap mine-plan certificates (`fmine_core::plan_cert::PlanCertificate`, BD-253,
+  plan §15.2). The optimizer checks its feasibility and bound witnesses when building the frame.
+  The offline reader checks the encoded bound and gap arithmetic, declared sampling-set identities,
+  calibration rules, all four false authority flags, and optional on-disk `--inputs-dir` hashes;
 - `FMT-CAS-1` content-addressed object manifests, fanout-16 Merkle roots, and every chunk hash on disk (`PO-BED-3`);
 - `SyncCert` (`FMNE` + `SCER`) RFC 6962 MMR prefix-consistency proofs (`PO-BED-2`);
 - `FMT-SEG-1` append-only ledger segment hash chains, per-record CRC32C checksums, and sealed MMR peak footers.

@@ -1631,7 +1631,8 @@ mod tests {
         // BD-162 adds the CLI's exact matched-cohort screen to the portable modules above.
         // Joint fractional scheduling and its independent controls are BitwisePortable.
         // BD-144 adds fmine-gen's portable simulation-based calibration module (sbc.rs).
-        assert_eq!(report.bitwise_files, 120, "{report:?}");
+        // BD-253 adds the core PlanCertificate codec and optimizer certificate builders.
+        assert_eq!(report.bitwise_files, 122, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

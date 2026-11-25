@@ -17,8 +17,9 @@ use fmine_core::plan_cert::{
 use fmine_evidence::{Refusal, RefusalCode};
 
 use crate::pitflow::{self, ClosureProblem, PitSolution};
+use crate::toposort::cpit::RATE_SCALE;
 use crate::toposort::pcpsp::{self, PcpspModel};
-use crate::toposort::search::DISCOUNT_SCALE;
+use crate::toposort::search::{DISCOUNT_SCALE, discount_factors};
 
 /// Caller-supplied plan metadata, sampling/VSS gaps, and calibration status for [`PlanCertificate`] sealing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,7 +30,8 @@ pub struct PlanCertMetadata {
     pub opt_set_id: String,
     pub currency_code: String,
     /// Scale denominator converting scaled integer objective units to `currency_code` (e.g. `1`, `100`).
-    /// For [`certify_pcpsp_plan`], this is ignored and computed exactly as `share_scale * DISCOUNT_SCALE`.
+    /// For [`certify_pcpsp_plan`], supply the parser's base value scale (10^value_decimals).
+    /// The builder multiplies it by the schedule share and discount scales.
     pub value_scale_denominator: u128,
     pub saa: Option<SaaGap>,
     pub vss: Option<VssCertificate>,
@@ -86,10 +88,10 @@ fn pit_witness_digest(in_pit: &[bool], arc_flow: &[i64]) -> Digest32 {
 }
 
 /// Deterministic SHA-256 content digest of a [`PcpspModel`] (blocks, periods, destinations,
-/// resources, values, uses, limits, and precedence arcs).
+/// resources, values, uses, limits, discount rate, and precedence arcs).
 #[must_use]
 pub fn pcpsp_model_digest(model: &PcpspModel) -> Digest32 {
-    let mut enc = Encoder::new_frame(*b"PCPM", 1);
+    let mut enc = Encoder::new_frame(*b"PCPM", 2);
     let nb = model.blocks();
     let nd = model.destinations();
     let nr = model.resources();
@@ -97,6 +99,7 @@ pub fn pcpsp_model_digest(model: &PcpspModel) -> Digest32 {
     enc.put_u64(model.periods() as u64);
     enc.put_u64(nd as u64);
     enc.put_u64(nr as u64);
+    enc.put_i64(model.discount_rate);
     for b in 0..nb {
         for d in 0..nd {
             enc.put_i64(model.value(b, d).unwrap_or(0));
@@ -204,6 +207,12 @@ pub fn certify_pcpsp_plan(
     model: &PcpspModel,
     plan: &pcpsp::planning::Plan,
 ) -> Result<PlanCertificate, Refusal> {
+    if plan.factors != discount_factors(model.discount_rate, RATE_SCALE, model.periods())? {
+        return Err(Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            "plan_cert: schedule discount factors disagree with the model rate and periods",
+        ));
+    }
     let checked = pcpsp::candidate::check(model, &plan.schedule)?;
     if !checked.feasible() {
         return Err(Refusal::new(
@@ -258,10 +267,11 @@ pub fn certify_pcpsp_plan(
     let denom = u128::try_from(plan.schedule.scale())
         .ok()
         .and_then(|s| s.checked_mul(u128::try_from(DISCOUNT_SCALE).ok()?))
+        .and_then(|s| s.checked_mul(meta.value_scale_denominator))
         .ok_or_else(|| {
             Refusal::new(
                 RefusalCode::NumericalCertificateFailed207,
-                "plan_cert: share_scale * DISCOUNT_SCALE overflows u128",
+                "plan_cert: value, share and discount scale product overflows u128",
             )
         })?;
     let iters = u32::try_from(plan.bound.history.len().max(1)).unwrap_or(u32::MAX);
@@ -435,7 +445,7 @@ EOF
         let model = pcpsp::parse(
             pcpsp_text,
             prec_text,
-            0,
+            3,
             pitflow::minelib::Rounding::Refuse,
             0,
         )
@@ -443,30 +453,30 @@ EOF
         let plan = pcpsp::planning::solve(&model, pcpsp::planning::Options::default(), None)
             .expect("solve tiny pcpsp");
 
-        let cert = certify_pcpsp_plan(
-            &PlanCertMetadata {
-                plan_id: "pcpsp-tiny-001".to_string(),
-                horizon: PlanHorizon::Tactical,
-                code_revision: "e3aadb3".to_string(),
-                opt_set_id: "opt-set-1".to_string(),
-                currency_code: "USD".to_string(),
-                value_scale_denominator: 1,
-                saa: None,
-                vss: None,
-                calibration: PlanCalibrationStatus::Miscalibrated {
-                    ledger_ref: "cal-2026q3".to_string(),
-                    bias_bps: 600,
-                    inflation_bps: 12_000,
-                },
-                inputs: vec![],
-                extra_refusal_codes: vec![],
+        let meta = PlanCertMetadata {
+            plan_id: "pcpsp-tiny-001".to_string(),
+            horizon: PlanHorizon::Tactical,
+            code_revision: "e3aadb3".to_string(),
+            opt_set_id: "opt-set-1".to_string(),
+            currency_code: "USD".to_string(),
+            value_scale_denominator: 1_000,
+            saa: None,
+            vss: None,
+            calibration: PlanCalibrationStatus::Miscalibrated {
+                ledger_ref: "cal-2026q3".to_string(),
+                bias_bps: 600,
+                inflation_bps: 12_000,
             },
-            &model,
-            &plan,
-        )
-        .expect("certify pcpsp");
+            inputs: vec![],
+            extra_refusal_codes: vec![],
+        };
+        let cert = certify_pcpsp_plan(&meta, &model, &plan).expect("certify pcpsp");
 
         assert_eq!(cert.primal_scaled, plan.discounted_numerator);
+        assert_eq!(
+            cert.value_scale_denominator,
+            1_000 * plan.schedule.scale() as u128 * DISCOUNT_SCALE as u128
+        );
         assert_eq!(cert.opt_gap_numerator, Some(plan.gap_numerator));
         assert!(matches!(
             cert.bound.as_ref().map(|b| b.kind),
@@ -477,6 +487,22 @@ EOF
             PlanCertificate::from_bytes(&cert.to_bytes().expect("encode")).expect("decode"),
             cert
         );
+        let changed_rate = pcpsp::parse(
+            &pcpsp_text.replace("DISCOUNT_RATE: 0", "DISCOUNT_RATE: 1"),
+            prec_text,
+            3,
+            pitflow::minelib::Rounding::Refuse,
+            0,
+        )
+        .expect("model with a new discount rate");
+        assert_ne!(
+            pcpsp_model_digest(&model),
+            pcpsp_model_digest(&changed_rate)
+        );
+        let refusal =
+            certify_pcpsp_plan(&meta, &changed_rate, &plan).expect_err("old discount factors");
+        assert_eq!(refusal.code, "FMINE-REF-207");
+        assert!(refusal.what.contains("discount factors disagree"));
     }
 
     #[test]

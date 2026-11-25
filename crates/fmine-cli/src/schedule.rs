@@ -3,21 +3,28 @@
 //! The model, candidate, scales and discount factors are explicit.
 
 use crate::{Envelope, NextAction, escape_json, worksheet_input};
-use fmine_evidence::Refusal;
+use fmine_core::{
+    Digest32,
+    anchor::SourceAnchor,
+    cert::InputDigest,
+    plan_cert::{PlanCalibrationStatus, PlanHorizon},
+};
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_optimize::{
     pitflow::minelib::Rounding,
+    plan_cert::{PlanCertMetadata, certify_pcpsp_plan},
     toposort::{
         pcpsp::{self, candidate, planning},
         search::DISCOUNT_SCALE,
     },
 };
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 mod guidance;
 pub mod omf;
 
-pub const USAGE: &str = "plan schedule --pcpsp <file.pcpsp> --prec <file.prec> [--candidate <file.sol>] [--decimals N] [--use-decimals N] [--share-decimals N] [--round] [--rounds N] [--bound-steps N] [--lp-guidance [--lp-iterations N]] [--list-schedule]";
+pub const USAGE: &str = "plan schedule --pcpsp <file.pcpsp> --prec <file.prec> [--candidate <file.sol>] [--decimals N] [--use-decimals N] [--share-decimals N] [--round] [--rounds N] [--bound-steps N] [--lp-guidance [--lp-iterations N]] [--list-schedule] [--certificate-currency CODE --certificate-horizon strategic|tactical|short_term]";
 const NO_CLAIM: &str = "A checked schedule and upper bound for the supplied deterministic PCPSP model and explicit integer discount factors. Values, capacities and precedence are declarations; sampling error and input calibration are not measured. A positive gap may reflect a loose bound. No reserve, execution authority or operational feasibility beyond the declared rows is established.";
 pub const ROBOT_DOCS_JSON: &str = concat!(
     "{",
@@ -31,6 +38,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     r#""discount":"period0 factor2^40; each subsequent factor=floor(previous*rate_scale/(rate_scale+rate)); factors emitted","#,
     r#""output":"Exact rational discounted values and bound gap; model rounding counts, resource uses, original candidate infeasibility witnesses and value, certificate prices; --list-schedule emits canonical MineLib solution text. fractional_period_search retains fixed-fraction seed/value/work counters including pair_moves. fractional_insertion_search retains its immediate seed, exact before/after values, inserted block count, trials and work budget. joint_period_route_search retains its immediate seed, exact before/after values, period/route move counts, trials and budget exhaustion. With guidance, lp_guidance reports termination, iterations, dimensions, start counts and best exact guided value; selected.origin identifies the winning path. The numerical certificate remains the full-model integer Lagrangian replay","#,
     r#""scope":"Only upper resource limits and no general side constraints; signed blend coefficients accepted. Structural candidate errors refuse; numerical infeasibility is reported and never admitted as an incumbent. No tolerance or claimed external bound is trusted","#,
+    r#""plan_certificate":"Optional MineLib FMT-PCERT-1 export. Supply --certificate-currency CODE and --certificate-horizon strategic|tactical|short_term together. Inputs must have portable workspace-relative locators. JSON plan_certificate.bytes_hex is the canonical frame. The optimizer replays feasibility, discounted value and the bound; the offline reader checks frame and source integrity. Sampling and calibration are unmeasured","#,
     r#""example":"tests/planning/fractional.pcpsp","#,
     r#""joint_move_example":"tests/planning/joint_route.pcpsp","#,
     r#""joint_fractional_example":"tests/planning/joint_fractional.pcpsp with matching .prec and --candidate .sol","#,
@@ -49,6 +57,13 @@ pub struct Command {
     pub round: bool,
     pub list_schedule: bool,
     pub lp_iterations: Option<usize>,
+    certificate: Option<CertificateBasis>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CertificateBasis {
+    currency_code: String,
+    horizon: PlanHorizon,
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -75,6 +90,8 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 | "--list-schedule"
                 | "--lp-guidance"
                 | "--lp-iterations"
+                | "--certificate-currency"
+                | "--certificate-horizon"
         ) {
             return Err(format!("plan schedule: unsupported option {flag}; {USAGE}"));
         }
@@ -109,6 +126,25 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     if fields.contains_key("--lp-iterations") && !fields.contains_key("--lp-guidance") {
         return Err("plan schedule: --lp-iterations requires --lp-guidance".into());
     }
+    let certificate = match (
+        fields.get("--certificate-currency"),
+        fields.get("--certificate-horizon"),
+    ) {
+        (None, None) => None,
+        (Some(&code), Some(&horizon)) => {
+            if code.len() != 3 || !code.bytes().all(|b| b.is_ascii_uppercase()) {
+                return Err("plan schedule: certificate currency must be a three-letter uppercase code".into());
+            }
+            let horizon = match horizon {
+                "strategic" => PlanHorizon::Strategic,
+                "tactical" => PlanHorizon::Tactical,
+                "short_term" => PlanHorizon::ShortTerm,
+                _ => return Err("plan schedule: certificate horizon must be strategic, tactical or short_term".into()),
+            };
+            Some(CertificateBasis { currency_code: code.into(), horizon })
+        }
+        _ => return Err("plan schedule: --certificate-currency and --certificate-horizon must be supplied together".into()),
+    };
     Ok(Command {
         pcpsp: path("--pcpsp")?,
         prec: path("--prec")?,
@@ -133,7 +169,33 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 )
             })
             .transpose()?,
+        certificate,
     })
+}
+
+fn certificate_input(
+    root: &Path,
+    role: &str,
+    source: &SourceAnchor,
+) -> Result<InputDigest, Refusal> {
+    let path = Path::new(&source.artifact_path)
+        .strip_prefix(root)
+        .ok()
+        .filter(|p| {
+            !p.as_os_str().is_empty() && p.components().all(|c| matches!(c, Component::Normal(_)))
+        })
+        .and_then(Path::to_str)
+        .ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::InputMissingOrUnreadable506,
+                format!("PCPSP certificate {role} needs a workspace-relative input locator"),
+            )
+        })?;
+    Ok(InputDigest::new(
+        role,
+        path,
+        Digest32(source.artifact_sha256),
+    ))
 }
 
 fn integers<T: std::fmt::Display>(values: &[T]) -> String {
@@ -304,15 +366,42 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                 let (text, source) = read(path, "CANDIDATE")?;
                 Ok::<_, Refusal>((
                     candidate::parse_solution(&text, &model, command.options.share_decimals)?,
-                    worksheet_input::source_json(&source, text.len()),
+                    source,
+                    text.len(),
                 ))
+            })
+            .transpose()?;
+        let cert_meta = command
+            .certificate
+            .as_ref()
+            .map(|basis| {
+                let mut inputs = vec![
+                    certificate_input(root, "pcpsp", &source)?,
+                    certificate_input(root, "precedence", &prec_source)?,
+                ];
+                if let Some((_, source, _)) = &outside {
+                    inputs.push(certificate_input(root, "candidate", source)?);
+                }
+                Ok::<_, Refusal>(PlanCertMetadata {
+                    plan_id: model.name.clone(),
+                    horizon: basis.horizon,
+                    code_revision: env!("FMINE_BUILD_REVISION").into(),
+                    opt_set_id: "declared-pcpsp".into(),
+                    currency_code: basis.currency_code.clone(),
+                    value_scale_denominator: 10_u128.pow(command.decimals),
+                    saa: None,
+                    vss: None,
+                    calibration: PlanCalibrationStatus::Uncalibrated,
+                    inputs,
+                    extra_refusal_codes: Vec::new(),
+                })
             })
             .transpose()?;
         let guided = command
             .lp_iterations
             .map(|iterations| guidance::solve(&model, command.decimals, iterations))
             .transpose()?;
-        let external_schedule = outside.as_ref().map(|(s, _)| s);
+        let external_schedule = outside.as_ref().map(|(s, _, _)| s);
         let plan = match &guided {
             Some(g) => planning::solve_with_guidance(
                 &model,
@@ -327,8 +416,9 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             * i128::from(plan.schedule.scale());
         let bound_denominator = 10_i128.pow(command.decimals) * i128::from(DISCOUNT_SCALE);
         let external = match (&plan.candidate, &outside) {
-            (Some(c), Some((_, source))) => format!(
-                "{{\"source\":{source},\"check\":{},\"discounted_value\":{}}}",
+            (Some(c), Some((_, source, bytes))) => format!(
+                "{{\"source\":{},\"check\":{},\"discounted_value\":{}}}",
+                worksheet_input::source_json(source, *bytes),
                 checked(&c.checked),
                 ratio(c.discounted_numerator, denominator)
             ),
@@ -344,8 +434,28 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         let (fractional_json, fractional_markdown) = fractional_period_report(&plan, denominator);
         let (insertion_json, insertion_markdown) = fractional_insertion_report(&plan, denominator);
         let (joint_json, joint_markdown) = joint_period_route_report(&plan, denominator);
+        let (cert_json, cert_markdown) = if let Some(meta) = cert_meta {
+            let cert = certify_pcpsp_plan(&meta, &model, &plan)?;
+            let bytes = cert.to_bytes().map_err(|e| {
+                Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string())
+            })?;
+            let digest = cert.certificate_digest;
+            (
+                format!(
+                    ",\"plan_certificate\":{{\"format\":\"FMT-PCERT-1\",\"digest\":\"{digest}\",\"bytes_hex\":\"{}\"}}",
+                    fmine_io::forecast::encode_hex_field(&bytes)
+                ),
+                format!(
+                    "\nPlan certificate `{digest}` for {} ({}). JSON includes the canonical frame.\n",
+                    cert.horizon.as_str(),
+                    cert.currency_code
+                ),
+            )
+        } else {
+            (String::new(), String::new())
+        };
         let payload = format!(
-            "{{\"schema\":\"fmine.plan-schedule.v1\",\"model\":{{\"format\":\"minelib_pcpsp\",\"name\":\"{}\",\"pcpsp\":{},\"prec\":{},\"blocks\":{},\"periods\":{},\"destinations\":{},\"resources\":{}}},\"value_decimals\":{},\"use_decimals\":{},\"share_decimals\":{},\"rounding\":{{\"values\":{},\"uses_up\":{},\"limits_down\":{}}},\"discount_factors\":{},\"discount_scale\":\"{DISCOUNT_SCALE}\",\"selected\":{{\"origin\":\"{}\",\"check\":{},\"discounted_value\":{},\"solution\":{}}},\"candidate\":{external},\"bound\":{{\"method\":\"lagrangian_full_model\",\"verified\":true,\"value\":{},\"prices\":{},\"steps\":{},\"gap\":{}}},\"search\":{{\"cycles\":{},\"round_limit\":{},\"bound_step_limit\":{}}}{lp_json}{fractional_json}{insertion_json}{joint_json}}}",
+            "{{\"schema\":\"fmine.plan-schedule.v1\",\"model\":{{\"format\":\"minelib_pcpsp\",\"name\":\"{}\",\"pcpsp\":{},\"prec\":{},\"blocks\":{},\"periods\":{},\"destinations\":{},\"resources\":{}}},\"value_decimals\":{},\"use_decimals\":{},\"share_decimals\":{},\"rounding\":{{\"values\":{},\"uses_up\":{},\"limits_down\":{}}},\"discount_factors\":{},\"discount_scale\":\"{DISCOUNT_SCALE}\",\"selected\":{{\"origin\":\"{}\",\"check\":{},\"discounted_value\":{},\"solution\":{}}},\"candidate\":{external},\"bound\":{{\"method\":\"lagrangian_full_model\",\"verified\":true,\"value\":{},\"prices\":{},\"steps\":{},\"gap\":{}}},\"search\":{{\"cycles\":{},\"round_limit\":{},\"bound_step_limit\":{}}}{lp_json}{fractional_json}{insertion_json}{joint_json}{cert_json}}}",
             escape_json(&model.name),
             worksheet_input::source_json(&source, text.len()),
             worksheet_input::source_json(&prec_source, prec.len()),
@@ -381,7 +491,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         }
         let candidate_line = plan.candidate.as_ref().map_or_else(String::new, |c| format!("\nExternal candidate: feasible={}, incomplete blocks={}, unmet requirements={}, exceeded limits={}.\n", c.checked.feasible(), c.checked.incomplete, c.checked.unmet, c.checked.over_limit.len()));
         envelope.rendered_markdown = Some(format!(
-            "# Production schedule: {}\n\nSelected `{}`: {} mined blocks. Feasibility and discounted value checked.\n\n| Discounted value | Verified upper bound | Gap to bound |\n|---|---|---|\n| {}/{} | {}/{} | {}/{} |\n\nValues are exact fractions in the input model's currency units.\n{candidate_line}{lp_markdown}{fractional_markdown}{insertion_markdown}{joint_markdown}\n{}\n\n{NO_CLAIM}\n",
+            "# Production schedule: {}\n\nSelected `{}`: {} mined blocks. Feasibility and discounted value checked.\n\n| Discounted value | Verified upper bound | Gap to bound |\n|---|---|---|\n| {}/{} | {}/{} | {}/{} |\n\nValues are exact fractions in the input model's currency units.\n{candidate_line}{lp_markdown}{fractional_markdown}{insertion_markdown}{joint_markdown}{cert_markdown}\n{}\n\n{NO_CLAIM}\n",
             crate::guidance::text(&model.name),
             plan.origin,
             plan.checked.mined,

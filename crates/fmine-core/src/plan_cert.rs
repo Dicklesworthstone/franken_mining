@@ -776,7 +776,7 @@ impl PlanCertificate {
             return None;
         }
         let scaled = gap.checked_mul(10_000)?;
-        Some((scaled + denom - 1) / denom)
+        Some(scaled / denom + i128::from(scaled % denom != 0))
     }
 
     /// Validate all structural, mathematical three-gap, NL-1/NL-4, and `INV-002` invariants.
@@ -1235,6 +1235,18 @@ mod tests {
             )],
             refusal_codes: vec![],
         }
+    }
+
+    #[test]
+    fn test_gap_basis_points_round_up_without_adding_the_bound() {
+        let mut req = sample_request(PlanCalibrationStatus::Uncalibrated);
+        req.primal_scaled = i128::MAX - 1;
+        let bound = req.bound.as_mut().expect("bound fixture");
+        bound.lower_scaled = i128::MAX;
+        bound.upper_scaled = i128::MAX;
+        let cert = PlanCertificate::build(req).expect("large exact bound is representable");
+        assert_eq!(cert.opt_gap_numerator, Some(1));
+        assert_eq!(cert.opt_gap_bps(), Some(1));
     }
 
     #[test]

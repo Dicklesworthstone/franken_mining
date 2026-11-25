@@ -1169,6 +1169,22 @@ its allocation between two destinations. Every selected schedule is independentl
 A global Lagrangian upper bound is recomputed from the returned prices over **every model
 block**, including negative-value material that can enable a blend.
 
+DESIGN (BD-253). For a MineLib schedule, declare the model's currency and planning horizon to export
+its `FMT-PCERT-1` frame. The builder rechecks the selected schedule, discounted value and full-model
+bound. The frame retains the original PCPSP, precedence and optional candidate hashes. Its value
+scale includes the model's decimal places, share scale and discount scale. The sampling and VSS
+fields are absent, and the calibration status is uncalibrated. The offline reader checks the sealed
+frame and can rehash the original files under the same workspace-relative paths.
+
+```bash
+cargo run --release -p fmine-cli -- plan schedule \
+  --pcpsp tests/planning/joint_fractional.pcpsp --prec tests/planning/joint_fractional.prec \
+  --candidate tests/planning/joint_fractional.sol \
+  --certificate-currency USD --certificate-horizon tactical --json \
+  | jq -er '.payload.plan_certificate.bytes_hex' | xxd -r -p > schedule.pcert
+cargo run --release -p fmine-verify -- plancert schedule.pcert --inputs-dir .
+```
+
 DESIGN (plan §15.4–15.6): when separate period and destination improvements stop, whole-block
 search also considers changing both together. A profitable alternative route can move into an earlier
 period even when the current route cannot fit there, and an unmined block can enter through a feasible
