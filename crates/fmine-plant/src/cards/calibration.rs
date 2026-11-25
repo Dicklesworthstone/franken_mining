@@ -109,13 +109,14 @@ impl CalibrationCardPolicy {
             ));
         }
         if self.coverage_lower_tolerance.signum() < 0
-            || cmp_qty(self.coverage_lower_tolerance, one)? == Ordering::Greater
+            || cmp_qty(self.coverage_lower_tolerance, self.nominal_coverage_target)?
+                != Ordering::Less
             || self.max_abs_standardized_bias.signum() < 0
             || cmp_qty(self.max_printed_diff_rounding_tolerance, zero)? == Ordering::Less
         {
             return Err(Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
-                "tolerances and standardized-bias limit must be non-negative",
+                "tolerances must be non-negative and coverage_lower_tolerance < nominal_coverage_target",
             ));
         }
         Ok(())
@@ -236,13 +237,7 @@ pub fn parse_markdown_lab_vs_plant_table(
             }
             continue;
         }
-        if line.is_empty()
-            || line.starts_with("<!--")
-            || line.starts_with("Page ")
-            || line.starts_with("March ")
-            || line.starts_with("####")
-            || line.contains("NI 43-101 Technical Report")
-        {
+        if is_page_break_line(line) {
             continue;
         }
         if !line.starts_with('|') {
@@ -254,15 +249,22 @@ pub fn parse_markdown_lab_vs_plant_table(
 
         let trimmed_pipes = line.trim_matches('|');
         let cols: Vec<&str> = trimmed_pipes.split('|').map(str::trim).collect();
-        if cols.len() < 4 {
-            continue;
-        }
         // Skip header and Markdown divider rows.
-        if cols[0].contains("**")
-            || cols[0].chars().all(|c| c == '-' || c == ':' || c == ' ')
-            || cols[1].contains("**")
+        if !cols.is_empty()
+            && (cols[0].contains("**")
+                || cols[0].chars().all(|c| c == '-' || c == ':' || c == ' ')
+                || cols.get(1).is_some_and(|c| c.contains("**")))
         {
             continue;
+        }
+        if cols.len() < 4 {
+            return Err(Refusal::new(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                format!(
+                    "line {line_no}: expected >= 4 pipe columns in lab-vs-plant table, got {}",
+                    cols.len()
+                ),
+            ));
         }
 
         let period_label = cols[0].to_string();
@@ -373,10 +375,14 @@ pub fn build_recovery_calibration_card(
     let mut printed_diff_rounding_discrepancies = 0usize;
 
     for lot in lots {
-        if lot.lot_id.trim().is_empty() || lot.period_label.trim().is_empty() {
+        if lot.lot_id.trim().is_empty()
+            || lot.period_label.trim().is_empty()
+            || lot.lot_id != lot.lot_id.trim()
+            || lot.period_label != lot.period_label.trim()
+        {
             return Err(Refusal::new(
                 RefusalCode::UndeclaredUnitBasisOrTz107,
-                "every lot must have non-empty period_label and lot_id",
+                "every lot must have non-empty, trimmed period_label and lot_id",
             ));
         }
         if !seen_lots.insert(lot.lot_id.as_str()) {
@@ -555,10 +561,20 @@ pub fn build_recovery_calibration_card(
 
     let scored_online_count = online_steps.len();
     let (raw_lab_coverage, bias_corrected_coverage, raw_lab_flag, bias_corrected_flag) =
-        if scored_online_count == 0 {
+        if scored_online_count < 2 {
+            let (raw_cov, corr_cov) = if scored_online_count == 0 {
+                (zero, zero)
+            } else {
+                (
+                    ExactQty::new(raw_covered_count as i128, scored_online_count as i128)
+                        .map_err(units_err)?,
+                    ExactQty::new(corr_covered_count as i128, scored_online_count as i128)
+                        .map_err(units_err)?,
+                )
+            };
             (
-                zero,
-                zero,
+                raw_cov,
+                corr_cov,
                 RecoveryCalibrationFlag::Unscored,
                 RecoveryCalibrationFlag::Unscored,
             )
@@ -581,19 +597,16 @@ pub fn build_recovery_calibration_card(
             let raw_flag = classify_flag(raw_biased, raw_overconf);
 
             let (corr_mean, corr_var) = exact_mean_and_var(&online_corr_errors)?;
-            let corr_biased = if online_corr_errors.len() >= 2 {
-                is_biased(corr_mean, corr_var, policy.max_abs_standardized_bias)?
-            } else {
-                false
-            };
+            let corr_biased = is_biased(corr_mean, corr_var, policy.max_abs_standardized_bias)?;
             let corr_overconf = cmp_qty(corr_cov, min_cov)? == Ordering::Less;
             let corr_flag = classify_flag(corr_biased, corr_overconf);
 
             (raw_cov, corr_cov, raw_flag, corr_flag)
         };
 
-    // Canonical SHA-256 digest over card metadata, policy, summary statistics, and online verdicts.
-    let mut enc = Encoder::new_frame(*b"RCC1", 1);
+    // Canonical SHA-256 digest over card metadata, policy, full ordered lot sequence, summary
+    // statistics, and online verdicts so distinct sequences can never collide on aggregate stats.
+    let mut enc = Encoder::new_frame(*b"RCC1", 2);
     enc.put_str(&card_id);
     enc.put_str(&site);
     enc.put_str(&circuit);
@@ -608,6 +621,36 @@ pub fn build_recovery_calibration_card(
     put_qty(&mut enc, policy.outlier_threshold_pct_pts);
     put_qty(&mut enc, policy.max_printed_diff_rounding_tolerance);
     enc.put_u64(lots.len() as u64);
+    for lot in lots {
+        enc.put_str(&lot.period_label);
+        enc.put_str(&lot.lot_id);
+        match &lot.status {
+            LotPairStatus::Paired {
+                lab_recovery_pct,
+                plant_recovery_pct,
+                printed_diff_pct_pts,
+            } => {
+                enc.put_u8(1);
+                put_qty(&mut enc, *lab_recovery_pct);
+                put_qty(&mut enc, *plant_recovery_pct);
+                enc.put_u8(u8::from(printed_diff_pct_pts.is_some()));
+                if let Some(d) = *printed_diff_pct_pts {
+                    put_qty(&mut enc, d);
+                }
+            }
+            LotPairStatus::MissingLabResult {
+                plant_recovery_pct,
+                reason,
+            } => {
+                enc.put_u8(2);
+                enc.put_u8(u8::from(plant_recovery_pct.is_some()));
+                if let Some(p) = *plant_recovery_pct {
+                    put_qty(&mut enc, p);
+                }
+                enc.put_str(reason);
+            }
+        }
+    }
     enc.put_u64(paired_count as u64);
     enc.put_u64(missing_lab_count as u64);
     put_qty(&mut enc, mean_bias_pct_pts);
@@ -662,8 +705,72 @@ fn units_err(err: fmine_units::UnitsError) -> Refusal {
     )
 }
 
+/// Overflow-free exact comparison of any two `ExactQty` values using 256-bit cross-multiplication.
 fn cmp_qty(a: ExactQty, b: ExactQty) -> Result<Ordering, Refusal> {
-    a.checked_cmp(b).map_err(units_err)
+    let sa = a.signum();
+    let sb = b.signum();
+    if sa != sb {
+        return Ok(sa.cmp(&sb));
+    }
+    if sa == 0 {
+        return Ok(Ordering::Equal);
+    }
+    let lhs = mul_wide_u128(a.num().unsigned_abs(), b.den().unsigned_abs());
+    let rhs = mul_wide_u128(b.num().unsigned_abs(), a.den().unsigned_abs());
+    let mag_ord = lhs.cmp(&rhs);
+    Ok(if sa > 0 { mag_ord } else { mag_ord.reverse() })
+}
+
+fn mul_wide_u128(a: u128, b: u128) -> (u128, u128) {
+    let mask = u128::from(u64::MAX);
+    let a_lo = a & mask;
+    let a_hi = a >> 64;
+    let b_lo = b & mask;
+    let b_hi = b >> 64;
+
+    let lo_lo = a_lo * b_lo;
+    let hi_lo = a_hi * b_lo;
+    let lo_hi = a_lo * b_hi;
+    let hi_hi = a_hi * b_hi;
+
+    let mid1 = (lo_lo >> 64) + (hi_lo & mask) + (lo_hi & mask);
+    let lo = (lo_lo & mask) | (mid1 << 64);
+    let hi = hi_hi + (hi_lo >> 64) + (lo_hi >> 64) + (mid1 >> 64);
+    (hi, lo)
+}
+
+fn is_page_break_line(line: &str) -> bool {
+    if line.is_empty()
+        || line.starts_with("<!--")
+        || line.starts_with("Page ")
+        || line.starts_with('#')
+        || line.contains("Technical Report")
+    {
+        return true;
+    }
+    const MONTHS: [&str; 12] = [
+        "January ",
+        "February ",
+        "March ",
+        "April ",
+        "May ",
+        "June ",
+        "July ",
+        "August ",
+        "September ",
+        "October ",
+        "November ",
+        "December ",
+    ];
+    MONTHS.iter().any(|m| {
+        line.strip_prefix(m).is_some_and(|rest| {
+            rest.len() <= 12
+                && rest.contains(',')
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || b == b',' || b == b' ')
+        })
+    })
 }
 
 fn abs_qty(q: ExactQty) -> Result<ExactQty, Refusal> {
@@ -1150,6 +1257,110 @@ Narrative paragraph terminates the table.
         assert_eq!(card_a.scored_online_count, 61);
         assert_eq!(card_a.printed_diff_rounding_discrepancies, 8);
         assert_ne!(card_a.card_digest, card_b.card_digest);
+
+        // Fresh-eyes regressions (C-1..C-5):
+        // (1) 256-bit overflow-free cmp_qty across huge i128 denominators (~10^25 product).
+        let big_a = ExactQty::new(
+            1_000_000_000_000_000_000_000_001,
+            3_000_000_000_000_000_000_000_000,
+        )
+        .unwrap();
+        let big_b = ExactQty::new(
+            1_000_000_000_000_000_000_000_000,
+            3_000_000_000_000_000_000_000_001,
+        )
+        .unwrap();
+        assert_eq!(cmp_qty(big_a, big_b).unwrap(), Ordering::Greater);
+        assert_eq!(
+            cmp_qty(big_a.checked_neg().unwrap(), big_b.checked_neg().unwrap()).unwrap(),
+            Ordering::Less
+        );
+
+        // (2) coverage_lower_tolerance >= nominal_coverage_target refuses (FMINE-REF-109).
+        let mut bad_pol = policy_a.clone();
+        bad_pol.coverage_lower_tolerance = bad_pol.nominal_coverage_target;
+        assert_eq!(
+            build_recovery_calibration_card("c", "s", "k", "loc", "d".repeat(64), &lots, &bad_pol)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-109"
+        );
+
+        // (3) Truncated pipe row refuses (FMINE-REF-107) instead of silently dropping; non-March date breaks work.
+        let truncated_md = "**T**\n|Jan 2026|Lot 1|90.0|91.0|1.0|\n|Feb 2026|Lot 2|89.0|\n";
+        assert_eq!(
+            parse_markdown_lab_vs_plant_table(truncated_md, "**T**")
+                .unwrap_err()
+                .code,
+            "FMINE-REF-107"
+        );
+        let feb_break_md = "**T**\n|Jan 2026|Lot 1|90.0|91.0|1.0|\n\nFebruary 27, 2026\nPage 4\n\n|Feb 2026|Lot 2|89.0|90.0|1.0|\n";
+        assert_eq!(
+            parse_markdown_lab_vs_plant_table(feb_break_md, "**T**")
+                .expect("February page break supported")
+                .len(),
+            2
+        );
+
+        // (4) Untrimmed lot_id refuses (FMINE-REF-107); scored_online_count == 1 stays Unscored.
+        let mut untrimmed = lots[..3].to_vec();
+        untrimmed[0].lot_id = " padded ".to_string();
+        assert_eq!(
+            build_recovery_calibration_card(
+                "c",
+                "s",
+                "k",
+                "loc",
+                "d".repeat(64),
+                &untrimmed,
+                &policy_a
+            )
+            .unwrap_err()
+            .code,
+            "FMINE-REF-107"
+        );
+        let mut one_online_pol = policy_a.clone();
+        one_online_pol.warmup_lots = 2;
+        let three_paired: Vec<LabVsPlantLot> = lots
+            .iter()
+            .filter(|l| matches!(l.status, LotPairStatus::Paired { .. }))
+            .take(3)
+            .cloned()
+            .collect();
+        let one_online_card = build_recovery_calibration_card(
+            "c",
+            "s",
+            "k",
+            "loc",
+            "d".repeat(64),
+            &three_paired,
+            &one_online_pol,
+        )
+        .expect("single online lot builds");
+        assert_eq!(one_online_card.scored_online_count, 1);
+        assert_eq!(
+            one_online_card.raw_lab_flag,
+            RecoveryCalibrationFlag::Unscored
+        );
+        assert_eq!(
+            one_online_card.bias_corrected_flag,
+            RecoveryCalibrationFlag::Unscored
+        );
+
+        // (5) Reordering lots with identical aggregate stats produces a distinct card_digest.
+        let mut reordered = three_paired.clone();
+        reordered.reverse();
+        let reordered_card = build_recovery_calibration_card(
+            "c",
+            "s",
+            "k",
+            "loc",
+            "d".repeat(64),
+            &reordered,
+            &one_online_pol,
+        )
+        .expect("reordered builds");
+        assert_ne!(one_online_card.card_digest, reordered_card.card_digest);
     }
 
     /// Real-file lane test (`BD-289`, `FACT E177`): reproduces Turquoise Ridge's 71 monthly

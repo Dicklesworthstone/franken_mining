@@ -239,6 +239,28 @@ impl CapitalEntityGraph {
                     detail: format!("node '{}' share_count must be > 0", node.id.as_str()),
                 });
             }
+            if let Some(ref reg_id) = node.country_regime_id
+                && (reg_id.trim().is_empty() || reg_id != reg_id.trim())
+            {
+                return Err(EconError::InvalidDomain {
+                    field: "country_regime_id",
+                    detail: format!(
+                        "node '{}' country_regime_id must be non-empty and trimmed: {reg_id:?}",
+                        node.id.as_str()
+                    ),
+                });
+            }
+            for eid in &node.source_e_ids {
+                if eid.trim().is_empty() || eid != eid.trim() {
+                    return Err(EconError::InvalidDomain {
+                        field: "source_e_ids",
+                        detail: format!(
+                            "node '{}' has empty or untrimmed source_e_id {eid:?}",
+                            node.id.as_str()
+                        ),
+                    });
+                }
+            }
             if node.kind == EntityKind::DivestedAsset {
                 match node.divested_on.as_deref() {
                     Some(d) if is_iso_date(d) => {}
@@ -252,6 +274,17 @@ impl CapitalEntityGraph {
                         });
                     }
                 }
+            } else if node.divested_on.is_some()
+                && matches!(node.kind, EntityKind::Parent | EntityKind::CarveOut)
+            {
+                return Err(EconError::InvalidDomain {
+                    field: "divested_on",
+                    detail: format!(
+                        "{:?} node '{}' cannot carry divested_on",
+                        node.kind,
+                        node.id.as_str()
+                    ),
+                });
             } else if let Some(ref d) = node.divested_on
                 && !is_iso_date(d)
             {
@@ -305,6 +338,18 @@ impl CapitalEntityGraph {
                     left: child.currency,
                     right: parent.currency,
                 });
+            }
+            for eid in &edge.source_e_ids {
+                if eid.trim().is_empty() || eid != eid.trim() {
+                    return Err(EconError::InvalidDomain {
+                        field: "source_e_ids",
+                        detail: format!(
+                            "edge '{}' -> '{}' has empty or untrimmed source_e_id {eid:?}",
+                            edge.from_child.as_str(),
+                            edge.to_parent.as_str()
+                        ),
+                    });
+                }
             }
 
             if child.kind == EntityKind::DivestedAsset
@@ -547,6 +592,7 @@ impl CapitalEntityGraph {
             }
             let mut eids = n.source_e_ids.clone();
             eids.sort();
+            eids.dedup();
             enc.put_u64(eids.len() as u64);
             for eid in &eids {
                 enc.put_str(eid);
@@ -602,6 +648,7 @@ impl CapitalEntityGraph {
             }
             let mut eids = e.source_e_ids.clone();
             eids.sort();
+            eids.dedup();
             enc.put_u64(eids.len() as u64);
             for eid in &eids {
                 enc.put_str(eid);
@@ -896,18 +943,51 @@ pub fn evaluate_jv_capital_call(
         .checked_mul(v_qty)?
         .checked_add(p_qty)?;
 
-    // Apply explicit contractual dilution penalty transfer if one party covered a non-consent shortfall.
+    // Apply explicit contractual sole-risk dilution penalty ONLY to the shortfall actually covered
+    // above a party's pro-rata obligation on total_call_required (or on total_funded when required == 0).
+    // If a party only funds its own pro-rata share while the other defaults without cover, normal
+    // straight pre-money dilution applies rather than an unearned cover penalty.
     let extra_mult = input.non_consent_penalty_multiplier.checked_sub(one)?;
     if extra_mult.signum() > 0 && total_funded.minor > 0 {
-        let total_f_qty = ExactQty::from_integer(total_funded.minor);
-        let op_prorata = input.prior_operator_share.checked_mul(total_f_qty)?;
-        let excess_op = p_qty.checked_sub(op_prorata)?;
-        let penalty_shift = excess_op.checked_mul(extra_mult)?;
-        op_account = op_account.checked_add(penalty_shift)?;
-        if op_account.signum() < 0 {
-            op_account = zero;
-        } else if op_account.checked_cmp(total_after)? == Ordering::Greater {
-            op_account = total_after;
+        let basis_minor = if input.total_call_required.minor > 0 {
+            input.total_call_required.minor
+        } else {
+            total_funded.minor
+        };
+        let basis_qty = ExactQty::from_integer(basis_minor);
+        let op_prorata = input.prior_operator_share.checked_mul(basis_qty)?;
+        let partner_prorata = prior_partner_share.checked_mul(basis_qty)?;
+
+        let op_over = p_qty.checked_sub(op_prorata)?;
+        let partner_over = x_qty.checked_sub(partner_prorata)?;
+
+        let penalty_shift = if op_over.signum() > 0 && partner_over.signum() < 0 {
+            let partner_shortfall = partner_over.checked_neg()?;
+            let covered = if op_over.checked_cmp(partner_shortfall)? == Ordering::Less {
+                op_over
+            } else {
+                partner_shortfall
+            };
+            covered.checked_mul(extra_mult)?
+        } else if partner_over.signum() > 0 && op_over.signum() < 0 {
+            let op_shortfall = op_over.checked_neg()?;
+            let covered = if partner_over.checked_cmp(op_shortfall)? == Ordering::Less {
+                partner_over
+            } else {
+                op_shortfall
+            };
+            covered.checked_mul(extra_mult)?.checked_neg()?
+        } else {
+            zero
+        };
+
+        if penalty_shift.signum() != 0 {
+            op_account = op_account.checked_add(penalty_shift)?;
+            if op_account.signum() < 0 {
+                op_account = zero;
+            } else if op_account.checked_cmp(total_after)? == Ordering::Greater {
+                op_account = total_after;
+            }
         }
     }
 
@@ -1035,9 +1115,10 @@ pub fn compare_fourmile_vend_in_vs_tolling(
     let combined_vend_in_100pct = input
         .fourmile_standalone_project_nav
         .checked_add(input.vend_in_synergy_nav_uplift_100pct)?;
+    let vend_in_without_payment =
+        money_mul_exact(combined_vend_in_100pct, input.ngm_barrick_fraction)?;
     let vend_in_newco_delta_nav =
-        money_mul_exact(combined_vend_in_100pct, input.ngm_barrick_fraction)?
-            .checked_add(input.vend_in_fmv_payment_from_newmont)?;
+        vend_in_without_payment.checked_add(input.vend_in_fmv_payment_from_newmont)?;
     let vend_in_parent_delta_nav = money_mul_exact(
         vend_in_newco_delta_nav,
         input.parent_retained_newco_fraction,
@@ -1060,9 +1141,8 @@ pub fn compare_fourmile_vend_in_vs_tolling(
     let vend_in_advantage_parent =
         vend_in_parent_delta_nav.checked_sub(tolling_parent_delta_nav)?;
 
-    // Breakeven Newmont payment: tolling_newco_delta_nav - ngm_share * (standalone + synergy).
-    let vend_in_without_payment =
-        money_mul_exact(combined_vend_in_100pct, input.ngm_barrick_fraction)?;
+    // Exact breakeven Newmont payment: tolling_newco_delta_nav - ngm_share * (standalone + synergy).
+    // May be negative when shared-infrastructure synergies alone make vend-in dominate tolling even at $0 payment.
     let breakeven_newmont_fmv_payment =
         tolling_newco_delta_nav.checked_sub(vend_in_without_payment)?;
 
@@ -1136,6 +1216,8 @@ pub struct KibaliWaterfallResult {
     pub anglogold_repatriated: Money,
     pub sokimo_repatriated: Money,
     pub barrick_trapped_share: Money,
+    pub anglogold_trapped_share: Money,
+    pub sokimo_trapped_share: Money,
 }
 
 /// Evaluate Kibali's fiscal terms (`drc_kibali_2026`: 5.7% royalty, 30% CIT, 50% super-profits
@@ -1152,6 +1234,17 @@ pub fn evaluate_kibali_waterfall(
         return Err(EconError::InvalidDomain {
             field: "capex_100pct",
             detail: "capex_100pct must be non-negative".to_string(),
+        });
+    }
+    if regime.state == crate::regime::RegimeState::Suspension
+        && input.payable_gold_oz_100pct.signum() > 0
+    {
+        return Err(EconError::InvalidDomain {
+            field: "regime.state",
+            detail: format!(
+                "cannot evaluate active Kibali production on suspended regime '{}'",
+                regime.id
+            ),
         });
     }
     validate_fraction_unit("repatriable_fraction", input.repatriable_fraction)?;
@@ -1199,6 +1292,8 @@ pub fn evaluate_kibali_waterfall(
         anglogold_repatriated: rep_slices[1],
         sokimo_repatriated: rep_slices[2],
         barrick_trapped_share: trap_slices[0],
+        anglogold_trapped_share: trap_slices[1],
+        sokimo_trapped_share: trap_slices[2],
     })
 }
 
@@ -1464,7 +1559,7 @@ pub fn evaluate_reko_diq_waterfall(
         let shortfall = input.scheduled_debt_service.checked_sub(paid)?;
         return Ok(RekoDiqWaterfallResult {
             dscr,
-            dscr_lock_active: true,
+            dscr_lock_active,
             debt_service_paid: paid,
             debt_service_shortfall: shortfall,
             operating_deficit,
@@ -1587,6 +1682,20 @@ pub fn evaluate_loulo_gounkoto_reset(
     check_ccy(ccy, input.retroactive_tax_and_penalty_100pct.ccy)?;
     check_ccy(ccy, input.settlement_payment_100pct.ccy)?;
     validate_fraction_positive("barrick_equity_fraction", input.barrick_equity_fraction)?;
+    if input
+        .barrick_equity_fraction
+        .checked_add(regime.state_equity_fraction)?
+        .checked_cmp(ExactQty::from_integer(1))?
+        == Ordering::Greater
+    {
+        return Err(EconError::InvalidDomain {
+            field: "barrick_equity_fraction",
+            detail: format!(
+                "barrick_equity_fraction + regime '{}' state_equity_fraction exceeds 100%",
+                regime.id
+            ),
+        });
+    }
     if input.attributable_gold_oz.signum() < 0
         || input.retroactive_tax_and_penalty_100pct.minor < 0
         || input.settlement_payment_100pct.minor < 0
@@ -1643,11 +1752,12 @@ pub fn evaluate_loulo_gounkoto_reset(
     })
 }
 
-/// Evaluation of a single reporting period for a divested asset (e.g., Tongon closed 2025-12-01;
-/// Hemlo closed 2025-11-26; FACT E485–E488, E553–E554).
+/// Evaluation of a single reporting period `[period_start_date, period_end_date]` for a divested
+/// asset (e.g., Tongon closed 2025-12-01; Hemlo closed 2025-11-26; FACT E485–E488, E553–E554).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DivestiturePeriodOutcome {
     pub asset_id: EntityNodeId,
+    pub period_start_date: String,
     pub period_end_date: String,
     pub closed_date: String,
     pub post_divestiture_terminated: bool,
@@ -1656,19 +1766,23 @@ pub struct DivestiturePeriodOutcome {
     pub suppressed_stale_operating_cashflow: Money,
 }
 
-/// Enforce divestiture termination so forward operating series never silently carry forward past
-/// a closed exit date (`Tongon` closed `2025-12-01`, up to `$305M` proceeds; E485–E488).
+/// Enforce divestiture termination over `[period_start_date, period_end_date]` so forward
+/// operating series never silently carry forward past a closed exit date (`Tongon` closed
+/// `2025-12-01`, up to `$305M` proceeds; E485–E488).
 ///
-/// - When `period_end_date > closed_date`: if `strict_refuse_post_exit_nonzero` is `true` and
+/// - When `period_start_date > closed_date` (strictly post-divestiture, e.g., Q1 2026): closing
+///   proceeds must be zero; if `strict_refuse_post_exit_nonzero` is `true` and
 ///   `projected_operating_cashflow != 0`, refuses with `FMINE-REF-109`; otherwise zeros operating
 ///   cash flow and records the suppressed stale amount.
-/// - When `period_end_date == closed_date`: admits `closing_proceeds` (refusing if `> max_proceeds`
-///   or `< 0`) alongside final pre-close operating cash flow.
-/// - When `period_end_date < closed_date`: passes pre-close operating cash flow and requires zero
-///   `closing_proceeds`.
+/// - When `period_start_date <= closed_date <= period_end_date` (closing period, e.g., Q4 2025
+///   `2025-10-01..2025-12-31` or exact day `2025-12-01..2025-12-01`): admits `closing_proceeds`
+///   (`0 <= proceeds <= max_proceeds`) alongside final pre-close stub operating cash flow.
+/// - When `period_end_date < closed_date` (strictly pre-divestiture): passes operating cash flow
+///   and requires zero `closing_proceeds`.
 pub fn evaluate_divested_asset_period(
     node: &EntityNode,
     edge: &WaterfallEdge,
+    period_start_date: &str,
     period_end_date: &str,
     projected_operating_cashflow: Money,
     closing_proceeds: Money,
@@ -1704,10 +1818,24 @@ pub fn evaluate_divested_asset_period(
             detail: "divested asset evaluation requires a DivestitureExit edge".to_string(),
         });
     };
+    if !is_iso_date(period_start_date) {
+        return Err(EconError::InvalidDomain {
+            field: "period_start_date",
+            detail: format!("invalid YYYY-MM-DD period_start_date {period_start_date:?}"),
+        });
+    }
     if !is_iso_date(period_end_date) {
         return Err(EconError::InvalidDomain {
             field: "period_end_date",
             detail: format!("invalid YYYY-MM-DD period_end_date {period_end_date:?}"),
+        });
+    }
+    if period_start_date > period_end_date {
+        return Err(EconError::InvalidDomain {
+            field: "period_start_date",
+            detail: format!(
+                "period_start_date '{period_start_date}' > period_end_date '{period_end_date}'"
+            ),
         });
     }
     if !is_iso_date(closed_date) {
@@ -1746,61 +1874,61 @@ pub fn evaluate_divested_asset_period(
     }
 
     let zero_m = Money::from_minor(node.currency, 0);
-    match period_end_date.cmp(closed_date.as_str()) {
-        Ordering::Greater => {
-            if closing_proceeds.minor != 0 {
-                return Err(EconError::InvalidDomain {
-                    field: "closing_proceeds",
-                    detail: "cannot recognize closing proceeds strictly after closed_date"
-                        .to_string(),
-                });
-            }
-            if strict_refuse_post_exit_nonzero && projected_operating_cashflow.minor != 0 {
-                return Err(EconError::InvalidDomain {
-                    field: "projected_operating_cashflow",
-                    detail: format!(
-                        "non-zero operating cash flow on '{}' after divestiture date {}",
-                        node.id.as_str(),
-                        closed_date
-                    ),
-                });
-            }
-            Ok(DivestiturePeriodOutcome {
-                asset_id: node.id.clone(),
-                period_end_date: period_end_date.to_string(),
-                closed_date: closed_date.clone(),
-                post_divestiture_terminated: true,
-                recognized_operating_cashflow: zero_m,
-                recognized_exit_proceeds: zero_m,
-                suppressed_stale_operating_cashflow: projected_operating_cashflow,
-            })
+    if period_start_date > closed_date.as_str() {
+        if closing_proceeds.minor != 0 {
+            return Err(EconError::InvalidDomain {
+                field: "closing_proceeds",
+                detail: "cannot recognize closing proceeds strictly after closed_date".to_string(),
+            });
         }
-        Ordering::Equal => Ok(DivestiturePeriodOutcome {
+        if strict_refuse_post_exit_nonzero && projected_operating_cashflow.minor != 0 {
+            return Err(EconError::InvalidDomain {
+                field: "projected_operating_cashflow",
+                detail: format!(
+                    "non-zero operating cash flow on '{}' after divestiture date {}",
+                    node.id.as_str(),
+                    closed_date
+                ),
+            });
+        }
+        Ok(DivestiturePeriodOutcome {
             asset_id: node.id.clone(),
+            period_start_date: period_start_date.to_string(),
+            period_end_date: period_end_date.to_string(),
+            closed_date: closed_date.clone(),
+            post_divestiture_terminated: true,
+            recognized_operating_cashflow: zero_m,
+            recognized_exit_proceeds: zero_m,
+            suppressed_stale_operating_cashflow: projected_operating_cashflow,
+        })
+    } else if period_end_date < closed_date.as_str() {
+        if closing_proceeds.minor != 0 {
+            return Err(EconError::InvalidDomain {
+                field: "closing_proceeds",
+                detail: "cannot recognize closing proceeds before closed_date".to_string(),
+            });
+        }
+        Ok(DivestiturePeriodOutcome {
+            asset_id: node.id.clone(),
+            period_start_date: period_start_date.to_string(),
+            period_end_date: period_end_date.to_string(),
+            closed_date: closed_date.clone(),
+            post_divestiture_terminated: false,
+            recognized_operating_cashflow: projected_operating_cashflow,
+            recognized_exit_proceeds: zero_m,
+            suppressed_stale_operating_cashflow: zero_m,
+        })
+    } else {
+        Ok(DivestiturePeriodOutcome {
+            asset_id: node.id.clone(),
+            period_start_date: period_start_date.to_string(),
             period_end_date: period_end_date.to_string(),
             closed_date: closed_date.clone(),
             post_divestiture_terminated: false,
             recognized_operating_cashflow: projected_operating_cashflow,
             recognized_exit_proceeds: closing_proceeds,
             suppressed_stale_operating_cashflow: zero_m,
-        }),
-        Ordering::Less => {
-            if closing_proceeds.minor != 0 {
-                return Err(EconError::InvalidDomain {
-                    field: "closing_proceeds",
-                    detail: "cannot recognize closing proceeds before closed_date".to_string(),
-                });
-            }
-            Ok(DivestiturePeriodOutcome {
-                asset_id: node.id.clone(),
-                period_end_date: period_end_date.to_string(),
-                closed_date: closed_date.clone(),
-                post_divestiture_terminated: false,
-                recognized_operating_cashflow: projected_operating_cashflow,
-                recognized_exit_proceeds: zero_m,
-                suppressed_stale_operating_cashflow: zero_m,
-            })
-        }
+        })
     }
 }
 
@@ -2693,23 +2821,39 @@ mod tests {
             .find(|e| e.from_child == tongon_id)
             .expect("tongon edge");
 
-        // Closing date recognizes up to $305M exit proceeds cleanly.
+        // Closing quarter Q4 2025 (2025-10-01..2025-12-31 containing closed_date 2025-12-01)
+        // recognizes stub operating cash flow + up to $305M exit proceeds cleanly.
         let at_close = evaluate_divested_asset_period(
             tongon_node,
             tongon_edge,
-            "2025-12-01",
+            "2025-10-01",
+            "2025-12-31",
             usd(15_000_000),
             usd(305_000_000),
             true,
         )
-        .expect("closing period");
+        .expect("closing quarter Q4 2025");
         assert!(!at_close.post_divestiture_terminated);
         assert_eq!(at_close.recognized_exit_proceeds, usd(305_000_000));
+
+        // Pre-close quarter Q3 2025 refuses closing proceeds before closed_date.
+        let pre_close_err = evaluate_divested_asset_period(
+            tongon_node,
+            tongon_edge,
+            "2025-07-01",
+            "2025-09-30",
+            usd(20_000_000),
+            usd(1_000_000),
+            true,
+        )
+        .expect_err("proceeds before close must refuse");
+        assert_eq!(pre_close_err.to_refusal().code, "FMINE-REF-109");
 
         // Proceeds > contracted $305M ceiling refuse (FMINE-REF-109).
         let over_cap = evaluate_divested_asset_period(
             tongon_node,
             tongon_edge,
+            "2025-12-01",
             "2025-12-01",
             usd(0),
             usd(306_000_000),
@@ -2718,10 +2862,11 @@ mod tests {
         .expect_err("over-cap proceeds must refuse");
         assert_eq!(over_cap.to_refusal().code, "FMINE-REF-109");
 
-        // Post-divestiture (Q1 2026) zeroes stale projected operating cash flow in suppress mode...
+        // Post-divestiture (Q1 2026: 2026-01-01..2026-03-31) zeroes stale projected operating cash flow...
         let q1_2026 = evaluate_divested_asset_period(
             tongon_node,
             tongon_edge,
+            "2026-01-01",
             "2026-03-31",
             usd(42_000_000),
             usd(0),
@@ -2736,6 +2881,7 @@ mod tests {
         let strict_err = evaluate_divested_asset_period(
             tongon_node,
             tongon_edge,
+            "2026-01-01",
             "2026-03-31",
             usd(42_000_000),
             usd(0),
@@ -2824,5 +2970,97 @@ mod tests {
         })
         .expect_err("currency mismatch must refuse");
         assert_eq!(cad_mismatch.to_refusal().code, "FMINE-REF-105");
+
+        // 6. Fresh-eyes regressions (E-1..E-6):
+        // (a) Duplicate source_e_ids deduplicate identically in digest; blank country_regime_id refuses.
+        let mut dup_eid_graph = graph.clone();
+        dup_eid_graph.nodes[0].source_e_ids.push("E658".to_string());
+        assert_eq!(graph.digest().unwrap(), dup_eid_graph.digest().unwrap());
+        let mut blank_reg_graph = graph.clone();
+        blank_reg_graph.nodes[0].country_regime_id = Some("  ".to_string());
+        assert_eq!(
+            blank_reg_graph.validate().unwrap_err().to_refusal().code,
+            "FMINE-REF-109"
+        );
+
+        // (b) JV call: when operator funds ONLY its pro-rata $615M while partner defaults $0,
+        //     2x sole-risk cover penalty does NOT fire (straight pre-money dilution 6765/10615).
+        let uncovered_default = evaluate_jv_capital_call(&JvCapitalCallInput {
+            jv_id: EntityNodeId::new("ngm_jv").unwrap(),
+            prior_operator_share: qty(615, 1_000),
+            prior_total_capital_account: usd(10_000_000_000),
+            total_call_required: usd(1_000_000_000),
+            operator_contribution: usd(615_000_000),
+            partner_contribution: usd(0),
+            non_consent_penalty_multiplier: ExactQty::from_integer(2),
+        })
+        .expect("uncovered default uses straight dilution");
+        assert!(!uncovered_default.fully_funded);
+        assert_eq!(uncovered_default.funding_shortfall, usd(385_000_000));
+        assert_eq!(uncovered_default.new_operator_share, qty(1_353, 2_123));
+
+        // (c) Kibali 3-way trapped conservation + Suspension refusal.
+        let kibali_row = regimes
+            .iter()
+            .find(|r| r.id == "drc_kibali_2026")
+            .expect("drc_kibali_2026");
+        let kibali_in = KibaliWaterfallInput {
+            payable_gold_oz_100pct: ExactQty::from_integer(100_000),
+            operating_cost_100pct: usd(100_000_000),
+            capex_100pct: usd(10_000_000),
+            repatriable_fraction: qty(60, 100),
+            barrick_equity_fraction: qty(45, 100),
+            anglogold_equity_fraction: qty(45, 100),
+            sokimo_equity_fraction: qty(10, 100),
+        };
+        let kibali_ok = evaluate_kibali_waterfall(kibali_row, &deck_4500, &kibali_in, false)
+            .expect("kibali ok");
+        assert_eq!(
+            kibali_ok
+                .barrick_trapped_share
+                .checked_add(kibali_ok.anglogold_trapped_share)
+                .unwrap()
+                .checked_add(kibali_ok.sokimo_trapped_share)
+                .unwrap(),
+            kibali_ok.trapped_cash_100pct
+        );
+        let mut kibali_susp = kibali_row.clone();
+        kibali_susp.state = crate::regime::RegimeState::Suspension;
+        assert_eq!(
+            evaluate_kibali_waterfall(&kibali_susp, &deck_4500, &kibali_in, false)
+                .unwrap_err()
+                .to_refusal()
+                .code,
+            "FMINE-REF-109"
+        );
+
+        // (d) Reko Diq zero scheduled debt service + negative CFADS -> dscr_lock_active == false.
+        let rd_zero_debt = evaluate_reko_diq_waterfall(&RekoDiqWaterfallInput {
+            cfads_100pct: usd(-15_000_000),
+            scheduled_debt_service: usd(0),
+            min_dscr_covenant: qty(125, 100),
+            cash_sweep_fraction_on_lock: ExactQty::from_integer(1),
+            opening_carry_recovery_balance: usd(30_000_000),
+            carry_recovery_cap_fraction: qty(80, 100),
+            barrick_fraction: qty(50, 100),
+            federal_soe_fraction: qty(25, 100),
+            balochistan_funded_fraction: qty(15, 100),
+            balochistan_free_carried_fraction: qty(10, 100),
+        })
+        .expect("reko diq zero debt service");
+        assert!(!rd_zero_debt.dscr_lock_active);
+        assert_eq!(rd_zero_debt.dscr, None);
+        assert_eq!(rd_zero_debt.operating_deficit, usd(15_000_000));
+
+        // (e) Loulo barrick_equity + state_equity > 100% refuses (FMINE-REF-109).
+        let mut over_100_loulo = h1_2026_in;
+        over_100_loulo.barrick_equity_fraction = qty(90, 100);
+        assert_eq!(
+            evaluate_loulo_gounkoto_reset(loulo_2026, &deck_4500, &over_100_loulo, false)
+                .unwrap_err()
+                .to_refusal()
+                .code,
+            "FMINE-REF-109"
+        );
     }
 }
