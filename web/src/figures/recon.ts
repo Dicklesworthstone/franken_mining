@@ -236,7 +236,8 @@ export default function mount(fig: HTMLElement) {
     <tbody>${[
       ["North pit / bench 240 / polygon A", "9", "120.00%", "83.33%", "100.00%", "masked within metal tolerance", "200/1", "0/1", "5500/3", "-5500/3"],
       ["North pit / bench 240 / polygon B", "17", "95.00%", "100.00%", "95.00%", "within tolerance", "-50/1", "-500/1", "-500/1", "0/1"],
-      ["East pit / unplanned cut", "25", "undefined", "undefined", "undefined", "unplanned movement", "200/1", "2500/1", "undefined grade", "undefined grade"],
+      // The command writes "undefined" where a ratio has no plan to divide by; a page that says "undefined" looks broken.
+      ["East pit / unplanned cut", "25", "no plan", "no plan", "no plan", "unplanned movement", "200/1", "2500/1", "no plan", "no plan"],
     ]
       .map(
         (r, i) =>
@@ -247,7 +248,7 @@ export default function mount(fig: HTMLElement) {
       .join("")}</tbody></table>
   <p class="rc-out">2 of 3 cohorts need review.</p>
 </div>
-<p class="micro asis rc-note">The worksheet <code>tests/recon/matched_cohorts.toml</code> is synthetic, and the table follows the command’s markdown report for it. Polygon B sits exactly on the 5% boundary and passes; the unplanned cut has no plan to divide by, so both its differences are shown in full. The plant and sale figures after the pad are illustrative. Touchstone reports every factor as a posterior with an interval; this screen works on declared totals and does not name the cause of a variance.</p>`);
+<p class="micro asis rc-note">The worksheet <code>tests/recon/matched_cohorts.toml</code> is synthetic, and the table follows the command’s markdown report for it. Polygon B sits exactly on the 5% boundary and passes; the unplanned cut has no plan to divide by, so its ratios and split have no value (the command writes them as <code>undefined</code>) and both its differences are shown in full. The plant and sale figures after the pad are illustrative. Touchstone reports every factor as a posterior with an interval; this screen works on declared totals and does not name the cause of a variance.</p>`);
 
   const svg = $<SVGSVGElement>(host, ".rc-svg");
   const panel = $(host, ".rc-panel");

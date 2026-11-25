@@ -143,9 +143,17 @@ export function sheet(d: SheetData): string {
     dims.push(`M${f1(X(d.xs[deepAt]!))} ${f1(yBot)}H${f1(xd + (right ? 5 : -5))}`);
     dims.push(`M${f1(xd)} ${f1(yTop)}V${f1(yBot)}`);
     heads.push(arrow(xd, yTop, 0, -1), arrow(xd, yBot, 0, 1));
+    const benches = Math.round(deep / H);
+    const say = [`${fmt(deep)} m`, `${fmt(benches)} ${benches === 1 ? "bench" : "benches"}`] as const;
+    // On a desktop the label sits beside the line. A phone draws the type twice the size, and beside the line there is
+    // seldom room for it (none at all beside the widest pits), so there it goes under the floor's extension line, in
+    // the rock below the pit, reaching back from the line toward the pit.
+    const xs = f1(xd + (right ? 7 : -7));
+    const xu = f1(xd + (right ? 4 : -4));
     text.push(
-      `<text class="dim ${right ? "l" : "r"}" x="${f1(xd + (right ? 7 : -7))}" y="${f1((yTop + yBot) / 2 + 4)}">${fmt(deep)} m</text>`,
-      `<text class="dim sub ${right ? "l" : "r"}" x="${f1(xd + (right ? 7 : -7))}" y="${f1((yTop + yBot) / 2 + 17)}">${fmt(Math.round(deep / H))} benches</text>`,
+      `<text class="dim dep-side ${right ? "l" : "r"}" x="${xs}" y="${f1((yTop + yBot) / 2 + 4)}">${say[0]}</text>`,
+      `<text class="dim dep-side sub ${right ? "l" : "r"}" x="${xs}" y="${f1((yTop + yBot) / 2 + 17)}">${say[1]}</text>`,
+      `<text class="dim dep-foot halo ${right ? "r" : "l"}" x="${xu}" y="${f1(yBot)}"><tspan x="${xu}" dy="1.3em">${say[0]}</tspan><tspan class="sub" x="${xu}" dy="1.25em">${say[1]}</tspan></text>`,
     );
     // Overall slope of each wall on this section: crest to the floor's toe.
     let ta = deepAt;

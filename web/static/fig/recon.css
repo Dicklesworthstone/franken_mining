@@ -515,6 +515,11 @@
 .rc-grid span:last-child {
   border-right: 0;
 }
+/* The factor's name takes a second line in a narrow card rather than being cut ("mill ÷ GC, pad adjusted") */
+.rc-grid span:nth-child(2) {
+  white-space: normal;
+  text-overflow: clip;
+}
 .rc-grid .hd span {
   border-top: 0;
   background: rgb(255 255 255 / 0.05);
@@ -659,11 +664,18 @@
 }
 
 /* The command's own table */
+/* The command wraps rather than being cut off: on a phone, an ellipsis reads as a fault. The dots stay level with
+   its first line. */
+.rc-term .term-bar {
+  align-items: flex-start;
+}
+.rc-term .term-bar i {
+  margin-top: 0.22rem;
+}
 .rc-term .term-bar span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .rc-table {
   margin: 0.4rem 0 0;

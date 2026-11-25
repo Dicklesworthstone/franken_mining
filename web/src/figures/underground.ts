@@ -75,8 +75,8 @@ const markup = () => `<div class="ug">
   <div class="hud-card hud-tl ug-card" data-card aria-live="polite"></div>
   <div class="hud-card hud-br agent-note ug-agent" data-agent></div>
   <div class="hud-card hud-bl ug-legend" data-legend></div>
-  <p class="ug-hint" aria-hidden="true">Drag to turn · pinch or Ctrl-scroll to zoom · tap a label</p>
-  <p class="ug-synth">Synthetic mine · illustrative</p>
+  <p class="ug-hint" aria-hidden="true" data-avoid>Drag to turn · pinch or Ctrl-scroll to zoom · tap a label</p>
+  <p class="ug-synth" data-avoid>Synthetic mine · illustrative</p>
 </div>
 <div class="scene-bar ug-bar">
   ${segHtml("layer", "Layer", [

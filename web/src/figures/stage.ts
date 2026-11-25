@@ -44,6 +44,8 @@ export interface StageOptions {
   labelArea?: () => [number, number, number, number];
   /** A line (a fraction of the view's height) no label may rise above, such as the bottom of text laid over the scene. */
   labelCeiling?: () => number;
+  /** What is laid over the view (its cards, a hint line) that labels keep out from under. */
+  avoid?: string;
 }
 
 export interface Orbit {
@@ -89,7 +91,9 @@ export interface Stage {
   setClock(hours: number): void;
   /** Re-centres the shadow box (call when the camera's region of interest moves). */
   shadowBox(at: [number, number, number] | THREE.Vector3, radius?: number): void;
-  label(html: string, at: THREE.Vector3 | THREE.Object3D, o?: { x?: number; y?: number; z?: number; className?: string }): Label;
+  /** A label pinned to a point. One that is `free` is placed by its figure, which keeps it clear of the rest: the stage
+   *  only stands it at its point, hanging left of it in the right part of the view. */
+  label(html: string, at: THREE.Vector3 | THREE.Object3D, o?: { x?: number; y?: number; z?: number; className?: string; free?: boolean }): Label;
   /** Called every frame with the step and the time in seconds. */
   frame(fn: (dt: number, t: number) => void): void;
   /** Called when the night fraction changes, e.g. to switch lamps on. */
@@ -440,7 +444,7 @@ void main(){
   }
 
   /* ---------- Labels ---------- */
-  type Pin = { el: HTMLElement; at: THREE.Vector3 | THREE.Object3D; off: THREE.Vector3; on: boolean; nat?: number; h?: number; cap?: string };
+  type Pin = { el: HTMLElement; at: THREE.Vector3 | THREE.Object3D; off: THREE.Vector3; on: boolean; free?: boolean; nat?: number; h?: number; cap?: string };
   const pins = new Set<Pin>();
   // A label measured before the web fonts arrived has the fallback font's size: measure every label again once they do.
   document.fonts?.addEventListener?.("loadingdone", () => {
@@ -456,6 +460,26 @@ void main(){
   };
   let area: [number, number, number, number] = [-0.15, -0.1, 1.15, 1.1];
   let ceilingAt = -Infinity;
+  // The cards and notes laid over the view, as boxes in its pixels [left, top, right, bottom]. A label whose point is
+  // under one hides (what it names cannot be seen); the rest keep clear of them as they keep clear of each other.
+  // Measured when one of them or the view changes size, just after layout, so a frame never asks for it.
+  let cover: [number, number, number, number][] = [];
+  // Some figures lay their cards inside the view, others beside it in a wrapper; only the ones over the view count.
+  const overlays = [...(view.closest("figure, section") ?? view.parentElement ?? view).querySelectorAll<HTMLElement>(o.avoid ?? ".hud-card, [data-avoid]")];
+  const measureCover = () => {
+    const v = view.getBoundingClientRect();
+    cover = [];
+    for (const el of overlays) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2 || r.right <= v.left || r.left >= v.right || r.bottom <= v.top || r.top >= v.bottom) continue;
+      cover.push([r.left - v.left, r.top - v.top, r.right - v.left, r.bottom - v.top]);
+    }
+  };
+  if (overlays.length) {
+    const ro = new ResizeObserver(measureCover);
+    ro.observe(view);
+    for (const el of overlays) ro.observe(el);
+  }
   const placed: { pin: Pin; x: number; y: number; w: number; h: number; flip: boolean; lift: number }[] = [];
   const placeLabels = () => {
     placed.length = 0;
@@ -465,21 +489,31 @@ void main(){
       const world = (pin.at instanceof THREE.Vector3 ? tmp.copy(base) : base).add(pin.off);
       const s = project(world);
       const [l, tp, r, b] = area;
-      if (!s || s.x < l * width || s.x > r * width || s.y < tp * height || s.y > b * height) {
+      const under = !pin.free && !!s && cover.some(([cl, ct, cr, cb]) => s.x > cl && s.x < cr && s.y > ct && s.y < cb);
+      if (!s || s.x < l * width || s.x > r * width || s.y < tp * height || s.y > b * height || under) {
         pin.el.style.visibility = "hidden";
         continue;
       }
       pin.el.style.visibility = "";
+      if (pin.free) {
+        const flip = s.x > width * 0.62;
+        if (pin.el.classList.contains("flip") !== flip) pin.el.classList.toggle("flip", flip);
+        pin.el.style.transform = flip
+          ? `translate3d(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px, 0) translate(calc(-100% + 0.68rem), -100%)`
+          : `translate3d(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px, 0) translate(-0.68rem, -100%)`;
+        continue;
+      }
       // A label's natural width, measured once per text (a capped label cannot say how wide it wants to be). Sizes
       // are read only when the text or its cap changes, so a steady frame never asks the browser for layout.
       if (pin.nat === undefined) {
         pin.el.style.maxWidth = "";
+        pin.el.classList.remove("capped");
         pin.cap = "";
         pin.nat = pin.el.offsetWidth;
         pin.h = pin.el.offsetHeight;
       }
       // Near the right edge a label hangs to the left of its point; one too long for its side takes the roomier
-      // side, and one too long for either is cut short (its words give way; its number and evidence stay).
+      // side, and one too long for either is capped (its words take a line of their own above its number).
       // Labels keep to the label area (a little wider), so none runs over the page's text beside the scene.
       const leftB = clamp((area[0] - 0.03) * width, 6, width);
       const rightB = clamp((area[2] + 0.1) * width, 0, width - 6);
@@ -493,6 +527,8 @@ void main(){
       const cap = pin.nat > room ? `${Math.max(80, Math.floor(room / 8) * 8)}px` : "";
       if (pin.cap !== cap) {
         pin.el.style.maxWidth = cap;
+        // A capped label puts its words on a line of their own (in the CSS) instead of cutting them short.
+        pin.el.classList.toggle("capped", !!cap);
         pin.cap = cap;
         pin.h = pin.el.offsetHeight;
       }
@@ -501,7 +537,7 @@ void main(){
     // Labels never sit on one another: from the lowest on screen up, a label that would overlap one already placed
     // lifts clear of it, and a leader line runs back down to its point.
     placed.sort((p, q) => q.y - p.y);
-    const boxes: [number, number, number, number][] = [];
+    const boxes: [number, number, number, number][] = cover.slice();
     const nudge = 11;
     const ceiling = Math.max(area[1] * height - 2, ceilingAt * height);
     for (const p of placed) {
@@ -605,7 +641,7 @@ void main(){
       el.innerHTML = html;
       el.style.visibility = "hidden";
       labels.append(el);
-      const pin: Pin = { el, at, off: new THREE.Vector3(off.x ?? 0, off.y ?? 0, off.z ?? 0), on: true };
+      const pin: Pin = { el, at, off: new THREE.Vector3(off.x ?? 0, off.y ?? 0, off.z ?? 0), on: true, free: off.free };
       pins.add(pin);
       return {
         el,

@@ -9,8 +9,10 @@
 .blast .hud-card {
   transition: opacity 0.4s;
 }
+/* Wide enough for its longest row ("Rock broken 118 kt · swell 1.30") beside the hole, inside its own padding */
 .blast .bl-pat {
-  width: 21rem;
+  width: 23rem;
+  max-width: min(23rem, 46%);
 }
 .blast .bl-pat dd {
   white-space: nowrap;

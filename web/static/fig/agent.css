@@ -100,11 +100,11 @@
 .ag-rail button:hover {
   color: #fff;
 }
+/* A step's name takes a second line where its share of the rail is too narrow ("Track record" on a tablet) */
 .ag-rail span {
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: center;
+  overflow-wrap: break-word;
 }
 .ag-count {
   font: 500 0.74rem var(--mono);

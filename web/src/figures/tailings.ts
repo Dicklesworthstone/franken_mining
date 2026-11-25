@@ -158,7 +158,7 @@ const markup = (storage: number, pmp: ReturnType<typeof designBasis>["pmp"]) => 
   <button type="button" class="toggle" data-toggle="pumps" aria-pressed="true"><i></i>Decant pumps</button>
   <button type="button" class="toggle" data-toggle="overlay" aria-pressed="true"><i></i>Engineering overlay</button>
   <div class="seg" role="group" aria-label="View" data-seg="view"><button type="button" data-v="dam" aria-pressed="true">Section</button><button type="button" data-v="pond" aria-pressed="false">Pond</button><button type="button" data-v="whole" aria-pressed="false">Facility</button></div>
-  <p class="tl-note">Synthetic facility; rates and criteria illustrative. Drag to look around.</p>
+  <p class="tl-note" data-avoid>Synthetic facility; rates and criteria illustrative. Drag to look around.</p>
 </div>`;
 
 type View = "dam" | "pond" | "whole";

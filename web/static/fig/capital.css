@@ -136,6 +136,14 @@
   font: 600 12.5px var(--sans);
   fill: #fff;
 }
+/* A dark rim under each point's words, so the limit line or a step that runs under a label never runs through it */
+.cap-chart .pl,
+.cap-chart .pv {
+  paint-order: stroke;
+  stroke: #0d0a0a;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
 .cap-chart .pt.pt-over .pl,
 .cap-chart .pt.pt-broke .pl {
   fill: var(--faint);

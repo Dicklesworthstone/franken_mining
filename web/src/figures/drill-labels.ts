@@ -97,7 +97,8 @@ export function tags(s: Stage, avoid: () => Iterable<Element>) {
   s.frame(place);
   return {
     add(html: string, at: THREE.Vector3 | THREE.Object3D, o: { prio: number; lift?: number; className?: string }): Tag {
-      const label = s.label(`<span>${html}</span>`, at, { className: o.className });
+      // Free: this module places the tag; the stage only stands it at its point.
+      const label = s.label(`<span>${html}</span>`, at, { className: o.className, free: true });
       // Hidden until first placed, so a new tag never shows for a frame where the stage has yet to put it.
       label.show(false);
       const it: Item = { label, at, prio: o.prio, lift: o.lift ?? 0, w: 0, h: 0, on: false };

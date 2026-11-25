@@ -50,7 +50,7 @@ export const markup = () => `
       </div>
       <p class="hl-src">Last 30 minutes of the fleet system’s time records <span class="ev measured">measured</span></p>
     </div>
-    <p class="hl-hint" data-hint>Tap a truck to follow it</p>
+    <p class="hl-hint" data-hint data-avoid>Tap a truck to follow it</p>
     <p class="hl-msg" data-msg hidden></p>
   </div>
   <aside class="hl-side">

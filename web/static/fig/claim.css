@@ -836,10 +836,18 @@
     padding: 0.8rem 0.75rem 1rem;
     font-size: 0.66rem;
   }
+  /* The command wraps rather than being cut off: on a phone, an ellipsis reads as a fault. The dots stay level with
+     its first line. */
+  .cl-term .term-bar {
+    align-items: flex-start;
+  }
+  .cl-term .term-bar i {
+    margin-top: 0.22rem;
+  }
   .cl-term .term-bar span {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    min-width: 0;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
   }
 }
 @media (max-width: 699px) {

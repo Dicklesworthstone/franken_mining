@@ -514,7 +514,15 @@ export default async function mount(fig: HTMLElement) {
         );
       });
     }
-    ui("term").innerHTML = lines.join("\n");
+    // One block per line with a hanging indent at the value column, so a line too long for a phone wraps under its own
+    // value instead of running off the edge.
+    ui("term").innerHTML = lines
+      .map((line) => {
+        const plain = line.replace(/<[^>]+>/g, "");
+        const ind = plain.startsWith("$") ? 2 : (/^\s+\S+\s+/.exec(plain)?.[0].length ?? 0);
+        return `<span class="ln" style="--ind:${ind}">${line}</span>`;
+      })
+      .join("");
   };
 
   /** The pit-by-pit chart: cumulative tonnes of each shell (ore and waste) and its value at today's price. */

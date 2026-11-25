@@ -532,6 +532,9 @@
 .pit-bench .sub {
   fill: var(--faint);
 }
+.pit-sheet .dep-foot {
+  display: none;
+}
 .pit-sheet .halo {
   paint-order: stroke;
   stroke: #17120f;
@@ -542,6 +545,10 @@
   font: 600 13px/1 var(--sans, inherit);
   text-anchor: start;
   fill: #fff;
+}
+/* The far end's mark ends at the section's edge, inside the drawing */
+.pit-sheet .end[text-anchor="end"] {
+  text-anchor: end;
 }
 .pit-sheet .scale {
   fill: none;
@@ -592,8 +599,13 @@
 .pit-term pre {
   font-size: 0.74rem;
   line-height: 1.6;
-  white-space: pre;
-  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pit-term .ln {
+  display: block;
+  padding-left: calc(var(--ind, 0) * 1ch);
+  text-indent: calc(var(--ind, 0) * -1ch);
 }
 .pit-note {
   margin: 0;
@@ -603,6 +615,21 @@
   color: var(--faint);
 }
 
+/* Between the two top cards there is no room for the status under about 1,000px of view (a tablet, a phone on its
+   side): it goes to the bottom right, clear of the agent's card on the left. */
+@media (min-width: 700px) and (max-width: 1023px) {
+  .pit-status {
+    top: auto;
+    left: auto;
+    right: 0.9rem;
+    bottom: 0.9rem;
+    transform: translateY(0.4rem);
+    font-size: 0.66rem;
+  }
+  .pit-status.on {
+    transform: none;
+  }
+}
 @media (max-width: 1099px) {
   .pit-cert,
   .pit-shells {
@@ -658,6 +685,13 @@
   }
   .pit-sheet .tick {
     font-size: 17px;
+  }
+  /* The depth goes under the floor's extension line: beside the line there is seldom room for type this size */
+  .pit-sheet .dep-side {
+    display: none;
+  }
+  .pit-sheet .dep-foot {
+    display: inline;
   }
   .pit-sheet .tick.r {
     display: none;

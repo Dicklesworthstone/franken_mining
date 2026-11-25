@@ -116,7 +116,7 @@ export default async function mount(fig: HTMLElement) {
     <button type="button" class="btn sm" data-section aria-pressed="false" title="A 60 m slice of the model along the newest hole, seen square on">Section</button>
     <button type="button" class="btn sm" data-reset disabled>Reset</button>
   </div>
-  <p class="drill-hint" data-d="hint"></p>
+  <p class="drill-hint" data-d="hint" data-avoid></p>
 </div>
 <div class="drill-below"></div>
 </div>`;

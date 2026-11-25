@@ -162,7 +162,9 @@ ${rangeHtml("tau", "Time", 0, END, 0.01, 0, "before Q1")}
     s += `<text x="${L}" y="${C.top - 9}" class="jr-pt">${narrow ? "Drift monitor: two bets’ wealth, log scale" : "Drift monitor: wealth of two bets against the model (log scale)"}</text>`;
     for (const [v, t] of [[-1, "0.1"], [0, "1"], [1, "10"], [2, "100"]] as const) s += `<text x="${L - 6}" y="${YC(v) + 4}" text-anchor="end">${t}</text>`;
     s += `<path class="axis" d="M${L} ${C.top}V${C.top + C.h}"/>`;
-    s += `<path d="M${L} ${YC(thr).toFixed(1)}H${X(QUARTERS)}" stroke="${CORAL}" stroke-dasharray="5 4"/><text x="${L + 6}" y="${YC(thr) - 5}" class="jr-thr">alarm at 40 = 2/α</text>`;
+    // Words inside the panels go on top, after the time cursor, so that it passes behind them.
+    let over = `<text x="${L + 6}" y="${YC(thr) - 5}" class="jr-thr">alarm at 40 = 2/α</text>`;
+    s += `<path d="M${L} ${YC(thr).toFixed(1)}H${X(QUARTERS)}" stroke="${CORAL}" stroke-dasharray="5 4"/>`;
     const line = (arr: Float64Array, colour: string, width2: number) => {
       if (!n) return "";
       let d = `M${L} ${YC(0).toFixed(1)}`;
@@ -172,29 +174,31 @@ ${rangeHtml("tau", "Time", 0, END, 0.01, 0, "before Q1")}
     s += line(w.logD, VIOLET, 1.4) + line(w.logL, PINK, 2.2);
     for (let k = 0; k < n; k++)
       if (Math.max(w.logL[k]!, w.logD[k]!) / Math.LN10 > LMAX) {
-        s += `<text x="${X(QUARTERS) - 4}" y="${C.top + 11}" text-anchor="end" class="jr-thr">off the scale ↑</text>`;
+        over += `<text x="${X(QUARTERS) - 4}" y="${C.top + 11}" text-anchor="end" class="jr-thr">off the scale ↑</text>`;
         break;
       }
     if (n) {
       const lx = X(n / PER);
       s += `<circle cx="${lx.toFixed(1)}" cy="${YC(w.logL[n - 1]! / Math.LN10).toFixed(1)}" r="3.5" fill="${PINK}"/>`;
     }
-    if (!narrow) s += `<text x="${L + 6}" y="${C.top + C.h - 6}" class="jr-key"><tspan fill="${PINK}">━ bias bet</tspan><tspan dx="12" fill="${VIOLET}">━ spread bet</tspan></text>`;
+    if (!narrow) over += `<text x="${L + 6}" y="${C.top + C.h - 6}" class="jr-key"><tspan fill="${PINK}">━ bias bet</tspan><tspan dx="12" fill="${VIOLET}">━ spread bet</tspan></text>`;
     // The alarm, once raised, across every panel.
     if (w.alarmAt >= 0 && n > w.alarmAt) {
       const ax = X((w.alarmAt + 1) / PER);
-      s += `<path d="M${ax.toFixed(1)} ${A.top}V${C.top + C.h}" stroke="${CORAL}" stroke-width="1.6"/>`;
+      s += `<path d="M${ax.toFixed(1)} ${A.top}V${A.top + A.h}M${ax.toFixed(1)} ${B.top}V${B.top + B.h}M${ax.toFixed(1)} ${C.top}V${C.top + C.h}" stroke="${CORAL}" stroke-width="1.6"/>`;
       const q = Math.floor(w.alarmAt / PER) + 1;
       const k = (w.alarmAt % PER) + 1;
       const text = narrow ? `ALARM · Q${q}, polygon ${k}` : `ALARM · Q${q}, polygon ${k} · the bias bet reached 40×`;
       const bw = text.length * 6.9 + 14;
       const bx = Math.min(ax + 5, X(QUARTERS) - bw - 2);
-      s += `<g class="jr-alarm"><rect x="${bx.toFixed(1)}" y="${C.top + C.h - 21}" width="${bw.toFixed(1)}" height="18" rx="5"/><text x="${(bx + 7).toFixed(1)}" y="${C.top + C.h - 8.5}" class="a1">${text}</text></g>`;
+      over += `<g class="jr-alarm"><rect x="${bx.toFixed(1)}" y="${C.top + C.h - 21}" width="${bw.toFixed(1)}" height="18" rx="5"/><text x="${(bx + 7).toFixed(1)}" y="${C.top + C.h - 8.5}" class="a1">${text}</text></g>`;
     }
     // Not yet happened: dimmed.
     const px = X(clamp(tau, 0, QUARTERS));
     s += `<rect x="${px.toFixed(1)}" y="${A.top}" width="${Math.max(0, X(QUARTERS) - px).toFixed(1)}" height="${C.top + C.h - A.top}" fill="#0d0b0a" fill-opacity=".35" pointer-events="none"/>`;
-    s += `<path d="M${px.toFixed(1)} ${A.top - 2}V${C.top + C.h + 2}" stroke="#fff" stroke-opacity=".8" stroke-width="1.2"/><path d="M${(px - 5).toFixed(1)} ${C.top + C.h + 7}l5 -6l5 6z" fill="#fff"/>`;
+    // Through each panel only: the gaps between them hold the panels' titles, which a line would cross out.
+    const through = (x: string, a: number, c: number) => `M${x} ${A.top - a}V${A.top + A.h}M${x} ${B.top}V${B.top + B.h}M${x} ${C.top}V${C.top + C.h + c}`;
+    s += `<path d="${through(px.toFixed(1), 2, 2)}" stroke="#fff" stroke-opacity=".8" stroke-width="1.2"/><path d="M${(px - 5).toFixed(1)} ${C.top + C.h + 7}l5 -6l5 6z" fill="#fff"/>` + over;
     svg.setAttribute("viewBox", `0 0 ${g.w} ${H}`);
     svg.innerHTML = s;
   };

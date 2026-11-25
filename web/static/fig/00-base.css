@@ -158,15 +158,32 @@
 .label3d.off {
   opacity: 0;
 }
-/* Where a label is too long for the room beside its point, its words give way; its number and evidence stay */
 .label3d > .t {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .label3d > b,
 .label3d > .ev {
   flex-shrink: 0;
+}
+/* Where a label is too long for the room beside its point (the stage caps it), its words take a line of their own
+   above its number, and a value in words wraps, rather than either being cut short */
+.label3d.capped:has(> .t) {
+  flex-wrap: wrap;
+  row-gap: 0.12rem;
+  border-radius: 0.75rem;
+  padding-top: 0.32rem;
+}
+.label3d.capped > .t {
+  order: -1;
+  flex-basis: 100%;
+  white-space: normal;
+  line-height: 1.25;
+}
+.label3d.capped > b {
+  flex-shrink: 1;
+  min-width: 0;
+  white-space: normal;
+  line-height: 1.2;
 }
 /* On a phone a label with words puts them on a line of their own above its number, rather than cutting them */
 @media (max-width: 640px) {
@@ -184,6 +201,13 @@
     font-size: 0.68rem;
     line-height: 1.25;
     color: var(--muted);
+  }
+  /* A value in words ("10 benches below the floor") wraps too, inside the room the label has beside its point */
+  .label3d:has(> .t) > b {
+    flex-shrink: 1;
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.2;
   }
 }
 /* A label hanging to the left of its point: its dot and stem sit at its right end */

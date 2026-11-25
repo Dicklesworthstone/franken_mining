@@ -1832,6 +1832,7 @@ svg.chart {
   color: var(--faint);
 }
 .term-bar i {
+  flex: none;
   width: 0.55rem;
   height: 0.55rem;
   border-radius: 50%;
@@ -3223,10 +3224,11 @@ html:not(.js) .element-card {
   }
 }
 @media (max-width: 400px) {
+  /* On one line, at the type size that fits between the gutters: the pill is 73px plus 29.61 times its type size. */
   .hero .pill {
     flex-wrap: nowrap;
     padding-inline: 0.8rem;
-    font-size: min(0.625rem, 2.75vw);
+    font-size: min(0.625rem, (100vw - 2 * var(--gutter) - 4.75rem) / 29.7);
     letter-spacing: 0.03em;
     white-space: nowrap;
   }

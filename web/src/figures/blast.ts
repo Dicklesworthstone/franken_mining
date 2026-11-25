@@ -63,7 +63,8 @@ const timingSvg = () => {
   const X = (u: number) => ((u - u0) / (u1 - u0)) * w;
   const Y = (s: number) => ((0 - s) / (0 - s0)) * (h - 16) + 10;
   const ore = ORE.map(([u, s], i) => `${i ? "L" : "M"}${X(u).toFixed(1)} ${Y(s).toFixed(1)}`).join("") + "Z";
-  return `<svg class="bl-timing" viewBox="-4 0 ${w + 8} ${h}" aria-hidden="true">
+  // The box starts above y = 0: the crest's words sit over its line, and their tops would be cut off at 0.
+  return `<svg class="bl-timing" viewBox="-4 -5 ${w + 8} ${h + 5}" aria-hidden="true">
 <path d="M${X(u0)} ${Y(0) - 3}H${X(u1)}" class="crest"/><text x="${X(u0)}" y="${Y(0) - 6}">crest · free face</text>
 <path d="${ore}" class="ore"/>
 ${holes.map((ho, i) => `<circle cx="${X(ho.u).toFixed(1)}" cy="${Y(ho.s).toFixed(1)}" r="3.1" data-h="${i}"/>`).join("")}
@@ -156,7 +157,7 @@ const markup = (eng: Eng | null) => `
   <button type="button" class="toggle" data-toggle="delays" aria-pressed="true"><i></i>Delays</button>
   <button type="button" class="toggle" data-toggle="heave" aria-pressed="true"><i></i>Heave</button>
   <button type="button" class="toggle" data-toggle="survey" aria-pressed="true"><i></i>Survey</button>
-  <p class="bl-note">Synthetic bench, true scale. Drag to look around.</p>
+  <p class="bl-note" data-avoid>Synthetic bench, true scale. Drag to look around.</p>
 </div>`;
 
 export default async function mount(fig: HTMLElement) {
