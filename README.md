@@ -1773,6 +1773,13 @@ Source-local downside screens are refused here: the portfolio's joint risk polic
 This comparison does not establish full lifetime NAV, terminal value, financing capacity, interim liquidity
 or project interactions; those require additional source models.
 
+To record a source-derived choice, copy a `bundle_id@comparison_digest` action from
+`payload.journal_actions` into `decide journal record --action`. Recording recomputes the comparison
+from the same workspace. A change to a source worksheet invalidates the reviewed action. The journal
+keeps the original portfolio manifest, exact comparison summary, selected bundle, result Claim ID and
+source receipt digests. Keep the full `decide program --json` output if you need the underlying source
+worksheets later. The bounded journal snapshot contains their digests.
+
 #### Stress capital choices under declared scenario-weight shifts
 
 DESIGN (BD-229, plan sections 22.5 and 23.3): an optional `[[robustness]]` declaration compares every
@@ -2569,9 +2576,9 @@ Set `FMINE_CAPITAL_BUNDLE` to the ID selected from that worksheet's action list.
 budget, dependencies, exclusions, cash and share constraints, nominal tail limits and any declared robust
 tail limits. The journal retains the original source and complete evaluated JSON with its existing Claim
 identity. The full receipt must fit the existing 65,536-byte operation limit; larger comparisons refuse
-without appending. This handoff supports directly declared static programs. KPI-constrained models and
-source-derived investment manifests require separate choice semantics. Recording grants no approval or
-execution authority.
+without appending. This handoff applies to directly declared static programs. Source-derived programs
+use the [digest-bound investment action](#build-a-portfolio-directly-from-operating-investment-sources).
+KPI-constrained programs require separate choice semantics. Recording grants no approval or execution authority.
 
 For a **two-stage capital program**, copy the full `id` from `decide program <model> --json` under
 `payload.journal_actions`. The `policy_id@comparison_digest` form pins the reviewed comparison. A worksheet

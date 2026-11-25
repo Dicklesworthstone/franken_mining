@@ -96,6 +96,7 @@ fn comparison_envelope(
 pub(crate) fn program_snapshot(
     text: &str,
     source: &SourceAnchor,
+    root: &Path,
     action: &str,
 ) -> Result<Option<(String, String)>, Refusal> {
     use fmine_capital::model::EvaluatedModel;
@@ -103,13 +104,18 @@ pub(crate) fn program_snapshot(
     let Ok(doc) = parse_subset(text) else {
         return Ok(None);
     };
-    if !matches!(doc.top_get("schema").map(|f| &f.value), Some(TomlValue::Str(s)) if s == "fmine.capital-program.v1")
-    {
+    let Some(TomlValue::Str(schema)) = doc.top_get("schema").map(|f| &f.value) else {
         return Ok(None);
-    }
+    };
     // The regular command and journal reader use different input labels. Preserve the command's
     // established capital locator so every input Claim and the retained output have identical ids.
     let source = SourceAnchor::new(&source.artifact_path, source.artifact_sha256, MODEL_LOCATOR);
+    if schema == investment::SCHEMA {
+        return investment::journal_snapshot(text, &source, root, action).map(Some);
+    }
+    if schema != "fmine.capital-program.v1" {
+        return Ok(None);
+    }
     let evaluated = fmine_capital::model::evaluate(text, source.clone())?;
     let snapshot = match &evaluated {
         EvaluatedModel::Static(program) => {
@@ -144,7 +150,8 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "\"schema\":\"fmine.capital-program.v1\",",
     "\"staged_permit_example\":\"tests/capital/staged_permit.toml\",",
     "\"staged_permits\":\"Bind a recourse candidate to each required application using stage_permit rows. Declare permit terms and one permit_state record per application and shared state, with any state-specific permit_pause rows. Use exact n/d percentage points for scope change and reopen threshold. Sources must be available by observation_date in their scenario. An elapsed clock alone leaves main works blocked. The same permit checks apply in the static benchmark and all realized continuations. States with the same observation share one decision.\",",
-    "\"static_journal\":\"Use decide journal record --model <directly declared static program> --action <bundle id>. Choose an id from journal_actions; candidate membership and all alternatives remain in the complete comparison. Admission enforces structural, nominal tail-risk and any declared robust tail-risk limits, including per-share and secondary-entity limits. A feasible lower-ranked bundle remains an explicit human choice. The original model, Claims and full evaluated JSON must fit the existing 65536-byte operation limit; oversize refuses without appending. Source-derived investment manifests and KPI-constrained programs require their own handoff. Recording supplies no approval or execution authority.\",",
+    "\"static_journal\":\"Use decide journal record --model <directly declared static program> --action <bundle id>. Choose an id from journal_actions; candidate membership and all alternatives remain in the complete comparison. Admission enforces structural, nominal tail-risk and any declared robust tail-risk limits, including per-share and secondary-entity limits. A feasible lower-ranked bundle remains an explicit human choice. The original model, Claims and full evaluated JSON must fit the existing 65536-byte operation limit; oversize refuses without appending. KPI-constrained programs require their own handoff. Recording supplies no approval or execution authority.\",",
+    "\"investment_journal\":\"For fmine.capital-investments.v1, copy an eligible bundle_id@comparison_digest from payload.journal_actions to decide journal record --action. Recording recomputes the complete source chain and applies the same structural, nominal and declared robust tail-risk limits as a directly declared portfolio. A changed source invalidates the action. The existing bounded journal retains the original manifest, exact summary, selection, Claim ID and hashes of the source receipts. Full source worksheets remain in the original decide program JSON output.\",",
     "\"staged_journal\":\"For a declared two-stage program, copy an id from decide program --json journal_actions to decide journal record --action. The id binds the policy to the reviewed comparison digest; changing the worksheet invalidates it. Admission checks all structural and declared nominal and robust tail-risk constraints. The latest possible commit time must precede the observation date at UTC midnight. The original worksheet and the complete selected policy, comparison digest and Claim identity survive source edits within the existing operation limit. The record preserves contingent intent. A follow-on observation or authorization requires its own evidence.\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",
     "\"executive_brief\":\"decide program <worksheet> --brief prints the meeting paper for executive worksheets, total-USD static or source-derived investment programs, and two-stage capital policies. Static briefs show the first tail limit that admits higher mean value or the first feasible choice. Staged briefs show initial and follow-on commitments, value over the best precommitted choice, retained co-winners, cash slack, risk limits and any permit or scenario-weight results. Use --format markdown for static per-share, KPI or detailed reports.\",",

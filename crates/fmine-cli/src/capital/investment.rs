@@ -8,8 +8,8 @@ use std::path::Path;
 use fmine_capital::robustness::{MAX_TRANSPORT_STATES, METHOD, RobustnessDesign, StateDistance};
 use fmine_capital::stability::{METHOD as STABILITY_METHOD, SelectionStabilityDesign};
 use fmine_capital::{
-    CandidateCashFlow, CapitalCandidate, CashPeriod, FundingSchedule, ProgramInputs, ProgramPolicy,
-    StateCashFlow,
+    CandidateCashFlow, CapitalCandidate, CashPeriod, EvaluatedProgram, FundingSchedule,
+    ProgramInputs, ProgramPolicy, StateCashFlow,
 };
 use fmine_claim::{
     AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
@@ -694,12 +694,44 @@ fn rational(value: Rat) -> String {
     js(&format!("{}/{}", value.num(), value.den()))
 }
 
-pub(super) fn execute(
-    text: &str,
-    source: &SourceAnchor,
-    root: &Path,
-    brief: bool,
-) -> Result<Envelope> {
+struct SourceReceipt {
+    manifest: String,
+    report: String,
+    sha256: String,
+}
+
+struct Portfolio {
+    declaration: Declaration,
+    loaded: BTreeMap<String, LoadedInvestment>,
+    program: EvaluatedProgram,
+    sources: Vec<SourceReceipt>,
+    candidate_sources: String,
+    cash_field: String,
+    digest: String,
+    no_claim: &'static str,
+}
+
+impl Portfolio {
+    fn journal_actions(&self) -> String {
+        let actions = super::journal_choices(&self.program)
+            .iter()
+            .map(|choice| {
+                let id = format!("{}@{}", choice.bundle_id, self.digest);
+                let candidates = choice.selected.iter().map(|id| js(id)).collect::<Vec<_>>();
+                format!(
+                    r#"{{"id":{},"bundle_id":{},"candidates":[{}]}}"#,
+                    js(&id),
+                    js(&choice.bundle_id),
+                    candidates.join(",")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("[{actions}]")
+    }
+}
+
+fn evaluate_portfolio(text: &str, source: &SourceAnchor, root: &Path) -> Result<Portfolio> {
     let d = parse(text, source)?;
     let mut loaded = BTreeMap::new();
     let mut snapshots = Vec::new();
@@ -716,10 +748,15 @@ pub(super) fn execute(
             if retained > MAX_RETAINED_BYTES {
                 return Err(invalid("capital investment source snapshots exceed 64 MiB"));
             }
-            snapshots.push(format!(
+            let report = format!(
                 "{{\"investment_manifest\":{},\"calculation\":{snapshot}}}",
                 js(&c.investment)
-            ));
+            );
+            snapshots.push(SourceReceipt {
+                manifest: c.investment.clone(),
+                sha256: sha256(report.as_bytes()).to_hex(),
+                report,
+            });
             entry.insert(investment);
         }
     }
@@ -881,7 +918,7 @@ pub(super) fn execute(
     enc.put_str(text);
     enc.put_str(program.digest());
     for snapshot in &snapshots {
-        enc.put_str(&sha256(snapshot.as_bytes()).to_hex());
+        enc.put_str(&snapshot.sha256);
     }
     let cash_field = if cash_derivation.is_empty() {
         String::new()
@@ -890,16 +927,98 @@ pub(super) fn execute(
         format!(",\"source_cash\":{cash_derivation}")
     };
     let digest = sha256(&enc.finish()).to_hex();
+    Ok(Portfolio {
+        declaration: d,
+        loaded,
+        program,
+        sources: snapshots,
+        candidate_sources: mappings.join(","),
+        cash_field,
+        digest,
+        no_claim,
+    })
+}
+
+pub(super) fn journal_snapshot(
+    text: &str,
+    source: &SourceAnchor,
+    root: &Path,
+    action: &str,
+) -> Result<(String, String)> {
+    let unavailable = || {
+        invalid(
+            "select an eligible digest-bound investment bundle from decide program --json journal_actions",
+        )
+    };
+    let (bundle, reviewed) = action.split_once('@').ok_or_else(unavailable)?;
+    let portfolio = evaluate_portfolio(text, source, root)?;
+    if reviewed != portfolio.digest {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            "investment portfolio or its sources differ from the reviewed action; evaluate it again before recording",
+        ));
+    }
+    if !super::journal_choices(&portfolio.program)
+        .iter()
+        .any(|choice| choice.bundle_id == bundle)
+    {
+        return Err(unavailable());
+    }
+    let receipts = portfolio
+        .sources
+        .iter()
+        .map(|receipt| {
+            format!(
+                r#"{{"investment_manifest":{},"source_receipt_sha256":{}}}"#,
+                js(&receipt.manifest),
+                js(&receipt.sha256)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let claim_id = portfolio.program.claim().claim_id.to_string();
+    let artifact = format!(
+        r#"{{"schema":"fmine.capital-investment-decision.v1","selected_bundle":{},"manifest_sha256":{},"comparison_digest":{},"program_digest":{},"claim_id":{},"summary":{},"candidate_sources":[{}],"source_receipt_digests":[{receipts}],"no_claim":{}}}"#,
+        js(bundle),
+        js(&sha256(text.as_bytes()).to_hex()),
+        js(reviewed),
+        js(portfolio.program.digest()),
+        js(&claim_id),
+        portfolio.program.summary_json(),
+        portfolio.candidate_sources,
+        js(portfolio.no_claim),
+    );
+    Ok((artifact, claim_id))
+}
+
+pub(super) fn execute(
+    text: &str,
+    source: &SourceAnchor,
+    root: &Path,
+    brief: bool,
+) -> Result<Envelope> {
+    let portfolio = evaluate_portfolio(text, source, root)?;
+    let d = &portfolio.declaration;
+    let program = &portfolio.program;
+    let digest = &portfolio.digest;
+    let no_claim = portfolio.no_claim;
+    let cash_field = &portfolio.cash_field;
+    let snapshots = portfolio
+        .sources
+        .iter()
+        .map(|receipt| receipt.report.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let actions = portfolio.journal_actions();
     let payload = format!(
-        "{{\"schema\":\"fmine.capital-investments-command.v1\",\"mode\":\"source_derived_investment_portfolio\",\"manifest\":{{\"source\":{},\"submitted_worksheet\":{}}},\"shared_scenario_basis\":{},\"additivity_basis\":{},\"candidate_sources\":[{}],\"sources\":[{}],\"program\":{}{cash_field},\"digest\":{}}}",
+        "{{\"schema\":\"fmine.capital-investments-command.v1\",\"mode\":\"source_derived_investment_portfolio\",\"manifest\":{{\"source\":{},\"submitted_worksheet\":{}}},\"shared_scenario_basis\":{},\"additivity_basis\":{},\"candidate_sources\":[{}],\"sources\":[{snapshots}],\"program\":{}{cash_field},\"digest\":{},\"journal_actions\":{actions}}}",
         worksheet_input::source_json(source, text.len()),
         js(text),
         js(&d.shared_scenario_basis),
         js(&d.additivity_basis),
-        mappings.join(","),
-        snapshots.join(","),
+        portfolio.candidate_sources,
         program.to_json(),
-        js(&digest)
+        js(digest)
     );
     if brief {
         let mut envelope = Envelope::ok("decide program", payload, Vec::new());
@@ -927,7 +1046,7 @@ pub(super) fn execute(
             md(&c.id),
             md(&c.investment),
             md(&c.alternative),
-            selected(&loaded, c)?.digest()
+            selected(&portfolio.loaded, c)?.digest()
         );
     }
     markdown.push('\n');

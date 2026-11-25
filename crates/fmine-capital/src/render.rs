@@ -815,9 +815,15 @@ pub(super) fn per_share_shown(value: Option<ExactPerShare>) -> String {
 }
 
 impl EvaluatedProgram {
+    /// The exact evaluated comparison, with all bundles, state results and rejections.
+    #[must_use]
+    pub fn summary_json(&self) -> String {
+        summary_json(self.summary())
+    }
+
     #[must_use]
     pub fn to_json(&self) -> String {
-        let summary = summary_json(self.summary());
+        let summary = self.summary_json();
         format!(
             "{{\"schema\":\"fmine.capital-program.v1\",\"digest\":{},\"summary\":{summary},\"claim\":{},\"inputs\":{},\"no_claim\":{},\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false}}",
             js(&self.digest),

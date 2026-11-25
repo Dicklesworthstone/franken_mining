@@ -34,6 +34,8 @@ const CONSTRAINED: &str = include_str!("../../../tests/decisions/constrained_tes
 const SHIFT_FEED: &str = include_str!("../../../tests/decisions/stockpile_holdback.toml");
 const PURCHASE: &str = include_str!("../../../tests/capital/executive_purchase.toml");
 const OPERATING_REVIEW: &str = include_str!("../../../tests/capital/executive_care.toml");
+const INVESTMENT_PORTFOLIO: &str =
+    include_str!("../../../tests/capital/production_investments.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 const CAPITAL_BASE: &str = r#"schema = "fmine.capital-program.v1"
@@ -1021,6 +1023,212 @@ fn json_field<'a>(value: &'a Json, keys: &[&str]) -> &'a Json {
             .get(key)
             .unwrap_or_else(|| panic!("missing {key}: {value:?}"))
     })
+}
+
+#[test]
+fn source_portfolio_journal_binds_the_review_and_reopens_after_leaf_edits() {
+    let f = Fixture::new();
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let investment = "tests/decisions/production_investment.toml";
+    let input = fs::read_to_string(repo.join(investment)).unwrap();
+    let doc = parse_subset(&input).unwrap();
+    // Reuse only the fixture's explicitly declared relative dependencies.
+    let copy = |name: &str| {
+        let dest = f.root.join(name);
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        fs::copy(repo.join(name), dest).unwrap();
+    };
+    copy(investment);
+    for row in doc.rows_of("bundle") {
+        for field in &row.fields {
+            if matches!(
+                field.key.as_str(),
+                "input" | "grinding" | "recovery" | "terms"
+            ) && let TomlValue::Str(name) = &field.value
+            {
+                copy(name);
+            }
+        }
+    }
+    fs::write(&f.model, INVESTMENT_PORTFOLIO).unwrap();
+    let run = |args: &[&str]| {
+        let output = Process::new(binary())
+            .args(args)
+            .args(["--workspace", f.root.to_str().unwrap(), "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        parse_json(&output.stdout).unwrap()
+    };
+    let model = f.model.to_str().unwrap();
+    let journal = f.journal.to_str().unwrap();
+    let reviewed = run(&["decide", "program", model]);
+    let payload = json_field(&reviewed, &["payload"]);
+    let digest = json_field(payload, &["digest"]).as_str().unwrap();
+    let actions = json_field(payload, &["journal_actions"])
+        .as_array()
+        .unwrap();
+    let ids: Vec<_> = actions
+        .iter()
+        .map(|row| json_field(row, &["bundle_id"]).as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["bundle_00", "bundle_01", "bundle_02"]);
+    let action = json_field(&actions[1], &["id"]).as_str().unwrap();
+    assert_eq!(action, format!("bundle_01@{digest}"));
+    let program = json_field(payload, &["program"]);
+    let summary = json_field(program, &["summary"]);
+    assert_eq!(
+        json_field(summary, &["feasible_winners"])
+            .as_array()
+            .unwrap()[0]
+            .as_str(),
+        Some("bundle_02")
+    );
+    f.refuses_without_append(
+        &f.record(f.initial, "impossible", &format!("bundle_03@{digest}")),
+        200,
+        "FMINE-REF-105",
+    );
+
+    // The same bundle is risk-rejected after imposing the explicit zero tail-loss cap.
+    fs::write(
+        &f.model,
+        INVESTMENT_PORTFOLIO.replace(
+            "tail_mass = \"1/2\"",
+            "tail_mass = \"1/2\"\nmax_tail_loss = \"0\"",
+        ),
+    )
+    .unwrap();
+    let screened = run(&["decide", "program", model]);
+    let new_digest = json_field(&screened, &["payload", "digest"])
+        .as_str()
+        .unwrap();
+    let admitted = json_field(&screened, &["payload", "journal_actions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(admitted.len(), 2);
+    assert!(
+        !admitted
+            .iter()
+            .any(|row| json_field(row, &["bundle_id"]).as_str() == Some("bundle_01"))
+    );
+    f.refuses_without_append(
+        &f.record(
+            f.initial,
+            "risk-rejected",
+            &format!("bundle_01@{new_digest}"),
+        ),
+        200,
+        "FMINE-REF-105",
+    );
+    fs::write(&f.model, INVESTMENT_PORTFOLIO).unwrap();
+
+    let leaf = f.root.join("tests/decisions/production_valuation.toml");
+    let original = fs::read_to_string(&leaf).unwrap();
+    fs::write(
+        &leaf,
+        format!("{original}\n# reviewed leaf bytes changed\n"),
+    )
+    .unwrap();
+    f.refuses_without_append(
+        &f.record(f.initial, "stale-leaf", action),
+        200,
+        "FMINE-REF-505",
+    );
+    fs::write(&leaf, original).unwrap();
+    let recorded = run(&[
+        "decide",
+        "journal",
+        "record",
+        "--journal",
+        journal,
+        "--expected-head",
+        &f.initial.to_hex(),
+        "--model",
+        model,
+        "--decision",
+        "portfolio-review",
+        "--action",
+        action,
+        "--reason",
+        "Retain the higher-power option with its explicit tail exposure",
+        "--code-revision",
+        REVISION,
+        "--trust-host-clock",
+    ]);
+    let pin = json_field(&recorded, &["payload", "head"])
+        .as_str()
+        .unwrap();
+
+    fs::write(leaf, "no source receipt can be recomputed from this\n").unwrap();
+    let shown = run(&[
+        "decide",
+        "journal",
+        "show",
+        "--journal",
+        journal,
+        "--head",
+        pin,
+    ]);
+    assert_eq!(
+        json_field(&shown, &["payload", "final_head_pinned"]).as_bool(),
+        Some(true)
+    );
+    let decisions = json_field(&shown, &["payload", "decisions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(decisions.len(), 1);
+    let snapshot = json_field(&decisions[0], &["snapshot"]);
+    assert_eq!(
+        json_field(snapshot, &["selected_action"]).as_str(),
+        Some(action)
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "content"]).as_str(),
+        Some(INVESTMENT_PORTFOLIO)
+    );
+    assert_eq!(
+        json_field(snapshot, &["claim_id"]),
+        json_field(program, &["claim", "id"])
+    );
+    let artifact_bytes = json_field(snapshot, &["artifact", "content"])
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        json_field(snapshot, &["artifact", "sha256"]).as_str(),
+        Some(sha256(artifact_bytes.as_bytes()).to_hex().as_str())
+    );
+    let artifact = parse_json(artifact_bytes.as_bytes()).unwrap();
+    assert_eq!(
+        json_field(&artifact, &["selected_bundle"]).as_str(),
+        Some("bundle_01")
+    );
+    assert_eq!(
+        json_field(&artifact, &["comparison_digest"]).as_str(),
+        Some(digest)
+    );
+    assert_eq!(
+        json_field(&artifact, &["program_digest"]),
+        json_field(program, &["digest"])
+    );
+    assert_eq!(json_field(&artifact, &["summary"]), summary);
+    assert_eq!(
+        json_field(&artifact, &["candidate_sources"]),
+        json_field(payload, &["candidate_sources"])
+    );
+    let receipts = json_field(&artifact, &["source_receipt_digests"])
+        .as_array()
+        .unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(
+        json_field(&receipts[0], &["investment_manifest"]).as_str(),
+        Some(investment)
+    );
+    assert!(artifact_bytes.len() < 65_536);
 }
 
 #[test]

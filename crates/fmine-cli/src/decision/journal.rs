@@ -800,7 +800,7 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                         )
                     } else if let Choice::ActNow(action) = choice
                         && let Some((card, claim_id)) =
-                            crate::capital::program_snapshot(&text, &source, action)?
+                            crate::capital::program_snapshot(&text, &source, root, action)?
                     {
                         (card, claim_id, None, None)
                     } else {
