@@ -1,0 +1,331 @@
+/* ---------- ladder: one number, followed down ---------- */
+#fig-ladder .ld {
+  display: grid;
+  gap: 1.4rem;
+}
+.ld-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem 1.4rem;
+}
+.ld-bar .micro {
+  margin: 0;
+}
+
+/* The tree: an outline on narrow screens, levels on wide ones */
+.ld-tree {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+}
+.ld-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.ld-lines path {
+  fill: none;
+  stroke: var(--line-2);
+  stroke-width: 1.4;
+  transition: stroke 0.3s, opacity 0.3s;
+}
+.ld-lines path.lit {
+  stroke: color-mix(in srgb, var(--chapter) 60%, transparent);
+}
+.ld-lines path.cross {
+  stroke-dasharray: 3 4;
+}
+.ld-lines path.hot {
+  stroke: var(--coral);
+  stroke-width: 1.8;
+}
+.ld-div {
+  font: 500 0.62rem var(--mono);
+  fill: var(--faint);
+}
+.ld-pulse {
+  fill: var(--coral);
+  filter: drop-shadow(0 0 6px var(--coral));
+}
+
+.ld-node {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.15rem 0.6rem;
+  margin-left: calc(var(--d) * 1.05rem);
+  padding: 0.45rem 0.65rem 0.5rem;
+  border: 1px solid var(--line-2);
+  border-radius: 0.75rem;
+  background: var(--panel);
+  transition: opacity 0.3s, border-color 0.3s, background-color 0.3s;
+}
+.ld-l {
+  font-size: 0.74rem;
+  line-height: 1.25;
+  color: var(--muted);
+}
+.ld-vv {
+  display: flex;
+  align-items: baseline;
+  gap: 0.2rem;
+  justify-self: end;
+  white-space: nowrap;
+}
+.ld-v {
+  font: 600 0.98rem/1.1 var(--mono);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.ld-u {
+  font-size: 0.66rem;
+  color: var(--faint);
+}
+.ld-sub {
+  grid-column: 2;
+  justify-self: end;
+  font: 400 0.64rem var(--mono);
+  color: var(--faint);
+}
+.ld-ev {
+  grid-column: 1;
+  grid-row: 2;
+  line-height: 1;
+}
+.ld-ev .ev {
+  font-size: 0.6rem;
+}
+.ld-id {
+  display: none;
+  grid-column: 1 / -1;
+  font-size: 0.6rem;
+  color: var(--life-2);
+  opacity: 0.85;
+}
+.ld-tree.ids .ld-id {
+  display: block;
+}
+.ld-bars {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 2px;
+  height: 4px;
+  margin-top: 0.15rem;
+}
+.ld-bars i {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--chapter) calc(80% - var(--i) * 12%), transparent);
+}
+.ld-delta {
+  position: absolute;
+  top: -0.6rem;
+  right: 0.5rem;
+  padding: 0.08rem 0.38rem;
+  border-radius: 0.5rem;
+  font: 600 0.62rem/1.2 var(--mono);
+  font-style: normal;
+  background: #0a0807;
+  border: 1px solid var(--line-2);
+  color: var(--in);
+}
+.ld-delta:empty {
+  display: none;
+}
+.ld-delta.bad {
+  color: var(--coral);
+  border-color: color-mix(in srgb, var(--coral) 45%, transparent);
+}
+
+.ld-node.dim {
+  opacity: 0.34;
+}
+.ld-node.own {
+  border-color: color-mix(in srgb, var(--chapter) 32%, var(--line-2));
+}
+.ld-node.root {
+  border-color: var(--chapter);
+  background: color-mix(in srgb, var(--chapter) 9%, var(--panel));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--chapter) 40%, transparent), 0 16px 40px -24px var(--chapter);
+}
+.ld-node.hit {
+  border-color: color-mix(in srgb, var(--coral) 55%, var(--line-2));
+}
+
+/* The desk's card */
+.ld-card {
+  order: -1;
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+  margin-bottom: 0.8rem;
+  padding: 1.05rem 1.15rem 1.15rem;
+  border: 1px solid var(--line-2);
+  border-radius: 1rem;
+  background: var(--raise);
+}
+.ld-card > * {
+  margin: 0;
+}
+.ld-card h4 {
+  margin-top: -0.35rem;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+.ld-card blockquote {
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--chapter);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--soft);
+}
+.ld-lives {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.7rem;
+  background: rgb(0 0 0 / 0.3);
+}
+.ld-lives p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.45rem;
+  margin: 0;
+}
+.ld-lives p > span:first-child {
+  margin-right: auto;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.ld-lives b {
+  font: 600 1.35rem/1.1 var(--mono);
+  color: #fff;
+}
+.ld-lives small {
+  font-size: 0.74rem;
+  color: var(--faint);
+}
+.ld-lives .ld-also b {
+  font-size: 1rem;
+}
+.ld-was {
+  font: 500 0.72rem var(--mono);
+  color: var(--coral);
+}
+.ld-how {
+  font: 400 0.72rem/1.5 var(--mono);
+  color: var(--faint);
+}
+.ld-note {
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--soft);
+}
+.ld-go {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.ld-term {
+  border-radius: 0.7rem;
+}
+.ld-term .term-bar {
+  padding: 0.5rem 0.7rem;
+  font-size: 0.64rem;
+}
+.ld-pre {
+  padding: 0.7rem 0.8rem !important;
+  font-size: 0.66rem !important;
+  line-height: 1.5 !important;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere;
+}
+
+/* What happened, in order */
+.ld-log {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--coral) 30%, var(--line));
+  border-radius: 1rem;
+  background: rgb(0 0 0 / 0.25);
+  list-style: none;
+}
+.ld-log:empty {
+  display: none;
+}
+.ld-log li {
+  display: grid;
+  grid-template-columns: 3.2rem minmax(0, 1fr);
+  gap: 0.6rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--soft);
+  animation: ld-in 0.4s var(--ease) both;
+}
+.ld-log time {
+  font: 500 0.74rem/1.6 var(--mono);
+  color: var(--coral);
+}
+.ld-log li:last-child {
+  color: #fff;
+}
+@keyframes ld-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (min-width: 1000px) {
+  .ld-tree {
+    display: grid;
+    grid-template-columns: repeat(16, minmax(0, 1fr));
+    /* The last row is flexible, so a tall desk card grows into it instead of stretching the tree. */
+    grid-template-rows: repeat(7, auto) 1fr;
+    column-gap: 0.55rem;
+    row-gap: 2.1rem;
+    align-items: start;
+  }
+  .ld-node {
+    grid-column: var(--gc);
+    grid-row: var(--gr);
+    margin-left: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+    padding: 0.5rem 0.6rem 0.55rem;
+  }
+  .ld-vv,
+  .ld-sub {
+    grid-column: 1;
+    justify-self: start;
+  }
+  .ld-ev {
+    grid-row: auto;
+    margin-top: 0.15rem;
+  }
+  .ld-v {
+    font-size: 1.02rem;
+  }
+  .ld-card {
+    order: 0;
+    grid-column: 9 / 17;
+    grid-row: 5 / 9;
+    margin: 0 0 0 1.2rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ld-log li {
+    animation: none;
+  }
+}

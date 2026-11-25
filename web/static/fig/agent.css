@@ -1,0 +1,529 @@
+/* ---------- agent: play the session ---------- */
+#fig-agent .ag {
+  display: grid;
+  gap: 1rem;
+}
+.ag-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+}
+.ag-top p {
+  margin: 0;
+}
+.ag-label {
+  color: var(--life-2);
+}
+.ag-surface {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.ag-pill {
+  display: inline-block;
+  margin: 0 0.25rem 0 0.4rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--line-2);
+  border-radius: 0.5rem;
+  font: 600 0.62rem/1.5 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  vertical-align: 0.08em;
+}
+.ag-pill.now {
+  margin-left: 0;
+  border-color: color-mix(in srgb, var(--in) 45%, transparent);
+  color: var(--in);
+}
+.ag-pill.wait {
+  border-color: color-mix(in srgb, var(--amber) 50%, transparent);
+  color: var(--amber);
+}
+
+/* Controls and the step rail */
+.ag-ctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.7rem 1rem;
+}
+.ag-btns {
+  display: flex;
+  gap: 0.35rem;
+}
+.ag-btns [data-play] {
+  min-width: 5.6rem;
+}
+.ag-rail {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ag-rail li {
+  flex: 1;
+  min-width: 0;
+}
+.ag-rail button {
+  display: grid;
+  justify-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.1rem;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font: 500 0.64rem/1.2 var(--sans);
+  cursor: pointer;
+}
+.ag-rail i {
+  position: relative;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-2);
+}
+.ag-rail button.done i {
+  background: color-mix(in srgb, var(--chapter) 65%, transparent);
+}
+.ag-rail button[aria-current="true"] i {
+  background: var(--chapter);
+  box-shadow: 0 0 10px var(--chapter);
+}
+.ag-rail button[aria-current="true"],
+.ag-rail button:hover {
+  color: #fff;
+}
+.ag-rail span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ag-count {
+  font: 500 0.74rem var(--mono);
+  color: var(--faint);
+}
+
+/* Terminal and side panel */
+.ag-main {
+  display: grid;
+  gap: 1rem;
+}
+.ag-term {
+  min-width: 0;
+}
+.ag-body {
+  min-height: 30rem;
+  padding: 0.9rem 1rem 1.1rem;
+  font: 400 0.72rem/1.55 var(--mono);
+  color: #eedac5;
+}
+.ag-body p {
+  margin: 0;
+}
+.ag-tag {
+  color: var(--faint);
+}
+.ag-who {
+  margin-bottom: 0.4rem !important;
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 0.86rem;
+}
+.ag-who .ag-tag {
+  font: 500 0.72rem var(--mono);
+  color: var(--sky);
+}
+.ag-who.ag-old {
+  font-size: 0.76rem;
+  color: var(--soft);
+}
+.ag-say {
+  margin: 0.2rem 0 !important;
+  font-family: var(--sans);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--life-2);
+}
+.ag-say .ag-tag {
+  font: 500 0.72rem var(--mono);
+  color: var(--life);
+}
+.ag-hist {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.ag-hist .c {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ag-st {
+  margin-left: auto;
+  flex: none;
+  font-size: 0.64rem;
+}
+.ag-st.ok {
+  color: color-mix(in srgb, var(--in) 75%, transparent);
+}
+.ag-st.bad {
+  color: var(--coral);
+}
+.ag-blk {
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--line);
+}
+.ag-blk:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.ag-cmd {
+  margin-top: 0.45rem !important;
+  color: #fff;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ag-ps {
+  color: var(--life);
+}
+.ag-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: -0.12em;
+  background: var(--life);
+  animation: ag-blink 1s steps(1) infinite;
+}
+.ag-blk.done .ag-caret {
+  display: none;
+}
+@keyframes ag-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.ag-out {
+  margin: 0.35rem 0 0;
+  padding: 0;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ag-blk.run .ln {
+  opacity: 0;
+}
+.ag-blk.run.done .ln {
+  animation: ag-ln 0.22s both;
+  animation-delay: calc(var(--i) * 26ms);
+}
+@keyframes ag-ln {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.ag-exit {
+  margin-top: 0.35rem !important;
+  font-size: 0.66rem;
+}
+.ag-blk.run .ag-exit:not(.on) {
+  visibility: hidden;
+}
+.ag-exit.ok {
+  color: var(--in);
+}
+.ag-exit.bad {
+  color: var(--coral);
+}
+
+.ag-side {
+  display: grid;
+  align-content: start;
+  gap: 0.8rem;
+  min-width: 0;
+}
+.ag-side > .micro {
+  margin: 0;
+}
+.ag-learned {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ag-l {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  gap: 0.55rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--panel);
+  opacity: 0.72;
+}
+.ag-l.cur {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--chapter) 45%, var(--line-2));
+}
+.ag-l.new {
+  animation: ag-in 0.45s var(--ease) both;
+}
+.ag-l.warn {
+  border-left: 2px solid var(--amber);
+}
+.ag-l.refused {
+  border-left: 2px solid var(--coral);
+}
+.ag-l.ok {
+  border-left: 2px solid var(--in);
+}
+.ag-l p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--soft);
+}
+.ag-l.cur p {
+  color: #fff;
+}
+.ag-n {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--line-2);
+  border-radius: 50%;
+  font-size: 0.66rem;
+  color: var(--faint);
+}
+.ag-l .ag-src {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+.ag-src code {
+  font-size: 0.66rem;
+  color: var(--faint);
+}
+.ag-src .ev {
+  font-size: 0.6rem;
+}
+#fig-agent .ev.k-refused {
+  border-color: color-mix(in srgb, var(--coral) 55%, transparent);
+  color: var(--coral);
+  background: color-mix(in srgb, var(--coral) 10%, transparent);
+}
+@keyframes ag-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.ag-card {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--chapter) 45%, var(--line-2));
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--chapter) 6%, var(--raise));
+}
+.ag-card.new {
+  animation: ag-in 0.5s var(--ease) both;
+}
+.ag-card > p {
+  margin: 0;
+}
+.ag-table {
+  width: 100%;
+  font-size: 0.78rem;
+}
+.ag-table th,
+.ag-table td {
+  padding: 0.32rem 0.3rem;
+  vertical-align: top;
+}
+.ag-table .r {
+  text-align: right;
+  white-space: nowrap;
+}
+.ag-table tr.voi td {
+  color: var(--life-2);
+  border-top: 1px dashed var(--line-2);
+}
+.ag-route {
+  font-size: 0.86rem;
+  color: var(--soft);
+}
+.ag-route b {
+  color: #fff;
+}
+.ag-fine {
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--faint);
+}
+.ag-fine code {
+  font-size: 0.7rem;
+  color: var(--life-2);
+}
+.ag-tally {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin: 0;
+}
+.ag-tally div {
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+}
+.ag-tally dt {
+  font-size: 0.62rem;
+  line-height: 1.25;
+  color: var(--faint);
+}
+.ag-tally dd {
+  margin: 0.15rem 0 0;
+  font: 600 1rem var(--mono);
+  color: #fff;
+}
+
+@media (min-width: 980px) {
+  .ag-main {
+    grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
+    align-items: start;
+  }
+  .ag-body {
+    min-height: 36rem;
+  }
+}
+/* Stacked over the panel, the terminal keeps one height and scrolls, as a terminal does: a session whose steps differ
+   in length then never moves the page below it (Safari keeps no scroll anchor). */
+@media (max-width: 979px) {
+  .ag-body {
+    height: min(36rem, 70svh);
+    overflow-y: auto;
+  }
+}
+@media (max-width: 699px) {
+  .ag-rail span {
+    display: none;
+  }
+  .ag-rail button {
+    min-height: 2.75rem;
+  }
+  .ag-ctl {
+    gap: 0.5rem;
+  }
+  .ag-rail {
+    flex-basis: 100%;
+    order: 2;
+  }
+  .ag-count {
+    margin-left: auto;
+  }
+  .ag-body {
+    min-height: 26rem;
+    padding: 0.75rem 0.75rem 1rem;
+    font-size: 0.66rem;
+  }
+  .ag-out {
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    mask-image: linear-gradient(90deg, #000 calc(100% - 1.4rem), transparent);
+  }
+  .ag-tally {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-caret,
+  .ag-l.new,
+  .ag-card.new {
+    animation: none;
+  }
+}
+#fig-agent .ag-table td:first-child {
+  white-space: normal;
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+#fig-agent .ag-table {
+  table-layout: auto;
+}
+.ag-body .ag-out {
+  padding: 0;
+  font: inherit;
+}
+.ag-out .ln {
+  display: block;
+  padding-left: calc((var(--ind) + 2) * 1ch);
+  text-indent: -2ch;
+}
+.ag-l.past {
+  align-items: center;
+  padding: 0.32rem 0.7rem;
+  opacity: 0.8;
+}
+.ag-l.past .ag-n {
+  width: 1.3rem;
+  height: 1.3rem;
+  font-size: 0.6rem;
+}
+.ag-l.past p {
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ag-learned {
+  gap: 0.35rem;
+}
+@media (max-width: 699px) {
+  .ag-out .ln {
+    padding-left: calc(var(--ind) * 1ch);
+    text-indent: 0;
+  }
+}
+.ag-nw {
+  white-space: nowrap;
+}
+@media (max-width: 699px) {
+  #fig-agent .ag-body .ag-out {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-x: visible;
+    mask-image: none;
+  }
+  .ag-out .ln {
+    padding-left: calc((var(--ind) + 2) * 1ch);
+    text-indent: -2ch;
+  }
+  .ag-rail button {
+    align-content: center;
+    min-height: 2.2rem;
+  }
+}

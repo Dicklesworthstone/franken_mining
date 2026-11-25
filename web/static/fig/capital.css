@@ -1,0 +1,266 @@
+/* ---------- 07 · capital: choose the portfolio, bound the downside ---------- */
+.cap-projects {
+  display: grid;
+  gap: 0.8rem;
+}
+@media (min-width: 860px) {
+  .cap-projects {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.cap-proj {
+  position: relative;
+  padding: 0.85rem 1rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 1.05rem;
+  background: rgb(0 0 0 / 0.22);
+  transition:
+    border-color 0.35s,
+    background-color 0.35s,
+    box-shadow 0.35s;
+}
+.cap-proj.sel {
+  border-color: color-mix(in srgb, var(--pc) 60%, transparent);
+  background: color-mix(in srgb, var(--pc) 7%, rgb(0 0 0 / 0.22));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc) 22%, transparent), 0 14px 40px -24px var(--pc);
+}
+.cap-proj header {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.cap-proj h4 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: #fff;
+}
+.cap-proj header .micro {
+  margin: 0;
+  color: var(--faint);
+}
+.cap-id {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--pc) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pc) 50%, transparent);
+  font: 700 0.95rem/1 var(--mono);
+  color: var(--pc);
+}
+.cap-in {
+  margin-left: auto;
+  padding: 0.12rem 0.5rem;
+  border-radius: 99rem;
+  background: var(--pc);
+  font: 700 0.62rem/1.4 var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #120f0d;
+  opacity: 0;
+  transform: scale(0.85);
+  transition:
+    opacity 0.3s,
+    transform 0.4s var(--ease);
+}
+.cap-proj.sel .cap-in {
+  opacity: 1;
+  transform: none;
+}
+.cap-mini {
+  margin-top: 0.55rem;
+}
+.cap-mini .cm-v {
+  font: 600 10.5px var(--mono);
+  fill: var(--soft);
+}
+.cap-mini .cm-s {
+  font: 500 10px var(--mono);
+  fill: var(--faint);
+}
+.cap-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: var(--faint);
+}
+.cap-stat b {
+  font: 600 0.82rem var(--mono);
+  color: #fff;
+}
+.cap-main {
+  display: grid;
+  gap: 1.2rem;
+  margin-top: 1.2rem;
+}
+@media (min-width: 980px) {
+  .cap-main {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: 1.6rem;
+  }
+}
+.cap-chart .micro,
+.cap-tailchart .micro {
+  margin: 0 0 0.5rem;
+  color: var(--faint);
+}
+.cap-chart .pt circle:first-child {
+  fill: #f3ebe3;
+  stroke: #0d0b0a;
+  stroke-width: 2;
+  transition: fill 0.3s;
+}
+.cap-chart .pt.pt-over circle:first-child {
+  fill: #5b3a40;
+}
+.cap-chart .pt.pt-broke circle:first-child {
+  fill: none;
+  stroke: rgb(255 224 196 / 0.35);
+  stroke-dasharray: 2 2;
+}
+.cap-chart .pt.on circle:first-child {
+  fill: var(--chapter);
+}
+.cap-chart .halo {
+  fill: color-mix(in srgb, var(--chapter) 20%, transparent);
+  stroke: var(--chapter);
+  stroke-opacity: 0.6;
+}
+.cap-chart .pl {
+  font: 600 12.5px var(--sans);
+  fill: #fff;
+}
+.cap-chart .pt.pt-over .pl,
+.cap-chart .pt.pt-broke .pl {
+  fill: var(--faint);
+}
+.cap-chart .pt.on .pl {
+  fill: var(--chapter);
+}
+.cap-chart .pv {
+  font: 500 10.5px var(--mono);
+  fill: var(--muted);
+}
+.cap-chart .pt.pt-over .pv,
+.cap-chart .pt.pt-broke .pv {
+  fill: rgb(141 129 119 / 0.75);
+}
+.cap-chart .cc-lim {
+  font: 700 11.5px var(--mono);
+  fill: #fb7185;
+}
+.cap-chart .cc-gap {
+  font: 700 12px var(--mono);
+  fill: var(--chapter);
+}
+.cap-side {
+  display: grid;
+  gap: 1.1rem;
+  align-content: start;
+  min-width: 0;
+}
+.cap-verdict {
+  padding: 0.9rem 1.1rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--chapter) 40%, transparent);
+  border-radius: 1.1rem;
+  background: color-mix(in srgb, var(--chapter) 7%, transparent);
+}
+.cap-verdict .micro {
+  margin: 0;
+}
+.cap-pick {
+  margin: 0.1rem 0 0.3rem;
+  font: 700 1.8rem/1.15 var(--mono);
+  letter-spacing: -0.03em;
+  color: #fff;
+}
+.cap-why {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--soft);
+}
+.cap-why b {
+  font: 600 0.86rem var(--mono);
+  color: #fff;
+}
+.cap-why b.cost {
+  color: var(--chapter);
+}
+.cap-budget {
+  margin-top: 0.8rem;
+}
+.cap-budget .micro {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--faint);
+}
+.cap-slots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.cap-slots i {
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--pc) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pc) 55%, transparent);
+  font: 500 0.76rem/1.3 var(--mono);
+  font-style: normal;
+  color: var(--soft);
+}
+.cap-slots i b {
+  color: var(--pc);
+}
+.cap-slots i.cash {
+  --pc: #8d8177;
+  border-style: dashed;
+  color: var(--faint);
+}
+.cap-tailchart .ct-v {
+  font: 600 11px var(--mono);
+  fill: var(--soft);
+}
+.cap-tailchart .ct-s {
+  font: 500 10px var(--mono);
+  fill: var(--faint);
+}
+.cap-tailchart .ct-t {
+  font: 700 10px var(--mono);
+  fill: #fb7185;
+  letter-spacing: 0.04em;
+}
+.cap-controls {
+  margin-top: 0.9rem;
+}
+.cap-foot {
+  margin: 1rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--faint);
+}
+.cap-foot code {
+  font: 500 0.76rem var(--mono);
+  color: var(--muted);
+}
+@media (max-width: 640px) {
+  .cap-proj {
+    padding: 0.7rem 0.8rem 0.6rem;
+  }
+  .cap-proj h4 {
+    font-size: 0.92rem;
+  }
+  .cap-id {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+  .cap-pick {
+    font-size: 1.5rem;
+  }
+}

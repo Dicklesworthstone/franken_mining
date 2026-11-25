@@ -1,0 +1,581 @@
+/* ---------- Process: follow the ore through the plant (plant.ts) ---------- */
+.pl-view {
+  height: clamp(32rem, min(62vw, 100svh - 10rem), 50rem);
+  background: radial-gradient(120% 90% at 50% 0%, #6b5a48 0%, #2a211b 55%, #120e0c 100%);
+}
+.pl .hud-card {
+  transition: opacity 0.4s;
+}
+.pl .hud-card p {
+  margin: 0;
+}
+.pl .hud-card p + p {
+  margin-top: 0.4rem;
+}
+
+/* Key figures */
+.pl-k {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  padding: 0.32rem 0;
+  border-top: 1px solid var(--line);
+}
+.pl-k .ev {
+  align-self: center;
+}
+.pl-kv {
+  white-space: nowrap;
+}
+.pl-kv b {
+  font: 600 0.95rem/1.25 var(--mono);
+}
+.pl-kv s {
+  margin-right: 0.15rem;
+  font: 500 0.74rem/1.25 var(--mono);
+}
+.pl .pl-new {
+  color: #9bdcff;
+  font-style: normal;
+}
+.pl .pl-bad {
+  color: #fb7185;
+}
+.pl-kpi.flash,
+.pl-bal.flash {
+  animation: pl-flash 1.2s var(--ease, ease-out);
+}
+@keyframes pl-flash {
+  0% {
+    box-shadow: 0 0 0 1px rgb(108 200 247 / 0.65), 0 0 34px -6px rgb(108 200 247 / 0.7);
+  }
+  100% {
+    box-shadow: 0 18px 50px -20px rgb(0 0 0 / 0.75);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pl-kpi.flash,
+  .pl-bal.flash {
+    animation: none;
+  }
+}
+.pl-k:first-of-type {
+  border-top: 0;
+  padding-top: 0.1rem;
+}
+.pl-k > span {
+  color: var(--muted);
+}
+.pl-k small {
+  grid-column: 1 / -1;
+  font: 500 0.68rem/1.35 var(--mono);
+  color: var(--faint);
+}
+.pl-k s,
+.pl-tag s {
+  color: var(--faint);
+  font-weight: 500;
+  text-decoration-thickness: 1px;
+}
+
+/* Node closures */
+.pl-nodes {
+  width: 100%;
+  margin: 0.15rem 0 0.45rem;
+  border-collapse: collapse;
+  font: 500 0.72rem/1.3 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.pl-nodes th,
+.pl-nodes td {
+  padding: 0.16rem 0;
+  border-top: 1px solid var(--line);
+  text-align: right;
+  font-weight: 500;
+}
+.pl-nodes thead th {
+  border-top: 0;
+  color: var(--faint);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.pl-nodes tbody th {
+  text-align: left;
+  font: 500 0.74rem/1.3 var(--sans);
+  color: var(--soft);
+}
+.pl-nodes thead th:first-child {
+  text-align: left;
+}
+.pl-nodes td {
+  width: 4.4rem;
+}
+.pl-nodes .ok {
+  color: #5fd38d;
+}
+.pl-nodes .off {
+  color: #fbbf24;
+}
+.pl-nodes .bad {
+  color: #fb7185;
+}
+.pl-nodes .na {
+  color: var(--faint);
+}
+.pl-pass {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+.pl-pass b {
+  font-size: 0.8rem;
+}
+.pl-worst {
+  margin: 0.45rem 0;
+  padding: 0.45rem 0.6rem;
+  border-left: 2px solid #fb7185;
+  border-radius: 0 0.5rem 0.5rem 0;
+  background: rgb(251 113 133 / 0.08);
+  font-size: 0.76rem;
+}
+.pl-worst b {
+  font-size: 0.8rem;
+}
+.pl-int {
+  font: 500 0.68rem/1.3 var(--mono);
+  color: var(--faint);
+}
+
+/* Stream labels */
+.label3d.pl-tag {
+  /* A label the stage caps to the room beside its point wraps its words rather than running out of the frame. */
+  white-space: normal;
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 0.08rem 0.45rem;
+  padding: 0.32rem 0.6rem 0.36rem 0.45rem;
+  border-radius: 0.7rem;
+  line-height: 1.25;
+}
+.label3d.pl-tag::before {
+  grid-column: 1;
+  grid-row: 1;
+}
+.pl-tag > * {
+  grid-column: 2;
+}
+.pl-tag .pl-n {
+  font: 500 0.7rem/1.25 var(--sans);
+  color: var(--soft);
+}
+.pl-tag b {
+  font-size: 0.74rem;
+}
+.pl-tag .pl-new {
+  color: #9bdcff;
+}
+.label3d.pl-tag.rec:not(.worst)::before {
+  background: #6cc8f7;
+}
+.pl-tag .pl-ev {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.08rem 0 0.06rem;
+}
+.pl-tag .ev {
+  font-size: 0.56rem;
+  padding: 0 0.38rem;
+}
+.pl-tag small {
+  font: 500 0.62rem/1.3 var(--mono);
+  color: var(--faint);
+}
+.pl-inf {
+  font-style: normal;
+  color: #6cc8f7;
+}
+.label3d.pl-tag.dim {
+  opacity: 0.62;
+}
+.label3d.pl-tag.dim.off {
+  opacity: 0;
+}
+.label3d.pl-tag.worst {
+  border-color: rgb(251 113 133 / 0.75);
+  box-shadow: 0 0 0 1px rgb(251 113 133 / 0.25), 0 0 26px -4px rgb(251 113 133 / 0.55);
+}
+.label3d.pl-tag.worst::before {
+  background: #fb7185;
+  animation: pl-pulse 1.6s ease-in-out infinite;
+}
+@keyframes pl-pulse {
+  50% {
+    box-shadow: 0 0 0 6px rgb(251 113 133 / 0.2);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .label3d.pl-tag.worst::before {
+    animation: none;
+  }
+}
+
+/* Under the scene */
+.pl-below {
+  display: none;
+}
+.pl-foot {
+  max-width: 62rem;
+  margin: 0;
+  padding: 0 var(--inset) 1.2rem;
+  font-size: 0.74rem;
+  line-height: 1.55;
+  color: var(--faint);
+}
+.pl-bal .pl-pass + .pl-pass {
+  margin-top: 0.3rem;
+}
+.pl-agent p {
+  font-size: 0.78rem;
+}
+.pl-bar .toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.pl-tour[aria-pressed="true"] svg path {
+  d: path("M7 5.5h3.5v13H7zM13.5 5.5H17v13h-3.5z");
+}
+
+/* Layout over the scene. plant.ts sets pl-wide, pl-mid or pl-phone on .pl from the view's own width.
+   Wide: the step and its numbers down the left, the plant's figures down the right, the plant between them.
+   Mid: the step and the key figures only; the rest below. Phone: two small cards, the rest below. */
+.pl-col {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  pointer-events: none;
+}
+.pl-col > .hud-card {
+  position: relative;
+  inset: auto;
+  max-width: none;
+  width: auto;
+  pointer-events: auto;
+}
+.pl .pl-step {
+  max-width: none;
+}
+.pl-wide .pl-col {
+  top: 0.9rem;
+  right: 0.9rem;
+  bottom: 0.9rem;
+  width: 19rem;
+}
+.pl-wide .pl-col .pl-agent {
+  margin-top: auto;
+}
+.pl-wide .pl-step {
+  top: 0.9rem;
+  left: 0.9rem;
+  width: 21rem;
+  max-height: calc(100% - 1.8rem);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.pl-mid .pl-col {
+  top: 0.9rem;
+  right: 0.9rem;
+  width: 17rem;
+}
+.pl-mid .pl-step {
+  bottom: 0.9rem;
+  left: 0.9rem;
+  width: 19rem;
+}
+.pl-mid .pl-bal,
+.pl-mid .pl-agent,
+.pl-phone .pl-bal,
+.pl-phone .pl-agent {
+  display: none;
+}
+.pl-phone .pl-col {
+  top: 0.6rem;
+  right: 0.6rem;
+  left: 0.6rem;
+}
+.pl-phone .pl-step {
+  right: 0.6rem;
+  bottom: 0.6rem;
+  left: 0.6rem;
+  padding: 0.5rem 0.7rem 0.55rem;
+  font-size: 0.76rem;
+}
+.pl-phone .pl-step p + p {
+  margin-top: 0.2rem;
+}
+
+/* Phone: the key figures as a strip of three */
+.pl-phone .pl-kpi {
+  padding: 0.5rem 0.7rem 0.55rem;
+}
+.pl-phone .pl-kpi .micro {
+  display: none;
+}
+.pl-phone .pl-kpi .pl-ks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.pl-phone .pl-k {
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 0.1rem;
+  padding: 0;
+  border-top: 0;
+}
+.pl-phone .pl-k > span:first-child {
+  font-size: 0.68rem;
+}
+.pl-phone .pl-kv {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.pl-phone .pl-kv b {
+  font-size: 0.82rem;
+}
+.pl-phone .pl-kv s {
+  font-size: 0.62rem;
+}
+.pl-phone .pl-k small {
+  display: none;
+}
+.pl-phone .pl-k .ev {
+  justify-self: start;
+  font-size: 0.54rem;
+}
+.pl-mid .pl-k small {
+  font-size: 0.62rem;
+}
+
+/* Below the scene, when it is not wide */
+.pl-mid .pl-below,
+.pl-phone .pl-below {
+  display: grid;
+  gap: 0.8rem;
+  padding: 0 var(--inset) 1rem;
+}
+.pl-mid .pl-below {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+/* Until its cards arrive, the note under them stays hidden, so it does not show early and then jump down. */
+.pl-mid .pl-below:empty + .pl-foot,
+.pl-phone .pl-below:empty + .pl-foot {
+  visibility: hidden;
+}
+.pl-card {
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--line-2);
+  border-radius: 0.95rem;
+  background: rgb(255 255 255 / 0.02);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--soft);
+}
+.pl-card p {
+  margin: 0;
+}
+.pl-card p + p {
+  margin-top: 0.4rem;
+}
+.pl-card b {
+  font: 600 0.9rem/1.25 var(--mono);
+  color: #fff;
+}
+@media (max-width: 699px) {
+  .pl-view {
+    height: min(38rem, 150vw);
+  }
+  .label3d.pl-tag {
+    padding: 0.24rem 0.5rem 0.28rem 0.4rem;
+  }
+}
+
+/* Governing numbers under the step text, and the engine's live answer */
+.pl-phys {
+  width: 100%;
+  margin: 0.45rem 0 0;
+  border-collapse: collapse;
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+.pl-phys th,
+.pl-phys td {
+  padding: 0.18rem 0.35rem 0.18rem 0;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.pl-phys th {
+  font-weight: 500;
+  color: var(--soft);
+  white-space: nowrap;
+}
+.pl-phys td {
+  font: 600 0.7rem/1.3 var(--mono);
+  color: var(--text, #f1ede6);
+}
+.pl-phys td.n {
+  font: 400 0.64rem/1.3 var(--mono);
+  color: var(--faint);
+}
+.pl .pl-src {
+  margin-top: 0.35rem;
+  font-size: 0.62rem;
+  color: var(--faint);
+}
+.pl .pl-eng {
+  margin-top: 0.45rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid rgb(108 200 247 / 0.28);
+  border-radius: 0.55rem;
+  background: rgb(108 200 247 / 0.06);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+.pl .pl-eng .micro {
+  display: block;
+  margin-bottom: 0.15rem;
+  color: #9bdcff;
+}
+.pl .pl-eng b {
+  font-family: var(--mono);
+}
+.pl .pl-eng .ev {
+  font-size: 0.56rem;
+}
+.pl .pl-ms {
+  font: 500 0.62rem/1.3 var(--mono);
+  color: #9bdcff;
+}
+.pl .pl-eng p {
+  margin: 0.25rem 0 0;
+}
+.pl .pl-ref {
+  margin-top: 0.4rem !important;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgb(251 113 133 / 0.3);
+  color: var(--muted);
+}
+.pl .pl-ok {
+  color: #5fd38d;
+}
+.pl-sl {
+  display: grid;
+  grid-template-columns: 5.6rem minmax(0, 1fr) 4.4rem;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.3rem;
+  font-size: 0.68rem;
+  color: var(--soft);
+}
+.pl-sl input {
+  width: 100%;
+  margin: 0;
+  accent-color: #6cc8f7;
+}
+.pl-sl output {
+  font: 600 0.66rem/1.2 var(--mono);
+  color: #fff;
+  text-align: right;
+}
+.pl .pl-eng code {
+  font: 500 0.62rem/1.35 var(--mono);
+  color: #fda4af;
+  word-break: break-word;
+}
+
+/* The flowsheet overlay: the plant dims, streams carry their numbers and evidence marks */
+.pl-view.pl-sheet canvas {
+  filter: brightness(0.62) saturate(0.55);
+  transition: filter 0.4s;
+}
+.pl-view canvas {
+  transition: filter 0.4s;
+}
+.label3d.pl-tag.fs {
+  grid-template-columns: auto auto auto auto;
+  padding: 0.2rem 0.5rem 0.22rem 0.4rem;
+  gap: 0 0.4rem;
+}
+.pl-tag.fs > * {
+  grid-column: auto;
+  grid-row: 1;
+}
+.pl-tag .pl-id {
+  font: 600 0.64rem/1.2 var(--mono);
+  color: #9bdcff;
+}
+.pl-tag .pl-m {
+  padding: 0 0.3rem;
+  border-radius: 0.3rem;
+  font: 600 0.56rem/1.5 var(--mono);
+  background: rgb(74 222 128 / 0.14);
+  color: #86efac;
+}
+.pl-tag .pl-m.i {
+  background: rgb(108 200 247 / 0.14);
+  color: #9bdcff;
+}
+.pl-tag .pl-m.r {
+  background: rgb(108 200 247 / 0.2);
+  color: #bae6fd;
+}
+.pl-tag .pl-m.bad {
+  background: rgb(251 113 133 / 0.2);
+  color: #fda4af;
+}
+@media (max-width: 699px) {
+  .pl-card .pl-phys {
+    font-size: 0.74rem;
+  }
+  .label3d.pl-tag.fs .pl-m {
+    display: none;
+  }
+}
+.label3d.pl-tag.pl-phystag::before {
+  background: #fbbf24;
+}
+.pl-phystag .pl-n {
+  color: #fcd34d;
+}
+.pl-kh {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.pl-kh .ev {
+  font-size: 0.54rem;
+  letter-spacing: 0.04em;
+}
+.pl-wide .pl-k,
+.pl-mid .pl-k {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.pl-tag b,
+.pl-tag small {
+  overflow-wrap: anywhere;
+}
+/* A phone's flowsheet view drops the KPI strip: the stream labels carry the values, and stacked labels may rise
+   into the space it leaves. */
+@media (max-width: 699px) {
+  .pl-view.pl-sheet .pl-kpi {
+    display: none;
+  }
+}

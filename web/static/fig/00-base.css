@@ -1,0 +1,446 @@
+/* ---------- Shared pieces for FrankenMining's figures ----------
+ * .host            the element a figure module draws into
+ * .scene-view      a live 3D view: canvas plus HUD overlays
+ * .hud-card        a glass panel over a scene (corners: .hud-tl .hud-tr .hud-bl .hud-br)
+ * .label3d         a label pinned to a point in 3D (positioned by script with transform)
+ * .ev              an evidence-class chip: .measured .derived .estimated .assumed .stale .refused
+ * .agent-note      what an AI agent sees and proposes, inside any figure
+ * .scene-bar       the control strip under a scene
+ */
+
+.host {
+  position: relative;
+  min-height: 4rem;
+}
+.fig.scene {
+  overflow: hidden;
+}
+.fig.scene .fig-body {
+  padding: 0;
+}
+.fig.scene .fig-head {
+  position: relative;
+  z-index: 3;
+}
+.scene-view {
+  position: relative;
+  height: clamp(30rem, 60vw, 47rem);
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 50% 0%, #2a211b 0%, #120e0c 55%, #0a0807 100%);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.scene-view > canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: pan-y;
+  cursor: grab;
+}
+.scene-view > canvas:active {
+  cursor: grabbing;
+}
+@media (max-width: 699px) {
+  .scene-view {
+    height: min(34rem, 120vw);
+  }
+}
+.scene-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Glass panels over a scene */
+.hud-card {
+  position: absolute;
+  z-index: 2;
+  max-width: min(21rem, 46%);
+  padding: 0.7rem 0.85rem 0.75rem;
+  border: 1px solid var(--line-2);
+  border-radius: 0.95rem;
+  background: rgb(12 10 9 / 0.7);
+  -webkit-backdrop-filter: blur(12px) saturate(1.25);
+  backdrop-filter: blur(12px) saturate(1.25);
+  box-shadow: 0 18px 50px -20px rgb(0 0 0 / 0.75);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--soft);
+}
+.hud-card .micro {
+  margin-bottom: 0.3rem;
+}
+.hud-card b,
+.hud-card .v {
+  font: 600 0.95rem/1.25 var(--mono);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.hud-card dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+.hud-card dt {
+  color: var(--muted);
+}
+.hud-card dd {
+  margin: 0;
+  text-align: right;
+  font: 500 0.8rem/1.4 var(--mono);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.hud-tl {
+  top: 0.9rem;
+  left: 0.9rem;
+}
+.hud-tr {
+  top: 0.9rem;
+  right: 0.9rem;
+}
+.hud-bl {
+  bottom: 0.9rem;
+  left: 0.9rem;
+}
+.hud-br {
+  bottom: 0.9rem;
+  right: 0.9rem;
+}
+@media (max-width: 699px) {
+  .hud-card {
+    max-width: calc(100% - 1.8rem);
+    font-size: 0.76rem;
+  }
+  .hud-card.hide-sm {
+    display: none;
+  }
+}
+
+/* Labels pinned to things in 3D */
+.label3d {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.28rem 0.6rem 0.3rem 0.45rem;
+  border: 1px solid var(--line-2);
+  border-radius: 99rem;
+  background: rgb(12 10 9 / 0.78);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  font: 500 0.74rem/1.2 var(--sans);
+  color: var(--soft);
+  white-space: nowrap;
+  will-change: transform;
+  transition: opacity 0.35s;
+}
+.label3d::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--chapter, var(--life));
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 0.06);
+}
+.label3d b {
+  font: 600 0.76rem/1 var(--mono);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.label3d.off {
+  opacity: 0;
+}
+/* Where a label is too long for the room beside its point, its words give way; its number and evidence stay */
+.label3d > .t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.label3d > b,
+.label3d > .ev {
+  flex-shrink: 0;
+}
+/* On a phone a label with words puts them on a line of their own above its number, rather than cutting them */
+@media (max-width: 640px) {
+  .label3d:has(> .t) {
+    flex-wrap: wrap;
+    row-gap: 0.12rem;
+    max-width: min(16rem, calc(100vw - 1.5rem));
+    border-radius: 0.75rem;
+    padding-top: 0.32rem;
+  }
+  .label3d > .t {
+    order: -1;
+    flex-basis: 100%;
+    white-space: normal;
+    font-size: 0.68rem;
+    line-height: 1.25;
+    color: var(--muted);
+  }
+}
+/* A label hanging to the left of its point: its dot and stem sit at its right end */
+.label3d.flip {
+  padding: 0.28rem 0.45rem 0.3rem 0.6rem;
+}
+.label3d.flip::before {
+  order: 9;
+}
+/* A label with a stem down to its anchor */
+.label3d.stem::after {
+  content: "";
+  position: absolute;
+  left: 0.68rem;
+  top: 100%;
+  width: 1px;
+  height: var(--stem, 1.6rem);
+  background: linear-gradient(var(--line-3), transparent);
+}
+.label3d.stem.flip::after {
+  left: auto;
+  right: 0.68rem;
+}
+/* A label lifted clear of another keeps a leader line down to its point */
+.label3d.lifted:not(.stem)::after {
+  content: "";
+  position: absolute;
+  left: 0.68rem;
+  top: 100%;
+  width: 1px;
+  height: var(--lift, 0);
+  background: linear-gradient(var(--line-3), rgb(255 255 255 / 0.12));
+}
+.label3d.lifted.stem::after {
+  height: calc(var(--stem, 1.6rem) + var(--lift, 0px));
+}
+.label3d.lifted.flip:not(.stem)::after {
+  left: auto;
+  right: 0.68rem;
+}
+
+/* Evidence classes: what a number rests on */
+.ev {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.08rem 0.45rem 0.1rem;
+  border-radius: 99rem;
+  font: 600 0.64rem/1.4 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid currentColor;
+}
+.ev.measured {
+  color: #5fd38d;
+  background: rgb(95 211 141 / 0.1);
+}
+/* Arithmetic on measurements (a sum, a difference, a ratio): plan §7.1's Derived, coloured as the Claim figure has it. */
+.ev.derived {
+  color: #2dd4bf;
+  background: rgb(45 212 191 / 0.1);
+}
+.ev.estimated {
+  color: #6cc8f7;
+  background: rgb(108 200 247 / 0.1);
+}
+.ev.assumed {
+  color: #fbbf24;
+  background: rgb(251 191 36 / 0.1);
+}
+.ev.stale {
+  color: #f2913a;
+  background: rgb(242 145 58 / 0.1);
+}
+.ev.refused {
+  color: #fb7185;
+  background: rgb(251 113 133 / 0.1);
+}
+
+/* An AI agent's view and proposal */
+.agent-note {
+  border-left: 3px solid #8be27a;
+}
+.agent-note .micro {
+  color: #8be27a;
+}
+.agent-note .micro::before {
+  content: "";
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: #8be27a;
+  box-shadow: 0 0 10px #8be27a;
+  vertical-align: 0.05em;
+}
+.agent-note .act {
+  display: inline-flex;
+  margin-top: 0.5rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 0.45rem;
+  background: rgb(139 226 122 / 0.14);
+  color: #c8f5bd;
+  font: 600 0.7rem/1.5 var(--mono);
+}
+
+/* Controls under a scene */
+.scene-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.9rem 1.6rem;
+  padding: 1rem var(--inset) 1.15rem;
+}
+.scene-bar .range {
+  min-width: 12rem;
+  flex: 1 1 12rem;
+  max-width: 20rem;
+}
+.scene-bar .reads {
+  margin-left: auto;
+}
+
+/* ---------- The hero mine ---------- */
+.mine-hero .lineup {
+  background:
+    radial-gradient(80% 70% at 70% 35%, #3a2a1d 0%, #140f0c 60%, #070505 100%);
+}
+.mine-hero .lineup canvas {
+  touch-action: pan-y;
+}
+.mine-hero .pins {
+  z-index: 1;
+  overflow: hidden;
+}
+.mine-hero .pins .label3d {
+  font-size: 0.72rem;
+}
+@media (min-width: 1000px) {
+  .mine-hero .lineup::after {
+    background:
+      linear-gradient(90deg, #070505 0%, rgb(7 5 5 / 0.93) 22%, rgb(7 5 5 / 0.62) 36%, rgb(7 5 5 / 0.1) 50%, transparent 58%),
+      linear-gradient(to bottom, rgb(7 5 5 / 0.8), transparent 15%),
+      linear-gradient(to top, #070505 3%, rgb(7 5 5 / 0.55) 14%, transparent 30%);
+  }
+}
+.tallybar [data-bar="ore"] {
+  background: var(--life);
+}
+.tallybar [data-bar="waste"] {
+  background: #8d7f74;
+}
+.tallybar [data-bar="open"] {
+  background: var(--sky);
+}
+.tallykeys .ore::before {
+  background: var(--life);
+}
+.tallykeys .waste::before {
+  background: #8d7f74;
+}
+.tallykeys .open::before {
+  background: var(--sky);
+}
+
+/* ---------- What it will never do ---------- */
+.never {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15.5rem, 1fr));
+  gap: 0.9rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.never li {
+  position: relative;
+  padding: 1.25rem 1.3rem 1.35rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: linear-gradient(160deg, rgb(255 255 255 / 0.035), transparent 60%), var(--panel);
+}
+.never-x {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  margin-bottom: 0.9rem;
+  border-radius: 0.7rem;
+  background: rgb(251 113 133 / 0.12);
+  color: var(--coral);
+}
+.never-x svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.never h4 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+  letter-spacing: -0.015em;
+  color: #fff;
+}
+.never p {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+/* ---------- Running today, in design ---------- */
+.status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: 1rem;
+  margin-top: 2.4rem;
+}
+.status > div {
+  padding: 1.2rem 1.35rem 1.3rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: rgb(18 15 13 / 0.7);
+}
+.status ul {
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.status li {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--line);
+}
+.status li b {
+  color: #fff;
+  font-weight: 600;
+}
+.status li span {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.status .dot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.5rem;
+  border-radius: 50%;
+  vertical-align: 0.04em;
+}
+.dot.run {
+  background: #5fd38d;
+  box-shadow: 0 0 10px #5fd38d;
+}
+.dot.design {
+  background: var(--amber);
+}
+
+.mine-hero .scene-labels {
+  z-index: 1;
+}

@@ -1,0 +1,779 @@
+/* ---------- 06 · recon: a steppable Sankey across the reconciliation boundaries ---------- */
+.rc {
+  --gain: #fbbf24;
+  --loss: #fb7185;
+  --stock: #6cc8f7;
+  --tails: #8d8177;
+  --ded: #b7a2fb;
+  display: grid;
+  gap: 1.1rem;
+}
+.rc-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem 1.2rem;
+}
+.rc-tag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.rc-tag .tag {
+  min-height: 1.5rem;
+  color: var(--chapter);
+}
+.rc-ctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+.rc-nav {
+  display: flex;
+  gap: 0.35rem;
+}
+.rc-nav .btn {
+  min-width: 2.5rem;
+  padding-inline: 0.7rem;
+}
+.rc-nav .btn.on {
+  border-color: var(--chapter);
+  background: color-mix(in srgb, var(--chapter) 14%, transparent);
+}
+
+/* The boundary rail */
+.rc-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rc-steps button {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  min-height: 2.6rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: rgb(0 0 0 / 0.22);
+  font: 600 0.8rem/1.2 var(--sans);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  transition:
+    border-color 0.2s,
+    background-color 0.2s,
+    color 0.2s;
+}
+.rc-steps button:hover {
+  color: #fff;
+  border-color: var(--line-2);
+}
+.rc-steps b {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: rgb(255 224 196 / 0.1);
+  font: 600 0.72rem/1 var(--mono);
+  color: var(--soft);
+}
+.rc-steps i {
+  display: inline-flex;
+  color: var(--faint);
+}
+.rc-steps i svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+.rc-steps .masked b {
+  box-shadow: inset 0 0 0 1px var(--gain);
+}
+.rc-steps .refused b {
+  box-shadow: inset 0 0 0 1px var(--loss);
+}
+.rc-steps button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--chapter) 60%, transparent);
+  background: color-mix(in srgb, var(--chapter) 13%, transparent);
+  color: #fff;
+}
+.rc-steps button[aria-pressed="true"] b {
+  background: var(--chapter);
+  color: #160c07;
+}
+@media (max-width: 899px) {
+  .rc-steps button {
+    justify-content: center;
+    padding-inline: 0.2rem;
+  }
+  .rc-steps button span,
+  .rc-steps button i {
+    display: none;
+  }
+}
+
+/* The diagram */
+.rc-view {
+  position: relative;
+  min-width: 0;
+}
+.rc-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.rc-gband {
+  fill: rgb(255 224 196 / 0.045);
+  stroke: rgb(255 224 196 / 0.09);
+  stroke-width: 0.8;
+  stroke-dasharray: 3 3;
+}
+.rc-band {
+  transition: opacity 0.35s;
+}
+.rc-band.main {
+  opacity: 0.86;
+}
+.rc-band.gain {
+  fill: var(--gain);
+  opacity: 0.8;
+}
+.rc-band.loss {
+  fill: var(--loss);
+  opacity: 0.8;
+}
+.rc-band.stock {
+  fill: var(--stock);
+  opacity: 0.72;
+}
+.rc-band.tails {
+  fill: var(--tails);
+  opacity: 0.55;
+}
+.rc-band.ded {
+  fill: var(--ded);
+  opacity: 0.7;
+}
+.rc-flow {
+  fill: none;
+  stroke: rgb(255 248 240 / 0.55);
+  stroke-dasharray: 1.5 13;
+  stroke-linecap: round;
+  animation: rc-flow 1.6s linear infinite;
+  pointer-events: none;
+}
+@keyframes rc-flow {
+  to {
+    stroke-dashoffset: -14.5;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-flow {
+    animation: none;
+    display: none;
+  }
+}
+/* The boundary in focus is bright; the rest step back. */
+.rc-svg[data-step] .rc-b {
+  opacity: 0.42;
+  transition: opacity 0.4s;
+}
+.rc-svg[data-step="1"] .rc-b[data-b="1"],
+.rc-svg[data-step="2"] .rc-b[data-b="2"],
+.rc-svg[data-step="3"] .rc-b[data-b="3"],
+.rc-svg[data-step="4"] .rc-b[data-b="4"],
+.rc-svg[data-step="5"] .rc-b[data-b="5"],
+.rc-svg[data-step="6"] .rc-b[data-b="6"] {
+  opacity: 1;
+}
+.rc-gate {
+  stroke: var(--chapter);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.rc-svg[data-step="1"] .rc-gate[data-b="1"],
+.rc-svg[data-step="2"] .rc-gate[data-b="2"],
+.rc-svg[data-step="3"] .rc-gate[data-b="3"],
+.rc-svg[data-step="4"] .rc-gate[data-b="4"],
+.rc-svg[data-step="5"] .rc-gate[data-b="5"],
+.rc-svg[data-step="6"] .rc-gate[data-b="6"] {
+  opacity: 0.7;
+}
+.rc-node {
+  fill: #f3ebe3;
+  transition: opacity 0.3s;
+}
+.rc-name {
+  font: 650 12.5px var(--sans);
+  fill: #fff;
+  letter-spacing: -0.01em;
+}
+.rc-val {
+  font: 600 11.5px var(--mono);
+  fill: var(--life-2);
+}
+.rc-sub {
+  font: 500 10.5px var(--mono);
+  fill: var(--faint);
+}
+.rc-svg .later {
+  opacity: 0.35;
+}
+.rc-side {
+  fill: #f3ebe3;
+}
+.rc-side.gain {
+  fill: var(--gain);
+}
+.rc-side.loss {
+  fill: var(--loss);
+}
+.rc-side.stock {
+  fill: var(--stock);
+}
+.rc-slabel {
+  font: 500 10.5px var(--sans);
+  fill: var(--muted);
+  transition: opacity 0.3s;
+}
+.rc-slabel .n {
+  font: 600 11px var(--mono);
+}
+.rc-slabel .l {
+  fill: var(--soft);
+  font-weight: 600;
+}
+.rc-slabel.gain .n {
+  fill: var(--gain);
+}
+.rc-slabel.loss .n {
+  fill: var(--loss);
+}
+.rc-slabel.stock .n {
+  fill: var(--stock);
+}
+.rc-slabel.tails .n,
+.rc-slabel.ded .n {
+  fill: var(--soft);
+}
+.rc-slabel.none {
+  opacity: 0;
+}
+.rc-chip {
+  cursor: pointer;
+  transition: opacity 0.3s;
+}
+.rc-chip rect {
+  fill: #120e0c;
+  stroke: rgb(255 224 196 / 0.35);
+  stroke-width: 1;
+}
+.rc-chip text {
+  font: 600 10.5px var(--mono);
+  fill: #fff;
+}
+.rc-chip.ok rect {
+  stroke: color-mix(in srgb, var(--in) 70%, transparent);
+}
+.rc-chip.masked rect {
+  stroke: var(--gain);
+  fill: #2a1d07;
+}
+.rc-chip.masked text {
+  fill: var(--gain);
+}
+.rc-chip.refused rect {
+  stroke: var(--loss);
+  fill: #2b0f15;
+}
+.rc-chip.refused text {
+  fill: var(--loss);
+}
+.rc-chip:hover rect {
+  stroke: #fff;
+}
+
+/* The boundary panel */
+.rc-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 1rem 1.6rem;
+  align-content: start;
+  min-height: 15.5rem;
+  padding: 1.1rem 1.2rem 1.2rem;
+  border: 1px solid var(--line-2);
+  border-radius: 1rem;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--chapter) 7%, transparent), transparent 55%), rgb(0 0 0 / 0.25);
+}
+.rc-panel:empty {
+  visibility: hidden;
+}
+.rc-panel h4 {
+  margin: 0.2rem 0 0.35rem;
+  font-size: 1.12rem;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.rc-p-main > p:not(.micro, .rc-key) {
+  margin: 0.55rem 0 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--soft);
+  text-wrap: pretty;
+}
+.rc-key code {
+  font-size: 0.72rem;
+  color: var(--life-2);
+  overflow-wrap: anywhere;
+}
+.rc-p-main .rc-meas {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.rc-find {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.8rem;
+  font-weight: 650;
+  font-size: 0.95rem;
+  color: #fff;
+}
+.rc-find i {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--in);
+  box-shadow: 0 0 10px var(--in);
+}
+.rc-find.warn {
+  color: var(--gain);
+}
+.rc-find.warn i {
+  background: var(--gain);
+  box-shadow: 0 0 10px var(--gain);
+}
+.rc-find.bad {
+  color: var(--loss);
+}
+.rc-find.bad i {
+  background: var(--loss);
+  box-shadow: 0 0 10px var(--loss);
+}
+.rc-find.note i {
+  background: var(--sky);
+  box-shadow: 0 0 10px var(--sky);
+}
+.rc-gauges {
+  display: grid;
+  gap: 0.7rem;
+}
+.rc-g {
+  display: grid;
+  grid-template-columns: 7.2rem auto;
+  align-items: baseline;
+  gap: 0.15rem 0.6rem;
+}
+.rc-g small {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.rc-g b {
+  justify-self: end;
+  font: 600 0.95rem var(--mono);
+  color: #fff;
+}
+.rc-g.out b {
+  color: var(--gain);
+}
+.rc-track {
+  position: relative;
+  grid-column: 1 / -1;
+  height: 0.9rem;
+  border-radius: 99rem;
+  background: rgb(255 224 196 / 0.07);
+}
+.rc-track .band {
+  position: absolute;
+  left: 40%;
+  width: 20%;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--in) 22%, transparent);
+}
+.rc-track .one {
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: rgb(255 255 255 / 0.5);
+}
+.rc-track .dot {
+  position: absolute;
+  top: 50%;
+  width: 0.8rem;
+  height: 0.8rem;
+  margin: -0.4rem 0 0 -0.4rem;
+  border-radius: 50%;
+  background: var(--in);
+  box-shadow: 0 0 0 3px rgb(0 0 0 / 0.5);
+  transition: left 0.6s var(--ease);
+}
+.rc-g.out .dot {
+  background: var(--gain);
+}
+.rc-tol {
+  margin-top: 0.6rem;
+  font-size: 0.74rem;
+  color: var(--faint);
+}
+.rc-lines {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+}
+.rc-lines div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--line);
+}
+.rc-lines dt {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.rc-lines dd {
+  margin: 0;
+  font: 500 0.82rem/1.4 var(--mono);
+  text-align: right;
+  color: #fff;
+}
+.rc-lines s {
+  color: var(--faint);
+}
+.rc-lines .bad {
+  color: var(--loss);
+}
+
+/* The two verdicts */
+.rc-verdict {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
+  gap: 0.9rem;
+}
+.rc-sheet,
+.rc-fm {
+  padding: 1rem 1.1rem 1.1rem;
+  border: 1px solid var(--line-2);
+  border-radius: 1rem;
+}
+.rc-sheet {
+  background: rgb(0 0 0 / 0.2);
+}
+.rc-fm {
+  border-color: color-mix(in srgb, var(--chapter) 45%, transparent);
+  background: linear-gradient(150deg, color-mix(in srgb, var(--chapter) 12%, transparent), transparent 60%), rgb(0 0 0 / 0.25);
+}
+.rc-grid {
+  display: grid;
+  margin-top: 0.6rem;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 0.4rem;
+  overflow: hidden;
+  font: 500 0.8rem/1.3 var(--mono);
+}
+.rc-grid > div {
+  display: grid;
+  grid-template-columns: 2.4rem minmax(0, 1fr) 4.4rem 3.6rem;
+}
+.rc-grid span {
+  padding: 0.42rem 0.5rem;
+  border-right: 1px solid rgb(255 255 255 / 0.08);
+  border-top: 1px solid rgb(255 255 255 / 0.08);
+  color: var(--soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rc-grid span:last-child {
+  border-right: 0;
+}
+.rc-grid .hd span {
+  border-top: 0;
+  background: rgb(255 255 255 / 0.05);
+  color: var(--faint);
+  font-size: 0.7rem;
+}
+.rc-grid span:first-child {
+  color: var(--faint);
+  text-align: center;
+}
+.rc-grid .pass {
+  background: rgb(95 211 141 / 0.16);
+  color: var(--in);
+  text-align: center;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+}
+.rc-say {
+  margin-top: 0.75rem;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+.rc-say b {
+  color: var(--in);
+}
+.rc-where {
+  margin-top: 0.4rem;
+  font-size: 0.98rem;
+  line-height: 1.45;
+  color: var(--soft);
+}
+.rc-where b {
+  color: #fff;
+}
+.rc-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--gain);
+  text-decoration: underline;
+  text-decoration-color: rgb(251 191 36 / 0.4);
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+.rc-split {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.9rem 0 0.3rem;
+}
+.rc-split .lab {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.rc-split .lab.l {
+  color: var(--loss);
+}
+.rc-split .lab.r {
+  color: var(--gain);
+}
+.rc-axis {
+  position: relative;
+  height: 1.4rem;
+}
+.rc-axis i {
+  position: absolute;
+  top: 0.2rem;
+  bottom: 0.2rem;
+  width: 0;
+  border-radius: 3px;
+  transition: width 1s var(--ease) 0.2s;
+}
+.rc-axis .loss {
+  right: 50%;
+  background: var(--loss);
+}
+.rc-axis .gain {
+  left: 50%;
+  background: var(--gain);
+}
+.rc[data-step] .rc-axis i {
+  width: 42%;
+}
+.rc-axis b {
+  position: absolute;
+  left: 50%;
+  top: -0.15rem;
+  bottom: -0.15rem;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+}
+.rc-kg {
+  display: grid;
+  margin: 0.4rem 0 0;
+}
+.rc-kg div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.8rem;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--line);
+}
+.rc-kg dt {
+  font-size: 0.85rem;
+  color: var(--soft);
+}
+.rc-kg dd {
+  margin: 0;
+  font: 600 0.88rem var(--mono);
+  color: #fff;
+  text-align: right;
+  white-space: nowrap;
+}
+.rc-kg dd small {
+  margin-left: 0.35rem;
+  font-weight: 500;
+  font-size: 0.72rem;
+  color: var(--faint);
+}
+.rc-kg dd.gain {
+  color: var(--gain);
+}
+.rc-kg dd.loss {
+  color: var(--loss);
+}
+.rc-kg .net dt,
+.rc-kg .net dd {
+  font-weight: 700;
+  color: #fff;
+}
+.rc-orders {
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* The command's own table */
+.rc-term .term-bar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.rc-table {
+  margin: 0.4rem 0 0;
+  font-size: 0.74rem;
+}
+.rc-table th,
+.rc-table td {
+  padding-left: 0.8rem;
+  white-space: normal;
+}
+.rc-table th:first-child,
+.rc-table td:first-child {
+  width: 17%;
+}
+.rc-table th {
+  font-size: 0.7rem;
+  line-height: 1.3;
+  vertical-align: bottom;
+}
+.rc-table tr.rc-hit td {
+  color: #fff;
+  background: rgb(251 191 36 / 0.07);
+}
+.rc-table tr.rc-hit td:nth-child(6) {
+  color: var(--gain);
+}
+.rc-out {
+  padding: 0.6rem 0.9rem 0.8rem;
+  font: 500 0.78rem/1.5 var(--mono);
+  color: #eedac5;
+}
+.rc-note {
+  color: var(--faint);
+  line-height: 1.55;
+}
+
+@media (max-width: 999px) {
+  .rc-table thead {
+    display: none;
+  }
+  .rc-table,
+  .rc-table tbody,
+  .rc-table tr,
+  .rc-table td {
+    display: block;
+  }
+  .rc-table tr {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(7.6rem, 1fr));
+    gap: 0.1rem 0.8rem;
+    padding: 0.6rem 0.9rem 0.7rem;
+    border-top: 1px solid var(--line);
+  }
+  .rc-table td {
+    padding: 0.15rem 0;
+    border: 0;
+  }
+  .rc-table td:first-child {
+    grid-column: 1 / -1;
+    width: auto;
+    font-weight: 600;
+    color: #fff;
+  }
+  .rc-table tr.rc-hit {
+    background: rgb(251 191 36 / 0.07);
+  }
+  .rc-table tr.rc-hit td {
+    background: none;
+  }
+  .rc-table td:not(:first-child)::before {
+    content: attr(data-h);
+    display: block;
+    font-size: 0.66rem;
+    color: var(--faint);
+  }
+}
+@media (max-width: 759px) {
+  .rc-panel {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  .rc-verdict {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .rc-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .rc-ctl {
+    justify-content: space-between;
+  }
+  .rc-ctl .seg {
+    flex: 1 1 auto;
+  }
+  .rc-grid {
+    font-size: 0.74rem;
+  }
+  .rc-grid > div {
+    grid-template-columns: 2.1rem minmax(0, 1fr) 3.9rem 3.3rem;
+  }
+  .rc-kg dd small {
+    display: block;
+    margin: 0;
+  }
+  .rc-grid span {
+    padding: 0.4rem 0.35rem;
+  }
+  .rc-grid span:nth-child(2) {
+    white-space: normal;
+  }
+}
