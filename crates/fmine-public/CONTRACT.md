@@ -992,6 +992,13 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
 - E866–E867 independently match all registered cross-vintage workbook pairs and dispositions through 2026Q3.
 
 ## 10. Known gaps
+- DESIGN (BD-504e): original-quarter gold cost/sold figures now receive a separate same-release workbook
+  comparison under `workbook_comparisons`. Canonical AISC and Mine Stats source Claims retain both locators,
+  raw values and ownership evidence. Exact equality, closed rounding overlap, differences and unavailable
+  counterparts are distinct; missing or duplicate assertions never choose a fallback. TCC/AISC rate bases
+  may use the existing gold-table bridge only with its title, attributable denominator and same-release
+  share label retained as hash-bound citations; unproven bases stay unavailable. This bounded projection
+  has its own digest and does not change M0AS or establish the authentic T18 census or complete gate passage.
 - Complete `GATE-BULL-01` issuer-consistency delivery record and prospective Q4 blind-layout run remain open.
 - Full all-verb JSON uncited-number validator (`BD-329`) and two-way cluster inference (`BD-341.S4`) remain open.
 - See scope notes below under Public API / Proof obligations.

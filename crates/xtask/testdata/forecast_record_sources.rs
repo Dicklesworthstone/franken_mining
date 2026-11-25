@@ -1231,6 +1231,10 @@ fn manifest_checks_reject_unused_hash_mismatch_and_premature_quarter_actuals() {
     let mut rules =
         record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
     rules.issuer = "synthetic".into();
+    rules.dates = record::RecordDates {
+        nowcast_from: parse_utc("2030-10-01T00:00:00Z").unwrap(),
+        proof_by: parse_utc("2030-12-31T23:59:59Z").unwrap(),
+    };
     let mut frozen = manifest(vec![input("q3.xlsx", bytes, "2030-10-01")]);
     profile.retrieved_utc = "2031-02-01T00:00:00Z".into();
     assert!(check_manifest_registry(&profile, &frozen, &rules).is_ok());

@@ -280,6 +280,8 @@ pub struct PublicAssuranceReport {
     pub mine_stats_vintages: key::consistency::VintageReport,
     /// The same comparison rules over visible AISC arithmetic operands.
     pub aisc_vintages: key::consistency::VintageReport,
+    /// Original-quarter gold figures across workbook families, with a separate complete projection digest.
+    pub workbook_comparisons: consistency::workbooks::WorkbookComparisons,
     pub disclosures: key::disclosure::VerifiedDisclosureRegistry,
     /// Same-quarter year-on-year public AISC bridges, with cited inputs, rounding enclosures and explicit
     /// fallbacks or refusals. Their separate digest is bound into the M0AS v8 assurance root.
@@ -1020,6 +1022,11 @@ impl PublicAssuranceReport {
                 .map(|s| js(s))
                 .collect::<Vec<_>>()
                 .join(",")
+        );
+        let _ = write!(
+            o,
+            "\"workbook_comparisons\":{},",
+            self.workbook_comparisons.to_json()
         );
         let mut consistency = self.issuer_consistency.to_json();
         consistency.pop();
@@ -1914,6 +1921,8 @@ fn assess_inner(
         Some(&disclosures),
     );
     let issuer_consistency = consistency::aisc_consistency(&public_claims, &instances);
+    let workbook_comparisons =
+        consistency::workbooks::compare(profile, &sources, &aisc_claims, &mine_stats_claims.claims);
     let mine_stats_consistency = consistency::mine_stats::assess(&mine_stats_claims, &mine_ledger);
     let waterfall = waterfall::pair_sites(
         profile,
@@ -2056,6 +2065,7 @@ fn assess_inner(
         mine_stats_claims,
         mine_stats_vintages,
         aisc_vintages,
+        workbook_comparisons,
         disclosures,
         waterfall,
         mine_ledger,

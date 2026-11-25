@@ -8,6 +8,7 @@ use crate::aisc::{AiscClaimIndex, IdentityFamily, IdentityInstance, OperandRole,
 use crate::key::{KeyedCell, SeriesKey};
 
 pub mod mine_stats;
+pub mod workbooks;
 
 pub const FIRST_REGISTERED_CAVEAT: &str = "Earliest registered vintage, not necessarily the issuer's first publication. Hidden sheets are excluded.";
 pub type FamilyCounts<F = IdentityFamily> = BTreeMap<(F, &'static str), usize>;

@@ -607,6 +607,7 @@ mod tests {
             &["robot", "schema", "all"],
             &["doctor"],
             &["assure", "public", "--synthetic"],
+            &["forecast", "record", "check"],
             &[
                 "repair",
                 "plan",
@@ -639,7 +640,14 @@ mod tests {
         }
 
         // 3. Validate every compiled verb in VERB_CATALOG against verbs schema (and reject unknown).
-        assert_eq!(VERB_CATALOG.len(), 85);
+        assert_eq!(VERB_CATALOG.len(), 86);
+        assert!(
+            VERB_CATALOG
+                .iter()
+                .any(|v| v.path == "forecast record check"
+                    && v.subsystem == "Plumb"
+                    && !v.mutates_authority)
+        );
         assert!(VERB_CATALOG.iter().any(|v| v.path == "metrics waterfall"
             && v.subsystem == "Bullion"
             && !v.mutates_authority));

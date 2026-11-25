@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 85
+[verbs] 86
 decide card
 decide production
 decide investment
@@ -104,6 +104,7 @@ recovery gap
 lint
 forecast assess
 forecast record build
+forecast record check
 forecast record score
 forecast journal init
 forecast journal register
