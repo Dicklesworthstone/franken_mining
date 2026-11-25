@@ -2576,9 +2576,16 @@ Set `FMINE_CAPITAL_BUNDLE` to the ID selected from that worksheet's action list.
 budget, dependencies, exclusions, cash and share constraints, nominal tail limits and any declared robust
 tail limits. The journal retains the original source and complete evaluated JSON with its existing Claim
 identity. The full receipt must fit the existing 65,536-byte operation limit; larger comparisons refuse
-without appending. This handoff applies to directly declared static programs. Source-derived programs
-use the [digest-bound investment action](#build-a-portfolio-directly-from-operating-investment-sources).
-KPI-constrained programs require separate choice semantics. Recording grants no approval or execution authority.
+without appending. Source-derived programs use the
+[digest-bound investment action](#build-a-portfolio-directly-from-operating-investment-sources).
+
+For a **KPI-constrained capital program**, copy `bundle_id@comparison_digest` from
+`payload.journal_actions`. The journal admits exactly the bundles that pass the original program and
+every declared KPI limit. The [synthetic AISC example](tests/capital/kpi_constraints.toml) offers the
+efficient investment and hold cash at the `3/2` cap. Growth becomes admissible at `2/1`. Re-evaluate
+the worksheet after changing the cap to get a new action ID. A pinned record retains the complete
+original comparison, including rejected bundles and the KPI result Claim. An empty feasible set has
+an empty action list. The same journal operation limit applies.
 
 For a **two-stage capital program**, copy the full `id` from `decide program <model> --json` under
 `payload.journal_actions`. The `policy_id@comparison_digest` form pins the reviewed comparison. A worksheet

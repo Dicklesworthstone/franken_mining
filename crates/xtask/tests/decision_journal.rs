@@ -36,6 +36,7 @@ const PURCHASE: &str = include_str!("../../../tests/capital/executive_purchase.t
 const OPERATING_REVIEW: &str = include_str!("../../../tests/capital/executive_care.toml");
 const INVESTMENT_PORTFOLIO: &str =
     include_str!("../../../tests/capital/production_investments.toml");
+const KPI_PORTFOLIO: &str = include_str!("../../../tests/capital/kpi_constraints.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 const CAPITAL_BASE: &str = r#"schema = "fmine.capital-program.v1"
@@ -1229,6 +1230,181 @@ fn source_portfolio_journal_binds_the_review_and_reopens_after_leaf_edits() {
         Some(investment)
     );
     assert!(artifact_bytes.len() < 65_536);
+}
+
+#[test]
+fn kpi_portfolio_journal_pins_the_full_comparison_and_admits_only_feasible_bundles() {
+    let f = Fixture::new();
+    fs::write(&f.model, KPI_PORTFOLIO).unwrap();
+    let run = |args: &[&str]| {
+        let output = Process::new(binary())
+            .args(args)
+            .args(["--workspace", f.root.to_str().unwrap(), "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let model = f.model.to_str().unwrap();
+    let journal = f.journal.to_str().unwrap();
+    let preview_bytes = run(&["decide", "program", model]);
+    let preview = parse_json(preview_bytes.as_bytes()).unwrap();
+    let program = json_field(&preview, &["payload", "program"]);
+    let digest = json_field(program, &["digest"]).as_str().unwrap();
+    let actions = json_field(&preview, &["payload", "journal_actions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(actions.len(), 2);
+    let hold = json_field(&actions[0], &["id"]).as_str().unwrap();
+    let efficient = json_field(&actions[1], &["id"]).as_str().unwrap();
+    assert_eq!(hold, format!("bundle_00@{digest}"));
+    assert_eq!(efficient, format!("bundle_01@{digest}"));
+    assert!(
+        json_field(&actions[0], &["candidates"])
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        json_field(&actions[1], &["candidates"]).as_array().unwrap()[0].as_str(),
+        Some("efficient")
+    );
+    assert_eq!(
+        json_field(program, &["summary", "opportunity_cost"]).as_str(),
+        Some("20/1")
+    );
+    for invalid in [format!("bundle_02@{digest}"), format!("bundle_03@{digest}")] {
+        f.refuses_without_append(
+            &f.record(f.initial, "ineligible-kpi", &invalid),
+            200,
+            "FMINE-REF-105",
+        );
+    }
+
+    // A cap below every bundle's KPI value excludes hold cash as well.
+    fs::write(
+        &f.model,
+        KPI_PORTFOLIO.replace("limit = \"3/2\"", "limit = \"1/2\""),
+    )
+    .unwrap();
+    let empty = parse_json(run(&["decide", "program", model]).as_bytes()).unwrap();
+    assert!(
+        json_field(&empty, &["payload", "journal_actions"])
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let empty_digest = json_field(&empty, &["payload", "program", "digest"])
+        .as_str()
+        .unwrap();
+    f.refuses_without_append(
+        &f.record(f.initial, "empty-kpi", &format!("bundle_00@{empty_digest}")),
+        200,
+        "FMINE-REF-105",
+    );
+    fs::write(&f.model, KPI_PORTFOLIO).unwrap();
+
+    let mut pin = f.initial.to_hex();
+    for (action, decision, reason) in [
+        (
+            hold,
+            "hold-cash",
+            "Keep cash available under the reviewed constraints",
+        ),
+        (
+            efficient,
+            "efficient-program",
+            "Select the efficient program under the reviewed AISC cap",
+        ),
+    ] {
+        let record = run(&[
+            "decide",
+            "journal",
+            "record",
+            "--journal",
+            journal,
+            "--expected-head",
+            &pin,
+            "--model",
+            model,
+            "--decision",
+            decision,
+            "--action",
+            action,
+            "--reason",
+            reason,
+            "--code-revision",
+            REVISION,
+            "--trust-host-clock",
+        ]);
+        let record = parse_json(record.as_bytes()).unwrap();
+        pin = json_field(&record, &["payload", "head"])
+            .as_str()
+            .unwrap()
+            .to_owned();
+    }
+    let revised = KPI_PORTFOLIO.replace("limit = \"3/2\"", "limit = \"2/1\"");
+    fs::write(&f.model, revised).unwrap();
+    let revised = parse_json(run(&["decide", "program", model]).as_bytes()).unwrap();
+    assert!(
+        json_field(&revised, &["payload", "journal_actions"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { json_field(row, &["bundle_id"]).as_str() == Some("bundle_02") })
+    );
+    let pinned = Digest32(fmine_calib::record::parse_hex32(&pin).unwrap());
+    f.refuses_without_append(
+        &f.record(pinned, "stale-kpi", efficient),
+        200,
+        "FMINE-REF-505",
+    );
+
+    fs::write(&f.model, "the live KPI worksheet has been replaced\n").unwrap();
+    let shown = parse_json(
+        run(&[
+            "decide",
+            "journal",
+            "show",
+            "--journal",
+            journal,
+            "--head",
+            &pin,
+        ])
+        .as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        json_field(&shown, &["payload", "final_head_pinned"]).as_bool(),
+        Some(true)
+    );
+    let decisions = json_field(&shown, &["payload", "decisions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(decisions.len(), 2);
+    for (row, action) in decisions.iter().zip([hold, efficient]) {
+        let snapshot = json_field(row, &["snapshot"]);
+        assert_eq!(
+            json_field(snapshot, &["selected_action"]).as_str(),
+            Some(action)
+        );
+        assert_eq!(
+            json_field(snapshot, &["model", "content"]).as_str(),
+            Some(KPI_PORTFOLIO)
+        );
+        assert_eq!(
+            json_field(snapshot, &["claim_id"]),
+            json_field(program, &["claim", "id"])
+        );
+        assert_eq!(
+            json_field(snapshot, &["artifact", "content"]).as_str(),
+            Some(preview_bytes.trim_end())
+        );
+    }
 }
 
 #[test]
@@ -3005,11 +3181,11 @@ value = "95"
         300,
         "FMINE-REF-105",
     );
-    for unsupported in [
-        include_str!("../../../tests/capital/kpi_constraints.toml"),
+    for needs_reviewed_id in [
+        KPI_PORTFOLIO,
         include_str!("../../../tests/capital/staged_permit.toml"),
     ] {
-        fs::write(&f.model, unsupported).unwrap();
+        fs::write(&f.model, needs_reviewed_id).unwrap();
         f.refuses_without_append(
             &f.record(f.initial, "policy-not-a-bundle", "bundle_00"),
             300,

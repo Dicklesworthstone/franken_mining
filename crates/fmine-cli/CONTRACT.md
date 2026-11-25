@@ -59,11 +59,18 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     preserves structural, nominal primary/secondary tail-risk and declared robust tail-risk limits.
     The full model and command comparison, including rejected alternatives and the existing output
     Claim ID, remain in the snapshot under the capital command's canonical source locator.
-    Existing journal formats and its 65,536-byte operation cap remain unchanged; complete receipts
-    that exceed it refuse atomically. KPI and source-derived investment models require their own
-    handoff. Recording grants no approval or execution authority. Direct CLI
-    replay, lower-ranked choices, risk/funding refusals and oversize atomicity are covered by
+    The existing 65,536-byte operation cap applies. Complete receipts that exceed it refuse atomically.
+    Direct CLI replay, lower-ranked choices, risk/funding refusals and oversize atomicity are covered by
     `capital_bundle_` controls in `xtask/tests/decision_journal.rs`.
+  - DESIGN (bd-229.1). Source-derived investments offer `bundle_id@comparison_digest` actions. Recording
+    recomputes the sources before checking the reviewed digest and existing portfolio admission. The
+    original manifest, exact evaluated summary, selected bundle, result Claim and source receipt hashes
+    are retained subject to the existing cap. The full comparison export carries the original source worksheets.
+  - DESIGN (bd-229.2). KPI-constrained programs offer the same action syntax. Admission uses the
+    evaluator's combined original and KPI feasibility. Recording binds the KPI comparison digest and
+    retains the full original envelope and KPI result Claim within the operation cap. Pinned replay
+    uses the saved worksheet and comparison. A changed digest, an infeasible bundle or an empty feasible
+    set refuses before append. `xtask/tests/decision_journal.rs` exercises the native workflow.
   - DESIGN (bd-w770). Staged models list eligible `journal_actions` using `policy_id@comparison_digest`.
     Recording requires that exact selector, a policy passing all structural, nominal and declared
     robust tail limits, and a writer clock interval entirely before midnight UTC on the observation

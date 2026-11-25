@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use fmine_capital::{ProgramChoice, robustness::kpi::EvaluatedKpiProgram};
 use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{Refusal, RefusalCode};
 
@@ -33,9 +34,7 @@ pub(crate) fn executive_snapshot(
 
 const MODEL_LOCATOR: &str = "declared static capital program";
 
-fn journal_choices(
-    program: &fmine_capital::EvaluatedProgram,
-) -> Vec<&fmine_capital::ProgramChoice> {
+fn journal_choices(program: &fmine_capital::EvaluatedProgram) -> Vec<&ProgramChoice> {
     let summary = program.summary();
     summary
         .choices
@@ -50,6 +49,41 @@ fn journal_choices(
                 })
         })
         .collect()
+}
+
+fn kpi_journal_choices(program: &EvaluatedKpiProgram) -> impl Iterator<Item = &ProgramChoice> {
+    program
+        .static_program()
+        .summary()
+        .choices
+        .iter()
+        .filter(|bundle| {
+            program
+                .summary()
+                .choices
+                .iter()
+                .any(|choice| choice.bundle_id == bundle.bundle_id && choice.feasible)
+        })
+}
+
+fn reviewed_bundle_actions<'a>(
+    choices: impl Iterator<Item = &'a ProgramChoice>,
+    digest: &str,
+) -> String {
+    let actions = choices
+        .map(|choice| {
+            let id = format!("{}@{digest}", choice.bundle_id);
+            let candidates = choice.selected.iter().map(|id| js(id)).collect::<Vec<_>>();
+            format!(
+                r#"{{"id":{},"bundle_id":{},"candidates":[{}]}}"#,
+                js(&id),
+                js(&choice.bundle_id),
+                candidates.join(",")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{actions}]")
 }
 
 fn comparison_envelope(
@@ -79,7 +113,10 @@ fn comparison_envelope(
                 staged_journal::actions_json(program)
             )
         }
-        _ => String::new(),
+        fmine_capital::model::EvaluatedModel::Kpi(program) => format!(
+            ",\"journal_actions\":{}",
+            reviewed_bundle_actions(kpi_journal_choices(program), program.digest())
+        ),
     };
     let payload = format!(
         "{{\"mode\":\"{}\",\"source\":{},\"program\":{}{actions}}}",
@@ -134,11 +171,27 @@ pub(crate) fn program_snapshot(
             )
         }
         EvaluatedModel::Recourse(program) => staged_journal::snapshot(program, &source, action)?,
-        EvaluatedModel::Kpi(_) => {
-            return Err(Refusal::new(
-                RefusalCode::BasisMismatch105,
-                "KPI-constrained capital models require their own journal choice semantics",
-            ));
+        EvaluatedModel::Kpi(program) => {
+            let unavailable = || {
+                Refusal::new(
+                    RefusalCode::BasisMismatch105,
+                    "select an eligible digest-bound KPI bundle from decide program --json journal_actions",
+                )
+            };
+            let (bundle, reviewed) = action.split_once('@').ok_or_else(unavailable)?;
+            if reviewed != program.digest() {
+                return Err(Refusal::new(
+                    RefusalCode::DigestMismatch505,
+                    "KPI capital comparison differs from the reviewed action; evaluate the worksheet again before recording",
+                ));
+            }
+            if !kpi_journal_choices(program).any(|choice| choice.bundle_id == bundle) {
+                return Err(unavailable());
+            }
+            (
+                comparison_envelope(&evaluated, &source, text.len()).to_json(),
+                program.claim().claim_id.to_string(),
+            )
         }
     };
     Ok(Some(snapshot))
@@ -150,7 +203,8 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "\"schema\":\"fmine.capital-program.v1\",",
     "\"staged_permit_example\":\"tests/capital/staged_permit.toml\",",
     "\"staged_permits\":\"Bind a recourse candidate to each required application using stage_permit rows. Declare permit terms and one permit_state record per application and shared state, with any state-specific permit_pause rows. Use exact n/d percentage points for scope change and reopen threshold. Sources must be available by observation_date in their scenario. An elapsed clock alone leaves main works blocked. The same permit checks apply in the static benchmark and all realized continuations. States with the same observation share one decision.\",",
-    "\"static_journal\":\"Use decide journal record --model <directly declared static program> --action <bundle id>. Choose an id from journal_actions; candidate membership and all alternatives remain in the complete comparison. Admission enforces structural, nominal tail-risk and any declared robust tail-risk limits, including per-share and secondary-entity limits. A feasible lower-ranked bundle remains an explicit human choice. The original model, Claims and full evaluated JSON must fit the existing 65536-byte operation limit; oversize refuses without appending. KPI-constrained programs require their own handoff. Recording supplies no approval or execution authority.\",",
+    "\"static_journal\":\"Use decide journal record --model <directly declared static program> --action <bundle id>. Choose an id from journal_actions; candidate membership and all alternatives remain in the complete comparison. Admission enforces structural, nominal tail-risk and any declared robust tail-risk limits, including per-share and secondary-entity limits. A feasible lower-ranked bundle remains an explicit human choice. The original model, Claims and full evaluated JSON must fit the existing 65536-byte operation limit; oversize refuses without appending. Recording supplies no approval or execution authority.\",",
+    "\"kpi_journal\":\"For a KPI-constrained static program copy an eligible bundle_id@comparison_digest from payload.journal_actions to decide journal record --action. The list includes every bundle passing the original and declared KPI constraints. An empty feasible set offers no action. A changed worksheet or comparison invalidates the selector. Pinned replay retains the complete original comparison and the KPI result Claim. The existing operation size limit remains binding.\",",
     "\"investment_journal\":\"For fmine.capital-investments.v1, copy an eligible bundle_id@comparison_digest from payload.journal_actions to decide journal record --action. Recording recomputes the complete source chain and applies the same structural, nominal and declared robust tail-risk limits as a directly declared portfolio. A changed source invalidates the action. The existing bounded journal retains the original manifest, exact summary, selection, Claim ID and hashes of the source receipts. Full source worksheets remain in the original decide program JSON output.\",",
     "\"staged_journal\":\"For a declared two-stage program, copy an id from decide program --json journal_actions to decide journal record --action. The id binds the policy to the reviewed comparison digest; changing the worksheet invalidates it. Admission checks all structural and declared nominal and robust tail-risk constraints. The latest possible commit time must precede the observation date at UTC midnight. The original worksheet and the complete selected policy, comparison digest and Claim identity survive source edits within the existing operation limit. The record preserves contingent intent. A follow-on observation or authorization requires its own evidence.\",",
     "\"executive_schema\":\"fmine.executive-decision.v1\",",

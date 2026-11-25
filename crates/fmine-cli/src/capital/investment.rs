@@ -711,26 +711,6 @@ struct Portfolio {
     no_claim: &'static str,
 }
 
-impl Portfolio {
-    fn journal_actions(&self) -> String {
-        let actions = super::journal_choices(&self.program)
-            .iter()
-            .map(|choice| {
-                let id = format!("{}@{}", choice.bundle_id, self.digest);
-                let candidates = choice.selected.iter().map(|id| js(id)).collect::<Vec<_>>();
-                format!(
-                    r#"{{"id":{},"bundle_id":{},"candidates":[{}]}}"#,
-                    js(&id),
-                    js(&choice.bundle_id),
-                    candidates.join(",")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        format!("[{actions}]")
-    }
-}
-
 fn evaluate_portfolio(text: &str, source: &SourceAnchor, root: &Path) -> Result<Portfolio> {
     let d = parse(text, source)?;
     let mut loaded = BTreeMap::new();
@@ -1009,7 +989,8 @@ pub(super) fn execute(
         .map(|receipt| receipt.report.as_str())
         .collect::<Vec<_>>()
         .join(",");
-    let actions = portfolio.journal_actions();
+    let actions =
+        super::reviewed_bundle_actions(super::journal_choices(program).into_iter(), digest);
     let payload = format!(
         "{{\"schema\":\"fmine.capital-investments-command.v1\",\"mode\":\"source_derived_investment_portfolio\",\"manifest\":{{\"source\":{},\"submitted_worksheet\":{}}},\"shared_scenario_basis\":{},\"additivity_basis\":{},\"candidate_sources\":[{}],\"sources\":[{snapshots}],\"program\":{}{cash_field},\"digest\":{},\"journal_actions\":{actions}}}",
         worksheet_input::source_json(source, text.len()),
