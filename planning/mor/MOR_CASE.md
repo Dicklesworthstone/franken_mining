@@ -1870,3 +1870,25 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     The corrected runner returns nonzero in all four cases and preserves the receipts of an earlier run.
     The local Q3 replay exercises the known-file tooling. The E854 binary's separate Q3 schema refusal and
     the prospective Q4 blind measurement remain distinct from this replay.
+
+- **E865** Publication evidence for the FY2026 forecast inputs (FACT and INFERENCE, 2026-11-25 UTC, bd-0545.3.1).
+  - The issuer's [Quarterly Reports index](https://www.barrick.com/English/investors/quarterly-reports/default.aspx)
+    supplies the `GetFinancialReportList` feed used in E859. Each of the 11 required Mine Stats workbook URLs
+    appears exactly once under a dated report. The 2024, 2025 and 2026 feed-response SHA-256 digests are
+    `e11e75dc2381063565eddfa9dbe9e9d0254812ef6d6266c820b998abe80a94f8`,
+    `289b014c1ecd8ebe172a596caad37f4cce89ea0f18a387b72cce42c1a3cf0e7a` and
+    `97e44646aa0929ff8f9bbe346d2a7b23fe548d2130a9a1e045253ddaabd1fab0`.
+  - The directory and original release selectors were unchanged. All 11 local workbook sizes and SHA-256
+    digests matched the existing registry. Nine rows now record the publication day inferred from the dated
+    listing and cite the feed's report and document IDs. The two existing dates agree with the feed.
+    The original retrieval bounds still govern availability of these exact registered bytes.
+  - The documented `pooled-quarterly-ratio-empirical-v1` draft at the `2026-11-10T23:59:59Z` cut returns all
+    22 live site and target forecasts and 11 dated inputs. Its CSV, exact forecasts, pools, source Claims
+    and availability bounds equal the earlier undated-input run. The candidate receipt includes the new
+    source metadata and changes to `f65c7ca92ecc0f64b4397f2296e3d1dc0e1876ae5604004df12765218fbb359a`.
+    The CSV SHA-256 is `d7f0ae92f7932e4d99ec76a08c05a01f0feb9cef83d7179083077feb06b01453`.
+    Both E860 assurance roots and anchors match, and both existing rules RFC 3161 proofs verify.
+  - The unsigned manifest represents the shared retrieval window by its recorded upper endpoint,
+    `2026-10-29T03:36:24Z`, as the manifest requires a whole-second UTC value. The candidate retains the
+    full recorded window. The record has no author or contact declaration and the hash command refuses
+    issuance at that boundary. The rules proofs predate the candidate and apply to the rules alone.
