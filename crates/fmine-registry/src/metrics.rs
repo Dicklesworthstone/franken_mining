@@ -439,9 +439,11 @@ impl MetricRegistry {
                 }
             }
             if matches!(def.family, MetricFamily::AllInCost | MetricFamily::CashCost)
-                && !Self::ancestry(&definitions, &def.id)
-                    .iter()
-                    .any(|owner| self.lines.get(*owner).is_some_and(|lines| !lines.is_empty()))
+                && !Self::ancestry(&definitions, &def.id).iter().any(|owner| {
+                    self.lines
+                        .get(*owner)
+                        .is_some_and(|lines| !lines.is_empty())
+                })
             {
                 return Err(schema_err(format!(
                     "{}: a cost definition with no lines",
