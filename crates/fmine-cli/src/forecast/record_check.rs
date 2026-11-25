@@ -81,7 +81,7 @@ pub(crate) fn parse(
         format,
         values
             .get("--workspace")
-            .map_or_else(|| default_root.to_path_buf(), |path| PathBuf::from(path)),
+            .map_or_else(|| default_root.to_path_buf(), PathBuf::from),
     ))
 }
 

@@ -991,6 +991,13 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
 - `GATE-BULL-01` (parts 1–3a/3b/3c): Mine Stats population reproduces T16 and all nine known changes with 30 region-map exclusions citing E461.
 
 ## 10. Known gaps
+- DESIGN (BD-504e): original-quarter gold cost/sold figures now receive a separate same-release workbook
+  comparison under `workbook_comparisons`. Canonical AISC and Mine Stats source Claims retain both locators,
+  raw values and ownership evidence. Exact equality, closed rounding overlap, differences and unavailable
+  counterparts are distinct; missing or duplicate assertions never choose a fallback. TCC/AISC rate bases
+  may use the existing gold-table bridge only with its title, attributable denominator and same-release
+  share label retained as hash-bound citations; unproven bases stay unavailable. This bounded projection
+  has its own digest and does not change M0AS or establish the authentic T18 census or complete gate passage.
 - Complete `GATE-BULL-01` issuer-consistency delivery record and Q3 2026 workbook ingestion remain open.
 - Full all-verb JSON uncited-number validator (`BD-329`), authentic corpus cross-vintage census acceptance (`BD-331.S8`), and two-way cluster inference (`BD-341.S4`) remain open.
 - See scope notes below under Public API / Proof obligations.

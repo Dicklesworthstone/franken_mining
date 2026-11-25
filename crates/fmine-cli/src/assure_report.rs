@@ -541,6 +541,90 @@ fn vintages(out: &mut String, value: &VintageReport) {
     }
 }
 
+fn workbook_comparisons(out: &mut String, report: &PublicAssuranceReport) {
+    let comparisons = &report.workbook_comparisons;
+    let _ = writeln!(
+        out,
+        "\n## Same-release workbook comparisons\n\n{}\n\nProjection digest: `{}`.\n",
+        fmine_public::consistency::workbooks::LIMITATION,
+        comparisons.digest()
+    );
+    table(
+        out,
+        &[
+            "Release / subject / metric",
+            "Finding",
+            "Reconciliation minus Mine Stats",
+            "Reconciliation evidence",
+            "Mine Stats evidence",
+        ],
+    );
+    for comparison in &comparisons.rows {
+        let sources = |cells: &[KeyedCell]| {
+            cells
+                .iter()
+                .map(|cell| {
+                    format!(
+                        "{} = {}; Claim {}; SHA-256 {}",
+                        cell.locator,
+                        shown(cell),
+                        cell.claim.claim_id,
+                        cell.key.reporting_vintage.file_sha256
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let difference = comparison.difference.as_ref().map_or_else(
+            || "unavailable".into(),
+            |d| {
+                format!(
+                    "{}; closed rounding [{}, {}]",
+                    rat_text(d.point),
+                    rat_text(d.lower),
+                    rat_text(d.upper)
+                )
+            },
+        );
+        row(
+            out,
+            &[
+                format!(
+                    "{} / {} / {}",
+                    comparison.release, comparison.subject, comparison.metric
+                ),
+                format!(
+                    "{}{}",
+                    comparison.state.as_str(),
+                    comparison
+                        .reason
+                        .map_or_else(String::new, |reason| format!(": {reason}"))
+                ),
+                difference,
+                sources(&comparison.reconciliation),
+                sources(&comparison.mine_stats),
+            ],
+        );
+    }
+    for comparison in &comparisons.rows {
+        if !comparison.basis_citations.is_empty() {
+            let _ = writeln!(
+                out,
+                "\nExplicit rate-basis evidence for {} / {} / {}: {}.\n",
+                text(&comparison.release),
+                text(&comparison.subject),
+                text(comparison.metric),
+                comparison
+                    .basis_citations
+                    .iter()
+                    .map(|c| format!("{}: {}; SHA-256 {}", text(&c.at), text(&c.text), c.sha256))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+    }
+}
+
 pub(super) fn cross_vintage(out: &mut String, report: &PublicAssuranceReport) {
     out.push_str("\n## Cross-vintage identity accounting\n\nEach later appearance is compared with its earliest registered release. These counts are separate from the within-vintage arithmetic totals. Numeric restatements keep stated and reconstructed explanations distinct; an incomplete disclosure check remains undecidable. Conflicts retain every source assertion and do not establish a true vintage or a minimal conflict set. First and single appearances remain in the source-value report.\n");
     for value in [&report.aisc_vintages, &report.mine_stats_vintages] {
@@ -875,6 +959,7 @@ pub(super) fn markdown(report: &PublicAssuranceReport) -> Result<String, Refusal
     cross_vintage(&mut out, report);
     vintages(&mut out, &report.aisc_vintages);
     vintages(&mut out, &report.mine_stats_vintages);
+    workbook_comparisons(&mut out, report);
     extraction_limits(&mut out, report);
     derived_sections(&mut out, report);
     let _ = writeln!(
