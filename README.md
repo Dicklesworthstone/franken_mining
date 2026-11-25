@@ -807,6 +807,9 @@ in `public_claims.unregistered_all_zero`.
 Cost-of-sales-per-ounce Claims include an exact ownership share when the AISC footnote and the Mine Stats
 labels for the publication and every quarter of the reported period agree. `fmine claim trace` resolves
 the footnote and the labels, including those from earlier workbooks used for a comparative.
+Comparative and cumulative sold-ounce Claims use the same period checks when the row declares an
+attributable basis. If a confirming quarter is unavailable, the original figure is shown with the
+exact ownership share unresolved.
 
 The same engine compares the AISC workbooks under `issuer_consistency.aisc_vintages`. Its frozen original
 population through 2026Q2 contains 9,541 appearances, 5,819 series and 3,722 later comparisons, including

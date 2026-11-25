@@ -977,7 +977,7 @@ fn column_locator(instance: &IdentityInstance) -> String {
     format!("{}:{}!{}", instance.file, instance.sheet, instance.column)
 }
 
-struct ConfirmedRateShare {
+struct ConfirmedShare {
     num: i64,
     den: i64,
     evidence: String,
@@ -985,12 +985,22 @@ struct ConfirmedRateShare {
     anchor: SourceAnchor,
 }
 
-type ConfirmedRateShares<'a> = BTreeMap<&'a str, BTreeMap<String, ConfirmedRateShare>>;
+impl ConfirmedShare {
+    fn ownership(&self) -> OwnershipBasis {
+        OwnershipBasis::Attributable {
+            num: self.num,
+            den: self.den,
+            source: ShareSource::Registry,
+        }
+    }
+}
 
-fn confirmed_rate_shares<'a>(
+type ConfirmedShares<'a> = BTreeMap<&'a str, BTreeMap<String, ConfirmedShare>>;
+
+fn confirmed_shares<'a>(
     profile: &IssuerProfile,
     sources: &'a [LoadedSource],
-) -> ConfirmedRateShares<'a> {
+) -> ConfirmedShares<'a> {
     let mut releases = BTreeMap::new();
     for source in sources.iter().filter(|s| s.kind == SourceKind::MineStats) {
         releases.entry(source.quarter.as_str()).or_insert_with(|| {
@@ -1013,7 +1023,7 @@ fn confirmed_rate_shares<'a>(
                     }
                     Some((
                         subject,
-                        ConfirmedRateShare {
+                        ConfirmedShare {
                             num,
                             den,
                             evidence,
@@ -1028,25 +1038,25 @@ fn confirmed_rate_shares<'a>(
     releases
 }
 
-/// The footnote states the metric's basis. The labels must confirm the same share for the printed period
-/// and the publication that reprints it. The identity verdict is irrelevant to what the issuer states.
-fn rate_basis(
+/// The row label or footnote states the metric's basis. Corroborate the share across the observation
+/// and the publication that reprints it, independently of the identity verdict.
+fn period_basis(
     source: &LoadedSource,
     sheet: &Sheet,
+    basis_cell: &str,
     subject: &str,
     period: Period,
-    shares: &ConfirmedRateShares<'_>,
+    shares: &ConfirmedShares<'_>,
 ) -> Option<(OwnershipBasis, String, Vec<SourceAnchor>)> {
     let ((year, first), (_, last)) = period.months();
     let release = parse_period_code(&source.quarter)?;
     if period.months().1 > release.months().1 {
         return None;
     }
-    let footnote = find_share_footnote(sheet)?;
     let printed = shares.get(source.quarter.as_str())?.get(subject)?;
     let mut labels = BTreeSet::from([printed.label_at.as_str()]);
     let mut anchors = vec![
-        source.workbook.make_anchor(&sheet.name, &footnote),
+        source.workbook.make_anchor(&sheet.name, basis_cell),
         printed.anchor.clone(),
     ];
     for quarter in first.div_ceil(3)..=last.div_ceil(3) {
@@ -1065,35 +1075,26 @@ fn rate_basis(
         printed.evidence,
         source.file_name,
         sheet.name,
-        footnote,
+        basis_cell,
         labels.into_iter().collect::<Vec<_>>().join(", ")
     );
-    Some((
-        OwnershipBasis::Attributable {
-            num: printed.num,
-            den: printed.den,
-            source: ShareSource::Registry,
-        },
-        evidence,
-        anchors,
-    ))
+    Some((printed.ownership(), evidence, anchors))
 }
 
 /// Builds one public Claim per distinct AISC operand, visible co-product rate and printed company column,
 /// keeping every reporting vintage. The anchored gold table's `Total` / `Total Gold` column is keyed as
 /// `Total Gold`, with its printed header retained; it does not enter the registered identity population.
 /// Other subjects are read from the cell's own registered column, including regional member columns.
-/// An attributable-basis row label uses its registered share. A cost-of-sales-per-ounce footnote also needs
-/// share confirmation in the reporting release and every quarter in the observation. Co-product rates have
-/// their own semantic line; they do not enter the by-product identity
-/// ledger or inherit its arithmetic conclusions.
+/// An attributable-basis row label or cost-of-sales-per-ounce footnote needs share confirmation in the
+/// reporting release and every quarter in the observation. Co-product rates have their own semantic line
+/// and never inherit the by-product identity verdicts.
 #[must_use]
 pub fn key_aisc_operands(
     profile: &IssuerProfile,
     sources: &[LoadedSource],
     instances: &[IdentityInstance],
 ) -> AiscClaimIndex {
-    let rate_shares = confirmed_rate_shares(profile, sources);
+    let shares = confirmed_shares(profile, sources);
     let sources: BTreeMap<&str, &LoadedSource> =
         sources.iter().map(|s| (s.file_name.as_str(), s)).collect();
     let operands: BTreeMap<String, &Operand> = instances
@@ -1131,7 +1132,7 @@ pub fn key_aisc_operands(
             let rows = coproduct_rows
                 .entry((operand.file.clone(), operand.sheet.clone()))
                 .or_insert_with(|| coproduct_rate_rows(sheet));
-            key_aisc_operand(profile, source, sheet, table, rows, operand, &rate_shares).map(Some)
+            key_aisc_operand(profile, source, sheet, table, rows, operand, &shares).map(Some)
         })();
         match result {
             Ok(Some(cell)) => {
@@ -1190,15 +1191,7 @@ pub fn key_aisc_operands(
                     if index.cells.contains_key(&locator) {
                         continue;
                     }
-                    match key_aisc_operand(
-                        profile,
-                        source,
-                        sheet,
-                        table,
-                        rows,
-                        &operand,
-                        &rate_shares,
-                    ) {
+                    match key_aisc_operand(profile, source, sheet, table, rows, &operand, &shares) {
                         Ok(cell) => {
                             index.cells.insert(locator, cell);
                         }
@@ -1258,7 +1251,7 @@ fn key_aisc_operand(
     table: &AiscTable,
     coproduct_rows: &BTreeSet<u32>,
     operand: &Operand,
-    rate_shares: &ConfirmedRateShares<'_>,
+    shares: &ConfirmedShares<'_>,
 ) -> Result<KeyedCell, String> {
     let (row, col) =
         parse_a1_ref(&operand.cell).ok_or_else(|| "invalid operand cell reference".to_string())?;
@@ -1310,30 +1303,31 @@ fn key_aisc_operand(
         "usd_m"
     };
     let raw_label = cell_text(sheet, row, 1).unwrap_or_default().to_lowercase();
-    let registered_share = profile.shares.iter().find(|s| s.subject == subject);
-    let attributable = raw_label.contains("attributable basis");
-    let mut basis = OwnershipBasis::Unprinted;
-    let mut basis_evidence = None;
-    let mut basis_anchors = Vec::new();
-    if row == table.cos_rate_row {
-        if let Some((share, evidence, anchors)) =
-            rate_basis(source, sheet, subject, period, rate_shares)
-        {
-            basis = share;
-            basis_evidence = Some(evidence);
-            basis_anchors = anchors;
+    let basis_cell = if row == table.cos_rate_row {
+        find_share_footnote(sheet)
+    } else if raw_label.contains("attributable basis") {
+        Some(format!("A{row}"))
+    } else {
+        None
+    };
+    let confirmed = basis_cell.as_deref().and_then(|at| {
+        if row != table.cos_rate_row && period.code() == source.quarter {
+            let share = shares.get(source.quarter.as_str())?.get(subject)?;
+            // DESIGN: preserve the established Claim encoding for verified original-quarter basis
+            // inputs. The waterfall also binds their same-release label in its own evidence.
+            let evidence = format!(
+                "{}; {}:{}!{at}",
+                share.evidence, source.file_name, sheet.name
+            );
+            Some((share.ownership(), evidence, Vec::new()))
+        } else {
+            period_basis(source, sheet, at, subject, period, shares)
         }
-    } else if attributable && let Some(share) = registered_share {
-        basis = OwnershipBasis::Attributable {
-            num: share.num,
-            den: share.den,
-            source: ShareSource::Registry,
-        };
-        basis_evidence = Some(format!(
-            "{}; {}:{}!A{}",
-            share.evidence, source.file_name, sheet.name, row
-        ));
-    }
+    });
+    let (basis, basis_evidence, basis_anchors) = confirmed.map_or(
+        (OwnershipBasis::Unprinted, None, Vec::new()),
+        |(basis, evidence, anchors)| (basis, Some(evidence), anchors),
+    );
     let key = PublicKey {
         issuer: profile.issuer.clone(),
         subject: subject.to_string(),

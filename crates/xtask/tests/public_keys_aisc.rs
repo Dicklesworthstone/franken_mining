@@ -261,13 +261,17 @@ mod tests {
         let profile = synthetic::synthetic_profile();
         let base = fmine_public::run_synthetic_assurance(&[]).expect("synthetic assurance");
         let rate_at = synthetic_at("K14");
+        let sold_at = synthetic_at("K13");
         let share = OwnershipBasis::Attributable {
             num: 3,
             den: 4,
             source: ShareSource::Registry,
         };
         let rate = &base.public_claims.cells[&rate_at];
+        let sold = &base.public_claims.cells[&sold_at];
         assert_eq!(rate.key.ownership_basis, share);
+        assert_eq!(sold.key.ownership_basis, share);
+        assert_eq!(sold.claim.anchors.len(), 1, "original-quarter encoding");
         assert_eq!(rate.printed_basis, OwnershipBasis::Unprinted);
         assert_eq!(rate.claim.anchors.len(), 3);
         assert!(rate.claim.anchors.iter().any(|a| a.locator == "QTD!A5"));
@@ -277,6 +281,23 @@ mod tests {
             no_footnote.public_claims.cells[&rate_at]
                 .key
                 .ownership_basis,
+            OwnershipBasis::Unprinted
+        );
+        assert_eq!(
+            no_footnote.public_claims.cells[&sold_at]
+                .key
+                .ownership_basis,
+            share
+        );
+        let without_mine_stats: Vec<_> = base
+            .sources
+            .iter()
+            .filter(|s| s.kind != SourceKind::MineStats)
+            .cloned()
+            .collect();
+        let unconfirmed_first = key_aisc_operands(&profile, &without_mine_stats, &base.instances);
+        assert_eq!(
+            unconfirmed_first.cells[&sold_at].key.ownership_basis,
             OwnershipBasis::Unprinted
         );
         assert_eq!(
@@ -327,12 +348,22 @@ mod tests {
                 .expect("basis")
                 .contains("reprint-mine-stats.xlsx:QTD!A5")
         );
+        let reprinted_sold = &reprint.cells[&sold_at];
+        assert_eq!(reprinted_sold.key.series_key(), sold.key.series_key());
+        assert_ne!(reprinted_sold.claim.claim_id, sold.claim.claim_id);
+        assert_eq!(reprinted_sold.claim.anchors.len(), 4);
+        assert_eq!(reprinted_sold.claim.anchors[1].locator, "Q1 2030!A13");
+        assert_eq!(reprinted_sold.claim.value, sold.claim.value);
 
         sources.pop();
         sources.push(reprint_stats("Site H (80%)"));
         let conflicting_label = key_aisc_operands(&profile, &sources, &base.instances);
         assert_eq!(
             conflicting_label.cells[&rate_at].key.ownership_basis,
+            OwnershipBasis::Unprinted
+        );
+        assert_eq!(
+            conflicting_label.cells[&sold_at].key.ownership_basis,
             OwnershipBasis::Unprinted
         );
         sources.pop();
@@ -344,6 +375,11 @@ mod tests {
             OwnershipBasis::Unprinted
         );
         assert_eq!(no_prior_label.cells[&rate_at].claim.anchors.len(), 1);
+        assert_eq!(
+            no_prior_label.cells[&sold_at].key.ownership_basis,
+            OwnershipBasis::Unprinted
+        );
+        assert_eq!(no_prior_label.cells[&sold_at].claim.value, sold.claim.value);
     }
 
     fn keying_fixture(file: &str, release: &str, col: &str, shift: u32) -> LoadedSource {
@@ -775,6 +811,23 @@ mod tests {
                 .anchors
                 .iter()
                 .any(|anchor| anchor.locator == "Q2 2026!A32")
+        );
+        let comparable = &index.cells["Barrick_Q1_2025_AISC.xlsx:Q1 2024!C19"];
+        assert_eq!(
+            comparable.key.ownership_basis,
+            OwnershipBasis::Attributable {
+                num: 123,
+                den: 200,
+                source: ShareSource::Registry
+            }
+        );
+        assert!(comparable.claim.anchors.iter().any(|a| {
+            a.artifact_path.ends_with("Barrick_Q1_2024_Mine_Stats.xlsx") && a.locator == "QTD!A5"
+        }));
+        let uncovered = &index.cells["Barrick_Q3_2024_AISC.xlsx:Q3 2023!K19"];
+        assert_eq!(uncovered.key.ownership_basis, OwnershipBasis::Unprinted);
+        assert!(
+            matches!(&uncovered.claim.value, PublicValue::Number { displayed: Ok(v), .. } if v == "77")
         );
     }
 
