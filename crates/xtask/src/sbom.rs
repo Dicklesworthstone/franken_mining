@@ -726,7 +726,7 @@ mod tests {
     }
 
     /// The real workspace: the bill lists exactly the packages reachable from fmine-cli through normal and build
-    /// dependencies in the member manifests, read without cargo.
+    /// dependencies in the member manifests and the pinned registry leaf.
     #[test]
     fn the_workspace_bill_is_the_manifest_closure() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -744,11 +744,13 @@ mod tests {
             let (name, normal, _dev) = crate::parse_cargo_manifest(&manifest).expect("manifest");
             deps.insert(name, normal);
         }
+        // DESIGN (bd-225.7): the pinned LZ4 features admit no normal or build dependencies.
+        deps.insert("lz4_flex".into(), Vec::new());
         let mut expect = BTreeSet::new();
         let mut todo = vec![ROOT_PACKAGE.to_string()];
         while let Some(name) = todo.pop() {
             if expect.insert(name.clone()) {
-                todo.extend(deps.get(&name).cloned().unwrap_or_default());
+                todo.extend(deps[&name].iter().cloned());
             }
         }
         let mut listed: Vec<&str> = bom.components.iter().map(|c| c.name.as_str()).collect();
