@@ -14,6 +14,9 @@ The universal Claim and the checks around it:
 - `render` (`BD-052`, plan §30.5) renders checked `FmClaimRow`s in `level1`, `markdown`, and multi-row FM tables
   with G-EXEC numeric suppression, clickable `fmine:clm_...` links, plain-sentence executive summaries, and the
   `INV-002` `NO_CLAIM_BANNER`.
+- `refclass` (`BD-050`, plan §9.3, `GATE-PLUMB-E4`) parses `registries/refclass.toml`, enforces zero ε without a
+  registered `REFCLASS-` record (`EpsilonContamination`), provides `BitwisePortable` moment-matched Huber
+  ε-contamination (`GB-32`), and guards `G-DISC` against unverified reference classes and unverified ancestors.
 
 It does no I/O. Storage, locking and key custody belong to the callers in `fmine-io` and `fmine-cli`.
 
@@ -21,7 +24,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **Layer:** S0
 - **Subsystem:** Plumb
 - **LOC budget:** 16,000 planned / 18,000 ceiling
-- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal", "inspection", "render", "representation"]`
+- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal", "inspection", "render", "representation", "refclass"]`
 
 ## 2. Inputs
 - **`Claim::new`** takes 13 arguments: metric key, value, canonical value tag, representation, support, additivity, evidence class, epistemic status, knowledge state, label, UU terms, parents and anchors. It takes the evidence class and parents as given. Nothing checks that they agree. `stale`, `calibration_failed` and `supersedes` start false or `None`. They are `pub` fields that callers set afterwards.
@@ -221,7 +224,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 
 ## 8. Validity domain
 - **`ClaimDag` is in memory only.** It has no durable format and does not authenticate the unhashed `supersedes`. `insert` does not check for cycles. A cycle would need a claim to name a descendant's id among its hashed parents. Visited sets stop every walk.
-- **G-DISC passing is necessary, not sufficient.** Its RefClass and attestation clauses wait on fields `Claim` does not have.
+- **G-DISC passing is necessary, not sufficient.** Evidence and `RefClass` clauses (`GATE-PLUMB-E4`) are enforced on the claim and its DAG provenance; human authority attestation (`ClaimAuthority::Attested`) is carried on `Claim` and enforced by downstream disclosure sign-off gates.
 - **Support compatibility is exact equality**, including composite length and SMU dimensions. There is no change-of-support model.
 - **The temporal check covers supplied evidence.** It does not authenticate clocks or prove that the parent lists are complete.
 - **Replay proves only reads through `ReplayView`.** Captured values, external I/O and cached results are out of its reach. Content-id checks cover the encoded bytes only. A `Claim` body commits its value tag, not its value.
@@ -259,9 +262,9 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   output-family record or reassessed transfer AOA. Model-derived values remain uncalibrated rather than
   borrowing their parents' scored outcomes. `Claim::new` still trusts explicitly supplied source classes.
 - **`Claim::new` trusts the caller's class and parents.** A claim can state `Derived` over an issuer figure. G-DISC catches that only when the issuer figure is a listed parent. A `Derived` claim with no parents passes its walk.
-- **The id leaves fields unhashed.** Representation, support, additivity, UU terms, `supersedes`, `authority`, `calibration_score`, `fallback`, and the value itself are outside `CLM1` schema 2 so pinned M0 Barrick claim IDs remain invariant. Widening the body moves every claim id and is an owner decision.
+- **The id leaves fields unhashed.** Representation, support, additivity, UU terms, `supersedes`, `authority`, `calibration_score`, `fallback`, `epsilon_contamination`, and the value itself are outside `CLM1` schema 2 so pinned M0 Barrick claim IDs remain invariant. Widening the body moves every claim id and is an owner decision.
 - **§31.1 writes the labels as a chain.** The product lattice refines it, so two ventures or two walls never collapse into one tier. The owner should confirm the refinement.
-- **G-DISC is incomplete (GATE-PLUMB-E4).** `Claim` has no RefClass or attestation field. FrankenMining's own public report is not a disclosure and does not call the guard.
+- **G-DISC human sign-off boundary.** `GATE-PLUMB-E4` (`RefClass` and unverified-ancestor blocking) is enforced by `ClaimDag::guard_disclosure_export`, while mandatory human attestation sign-off remains a downstream disclosure-gate responsibility. FrankenMining's own public report is not a disclosure and does not call the guard.
 - **Three codes are proposed, not active:** 110, 505 and 507.
 - **Four nearest-code uses are unconfirmed.** ADR-REFUSALS-01 covers 301 for internal data and leaves G-DISC's code open. It does not list 107 for malformed reliance input, 205 for an unreviewed `Assertion`, or 304 for G-DISC.
 - **No `//! Determinism:` header** in four files, and the one in `reliance.rs` is not in the form `check-det` parses.
@@ -270,10 +273,11 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **A code comment points at the old layout.** It sits on `canonical_body` in `src/lib.rs` and cites "CONTRACT §2". The hashed-body rule is now in Inputs.
 
 ## 11. Public API
-- **Claim.** `ClaimId`, `Representation`, `SpatialSupport`, `AdditivityClass`, `UuTerm`, `ClaimAuthority`, `DeclaredFallback`, and `CalibrationScore` (`compute`, `score`, `cov80`, `ks_pit`, `is_calibrated`). `Claim<T>`, with:
+- **Claim.** `ClaimId`, `Representation`, `SpatialSupport`, `AdditivityClass`, `UuTerm`, `ClaimAuthority`, `DeclaredFallback`, `CalibrationScore` (`compute`, `score`, `cov80`, `ks_pit`, `is_calibrated`), `RefClassId`, `RefClassStatus`, `RefClassRecord`, `RefClassRegistry`, and `EpsilonContamination`. `Claim<T>`, with:
   - `new`, `value_tag`, `canonical_body` and `check_id`;
-  - `downgraded`, `with_regime`, `authority`, `with_authority`, `attest`, `with_calibration_score`, `calibration_score`, `fallback` and `fallback_active`;
+  - `downgraded`, `with_regime`, `authority`, `with_authority`, `attest`, `with_calibration_score`, `calibration_score`, `fallback`, `fallback_active`, `epsilon_contamination`, `with_epsilon_contamination`, `with_checked_epsilon` and `with_ref_class`;
   - `color`, `verify_export_clearance` and `verify_uu_slot_for_decision`.
+- **`refclass`.** `RefClassId::parse`, `RefClassStatus::parse`, `RefClassRecord`, `RefClassRegistry::{parse, get, lookup, len, is_empty, iter}`, and `EpsilonContamination::{none, try_new, from_registry, ref_class, epsilon_bps, epsilon, status, blend_moments}` (private fields, `compile_fail,E0451`).
 - **Labels.** `Confidentiality`, with `public`, `internal`, `venture`, `mnpi`, `join`, `leq`, `is_public`, `ventures`, `walls` and `refusal_over`. `LabelRegistry`, with `new`, `venture` and `wall`. `VentureId`, `WallId` and `LabelError`.
 - **Free functions.** `verify_support_compatible`, `verify_unweighted_additive`, `compose_binary` and `compose_binary_with_fallback`.
 - **Provenance index.** `DagNode`, and `ClaimDag`, with `new`, `insert`, `guard_disclosure_export`, `invalidate_and_propagate` and `is_stale`.
@@ -305,4 +309,4 @@ The plan defines no `PO-CLAIM-*`. The old contract's PO-CLAIM-1 to PO-CLAIM-3 we
   - The forecast-scoring clause is outside this crate.
 - **PO-PLUMB-15** (`Refused` never becomes a number without a declared fallback): discharged at the Claim composition layer by `compose_binary`, `compose_binary_with_fallback`, `test_nl6_refusal_absorption_and_declared_fallback_bounds`, and `test_gate_plumb_e1_nl1_to_nl8_100k_dags`.
 - **GATE-PLUMB-E1** (no-laundering proptests 100%): `docs/delivery/GATE-PLUMB-E1.md` (`test_gate_plumb_e1_nl1_to_nl8_100k_dags`, 0 violations across 100,000 DAGs).
-- **GATE-PLUMB-E4** (no ε without a RefClass; no unverified reference class on disclosure-facing claims): not met. `Claim` has no RefClass.
+- **GATE-PLUMB-E4** (no ε without a RefClass; no unverified reference class on disclosure-facing claims): discharged by `refclass::EpsilonContamination` (`compile_fail,E0451`), `ClaimDag::guard_disclosure_export`, `test_gate_plumb_e4_zero_eps_without_refclass_and_gb32_blend`, `test_refclass_registry_refuses_malformed_and_duplicate_rows`, and `test_gate_plumb_e4_claim_refclass_and_g_disc_blocks_unverified_and_ancestors` (`docs/delivery/GATE-PLUMB-E4.md`).

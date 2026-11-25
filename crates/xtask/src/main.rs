@@ -197,6 +197,10 @@ fn main() -> ExitCode {
             "check-kernels",
             xtask::kernels::check_kernels(&root).map(|r| println!("{}", r.log_line())),
         ),
+        "check-refclass" => run_one(
+            "check-refclass",
+            xtask::refclass::check_refclass(&root).map(|r| println!("{}", r.log_line())),
+        ),
         "check-refusals" => run_one(
             "check-refusals",
             xtask::refusals::check_refusals(&root).map(|r| {
@@ -331,6 +335,9 @@ fn main() -> ExitCode {
                 }
                 if let Ok(kernels) = xtask::kernels::check_kernels(&root) {
                     println!("{}", kernels.log_line());
+                }
+                if let Ok(rc) = xtask::refclass::check_refclass(&root) {
+                    println!("{}", rc.log_line());
                 }
                 if let Ok(lock) = xtask::check_stack_lock(&root) {
                     println!("{}", lock.log_line());

@@ -72,11 +72,15 @@ pub mod dag;
 pub mod forecast_journal;
 pub mod inspection;
 mod label;
+pub mod refclass;
 pub mod reliance;
 pub mod render;
 pub mod representation;
 
 pub use label::{Confidentiality, LabelError, LabelRegistry, VentureId, WallId};
+pub use refclass::{
+    EpsilonContamination, RefClassId, RefClassRecord, RefClassRegistry, RefClassStatus,
+};
 
 /// Explicit Unknown-Unknown (`UU`) structural tail-risk scenario (`BD-044`, `INV-015`).
 #[derive(Debug, Clone, PartialEq)]
@@ -251,6 +255,9 @@ pub struct Claim<T> {
     calibration_score: Option<CalibrationScore>,
     /// Declared deterministic fallback recorded when `NL-6` fallback mode was engaged.
     fallback: Option<DeclaredFallback>,
+    /// Checked Huber ε-contamination attachment (`§9.3`, `GATE-PLUMB-E4`, `BD-050`).
+    /// Unhashed outside `CLM1` schema 2 so pinned M0 public-lane claim IDs stay invariant.
+    epsilon_contamination: EpsilonContamination,
     /// The anchor's colour on a leaf, the composition of the parents' colours on a derived claim.
     color_basis: Option<Color>,
     /// The value's canonical text, hashed into the id in place of `value`.
@@ -306,6 +313,7 @@ impl<T> Claim<T> {
             authority: ClaimAuthority::default(),
             calibration_score: None,
             fallback: None,
+            epsilon_contamination: EpsilonContamination::none(),
             color_basis: None,
             value_tag: canonical_value_tag.to_string(),
         }
@@ -399,6 +407,43 @@ impl<T> Claim<T> {
     #[must_use]
     pub fn fallback_active(&self) -> bool {
         self.fallback.as_ref().is_some_and(|f| f.fallback_active)
+    }
+
+    /// Returns the checked Huber ε-contamination attachment (`§9.3`, `GATE-PLUMB-E4`).
+    #[must_use]
+    pub fn epsilon_contamination(&self) -> &EpsilonContamination {
+        &self.epsilon_contamination
+    }
+
+    /// Attaches a pre-checked [`EpsilonContamination`] (`§9.3`, `GATE-PLUMB-E4`).
+    #[must_use]
+    pub fn with_epsilon_contamination(mut self, contamination: EpsilonContamination) -> Self {
+        self.epsilon_contamination = contamination;
+        self
+    }
+
+    /// Attaches a checked ε-contamination weight, refusing `epsilon_bps > 0` without a
+    /// [`RefClassRecord`] (`FMINE-REF-205`) or `epsilon_bps > 10_000` (`FMINE-REF-109`).
+    pub fn with_checked_epsilon(
+        mut self,
+        ref_class: Option<RefClassRecord>,
+        epsilon_bps: u16,
+    ) -> Result<Self, Refusal> {
+        self.epsilon_contamination = EpsilonContamination::try_new(ref_class, epsilon_bps)?;
+        Ok(self)
+    }
+
+    /// Attaches a registered `REFCLASS-` row from [`RefClassRegistry`] (`GATE-PLUMB-E4`).
+    /// Refuses unknown IDs with `FMINE-REF-201` and out-of-range overrides with `FMINE-REF-109`.
+    pub fn with_ref_class(
+        mut self,
+        registry: &RefClassRegistry,
+        raw_id: &str,
+        override_epsilon_bps: Option<u16>,
+    ) -> Result<Self, Refusal> {
+        self.epsilon_contamination =
+            EpsilonContamination::from_registry(registry, raw_id, override_epsilon_bps)?;
+        Ok(self)
     }
 
     /// The value's canonical text, as hashed into the id.
@@ -657,6 +702,12 @@ pub fn compose_binary<A, B, R>(
         .filter(|f| f.fallback_active)
         .or_else(|| right.fallback.as_ref().filter(|f| f.fallback_active))
         .cloned();
+    // GATE-PLUMB-E4: propagate Unverified reference-class taint so composition never launders it.
+    if left.epsilon_contamination.status() == Some(RefClassStatus::Unverified) {
+        derived.epsilon_contamination = left.epsilon_contamination.clone();
+    } else if right.epsilon_contamination.status() == Some(RefClassStatus::Unverified) {
+        derived.epsilon_contamination = right.epsilon_contamination.clone();
+    }
     derived
 }
 
@@ -729,6 +780,7 @@ pub fn compose_binary_with_fallback<A, B, R>(
     degraded.stale = normal.stale;
     degraded.calibration_failed = false;
     degraded.fallback = Some(fallback.clone());
+    degraded.epsilon_contamination = normal.epsilon_contamination;
     degraded.color_basis = Some(Color::Estimated {
         estimator: format!("fallback:{}", fallback.fallback_id.trim()),
         dispersion: f64::INFINITY,
@@ -783,6 +835,10 @@ pub struct DagNode {
     pub parents: Vec<ClaimId>,
     pub stale: bool,
     pub superseded_by: Option<ClaimId>,
+    /// Verification status of any attached `REFCLASS-` record (`GATE-PLUMB-E4`).
+    pub ref_class_status: Option<RefClassStatus>,
+    /// Contamination weight `ε` in basis points (`0..=10_000`, `GATE-PLUMB-E4`).
+    pub epsilon_bps: u16,
 }
 
 /// Directed acyclic provenance graph tracking parent -> child derivation edges (`BD-046`, `INV-013`).
@@ -833,6 +889,8 @@ impl ClaimDag {
                 parents: claim.parents.clone(),
                 stale,
                 superseded_by: self.invalidations.get(&claim.claim_id).copied().flatten(),
+                ref_class_status: claim.epsilon_contamination.status(),
+                epsilon_bps: claim.epsilon_contamination.epsilon_bps(),
             },
         );
         if stale {
@@ -844,14 +902,17 @@ impl ClaimDag {
         Ok(())
     }
 
-    /// G-DISC (`§8.3`), its evidence clauses: a disclosure-facing export needs a class in {Measured, Derived,
-    /// ModelledCalibrated} and no `Assertion` or `Assumed` anywhere in its provenance. A parent this DAG does not hold
-    /// proves nothing, so it refuses too. The body must still match its id (`FMINE-REF-507`), and both this claim
-    /// and its ancestors must be current (`FMINE-REF-202`, INV-013). The supplied root need not be inserted.
+    /// G-DISC (`§8.3`, `GATE-PLUMB-E4`), its evidence and reference-class clauses: a disclosure-facing export needs
+    /// a class in {Measured, Derived, ModelledCalibrated}, no `Assertion` or `Assumed` anywhere in its provenance,
+    /// no unbacked `epsilon_bps > 0` (`FMINE-REF-205`), and no `RefClassStatus::Unverified` on itself or any
+    /// ancestor (`FMINE-REF-304`). A parent this DAG does not hold proves nothing, so it refuses too. The body must
+    /// still match its id (`FMINE-REF-507`), and both this claim and its ancestors must be current (`FMINE-REF-202`,
+    /// INV-013). The supplied root need not be inserted.
     ///
-    /// §8.4 has no G-DISC code, so `FMINE-REF-304` is the nearest: the clause this cannot yet check is the attested
-    /// record. Passing is therefore necessary, not sufficient: the RefClass and attestation clauses wait on fields
-    /// `Claim` does not have. FrankenMining's own public report is not a disclosure and does not call this.
+    /// §8.4 has no G-DISC code, so `FMINE-REF-304` is the nearest: passing is still necessary, not sufficient,
+    /// because regulatory disclosure sign-off requires human authority attestation (`ClaimAuthority::Attested` is
+    /// checked by downstream disclosure sign-off gates). FrankenMining's own public report is not a disclosure and
+    /// does not call this.
     pub fn guard_disclosure_export<T>(&self, claim: &Claim<T>) -> Result<(), Refusal> {
         claim.check_id()?;
         let stale = |id: ClaimId| {
@@ -872,6 +933,25 @@ impl ClaimDag {
                 format!("G-DISC on '{}': {why}", claim.metric_key),
             ))
         };
+        if claim.epsilon_contamination.epsilon_bps() > 0
+            && claim.epsilon_contamination.ref_class().is_none()
+        {
+            return Err(Refusal::new(
+                RefusalCode::CalibrationRequired205,
+                format!(
+                    "G-DISC on '{}': non-zero epsilon without registered REFCLASS- (GATE-PLUMB-E4)",
+                    claim.metric_key
+                ),
+            ));
+        }
+        if let Some(rc) = claim.epsilon_contamination.ref_class()
+            && rc.status == RefClassStatus::Unverified
+        {
+            return refuse(format!(
+                "unverified reference class '{}' (GATE-PLUMB-E4)",
+                rc.id
+            ));
+        }
         if !matches!(
             claim.evidence,
             EvidenceClass::Measured | EvidenceClass::Derived | EvidenceClass::ModelledCalibrated
@@ -897,6 +977,21 @@ impl ClaimDag {
                 return refuse(format!(
                     "'{}' in its provenance is {:?}",
                     node.metric_key, node.evidence
+                ));
+            }
+            if node.epsilon_bps > 0 && node.ref_class_status.is_none() {
+                return Err(Refusal::new(
+                    RefusalCode::CalibrationRequired205,
+                    format!(
+                        "G-DISC on '{}': ancestor '{}' carries non-zero epsilon without REFCLASS- (GATE-PLUMB-E4)",
+                        claim.metric_key, node.metric_key
+                    ),
+                ));
+            }
+            if node.ref_class_status == Some(RefClassStatus::Unverified) {
+                return refuse(format!(
+                    "'{}' in its provenance uses an unverified reference class (GATE-PLUMB-E4)",
+                    node.metric_key
                 ));
             }
             queue.extend(node.parents.iter().copied());
@@ -2573,5 +2668,101 @@ mod tests {
         assert_eq!(violations, 0);
         assert!(validated > 0 && refused > 0 && fallback_engaged > 0);
         assert!(attested_checked > 0 && mnpi_tainted > 0 && diamond_edges > 0);
+    }
+
+    #[test]
+    fn test_gate_plumb_e4_claim_refclass_and_g_disc_blocks_unverified_and_ancestors() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        let text = std::fs::read_to_string(root.join("registries/refclass.toml"))
+            .expect("read registries/refclass.toml");
+        let reg = RefClassRegistry::parse(&text).expect("parse refclass registry");
+
+        let base = leaf("greenfield_capex_usd_m", EvidenceClass::Measured);
+        let original_id = base.claim_id;
+
+        // 1. Non-zero epsilon without RefClass refuses with FMINE-REF-205.
+        let no_rc = base
+            .clone()
+            .with_checked_epsilon(None, 1_500)
+            .expect_err("non-zero epsilon without RefClass must refuse");
+        assert_eq!((no_rc.code, no_rc.exit_code), ("FMINE-REF-205", 3));
+
+        // 2. Unregistered RefClass refuses with FMINE-REF-201.
+        let unknown = base
+            .clone()
+            .with_ref_class(&reg, "REFCLASS-DOES-NOT-EXIST", None)
+            .expect_err("unknown refclass must refuse");
+        assert_eq!((unknown.code, unknown.exit_code), ("FMINE-REF-201", 3));
+
+        // 3. Verified REFCLASS-CAPEX-GREENFIELD attaches, preserves pinned claim_id, and passes G-DISC.
+        let verified = base
+            .clone()
+            .with_ref_class(&reg, "REFCLASS-CAPEX-GREENFIELD", None)
+            .expect("verified refclass attaches");
+        assert_eq!(verified.claim_id, original_id);
+        assert_eq!(
+            verified.epsilon_contamination().status(),
+            Some(RefClassStatus::Verified)
+        );
+        let (mu, sd) = verified
+            .epsilon_contamination()
+            .blend_moments(1000.0, 100.0)
+            .unwrap();
+        assert!((mu - 1070.0).abs() < 1e-12);
+        assert!((sd - 52_825.0_f64.sqrt()).abs() < 1e-11);
+
+        let mut dag = ClaimDag::new();
+        dag.insert(&verified).unwrap();
+        dag.guard_disclosure_export(&verified)
+            .expect("verified refclass passes G-DISC");
+
+        // 4. Unverified REFCLASS-TAILINGS-PRELIMINARY is usable internally, refused directly by G-DISC.
+        let unverified = leaf("tailings_capex_usd_m", EvidenceClass::Measured)
+            .with_ref_class(&reg, "REFCLASS-TAILINGS-PRELIMINARY", None)
+            .expect("unverified refclass allowed internally");
+        unverified
+            .verify_export_clearance(&Confidentiality::internal())
+            .expect("internal clearance allowed");
+        let direct_err = dag
+            .guard_disclosure_export(&unverified)
+            .expect_err("G-DISC must refuse unverified refclass directly");
+        assert_eq!(
+            (direct_err.code, direct_err.exit_code),
+            ("FMINE-REF-304", 7)
+        );
+        assert!(direct_err.what.contains("REFCLASS-TAILINGS-PRELIMINARY"));
+
+        // 5. Composing unverified with verified propagates Unverified taint and refuses G-DISC.
+        dag.insert(&unverified).unwrap();
+        let composed = join("combined_capex_usd_m", &verified, &unverified);
+        assert_eq!(
+            composed.epsilon_contamination().status(),
+            Some(RefClassStatus::Unverified)
+        );
+        let composed_err = dag
+            .guard_disclosure_export(&composed)
+            .expect_err("G-DISC must refuse descendant composed from unverified refclass");
+        assert_eq!(
+            (composed_err.code, composed_err.exit_code),
+            ("FMINE-REF-304", 7)
+        );
+
+        // 6. Even a manually constructed Derived claim with no local RefClass whose DAG parent used
+        //    an Unverified RefClass is caught by G-DISC's ancestor walk.
+        let manual_child = stating(
+            "manual_descendant",
+            EvidenceClass::Derived,
+            vec![unverified.claim_id],
+        );
+        assert_eq!(manual_child.epsilon_contamination().status(), None);
+        let anc_err = dag
+            .guard_disclosure_export(&manual_child)
+            .expect_err("G-DISC ancestor walk must catch unverified parent refclass");
+        assert_eq!((anc_err.code, anc_err.exit_code), ("FMINE-REF-304", 7));
+        assert!(anc_err.what.contains("unverified reference class"));
     }
 }

@@ -13,6 +13,7 @@ pub mod kernels;
 pub mod lifts;
 pub mod loc;
 pub mod oracle;
+pub mod refclass;
 pub mod refusals;
 pub mod sbom;
 pub mod verbs;
@@ -948,6 +949,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     if let Err(e) = kernels::check_kernels(root) {
         all_errors.extend(e);
     }
+    if let Err(e) = refclass::check_refclass(root) {
+        all_errors.extend(e);
+    }
     if let Err(e) = check_sources_registry(root) {
         all_errors.extend(e);
     }
@@ -1636,7 +1640,8 @@ mod tests {
         // Joint fractional scheduling and its independent controls are BitwisePortable.
         // BD-144 adds fmine-gen's portable simulation-based calibration module (sbc.rs).
         // BD-253 adds the core PlanCertificate codec and optimizer certificate builders.
-        assert_eq!(report.bitwise_files, 122, "{report:?}");
+        // BD-050 adds fmine-claim's portable reference-class ε-contamination module (refclass.rs).
+        assert_eq!(report.bitwise_files, 123, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

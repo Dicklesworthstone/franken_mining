@@ -9,6 +9,7 @@ description = "FrankenMining workspace governance, layer DAG, LOC budget, lift p
 
 [dependencies]
 fmine-calib = { path = "../fmine-calib" }
+fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-io = { path = "../fmine-io" }
 fmine-public = { path = "../fmine-public" }
@@ -16,7 +17,6 @@ fmine-registry = { path = "../fmine-registry" }
 fmine-time = { path = "../fmine-time" }
 
 [dev-dependencies]
-fmine-claim = { path = "../fmine-claim" }
 fmine-cli = { path = "../fmine-cli" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-gen = { path = "../fmine-gen" }

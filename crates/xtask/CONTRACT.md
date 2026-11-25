@@ -14,7 +14,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** not budgeted (dev-only tool; no row in registries/loc_budget.toml)
-- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "kernels", "oracle", "forecast", "refusals", "verbs", "int_as", "beads", "contracts", "sbom"]`
+- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "kernels", "oracle", "forecast", "refclass", "refusals", "verbs", "int_as", "beads", "contracts", "sbom"]`
 
 ## 2. Inputs
 - **The tree.** Member `Cargo.toml` files, `crates/**/*.rs` and `crates/*/CONTRACT.md`. Also:
@@ -23,7 +23,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
   - `.beads/issues.jsonl`, `deny.toml` and `franken-stack.lock`;
   - `Cargo.lock` and `rust-toolchain.toml`, for `sbom`;
   - the plan's §8.4 codes and its Appendix F.1 rows.
-- **Registries.** `registries/`: `loc_budget.toml`, `lifts.toml`, `lift_drift.toml`, `refusals.toml`, `l6_allow.toml`, `kernels.toml`, `sources/*.toml`, `calendars.toml` and `zones.toml`.
+- **Registries.** `registries/`: `loc_budget.toml`, `lifts.toml`, `lift_drift.toml`, `refclass.toml`, `refusals.toml`, `l6_allow.toml`, `kernels.toml`, `sources/*.toml`, `calendars.toml` and `zones.toml`.
 - **External programs, read-only:**
   - `cargo tree`, for `check-int-as-001a`, `check-oracle` and `sbom`;
   - `git rev-parse`, `diff`, `ls-files`, `ls-tree` and `show`, for `check-amend`, `check-lifts --upstream`, `check-lift-drift` and `forecast-rules-order`;
@@ -33,6 +33,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
   - `fmine-calib`, for the pure forecast record and its scoring;
   - `fmine-io`, for the shared offline RFC 3161 verifier (`fmine_io::forecast::timestamp`);
   - `fmine-public`, for the label-anchored Mine Stats reader that `forecast-baseline` and `forecast-record-score` use;
+  - `fmine-claim`, for `refclass::check_refclass` (`GATE-PLUMB-E4`);
   - `fmine-core` and `fmine-time`.
 - **Root.** The workspace is the checkout xtask was built from (`CARGO_MANIFEST_DIR`'s grandparent), not the current directory.
 
@@ -250,8 +251,10 @@ Not applicable: no Claims are emitted.
   - `the_workspace_bill_is_the_manifest_closure` checks the real bill against the closure read from the member manifests without cargo. `.github/workflows/blind-binary.yml` uploads the bill beside the blind binary.
 - `forecast::rules_order` (BD-334.S2; command `forecast-rules-order`): the commit adding `forecasts/fy2026/rules.toml` is a strict ancestor of every commit touching `forecasts/fy2026/forecasts.csv`. It refuses a shallow clone, whose history cannot show the order.
 - `kernels::{check_kernels, parse_kernels_toml, KernelRow, KernelCheckReport}` (`PO-NUM-3`, `bd-dm2z`; command `check-kernels`, run by `check-all`): validates `registries/kernels.toml`, verifies K/E `//! Determinism:` header agreement and referenced regression test existence, and refuses any unlisted `std::thread::` kernel in S0/K/E library code.
+- `refclass::{check_refclass, RefClassCheckReport}` (`GATE-PLUMB-E4`, `bd-050`; command `check-refclass`, run by `check-all`): validates `registries/refclass.toml` via `fmine_claim::refclass::RefClassRegistry::parse` and verifies the baseline verified `REFCLASS-CAPEX-GREENFIELD` row.
 
 ## 12. Proof obligations
+- GATE-PLUMB-E4 (reference-class registry schema and completeness): `refclass::check_refclass`. Test: `test_workspace_refclass_registry_passes_gate_plumb_e4`.
 - PO-NUM-3 (kernel determinism class and thread-count verification on certified paths, no unlisted threaded kernel): `kernels::check_kernels`. Tests:
   - `kernels::tests::test_workspace_kernels_registry_passes`;
   - `kernels::tests::test_unlisted_threaded_kernel_is_refused`;

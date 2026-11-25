@@ -1,0 +1,97 @@
+# registries/refclass.toml — Reference-Class Prior Registry (`REFCLASS-`, plan §9.3, BD-050, GATE-PLUMB-E4)
+#
+# Every ε-contaminated outside-view prior (`(1 - ε) * P_model + ε * Q`) MUST cite a row in this registry.
+# Enforced by `fmine_claim::refclass` (`GATE-PLUMB-E4`: zero ε without a `RefClass`; zero `unverified`
+# reference classes on disclosure-facing claims) and `cargo run -p xtask -- check-refclass` (`check-all`).
+
+schema_version = 1
+
+[[refclass]]
+id = "REFCLASS-CAPEX-GREENFIELD"
+domain = "capex_greenfield"
+population = "Global greenfield base- and precious-metal mining capital projects at feasibility study"
+n = 63
+period = "1980-2001"
+inclusion_rule = "Published feasibility-study initial capex vs. actual constructed capex in real terms"
+similarity_justification = "Captures systematic engineering optimism and heavy right tail (+14% mean, ~1 in 13 >= +100% blowout; GB-32)"
+status = "verified"
+epsilon_bps = 2500
+ref_mean_multiplier_bps = 12800
+ref_std_multiplier_bps = 3500
+source_document = "Bertisen & Davis (2008), Resources Policy 33(3):153-163; plan §9.3 GB-32"
+source_e_ids = "E001,GB-32"
+
+[[refclass]]
+id = "REFCLASS-CAPEX-BROWNFIELD"
+domain = "capex_brownfield"
+population = "Brownfield mill expansion and mine-life extension capital projects at operating sites"
+n = 48
+period = "1995-2020"
+inclusion_rule = "Operating mine brownfield expansions >= $50M USD with disclosed initial budget and final cost"
+similarity_justification = "Lower tail risk than greenfield due to existing infrastructure and site geology knowledge"
+status = "verified"
+epsilon_bps = 1500
+ref_mean_multiplier_bps = 11400
+ref_std_multiplier_bps = 2000
+source_document = "Plan §9.3 cost-forecast reference-class baseline (brownfield subset)"
+source_e_ids = "E001"
+
+[[refclass]]
+id = "REFCLASS-SCHEDULE-MINING"
+domain = "schedule_compliance"
+population = "Open-pit and underground mining construction and ramp-up schedules to commercial production"
+n = 52
+period = "2000-2024"
+inclusion_rule = "Sanctioned mining projects with disclosed FID-to-commercial-production planned vs. actual months"
+similarity_justification = "Captures permitting, procurement, and commissioning delay skewness across jurisdictions"
+status = "verified"
+epsilon_bps = 2000
+ref_mean_multiplier_bps = 11800
+ref_std_multiplier_bps = 2500
+source_document = "Plan §9.3 plans-and-schedules reference-class baseline"
+source_e_ids = "E001"
+
+[[refclass]]
+id = "REFCLASS-RESERVE-GRADE-BIAS"
+domain = "reserve_grade_reconciliation"
+population = "Operating gold and copper mines reporting multi-year F1/F2 reserve-to-mill grade reconciliation"
+n = 40
+period = "2005-2024"
+inclusion_rule = "Public NI 43-101 / JORC / S-K 1300 reconciliations with >= 3 years of consecutive mined vs. model grades"
+similarity_justification = "Reflects conditional-bias smoothing and unplanned dilution in selective mining units (§9.3)"
+status = "verified"
+epsilon_bps = 1500
+ref_mean_multiplier_bps = 9400
+ref_std_multiplier_bps = 1200
+source_document = "Plan §9.3 reserves modifying-factor reference-class baseline (OPEN-PLUMB-7)"
+source_e_ids = "E154,E155"
+
+[[refclass]]
+id = "REFCLASS-RECOVERY-RAMPUP"
+domain = "metallurgical_recovery"
+population = "New flotation and CIL/autoclave gold-copper plants during first 12 months post-commissioning"
+n = 35
+period = "2000-2024"
+inclusion_rule = "Disclosed feasibility design recovery vs. Year-1 actual plant recovery on comparable ore types"
+similarity_justification = "Accounts for commissioning instability, transitional ore blend shifts, and reagent tuning"
+status = "verified"
+epsilon_bps = 2000
+ref_mean_multiplier_bps = 9200
+ref_std_multiplier_bps = 1500
+source_document = "Plan §9.3 processing recovery reference-class baseline"
+source_e_ids = "E156"
+
+[[refclass]]
+id = "REFCLASS-TAILINGS-PRELIMINARY"
+domain = "tailings_preliminary"
+population = "Unvetted historical TSF incident compilation prior to site-specific EoR/ITRB screening"
+n = 24
+period = "1970-2024"
+inclusion_rule = "Publicly compiled TSF incidents lacking normalized dam-year exposure denominators"
+similarity_justification = "Unverified outside-view placeholder; permitted for internal sensitivity exploration only and blocked from G-DISC disclosure per §9.3"
+status = "unverified"
+epsilon_bps = 1000
+ref_mean_multiplier_bps = 15000
+ref_std_multiplier_bps = 5000
+source_document = "Plan §9.3 tailings warning: PoF not stated on disclosure without vetted reference class"
+source_e_ids = "E001"
