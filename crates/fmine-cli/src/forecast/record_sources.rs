@@ -149,7 +149,7 @@ fn frozen_reason(manifest: &RecordManifest, file: &str) -> Option<String> {
     }
 }
 
-fn check_manifest_registry(
+pub(super) fn check_manifest_registry(
     profile: &IssuerProfile,
     manifest: &RecordManifest,
     rules: &RecordRules,

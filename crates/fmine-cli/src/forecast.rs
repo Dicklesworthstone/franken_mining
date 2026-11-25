@@ -31,6 +31,7 @@ pub mod live;
 pub mod plant;
 mod provenance;
 pub mod record_build;
+pub mod record_check;
 pub mod record_score;
 mod record_sources;
 mod segments;

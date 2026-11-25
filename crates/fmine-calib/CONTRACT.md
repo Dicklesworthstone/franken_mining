@@ -628,7 +628,9 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     mistyped values refuse (`RecordError`);
   - `validate(manifest, registered digests, Option<ProofTimes>, RecordDates)` → `Vec<Finding>`: a digest that
     differs from the source registry, an input after the cut-off, a reworded attestation, an author that is not a
-    role id; with a proof, a cut-off not before it, a label that disagrees with it, a proof after the deadline.
+    role id, or a cut-off at/after the frozen proof deadline; with a proof, a cut-off not before it, a label that
+    disagrees with it, a proof after the deadline. Draft validation refuses an impossible proof window before
+    hashing: the cut-off must leave time for `cutoff < lower <= upper <= deadline`.
     Times come only from a proof (`ProofTimes`), never from a clock; `FY2026_DATES` holds the Q3 release
     (2026-11-09T11:00Z) and the 31 Dec 2026 deadline;
   - `parse_rules` → `RecordRules` (BD-334.S2): α, the quantile estimator, the n_eff correlation range, the

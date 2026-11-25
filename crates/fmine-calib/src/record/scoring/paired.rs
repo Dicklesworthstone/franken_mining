@@ -176,7 +176,9 @@ fn closed(lo: Rat, hi: Rat) -> Interval {
     }
 }
 
-fn validate_rules(rules: &RecordRules) -> Result<(), Refusal> {
+/// Validate the numerical rules and both canonical comparator declarations without requiring outcomes.
+/// Source adapters and external time proofs remain separate from this pure scoring admission check.
+pub fn validate_rules(rules: &RecordRules) -> Result<(), Refusal> {
     if rules.record_id.trim().is_empty()
         || rules.rules_id.trim().is_empty()
         || rules.issuer.trim().is_empty()

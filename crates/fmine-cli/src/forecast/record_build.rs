@@ -159,10 +159,16 @@ pub(crate) fn parse(
 
 #[must_use]
 pub fn execute(command: &Command, root: &Path) -> Envelope {
-    let actions = vec![NextAction::new(
-        "fmine robot-docs",
-        "Review draft generation, source requirements and the separate frozen-record workflow",
-    )];
+    let actions = vec![
+        NextAction::new(
+            "fmine forecast record check --record <directory>",
+            "Check the reviewed manifest and exported forecast CSV before requesting timestamps",
+        ),
+        NextAction::new(
+            "fmine robot-docs",
+            "Review draft generation, source requirements and the separate frozen-record workflow",
+        ),
+    ];
     let result = read_rules(&root.join(&command.rules)).and_then(|bytes| {
         fmine_public::forecast::build_with_model(
             root,

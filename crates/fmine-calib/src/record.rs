@@ -1295,6 +1295,8 @@ pub enum Finding {
     AuthorRoleNotARoleId,
     ProofInverted,
     CutoffNotBeforeProof,
+    /// No proof can follow the information cut-off and still meet the frozen deadline.
+    CutoffNotBeforeDeadline,
     /// The label disagrees with the proof's upper time.
     LabelInconsistent {
         label: Label,
@@ -1330,6 +1332,12 @@ impl fmt::Display for Finding {
                 write!(
                     f,
                     "the information cut-off is not before the proof's lower time"
+                )
+            }
+            Self::CutoffNotBeforeDeadline => {
+                write!(
+                    f,
+                    "the information cut-off leaves no time for a proof by the frozen deadline"
                 )
             }
             Self::LabelInconsistent { label } => {
@@ -1388,6 +1396,9 @@ pub fn validate(
     }
     if !is_role_id(&m.author_role) {
         out.push(Finding::AuthorRoleNotARoleId);
+    }
+    if m.information_cutoff_utc >= dates.proof_by {
+        out.push(Finding::CutoffNotBeforeDeadline);
     }
     if let Some(p) = proof {
         if p.lower_utc > p.upper_utc {
@@ -2121,6 +2132,30 @@ mod tests {
                 doc_id: "Synthetic_Mine_Stats.xlsx".to_string()
             }]
         );
+    }
+
+    #[test]
+    fn test_cutoff_must_leave_time_for_proof_before_deadline() {
+        let mut m = manifest("2026-12-31T23:59:58Z", "nowcast");
+        // The last second is still usable: cutoff < lower <= upper <= deadline.
+        let on_deadline = ProofTimes {
+            lower_utc: FY2026_DATES.proof_by,
+            upper_utc: FY2026_DATES.proof_by,
+        };
+        assert!(validate(&m, &[], None, FY2026_DATES).is_empty());
+        assert!(validate(&m, &[], Some(on_deadline), FY2026_DATES).is_empty());
+        for cutoff in [FY2026_DATES.proof_by, FY2026_DATES.proof_by + 1] {
+            m.information_cutoff_utc = cutoff;
+            // Refuse before hashing, even without a receipt: no later proof can meet both bounds.
+            assert_eq!(
+                validate(&m, &[], None, FY2026_DATES),
+                vec![Finding::CutoffNotBeforeDeadline]
+            );
+            assert!(
+                validate(&m, &[], Some(on_deadline), FY2026_DATES)
+                    .contains(&Finding::CutoffNotBeforeDeadline)
+            );
+        }
     }
 
     #[test]
