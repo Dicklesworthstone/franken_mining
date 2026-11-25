@@ -96,6 +96,13 @@ periods on a common pre-tax ownership basis. The original plans, costs and disco
 Holding cash is a third choice. Full JSON retains the original submissions, paired prices and both valuation
 receipts. [Editable committee worksheet](tests/capital/executive_deck.toml)
 
+For a committee decision record, run the same worksheet with `--json` and copy an ID from
+`payload.journal_actions` to `decide journal record --action`. The ID binds the reviewed comparison
+to the first listed investment, the second listed investment, or hold cash. A changed deck or source
+calculation requires a fresh review. The pinned record retains the original worksheet, original and
+repriced comparisons, paired prices, and SHA-256 hashes of the full source calculations. Keep the
+original full export if the committee needs the nested source worksheets and cash flows.
+
 ### What could offset the loss from a plant interruption?
 
 ```bash

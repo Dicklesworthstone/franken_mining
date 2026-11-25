@@ -176,6 +176,9 @@ pub(super) fn journal_snapshot(
         Some(TomlValue::Str(mode)) if mode == "operating_review" => {
             ("decision.operating-review/1", "operating-review/v1")
         }
+        Some(TomlValue::Str(mode)) if mode == "common_price_deck" => {
+            ("decision.common-price-deck/1", "common-price-deck/v1")
+        }
         _ => {
             return Err(invalid(
                 "executive worksheet does not support a journal choice",
@@ -242,14 +245,16 @@ fn evaluate(
         return Err(invalid("evidence must be synthetic or operator_declared"));
     }
     let mode = get(&f, "decision")?;
-    if selected_action.is_some() && !matches!(mode, "purchase" | "operating_review") {
+    if selected_action.is_some()
+        && !matches!(mode, "purchase" | "operating_review" | "common_price_deck")
+    {
         return Err(invalid(
-            "only procurement and operating-review executive worksheets can be recorded in the decision journal",
+            "only procurement, operating-review and common-price-deck executive worksheets can be recorded in the decision journal",
         ));
     }
     let card = match mode {
         "purchase" => purchase(doc, as_of)?,
-        "common_price_deck" => deck::compare(doc, as_of, source, root)?,
+        "common_price_deck" => deck::compare(doc, as_of, source, root, selected_action.is_none())?,
         "operating_review" => care::compare(doc, as_of)?,
         "hedge_liquidity" => hedge::compare(doc, as_of)?,
         "interruption_indemnity" if evidence == "synthetic" => insurance::evaluate(doc, as_of)?,
@@ -270,13 +275,35 @@ fn evaluate(
         "project_estimates" => project_estimates(doc, as_of)?,
         _ => return Err(invalid("unknown executive decision type")),
     };
-    if let Some(action) = selected_action
-        && !card.journal_actions.iter().any(|(id, _)| *id == action)
-    {
-        return Err(invalid(format!(
-            "{mode} action {action} is unavailable in the evaluated worksheet"
-        )));
+    if let Some(action) = selected_action {
+        let id = if let Some(digest) = &card.calculation_digest {
+            let (id, reviewed) = action.split_once('@').ok_or_else(|| {
+                invalid("copy a digest-bound action from decide program --json journal_actions")
+            })?;
+            if reviewed != digest {
+                return Err(Refusal::new(
+                    fmine_evidence::RefusalCode::DigestMismatch505,
+                    "common price-deck comparison differs from the reviewed action; evaluate the worksheet again before recording",
+                ));
+            }
+            id
+        } else {
+            action
+        };
+        if !card
+            .journal_actions
+            .iter()
+            .any(|(offered, _)| *offered == id)
+        {
+            return Err(invalid(format!(
+                "{mode} action {action} is unavailable in the evaluated worksheet"
+            )));
+        }
     }
+    let action_id = |id: &str| match &card.calculation_digest {
+        Some(digest) => format!("{id}@{digest}"),
+        None => id.to_owned(),
+    };
     let array = |v: &[String]| {
         format!(
             "[{}]",
@@ -327,7 +354,7 @@ fn evaluate(
         let actions = card
             .journal_actions
             .iter()
-            .map(|(id, label)| format!("{label} (`{id}`)"))
+            .map(|(id, label)| format!("{label} (`{}`)", action_id(id)))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(
@@ -375,7 +402,7 @@ fn evaluate(
         let rows = card
             .journal_actions
             .iter()
-            .map(|(id, label)| format!(r#"{{"id":{},"label":{}}}"#, js(id), js(label),))
+            .map(|(id, label)| format!(r#"{{"id":{},"label":{}}}"#, js(&action_id(id)), js(label)))
             .collect::<Vec<_>>()
             .join(",");
         format!(",\"journal_actions\":[{rows}]")

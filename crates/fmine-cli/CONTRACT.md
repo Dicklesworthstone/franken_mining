@@ -153,6 +153,11 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     worksheet limit. Separate risk screens, contingent actions and price-dependent mine plans or fiscal
     terms require a separate valuation. JSON binds paired price rows and both source calculations to a
     comparison digest, including complete original worksheet bytes and the original/repriced cash flows.
+  - DESIGN (bd-xm5k.1). The common committee price deck offers digest-bound journal actions for either
+    investment or hold cash. Admission replays the comparison and checks the reviewed digest before
+    append. The existing journal retains the original worksheet, paired prices, exact before/after
+    results and SHA-256 hashes of the full original and repriced source calculations. The full
+    `decide program --json` export carries the nested valuation and source worksheets.
   - DESIGN (bd-ftw5). `hedge_liquidity` admits one entity's unrestricted USD cash, one committed
     facility and a fixed net cargo receipt. Declare every calendar day after the opening date through the
     horizon, including zero-flow days (up to 14). The undrawn line is available from the opening of its

@@ -141,6 +141,7 @@ pub(super) fn compare(
     as_of: &str,
     source: &SourceAnchor,
     root: &Path,
+    full_sources: bool,
 ) -> Result<Card> {
     tables(doc, &["comparison", "candidate", "price"])?;
     let basis = row_fields(
@@ -283,12 +284,21 @@ pub(super) fn compare(
             ));
         }
         digest.put_str(path);
-        digest.put_fixed(&sha256(submitted.as_bytes()).0);
-        digest.put_fixed(&sha256(restated.as_bytes()).0);
-        sources.push(format!(
-            r#"{{"investment":{},"submitted":{submitted},"common_deck":{restated}}}"#,
-            js(path),
-        ));
+        let submitted_sha256 = sha256(submitted.as_bytes());
+        let common_sha256 = sha256(restated.as_bytes());
+        digest.put_fixed(&submitted_sha256.0);
+        digest.put_fixed(&common_sha256.0);
+        sources.push(if full_sources {
+            format!(
+                r#"{{"investment":{},"submitted":{submitted},"common_deck":{restated}}}"#,
+                js(path),
+            )
+        } else {
+            format!(
+                r#"{{"investment":{},"submitted_sha256":"{submitted_sha256}","common_deck_sha256":"{common_sha256}"}}"#,
+                js(path),
+            )
+        });
         replayed.insert(path, common);
     }
 
@@ -370,11 +380,21 @@ pub(super) fn compare(
         element,
     ));
     card.rows = rows;
+    card.journal_actions.extend([
+        ("first-candidate", "Select the first listed investment"),
+        ("second-candidate", "Select the second listed investment"),
+        ("hold-cash", "Hold cash"),
+    ]);
+    let sources_key = if full_sources {
+        "source_calculations"
+    } else {
+        "source_receipts"
+    };
     let labels = |names: &[String]| names.iter().map(|s| js(s)).collect::<Vec<_>>().join(",");
     card.detail = Some((
         "price_deck",
         format!(
-            r#"{{"element":{},"ownership_basis":{},"repricing_basis":"fixed_plan_flat_royalty_pre_tax","submitted_winners":[{}],"common_winners":[{}],"project_order_reversed":{reversal},"submitted_first_minus_second_usd":{},"common_first_minus_second_usd":{},"candidates":[{}],"source_calculations":[{}],"digest":{}}}"#,
+            r#"{{"element":{},"ownership_basis":{},"repricing_basis":"fixed_plan_flat_royalty_pre_tax","submitted_winners":[{}],"common_winners":[{}],"project_order_reversed":{reversal},"submitted_first_minus_second_usd":{},"common_first_minus_second_usd":{},"candidates":[{}],"{sources_key}":[{}],"digest":{}}}"#,
             js(element),
             js(ownership),
             labels(&before),
@@ -406,7 +426,7 @@ mod tests {
             "worksheet",
         );
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let (_, detail) = compare(&doc, "2030-04-15", &source, &root)?
+        let (_, detail) = compare(&doc, "2030-04-15", &source, &root, true)?
             .detail
             .expect("deck");
         Ok(parse(detail.as_bytes()).expect("valid result JSON"))

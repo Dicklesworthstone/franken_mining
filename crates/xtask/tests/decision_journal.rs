@@ -1026,16 +1026,13 @@ fn json_field<'a>(value: &'a Json, keys: &[&str]) -> &'a Json {
     })
 }
 
-#[test]
-fn source_portfolio_journal_binds_the_review_and_reopens_after_leaf_edits() {
-    let f = Fixture::new();
+fn copy_investment_sources(root: &Path, investment: &str) {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let investment = "tests/decisions/production_investment.toml";
     let input = fs::read_to_string(repo.join(investment)).unwrap();
     let doc = parse_subset(&input).unwrap();
     // Reuse only the fixture's explicitly declared relative dependencies.
     let copy = |name: &str| {
-        let dest = f.root.join(name);
+        let dest = root.join(name);
         fs::create_dir_all(dest.parent().unwrap()).unwrap();
         fs::copy(repo.join(name), dest).unwrap();
     };
@@ -1051,6 +1048,13 @@ fn source_portfolio_journal_binds_the_review_and_reopens_after_leaf_edits() {
             }
         }
     }
+}
+
+#[test]
+fn source_portfolio_journal_binds_the_review_and_reopens_after_leaf_edits() {
+    let f = Fixture::new();
+    let investment = "tests/decisions/production_investment.toml";
+    copy_investment_sources(&f.root, investment);
     fs::write(&f.model, INVESTMENT_PORTFOLIO).unwrap();
     let run = |args: &[&str]| {
         let output = Process::new(binary())
@@ -1405,6 +1409,173 @@ fn kpi_portfolio_journal_pins_the_full_comparison_and_admits_only_feasible_bundl
             Some(preview_bytes.trim_end())
         );
     }
+}
+
+#[test]
+fn common_deck_journal_preserves_rank_reversal_and_refuses_revised_sources() {
+    let f = Fixture::new();
+    let investment = "tests/decisions/sponsor_power_investment.toml";
+    copy_investment_sources(&f.root, investment);
+    let deck = include_str!("../../../tests/capital/executive_deck.toml").replace("2030-", "2024-");
+    fs::write(&f.model, &deck).unwrap();
+    let run = |args: &[&str]| {
+        let result = Process::new(binary())
+            .args(args)
+            .args(["--workspace", f.root.to_str().unwrap(), "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    let model = f.model.to_str().unwrap();
+    let journal = f.journal.to_str().unwrap();
+    let preview_bytes = run(&["decide", "program", model]);
+    let preview = parse_json(preview_bytes.as_bytes()).unwrap();
+    let payload = json_field(&preview, &["payload"]);
+    let comparison = json_field(payload, &["price_deck"]);
+    let digest = json_field(comparison, &["digest"]).as_str().unwrap();
+    assert_eq!(
+        json_field(comparison, &["common_first_minus_second_usd"]).as_str(),
+        Some("4538/5")
+    );
+    assert_eq!(
+        json_field(comparison, &["submitted_first_minus_second_usd"]).as_str(),
+        Some("-23326/5")
+    );
+    let actions = json_field(payload, &["journal_actions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(actions.len(), 3);
+    for (entry, id) in actions
+        .iter()
+        .zip(["first-candidate", "second-candidate", "hold-cash"])
+    {
+        assert_eq!(
+            json_field(entry, &["id"]).as_str(),
+            Some(format!("{id}@{digest}").as_str())
+        );
+    }
+    let action = json_field(&actions[1], &["id"]).as_str().unwrap();
+    for invalid in ["second-candidate".into(), format!("unlisted@{digest}")] {
+        f.refuses_without_append(
+            &f.record(f.initial, "unlisted", &invalid),
+            200,
+            "FMINE-REF-105",
+        );
+    }
+
+    let result = run(&[
+        "decide",
+        "journal",
+        "record",
+        "--journal",
+        journal,
+        "--expected-head",
+        &f.initial.to_hex(),
+        "--model",
+        model,
+        "--decision",
+        "higher-power",
+        "--action",
+        action,
+        "--reason",
+        "Preserve the higher-power option under the reviewed assumptions",
+        "--code-revision",
+        REVISION,
+        "--trust-host-clock",
+    ]);
+    let result = parse_json(result.as_bytes()).unwrap();
+    let pin = json_field(&result, &["payload", "head"]).as_str().unwrap();
+    let pin_digest = Digest32(fmine_calib::record::parse_hex32(pin).unwrap());
+    let decisions = json_field(&result, &["payload", "decisions"])
+        .as_array()
+        .unwrap();
+    let snapshot = json_field(&decisions[0], &["snapshot"]);
+    assert_eq!(
+        json_field(snapshot, &["selected_action"]).as_str(),
+        Some(action)
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "content"]).as_str(),
+        Some(deck.as_str())
+    );
+    let evidence = json_field(snapshot, &["artifact", "content"])
+        .as_str()
+        .unwrap();
+    assert!(evidence.len() < 65_536 && preview_bytes.len() > 65_536);
+    let saved = parse_json(evidence.as_bytes()).unwrap();
+    let saved = json_field(&saved, &["payload", "price_deck"]);
+    assert!(saved.get("source_calculations").is_none());
+    for field in [
+        "digest",
+        "candidates",
+        "common_winners",
+        "submitted_winners",
+        "project_order_reversed",
+    ] {
+        assert_eq!(
+            json_field(saved, &[field]),
+            json_field(comparison, &[field])
+        );
+    }
+    let receipts = json_field(saved, &["source_receipts"]).as_array().unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(
+        json_field(&receipts[0], &["investment"]).as_str(),
+        Some(investment)
+    );
+    let (_, source_bytes) = preview_bytes
+        .split_once(&format!(
+            r#","source_calculations":[{{"investment":"{investment}","submitted":"#
+        ))
+        .unwrap();
+    let (submitted, common) = source_bytes.split_once(r#","common_deck":"#).unwrap();
+    let (common, _) = common.rsplit_once(r#"}],"digest":"#).unwrap();
+    for (field, bytes) in [
+        ("submitted_sha256", submitted),
+        ("common_deck_sha256", common),
+    ] {
+        assert_eq!(
+            json_field(&receipts[0], &[field]).as_str(),
+            Some(sha256(bytes.as_bytes()).to_hex().as_str())
+        );
+    }
+
+    fs::write(&f.model, deck.replacen("50000", "51000", 1)).unwrap();
+    f.refuses_without_append(
+        &f.record(pin_digest, "revised-price", action),
+        200,
+        "FMINE-REF-505",
+    );
+    fs::write(&f.model, &deck).unwrap();
+    let leaf = f.root.join("tests/decisions/sponsor_power_terms.toml");
+    let terms = fs::read_to_string(&leaf).unwrap();
+    fs::write(&leaf, terms.replace("65000", "66000")).unwrap();
+    f.refuses_without_append(
+        &f.record(pin_digest, "revised-source", action),
+        200,
+        "FMINE-REF-505",
+    );
+    fs::write(&leaf, "invalid replacement").unwrap();
+
+    let replay = run(&[
+        "decide",
+        "journal",
+        "show",
+        "--journal",
+        journal,
+        "--head",
+        pin,
+    ]);
+    let replay = parse_json(replay.as_bytes()).unwrap();
+    assert_eq!(
+        json_field(&replay, &["payload", "decisions"]).as_array(),
+        Some(decisions)
+    );
 }
 
 #[test]
