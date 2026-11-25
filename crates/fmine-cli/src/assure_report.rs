@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 
 use fmine_core::Digest32;
 use fmine_evidence::Refusal;
-use fmine_public::aisc::{IdentityFamily, IdentityInstance};
+use fmine_public::aisc::{AiscClaimIndex, IdentityFamily, IdentityInstance};
 use fmine_public::consistency::{Consistency, ConsistencyFamily, FamilyCounts};
 use fmine_public::key::consistency::{Comparison, VintageReport};
 use fmine_public::key::{KeyedCell, PublicValue};
@@ -153,7 +153,11 @@ fn counts<F: ConsistencyFamily>(out: &mut String, heading: &str, values: &Family
     }
 }
 
-fn aisc_instances(out: &mut String, instances: &[IdentityInstance]) {
+fn aisc_instances(
+    out: &mut String,
+    instances: &[IdentityInstance],
+    claims: Option<&AiscClaimIndex>,
+) {
     table(
         out,
         &[
@@ -165,6 +169,16 @@ fn aisc_instances(out: &mut String, instances: &[IdentityInstance]) {
         ],
     );
     for instance in instances {
+        let mut detail = instance.state.detail();
+        if let Some(status) = claims.and_then(|index| index.all_zero_status(instance)) {
+            let _ = write!(
+                detail,
+                ". Registered status for {} is {} ({})",
+                status.period.code(),
+                status.row.kind.as_str().replace('_', " "),
+                status.row.evidence
+            );
+        }
         row(
             out,
             &[
@@ -172,7 +186,7 @@ fn aisc_instances(out: &mut String, instances: &[IdentityInstance]) {
                 instance.family.as_str().into(),
                 format!("{}: {}", instance.state.code(), instance.state.label()),
                 format!("{}:{}!{}", instance.file, instance.sheet, instance.cell),
-                instance.state.detail(),
+                detail,
             ],
         );
     }
@@ -187,7 +201,7 @@ fn ledger(out: &mut String, report: &PublicAssuranceReport) {
         report.aisc_tables,
         report.relaxation_only()
     );
-    aisc_instances(out, &report.instances);
+    aisc_instances(out, &report.instances, Some(&report.public_claims));
     counts(
         out,
         "Visible Mine Stats identities",
@@ -880,7 +894,7 @@ pub(super) fn markdown(report: &PublicAssuranceReport) -> Result<String, Refusal
             .or_insert(0) += 1;
     }
     counts(&mut out, "Hidden AISC identities", &hidden);
-    aisc_instances(&mut out, &report.hidden_scope.instances);
+    aisc_instances(&mut out, &report.hidden_scope.instances, None);
     for refused in &report.hidden_scope.table_refusals {
         let _ = writeln!(
             out,

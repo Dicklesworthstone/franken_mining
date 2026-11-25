@@ -244,6 +244,17 @@ pub enum StatusKind {
     CareAndMaintenance,
 }
 
+impl StatusKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disposed => "disposed",
+            Self::Withheld => "withheld",
+            Self::CareAndMaintenance => "care_and_maintenance",
+        }
+    }
+}
+
 /// One subject-status row: the status applies to a period that lies entirely within months `first` to `last`
 /// (open-ended when `last` is `None`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,10 +305,17 @@ pub fn status_for(
     subject: &str,
     period: &Period,
 ) -> Option<StatusKind> {
+    subject_status_for(statuses, subject, period).map(|row| row.kind)
+}
+
+pub(crate) fn subject_status_for<'a>(
+    statuses: &'a [SubjectStatus],
+    subject: &str,
+    period: &Period,
+) -> Option<&'a SubjectStatus> {
     statuses
         .iter()
         .find(|s| s.subject == subject && s.applies(period))
-        .map(|s| s.kind)
 }
 
 /// Why a value is `Nil`.
@@ -822,11 +840,12 @@ fn basis_json(basis: OwnershipBasis) -> String {
 
 impl KeyedCell {
     pub(crate) fn cite_status(&mut self, profile: &IssuerProfile) {
-        self.status_evidence = profile
-            .subject_statuses
-            .iter()
-            .find(|s| s.subject == self.key.subject && s.applies(&self.key.valid_period))
-            .map(|s| s.evidence.clone());
+        self.status_evidence = subject_status_for(
+            &profile.subject_statuses,
+            &self.key.subject,
+            &self.key.valid_period,
+        )
+        .map(|row| row.evidence.clone());
     }
 
     /// Stable robot output. `unit` describes the stored number; `displayed` preserves formatting such as `%`.

@@ -1119,13 +1119,33 @@ impl PublicAssuranceReport {
                 let cells: Vec<String> = cells.iter().map(|c| js(c)).collect();
                 let _ = write!(
                     o,
-                    "{}{{\"reason\":{},\"reason_code\":{},\"count\":{},\"instances\":[{}]}}",
+                    "{}{{\"reason\":{},\"reason_code\":{},\"count\":{},\"instances\":[{}]",
                     if n == 0 { "" } else { "," },
                     js(reason),
                     js(reason_code),
                     cells.len(),
                     cells.join(",")
                 );
+                if *reason_code == aisc::NotPublishedReason::AllZeroColumn.code()
+                    && !self.public_claims.registered_all_zero.is_empty()
+                {
+                    o.push_str(",\"status_citations\":[");
+                    for (at, status) in &self.public_claims.registered_all_zero {
+                        let _ = write!(
+                            o,
+                            "{{\"at\":{},\"sha256\":{},\"subject\":{},\"period\":{},\"status\":{},\"evidence\":{}}},",
+                            js(at),
+                            js(&status.file_sha256),
+                            js(&status.row.subject),
+                            js(&status.period.code()),
+                            js(status.row.kind.as_str()),
+                            js(&status.row.evidence)
+                        );
+                    }
+                    o.pop();
+                    o.push(']');
+                }
+                o.push('}');
             }
             o.push_str("],");
         }

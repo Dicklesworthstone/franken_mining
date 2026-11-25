@@ -727,6 +727,9 @@ The public lane of M0 (`fmine assure public`).
   - `aisc::StatedShare` is a stated-share basis, and `aisc::CitedCell` an explained component.
   - `IdentityState::reason_code()` gives the code that the payload's exception records and refused and
     not-published groups carry as `reason_code`. `detail()` renders the same prose as before.
+    The visible `all_zero_column` group includes `status_citations` when a registered subject status covers
+    the full period of a column. Each citation gives the column locator, workbook SHA-256, period, subject,
+    status and registry evidence. The presence of a status citation leaves the ledger verdict and state root unchanged.
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `HiddenScope`, `HIDDEN_SCOPE`,
   `PublicAssuranceReport`, `load_registered_sources`, `assess`, `assess_memo`, `MineStatsMemo` (`hits`,
   `misses`), `run_public_assurance`, `run_barrick_m0_assurance`,

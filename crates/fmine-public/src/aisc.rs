@@ -33,8 +33,8 @@ use fmine_numerics::exact_feas::{self as xf, Rat};
 
 use crate::LoadedSource;
 use crate::key::{
-    KeyedCell, LineKey, OwnershipBasis, PublicKey, Scope, ShareSource, Vintage, classify,
-    parse_sheet_period, public_claim, scope_for, status_for,
+    KeyedCell, LineKey, OwnershipBasis, Period, PublicKey, Scope, ShareSource, SubjectStatus,
+    Vintage, classify, parse_sheet_period, public_claim, scope_for, status_for, subject_status_for,
 };
 use crate::sources::{IssuerProfile, SourceKind};
 
@@ -933,6 +933,14 @@ pub struct KeyingRefusal {
     pub reason: String,
 }
 
+/// A registered status covering the full period of one visible all-zero column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZeroColumnStatus {
+    pub period: Period,
+    pub row: SubjectStatus,
+    pub file_sha256: String,
+}
+
 /// Numeric and placeholder AISC cells keyed independently of their spreadsheet coordinates (BD-332.S2).
 /// Textual `LabelCheck` operands remain context references. Numeric operands in Mine Stats files are keyed by
 /// that reader's adapter, which knows their block periods and units.
@@ -940,9 +948,31 @@ pub struct KeyingRefusal {
 pub struct AiscClaimIndex {
     pub cells: BTreeMap<String, KeyedCell>,
     pub refusals: Vec<KeyingRefusal>,
+    /// Applicable registry rows keyed by `file:sheet!column`.
+    pub registered_all_zero: BTreeMap<String, ZeroColumnStatus>,
     /// All-zero columns with no registered subject status for their period, named `file:sheet!column`.
     /// Their numeric zeros remain numbers; the ledger's existing not-published state is not upgraded to a fact.
     pub unregistered_all_zero: Vec<String>,
+}
+
+impl AiscClaimIndex {
+    #[must_use]
+    pub fn all_zero_status(&self, instance: &IdentityInstance) -> Option<&ZeroColumnStatus> {
+        if matches!(
+            instance.state,
+            IdentityState::NotPublished {
+                reason: NotPublishedReason::AllZeroColumn
+            }
+        ) {
+            self.registered_all_zero.get(&column_locator(instance))
+        } else {
+            None
+        }
+    }
+}
+
+fn column_locator(instance: &IdentityInstance) -> String {
+    format!("{}:{}!{}", instance.file, instance.sheet, instance.column)
 }
 
 /// Builds one public Claim per distinct AISC operand, visible co-product rate and printed company column,
@@ -1073,13 +1103,24 @@ pub fn key_aisc_operands(
             }
         )
     }) {
-        if let Ok(period) = parse_sheet_period(&instance.sheet)
-            && status_for(&profile.subject_statuses, &instance.subject, &period).is_none()
+        let Ok(period) = parse_sheet_period(&instance.sheet) else {
+            continue;
+        };
+        let at = column_locator(instance);
+        if let Some(row) = subject_status_for(&profile.subject_statuses, &instance.subject, &period)
         {
-            unregistered.insert(format!(
-                "{}:{}!{}",
-                instance.file, instance.sheet, instance.column
-            ));
+            if let Some(source) = sources.get(instance.file.as_str()) {
+                index
+                    .registered_all_zero
+                    .entry(at)
+                    .or_insert_with(|| ZeroColumnStatus {
+                        period,
+                        row: row.clone(),
+                        file_sha256: Digest32(source.workbook.sha256).to_hex(),
+                    });
+            }
+        } else {
+            unregistered.insert(at);
         }
     }
     index.unregistered_all_zero = unregistered.into_iter().collect();

@@ -801,6 +801,9 @@ does not establish whether an explanation exists outside the registered evidence
 Visible identity checks and their exception records include `cited.operands[].claim_id` for operands
 with an accepted Claim at the same workbook cell and SHA-256. Use the ID to find its period, release,
 ownership basis, units and typed value in `public_claims.cells` or with `fmine claim show`.
+The `all_zero_column` reason in `identity_ledger.not_published` cites the registered status of each
+covered column, with its period and workbook hash. Columns without a matching status remain listed
+in `public_claims.unregistered_all_zero`.
 
 The same engine compares the AISC workbooks under `issuer_consistency.aisc_vintages`. Its frozen original
 population through 2026Q2 contains 9,541 appearances, 5,819 series and 3,722 later comparisons, including

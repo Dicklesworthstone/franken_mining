@@ -134,6 +134,20 @@ mod tests {
 
     #[test]
     fn test_aisc_withheld_zero_uses_only_registered_status() {
+        fn all_zero_reason(report: &fmine_public::PublicAssuranceReport) -> Json {
+            let json = parse(report.to_json().as_bytes()).expect("assurance JSON");
+            json.get("identity_ledger")
+                .and_then(|ledger| ledger.get("not_published"))
+                .and_then(Json::as_array)
+                .expect("not-published reasons")
+                .iter()
+                .find(|reason| {
+                    reason.get("reason_code").and_then(Json::as_str) == Some("all_zero_column")
+                })
+                .expect("all-zero reason")
+                .clone()
+        }
+
         let mut profile = synthetic::synthetic_profile();
         profile.subject_statuses.push(SubjectStatus {
             subject: "Site E".to_string(),
@@ -142,7 +156,13 @@ mod tests {
             last: Some((2030, 3)),
             evidence: "SYNTHETIC-WITHHELD".to_string(),
         });
-        let registered = keyed_synthetic(&profile);
+        let base = fmine_public::run_synthetic_assurance(&[]).expect("synthetic assurance");
+        let report = fmine_public::assess(
+            &profile,
+            fmine_public::Lane::Synthetic,
+            base.sources.clone(),
+        );
+        let registered = &report.public_claims;
         assert_eq!(
             registered.cells[&synthetic_at("F5")]
                 .status_evidence
@@ -157,8 +177,25 @@ mod tests {
             }
         );
         assert!(registered.unregistered_all_zero.is_empty());
-        profile.subject_statuses.clear();
-        let unregistered = keyed_synthetic(&profile);
+        let sha = &registered.cells[&synthetic_at("F5")]
+            .key
+            .reporting_vintage
+            .file_sha256;
+        let expected_citations = format!(
+            "[{{\"at\":\"{}\",\"sha256\":\"{sha}\",\"subject\":\"Site E\",\"period\":\"2030Q1\",\
+             \"status\":\"withheld\",\"evidence\":\"SYNTHETIC-WITHHELD\"}}]",
+            synthetic_at("F")
+        );
+        let expected_citations = parse(expected_citations.as_bytes()).expect("citation JSON");
+        let reason = all_zero_reason(&report);
+        assert_eq!(reason.get("status_citations"), Some(&expected_citations));
+
+        // The registered months must cover the entire displayed period.
+        profile.subject_statuses[0].first = (2030, 2);
+        let partial = fmine_public::assess(&profile, fmine_public::Lane::Synthetic, base.sources);
+        let unregistered = &partial.public_claims;
+        assert!(all_zero_reason(&partial).get("status_citations").is_none());
+        assert_eq!(report.state_counts(), partial.state_counts());
         assert!(matches!(
             unregistered.cells[&synthetic_at("F5")].claim.value,
             PublicValue::Number { .. }
@@ -532,7 +569,7 @@ mod tests {
             .expect("registry");
         let report =
             fmine_public::run_public_assurance(&profile, &root).expect("registered corpus");
-        let index = key_aisc_operands(&profile, &report.sources, &report.instances);
+        let index = &report.public_claims;
         assert!(index.refusals.is_empty(), "{:?}", index.refusals);
         let aisc_files: BTreeSet<_> = report
             .sources
@@ -568,11 +605,22 @@ mod tests {
                     !index.unregistered_all_zero.contains(&at),
                     "{at}"
                 );
+                assert_eq!(
+                    registered,
+                    index.registered_all_zero.contains_key(&at),
+                    "{at}"
+                );
                 all_zero.insert(at);
             }
         }
         assert_eq!(operands, 26_120);
         assert_eq!(all_zero.len(), 12);
+        assert_eq!(index.registered_all_zero.len(), 11);
+        for (at, status) in &index.registered_all_zero {
+            assert_eq!(status.row.subject, "Loulo-Gounkoto", "{at}");
+            assert_eq!(status.row.kind, StatusKind::Withheld, "{at}");
+            assert_eq!(status.row.evidence, "E818", "{at}");
+        }
         assert_eq!(
             index.unregistered_all_zero,
             ["Barrick_Q1_2025_AISC.xlsx:Q1 2024!L"]
