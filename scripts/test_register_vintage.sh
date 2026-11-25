@@ -84,7 +84,7 @@ check() {
     printf '{"case":"%s","ok":true}\n' "$name"
   else
     failures=$((failures + 1))
-    printf '{"case":"%s","ok":false,"detail":"%s"}\n' "$name" "$detail"
+    python3 -I -c 'import json, sys; print(json.dumps(dict(case=sys.argv[1], ok=False, detail=sys.argv[2])))' "$name" "$detail"
   fi
 }
 # vintage WS STAMP [ARGS...]: runs the script; sets out, code, err
@@ -149,6 +149,8 @@ check reused_directory_refused "exit $code: $err" reuse
 
 ws2="$scratch/ws2"
 registry "$ws2" "$(digest "$aisc")"
+printf 'published_at = "2026-08-10"\npublished_at_basis = "different source"\n' \
+  >>"$ws2/registries/sources/barrick.toml"
 vintage "$ws2" t2 "${urls[@]}"
 dir2="$ws2/corpus_of_input_docs/incoming/t2"
 duplicate() {
@@ -159,8 +161,29 @@ duplicate() {
 check registered_sha256_prints_no_row "exit $code" duplicate
 
 vintage "$ws2" t3 --dry-run "${urls[@]}"
-dry() { [[ $code -eq 0 && "$out" == *'"count":2'* ]]; }
+dry() {
+  [[ $code -eq 0 && "$out" == *'"count":2'* ]] &&
+    ! has "$ws2/corpus_of_input_docs/incoming/t3/rows.toml" 'published_at'
+}
 check dry_run_prints_registered_row "exit $code" dry
+
+ws3="$scratch/ws3"
+registry "$ws3" "$zeros"
+cat "$dir1/rows.toml" >>"$ws3/registries/sources/barrick.toml"
+printf 'published_at = "2026-11-09"\npublished_at_basis = "invented release marker"\n' \
+  >>"$ws3/registries/sources/barrick.toml"
+vintage "$ws3" t4 --dry-run "${urls[@]}"
+publication_evidence() {
+  [[ $code -eq 0 ]] && python3 -I - "$ws3/corpus_of_input_docs/incoming/t4/rows.toml" <<'PY'
+import sys
+from pathlib import Path
+_, stats, aisc = Path(sys.argv[1]).read_text().split("[[source]]")
+assert "published_at" not in stats
+assert 'published_at = "2026-11-09"\n' in aisc
+assert 'published_at_basis = "invented release marker"\n' in aisc
+PY
+}
+check dry_run_retains_reviewed_publication_evidence "exit $code: $err" publication_evidence
 
 fake="$scratch/fake-fmine"
 printf '#!/bin/sh\necho "{}"\n' >"$fake"
@@ -170,7 +193,8 @@ printf '{"binary_sha256":"%s"}\n' "$(digest "$fake")" >"$scratch/record-fake.jso
 # run WS DIR RECORD: --run 2026Q2 with the fake binary; sets out, code, err
 run() {
   code=0
-  out="$(FMINE_WORKSPACE="$1" FMINE_BIN="$fake" FMINE_BLIND_RECORD="$3" bash "$script" --run 2026Q2 "$2" \
+  out="$(FMINE_WORKSPACE="$1" FMINE_BIN="${4:-$fake}" FMINE_BLIND_RECORD="$3" VINTAGE_TEST_CASE="${5:-}" \
+    VINTAGE_TEST_DIR="$2" bash "$script" --run 2026Q2 "$2" \
     2>"$scratch/err")" || code=$?
   err="$(cat "$scratch/err")"
 }
@@ -187,6 +211,81 @@ no_payload() {
     [[ "$out" == *'"stage":"binary"'*'"equal":true'* ]] && (($(grep -c '"stage":"fmine"' "$dir2/log.jsonl") == 2))
 }
 check recorded_binary_runs_after_seal "exit $code: $err" no_payload
+
+# DESIGN: exercise the shell and comparison boundary with invented CLI receipts. Real-workbook
+# reproduction uses an unmodified native binary separately.
+receipt="$scratch/receipt-fmine"
+cat >"$receipt" <<'PY'
+#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+directory = pathlib.Path(os.environ["VINTAGE_TEST_DIR"])
+case = os.environ["VINTAGE_TEST_CASE"]
+through = sys.argv[sys.argv.index("--through") + 1] if "--through" in sys.argv else None
+hashes = {pathlib.Path(row["path"]).name: row["sha256"]
+          for row in map(json.loads, (directory / "fetch.jsonl").read_text().splitlines())}
+census = [row for row in map(json.loads, (directory / "oracle.jsonl").read_text().splitlines())
+          if "file" in row]
+sources = []
+for row in census:
+    name = row["file"]
+    fetched = name if "Mine_Stats" in name else "AISC_Q3_2026.xlsx"
+    sources.append(dict(file=name, sha256=hashes[fetched], visible_sheets=row["visible"],
+                        hidden_sheets=row["hidden"], numeric_cells=row["numeric"],
+                        placeholder_cells=row["placeholder"], formula_error_cells=row["error"],
+                        text_cells=row["text"], numeric_digest=row["digest"]))
+if case == "wrong_hash":
+    sources[0]["sha256"] = "0" * 64
+if case == "wrong_census":
+    sources[0]["numeric_cells"] += 1
+if case == "wrong_bound":
+    through = None
+root = "a" * 64
+ledger = dict(totals={}, instances=0, exceptions=[], table_refusals=[], unregistered_headers=[])
+payload = dict(issuer="barrick", lane="public", through=through, sources=sources,
+               state_root=root, anchor_id="anc_test", identity_ledger=ledger)
+print(json.dumps(dict(status="ok", exit_code=0, certificate=root, anchor_id="anc_test", payload=payload)))
+sys.exit(7 if case == "child_failed" else 0)
+PY
+chmod +x "$receipt"
+printf '{"binary_sha256":"%s"}\n' "$(digest "$receipt")" >"$scratch/record-receipt.json"
+rehearse() {
+  local scenario="$1"
+  vintage "$ws1" "case-$scenario" "${urls[@]}"
+  [[ $code -eq 0 ]] || return 1
+  run "$ws1" "$ws1/corpus_of_input_docs/incoming/case-$scenario" "$scratch/record-receipt.json" "$receipt" "$scenario"
+}
+rehearse positive
+matching_receipts() {
+  [[ $code -eq 0 && "$out" == *'"stage":"diff"'*'"census_equal":true,"source_bytes_equal":true'* ]]
+}
+check matching_receipts_accepted "exit $code: $err" matching_receipts
+dir_ok="$ws1/corpus_of_input_docs/incoming/case-positive"
+before="$(digest "$dir_ok/run_through.json")"
+run "$ws1" "$dir_ok" "$scratch/record-receipt.json" "$receipt" wrong_census
+receipts_preserved() {
+  [[ $code -eq 2 && "$err" == *"already has a run receipt"* && "$(digest "$dir_ok/run_through.json")" == "$before" ]]
+}
+check existing_run_receipts_preserved "exit $code: $err" receipts_preserved
+
+rehearse wrong_census
+census_disagrees() { [[ $code -eq 1 && "$out" == *'"stage":"diff"'*'"census_equal":false'* ]]; }
+check mismatched_census_refused "exit $code: $err" census_disagrees
+
+rehearse wrong_hash
+hash_disagrees() { [[ $code -eq 1 && "$out" == *'"source_bytes_equal":false'* ]]; }
+check same_census_wrong_source_refused "exit $code: $err" hash_disagrees
+
+rehearse wrong_bound
+bound_disagrees() { [[ $code -eq 1 && "$err" == *"reported through"* ]]; }
+check wrong_rehearsal_bound_refused "exit $code: $err" bound_disagrees
+
+rehearse child_failed
+child_fails() { [[ $code -eq 7 && "$out" == *'"exit":7'* && "$out" != *'"stage":"diff"'* ]]; }
+check child_failure_preserved "exit $code: $err" child_fails
 
 printf ' ' >>"$dir1/oracle.jsonl"
 run "$ws1" "$dir1" "$scratch/record-fake.json"

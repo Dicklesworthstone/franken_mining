@@ -13,7 +13,7 @@
 #     the corpus and checks their digests. It checks the oracle seal and that the fmine binary is the one the
 #     blind record names. It runs the binary on all sources and on --through <YYYYQn>, and prints the diffs:
 #     the two roots, the census per new file against the oracle, the ledger counts, new exceptions, table
-#     refusals and unregistered headers. It never fixes a mismatch.
+#     refusals and unregistered headers. A failed run or disagreement exits nonzero and keeps its receipts.
 #
 # Output: one JSON line per step. Environment:
 #   FMINE_WORKSPACE       workspace root (default: one level above this script)
@@ -70,14 +70,28 @@ if [[ "${1:-}" == "--run" ]]; then
     exit 1
   fi
   for mode in through all; do
+    if [[ -e "$dir/run_$mode.json" || -L "$dir/run_$mode.json" ]]; then
+      die "$dir already has a run receipt; use a fresh incoming directory"
+    fi
+  done
+  # Claim this incoming directory before invoking the binary, including against another concurrent --run.
+  if ! (set -o noclobber; : >"$dir/run_through.json"); then
+    die "could not create the first run receipt in $dir"
+  fi
+  failed=0
+  for mode in through all; do
     args=(assure public --issuer barrick --workspace "$ws" --format json)
     [[ "$mode" == through ]] && args+=(--through "$bound")
     t="$(now)"
     printf '{"stage":"fmine","mode":"%s","utc":"%s"}\n' "$mode" "$t" >>"$dir/log.jsonl"
     code=0
     "$bin" "${args[@]}" >"$dir/run_$mode.json" || code=$?
-    printf '{"stage":"fmine","mode":"%s","utc":"%s","exit":%d}\n' "$mode" "$t" "$code"
+    printf '{"stage":"fmine_exit","mode":"%s","exit":%d}\n' "$mode" "$code" | tee -a "$dir/log.jsonl"
+    if ((failed == 0 && code != 0)); then
+      failed="$code"
+    fi
   done
+  ((failed == 0)) || exit "$failed"
   exec "${helper[@]}" diff "$ws" "$dir" "$bound"
 fi
 

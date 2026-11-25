@@ -6,9 +6,9 @@ Subcommands, each printing one JSON line per step:
   oracle <workspace> <dir>                               the independent reader on the fetched files, blind
   diff <workspace> <dir> <bound>                         dir/run_all.json and dir/run_through.json vs the oracle
 
-The oracle step runs scripts/oracle/fidelity.py and census2.py unchanged, census2.py in its --displayed mode
-because the fmine ledger scores displayed values (bd-jg43.3), so the two ledger counts the diff prints are
-comparable. census2.py reads
+The oracle step runs scripts/oracle/fidelity.py and census2.py unchanged. The diff prints the independent
+displayed-value baseline and the product's ledger counts. Registered share and other evidence rules can
+change those counts. census2.py reads
 <root>/corpus_of_input_docs/downloaded/mine_stats, so the step builds that layout in <dir>/oracle_root. It holds
 links to the registered files present in the corpus and the fetched files under their candidate names. Its
 output, dir/oracle.jsonl, is written and its sha256 and time are recorded in dir/log.jsonl before any fmine
@@ -120,17 +120,24 @@ def fetched(dir_):
 
 def cmd_rows(ws, dir_, dry_run):
     top, rows = registry(ws)
-    known = {r.get("sha256"): r.get("file") for r in rows}
+    known = {r.get("sha256"): r for r in rows}
     out = []
     for f in fetched(dir_):
         row, text, warnings = candidate(top["issuer"], top["url_prefix"], f["url"], f["bytes"], f["sha256"],
                                         f["utc"])
-        already = f["sha256"] in known
+        registered = known.get(f["sha256"])
+        already = registered is not None
         line(stage="row", file_name=row["file"], quarter=row["quarter"], already_registered=already,
              warnings=warnings)
-        if already and not dry_run:
-            print("already registered: %s" % known[f["sha256"]], file=sys.stderr)
-            continue
+        if registered is not None:
+            if not dry_run:
+                print("already registered: %s" % registered["file"], file=sys.stderr)
+                continue
+            # A dry run can repeat reviewed metadata for the exact same source identity.
+            publication = ("published_at", "published_at_basis")
+            if (all(row[key] == registered.get(key) for key in ("file", "kind", "quarter", "path", "bytes"))
+                    and all(registered.get(key) for key in publication)):
+                text += "".join('%s = "%s"\n' % (key, registered[key]) for key in publication)
         out.append(text)
     with open(os.path.join(dir_, "rows.toml"), "w", encoding="utf-8") as h:
         h.write("\n".join(out))
@@ -152,18 +159,21 @@ def cmd_oracle(ws, dir_):
     root = os.path.join(dir_, "oracle_root")
     corpus = os.path.join(root, "corpus_of_input_docs", "downloaded", "mine_stats")
     os.makedirs(corpus)
-    names = []
+    digests = {}
     for f in fetched(dir_):
         row, _, _ = candidate(top["issuer"], top["url_prefix"], f["url"], f["bytes"], f["sha256"], f["utc"])
-        if row["file"] in names:
+        if row["file"] in digests:
             refuse("two fetched files would both be %s" % row["file"])
+        digest = sha256_file(f["path"])
+        if digest != f["sha256"]:
+            refuse("download changed before the oracle read: %s" % row["file"])
         os.symlink(os.path.abspath(f["path"]), os.path.join(corpus, row["file"]))
-        names.append(row["file"])
+        digests[row["file"]] = digest
     # Registered files present in the corpus, except a name a fetched file already takes (a dry run).
     registered = os.path.join(ws, top["corpus_dir"])
     for r in rows:
         src = os.path.join(registered, r["file"])
-        if r["file"] not in names and os.path.exists(src):
+        if r["file"] not in digests and os.path.exists(src):
             os.symlink(src, os.path.join(corpus, r["file"]))
     _, res = census2.run(root, displayed=True)
     counts = {}
@@ -171,9 +181,9 @@ def cmd_oracle(ws, dir_):
         counts[x[5]] = counts.get(x[5], 0) + 1
     out = os.path.join(dir_, "oracle.jsonl")
     with open(out, "w", encoding="utf-8") as h:
-        for name in names:
+        for name, digest in digests.items():
             o = fidelity.read(os.path.join(corpus, name))
-            h.write(json.dumps({"file": name, "visible": o["visible"], "hidden": o["hidden"],
+            h.write(json.dumps({"file": name, "sha256": digest, "visible": o["visible"], "hidden": o["hidden"],
                                 "numeric": o["numeric"], "placeholder": o["placeholder"], "error": o["error"],
                                 "text": o["text"], "digest": o["digest"],
                                 "instances": sum(1 for x in res if x[0] == name)}, separators=(",", ":")) + "\n")
@@ -216,11 +226,25 @@ def cmd_diff(ws, dir_, bound):
         if not isinstance(v.get("payload"), dict):
             refuse("the fmine run on %s has no payload (status %s, exit %s)" % (k, v.get("status"),
                                                                                  v.get("exit_code")), 1)
+        p = v["payload"]
+        if v.get("status") != "ok" or v.get("exit_code") != 0:
+            refuse("the fmine run on %s reported %s (exit %s)" % (k, v.get("status"), v.get("exit_code")), 1)
+        if p.get("issuer") != "barrick" or p.get("lane") != "public":
+            refuse("the fmine run on %s is outside the Barrick public lane" % k, 1)
+        through = bound if k == "through" else None
+        if "through" not in p or p["through"] != through:
+            refuse("the fmine run on %s reported through %s (expected %s)" % (k, p.get("through"), through), 1)
+        if (not v.get("certificate") or v["certificate"] != p.get("state_root")
+                or not v.get("anchor_id") or v["anchor_id"] != p.get("anchor_id")):
+            refuse("the fmine run on %s has inconsistent root or anchor evidence" % k, 1)
     pay = {k: v["payload"] for k, v in runs.items()}
     oracle = jsonl(os.path.join(dir_, "oracle.jsonl"))
     per_file = {o["file"]: o for o in oracle if "file" in o}
+    if not per_file:
+        refuse("the sealed oracle contains no fetched workbooks", 1)
     sources = {s["file"]: s for s in pay["all"]["sources"]}
     census_equal = True
+    source_bytes_equal = True
     for name, o in sorted(per_file.items()):
         s = sources.get(name)
         got = None if s is None else [s["visible_sheets"], s["hidden_sheets"], s["numeric_cells"],
@@ -228,8 +252,10 @@ def cmd_diff(ws, dir_, bound):
                                       s["numeric_digest"]]
         want = [o["visible"], o["hidden"], o["numeric"], o["placeholder"], o["error"], o["text"], o["digest"]]
         equal = got == want
+        same_bytes = s is not None and bool(o.get("sha256")) and s.get("sha256") == o["sha256"]
         census_equal = census_equal and equal
-        line(stage="census", file=name, registered=s is not None, equal=equal)
+        source_bytes_equal = source_bytes_equal and same_bytes
+        line(stage="census", file=name, registered=s is not None, equal=equal, source_bytes_equal=same_bytes)
     ledger = {k: pay[k]["identity_ledger"] for k in pay}
     new_files = set(per_file)
     new_exceptions = [e for e in ledger["all"]["exceptions"] if e["file"] in new_files]
@@ -241,11 +267,13 @@ def cmd_diff(ws, dir_, bound):
             line(stage=k, item=item)
     oracle_ledger = next(o for o in oracle if "ledger" in o)
     line(stage="diff", bound=bound, root_all=pay["all"]["state_root"], root_through=pay["through"]["state_root"],
-         census_equal=census_equal,
+         census_equal=census_equal, source_bytes_equal=source_bytes_equal,
          counts={"through": ledger["through"]["totals"], "all": ledger["all"]["totals"],
                  "oracle_census2": oracle_ledger["ledger"]},
          new_instances=ledger["all"]["instances"] - ledger["through"]["instances"],
          new_exceptions=len(new_exceptions))
+    if not census_equal or not source_bytes_equal:
+        refuse("the fmine run disagrees with the sealed workbook bytes or extraction census", 1)
 
 
 if __name__ == "__main__":

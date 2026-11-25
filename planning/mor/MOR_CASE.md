@@ -1845,3 +1845,28 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   - **Regression.** `xtask::public_mine_stats_vintages::tests::real_mine_stats_vintages_keep_e474_and_basis_conflicts`
     checks the six T16 vintage denominators, all nine changed source locations, 30 cited E461 regional
     exclusions and W1-DR-01. The disclosure negative control records the rule described in E862.
+
+- **E864** Quarter-admission rehearsal and failure controls (FACT, 2026-11-25 UTC, bd-s9j3.2).
+  - A live dry run fetched the two registered Q2 2026 URLs. The emitted source rows matched the 2026Q2 registry
+    in E861 field for field apart from retrieval time and URL basis. Both retained the registered publication
+    evidence. `xtask::tests::test_candidate_row_parses_under_toml_subset` passed on a separate candidate
+    appended to a copy of the registry.
+  - The unchanged Python reader over the 18 verified historical workbooks reproduced E820's 101 visible and
+    six hidden sheets, 30,388 numeric cells, 3,952 placeholders, 1,092 formula errors and 6,537 text cells.
+    The independent stored-value census reproduced E822's `(2120, 3, 4, 17, 391, 60)` in state order
+    `(i, ii, iii, iv, v, np)`. The displayed-value seal records `(2132, 3, 4, 17, 379, 60)` after E838's
+    change to read the presentation of the 12 E823 cells.
+  - The local known-file Q3 rehearsal used the 20 verified registered workbooks and the native debug binary
+    from the Rust sources at `ebee6a6`, SHA-256
+    `54c5ad4d76a5d843eac82fb51432e9d1e7c435b81a9903289f1cd2b2dbd5e212`. The independent oracle seal
+    `33f7b4daaa8cac370261c91337dd4b79552b444e558c4ee05f42e756e5ffd65e` at
+    `2026-11-25T03:13:32.909284Z` preceded the bounded and all-source invocations. Both exited 0.
+    The two Q3 files matched the sealed workbook hashes and extraction censuses, including numeric-cell
+    digests over 2,246 Mine Stats cells and 1,088 AISC cells. The bounded root
+    `0effa0b43ff122299e95b8d12cdfa57319b26a1f2a7a71fce4ea7367d0e2f264` and full root
+    `a969738fca74d44e0907045d6603a82035784ada6fe50909ba579a698ddf025a` matched the recorded E860 roots.
+  - The offline controls in `scripts/test_register_vintage.sh` exposed successful exits with a mismatched
+    census, a different workbook hash, a wrong historical bound or a failing child process before the fix.
+    The corrected runner returns nonzero in all four cases and preserves the receipts of an earlier run.
+    The local Q3 replay exercises the known-file tooling. The E854 binary's separate Q3 schema refusal and
+    the prospective Q4 blind measurement remain distinct from this replay.
