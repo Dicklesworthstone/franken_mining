@@ -1644,7 +1644,8 @@ mod tests {
         // BD-123/BD-124 adds fmine-report's portable plain-Markdown report renderer (lib.rs).
         // BD-356.S3 adds fmine-gen's portable PilotProtocolCard & AnalysisPlan ledger (pilot_card.rs).
         // BD-352 adds fmine-claim::origin and fmine-gen::origin_coverage (2 portable modules).
-        assert_eq!(report.bitwise_files, 127, "{report:?}");
+        // BD-314 adds fmine-econ::entity_graph (CapitalEntityGraph & Barrick portfolio waterfalls).
+        assert_eq!(report.bitwise_files, 128, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

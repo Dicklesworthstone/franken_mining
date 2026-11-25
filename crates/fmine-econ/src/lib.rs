@@ -5,6 +5,7 @@
 //! All physical and monetary quantities use `fmine_units::ExactQty` and `fmine_units::Money`
 //! (zero bare `f64` parameters in public signatures; L-6).
 
+pub mod entity_graph;
 pub mod fiscal;
 pub mod npv;
 pub mod price_deck;
