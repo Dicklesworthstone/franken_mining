@@ -425,6 +425,12 @@ counterfactual with `hold-back:<lot-id>`. The retained card includes the full co
 anchors and the same result Claim as the standalone command. A lot with undefined recovery retains
 its refusal. The operator supplies the choice and rationale.
 
+DESIGN (bd-zpu6.6). A proper fractional minimum can be selected with
+`hold-back-partial:<lot-id>:<numerator>/<denominator>`. Admission compares the canonical action to
+the action derived from the current evaluated card. A changed lot or fraction refuses before append.
+Zero and full splits use the existing actions. The 256-byte journal choice limit bounds the emitted
+action. The full original comparison remains the retained artifact.
+
 Exact rational arithmetic enumerates all eight endpoint vertices and checks the closed-form extrema of
 `R = (1-w) * R_tested + w * R_untested`. The card retains witnesses and reports stable proceed, stable
 stop or unstable. Proceed means recovery is at least the declared threshold; stop is strictly below it.

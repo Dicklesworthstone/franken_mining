@@ -1494,6 +1494,188 @@ fn feed_choices_replay_the_original_comparison_and_keep_refusals_atomic() {
     }
 }
 
+#[test]
+fn native_partial_holdback_records_the_exact_action_and_replays_after_the_worksheet_changes() {
+    let f = Fixture::new();
+    let original = format!(
+        "{SHIFT_FEED}\n[[partial_holdback]]\nlot = \"high-grade-pocket\"\nbasis = \"proportional_same_grade\"\n"
+    );
+    fs::write(&f.model, &original).unwrap();
+    let run = |args: &[&str]| {
+        let output = Process::new(binary())
+            .args(args)
+            .args(["--workspace", f.root.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let model = f.model.to_str().unwrap();
+    let journal = f.journal.to_str().unwrap();
+    let card = parse_json(run(&["decide", "recovery-bounds", model, "--json"]).as_bytes()).unwrap();
+    let original_card = json_field(&card, &["payload", "card"]);
+    let action = json_field(&card, &["payload", "partial_holdback_action"])
+        .as_str()
+        .unwrap();
+    assert_eq!(action, "hold-back-partial:high-grade-pocket:71/72");
+    assert!(
+        run(&["decide", "recovery-bounds", model, "--format", "markdown"])
+            .contains(&format!("`decide journal record --action {action}`"))
+    );
+    f.refuses_without_append(
+        &f.record(
+            f.initial,
+            "wrong-lot",
+            "hold-back-partial:marginal-pad:71/72",
+        ),
+        180,
+        "FMINE-REF-107",
+    );
+
+    let rationale = "Meet the synthetic recovery target while retaining part of the pocket";
+    let recorded = run(&[
+        "decide",
+        "journal",
+        "record",
+        "--journal",
+        journal,
+        "--expected-head",
+        &f.initial.to_hex(),
+        "--model",
+        model,
+        "--decision",
+        "shift-split",
+        "--action",
+        action,
+        "--reason",
+        rationale,
+        "--code-revision",
+        REVISION,
+        "--trust-host-clock",
+        "--json",
+    ]);
+    let record = parse_json(recorded.as_bytes()).unwrap();
+    let digest = json_field(&record, &["payload", "head"]).as_str().unwrap();
+    let pin = Digest32(fmine_calib::record::parse_hex32(digest).unwrap());
+    let revised = original.replace("threshold = \"0.85\"", "threshold = \"0.75\"");
+    fs::write(&f.model, revised).unwrap();
+    let revised =
+        parse_json(run(&["decide", "recovery-bounds", model, "--json"]).as_bytes()).unwrap();
+    assert_eq!(
+        json_field(&revised, &["payload", "partial_holdback_action"]).as_str(),
+        Some("hold-back-partial:high-grade-pocket:33/56")
+    );
+    f.refuses_without_append(&f.record(pin, "stale-action", action), 200, "FMINE-REF-107");
+
+    let shown = run(&[
+        "decide",
+        "journal",
+        "show",
+        "--journal",
+        journal,
+        "--head",
+        digest,
+        "--json",
+    ]);
+    let replay = parse_json(shown.as_bytes()).unwrap();
+    assert_eq!(
+        json_field(&replay, &["payload", "final_head_pinned"]).as_bool(),
+        Some(true)
+    );
+    let decisions = json_field(&replay, &["payload", "decisions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(decisions.len(), 1);
+    let snapshot = json_field(&decisions[0], &["snapshot"]);
+    assert_eq!(
+        json_field(snapshot, &["selected_action"]).as_str(),
+        Some(action)
+    );
+    assert_eq!(
+        json_field(snapshot, &["rationale"]).as_str(),
+        Some(rationale)
+    );
+    assert_eq!(
+        json_field(snapshot, &["claim_id"]),
+        json_field(original_card, &["result", "id"])
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "content"]).as_str(),
+        Some(original.as_str())
+    );
+    let card_bytes = json_field(snapshot, &["artifact", "content"])
+        .as_str()
+        .unwrap();
+    assert_eq!(&parse_json(card_bytes.as_bytes()).unwrap(), original_card);
+    assert_eq!(
+        json_field(snapshot, &["artifact", "sha256"]).as_str(),
+        Some(sha256(card_bytes.as_bytes()).to_hex().as_str())
+    );
+}
+
+#[test]
+fn partial_holdback_admission_requires_a_recordable_proper_fraction() {
+    let f = Fixture::new();
+    let base = format!(
+        "{SHIFT_FEED}\n[[partial_holdback]]\nlot = \"high-grade-pocket\"\nbasis = \"proportional_same_grade\"\n"
+    );
+    let long_id = "p".repeat(240);
+    for (worksheet, action) in [
+        (
+            SHIFT_FEED.to_string(),
+            "hold-back-partial:high-grade-pocket:71/72".into(),
+        ),
+        (
+            base.replace("0.85", "0.1"),
+            "hold-back-partial:high-grade-pocket:0/1".into(),
+        ),
+        (
+            base.replace("0.85", "47/55"),
+            "hold-back-partial:high-grade-pocket:1/1".into(),
+        ),
+        (
+            base.replace("0.85", "0.99"),
+            "hold-back-partial:high-grade-pocket:71/72".into(),
+        ),
+        (
+            base.replace("high-grade-pocket", &long_id),
+            format!("hold-back-partial:{long_id}:71/72"),
+        ),
+    ] {
+        fs::write(&f.model, worksheet).unwrap();
+        let (envelope, _) = fmine_cli::invoke(
+            &[
+                "decide".into(),
+                "recovery-bounds".into(),
+                f.model.display().to_string(),
+            ],
+            &f.root,
+        );
+        let envelope = successful(envelope);
+        assert!(
+            parse_json(envelope.payload_json.as_bytes())
+                .unwrap()
+                .get("partial_holdback_action")
+                .is_none()
+        );
+        f.refuses_without_append(
+            &f.record(f.initial, "inadmissible-split", &action),
+            180,
+            "FMINE-REF-107",
+        );
+    }
+    fs::write(&f.model, base).unwrap();
+    f.refuses_without_append(
+        &f.record(
+            f.initial,
+            "noncanonical",
+            "hold-back-partial:high-grade-pocket:142/144",
+        ),
+        180,
+        "FMINE-REF-107",
+    );
+}
+
 struct Predictions {
     root: PathBuf,
     journal: PathBuf,

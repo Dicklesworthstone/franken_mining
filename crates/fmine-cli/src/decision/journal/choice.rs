@@ -49,7 +49,7 @@ impl Choice {
             Self::ActNow(action) => action,
             Self::InformationOption { option_id, .. } => option_id,
         };
-        if !clean(id, 256) {
+        if !clean(id, card::model::JOURNAL_CHOICE_MAX_BYTES) {
             return Err(invalid(
                 "selected action or information option needs a bounded id",
             ));

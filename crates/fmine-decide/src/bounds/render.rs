@@ -379,6 +379,12 @@ impl BoundCard {
                     let _ = writeln!(out, "{lot}. {}", limit.description());
                 }
             }
+            if let Some(action) = holdback.journal_action() {
+                let _ = writeln!(
+                    out,
+                    "\nRecord this split with `decide journal record --action {action}`."
+                );
+            }
         }
         if let Some(windows) = self.dry_share_ranges().transpose() {
             out.push_str("\n## Untested share of dry feed tonnes\n\nThese windows use the available dry tonnes and hold across both declared grade and recovery ranges.\n\n");

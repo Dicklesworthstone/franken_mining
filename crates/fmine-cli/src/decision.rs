@@ -6,7 +6,7 @@ use std::path::Path;
 use fmine_decide::{bounds, card};
 use fmine_evidence::Refusal;
 
-use crate::{Envelope, NextAction, worksheet_input};
+use crate::{Envelope, NextAction, json_string, worksheet_input};
 
 pub mod journal;
 pub mod production;
@@ -58,10 +58,15 @@ pub(crate) fn execute(model: &Path, root: &Path, view: View) -> Envelope {
             "decision model",
             "declared decision model",
         )?;
-        let (json, markdown) = if recovery_bounds {
+        let (json, markdown, journal_action) = if recovery_bounds {
             let inputs = bounds::model::parse(&text, source.clone())?;
             let evaluated = bounds::evaluate(&inputs)?;
-            (evaluated.to_json(), evaluated.to_markdown())
+            let journal_action = evaluated
+                .summary()
+                .partial_holdback
+                .as_ref()
+                .and_then(bounds::parcels::PartialHoldback::journal_action);
+            (evaluated.to_json(), evaluated.to_markdown(), journal_action)
         } else {
             let inputs = card::model::parse(&text, source.clone())?;
             let evaluated = card::evaluate(&inputs)?;
@@ -75,10 +80,13 @@ pub(crate) fn execute(model: &Path, root: &Path, view: View) -> Envelope {
             } else {
                 evaluated.to_markdown()
             };
-            (evaluated.to_json(), markdown)
+            (evaluated.to_json(), markdown, None)
         };
+        let action_field = journal_action.map_or_else(String::new, |action| {
+            format!("\"partial_holdback_action\":{},", json_string(&action))
+        });
         let payload = format!(
-            "{{\"mode\":\"{mode}\",\"source\":{},\"card\":{}}}",
+            "{{\"mode\":\"{mode}\",\"source\":{},{action_field}\"card\":{}}}",
             worksheet_input::source_json(&source, text.len()),
             json,
         );

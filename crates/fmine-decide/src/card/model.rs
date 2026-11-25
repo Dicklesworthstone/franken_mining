@@ -32,6 +32,8 @@ const UU: RefusalCode = RefusalCode::UnbudgetedUnknowns204;
 /// the supplied action cash flows valid after its declared delay. Test and delay
 /// costs share that decision's monetary valuation basis; time shifts are not inferred.
 pub const INFORMATION_BASIS: &str = "before_action_same_payoffs_explicit_delay_cost";
+/// Byte limit for an action or option ID in the existing decision journal.
+pub const JOURNAL_CHOICE_MAX_BYTES: usize = 256;
 
 struct DeclaredAction {
     label: String,
@@ -142,7 +144,7 @@ fn verified_document(text: &str, source: &SourceAnchor) -> Result<TomlDoc, Refus
 }
 
 /// Evaluate an explicitly chosen action and return the complete canonical comparison and its result Claim.
-/// A recorded feed choice may miss the target or have an undefined recovery. Its card retains that verdict.
+/// Full-feed and whole-lot choices retain their evaluated verdicts. A partial choice names the exact evaluated minimum.
 pub fn evaluate_named_action(
     text: &str,
     source: SourceAnchor,
@@ -165,20 +167,33 @@ pub fn evaluate_named_action(
                 "a feed choice requires a worksheet with named parcel rows",
             ));
         }
-        let selected_lot =
-            match action {
-                "all-feed" => None,
-                _ => Some(action.strip_prefix("hold-back:").ok_or_else(|| {
-                    missing("use all-feed or hold-back:<lot-id> for a feed choice")
-                })?),
-            };
-        if !lots
-            .iter()
-            .any(|row| row.held_back.as_deref() == selected_lot)
-        {
-            return Err(missing(
-                "selected feed lot is absent from the evaluated worksheet",
-            ));
+        match action {
+            "all-feed" => {}
+            _ if action.starts_with(crate::bounds::parcels::PARTIAL_HOLDBACK_ACTION_PREFIX) => {
+                let current = card
+                    .summary()
+                    .partial_holdback
+                    .as_ref()
+                    .and_then(crate::bounds::parcels::PartialHoldback::journal_action);
+                if current.as_deref() != Some(action) {
+                    return Err(missing(
+                        "selected partial holdback is absent or has changed; use the exact journal action from the current recovery card",
+                    ));
+                }
+            }
+            _ => {
+                let selected_lot = action.strip_prefix("hold-back:").ok_or_else(|| {
+                    missing("use all-feed, hold-back:<lot-id>, or the partial holdback action from the recovery card")
+                })?;
+                if !lots
+                    .iter()
+                    .any(|row| row.held_back.as_deref() == Some(selected_lot))
+                {
+                    return Err(missing(
+                        "selected feed lot is absent from the evaluated worksheet",
+                    ));
+                }
+            }
         }
         return Ok((card.to_json(), card.claim().claim_id));
     }

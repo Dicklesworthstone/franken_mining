@@ -2423,10 +2423,13 @@ held and retained dry tonnes, recovered metal and forgone recovery. It can also 
 already meets the target, or that splitting this lot cannot guarantee it with positive retained metal. This
 calculation assumes the split preserves grade and recovery bounds, with no replacement feed.
 
-Record the chosen scenario with `decide journal record`. Use `--action all-feed` for the full feed
-or `--action hold-back:<lot-id>` for one named lot. A reviewer can then recover the exact worksheet,
-all the alternatives and the planner's rationale from the pinned journal head. Those action IDs refer
-to the full feed and whole-lot choices.
+Record the chosen scenario with `decide journal record`. For a partial split, copy the action from
+Markdown or the `payload.partial_holdback_action` JSON field. The 85% example gives
+`--action hold-back-partial:high-grade-pocket:71/72`. The journal checks the named lot and exact fraction
+against the current worksheet before it appends. Use `--action all-feed` for the full feed or a zero
+split, and `--action hold-back:<lot-id>` for a whole-lot holdback or a full split. Journal action IDs
+have a 256-byte limit. A reviewer can recover the selected action, exact worksheet, all alternatives
+and the planner's rationale from the pinned journal head.
 
 JSON and Markdown preserve the source, input/output Claims, evidence, confidentiality and UU. The
 receipt binds that metadata as well as the numerical result. These are conditional identification

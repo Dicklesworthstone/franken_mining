@@ -7,6 +7,7 @@ use super::{
     Interval, ONE, Rat, RecoveryBoundModel, Result, Stability, ZERO, bad, contained_grams, exact,
     positive_metal_share, recovery_range, stability,
 };
+use crate::card::model::JOURNAL_CHOICE_MAX_BYTES;
 use fmine_evidence::{Refusal, RefusalCode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,26 @@ impl HoldbackLimit {
 pub struct PartialHoldback {
     pub lot: String,
     pub minimum: std::result::Result<MinimumHoldback, HoldbackLimit>,
+}
+
+pub(crate) const PARTIAL_HOLDBACK_ACTION_PREFIX: &str = "hold-back-partial:";
+
+impl PartialHoldback {
+    /// Bind the named lot and the exact evaluated fraction to the journal choice.
+    /// The endpoint choices already have full-feed and whole-lot action IDs.
+    pub fn journal_action(&self) -> Option<String> {
+        let fraction = self.minimum.as_ref().ok()?.fraction;
+        if fraction == ZERO || fraction == ONE {
+            return None;
+        }
+        let action = format!(
+            "{PARTIAL_HOLDBACK_ACTION_PREFIX}{}:{}/{}",
+            self.lot,
+            fraction.num(),
+            fraction.den()
+        );
+        (action.len() <= JOURNAL_CHOICE_MAX_BYTES).then_some(action)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
