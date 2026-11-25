@@ -397,24 +397,21 @@ pub fn inspect_segment_bytes(bytes: &[u8]) -> Result<SegmentInspection, LedgerEr
             });
         };
         if frame_end > bytes.len() {
-            return Ok(SegmentInspection {
+            return torn_or_interior(
+                bytes,
+                cursor,
+                remaining,
+                format!(
+                    "truncated trailing frame: declared {frame_len} payload bytes, only {} available",
+                    remaining.saturating_sub(4)
+                ),
                 header,
                 batches,
                 batch_digests,
                 mmr,
                 head_hash,
                 last_epoch,
-                verified_bytes: cursor as u64,
-                total_bytes: bytes.len() as u64,
-                state: SegmentState::TornTail {
-                    torn_offset: cursor as u64,
-                    torn_bytes: remaining as u64,
-                    reason: format!(
-                        "truncated trailing frame: declared {frame_len} payload bytes, only {} available",
-                        remaining.saturating_sub(4)
-                    ),
-                },
-            });
+            );
         }
         let frame = &bytes[cursor + 4..frame_end];
         let is_last_frame = frame_end == bytes.len();
@@ -446,53 +443,35 @@ pub fn inspect_segment_bytes(bytes: &[u8]) -> Result<SegmentInspection, LedgerEr
                     });
                 }
                 Err(err) => {
-                    if is_last_frame {
-                        return Ok(SegmentInspection {
-                            header,
-                            batches,
-                            batch_digests,
-                            mmr,
-                            head_hash,
-                            last_epoch,
-                            verified_bytes: cursor as u64,
-                            total_bytes: bytes.len() as u64,
-                            state: SegmentState::TornTail {
-                                torn_offset: cursor as u64,
-                                torn_bytes: remaining as u64,
-                                reason: format!("corrupt or torn trailing footer frame: {err}"),
-                            },
-                        });
-                    }
-                    return Err(LedgerError::InteriorCorruption {
-                        offset: cursor as u64,
-                        detail: format!("corrupt interior footer frame: {err}"),
-                    });
+                    return torn_or_interior(
+                        bytes,
+                        cursor,
+                        remaining,
+                        format!("corrupt or torn footer frame: {err}"),
+                        header,
+                        batches,
+                        batch_digests,
+                        mmr,
+                        head_hash,
+                        last_epoch,
+                    );
                 }
             }
         }
 
         if &frame[0..4] != b"FMNE" || tag != TAG_LEDGER_BATCH {
-            if is_last_frame {
-                return Ok(SegmentInspection {
-                    header,
-                    batches,
-                    batch_digests,
-                    mmr,
-                    head_hash,
-                    last_epoch,
-                    verified_bytes: cursor as u64,
-                    total_bytes: bytes.len() as u64,
-                    state: SegmentState::TornTail {
-                        torn_offset: cursor as u64,
-                        torn_bytes: remaining as u64,
-                        reason: "corrupt trailing frame magic or tag".to_string(),
-                    },
-                });
-            }
-            return Err(LedgerError::InteriorCorruption {
-                offset: cursor as u64,
-                detail: "corrupt interior frame magic or tag".to_string(),
-            });
+            return torn_or_interior(
+                bytes,
+                cursor,
+                remaining,
+                "corrupt frame magic or tag".to_string(),
+                header,
+                batches,
+                batch_digests,
+                mmr,
+                head_hash,
+                last_epoch,
+            );
         }
 
         match DeltaBatch::from_bytes(frame) {
@@ -546,27 +525,18 @@ pub fn inspect_segment_bytes(bytes: &[u8]) -> Result<SegmentInspection, LedgerEr
                 cursor = frame_end;
             }
             Err(err) => {
-                if is_last_frame {
-                    return Ok(SegmentInspection {
-                        header,
-                        batches,
-                        batch_digests,
-                        mmr,
-                        head_hash,
-                        last_epoch,
-                        verified_bytes: cursor as u64,
-                        total_bytes: bytes.len() as u64,
-                        state: SegmentState::TornTail {
-                            torn_offset: cursor as u64,
-                            torn_bytes: remaining as u64,
-                            reason: format!("corrupt trailing batch frame: {err}"),
-                        },
-                    });
-                }
-                return Err(LedgerError::InteriorCorruption {
-                    offset: cursor as u64,
-                    detail: format!("corrupt interior batch frame: {err}"),
-                });
+                return torn_or_interior(
+                    bytes,
+                    cursor,
+                    remaining,
+                    format!("corrupt or torn batch frame: {err}"),
+                    header,
+                    batches,
+                    batch_digests,
+                    mmr,
+                    head_hash,
+                    last_epoch,
+                );
             }
         }
     }
@@ -584,6 +554,14 @@ pub fn inspect_segment_bytes(bytes: &[u8]) -> Result<SegmentInspection, LedgerEr
     })
 }
 
+/// Classifies the bytes from `cursor`, which do not form a verified record (`F7`).
+///
+/// They are a crash-torn tail unless a whole record follows them: a length prefix starting at or after
+/// `cursor + 4`, in range, then that many bytes that decode as an `FMT-LEDGER-1` batch or a segment footer,
+/// frame CRC included. Torn bytes cannot pass that CRC, so such a record means written history lies beyond
+/// the damage; that is refused as interior corruption and never truncated. A crash can leave any part of the
+/// in-flight write on disk, even its later sectors without its length prefix, and a batch embeds its anchor
+/// as a complete frame of its own, so finding `FMNE` alone in the tail proves nothing.
 #[allow(
     clippy::too_many_arguments,
     reason = "internal tail-vs-interior classifier"
@@ -600,12 +578,10 @@ fn torn_or_interior(
     head_hash: Digest32,
     last_epoch: u64,
 ) -> Result<SegmentInspection, LedgerError> {
-    // Only treat a bad length prefix as a torn tail if no further `FMNE` frame magic appears after it.
-    let tail = &bytes[cursor + 4..];
-    if tail.windows(4).any(|w| w == b"FMNE") {
+    if let Some(offset) = whole_record_after(bytes, cursor) {
         return Err(LedgerError::InteriorCorruption {
             offset: cursor as u64,
-            detail: format!("{reason} with subsequent FMNE frames present"),
+            detail: format!("{reason}; a whole record follows at byte {offset}"),
         });
     }
     Ok(SegmentInspection {
@@ -623,6 +599,27 @@ fn torn_or_interior(
             reason,
         },
     })
+}
+
+/// The offset of the length prefix of the first whole batch or footer record that starts at or after
+/// `cursor + 4` (see [`torn_or_interior`]).
+fn whole_record_after(bytes: &[u8], cursor: usize) -> Option<usize> {
+    let first_magic = cursor.checked_add(8)?;
+    let candidates = bytes.get(first_magic..)?.windows(4).enumerate();
+    for (magic, _) in candidates.filter(|(_, w)| *w == b"FMNE") {
+        let magic = first_magic + magic;
+        let frame_len = read_u32_le(bytes, magic - 4) as usize;
+        if !(14..=MAX_FRAME_BYTES).contains(&frame_len) {
+            continue;
+        }
+        let Some(frame) = bytes.get(magic..magic + frame_len) else {
+            continue;
+        };
+        if DeltaBatch::from_bytes(frame).is_ok() || SegmentFooter::from_bytes(frame).is_ok() {
+            return Some(magic - 4);
+        }
+    }
+    None
 }
 
 fn verify_footer(
@@ -1131,6 +1128,85 @@ mod tests {
             Err(LedgerError::InteriorCorruption { .. })
         ));
 
+        let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    /// A crash can persist the later sectors of an append and lose the one holding its length prefix
+    /// (`F7`). The frame then follows a zero length, and the anchor it embeds is a frame of its own;
+    /// neither is a record, so this is a torn tail to repair, not interior corruption.
+    #[test]
+    fn test_lost_length_prefix_with_persisted_frame_is_torn_tail() {
+        let path = scratch_path("lostlen");
+        let mut writer = SegmentWriter::create(
+            &path,
+            "CELL-SITE(lumwana)",
+            0,
+            GENESIS_PREV_HASH,
+            Vec::new(),
+        )
+        .expect("create");
+        let d0 = writer
+            .append(&sample_batch("CELL-SITE(lumwana)", 1, 0, GENESIS_PREV_HASH))
+            .expect("b0");
+        drop(writer);
+        let clean = std::fs::read(&path).expect("read");
+        let b1 = sample_batch("CELL-SITE(lumwana)", 1, 1, d0)
+            .to_bytes()
+            .expect("b1 bytes");
+        assert!(
+            b1[4..].windows(4).any(|w| w == b"FMNE"),
+            "the anchor is a nested frame"
+        );
+
+        for lost_head in [0, 8, 64] {
+            let mut torn = clean.clone();
+            torn.extend_from_slice(&[0u8; 4]);
+            torn.extend_from_slice(&[0u8; 64][..lost_head]);
+            torn.extend_from_slice(&b1[lost_head..]);
+            let inspected = inspect_segment_bytes(&torn).expect("a torn tail, not interior");
+            assert!(
+                matches!(inspected.state, SegmentState::TornTail { .. }),
+                "lost_head {lost_head}: {:?}",
+                inspected.state
+            );
+            assert_eq!(inspected.verified_bytes, clean.len() as u64);
+            assert_eq!(inspected.batches.len(), 1);
+        }
+        let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    /// A damaged length prefix on an interior record that points past the end of the file must not read as
+    /// a torn tail, or repair would truncate the whole records after it (`INV-003`).
+    #[test]
+    fn test_overlong_interior_length_prefix_refuses_instead_of_truncating() {
+        let path = scratch_path("overlong");
+        let mut writer = SegmentWriter::create(
+            &path,
+            "CELL-SITE(lumwana)",
+            0,
+            GENESIS_PREV_HASH,
+            Vec::new(),
+        )
+        .expect("create");
+        let mut prev = GENESIS_PREV_HASH;
+        for seq in 0..3 {
+            prev = writer
+                .append(&sample_batch("CELL-SITE(lumwana)", 1, seq, prev))
+                .expect("append");
+        }
+        writer.seal().expect("seal");
+        let full = std::fs::read(&path).expect("read");
+        let header_end = 4 + read_u32_le(&full, 0) as usize;
+
+        let mut damaged = full.clone();
+        let overlong = u32::try_from(full.len()).expect("small file");
+        damaged[header_end..header_end + 4].copy_from_slice(&overlong.to_le_bytes());
+        match inspect_segment_bytes(&damaged) {
+            Err(LedgerError::InteriorCorruption { offset, .. }) => {
+                assert_eq!(offset, header_end as u64);
+            }
+            other => panic!("expected interior corruption, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
     }
 }

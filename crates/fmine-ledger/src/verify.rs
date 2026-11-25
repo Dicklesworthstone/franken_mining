@@ -6,14 +6,15 @@
 //! - A crash-torn trailing frame (`F7`) produces a `TruncateTornTail` repair plan with a canonical
 //!   SHA-256 `plan_digest` binding path, original digest, verified byte prefix, retained record
 //!   count, verified chain head, and the quarantine evidence file path (`<seg>.torn.<sha12>.evidence`).
-//! - Applying a repair plan requires the exact matching `plan_digest` (`PO-ADIT-3`), writes the
-//!   complete original bytes to the evidence file with `create_new(true)` + `sync_all()` FIRST,
-//!   then truncates the segment to `verified_bytes`, syncs, and re-verifies from byte 0.
+//! - Applying a repair plan requires the exact matching `plan_digest` (`PO-ADIT-3`), keeps the
+//!   complete original bytes in the evidence file FIRST ([`retain_repair_evidence`]), then truncates
+//!   the segment to `verified_bytes`, syncs, and re-verifies from byte 0. A crash at any step leaves
+//!   either the torn segment, which plans the same repair again, or the repaired one.
 //! - Interior corruption, hash-chain breaks, fencing regressions, and tampered footers are REFUSED
 //!   at both plan and apply time.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use fmine_core::codec::Encoder;
@@ -209,25 +210,7 @@ pub fn apply_segment_repair(
     };
 
     // Retain complete original bytes BEFORE touching the target segment (`F7`).
-    let mut ev_opts = OpenOptions::new();
-    ev_opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        ev_opts.mode(0o600);
-    }
-    let mut ev_file = ev_opts.open(&evidence_path).map_err(|e| LedgerError::Io {
-        operation: "create_evidence_file",
-        detail: format!("{}: {e}", evidence_path.display()),
-    })?;
-    ev_file
-        .write_all(&original_bytes)
-        .and_then(|()| ev_file.sync_all())
-        .map_err(|e| LedgerError::Io {
-            operation: "write_evidence_file",
-            detail: format!("{}: {e}", evidence_path.display()),
-        })?;
-    sync_parent_dir(&evidence_path)?;
+    retain_repair_evidence(&evidence_path, &original_bytes)?;
 
     // Truncate target segment to verified prefix and fsync.
     locked
@@ -269,6 +252,69 @@ pub fn apply_segment_repair(
         verified_head: verified.head_hash,
         verified_mmr_root: verified.mmr_root,
     })
+}
+
+/// Keeps `original` at `evidence_path`, complete and synced, before a repair touches its target (`F7`).
+///
+/// The caller holds the target's exclusive lock. A crash between this step and the truncation leaves the
+/// target as it was, so the retry plans the same repair and the same evidence path: a file there that
+/// already holds exactly `original` is kept as it is, and any other file there is refused. The bytes are
+/// written first to `<evidence_path>.partial`, synced, and renamed into place, so `evidence_path` never
+/// holds a partial copy. A `.partial` file left by a crash is a partial copy and is replaced; it is
+/// removed and created afresh, so a link planted at that name is never followed.
+pub fn retain_repair_evidence(evidence_path: &Path, original: &[u8]) -> Result<(), LedgerError> {
+    let io = |operation: &'static str, path: &Path, e: std::io::Error| LedgerError::Io {
+        operation,
+        detail: format!("{}: {e}", path.display()),
+    };
+    match File::open(evidence_path) {
+        Ok(existing) => {
+            let mut kept = Vec::with_capacity(original.len());
+            existing
+                .take(original.len() as u64 + 1)
+                .read_to_end(&mut kept)
+                .map_err(|e| io("read_evidence_file", evidence_path, e))?;
+            if kept == original {
+                return Ok(());
+            }
+            return Err(LedgerError::InvalidField {
+                field: "evidence_path",
+                detail: format!(
+                    "{} already exists and does not hold this repair's original bytes",
+                    evidence_path.display()
+                ),
+            });
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(io("open_evidence_file", evidence_path, e)),
+    }
+
+    let mut partial = evidence_path.as_os_str().to_os_string();
+    partial.push(".partial");
+    let partial = PathBuf::from(partial);
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let mut file = match opts.open(&partial) {
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&partial)
+                .map_err(|e| io("remove_stale_partial_evidence", &partial, e))?;
+            opts.open(&partial)
+        }
+        other => other,
+    }
+    .map_err(|e| io("create_partial_evidence", &partial, e))?;
+    file.write_all(original)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| io("write_partial_evidence", &partial, e))?;
+    drop(file);
+    std::fs::rename(&partial, evidence_path)
+        .map_err(|e| io("rename_evidence_into_place", evidence_path, e))?;
+    sync_parent_dir(evidence_path)
 }
 
 fn verify_segment_bytes(path: &Path, bytes: &[u8]) -> Result<SegmentVerification, LedgerError> {
@@ -496,6 +542,77 @@ mod tests {
         let clean_plan = plan_segment_repair(&seg).expect("clean plan");
         assert_eq!(clean_plan.action, RepairAction::NoOp);
         assert_eq!(clean_plan.torn_bytes, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two batches, then half of a third as a crash leaves it. Returns the torn bytes and the clean length.
+    fn torn_segment(seg: &Path) -> (Vec<u8>, u64) {
+        let cell = "CELL-SITE(lumwana)";
+        let mut writer =
+            SegmentWriter::create(seg, cell, 0, GENESIS_PREV_HASH, Vec::new()).expect("create");
+        let d0 = writer
+            .append(&sample_batch(cell, 1, 0, GENESIS_PREV_HASH))
+            .expect("b0");
+        let d1 = writer.append(&sample_batch(cell, 1, 1, d0)).expect("b1");
+        drop(writer);
+        let clean_len = std::fs::metadata(seg).expect("meta").len();
+        let b2 = sample_batch(cell, 1, 2, d1).to_bytes().expect("b2 bytes");
+        let mut f = OpenOptions::new().append(true).open(seg).expect("open");
+        f.write_all(&(b2.len() as u32).to_le_bytes()).expect("len");
+        f.write_all(&b2[..b2.len() / 2]).expect("partial frame");
+        f.sync_all().expect("sync");
+        (std::fs::read(seg).expect("read torn"), clean_len)
+    }
+
+    /// A crash while the evidence is written, or after it is kept and before the truncation, must not
+    /// wedge the repair: the retry plans the same repair and completes it (`F7`).
+    #[test]
+    fn test_f7_repair_completes_after_a_crash_during_repair() {
+        let dir = scratch_dir("f7-crash-in-repair");
+        let seg = dir.join("cell-site.fmseg");
+        let (torn, clean_len) = torn_segment(&seg);
+        let plan = plan_segment_repair(&seg).expect("plan");
+        let evidence = plan.evidence_path.clone().expect("evidence path");
+        let mut partial = evidence.as_os_str().to_os_string();
+        partial.push(".partial");
+        let partial = PathBuf::from(partial);
+
+        // A crash while writing the evidence leaves part of a copy at the partial path.
+        std::fs::write(&partial, &torn[..torn.len() / 3]).expect("partial copy");
+        // A crash just after the evidence is kept leaves it complete and the segment untouched.
+        retain_repair_evidence(&evidence, &torn).expect("keep evidence");
+        assert!(
+            !partial.exists(),
+            "the partial copy was replaced and renamed"
+        );
+        assert_eq!(std::fs::read(&evidence).expect("evidence"), torn);
+        assert_eq!(std::fs::read(&seg).expect("segment"), torn);
+
+        assert_eq!(plan_segment_repair(&seg).expect("plan again"), plan);
+        let receipt = apply_segment_repair(&seg, plan.plan_digest).expect("retry completes");
+        assert_eq!(receipt.final_bytes, clean_len);
+        assert_eq!(receipt.retained_records, 2);
+        assert_eq!(std::fs::read(&evidence).expect("evidence kept"), torn);
+
+        // Some other file at the evidence path is refused, and the segment is not touched.
+        let seg2 = dir.join("cell-site-2.fmseg");
+        let (torn2, _) = torn_segment(&seg2);
+        let plan2 = plan_segment_repair(&seg2).expect("plan 2");
+        let evidence2 = plan2.evidence_path.clone().expect("evidence path 2");
+        std::fs::write(&evidence2, b"not this repair's bytes").expect("foreign file");
+        assert!(matches!(
+            apply_segment_repair(&seg2, plan2.plan_digest),
+            Err(LedgerError::InvalidField {
+                field: "evidence_path",
+                ..
+            })
+        ));
+        assert_eq!(std::fs::read(&seg2).expect("segment 2"), torn2);
+        assert_eq!(
+            std::fs::read(&evidence2).expect("foreign file kept"),
+            b"not this repair's bytes"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

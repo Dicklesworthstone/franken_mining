@@ -62,6 +62,7 @@ Not applicable: emits cryptographic verification verdicts rather than domain `Cl
 ## 9. Oracles
 - Known-answer tamper tests in `tests/tamper_exit_8.rs` executing the compiled `fmine-verify` binary on valid and single-bit-flipped `FMT-CERT-1`, `FMT-CAS-1`, `SyncCert`, and `FMT-SEG-1` artifacts.
 - Underlying RFC 6962 MMR (`fixtures/fmine-ledger/rfc6962_probes.txt`) and SHA-256 / CRC32C vectors in `fmine-core`.
+- `tests/f7_lab.rs`: the `F7` lab test for `fmine-ledger` segments (`BD-088`), on `fmine-lab`'s `LabRuntime` (a dev-dependency). A crash at every byte of the write in flight, and seeds 0..999 that also lose sectors and cut the repair short; every state is detected, repaired with its evidence kept, and resumed to bytes identical to a crash-free segment.
 
 ## 10. Known gaps
 - `FMT-POST-1` Merkle-folded posting detail verification against `franken_accounting` rows will be added once WP-13 (`fmine-fa-bridge`) lands.

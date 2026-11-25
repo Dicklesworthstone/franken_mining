@@ -27,7 +27,7 @@ The ledger is Bedrock's L1 authority store (plan §26). It provides:
 - `batch::{DeltaBatch, DeltaOp, DeltaKind, Witness, WitnessKind, CrossCellRef, LedgerError, GENESIS_PREV_HASH, FMT_LEDGER_V1}`.
 - `segment::{SegmentHeader, SegmentFooter, SegmentWriter, SegmentReader, SegmentInspection, SegmentState, inspect_segment_bytes}`.
 - `cell::{CellLease, CellAuthority, ConflictRecord, AdmitOutcome, GluingIssue, GluingReport, check_gluing}`.
-- `verify::{SegmentVerification, RepairAction, SegmentRepairPlan, SegmentRepairReceipt, verify_segment, plan_segment_repair, apply_segment_repair}`
+- `verify::{SegmentVerification, RepairAction, SegmentRepairPlan, SegmentRepairReceipt, verify_segment, plan_segment_repair, apply_segment_repair, retain_repair_evidence}`
 - `l0::{L0Ledger, L0Error, KeyVersion, CellSnapshot}` (`BD-080`: L0 in-memory reference ledger and semantic oracle for L1 parity)
 - `as_of_replay::{AsOfReplayError, ReplayRun, run_as_of, assert_bit_identical_replay}` (`BD-053`: bit-identical as-of replay harness bound by `FMT-CERT-1`).
 
@@ -37,7 +37,8 @@ The ledger is Bedrock's L1 authority store (plan §26). It provides:
 - **Append-only chain & MMR footer (`BD-082`):** every batch in a segment chains `seq`, `prev_hash`, and monotonic `epoch`. Sealed `SEGF` footers must match the replayed `record_count`, `head_hash`, `mmr_root`, and `mmr_peaks`.
 - **Single-writer fencing & split-brain quarantine (`PO-BED-1`, `F6`):** `CellAuthority::transfer_lease` strictly increments `epoch + 1`; direct commits with a stale lease refuse with `EpochRegression`; lower-epoch batches received by a replica are quarantined into `ConflictRecord` without mutating authority state.
 - **Cross-cell gluing (`F12`):** `check_gluing` flags every missing cell, out-of-range sequence, or digest mismatch.
-- **Non-destructive F7 repair (`BD-088`, `PO-ADIT-3`, `INV-003`):** interior corruption, chain breaks, and footer mismatches are refused at plan and apply time. `apply_segment_repair` refuses any mismatched `plan_digest` before touching disk, archives full original bytes to `<path>.torn.<sha12>.evidence` with `create_new(true)` + `sync_all()` before truncating, and re-verifies the truncated prefix from byte 0.
+- **Torn tail or interior (`F7`, `INV-003`):** bytes that do not form a verified record are a torn tail unless a whole record follows them (a length prefix in range, then a batch or footer frame that passes its CRC); then they are interior corruption. A lost length prefix with the frame persisted, or a partly written batch with its embedded anchor frame, is still a torn tail; a damaged interior length that points past the end of the file is never truncated.
+- **Non-destructive F7 repair (`BD-088`, `PO-ADIT-3`, `INV-003`):** interior corruption, chain breaks, and footer mismatches are refused at plan and apply time. `apply_segment_repair` refuses any mismatched `plan_digest` before touching disk, keeps the full original bytes at `<path>.torn.<sha12>.evidence` before truncating (`retain_repair_evidence`: written to `.partial`, synced and renamed into place; a retry after a crash keeps an archive that already holds those bytes and refuses any other file there), and re-verifies the truncated prefix from byte 0.
 
 ## 5. Refusals
 - `MmrError` for pure MMR proof/range checks.
@@ -59,11 +60,12 @@ Not applicable: Bedrock emits authority storage, proofs, and verification receip
 ## 9. Oracles
 - `fixtures/fmine-ledger/rfc6962_probes.txt`: `transparency-dev/merkle` commit `c39fbf350a405f68571bf4c42a6a518eb0a46a4b` (Apache-2.0) inclusion and consistency probes.
 - Known-answer unit tests in `batch.rs`, `segment.rs`, `cell.rs`, and `verify.rs`, including exhaustive byte-by-byte post-header truncation recovery and 1-bit flip refusal sweeps.
+- `crates/fmine-verify/tests/f7_lab.rs` (T layer): the `F7` lab test. A crash at every byte of an append and of a seal, and `LabRuntime` seeds 0..999 that also lose sectors of the write in flight (zeros or stale bytes) and cut the repair short once; each state is detected, refused for writes, repaired with its evidence kept, and resumed to bytes identical to a crash-free segment.
 - Fuzz target `fuzz/fuzz_targets/ledger.rs` for `FMT-LEDGER-1`.
 
 ## 10. Known gaps
-- `BD-081`'s 24-hour fuzz run for `fuzz/fuzz_targets/ledger.rs` has not yet been executed (`bd-081` remains `in_progress`).
-- No multi-segment directory catalog, `FMT-CAS-1` chunk store (`BD-090`), `SyncCert` wire protocol (`BD-103`), or LabRuntime DPOR chaos harness (`BD-099`/`BD-101`) yet.
+- `BD-081`'s 24-hour fuzz run for `fuzz/fuzz_targets/ledger.rs` started on 2026-11-25 and has no result yet (`bd-081` remains `in_progress`).
+- No multi-segment directory catalog, `FMT-CAS-1` chunk store (`BD-090`), or `SyncCert` wire protocol (`BD-103`) yet. `LabRuntime` DPOR over lease transfer (`PO-BED-1`, `BD-101`) is not built; the `F7` lab test covers crash recovery only.
 - Self-verified only; no independent external review or multi-ISA CI run of the new modules yet.
 
 ## 11. Public API
@@ -76,5 +78,5 @@ Not applicable: Bedrock emits authority storage, proofs, and verification receip
 - `as_of_replay::{AsOfReplayError, ReplayRun, run_as_of, assert_bit_identical_replay}` (`BD-053`: bit-identical as-of replay harness bound by `FMT-CERT-1`)
 
 ## 12. Proof obligations
-- `PO-BED-1` (single-writer fencing + lower-epoch quarantine): unit-tested in `cell::tests::test_po_bed_1_lease_transfer_fencing_and_split_brain_quarantine` (LabRuntime DPOR remains open under `BD-101`).
-- `F7` / `PO-ADIT-3` (digest-bound torn-tail repair with pre-truncation evidence retention): unit-tested in `verify::tests::test_f7_torn_tail_repair_retains_evidence_enforces_digest_and_resumes_cleanly`.
+- `PO-BED-1` (single-writer fencing + lower-epoch quarantine): unit-tested in `cell::tests::test_po_bed_1_lease_transfer_fencing_and_split_brain_quarantine` and `cell::tests::test_po_bed_1_one_holder_per_epoch_refuses_leases_the_cell_did_not_grant` (LabRuntime DPOR remains open under `BD-101`).
+- `F7` / `PO-ADIT-3` (digest-bound torn-tail repair with pre-truncation evidence retention): unit-tested in `verify::tests::test_f7_torn_tail_repair_retains_evidence_enforces_digest_and_resumes_cleanly` and `verify::tests::test_f7_repair_completes_after_a_crash_during_repair`; lab-tested in `crates/fmine-verify/tests/f7_lab.rs`.

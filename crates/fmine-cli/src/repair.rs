@@ -10,12 +10,13 @@
 //!   canonical SHA-256 `plan_digest`.
 //! - `repair apply <digest>` recomputes the current plan under an exclusive OS lock, refuses any
 //!   digest mismatch (`FMINE-REF-505`, `PO-ADIT-3`) without writing a byte, archives complete
-//!   pre-repair bytes to `<path>.torn.<sha12>.evidence` (`create_new(true)` + `sync_all()`), then
-//!   truncates to `verified_bytes` and re-verifies from byte 0.
+//!   pre-repair bytes to `<path>.torn.<sha12>.evidence` (synced, then renamed into place; a retry after
+//!   a crash keeps an archive that already holds those bytes), then truncates to `verified_bytes` and
+//!   re-verifies from byte 0.
 //! - Interior corruption, hash-chain breaks, and tampered footers are refused (`FMINE-REF-505`).
 
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use fmine_claim::forecast_journal;
@@ -24,7 +25,7 @@ use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_ledger::verify::{
     RepairAction, SegmentRepairPlan, SegmentRepairReceipt, apply_segment_repair,
-    plan_segment_repair,
+    plan_segment_repair, retain_repair_evidence,
 };
 
 use crate::{Envelope, NextAction, ROBOT_DOCS_WHY, escape_json};
@@ -413,35 +414,13 @@ fn apply_journal_repair(
         ));
     };
 
-    // Archive complete pre-repair bytes BEFORE truncating (`F7`).
-    let mut ev_opts = OpenOptions::new();
-    ev_opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        ev_opts.mode(0o600);
-    }
-    let mut ev = ev_opts.open(&evidence_path).map_err(|e| {
+    // Archive complete pre-repair bytes BEFORE truncating (`F7`); a retry after a crash keeps them.
+    retain_repair_evidence(&evidence_path, &original_bytes).map_err(|e| {
         Refusal::new(
             RefusalCode::InputMissingOrUnreadable506,
-            format!(
-                "cannot create evidence archive {}: {e}",
-                evidence_path.display()
-            ),
+            format!("cannot archive evidence {}: {e}", evidence_path.display()),
         )
     })?;
-    ev.write_all(&original_bytes)
-        .and_then(|()| ev.sync_all())
-        .map_err(|e| {
-            Refusal::new(
-                RefusalCode::InputMissingOrUnreadable506,
-                format!(
-                    "cannot write evidence archive {}: {e}",
-                    evidence_path.display()
-                ),
-            )
-        })?;
-    sync_parent(&evidence_path)?;
 
     // Truncate target journal to verified prefix, sync, and re-verify from byte 0.
     locked
@@ -643,27 +622,6 @@ fn evidence_path_for(path: &Path, original_sha256: &Digest32) -> PathBuf {
     PathBuf::from(os)
 }
 
-fn sync_parent(path: &Path) -> Result<(), Refusal> {
-    #[cfg(unix)]
-    {
-        let parent = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        File::open(parent).and_then(|d| d.sync_all()).map_err(|e| {
-            Refusal::new(
-                RefusalCode::InputMissingOrUnreadable506,
-                format!("cannot sync directory {}: {e}", parent.display()),
-            )
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-    Ok(())
-}
-
 #[allow(
     clippy::too_many_arguments,
     reason = "canonical journal repair plan digest binding"
@@ -840,6 +798,8 @@ fn journal_receipt_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
     use fmine_core::anchor::{FMT_ANCHOR_V1, LedgerAnchor};
     use fmine_ledger::batch::{DeltaBatch, DeltaKind, DeltaOp, FMT_LEDGER_V1, GENESIS_PREV_HASH};
     use fmine_ledger::segment::SegmentWriter;

@@ -527,6 +527,50 @@ mod tests {
         assert_eq!(cell.mmr().len(), 2);
     }
 
+    /// `PO-BED-1`: one holder per epoch. A lease the cell did not grant is refused even at the live
+    /// epoch, as is a lease for another cell and a batch whose epoch is not its lease's; none of them
+    /// changes the cell.
+    #[test]
+    fn test_po_bed_1_one_holder_per_epoch_refuses_leases_the_cell_did_not_grant() {
+        let mut cell = CellAuthority::new("CELL-SITE(lumwana)", "node-a").expect("init cell");
+        let lease_e1 = cell.active_lease().clone();
+        let d0 = cell
+            .commit_with_lease(
+                &lease_e1,
+                sample_batch("CELL-SITE(lumwana)", 1, 0, GENESIS_PREV_HASH),
+            )
+            .expect("commit seq 0");
+        let lease_e2 = cell.transfer_lease("node-b").expect("transfer lease");
+
+        let mut forged = lease_e2.clone();
+        forged.holder_id = "node-c".to_string();
+        let mut other_cell = lease_e2.clone();
+        other_cell.cell_id = "CELL-SITE(other)".to_string();
+        let mut ahead = lease_e2.clone();
+        ahead.epoch = 3;
+        for lease in [&forged, &other_cell, &ahead] {
+            assert!(
+                matches!(
+                    cell.commit_with_lease(lease, sample_batch("CELL-SITE(lumwana)", 2, 1, d0)),
+                    Err(LedgerError::LeaseViolation { .. })
+                ),
+                "{lease:?}"
+            );
+        }
+        assert!(matches!(
+            cell.commit_with_lease(&lease_e2, sample_batch("CELL-SITE(lumwana)", 1, 1, d0)),
+            Err(LedgerError::LeaseViolation { .. })
+        ));
+        assert_eq!(cell.next_seq(), 1);
+        assert_eq!(cell.head_hash(), d0);
+        assert_eq!(cell.highest_seen_epoch(), 2);
+        assert!(cell.conflicts().is_empty());
+
+        cell.commit_with_lease(&lease_e2, sample_batch("CELL-SITE(lumwana)", 2, 1, d0))
+            .expect("the granted lease still commits");
+        assert_eq!(cell.next_seq(), 2);
+    }
+
     #[test]
     fn test_cross_cell_gluing_checker_detects_missing_stale_and_mismatched_refs() {
         let d_pub0 = sha256(b"ref-0");

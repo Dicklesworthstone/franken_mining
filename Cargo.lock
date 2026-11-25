@@ -359,6 +359,7 @@ dependencies = [
  "fmine-core",
  "fmine-evidence",
  "fmine-gen",
+ "fmine-lab",
  "fmine-ledger",
  "fmine-object",
  "fmine-optimize",
