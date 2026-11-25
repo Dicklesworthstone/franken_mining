@@ -20,6 +20,10 @@ Validated `RegistryCatalog`, `SiteCalendars`, `MetricRegistry`, `SourcesRegistry
   by-product credits from mandatory reconciliation deductions. Cost definitions require USD/oz or USD/lb
   on an explicit sold basis; inherited cost definitions must use the same unit. The bundled copper C1/AISC
   rules name the Q2 2026 issuer reconciliation lines, without embedding issuer amounts.
+  Explicit descendant line declarations override ancestors even through shared inheritance paths.
+  Differing declarations from incomparable parents refuse unless a descendant explicitly resolves the item;
+  identical declarations coalesce once. Parent order never selects a cost, credit or deduction treatment.
+  The existing inclusion rule remains: a registered line in the family takes precedence over exclusions.
 - `sources::HtmlSourceRow`, `SourcesRegistry::html_sources` (BD-057/BD-059): optional `[[html]]` rows
   register HTML filings separately from workbook and PDF sources. Required fields are a bare `.html` or
   `.htm` `file`, `release` (`YYYYQn`), HTTPS `url`, registered `url_basis`, calendar `published_at`, cited

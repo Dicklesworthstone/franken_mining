@@ -382,6 +382,110 @@ fn selected_versions_and_explicit_allocation_compute_distinct_useful_costs() {
 }
 
 #[test]
+fn inherited_cost_adjustment_changes_the_signed_cli_result_and_bound_receipt() {
+    let fixture = Fixture::new(&worksheet(&[
+        ("on_site_mining_costs", "1000"),
+        ("royalties_and_production_taxes", "100"),
+    ]));
+    // Invented versioned definitions: the original 100 USD cost becomes a separately declared
+    // 100 USD rebate. A second inheritance path must not restore the ancestor's cost treatment.
+    let declarations = r#"
+[[definition]]
+id = "rebate@invented"
+family = "all_in_cost"
+unit = "USD/oz"
+formula = "invented royalty rebate control"
+source = "invented arithmetic, no issuer claim"
+evidence = "E1"
+extends = "aisc@wgc-2018"
+[[line]]
+definition = "rebate@invented"
+item = "royalties_and_production_taxes"
+letter = "rebate"
+kind = "credit"
+[[definition]]
+id = "unchanged@invented"
+family = "all_in_cost"
+unit = "USD/oz"
+formula = "invented unchanged branch"
+source = "invented arithmetic, no issuer claim"
+evidence = "E1"
+extends = "aisc@wgc-2018"
+[[definition]]
+id = "combined@invented"
+family = "all_in_cost"
+unit = "USD/oz"
+formula = "invented combined branches"
+source = "invented arithmetic, no issuer claim"
+evidence = "E1"
+extends = "rebate@invented unchanged@invented"
+"#;
+    let registry = format!("{REGISTRY}{declarations}");
+    fs::write(fixture.0.join("registries/metrics.toml"), &registry).unwrap();
+    let original = fixture.ok("aisc@wgc-2018");
+    assert_eq!(string_field(&original.payload_json, "usd_per_oz"), "11");
+    let adjusted = fixture.ok("combined@invented");
+    assert_eq!(string_field(&adjusted.payload_json, "numerator_usd"), "900");
+    assert_eq!(string_field(&adjusted.payload_json, "usd_per_oz"), "9");
+    assert!(adjusted.payload_json.contains("\"treatment\":\"credit\""));
+    assert!(adjusted.payload_json.contains("\"numerator_usd\":\"-100\""));
+    assert!(
+        adjusted
+            .payload_json
+            .contains(&sha256(registry.as_bytes()).to_hex())
+    );
+    assert_eq!(
+        fixture.ok("combined@invented").to_json(),
+        adjusted.to_json()
+    );
+
+    let reordered = format!(
+        "{REGISTRY}{}",
+        declarations.replace(
+            "rebate@invented unchanged@invented",
+            "unchanged@invented rebate@invented"
+        )
+    );
+    fs::write(fixture.0.join("registries/metrics.toml"), reordered).unwrap();
+    assert_eq!(
+        string_field(&fixture.ok("combined@invented").payload_json, "usd_per_oz"),
+        "9"
+    );
+
+    let changed = format!(
+        "{REGISTRY}{}",
+        declarations.replace("kind = \"credit\"", "kind = \"cost\"")
+    );
+    fs::write(fixture.0.join("registries/metrics.toml"), changed).unwrap();
+    let restored = fixture.ok("combined@invented");
+    assert_eq!(string_field(&restored.payload_json, "usd_per_oz"), "11");
+    assert_ne!(
+        string_field(&adjusted.payload_json, "definition_tag"),
+        string_field(&restored.payload_json, "definition_tag")
+    );
+    assert_ne!(
+        string_field(&adjusted.payload_json, "digest"),
+        string_field(&restored.payload_json, "digest")
+    );
+
+    let ambiguous = format!(
+        "{registry}\n[[line]]\ndefinition = \"unchanged@invented\"\n\
+         item = \"royalties_and_production_taxes\"\nletter = \"cost\"\nkind = \"cost\"\n"
+    );
+    fs::write(fixture.0.join("registries/metrics.toml"), ambiguous).unwrap();
+    let refused = fixture.invoke("combined@invented");
+    assert_ne!(refused.exit_code, 0);
+    assert!(
+        refused
+            .refusal
+            .unwrap()
+            .what
+            .contains("ambiguous inherited line")
+    );
+    assert!(!refused.payload_json.contains("\"usd_per_oz\""));
+}
+
+#[test]
 fn pennies_and_actual_source_or_registry_bytes_change_the_receipt_identity() {
     let original = worksheet(&[("on_site_mining_costs", "800.01")]);
     let fixture = Fixture::new(&original);
