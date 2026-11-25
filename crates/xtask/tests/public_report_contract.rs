@@ -2204,12 +2204,19 @@ mod tests {
     /// numbers: 350 as read, the sum 250 of C5:C7 and the residual 100, in its certificate and its `cited` record.
     #[test]
     fn test_c8_footing_renders_three_cited_numbers() {
-        let json = run_synthetic_assurance(&[])
-            .expect("synthetic run")
-            .to_json();
+        let report = run_synthetic_assurance(&[]).expect("synthetic run");
+        let json = report.to_json();
         let sha = synthetic_aisc_sha();
-        let at = |c: &str| format!("\"Synthetic_AISC.xlsx:Q1 2030!{c}\"");
+        let locator = |c: &str| format!("Synthetic_AISC.xlsx:Q1 2030!{c}");
+        let at = |c: &str| format!("\"{}\"", locator(c));
         let x = |v: i64, c: &str| format!("\"v\":{v},\"at\":{},\"sha256\":\"{sha}\"}}", at(c));
+        let linked = |role: &str, v: i64, c: &str| {
+            let claim_id = report.public_claims.cells[&locator(c)].claim.claim_id;
+            format!(
+                "{{\"claim_id\":\"{claim_id}\",\"role\":\"{role}\",{}",
+                x(v, c)
+            )
+        };
         let rule = |r: &str| format!("\"rule\":\"{r}\",\"rules_version\":\"m0-ledger/1\"");
         let lines = format!("{},{},{}", at("C5"), at("C6"), at("C7"));
         let sum = format!(
@@ -2228,13 +2235,12 @@ mod tests {
         );
         assert!(json.contains(&certificate), "{certificate}");
         let cited = format!(
-            "\"cited\":{{\"operands\":[{{\"role\":\"total\",{},{{\"role\":\"line\",{},{{\"role\":\"line\",{},\
-             {{\"role\":\"line\",{}],\"derived\":[{{\"name\":\"component_sum\",{sum},{{\"name\":\"residual\",\
-             {residual}]}}",
-            x(350, "C8"),
-            x(300, "C5"),
-            x(-50, "C6"),
-            x(0, "C7")
+            "\"cited\":{{\"operands\":[{},{},{},{}],\"derived\":[{{\"name\":\"component_sum\",{sum},\
+             {{\"name\":\"residual\",{residual}]}}",
+            linked("total", 350, "C8"),
+            linked("line", 300, "C5"),
+            linked("line", -50, "C6"),
+            linked("line", 0, "C7")
         );
         assert!(json.contains(&cited), "{cited}");
     }
