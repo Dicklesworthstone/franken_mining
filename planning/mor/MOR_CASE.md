@@ -1769,3 +1769,49 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     `0effa0b43ff122299e95b8d12cdfa57319b26a1f2a7a71fce4ea7367d0e2f264` with its original anchor and counts.
     The frozen Python AISC aggregator still reports E859's two refusals; agreement is not asserted for those
     two outcomes. Their correction rests on the separately stated source evidence and exact arithmetic above.
+
+- **E861** First-registered AISC identity census through 2026Q2 (FACT, 2026-11-24, bd-504e.1).
+  - The source registry is `registries/sources/barrick.toml` at revision
+    `08b06594558d635e09efe5183b38a3d6b6ab7431`, SHA-256
+    `050ea2536293e2a18425ae3286648d949fe4bc2123e75c45252b3896e73c5381`. All 18 workbook sizes and
+    SHA-256 digests matched this registry before replay.
+  - The unchanged independent aggregator `repro/barrick/first_vintage_aisc_census.py` from
+    `50e9b467adf55cf4005adf06d5f3545f026ed4d6` reads displayed workbook values via the Python census, share
+    and region readers. It found 34 visible AISC tables and 2,595 appearances across all releases.
+    The all-release counts in state order `(i, ii, iii, iv, v, np)` are `(2436, 3, 4, 92, 0, 60)`.
+    Grouping by subject, valid period and identity family gives 1,565 first-registered identities and no
+    tied earliest releases. Region-map scope gives the same counts.
+
+    | Family | i | ii | iii | iv | v | np | Total |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+    | TCC footing | 306 | 0 | 1 | 0 | 0 | 6 | 313 |
+    | AISC footing | 306 | 0 | 1 | 0 | 0 | 6 | 313 |
+    | Cost of sales per ounce | 250 | 0 | 0 | 57 | 0 | 6 | 313 |
+    | TCC per ounce | 307 | 0 | 0 | 0 | 0 | 6 | 313 |
+    | AISC per ounce | 305 | 2 | 0 | 0 | 0 | 6 | 313 |
+    | Total | 1474 | 2 | 2 | 57 | 0 | 30 | 1565 |
+
+  - Kibali TCC at `Q2 2024!O11` and Porgera AISC at `Q2 2024!L18` each remain in state (iii) across their
+    adjacent releases in `Barrick_Q3_2024_AISC.xlsx` and `Barrick_Q2_2025_AISC.xlsx`. The Rust test
+    `xtask::public_consistency::tests::test_part3_real_aisc_dedup_and_persisted` also checks persistence,
+    source digests and order independence. First-registered refers to this source registry's release
+    window. The counts do not set a reliability threshold or attest to a complete publication history.
+
+- **E862** AISC comparative-value census through 2026Q2 (FACT, 2026-11-24, bd-504e.2).
+  - Replayed `python3 -I scripts/oracle/vintage_census.py <verified historical workbook directory>` on the
+    eight AISC workbooks in E861. The unchanged OOXML reader last changed at
+    `3a8ae10f561feff00e7fe7bae910df681cfcca2a`. It reads stored source cells from visible sheets and keys
+    them by period, subject, line and occurrence. It found 5,819 keys, 2,980 with multiple vintages,
+    3,722 later appearances and zero changed keys. The replay output SHA-256 was
+    `ba0f58b6d4a28b22e94f22ccb2e682d8f24d236eb58f1258d2eb8383feb3d3f7`.
+  - The Rust test `xtask::public_mine_stats_vintages::tests::real_aisc_vintages_match_independent_census`
+    matches this denominator with 9,541 classified appearances and all 3,722 later appearances unchanged.
+    For example, Pueblo Viejo's H1 2025 all-in sustaining cost appears at
+    `Barrick_Q2_2025_AISC.xlsx:YTD Q2 2025!J18` and `Barrick_Q2_2026_AISC.xlsx:YTD Q2 2025!I17`.
+    Moving a column preserves the series. The Rust comparison uses the displayed value. This census
+    checks the registered-subject population and excludes supplemental company assertions.
+  - Synthetic controls exercise disclosed and silent changes, token changes, conflicts, region boundaries
+    and missing note coverage. Removing a verified note makes a comparable change silent. Region membership
+    is bound by the source registry independently of disclosure coverage. Removing the note leaves different
+    memberships incomparable, as tested by
+    `xtask::public_mine_stats_vintages::tests::disclosure_preserves_region_exclusions_glyphs_and_reversions`.

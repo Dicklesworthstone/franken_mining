@@ -52,6 +52,11 @@ candidate therefore has two more consistent outcomes and two fewer refusals than
 The original reader outputs and expected-root row are retained; tests check the two named corrections and
 all remaining census and family-count expectations.
 
+For the historical through-2026Q2 counts in E861, pass a separate workspace root as the script's argument.
+Place `registries/sources/barrick.toml` from revision `08b06594558d635e09efe5183b38a3d6b6ab7431` in that root,
+link the repository's `scripts/` directory, and link only the 18 sources from that registry under
+`corpus_of_input_docs/downloaded/mine_stats/`. Verify their recorded sizes and SHA-256 digests before running.
+
 `fetch.sh` reads `registries/sources/barrick.toml`. It downloads only the files that are missing, two seconds
 apart, saves each under its registered name only when its size and SHA-256 match, and verifies every file
 already present without overwriting it. It prints one JSON line per file and a summary line.

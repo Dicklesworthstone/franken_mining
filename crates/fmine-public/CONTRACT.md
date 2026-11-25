@@ -845,7 +845,8 @@ The public lane of M0 (`fmine assure public`).
   - Identities group by semantic total/rate key and family, so moved rows/columns and equivalent period names
     do not create new identities. Hidden sheets are excluded. An unkeyed total remains in `all_files` and is
     listed under `unkeyed`; multiple distinct assertions at the earliest registered release are retained in
-    `ambiguous_vintages` and excluded from `first_registered`, never chosen arbitrarily.
+    `ambiguous_vintages` and excluded from the first-registered counts. The history's `first_registered` and
+    `total` fields are both null in that case, with every assertion still cited in `sequence`.
   - `transitions` keeps every appearance's release, file/cell, SHA-256 and state, and an adjacent `steps` list.
     `persisted` requires equal state, label, reason and complete arithmetic operand signatures; `corrected`
     requires `(iii) → (i or ii)` with changed operands; `broken` records `(i) → (iii)`. Other transitions,
@@ -1181,7 +1182,7 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
     printed 47.5% and corrected 24.5% remain separately visible. Pueblo Viejo's moved AISC column and Kibali's
     repeated total preserve their series. These are keyed projection checks; the existing ledger-root
     regression remains unchanged.
-- `PO-PUB-15` (AISC issuer consistency, bd-504e.1; T-layer `crates/xtask/tests/public_consistency.rs`):
+- `PO-PUB-15` (AISC issuer consistency, bd-504e.1, E861 and T-layer `crates/xtask/tests/public_consistency.rs`):
   - **Real files** (ignored `test_part3_real_aisc_dedup_and_persisted`): 2,595 all-file instances become 1,565
     first-registered identities, 313 per family, with no unkeyed totals or ambiguous releases. The independent
     aggregation in `repro/barrick/first_vintage_aisc_census.py` uses `census2.py` on displayed values plus

@@ -317,8 +317,12 @@ for category in ['first_registered', 'all_files']:
         assert family['n'] == 0
         assert all(s == {'n': 0, 'rate': None, 'cp95': None} for s in family['states'].values())
 assert empty['transitions'] == empty['unkeyed'] == []
-assert all(h['first_registered'] is None and h['ambiguous_vintages'] == ['2024Q3']
-           for h in ambiguous['transitions'])
+assert len(ambiguous['transitions']) == 5
+for h in ambiguous['transitions']:
+    assert h['first_registered'] is None and h['total'] is None
+    assert h['ambiguous_vintages'] == ['2024Q3']
+    assert sorted(a['at'].split(':')[0] for a in h['sequence']) == ['one.xlsx', 'two.xlsx']
+    assert all(a['release'] == '2024Q3' and len(a['sha256']) == 64 for a in h['sequence'])
 "#;
         let mut child = Command::new("python3")
             .args(["-I", "-c", script])
@@ -397,13 +401,22 @@ assert all(h['first_registered'] is None and h['ambiguous_vintages'] == ['2024Q3
             load_registered_sources(&profile, &root).unwrap(),
         );
         assert_eq!(report.sources.len(), 18, "historical source population");
-        let index = key_aisc_operands(&profile, &report.sources, &report.instances);
-        let consistency = aisc_consistency(&index, &report.instances);
+        assert_eq!(report.aisc_tables, 34);
+        let consistency = &report.issuer_consistency;
         assert!(consistency.unkeyed.is_empty(), "{:?}", consistency.unkeyed);
         assert_eq!(consistency.all_files, report.state_counts());
-        // FACT: independent census2(displayed=True), share_census and region_census reads, grouped by canonical
-        // period, subject and family and selecting the earliest registry quarter. Adding region-map scope did
-        // not change these counts. The reader did not inspect consistency.rs before supplying these answers.
+        // FACT (E861): independent displayed-value counts for the through-2026Q2 registry.
+        assert_eq!(
+            ["i", "ii", "iii", "iv", "v", "np"].map(|state| {
+                consistency
+                    .all_files
+                    .iter()
+                    .filter(|((_, bucket), _)| *bucket == state)
+                    .map(|(_, &n)| n)
+                    .sum::<usize>()
+            }),
+            [2_436, 3, 4, 92, 0, 60]
+        );
         assert_eq!(consistency.histories.len(), 1_565);
         assert_eq!(consistency.first_registered.values().sum::<usize>(), 1_565);
         assert_eq!(consistency.all_files.values().sum::<usize>(), 2_595);
@@ -449,16 +462,28 @@ assert all(h['first_registered'] is None and h['ambiguous_vintages'] == ['2024Q3
                     .collect::<Vec<_>>(),
                 [("iii", "2024Q3"), ("iii", "2025Q2")]
             );
-            assert!(
-                h.sequence
+            for (appearance, file) in h
+                .sequence
+                .iter()
+                .zip(["Barrick_Q3_2024_AISC.xlsx", "Barrick_Q2_2025_AISC.xlsx"])
+            {
+                let registered = profile
+                    .sources
                     .iter()
-                    .all(|a| a.at.ends_with(&format!("!{cell}")) && a.sha256.len() == 64)
-            );
+                    .find(|s| s.file_name == file)
+                    .unwrap();
+                assert_eq!(appearance.at, format!("{file}:Q2 2024!{cell}"));
+                assert_eq!(appearance.sha256, registered.sha256_hex);
+            }
+            assert_eq!(h.transitions.len(), 1);
             assert_eq!(h.transitions[0].kind, TransitionKind::Persisted);
         }
         let mut reversed = report.instances.clone();
         reversed.reverse();
-        assert_eq!(aisc_consistency(&index, &reversed), consistency);
+        assert_eq!(
+            &aisc_consistency(&report.public_claims, &reversed),
+            consistency
+        );
         println!(
             "{{\"instances_all\":{},\"instances_first_registered\":{},\"oracle_equal\":true}}",
             consistency.all_files.values().sum::<usize>(),

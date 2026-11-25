@@ -115,11 +115,10 @@ impl<F: ConsistencyFamily> Consistency<F> {
         use crate::js;
         let histories = self.histories.iter().map(|h| {
             let sequence = h.sequence.iter().map(appearance_json).collect::<Vec<_>>().join(",");
-            let first = h.sequence.first();
+            let first = h.sequence.first().filter(|a| h.ambiguous_vintages.iter().all(|v| v > &a.release));
             let total = first.map_or_else(|| "null".to_string(), |a| format!(
                 "{{\"at\":{},\"sha256\":{}}}", js(&a.at), js(&a.sha256)));
-            let first_registered = first.filter(|a| h.ambiguous_vintages.iter().all(|v| v > &a.release))
-                .map_or_else(|| "null".to_string(), appearance_json);
+            let first_registered = first.map_or_else(|| "null".to_string(), appearance_json);
             let steps = h.transitions.iter().map(|t| format!(
                 "{{\"from\":{},\"to\":{},\"kind\":{},\"operands_changed\":{}}}",
                 t.from, t.to, js(t.kind.as_str()),
