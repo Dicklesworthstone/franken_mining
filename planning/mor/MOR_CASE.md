@@ -1970,3 +1970,34 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     comparison projects the existing typed Claims and has its own digest. Synthetic controls
     with missing CoS language and a 100%-basis sold header refused their respective comparisons.
     The census covers the 54 named gold workbook pairs and leaves the complete T18 census open.
+
+- **E870** Typed citation validation for same-release workbook comparisons (FACT, 2026-11-25 UTC, bd-sjrh.2).
+  - The pre-change assurance validator accepted a copied Mine Stats Claim whose locator had been
+    changed, a changed displayed difference, and edited basis text in a workbook-comparison row.
+    `assurance_refuses_corrupted_workbook_claims_differences_and_basis_citations` reproduced the gap before the
+    fix. The corrected validator refuses with `FMINE-REF-208` and names the offending field paths.
+    The regression also checks that a changed confirmed share refuses.
+  - Both assertion arrays must match canonical source Claims for the displayed subject, metric and
+    original quarter. The confirmed share must match the Mine Stats Claim. The basis text must
+    match its cited cell in one of the row's source workbooks with the correct release and hash.
+    The existing exact comparison rule recomputes the finding and its difference from the inputs.
+  - The Q2 and Q3 registered native runs each returned exit zero. Their complete JSON payloads
+    match the E869 runs, covering all 736 and 804 same-release comparison rows, respectively.
+    The Q3 Markdown is byte-identical, with SHA-256
+    `c69c25c96498d603b1ebd7ba796535f58305cecf5629733d90f01720418ca2ac`.
+    This covers the typed comparison before assurance rendering. The all-verb numeric validator
+    and verification of the complete T18 census remain open.
+
+- **E871** Historical live-dependency replay through 2026Q2 (FACT, 2026-11-25 UTC, bd-r7lp).
+  - Ran the existing 18-workbook file controls. All 54 cases refused, naming only the affected
+    workbook. Absence returned `FMINE-REF-506`. Empty and foreign workbooks returned `FMINE-REF-505`.
+    All 56 anchor mutations in the eight release-quarter AISC sheets caused a table refusal.
+  - In the existing one-leaf-per-instance frame, the optimized real run selected 2,595 leaves.
+    It passed 2,492 and failed zero. The remaining 103 selections were skipped because another
+    nonzero NCI line remained decisive. The deliberate Kibali O11 literal was caught and its
+    honest control passed.
+  - The synthetic run passed 12 tests, with 335 leaf perturbation passes, zero failures, and
+    26 explicit skips over 55 current instances. The separate byte-level control matched the
+    parsed-cell results. The existing release-mode label run supplies the 56-control result.
+  - The four real-corpus tests affected by the bounded-reader fix (`740fc70`) also passed.
+    The CI gate verdict and decisive perturbations for the skipped real instances remain open.

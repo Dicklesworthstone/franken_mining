@@ -432,3 +432,39 @@ fn assurance_json_and_markdown_include_the_separate_workbook_projection() {
     assert!(markdown.contains("Reconciliation minus Mine Stats"));
     assert!(markdown.contains("mine\\_stats\\_counterpart\\_missing"));
 }
+
+#[test]
+fn assurance_refuses_corrupted_workbook_claims_differences_and_basis_citations() {
+    let mut report = run("2000");
+    let rows = &mut report.workbook_comparisons.rows;
+    let index = |metric| {
+        rows.iter()
+            .position(|row| row.metric == metric)
+            .expect("known comparison")
+    };
+    let sold = index("au_sold_attr_koz");
+    let cos = index("cos_usd_per_oz");
+    let aisc = index("aisc_usd_per_oz");
+    let tcc = index("tcc_usd_per_oz");
+    rows[sold].mine_stats[0].locator = "stats.xlsx:QTD!C5".into();
+    rows[cos].difference.as_mut().expect("equal rates").point = Rat::from_integer(1);
+    rows[aisc].basis_citations[0].text = "Edited after extraction".into();
+    rows[tcc].confirmed_share = Some(Rat::new(4, 5).unwrap());
+    let refusal =
+        fmine_public::citation::validate_report(&report).expect_err("corrupted comparisons");
+    assert_eq!(refusal.code, "FMINE-REF-208");
+    for (index, field) in [
+        (sold, "mine_stats[0]"),
+        (cos, "difference"),
+        (aisc, "basis_citations[0]"),
+        (tcc, "confirmed_share"),
+    ] {
+        assert!(
+            refusal
+                .what
+                .contains(&format!("$.workbook_comparisons.rows[{index}].{field}")),
+            "missing {field}: {}",
+            refusal.what
+        );
+    }
+}

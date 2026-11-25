@@ -999,8 +999,11 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
   reconciliation basis may use the existing gold-table bridge with its title, attributable denominator and
   same-release share label retained as hash-bound citations. Sold-ounce comparisons also require the
   Mine Stats header to state attributable share. Cost-of-sales rates require the explicit attributable
-  numerator footnote, cited with its workbook hash. Unproven bases stay unavailable. This bounded projection
-  has its own digest and does not change M0AS or establish the authentic T18 census or complete gate passage.
+  numerator footnote, cited with its workbook hash. Unproven bases stay unavailable. Before emitting either
+  report format, the assurance gate matches comparison inputs to canonical Claims and original-quarter keys,
+  verifies the cited ownership text against the loaded workbooks, and recomputes the displayed differences.
+  Inconsistent fields name their paths in `FMINE-REF-208`. The projection has its own digest. The authentic
+  T18 census and complete gate passage remain open.
 - Complete `GATE-BULL-01` issuer-consistency delivery record and prospective Q4 blind-layout run remain open.
 - Full all-verb JSON uncited-number validator (`BD-329`) and two-way cluster inference (`BD-341.S4`) remain open.
 - See scope notes below under Public API / Proof obligations.

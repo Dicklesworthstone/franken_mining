@@ -1,5 +1,5 @@
 //! DESIGN (BD-329.S2 slice): authenticate typed workbook citations before emission.
-//! This checks source Claims and operands behind the four AISC derived-number rules.
+//! This checks the AISC derived-number inputs and the same-release workbook projection.
 //! It does not certify every JSON number, historical source completeness or issuer truth.
 //!
 //! Determinism: Exact (ordered source projections yield sorted, deduplicated findings).
@@ -13,6 +13,7 @@ use fmine_io::xlsx::{CellValue, Sheet, col_index_to_letters, parse_a1_ref};
 use super::{Cited, RULES, derived, locator};
 use crate::aisc::{self, Calc, IdentityInstance, OperandRole, OperandValue};
 use crate::key::{self, KeyedCell, NilReason, PublicValue, StatusKind};
+use crate::sources::SourceKind;
 use crate::{Lane, LoadedSource, PublicAssuranceReport};
 
 /// A deterministic report-field path, with the offending source kept separately.
@@ -166,6 +167,98 @@ fn calculation_matches(sources: &Sources<'_>, instance: &IdentityInstance) -> bo
     }
 }
 
+fn workbook_findings(
+    report: &PublicAssuranceReport,
+    sources: &Sources<'_>,
+    add: &mut impl FnMut(String, &'static str, &str),
+) {
+    for (index, row) in report.workbook_comparisons.rows.iter().enumerate() {
+        let path = format!("$.workbook_comparisons.rows[{index}]");
+        if row.reconciliation.is_empty() && row.mine_stats.is_empty() {
+            add(path.clone(), "empty_workbook_comparison", "");
+        }
+        for (reconciliation, member, claims, kind) in [
+            (
+                true,
+                "reconciliation",
+                &row.reconciliation,
+                SourceKind::AiscReconciliation,
+            ),
+            (false, "mine_stats", &row.mine_stats, SourceKind::MineStats),
+        ] {
+            for (i, claim) in claims.iter().enumerate() {
+                if report.public_claims.cells.get(&claim.locator) != Some(claim)
+                    || !row.matches_input(claim, reconciliation)
+                    || !resolve(sources, &claim.locator)
+                        .is_ok_and(|(source, _, _, _)| source.kind == kind)
+                {
+                    add(
+                        format!("{path}.{member}[{i}]"),
+                        "noncanonical_workbook_input",
+                        &claim.locator,
+                    );
+                }
+            }
+        }
+        let expected_citations = if row.confirmed_share.is_none() {
+            0
+        } else if row.metric == "cos_usd_per_oz" {
+            4
+        } else {
+            3
+        };
+        if !row.confirmed_share_matches() {
+            add(
+                format!("{path}.confirmed_share"),
+                "workbook_confirmed_share_mismatch",
+                "",
+            );
+        }
+        let mut seen = BTreeSet::new();
+        if row.basis_citations.len() != expected_citations {
+            add(
+                format!("{path}.basis_citations"),
+                "workbook_basis_evidence_count",
+                "",
+            );
+        }
+        for (i, note) in row.basis_citations.iter().enumerate() {
+            let valid = resolve(sources, &note.at).is_ok_and(|(source, sheet, r, c)| {
+                source.quarter == row.release
+                    && note.sha256 == Digest32(source.workbook.sha256).to_hex()
+                    && aisc::cell_text(sheet, r, c).as_deref() == Some(note.text.as_str())
+                    && row
+                        .reconciliation
+                        .iter()
+                        .chain(&row.mine_stats)
+                        .any(|claim| {
+                            claim
+                                .locator
+                                .split_once(':')
+                                .is_some_and(|(file, _)| file == source.file_name)
+                        })
+            });
+            if !valid || !seen.insert(&note.at) {
+                add(
+                    format!("{path}.basis_citations[{i}]"),
+                    "workbook_basis_source_mismatch",
+                    &note.at,
+                );
+            }
+        }
+        let (state, reason, difference) = row.expected_finding();
+        for (field, matches) in [
+            ("state", state == row.state),
+            ("reason", reason == row.reason),
+            ("difference", difference == row.difference),
+        ] {
+            if !matches {
+                add(format!("{path}.{field}"), "workbook_finding_mismatch", "");
+            }
+        }
+    }
+}
+
 /// Rechecks canonical workbook Claims and visible AISC citations against loaded sources.
 /// Blank cells, placeholders, unsupported displays and ledger refusals retain their meanings.
 /// File-byte authentication remains the loader's responsibility; registry interpretations
@@ -265,6 +358,7 @@ pub fn report_findings(report: &PublicAssuranceReport) -> Vec<CitationFinding> {
             "",
         );
     }
+    workbook_findings(report, &sources, &mut add);
     findings.sort();
     findings.dedup();
     findings

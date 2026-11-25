@@ -273,6 +273,35 @@ fn classify(row: &WorkbookComparison) -> Result<(WorkbookState, Option<Differenc
     ))
 }
 
+impl WorkbookComparison {
+    pub(crate) fn matches_input(&self, cell: &KeyedCell, reconciliation: bool) -> bool {
+        cell.key.issuer == self.issuer
+            && cell.key.subject == self.subject
+            && cell.key.reporting_vintage.release == self.release
+            && cell.key.valid_period.code() == self.release
+            && metric(&cell.key.line.label, reconciliation) == Some(self.metric)
+    }
+
+    pub(crate) fn expected_finding(
+        &self,
+    ) -> (WorkbookState, Option<&'static str>, Option<Difference>) {
+        match classify(self) {
+            Ok((state, difference)) => (state, None, difference),
+            Err(reason) => (WorkbookState::Unavailable, Some(reason), None),
+        }
+    }
+
+    pub(crate) fn confirmed_share_matches(&self) -> bool {
+        self.confirmed_share.is_none_or(|confirmed| {
+            matches!(
+                (&self.reconciliation[..], &self.mine_stats[..]),
+                ([a], [b]) if a.key.ownership_basis == OwnershipBasis::Unprinted
+                    && share(b.key.ownership_basis) == Some(confirmed)
+            )
+        })
+    }
+}
+
 /// Each input is the visible canonical Claim population for its named workbook family.
 /// A candidate comes from either family; a missing or duplicate counterpart never disappears.
 #[must_use]
@@ -327,13 +356,7 @@ pub fn compare(
             });
         }
         confirm_basis(profile, sources, row);
-        match classify(row) {
-            Ok((state, difference)) => {
-                row.state = state;
-                row.difference = difference;
-            }
-            Err(reason) => row.reason = Some(reason),
-        }
+        (row.state, row.reason, row.difference) = row.expected_finding();
     }
     WorkbookComparisons { rows }
 }
