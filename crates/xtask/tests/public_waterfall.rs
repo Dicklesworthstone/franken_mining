@@ -596,7 +596,18 @@ fn explicit_waterfall_cli_reads_registered_workbooks_and_preserves_citations() {
     assert!(envelope.payload_json.contains("\"exact\":\"300\""));
     assert!(!envelope.payload_json.contains("\"subject\":\"Heap Site\""));
     let markdown = envelope.rendered_markdown.as_ref().unwrap();
-    assert!(markdown.contains("Lmdi Site") && markdown.contains("2030_aisc.xlsx"));
+    let original_aisc = sources
+        .iter()
+        .find(|source| source.file_name == "2030_aisc.xlsx")
+        .expect("original AISC workbook retained");
+    let original_hash = fmine_core::Digest32(original_aisc.workbook.sha256).to_hex();
+    let citation = format!(r"2030\_aisc.xlsx:Q2 2030!B12; SHA-256 {original_hash}.");
+    assert!(markdown.contains("## Lmdi Site"));
+    assert!(
+        markdown
+            .lines()
+            .any(|line| line.starts_with("- Source Claim ") && line.ends_with(&citation))
+    );
     assert_eq!(
         envelope.to_json(),
         fmine_cli::invoke(&args, &root).0.to_json()
