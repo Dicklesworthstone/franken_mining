@@ -86,13 +86,20 @@ fn certificate_input(
     role: &str,
     source: &SourceAnchor,
 ) -> Result<InputDigest, Refusal> {
-    let path = Path::new(&source.artifact_path)
+    let locator = Path::new(&source.artifact_path)
         .strip_prefix(root)
         .ok()
-        .filter(|p| {
-            !p.as_os_str().is_empty() && p.components().all(|c| matches!(c, Component::Normal(_)))
+        .and_then(|path| {
+            // DESIGN: a relative locator uses forward slashes even when produced on Windows.
+            path.components()
+                .map(|component| match component {
+                    Component::Normal(name) => name.to_str(),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+                .filter(|components| !components.is_empty())
+                .map(|components| components.join("/"))
         })
-        .and_then(Path::to_str)
         .ok_or_else(|| {
             Refusal::new(
                 RefusalCode::InputMissingOrUnreadable506,
@@ -101,7 +108,7 @@ fn certificate_input(
         })?;
     Ok(InputDigest::new(
         role,
-        path,
+        locator,
         Digest32(source.artifact_sha256),
     ))
 }

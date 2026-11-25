@@ -372,7 +372,8 @@ fn minelib_pit_exports_the_checked_optimum_and_all_source_digests() {
     let candidate = "0\n";
     fs::write(root.join("pit.upit"), &upit).unwrap();
     fs::write(root.join("pit.prec"), &prec).unwrap();
-    fs::write(root.join("candidate.txt"), candidate).unwrap();
+    fs::create_dir(root.join("review")).unwrap();
+    fs::write(root.join("review/candidate.txt"), candidate).unwrap();
     let run = |extra: &[&str]| {
         Command::new(binary())
             .current_dir(&root)
@@ -386,7 +387,7 @@ fn minelib_pit_exports_the_checked_optimum_and_all_source_digests() {
                 "--decimals",
                 "2",
                 "--candidate",
-                "candidate.txt",
+                "review//candidate.txt",
                 "--json",
             ])
             .args(extra)
@@ -438,7 +439,11 @@ fn minelib_pit_exports_the_checked_optimum_and_all_source_digests() {
     assert_eq!(
         cert.inputs,
         [
-            InputDigest::new("candidate", "candidate.txt", sha256(candidate.as_bytes())),
+            InputDigest::new(
+                "candidate",
+                "review/candidate.txt",
+                sha256(candidate.as_bytes()),
+            ),
             InputDigest::new("precedence", "pit.prec", sha256(prec.as_bytes())),
             InputDigest::new("upit", "pit.upit", sha256(upit.as_bytes())),
         ]
