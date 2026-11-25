@@ -19,6 +19,7 @@ use fmine_runtime::WallClock;
 pub const MAX_JOURNAL_BYTES: u64 = forecast_journal::MAX_JOURNAL_BYTES as u64;
 pub const MAX_JOURNAL_RECORDS: usize = forecast_journal::MAX_RECORDS;
 pub const MAX_REQUEST_BYTES: usize = forecast_journal::MAX_OPERATION_BYTES;
+const MAX_EXPANDED_CARD_BYTES: usize = 96 * 1024;
 
 /// Lowercase, two-digit encoding of each byte in retained journal evidence.
 pub fn encode_hex_field(bytes: &[u8]) -> String {
@@ -45,6 +46,31 @@ pub fn decode_hex_field(value: &str) -> Option<Vec<u8>> {
         .iter()
         .map(|&[hi, lo]| Some(nibble(hi)? * 16 + nibble(lo)?))
         .collect()
+}
+
+/// DESIGN (bd-225.7): store a bounded decision card as hex over a size-prefixed LZ4 block.
+#[must_use]
+pub fn encode_journal_card(card: &str) -> Option<String> {
+    (card.len() <= MAX_EXPANDED_CARD_BYTES)
+        .then(|| encode_hex_field(&lz4_flex::block::compress_prepend_size(card.as_bytes())))
+}
+
+/// Check the declared size before allocating and require the block to produce exactly that size.
+#[must_use]
+pub fn decode_journal_card(field: &str) -> Option<String> {
+    if field.len() > MAX_REQUEST_BYTES {
+        return None;
+    }
+    let bytes = decode_hex_field(field)?;
+    let (size, block) = lz4_flex::block::uncompressed_size(&bytes).ok()?;
+    if size > MAX_EXPANDED_CARD_BYTES {
+        return None;
+    }
+    let mut decoded = vec![0; size];
+    if lz4_flex::block::decompress_into(block, &mut decoded).ok()? != size {
+        return None;
+    }
+    String::from_utf8(decoded).ok()
 }
 
 /// An open file holding a POSIX/OS lock that explicitly unlocks on drop so a concurrently
@@ -364,6 +390,31 @@ mod tests {
         for invalid in ["0", "AF", "0x", "01 02", "é"] {
             assert_eq!(decode_hex_field(invalid), None);
         }
+    }
+
+    #[test]
+    fn journal_card_codec_checks_expansion_bounds_and_exact_utf8() {
+        // A size of three followed by one LZ4 literal sequence containing `abc`.
+        assert_eq!(
+            decode_journal_card("0300000030616263").as_deref(),
+            Some("abc")
+        );
+        for invalid in [
+            "0400000030616263", // Wrong expanded size.
+            "03000000306162",   // Truncated literal sequence.
+            "0180010030616263", // Declares 96 KiB plus one byte.
+            "0100000010ff",     // Invalid UTF-8.
+        ] {
+            assert!(decode_journal_card(invalid).is_none(), "{invalid}");
+        }
+        let mut card = "x".repeat(MAX_EXPANDED_CARD_BYTES);
+        let encoded = encode_journal_card(&card).unwrap();
+        assert_eq!(
+            decode_journal_card(&encoded).as_deref(),
+            Some(card.as_str())
+        );
+        card.push('x');
+        assert!(encode_journal_card(&card).is_none());
     }
     use fmine_runtime::ClockError;
     use std::path::PathBuf;

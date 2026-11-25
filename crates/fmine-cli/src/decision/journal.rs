@@ -6,10 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use fmine_claim::forecast_journal::Entry;
+use fmine_claim::forecast_journal::{Entry, MAX_JOURNAL_BYTES};
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_io::forecast::{Journal, MAX_REQUEST_BYTES, decode_hex_field, encode_hex_field as hex};
+use fmine_io::forecast::{
+    Journal, MAX_REQUEST_BYTES, decode_hex_field, decode_journal_card, encode_hex_field as hex,
+    encode_journal_card,
+};
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 use fmine_runtime::{HostWallClock, WallClock};
 
@@ -29,6 +32,7 @@ const POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v2";
 const COMPACT_POLICY_OPERATION_SCHEMA: &str = "fmine.decision-operation.v3";
 const LINKED_OPERATION_SCHEMA: &str = "fmine.decision-operation.v4";
 const COMPACT_ACTION_SCHEMA: &str = "fmine.decision-operation.v5";
+const COMPRESSED_ACTION_SCHEMA: &str = "fmine.decision-operation.v6";
 const REPORT_SCHEMA: &str = "fmine.decision-journal.v1";
 const POLICY_REPORT_SCHEMA: &str = "fmine.decision-journal.v2";
 const LINKED_REPORT_SCHEMA: &str = "fmine.decision-journal.v3";
@@ -214,13 +218,21 @@ fn unhex(value: &str) -> Result<String, Refusal> {
     String::from_utf8(bytes).map_err(|_| integrity("retained content is not UTF-8"))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum CardEncoding {
+    Hex,
+    Json,
+    // Preserve the stored block so replay's wire check is independent of recompression.
+    Lz4(String),
+}
+
 #[derive(Debug)]
 struct Snapshot {
     decision_id: String,
     choice: Choice,
     policy_snapshot: Option<String>,
     // Replay must retain the original encoding so v1/v2 canonical bytes and heads remain stable.
-    compact_json: bool,
+    encoding: CardEncoding,
     rationale: String,
     model_path: String,
     model: String,
@@ -231,6 +243,10 @@ struct Snapshot {
 }
 
 impl Snapshot {
+    fn artifact_bytes(&self) -> usize {
+        self.model.len() + self.card.len() + self.policy_snapshot.as_ref().map_or(0, String::len)
+    }
+
     fn validate(&self) -> Result<(), Refusal> {
         self.choice.validate()?;
         if !clean(&self.decision_id, 256)
@@ -261,11 +277,16 @@ impl Snapshot {
         }
         if let Some(links) = &self.forecasts {
             links.encode()?;
-            if !self.compact_json {
+            if self.encoding != CardEncoding::Json {
                 return Err(integrity(
                     "linked decisions require their compact v4 encoding",
                 ));
             }
+        }
+        if matches!(self.encoding, CardEncoding::Lz4(_))
+            && !matches!(self.choice, Choice::ActNow(_))
+        {
+            return Err(integrity("compressed cards require an unlinked action"));
         }
         Ok(())
     }
@@ -288,30 +309,40 @@ impl Snapshot {
 
     fn operation(&self) -> Result<String, Refusal> {
         self.validate()?;
-        let mut out = self.encode(self.compact_json)?;
-        if out.len() > MAX_REQUEST_BYTES
-            && !self.compact_json
-            && matches!(self.choice, Choice::ActNow(_))
-        {
-            out = self.encode(true)?;
+        let out = self.encode(&self.encoding)?;
+        if out.len() <= MAX_REQUEST_BYTES {
+            return Ok(out);
         }
-        if out.len() > MAX_REQUEST_BYTES {
-            return Err(invalid(
-                "model and evaluated card exceed the 65536-byte journal operation limit",
-            ));
+        if matches!(self.choice, Choice::ActNow(_)) && self.forecasts.is_none() {
+            if self.encoding == CardEncoding::Hex {
+                let compact = self.encode(&CardEncoding::Json)?;
+                if compact.len() <= MAX_REQUEST_BYTES {
+                    return Ok(compact);
+                }
+            }
+            if !matches!(self.encoding, CardEncoding::Lz4(_))
+                && let Some(block) = encode_journal_card(&self.card)
+            {
+                let compact = self.encode(&CardEncoding::Lz4(block))?;
+                if compact.len() <= MAX_REQUEST_BYTES {
+                    return Ok(compact);
+                }
+            }
         }
-        Ok(out)
+        Err(invalid(
+            "model and evaluated card exceed the 65536-byte journal operation limit",
+        ))
     }
 
-    fn encode(&self, compact: bool) -> Result<String, Refusal> {
+    fn encode(&self, encoding: &CardEncoding) -> Result<String, Refusal> {
         let mut fields = match &self.choice {
             Choice::ActNow(action) => vec![
                 (
                     "schema",
-                    if compact {
-                        COMPACT_ACTION_SCHEMA
-                    } else {
-                        OPERATION_SCHEMA
+                    match encoding {
+                        CardEncoding::Hex => OPERATION_SCHEMA,
+                        CardEncoding::Json => COMPACT_ACTION_SCHEMA,
+                        CardEncoding::Lz4(_) => COMPRESSED_ACTION_SCHEMA,
                     }
                     .to_owned(),
                 ),
@@ -323,7 +354,7 @@ impl Snapshot {
                     .policy_snapshot
                     .as_deref()
                     .ok_or_else(|| integrity("missing information-policy snapshot"))?;
-                let (schema, policy_field, policy_value) = if compact {
+                let (schema, policy_field, policy_value) = if *encoding == CardEncoding::Json {
                     (
                         COMPACT_POLICY_OPERATION_SCHEMA,
                         "policy_json",
@@ -354,10 +385,10 @@ impl Snapshot {
             ("claim_id", self.claim_id.clone()),
             ("code_revision", self.code_revision.clone()),
             ("model_hex", hex(self.model.as_bytes())),
-            if compact {
-                ("card_json", self.card.clone())
-            } else {
-                ("card_hex", hex(self.card.as_bytes()))
+            match encoding {
+                CardEncoding::Hex => ("card_hex", hex(self.card.as_bytes())),
+                CardEncoding::Json => ("card_json", self.card.clone()),
+                CardEncoding::Lz4(block) => ("card_lz4_hex", block.clone()),
             },
         ]);
         if let Some(links) = &self.forecasts {
@@ -385,12 +416,20 @@ impl Snapshot {
             fields.insert(field.key, value);
         }
         let schema = take(&mut fields, "schema").map_err(integrity)?;
-        let compact_json = matches!(
-            schema.as_str(),
-            COMPACT_POLICY_OPERATION_SCHEMA | LINKED_OPERATION_SCHEMA | COMPACT_ACTION_SCHEMA
-        );
+        let encoding = match schema.as_str() {
+            COMPACT_POLICY_OPERATION_SCHEMA | LINKED_OPERATION_SCHEMA | COMPACT_ACTION_SCHEMA => {
+                CardEncoding::Json
+            }
+            COMPRESSED_ACTION_SCHEMA => {
+                CardEncoding::Lz4(take(&mut fields, "card_lz4_hex").map_err(integrity)?)
+            }
+            _ => CardEncoding::Hex,
+        };
         let (choice, policy_snapshot) = match schema.as_str() {
-            OPERATION_SCHEMA | COMPACT_ACTION_SCHEMA | LINKED_OPERATION_SCHEMA
+            OPERATION_SCHEMA
+            | COMPACT_ACTION_SCHEMA
+            | LINKED_OPERATION_SCHEMA
+            | COMPRESSED_ACTION_SCHEMA
                 if fields.contains_key("action") =>
             {
                 (
@@ -406,7 +445,7 @@ impl Snapshot {
                     )
                     .map_err(integrity)?,
                 };
-                let snapshot = if compact_json {
+                let snapshot = if encoding == CardEncoding::Json {
                     take(&mut fields, "policy_json").map_err(integrity)?
                 } else {
                     unhex(&take(&mut fields, "policy_hex").map_err(integrity)?)?
@@ -423,11 +462,17 @@ impl Snapshot {
             }
             _ => return Err(integrity("unknown decision operation schema")),
         };
+        let card = match &encoding {
+            CardEncoding::Hex => unhex(&take(&mut fields, "card_hex").map_err(integrity)?)?,
+            CardEncoding::Json => take(&mut fields, "card_json").map_err(integrity)?,
+            CardEncoding::Lz4(block) => decode_journal_card(block)
+                .ok_or_else(|| integrity("invalid or oversized compressed journal card"))?,
+        };
         let snapshot = Self {
             decision_id: take(&mut fields, "decision_id").map_err(integrity)?,
             choice,
             policy_snapshot,
-            compact_json,
+            encoding,
             rationale: take(&mut fields, "rationale").map_err(integrity)?,
             model_path: take(&mut fields, "model_path").map_err(integrity)?,
             claim_id: take(&mut fields, "claim_id").map_err(integrity)?,
@@ -440,11 +485,7 @@ impl Snapshot {
                 None
             },
             model: unhex(&take(&mut fields, "model_hex").map_err(integrity)?)?,
-            card: if compact_json {
-                take(&mut fields, "card_json").map_err(integrity)?
-            } else {
-                unhex(&take(&mut fields, "card_hex").map_err(integrity)?)?
-            },
+            card,
         };
         for (key, bytes) in [
             ("model_sha256", snapshot.model.as_bytes()),
@@ -509,6 +550,15 @@ struct History {
     snapshots: Vec<Snapshot>,
     ids: BTreeMap<String, usize>,
     stage_reviews: BTreeSet<Digest32>,
+    artifact_bytes: usize,
+}
+
+impl History {
+    fn evidence_bytes_after(&self, additional: usize) -> Option<usize> {
+        self.artifact_bytes
+            .checked_add(additional)
+            .filter(|total| *total <= MAX_JOURNAL_BYTES)
+    }
 }
 
 fn replay(journal: &Journal) -> Result<History, Refusal> {
@@ -526,6 +576,11 @@ fn replay(journal: &Journal) -> Result<History, Refusal> {
             return Err(integrity("unexpected repeated genesis"));
         };
         let snapshot = Snapshot::decode(operation)?;
+        history.artifact_bytes = history
+            .evidence_bytes_after(snapshot.artifact_bytes())
+            .ok_or_else(|| {
+                integrity("expanded decision history exceeds the 64 MiB evidence limit")
+            })?;
         let (earliest, latest) = journal.header().time_bounds(record.observed_ns)?;
         snapshot.validate_at(earliest, latest)?;
         if let Some(observation) = stage_review::retained(&snapshot)? {
@@ -778,7 +833,11 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                 let snapshot = Snapshot {
                     decision_id: decision_id.clone(),
                     choice: choice.clone(),
-                    compact_json: policy_snapshot.is_some() || prepared_forecasts.is_some(),
+                    encoding: if policy_snapshot.is_some() || prepared_forecasts.is_some() {
+                        CardEncoding::Json
+                    } else {
+                        CardEncoding::Hex
+                    },
                     policy_snapshot,
                     rationale: rationale.clone(),
                     model_path: source.artifact_path,
@@ -789,6 +848,14 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
                     forecasts: prepared_forecasts.as_ref().map(|(_, links)| links.clone()),
                 };
                 let operation = snapshot.operation()?;
+                if history
+                    .evidence_bytes_after(snapshot.artifact_bytes())
+                    .is_none()
+                {
+                    return Err(invalid(
+                        "expanded decision history exceeds the 64 MiB evidence limit",
+                    ));
+                }
                 journal.append(&operation, clock, |record, header| {
                     let (earliest, latest) = header.time_bounds(record.observed_ns)?;
                     if not_before_ns.is_some_and(|bound| i128::from(earliest) < bound) {
@@ -808,4 +875,20 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
         }
     };
     perform().unwrap_or_else(|refusal| Envelope::refused(command.verb(), refusal, Vec::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{History, MAX_JOURNAL_BYTES};
+
+    #[test]
+    fn decision_history_applies_limit_to_expanded_artifact_bytes() {
+        let history = History {
+            artifact_bytes: MAX_JOURNAL_BYTES - 7,
+            ..History::default()
+        };
+        assert_eq!(history.evidence_bytes_after(7), Some(MAX_JOURNAL_BYTES));
+        assert_eq!(history.evidence_bytes_after(8), None);
+        assert_eq!(history.evidence_bytes_after(usize::MAX), None);
+    }
 }

@@ -193,6 +193,7 @@ dependencies = [
  "fmine-registry",
  "fmine-runtime",
  "fmine-units",
+ "lz4_flex",
 ]
 
 [[package]]
@@ -372,6 +373,12 @@ dependencies = [
  "fmine-evidence",
  "fmine-geom",
 ]
+
+[[package]]
+name = "lz4_flex"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f56455fff36934a9500d69062aec1c77037179b6f0669e4d5d6b72b84722d6a3"
 
 [[package]]
 name = "xtask"

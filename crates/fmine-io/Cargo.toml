@@ -21,6 +21,7 @@ fmine-optimize = { path = "../fmine-optimize" }
 fmine-registry = { path = "../fmine-registry" }
 fmine-runtime = { path = "../fmine-runtime" }
 fmine-units = { path = "../fmine-units" }
+lz4_flex = { version = "=0.14.2", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 
 [lints]
 workspace = true

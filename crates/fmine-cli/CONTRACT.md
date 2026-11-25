@@ -489,6 +489,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   quoted card/policy JSON instead of hex, keeping exact bytes and digests within the unchanged 64 KiB
   operation bound; model bytes remain hex-encoded. Histories containing information choices still use
   v2 reports. Replay checks byte integrity without re-evaluation or authenticated policy provenance.
+- DESIGN (bd-225.7). An unlinked action whose v5 operation exceeds 64 KiB may use v6 with the original
+  JSON card stored as lowercase hex over a size-prefixed LZ4 block. Replay checks the 96 KiB expanded
+  card bound before allocation and verifies both original SHA-256 digests. It retains the compressed
+  block for canonical operation verification. The 64 KiB encoded limit still applies. Replay and append
+  also bound the total expanded model, card and policy bytes by the existing 64 MiB journal budget.
+  The evaluated card retains its original source path and Claim identities.
 - DESIGN (BD-225/227, plan §22.4–22.5): `decide card` admits an optional source-bound
   `[[policy_optimization]]` declaration with `exact_deterministic` method, nominal or Wasserstein
   probability screen, and explicit policy/work limits. The decision owner streams complete one-test

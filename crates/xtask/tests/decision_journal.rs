@@ -2430,6 +2430,139 @@ fn capital_bundle_choice_retains_complete_comparison_and_lower_ranked_human_choi
 }
 
 #[test]
+fn capital_choice_replays_exact_card_in_a_deep_workspace() {
+    let f = Fixture::new();
+    let deep = f.root.join("portfolio-review-".repeat(12));
+    fs::create_dir(&deep).unwrap();
+    let earlier = successful(execute_with_clock(
+        &f.record(f.initial, "earlier-action", "hold"),
+        &deep,
+        &Clock(200),
+    ));
+    let prior = head(&earlier);
+    let old_fields = operation_fields(&f, prior, 1);
+    assert!(
+        old_fields
+            .iter()
+            .any(|(key, value)| { key == "model_path" && value == f.model.to_str().unwrap() })
+    );
+    assert_eq!(old_fields[0].1, "fmine.decision-operation.v1");
+    let prefix = fs::read(&f.journal).unwrap();
+    let model = deep.join("model.toml");
+    let submitted = format!("{CAPITAL_BASE}{CAPITAL_STRESS}");
+    fs::write(&model, &submitted).unwrap();
+
+    let run = |workspace: &Path, args: &[&str]| {
+        let output = Process::new(binary())
+            .args(args)
+            .arg("--workspace")
+            .arg(workspace)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let recorded = run(
+        &deep,
+        &[
+            "decide",
+            "journal",
+            "record",
+            "--journal",
+            f.journal.to_str().unwrap(),
+            "--expected-head",
+            &prior.to_hex(),
+            "--model",
+            model.to_str().unwrap(),
+            "--decision",
+            "deep-capital-review",
+            "--action",
+            "bundle_00",
+            "--reason",
+            "Retain cash under the stated robust tail constraint",
+            "--code-revision",
+            REVISION,
+            "--trust-host-clock",
+            "--json",
+        ],
+    );
+    let output = parse_json(recorded.as_bytes()).unwrap();
+    let records = json_field(&output, &["payload", "decisions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(records.len(), 2);
+    let snapshot = json_field(&records[1], &["snapshot"]);
+    assert_eq!(
+        json_field(snapshot, &["selected_action"]).as_str(),
+        Some("bundle_00")
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "path"]).as_str(),
+        model.to_str()
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "content"]).as_str(),
+        Some(submitted.as_str())
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "sha256"]).as_str(),
+        Some(sha256(submitted.as_bytes()).to_hex().as_str())
+    );
+
+    let comparison = run(&deep, &["decide", "program", "model.toml", "--json"]);
+    assert_eq!(
+        json_field(snapshot, &["artifact", "content"]).as_str(),
+        Some(comparison.trim_end())
+    );
+
+    let pin = Digest32(
+        fmine_calib::record::parse_hex32(
+            json_field(&output, &["payload", "head"]).as_str().unwrap(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(operation_fields(&f, pin, 1), old_fields);
+    let fields = operation_fields(&f, pin, 2);
+    assert_eq!(fields[0].1, "fmine.decision-operation.v6");
+    assert!(fields.iter().any(|(key, _)| key == "card_lz4_hex"));
+    let saved = Journal::open_read(&f.journal, Some(pin)).unwrap();
+    let mut last = saved.records()[2].clone();
+    drop(saved);
+    let Entry::Operation(operation) = &mut last.entry else {
+        panic!("retained compressed operation");
+    };
+    let (_, card_digest) = fields.iter().find(|(key, _)| key == "card_sha256").unwrap();
+    *operation = operation.replacen(card_digest, &"a".repeat(64), 1);
+    let corrupt = deep.join("altered-card-digest.journal");
+    let mut rebuilt = prefix.clone();
+    rebuilt.extend(last.to_line().unwrap());
+    fs::write(&corrupt, rebuilt).unwrap();
+    let result = execute_with_clock(
+        &Command::Show {
+            journal: corrupt,
+            head: Some(last.chain_head().unwrap()),
+        },
+        &deep,
+        &NoClock,
+    );
+    let refusal = result.refusal.unwrap();
+    assert_eq!(refusal.code, "FMINE-REF-505");
+    assert!(refusal.what.contains("retained card_sha256 differs"));
+    assert!(fs::read(&f.journal).unwrap().starts_with(&prefix));
+    fs::write(&model, "the live worksheet has been replaced").unwrap();
+    let replay = successful(f.show(Some(pin)));
+    let replay = parse_json(replay.payload_json.as_bytes()).unwrap();
+    assert_eq!(
+        json_field(&replay, &["decisions"]).as_array().unwrap(),
+        records
+    );
+}
+
+#[test]
 fn capital_bundle_journal_enforces_declared_limits_without_inventing_a_policy() {
     let f = Fixture::new();
     let submitted = format!("{CAPITAL_BASE}{CAPITAL_SAFE}");
