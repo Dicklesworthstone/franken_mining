@@ -12,6 +12,7 @@ use std::path::{Component, Path};
 
 use fmine_core::cert::Certificate;
 use fmine_core::hash::{Digest32, sha256};
+use fmine_core::plan_cert::PlanCertificate;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_ledger::mmr::{leaf_hash, verify_inclusion};
 use fmine_ledger::verify::{SegmentVerification, verify_segment};
@@ -290,6 +291,71 @@ pub fn verify_segment_file(path: &Path) -> Result<SegmentVerification, VerifyErr
         });
     }
     Ok(report)
+}
+
+/// Verify raw `FMT-PCERT-1` three-gap `PlanCertificate` bytes (`FMNE` + `PCRT` + CRC32C +
+/// three-gap / NL-1 / NL-4 / INV-002 invariants + self-verifying SHA-256 digest; `BD-253`).
+pub fn verify_plan_cert_bytes(bytes: &[u8]) -> Result<PlanCertificate, VerifyError> {
+    PlanCertificate::from_bytes(bytes).map_err(|e| VerifyError::Tamper {
+        kind: "plan_certificate",
+        detail: e.to_string(),
+    })
+}
+
+/// Verify an `FMT-PCERT-1` three-gap `PlanCertificate` file on disk and, if `inputs_dir` is given,
+/// re-hash every `InputDigest` locator under `inputs_dir` and require exact SHA-256 parity (`BD-253`).
+pub fn verify_plan_cert_file(
+    path: &Path,
+    inputs_dir: Option<&Path>,
+) -> Result<PlanCertificate, VerifyError> {
+    let bytes = read_input_bytes(path)?;
+    let cert = verify_plan_cert_bytes(&bytes)?;
+    if let Some(base) = inputs_dir {
+        if !base.is_dir() {
+            return Err(VerifyError::MissingOrUnreadable {
+                path: base.display().to_string(),
+                detail: "inputs directory does not exist".to_string(),
+            });
+        }
+        for inp in &cert.inputs {
+            let rel = Path::new(&inp.locator);
+            if rel.is_absolute()
+                || rel.components().any(|c| {
+                    matches!(
+                        c,
+                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                    )
+                })
+            {
+                return Err(VerifyError::Tamper {
+                    kind: "plan_certificate_input",
+                    detail: format!("unsafe input locator {:?}", inp.locator),
+                });
+            }
+            let full = base.join(rel);
+            let data = fs::read(&full).map_err(|e| VerifyError::Tamper {
+                kind: "plan_certificate_input",
+                detail: format!(
+                    "declared input '{}' ({}) unreadable: {e}",
+                    inp.locator, inp.role
+                ),
+            })?;
+            let actual = sha256(&data);
+            if actual != inp.sha256 {
+                return Err(VerifyError::Tamper {
+                    kind: "plan_certificate_input",
+                    detail: format!(
+                        "input '{}' ({}) digest mismatch: expected {}, actual {}",
+                        inp.locator,
+                        inp.role,
+                        inp.sha256.to_hex(),
+                        actual.to_hex()
+                    ),
+                });
+            }
+        }
+    }
+    Ok(cert)
 }
 
 /// Offline RFC 6962 MMR inclusion proof check helper.

@@ -269,6 +269,7 @@ dependencies = [
 name = "fmine-optimize"
 version = "0.1.0"
 dependencies = [
+ "fmine-core",
  "fmine-evidence",
  "fmine-numerics",
 ]
@@ -360,6 +361,7 @@ dependencies = [
  "fmine-gen",
  "fmine-ledger",
  "fmine-object",
+ "fmine-optimize",
  "fmine-sync",
  "fmine-units",
 ]

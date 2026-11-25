@@ -16,4 +16,5 @@
 //! search and the stochastic layer are later slices.
 
 pub mod pitflow;
+pub mod plan_cert;
 pub mod toposort;

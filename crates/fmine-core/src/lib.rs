@@ -7,6 +7,7 @@ pub mod codec;
 pub mod det;
 pub mod hash;
 pub mod id;
+pub mod plan_cert;
 pub mod rand;
 
 pub use anchor::{FMT_ANCHOR_V1, LedgerAnchor, SourceAnchor};
@@ -17,4 +18,9 @@ pub use cert::{
 pub use codec::{CodecError, Decoder, Encoder, MAGIC_FMNE, crc32c};
 pub use hash::{Blake3, Digest32, blake3_hash, sha256};
 pub use id::{IdParseError, ObjectId, PrefixKind};
+pub use plan_cert::{
+    BoundKind, CertifiedBound, FMT_PLANCERT_MIN_VERSION, FMT_PLANCERT_V1, PlanCalibrationStatus,
+    PlanCertError, PlanCertificate, PlanCertificateRequest, PlanColor, PlanHorizon, SaaGap,
+    TAG_PLAN_CERT, VssCertificate,
+};
 pub use rand::{PhiloxStream, RngKey, philox4x32_10, sobol_owen_2d};

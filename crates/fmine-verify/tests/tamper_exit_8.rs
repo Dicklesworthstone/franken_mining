@@ -301,3 +301,247 @@ fn test_metamorphic_laws_shared_in_fmine_verify() {
     ];
     assert_exact_statutory_unit_roundtrips(&qty).expect("unit roundtrips");
 }
+
+#[test]
+fn test_fmine_verify_plancert_pit_and_pcpsp_roundtrip_and_tamper_exits_8() {
+    use fmine_core::plan_cert::{
+        PlanCalibrationStatus, PlanColor, PlanHorizon, SaaGap, VssCertificate,
+    };
+    use fmine_optimize::pitflow::{self, ClosureProblem};
+    use fmine_optimize::plan_cert::{
+        PlanCertMetadata, certify_pcpsp_plan, certify_ultimate_pit, certify_unbounded_heuristic,
+    };
+    use fmine_optimize::toposort::pcpsp;
+
+    let tmp = TempDir::new("plancert");
+    let inputs_dir = tmp.path().join("inputs");
+    fs::create_dir_all(&inputs_dir).expect("mkdir inputs");
+    let upit_bytes = b"synthetic-upit-model-bytes-v1";
+    fs::write(inputs_dir.join("pit.upit"), upit_bytes).expect("write pit input");
+
+    // 1. Real pitflow solve -> certified exact three-gap PlanCertificate (calibrated -> Validated).
+    let problem = ClosureProblem::from_requirements(vec![-4, 10, -20], &[vec![], vec![0], vec![0]])
+        .expect("valid closure");
+    let pit_sol = pitflow::solve(&problem).expect("pit solves");
+    let pit_cert = certify_ultimate_pit(
+        &PlanCertMetadata {
+            plan_id: "pit-strategic-2026".to_string(),
+            horizon: PlanHorizon::Strategic,
+            code_revision: "e3aadb3".to_string(),
+            opt_set_id: "rset-opt-200".to_string(),
+            currency_code: "USD".to_string(),
+            value_scale_denominator: 1,
+            saa: Some(SaaGap {
+                opt_set_id: "rset-opt-200".to_string(),
+                eval_set_id: "rset-eval-1000".to_string(),
+                n_eval: 1000,
+                sample_mean_scaled: 6,
+                sample_se_scaled: 1,
+                conf_bps: 9500,
+                ci_lo_scaled: 4,
+                ci_hi_scaled: 8,
+            }),
+            vss: Some(VssCertificate {
+                det_plan_id: "pit-det-2026".to_string(),
+                sto_plan_id: "pit-strategic-2026".to_string(),
+                opt_set_id: "rset-opt-200".to_string(),
+                eval_set_id: "rset-eval-1000".to_string(),
+                n_eval: 1000,
+                vss_oos_lo_scaled: 1,
+                vss_oos_hi_scaled: 3,
+                vss_in_sample_scaled: 4,
+                optimism_scaled: 2,
+            }),
+            calibration: PlanCalibrationStatus::Calibrated {
+                ledger_ref: "cal-2026q3".to_string(),
+                n_resolved: 40,
+                cov80_bps: 8000,
+                bias_bps: -50,
+            },
+            inputs: vec![InputDigest::new(
+                "block_model",
+                "pit.upit",
+                sha256(upit_bytes),
+            )],
+            extra_refusal_codes: vec![],
+        },
+        &problem,
+        &pit_sol,
+    )
+    .expect("certify ultimate pit");
+    let pit_bytes = pit_cert.to_bytes().expect("encode pit cert");
+    let pit_path = tmp.path().join("pit.fpcert");
+    fs::write(&pit_path, &pit_bytes).expect("write pit cert");
+
+    let (code, stdout) = run_bin(&[
+        "plancert",
+        pit_path.to_str().unwrap(),
+        "--inputs-dir",
+        inputs_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "clean pit plancert must exit 0: {stdout}");
+    assert!(stdout.contains("\"kind\":\"fmt-pcert-1\""), "{stdout}");
+    assert!(stdout.contains("\"color\":\"Validated\""), "{stdout}");
+    assert!(stdout.contains("\"opt_gap_numerator\":0"), "{stdout}");
+    assert!(
+        stdout.contains("\"reserve_disclosure_claim\":false"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&pit_cert.certificate_digest.to_hex()),
+        "{stdout}"
+    );
+
+    // 2. Real PCPSP solve -> Lagrangian dual bound PlanCertificate (miscalibrated -> Estimated).
+    let pcpsp_text = "\
+NAME: split-blend-example
+TYPE: PCPSP
+NBLOCKS: 3
+NPERIODS: 2
+NDESTINATIONS: 2
+NRESOURCE_SIDE_CONSTRAINTS: 2
+NGENERAL_SIDE_CONSTRAINTS: 0
+DISCOUNT_RATE: 0
+RESOURCE_CONSTRAINT_LIMITS:
+0 0 L 2
+0 1 L 2
+1 0 L 0
+1 1 L 0
+OBJECTIVE_FUNCTION:
+0 -4 12
+1 -2 8
+2 -3 21
+RESOURCE_CONSTRAINT_COEFFICIENTS:
+0 0 0 1
+0 1 0 1
+0 1 1 2
+1 0 0 1
+1 1 0 1
+1 1 1 -1
+2 0 0 1
+2 1 0 1
+EOF
+";
+    let model = pcpsp::parse(
+        pcpsp_text,
+        "0 0\n1 0\n2 1 0\n",
+        0,
+        pitflow::minelib::Rounding::Refuse,
+        0,
+    )
+    .expect("parse pcpsp");
+    let plan = pcpsp::planning::solve(&model, pcpsp::planning::Options::default(), None)
+        .expect("solve pcpsp");
+    let pcpsp_cert = certify_pcpsp_plan(
+        &PlanCertMetadata {
+            plan_id: "pcpsp-tactical-2026".to_string(),
+            horizon: PlanHorizon::Tactical,
+            code_revision: "e3aadb3".to_string(),
+            opt_set_id: "rset-opt-200".to_string(),
+            currency_code: "USD".to_string(),
+            value_scale_denominator: 1,
+            saa: None,
+            vss: None,
+            calibration: PlanCalibrationStatus::Miscalibrated {
+                ledger_ref: "cal-2026q3".to_string(),
+                bias_bps: 600,
+                inflation_bps: 12_500,
+            },
+            inputs: vec![],
+            extra_refusal_codes: vec![],
+        },
+        &model,
+        &plan,
+    )
+    .expect("certify pcpsp plan");
+    let pcpsp_path = tmp.path().join("pcpsp.fpcert");
+    fs::write(&pcpsp_path, pcpsp_cert.to_bytes().expect("encode pcpsp")).expect("write pcpsp cert");
+    let (code, stdout) = run_bin(&["plancert", pcpsp_path.to_str().unwrap()]);
+    assert_eq!(code, 0, "clean pcpsp plancert must exit 0: {stdout}");
+    assert!(stdout.contains("\"bound_kind\":\"lagrangian\""), "{stdout}");
+    assert!(stdout.contains("\"color\":\"Estimated\""), "{stdout}");
+
+    // 3. Unbounded heuristic cert verifies cleanly as Estimated with refusal count >= 1.
+    let heur_cert = certify_unbounded_heuristic(
+        &PlanCertMetadata {
+            plan_id: "stope-heuristic-2026".to_string(),
+            horizon: PlanHorizon::ShortTerm,
+            code_revision: "e3aadb3".to_string(),
+            opt_set_id: "rset-opt-1".to_string(),
+            currency_code: "USD".to_string(),
+            value_scale_denominator: 1,
+            saa: None,
+            vss: None,
+            calibration: PlanCalibrationStatus::Uncalibrated,
+            inputs: vec![],
+            extra_refusal_codes: vec![],
+        },
+        sha256(b"stope-model"),
+        12_345,
+    )
+    .expect("heuristic cert");
+    let heur_path = tmp.path().join("heur.fpcert");
+    fs::write(&heur_path, heur_cert.to_bytes().expect("encode heur")).expect("write heur");
+    let (code, stdout) = run_bin(&["plancert", heur_path.to_str().unwrap()]);
+    assert_eq!(
+        code, 0,
+        "unbounded heuristic cert verifies as Estimated: {stdout}"
+    );
+    assert!(stdout.contains("\"bound_kind\":null"), "{stdout}");
+    assert!(stdout.contains("\"color\":\"Estimated\""), "{stdout}");
+    assert!(stdout.contains("\"refusals\":1"), "{stdout}");
+
+    // 4. Attack A: Flip 1 bit in certificate frame -> exit 8 (FMINE-REF-505).
+    let mut bad_bytes = pit_bytes.clone();
+    bad_bytes[24] ^= 0x01;
+    let bad_path = tmp.path().join("tampered.fpcert");
+    fs::write(&bad_path, &bad_bytes).expect("write tampered");
+    let (code, stdout) = run_bin(&["plancert", bad_path.to_str().unwrap()]);
+    assert_eq!(code, 8, "1-bit tampered plancert must exit 8: {stdout}");
+    assert!(stdout.contains("FMINE-REF-505"), "{stdout}");
+
+    // 5. Attack B: Tamper declared input file on disk -> exit 8 (FMINE-REF-505).
+    fs::write(
+        inputs_dir.join("pit.upit"),
+        b"synthetic-upit-model-bytes-v2",
+    )
+    .expect("tamper input");
+    let (code, stdout) = run_bin(&[
+        "plancert",
+        pit_path.to_str().unwrap(),
+        "--inputs-dir",
+        inputs_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 8, "tampered input file must exit 8: {stdout}");
+    assert!(stdout.contains("FMINE-REF-505"), "{stdout}");
+
+    // 6. Attack C: Semantic forgery (Validated color on Miscalibrated, INV-002 flag = true, tampered wire) -> exit 8!
+    let mut forged = pcpsp_cert.clone();
+    forged.color = PlanColor::Validated;
+    forged.certificate_digest = forged.compute_digest().expect("recompute digest");
+    assert!(
+        forged.verify().is_err(),
+        "forged Validated color must fail verify()"
+    );
+    let mut forged_auth = pcpsp_cert.clone();
+    forged_auth.reserve_disclosure_claim = true;
+    forged_auth.certificate_digest = forged_auth.compute_digest().expect("recompute digest");
+    assert!(
+        forged_auth.verify().is_err(),
+        "forged INV-002 flag must fail verify()"
+    );
+    let mut forged_bytes = pcpsp_cert.to_bytes().expect("raw");
+    let flip_idx = forged_bytes.len() - 10;
+    forged_bytes[flip_idx] ^= 0x01;
+    let forged_path = tmp.path().join("forged.fpcert");
+    fs::write(&forged_path, &forged_bytes).expect("write forged");
+    let (code, stdout) = run_bin(&["plancert", forged_path.to_str().unwrap()]);
+    assert_eq!(code, 8, "forged plancert must exit 8: {stdout}");
+    assert!(stdout.contains("FMINE-REF-505"), "{stdout}");
+
+    // 7. Missing file -> exit 5 (FMINE-REF-506).
+    let missing = tmp.path().join("missing.fpcert");
+    let (code, stdout) = run_bin(&["plancert", missing.to_str().unwrap()]);
+    assert_eq!(code, 5, "missing plancert must exit 5: {stdout}");
+    assert!(stdout.contains("FMINE-REF-506"), "{stdout}");
+}

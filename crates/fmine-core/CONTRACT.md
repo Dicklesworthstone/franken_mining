@@ -9,7 +9,7 @@ Three files are lifted from frankensim at `20463525d9775a18c1b237d2676f364f36717
 - **Layer:** S0
 - **Subsystem:** Bedrock
 - **LOC budget:** 12,000 planned / 14,000 ceiling
-- **Allowed Module Families:** `["id", "codec", "hash", "det", "rand", "anchor", "cert"]`
+- **Allowed Module Families:** `["id", "codec", "hash", "det", "rand", "anchor", "cert", "plan_cert"]`
 
 ## 2. Inputs
 Byte slices (hashing, frame decoding), ID strings (`ObjectId` parsing), `f64` arguments (`det`), `RngKey` 6-tuples `(seed_root, partition, domain, var_group, realization, brick)` (`rand`), and `LedgerAnchor` fields. It reads no files and no registries.
@@ -60,6 +60,7 @@ Not applicable: the crate emits digests, identifiers and numbers, not Claims, so
 - `rand::{RngKey, PhiloxStream, philox4x32_10, sobol_owen_2d}`
 - `anchor::{LedgerAnchor, SourceAnchor, FMT_ANCHOR_V1}`
 - `cert::{Certificate, CertError, DeterminismClass, InputDigest, FMT_CERT_V1, FMT_CERT_MIN_VERSION, TAG_CERT}` (`BD-096`: `FMT-CERT-1` self-verifying execution certificate)
+- `plan_cert::{PlanCertificate, PlanCertificateRequest, PlanCertError, PlanHorizon, BoundKind, CertifiedBound, SaaGap, VssCertificate, PlanCalibrationStatus, PlanColor, FMT_PLANCERT_V1, FMT_PLANCERT_MIN_VERSION, TAG_PLAN_CERT}` (`BD-253`: `FMT-PCERT-1` three-gap mine-plan certificate)
 
 ## 12. Proof obligations
 - PO-NUM-2 (no std transcendental in a BitwisePortable module): `xtask check-det` in `check-all`; the pinned digest `test_golden_hash_10k_inputs`.

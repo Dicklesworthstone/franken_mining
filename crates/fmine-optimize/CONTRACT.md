@@ -67,7 +67,7 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - **Layer:** E
 - **Subsystem:** Pushback
 - **LOC budget:** 36,000 planned / 41,000 ceiling
-- **Allowed Module Families:** `["pitflow", "toposort"]`
+- **Allowed Module Families:** `["pitflow", "toposort", "plan_cert"]`
 
 ## 2. Inputs
 - `toposort::pcpsp::planning::solve`: a parsed PCPSP model, bounded `Options` (0–1,000 search rounds,

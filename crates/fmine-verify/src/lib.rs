@@ -6,8 +6,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use checks::{
-    VerifyError, parse_digest32_hex, verify_cas_root, verify_certificate_file, verify_segment_file,
-    verify_sync_cert_file,
+    VerifyError, parse_digest32_hex, verify_cas_root, verify_certificate_file,
+    verify_plan_cert_file, verify_segment_file, verify_sync_cert_file,
 };
 
 fn escape_json(s: &str) -> String {
@@ -45,11 +45,12 @@ fn format_error(err: &VerifyError) -> (String, u8) {
 pub fn run_cli(args: &[String]) -> (String, u8) {
     let res = match args.first().map(String::as_str) {
         Some("cert") => run_cert(&args[1..]),
+        Some("plancert") => run_plancert(&args[1..]),
         Some("cas") => run_cas(&args[1..]),
         Some("synccert") => run_synccert(&args[1..]),
         Some("segment") => run_segment(&args[1..]),
         _ => Err(VerifyError::Usage(
-            "expected: fmine-verify <cert <file> [--inputs-dir <dir>] | cas <dir> <root-hex> | synccert <file> | segment <file>>"
+            "expected: fmine-verify <cert <file> [--inputs-dir <dir>] | plancert <file> [--inputs-dir <dir>] | cas <dir> <root-hex> | synccert <file> | segment <file>>"
                 .to_string(),
         )),
     };
@@ -80,6 +81,56 @@ fn run_cert(rest: &[String]) -> Result<String, VerifyError> {
         cert.determinism_class.as_str(),
         cert.inputs.len(),
         cert.output_digest.to_hex(),
+        cert.certificate_digest.to_hex()
+    ))
+}
+
+fn run_plancert(rest: &[String]) -> Result<String, VerifyError> {
+    let (file, inputs_dir) = match rest {
+        [f] => (Path::new(f.as_str()), None),
+        [f, flag, dir] if flag == "--inputs-dir" => {
+            (Path::new(f.as_str()), Some(Path::new(dir.as_str())))
+        }
+        _ => {
+            return Err(VerifyError::Usage(
+                "expected: fmine-verify plancert <file> [--inputs-dir <dir>]".to_string(),
+            ));
+        }
+    };
+    let cert = verify_plan_cert_file(file, inputs_dir)?;
+    let bound_upper = cert
+        .bound
+        .as_ref()
+        .map_or_else(|| "null".to_string(), |b| b.upper_scaled.to_string());
+    let bound_kind = cert.bound.as_ref().map_or_else(
+        || "null".to_string(),
+        |b| format!("\"{}\"", b.kind.as_str()),
+    );
+    let opt_gap_num = cert
+        .opt_gap_numerator
+        .map_or_else(|| "null".to_string(), |g| g.to_string());
+    let opt_gap_bps = cert
+        .opt_gap_bps()
+        .map_or_else(|| "null".to_string(), |b| b.to_string());
+    Ok(format!(
+        "{{\"status\":\"verified\",\"kind\":\"fmt-pcert-1\",\"format_version\":{},\"plan_id\":\"{}\",\"horizon\":\"{}\",\"code_revision\":\"{}\",\"currency_code\":\"{}\",\"value_scale_denominator\":{},\"primal_scaled\":{},\"bound_kind\":{},\"bound_upper_scaled\":{},\"opt_gap_numerator\":{},\"opt_gap_bps\":{},\"has_saa\":{},\"has_vss\":{},\"calibration\":\"{}\",\"color\":\"{}\",\"inputs\":{},\"refusals\":{},\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false,\"certificate_digest\":\"{}\"}}",
+        cert.format_version,
+        escape_json(&cert.plan_id),
+        cert.horizon.as_str(),
+        escape_json(&cert.code_revision),
+        escape_json(&cert.currency_code),
+        cert.value_scale_denominator,
+        cert.primal_scaled,
+        bound_kind,
+        bound_upper,
+        opt_gap_num,
+        opt_gap_bps,
+        cert.saa.is_some(),
+        cert.vss.is_some(),
+        cert.calibration.as_str(),
+        cert.color.as_str(),
+        cert.inputs.len(),
+        cert.refusal_codes.len(),
         cert.certificate_digest.to_hex()
     ))
 }

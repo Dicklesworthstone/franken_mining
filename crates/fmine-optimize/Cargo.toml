@@ -8,6 +8,7 @@ publish = false
 description = "Pushback optimisation kernels: ultimate pit limits by Hochbaum pseudoflow on an i64 CSR precedence graph, with an independently checkable certificate."
 
 [dependencies]
+fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-numerics = { path = "../fmine-numerics" }
 
