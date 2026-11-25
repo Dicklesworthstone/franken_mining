@@ -67,7 +67,7 @@ Not applicable: Bedrock emits authority storage, proofs, and verification receip
 - `BD-081`'s 24-hour fuzz run for `fuzz/fuzz_targets/ledger.rs` started on 2026-11-25 and has no result yet (`bd-081` remains `in_progress`).
 - No multi-segment directory catalog, `FMT-CAS-1` chunk store (`BD-090`), or `SyncCert` wire protocol (`BD-103`) yet. `LabRuntime` DPOR over lease transfer (`PO-BED-1`, `BD-101`) is not built; the `F7` lab test covers crash recovery only.
 - A torn batch whose payload holds a CRC-valid `FMT-LEDGER-1` batch or segment footer frame, with its length prefix, reads as interior corruption and is refused, not repaired: the scanner cannot tell that frame from a record written after the damage.
-- OPEN (owner): damage to the last acknowledged records with no whole record after it, such as bit rot rather than a crash, reads as a torn tail, and `repair apply` truncates it with the complete bytes kept as evidence. Nothing in a segment tells the two causes apart.
+- OPEN (owner): damage to the last acknowledged records with no whole record after it, such as bit rot rather than a crash, reads as a torn tail, and `repair apply` truncates it with the complete bytes kept as evidence. That includes a damaged length prefix on an otherwise whole last batch or footer: its frame still verifies, but its length cannot be read, as when a crash loses the sector holding an unacknowledged write's length. Nothing in a segment tells the two causes apart.
 - Self-verified only; no independent external review or multi-ISA CI run of the new modules yet.
 
 ## 11. Public API
