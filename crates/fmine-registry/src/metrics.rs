@@ -401,6 +401,7 @@ impl MetricRegistry {
     }
 
     fn check_links(&self, ids: &BTreeSet<String>) -> Result<(), RegistryError> {
+        let definitions = self.definition_index();
         for def in &self.definitions {
             for parent in def.extends.iter().chain(&def.supersedes) {
                 if !ids.contains(parent) {
@@ -411,15 +412,15 @@ impl MetricRegistry {
                 }
             }
             let mut seen = BTreeSet::new();
-            let mut stack = def.extends.clone();
+            let mut stack: Vec<_> = def.extends.iter().map(String::as_str).collect();
             while let Some(id) = stack.pop() {
                 if id == def.id {
                     return Err(schema_err(format!("{}: extends itself", def.id)));
                 }
-                if seen.insert(id.clone())
-                    && let Some(parent) = self.definition(&id)
+                if seen.insert(id)
+                    && let Some(parent) = definitions.get(id)
                 {
-                    stack.extend(parent.extends.iter().cloned());
+                    stack.extend(parent.extends.iter().map(String::as_str));
                 }
             }
             let mut items = BTreeSet::new();
@@ -438,7 +439,9 @@ impl MetricRegistry {
                 }
             }
             if matches!(def.family, MetricFamily::AllInCost | MetricFamily::CashCost)
-                && self.lines_of(&def.id).is_empty()
+                && !Self::ancestry(&definitions, &def.id)
+                    .iter()
+                    .any(|owner| self.lines.get(*owner).is_some_and(|lines| !lines.is_empty()))
             {
                 return Err(schema_err(format!(
                     "{}: a cost definition with no lines",
@@ -453,7 +456,7 @@ impl MetricRegistry {
                     )));
                 }
                 for parent_id in &def.extends {
-                    if let Some(parent) = self.definition(parent_id)
+                    if let Some(parent) = definitions.get(parent_id.as_str())
                         && (!matches!(
                             parent.family,
                             MetricFamily::AllInCost | MetricFamily::CashCost
@@ -464,6 +467,20 @@ impl MetricRegistry {
                             def.id
                         )));
                     }
+                }
+            }
+        }
+        let mut ancestry = BTreeMap::new();
+        for def in &self.definitions {
+            for (item, origins) in self.line_origins(&def.id, &definitions, &mut ancestry) {
+                if let Some(first) = origins.values().next()
+                    && origins.values().any(|line| line != first)
+                {
+                    return Err(schema_err(format!(
+                        "{}: ambiguous inherited line {item} from {}; declare an explicit override",
+                        def.id,
+                        origins.keys().copied().collect::<Vec<_>>().join(", ")
+                    )));
                 }
             }
         }
@@ -503,29 +520,85 @@ impl MetricRegistry {
             .map(|d| d.id.as_str())
     }
 
-    fn ancestry<'a>(&'a self, id: &'a str) -> Vec<&'a str> {
-        let mut seen: Vec<&str> = Vec::new();
-        let mut stack = vec![id];
+    fn definition_index(&self) -> BTreeMap<&str, &MetricDefinition> {
+        self.definitions
+            .iter()
+            .map(|def| (def.id.as_str(), def))
+            .collect()
+    }
+
+    fn ancestry<'a>(
+        definitions: &BTreeMap<&'a str, &'a MetricDefinition>,
+        id: &str,
+    ) -> BTreeSet<&'a str> {
+        let mut seen = BTreeSet::new();
+        let mut stack: Vec<_> = definitions.get(id).copied().into_iter().collect();
         while let Some(at) = stack.pop() {
-            if seen.contains(&at) {
-                continue;
-            }
-            seen.push(at);
-            if let Some(def) = self.definition(at) {
-                stack.extend(def.extends.iter().map(String::as_str));
+            if seen.insert(at.id.as_str()) {
+                stack.extend(
+                    at.extends
+                        .iter()
+                        .filter_map(|parent| definitions.get(parent.as_str()).copied()),
+                );
             }
         }
         seen
     }
 
-    /// Every line `id` counts, its parents' included, by item.
+    /// The most-specific declarations of each inherited item. An ancestor cannot overwrite its
+    /// descendant, including when a second path reaches that ancestor through a diamond.
+    fn line_origins<'a>(
+        &'a self,
+        id: &str,
+        definitions: &BTreeMap<&'a str, &'a MetricDefinition>,
+        ancestry: &mut BTreeMap<&'a str, BTreeSet<&'a str>>,
+    ) -> BTreeMap<&'a str, BTreeMap<&'a str, &'a MetricLine>> {
+        let mut items: BTreeMap<&str, BTreeMap<&str, &MetricLine>> = BTreeMap::new();
+        for owner in Self::ancestry(definitions, id) {
+            for line in self.lines.get(owner).into_iter().flatten() {
+                items
+                    .entry(line.item.as_str())
+                    .or_default()
+                    .insert(owner, line);
+            }
+        }
+        for origins in items.values_mut() {
+            // A local declaration dominates every inherited declaration. Equal declarations need
+            // no graph comparison; each query reads the original declarations anew.
+            let first = origins
+                .first_key_value()
+                .map(|(owner, line)| (*owner, *line));
+            if origins.contains_key(id) {
+                origins.retain(|owner, _| *owner == id);
+            } else if let Some((owner, first)) = first
+                && origins.values().all(|line| *line == first)
+            {
+                origins.retain(|candidate, _| *candidate == owner);
+            } else {
+                let mut maximal: BTreeMap<&str, &MetricLine> = BTreeMap::new();
+                for (owner, line) in std::mem::take(origins) {
+                    if maximal.keys().any(|other| ancestry[other].contains(owner)) {
+                        continue;
+                    }
+                    let older = ancestry
+                        .entry(owner)
+                        .or_insert_with(|| Self::ancestry(definitions, owner));
+                    maximal.retain(|other, _| !older.contains(other));
+                    maximal.insert(owner, line);
+                }
+                *origins = maximal;
+            }
+        }
+        items
+    }
+
+    /// Every line `id` counts, its parents' included, by item. Explicit descendant declarations win;
+    /// parsing refuses incompatible declarations from incomparable parents, independently of order.
     #[must_use]
     pub fn lines_of(&self, id: &str) -> BTreeMap<&str, &MetricLine> {
-        self.ancestry(id)
+        self.line_origins(id, &self.definition_index(), &mut BTreeMap::new())
             .into_iter()
-            .filter_map(|at| self.lines.get(at))
-            .flatten()
-            .map(|l| (l.item.as_str(), l))
+            .filter_map(|(item, origins)| origins.into_values().next().map(|line| (item, line)))
             .collect()
     }
 
@@ -533,7 +606,7 @@ impl MetricRegistry {
     #[must_use]
     pub fn excluded_of(&self, id: &str) -> BTreeSet<&str> {
         let lines = self.lines_of(id);
-        self.ancestry(id)
+        Self::ancestry(&self.definition_index(), id)
             .into_iter()
             .filter_map(|at| self.excluded.get(at))
             .flatten()
@@ -605,6 +678,80 @@ mod tests {
         assert!(reg.lines_of(AIC_2018).contains_key("lease_payments"));
         assert!(!reg.excluded_of(AIC_2018).contains("lease_payments"));
         assert!(reg.excluded_of(AIC_2018).contains("income_tax"));
+    }
+
+    fn inherited_cost_definition(id: &str, parents: &str) -> String {
+        format!(
+            "\n[[definition]]\nid = \"{id}\"\nfamily = \"all_in_cost\"\nunit = \"USD/oz\"\n\
+             formula = \"invented arithmetic control\"\nsource = \"invented\"\nevidence = \"E1\"\n\
+             extends = \"{parents}\"\n"
+        )
+    }
+
+    fn inherited_cost_line(id: &str, kind: &str) -> String {
+        format!(
+            "\n[[line]]\ndefinition = \"{id}\"\nitem = \"on_site_mining_costs\"\n\
+             letter = \"explicit override\"\nkind = \"{kind}\"\n"
+        )
+    }
+
+    #[test]
+    fn descendant_line_overrides_survive_shared_ancestors_and_parent_order() {
+        let left = inherited_cost_definition("left@1", AISC_2013);
+        let right = inherited_cost_definition("right@1", AISC_2013);
+        let adjustment = inherited_cost_line("left@1", "credit");
+        for parents in ["left@1 right@1", "right@1 left@1"] {
+            for branches in [format!("{left}{right}"), format!("{right}{left}")] {
+                let child = inherited_cost_definition("child@1", parents);
+                let reg = with(&format!("{child}{branches}{adjustment}")).unwrap();
+                for id in ["left@1", "child@1"] {
+                    let lines = reg.lines_of(id);
+                    assert_eq!(lines["on_site_mining_costs"].kind, LineKind::Credit);
+                    assert_eq!(lines["on_site_mining_costs"].letter, "explicit override");
+                    assert_eq!(lines.len(), reg.lines_of(AISC_2013).len());
+                }
+                assert_eq!(
+                    reg.lines_of("right@1")["on_site_mining_costs"].kind,
+                    LineKind::Cost
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn conflicting_incomparable_lines_need_an_explicit_descendant_override() {
+        let branches = format!(
+            "{}{}{}{}",
+            inherited_cost_definition("left@1", AISC_2013),
+            inherited_cost_definition("right@1", AISC_2013),
+            inherited_cost_line("left@1", "credit"),
+            inherited_cost_line("right@1", "deduction")
+        );
+        for parents in ["left@1 right@1", "right@1 left@1"] {
+            let declarations = format!(
+                "{}{}",
+                inherited_cost_definition("child@1", parents),
+                branches
+            );
+            violation(
+                with(&declarations),
+                "child@1: ambiguous inherited line on_site_mining_costs from left@1, right@1",
+            );
+            let explicit = with(&format!(
+                "{declarations}{}",
+                inherited_cost_line("child@1", "cost")
+            ))
+            .unwrap();
+            assert_eq!(
+                explicit.lines_of("child@1")["on_site_mining_costs"].kind,
+                LineKind::Cost
+            );
+            let identical = with(&declarations.replace("\"deduction\"", "\"credit\"")).unwrap();
+            assert_eq!(
+                identical.lines_of("child@1")["on_site_mining_costs"].kind,
+                LineKind::Credit
+            );
+        }
     }
 
     #[test]
