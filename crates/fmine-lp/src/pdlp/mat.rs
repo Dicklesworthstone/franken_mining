@@ -329,4 +329,70 @@ mod tests {
             assert!(p.len() <= w.max(1));
         }
     }
+
+    /// `PO-NUM-3` (`bd-dm2z`): `even_pieces` + `run` + `fold` over real OS threads is bit-identical
+    /// across 1, 2, 3, 5, and 8 workers even on catastrophic-cancellation order-sensitive vectors,
+    /// while a planted worker-split reduction (ignoring `CHUNK`) diverges in bits.
+    #[test]
+    fn test_po_num_3_fixed_chunk_fold_bit_identical_and_unsafe_reduction_negative_control() {
+        let len = 4 * CHUNK + 137;
+        // Order-sensitive catastrophic-cancellation vector: `1e16` at index 0 absorbs `1.0`s
+        // inside a sequential left-to-right accumulator (ULP(1e16) = 2.0), whereas splitting
+        // across workers lets later workers accumulate `1.0`s above ULP before hitting `-1e16`.
+        let mut xs = vec![1.0_f64; len];
+        xs[0] = 1e16_f64;
+        xs[len - 1] = -1e16_f64;
+
+        let run_fixed_chunk = |w: usize| -> u64 {
+            let pieces = even_pieces(len, w);
+            let mut buf = xs.clone();
+            let partials = run(&pieces, buf.as_mut_slice(), |piece, slice: &mut [f64]| {
+                let mut out = Vec::new();
+                for sub in chunks(piece.clone()) {
+                    let rel_lo = sub.start - piece.start;
+                    let rel_hi = sub.end - piece.start;
+                    let mut acc = 0.0_f64;
+                    for &v in &slice[rel_lo..rel_hi] {
+                        acc += v;
+                    }
+                    out.push([acc]);
+                }
+                out
+            })
+            .expect("fixed-chunk parallel fold");
+            fold(partials)[0].to_bits()
+        };
+
+        let ref_bits = run_fixed_chunk(1);
+        for w in [2, 3, 5, 8] {
+            assert_eq!(
+                run_fixed_chunk(w),
+                ref_bits,
+                "PDLP fixed-chunk fold drifted at {w} threads"
+            );
+        }
+
+        // Planted negative control: naive per-worker slice sum (not CHUNK-aligned) loses bit equality.
+        let unsafe_worker_sum = |w: usize| -> u64 {
+            let stride = len.div_ceil(w);
+            let mut total = 0.0_f64;
+            for tid in 0..w {
+                let lo = tid * stride;
+                let hi = (lo + stride).min(len);
+                if lo < hi {
+                    let mut acc = 0.0_f64;
+                    for &v in &xs[lo..hi] {
+                        acc += v;
+                    }
+                    total += acc;
+                }
+            }
+            total.to_bits()
+        };
+        let s1 = unsafe_worker_sum(1);
+        assert!(
+            [2, 3, 5, 8].into_iter().any(|w| unsafe_worker_sum(w) != s1),
+            "order-sensitive negative control must expose unsafe thread-split reduction"
+        );
+    }
 }

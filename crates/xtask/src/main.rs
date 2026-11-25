@@ -193,6 +193,10 @@ fn main() -> ExitCode {
             "check-det",
             xtask::check_det(&root).map(|r| println!("{}", r.log_line())),
         ),
+        "check-kernels" => run_one(
+            "check-kernels",
+            xtask::kernels::check_kernels(&root).map(|r| println!("{}", r.log_line())),
+        ),
         "check-refusals" => run_one(
             "check-refusals",
             xtask::refusals::check_refusals(&root).map(|r| {
@@ -324,6 +328,9 @@ fn main() -> ExitCode {
                 // check_all ran these checks and they passed; read again for their counts.
                 if let Ok(det) = xtask::check_det(&root) {
                     println!("{}", det.log_line());
+                }
+                if let Ok(kernels) = xtask::kernels::check_kernels(&root) {
+                    println!("{}", kernels.log_line());
                 }
                 if let Ok(lock) = xtask::check_stack_lock(&root) {
                     println!("{}", lock.log_line());

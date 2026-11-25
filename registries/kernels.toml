@@ -1,0 +1,178 @@
+# registries/kernels.toml — Numerical Kernel Determinism & Thread-Count Registry (PO-NUM-3, plan §29.7, bd-dm2z)
+#
+# Every numerical kernel reachable from a certified path is listed here with its exact determinism class,
+# threading mode, reduction order, caller thread control, runnable verification test, and cross-ISA scope.
+# Enforced by `cargo run -p xtask -- check-kernels` (and `check-all`):
+#   - No unlisted `std::thread::` numerical kernel in S0/K/E library code may qualify a certified path.
+#   - Every listed K/E `source_file`'s `//! Determinism:` header must match `determinism_class`.
+#   - Every `test_ref` must name an existing `fn` inside the declared crate.
+
+schema_version = 1
+
+[[kernel]]
+id = "fmine-core.det.transcendentals"
+crate = "fmine-core"
+source_file = "crates/fmine-core/src/det.rs"
+determinism_class = "BitwisePortable"
+threading = "serial"
+thread_control = "single-threaded (pure deterministic polynomial/rational evaluation)"
+reduction_order = "fixed Horner polynomial evaluation; no parallel reduction"
+certified_paths = "public-assurance,forecast-calibration,sbc-harness"
+test_ref = "test:fmine-core::det::tests::test_det_exp_1_within_one_ulp"
+cross_isa_ref = "BD-141 independent matrix (x86_64-linux + aarch64-darwin)"
+
+[[kernel]]
+id = "fmine-core.rand.philox4x32"
+crate = "fmine-core"
+source_file = "crates/fmine-core/src/rand.rs"
+determinism_class = "BitwisePortable"
+threading = "serial"
+thread_control = "single-threaded counter-based PRNG keyed by RngKey"
+reduction_order = "counter-indexed Philox4x32-10 rounds; independent of thread scheduling"
+certified_paths = "decision-card,sbc-harness,exploration-endowment"
+test_ref = "test:fmine-core::rand::tests::test_philox4x32_known_answers"
+cross_isa_ref = "BD-141 independent matrix (x86_64-linux + aarch64-darwin)"
+
+[[kernel]]
+id = "fmine-numerics.dense.cholesky_brent_norm"
+crate = "fmine-numerics"
+source_file = "crates/fmine-numerics/src/lib.rs"
+determinism_class = "BitwisePortable"
+threading = "serial"
+thread_control = "single-threaded (no thread spawning in K0)"
+reduction_order = "ascending (i, j, k) Cholesky inner loop and deterministic Brent bracket"
+certified_paths = "forecast-calibration,reconciliation"
+test_ref = "test:fmine-numerics::tests::test_golden_digest_cholesky_brent_10k"
+cross_isa_ref = "BD-141 independent matrix (CI 41237993223 x86_64 + aarch64)"
+
+[[kernel]]
+id = "fmine-numerics.exact_feas.solver"
+crate = "fmine-numerics"
+source_file = "crates/fmine-numerics/src/exact_feas.rs"
+determinism_class = "Exact"
+threading = "serial"
+thread_control = "single-threaded exact rational solver"
+reduction_order = "inputs sorted by locator and cell id; exact i128 ExactQty arithmetic"
+certified_paths = "public-assurance"
+test_ref = "test:fmine-numerics::exact_feas::tests::test_certificate_digest_invariant_under_row_order"
+cross_isa_ref = "Exact integer rational (architecture-independent)"
+
+[[kernel]]
+id = "fmine-numerics.sparse.csr_ldlt_pcg"
+crate = "fmine-numerics"
+source_file = "crates/fmine-numerics/src/sparse.rs"
+determinism_class = "DeterministicPerIsa"
+threading = "serial"
+thread_control = "single-threaded (no thread spawning in K0)"
+reduction_order = "COO sorted by (row, col); CSR SpMV and supernodal LDLT in ascending index order"
+certified_paths = "reconciliation,plan-certificate"
+test_ref = "test:fmine-numerics::sparse::tests::test_assembly_is_stream_order_invariant_bitwise"
+cross_isa_ref = "same-ISA bit-identical (BD-141 cross-ISA not claimed for DeterministicPerIsa)"
+
+[[kernel]]
+id = "fmine-numerics.reconciliation.linear_wls"
+crate = "fmine-numerics"
+source_file = "crates/fmine-numerics/src/reconciliation.rs"
+determinism_class = "DeterministicPerIsa"
+threading = "serial"
+thread_control = "single-threaded (no thread spawning in K0)"
+reduction_order = "equilibrated LDLT and compensated dot/congruence sums in ascending index order"
+certified_paths = "reconciliation"
+test_ref = "test:fmine-numerics::reconciliation::tests::one_balance_known_answer_and_posterior_covariance"
+cross_isa_ref = "same-ISA bit-identical (BD-141 cross-ISA not claimed for DeterministicPerIsa)"
+
+[[kernel]]
+id = "fmine-numerics.risk.bootstrap"
+crate = "fmine-numerics"
+source_file = "crates/fmine-numerics/src/risk/bootstrap.rs"
+determinism_class = "Exact"
+threading = "serial"
+thread_control = "single-threaded (seed/replicate indexed Philox streams)"
+reduction_order = "canonical caller state order; exact rational reductions"
+certified_paths = "decision-card"
+test_ref = "test:fmine-numerics::risk::bootstrap::tests::reductions_match_independent_equal_mass_expansion"
+cross_isa_ref = "Exact integer rational (architecture-independent)"
+
+[[kernel]]
+id = "fmine-numerics.risk.transport"
+crate = "fmine-numerics"
+source_file = "crates/fmine-numerics/src/risk/transport.rs"
+determinism_class = "Exact"
+threading = "serial"
+thread_control = "single-threaded exact rational optimal transport"
+reduction_order = "canonical source/destination order; checked rational hull and dual verification"
+certified_paths = "decision-card"
+test_ref = "test:fmine-numerics::risk::transport::tests::exhaustive_small_laws_match_independent_transport_polytope_vertices"
+cross_isa_ref = "Exact integer rational (architecture-independent)"
+
+[[kernel]]
+id = "fmine-numerics.eproc.coverage"
+crate = "fmine-numerics"
+source_file = "crates/fmine-numerics/src/eproc/coverage.rs"
+determinism_class = "DeterministicPerIsa"
+threading = "serial"
+thread_control = "single-threaded sequential betting martingale"
+reduction_order = "ordered boolean hit sequence with compensated log accumulation via fmine_core::det"
+certified_paths = "forecast-calibration"
+test_ref = "test:fmine-numerics::eproc::coverage::tests::coverage_gb08_beta_integral_known_answers"
+cross_isa_ref = "same-ISA bit-identical (BD-141 cross-ISA not claimed for DeterministicPerIsa)"
+
+[[kernel]]
+id = "fmine-numerics.voi.discrete_mc_evsi"
+crate = "fmine-numerics"
+source_file = "crates/fmine-numerics/src/voi.rs"
+determinism_class = "DeterministicPerIsa"
+threading = "serial"
+thread_control = "single-threaded (seed-keyed Philox Monte Carlo)"
+reduction_order = "compensated weighted payoff differences in canonical state/action/signal order"
+certified_paths = "decision-card"
+test_ref = "test:fmine-numerics::voi::tests::test_mc_evsi_is_a_pure_function_of_its_key"
+cross_isa_ref = "same-ISA bit-identical (BD-141 cross-ISA not claimed for DeterministicPerIsa)"
+
+[[kernel]]
+id = "fmine-optimize.pitflow.closure"
+crate = "fmine-optimize"
+source_file = "crates/fmine-optimize/src/pitflow.rs"
+determinism_class = "BitwisePortable"
+threading = "serial"
+thread_control = "single-threaded exact integer Hochbaum pseudoflow"
+reduction_order = "i64/i128 integer flow arithmetic with independent verify() replay"
+certified_paths = "plan-certificate"
+test_ref = "test:fmine-optimize::pitflow::tests::random_small_instances_match_brute_force_and_keep_invariants"
+cross_isa_ref = "BitwisePortable exact integer (architecture-independent)"
+
+[[kernel]]
+id = "fmine-optimize.pcpsp.lagrangian"
+crate = "fmine-optimize"
+source_file = "crates/fmine-optimize/src/toposort/pcpsp/lp.rs"
+determinism_class = "BitwisePortable"
+threading = "serial"
+thread_control = "single-threaded exact integer Lagrangian replay"
+reduction_order = "fixed block/period/destination index order; i128 discounted value and bound replay"
+certified_paths = "plan-certificate"
+test_ref = "test:fmine-optimize::plan_cert::tests::test_certify_pcpsp_plan_replays_lagrangian_bound"
+cross_isa_ref = "BitwisePortable (architecture-independent)"
+
+[[kernel]]
+id = "fmine-lp.pdlp.mat_spmv_fold"
+crate = "fmine-lp"
+source_file = "crates/fmine-lp/src/pdlp/mat.rs"
+determinism_class = "DeterministicPerIsa"
+threading = "parallel_fixed_chunk"
+thread_control = "PdlpOptions.threads (0 = available_parallelism capped at 16 for nnz >= 2^17; fmine-cli pins threads=1)"
+reduction_order = "each CSR row sums in ascending-column order; reductions sum fixed CHUNK=16384 index-aligned partial sums in chunk order"
+certified_paths = "plan-certificate,advisory-lp-schedule"
+test_ref = "test:fmine-lp::pdlp::mat::tests::test_po_num_3_fixed_chunk_fold_bit_identical_and_unsafe_reduction_negative_control"
+cross_isa_ref = "same-ISA bit-identical across 1, 2, 3, 5, 8 threads (BD-141 cross-ISA not claimed for DeterministicPerIsa)"
+
+[[kernel]]
+id = "fmine-lp.pdlp.solver"
+crate = "fmine-lp"
+source_file = "crates/fmine-lp/src/pdlp.rs"
+determinism_class = "DeterministicPerIsa"
+threading = "parallel_fixed_chunk"
+thread_control = "PdlpOptions.threads (1..=16; fmine-cli schedule guidance pins threads=1)"
+reduction_order = "fixed CHUNK=16384 parallel reductions via pdlp::mat::fold; outward interval-rounded certified_bound"
+certified_paths = "plan-certificate,advisory-lp-schedule"
+test_ref = "test:fmine-lp::pdlp_oracles::any_thread_count_gives_the_same_bits"
+cross_isa_ref = "same-ISA bit-identical across 1, 2, and 5 threads (BD-141 cross-ISA not claimed for DeterministicPerIsa)"

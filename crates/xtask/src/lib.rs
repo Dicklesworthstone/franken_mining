@@ -9,6 +9,7 @@ pub mod claims;
 pub mod contracts;
 pub mod forecast;
 pub mod int_as;
+pub mod kernels;
 pub mod lifts;
 pub mod loc;
 pub mod oracle;
@@ -942,6 +943,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
         all_errors.extend(e);
     }
     if let Err(e) = check_det(root) {
+        all_errors.extend(e);
+    }
+    if let Err(e) = kernels::check_kernels(root) {
         all_errors.extend(e);
     }
     if let Err(e) = check_sources_registry(root) {

@@ -219,7 +219,7 @@ No fixture under `fixtures/` (§33.2).
 - **The Monte Carlo estimator is not nested.** Plan §22.4's general estimator is nested Monte Carlo. This one computes the posterior exactly, which only a finite problem allows (Validity domain).
 - **No caller uses the Monte Carlo estimate yet.** `fmine_decide::rank_voi_campaigns` ranks by the closed form and reports no SE or status (G-HELM-6).
 - **PO-NUM-1 holds for `lib.rs` only.** Every other module is DeterministicPerIsa, with no cross-host digest.
-- **PO-NUM-3** asks for a recorded determinism class and a thread-count test for each kernel on a certified path, kept in `registries/kernels.toml`. That registry does not exist, and no bead covers it.
+- **PO-NUM-3** (`bd-dm2z`): `registries/kernels.toml` now maps every certified-path numerical kernel to its determinism class, threading mode, reduction order, and runnable test, enforced by `xtask check-kernels` (and `xtask check-all`) so no unlisted threaded kernel in S0/K/E can qualify a certified path. Cross-ISA qualification remains bounded by BD-141's independent matrix.
 - **`sparse` has no caller yet.** Its planned consumers are WLS (bd-149), kriging parity (bd-238) and PDLP (bd-251).
 - **The registry charter names things not in the crate:** `enkf`, `gmrf` and "the array bridge".
 - **BD-340 is open (bd-4wvl).**
