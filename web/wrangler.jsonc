@@ -1,0 +1,17 @@
+{
+  "name": "frankenmining",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "frankenmining.com", "custom_domain": true },
+    { "pattern": "www.frankenmining.com", "custom_domain": true },
+  ],
+  "assets": {
+    "directory": "./out",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "404-page",
+  },
+}
