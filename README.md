@@ -110,6 +110,20 @@ on the branch where the exclusion does not apply. The worksheet shows the dated 
 unresolved inputs can narrow the recovery bounds. Treasury needs a separately confirmed payment
 amount and date for its cash forecast. [Editable synthetic worksheet](tests/capital/executive_interruption.toml)
 
+When loss changes as equipment restarts, use dated `[[loss_phase]]` rows in place of `[[loss_rate]]`.
+The rows must cover the longest admitted outage, with no gaps or overlaps. Each row gives whole-day
+offsets from occurrence (`start_day` inclusive, `end_day` exclusive), daily USD loss bounds and a
+source available by the decision date. Day and rate bounds are independent in this worksheet.
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_interruption_phases.toml --brief
+```
+
+In this synthetic restart case, days 0–2 account for US$4 million of the same US$6 million total loss.
+The two-day wait and five-day indemnity period leave only days 2–5 eligible, or **US$1.8 million**.
+After the deductible, the conditional branch with no applicable exclusion is **US$1.3 million**.
+The output shows each phase's economic and eligible amounts and its source line.
+
 ### Should we fund early works before the main approval?
 
 ```bash

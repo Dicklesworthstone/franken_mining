@@ -92,9 +92,8 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   - DESIGN (bd-3ikw, synthetic slice of BD-354). `interruption_indemnity` admits synthetic evidence and
     one insured entity and perimeter with whole, nominal USD and whole interruption days. One dated policy
     interpretation requires explicit waiting, indemnity, deductible and limit clauses. Both time
-    periods start at occurrence under this model. The admitted loss rate is constant by scenario over
-    the outage and applies equally to the policy day window. Economic and policy-eligible loss have
-    separate bounds. Apply the two monetary clauses in the declared order, with a zero floor under the
+    periods start at occurrence under this model. Economic and policy-eligible loss have separate
+    bounds. Apply the two monetary clauses in the declared order, with a zero floor under the
     deductible. Exclusions are explicitly absent or individually listed with dated states. An unresolved
     exclusion preserves the zero and otherwise payable branches. An applying exclusion restricts all
     conditional recovery to zero. The reported bounds use independent day and loss-rate intervals.
@@ -102,6 +101,11 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     branch. Terms, clause calculations and alternative branches remain visible in JSON. A confirmed
     amount and payment date are separate Treasury inputs. Real policy interpretation and historical
     loss baselines remain BD-354 work.
+  - DESIGN (bd-ijwb.1). Use one constant `loss_rate` or dated `loss_phase` rows partitioning the longest
+    admitted outage from day zero. Whole-day intervals start inclusively and end exclusively. Each
+    phase has a matching USD basis, source and independent nonnegative daily loss bounds. Sum loss over
+    the full outage and the intersection with the policy day window separately. The result preserves
+    each phase's contribution and original worksheet line before ordered monetary adjustments.
   - DESIGN (bd-9bsy, synthetic slice of BD-297). `permit_early_works` compares a separately documented
     early-work package with waiting for main approval. The declared start plus whole calendar days and
     observed pauses gives the deadline. Pauses are half-open intervals and an open pause leaves the

@@ -24,6 +24,112 @@ fn bounds(f: &Fields<'_>, low: &str, high: &str) -> Result<Bounds<i128>> {
     Ok(pair)
 }
 
+const RATE_FIELDS: [&str; 5] = [
+    "entity",
+    "perimeter",
+    "currency",
+    "usd_per_day_low",
+    "usd_per_day_high",
+];
+
+fn insured_usd(fields: &Fields<'_>, entity: &str, perimeter: &str) -> Result<()> {
+    if get(fields, "entity")? != entity
+        || get(fields, "perimeter")? != perimeter
+        || get(fields, "currency")? != "USD"
+    {
+        return Err(invalid(
+            "the interruption, loss and policy require the same insured entity and perimeter and a USD basis",
+        ));
+    }
+    Ok(())
+}
+
+struct LossPhase {
+    start: i128,
+    end: i128,
+    rate: Bounds<i128>,
+    line: usize,
+}
+
+fn usd_money(whole_usd: i128) -> Money {
+    Money::from_major(Currency::USD, whole_usd)
+}
+
+fn loss_on_days(days: i128, usd_per_day: i128) -> Result<Money> {
+    usd_money(usd_per_day)
+        .minor
+        .checked_mul(days)
+        .map(|minor| Money::from_minor(Currency::USD, minor))
+        .ok_or_else(|| invalid("interruption loss exceeds the exact monetary range"))
+}
+
+impl LossPhase {
+    fn loss(&self, start: i128, end: i128, upper: bool) -> Result<Money> {
+        let overlap = (end.min(self.end) - start.max(self.start)).max(0);
+        let rate = if upper { self.rate.high } else { self.rate.low };
+        loss_on_days(overlap, rate)
+    }
+}
+
+fn loss_schedule(
+    doc: &TomlDoc,
+    as_of: &str,
+    entity: &str,
+    perimeter: &str,
+    max_days: i128,
+) -> Result<(Vec<LossPhase>, bool)> {
+    if doc.rows_of("loss_phase").next().is_none() {
+        let row = table(doc, "loss_rate")?;
+        let fields = row_fields(row, &RATE_FIELDS, as_of)?;
+        insured_usd(&fields, entity, perimeter)?;
+        let rate = bounds(&fields, "usd_per_day_low", "usd_per_day_high")?;
+        return Ok((
+            vec![LossPhase {
+                start: 0,
+                end: max_days,
+                rate,
+                line: row.line,
+            }],
+            false,
+        ));
+    }
+    if doc.rows_of("loss_rate").next().is_some() {
+        return Err(invalid(
+            "use either one loss_rate or complete loss_phase rows",
+        ));
+    }
+    let mut fields = RATE_FIELDS.to_vec();
+    fields.extend(["start_day", "end_day"]);
+    let mut phases = Vec::new();
+    for row in doc.rows_of("loss_phase") {
+        let f = row_fields(row, &fields, as_of)?;
+        insured_usd(&f, entity, perimeter)?;
+        phases.push(LossPhase {
+            start: qty(&f, "start_day")?,
+            end: qty(&f, "end_day")?,
+            rate: bounds(&f, "usd_per_day_low", "usd_per_day_high")?,
+            line: row.line,
+        });
+    }
+    phases.sort_by_key(|phase| phase.start);
+    let mut next_day = 0;
+    for phase in &phases {
+        if phase.start != next_day || phase.end <= phase.start || phase.end > max_days {
+            return Err(invalid(format!(
+                "loss_phase at line {} must start at day {next_day} and end on a later day at most {max_days}",
+                phase.line
+            )));
+        }
+        next_day = phase.end;
+    }
+    if next_day != max_days {
+        return Err(invalid(format!(
+            "loss_phase rows end on day {next_day} and must cover the outage through day {max_days}"
+        )));
+    }
+    Ok((phases, true))
+}
+
 #[derive(Clone, Copy)]
 enum Adjustment {
     Deductible,
@@ -56,19 +162,17 @@ struct Bridge {
 }
 
 impl Terms {
-    fn bridge(self, days: i128, daily_loss: Money) -> Result<Bridge> {
-        let loss = |days| {
-            daily_loss
-                .minor
-                .checked_mul(days)
-                .map(|minor| Money::from_minor(daily_loss.ccy, minor))
-                .ok_or_else(|| invalid("interruption loss exceeds the exact monetary range"))
-        };
-        let economic = loss(days)?;
+    fn eligible_window(self, days: i128) -> (i128, i128) {
         // In this interpretation both periods run from occurrence. The floor at
-        // zero is a policy term for a loss that ends inside its waiting period.
-        let eligible_days = (days.min(self.indemnity_days) - self.waiting_days).max(0);
-        let eligible = loss(eligible_days)?;
+        // zero gives an empty window if the loss ends within the wait.
+        let end = days.min(self.indemnity_days);
+        (self.waiting_days.min(end), end)
+    }
+
+    fn bridge(self, days: i128, loss: impl Fn(i128, i128) -> Result<Money>) -> Result<Bridge> {
+        let economic = loss(0, days)?;
+        let (start, end) = self.eligible_window(days);
+        let eligible = loss(start, end)?;
         let mut adjusted = [eligible; 2];
         let mut amount = eligible;
         for (slot, action) in adjusted.iter_mut().zip(self.order) {
@@ -87,7 +191,7 @@ impl Terms {
         }
         Ok(Bridge {
             economic,
-            eligible_days,
+            eligible_days: end - start,
             eligible,
             adjusted,
         })
@@ -115,21 +219,19 @@ fn money_json(low: Money, high: Money) -> String {
 }
 
 pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
-    tables(doc, &["interruption", "loss_rate", "policy", "exclusion"])?;
+    tables(
+        doc,
+        &[
+            "interruption",
+            "loss_rate",
+            "loss_phase",
+            "policy",
+            "exclusion",
+        ],
+    )?;
     let event = row_fields(
         table(doc, "interruption")?,
         &["entity", "perimeter", "occurrence", "days_low", "days_high"],
-        as_of,
-    )?;
-    let loss = row_fields(
-        table(doc, "loss_rate")?,
-        &[
-            "entity",
-            "perimeter",
-            "currency",
-            "usd_per_day_low",
-            "usd_per_day_high",
-        ],
         as_of,
     )?;
     let policy = row_fields(
@@ -156,16 +258,7 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     )?;
     let entity = get(&event, "entity")?;
     let perimeter = get(&event, "perimeter")?;
-    for f in [&loss, &policy] {
-        if get(f, "entity")? != entity
-            || get(f, "perimeter")? != perimeter
-            || get(f, "currency")? != "USD"
-        {
-            return Err(invalid(
-                "the interruption, loss and policy require the same insured entity and perimeter and a USD basis",
-            ));
-        }
-    }
+    insured_usd(&policy, entity, perimeter)?;
     let occurrence = date(&event, "occurrence")?;
     if occurrence > as_of || get(&policy, "day_basis")? != "both_from_occurrence" {
         return Err(invalid(
@@ -183,15 +276,12 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         }
     };
     let days = bounds(&event, "days_low", "days_high")?;
-    let loss_rate = bounds(&loss, "usd_per_day_low", "usd_per_day_high")?;
-    // qty() admits nonnegative i64 values widened to i128. Whole USD convert
-    // exactly to Money before multiplication by the independently bounded days.
-    let money = |usd| Money::from_major(Currency::USD, usd);
+    let (phases, phased) = loss_schedule(doc, as_of, entity, perimeter, days.high)?;
     let terms = Terms {
         waiting_days: qty(&policy, "waiting_days")?,
         indemnity_days: qty(&policy, "indemnity_days")?,
-        deductible: money(qty(&policy, "deductible_usd")?),
-        limit: money(qty(&policy, "limit_usd")?),
+        deductible: usd_money(qty(&policy, "deductible_usd")?),
+        limit: usd_money(qty(&policy, "limit_usd")?),
         order: adjustments,
     };
     let mut exclusions = BTreeMap::new();
@@ -222,10 +312,21 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         .any(|(status, _)| *status == "unresolved");
     let version = get(&policy, "version")?;
 
-    let low = terms.bridge(days.low, money(loss_rate.low))?;
-    let high = terms.bridge(days.high, money(loss_rate.high))?;
-    let later_low = terms.bridge(days.high, money(loss_rate.low))?.adjusted[1];
-    let sooner_high = terms.bridge(days.low, money(loss_rate.high))?.adjusted[1];
+    // Day and rate bounds are independent. Each loss is nonnegative, so the
+    // endpoint duration and rate vectors give exact extrema before and after clauses.
+    let evaluate = |days, upper| {
+        terms.bridge(days, |start, end| {
+            phases.iter().try_fold(usd_money(0), |total, phase| {
+                total
+                    .checked_add(phase.loss(start, end, upper)?)
+                    .map_err(|_| invalid("interruption loss exceeds the exact monetary range"))
+            })
+        })
+    };
+    let low = evaluate(days.low, false)?;
+    let high = evaluate(days.high, true)?;
+    let later_low = evaluate(days.high, false)?.adjusted[1];
+    let sooner_high = evaluate(days.low, true)?.adjusted[1];
     let (adjusted_low, adjusted_high) = (low.adjusted[1], high.adjusted[1]);
     let duration_matters = !blocked && (later_low != adjusted_low || sooner_high != adjusted_high);
     let rate_matters = !blocked && (sooner_high != adjusted_low || later_low != adjusted_high);
@@ -250,7 +351,12 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         vec![
             "Economic loss".into(),
             usd(low.economic, high.economic),
-            "Outage days × submitted daily loss".into(),
+            if phased {
+                "Sum over the admitted outage days"
+            } else {
+                "Outage days × submitted daily loss"
+            }
+            .into(),
         ],
         vec![
             "Policy-eligible loss".into(),
@@ -272,12 +378,49 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         let (amount, note) = add_branch(
             "exclusion_applies",
             "A listed exclusion applies",
-            money(0),
-            money(0),
+            usd_money(0),
+            usd_money(0),
         );
         card.rows
             .push(vec!["Conditional recovery".into(), amount, note]);
     }
+
+    let loss_details = if phased {
+        let (low_start, low_end) = terms.eligible_window(days.low);
+        let (high_start, high_end) = terms.eligible_window(days.high);
+        let mut rows = Vec::with_capacity(phases.len());
+        for phase in &phases {
+            let economic_low = phase.loss(0, days.low, false)?;
+            let economic_high = phase.loss(0, days.high, true)?;
+            let eligible_low = phase.loss(low_start, low_end, false)?;
+            let eligible_high = phase.loss(high_start, high_end, true)?;
+            card.rows.push(vec![
+                format!("Outage days [{}, {})", phase.start, phase.end),
+                usd(economic_low, economic_high),
+                format!(
+                    "{} policy-eligible before monetary adjustments · worksheet line {}",
+                    usd(eligible_low, eligible_high),
+                    phase.line
+                ),
+            ]);
+            rows.push(format!(
+                r#"{{"start_day":"{}","end_day":"{}","source_line":{},"daily_loss_usd":{},"economic_loss_usd":{},"policy_eligible_loss_usd":{}}}"#,
+                phase.start,
+                phase.end,
+                phase.line,
+                json(phase.rate.low, phase.rate.high),
+                money_json(economic_low, economic_high),
+                money_json(eligible_low, eligible_high),
+            ));
+        }
+        format!(r#""loss_phases":[{}]"#, rows.join(","))
+    } else {
+        let rate = phases
+            .first()
+            .ok_or_else(|| invalid("loss_rate is absent"))?
+            .rate;
+        format!(r#""daily_loss_usd":{}"#, json(rate.low, rate.high))
+    };
 
     let deductible = format!("{} deductible", dollars(whole(terms.deductible)));
     let limit = format!("{} limit", dollars(whole(terms.limit)));
@@ -348,7 +491,7 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     card.detail = Some((
         "indemnity",
         format!(
-            r#"{{"entity":{},"perimeter":{},"currency":"USD","occurrence":{},"terms_version":{},"interpretation_role":{},"order":{},"outage_days":{},"daily_loss_usd":{},"economic_loss_usd":{},"policy_eligible_loss_usd":{},"eligible_days":{},"day_terms":{{"basis":"both_from_occurrence","indemnity_days":"{}","indemnity_clause":{},"waiting_days":"{}","waiting_clause":{}}},"monetary_steps":[{}],"conditional_recovery":[{}],"exclusions":[{exclusion_rows}],"bound_drivers":{{"duration":{duration_matters},"daily_loss":{rate_matters},"exclusions":{exclusion_matters}}}}}"#,
+            r#"{{"entity":{},"perimeter":{},"currency":"USD","occurrence":{},"terms_version":{},"interpretation_role":{},"order":{},"outage_days":{},{loss_details},"economic_loss_usd":{},"policy_eligible_loss_usd":{},"eligible_days":{},"day_terms":{{"basis":"both_from_occurrence","indemnity_days":"{}","indemnity_clause":{},"waiting_days":"{}","waiting_clause":{}}},"monetary_steps":[{}],"conditional_recovery":[{}],"exclusions":[{exclusion_rows}],"bound_drivers":{{"duration":{duration_matters},"daily_loss":{rate_matters},"exclusions":{exclusion_matters}}}}}"#,
             js(entity),
             js(perimeter),
             js(occurrence),
@@ -356,7 +499,6 @@ pub(super) fn evaluate(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             js(get(&policy, "interpretation_role")?),
             js(order),
             json(days.low, days.high),
-            json(loss_rate.low, loss_rate.high),
             money_json(low.economic, high.economic),
             money_json(low.eligible, high.eligible),
             json(low.eligible_days, high.eligible_days),
@@ -381,6 +523,8 @@ mod tests {
     use std::path::Path;
 
     const EVENT: &str = include_str!("../../../../../tests/capital/executive_interruption.toml");
+    const PHASED: &str =
+        include_str!("../../../../../tests/capital/executive_interruption_phases.toml");
 
     fn run(text: &str) -> Result<Json> {
         let doc = parse_subset(text).expect("valid synthetic TOML");
@@ -577,7 +721,9 @@ mod tests {
                             };
                             let mut previous = 0;
                             for days in 0..=8 {
-                                let result = terms.bridge(days, money(3)).expect("bounded domain");
+                                let result = terms
+                                    .bridge(days, |start, end| loss_on_days(end - start, 3))
+                                    .expect("bounded domain");
                                 let amount = result.adjusted[1].minor;
                                 assert!(
                                     amount >= previous
@@ -591,6 +737,120 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn phased_bounds_match_independent_day_sums_for_each_clause_order() {
+        let varied = PHASED
+            .replace("days_low = \"6\"", "days_low = \"3\"")
+            .replace(
+                "usd_per_day_low = \"2000000\"",
+                "usd_per_day_low = \"1800000\"",
+            )
+            .replace(
+                "usd_per_day_low = \"600000\"",
+                "usd_per_day_low = \"500000\"",
+            )
+            .replace(
+                "usd_per_day_low = \"200000\"",
+                "usd_per_day_low = \"100000\"",
+            )
+            .replace("limit_usd = \"3000000\"", "limit_usd = \"1000000\"");
+        for order in ["deductible_then_limit", "limit_then_deductible"] {
+            let input = varied.replace("deductible_then_limit", order);
+            let payload = run(&input).expect("admitted loss bands");
+            let result = at(&payload, &["indemnity"]);
+            let mut outcomes = Vec::new();
+            for days in 3..=6 {
+                for shutdown in [1_800_000_i64, 2_000_000] {
+                    for restart in [500_000, 600_000] {
+                        for ramp in [100_000, 200_000] {
+                            let daily = [shutdown, shutdown, restart, restart, restart, ramp];
+                            let economic = daily[..days].iter().sum::<i64>();
+                            let eligible = daily[2..days.min(5)].iter().sum::<i64>();
+                            let paid = if order == "deductible_then_limit" {
+                                (eligible - 500_000).clamp(0, 1_000_000)
+                            } else {
+                                (eligible.min(1_000_000) - 500_000).max(0)
+                            };
+                            outcomes.push([economic, eligible, paid]);
+                        }
+                    }
+                }
+            }
+            let branches = at(result, &["conditional_recovery"])
+                .as_array()
+                .expect("branches");
+            assert_eq!(at(&branches[1], &["usd", "upper"]).as_str(), Some("0"));
+            for (i, bound) in [
+                at(result, &["economic_loss_usd"]),
+                at(result, &["policy_eligible_loss_usd"]),
+                at(&branches[0], &["usd"]),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let minimum = outcomes.iter().map(|outcome| outcome[i]).min().unwrap();
+                let maximum = outcomes.iter().map(|outcome| outcome[i]).max().unwrap();
+                assert_eq!(
+                    at(bound, &["lower"]).as_str(),
+                    Some(minimum.to_string().as_str())
+                );
+                assert_eq!(
+                    at(bound, &["upper"]).as_str(),
+                    Some(maximum.to_string().as_str())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn phased_losses_require_continuous_chronology_and_admitted_source_basis() {
+        let (_, flat) = EVENT.split_once("[[loss_rate]]").unwrap();
+        let (rate, _) = flat.split_once("[[policy]]").unwrap();
+        let mixed = format!("{PHASED}\n[[loss_rate]]{rate}");
+        for (input, expected) in [
+            (mixed, "either one loss_rate"),
+            (
+                PHASED.replace("start_day = \"2\"", "start_day = \"3\""),
+                "must start at day 2",
+            ),
+            (
+                PHASED.replace("start_day = \"2\"", "start_day = \"1\""),
+                "must start at day 2",
+            ),
+            (
+                PHASED.replace("end_day = \"5\"", "end_day = \"2\""),
+                "end on a later day",
+            ),
+            (
+                PHASED.replace("days_high = \"6\"", "days_high = \"7\""),
+                "must cover the outage through day 7",
+            ),
+            (
+                PHASED.replace("end_day = \"6\"", "end_day = \"7\""),
+                "at most 6",
+            ),
+            (
+                PHASED.replacen("currency = \"USD\"", "currency = \"CAD\"", 1),
+                "USD basis",
+            ),
+            (
+                PHASED.replacen(
+                    "[[loss_phase]]\nentity = \"North Range Copper\"",
+                    "[[loss_phase]]\nentity = \"Other entity\"",
+                    1,
+                ),
+                "same insured entity",
+            ),
+            (
+                PHASED.replacen("2030-06-09", "2030-06-11", 1),
+                "source was unavailable",
+            ),
+        ] {
+            let refused = run(&input).expect_err("invalid phased loss");
+            assert!(refused.what.contains(expected), "{}", refused.what);
         }
     }
 }

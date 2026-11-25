@@ -331,6 +331,73 @@ fn interruption_card_preserves_the_loss_bridge_and_both_exclusion_outcomes() {
 }
 
 #[test]
+fn interruption_phases_show_which_loss_fell_inside_the_policy_window() {
+    let c = card("interruption_phases");
+    assert_eq!(row(&c, "Economic loss")[1], "US$6,000,000");
+    assert_eq!(row(&c, "Policy-eligible loss")[1], "US$1,800,000");
+    let b = c.get("indemnity").expect("bridge");
+    let phases = b
+        .get("loss_phases")
+        .and_then(Json::as_array)
+        .expect("phase list");
+    assert_eq!(phases.len(), 3);
+    for (phase, (day, economic, eligible, label)) in phases.iter().zip([
+        ("0", "4000000", "0", "full shutdown"),
+        ("2", "1800000", "1800000", "partial restart"),
+        ("5", "200000", "0", "final ramp"),
+    ]) {
+        assert_eq!(phase.get("start_day").and_then(Json::as_str), Some(day));
+        for (field, value) in [
+            ("economic_loss_usd", economic),
+            ("policy_eligible_loss_usd", eligible),
+        ] {
+            let amount = phase.get(field).expect("phase amount");
+            assert_eq!(amount.get("lower").and_then(Json::as_str), Some(value));
+            assert_eq!(amount.get("upper").and_then(Json::as_str), Some(value));
+        }
+        let source_line = phase
+            .get("source_line")
+            .and_then(Json::u64)
+            .expect("source line") as usize;
+        let worksheet = c.get("worksheet").and_then(Json::as_str).unwrap();
+        let source = worksheet
+            .lines()
+            .skip(source_line - 1)
+            .take(10)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(source.starts_with("[[loss_phase]]") && source.contains(label));
+    }
+    let branches = b
+        .get("conditional_recovery")
+        .and_then(Json::as_array)
+        .expect("branches");
+    assert_eq!(branches.len(), 2);
+    for (branch, upper) in branches.iter().zip(["1300000", "0"]) {
+        assert_eq!(
+            branch
+                .get("usd")
+                .and_then(|v| v.get("upper"))
+                .and_then(Json::as_str),
+            Some(upper)
+        );
+    }
+    let printed = String::from_utf8(run("interruption_phases", true).stdout).expect("Markdown");
+    assert!(printed.lines().any(|line| line.starts_with(
+        r"| Outage days \[2, 5) | US$1,800,000 | US$1,800,000 policy-eligible before monetary adjustments"
+    )));
+    let json = run("interruption_phases", false).stdout;
+    assert_eq!(json, run("interruption_phases", false).stdout);
+    let envelope = parse(&json).expect("full envelope");
+    assert_eq!(
+        envelope
+            .get("flags")
+            .and_then(|flags| flags.get("execution_authorized")),
+        Some(&Json::Bool(false))
+    );
+}
+
+#[test]
 fn early_works_values_both_paths_when_elapsed_clock_still_requires_confirmation() {
     let payload = card("permit");
     let permit = payload.get("permit_gate").expect("permit");
