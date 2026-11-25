@@ -15,8 +15,7 @@ use fmine_public::{Lane, assess, load_registered_sources};
 use crate::guidance::{number, text};
 use crate::{Envelope, NextAction, json_string as js};
 
-pub const USAGE: &str =
-    "metrics waterfall --issuer <issuer> --from YYYYQn --to YYYYQn [--site <subject>] [--metric aisc|tcc]";
+pub const USAGE: &str = "metrics waterfall --issuer <issuer> --from YYYYQn --to YYYYQn [--site <subject>] [--metric aisc|tcc]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -290,14 +289,7 @@ mod tests {
 
     #[test]
     fn cost_metric_selection_is_explicit_and_defaults_to_aisc() {
-        let base = args(&[
-            "--issuer",
-            "barrick",
-            "--from",
-            "2030Q4",
-            "--to",
-            "2031Q1",
-        ]);
+        let base = args(&["--issuer", "barrick", "--from", "2030Q4", "--to", "2031Q1"]);
         let default = parse(&base).unwrap();
         for (name, metric) in [
             ("aisc", WaterfallMetric::Aisc),

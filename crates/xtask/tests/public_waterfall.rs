@@ -15,8 +15,8 @@ use fmine_numerics::exact_feas::Rat;
 use fmine_public::key::{Period, PeriodKind, parse_period_code};
 use fmine_public::sources::{IssuerProfile, RegisteredShare, SourceKind, load_issuer_profile};
 use fmine_public::waterfall::{
-    BarPoint, Bridge, PairOutcome, WaterfallMetric, WaterfallReport, pair_sites, pair_sites_between,
-    pair_sites_between_for_metric,
+    BarPoint, Bridge, PairOutcome, WaterfallMetric, WaterfallReport, pair_sites,
+    pair_sites_between, pair_sites_between_for_metric,
 };
 use fmine_public::{
     Lane, LoadedSource, PublicAssuranceReport, assess, load_registered_sources, synthetic,
@@ -427,7 +427,10 @@ fn tcc_waterfall_ignores_unselected_sustaining_and_printed_rate_failures() {
         });
         let report = assess(&profile, Lane::Synthetic, sources);
         if matches!(cell, "C7" | "C8") {
-            assert!(site(&report.waterfall, "Lmdi Site").outcome.is_err(), "{cell}");
+            assert!(
+                site(&report.waterfall, "Lmdi Site").outcome.is_err(),
+                "{cell}"
+            );
         }
         let tcc = selected_metric(&profile, &report, WaterfallMetric::TotalCashCost);
         let before = bridge(&original, "Lmdi Site");
@@ -481,7 +484,16 @@ fn tcc_waterfall_moves_with_reconciled_first_block_source_values() {
     // Original TCC is 1000 USD/oz; the revised source gives 1000 * 90/60 = 1500.
     assert_eq!(result.gap().total_delta, Rat::from_integer(500));
     assert_eq!(result.gap().printed_rate_gap, Rat::from_integer(0));
-    assert!((result.bars().iter().map(|bar| bar.point.as_f64()).sum::<f64>() - 500.0).abs() < 1e-9);
+    assert!(
+        (result
+            .bars()
+            .iter()
+            .map(|bar| bar.point.as_f64())
+            .sum::<f64>()
+            - 500.0)
+            .abs()
+            < 1e-9
+    );
     assert_ne!(original.digest(), changed.digest());
 }
 
@@ -839,7 +851,12 @@ fn explicit_waterfall_cli_reads_registered_workbooks_and_preserves_citations() {
     assert!(tcc.payload_json.contains("\"metric\":\"tcc\""));
     assert!(tcc.payload_json.contains("\"kind\":\"lmdi\""));
     assert!(tcc.payload_json.contains("\"exact\":\"250\""));
-    assert!(tcc.rendered_markdown.as_ref().unwrap().contains("# Quarterly TCC cost bridge"));
+    assert!(
+        tcc.rendered_markdown
+            .as_ref()
+            .unwrap()
+            .contains("# Quarterly TCC cost bridge")
+    );
     let tcc_citation = format!(r"2030\_aisc.xlsx:Q2 2030!B11; SHA-256 {original_hash}.");
     assert!(
         tcc.rendered_markdown
@@ -848,7 +865,10 @@ fn explicit_waterfall_cli_reads_registered_workbooks_and_preserves_citations() {
             .lines()
             .any(|line| line.starts_with("- Source Claim ") && line.ends_with(&tcc_citation))
     );
-    assert_eq!(tcc.to_json(), fmine_cli::invoke(&tcc_args, &root).0.to_json());
+    assert_eq!(
+        tcc.to_json(),
+        fmine_cli::invoke(&tcc_args, &root).0.to_json()
+    );
     std::fs::write(root.join("corpus/2030_aisc.xlsx"), b"altered source").unwrap();
     let (refused, _) = fmine_cli::invoke(&args, &root);
     assert_eq!(refused.exit_code, 8, "{}", refused.to_json());
