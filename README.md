@@ -1158,6 +1158,26 @@ derived from prices, costs or recoveries, and the result supplies no reserve cla
 The integration tests independently enumerate all closed sets for 24 small authored OMF models, check
 source perturbations and signed rounding, and exercise the built executable; these are synthetic checks.
 
+### Share an ultimate-pit certificate
+
+Both `plan pit` forms accept `--certificate-currency CODE --certificate-horizon strategic`
+as a pair. Choose `strategic`, `tactical` or `short_term` and use the currency already represented
+by the block values. The command makes no currency conversions.
+
+```bash
+fmine plan pit --upit model.upit --prec model.prec --decimals 2 \
+  --certificate-currency USD --certificate-horizon strategic --json \
+  | jq -er '.payload.plan_certificate.bytes_hex' | xxd -r -p > pit.plancert
+fmine-verify plancert pit.plancert --inputs-dir .
+```
+
+Share the original files using their workspace-relative paths and keep the JSON report with the
+certificate for the selectors, slope and rounding declarations. The MineLib certificate binds
+the UPIT/PREC pair and any supplied candidate. The OMF certificate binds the archive. The producer
+rechecks the flow proof for the scaled closure model before it seals the exact objective and its
+zero optimization gap. The offline verifier checks the sealed frame and, with `--inputs-dir`,
+rehashes the input files. Sampling error, VSS and calibration remain unmeasured.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

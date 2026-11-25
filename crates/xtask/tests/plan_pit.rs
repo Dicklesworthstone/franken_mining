@@ -10,7 +10,15 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_cli::{Envelope, OutputFormat, invoke};
-use fmine_core::hash::sha256;
+use fmine_core::{
+    cert::InputDigest,
+    hash::sha256,
+    plan_cert::{BoundKind, PlanCertificate, PlanColor, PlanHorizon},
+};
+use fmine_io::{
+    forecast::decode_hex_field,
+    omf::json::{Json, parse},
+};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -354,6 +362,99 @@ fn plan_pit_binds_its_sources_and_matches_the_binary() {
             format!("{expected}\n")
         );
     }
+}
+
+#[test]
+fn minelib_pit_exports_the_checked_optimum_and_all_source_digests() {
+    let root = root();
+    let upit = upit(&args(&["-1.50", "3.25", "0.01"]));
+    let prec = prec(&[vec![], vec![0], vec![]]);
+    let candidate = "0\n";
+    fs::write(root.join("pit.upit"), &upit).unwrap();
+    fs::write(root.join("pit.prec"), &prec).unwrap();
+    fs::write(root.join("candidate.txt"), candidate).unwrap();
+    let run = |extra: &[&str]| {
+        Command::new(binary())
+            .current_dir(&root)
+            .args([
+                "plan",
+                "pit",
+                "--upit",
+                "pit.upit",
+                "--prec",
+                "pit.prec",
+                "--decimals",
+                "2",
+                "--candidate",
+                "candidate.txt",
+                "--json",
+            ])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let flags = [
+        "--certificate-currency",
+        "CAD",
+        "--certificate-horizon",
+        "strategic",
+    ];
+    let baseline = run(&[]);
+    let result = run(&flags);
+    assert!(baseline.status.success() && result.status.success());
+    assert_eq!(result.stdout, run(&flags).stdout);
+    let report = parse(&result.stdout).unwrap();
+    let payload = report.get("payload").unwrap();
+    let mut ordinary_fields = payload.as_object().unwrap().to_vec();
+    ordinary_fields.retain(|(key, _)| key != "plan_certificate");
+    assert_eq!(
+        &Json::Object(ordinary_fields),
+        parse(&baseline.stdout).unwrap().get("payload").unwrap()
+    );
+    let preview = payload.get("plan_certificate").unwrap();
+    assert_eq!(
+        preview.get("format").and_then(Json::as_str),
+        Some("FMT-PCERT-1")
+    );
+    let bytes = decode_hex_field(preview.get("bytes_hex").unwrap().as_str().unwrap()).unwrap();
+    let cert = PlanCertificate::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        preview.get("digest").unwrap().as_str().unwrap(),
+        cert.certificate_digest.to_hex()
+    );
+    assert_eq!(cert.plan_id, "synthetic");
+    assert_eq!(cert.horizon, PlanHorizon::Strategic);
+    assert_eq!(cert.currency_code, "CAD");
+    assert_eq!(cert.color, PlanColor::Estimated);
+    assert!(cert.saa.is_none() && cert.vss.is_none());
+    assert_eq!(
+        (cert.primal_scaled, cert.value_scale_denominator),
+        (176, 100)
+    );
+    assert_eq!(cert.opt_gap_numerator, Some(0));
+    let bound = cert.bound.unwrap();
+    assert_eq!(bound.kind, BoundKind::ClosureExact);
+    assert_eq!((bound.lower_scaled, bound.upper_scaled), (176, 176));
+    assert_eq!(
+        cert.inputs,
+        [
+            InputDigest::new("candidate", "candidate.txt", sha256(candidate.as_bytes())),
+            InputDigest::new("precedence", "pit.prec", sha256(prec.as_bytes())),
+            InputDigest::new("upit", "pit.upit", sha256(upit.as_bytes())),
+        ]
+    );
+    assert_eq!(run(&flags[..2]).status.code(), Some(2));
+    assert_eq!(
+        run(&[
+            "--certificate-currency",
+            "cad",
+            "--certificate-horizon",
+            "strategic"
+        ])
+        .status
+        .code(),
+        Some(2)
+    );
 }
 
 #[test]

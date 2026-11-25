@@ -4,7 +4,10 @@
 
 use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_optimize::pitflow::slope::{SlopeTable, SlopeTangent};
+use fmine_optimize::pitflow::{
+    self, ClosureProblem, PitSolution,
+    slope::{SlopeTable, SlopeTangent},
+};
 
 pub const MAX_BYTES: u64 = 1024 * 1024 * 1024;
 pub const NO_CLAIM: &str = "The maximum-value closed set for the OMF adapter's scaled integer block values and the declared uniform finite-depth slope cones. The certificate covers that integer model only; no optimum for the unrounded attribute, geological validity, approved slope, reserve, schedule, mine plan or execution authorization is supplied.";
@@ -25,6 +28,13 @@ pub struct PitSpec {
 pub struct Report {
     pub json: String,
     pub markdown: String,
+}
+
+/// Exact scaled closure problem and checked solver output behind an ultimate-pit report.
+pub struct PitWitness {
+    pub model_name: String,
+    pub problem: ClosureProblem,
+    pub solution: PitSolution,
 }
 
 pub(crate) fn escape_json(s: &str) -> String {
@@ -61,6 +71,19 @@ pub fn evaluate(
     input: &PitSpec,
     list_blocks: bool,
 ) -> Result<Report, Refusal> {
+    evaluate_with_witness(bytes, source, input, list_blocks).map(|(report, _)| report)
+}
+
+/// Solve the OMF pit and retain the scaled problem and witness used by the report.
+///
+/// # Errors
+/// Refuses oversized or incorrectly bound bytes, unsupported model declarations and failed pit certificates.
+pub fn evaluate_with_witness(
+    bytes: &[u8],
+    source: &SourceAnchor,
+    input: &PitSpec,
+    list_blocks: bool,
+) -> Result<(Report, PitWitness), Refusal> {
     if bytes.len() as u64 > MAX_BYTES || sha256(bytes).0 != source.artifact_sha256 {
         return Err(Refusal::new(
             RefusalCode::InputMissingOrUnreadable506,
@@ -91,9 +114,10 @@ pub fn evaluate(
     )
     .map_err(&bind_refusal)?;
     // The admitted adapter constructs the problem; solve verifies its final flow certificate before return.
-    let pit = model
-        .ultimate_pit(&input.value_attribute, input.per_unit)
+    let problem = model
+        .closure_problem(&input.value_attribute, input.per_unit)
         .map_err(&bind_refusal)?;
+    let pit = pitflow::solve(&problem).map_err(&bind_refusal)?;
     let stats = pit.stats();
     let mut payload = format!(
         "{{\"schema\":\"fmine.plan-pit.omf.v1\",\"model\":{{\"format\":\"omf2\",\"name\":\"{}\",\"source\":{},\"block_model\":\"{}\",\"value_attribute\":\"{}\",\"value_units\":\"{}\",\"coordinate_reference_system\":\"{}\",\"length_units\":\"{}\"}},\"blocks\":{},\"arcs\":{},\"slope\":{{\"kind\":\"uniform\",\"rise\":{},\"run\":{},\"levels\":{}}},\"rounding\":\"nearest_integer_half_away_from_zero\",\"per_unit\":{},\"scaled_value\":\"{}\",\"value\":\"{}/{}\",\"raw_attribute_optimality_bound\":null,\"pit_blocks\":{},\"block_order\":\"omf_u_then_v_then_w_bottom_up\",\"certificate\":{{\"verified\":true,\"method\":\"pseudoflow final arc flows; pit closed, no flow enters it, excess non-negative inside and non-positive outside\"}},\"solver\":{{\"mergers\":{},\"splits\":{},\"relabels\":{},\"max_label\":{}}}",
@@ -145,8 +169,15 @@ pub fn evaluate(
         input.slope_run,
         input.slope_levels,
     );
-    Ok(Report {
-        json: payload,
-        markdown,
-    })
+    Ok((
+        Report {
+            json: payload,
+            markdown,
+        },
+        PitWitness {
+            model_name: input.block_model.clone(),
+            problem,
+            solution: pit,
+        },
+    ))
 }

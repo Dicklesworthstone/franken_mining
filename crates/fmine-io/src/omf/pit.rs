@@ -447,12 +447,19 @@ impl<'p> PitModel<'p> {
     /// # Errors
     /// Those of [`PitModel::weights`], `ClosureProblem::new` and `pitflow::solve`.
     pub fn ultimate_pit(&self, attribute: &str, per_unit: u32) -> Result<PitSolution, Refusal> {
-        let problem = ClosureProblem::new(
+        solve(&self.closure_problem(attribute, per_unit)?)
+    }
+
+    pub(super) fn closure_problem(
+        &self,
+        attribute: &str,
+        per_unit: u32,
+    ) -> Result<ClosureProblem, Refusal> {
+        ClosureProblem::new(
             self.weights(attribute, per_unit)?,
             self.offsets.clone(),
             self.targets.clone(),
-        )?;
-        solve(&problem)
+        )
     }
 
     /// Certified nested shells, one per revenue factor, for the revenue and cost in the attributes `revenue` and

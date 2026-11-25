@@ -10,7 +10,12 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_cli::{Envelope, OutputFormat, invoke};
-use fmine_core::hash::sha256;
+use fmine_core::{
+    cert::InputDigest,
+    hash::sha256,
+    plan_cert::{BoundKind, PlanCertificate},
+};
+use fmine_io::{forecast::decode_hex_field, omf::json::parse};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -274,6 +279,53 @@ fn brute_force(
         .max()
         .unwrap();
     (value, required)
+}
+
+#[test]
+fn omf_pit_certificate_binds_the_scaled_model_and_original_archive() {
+    let root = root();
+    let archive = fixture(&root, [5, 1, 3], &section(9.25), "");
+    let certified = |rise| {
+        let mut call = args(rise, 1, 2);
+        call.extend(
+            [
+                "--certificate-currency",
+                "USD",
+                "--certificate-horizon",
+                "strategic",
+            ]
+            .map(str::to_owned),
+        );
+        let report = run(&root, &call);
+        assert_eq!(report.exit_code, 0, "{}", report.to_json());
+        let payload = parse(report.payload_json.as_bytes()).unwrap();
+        let preview = payload.get("plan_certificate").unwrap();
+        let bytes = decode_hex_field(preview.get("bytes_hex").unwrap().as_str().unwrap()).unwrap();
+        let cert = PlanCertificate::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            preview.get("digest").unwrap().as_str().unwrap(),
+            cert.certificate_digest.to_hex()
+        );
+        assert_eq!(cert.primal_scaled, i128::from(value(&report.to_json())));
+        cert
+    };
+    let cert = certified(1);
+    assert_eq!(cert.plan_id, "section");
+    assert_eq!((cert.primal_scaled, cert.value_scale_denominator), (5, 4));
+    assert_eq!(cert.opt_gap_numerator, Some(0));
+    let bound = cert.bound.as_ref().unwrap();
+    assert_eq!(bound.kind, BoundKind::ClosureExact);
+    assert_eq!((bound.lower_scaled, bound.upper_scaled), (5, 5));
+    assert_eq!(
+        cert.inputs,
+        [InputDigest::new("omf", "section.omf", sha256(&archive))]
+    );
+    let steeper = certified(2);
+    // Half a block of reach per level admits one middle and three top waste blocks.
+    assert_eq!(steeper.primal_scaled, 21);
+    assert_eq!(cert.inputs, steeper.inputs);
+    assert_ne!(cert.model_digest, steeper.model_digest);
+    assert_ne!(cert.certificate_digest, steeper.certificate_digest);
 }
 
 #[test]

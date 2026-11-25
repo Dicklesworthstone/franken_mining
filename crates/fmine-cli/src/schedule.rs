@@ -2,24 +2,22 @@
 //! Determinism: DeterministicPerIsa
 //! The model, candidate, scales and discount factors are explicit.
 
-use crate::{Envelope, NextAction, escape_json, worksheet_input};
-use fmine_core::{
-    Digest32,
-    anchor::SourceAnchor,
-    cert::InputDigest,
-    plan_cert::{PlanCalibrationStatus, PlanHorizon},
+use crate::{
+    Envelope, NextAction, escape_json,
+    plan_certificate::{self, CertificateBasis},
+    worksheet_input,
 };
-use fmine_evidence::{Refusal, RefusalCode};
+use fmine_evidence::Refusal;
 use fmine_optimize::{
     pitflow::minelib::Rounding,
-    plan_cert::{PlanCertMetadata, certify_pcpsp_plan},
+    plan_cert::certify_pcpsp_plan,
     toposort::{
         pcpsp::{self, candidate, planning},
         search::DISCOUNT_SCALE,
     },
 };
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 mod guidance;
 pub mod omf;
@@ -58,12 +56,6 @@ pub struct Command {
     pub list_schedule: bool,
     pub lp_iterations: Option<usize>,
     certificate: Option<CertificateBasis>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CertificateBasis {
-    currency_code: String,
-    horizon: PlanHorizon,
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -126,25 +118,11 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     if fields.contains_key("--lp-iterations") && !fields.contains_key("--lp-guidance") {
         return Err("plan schedule: --lp-iterations requires --lp-guidance".into());
     }
-    let certificate = match (
-        fields.get("--certificate-currency"),
-        fields.get("--certificate-horizon"),
-    ) {
-        (None, None) => None,
-        (Some(&code), Some(&horizon)) => {
-            if code.len() != 3 || !code.bytes().all(|b| b.is_ascii_uppercase()) {
-                return Err("plan schedule: certificate currency must be a three-letter uppercase code".into());
-            }
-            let horizon = match horizon {
-                "strategic" => PlanHorizon::Strategic,
-                "tactical" => PlanHorizon::Tactical,
-                "short_term" => PlanHorizon::ShortTerm,
-                _ => return Err("plan schedule: certificate horizon must be strategic, tactical or short_term".into()),
-            };
-            Some(CertificateBasis { currency_code: code.into(), horizon })
-        }
-        _ => return Err("plan schedule: --certificate-currency and --certificate-horizon must be supplied together".into()),
-    };
+    let certificate = CertificateBasis::parse(
+        "plan schedule",
+        fields.get("--certificate-currency").copied(),
+        fields.get("--certificate-horizon").copied(),
+    )?;
     Ok(Command {
         pcpsp: path("--pcpsp")?,
         prec: path("--prec")?,
@@ -171,31 +149,6 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             .transpose()?,
         certificate,
     })
-}
-
-fn certificate_input(
-    root: &Path,
-    role: &str,
-    source: &SourceAnchor,
-) -> Result<InputDigest, Refusal> {
-    let path = Path::new(&source.artifact_path)
-        .strip_prefix(root)
-        .ok()
-        .filter(|p| {
-            !p.as_os_str().is_empty() && p.components().all(|c| matches!(c, Component::Normal(_)))
-        })
-        .and_then(Path::to_str)
-        .ok_or_else(|| {
-            Refusal::new(
-                RefusalCode::InputMissingOrUnreadable506,
-                format!("PCPSP certificate {role} needs a workspace-relative input locator"),
-            )
-        })?;
-    Ok(InputDigest::new(
-        role,
-        path,
-        Digest32(source.artifact_sha256),
-    ))
 }
 
 fn integers<T: std::fmt::Display>(values: &[T]) -> String {
@@ -375,26 +328,15 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             .certificate
             .as_ref()
             .map(|basis| {
-                let mut inputs = vec![
-                    certificate_input(root, "pcpsp", &source)?,
-                    certificate_input(root, "precedence", &prec_source)?,
-                ];
-                if let Some((_, source, _)) = &outside {
-                    inputs.push(certificate_input(root, "candidate", source)?);
-                }
-                Ok::<_, Refusal>(PlanCertMetadata {
-                    plan_id: model.name.clone(),
-                    horizon: basis.horizon,
-                    code_revision: env!("FMINE_BUILD_REVISION").into(),
-                    opt_set_id: "declared-pcpsp".into(),
-                    currency_code: basis.currency_code.clone(),
-                    value_scale_denominator: 10_u128.pow(command.decimals),
-                    saa: None,
-                    vss: None,
-                    calibration: PlanCalibrationStatus::Uncalibrated,
-                    inputs,
-                    extra_refusal_codes: Vec::new(),
-                })
+                basis.metadata(
+                    &model.name,
+                    "declared-pcpsp",
+                    10_u128.pow(command.decimals),
+                    root,
+                    [("pcpsp", &source), ("precedence", &prec_source)]
+                        .into_iter()
+                        .chain(outside.as_ref().map(|(_, source, _)| ("candidate", source))),
+                )
             })
             .transpose()?;
         let guided = command
@@ -435,22 +377,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         let (insertion_json, insertion_markdown) = fractional_insertion_report(&plan, denominator);
         let (joint_json, joint_markdown) = joint_period_route_report(&plan, denominator);
         let (cert_json, cert_markdown) = if let Some(meta) = cert_meta {
-            let cert = certify_pcpsp_plan(&meta, &model, &plan)?;
-            let bytes = cert.to_bytes().map_err(|e| {
-                Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string())
-            })?;
-            let digest = cert.certificate_digest;
-            (
-                format!(
-                    ",\"plan_certificate\":{{\"format\":\"FMT-PCERT-1\",\"digest\":\"{digest}\",\"bytes_hex\":\"{}\"}}",
-                    fmine_io::forecast::encode_hex_field(&bytes)
-                ),
-                format!(
-                    "\nPlan certificate `{digest}` for {} ({}). JSON includes the canonical frame.\n",
-                    cert.horizon.as_str(),
-                    cert.currency_code
-                ),
-            )
+            plan_certificate::render(&certify_pcpsp_plan(&meta, &model, &plan)?)?
         } else {
             (String::new(), String::new())
         };

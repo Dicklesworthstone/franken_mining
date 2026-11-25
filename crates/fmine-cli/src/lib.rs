@@ -23,6 +23,7 @@ mod lint_reserve;
 pub mod mirror;
 pub mod packet;
 pub mod pit;
+mod plan_certificate;
 pub mod plant;
 mod recon;
 pub mod recovery;

@@ -5,7 +5,7 @@ use fmine_core::{anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_optimize::pitflow::{self, candidate, minelib};
 
-use crate::omf::pit_report::{MAX_BYTES, escape_json, source_json};
+use crate::omf::pit_report::{MAX_BYTES, PitWitness, escape_json, source_json};
 
 pub const NO_CLAIM: &str = "The maximum-value closed set of the supplied block values and precedence arcs. Values and \
 arcs are taken as given: no price, cost, recovery or slope is derived or checked, and the pit is not a reserve, \
@@ -74,6 +74,22 @@ pub fn evaluate(
     options: &Options,
     candidate: Option<Candidate<'_>>,
 ) -> Result<Report, Refusal> {
+    evaluate_with_witness(upit, upit_source, prec, prec_source, options, candidate)
+        .map(|(report, _)| report)
+}
+
+/// Solve the MineLib pit and retain the scaled problem and witness used by the report.
+///
+/// # Errors
+/// Refuses incorrectly bound or oversized sources, invalid MineLib inputs and failed pit certificates.
+pub fn evaluate_with_witness(
+    upit: &str,
+    upit_source: &SourceAnchor,
+    prec: &str,
+    prec_source: &SourceAnchor,
+    options: &Options,
+    candidate: Option<Candidate<'_>>,
+) -> Result<(Report, PitWitness), Refusal> {
     if options.decimals > minelib::MAX_DECIMALS {
         return Err(Refusal::new(
             RefusalCode::InputMissingOrUnreadable506,
@@ -200,11 +216,18 @@ pub fn evaluate(
         decimal(i128::from(pit.value()), d),
         model.rounded
     );
-    Ok(Report {
-        json: payload,
-        markdown,
-        warnings,
-    })
+    Ok((
+        Report {
+            json: payload,
+            markdown,
+            warnings,
+        },
+        PitWitness {
+            model_name: model.name,
+            problem: model.problem,
+            solution: pit,
+        },
+    ))
 }
 
 #[cfg(test)]

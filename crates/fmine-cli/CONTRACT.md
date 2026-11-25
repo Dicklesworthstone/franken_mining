@@ -188,7 +188,7 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
 - **LOC budget:** 54,000 planned / 62,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "waterfall"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "waterfall"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common
@@ -824,6 +824,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     synthetic OMF fixtures are checked against independent geometric closure enumeration, alongside
     hand-worked cones, signed rounding, source perturbation, refusals and actual-binary execution in
     `crates/xtask/tests/plan_pit_omf.rs`.
+    DESIGN (bd-wvgl): either form accepts `--certificate-currency CODE --certificate-horizon
+    strategic|tactical|short_term` together. The producer independently checks the witness retained
+    by the source-bound IO adapter and emits `payload.plan_certificate` with `FMT-PCERT-1` hex bytes
+    and a canonical digest. The exact closure objective uses the report's value scale and the caller's
+    declared currency. Inputs use workspace-relative locators for offline file verification. The optional
+    MineLib candidate is bound for comparison provenance. Calibration is uncalibrated, with no SAA or VSS.
     DESIGN: `plan schedule --omf <file.omf> --spec <schedule.json> [--list-schedule]` uses
     `fmine-io::omf::scheduling` for strict source-bound declarations, TopoSort/local search, imported
     candidate-period checks and an integer Lagrangian bound replay. The CLI only reads bounded regular

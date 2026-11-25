@@ -96,6 +96,8 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
 - `minelib_report::evaluate` owns the existing MineLib UPIT report and optional candidate comparison.
   All source hashes are rechecked; final flow verification, exact decimal rounding bounds, candidate
   closure witnesses and optimum gaps retain the existing CLI payload semantics.
+- DESIGN (bd-wvgl): the MineLib and OMF pit report adapters expose the same exact scaled closure problem
+  and verified solution with the report, so the caller can seal it without rereading or solving again.
 - `PitModel::lp_schedule` (bd-djb7) takes its starts from an LP instead of the caller's ranks. It builds the same
   `ScheduleProblem` and its relaxation (`toposort::lp::relaxation` at decimals 0, so the LP is in units of
   `1 / per_unit`, discounted by `(1 + rate)^-t` in `f64`), solves it with fmine-lp's PDLP, then searches from
