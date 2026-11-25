@@ -1892,3 +1892,21 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     `2026-10-29T03:36:24Z`, as the manifest requires a whole-second UTC value. The candidate retains the
     full recorded window. The record has no author or contact declaration and the hash command refuses
     issuance at that boundary. The rules proofs predate the candidate and apply to the rules alone.
+
+- **E866** Historical AISC cross-vintage ledger census (FACT, 2026-11-25 UTC, bd-prmn.7).
+  - The unchanged `scripts/oracle/vintage_census.py` yields the E862 subject columns and earliest-to-later
+    source pairs from the verified 18-workbook epoch. Read the displayed cells using
+    `scripts/oracle/formats.py`. A format's dash for a stored zero preserves the numeric zero unless
+    the registered site-period status makes it Nil. The 3,722 E862 pairs produce 3,616 numeric
+    agreements and 106 nonnumeric exclusions. Every exclusion is an E818 Loulo-Gounkoto zero
+    in 2025 (36 Q1, 36 Q2, 17 H1 and 17 Q3).
+  - In the same independently located subject columns, reading the separately printed
+    all-in sustaining cost per ounce on a co-product basis adds 359 appearances across 249 series.
+    The 110 later pairs produce 108 numeric agreements and two nonnumeric exclusions. Both
+    populations agree item for item by first and later locator with the E864 assurance receipt at
+    root `0effa0b43ff122299e95b8d12cdfa57319b26a1f2a7a71fce4ea7367d0e2f264`.
+  - Every AISC and Mine Stats ledger source reference in that receipt names a Claim and matches
+    the workbook's registered SHA-256. E474 at `Q1_2024:QTD!G23` and `Q1_2025:QTD!N22` is
+    reconstructed (ii). All 20 Porgera basis conflicts are (iii). The 30 E461 region exclusions
+    and six token changes carry no numeric state. These are named Mine Stats checks. Independent
+    reconstruction of all Mine Stats source pairs remains open.
