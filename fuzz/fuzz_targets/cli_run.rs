@@ -1,9 +1,11 @@
 //! Whole invocations of `fmine`: `fmine_cli::invoke`, which is `parse_args` then `execute_command` (plan §30.1 and
 //! §33.4, PO-ADIT-4; BD-112).
 //!
-//! Input: bytes, each choosing one entry of a fixed vocabulary: a registered verb path (every `path` in
-//! registries/verbs.toml, so a verb added there is fuzzed without editing this file), a flag the parsers know, a
-//! flag with a value its parser accepts, or a value. The argument list is the chosen entries in order. Every invocation must exit with a code from the §30.1
+//! Input: pairs of bytes, each a little-endian index (modulo the vocabulary's size) choosing one entry of a fixed
+//! vocabulary: a registered verb path (every `path` in registries/verbs.toml, so a verb added there is fuzzed
+//! without editing this file), a flag the parsers know, a flag with a value its parser accepts, or a value. Two
+//! bytes reach 65,536 entries; one byte reached only 256, fewer than the vocabulary now holds.
+//! The argument list is the chosen entries in order. Every invocation must exit with a code from the §30.1
 //! dictionary (0, 2–9), and its envelope must be one line of JSON whose schema, exit code and status agree; in JSON
 //! format that line is what `fmine` prints.
 //!
@@ -236,8 +238,8 @@ const VALUES: &[&str] = &[
     "é",
 ];
 
-/// The vocabulary: each verb path as its words, then each flag, each pair, and each value. At most 256 entries,
-/// so every entry is one byte away.
+/// The vocabulary: each verb path as its words, then each flag, each pair, and each value. An input chooses
+/// entries by two-byte index, so any size up to 65,536 is reachable.
 fn vocabulary() -> &'static [Vec<String>] {
     static WORDS: OnceLock<Vec<Vec<String>>> = OnceLock::new();
     WORDS.get_or_init(|| {
@@ -255,7 +257,7 @@ fn vocabulary() -> &'static [Vec<String>] {
                 .map(|(f, v)| vec![(*f).to_owned(), (*v).to_owned()]),
         );
         words.extend(VALUES.iter().map(|w| vec![(*w).to_owned()]));
-        assert!(words.len() <= 256, "{} vocabulary entries", words.len());
+        assert!(words.len() <= 65_536, "{} vocabulary entries", words.len());
         assert!(
             words.iter().flatten().all(|w| !w.contains('/')),
             "a vocabulary entry holds a path separator"
@@ -267,8 +269,9 @@ fn vocabulary() -> &'static [Vec<String>] {
 fuzz_target!(|data: &[u8]| {
     let words = vocabulary();
     let mut args: Vec<String> = Vec::with_capacity(data.len() + 4);
-    for &byte in data.iter().take(64) {
-        for word in &words[usize::from(byte) % words.len()] {
+    for pair in data.chunks_exact(2).take(64) {
+        let index = usize::from(u16::from_le_bytes([pair[0], pair[1]]));
+        for word in &words[index % words.len()] {
             args.push(word.clone());
             if word == "--workspace" {
                 args.push(ROOT.to_owned());

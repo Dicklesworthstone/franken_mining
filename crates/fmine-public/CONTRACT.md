@@ -1295,10 +1295,10 @@ Every retained numeric issuer assertion is `Assertion { source: Issuer }` (`Know
   effective sample size, calibration or site ranking. Legacy report bytes and digests are unchanged.
 - DESIGN (BD-329.S2, bounded runtime citation integrity): both public and synthetic assurance entry points
   validate canonical source Claims and the AISC ledger's emitted source operands and registered derivations
-  before returning a report. Missing or mismatched source identity, locator, digest, value or derivation
-  ancestry is a structured `FMINE-REF-208` refusal with the affected report path. Existing valid report bytes
-  and state roots are unchanged. This is a typed source/derivation check, not the full all-verb JSON
-  uncited-number validator; that broader acceptance gate remains open.
+  before returning a report. The check includes rendered hidden-sheet exceptions. It binds each footing
+  discrepancy's printed total, component sum, residual, cell list and sign-flip witness to the calculation
+  and its operands. A mismatch produces `FMINE-REF-208` with the affected report path. Hidden-sheet lookup
+  applies only to hidden exceptions. The full all-verb JSON uncited-number validator remains open.
 - DESIGN (BD-331.S8): the cross-vintage ledger projects each later source appearance against its earliest
   registered release into a separate numeric denominator. Unchanged numbers are state i; verified stated
   and reconstructed silent restatements are distinct state ii explanations; source assertion conflicts

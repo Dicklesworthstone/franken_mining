@@ -9,6 +9,7 @@ checkout, the omf target also gets the published sample files under 64 KiB (MIT,
 """
 
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -35,8 +36,31 @@ def frame(tag: bytes, version: int, body: bytes) -> bytes:
 
 
 def put_str(s: str) -> bytes:
-    b = s.encode()
+    return put_blob(s.encode())
+
+
+def put_blob(b: bytes) -> bytes:
     return struct.pack("<I", len(b)) + b
+
+
+def ledger_body(version: int, seq: int, deltas, witnesses, refs) -> bytes:
+    """An FMT-LEDGER-1 batch body (crates/fmine-ledger/src/batch.rs) for cell-a at epoch 3, with a framed anchor that
+    names the same cell, epoch and sequence. Items come in the decoder's canonical order: deltas by key, witnesses by
+    kind then subject, refs by cell then sequence. Each payload digest is the payload's SHA-256."""
+    anchor = frame(b"ANCR", 1, put_str("cell-a") + struct.pack("<QQIIIII", 3, seq, 1, 2, 3, 4, 5) + bytes(range(32)))
+    prev = bytes(32) if seq == 0 else bytes(range(1, 33))
+    body = put_str("cell-a") + struct.pack("<QQ", 3, seq) + prev + put_blob(anchor)
+    body += struct.pack("<I", len(deltas))
+    for key, kind, payload in deltas:
+        body += put_str(key) + bytes([kind]) + hashlib.sha256(payload).digest() + put_blob(payload)
+    body += struct.pack("<I", len(witnesses))
+    for kind, subject in witnesses:
+        body += bytes([kind]) + put_str(subject) + bytes(range(32))
+    if version >= 1:
+        body += struct.pack("<I", len(refs))
+        for cell, ref_seq in refs:
+            body += put_str(cell) + struct.pack("<Q", ref_seq) + bytes(range(32, 64))
+    return body
 
 
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -407,7 +431,7 @@ def main() -> None:
     root, out = Path(sys.argv[1]), Path(sys.argv[2])
     seeds: dict[str, list[bytes]] = {t: [] for t in
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
-                                      "cli", "cli_run", "pit", "cpit", "pcpsp", "omf")}
+                                      "cli", "cli_run", "pit", "cpit", "pcpsp", "omf", "ledger")}
 
     # omf: every geometry and attribute type in v1 and v2 pages, then with pages and row groups split small and
     # bit-packed levels; then the omf-rust samples, when FMINE_OMF_DIR names a checkout.
@@ -430,6 +454,19 @@ def main() -> None:
     seeds["anchor"].append(b"\x02" + common + bytes(range(32)))
     seeds["anchor"].append(b"\x05" + common + struct.pack("<I", 5) + bytes(range(32)))
     seeds["anchor"].append(b"\x00" + frame(b"ANCR", 1, common + struct.pack("<I", 5) + bytes(range(32))))
+
+    # ledger: batches that decode, so mutations start past the anchor's own CRC. Selector 2 wraps a body in a
+    # version-0 frame and 5 in a version-1 frame, which adds cross-cell refs; 0 is a whole frame and 1 a whole frame
+    # whose CRC the target repairs. Every delta and witness kind appears once.
+    deltas = [("k/a", 1, b"alpha"), ("k/b", 2, b""), ("k/c", 3, b"obligation"), ("k/d", 4, b"resolved"),
+              ("k/e", 5, b"lease")]
+    witnesses = [(1, "w-mass"), (2, "w-glue"), (3, "w-sig"), (4, "w-token"), (5, "w-tele")]
+    refs = [("cell-b", 7), ("cell-b", 8), ("cell-c", 0)]
+    v0 = ledger_body(0, 41, deltas, witnesses, [])
+    v1 = ledger_body(1, 41, deltas, witnesses, refs)
+    seeds["ledger"] += [b"\x02" + ledger_body(0, 0, [], [], []), b"\x02" + v0, b"\x05" + v1,
+                        b"\x05" + ledger_body(1, 0, deltas[:1], witnesses[:1], refs[:1]),
+                        b"\x00" + frame(b"LDGR", 1, v1), b"\x01" + frame(b"LDGR", 0, v0)[:-4] + bytes(4)]
 
     # journal: a forecast genesis record as a wrapped body (selector 8), a hex line (1), a one-line journal (2), and a
     # reliance body that starts with a zero previous head (11).
@@ -544,9 +581,9 @@ def main() -> None:
     for choices in (bytes([0x01, 0x21, 0x11]), bytes([0x21, 0x01, 0x11])):
         seeds["pcpsp"].append(bytes([0x20]) + f"{blend}\0{bprec}\0".encode() + choices)
 
-    # cli_run: one byte per vocabulary entry, in the order fuzz_targets/cli_run.rs builds it (verb paths, then its
-    # FLAGS, PAIRS and VALUES). Each verb alone, with a selector, with options, and as a full mutation command. A
-    # tuple names a pair.
+    # cli_run: a two-byte little-endian index per vocabulary entry, in the order fuzz_targets/cli_run.rs builds it
+    # (verb paths, then its FLAGS, PAIRS and VALUES). Each verb alone, with a selector, with options, and as a full
+    # mutation command. A tuple names a pair.
     source = (root / "fuzz" / "fuzz_targets" / "cli_run.rs").read_text()
     def block(name: str) -> str:
         found = re.search(r"const " + name + r": &\[[^\n]*\] = &\[(.*?)\n\];", source, re.DOTALL)
@@ -555,9 +592,9 @@ def main() -> None:
     flags, values = re.findall(lit, block("FLAGS")), re.findall(lit, block("VALUES"))
     pairs = re.findall(r"\(\s*" + lit + r",\s*" + lit + r",?\s*\)", block("PAIRS"))
     vocab = [v.decode() for v in verbs] + flags + pairs + values
-    assert len(vocab) <= 256 and len(flags) > 50 and len(pairs) > 40 and len(values) > 40
+    assert len(vocab) <= 65_536 and len(flags) > 50 and len(pairs) > 40 and len(values) > 40
     def run(*words) -> bytes:
-        return bytes(vocab.index(w) for w in words)
+        return b"".join(struct.pack("<H", vocab.index(w)) for w in words)
     for v in verbs:
         p = v.decode()
         seeds["cli_run"] += [run(p), run(p, "--synthetic"), run(p, ("--format", "markdown")),

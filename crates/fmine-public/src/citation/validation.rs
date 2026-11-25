@@ -1,5 +1,6 @@
 //! DESIGN (BD-329.S2 slice): authenticate typed workbook citations before emission.
-//! This checks the AISC derived-number inputs and the same-release workbook projection.
+//! This checks AISC calculation inputs and rendered footing certificates, including hidden exceptions,
+//! and the same-release workbook projection.
 //! It does not certify every JSON number, historical source completeness or issuer truth.
 //!
 //! Determinism: Exact (ordered source projections yield sorted, deduplicated findings).
@@ -11,7 +12,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::xlsx::{CellValue, Sheet, col_index_to_letters, parse_a1_ref};
 
 use super::{Cited, RULES, derived, locator};
-use crate::aisc::{self, Calc, IdentityInstance, OperandRole, OperandValue};
+use crate::aisc::{self, Calc, IdentityInstance, IdentityState, OperandRole, OperandValue};
 use crate::key::{self, KeyedCell, NilReason, PublicValue, StatusKind};
 use crate::sources::SourceKind;
 use crate::{Lane, LoadedSource, PublicAssuranceReport};
@@ -30,13 +31,23 @@ type Sources<'a> = BTreeMap<&'a str, &'a LoadedSource>;
 fn resolve<'a>(
     sources: &Sources<'a>,
     at: &str,
+    include_hidden: bool,
 ) -> Result<(&'a LoadedSource, &'a Sheet, u32, u32), &'static str> {
     let (file, rest) = at.split_once(':').ok_or("invalid_locator")?;
     let (sheet_name, cell_ref) = rest.rsplit_once('!').ok_or("invalid_locator")?;
     let source = *sources.get(file).ok_or("unregistered_source")?;
-    let sheet = source
-        .workbook
+    let workbook = &source.workbook;
+    let sheet = workbook
         .sheet(sheet_name)
+        .or_else(|| {
+            if !include_hidden {
+                return None;
+            }
+            workbook
+                .hidden_sheets
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(sheet_name))
+        })
         .ok_or("unavailable_sheet")?;
     let (row, col) = parse_a1_ref(cell_ref).ok_or("invalid_locator")?;
     if format!("{}{row}", col_index_to_letters(col)) != cell_ref {
@@ -50,7 +61,8 @@ fn claim_issue(
     issuer: &str,
     cell: &KeyedCell,
 ) -> Result<(), (&'static str, &'static str)> {
-    let (source, sheet, row, col) = resolve(sources, &cell.locator).map_err(|kind| ("at", kind))?;
+    let (source, sheet, row, col) =
+        resolve(sources, &cell.locator, false).map_err(|kind| ("at", kind))?;
     if cell.key.issuer != issuer || cell.key.reporting_vintage.release != source.quarter {
         return Err(("vintage", "source_identity_mismatch"));
     }
@@ -94,15 +106,19 @@ fn claim_issue(
     Ok(())
 }
 
-fn placeholder(sources: &Sources<'_>, operand: &aisc::Operand) -> bool {
-    resolve(sources, &locator(operand)).is_ok_and(|(_, sheet, row, col)| {
+fn placeholder(sources: &Sources<'_>, operand: &aisc::Operand, include_hidden: bool) -> bool {
+    resolve(sources, &locator(operand), include_hidden).is_ok_and(|(_, sheet, row, col)| {
         sheet
             .cell(row, col)
             .is_some_and(|cell| matches!(cell.value, CellValue::Placeholder(_)))
     })
 }
 
-fn calculation_matches(sources: &Sources<'_>, instance: &IdentityInstance) -> bool {
+fn calculation_matches(
+    sources: &Sources<'_>,
+    instance: &IdentityInstance,
+    include_hidden: bool,
+) -> bool {
     let one = |role| {
         let mut values = instance.operands.iter().filter(|o| o.role == role);
         let first = values.next()?;
@@ -128,7 +144,7 @@ fn calculation_matches(sources: &Sources<'_>, instance: &IdentityInstance) -> bo
                 .collect();
             let sum = lines.iter().try_fold(0_i128, |sum, o| match &o.value {
                 OperandValue::Int(value) => sum.checked_add(i128::from(*value)),
-                _ if placeholder(sources, o) => Some(sum),
+                _ if placeholder(sources, o, include_hidden) => Some(sum),
                 _ => None,
             });
             !lines.is_empty()
@@ -156,13 +172,135 @@ fn calculation_matches(sources: &Sources<'_>, instance: &IdentityInstance) -> bo
                 .filter(|o| matches!(o.value, OperandValue::Int(_)))
                 .count();
             !inputs.is_empty()
-                && inputs
-                    .iter()
-                    .all(|o| matches!(o.value, OperandValue::Int(_)) || placeholder(sources, o))
+                && inputs.iter().all(|o| {
+                    matches!(o.value, OperandValue::Int(_))
+                        || placeholder(sources, o, include_hidden)
+                })
                 && i64::try_from(count).ok() == Some(rate.k)
                 && one(OperandRole::Numerator) == Some(rate.n)
                 && one(OperandRole::Ounces) == Some(rate.q)
                 && one(OperandRole::Rate) == Some(rate.r)
+        }
+    }
+}
+
+fn instance_findings(
+    instance: &IdentityInstance,
+    sources: &Sources<'_>,
+    path: &str,
+    include_hidden: bool,
+    add: &mut impl FnMut(String, &'static str, &str),
+) {
+    let mut seen = BTreeSet::new();
+    for (index, operand) in instance.operands.iter().enumerate() {
+        let at = locator(operand);
+        let issue = resolve(sources, &at, include_hidden).map(|(source, sheet, row, col)| {
+            aisc::operand_at(&source.file_name, sheet, row, col, operand.role) == *operand
+        });
+        let kind = match issue {
+            Err(kind) => Some(kind),
+            Ok(false) => Some("source_value_mismatch"),
+            Ok(true) => None,
+        };
+        if let Some(kind) = kind {
+            add(format!("{path}.operands[{index}]"), kind, &at);
+        }
+        if !seen.insert((operand.role.as_str(), at.clone())) {
+            add(
+                format!("{path}.operands[{index}]"),
+                "duplicate_operand",
+                &at,
+            );
+        }
+    }
+    let at = format!("{}:{}!{}", instance.file, instance.sheet, instance.cell);
+    if !calculation_matches(sources, instance, include_hidden) {
+        add(format!("{path}.derived"), "derived_input_mismatch", &at);
+        return;
+    }
+    for (index, (_, cited)) in derived(instance).into_iter().enumerate() {
+        if let Cited::Derived { rule, inputs, .. } = cited
+            && (!RULES.contains(&rule)
+                || inputs.is_empty()
+                || inputs
+                    .iter()
+                    .any(|at| !instance.operands.iter().any(|o| locator(o) == *at)))
+        {
+            add(
+                format!("{path}.derived[{index}]"),
+                "unbound_derivation",
+                &at,
+            );
+        }
+    }
+}
+
+fn footing_certificate_findings(
+    instance: &IdentityInstance,
+    path: &str,
+    add: &mut impl FnMut(String, &'static str, &str),
+) {
+    let IdentityState::IssuerDiscrepancy(certificate) = &instance.state else {
+        return;
+    };
+    let at = format!("{}:{}!{}", instance.file, instance.sheet, instance.cell);
+    let Calc::Footing {
+        printed,
+        component_sum,
+        ..
+    } = instance.calc
+    else {
+        add(
+            format!("{path}.certificate"),
+            "footing_certificate_mismatch",
+            &at,
+        );
+        return;
+    };
+    let residual = printed.checked_sub(component_sum);
+    let same_sheet = |o: &aisc::Operand| o.file == instance.file && o.sheet == instance.sheet;
+    let total_matches = certificate.total_cell == instance.cell
+        && instance.operands.iter().any(|o| {
+            o.role == OperandRole::Total && same_sheet(o) && o.cell == certificate.total_cell
+        });
+    let lines = || {
+        instance
+            .operands
+            .iter()
+            .filter(|o| o.role == OperandRole::Line)
+    };
+    let lines_match = lines().all(same_sheet)
+        && lines()
+            .map(|o| o.cell.as_str())
+            .eq(certificate.line_cells.iter().map(String::as_str));
+    let witness = lines().find_map(|o| match o.value {
+        OperandValue::Int(value)
+            if value != 0 && residual.map(i128::from) == Some(-2 * i128::from(value)) =>
+        {
+            Some(o.cell.as_str())
+        }
+        _ => None,
+    });
+    for (field, matches) in [
+        ("printed", printed == certificate.printed),
+        ("component_sum", component_sum == certificate.component_sum),
+        (
+            "residual",
+            residual == Some(certificate.residual) && certificate.residual != 0,
+        ),
+        ("total_cell", total_matches),
+        ("line_cells", lines_match),
+        (
+            "sign_flip_witness",
+            witness == certificate.sign_flip_witness.as_deref(),
+        ),
+    ] {
+        if !matches {
+            add(
+                format!("{path}.certificate.{field}"),
+                "footing_certificate_mismatch",
+                &at,
+            );
         }
     }
 }
@@ -189,7 +327,7 @@ fn workbook_findings(
             for (i, claim) in claims.iter().enumerate() {
                 if report.public_claims.cells.get(&claim.locator) != Some(claim)
                     || !row.matches_input(claim, reconciliation)
-                    || !resolve(sources, &claim.locator)
+                    || !resolve(sources, &claim.locator, false)
                         .is_ok_and(|(source, _, _, _)| source.kind == kind)
                 {
                     add(
@@ -223,7 +361,7 @@ fn workbook_findings(
             );
         }
         for (i, note) in row.basis_citations.iter().enumerate() {
-            let valid = resolve(sources, &note.at).is_ok_and(|(source, sheet, r, c)| {
+            let valid = resolve(sources, &note.at, false).is_ok_and(|(source, sheet, r, c)| {
                 source.quarter == row.release
                     && note.sha256 == Digest32(source.workbook.sha256).to_hex()
                     && aisc::cell_text(sheet, r, c).as_deref() == Some(note.text.as_str())
@@ -259,7 +397,7 @@ fn workbook_findings(
     }
 }
 
-/// Rechecks canonical workbook Claims and visible AISC citations against loaded sources.
+/// Rechecks canonical workbook Claims, visible AISC citations and rendered hidden exceptions against loaded sources.
 /// Blank cells, placeholders, unsupported displays and ledger refusals retain their meanings.
 /// File-byte authentication remains the loader's responsibility; registry interpretations
 /// are not re-proved here. This is not the general uncited-JSON-number validator of BD-329.S2.
@@ -298,48 +436,28 @@ pub fn report_findings(report: &PublicAssuranceReport) -> Vec<CitationFinding> {
         }
     }
     for (index, instance) in report.instances.iter().enumerate() {
-        let path = format!("$.instances[{index}].cited");
-        let mut seen = BTreeSet::new();
-        for (operand_index, operand) in instance.operands.iter().enumerate() {
-            let at = locator(operand);
-            let issue = resolve(&sources, &at).map(|(source, sheet, row, col)| {
-                aisc::operand_at(&source.file_name, sheet, row, col, operand.role) == *operand
-            });
-            let kind = match issue {
-                Err(kind) => Some(kind),
-                Ok(false) => Some("source_value_mismatch"),
-                Ok(true) => None,
-            };
-            if let Some(kind) = kind {
-                add(format!("{path}.operands[{operand_index}]"), kind, &at);
+        instance_findings(
+            instance,
+            &sources,
+            &format!("$.instances[{index}].cited"),
+            false,
+            &mut add,
+        );
+    }
+    for (section, instances, hidden) in [
+        ("identity_ledger", &report.instances, false),
+        ("hidden_scope", &report.hidden_scope.instances, true),
+    ] {
+        for (index, instance) in instances
+            .iter()
+            .filter(|i| matches!(i.state.code(), "ii" | "iii" | "iv"))
+            .enumerate()
+        {
+            let path = format!("$.{section}.exceptions[{index}]");
+            if hidden {
+                instance_findings(instance, &sources, &format!("{path}.cited"), true, &mut add);
             }
-            if !seen.insert((operand.role.as_str(), at.clone())) {
-                add(
-                    format!("{path}.operands[{operand_index}]"),
-                    "duplicate_operand",
-                    &at,
-                );
-            }
-        }
-        let at = format!("{}:{}!{}", instance.file, instance.sheet, instance.cell);
-        if !calculation_matches(&sources, instance) {
-            add(format!("{path}.derived"), "derived_input_mismatch", &at);
-            continue;
-        }
-        for (index, (_, cited)) in derived(instance).into_iter().enumerate() {
-            if let Cited::Derived { rule, inputs, .. } = cited
-                && (!RULES.contains(&rule)
-                    || inputs.is_empty()
-                    || inputs
-                        .iter()
-                        .any(|at| !instance.operands.iter().any(|o| locator(o) == *at)))
-            {
-                add(
-                    format!("{path}.derived[{index}]"),
-                    "unbound_derivation",
-                    &at,
-                );
-            }
+            footing_certificate_findings(instance, &path, &mut add);
         }
     }
     for (index, cell) in report.mine_stats_claims.claims.iter().enumerate() {

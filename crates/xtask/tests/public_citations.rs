@@ -5,7 +5,7 @@
 
 use fmine_core::hash::Digest32;
 use fmine_io::xlsx::MinimalCell;
-use fmine_public::aisc::{Calc, OperandRole, OperandValue};
+use fmine_public::aisc::{Calc, IdentityState, OperandRole, OperandValue};
 use fmine_public::citation::{report_findings, validate_report};
 use fmine_public::key::{self, PublicValue};
 use fmine_public::{PublicAssuranceReport, run_synthetic_assurance};
@@ -238,6 +238,76 @@ fn cached_sums_and_numeric_line_counts_need_their_original_ancestry() {
         &format!("$.instances[{index}].cited.derived"),
         "derived_input_mismatch",
     );
+}
+
+#[test]
+fn hidden_exception_operands_must_match_the_loaded_sheet() {
+    let mut report = fixture();
+    let exception = report
+        .hidden_scope
+        .instances
+        .iter_mut()
+        .find(|instance| matches!(instance.state, IdentityState::IssuerDiscrepancy(_)))
+        .expect("synthetic hidden footing discrepancy");
+    let (index, total) = exception
+        .operands
+        .iter_mut()
+        .enumerate()
+        .find(|(_, operand)| operand.role == OperandRole::Total)
+        .expect("hidden footing total");
+    let OperandValue::Int(value) = &mut total.value else {
+        panic!("hidden total must be numeric");
+    };
+    *value += 1;
+    has(
+        &report,
+        &format!("$.hidden_scope.exceptions[0].cited.operands[{index}]"),
+        "source_value_mismatch",
+    );
+}
+
+#[test]
+fn rendered_footing_certificate_must_match_its_calculation_and_operands() {
+    let report = fixture();
+    for hidden in [false, true] {
+        for field in [
+            "printed",
+            "component_sum",
+            "residual",
+            "total_cell",
+            "line_cells",
+            "sign_flip_witness",
+        ] {
+            let mut changed = report.clone();
+            let (section, instances) = if hidden {
+                ("hidden_scope", &mut changed.hidden_scope.instances)
+            } else {
+                ("identity_ledger", &mut changed.instances)
+            };
+            let (index, certificate) = instances
+                .iter_mut()
+                .filter(|i| matches!(i.state.code(), "ii" | "iii" | "iv"))
+                .enumerate()
+                .find_map(|(index, i)| match &mut i.state {
+                    IdentityState::IssuerDiscrepancy(certificate) => Some((index, certificate)),
+                    _ => None,
+                })
+                .expect("synthetic footing discrepancy");
+            match field {
+                "printed" => certificate.printed += 1,
+                "component_sum" => certificate.component_sum += 1,
+                "residual" => certificate.residual += 1,
+                "total_cell" => certificate.total_cell = "A1".into(),
+                "line_cells" => certificate.line_cells.clear(),
+                _ => certificate.sign_flip_witness = Some("A1".into()),
+            }
+            has(
+                &changed,
+                &format!("$.{section}.exceptions[{index}].certificate.{field}"),
+                "footing_certificate_mismatch",
+            );
+        }
+    }
 }
 
 #[test]
