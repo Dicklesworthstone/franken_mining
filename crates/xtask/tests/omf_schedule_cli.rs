@@ -1168,6 +1168,15 @@ fn omf_schedule_certificate_replays_the_selected_plan_and_binds_external_guidanc
         guided.bound.unwrap().witness_digest
     );
     assert_eq!(run_binary(&flags[..2]).status.code(), Some(2));
+    let mismatched = run_binary(&[
+        "--certificate-currency",
+        "EUR",
+        "--certificate-horizon",
+        "tactical",
+    ]);
+    assert!(!mismatched.status.success());
+    let refusal = parse(&mismatched.stdout).unwrap();
+    assert_eq!(string(field(&refusal, "refusal"), "code"), "FMINE-REF-105");
     assert_eq!(
         run_binary(&[&flags[..], &["--export-lp"]].concat())
             .status

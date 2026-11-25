@@ -33,6 +33,7 @@ pub struct Report {
 /// Exact scaled closure problem and checked solver output behind an ultimate-pit report.
 pub struct PitWitness {
     pub model_name: String,
+    pub value_units: Option<String>,
     pub problem: ClosureProblem,
     pub solution: PitSolution,
 }
@@ -176,6 +177,7 @@ pub fn evaluate_with_witness(
         },
         PitWitness {
             model_name: input.block_model.clone(),
+            value_units: Some(value_attribute.units.clone()),
             problem,
             solution: pit,
         },

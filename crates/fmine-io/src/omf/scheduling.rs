@@ -19,6 +19,7 @@ pub use super::pit_report::Report;
 pub struct ScheduleWitness {
     pub model_name: String,
     pub value_per_unit: u32,
+    pub value_units: String,
     baseline: OmfSchedule,
     discount: [i64; 2],
     selected: Vec<Option<u32>>,
@@ -619,6 +620,7 @@ pub fn evaluate_with_witness(
             Some(ScheduleWitness {
                 model_name: declaration.block_model,
                 value_per_unit: declaration.value_per_unit,
+                value_units: value.units.clone(),
                 baseline,
                 discount: declaration.discount,
                 selected,

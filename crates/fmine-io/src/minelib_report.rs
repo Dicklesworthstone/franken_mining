@@ -224,6 +224,7 @@ pub fn evaluate_with_witness(
         },
         PitWitness {
             model_name: model.name,
+            value_units: None,
             problem: model.problem,
             solution: pit,
         },

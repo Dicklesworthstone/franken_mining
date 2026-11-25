@@ -131,6 +131,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                     "the OMF report has no selected schedule to certify",
                 )
             })?;
+            basis.check_omf_currency(&witness.value_units)?;
             let metadata = basis.metadata(
                 &witness.model_name,
                 "declared-omf-schedule",

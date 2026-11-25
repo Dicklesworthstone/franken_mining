@@ -326,6 +326,19 @@ fn omf_pit_certificate_binds_the_scaled_model_and_original_archive() {
     assert_eq!(cert.inputs, steeper.inputs);
     assert_ne!(cert.model_digest, steeper.model_digest);
     assert_ne!(cert.certificate_digest, steeper.certificate_digest);
+    let mut call = args(1, 1, 2);
+    call.extend(
+        [
+            "--certificate-currency",
+            "CAD",
+            "--certificate-horizon",
+            "strategic",
+        ]
+        .map(str::to_owned),
+    );
+    let refused = run(&root, &call);
+    assert_ne!(refused.exit_code, 0);
+    assert_eq!(refused.refusal.unwrap().code, "FMINE-REF-105");
 }
 
 #[test]

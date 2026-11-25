@@ -79,6 +79,24 @@ impl CertificateBasis {
             extra_refusal_codes: Vec::new(),
         })
     }
+
+    pub(super) fn check_omf_currency(&self, units: &str) -> Result<(), Refusal> {
+        let units = units.trim();
+        // DESIGN: preserve the caller's explicit declaration when the attribute has no code-shaped unit.
+        if units.len() == 3
+            && units.bytes().all(|byte| byte.is_ascii_alphabetic())
+            && !units.eq_ignore_ascii_case(&self.currency_code)
+        {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!(
+                    "OMF value attribute declares {units}, but the certificate declares {}",
+                    self.currency_code
+                ),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn certificate_input(
@@ -147,4 +165,25 @@ pub(super) fn attach(
     json.push('}');
     markdown.push_str(&cert_markdown);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omf_currency_codes_must_match_and_unlabelled_values_keep_the_declaration() {
+        let basis = CertificateBasis::parse("plan schedule", Some("USD"), Some("tactical"))
+            .unwrap()
+            .unwrap();
+        for label in ["USD", " usd ", "", "$"] {
+            assert!(basis.check_omf_currency(label).is_ok());
+        }
+        for label in ["EUR", " cad "] {
+            assert_eq!(
+                basis.check_omf_currency(label).unwrap_err().code,
+                "FMINE-REF-105"
+            );
+        }
+    }
 }

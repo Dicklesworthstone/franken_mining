@@ -1163,6 +1163,7 @@ source perturbations and signed rounding, and exercise the built executable; the
 Both `plan pit` forms accept `--certificate-currency CODE --certificate-horizon strategic`
 as a pair. Choose `strategic`, `tactical` or `short_term` and use the currency already represented
 by the block values. The command makes no currency conversions.
+For OMF inputs, an explicit three-letter value unit must agree with the certificate currency.
 
 ```bash
 fmine plan pit --upit model.upit --prec model.prec --decimals 2 \
@@ -1507,6 +1508,7 @@ destination per block; the MineLib path above provides destination splits and op
 
 Pass the currency already used by the block values and choose a planning horizon. The command
 exports the same scaled incumbent and integer Lagrangian upper bound shown in its report.
+An explicit three-letter OMF value unit must agree with the certificate currency.
 
 ```bash
 fmine plan schedule --omf model.omf --spec schedule.json \

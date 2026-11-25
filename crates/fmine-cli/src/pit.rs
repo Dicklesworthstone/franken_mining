@@ -284,6 +284,9 @@ fn execute_omf(command: &Command, input: &OmfInput, root: &Path) -> Envelope {
             .certificate
             .as_ref()
             .map(|basis| {
+                if let Some(units) = &witness.value_units {
+                    basis.check_omf_currency(units)?;
+                }
                 basis.metadata(
                     &witness.model_name,
                     "declared-omf-pit",

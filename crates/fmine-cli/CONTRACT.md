@@ -830,6 +830,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     and a canonical digest. The exact closure objective uses the report's value scale and the caller's
     declared currency. Inputs use workspace-relative locators for offline file verification. The optional
     MineLib candidate is bound for comparison provenance. Calibration is uncalibrated, with no SAA or VSS.
+    DESIGN (bd-b8nq): both OMF certificate paths check any three-letter ASCII value-unit label against
+    the requested currency, ignoring case and surrounding whitespace. A conflict refuses FMINE-REF-105.
     DESIGN: `plan schedule --omf <file.omf> --spec <schedule.json> [--list-schedule]` uses
     `fmine-io::omf::scheduling` for strict source-bound declarations, TopoSort/local search, imported
     candidate-period checks and an integer Lagrangian bound replay. The CLI only reads bounded regular
