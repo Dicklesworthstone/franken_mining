@@ -2235,6 +2235,12 @@ matrix entries or arithmetic overflow refuse the whole comparison. The entity, s
 baseline NAV, share changes, risk limit, sources and unknown-risk terms all bind the result's receipt.
 Models without an equity declaration retain their existing economics and receipts.
 
+Use `fmine decide program tests/capital/equity.toml --brief` for a static equity meeting view.
+The synthetic issuance-and-project package leads at **1/2 USD per actual share**. The brief
+identifies the primary share class, reports the current co-winners and shows when changing a
+single entity's nominal downside cap would improve the primary objective or admit a first bundle.
+Each step applies the other declared caps and structural constraints.
+
 #### Evaluate parent and carve-out shareholders together
 
 DESIGN (BD-314, plan section 23.2): a capital program can evaluate additional entity/share-class denominators

@@ -141,6 +141,10 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     expected values and the opportunity cost in the reported objective unit. For each declared cap
     or floor it selects the first looser evaluated threshold that improves the value or admits a
     first feasible bundle. The worksheet SHA-256 and comparison digest agree with the full report.
+  - DESIGN (bd-229.4). A static equity brief names the primary share class and expected ΔNAV per
+    actual share, before and after all nominal tail caps. For each declared entity cap it gives the
+    first exact threshold with higher primary value or a first feasible bundle subject to the other
+    constraints. The full report carries the declared stressed and resampled results.
   - DESIGN (bd-xm5k). `common_price_deck` compares two distinct source investment alternatives and
     holding cash by weighted, discounted incremental pre-tax USD over the declared periods. A dated
     `comparison` declares one element, a shared ownership/cash counterfactual basis and

@@ -622,7 +622,45 @@ fn executive_briefs_keep_decisive_terms_alternatives_and_the_full_worksheet_dige
     for flags in [&["--json"][..], &["--format", "json"], &["--brief"]] {
         assert_eq!(brief("executive_hedge", flags).status.code(), Some(2));
     }
-    assert_eq!(brief("equity", &[]).status.code(), Some(3));
+}
+
+#[test]
+fn static_equity_brief_reports_the_primary_actual_share_objective() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let model = "tests/capital/equity.toml";
+    let run = |format: &str| {
+        let result = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .current_dir(&root)
+            .args(["decide", "program", model, format])
+            .output()
+            .expect("run equity comparison");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        result.stdout
+    };
+    let json = parse(&run("--json")).expect("full equity report");
+    let digest = json
+        .get("payload")
+        .and_then(|payload| payload.get("program"))
+        .and_then(|program| program.get("digest"))
+        .and_then(Json::as_str)
+        .expect("comparison digest");
+    let worksheet = sha256(&std::fs::read(root.join(model)).expect("worksheet")).to_hex();
+    let brief = String::from_utf8(run("--brief")).expect("equity brief");
+    for expected in [
+        "# Static equity capital brief",
+        "Expected ΔNAV per actual share of Invented parent company (Invented ordinary shares).",
+        "| All nominal tail caps | issue + project | 1/2 USD/share |",
+        "**Invented parent company** Inclusive cap **1/4 USD/share**.",
+        "No higher primary value from loosening this cap alone.",
+    ] {
+        assert!(brief.contains(expected), "{expected}\n{brief}");
+    }
+    assert!(brief.contains(&format!("Comparison digest `{digest}`.")));
+    assert!(brief.contains(&format!("Worksheet SHA-256 `{worksheet}`.")));
 }
 
 #[test]

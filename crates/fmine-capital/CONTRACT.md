@@ -205,6 +205,12 @@ If no subset is structurally feasible, both winner sets are empty, statistics
 and tail losses are absent, and no risk cost or hindsight baseline is invented. This is distinct from
 having structurally feasible choices that all violate the risk limit.
 
+DESIGN (bd-229.4). The static equity brief uses the nominal co-winners and exact primary
+per-share objective. For each entity it considers the exact tails of bundles admitted by
+structural checks and every other cap. It reports the least looser inclusive cap that admits
+a strictly higher primary mean, or the first feasible bundle when none qualifies today.
+All co-winners at that cap are reported.
+
 DESIGN (BD-229, §23.1–23.3, G-CAP-D): `recourse::evaluate` adds a separate exact two-stage comparison while
 retaining the complete static result. Every candidate has one declared stage; every terminal state has one
 declared observation. A policy fixes its initial subset before the observation and chooses one continuation
