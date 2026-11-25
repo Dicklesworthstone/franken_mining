@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use fmine_calib::record::{Rat, parse_forecasts, parse_rules};
+use fmine_calib::record::{
+    ATTESTATION, Rat, parse_date, parse_forecasts, parse_manifest, parse_rules, parse_utc,
+};
 use fmine_core::hash::sha256;
 use fmine_io::omf::json::{self, Json};
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
@@ -237,6 +239,70 @@ fn at<'a>(value: &'a Json, path: &[&str]) -> &'a Json {
             .get(key)
             .unwrap_or_else(|| panic!("missing {key}: {value:?}"))
     })
+}
+
+#[test]
+fn cli_exports_manifest_inputs_with_actual_retrieval_bounds() {
+    let fixture = Fixture::new();
+    let args = fixture.args();
+    let (exit, undated, _) = invoke(&args);
+    assert_eq!(exit, 0);
+    assert_eq!(undated.get("payload").unwrap().get("manifest_inputs_toml"), Some(&Json::Null));
+
+    let path = fixture.root.join("registries/sources/synthetic.toml");
+    let mut registry = std::fs::read_to_string(&path).unwrap();
+    let dates = ["2030-05-01", "2030-08-01", "2030-10-02"];
+    for (index, date) in dates.iter().enumerate() {
+        let source_path = format!("path = \"Invented_Q{}.xlsx\"\n", index + 1);
+        registry = registry.replacen(
+            &source_path,
+            &format!(
+                "{source_path}published_at = \"{date}\"\npublished_at_basis = \"FACT: invented release day\"\n"
+            ),
+            1,
+        );
+        if index == 1 {
+            std::fs::write(&path, &registry).unwrap();
+            let (exit, partial, _) = invoke(&args);
+            assert_eq!(exit, 0);
+            assert_eq!(at(&partial, &["payload", "manifest_inputs_toml"]), &Json::Null);
+        }
+    }
+    std::fs::write(path, registry).unwrap();
+    let (exit, dated, text) = invoke(&args);
+    assert_eq!(exit, 0, "{text}");
+    let report = at(&dated, &["payload"]);
+    let rows = at(report, &["manifest_inputs_toml"]).as_str().unwrap();
+    let rules = at(report, &["rules_digest"]).as_str().unwrap();
+    let manifest = parse_manifest(&format!(
+        "record_id = \"invented-cli-record\"\nauthor_role = \"synthetic-test-author\"\n\
+         information_cutoff_utc = \"{CUT}\"\nlabel = \"nowcast\"\ncontact = \"pre-contact\"\n\
+         attestation = \"{ATTESTATION}\"\nrules_sha256 = \"{rules}\"\n{rows}"
+    ))
+    .expect("the exported inputs fit the frozen-record parser");
+    let sources = at(report, &["input_manifest"]).as_array().unwrap();
+    assert_eq!(manifest.inputs.len(), 3);
+    assert_eq!(manifest.inputs.len(), sources.len());
+    for ((input, source), date) in manifest.inputs.iter().zip(sources).zip(dates) {
+        assert_eq!(Some(input.doc_id.as_str()), at(source, &["file"]).as_str());
+        assert_eq!(Some(input.url.as_str()), at(source, &["url"]).as_str());
+        assert_eq!(i64::try_from(input.bytes).ok(), at(source, &["bytes"]).i64());
+        let workbook = std::fs::read(fixture.root.join("invented").join(&input.doc_id)).unwrap();
+        assert_eq!(sha256(&workbook).0, input.sha256);
+        assert_eq!(Some(input.publication_day), parse_date(date));
+        assert_eq!(Some(input.retrieved_utc), parse_utc("2030-10-02T10:01:00Z"));
+    }
+    assert_eq!(
+        at(&sources[2], &["retrieved_utc"]).as_str(),
+        Some("2030-10-02T10:00:00Z/10:01:00Z")
+    );
+    assert_eq!(
+        at(&sources[2], &["available_by_utc"]).as_str(),
+        Some("2030-10-02T23:59:59Z")
+    );
+    let markdown = output(&[args, vec!["--format".into(), "markdown".into()]].concat());
+    assert!(markdown.status.success());
+    assert!(String::from_utf8(markdown.stdout).unwrap().contains(rows));
 }
 
 #[test]

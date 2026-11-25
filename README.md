@@ -3980,6 +3980,16 @@ complete issuance manifest. After reviewing a successful envelope, extract the C
 jq -ej '.payload.forecasts_csv' candidate.json > forecasts.csv
 ```
 
+When every consumed workbook has a registered publication date, extract its manifest input rows:
+
+```bash
+jq -ej '.payload.manifest_inputs_toml // error("Missing registered publication dates")' candidate.json
+```
+
+The rows use the registered retrieval upper bound as one whole-second UTC timestamp. The source audit retains
+the original retrieval window and the separately calculated availability bound. Append the rows below the
+reviewed manifest header, which carries the author's role, contact status and attestation.
+
 The existing record-hash, external timestamp and record-score workflow remains responsible for freezing and
 scoring a reviewed forecast. Synthetic source fixtures are explicitly labelled in JSON and Markdown.
 

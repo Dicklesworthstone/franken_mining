@@ -1713,7 +1713,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   default 6), with lower-down, upper-up, nearest-point rounding, point ties toward positive infinity and
   unsigned zero. The all-season model's exact bounds equal the persistence comparator before rounding; its median
   point is not evidence of independent skill. The output manifest preserves retrieval evidence separately
-  from declared publication dates and is not the completed issuance manifest.
+  from declared publication dates. `manifest_inputs_toml` supplies the consumed workbook input rows in
+  the record manifest's syntax when all publication dates are present. The rows use the registered retrieval
+  upper bound, which can precede the conservative availability bound. The export is null if a required source
+  has no date. The reviewed author and contact declarations, attestation and time proof remain separate.
   The explicitly seasonal model selects positive adjacent historical transitions whose destination
   calendar quarter matches the common validated outcome horizon, including Q4-to-next-year-Q1.
   It retains the frozen live-site population and every required original source, observation and Claim.
@@ -1721,8 +1724,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   endpoints, while unusable selected pairs remain in `excluded_pairs`. Markdown identifies the selected
   quarter and omitted-season audit count. An empty selected pool refuses without an all-season fallback.
   Model identity and the complete source corpus remain receipt-bound, including when models produce
-  identical CSV values or a source affects only other seasons. The legacy all-season candidate JSON,
-  Markdown, CSV and receipt encoding remain unchanged; the registered persistence comparator is also
+  identical CSV values or a source affects only other seasons. The all-season candidate keeps its model fields,
+  CSV and receipt encoding; the registered persistence comparator is also
   unchanged. Seasonal bounds can differ from that comparator and retain exact signed-cost ordering and
   outward decimal enclosure. The seasonal scope text makes no claim of seasonality, calibrated coverage,
   independent skill, attestation or issuance.

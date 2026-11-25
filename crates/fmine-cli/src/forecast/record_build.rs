@@ -10,9 +10,10 @@ use fmine_calib::record::candidate::{
     CHANGE_MODEL_ID, CandidateModel, CandidatePool, ChangeKind, ExcludedPair, MODEL_ID,
     SEASONAL_CHANGE_MODEL_ID, SEASONAL_MODEL_ID,
 };
-use fmine_calib::record::{ForecastRow, Outcome, Rat, Target, parse_utc};
+use fmine_calib::record::{ForecastRow, Outcome, Rat, Target, format_utc, parse_utc};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_public::forecast::{CandidateObservation, CandidateSource, PublicCandidate};
+use fmine_registry::sources::retrieval_upper;
 
 use crate::{Envelope, NextAction, OutputFormat, json_string as js};
 
@@ -26,7 +27,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     r#""post_quarter_nowcast":"Every target explicitly declares quarter_qtd_nowcast; nowcast_from_utc equals quarter end and proof_by_utc is later but strictly before mandatory earliest_outcome_release_utc. outcome_release_basis must cover preliminary announcements, not just later workbooks. Cut/proof follow quarter end; candidate cuts and authenticated scoring proofs must precede every FACT-cited original workbook/HTML publication day. Scoring requires an original Mine Stats release and label=nowcast. Distinct candidate/assessment schemas prevent mixing with advance forecasts; legacy rules are unchanged.","#,
     r#""inputs":"Explicit rules and evidence cut; only required original Mine Stats releases with verified hashes and semantic source Claims","live_points":"Ratio models require positive production points. Additive models also admit an unflagged numeric zero production point, retaining nonnegative predicted bounds without clamping. Supported cost and capex targets retain signed or zero printed values with verified ownership and no overlapping site status. Ratio history requires positive observations; additive admission checks ownership and numeric status on every signed or zero history and point observation.","#,
     r#""estimate":"Ratio models multiply the point-quarter observation by their historical quarterly-ratio median; change models add the median difference.","interval":"Ratio models multiply the latest observation by inverse empirical CDF tails, ordering products for signed amounts. Only the all-season ratio model's exact bounds equal the registered persistence baseline. Additive models use ordered translated tails.","#,
-    r#""rounding":"CSV lower bounds round toward negative infinity, upper bounds toward positive infinity, points to nearest with ties toward positive infinity; 0 through 12 decimal places, default 6; no negative zero","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","missing":"Missing required sources or live point observations refuse; missing historical quarters never bridge, and no comparative substitution or silent population shrinkage occurs","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow","#,
+    r#""rounding":"CSV lower bounds round toward negative infinity, upper bounds toward positive infinity, points to nearest with ties toward positive infinity; 0 through 12 decimal places, default 6; no negative zero","outputs":"Complete live-site/target forecasts_csv, exact and serialized rows, excluded transitions, source Claims, input manifest and deterministic receipt","manifest_inputs_toml":"Copy-ready [[input]] rows for the consumed workbooks, using their registered publication day and retrieval upper bound. Null if any required workbook lacks a publication day.","missing":"Missing required sources or live point observations refuse; missing historical quarters never bridge, and no comparative substitution or silent population shrinkage occurs","issuance":"Does not change files, supply an author attestation, freeze a forecast or obtain a timestamp; review and use the existing record workflow","#,
     r#""capex":"Total, minesite-sustaining and project capital expenditures are distinct printed Minestats site rows in USD millions, admitted only for quarter_qtd or quarter_qtd_nowcast. No scope substitution, cumulative subtraction, alias-based redefinition or ownership conversion is permitted. Candidates and persistence require stable ownership across eligible history and the point. Outcomes and quarterly guidance must match that usable point's ownership; incompatible outcomes remain unresolved. Guidance must name the matching issuer-reported capital scope. Status-derived Nil never becomes zero."}"#,
 );
 
@@ -173,9 +174,10 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
     });
     match result {
         Ok(report) => {
-            let mut envelope = Envelope::ok(VERB, render_json(&report), actions);
+            let inputs = manifest_inputs_toml(&report.sources);
+            let mut envelope = Envelope::ok(VERB, render_json(&report, inputs.as_deref()), actions);
             envelope.no_claim = Some(no_claim(&report));
-            envelope.rendered_markdown = Some(render_markdown(&report));
+            envelope.rendered_markdown = Some(render_markdown(&report, inputs.as_deref()));
             envelope
         }
         Err(refusal) => Envelope::refused(VERB, refusal, actions),
@@ -284,6 +286,29 @@ fn source_json(source: &CandidateSource) -> String {
     )
 }
 
+/// The forecast manifest requires a single retrieval timestamp. The conservative availability time
+/// can be later than retrieval when publication is only known to the day.
+fn manifest_inputs_toml(sources: &[CandidateSource]) -> Option<String> {
+    let mut rows = String::new();
+    for source in sources {
+        let publication_day = source.published_at.as_deref()?;
+        let retrieved = format_utc(retrieval_upper(&source.retrieved_utc).ok()?);
+        // The registry TOML subset rejects control characters. JSON's quote and backslash escaping
+        // fits the same subset for the remaining string literals.
+        let _ = writeln!(
+            rows,
+            "\n[[input]]\ndoc_id = {}\nurl = {}\npublication_date = {}\nretrieved_utc = {}\nbytes = {}\nsha256 = {}",
+            js(&source.file),
+            js(&source.url),
+            js(publication_day),
+            js(&retrieved),
+            source.bytes,
+            js(&source.sha256),
+        );
+    }
+    Some(rows)
+}
+
 fn observation_json(observation: &CandidateObservation) -> String {
     format!(
         "{{\"site\":{},\"target\":{},\"quarter\":{},\"role\":{},\"source\":{},\"sha256\":{},\"value\":{},\"reason\":{},\"claim\":{}}}",
@@ -363,7 +388,7 @@ fn pool_json(pool: &CandidatePool, unit: Option<&str>) -> String {
     )
 }
 
-fn render_json(report: &PublicCandidate) -> String {
+fn render_json(report: &PublicCandidate, inputs: Option<&str>) -> String {
     let candidate = &report.candidate;
     let horizon = if report
         .rules
@@ -415,7 +440,7 @@ fn render_json(report: &PublicCandidate) -> String {
         horizon
     };
     format!(
-        "{{\"schema\":\"{schema}\",\"status\":\"draft\",\"model\":{},\"issuer\":{},\"record_id\":{},\"as_of\":{}{horizon},\"synthetic\":{},\"uncalibrated\":true,\"issued\":false,\"attestation\":null,\"timestamp_proof\":null,\"alpha\":{},\"decimal_places\":{},\"rounding\":\"lower_down_upper_up_point_nearest_ties_up\",\"rules_digest\":{},\"rules_file_sha256\":{},\"registry_sha256\":{},\"receipt_digest\":{},\"forecasts_csv\":{},\"targets\":[{}],\"exact_forecasts\":[{}],\"serialized_forecasts\":[{}],\"not_published_sites\":[{}],\"pools\":[{}],\"input_manifest\":[{}],\"observations\":[{}]}}",
+        "{{\"schema\":\"{schema}\",\"status\":\"draft\",\"model\":{},\"issuer\":{},\"record_id\":{},\"as_of\":{}{horizon},\"synthetic\":{},\"uncalibrated\":true,\"issued\":false,\"attestation\":null,\"timestamp_proof\":null,\"alpha\":{},\"decimal_places\":{},\"rounding\":\"lower_down_upper_up_point_nearest_ties_up\",\"rules_digest\":{},\"rules_file_sha256\":{},\"registry_sha256\":{},\"receipt_digest\":{},\"forecasts_csv\":{},\"targets\":[{}],\"exact_forecasts\":[{}],\"serialized_forecasts\":[{}],\"not_published_sites\":[{}],\"pools\":[{}],\"input_manifest\":[{}],\"manifest_inputs_toml\":{},\"observations\":[{}]}}",
         js(candidate.model_id),
         js(&report.rules.issuer),
         js(&report.rules.record_id),
@@ -474,6 +499,7 @@ fn render_json(report: &PublicCandidate) -> String {
             .map(source_json)
             .collect::<Vec<_>>()
             .join(","),
+        optional(inputs),
         report
             .observations
             .iter()
@@ -483,7 +509,7 @@ fn render_json(report: &PublicCandidate) -> String {
     )
 }
 
-fn render_markdown(report: &PublicCandidate) -> String {
+fn render_markdown(report: &PublicCandidate, inputs: Option<&str>) -> String {
     let mut out = format!(
         "# {}\n\nModel: `{}`. Evidence cut: `{}`. Calibration: **uncalibrated**.\n\nEvidence lane: **{}**.\n\n{}\n\n## Targets\n\n",
         if report.rules.is_post_quarter_nowcast() {
@@ -586,6 +612,12 @@ fn render_markdown(report: &PublicCandidate) -> String {
             out,
             "- `{}` ({}): SHA-256 `{}`; available by `{}`.",
             source.file, source.release, source.sha256, source.available_by_utc
+        );
+    }
+    if let Some(rows) = inputs {
+        let _ = write!(
+            out,
+            "\n### Record manifest input rows\n\n```toml\n{rows}```\n"
         );
     }
     if !report.candidate.not_published_sites.is_empty() {
