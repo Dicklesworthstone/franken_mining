@@ -509,6 +509,10 @@
 .cl-rungs li:nth-child(4) span:first-child {
   flex: 1.7;
 }
+/* "Transferred" and "Elicited" are single words: they keep their width and the two-word class beside them wraps */
+.cl-rungs li:nth-child(4) span:not(:first-child) {
+  min-width: max-content;
+}
 .cl-rungs span {
   flex: 1;
   min-width: 0;

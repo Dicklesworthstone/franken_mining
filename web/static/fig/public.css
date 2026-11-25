@@ -578,7 +578,13 @@
 
 @media (max-width: 1099px) {
   .pb-idbody {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* On a phone a long printed line ("Reclamation accretion and amortisation") takes two lines */
+@media (max-width: 699px) {
+  .pb-lines td:first-child {
+    white-space: normal;
   }
 }
 @media (max-width: 999px) {

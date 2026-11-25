@@ -235,10 +235,13 @@ ${rangeHtml("prior", "Chance the ore recovers well, before testing", 5, 95, 1, 6
       else if (r.kind === "chance") g = `<circle cx="${x}" cy="${y}" r="6.5"/>`;
       else g = `<path d="M${x - 5} ${y - 6}L${x + 6} ${y}L${x - 5} ${y + 6}Z"/>`;
       const tx = x + 13;
-      const sub = r.sub ? `<tspan class="sub" dx="8">${r.sub}</tspan>` : "";
-      const label = two(r) ? `<tspan>${r.label}</tspan>` : `<tspan>${r.label}</tspan>${sub}`;
+      // On two lines, a sub-line that leads with a short figure ("57% · then 89% chance it recovers well") keeps the
+      // figure beside its label and puts the rest underneath.
+      const cut = two(r) ? r.sub!.indexOf(" · ") : -1;
+      const [lead, rest] = !two(r) ? [r.sub ?? "", ""] : cut > 0 && cut <= 6 ? [r.sub!.slice(0, cut), r.sub!.slice(cut + 3)] : ["", r.sub!];
+      const label = `<tspan>${r.label}</tspan>${lead ? `<tspan class="sub" dx="8">${lead}</tspan>` : ""}`;
       s += `<g class="${cls}">${g}<text x="${tx}" y="${y + 4}" class="lab">${label}</text>${r.value ? `<text x="${W - 6}" y="${y + 4}" text-anchor="end" class="val">${r.value}</text>` : ""}</g>`;
-      if (two(r)) s += `<text x="${tx}" y="${y + 17}" class="sub2">${r.sub}</text>`;
+      if (rest) s += `<text x="${tx}" y="${y + 17}" class="sub2">${rest}</text>`;
     }
     treeSvg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     treeSvg.innerHTML = s;

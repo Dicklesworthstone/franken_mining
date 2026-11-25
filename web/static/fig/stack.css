@@ -447,6 +447,16 @@ p.st-note {
   line-height: 1.45;
   color: var(--soft);
 }
+/* "FrankenAccounting" is one 136px word at 0.9rem: on a phone narrower than about 410px the reader names scale with
+   the screen, so it stays inside its box */
+@media (max-width: 409px) {
+  .st-r {
+    padding-inline: 0.65rem;
+  }
+  .st-r .st-name {
+    font-size: min(0.9rem, 5.2vw - 6.6px);
+  }
+}
 @media (max-width: 639px) {
   .st-subs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
