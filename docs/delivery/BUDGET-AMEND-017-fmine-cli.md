@@ -6,6 +6,6 @@
 - **New planned:** 55000
 - **New ceiling:** 62000
 - **New scope:** Read-only capital approval freeze and pinned outcome scoring with bounded worksheet input, source hashes and JSON and Markdown output.
-- **Gate served:** The measured `check-amend` in `GATE-LAYERS-00` reads this amendment when the new verb crosses the previous allowance.
+- **Gate served:** The measured `check-amend` in `GATE-LAYERS-00` reads this approval as the allowance for the new verb. The registry uses the plan's 1,192,000-line aggregate.
 - **Approval:** approved by project owner via standing waiver, 2026-11-25
 - **Authorization:** The owner wrote, "yeah that's fine, I don't care at all about LoC budgets, they are dumb".
