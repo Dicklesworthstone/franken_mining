@@ -152,7 +152,10 @@ pub enum CliCommand {
     /// Compare three timing conventions over a cited developer cash-flow schedule.
     CheckDeveloperNpv(PathBuf),
     /// Screen a pack of local drill-release and developer NPV worksheets.
-    ScreenTarget(PathBuf),
+    ScreenTarget {
+        docs: PathBuf,
+        table_as_of: Option<String>,
+    },
     /// Inspect workbook identities, or explicitly declared PDF sums and reserve roll-forwards.
     CheckTables {
         /// `None` selects the invented workbook known answers.
@@ -1260,18 +1263,7 @@ pub fn parse_args(
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
             }
             "decide hindcast" => CliCommand::CapitalHindcast(capital::hindcast::parse(&words)?),
-            screen_target::VERB => match words.as_slice() {
-                [group, target, flag, path]
-                    if group == "screen"
-                        && target == "target"
-                        && flag == "--docs"
-                        && !path.trim().is_empty()
-                        && !path.starts_with("--") =>
-                {
-                    CliCommand::ScreenTarget(path.into())
-                }
-                _ => return Err(format!("expected 'fmine {}'", screen_target::USAGE)),
-            },
+            screen_target::VERB => screen_target::parse(&words)?,
             capital::drill_release::VERB | capital::npv_replay::VERB => match words.as_slice() {
                 [check, mode, path]
                     if check == "check"
@@ -2382,6 +2374,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::Issued(command) => issued::execute(command, workspace_root),
         CliCommand::Reliance(command) => reliance::execute(command, workspace_root),
         CliCommand::AssureExport(command) => {
+            if let Err(refusal) = fmine_public::refuse_if_salted(workspace_root) {
+                return Envelope::refused("assure public", refusal, to_doctor());
+            }
             let mut envelope = reliance::execute(command, workspace_root);
             envelope.verb = "assure public".to_string();
             envelope
@@ -2399,7 +2394,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             capital::drill_release::execute(path, workspace_root)
         }
         CliCommand::CheckDeveloperNpv(path) => capital::npv_replay::execute(path, workspace_root),
-        CliCommand::ScreenTarget(docs) => screen_target::execute(docs, workspace_root),
+        CliCommand::ScreenTarget { docs, table_as_of } => {
+            screen_target::execute(docs, workspace_root, table_as_of.as_deref())
+        }
         CliCommand::CheckTables {
             issuer,
             through,
@@ -2417,6 +2414,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .map(|(before, after)| (before.as_str(), after.as_str())),
         ),
         CliCommand::AssurePublic { issuer, through } => {
+            if let Err(refusal) = fmine_public::refuse_if_salted(workspace_root) {
+                return Envelope::refused("assure public", refusal, to_doctor());
+            }
             if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {
                 return Envelope::usage_error(
                     "assure public",
@@ -2450,6 +2450,11 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             Err(refusal) => Envelope::refused("assure public", refusal, to_doctor()),
         },
         CliCommand::AssureChallenges { issuer, through } => {
+            if issuer.is_some()
+                && let Err(refusal) = fmine_public::refuse_if_salted(workspace_root)
+            {
+                return Envelope::refused("assure challenges", refusal, to_doctor());
+            }
             let report = match issuer {
                 Some(name) => load_issuer_profile(workspace_root, name)
                     .and_then(|p| match through {

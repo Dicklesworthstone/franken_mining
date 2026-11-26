@@ -152,6 +152,133 @@ mod tests {
         assert!(!synthetic.payload_json.contains("published_cutoffs"));
     }
 
+    /// BD-357.S2: `fmine assure public` refuses a workspace carrying a salted review-packet manifest
+    /// before loading any source, emitting no report, anchor or certificate.
+    #[test]
+    fn test_assure_public_refuses_salted_packet_workspace() {
+        let ws =
+            std::env::temp_dir().join(format!("fmine-cli-salted-refusal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(&ws).expect("temp dir");
+        std::fs::write(
+            ws.join(fmine_public::REVIEW_PACKET_MANIFEST),
+            "packet = \"salted\"\nround_id = \"round-1\"\nitem_ids = [\"item-0001\"]\n",
+        )
+        .expect("write salted manifest");
+
+        let ws_str = ws.to_string_lossy().into_owned();
+        let (env, _) = invoke(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &ws_str,
+            ]),
+            &workspace_root(),
+        );
+        let expected_spec = RefusalCode::MnpiWall301.spec();
+        assert_eq!(env.status, "refused", "{}", env.to_json());
+        assert_eq!(env.exit_code, expected_spec.exit_code);
+        assert_eq!(
+            env.refusal.as_ref().expect("refusal").code,
+            expected_spec.code
+        );
+        assert_eq!(env.payload_json, "null");
+        assert!(env.anchor_id.is_none());
+        assert!(env.certificate.is_none());
+
+        // Malformed manifest also fails closed with FMINE-REF-301.
+        std::fs::write(
+            ws.join(fmine_public::REVIEW_PACKET_MANIFEST),
+            "packet = \"bogus\"\n",
+        )
+        .expect("write malformed manifest");
+        let (bad_env, _) = invoke(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &ws_str,
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!(bad_env.status, "refused");
+        assert_eq!(
+            bad_env.refusal.as_ref().expect("refusal").code,
+            expected_spec.code
+        );
+        assert_eq!(bad_env.payload_json, "null");
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// BD-357.S2 positive control: an unsalted manifest leaves `fmine assure public` behaviour
+    /// identical to a workspace with no `review-packet.toml`.
+    #[test]
+    fn test_assure_public_accepts_unsalted_manifest_path_unchanged() {
+        let pid = std::process::id();
+        let ws_bare = std::env::temp_dir().join(format!("fmine-cli-unsalted-bare-{pid}"));
+        let ws_unsalted = std::env::temp_dir().join(format!("fmine-cli-unsalted-manifest-{pid}"));
+        for dir in [&ws_bare, &ws_unsalted] {
+            let _ = std::fs::remove_dir_all(dir);
+            let reg_dir = dir.join("registries").join("sources");
+            std::fs::create_dir_all(&reg_dir).expect("reg dir");
+            std::fs::copy(
+                workspace_root().join("registries/sources/barrick.toml"),
+                reg_dir.join("barrick.toml"),
+            )
+            .expect("copy barrick registry");
+        }
+        std::fs::write(
+            ws_unsalted.join(fmine_public::REVIEW_PACKET_MANIFEST),
+            "packet = \"unsalted\"\nround_id = \"round-1\"\nitem_ids = [\"item-0001\"]\n",
+        )
+        .expect("write unsalted manifest");
+
+        let bare_str = ws_bare.to_string_lossy().into_owned();
+        let unsalted_str = ws_unsalted.to_string_lossy().into_owned();
+        let (env_bare, _) = invoke(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &bare_str,
+            ]),
+            &workspace_root(),
+        );
+        let (env_unsalted, _) = invoke(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &unsalted_str,
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!(env_bare.status, "refused");
+        assert_eq!(env_unsalted.status, env_bare.status);
+        assert_eq!(env_unsalted.exit_code, env_bare.exit_code);
+        assert_eq!(
+            env_unsalted.refusal.as_ref().expect("refusal").code,
+            RefusalCode::InputMissingOrUnreadable506.spec().code
+        );
+        assert_eq!(
+            env_unsalted.refusal.as_ref().expect("refusal").code,
+            env_bare.refusal.as_ref().expect("refusal").code
+        );
+
+        let _ = std::fs::remove_dir_all(&ws_bare);
+        let _ = std::fs::remove_dir_all(&ws_unsalted);
+    }
+
     /// The four INV-002 flags, all false, written by hand from BD-329.S3 (not taken from `FLAGS_JSON`).
     const FLAGS: &str = "{\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\
                          \"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false}";

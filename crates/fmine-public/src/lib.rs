@@ -148,6 +148,100 @@ fn hex(bytes: &[u8; 32]) -> String {
     Digest32(*bytes).to_hex()
 }
 
+/// Filename of the salted internal-review packet manifest checked before any public export (`BD-357.S2`).
+pub const REVIEW_PACKET_MANIFEST: &str = "review-packet.toml";
+
+fn parse_quoted_toml_value(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    let quote = trimmed.as_bytes().first().copied()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let rest = &trimmed[1..];
+    let end = rest.find(quote as char)?;
+    let trailing = rest[end + 1..].trim();
+    if !trailing.is_empty() && !trailing.starts_with('#') {
+        return None;
+    }
+    Some(&rest[..end])
+}
+
+/// Export-lane guard (`BD-357.S2`, `RISK-32`): refuses before loading any source if `dir` contains a
+/// `review-packet.toml` marking a salted internal-review packet (`packet = "salted"`), or if the manifest
+/// is unreadable/malformed (fail-closed with `FMINE-REF-301`). Absent or `packet = "unsalted"` passes.
+pub fn refuse_if_salted(dir: &Path) -> Result<(), Refusal> {
+    let manifest = dir.join(REVIEW_PACKET_MANIFEST);
+    let text = match std::fs::read_to_string(&manifest) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(Refusal::new(
+                RefusalCode::MnpiWall301,
+                format!(
+                    "salted-review guard: unable to read {}: {err}",
+                    manifest.display()
+                ),
+            ));
+        }
+    };
+    let mut packet_kind: Option<&str> = None;
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+            continue;
+        }
+        let Some((lhs, rhs)) = line.split_once('=') else {
+            continue;
+        };
+        if lhs.trim() != "packet" {
+            continue;
+        }
+        if packet_kind.is_some() {
+            return Err(Refusal::new(
+                RefusalCode::MnpiWall301,
+                format!(
+                    "salted-review guard: duplicate 'packet' key in {}; refusing closed",
+                    manifest.display()
+                ),
+            ));
+        }
+        let Some(val) = parse_quoted_toml_value(rhs) else {
+            return Err(Refusal::new(
+                RefusalCode::MnpiWall301,
+                format!(
+                    "salted-review guard: malformed 'packet' entry in {}; refusing closed",
+                    manifest.display()
+                ),
+            ));
+        };
+        packet_kind = Some(val);
+    }
+    match packet_kind {
+        Some("unsalted") => Ok(()),
+        Some("salted") => Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            format!(
+                "salted internal-review packet ({}) cannot enter any public export path (BD-357.S2, RISK-32)",
+                manifest.display()
+            ),
+        )),
+        Some(other) => Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            format!(
+                "salted-review guard: unrecognized packet kind '{other}' in {}; refusing closed",
+                manifest.display()
+            ),
+        )),
+        None => Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            format!(
+                "salted-review guard: {} is missing required 'packet' declaration; refusing closed",
+                manifest.display()
+            ),
+        )),
+    }
+}
+
 /// Loads every registered workbook of `profile` from `<root>/<corpus_dir>/`, checking byte size and SHA-256
 /// against the registry. Refuses naming every missing, altered or unparseable file: `FMINE-REF-506` (exit 5)
 /// when any file is missing or unreadable, otherwise `FMINE-REF-505` (exit 8) for digest mismatches alone.
@@ -156,6 +250,7 @@ pub fn load_registered_sources(
     profile: &IssuerProfile,
     root: &Path,
 ) -> Result<Vec<LoadedSource>, Refusal> {
+    refuse_if_salted(root)?;
     profile
         .sources
         .first()
