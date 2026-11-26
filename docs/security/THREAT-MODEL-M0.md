@@ -65,7 +65,7 @@ Each control below says how it is known: **enforced** (a check or the compiler f
 
 1. The Linux offline run's first CI result (bd-073).
 2. A signed release and a reproducible-build check (T2).
-3. 24-hour runs of every fuzz target (T1, plan §32.4, PO-PORT-1). Each has run for minutes so far. The `cli` target covers the verb parser and the envelope (§33.4): parse errors and every free-text field must print as one line of JSON, and no envelope exits 1. It parses only. The `cli_run` target executes verbs: argument lists from a fixed vocabulary, run against a missing workspace, so each verb stops at its first file access and nothing is written.
+3. 24-hour runs of every fuzz target (T1, plan §32.4, PO-PORT-1). Two have had one, each on a single aarch64-macos host: `codec` (`docs/delivery/fuzz-codec-24h.md`) and `ledger` at batch schema v0 and v1 (`docs/delivery/ledger-fuzz-24h.md`; a run covering v2 began on 2026-11-26). The others have run for minutes, and `cli_run` for 25,000 runs on hosted CI. The `cli` target covers the verb parser and the envelope (§33.4): parse errors and every free-text field must print as one line of JSON, and no envelope exits 1. It parses only. The `cli_run` target executes verbs: argument lists from a fixed vocabulary, run against a missing workspace, so each verb stops at its first file access and nothing is written.
 4. A static network and process ban for the V and U crates, so that §4's "by search" rows become enforced (T4).
 5. The licence. The manifests declare MIT, and the SBOM reports that, but `LICENSE` reads "MIT License (with OpenAI/Anthropic Rider)" (E681). The owner's decision is pending (RISK-17).
 6. Review by someone other than the author. bd-073's done-when is "Pack reviewed".
