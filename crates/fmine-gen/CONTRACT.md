@@ -10,7 +10,7 @@ Testpit T-layer synthetic-truth world generator and sealed scoring harness (`BD-
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** 20,000 planned / 23,000 ceiling
-- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "cu_au_world", "biases", "drillholes", "dispatch", "mill_balance", "fa_book", "metamorphic", "plant_twin", "pilot_power", "pilot_card", "origin_coverage", "review", "det_families", "sbc"]`
+- **Allowed Module Families:** `["seal", "worlds", "harness", "geology", "cu_au_world", "biases", "drillholes", "dispatch", "mill_balance", "fa_book", "metamorphic", "plant_twin", "pilot_power", "pilot_card", "origin_coverage", "review", "det_families", "sbc", "junior"]`
 
 ## 2. Inputs
 - Deterministic `seed_root: u64`, `WorldCondition` (`CorrectlySpecified`, `Misspecified`, `IdentifiabilityProbe`), and world configuration (`OpenPitAuConfig`).
@@ -67,9 +67,11 @@ Synthetic only (`EvidenceClass::ModelledUncalibrated` / synthetic test harness);
 - `review::{MAX_EXACT_CLOPPER_PEARSON_N, SeedClass, ReviewKey, clopper_pearson, commit, verify, generate_os_nonce}` (`BD-357.S1`)
 - `det_families::{FamilyDigest, evaluate_all_bitwise_portable_families}` (`BD-141`, 18 `BitwisePortable` families pinned in `fixtures/det/bitwise_portable_families.txt`)
 - `sbc::{MAX_SBC_REPLICATES, MAX_SBC_POSTERIOR_DRAWS, MAX_SBC_BINS, SbcConfig, SbcReplicate, SbcCoverageRow, SbcDiagnosis, SbcReport, NormalNormalControl, GammaPoissonControl, BetaBinomialControl, chi_square_sf, clopper_pearson_interval, evaluate_sbc_replicates, run_sbc, sample_gamma, sample_beta, sample_poisson, sample_binomial}` (`BD-144`, Talts et al. 2018 SBC rank-histogram & empirical-coverage harness)
+- `junior::{SYNTHETIC_JUNIOR_LABEL, JuniorSeedClass, JuniorCampaignConfig, JuniorReleasePacket, JuniorWorldTruth, JuniorAuditOutput, ClassDetectionStats, HoleGapHypothesisScore, JuniorCampaignScorecard, JuniorScoringHarness}` (`BD-350.S5`, sealed-truth synthetic junior drill-release campaign generator & 90% Clopper–Pearson detector scorer)
 
 ## 12. Proof obligations
-- `GATE-GEN-01` (sealed truth inaccessible outside scoring harness): `seal.rs` `compile_fail` doctests + `harness::tests::test_sealed_truth_isolation_and_deterministic_replay`.
+- `GATE-GEN-01` (sealed truth inaccessible outside scoring harness): `seal.rs` `compile_fail` doctests + `harness::tests::test_sealed_truth_isolation_and_deterministic_replay` + `junior::tests::test_engine_input_has_no_seed_labels`.
+- `BD-350.S5` (synthetic junior selective-reporting detection, clean zero-flag control, grammar round-trip, and `HoleSequenceGap` hypothesis scoring): `junior::tests::test_clean_synthetic_releases_raise_zero_flags`, `junior::tests::test_each_seed_class_detected_with_rate`, `junior::tests::test_hole_gap_hypothesis_scored_against_full_release`, `junior::tests::test_rendered_release_round_trips_through_grammar`, `junior::tests::test_generator_deterministic_under_rng_key`, `junior::tests::test_engine_input_has_no_seed_labels`.
 - Known-answer & coverage recovery: `harness::tests::test_scoring_harness_recovers_seeded_biases_and_coverage`.
 - `BD-144` (SBC rank histograms & coverage harness): `sbc::tests::test_chi_square_sf_matches_scipy_known_answers`, `sbc::tests::test_clopper_pearson_matches_exact_review_module_and_large_n`, `sbc::tests::test_sbc_normal_normal_known_calibrated_control_passes`, `sbc::tests::test_sbc_gamma_poisson_known_calibrated_control_passes`, `sbc::tests::test_sbc_beta_binomial_known_calibrated_control_passes`, `sbc::tests::test_sbc_detects_planted_miscalibrated_controls`, `sbc::tests::test_sbc_refuses_invalid_configs_and_non_finite_replicates`, `sbc::tests::test_sbc_is_bitwise_deterministic_across_runs`.
 - `BD-357.S1` (transcendental-free exact Clopper–Pearson coverage & BLAKE3 `ReviewKey` commitment): `review::tests::test_clopper_pearson_known_answers`, `review::tests::test_clopper_pearson_exact_coverage_ge_95`, `review::tests::test_clopper_pearson_simulated_coverage_10k`, `review::tests::test_review_key_commit_verify_roundtrip`, `review::tests::test_review_key_tamper_fails`.

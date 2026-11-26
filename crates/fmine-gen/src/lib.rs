@@ -9,6 +9,7 @@ pub mod drillholes;
 pub mod fa_book;
 pub mod geology;
 pub mod harness;
+pub mod junior;
 pub mod metamorphic;
 pub mod mill_balance;
 pub mod origin_coverage;
