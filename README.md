@@ -1233,6 +1233,38 @@ The engine refuses an ounce/pound mismatch, a produced-unit substitution, ambigu
 and an allocation for another metal. Values and labels remain declared assumptions; the example
 does not reproduce a rounded issuer rate or establish an audited accounting population.
 
+### Explain a copper C1 or AISC change
+
+`metrics waterfall` also compares two complete declared copper cost worksheets under one
+explicit registered definition:
+
+```bash
+cargo run -p fmine-cli -- metrics waterfall --from-worksheet tests/costs/declared_copper.toml --to-worksheet tests/costs/declared_copper_later.toml --definition c1.copper@barrick-q2-2026 --format markdown
+cargo run -p fmine-cli -- metrics waterfall --from-worksheet tests/costs/declared_copper.toml --to-worksheet tests/costs/declared_copper_later.toml --definition aisc.copper@barrick-q2-2026 --json
+```
+
+The invented second period raises cost of sales from USD 1,000 to USD 1,200 and pounds sold
+from 400 to 500. The C1 rate falls from USD 2.45/lb to USD 2.36/lb: a +0.45 USD/lb
+cost-of-sales effect and a -0.54 USD/lb sold-volume effect close exactly to -0.09 USD/lb.
+Under the AISC definition the rate falls from USD 3/lb to USD 2.80/lb, with effects of
++0.45 and -0.65 USD/lb. All other included line effects are zero in this example.
+
+The symmetric additive bridge works with signed costs, including zero or negative net C1.
+It reports exact rational rates and contributions in USD/lb, retains both complete cost receipts
+and all excluded inputs, and binds the two worksheet hashes and the metric registry to the result.
+Multiple project contributions for the same registered item and treatment are summed exactly;
+their individual source Claims remain in the original receipts.
+
+Both periods must have the same issuer, subject, ownership, accounting basis, allocation and
+definition, use equal-length nonoverlapping periods in increasing order, and contain the same
+included accounting components. A missing component is not treated as zero. Independently
+reported rates are not supplied by these worksheets, so reported-rate gaps remain unavailable.
+
+This is an **Assumed, Internal, uncalibrated** accounting explanation over declared data.
+It does not authenticate an issuer workbook or establish a causal production model.
+The numeric enclosures bound evaluation of the declared arithmetic, not measurement uncertainty
+or confidence intervals.
+
 ### Compare production GEO across named price decks
 
 `metrics geo` applies each versioned price deck to the same declared production quantities, showing each

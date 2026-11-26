@@ -1081,3 +1081,452 @@ fn serialized_receipts_expose_the_colour_and_exact_uu_metadata_their_digest_bind
             .contains("\"downside_bits\":\"3ff0000000000001\"")
     );
 }
+
+mod copper_waterfalls {
+    use super::*;
+
+    const FIRST: &str = include_str!("../../../tests/costs/declared_copper.toml");
+    const LATER: &str = include_str!("../../../tests/costs/declared_copper_later.toml");
+    const LATER_PATH: &str = "later.toml";
+    const C1: &str = "c1.copper@barrick-q2-2026";
+    const AISC: &str = "aisc.copper@barrick-q2-2026";
+
+    fn args(definition: &str) -> Vec<String> {
+        [
+            "metrics",
+            "waterfall",
+            "--from-worksheet",
+            SOURCE,
+            "--to-worksheet",
+            LATER_PATH,
+            "--definition",
+            definition,
+        ]
+        .map(str::to_owned)
+        .into()
+    }
+
+    fn fixture(first: &str, later: &str) -> Fixture {
+        let fixture = Fixture::new(first);
+        fs::write(fixture.0.join(LATER_PATH), later).unwrap();
+        fixture
+    }
+
+    fn ok(fixture: &Fixture, definition: &str) -> Envelope {
+        let (result, format) = invoke(&args(definition), &fixture.0);
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(result.exit_code, 0, "{}", result.to_json());
+        assert!(result.refusal.is_none());
+        assert!(!result.next_actions.is_empty());
+        for action in &result.next_actions {
+            let command = action.command.split_whitespace().collect::<Vec<_>>();
+            assert_eq!(command.first().copied(), Some("fmine"));
+            let tail = command[1..]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>();
+            assert!(parse_args(&tail, &fixture.0).is_ok(), "{}", action.command);
+        }
+        result
+    }
+
+    fn receipt<'a>(json: &'a str, name: &str) -> &'a str {
+        let end = match name {
+            "from_receipt" => ",\"to_receipt\":",
+            "to_receipt" => ",\"bridge\":",
+            _ => panic!("unknown receipt {name}"),
+        };
+        json.split_once(&format!("\"{name}\":"))
+            .unwrap_or_else(|| panic!("missing receipt {name}"))
+            .1
+            .split_once(end)
+            .unwrap_or_else(|| panic!("missing end of receipt {name}"))
+            .0
+    }
+
+    fn bar<'a>(json: &'a str, id: &str) -> &'a str {
+        let tail = json
+            .split_once(&format!("\"id\":\"{id}\","))
+            .unwrap_or_else(|| panic!("missing bar {id}: {json}"))
+            .1;
+        string_field(tail, "value")
+    }
+
+    fn rates(result: &Envelope) -> [&str; 3] {
+        ["rate_0", "rate_1", "total_delta"].map(|field| string_field(&result.payload_json, field))
+    }
+
+    #[test]
+    fn known_c1_and_aisc_bridges_close_with_complete_sources_and_markdown() {
+        let fixture = fixture(FIRST, LATER);
+        // Independent arithmetic: C1 numerators 980 and 1180; AISC 1200 and 1400.
+        // The 200 USD cost increase contributes 200 * (1/400 + 1/500) / 2 = 9/20.
+        for (definition, expected, sold, line_count) in [
+            (C1, ["49/20", "59/25", "-9/100"], "-27/50", 6),
+            (AISC, ["3", "14/5", "-1/5"], "-13/20", 12),
+        ] {
+            let result = ok(&fixture, definition);
+            let json = &result.payload_json;
+            assert_eq!(
+                string_field(json, "schema"),
+                "fmine.copper-waterfall.worksheets.v1"
+            );
+            assert_eq!(string_field(json, "unit"), "usd_per_lb");
+            assert_eq!(rates(&result), expected);
+            assert_eq!(bar(json, "line:cost_of_sales:cost"), "9/20");
+            assert_eq!(bar(json, "sold_volume"), sold);
+            assert_eq!(
+                json.matches("\"rule\":\"copper.waterfall.additive.line\"")
+                    .count(),
+                line_count
+            );
+            for id in [
+                "line:depreciation_amortization_removed:deduction",
+                "line:royalties_removed_from_cost_of_sales:deduction",
+                "line:costs_allocated_to_by_products:credit",
+            ] {
+                assert_eq!(bar(json, id), "0");
+            }
+            for endpoint in ["from_receipt", "to_receipt"] {
+                let retained = receipt(json, endpoint);
+                assert!(!string_field(retained, "digest").is_empty());
+                assert_eq!(string_field(retained, "definition"), definition);
+                assert!(retained.contains("\"inputs\":["));
+                assert!(retained.contains("\"canonical_body_hex\":"));
+            }
+            for source in [FIRST, LATER, REGISTRY] {
+                assert!(json.contains(&sha256(source.as_bytes()).to_hex()));
+            }
+            for field in [
+                "reported_rate_0",
+                "reported_rate_1",
+                "reported_rate_gap_0",
+                "reported_rate_gap_1",
+                "reported_rate_gap",
+            ] {
+                assert!(json.contains(&format!("\"{field}\":null")));
+            }
+            for flag in [
+                "reserve_disclosure_claim",
+                "execution_authorized",
+                "geotechnical_signoff",
+                "regulatory_compliance_claim",
+            ] {
+                assert!(result.to_json().contains(&format!("\"{flag}\":false")));
+            }
+            assert!(json.contains("sum_contributions["));
+            assert!(json.contains(":pounds_sold"));
+            assert!(
+                result
+                    .no_claim
+                    .unwrap()
+                    .contains("Assumed, Internal and uncalibrated")
+            );
+            assert_eq!(ok(&fixture, definition).to_json(), result.to_json());
+
+            let mut markdown_args = args(definition);
+            markdown_args.extend(["--format".into(), "markdown".into()]);
+            let (markdown, exit) = run(&markdown_args, &fixture.0);
+            assert_eq!(exit, 0);
+            assert_eq!(Some(&markdown), result.rendered_markdown.as_ref());
+            assert!(markdown.contains("Original period receipt"));
+            assert!(markdown.contains("Later period receipt"));
+            assert!(markdown.contains("not observation uncertainty or confidence intervals"));
+        }
+        assert_eq!(fs::read_to_string(fixture.0.join(SOURCE)).unwrap(), FIRST);
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(),
+            LATER
+        );
+    }
+
+    #[test]
+    fn negative_c1_and_changing_deductions_and_credits_stay_signed() {
+        let first = FIRST.replace(
+            "item = \"costs_allocated_to_by_products\"\nusd = \"20\"",
+            "item = \"costs_allocated_to_by_products\"\nusd = \"2000\"",
+        );
+        let later = LATER
+            .replace(
+                "item = \"costs_allocated_to_by_products\"\nusd = \"20\"",
+                "item = \"costs_allocated_to_by_products\"\nusd = \"2200\"",
+            )
+            .replace(
+                "item = \"depreciation_amortization_removed\"\nusd = \"200\"",
+                "item = \"depreciation_amortization_removed\"\nusd = \"240\"",
+            );
+        let fixture = fixture(&first, &later);
+        let result = ok(&fixture, C1);
+        // Numerators -1000 and -1040 over 400 and 500 pounds: delta 21/50.
+        // Signed cost, depreciation, credit and volume effects sum to 42/100.
+        assert_eq!(rates(&result), ["-5/2", "-52/25", "21/50"]);
+        for (id, expected) in [
+            ("line:cost_of_sales:cost", "9/20"),
+            ("line:depreciation_amortization_removed:deduction", "-9/100"),
+            ("line:costs_allocated_to_by_products:credit", "-9/20"),
+            ("sold_volume", "51/100"),
+        ] {
+            assert_eq!(bar(&result.payload_json, id), expected);
+        }
+        assert!(result.payload_json.contains("\"numerator_usd\":\"-2200\""));
+        assert!(result.payload_json.contains("\"numerator_usd\":\"-240\""));
+    }
+
+    #[test]
+    fn source_registry_and_excluded_changes_rebind_identity_without_changing_rates() {
+        let fixture = fixture(FIRST, LATER);
+        let original = ok(&fixture, C1);
+        let original_digest = string_field(&original.payload_json, "waterfall_digest");
+        let original_first =
+            string_field(receipt(&original.payload_json, "from_receipt"), "digest");
+        let original_later = string_field(receipt(&original.payload_json, "to_receipt"), "digest");
+        for changed in [
+            format!("{LATER}\n# Same declarations, changed source bytes.\n"),
+            LATER.replace(
+                "item = \"sustaining_leases\"\nusd = \"5\"",
+                "item = \"sustaining_leases\"\nusd = \"6\"",
+            ),
+        ] {
+            fs::write(fixture.0.join(LATER_PATH), &changed).unwrap();
+            let result = ok(&fixture, C1);
+            assert_eq!(rates(&result), rates(&original));
+            assert_eq!(bar(&result.payload_json, "sold_volume"), "-27/50");
+            assert_ne!(
+                string_field(&result.payload_json, "waterfall_digest"),
+                original_digest
+            );
+            assert_eq!(
+                string_field(receipt(&result.payload_json, "from_receipt"), "digest"),
+                original_first
+            );
+            assert_ne!(
+                string_field(receipt(&result.payload_json, "to_receipt"), "digest"),
+                original_later
+            );
+            assert!(
+                result
+                    .payload_json
+                    .contains(&sha256(changed.as_bytes()).to_hex())
+            );
+            assert!(
+                !result
+                    .payload_json
+                    .contains("\"id\":\"line:sustaining_leases:")
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(),
+                changed
+            );
+        }
+        let excluded = ok(&fixture, C1);
+        assert!(excluded.payload_json.contains(
+            "\"amount_minor\":\"60000\",\"treatment\":\"excluded\",\"numerator_usd\":\"0\""
+        ));
+
+        fs::write(fixture.0.join(LATER_PATH), LATER).unwrap();
+        let registry = format!("{REGISTRY}\n# Same rules, changed retained registry bytes.\n");
+        fs::write(fixture.0.join("registries/metrics.toml"), &registry).unwrap();
+        let changed = ok(&fixture, C1);
+        assert_eq!(rates(&changed), rates(&original));
+        assert_ne!(
+            string_field(&changed.payload_json, "waterfall_digest"),
+            original_digest
+        );
+        assert!(
+            changed
+                .payload_json
+                .contains(&sha256(registry.as_bytes()).to_hex())
+        );
+        for endpoint in ["from_receipt", "to_receipt"] {
+            assert_ne!(
+                string_field(receipt(&changed.payload_json, endpoint), "digest"),
+                string_field(receipt(&original.payload_json, endpoint), "digest")
+            );
+        }
+    }
+
+    #[test]
+    fn mismatched_scopes_periods_units_and_definitions_refuse_without_a_bridge() {
+        let fixture = fixture(FIRST, LATER);
+        for changed in [
+            LATER.replace("issuer = \"invented\"", "issuer = \"another\""),
+            LATER.replace("Example Copper Mine", "Another Copper Mine"),
+            LATER.replace("Invented nominal USD", "Different nominal USD"),
+            LATER.replace(
+                "ownership = \"full\"",
+                "ownership = \"attributable\"\nownership_share = \"1/2\"",
+            ),
+            LATER.replace("2031FY", "2030FY"),
+            LATER.replace("2031FY", "2029FY"),
+            LATER.replace("2031FY", "2031H1"),
+            LATER.replace("pounds_sold = \"500\"", "ounces_sold = \"500\""),
+        ] {
+            fs::write(fixture.0.join(LATER_PATH), &changed).unwrap();
+            let result = invoke(&args(C1), &fixture.0).0;
+            assert_ne!(result.exit_code, 0, "accepted {changed}");
+            assert_eq!(result.refusal.as_ref().unwrap().code, "FMINE-REF-105");
+            assert_eq!(result.payload_json, "null");
+            assert!(result.rendered_markdown.is_none());
+            assert_eq!(
+                fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(),
+                changed
+            );
+        }
+        fs::write(fixture.0.join(LATER_PATH), LATER).unwrap();
+        for definition in ["missing@invented", "aisc@wgc-2018"] {
+            let result = invoke(&args(definition), &fixture.0).0;
+            assert_eq!(result.refusal.as_ref().unwrap().code, "FMINE-REF-105");
+            assert_eq!(result.payload_json, "null");
+        }
+        // An omitted included component must not silently become a zero observation.
+        let missing = LATER.replace(
+            "[[cost]]\nitem = \"treatment_refining_charges\"\nusd = \"100\"\n",
+            "",
+        );
+        fs::write(fixture.0.join(LATER_PATH), missing).unwrap();
+        let result = invoke(&args(C1), &fixture.0).0;
+        let refusal = result.refusal.as_ref().unwrap();
+        assert_eq!(refusal.code, "FMINE-REF-104");
+        assert!(refusal.what.contains("populations differ"));
+        assert_eq!(result.payload_json, "null");
+    }
+
+    #[test]
+    fn separately_admitted_co_product_allocations_must_match_between_periods() {
+        let definition = "c1.copper.co_product@synthetic";
+        let declarations = r#"
+[[definition]]
+id = "c1.copper.co_product@synthetic"
+family = "cash_cost"
+unit = "USD/lb"
+formula = "synthetic copper allocation control"
+source = "invented arithmetic, no issuer claim"
+evidence = "E0"
+credit_basis = "co_product"
+extends = "c1.copper@barrick-q2-2026"
+"#;
+        let first = FIRST.replace("complete =", "copper_share = \"1/2\"\ncomplete =");
+        let later = LATER.replace("complete =", "copper_share = \"3/4\"\ncomplete =");
+        let fixture = fixture(&first, &later);
+        fs::write(
+            fixture.0.join("registries/metrics.toml"),
+            format!("{REGISTRY}{declarations}"),
+        )
+        .unwrap();
+        fixture.ok(definition);
+        let mut later_cost = Fixture::args(definition);
+        later_cost[3] = LATER_PATH.into();
+        assert_eq!(invoke(&later_cost, &fixture.0).0.exit_code, 0);
+        let result = invoke(&args(definition), &fixture.0).0;
+        assert_eq!(result.refusal.as_ref().unwrap().code, "FMINE-REF-105");
+        assert_eq!(result.payload_json, "null");
+    }
+
+    #[test]
+    fn distinct_projects_group_exactly_without_losing_original_contribution_claims() {
+        let definition = "copper.projects@synthetic";
+        let declarations = r#"
+[[definition]]
+id = "copper.projects@synthetic"
+family = "all_in_cost"
+unit = "USD/lb"
+formula = "synthetic sustaining project sum per sold copper pound"
+source = "invented known-answer fixture, no issuer claim"
+evidence = "E0"
+[[line]]
+definition = "copper.projects@synthetic"
+letter = "S"
+item = "capital_expenditure_sustaining"
+[[project_test]]
+definition = "copper.projects@synthetic"
+material_uplift_percent = "10"
+net_cash_months = 12
+extension_months = 12
+ore_phase_years = 5
+"#;
+        let projects = r#"schema = "fmine.cost-worksheet.v1"
+issuer = "invented"
+subject = "Site A"
+period = "2030Q1"
+ownership = "full"
+basis = "nominal USD accrual"
+currency = "USD"
+complete = "true"
+pounds_sold = "100"
+
+[[project_cost]]
+id = "one"
+cost_kind = "capital_expenditure"
+usd = "20"
+classification_rule = "copper.projects@synthetic"
+project_kind = "existing_operation"
+uplift_percent = "0"
+months_to_net_cash = "0"
+
+[[project_cost]]
+id = "two"
+cost_kind = "capital_expenditure"
+usd = "30"
+classification_rule = "copper.projects@synthetic"
+project_kind = "existing_operation"
+uplift_percent = "0"
+months_to_net_cash = "0"
+"#;
+        let later = projects
+            .replace("2030Q1", "2030Q2")
+            .replace("usd = \"30\"", "usd = \"50\"")
+            .replace("usd = \"20\"", "usd = \"30\"");
+        let fixture = fixture(projects, &later);
+        fs::write(
+            fixture.0.join("registries/metrics.toml"),
+            format!("{REGISTRY}{declarations}"),
+        )
+        .unwrap();
+        let result = ok(&fixture, definition);
+        let json = &result.payload_json;
+        assert_eq!(rates(&result), ["1/2", "4/5", "3/10"]);
+        assert_eq!(
+            bar(json, "line:capital_expenditure_sustaining:cost"),
+            "3/10"
+        );
+        assert_eq!(bar(json, "sold_volume"), "0");
+        assert_eq!(
+            json.matches("\"id\":\"line:capital_expenditure_sustaining:cost\"")
+                .count(),
+            1
+        );
+        assert!(json.contains("sum_contributions["));
+        assert!(string_field(json, "component_grouping").contains("exact sum"));
+        for endpoint in ["from_receipt", "to_receipt"] {
+            let retained = receipt(json, endpoint);
+            let contributions = retained
+                .split_once("\"contributions\":[")
+                .unwrap()
+                .1
+                .split_once(']')
+                .unwrap()
+                .0;
+            let ids = contributions
+                .split("\"input_claim_id\":\"")
+                .skip(1)
+                .map(|tail| tail.split('"').next().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(ids.len(), 2);
+            assert_ne!(ids[0], ids[1]);
+            for id in ids {
+                assert!(retained.contains(&format!("\"claim_id\":\"{id}\"")));
+            }
+            for project in ["one", "two"] {
+                assert!(retained.contains(&format!("\"id\":\"{project}\"")));
+            }
+        }
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(SOURCE)).unwrap(),
+            projects
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(),
+            later
+        );
+    }
+}
