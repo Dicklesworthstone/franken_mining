@@ -30,12 +30,17 @@ Callers: fmine-calib, fmine-claim, fmine-cli, fmine-decide, fmine-registry and x
 ## 4. Invariants
 - Period attribution follows `[start_ns, end_ns)` (plan §6.3, §25.4): adjacent periods do not overlap and a cutoff instant belongs only to the following period. Equal instants overlap and contain one another. Tests: `test_valid_time_half_open_boundaries_and_instant_containment`, `test_valid_time_operations_match_discrete_physical_time_sets`, `test_physical_period_cut_assigns_movements_once_with_late_assays`.
 - INV-012, cross-cell references resolve at the consumer's anchor or are not observable. Records are ordered by commit, never by wall clock: `RecordTime::commit_order` orders commits of one cell by `seq` and gives `None` across cells, and the anchor alone decides cross-cell visibility. Only the anchor half is here; digest checks are BD-108's. Tests: `test_record_order_is_by_seq_within_a_cell_and_none_across_cells`, `test_cross_cell_visibility_follows_the_anchor_not_the_wall_clock`.
-- INV-016, no availability lookahead. `as_of(t, anchor)` holds when `availability_time ≤ t` and the anchor holds `record_time`, and it is monotone in `t`. Tests: `test_quad_temporal_assay_lag_guard_g_time_2`, `test_fire_assay_lag_of_3_to_21_days_is_refused_until_available`, `test_late_reading_is_invisible_until_available_and_committed`, `test_as_of_is_monotone_in_t`.
+- INV-016, no availability lookahead. `as_of(t, anchor)` holds when `availability_time ≤ t` and the anchor holds `record_time`, and it is monotone in `t`. Tests: `test_quad_temporal_assay_lag_guard_g_time_2`, `test_fire_assay_lags_are_refused_until_available`, `test_late_reading_is_invisible_until_available_and_committed`, `test_as_of_is_monotone_in_t`.
 - The four times stay separate, and no stamp holds an impossible order: `test_stamp_keeps_the_four_times_apart`, `test_stamp_admits_no_lag_and_a_record_before_availability`.
+- Collection can occur at or after the start of physical support, including a survey of a finished period
+  (§25.4). The stamp validates physical interval bounds even for a directly constructed `ValidTime`.
+  Test: `test_stamp_requires_a_valid_physical_start_at_collection`.
 
 ## 5. Refusals
 - `TimeError::AssayLagLookahead` (G-TIME-2) → FMINE-REF-108, assay-availability lookahead, exit 3 (`src/lib.rs:63`). This is the only variant `refusal_code` maps, and it is a string because the crate sits below `fmine-evidence`.
 - The other typed errors carry no code:
+  - `CollectionBeforePhysicalStart`: collection precedes the start of physical support. The forecast assessment
+    adapter surfaces this as `FMINE-REF-110` for a supplied observation.
   - `StampOrder`: availability, or the commit's wall-clock reading, before collection. Tests: `test_stamp_refuses_availability_before_collection`, `test_stamp_refuses_record_before_collection`.
   - `CellNotInAnchor`: reported upstream as not observable. Test: `test_cell_missing_from_the_anchor_is_not_observable`.
   - `AnchorCellRepeated`: never resolved by max or min. Test: `test_anchor_reads_ledger_anchors_and_refuses_a_cell_named_twice`.
@@ -64,8 +69,8 @@ Not applicable: no Claims are emitted. `TimeEvidence` records how a commit's wal
 - `fixtures/fmine-time/zone_oracle_1970_2100.txt`: CPython `zoneinfo` over tzdata 2026e, made by `scripts/oracle/zone_snapshot.py`, with its capture record. Its test, `test_po_time_3_zone_snapshot_matches_the_pinned_oracle_table`, lives in fmine-registry, which loads the snapshot.
 
 ## 10. Known gaps
-- BD-028 (bd-028), BD-029 (bd-029) and BD-309 (bd-309): the code and tests exist, but each stays open behind its blockers. bd-028 waits on bd-016 (the GATE-LAYERS-00 chain); bd-029 waits on bd-028; bd-309 waits on bd-028, bd-032 and bd-g507.
-- NEW (bd-g507): the four-field stamp needs verification by someone other than its author.
+- BD-309 (bd-309) still waits on bd-g507. The four-field stamp is used by source observations in
+  forecast assessment. Wiring it into all Claims and their identity remains open.
 - No FMINE-REF code exists for the stamp-order, anchor and zone refusals (BD-328 owns the registry).
 
 ## 11. Public API
@@ -76,5 +81,5 @@ Not applicable: no Claims are emitted. `TimeEvidence` records how a commit's wal
 
 ## 12. Proof obligations
 - PO-TIME-1 (civil dates biject with epoch days from 1900 to 2200, and agree with the oracle): `test_civil_calendar_roundtrip_1900_to_2200`, `test_po_time_1_calendar_matches_the_pinned_oracle_table`.
-- PO-TIME-2 (`as_of_decision(t_dec)` excludes every record available after `t_dec`, even when its physical time is earlier): `test_quad_temporal_assay_lag_guard_g_time_2`, `test_fire_assay_lag_of_3_to_21_days_is_refused_until_available`. The second test sweeps lags of 3 to 21 days, where the plan says 1 to 21. An operational `check_admissible` refuses with FMINE-REF-108, and a `RetrospectiveAccounting` query admits the stamp once the anchor holds it. The old contract named a method `AsOfQuery::admits`, which does not exist.
+- PO-TIME-2 (`as_of_decision(t_dec)` excludes every record available after `t_dec`, even when its physical time is earlier): `test_quad_temporal_assay_lag_guard_g_time_2`, `test_fire_assay_lags_are_refused_until_available`. The second test sweeps all lags from 1 to 21 days. An operational `check_admissible` refuses with FMINE-REF-108, and a `RetrospectiveAccounting` query admits the stamp once the anchor holds it.
 - PO-TIME-3 (offsets, local times and day cuts agree with the zone oracle; it is not in the plan's PO table, but is named in bd-029 and `fmine-registry`): `test_po_time_3_zone_snapshot_matches_the_pinned_oracle_table`, `test_site_day_cut_follows_daylight_saving`, `test_zone_offset_holds_from_each_transition_second`.

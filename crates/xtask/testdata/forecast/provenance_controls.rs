@@ -71,6 +71,22 @@ mod tests {
     }
 
     #[test]
+    fn observation_collection_before_physical_support_refuses_assessment() {
+        let changed = BUNDLE.replace(
+            "collected_at = \"2026-06-10T16:00:00Z\"",
+            "collected_at = \"2026-06-09T16:00:00Z\"",
+        );
+        assert_ne!(changed, BUNDLE);
+        let error = check(&changed, LEDGER).expect_err("impossible observation");
+        assert_eq!(error.refusal.code, "FMINE-REF-110");
+        assert!(
+            error.refusal.what.contains("before physical_valid_time"),
+            "{}",
+            error.refusal.what
+        );
+    }
+
+    #[test]
     fn fitted_input_exclusion_and_deck_leaks_refuse_with_frontier_paths() {
         for (before, node) in [
             (

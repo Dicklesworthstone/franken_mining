@@ -27,6 +27,11 @@ pub enum TimeError {
         availability_time: i64,
         as_of_decision_ns: i64,
     },
+    /// Plan §25.4 requires collection at or after the start of the physical support.
+    CollectionBeforePhysicalStart {
+        collection_time: i64,
+        physical_start_ns: i64,
+    },
     /// A `QuadTemporalStamp` instant before its `collection_time`: impossible, so refused, never reordered.
     StampOrder {
         field: &'static str,
@@ -89,6 +94,13 @@ impl fmt::Display for TimeError {
             } => write!(
                 f,
                 "FMINE-REF-108: available at {availability_time} > decision time {as_of_decision_ns}"
+            ),
+            Self::CollectionBeforePhysicalStart {
+                collection_time,
+                physical_start_ns,
+            } => write!(
+                f,
+                "collection_time {collection_time} is before physical_valid_time start {physical_start_ns}"
             ),
             Self::StampOrder {
                 field,
@@ -647,14 +659,21 @@ pub struct QuadTemporalStamp {
 }
 
 impl QuadTemporalStamp {
-    /// Builds a stamp. Refuses `availability_time`, or the commit's wall-clock reading, before `collection_time`
-    /// ([`TimeError::StampOrder`]); nothing is reordered or clamped.
+    /// Builds a stamp with valid physical support and collection at or after its start (§25.4).
+    /// Availability and the commit's wall-clock reading must also be at or after collection.
     pub fn new(
         physical_valid_time: ValidTime,
         collection_time: i64,
         availability_time: i64,
         record_time: RecordTime,
     ) -> Result<Self, TimeError> {
+        ValidTime::new(physical_valid_time.start_ns, physical_valid_time.end_ns)?;
+        if collection_time < physical_valid_time.start_ns {
+            return Err(TimeError::CollectionBeforePhysicalStart {
+                collection_time,
+                physical_start_ns: physical_valid_time.start_ns,
+            });
+        }
         if availability_time < collection_time {
             return Err(TimeError::StampOrder {
                 field: "availability_time",
@@ -1135,11 +1154,11 @@ mod tests {
         }
     }
 
-    /// BD-309: fire-assay turnarounds of 3 to 21 days (plan §6.3). Every routing decision taken while the
+    /// BD-309: assay turnarounds of 1 to 21 days (plan §39). Every routing decision taken while the
     /// certificate is outstanding, to the last nanosecond, refuses with FMINE-REF-108 (G-TIME-2). From the instant it
     /// is available the routing query admits it, and a period close admits it at any decision time.
     #[test]
-    fn test_fire_assay_lag_of_3_to_21_days_is_refused_until_available() {
+    fn test_fire_assay_lags_are_refused_until_available() {
         let collected = 2 * NS_PER_DAY + 7 * NS_PER_HOUR;
         let period = ValidTime::new(0, 30 * NS_PER_DAY).unwrap();
         let query = |t: i64, purpose| AsOfQuery {
@@ -1148,13 +1167,13 @@ mod tests {
             for_physical_period: period,
             purpose,
         };
-        for lag_days in 3..=21 {
+        for lag_days in 1..=21 {
             let available = collected + lag_days * NS_PER_DAY;
             let stamp = QuadTemporalStamp::new(
                 ValidTime::instant(collected),
                 collected,
                 available,
-                RecordTime::new(SITE, 1, collected + NS_PER_HOUR, TimeEvidence::HostSynced),
+                RecordTime::new(SITE, 1, collected, TimeEvidence::HostSynced),
             )
             .unwrap();
             let outstanding = (collected..available)
@@ -1247,6 +1266,44 @@ mod tests {
                 collection_time: 10,
             })
         );
+    }
+
+    #[test]
+    fn test_stamp_requires_a_valid_physical_start_at_collection() {
+        let physical = ValidTime::new(10, 14).unwrap();
+        let stamp = |physical, collected| {
+            QuadTemporalStamp::new(
+                physical,
+                collected,
+                20,
+                RecordTime::new(SITE, 1, 21, TimeEvidence::HostSynced),
+            )
+        };
+        assert_eq!(
+            stamp(physical, 9),
+            Err(TimeError::CollectionBeforePhysicalStart {
+                collection_time: 9,
+                physical_start_ns: 10,
+            })
+        );
+        assert_eq!(
+            stamp(
+                ValidTime {
+                    start_ns: 14,
+                    end_ns: 10
+                },
+                14
+            ),
+            Err(TimeError::InvalidInterval {
+                start_ns: 14,
+                end_ns: 10
+            })
+        );
+        for collected in [10, 11, 15] {
+            let stamp = stamp(physical, collected).unwrap();
+            assert_eq!(stamp.physical_valid_time(), physical);
+            assert_eq!(stamp.collection_time(), collected);
+        }
     }
 
     /// Ownership, tenure and fiscal records have no sampling lag (§6.3), and a ledger may commit a sample before
