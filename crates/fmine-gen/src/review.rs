@@ -562,7 +562,7 @@ pub struct ReviewPacket {
 /// before an issuer reader.
 pub fn parse_seed_class(token: &str) -> Result<SeedClass, Refusal> {
     let normalized = token.trim().to_ascii_lowercase().replace(['_', ' '], "-");
-    if normalized == "basis-switch" || normalized == "basisswitch" {
+    if normalized.contains("basis-switch") || normalized.contains("basisswitch") {
         return Err(Refusal::new(
             RefusalCode::MnpiWall301,
             "seed class 'basis-switch' is permanently excluded (BD-357, RISK-32): an issuer-attributed false figure is never placed before an issuer reader",
@@ -793,9 +793,42 @@ fn path_touches_forbidden_dir(path: &Path) -> Option<&'static str> {
 
 /// Materialize a [`ReviewPacket`] to `dir` (`review-packet.toml` + `items/<item_id>.txt`).
 ///
-/// Refuses (`FMINE-REF-301`) any path inside `.beads/` or `corpus_of_input_docs/` (including
-/// via existing symlinked ancestors) so packet items can never enter tracker or corpus directories.
+/// Enforces:
+/// - manifest integrity: a packet containing any [`SaltedItem`] can never be written with an
+///   unsalted manifest (`FMINE-REF-301`), and `manifest.sha256` / `round_id` / `item_ids` must
+///   match the packet contents (`FMINE-REF-505`);
+/// - forbidden-path isolation: refuses (`FMINE-REF-301`) any path inside `.beads/` or
+///   `corpus_of_input_docs/` (including relative paths rooted in those dirs or symlinked ancestors).
 pub fn write_packet_dir(dir: &Path, packet: &ReviewPacket) -> Result<PathBuf, Refusal> {
+    let has_salted = packet
+        .items
+        .iter()
+        .any(|it| matches!(it, PacketItem::Salted(_)));
+    if has_salted && packet.manifest.packet != PacketKind::Salted {
+        return Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            "salted review packet cannot be written with an unsalted manifest (BD-357.S2, RISK-32)",
+        ));
+    }
+    let expected_ids: Vec<&str> = packet.items.iter().map(PacketItem::item_id).collect();
+    let manifest_ids: Vec<&str> = packet
+        .manifest
+        .item_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let expected_sha =
+        compute_packet_sha256(&packet.round_id, packet.manifest.packet, &packet.items);
+    if packet.manifest.round_id != packet.round_id
+        || manifest_ids != expected_ids
+        || packet.manifest.sha256 != expected_sha
+    {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            "review packet manifest does not match packet contents; refusing to materialize",
+        ));
+    }
+
     if let Some(forbidden) = path_touches_forbidden_dir(dir) {
         return Err(Refusal::new(
             RefusalCode::MnpiWall301,
@@ -805,8 +838,30 @@ pub fn write_packet_dir(dir: &Path, packet: &ReviewPacket) -> Result<PathBuf, Re
             ),
         ));
     }
-    for ancestor in dir.ancestors() {
-        if ancestor.exists()
+    let abs_dir = if dir.is_absolute() {
+        dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| {
+                Refusal::new(
+                    RefusalCode::InputMissingOrUnreadable506,
+                    format!("unable to resolve current working directory for packet output: {e}"),
+                )
+            })?
+            .join(dir)
+    };
+    if let Some(forbidden) = path_touches_forbidden_dir(&abs_dir) {
+        return Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            format!(
+                "refusing to write review packet into forbidden directory '{forbidden}': {}",
+                abs_dir.display()
+            ),
+        ));
+    }
+    for ancestor in abs_dir.ancestors() {
+        if !ancestor.as_os_str().is_empty()
+            && ancestor.exists()
             && let Ok(canon) = ancestor.canonicalize()
             && let Some(forbidden) = path_touches_forbidden_dir(&canon)
         {
@@ -1176,6 +1231,7 @@ mod tests {
             "BASIS_SWITCH",
             "Basis Switch",
             "basisswitch",
+            "issuer-basis-switch",
         ] {
             let err = parse_seed_class(forbidden).unwrap_err();
             assert_eq!(err.code, RefusalCode::MnpiWall301.spec().code);
@@ -1353,7 +1409,70 @@ mod tests {
         assert!(unsalted_manifest.is_file());
         fmine_public::refuse_if_salted(&dir_unsalted).unwrap();
 
+        // Tampering a salted packet's manifest to Unsalted refuses with FMINE-REF-301.
+        let (mut tampered_kind, _) = build_packet(
+            "round-1",
+            &sample_real_records(),
+            &sample_seed_requests(),
+            [0x55; 32],
+        )
+        .unwrap();
+        tampered_kind.manifest.packet = PacketKind::Unsalted;
+        assert_eq!(
+            write_packet_dir(&dir_salted, &tampered_kind)
+                .unwrap_err()
+                .code,
+            RefusalCode::MnpiWall301.spec().code
+        );
+
+        // Tampering a manifest digest refuses with FMINE-REF-505.
+        let (mut tampered_sha, _) = build_packet(
+            "round-1",
+            &sample_real_records(),
+            &sample_seed_requests(),
+            [0x55; 32],
+        )
+        .unwrap();
+        tampered_sha.manifest.sha256 = Digest32([0u8; 32]);
+        assert_eq!(
+            write_packet_dir(&dir_salted, &tampered_sha)
+                .unwrap_err()
+                .code,
+            RefusalCode::DigestMismatch505.spec().code
+        );
+
+        // Section-smuggled `packet = "unsalted"` inside a TOML table fails closed with FMINE-REF-301,
+        // and BOM-prefixed manifests are parsed cleanly.
+        let dir_edge = std::env::temp_dir().join(format!("fmine-review-edge-{pid}"));
+        let _ = std::fs::remove_dir_all(&dir_edge);
+        std::fs::create_dir_all(&dir_edge).unwrap();
+        std::fs::write(
+            dir_edge.join(REVIEW_PACKET_MANIFEST),
+            "[metadata]\npacket = \"unsalted\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            fmine_public::refuse_if_salted(&dir_edge).unwrap_err().code,
+            RefusalCode::MnpiWall301.spec().code
+        );
+        std::fs::write(
+            dir_edge.join(REVIEW_PACKET_MANIFEST),
+            "\u{FEFF}packet = \"salted\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            fmine_public::refuse_if_salted(&dir_edge).unwrap_err().code,
+            RefusalCode::MnpiWall301.spec().code
+        );
+        std::fs::write(
+            dir_edge.join(REVIEW_PACKET_MANIFEST),
+            "\u{FEFF}packet = \"unsalted\"\n",
+        )
+        .unwrap();
+        fmine_public::refuse_if_salted(&dir_edge).unwrap();
+
         let _ = std::fs::remove_dir_all(&dir_salted);
         let _ = std::fs::remove_dir_all(&dir_unsalted);
+        let _ = std::fs::remove_dir_all(&dir_edge);
     }
 }

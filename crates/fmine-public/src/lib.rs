@@ -151,6 +151,9 @@ fn hex(bytes: &[u8; 32]) -> String {
 /// Filename of the salted internal-review packet manifest checked before any public export (`BD-357.S2`).
 pub const REVIEW_PACKET_MANIFEST: &str = "review-packet.toml";
 
+/// Upper size bound (1 MiB) for `review-packet.toml` reads in `refuse_if_salted`.
+const MAX_REVIEW_MANIFEST_BYTES: u64 = 1_048_576;
+
 fn parse_quoted_toml_value(raw: &str) -> Option<&str> {
     let trimmed = raw.trim();
     let quote = trimmed.as_bytes().first().copied()?;
@@ -158,7 +161,23 @@ fn parse_quoted_toml_value(raw: &str) -> Option<&str> {
         return None;
     }
     let rest = &trimmed[1..];
-    let end = rest.find(quote as char)?;
+    let mut end = None;
+    let mut escaped = false;
+    for (idx, ch) in rest.char_indices() {
+        if quote == b'"' && escaped {
+            escaped = false;
+            continue;
+        }
+        if quote == b'"' && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch as u32 == u32::from(quote) {
+            end = Some(idx);
+            break;
+        }
+    }
+    let end = end?;
     let trailing = rest[end + 1..].trim();
     if !trailing.is_empty() && !trailing.starts_with('#') {
         return None;
@@ -168,9 +187,33 @@ fn parse_quoted_toml_value(raw: &str) -> Option<&str> {
 
 /// Export-lane guard (`BD-357.S2`, `RISK-32`): refuses before loading any source if `dir` contains a
 /// `review-packet.toml` marking a salted internal-review packet (`packet = "salted"`), or if the manifest
-/// is unreadable/malformed (fail-closed with `FMINE-REF-301`). Absent or `packet = "unsalted"` passes.
+/// is unreadable, oversized, section-smuggled, or malformed (fail-closed with `FMINE-REF-301`). Absent or
+/// top-level `packet = "unsalted"` passes.
 pub fn refuse_if_salted(dir: &Path) -> Result<(), Refusal> {
     let manifest = dir.join(REVIEW_PACKET_MANIFEST);
+    let meta = match std::fs::metadata(&manifest) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(Refusal::new(
+                RefusalCode::MnpiWall301,
+                format!(
+                    "salted-review guard: unable to stat {}: {err}",
+                    manifest.display()
+                ),
+            ));
+        }
+    };
+    if meta.len() > MAX_REVIEW_MANIFEST_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            format!(
+                "salted-review guard: {} exceeds {MAX_REVIEW_MANIFEST_BYTES} bytes ({} bytes); refusing closed",
+                manifest.display(),
+                meta.len()
+            ),
+        ));
+    }
     let text = match std::fs::read_to_string(&manifest) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -184,10 +227,16 @@ pub fn refuse_if_salted(dir: &Path) -> Result<(), Refusal> {
             ));
         }
     };
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
+    let mut in_root = true;
     let mut packet_kind: Option<&str> = None;
     for raw_line in text.lines() {
         let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_root = false;
             continue;
         }
         let Some((lhs, rhs)) = line.split_once('=') else {
@@ -195,6 +244,15 @@ pub fn refuse_if_salted(dir: &Path) -> Result<(), Refusal> {
         };
         if lhs.trim() != "packet" {
             continue;
+        }
+        if !in_root {
+            return Err(Refusal::new(
+                RefusalCode::MnpiWall301,
+                format!(
+                    "salted-review guard: 'packet' declared inside a table section in {}; must appear at root; refusing closed",
+                    manifest.display()
+                ),
+            ));
         }
         if packet_kind.is_some() {
             return Err(Refusal::new(

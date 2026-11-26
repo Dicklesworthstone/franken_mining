@@ -586,6 +586,7 @@ pub fn registered_issuers(workspace: &Path) -> Vec<String> {
 /// malformed file refuses (`FMINE-REF-506`, registered input missing or unreadable; exit 5) naming the file
 /// and the line.
 pub fn load_issuer_profile(workspace: &Path, issuer: &str) -> Result<IssuerProfile, Refusal> {
+    crate::refuse_if_salted(workspace)?;
     if !is_issuer_name(issuer) {
         return Err(crate::input_refusal(format!(
             "issuer {issuer:?} is not a registry name"
