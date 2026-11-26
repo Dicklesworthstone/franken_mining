@@ -232,10 +232,15 @@ def snapshot_path_arg(src: Path, dst_root: Path, slot_name: str) -> tuple[str, l
 
 def normalize_output(data: bytes, path_rewrites: list[dict[str, str]]) -> bytes:
     text = data.decode("utf-8", errors="replace")
-    for rw in sorted(path_rewrites, key=lambda r: len(r["original"]), reverse=True):
-        orig = rw["original"]
-        if orig:
-            text = text.replace(orig, f"<CRASHPACK:{rw['slot']}>")
+    patterns: list[tuple[str, str]] = []
+    for rw in path_rewrites:
+        slot = rw.get("slot", "")
+        for key in ("original", "original_resolved"):
+            val = rw.get(key)
+            if val:
+                patterns.append((val, slot))
+    for pat, slot in sorted(patterns, key=lambda item: len(item[0]), reverse=True):
+        text = text.replace(pat, f"<CRASHPACK:{slot}>")
     return text.encode("utf-8")
 
 
@@ -324,15 +329,17 @@ def write_crashpack(
                 rel_target, captured = snapshot_path_arg(candidate, pack_dir, slot_name)
                 if rel_target:
                     files_inventory.extend(captured)
-                    path_rewrites.append(
-                        {
-                            "flag": flag_name,
-                            "arg_index": str(val_arg_idx),
-                            "slot": slot_name,
-                            "original": raw_val,
-                            "captured_rel": rel_target,
-                        }
-                    )
+                    resolved_val = str(candidate.resolve())
+                    rw_entry = {
+                        "flag": flag_name,
+                        "arg_index": str(val_arg_idx),
+                        "slot": slot_name,
+                        "original": raw_val,
+                        "captured_rel": rel_target,
+                    }
+                    if resolved_val != raw_val:
+                        rw_entry["original_resolved"] = resolved_val
+                    path_rewrites.append(rw_entry)
                     if eq_flag is not None:
                         replay_args[val_arg_idx] = f"{eq_flag}=@CRASHPACK/{rel_target}"
                     else:
@@ -666,10 +673,24 @@ def cmd_replay(ns: argparse.Namespace) -> int:
 
     # Verify every recorded file's safe relative path, exact byte size, and SHA-256,
     # and refuse any unexpected or symlinked files injected into the CrashPack directory.
+    manifest_files = manifest.get("files")
+    if not isinstance(manifest_files, list):
+        print("CrashPack corrupt: manifest files inventory is not a list", file=sys.stderr)
+        return 2
     expected_rels: set[str] = set()
-    for entry in manifest.get("files", []):
+    for entry in manifest_files:
+        if not isinstance(entry, dict):
+            print("CrashPack corrupt: invalid file inventory entry", file=sys.stderr)
+            return 2
         rel = entry.get("rel_path")
-        if not isinstance(rel, str) or not rel:
+        expected_sha = entry.get("sha256")
+        expected_bytes = entry.get("bytes")
+        if (
+            not isinstance(rel, str)
+            or not rel
+            or not isinstance(expected_sha, str)
+            or not isinstance(expected_bytes, int)
+        ):
             print("CrashPack corrupt: invalid file inventory entry", file=sys.stderr)
             return 2
         rel_obj = Path(rel)
@@ -682,9 +703,9 @@ def cmd_replay(ns: argparse.Namespace) -> int:
             print(f"CrashPack corrupt: missing or non-regular file {rel}", file=sys.stderr)
             return 2
         actual_sha = sha256_file(fpath)
-        if actual_sha != entry["sha256"] or fpath.stat().st_size != entry["bytes"]:
+        if actual_sha != expected_sha or fpath.stat().st_size != expected_bytes:
             print(
-                f"CrashPack tamper detected on {rel}: expected sha256 {entry['sha256']} ({entry['bytes']}B), "
+                f"CrashPack tamper detected on {rel}: expected sha256 {expected_sha} ({expected_bytes}B), "
                 f"got {actual_sha} ({fpath.stat().st_size}B)",
                 file=sys.stderr,
             )

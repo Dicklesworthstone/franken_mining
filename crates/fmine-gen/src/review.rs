@@ -1471,6 +1471,47 @@ mod tests {
         .unwrap();
         fmine_public::refuse_if_salted(&dir_edge).unwrap();
 
+        // Quoted duplicate key (`packet = "unsalted"` + `"packet" = "salted"`) refuses closed.
+        std::fs::write(
+            dir_edge.join(REVIEW_PACKET_MANIFEST),
+            "packet = \"unsalted\"\n\"packet\" = \"salted\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            fmine_public::refuse_if_salted(&dir_edge).unwrap_err().code,
+            RefusalCode::MnpiWall301.spec().code
+        );
+
+        // Non-regular directory named review-packet.toml refuses closed.
+        let dir_nonfile = std::env::temp_dir().join(format!("fmine-review-dir-{pid}"));
+        let _ = std::fs::remove_dir_all(&dir_nonfile);
+        std::fs::create_dir_all(dir_nonfile.join(REVIEW_PACKET_MANIFEST)).unwrap();
+        assert_eq!(
+            fmine_public::refuse_if_salted(&dir_nonfile)
+                .unwrap_err()
+                .code,
+            RefusalCode::MnpiWall301.spec().code
+        );
+        let _ = std::fs::remove_dir_all(&dir_nonfile);
+
+        // Dangling symlink named review-packet.toml refuses closed (never treated as absent).
+        #[cfg(unix)]
+        {
+            let dir_sym = std::env::temp_dir().join(format!("fmine-review-sym-{pid}"));
+            let _ = std::fs::remove_dir_all(&dir_sym);
+            std::fs::create_dir_all(&dir_sym).unwrap();
+            std::os::unix::fs::symlink(
+                dir_sym.join("nonexistent-target.toml"),
+                dir_sym.join(REVIEW_PACKET_MANIFEST),
+            )
+            .unwrap();
+            assert_eq!(
+                fmine_public::refuse_if_salted(&dir_sym).unwrap_err().code,
+                RefusalCode::MnpiWall301.spec().code
+            );
+            let _ = std::fs::remove_dir_all(&dir_sym);
+        }
+
         let _ = std::fs::remove_dir_all(&dir_salted);
         let _ = std::fs::remove_dir_all(&dir_unsalted);
         let _ = std::fs::remove_dir_all(&dir_edge);

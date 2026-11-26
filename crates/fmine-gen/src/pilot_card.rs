@@ -2082,6 +2082,10 @@ pub mod north_mara {
             }
             if !self.min_power.is_finite()
                 || !self.max_power.is_finite()
+                || !self.max_mc_se.is_finite()
+                || self.min_power < 0.0
+                || self.max_power > 1.0
+                || self.max_mc_se < 0.0
                 || self.min_power > self.max_power
             {
                 return Err(Refusal::new(
@@ -2264,6 +2268,14 @@ pub mod north_mara {
             ));
         }
 
+        let unique_subset: Vec<&str> = subset
+            .iter()
+            .copied()
+            .collect::<BTreeSet<&str>>()
+            .into_iter()
+            .collect();
+        let subset_brick = subset_stream_brick(&unique_subset);
+
         let z_crit = 1.959_963_984_540_054;
         let mut min_power = 1.0_f64;
         let mut max_power = 0.0_f64;
@@ -2271,7 +2283,7 @@ pub mod north_mara {
         let mut first_refusal: Option<Refusal> = None;
 
         for (t_idx, twin) in family.twins.iter().enumerate() {
-            let (snr, refusal) = grade_led_cause_snr(twin, subset, cause);
+            let (snr, refusal) = grade_led_cause_snr(twin, &unique_subset, cause);
             if refusal.is_some() && first_refusal.is_none() {
                 first_refusal = refusal.clone();
             }
@@ -2282,9 +2294,9 @@ pub mod north_mara {
                     seed_root,
                     partition: 356,
                     domain: 40 + (cause as u32),
-                    var_group: subset.len() as u32,
+                    var_group: unique_subset.len() as u32,
                     realization: t_idx as u32,
-                    brick: subset_stream_brick(subset),
+                    brick: subset_brick,
                 });
                 let mut detected = 0usize;
                 for _ in 0..replicates {
@@ -2309,7 +2321,7 @@ pub mod north_mara {
         }
 
         Ok(GradeLedPowerEnvelope {
-            subset: subset.iter().map(|s| (*s).to_string()).collect(),
+            subset: unique_subset.into_iter().map(str::to_string).collect(),
             cause,
             twins_evaluated: family.twins.len(),
             min_power,
@@ -2340,6 +2352,27 @@ pub mod north_mara {
                 "label_grade_led_candidate_files requires non-empty candidates and top_n >= 1",
             ));
         }
+        let mut seen_names = BTreeSet::new();
+        for cand in candidates {
+            if cand.name.trim().is_empty() || !seen_names.insert(cand.name.as_str()) {
+                return Err(Refusal::new(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    format!(
+                        "empty or duplicate North Mara candidate file name {:?}",
+                        cand.name
+                    ),
+                ));
+            }
+            if !(cand.extraction_cost.is_finite() && cand.extraction_cost > 0.0) {
+                return Err(Refusal::new(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    format!(
+                        "North Mara candidate file '{}' requires finite extraction_cost > 0 (got {})",
+                        cand.name, cand.extraction_cost
+                    ),
+                ));
+            }
+        }
 
         let mut counts: BTreeMap<&str, usize> =
             candidates.iter().map(|c| (c.name.as_str(), 0)).collect();
@@ -2352,7 +2385,7 @@ pub mod north_mara {
                         .map(|&cause| grade_led_cause_snr(twin, &[c.name.as_str()], cause).0)
                         .sum();
                     // Emphasize axis sensitivity via twin-specific cost weighting on auxiliary files.
-                    let score = total_snr / c.extraction_cost.max(0.1);
+                    let score = total_snr / c.extraction_cost;
                     (c.name.as_str(), score)
                 })
                 .collect();
@@ -3469,6 +3502,87 @@ pub mod north_mara {
             let summary = events.last().expect("summary event");
             assert!(summary.contains("\"alternate\":\"Kibali\""));
             assert!(summary.contains("\"envelope_too_wide_fallback\":true"));
+
+            // Regression: set-invariance of grade-led envelopes (duplicates & ordering) and
+            // fail-closed rejection of invalid extraction_cost, duplicate candidates, and
+            // out-of-range / NaN envelope bounds.
+            let e_single = estimate_grade_led_power_envelope(
+                &family,
+                &["mine_surveys"],
+                GradeLedCause::SurveyStockpileError,
+                60,
+                20_263_564,
+            )
+            .expect("single");
+            let e_dup = estimate_grade_led_power_envelope(
+                &family,
+                &["mine_surveys", "mine_surveys"],
+                GradeLedCause::SurveyStockpileError,
+                60,
+                20_263_564,
+            )
+            .expect("dup");
+            assert_eq!(e_single, e_dup);
+            let e_ab = estimate_grade_led_power_envelope(
+                &family,
+                &["mine_surveys", "dispatch_tonnages"],
+                GradeLedCause::DilutionOreLoss,
+                60,
+                20_263_564,
+            )
+            .expect("ab");
+            let e_ba = estimate_grade_led_power_envelope(
+                &family,
+                &["dispatch_tonnages", "mine_surveys"],
+                GradeLedCause::DilutionOreLoss,
+                60,
+                20_263_564,
+            )
+            .expect("ba");
+            assert_eq!(e_ab, e_ba);
+
+            let mut bad_cost = spec.candidate_files.clone();
+            bad_cost[0].extraction_cost = f64::NAN;
+            assert_eq!(
+                label_grade_led_candidate_files(&family, &bad_cost, 3)
+                    .unwrap_err()
+                    .code,
+                "FMINE-REF-109"
+            );
+            bad_cost[0].extraction_cost = 0.0;
+            assert_eq!(
+                label_grade_led_candidate_files(&family, &bad_cost, 3)
+                    .unwrap_err()
+                    .code,
+                "FMINE-REF-109"
+            );
+            let mut dup_cand = spec.candidate_files.clone();
+            dup_cand.push(spec.candidate_files[0].clone());
+            assert_eq!(
+                label_grade_led_candidate_files(&family, &dup_cand, 3)
+                    .unwrap_err()
+                    .code,
+                "FMINE-REF-109"
+            );
+
+            let mut bad_env = e_single.clone();
+            bad_env.max_mc_se = f64::NAN;
+            assert_eq!(
+                bad_env.render_envelope_string().unwrap_err().code,
+                "FMINE-REF-109"
+            );
+            bad_env.max_mc_se = 0.01;
+            bad_env.max_power = 1.5;
+            assert_eq!(
+                bad_env.render_envelope_string().unwrap_err().code,
+                "FMINE-REF-109"
+            );
+            bad_env.max_power = 0.5;
+            bad_env.min_power = -0.1;
+            assert_eq!(
+                bad_env.render_envelope_string().unwrap_err().code,
+                "FMINE-REF-109"
+            );
         }
 
         #[test]

@@ -191,14 +191,28 @@ fn parse_quoted_toml_value(raw: &str) -> Option<&str> {
 /// top-level `packet = "unsalted"` passes.
 pub fn refuse_if_salted(dir: &Path) -> Result<(), Refusal> {
     let manifest = dir.join(REVIEW_PACKET_MANIFEST);
-    let meta = match std::fs::metadata(&manifest) {
-        Ok(meta) => meta,
+    // Use symlink_metadata first so a dangling symlink named review-packet.toml is detected and
+    // refused closed rather than mistaken for an absent manifest.
+    match std::fs::symlink_metadata(&manifest) {
+        Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
             return Err(Refusal::new(
                 RefusalCode::MnpiWall301,
                 format!(
-                    "salted-review guard: unable to stat {}: {err}",
+                    "salted-review guard: unable to lstat {}: {err}",
+                    manifest.display()
+                ),
+            ));
+        }
+    }
+    let meta = match std::fs::metadata(&manifest) {
+        Ok(meta) => meta,
+        Err(err) => {
+            return Err(Refusal::new(
+                RefusalCode::MnpiWall301,
+                format!(
+                    "salted-review guard: unable to stat {} (dangling symlink or unreadable target): {err}",
                     manifest.display()
                 ),
             ));
@@ -225,7 +239,6 @@ pub fn refuse_if_salted(dir: &Path) -> Result<(), Refusal> {
     }
     let text = match std::fs::read_to_string(&manifest) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
             return Err(Refusal::new(
                 RefusalCode::MnpiWall301,
@@ -251,7 +264,7 @@ pub fn refuse_if_salted(dir: &Path) -> Result<(), Refusal> {
         let Some((lhs, rhs)) = line.split_once('=') else {
             continue;
         };
-        if lhs.trim() != "packet" {
+        if !matches!(lhs.trim(), "packet" | "\"packet\"" | "'packet'") {
             continue;
         }
         if !in_root {
