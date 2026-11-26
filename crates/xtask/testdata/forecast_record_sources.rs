@@ -1262,13 +1262,23 @@ fn manifest_checks_reject_unused_hash_mismatch_and_premature_quarter_actuals() {
         .push(input("release.html", html, "2030-10-01"));
     let bound = fmine_public::forecast::manifest::bind(&profile, &rules, &frozen).unwrap();
     assert!(bound.iter().all(Option::is_some));
+    let check_mismatch = |edited: &RecordManifest, field: &str| {
+        let error = fmine_public::forecast::manifest::bind(&profile, &rules, edited).unwrap_err();
+        assert_eq!(error.code, "FMINE-REF-505");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("release.html: {field} differs"))
+        );
+    };
+    let mut edited = frozen.clone();
+    edited.inputs[1].bytes += 1;
+    check_mismatch(&edited, "byte count");
+    let mut edited = frozen.clone();
+    edited.inputs[1].url.push_str("?revision=2");
+    check_mismatch(&edited, "URL");
     frozen.inputs[1].sha256[0] ^= 1;
-    assert_eq!(
-        fmine_public::forecast::manifest::bind(&profile, &rules, &frozen)
-            .unwrap_err()
-            .code,
-        "FMINE-REF-505"
-    );
+    check_mismatch(&frozen, "sha256");
     frozen.inputs.pop().unwrap();
     frozen.inputs[0].sha256[0] ^= 1;
     assert_eq!(
