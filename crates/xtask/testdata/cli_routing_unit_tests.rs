@@ -189,6 +189,33 @@ mod tests {
         assert!(env.anchor_id.is_none());
         assert!(env.certificate.is_none());
 
+        // Even with a valid issuer registry present, a salted manifest refuses BEFORE loading sources.
+        let reg_dir = ws.join("registries").join("sources");
+        std::fs::create_dir_all(&reg_dir).expect("reg dir");
+        std::fs::copy(
+            workspace_root().join("registries/sources/barrick.toml"),
+            reg_dir.join("barrick.toml"),
+        )
+        .expect("copy barrick registry");
+        let (env_with_reg, _) = invoke(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &ws_str,
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!(env_with_reg.status, "refused", "{}", env_with_reg.to_json());
+        assert_eq!(env_with_reg.exit_code, expected_spec.exit_code);
+        assert_eq!(
+            env_with_reg.refusal.as_ref().expect("refusal").code,
+            expected_spec.code
+        );
+        assert_eq!(env_with_reg.payload_json, "null");
+
         // Malformed manifest also fails closed with FMINE-REF-301.
         std::fs::write(
             ws.join(fmine_public::REVIEW_PACKET_MANIFEST),

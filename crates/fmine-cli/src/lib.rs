@@ -1768,7 +1768,10 @@ pub fn parse_args(
                     ));
                 }
                 (Some(name), false) => {
-                    if !is_issuer_name(name) || !registry_path(&workspace, name).is_file() {
+                    if !is_issuer_name(name)
+                        || (!registry_path(&workspace, name).is_file()
+                            && fmine_public::refuse_if_salted(&workspace).is_ok())
+                    {
                         return Err(format!(
                             "unknown issuer '{name}': no registries/sources/{name}.toml under {} (registered: {})",
                             workspace.display(),
