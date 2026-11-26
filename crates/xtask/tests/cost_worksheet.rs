@@ -17,6 +17,70 @@ const SOURCE: &str = "worksheet.toml";
 const PROJECTS: &str = include_str!("../../../tests/costs/classified_projects.toml");
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+const PRICED_SALES: &str = include_str!("../../../tests/costs/priced_sales.toml");
+
+#[test]
+fn royalties_and_credits_use_the_same_declared_sales_price() {
+    let fixture = Fixture::new(PRICED_SALES);
+    let definition = "aisc@wgc-2018";
+    let original = fixture.ok(definition);
+    assert_eq!(string_field(&original.payload_json, "usd_per_oz"), "996");
+    for expected in [
+        "\"gross_sales_usd\":\"5000\"",
+        "\"gross_sales_usd\":\"200000\"",
+        "\"by_product_credit_usd_minor\":\"45000000\"",
+        "priced_sale.usd_per_unit",
+        "priced_sale.by_product_credit_fraction",
+    ] {
+        assert!(original.payload_json.contains(expected), "{expected}");
+    }
+    assert!(
+        original
+            .rendered_markdown
+            .as_ref()
+            .unwrap()
+            .contains("| silver | 250 oz | 20 | 5000 | 1/50 | 9/10 |")
+    );
+    // USD 1 more per oz of silver raises sales by 250, royalty by 5, credit by 225.
+    fixture.write(&PRICED_SALES.replace("usd_per_unit = \"20\"", "usd_per_unit = \"21\""));
+    let changed = fixture.ok(definition);
+    assert_eq!(string_field(&changed.payload_json, "usd_per_oz"), "4969/5");
+    assert_ne!(
+        string_field(&original.payload_json, "digest"),
+        string_field(&changed.payload_json, "digest")
+    );
+    // Co-product allocation excludes the silver credit before taking the gold cost share.
+    fixture.write(&PRICED_SALES.replace("ounces_sold =", "gold_share = \"1/2\"\nounces_sold ="));
+    let co = fixture.ok("aisc.co_product@wgc-2018");
+    assert_eq!(string_field(&co.payload_json, "usd_per_oz"), "1041/2");
+    assert!(
+        co.payload_json
+            .contains("\"amount_minor\":\"45000000\",\"treatment\":\"excluded\"")
+    );
+}
+
+#[test]
+fn priced_sales_refuse_ambiguous_units_terms_and_duplicate_costs() {
+    let fixture = Fixture::new(PRICED_SALES);
+    for invalid in [
+        PRICED_SALES.replace("unit = \"oz\"", "unit = \"koz\""),
+        PRICED_SALES.replace("quantity_sold = \"100\"", "quantity_sold = \"101\""),
+        PRICED_SALES.replace("royalty_fraction = \"0.02\"", "royalty_fraction = \"1.1\""),
+        PRICED_SALES.replace("by_product_credit_fraction = \"0.90\"", "by_product_credit_fraction = \"-1\""),
+        PRICED_SALES.replace("metal = \"silver\"", "metal = \"gold\""),
+        PRICED_SALES.replace("royalty_fraction = \"0.02\"", "royalty_fraction = \"1/3\""),
+        PRICED_SALES.replacen("royalty_fraction =", "by_product_credit_fraction =", 1),
+        format!("{PRICED_SALES}\n[[cost]]\nitem = \"royalties_and_production_taxes\"\nusd = \"100\"\n"),
+        format!("{PRICED_SALES}\n[[cost]]\nitem = \"by_product_credits\"\nusd = \"100\"\n"),
+        PRICED_SALES.replace("ounces_sold", "pounds_sold"),
+    ] {
+        fixture.write(&invalid);
+        let report = fixture.invoke("aisc@wgc-2018");
+        assert!(report.refusal.is_some(), "accepted {invalid}");
+        assert!(!report.payload_json.contains("\"usd_per_oz\""));
+    }
+}
+
 #[test]
 fn classified_project_costs_reach_aisc_aic_with_all_assumptions_and_excluded_amounts() {
     let fixture = Fixture::new(PROJECTS);

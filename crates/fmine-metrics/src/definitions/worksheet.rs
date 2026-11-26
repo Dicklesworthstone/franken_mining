@@ -308,6 +308,50 @@ fn evaluate_inner(
                 }
                 row_anchors.insert(row.line, anchors);
             }
+            "priced_sale" => {
+                let f = fields(
+                    &row.fields,
+                    &["metal", "unit", "quantity_sold", "usd_per_unit"],
+                    &["royalty_fraction", "by_product_credit_fraction"],
+                    row.line,
+                    bad,
+                )?;
+                let (metal, line) = get(&f, "metal")?;
+                let metal = super::geo::Metal::ALL
+                    .into_iter()
+                    .find(|m| m.name() == metal)
+                    .ok_or_else(|| bad(line, "priced sale metal must be gold, copper or silver"))?;
+                let (unit, line) = get(&f, "unit")?;
+                if unit != metal.unit() {
+                    return Err(bad(
+                        line,
+                        format!("{} sales require {} units", metal.name(), metal.unit()),
+                    ));
+                }
+                let number = |key| {
+                    let (v, line) = get(&f, key)?;
+                    quantity(v, line)
+                };
+                let optional = |key: &str| f.get(key).map(|(v, line)| quantity(v, *line)).transpose();
+                values.push((
+                    CostValue::PricedSale(claims::priced_sale::PricedSale {
+                        metal,
+                        quantity_sold: number("quantity_sold")?,
+                        usd_per_unit: number("usd_per_unit")?,
+                        royalty_fraction: optional("royalty_fraction")?,
+                        by_product_credit_fraction: optional("by_product_credit_fraction")?,
+                    }),
+                    row.line,
+                ));
+                row_anchors.insert(
+                    row.line,
+                    f.iter()
+                        .map(|(key, (_, line))| {
+                            anchored(&source, format!("line {line}: priced_sale.{key}"))
+                        })
+                        .collect(),
+                );
+            }
             "project_cost" => {
                 let f = fields(
                     &row.fields,
@@ -553,6 +597,9 @@ fn input_json(input: &CostInput) -> String {
             js(item),
             driver.json_fields()
         ),
+        CostValue::PricedSale(sale) => {
+            format!("{{\"kind\":\"priced_sale\",{}}}", sale.json_fields())
+        }
         CostValue::ProjectLine(project) => {
             format!("{{\"kind\":\"project_cost\",{}}}", project.json_fields())
         }
@@ -604,8 +651,16 @@ impl CostReceipt {
                 join_json(&s.project_classifications, |p| p.to_json())
             )
         };
+        let sales = if s.priced_sales.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ",\"priced_sales\":[{}]",
+                join_json(&s.priced_sales, |sale| sale.to_json())
+            )
+        };
         let summary = format!(
-            "{{\"scope\":{},\"definition\":{},\"definition_tag\":{},\"superseded_by\":{},\"declared_complete\":{},\"currency\":\"USD\",\"numerator_usd\":{},\"{quantity_key}\":{},\"{share_key}\":{},\"{rate_key}\":{},\"contributions\":[{contributions}]{projects}}}",
+            "{{\"scope\":{},\"definition\":{},\"definition_tag\":{},\"superseded_by\":{},\"declared_complete\":{},\"currency\":\"USD\",\"numerator_usd\":{},\"{quantity_key}\":{},\"{share_key}\":{},\"{rate_key}\":{},\"contributions\":[{contributions}]{projects}{sales}}}",
             scope_json(&s.scope),
             js(&s.definition),
             js(&s.definition_tag),
@@ -717,6 +772,25 @@ impl CostReceipt {
             out.push_str("\n## Declared cost drivers\n\nCost = quantity × USD per stated unit + fixed USD; no fitted rates or unit conversion.\n\n| Cost item | Driver | Quantity and unit | USD per unit | Fixed USD |\n|---|---|---:|---:|---:|\n");
             out.push_str(&drivers.join("\n"));
             out.push('\n');
+        }
+        if !s.priced_sales.is_empty() {
+            out.push_str("\n## Price-linked costs on declared gross sales\n\nEach fraction uses the same quantity sold and price. The reconciliation above shows the selected definition’s treatment. Gross sales cover only the listed metals.\n\n| Metal | Sold | USD per unit | Gross sales (USD) | Royalty fraction | By-product credit fraction | Input Claim |\n|---|---:|---:|---:|---:|---:|---|\n");
+            for assessed in &s.priced_sales {
+                let sale = &assessed.sale;
+                let fraction = |v: Option<ExactQty>| v.map_or_else(|| "undeclared".into(), qty);
+                let _ = writeln!(
+                    out,
+                    "| {} | {} {} | {} | {} | {} | {} | {} |",
+                    sale.metal.name(),
+                    qty(sale.quantity_sold),
+                    sale.metal.unit(),
+                    qty(sale.usd_per_unit),
+                    qty(assessed.gross_sales_usd),
+                    fraction(sale.royalty_fraction),
+                    fraction(sale.by_product_credit_fraction),
+                    assessed.input_claim_id
+                );
+            }
         }
         if !s.project_classifications.is_empty() {
             out.push_str("\n## Conditional project classifications\n\nThe registered rule is applied to declared project facts. Initial development of a new operation is non-sustaining. Existing-operation and extension rows must meet both of their stated conditions. Facts and account classification are supplied by the worksheet author. `never` explicitly declares no incremental net cash. Supply a timing or `never` for an existing operation.\n\n");
