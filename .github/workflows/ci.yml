@@ -170,6 +170,10 @@ jobs:
       - name: Envelope e2e
         if: matrix.profile == 'dev'
         run: bash tests/e2e_envelope.sh
+      # BD-142 [WP-07]: tests/e2e NDJSON logging harness and CrashPack self-test against real `fmine`.
+      - name: E2E NDJSON harness and CrashPack self-test
+        if: matrix.profile == 'dev'
+        run: bash tests/e2e/self_test.sh
       # The reproduction kit's fetch script against invented files over file:// (BD-339.S2): saving under the
       # registered name, a changed issuer file, a present mismatching file left alone, a non-bare file name.
       - name: Fetch kit offline test
