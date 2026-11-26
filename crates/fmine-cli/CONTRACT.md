@@ -77,7 +77,12 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   - Procurement uses whole nominal USD and two checkpoints at one expressly named paying entity. Cash
     balances exclude **both** proposed expenditures at both dates. The deposit is credited on purchase.
     Total cancellation cost includes forfeiture and is settled net of the deposit at review; a negative
-    settlement is a declared refund. A hold preserves the reserved delivery. The optional quoted whole-USD
+    settlement is a declared refund. DESIGN (bd-3bxg.2). The optional `preserves_slot_through_expiry = "yes"`
+    on the cited `[[order]]` row declares that the price and delivery remain firm through the inclusive
+    expiry with no prior commitment. If expiry reaches review, the company can defer, then pay the full
+    order price at review or decline at zero supplier cost. The comparison applies the same two floors and
+    competing expenditure. An omitted field or an explicit `"no"` supplies no deferral option.
+    A hold preserves the reserved delivery. The optional quoted whole-USD
     `exercise_price_usd` on `[[hold]]` gives the supplier's firm price before the credit. When the field is
     absent, the hold preserves the immediate-order price. The credit applies only on exercise and cannot
     exceed either the hold fee or the exercise price. Full remaining supplier amounts settle on review in
@@ -95,7 +100,8 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     past the four-digit worksheet calendar. Cancelled branches have no commissioning milestone to delay.
     DESIGN (bd-5xc1). `decide journal record --model <purchase worksheet> --action <id>` accepts the
     commercially available choices listed by that worksheet. `order-now` and `hold-slot` require
-    live terms at the worksheet date. `let-lapse` remains available with or without a priced replacement.
+    live terms at the worksheet date. `defer-order` requires the explicit guarantee through review.
+    `let-lapse` remains available with or without a priced replacement.
     The writer records the explicit choice even if the displayed cash or schedule comparison is adverse.
     The worksheet date must be no later than the earliest possible UTC date under the journal's declared
     host-clock skew. The existing operation stores the original model bytes, complete comparison envelope,

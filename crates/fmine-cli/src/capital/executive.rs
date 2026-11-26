@@ -472,7 +472,7 @@ impl PurchaseLimits {
 
 fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     tables(doc, &["order", "treasury", "schedule", "hold", "wait"])?;
-    let order = row_fields(
+    let order = row_fields_with_optional(
         table(doc, "order")?,
         &[
             "entity",
@@ -482,6 +482,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             "deposit_usd",
             "total_cancel_usd",
         ],
+        &["preserves_slot_through_expiry"],
         as_of,
     )?;
     let fund = row_fields(
@@ -576,6 +577,26 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     } else {
         c.findings
             .push("Order unavailable: quoted order deadline passed.".into());
+    }
+    if order.contains_key("preserves_slot_through_expiry")
+        && flag(&order, "preserves_slot_through_expiry")?
+    {
+        if review <= expiry {
+            c.journal_actions.push((
+                "defer-order",
+                "Decide on the firm quote at engineering review",
+            ));
+            paths.push(("Defer order / proceed", 0, price, Some(0)));
+            paths.push(("Defer order / cancel", 0, 0, None));
+            c.findings.push(format!(
+                "The supplier guarantees the quoted price and reserved delivery through {expiry}. At review on {review}, order for {price} USD or decline at zero supplier cost."
+            ));
+        } else {
+            c.findings.push(
+                "Deferred order unavailable: the guaranteed quote and delivery slot expire before engineering review."
+                    .into(),
+            );
+        }
     }
     if doc.rows_of("hold").next().is_some() {
         let hold = row_fields_with_optional(
@@ -703,6 +724,7 @@ fn purchase(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     let mut qualified = Vec::new();
     for (proceed, cancel_label) in [
         ("Order / proceed", "Order / cancel"),
+        ("Defer order / proceed", "Defer order / cancel"),
         ("Hold / proceed", "Hold / cancel"),
         ("Lapse / proceed", "Lapse / cancel"),
     ] {
@@ -1455,6 +1477,45 @@ mod tests {
         ] {
             assert!(evaluate(&PURCHASE.replace("credit_on_purchase_usd = \"0\"", key)).is_err());
         }
+    }
+
+    #[test]
+    fn guaranteed_slot_through_review_can_avoid_both_deposit_and_hold_fee() {
+        let expiry = r#"expires = "2030-03-22""#;
+        let price_only = PURCHASE.replace(r#"expires = "2030-03-08""#, expiry);
+        let firm = price_only.replace(
+            expiry,
+            &format!("{expiry}\npreserves_slot_through_expiry = \"yes\""),
+        );
+        let md = report(&firm);
+        assert!(md.contains("Defer order (0 USD)"));
+        assert!(md.contains(
+            "Smallest total loss if cancelled among the same eligible choices: Defer order (0 USD)."
+        ));
+        assert!(md.contains("| Defer order / proceed | 0 | 20000000 | 20000000 | 0 | 0 | 1500000 | 7000000 | 500000 |"));
+        assert!(md.contains("| Defer order / cancel | 0 | 0 | 0 | not applicable | not applicable | 1500000 | 27000000 | 20500000 |"));
+        assert!(md.contains("| Lapse / proceed | 0 | 21500000 | 21500000 | 18 |"));
+
+        for unguaranteed in [
+            price_only,
+            firm.replace("expiry = \"yes\"", "expiry = \"no\""),
+            firm.replace(expiry, r#"expires = "2030-03-21""#),
+        ] {
+            let md = report(&unguaranteed);
+            assert!(!md.contains("| Defer order /"));
+            assert!(md.contains("Hold (250000 USD)"));
+        }
+        assert!(evaluate(&firm.replace("expiry = \"yes\"", "expiry = \"maybe\"")).is_err());
+
+        let exactly_funded = firm.replace("45000000", "44500000");
+        assert!(report(&exactly_funded).contains("Defer order (0 USD)"));
+        let short = report(&exactly_funded.replace("44500000", "44499999"));
+        assert!(short.contains("No fully priced on-time alternative"));
+        assert!(short.contains(
+            "Defer order / proceed displaces North Ridge substation at review by 1 USD."
+        ));
+        let below_opening_floor = report(&firm.replace("19500000", "17999999"));
+        assert!(below_opening_floor.contains("No fully priced on-time alternative"));
     }
 
     #[test]

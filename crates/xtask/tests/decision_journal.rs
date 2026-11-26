@@ -1779,6 +1779,40 @@ fn common_deck_journal_preserves_rank_reversal_and_refuses_revised_sources() {
 
 #[test]
 fn procurement_choice_pins_the_complete_comparison_and_survives_revised_terms() {
+    assert_procurement_choice_replays(
+        PURCHASE.replace("2030-", "2024-"),
+        "hold-slot",
+        &["order-now", "hold-slot", "let-lapse"],
+        "Hold the delivery slot through engineering review and preserve the substation budget",
+        "fee_usd = \"250000\"",
+        "fee_usd = \"550000\"",
+    );
+}
+
+#[test]
+fn procurement_deferral_replays_the_original_supplier_guarantee() {
+    let submitted = PURCHASE.replace("2030-", "2024-").replace(
+        "expires = \"2024-03-08\"",
+        "expires = \"2024-03-22\"\npreserves_slot_through_expiry = \"yes\"",
+    );
+    assert_procurement_choice_replays(
+        submitted,
+        "defer-order",
+        &["order-now", "defer-order", "hold-slot", "let-lapse"],
+        "Wait for engineering because the supplier guarantees the price and delivery",
+        "preserves_slot_through_expiry = \"yes\"",
+        "preserves_slot_through_expiry = \"no\"",
+    );
+}
+
+fn assert_procurement_choice_replays(
+    submitted: String,
+    action: &str,
+    expected_ids: &[&str],
+    reason: &str,
+    prior_term: &str,
+    changed_term: &str,
+) {
     let f = Fixture::new();
     let older = successful(execute_with_clock(
         &f.record(f.initial, "earlier-action", "hold"),
@@ -1787,8 +1821,6 @@ fn procurement_choice_pins_the_complete_comparison_and_survives_revised_terms() 
     ));
     let prior = head(&older);
     let old_bytes = operation_fields(&f, prior, 1);
-    // Fixed synthetic 2024 calendar so the actual command can admit it with a live clock.
-    let submitted = PURCHASE.replace("2030-", "2024-");
     fs::write(&f.model, &submitted).unwrap();
     let run = |args: &[&str]| {
         let result = Process::new(binary())
@@ -1814,10 +1846,8 @@ fn procurement_choice_pins_the_complete_comparison_and_survives_revised_terms() 
         .iter()
         .map(|row| row.get("id").unwrap().as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["order-now", "hold-slot", "let-lapse"]);
+    assert_eq!(ids, expected_ids);
 
-    let reason =
-        "Hold the delivery slot through engineering review and preserve the substation budget";
     let recorded = run(&[
         "decide",
         "journal",
@@ -1831,7 +1861,7 @@ fn procurement_choice_pins_the_complete_comparison_and_survives_revised_terms() 
         "--decision",
         "drive-delivery",
         "--action",
-        "hold-slot",
+        action,
         "--reason",
         reason,
         "--code-revision",
@@ -1846,7 +1876,7 @@ fn procurement_choice_pins_the_complete_comparison_and_survives_revised_terms() 
     let choice = json_field(&decisions[1], &["snapshot"]);
     assert_eq!(
         json_field(choice, &["selected_action"]).as_str(),
-        Some("hold-slot")
+        Some(action)
     );
     assert_eq!(json_field(choice, &["rationale"]).as_str(), Some(reason));
     assert_eq!(
@@ -1866,7 +1896,7 @@ fn procurement_choice_pins_the_complete_comparison_and_survives_revised_terms() 
     let pin_digest = Digest32(fmine_calib::record::parse_hex32(pin).unwrap());
     assert_eq!(operation_fields(&f, pin_digest, 1), old_bytes);
 
-    fs::write(&f.model, submitted.replace("250000", "550000")).unwrap();
+    fs::write(&f.model, submitted.replace(prior_term, changed_term)).unwrap();
     assert_ne!(run(&["decide", "program", model, "--json"]), card);
     let show = run(&[
         "decide",
@@ -1899,6 +1929,11 @@ fn procurement_record_refuses_unavailable_choices_and_future_dates_before_append
     f.refuses_without_append(&hold, first_possible + 9, "FMINE-REF-107");
     f.refuses_without_append(
         &f.record(f.initial, "unknown", "approve"),
+        first_possible + 10,
+        "FMINE-REF-105",
+    );
+    f.refuses_without_append(
+        &f.record(f.initial, "undeclared-reservation", "defer-order"),
         first_possible + 10,
         "FMINE-REF-105",
     );

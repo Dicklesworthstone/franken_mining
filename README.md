@@ -35,11 +35,17 @@ amount due at review to $20.25 million and cuts the affordable hold fee to $250,
 in the exercise quote would displace part of the substation funding at the original hold fee. Omit the
 field when the hold explicitly preserves the original order price.
 
+If the supplier guarantees the quoted price and delivery slot through the order deadline without an
+upfront commitment, declare `preserves_slot_through_expiry = "yes"` in the cited `[[order]]` row.
+When that deadline reaches engineering review, the brief also compares waiting on the firm quote.
+In the North Basin example, moving that deadline to `2030-03-22` with the guarantee lets the committee
+pay nothing today, pay $20 million at review if proceeding, or decline at zero supplier cost.
+
 Use `--json` for the full submitted worksheet, source digest, findings, comparison rows and procurement limits. The operator
 declares source availability, payment terms and financial scope. An input dated after the meeting refuses.
 
 Use `decide journal record` with the purchase worksheet and one of its displayed action IDs
-(`order-now`, `hold-slot` or `let-lapse`). Pin the new head to recover the original comparison and
+(`order-now`, `defer-order`, `hold-slot` or `let-lapse`). Pin the new head to recover the original comparison and
 your rationale after supplier terms change. The journal admits the worksheet once its decision date
 has arrived in UTC. [Decision journal walkthrough](#retain-a-decision-and-its-original-evaluated-evidence)
 
