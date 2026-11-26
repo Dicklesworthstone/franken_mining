@@ -565,7 +565,9 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
                     {
                         return Err(bad(
                             RefusalCode::BasisMismatch105,
-                            &format!("price-linked {item} overlaps a supplied line or lacks the required registered treatment"),
+                            &format!(
+                                "price-linked {item} overlaps a supplied line or lacks the required registered treatment"
+                            ),
                         ));
                     }
                     amounts.push((input, item, amount));

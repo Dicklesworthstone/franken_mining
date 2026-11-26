@@ -66,11 +66,16 @@ fn priced_sales_refuse_ambiguous_units_terms_and_duplicate_costs() {
         PRICED_SALES.replace("unit = \"oz\"", "unit = \"koz\""),
         PRICED_SALES.replace("quantity_sold = \"100\"", "quantity_sold = \"101\""),
         PRICED_SALES.replace("royalty_fraction = \"0.02\"", "royalty_fraction = \"1.1\""),
-        PRICED_SALES.replace("by_product_credit_fraction = \"0.90\"", "by_product_credit_fraction = \"-1\""),
+        PRICED_SALES.replace(
+            "by_product_credit_fraction = \"0.90\"",
+            "by_product_credit_fraction = \"-1\"",
+        ),
         PRICED_SALES.replace("metal = \"silver\"", "metal = \"gold\""),
         PRICED_SALES.replace("royalty_fraction = \"0.02\"", "royalty_fraction = \"1/3\""),
         PRICED_SALES.replacen("royalty_fraction =", "by_product_credit_fraction =", 1),
-        format!("{PRICED_SALES}\n[[cost]]\nitem = \"royalties_and_production_taxes\"\nusd = \"100\"\n"),
+        format!(
+            "{PRICED_SALES}\n[[cost]]\nitem = \"royalties_and_production_taxes\"\nusd = \"100\"\n"
+        ),
         format!("{PRICED_SALES}\n[[cost]]\nitem = \"by_product_credits\"\nusd = \"100\"\n"),
         PRICED_SALES.replace("ounces_sold", "pounds_sold"),
     ] {
@@ -1148,8 +1153,7 @@ mod copper_waterfalls {
     }
 
     fn rates(result: &Envelope) -> [&str; 3] {
-        ["rate_0", "rate_1", "total_delta"]
-            .map(|field| string_field(&result.payload_json, field))
+        ["rate_0", "rate_1", "total_delta"].map(|field| string_field(&result.payload_json, field))
     }
 
     #[test]
@@ -1230,7 +1234,10 @@ mod copper_waterfalls {
             assert!(markdown.contains("not observation uncertainty or confidence intervals"));
         }
         assert_eq!(fs::read_to_string(fixture.0.join(SOURCE)).unwrap(), FIRST);
-        assert_eq!(fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(), LATER);
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(),
+            LATER
+        );
     }
 
     #[test]
@@ -1301,7 +1308,11 @@ mod copper_waterfalls {
                     .payload_json
                     .contains(&sha256(changed.as_bytes()).to_hex())
             );
-            assert!(!result.payload_json.contains("\"id\":\"line:sustaining_leases:"));
+            assert!(
+                !result
+                    .payload_json
+                    .contains("\"id\":\"line:sustaining_leases:")
+            );
             assert_eq!(
                 fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(),
                 changed
@@ -1474,7 +1485,10 @@ months_to_net_cash = "0"
         let result = ok(&fixture, definition);
         let json = &result.payload_json;
         assert_eq!(rates(&result), ["1/2", "4/5", "3/10"]);
-        assert_eq!(bar(json, "line:capital_expenditure_sustaining:cost"), "3/10");
+        assert_eq!(
+            bar(json, "line:capital_expenditure_sustaining:cost"),
+            "3/10"
+        );
         assert_eq!(bar(json, "sold_volume"), "0");
         assert_eq!(
             json.matches("\"id\":\"line:capital_expenditure_sustaining:cost\"")
@@ -1506,7 +1520,13 @@ months_to_net_cash = "0"
                 assert!(retained.contains(&format!("\"id\":\"{project}\"")));
             }
         }
-        assert_eq!(fs::read_to_string(fixture.0.join(SOURCE)).unwrap(), projects);
-        assert_eq!(fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(), later);
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(SOURCE)).unwrap(),
+            projects
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(LATER_PATH)).unwrap(),
+            later
+        );
     }
 }

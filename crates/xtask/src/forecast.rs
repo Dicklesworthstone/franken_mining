@@ -25,8 +25,8 @@ mod scoring;
 pub use scoring::record_score;
 
 use fmine_calib::record::{
-    self, BaselineKind, ProofTimes, Quarter, Rat, RecordDates, RecordManifest,
-    RecordRules, SiteStatus, format_utc, parse_hex32, parse_utc,
+    self, BaselineKind, ProofTimes, Quarter, Rat, RecordDates, RecordManifest, RecordRules,
+    SiteStatus, format_utc, parse_hex32, parse_utc,
 };
 use fmine_core::hash::Digest32;
 pub use fmine_io::forecast::timestamp::proof_times_from_text;
@@ -565,7 +565,10 @@ fn verify_loaded(root: &Path, dir: &Path, loaded: &Loaded) -> Res<(Vec<String>, 
     proof_before_outcome_end(&loaded.rules, proof)?;
     let found = record::validate(&loaded.manifest, &[], Some(proof), loaded.dates);
     if !found.is_empty() {
-        return Err(found.iter().map(|f| format!("manifest.toml: {f}")).collect());
+        return Err(found
+            .iter()
+            .map(|f| format!("manifest.toml: {f}"))
+            .collect());
     }
     let mut prior_rules = Vec::new();
     let mut rule_failures = Vec::new();
@@ -665,7 +668,11 @@ mod tests {
         assert!(proof_before_outcome_end(&rules, proof(end - 1)).is_ok());
         for upper in [end, end + 1] {
             let refused = proof_before_outcome_end(&rules, proof(upper)).unwrap_err();
-            assert!(refused.iter().any(|reason| reason.contains("end of the scored quarter")));
+            assert!(
+                refused
+                    .iter()
+                    .any(|reason| reason.contains("end of the scored quarter"))
+            );
         }
     }
     use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
@@ -1150,7 +1157,8 @@ mod tests {
             .find(|document| document.file == "Barrick_Q4_2025_MD-A.pdf")
             .expect("registered PDF");
         let profile = fmine_public::sources::load_issuer_profile(&root, "barrick").unwrap();
-        let rules = record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+        let rules =
+            record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
         let digest = parse_hex32(&document.sha256).unwrap();
         let mut manifest = RecordManifest {
             record_id: "synthetic-registry-binding".into(),
@@ -1173,7 +1181,8 @@ mod tests {
         };
         assert!(fmine_public::forecast::manifest::bind(&profile, &rules, &manifest).is_ok());
         manifest.inputs[0].sha256[0] ^= 1;
-        let refused = fmine_public::forecast::manifest::bind(&profile, &rules, &manifest).unwrap_err();
+        let refused =
+            fmine_public::forecast::manifest::bind(&profile, &rules, &manifest).unwrap_err();
         assert!(refused.what.contains(&document.file));
     }
 
