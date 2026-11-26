@@ -65,6 +65,7 @@ dependencies = [
  "fmine-core",
  "fmine-crs",
  "fmine-decide",
+ "fmine-econ",
  "fmine-evidence",
  "fmine-explore",
  "fmine-flow",

@@ -1,0 +1,38 @@
+# All amounts and publication locations in this worksheet are synthetic.
+schema = "fmine.developer-npv.v1"
+document = "Synthetic Alder Ridge project economics"
+evidence = "synthetic"
+tax_basis = "pre_tax"
+discount_rate = "0.05"
+rate_locator = "p. 10, discount-rate assumption"
+printed_npv = "25.1"
+npv_locator = "p. 10, headline NPV"
+printed_step = "0.1"
+flow_step = "0"
+irr_lo = "0.05"
+irr_hi = "0.25"
+
+[[flow]]
+year = "0"
+amount = "-100"
+locator = "p. 11, year 0"
+
+[[flow]]
+year = "1"
+amount = "30"
+locator = "p. 11, year 1"
+
+[[flow]]
+year = "2"
+amount = "40"
+locator = "p. 11, year 2"
+
+[[flow]]
+year = "3"
+amount = "50"
+locator = "p. 11, year 3"
+
+[[flow]]
+year = "4"
+amount = "20"
+locator = "p. 11, year 4"

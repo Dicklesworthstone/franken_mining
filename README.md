@@ -210,6 +210,30 @@ command can check overlap. Keep trailing decimal zeros to preserve printed preci
 `true_width_stated = "true"` only where the cited text supports it. The document locators and
 disclosure context are reader declarations. [Synthetic worksheet](tests/exploration/drill_release.toml)
 
+## Replay a developer's printed NPV
+
+```bash
+fmine check developer-npv tests/exploration/developer_npv.toml --format markdown
+```
+
+The synthetic case gives a printed NPV of USD 25.1 million at 5%. Of the three timing conventions
+tested, only `MidYearAll` overlaps the printed rounding interval. Markdown displays the bounds
+and worksheet SHA-256. Use `--format json` for exact bounds and cited annual rows.
+
+Supply one `[[flow]]` per consecutive year from zero, with quoted `year`, `amount` in USD millions
+and `locator`. Supply `flow_step` for the common printed precision and `printed_step` for the NPV.
+Use `tax_basis = "pre_tax"` for a pre-tax replay. After-tax replay starts from pre-tax flows and
+requires a separately cited `tax_outflow` and `tax_locator` for every year. The replay treats those
+tax amounts as exact, so its bounds do not include separate tax rounding. Optional `irr_lo` and
+`irr_hi` use fractional rates and require exact flows (`flow_step = "0"`). The receipt preserves
+the NPV result if the requested IRR cannot be established. [Synthetic worksheet](tests/exploration/developer_npv.toml)
+
+Year zero is at the valuation date unless `year_zero_timing = "end_of_first_period"`. The latter
+discounts every flow by one additional year before comparing the NPV. In the cited 2021 Taguas
+assessment, the final pre-tax row gives approximately US$103.72M under this end-year hypothesis,
+which rounds to the reported US$104M at 8%. The worksheet retains the original URL and PDF digest.
+[Taguas transcription](tests/exploration/taguas_2021_pre_tax.toml)
+
 ## Check a mining front for model drift
 
 **DESIGN.** Evaluate an explicitly declared sequence of mining polygons against one spatial model:

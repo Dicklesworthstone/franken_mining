@@ -1,0 +1,80 @@
+# E876. Table 22-3 final pre-tax row, after royalties and salvage. Printed US$000 divided by 1000.
+schema = "fmine.developer-npv.v1"
+document = "Taguas Heap Leach Project PEA, effective 2021-12-29"
+evidence = "declared_public"
+source_url = "https://s2.q4cdn.com/372236871/files/doc_downloads/2022/04/Preliminary-Economic-Assessment-NI-43-101-Technical-Report-on-the-Taguas-Heap-Leach-Project-San-Juan-Argentina-%E2%80%93-December-29-2021.pdf"
+report_sha256 = "74ef05e198a0b08ac6aecf8369546d69808b72d06fc5560a2ce829f88822ae7d"
+tax_basis = "pre_tax"
+discount_rate = "0.08"
+rate_locator = "PDF p.244, Table 22-2, pre-tax NPV rate"
+printed_npv = "104"
+npv_locator = "PDF p.244, Table 22-2, pre-tax NPV"
+printed_step = "1"
+flow_step = "0.001"
+# Inferred candidate convention. The on-valuation-date hypothesis is checked separately.
+year_zero_timing = "end_of_first_period"
+
+[[flow]]
+year = "0"
+amount = "-173.952"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 0"
+
+[[flow]]
+year = "1"
+amount = "69.598"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 1"
+
+[[flow]]
+year = "2"
+amount = "75.810"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 2"
+
+[[flow]]
+year = "3"
+amount = "46.389"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 3"
+
+[[flow]]
+year = "4"
+amount = "55.613"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 4"
+
+[[flow]]
+year = "5"
+amount = "45.382"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 5"
+
+[[flow]]
+year = "6"
+amount = "37.575"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 6"
+
+[[flow]]
+year = "7"
+amount = "24.030"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 7"
+
+[[flow]]
+year = "8"
+amount = "7.921"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 8"
+
+[[flow]]
+year = "9"
+amount = "7.250"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 9"
+
+[[flow]]
+year = "10"
+amount = "9.107"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 10"
+
+[[flow]]
+year = "11"
+amount = "-2.275"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 11"
+
+[[flow]]
+year = "12"
+amount = "-2.275"
+locator = "PDF p.245, Table 22-3, final pre-tax net, Year 12"

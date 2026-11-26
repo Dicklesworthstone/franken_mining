@@ -2053,3 +2053,17 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     Mine H's 18-month development and seven-year ore phase, and Mine I's initial 5 Mtpa plant and
     later 8 Mtpa capacity. Where a case omits cash timing or a precise comparison input, the cost
     worksheet tests identify their additional premises explicitly. The test dollar amounts are invented.
+
+- **E876** Orvana, Taguas Heap Leach Project assessment, effective 2021-12-29 and filed 2022-02-11
+  (FACT, verified 2026-11-26 UTC, BD-350.S4). PDF SHA-256
+  `74ef05e198a0b08ac6aecf8369546d69808b72d06fc5560a2ce829f88822ae7d`.
+  [Issuer-hosted PDF](https://s2.q4cdn.com/372236871/files/doc_downloads/2022/04/Preliminary-Economic-Assessment-NI-43-101-Technical-Report-on-the-Taguas-Heap-Leach-Project-San-Juan-Argentina-%E2%80%93-December-29-2021.pdf)
+  [Issuer filing notice](https://www.orvana.com/English/news/news-details/2022/ORVANA-REPORTS-Q1-FY2022-RESULTS-AND-ANNOUNCES-FILING-OF-PEA-NI-43-101-REPORT-FOR-TAGUAS/default.aspx)
+  - PDF p.244, Table 22-2 (printed p.22-4) reports pre-tax NPV of US$104M at 8%. PDF p.245,
+    Table 22-3 (printed p.22-5) supplies 13 yearly values. Use the final pre-tax row after
+    royalties and salvage. Printed US$ thousands convert to US$ millions exactly.
+  - INFERENCE. Fraction arithmetic gives US$112.0193078M at exponents 0–12 and US$103.7215813M
+    at exponents 1–13. The latter end-year candidate intersects the reported NPV rounding
+    interval [103.5, 104.5] under the printed annual step of US$0.001M. The three unshifted
+    timing conventions and the two shifted mid-year candidates do not match. This is an
+    inference from the cited arithmetic. The publisher's model and spreadsheet are separate evidence.

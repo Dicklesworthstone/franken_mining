@@ -13,6 +13,7 @@ pub(super) mod drill_release;
 mod executive;
 pub(super) mod hindcast;
 mod investment;
+pub(super) mod npv_replay;
 pub(crate) mod staged_journal;
 
 pub(crate) use executive::ExecutiveSnapshot;

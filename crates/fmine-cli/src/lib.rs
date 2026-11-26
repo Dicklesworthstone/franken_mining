@@ -148,6 +148,8 @@ pub enum CliCommand {
     },
     /// Check a locally transcribed set of drill intercepts using exact remainder arithmetic.
     CheckDrillRelease(PathBuf),
+    /// Compare three timing conventions over a cited developer cash-flow schedule.
+    CheckDeveloperNpv(PathBuf),
     /// Inspect workbook identities, or explicitly declared PDF sums and reserve roll-forwards.
     CheckTables {
         /// `None` selects the invented workbook known answers.
@@ -635,6 +637,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--format" | "--workspace" => next += 2,
                         "--json" => next += 1,
                         "drill-release" => return capital::drill_release::VERB,
+                        "developer-npv" => return capital::npv_replay::VERB,
                         _ => break,
                     }
                 }
@@ -1212,6 +1215,7 @@ pub fn parse_args(
             | "decide investment"
             | "decide hindcast"
             | capital::drill_release::VERB
+            | capital::npv_replay::VERB
             | "compare"
             | "plan pit"
             | "plan schedule"
@@ -1251,20 +1255,26 @@ pub fn parse_args(
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
             }
             "decide hindcast" => CliCommand::CapitalHindcast(capital::hindcast::parse(&words)?),
-            capital::drill_release::VERB => match words.as_slice() {
+            capital::drill_release::VERB | capital::npv_replay::VERB => match words.as_slice() {
                 [check, mode, path]
                     if check == "check"
-                        && mode == "drill-release"
+                        && matches!(mode.as_str(), "drill-release" | "developer-npv")
                         && !path.trim().is_empty()
                         && !path.starts_with("--") =>
                 {
-                    CliCommand::CheckDrillRelease(path.into())
+                    if mode == "drill-release" {
+                        CliCommand::CheckDrillRelease(path.into())
+                    } else {
+                        CliCommand::CheckDeveloperNpv(path.into())
+                    }
                 }
                 _ => {
-                    return Err(format!(
-                        "expected 'fmine {}'",
+                    let usage = if verb == capital::drill_release::VERB {
                         capital::drill_release::USAGE
-                    ));
+                    } else {
+                        capital::npv_replay::USAGE
+                    };
+                    return Err(format!("expected 'fmine {usage}'"));
                 }
             },
             "decide investment" => {
@@ -2371,6 +2381,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::CheckDrillRelease(path) => {
             capital::drill_release::execute(path, workspace_root)
         }
+        CliCommand::CheckDeveloperNpv(path) => capital::npv_replay::execute(path, workspace_root),
         CliCommand::CheckTables {
             issuer,
             through,
@@ -2725,6 +2736,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "check tables --issuer <issuer> --definitions <path> --cost-bridge <before_id,after_id> [--as-of YYYY-MM-DD]",
                 "check tables --synthetic",
                 capital::drill_release::USAGE,
+                capital::npv_replay::USAGE,
                 "assure issue (--issuer <issuer> [--through YYYYQn] | --synthetic) --output <path> --journal <path> --expected-head <hex> --key <path> --role <generic-role> --purpose <text> --now <UTC> --uncertainty-ns <n>",
                 "reliance init --journal <path> --key <path> --now <UTC> --uncertainty-ns <n> --max-age-ns <n> --max-skew-ns <n>",
                 "reliance check <digest|file> --journal <path> [--head <hex>] [--now <UTC> --uncertainty-ns <n>] [--as-of <UTC>]",

@@ -141,6 +141,12 @@ mutates_authority = false
 description = "Check exact drill intercept remainder grades and disclosure context from a local transcribed worksheet"
 
 [[verb]]
+path = "check developer-npv"
+subsystem = "Helm"
+mutates_authority = false
+description = "Replay cited developer cash flows and find a compatible NPV timing convention with an optional bracketed IRR"
+
+[[verb]]
 path = "reserve replacement"
 subsystem = "Bullion"
 mutates_authority = false

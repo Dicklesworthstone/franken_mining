@@ -16,6 +16,19 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   binds the local input. Original provenance and disclosure context are caller declarations. Arithmetic
   flags have no resource, reserve, execution, geotechnical or regulatory authority.
 
+- DESIGN (BD-350.S4). `check developer-npv <worksheet.toml>` reads bounded
+  `fmine.developer-npv.v1` and applies the existing developer cash-flow replay with exact NPV
+  bounds. It requires a consecutive year-zero schedule, source locators and a stated rounding
+  and tax basis. After-tax replay applies a complete separately cited tax schedule, taken as
+  exact, to pre-tax inputs. A unique compatible convention retains exact NPV intervals for every
+  tested rule.
+  The optional numeric IRR requires exact cash flows and an explicit bracket. The result
+  preserves a successful NPV replay when the IRR solver refuses. A local worksheet digest
+  identifies the transcription supplied by the reader.
+  `year_zero_timing` defaults to `valuation_date`. The explicit `end_of_first_period` basis
+  discounts every flow by one additional year. Public transcriptions require a declared source URL
+  and PDF digest. The E876 worksheet preserves the source and independently checked Taguas replay.
+
 - DESIGN (BD-054). `decide card <model> --brief` selects the executive Markdown view of the same evaluated
   Claim, with the worksheet path and SHA-256. An explicit JSON format or a different verb refuses the flag.
   The ordinary JSON and analyst Markdown retain the full comparison.
