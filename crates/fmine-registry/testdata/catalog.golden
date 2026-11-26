@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 86
+[verbs] 87
 decide card
 decide production
 decide investment
@@ -145,6 +145,7 @@ plant flowsheet
 plant transfer
 plant infer
 plant recovery
+plant recovery-audit
 plant rtd
 plant rtd-infer
 plant grinding
