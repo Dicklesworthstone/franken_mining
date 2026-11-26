@@ -332,6 +332,52 @@ impl CellAuthority {
             self.conflicts.push(conflict.clone());
             return Ok(AdmitOutcome::Quarantined(conflict));
         }
+        self.check_received_batch(&batch)?;
+        let next_seq =
+            self.next_seq
+                .checked_add(1)
+                .ok_or_else(|| LedgerError::ChainContinuity {
+                    detail: "sequence counter overflow".to_string(),
+                })?;
+        self.mmr
+            .push(batch_digest.as_bytes())
+            .map_err(|e| LedgerError::ChainContinuity {
+                detail: format!("MMR append failed: {e}"),
+            })?;
+        self.highest_seen_epoch = batch.epoch;
+        self.head_hash = batch_digest;
+        self.next_seq = next_seq;
+        let seq = batch.seq;
+        let epoch = batch.epoch;
+        self.batches.push(batch);
+        self.digests.push(batch_digest);
+        Ok(AdmitOutcome::Committed {
+            seq,
+            epoch,
+            batch_digest,
+            mmr_root: self.mmr.root(),
+        })
+    }
+
+    /// DESIGN (BD-085): preflight for a durable combiner. A refusal leaves both authority
+    /// and quarantine unchanged; callers must retain exclusive access until admission.
+    pub(crate) fn check_received_batch(&self, batch: &DeltaBatch) -> Result<Digest32, LedgerError> {
+        batch.validate()?;
+        if batch.cell_id != self.cell_id {
+            return Err(LedgerError::ChainContinuity {
+                detail: format!(
+                    "batch cell '{}' != authority cell '{}'",
+                    batch.cell_id, self.cell_id
+                ),
+            });
+        }
+        if batch.epoch < self.highest_seen_epoch {
+            return Err(LedgerError::EpochRegression {
+                cell_id: self.cell_id.clone(),
+                observed: batch.epoch,
+                highest: self.highest_seen_epoch,
+            });
+        }
         if batch.seq != self.next_seq {
             return Err(LedgerError::ChainContinuity {
                 detail: format!(
@@ -348,29 +394,12 @@ impl CellAuthority {
                 ),
             });
         }
-        self.mmr
-            .push(batch_digest.as_bytes())
-            .map_err(|e| LedgerError::ChainContinuity {
-                detail: format!("MMR append failed: {e}"),
+        self.next_seq
+            .checked_add(1)
+            .ok_or_else(|| LedgerError::ChainContinuity {
+                detail: "sequence counter overflow".to_string(),
             })?;
-        self.highest_seen_epoch = batch.epoch;
-        self.head_hash = batch_digest;
-        self.next_seq =
-            self.next_seq
-                .checked_add(1)
-                .ok_or_else(|| LedgerError::ChainContinuity {
-                    detail: "sequence counter overflow".to_string(),
-                })?;
-        let seq = batch.seq;
-        let epoch = batch.epoch;
-        self.batches.push(batch);
-        self.digests.push(batch_digest);
-        Ok(AdmitOutcome::Committed {
-            seq,
-            epoch,
-            batch_digest,
-            mmr_root: self.mmr.root(),
-        })
+        batch.batch_digest()
     }
 }
 

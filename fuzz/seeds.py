@@ -457,17 +457,20 @@ def main() -> None:
     seeds["anchor"].append(b"\x00" + frame(b"ANCR", 1, common + struct.pack("<I", 5) + bytes(range(32))))
 
     # ledger: batches that decode, so mutations start past the anchor's own CRC. Selector 2 wraps a body in a
-    # version-0 frame and 5 in a version-1 frame, which adds cross-cell refs; 0 is a whole frame and 1 a whole frame
-    # whose CRC the target repairs. Every delta and witness kind appears once.
+    # version-0 frame and 5 in a version-1 frame, which adds cross-cell refs; 8 selects version 2 key-state reads.
+    # 0 is a whole frame and 1 a whole frame whose CRC the target repairs. Every delta and witness kind appears.
     deltas = [("k/a", 1, b"alpha"), ("k/b", 2, b""), ("k/c", 3, b"obligation"), ("k/d", 4, b"resolved"),
               ("k/e", 5, b"lease")]
     witnesses = [(1, "w-mass"), (2, "w-glue"), (3, "w-sig"), (4, "w-token"), (5, "w-tele")]
     refs = [("cell-b", 7), ("cell-b", 8), ("cell-c", 0)]
     v0 = ledger_body(0, 41, deltas, witnesses, [])
     v1 = ledger_body(1, 41, deltas, witnesses, refs)
+    v2 = ledger_body(2, 41, deltas, witnesses + [(6, "k/a"), (6, "k/" + "x" * 510)], refs)
     seeds["ledger"] += [b"\x02" + ledger_body(0, 0, [], [], []), b"\x02" + v0, b"\x05" + v1,
                         b"\x05" + ledger_body(1, 0, deltas[:1], witnesses[:1], refs[:1]),
-                        b"\x00" + frame(b"LDGR", 1, v1), b"\x01" + frame(b"LDGR", 0, v0)[:-4] + bytes(4)]
+                        b"\x00" + frame(b"LDGR", 1, v1), b"\x01" + frame(b"LDGR", 0, v0)[:-4] + bytes(4),
+                        b"\x08" + v2, b"\x00" + frame(b"LDGR", 2, v2),
+                        b"\x05" + v2, b"\x0b" + v2]  # KeyState in v1 and unsupported v3 must refuse.
 
     # segment: the target writes the clean segment itself, so a seed is a mode, a selector, a 16-bit cut and
     # edits: [kind, offset lo, offset hi, n], then a fill byte (kind 0) or n bytes to write (1) or insert (2). In a

@@ -15,7 +15,11 @@ use std::path::Path;
 use fmine_core::codec::{CodecError, Decoder, Encoder, MAX_FRAME_BYTES, crc32c};
 use fmine_core::hash::{Digest32, sha256};
 
-use crate::batch::{DeltaBatch, GENESIS_PREV_HASH, LedgerError, MAX_ID_BYTES, TAG_LEDGER_BATCH};
+use crate::batch::{
+    DeltaBatch, GENESIS_PREV_HASH, LedgerError, MAX_ID_BYTES, TAG_LEDGER_BATCH, Witness,
+};
+use crate::cell::AdmitOutcome;
+use crate::l0::{CellSnapshot, L0Error, L0Ledger};
 use crate::mmr::{Mmr, root_from_peaks};
 
 /// Format tag for `FMT-SEG-1` segment header frames (`FMNE` + `SEGH`).
@@ -296,6 +300,43 @@ pub struct SegmentInspection {
     pub total_bytes: u64,
     /// Sealed state or F7 torn-tail state.
     pub state: SegmentState,
+}
+
+impl SegmentInspection {
+    /// DESIGN (BD-085): rebuild the keyed state of the verified prefix, checking append-only
+    /// operations, obligations and key-state witnesses. A continuation needs its preceding log;
+    /// an empty index is never substituted. This does not verify application laws or writer identity.
+    pub fn replay_semantics(&self) -> Result<CellSnapshot, L0Error> {
+        let ledger = replay_semantics(&self.header, &self.batches)?;
+        let snapshot = ledger.as_of_seq(&self.header.cell_id, self.batches.len() as u64)?;
+        if snapshot.head_hash != self.head_hash || snapshot.mmr_root != self.mmr.root() {
+            return Err(LedgerError::ChainContinuity {
+                detail: "semantic replay disagrees with the inspected head or MMR".to_string(),
+            }
+            .into());
+        }
+        Ok(snapshot)
+    }
+}
+
+fn replay_semantics(header: &SegmentHeader, batches: &[DeltaBatch]) -> Result<L0Ledger, L0Error> {
+    header.validate()?;
+    if header.first_seq != 0 || !header.prev_mmr_peaks.is_empty() {
+        return Err(LedgerError::ChainContinuity {
+            detail: "semantic replay requires a complete genesis segment, not a continuation"
+                .to_string(),
+        }
+        .into());
+    }
+    let mut ledger = L0Ledger::new();
+    // DESIGN: replay is receiver admission. This placeholder grants no writer authority;
+    // a caller must separately authenticate its persisted lease before submitting writes.
+    ledger.create_cell(&header.cell_id, "segment-replay")?;
+    for batch in batches {
+        ledger.check_replica(batch)?;
+        ledger.admit_replica(batch.clone())?;
+    }
+    Ok(ledger)
 }
 
 /// Lifecycle state observed when inspecting an `FMT-SEG-1` segment.
@@ -766,6 +807,24 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
 }
 
 fn write_framed(file: &mut File, frame: &[u8]) -> Result<(), LedgerError> {
+    if frame.len() > MAX_FRAME_BYTES {
+        return Err(LedgerError::Codec(CodecError::LengthOutOfBounds {
+            len: frame.len(),
+            max: MAX_FRAME_BYTES,
+        }));
+    }
+    let position = file.stream_position().map_err(|e| LedgerError::Io {
+        operation: "write_position",
+        detail: e.to_string(),
+    })?;
+    let end = position.checked_add(frame.len() as u64 + 4);
+    if end.is_none_or(|end| end > MAX_SEGMENT_BYTES) {
+        return Err(LedgerError::InvalidField {
+            field: "segment.size",
+            detail: "append would exceed the bounded segment reader; rotate the segment"
+                .to_string(),
+        });
+    }
     let len = u32::try_from(frame.len()).map_err(|_| {
         LedgerError::Codec(CodecError::LengthOutOfBounds {
             len: frame.len(),
@@ -813,6 +872,7 @@ pub struct SegmentWriter {
     record_count: u64,
     mmr: Mmr,
     sealed: bool,
+    failed_write: bool,
 }
 
 impl SegmentWriter {
@@ -855,12 +915,17 @@ impl SegmentWriter {
             record_count: 0,
             mmr: Mmr::new(),
             sealed: false,
+            failed_write: false,
         })
     }
 
     /// Re-open an unsealed clean `FMT-SEG-1` segment for appending under an exclusive lock.
     /// Refuses sealed segments, torn segments, or corrupted segments (forcing `repair plan` first).
     pub fn open_append(path: &Path) -> Result<Self, LedgerError> {
+        Self::open_append_with_batches(path).map(|(writer, _)| writer)
+    }
+
+    fn open_append_with_batches(path: &Path) -> Result<(Self, Vec<DeltaBatch>), LedgerError> {
         let raw = OpenOptions::new()
             .read(true)
             .write(true)
@@ -888,7 +953,7 @@ impl SegmentWriter {
                     .ok_or_else(|| LedgerError::ChainContinuity {
                         detail: "sequence overflow".to_string(),
                     })?;
-                Ok(Self {
+                let writer = Self {
                     file,
                     header: inspected.header,
                     next_seq,
@@ -897,7 +962,9 @@ impl SegmentWriter {
                     record_count,
                     mmr: inspected.mmr,
                     sealed: false,
-                })
+                    failed_write: false,
+                };
+                Ok((writer, inspected.batches))
             }
             SegmentState::Sealed(_) => Err(LedgerError::ChainContinuity {
                 detail: "cannot append to an already sealed segment".to_string(),
@@ -917,6 +984,7 @@ impl SegmentWriter {
 
     /// Append one canonical `FMT-LEDGER-1` batch, syncing to disk before returning its digest.
     pub fn append(&mut self, batch: &DeltaBatch) -> Result<Digest32, LedgerError> {
+        self.check_write_state()?;
         if self.sealed {
             return Err(LedgerError::ChainContinuity {
                 detail: "segment is already sealed".to_string(),
@@ -951,7 +1019,22 @@ impl SegmentWriter {
                 highest: self.last_epoch,
             });
         }
+        let record_count =
+            self.record_count
+                .checked_add(1)
+                .ok_or_else(|| LedgerError::ChainContinuity {
+                    detail: "record_count overflow".to_string(),
+                })?;
+        let next_seq =
+            self.next_seq
+                .checked_add(1)
+                .ok_or_else(|| LedgerError::ChainContinuity {
+                    detail: "sequence overflow".to_string(),
+                })?;
         let digest = sha256(&frame);
+        // DESIGN: an I/O error can leave an unacknowledged frame on disk. Reopen and inspect
+        // before retrying; appending another frame could turn a repairable tail into corruption.
+        self.failed_write = true;
         write_framed(self.file.file_mut(), &frame)?;
         self.mmr
             .push(digest.as_bytes())
@@ -960,23 +1043,15 @@ impl SegmentWriter {
             })?;
         self.last_epoch = batch.epoch;
         self.head_hash = digest;
-        self.record_count =
-            self.record_count
-                .checked_add(1)
-                .ok_or_else(|| LedgerError::ChainContinuity {
-                    detail: "record_count overflow".to_string(),
-                })?;
-        self.next_seq =
-            self.next_seq
-                .checked_add(1)
-                .ok_or_else(|| LedgerError::ChainContinuity {
-                    detail: "sequence overflow".to_string(),
-                })?;
+        self.record_count = record_count;
+        self.next_seq = next_seq;
+        self.failed_write = false;
         Ok(digest)
     }
 
     /// Seal the segment by writing its `SEGF` MMR peak footer and syncing to disk.
     pub fn seal(mut self) -> Result<SegmentFooter, LedgerError> {
+        self.check_write_state()?;
         if self.sealed {
             return Err(LedgerError::ChainContinuity {
                 detail: "segment is already sealed".to_string(),
@@ -1021,6 +1096,120 @@ impl SegmentWriter {
     pub fn mmr_root(&self) -> Digest32 {
         self.mmr.root()
     }
+
+    fn check_write_state(&self) -> Result<(), LedgerError> {
+        if self.failed_write {
+            return Err(LedgerError::Io {
+                operation: "resume_after_failed_write",
+                detail: "a prior append failed; reopen and inspect the segment before writing"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// DESIGN (BD-085/BD-086): a single-segment combiner with the L0 keyed index rebuilt at open.
+/// Checks run before persistence; the index advances only after the frame has been synced.
+///
+/// This is receiver-style semantic admission, not lease authentication. The embedding authority
+/// must authenticate its persisted writer lease and provide application laws. Cross-cell references,
+/// signatures and legacy witness digests are retained but are not certified by this writer.
+#[derive(Debug)]
+pub struct SemanticSegmentWriter {
+    writer: SegmentWriter,
+    ledger: L0Ledger,
+    failed_commit: bool,
+}
+
+impl SemanticSegmentWriter {
+    pub fn create(path: &Path, cell_id: impl Into<String>) -> Result<Self, L0Error> {
+        let cell_id = cell_id.into();
+        let mut ledger = L0Ledger::new();
+        ledger.create_cell(&cell_id, "segment-replay")?;
+        let writer = SegmentWriter::create(path, cell_id, 0, GENESIS_PREV_HASH, Vec::new())?;
+        Ok(Self {
+            writer,
+            ledger,
+            failed_commit: false,
+        })
+    }
+
+    pub fn open_append(path: &Path) -> Result<Self, L0Error> {
+        let (writer, batches) = SegmentWriter::open_append_with_batches(path)?;
+        let ledger = replay_semantics(&writer.header, &batches)?;
+        Ok(Self {
+            writer,
+            ledger,
+            failed_commit: false,
+        })
+    }
+
+    /// The index cannot be mutated independently of the durable log.
+    #[must_use]
+    pub const fn ledger(&self) -> &L0Ledger {
+        &self.ledger
+    }
+
+    #[must_use]
+    pub fn cell_id(&self) -> &str {
+        &self.writer.header.cell_id
+    }
+
+    pub fn key_witness(&self, key: &str) -> Result<Witness, L0Error> {
+        self.ledger.key_witness(self.cell_id(), key)
+    }
+
+    pub fn snapshot(&self) -> Result<CellSnapshot, L0Error> {
+        self.ledger.as_of_seq(self.cell_id(), self.writer.next_seq)
+    }
+
+    pub fn append(&mut self, batch: &DeltaBatch) -> Result<Digest32, L0Error> {
+        self.append_with_law(batch, |_, _| Ok(()))
+    }
+
+    /// A law sees the pre-commit index and complete batch. Rejections leave disk and index
+    /// unchanged. After an uncertain persistence error this handle refuses further writes.
+    pub fn append_with_law<F>(&mut self, batch: &DeltaBatch, check: F) -> Result<Digest32, L0Error>
+    where
+        F: FnOnce(&L0Ledger, &DeltaBatch) -> Result<(), String>,
+    {
+        self.check_commit_state()?;
+        self.ledger.check_replica(batch)?;
+        check(&self.ledger, batch).map_err(|detail| L0Error::ConservationViolation {
+            cell_id: batch.cell_id.clone(),
+            detail,
+        })?;
+        self.failed_commit = true;
+        let digest = self.writer.append(batch)?;
+        match self.ledger.admit_replica(batch.clone())? {
+            AdmitOutcome::Committed { batch_digest, .. } if batch_digest == digest => {
+                self.failed_commit = false;
+                Ok(digest)
+            }
+            _ => Err(LedgerError::ChainContinuity {
+                detail: "durable append disagrees with preflight semantic admission".to_string(),
+            }
+            .into()),
+        }
+    }
+
+    pub fn seal(self) -> Result<SegmentFooter, L0Error> {
+        self.check_commit_state()?;
+        Ok(self.writer.seal()?)
+    }
+
+    fn check_commit_state(&self) -> Result<(), L0Error> {
+        if self.failed_commit {
+            return Err(LedgerError::Io {
+                operation: "resume_after_failed_commit",
+                detail: "reopen and inspect the segment after an uncertain durable commit"
+                    .to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
 }
 
 /// Read-only `FMT-SEG-1` segment inspector holding a shared OS lock during read.
@@ -1060,8 +1249,8 @@ pub(crate) fn read_bounded(file: &mut File, path: &Path) -> Result<Vec<u8>, Ledg
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::batch::FMT_LEDGER_V1;
     use crate::batch::tests::sample_batch;
+    use crate::batch::{DeltaKind, DeltaOp, FMT_LEDGER_V2};
     use crate::mmr::{leaf_hash, verify_consistency, verify_inclusion};
 
     fn scratch_path(tag: &str) -> std::path::PathBuf {
@@ -1070,6 +1259,268 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir.join("seg-000001.fmseg")
+    }
+
+    fn semantic_batch(
+        seq: u64,
+        prev: Digest32,
+        deltas: Vec<DeltaOp>,
+        witnesses: Vec<Witness>,
+    ) -> DeltaBatch {
+        let mut batch = sample_batch("CELL-EVID(test)", 1, seq, prev);
+        batch.format_version = FMT_LEDGER_V2;
+        batch.deltas = deltas;
+        batch.deltas.sort();
+        batch.witnesses = witnesses;
+        batch.witnesses.sort();
+        batch.cross_cell_refs.clear();
+        batch
+    }
+
+    #[test]
+    fn semantic_writer_reopens_with_exact_l0_history_obligations_and_read_witnesses() {
+        let path = scratch_path("semantic-parity");
+        let mut writer = SemanticSegmentWriter::create(&path, "CELL-EVID(test)").unwrap();
+        let mut reference = L0Ledger::new();
+        let lease = reference.create_cell("CELL-EVID(test)", "writer").unwrap();
+        let absent = writer.key_witness("grade").unwrap();
+        let first = semantic_batch(
+            0,
+            GENESIS_PREV_HASH,
+            vec![
+                DeltaOp::new("grade", DeltaKind::Put, b"42".to_vec()),
+                DeltaOp::new("OB-001", DeltaKind::ReserveObligation, Vec::new()),
+            ],
+            vec![absent],
+        );
+        let head = writer.append(&first).unwrap();
+        assert_eq!(head, reference.commit(&lease, first).unwrap());
+        let grade_read = writer.key_witness("grade").unwrap();
+        let unrelated = semantic_batch(
+            1,
+            head,
+            vec![DeltaOp::new("other", DeltaKind::Put, b"unchanged".to_vec())],
+            vec![grade_read.clone()],
+        );
+        let head = writer.append(&unrelated).unwrap();
+        reference.commit(&lease, unrelated).unwrap();
+        let before = writer.snapshot().unwrap();
+        assert_eq!(before, reference.as_of_seq("CELL-EVID(test)", 2).unwrap());
+        drop(writer);
+
+        let mut writer = SemanticSegmentWriter::open_append(&path).unwrap();
+        assert_eq!(writer.snapshot().unwrap(), before);
+        assert_eq!(writer.key_witness("grade").unwrap(), grade_read);
+        let next = semantic_batch(
+            2,
+            head,
+            vec![
+                DeltaOp::new("grade", DeltaKind::Supersede, b"43".to_vec()),
+                DeltaOp::new("OB-001", DeltaKind::ResolveObligation, Vec::new()),
+            ],
+            vec![grade_read],
+        );
+        writer
+            .append_with_law(&next, |state, batch| {
+                let old = state.key_history(&batch.cell_id, "grade").unwrap();
+                assert_eq!(old.last().unwrap().payload, b"42");
+                assert!(
+                    state
+                        .open_obligations(&batch.cell_id)
+                        .unwrap()
+                        .contains("OB-001")
+                );
+                Ok(())
+            })
+            .unwrap();
+        reference.commit(&lease, next).unwrap();
+        let expected = reference.as_of_seq("CELL-EVID(test)", 3).unwrap();
+        assert_eq!(writer.snapshot().unwrap(), expected);
+        assert_eq!(
+            writer
+                .ledger()
+                .key_history(writer.cell_id(), "grade")
+                .unwrap()
+                .len(),
+            2
+        );
+        writer.seal().unwrap();
+        assert_eq!(
+            SegmentReader::open(&path)
+                .unwrap()
+                .replay_semantics()
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn semantic_refusals_leave_durable_bytes_index_and_obligations_unchanged() {
+        let path = scratch_path("semantic-refuse");
+        let mut writer = SemanticSegmentWriter::create(&path, "CELL-EVID(test)").unwrap();
+        let absent = writer.key_witness("grade").unwrap();
+        let first = semantic_batch(
+            0,
+            GENESIS_PREV_HASH,
+            vec![DeltaOp::new("grade", DeltaKind::Put, b"42".to_vec())],
+            vec![absent.clone()],
+        );
+        let head = writer.append(&first).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let state = writer.snapshot().unwrap();
+        let stale = semantic_batch(
+            1,
+            head,
+            vec![DeltaOp::new("next", DeltaKind::Put, b"result".to_vec())],
+            vec![absent],
+        );
+        assert_eq!(
+            writer.append(&stale).unwrap_err().to_refusal().code,
+            "FMINE-REF-502"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(writer.snapshot().unwrap(), state);
+        let mut current = stale;
+        current.witnesses = vec![writer.key_witness("grade").unwrap()];
+        assert!(matches!(
+            writer.append_with_law(&current, |_, _| Err(
+                "declared conservation law failed".into()
+            )),
+            Err(L0Error::ConservationViolation { .. })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(writer.snapshot().unwrap(), state);
+
+        let invalid = semantic_batch(
+            1,
+            head,
+            vec![
+                DeltaOp::new("a-new", DeltaKind::Put, b"must not appear".to_vec()),
+                DeltaOp::new("z-missing", DeltaKind::Supersede, Vec::new()),
+            ],
+            Vec::new(),
+        );
+        assert!(matches!(
+            writer.append(&invalid),
+            Err(L0Error::KeyNotFound { .. })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(writer.snapshot().unwrap(), state);
+        writer.append(&current).unwrap();
+        assert!(writer.snapshot().unwrap().live_keys.contains_key("next"));
+    }
+
+    #[test]
+    fn semantic_open_refuses_hash_valid_stale_history_without_changing_it() {
+        let path = scratch_path("semantic-corrupt");
+        let mut state = L0Ledger::new();
+        let lease = state.create_cell("CELL-EVID(test)", "writer").unwrap();
+        let absent = state.key_witness("CELL-EVID(test)", "grade").unwrap();
+        let first = semantic_batch(
+            0,
+            GENESIS_PREV_HASH,
+            vec![DeltaOp::new("grade", DeltaKind::Put, b"42".to_vec())],
+            vec![absent.clone()],
+        );
+        let mut raw =
+            SegmentWriter::create(&path, "CELL-EVID(test)", 0, GENESIS_PREV_HASH, Vec::new())
+                .unwrap();
+        let head = raw.append(&first).unwrap();
+        state.commit(&lease, first).unwrap();
+        let stale = semantic_batch(
+            1,
+            head,
+            vec![DeltaOp::new(
+                "result",
+                DeltaKind::Put,
+                b"invalid derivation".to_vec(),
+            )],
+            vec![absent],
+        );
+        raw.append(&stale).unwrap();
+        drop(raw);
+        let bytes = std::fs::read(&path).unwrap();
+        let inspected = SegmentReader::open(&path).unwrap();
+        assert_eq!(inspected.batches.len(), 2);
+        assert!(matches!(
+            inspected.replay_semantics(),
+            Err(L0Error::KeyWitnessMismatch { .. })
+        ));
+        assert!(matches!(
+            SemanticSegmentWriter::open_append(&path),
+            Err(L0Error::KeyWitnessMismatch { .. })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn unacknowledged_complete_append_replays_once_and_retries_cannot_duplicate_it() {
+        let path = scratch_path("semantic-unacknowledged");
+        let mut writer = SemanticSegmentWriter::create(&path, "CELL-EVID(test)").unwrap();
+        let batch = semantic_batch(
+            0,
+            GENESIS_PREV_HASH,
+            vec![
+                DeltaOp::new("grade", DeltaKind::Put, b"42".to_vec()),
+                DeltaOp::new("OB-001", DeltaKind::ReserveObligation, Vec::new()),
+            ],
+            vec![writer.key_witness("grade").unwrap()],
+        );
+        // FACT: a real, fully synced frame, followed by process loss before index admission.
+        writer.writer.append(&batch).unwrap();
+        assert_eq!(
+            writer.ledger().committed_count(writer.cell_id()).unwrap(),
+            0
+        );
+        drop(writer);
+        let bytes = std::fs::read(&path).unwrap();
+        let mut reopened = SemanticSegmentWriter::open_append(&path).unwrap();
+        let snapshot = reopened.snapshot().unwrap();
+        assert_eq!(snapshot.committed_count, 1);
+        assert_eq!(snapshot.live_keys.len(), 1);
+        assert!(snapshot.open_obligations.contains("OB-001"));
+        assert!(reopened.append(&batch).is_err());
+        assert_eq!(reopened.snapshot().unwrap(), snapshot);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn failed_storage_write_requires_reopen_and_never_advances_the_semantic_index() {
+        let path = scratch_path("semantic-io-failure");
+        let mut writer = SemanticSegmentWriter::create(&path, "CELL-EVID(test)").unwrap();
+        let batch = semantic_batch(
+            0,
+            GENESIS_PREV_HASH,
+            vec![DeltaOp::new("grade", DeltaKind::Put, b"42".to_vec())],
+            Vec::new(),
+        );
+        let before = std::fs::read(&path).unwrap();
+        // DESIGN: fault injection through a real read-only descriptor; writes return an OS error.
+        let readonly = File::open(&path).unwrap();
+        writer.writer.file.0 = readonly;
+        assert!(matches!(
+            writer.append(&batch),
+            Err(L0Error::Ledger(LedgerError::Io { .. }))
+        ));
+        assert_eq!(
+            writer.ledger().committed_count(writer.cell_id()).unwrap(),
+            0
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(matches!(
+            writer.append(&batch),
+            Err(L0Error::Ledger(LedgerError::Io {
+                operation: "resume_after_failed_commit",
+                ..
+            }))
+        ));
+        assert!(writer.seal().is_err());
+        let mut reopened = SemanticSegmentWriter::open_append(&path).unwrap();
+        reopened.append(&batch).unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().live_keys["grade"].payload,
+            b"42"
+        );
     }
 
     #[test]
@@ -1385,7 +1836,7 @@ mod tests {
         let mut newer = sample_batch("CELL-SITE(lumwana)", 1, 1, d0)
             .to_bytes()
             .expect("b1 bytes");
-        newer[8..10].copy_from_slice(&(FMT_LEDGER_V1 + 1).to_le_bytes());
+        newer[8..10].copy_from_slice(&(FMT_LEDGER_V2 + 1).to_le_bytes());
         let body_end = newer.len() - 4;
         let crc = crc32c(&newer[..body_end]);
         newer[body_end..].copy_from_slice(&crc.to_le_bytes());

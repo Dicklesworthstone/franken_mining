@@ -5,7 +5,8 @@
 //! framed with `FMNE` + `LDGR` + version + CRC32C via [`fmine_core::codec`]. Sequences are encoded in
 //! strict canonical ascending order (`put_canonical_seq` / `get_canonical_seq`). The batch digest is
 //! `SHA-256(canonical_bytes)` so the cell hash chain and RFC 6962 [`crate::mmr::Mmr`] align with ATP
-//! Merkle hashing. Readers accept versions `1` (`FMT-LEDGER-1`) and `0` (`N-1`, without `cross_cell_refs`).
+//! Merkle hashing. Schema `v2` adds opt-in keyed-state witnesses; `v0` (without `cross_cell_refs`)
+//! and `v1` retain their existing encodings and remain readable.
 
 use core::fmt;
 
@@ -17,16 +18,19 @@ use fmine_evidence::{Refusal, RefusalCode};
 /// Format tag for `FMT-LEDGER-1` delta batches (`FMNE` + `LDGR`).
 pub const TAG_LEDGER_BATCH: [u8; 4] = *b"LDGR";
 
-/// Current schema version for `FMT-LEDGER-1`.
+/// Original schema version with cross-cell references for `FMT-LEDGER-1`.
 pub const FMT_LEDGER_V1: u16 = 1;
 
-/// Minimum supported schema version (`N-1` compatibility, plan §26.5).
+/// Schema version admitting [`WitnessKind::KeyState`] (`BD-085`).
+pub const FMT_LEDGER_V2: u16 = 2;
+
+/// Minimum supported schema version (retained durable compatibility, plan §26.5).
 pub const FMT_LEDGER_MIN_VERSION: u16 = 0;
 
 /// Previous-hash sentinel for a cell's genesis batch (`seq == 0`).
 pub const GENESIS_PREV_HASH: Digest32 = Digest32([0u8; 32]);
 
-/// Maximum length of a `cell_id` or `subject_id` in bytes.
+/// Maximum length of a `cell_id` or non-key witness `subject_id` in bytes.
 pub const MAX_ID_BYTES: usize = 256;
 
 /// Maximum length of a delta key in bytes.
@@ -93,6 +97,8 @@ pub enum WitnessKind {
     AuthorityToken = 4,
     /// Telemetry continuity receipt witness (`§26.8`).
     Continuity = 5,
+    /// Exact pre-batch version or absence of a cell-scoped key (`BD-085`, schema `v2`).
+    KeyState = 6,
 }
 
 impl WitnessKind {
@@ -103,6 +109,7 @@ impl WitnessKind {
             3 => Ok(Self::Signature),
             4 => Ok(Self::AuthorityToken),
             5 => Ok(Self::Continuity),
+            6 => Ok(Self::KeyState),
             other => Err(LedgerError::InvalidEnumTag {
                 kind: "WitnessKind",
                 tag: other,
@@ -170,7 +177,7 @@ impl DeltaOp {
 pub struct Witness {
     /// Witness classification.
     pub kind: WitnessKind,
-    /// Subject identifier (non-empty, ≤ [`MAX_ID_BYTES`]).
+    /// Subject identifier (non-empty, ≤ [`MAX_ID_BYTES`], or [`MAX_KEY_BYTES`] for `KeyState`).
     pub subject_id: String,
     /// 32-byte witness digest.
     pub digest: Digest32,
@@ -188,13 +195,15 @@ impl Witness {
     }
 
     fn validate(&self) -> Result<(), LedgerError> {
-        if self.subject_id.is_empty() || self.subject_id.len() > MAX_ID_BYTES {
+        let max = if self.kind == WitnessKind::KeyState {
+            MAX_KEY_BYTES
+        } else {
+            MAX_ID_BYTES
+        };
+        if self.subject_id.is_empty() || self.subject_id.len() > max {
             return Err(LedgerError::InvalidField {
                 field: "witness.subject_id",
-                detail: format!(
-                    "length {} outside 1..={MAX_ID_BYTES}",
-                    self.subject_id.len()
-                ),
+                detail: format!("length {} outside 1..={max}", self.subject_id.len()),
             });
         }
         Ok(())
@@ -237,7 +246,7 @@ impl CrossCellRef {
 /// Canonical `FMT-LEDGER-1` delta batch (`BD-081`, plan §26.5).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DeltaBatch {
-    /// Format version (`1` for `FMT-LEDGER-1`; `0` supported for N-1 compatibility).
+    /// Format version (`2` admits keyed-state witnesses; `0` and `1` retain legacy encodings).
     pub format_version: u16,
     /// Authority cell identifier (`CELL-PUBLIC`, `CELL-SITE(...)`, `CELL-DEC`, etc.).
     pub cell_id: String,
@@ -253,7 +262,7 @@ pub struct DeltaBatch {
     pub deltas: Vec<DeltaOp>,
     /// Strictly ascending canonical sequence of [`Witness`] records.
     pub witnesses: Vec<Witness>,
-    /// Strictly ascending canonical sequence of [`CrossCellRef`] triples (`v1` only; empty in `v0`).
+    /// Strictly ascending canonical sequence of [`CrossCellRef`] triples (`v1`/`v2`; empty in `v0`).
     pub cross_cell_refs: Vec<CrossCellRef>,
 }
 
@@ -375,11 +384,11 @@ impl std::error::Error for LedgerError {}
 impl DeltaBatch {
     /// Validate all structural, digest, anchor-binding, and canonical-order invariants.
     pub fn validate(&self) -> Result<(), LedgerError> {
-        if self.format_version > FMT_LEDGER_V1 {
+        if self.format_version > FMT_LEDGER_V2 {
             return Err(LedgerError::Codec(CodecError::UnsupportedVersion {
                 actual: self.format_version,
                 min_supported: FMT_LEDGER_MIN_VERSION,
-                max_supported: FMT_LEDGER_V1,
+                max_supported: FMT_LEDGER_V2,
             }));
         }
         if self.cell_id.is_empty() || self.cell_id.len() > MAX_ID_BYTES {
@@ -463,9 +472,25 @@ impl DeltaBatch {
         }
         for witness in &self.witnesses {
             witness.validate()?;
+            if witness.kind == WitnessKind::KeyState && self.format_version < FMT_LEDGER_V2 {
+                return Err(LedgerError::InvalidField {
+                    field: "witness.kind",
+                    detail: "KeyState witnesses require FMT-LEDGER v2".to_string(),
+                });
+            }
         }
         if self.witnesses.windows(2).any(|w| w[0] >= w[1]) {
             return Err(LedgerError::Codec(CodecError::NonCanonicalOrder));
+        }
+        if self.witnesses.windows(2).any(|w| {
+            w[0].kind == WitnessKind::KeyState
+                && w[1].kind == WitnessKind::KeyState
+                && w[0].subject_id == w[1].subject_id
+        }) {
+            return Err(LedgerError::InvalidField {
+                field: "witness.subject_id",
+                detail: "a key may have only one pre-batch KeyState witness".to_string(),
+            });
         }
         for cref in &self.cross_cell_refs {
             cref.validate()?;
@@ -513,13 +538,13 @@ impl DeltaBatch {
         Ok(enc.finish())
     }
 
-    /// Decode a canonical `FMT-LEDGER-1` (or N-1 `v0`) frame and validate all invariants.
+    /// Decode a canonical `FMT-LEDGER-1` schema `v0`, `v1` or `v2` frame and validate all invariants.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, LedgerError> {
         let mut dec = Decoder::open_frame(
             bytes,
             TAG_LEDGER_BATCH,
             FMT_LEDGER_MIN_VERSION,
-            FMT_LEDGER_V1,
+            FMT_LEDGER_V2,
         )?;
         let format_version = dec.version();
         let cell_id = dec.get_str(MAX_ID_BYTES)?.to_string();
@@ -567,7 +592,12 @@ impl DeltaBatch {
                     WitnessKind::Conservation
                 }
             };
-            let subject_id = d.get_str(MAX_ID_BYTES)?.to_string();
+            let max = if kind == WitnessKind::KeyState && format_version >= FMT_LEDGER_V2 {
+                MAX_KEY_BYTES
+            } else {
+                MAX_ID_BYTES
+            };
+            let subject_id = d.get_str(max)?.to_string();
             let digest = Digest32(d.get_fixed::<32>()?);
             Ok(Witness {
                 kind,
@@ -748,5 +778,118 @@ pub(crate) mod tests {
             bad_genesis.to_bytes(),
             Err(LedgerError::ChainContinuity { .. })
         ));
+    }
+
+    #[test]
+    fn key_state_schema_is_opt_in_and_legacy_bytes_remain_pinned() {
+        // FACT: independent Python struct/CRC32C/SHA-256 encoding of the unchanged v0/v1 fields.
+        let mut legacy = sample_batch("CELL-SITE(lumwana)", 1, 0, GENESIS_PREV_HASH);
+        let bytes = legacy.to_bytes().unwrap();
+        assert_eq!(bytes.len(), 486);
+        assert_eq!(
+            sha256(&bytes).to_hex(),
+            "65f03383ca40522e015bb2ef7939cefbba23bda4e36674a10aad91888e4f8cd7"
+        );
+        legacy.format_version = 0;
+        legacy.cross_cell_refs.clear();
+        let bytes = legacy.to_bytes().unwrap();
+        assert_eq!(bytes.len(), 418);
+        assert_eq!(
+            sha256(&bytes).to_hex(),
+            "0c560966aadbbaf94a233c42a1d31e88594d4147526ea7178138f2ab6fdf4153"
+        );
+
+        let mut batch = legacy;
+        batch.format_version = FMT_LEDGER_V2;
+        batch.witnesses.push(Witness::new(
+            WitnessKind::KeyState,
+            "sample/a",
+            sha256(b"pre-batch-state"),
+        ));
+        let bytes = batch.to_bytes().unwrap();
+        assert_eq!(DeltaBatch::from_bytes(&bytes).unwrap(), batch);
+        for version in [0, FMT_LEDGER_V1] {
+            batch.format_version = version;
+            assert!(matches!(
+                batch.to_bytes(),
+                Err(LedgerError::InvalidField {
+                    field: "witness.kind",
+                    ..
+                })
+            ));
+
+            // A valid CRC cannot downgrade the new witness into an unversioned old meaning.
+            let mut downgraded = bytes.clone();
+            downgraded[8..10].copy_from_slice(&version.to_le_bytes());
+            if version == 0 {
+                let refs_start = downgraded.len() - 8;
+                downgraded.drain(refs_start..refs_start + 4);
+            }
+            let crc_at = downgraded.len() - 4;
+            let crc = fmine_core::codec::crc32c(&downgraded[..crc_at]);
+            downgraded[crc_at..].copy_from_slice(&crc.to_le_bytes());
+            assert!(matches!(
+                DeltaBatch::from_bytes(&downgraded),
+                Err(LedgerError::InvalidField {
+                    field: "witness.kind",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn key_state_subjects_are_unique_and_support_the_full_key_bound() {
+        let mut batch = sample_batch("CELL-EVID", 1, 0, GENESIS_PREV_HASH);
+        batch.format_version = FMT_LEDGER_V2;
+        batch.witnesses = vec![
+            Witness::new(WitnessKind::KeyState, "sample/a", Digest32([0; 32])),
+            Witness::new(WitnessKind::KeyState, "sample/a", Digest32([1; 32])),
+        ];
+        assert!(matches!(
+            batch.to_bytes(),
+            Err(LedgerError::InvalidField {
+                field: "witness.subject_id",
+                ..
+            })
+        ));
+        batch.witnesses[1].subject_id = "sample/b".to_string();
+        let mut bytes = batch.to_bytes().unwrap();
+        let at = bytes.windows(8).position(|w| w == b"sample/b").unwrap();
+        bytes[at..at + 8].copy_from_slice(b"sample/a");
+        let crc_at = bytes.len() - 4;
+        let crc = fmine_core::codec::crc32c(&bytes[..crc_at]);
+        bytes[crc_at..].copy_from_slice(&crc.to_le_bytes());
+        assert!(matches!(
+            DeltaBatch::from_bytes(&bytes),
+            Err(LedgerError::InvalidField {
+                field: "witness.subject_id",
+                ..
+            })
+        ));
+        batch.witnesses[1] = batch.witnesses[0].clone();
+        assert_eq!(
+            batch.to_bytes(),
+            Err(LedgerError::Codec(CodecError::NonCanonicalOrder))
+        );
+
+        batch.witnesses.truncate(1);
+        batch.witnesses[0].subject_id = "k".repeat(MAX_KEY_BYTES);
+        let bytes = batch.to_bytes().unwrap();
+        assert_eq!(DeltaBatch::from_bytes(&bytes).unwrap(), batch);
+        batch.witnesses[0].subject_id.push('k');
+        assert!(batch.to_bytes().is_err());
+        batch.witnesses[0].subject_id = "k".repeat(MAX_ID_BYTES + 1);
+        batch.witnesses[0].kind = WitnessKind::Conservation;
+        assert!(batch.to_bytes().is_err());
+
+        // Existing non-key witness kinds retain their old canonical identity and bounds.
+        batch.format_version = FMT_LEDGER_V1;
+        batch.witnesses = vec![
+            Witness::new(WitnessKind::Conservation, "balance", Digest32([0; 32])),
+            Witness::new(WitnessKind::Conservation, "balance", Digest32([1; 32])),
+        ];
+        let bytes = batch.to_bytes().unwrap();
+        assert_eq!(DeltaBatch::from_bytes(&bytes).unwrap(), batch);
     }
 }
