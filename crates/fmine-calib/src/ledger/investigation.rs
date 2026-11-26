@@ -258,7 +258,9 @@ impl InvestigationLedger {
         self.check_time(request.opened_ns)?;
         validate_open(&request)?;
         if self.cases.len() >= MAX_CASES {
-            return Err(invalid("investigation ledger exceeds its bounded case capacity"));
+            return Err(invalid(
+                "investigation ledger exceeds its bounded case capacity",
+            ));
         }
         if self.cases.contains_key(&request.case_id) {
             return Err(frozen("investigation case id is already retained"));
@@ -432,7 +434,11 @@ impl InvestigationLedger {
     }
 
     fn check_time(&self, recorded_ns: i64) -> Result<(), Refusal> {
-        if recorded_ns < 0 || self.latest_record_ns.is_some_and(|prior| recorded_ns < prior) {
+        if recorded_ns < 0
+            || self
+                .latest_record_ns
+                .is_some_and(|prior| recorded_ns < prior)
+        {
             Err(late("investigation authority chronology cannot regress"))
         } else {
             Ok(())
@@ -484,7 +490,9 @@ fn trigger(assessment: &Assessment, monitor: MonitorKind) -> Result<CaseTrigger,
         citation,
     } = &member.outcome
     else {
-        return Err(invalid("monitor crossing must retain a resolved original event"));
+        return Err(invalid(
+            "monitor crossing must retain a resolved original event",
+        ));
     };
     citation.validate()?;
     if !value.is_finite()

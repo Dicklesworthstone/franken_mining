@@ -139,11 +139,19 @@ pub(super) fn json_field(state: &Replay, recorded_ns: i64) -> Result<String, Ref
                 js(&resolution.evidence), resolution.recorded_ns, js(&resolution.digest.to_hex()),
             )
         });
-        let rearm = case.rearm.as_ref().map_or_else(|| "null".into(), |rearm| {
-            format!("{{\"cohort\":{},\"recorded_ns\":{},\"digest\":{}}}",
-                js(&rearm.cohort.to_hex()), rearm.recorded_ns, js(&rearm.digest.to_hex()))
-        });
-        let strings = |values: &[String]| values.iter().map(|v| js(v)).collect::<Vec<_>>().join(",");
+        let rearm = case.rearm.as_ref().map_or_else(
+            || "null".into(),
+            |rearm| {
+                format!(
+                    "{{\"cohort\":{},\"recorded_ns\":{},\"digest\":{}}}",
+                    js(&rearm.cohort.to_hex()),
+                    rearm.recorded_ns,
+                    js(&rearm.digest.to_hex())
+                )
+            },
+        );
+        let strings =
+            |values: &[String]| values.iter().map(|v| js(v)).collect::<Vec<_>>().join(",");
         cases.push(format!(
             "{{\"id\":{},\"state\":{},\"owner_role\":{},\"opened_ns\":{},\"deadline_ns\":{},\"overdue_at_recorded_time\":{},\"assessment_digest\":{},\"opening_digest\":{},\"digest\":{},\"trigger\":{{\"cohort\":{},\"monitor\":{},\"first_crossing\":{},\"member\":{}}},\"hypotheses\":[{}],\"probes_in_declared_order\":[{}],\"probe_ranking_verified\":false,\"resolution\":{resolution},\"rearm\":{rearm}}}",
             js(&case.case_id), js(case.state()), js(&case.owner_role), case.opened_ns, case.deadline_ns,
@@ -175,10 +183,17 @@ pub(super) fn markdown(state: &Replay, recorded_ns: i64) -> String {
         let _ = writeln!(
             out,
             "\n### {} — {}\n\nOwner: {}. Deadline: {}. Overdue at the journal's last recorded time: {}.\n\nSaved assessment: {}. {} alarm at original observation {}; forecast {}; event {event}.\n\nOpening digest: {}. Current case digest: {}.\n\nCompeting explanations:",
-            text(&case.case_id), case.state(), text(&case.owner_role), utc(case.deadline_ns),
-            case.is_overdue(recorded_ns), case.assessment_digest, case.trigger.monitor.as_str(),
-            case.trigger.first_crossing, text(state.alias(case.trigger.member.forecast_id)),
-            case.opening_digest, case.digest
+            text(&case.case_id),
+            case.state(),
+            text(&case.owner_role),
+            utc(case.deadline_ns),
+            case.is_overdue(recorded_ns),
+            case.assessment_digest,
+            case.trigger.monitor.as_str(),
+            case.trigger.first_crossing,
+            text(state.alias(case.trigger.member.forecast_id)),
+            case.opening_digest,
+            case.digest
         );
         out.push('\n');
         for hypothesis in &case.hypotheses {
@@ -192,15 +207,19 @@ pub(super) fn markdown(state: &Replay, recorded_ns: i64) -> String {
             let _ = writeln!(
                 out,
                 "\nResolution: {}. Declared human role: {}. Rationale: {}. Evidence: {}. Recorded at {}.\n",
-                resolution.kind.as_str(), text(&resolution.human_role), text(&resolution.rationale),
-                text(&resolution.evidence), utc(resolution.recorded_ns)
+                resolution.kind.as_str(),
+                text(&resolution.human_role),
+                text(&resolution.rationale),
+                text(&resolution.evidence),
+                utc(resolution.recorded_ns)
             );
         }
         if let Some(rearm) = &case.rearm {
             let _ = writeln!(
                 out,
                 "\nRearmed through new prospective cohort {} at {}; the old monitor is unchanged.\n",
-                rearm.cohort, utc(rearm.recorded_ns)
+                rearm.cohort,
+                utc(rearm.recorded_ns)
             );
         }
     }

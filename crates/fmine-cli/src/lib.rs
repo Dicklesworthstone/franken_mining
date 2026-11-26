@@ -897,7 +897,11 @@ fn parse_forecast_journal(
                 clock_skew_ns,
             }
         }
-        "register" | "freeze" | "outcome" | "investigate" | "resolve-investigation"
+        "register"
+        | "freeze"
+        | "outcome"
+        | "investigate"
+        | "resolve-investigation"
         | "rearm-investigation" => {
             let head = digest(&take(&mut fields, "--head")?)?;
             let request = PathBuf::from(take(&mut fields, "--request")?);

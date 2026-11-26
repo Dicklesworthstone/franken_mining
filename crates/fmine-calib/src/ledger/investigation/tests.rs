@@ -234,7 +234,11 @@ fn invalid_opening_and_changed_assessments_are_atomic_and_do_not_reserve_ids_or_
     request.owner_role = "x".repeat(129);
     bad.push(request);
     for request in bad {
-        assert!(cases.open(&assessment, MonitorKind::Cusum, request).is_err());
+        assert!(
+            cases
+                .open(&assessment, MonitorKind::Cusum, request)
+                .is_err()
+        );
         assert_eq!(cases, empty);
     }
     assert!(
@@ -328,7 +332,10 @@ fn resolution_records_every_declared_outcome_without_revising_forecast_or_case_o
         let before = cases.clone();
         assert!(cases.resolve("case", resolution(151)).is_err());
         assert_eq!(cases, before);
-        assert_eq!(ResolutionKind::parse(kind.as_str()).expect("round trip"), kind);
+        assert_eq!(
+            ResolutionKind::parse(kind.as_str()).expect("round trip"),
+            kind
+        );
     }
     assert!(
         forecasts
@@ -360,7 +367,11 @@ fn rearm_requires_resolved_case_and_a_fresh_prospective_monitor_cohort() {
         .open(&assessment, MonitorKind::Cusum, opening("case", 104))
         .expect("open");
     let before = cases.clone();
-    assert!(cases.rearm("case", &forecasts, assessment.cohort, 105).is_err());
+    assert!(
+        cases
+            .rearm("case", &forecasts, assessment.cohort, 105)
+            .is_err()
+    );
     assert_eq!(cases, before);
     let (early, _) = cohort(&mut forecasts, "frozen-before-resolution", 110, 300, true);
     let resolved = cases

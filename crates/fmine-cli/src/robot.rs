@@ -646,7 +646,19 @@ mod tests {
         }
 
         // 3. Validate every compiled verb in VERB_CATALOG against verbs schema (and reject unknown).
-        assert_eq!(VERB_CATALOG.len(), 91);
+        assert_eq!(VERB_CATALOG.len(), 94);
+        for path in [
+            "forecast journal investigate",
+            "forecast journal resolve-investigation",
+            "forecast journal rearm-investigation",
+        ] {
+            assert!(
+                VERB_CATALOG.iter().any(|verb| verb.path == path
+                    && verb.subsystem == "Plumb"
+                    && verb.mutates_authority),
+                "{path}"
+            );
+        }
         assert!(VERB_CATALOG.iter().any(|v| v.path == "screen target"
             && v.subsystem == "Lodestar"
             && !v.mutates_authority));

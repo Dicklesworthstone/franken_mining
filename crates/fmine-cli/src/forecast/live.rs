@@ -743,9 +743,11 @@ fn perform(
             "investigation_resolution",
             None,
         ),
-        Command::RearmInvestigation { request, .. } => {
-            (read_request(&root.join(request))?, "investigation_rearm", None)
-        }
+        Command::RearmInvestigation { request, .. } => (
+            read_request(&root.join(request))?,
+            "investigation_rearm",
+            None,
+        ),
         Command::Resolve {
             cohort, forecast, ..
         } => {
