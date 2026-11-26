@@ -45,6 +45,7 @@ pub enum InputRole {
     PublishedMetric,
     GoldPrice,
     Cost,
+    CostPerShortTon,
     RevenueDeduction,
     OunceDeduction,
     Recovery,
@@ -61,6 +62,7 @@ impl InputRole {
             Self::PublishedMetric => "published_metric",
             Self::GoldPrice => "gold_price",
             Self::Cost => "cost",
+            Self::CostPerShortTon => "cost_per_short_ton",
             Self::RevenueDeduction => "revenue_deduction",
             Self::OunceDeduction => "ounce_deduction",
             Self::Recovery => "recovery",
@@ -77,6 +79,7 @@ impl InputRole {
             Self::PublishedMetric | Self::RecoverySlope => "g_per_t",
             Self::GoldPrice | Self::OunceDeduction => "usd_per_oz",
             Self::Cost => "usd_per_t",
+            Self::CostPerShortTon => "usd_per_short_ton",
             Self::RevenueDeduction | Self::Recovery | Self::RecoveryIntercept | Self::Tcm => {
                 "percent"
             }
@@ -89,6 +92,7 @@ impl InputRole {
             "published_metric" => Self::PublishedMetric,
             "gold_price" => Self::GoldPrice,
             "cost" => Self::Cost,
+            "cost_per_short_ton" => Self::CostPerShortTon,
             "revenue_deduction" => Self::RevenueDeduction,
             "ounce_deduction" => Self::OunceDeduction,
             "recovery" => Self::Recovery,
@@ -150,7 +154,7 @@ impl CutoffDeclaration {
         let count = |role| self.inputs.iter().filter(|i| i.role == role).count();
         if count(InputRole::Published) != 1
             || count(InputRole::GoldPrice) != 1
-            || count(InputRole::Cost) == 0
+            || count(InputRole::Cost) + count(InputRole::CostPerShortTon) == 0
             || count(InputRole::PublishedMetric) > 1
             || (count(InputRole::PublishedMetric) == 1 && self.unit != Unit::OuncesPerShortTon)
         {

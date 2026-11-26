@@ -3281,17 +3281,20 @@ role = "recovery"
 quantity = "metallurgical_recovery"
 ```
 
-Run it with `fmine check tables --issuer demo --definitions local/cutoffs.toml --format markdown`. The published
-cutoff uses `g_per_t`, costs use `usd_per_t`, recovery uses `percent`, and the gold price uses `usd_per_oz`.
+Run it with `fmine check tables --issuer demo --definitions local/cutoffs.toml --format markdown`. This example
+uses `g_per_t` for the published cutoff, `usd_per_t` for cost, `percent` for recovery and `usd_per_oz` for gold price.
 Every input must match the declared period. The gold price uses `price_basis`; the other inputs use `basis`.
-Multiple `cost` rows explicitly add their separate costs. Optional `revenue_deduction` and `ounce_deduction`
+Use `role = "cost_per_short_ton"` and a cited `usd_per_short_ton` reading for costs printed per US short ton.
+The calculation converts the amount and its rounding interval using exactly 0.90718474 tonnes per short ton.
+Each cost input keeps its printed unit and precision, and a recipe can add distinct costs from either basis.
+Optional `revenue_deduction` and `ounce_deduction`
 inputs use `percent` and `usd_per_oz`, respectively.
 
 The gold price is an exact quoted parameter; the other inputs retain their displayed rounding bounds.
 For example, invented readings of $100.0/t cost, 50.0% recovery and $3,110.34768/oz gold reproduce 2.00 g/t.
 `recovery = "tcm_over_gold"` instead requires `recovery_intercept` (`percent`), `recovery_slope` (`g_per_t`)
 and `tcm` (`percent`) inputs. The alternative output unit is `oz_per_short_ton`; an optional `published_metric`
-input checks its printed `g_per_t` equivalent. Cost inputs remain USD per metric tonne.
+input checks its printed `g_per_t` equivalent. The output unit is independent of the declared cost units.
 
 Results appear under `payload.checks.cutoffs.rows`: `reproduced`, `within_input_rounding`, or `conflict` for a
 completed arithmetic comparison; `refused` with its reason when evidence or assumptions are unusable. JSON

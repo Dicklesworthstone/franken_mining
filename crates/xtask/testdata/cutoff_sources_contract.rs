@@ -747,3 +747,70 @@ fn cutoff_cli_combines_separate_cost_revenue_and_per_ounce_source_claims() {
     }
     assert_canonical_id(derived);
 }
+
+#[test]
+fn cutoff_cli_converts_explicit_short_ton_costs_and_preserves_the_raw_claims() {
+    let mut fixture = Fixture::new("mixed-cost-units", &[Model::Constant]);
+    fixture.definitions.push_str(
+        "\n[[cutoff_input]]\ncutoff = \"constant_cutoff\"\nrole = \"cost_per_short_ton\"\nquantity = \"short_ton_cost\"\n",
+    );
+    for reader in ["synthetic_reader_a", "synthetic_reader_b"] {
+        fixture.entries.push(Entry {
+            quantity: "short_ton_cost".into(),
+            row: "Printed US$/st cost".into(),
+            token: "45.359237".into(),
+            unit: "usd_per_short_ton".into(),
+            basis: BASIS.into(),
+            period: PERIOD.into(),
+            reader,
+        });
+    }
+    fixture.change("constant_cutoff_published", |e| e.token = "3.00".into());
+    let output = fixture.successful(&[]);
+    let row = cutoff_row(&output, "constant_cutoff");
+    // Independently recomputed with Fraction: divide both short-ton cost bounds
+    // by 0.90718474, then add the metric cost bounds and divide by recovery.
+    assert!(
+        row.contains(
+            r#""computed":"3/1","low":"136032351263/45404596237","high":"136123070737/45313877763""#
+        ),
+        "{row}"
+    );
+    let (inputs, derived) = claim_objects(row);
+    assert_eq!(inputs.len(), 5);
+    let cost = inputs
+        .iter()
+        .find(|c| string_field(c, "quantity") == "short_ton_cost")
+        .unwrap();
+    assert!(cost.contains(r#""role":"cost_per_short_ton""#), "{cost}");
+    assert!(
+        cost.contains(r#""printed":"45359237/1000000","half_step":"1/2000000""#),
+        "{cost}"
+    );
+    assert!(cost.contains("Printed US$/st cost"), "{cost}");
+    assert!(derived.contains(string_field(cost, "claim_id")));
+    assert_canonical_id(cost);
+    assert_canonical_id(derived);
+
+    fixture.change("short_ton_cost", |e| e.unit = "usd_per_t".into());
+    let output = fixture.successful(&[]);
+    let row = cutoff_row(&output, "constant_cutoff");
+    assert!(row.contains(r#""status":"refused""#), "{row}");
+    assert!(row.contains(r#""claims":null"#), "{row}");
+    assert!(
+        row.contains("Printed US$/st cost/Declared: unit or basis differs"),
+        "{row}"
+    );
+
+    // A declaration can consist entirely of short-ton costs.
+    fixture.definitions = fixture.definitions
+        .replace("[[cutoff_input]]\ncutoff = \"constant_cutoff\"\nrole = \"cost\"\nquantity = \"constant_cutoff_cost\"\n", "");
+    fixture.change("short_ton_cost", |e| e.unit = "usd_per_short_ton".into());
+    fixture.change("constant_cutoff_published", |e| e.token = "1.00".into());
+    let output = fixture.successful(&[]);
+    let row = cutoff_row(&output, "constant_cutoff");
+    assert!(
+        row.contains(r#""published":"1/1","computed":"1/1""#),
+        "{row}"
+    );
+}

@@ -49,6 +49,25 @@ fn printed(source: &SourceCell) -> Result<Printed, String> {
     })
 }
 
+fn cost_per_metric_tonne(role: InputRole, source: &SourceCell) -> Result<Printed, String> {
+    let input = printed(source)?;
+    if role == InputRole::Cost {
+        return Ok(input);
+    }
+    // Convert the quoted cost and its half-step by the same exact mass ratio.
+    // The evidence and source Claims still retain the original unit and precision.
+    let convert = || -> Result<Printed, fmine_units::UnitsError> {
+        let grams_per_short_ton = ExactQty::from_integer(2000).avdp_lb_to_grams()?;
+        let short_tons_per_tonne =
+            ExactQty::from_integer(1_000_000).checked_div(grams_per_short_ton)?;
+        Ok(Printed {
+            value: input.value.checked_mul(short_tons_per_tonne)?,
+            half_step: input.half_step.checked_mul(short_tons_per_tonne)?,
+        })
+    };
+    convert().map_err(|e| format!("exact short-ton cost conversion: {e:?}"))
+}
+
 fn domain(case: &CutoffCase) -> Result<(), String> {
     let checked = (|| -> Result<(), super::CutoffFailure> {
         if case.published.value.signum() <= 0
@@ -197,7 +216,11 @@ fn bind(
             .map(|(_, s)| printed(s))
             .transpose()?,
         gold_price_usd_per_oz: exact(one(InputRole::GoldPrice)?.cell.printed)?,
-        costs_usd_per_t: values(InputRole::Cost)?,
+        costs_usd_per_t: sources
+            .iter()
+            .filter(|(role, _)| matches!(role, InputRole::Cost | InputRole::CostPerShortTon))
+            .map(|(role, source)| cost_per_metric_tonne(*role, source))
+            .collect::<Result<_, _>>()?,
         revenue_percent: values(InputRole::RevenueDeduction)?,
         usd_per_oz: values(InputRole::OunceDeduction)?,
         recovery: match declaration.recovery {

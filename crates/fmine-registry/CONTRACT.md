@@ -85,6 +85,8 @@ Validated `RegistryCatalog`, `SiteCalendars`, `MetricRegistry`, `SourcesRegistry
   one registered document, subject, period, physical/model basis, separate price basis, output unit and
   recovery model; numerical values come only from agreed source readings. Explicit roles require one
   published grade, one gold price, at least one cost and exactly the chosen recovery model's parameters.
+  Cost roles bind `cost` to `usd_per_t` and `cost_per_short_ton` to `usd_per_short_ton`. A recipe can declare
+  distinct costs on both bases.
   Optional deductions and an oz/short-ton row's metric equivalent remain separately named. Unknown fields,
   orphan inputs, duplicate quantity keys and incompatible roles/units refuse. `quantities_by_document`
   includes every required reading. Parsing, validation and ordering are Exact; document eligibility,
