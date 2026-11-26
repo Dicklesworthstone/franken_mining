@@ -28,6 +28,7 @@ pub mod correction;
 pub mod coverage;
 pub mod cusum;
 pub mod diagnostics;
+pub mod investigation;
 pub mod segments;
 pub use coverage::{CoverageMonitorAssessment, CoverageMonitorPolicy, CoverageObservation};
 pub use cusum::{CusumMonitorAssessment, CusumMonitorPolicy, CusumObservation};

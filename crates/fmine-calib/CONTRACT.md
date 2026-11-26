@@ -743,6 +743,30 @@ other Claims or create an InvestigationCase (plan §10.5). Pure calibration and 
 - Clustered bias interval and its 200-replicate coverage gate (`BD-341.S4`) remain open; `GATE-HELM-01` remains open.
 - Cohort store is in memory; durable storage and external timestamp authority live in `fmine-io`/`fmine-ledger`.
 
+### Forecast-monitor investigation lifecycle
+
+DESIGN (BD-051, §10.5): `ledger::investigation::InvestigationLedger` consumes a retained assessment and
+derives the first original-publication crossing of its explicitly selected coverage or CUSUM monitor.
+The opening binds the assessment, source cohort, original forecast/event/citation, owner role, future
+deadline, at least two distinct labelled competing hypotheses and an ordered list of proposed probes.
+Probe ranking is supplied; this slice computes no VOI. A later assessment or restatement cannot reopen
+the same original alarm under another case id. Rejected transitions do not reserve identities or time.
+
+An explicit human-role review records one of `hypothesis_added`, `recalibrated`, `data_defect` or
+`false_alarm_logged`, with separate rationale and evidence declarations. The role and evidence are
+unverified inputs, not authenticated identity, causality or proof that a correction was applied.
+Resolution preserves the opening and alarm. Optional rearming links a different cohort frozen after
+resolution, with the same monitor kind and no outcomes recorded or due at rearm. The source monitor
+is never reset. The authority adapter retains all events and checks any stronger physical support start.
+The pure kernel supplies bounded deterministic replay state and canonical opening/response digests;
+durability and persistence of the selected source assessment remain the adapter's responsibility.
+
+Synthetic controls in `ledger::investigation::tests` independently identify the second-observation CUSUM
+crossing and third-miss coverage crossing, preserve original evidence through restatements, reject
+duplicate triggers and malformed transitions atomically, exercise all four explicit resolution kinds,
+and enforce prospective rearming without changing frozen forecasts, assessments or alarm histories.
+Spatial-front assessments and automatic downstream Claim invalidation remain outside this slice.
+
 ### Scope boundary and cluster projection notes
 Pure calibration and scoring kernel; does not perform file I/O (`L-3`).
 

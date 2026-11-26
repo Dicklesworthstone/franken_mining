@@ -279,6 +279,24 @@ mutates_authority = false
 description = "Replay and inspect a forecast journal, optionally checking an independently retained final-head digest"
 
 [[verb]]
+path = "forecast journal investigate"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Open an owned investigation from an original monitor alarm in a persisted assessment"
+
+[[verb]]
+path = "forecast journal resolve-investigation"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Record declared human review and resolution while preserving the original monitor alarm"
+
+[[verb]]
+path = "forecast journal rearm-investigation"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Link a resolved investigation to a newly frozen prospective monitoring cohort"
+
+[[verb]]
 path = "forecast journal report"
 subsystem = "Plumb"
 mutates_authority = false

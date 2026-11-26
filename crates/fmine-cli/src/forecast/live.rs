@@ -49,6 +49,7 @@ const V14_SCHEMA: &str = "fmine.forecast-operation.v14";
 const V15_SCHEMA: &str = "fmine.forecast-operation.v15";
 const V16_SCHEMA: &str = "fmine.forecast-operation.v16";
 const V17_SCHEMA: &str = "fmine.forecast-operation.v17";
+const V18_SCHEMA: &str = "fmine.forecast-operation.v18";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +79,7 @@ enum OperationVersion {
     V15 = 14,
     V16 = 15,
     V17 = 16,
+    V18 = 17,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -103,6 +105,7 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
             V15_SCHEMA => Ok(OperationVersion::V15),
             V16_SCHEMA => Ok(OperationVersion::V16),
             V17_SCHEMA => Ok(OperationVersion::V17),
+            V18_SCHEMA => Ok(OperationVersion::V18),
             _ => Err(invalid("unknown stored forecast operation schema")),
         },
         _ => Err(invalid("unknown stored forecast operation schema")),
@@ -117,7 +120,12 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if expected_table == "plant_production_outcome" {
+    let schema = if matches!(
+        expected_table,
+        "investigation" | "investigation_resolution" | "investigation_rearm"
+    ) {
+        V18_SCHEMA
+    } else if expected_table == "plant_production_outcome" {
         V17_SCHEMA
     } else if expected_table == "plant_outcome" {
         V16_SCHEMA
@@ -270,6 +278,24 @@ pub enum Command {
         selector: String,
         expected_digest: Option<Digest32>,
     },
+    /// Open a case from the first original-publication alarm in a saved assessment.
+    Investigate {
+        journal: PathBuf,
+        head: Digest32,
+        request: PathBuf,
+    },
+    /// Record an explicit human-review declaration without erasing the alarm or changing forecasts.
+    ResolveInvestigation {
+        journal: PathBuf,
+        head: Digest32,
+        request: PathBuf,
+    },
+    /// Link a resolved case to a newly frozen prospective monitor; old evidence remains immutable.
+    RearmInvestigation {
+        journal: PathBuf,
+        head: Digest32,
+        request: PathBuf,
+    },
     Inspect {
         journal: PathBuf,
         head: Option<Digest32>,
@@ -350,6 +376,9 @@ impl Command {
             Self::Resolve { .. } => "resolve",
             Self::Restate { .. } => "restate",
             Self::Assess { .. } => "assess",
+            Self::Investigate { .. } => "investigate",
+            Self::ResolveInvestigation { .. } => "resolve-investigation",
+            Self::RearmInvestigation { .. } => "rearm-investigation",
             Self::Inspect { .. } => "inspect",
             Self::VerifyPlant { .. } => "verify-plant",
             Self::ExplainPlantChange { .. } => "explain-plant-change",
@@ -619,6 +648,9 @@ fn perform(
         | Command::Outcome { journal, head, .. }
         | Command::Resolve { journal, head, .. }
         | Command::Restate { journal, head, .. }
+        | Command::Investigate { journal, head, .. }
+        | Command::ResolveInvestigation { journal, head, .. }
+        | Command::RearmInvestigation { journal, head, .. }
         | Command::Assess { journal, head, .. } => (journal, *head),
         _ => return Err(invalid("this operation needs a writer").into()),
     };
@@ -703,6 +735,17 @@ fn perform(
         }
         Command::Freeze { request, .. } => (read_request(&root.join(request))?, "cohort", None),
         Command::Outcome { request, .. } => (read_request(&root.join(request))?, "outcome", None),
+        Command::Investigate { request, .. } => {
+            (read_request(&root.join(request))?, "investigation", None)
+        }
+        Command::ResolveInvestigation { request, .. } => (
+            read_request(&root.join(request))?,
+            "investigation_resolution",
+            None,
+        ),
+        Command::RearmInvestigation { request, .. } => {
+            (read_request(&root.join(request))?, "investigation_rearm", None)
+        }
         Command::Resolve {
             cohort, forecast, ..
         } => {
@@ -853,7 +896,7 @@ pub(super) fn persisted_report(
     Ok(report)
 }
 
-fn digest_is_bound(state: &Replay, digest: Digest32) -> bool {
+pub(super) fn digest_is_bound(state: &Replay, digest: Digest32) -> bool {
     state
         .checkpoints
         .iter()
@@ -1472,10 +1515,18 @@ fn apply(
     let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
     let vintage_declared = row.get("public_vintages").is_some();
     let weighted_declared = matches!(row.get("kind").map(|field| &field.value), Some(TomlValue::Str(kind)) if kind == "weighted_empirical");
-    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17};
+    use OperationVersion::{V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17, V18};
     // A feature's accepted schemas and each schema's required operation are separate constraints.
     // Keeping both directions explicit prevents incomplete receipts from downgrading their semantics.
     let features: &[(bool, &[OperationVersion], &str)] = &[
+        (
+            matches!(
+                row.table.as_str(),
+                "investigation" | "investigation_resolution" | "investigation_rearm"
+            ),
+            &[V18],
+            "monitor investigation",
+        ),
         (
             row.table == "plant_production_outcome",
             &[V17],
@@ -1554,6 +1605,10 @@ fn apply(
         ),
         V16 => row.table == "plant_outcome",
         V17 => row.table == "plant_production_outcome",
+        V18 => matches!(
+            row.table.as_str(),
+            "investigation" | "investigation_resolution" | "investigation_rearm"
+        ),
         _ => true,
     };
     if !required {
@@ -1582,6 +1637,9 @@ fn apply(
     };
     let row = Row(row);
     match row.0.table.as_str() {
+        "investigation" | "investigation_resolution" | "investigation_rearm" => {
+            super::investigation::apply(state, row, lower, upper)?;
+        }
         "assumption_forecast" => {
             super::assumption::apply_forecast(state, row, lower, upper)?;
         }
@@ -1692,7 +1750,7 @@ fn apply(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct VersionCounts([usize; 17]);
+struct VersionCounts([usize; 18]);
 
 impl VersionCounts {
     fn record(&mut self, version: OperationVersion) {
@@ -1967,8 +2025,9 @@ fn presentation_at(
     } else {
         String::new()
     };
+    let investigations = super::investigation::json_field(state, latest)?;
     let payload = format!(
-        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"{external_time_proof}\",\"timestamp_commitment\":{timestamp_commitment},\"timestamp_verification\":{timestamp_verification},\"source_citations\":{},\"source_admissions\":[{source_admissions}],\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval}{correction_admissions},\"report\":{report}}}",
+        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"{external_time_proof}\",\"timestamp_commitment\":{timestamp_commitment},\"timestamp_verification\":{timestamp_verification},\"source_citations\":{},\"source_admissions\":[{source_admissions}],\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval}{correction_admissions}{investigations},\"report\":{report}}}",
         js(operation),
         js(&head.to_hex()),
         js(&header.cell_id),
@@ -2006,6 +2065,7 @@ fn presentation_at(
     if let Some(evidence) = timestamp {
         rendered_markdown.push_str(&evidence.markdown());
     }
+    rendered_markdown.push_str(&super::investigation::markdown(state, latest));
     Ok((payload, rendered_markdown))
 }
 

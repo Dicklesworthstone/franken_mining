@@ -846,7 +846,7 @@ fn parse_forecast_journal(
     let (mut fields, words) = journal_arguments(args, &["--json", "--trust-host-clock"])?;
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|register-plant|resolve-plant|verify-plant|explain-plant-change|register-correction|freeze|outcome|resolve|restate|assess|inspect|report|compare|correction"
+            "expected forecast journal init|register|register-plant|resolve-plant|verify-plant|explain-plant-change|register-correction|freeze|outcome|resolve|restate|assess|investigate|resolve-investigation|rearm-investigation|inspect|report|compare|correction"
                 .to_string(),
         );
     };
@@ -897,7 +897,8 @@ fn parse_forecast_journal(
                 clock_skew_ns,
             }
         }
-        "register" | "freeze" | "outcome" => {
+        "register" | "freeze" | "outcome" | "investigate" | "resolve-investigation"
+        | "rearm-investigation" => {
             let head = digest(&take(&mut fields, "--head")?)?;
             let request = PathBuf::from(take(&mut fields, "--request")?);
             match *verb {
@@ -907,6 +908,21 @@ fn parse_forecast_journal(
                     request,
                 },
                 "freeze" => Command::Freeze {
+                    journal,
+                    head,
+                    request,
+                },
+                "investigate" => Command::Investigate {
+                    journal,
+                    head,
+                    request,
+                },
+                "resolve-investigation" => Command::ResolveInvestigation {
+                    journal,
+                    head,
+                    request,
+                },
+                "rearm-investigation" => Command::RearmInvestigation {
                     journal,
                     head,
                     request,
@@ -2958,6 +2974,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(forecast::CORRECTION_JSON);
             payload.push_str(",\"forecast_correction_registration\":");
             payload.push_str(forecast::CORRECTION_REGISTRATION_JSON);
+            payload.push_str(",\"forecast_investigations\":");
+            payload.push_str(forecast::INVESTIGATION_JSON);
             payload.push_str(",\"forecast_plant_verification\":");
             payload.push_str(forecast::plant::VERIFICATION_DOCS_JSON);
             payload.push_str(",\"forecast_plant_outcome\":");
