@@ -609,6 +609,12 @@ mod tests {
             &["assure", "public", "--synthetic"],
             &["forecast", "record", "check"],
             &[
+                "plant",
+                "recovery-audit",
+                "--input",
+                "/nonexistent/fmine/recovery-audit.toml",
+            ],
+            &[
                 "repair",
                 "plan",
                 "--segment",
@@ -640,7 +646,7 @@ mod tests {
         }
 
         // 3. Validate every compiled verb in VERB_CATALOG against verbs schema (and reject unknown).
-        assert_eq!(VERB_CATALOG.len(), 86);
+        assert_eq!(VERB_CATALOG.len(), 87);
         assert!(
             VERB_CATALOG
                 .iter()
@@ -652,6 +658,9 @@ mod tests {
             && v.subsystem == "Bullion"
             && !v.mutates_authority));
         assert!(VERB_CATALOG.iter().any(|v| v.path == "plant reconcile-raw"
+            && v.subsystem == "Crucible"
+            && !v.mutates_authority));
+        assert!(VERB_CATALOG.iter().any(|v| v.path == "plant recovery-audit"
             && v.subsystem == "Crucible"
             && !v.mutates_authority));
         assert!(
