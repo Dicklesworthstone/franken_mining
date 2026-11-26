@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # main only: master is pushed as the same commit (AGENTS.md), so a run for master repeated every job at that SHA.
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
 
 jobs:
