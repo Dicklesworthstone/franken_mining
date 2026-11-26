@@ -373,6 +373,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   `ExtractedCell::number_text`.
 - `Workbook::from_file` on a missing or unreadable path returns `IoError::FileRead` naming the path. There is no
   fallback content of any kind (`BD-321`).
+- Workbook relationships name the shared-string and style parts, including nonstandard internal paths. The
+  standard paths remain the default when their relationship is absent. Missing explicitly referenced parts and
+  unresolved shared-string indexes refuse the workbook, with the part or cell locator in the error (`BD-271`).
 - Hostile archives (BD-073). `read_zip_entries` refuses, before allocating, an entry declaring more than
   `MAX_ENTRY_BYTES` (64 MiB) uncompressed or an archive declaring more than `MAX_ARCHIVE_BYTES` (256 MiB):
   `ZipError::Limit`. Inflation stops at the declared size, and an entry that inflates to any other length is refused,

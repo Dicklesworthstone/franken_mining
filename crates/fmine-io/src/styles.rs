@@ -159,21 +159,12 @@ pub fn parse_styles(xml: &str) -> Result<Styles, IoError> {
     Ok(styles)
 }
 
-/// The styles part named by the workbook relationships (`Type` ending in `/styles`), else `xl/styles.xml`.
+/// The resolved styles part named by a single internal workbook relationship.
 #[must_use]
 pub fn styles_part_name(rels_xml: &str) -> Option<String> {
-    iter_xml_start_tags(rels_xml, "Relationship")
-        .into_iter()
-        .filter(|tag| extract_attr_exact(tag, "Type").is_some_and(|t| t.ends_with("/styles")))
-        .find_map(|tag| extract_attr_exact(tag, "Target"))
-        .map(|target| {
-            let t = target.trim_start_matches('/');
-            if t.starts_with("xl/") {
-                t.to_string()
-            } else {
-                format!("xl/{t}")
-            }
-        })
+    crate::xlsx::metadata_part_name(rels_xml, "styles")
+        .ok()
+        .flatten()
 }
 
 /// Whether a stored decimal (optional sign, digits with an optional point, optional exponent) is not an integer,

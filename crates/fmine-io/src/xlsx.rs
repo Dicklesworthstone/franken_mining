@@ -9,7 +9,7 @@ use fmine_core::hash::sha256;
 
 use crate::IoError;
 use crate::numfmt::{self, DisplayRefusal, Displayed};
-use crate::styles::{NumberFormat, Styles, decimal_is_non_integer, parse_styles, styles_part_name};
+use crate::styles::{NumberFormat, Styles, decimal_is_non_integer, parse_styles};
 use crate::zip_inflate::{read_zip_entries, write_stored_zip};
 
 /// Typed cell value preserving the distinction between `0.0`, `Placeholder` (`"-"`/`"N/A"`),
@@ -304,13 +304,6 @@ impl Workbook {
         let digest = sha256(bytes).0;
         let entries = read_zip_entries(bytes).map_err(|e| IoError::Zip(e.to_string()))?;
 
-        let shared_strings = if let Some(ss_bytes) = entries.get("xl/sharedStrings.xml") {
-            let ss_xml = String::from_utf8_lossy(ss_bytes);
-            parse_shared_strings(&ss_xml)
-        } else {
-            Vec::new()
-        };
-
         let wb_xml = entries
             .get("xl/workbook.xml")
             .ok_or_else(|| IoError::Xml("missing xl/workbook.xml".to_string()))?;
@@ -321,17 +314,16 @@ impl Workbook {
             .map(|b| String::from_utf8_lossy(b).into_owned())
             .unwrap_or_default();
         let rel_targets = parse_workbook_rels(&rels_text);
-        // The styles part (bd-jg43.1): the one the relationships name, else xl/styles.xml; with neither, every
-        // cell is General. A styles part that does not parse refuses the workbook.
-        let styles_key = styles_part_name(&rels_text)
-            .filter(|k| entries.contains_key(k))
-            .or_else(|| {
-                entries
-                    .contains_key("xl/styles.xml")
-                    .then(|| "xl/styles.xml".to_string())
-            });
-        let styles = styles_key
-            .and_then(|k| entries.get(&k))
+        let shared_strings = workbook_metadata(
+            &entries,
+            &rels_text,
+            "sharedStrings",
+            "xl/sharedStrings.xml",
+        )?
+        .map_or_else(Vec::new, |bytes| {
+            parse_shared_strings(&String::from_utf8_lossy(bytes))
+        });
+        let styles = workbook_metadata(&entries, &rels_text, "styles", "xl/styles.xml")?
             .map(|b| parse_styles(&String::from_utf8_lossy(b)))
             .transpose()?;
 
@@ -342,7 +334,7 @@ impl Workbook {
             parse_workbook_sheets(&wb_text).into_iter().enumerate()
         {
             let part = if let Some(target) = rel_targets.get(&rel_id) {
-                worksheet_part(target).ok_or_else(|| {
+                workbook_part(target).ok_or_else(|| {
                     IoError::Xml(format!(
                         "sheet {sheet_name:?}: invalid part target {target:?}"
                     ))
@@ -424,7 +416,7 @@ impl Workbook {
 
 /// Resolve the target against xl/workbook.xml. A leading slash names a package part
 /// directly. Keep accepting the legacy xl-prefixed spelling used by older inputs.
-fn worksheet_part(target: &str) -> Option<String> {
+fn workbook_part(target: &str) -> Option<String> {
     let mut parts = Vec::new();
     if !target.starts_with('/') && !target.starts_with("xl/") {
         parts.push("xl");
@@ -439,6 +431,45 @@ fn worksheet_part(target: &str) -> Option<String> {
         }
     }
     (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+pub(crate) fn metadata_part_name(rels_xml: &str, kind: &str) -> Result<Option<String>, IoError> {
+    let suffix = format!("/{kind}");
+    let mut links = iter_xml_start_tags(rels_xml, "Relationship")
+        .into_iter()
+        .filter(|tag| extract_attr_exact(tag, "Type").is_some_and(|kind| kind.ends_with(&suffix)));
+    let Some(tag) = links.next() else {
+        return Ok(None);
+    };
+    if links.next().is_some() {
+        return Err(IoError::Xml(format!(
+            "workbook specifies multiple {kind} parts"
+        )));
+    }
+    if extract_attr_exact(tag, "TargetMode").as_deref() == Some("External") {
+        return Err(IoError::Xml(format!("external workbook {kind} part")));
+    }
+    let target = extract_attr_exact(tag, "Target")
+        .filter(|target| !target.is_empty())
+        .ok_or_else(|| IoError::Xml(format!("workbook {kind} relationship has no target")))?;
+    workbook_part(&decode_xml_entities(&target))
+        .map(Some)
+        .ok_or_else(|| IoError::Xml(format!("invalid workbook {kind} target {target:?}")))
+}
+
+fn workbook_metadata<'a>(
+    entries: &'a BTreeMap<String, Vec<u8>>,
+    rels_xml: &str,
+    kind: &str,
+    legacy_path: &str,
+) -> Result<Option<&'a [u8]>, IoError> {
+    let Some(part) = metadata_part_name(rels_xml, kind)? else {
+        return Ok(entries.get(legacy_path).map(Vec::as_slice));
+    };
+    let bytes = entries
+        .get(&part)
+        .ok_or_else(|| IoError::Xml(format!("missing workbook {kind} part {part:?}")))?;
+    Ok(Some(bytes))
 }
 
 fn parse_workbook_rels(xml: &str) -> BTreeMap<String, String> {
@@ -569,12 +600,17 @@ fn parse_worksheet_cells(
         let mut number_text = None;
         let value = match cell_type.as_str() {
             "s" => {
-                let idx = raw_v.trim().parse::<usize>().ok();
-                let s = idx
+                let s = raw_v
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
                     .and_then(|i| shared_strings.get(i))
-                    .cloned()
-                    .unwrap_or_default();
-                classify_string_cell(sheet_name, &cell_ref, s, quarantined)
+                    .ok_or_else(|| {
+                        IoError::Xml(format!(
+                            "{sheet_name}!{cell_ref}: unresolved shared string index {raw_v:?}"
+                        ))
+                    })?;
+                classify_string_cell(sheet_name, &cell_ref, s.clone(), quarantined)
             }
             "str" | "inlineStr" => {
                 let s = decode_xml_entities(&raw_v);
