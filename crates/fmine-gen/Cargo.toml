@@ -30,3 +30,7 @@ fmine-plant = { path = "../fmine-plant" }
 fmine-telemetry = { path = "../fmine-telemetry" }
 fmine-units = { path = "../fmine-units" }
 fmine-view = { path = "../fmine-view" }
+
+[dev-dependencies]
+fmine-cli = { path = "../fmine-cli" }
+fmine-public = { path = "../fmine-public" }

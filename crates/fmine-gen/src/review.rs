@@ -12,10 +12,13 @@
 //!   so `xtask check-det` certifies `BitwisePortable`).
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 use fmine_core::Digest32;
-use fmine_core::hash::blake3_hash;
+use fmine_core::hash::{blake3_hash, sha256};
+use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{Refusal, RefusalCode};
 
 /// Maximum `n` for which every binomial coefficient `C(n, k)` fits exactly in IEEE-754 `f64`
@@ -27,6 +30,15 @@ const BISECTION_ITERATIONS: usize = 100;
 
 /// Canonical domain-separation prefix for `ReviewKey` commitments (`BD-357.S1`).
 const REVIEW_KEY_DOMAIN_PREFIX: &[u8] = b"fmine:review-key:v1\0";
+
+/// Domain-separation prefix for nonce-keyed packet shuffling (`BD-357.S2`).
+const REVIEW_SHUFFLE_DOMAIN_PREFIX: &[u8] = b"fmine:review-shuffle:v1\0";
+
+/// Domain-separation prefix for `PacketManifest` SHA-256 hashing (`BD-357.S2`).
+const REVIEW_PACKET_DOMAIN_PREFIX: &[u8] = b"fmine:review-packet:v1\0";
+
+/// Filename written at the root of a materialized review packet directory (`BD-357.S2`).
+pub const REVIEW_PACKET_MANIFEST: &str = "review-packet.toml";
 
 /// Permitted internal-review seed classes (`BD-357.S1` / `BD-357.S2`).
 ///
@@ -332,10 +344,520 @@ pub fn generate_os_nonce() -> Result<[u8; 32], Refusal> {
     Ok(nonce)
 }
 
+/// Whether a materialized internal-review packet contains seeded errors (`BD-357.S2`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketKind {
+    Salted,
+    Unsalted,
+}
+
+impl PacketKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Salted => "salted",
+            Self::Unsalted => "unsalted",
+        }
+    }
+}
+
+/// Manifest written as `review-packet.toml` at the root of a review packet directory (`BD-357.S2`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PacketManifest {
+    pub packet: PacketKind,
+    pub round_id: String,
+    pub item_ids: Vec<String>,
+    pub sha256: Digest32,
+}
+
+fn quote_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let code = c as u32;
+                out.push_str(&format!("\\u{code:04x}"));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+impl PacketManifest {
+    /// Render deterministic `review-packet.toml` contents consumed by `fmine_public::refuse_if_salted`.
+    #[must_use]
+    pub fn to_toml(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "packet = {}\n",
+            quote_string(self.packet.as_str())
+        ));
+        out.push_str(&format!("round_id = {}\n", quote_string(&self.round_id)));
+        out.push_str(&format!(
+            "sha256 = {}\n",
+            quote_string(&self.sha256.to_hex())
+        ));
+        out.push_str("item_ids = [");
+        for (idx, id) in self.item_ids.iter().enumerate() {
+            if idx > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&quote_string(id));
+        }
+        out.push_str("]\n");
+        out
+    }
+}
+
+/// Isolated seeded item inside a [`ReviewPacket`] (`BD-357.S2`, `RISK-32`).
+///
+/// All fields are private. `SaltedItem` implements no `Display`, no `From`/`Into` conversion into
+/// `fmine_claim::Claim`, workbook cell types, or `fmine_cli::Envelope`, and exposes no `as_claim()`.
+///
+/// # Compile-time isolation proofs (`BD-357.S2`)
+///
+/// `salted_item_is_not_a_claim`: a `SaltedItem` cannot be passed to `fmine_claim::Claim::new`.
+/// ```compile_fail
+/// use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+/// use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
+/// use fmine_gen::review::SaltedItem;
+///
+/// fn leak_into_claim(item: SaltedItem) -> Claim<f64> {
+///     Claim::new(
+///         "gold.aisc",
+///         item,
+///         "1500",
+///         Representation::Deterministic,
+///         SpatialSupport::PeriodAggregate,
+///         AdditivityClass::Ratio,
+///         EvidenceClass::ISSUER,
+///         EpistemicStatus::KnownKnown,
+///         KnowledgeState::Known,
+///         Confidentiality::public(),
+///         vec![],
+///         vec![],
+///         vec![],
+///     )
+/// }
+/// ```
+///
+/// `salted_item_is_not_a_workbook_cell`: a `SaltedItem` cannot be passed to
+/// `fmine_public::cell_to_public_claim`.
+/// ```compile_fail
+/// use fmine_claim::AdditivityClass;
+/// use fmine_gen::review::SaltedItem;
+/// use fmine_io::xlsx::Workbook;
+///
+/// fn leak_into_cell_claim(wb: &Workbook, item: &SaltedItem) {
+///     let _ = fmine_public::cell_to_public_claim(
+///         wb,
+///         "QTD",
+///         "gold.aisc",
+///         item,
+///         AdditivityClass::Ratio,
+///     );
+/// }
+/// ```
+///
+/// `salted_item_is_not_an_envelope`: a `SaltedItem` cannot be passed to `fmine_cli::Envelope::ok`.
+/// ```compile_fail
+/// use fmine_gen::review::SaltedItem;
+///
+/// fn leak_into_envelope(item: SaltedItem) -> fmine_cli::Envelope {
+///     fmine_cli::Envelope::ok("assure public", item, vec![])
+/// }
+/// ```
+///
+/// `salted_item_fields_are_private`: direct field reads are rejected (`E0616`).
+/// ```compile_fail,E0616
+/// use fmine_gen::review::SaltedItem;
+///
+/// fn read_body(item: &SaltedItem) -> &str {
+///     &item.body
+/// }
+/// ```
+#[derive(PartialEq, Eq)]
+pub struct SaltedItem {
+    item_id: String,
+    body: String,
+}
+
+impl fmt::Debug for SaltedItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SaltedItem(<redacted>)")
+    }
+}
+
+/// Copied real record inside a [`ReviewPacket`] (`BD-357.S2`).
+#[derive(PartialEq, Eq)]
+pub struct RealRecordCopy {
+    item_id: String,
+    body: String,
+}
+
+impl fmt::Debug for RealRecordCopy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RealRecordCopy(<redacted>)")
+    }
+}
+
+/// One reviewable item in a [`ReviewPacket`], hiding real-vs-salted provenance from reviewer reads.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PacketItem {
+    Real(RealRecordCopy),
+    Salted(SaltedItem),
+}
+
+impl PacketItem {
+    #[must_use]
+    pub fn item_id(&self) -> &str {
+        match self {
+            Self::Real(r) => &r.item_id,
+            Self::Salted(s) => &s.item_id,
+        }
+    }
+
+    #[must_use]
+    pub fn render_for_reviewer(&self) -> &str {
+        match self {
+            Self::Real(r) => &r.body,
+            Self::Salted(s) => &s.body,
+        }
+    }
+}
+
+/// Input real record passed to [`build_packet`] / [`build_packet_with_log`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RealRecordInput {
+    pub body: String,
+}
+
+/// Text-form seed request passed to [`build_packet`] / [`build_packet_with_log`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeedRequest {
+    pub class_token: String,
+    pub body: String,
+}
+
+/// Assembled salted or unsalted internal-review packet (`BD-357.S2`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReviewPacket {
+    pub round_id: String,
+    pub manifest: PacketManifest,
+    pub items: Vec<PacketItem>,
+}
+
+/// Parse a seed-class request token (`BD-357.S2`).
+///
+/// Explicitly refuses `"basis-switch"` (in any casing or separator form) with `FMINE-REF-301`
+/// citing the permanent `RISK-32` exclusion: an issuer-attributed false figure is never placed
+/// before an issuer reader.
+pub fn parse_seed_class(token: &str) -> Result<SeedClass, Refusal> {
+    let normalized = token.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+    if normalized == "basis-switch" || normalized == "basisswitch" {
+        return Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            "seed class 'basis-switch' is permanently excluded (BD-357, RISK-32): an issuer-attributed false figure is never placed before an issuer reader",
+        ));
+    }
+    match normalized.as_str() {
+        "s1" | "s1-close-cites-non-exercising-test" | "close-cites-non-exercising-test" => {
+            Ok(SeedClass::S1CloseCitesNonExercisingTest)
+        }
+        "s2" | "s2-close-cites-non-pass-record" | "close-cites-non-pass-record" => {
+            Ok(SeedClass::S2CloseCitesNonPassRecord)
+        }
+        "s3" | "s3-mis-cited-cell" | "mis-cited-cell" => Ok(SeedClass::S3MisCitedCell),
+        "s4" | "s4-refused-shown-reproduced" | "refused-shown-reproduced" => {
+            Ok(SeedClass::S4RefusedShownReproduced)
+        }
+        "s5" | "s5-stale-shown-current" | "stale-shown-current" => {
+            Ok(SeedClass::S5StaleShownCurrent)
+        }
+        "s6" | "s6-wrong-cause-class" | "wrong-cause-class" => Ok(SeedClass::S6WrongCauseClass),
+        _ => Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            format!(
+                "unknown review seed class '{token}'; allowed classes are S1..S6 (basis-switch is permanently excluded)"
+            ),
+        )),
+    }
+}
+
+fn shuffle_rng_from_nonce(round_id: &str, nonce: &[u8; 32]) -> PhiloxStream {
+    let mut seed_buf =
+        Vec::with_capacity(REVIEW_SHUFFLE_DOMAIN_PREFIX.len() + 4 + round_id.len() + nonce.len());
+    seed_buf.extend_from_slice(REVIEW_SHUFFLE_DOMAIN_PREFIX);
+    seed_buf.extend_from_slice(&(round_id.len() as u32).to_le_bytes());
+    seed_buf.extend_from_slice(round_id.as_bytes());
+    seed_buf.extend_from_slice(nonce);
+    let h = blake3_hash(&seed_buf);
+    let b = h.as_bytes();
+    let key = RngKey {
+        seed_root: u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
+        partition: u32::from_le_bytes([b[8], b[9], b[10], b[11]]),
+        domain: u32::from_le_bytes([b[12], b[13], b[14], b[15]]),
+        var_group: u32::from_le_bytes([b[16], b[17], b[18], b[19]]),
+        realization: u32::from_le_bytes([b[20], b[21], b[22], b[23]]),
+        brick: u64::from_le_bytes([b[24], b[25], b[26], b[27], b[28], b[29], b[30], b[31]]),
+    };
+    PhiloxStream::new(key)
+}
+
+fn next_unbiased_usize(stream: &mut PhiloxStream, upper_inclusive: usize) -> usize {
+    let bound = (upper_inclusive as u64) + 1;
+    let limit = u64::MAX - (u64::MAX % bound);
+    loop {
+        let sample = stream.next_u64();
+        if sample < limit {
+            return (sample % bound) as usize;
+        }
+    }
+}
+
+fn compute_packet_sha256(round_id: &str, kind: PacketKind, items: &[PacketItem]) -> Digest32 {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(REVIEW_PACKET_DOMAIN_PREFIX);
+    buf.extend_from_slice(&(round_id.len() as u32).to_le_bytes());
+    buf.extend_from_slice(round_id.as_bytes());
+    buf.extend_from_slice(&(kind.as_str().len() as u32).to_le_bytes());
+    buf.extend_from_slice(kind.as_str().as_bytes());
+    buf.extend_from_slice(&(items.len() as u32).to_le_bytes());
+    for item in items {
+        let id = item.item_id();
+        let body = item.render_for_reviewer();
+        buf.extend_from_slice(&(id.len() as u32).to_le_bytes());
+        buf.extend_from_slice(id.as_bytes());
+        buf.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        buf.extend_from_slice(body.as_bytes());
+    }
+    sha256(&buf)
+}
+
+enum PendingEntry {
+    Real(String),
+    Salted(SeedClass, String),
+}
+
+/// Build a shuffled internal-review packet, its sealed [`ReviewKey`], and an indistinguishable
+/// public NDJSON build log (`BD-357.S2`).
+///
+/// The permutation is keyed strictly by `(round_id, nonce)` so seed positions never leak; opaque
+/// sequential IDs (`item-0001`, …) are assigned after shuffling. Each NDJSON item line carries
+/// `{"round_id","item_id","position","packet_sha256"}` with no class or salted field, followed by
+/// one summary line `{"round_id","items":N,"commitment":"<blake3 hex>"}`.
+pub fn build_packet_with_log(
+    round_id: &str,
+    records: &[RealRecordInput],
+    seeds: &[SeedRequest],
+    nonce: [u8; 32],
+) -> Result<(ReviewPacket, ReviewKey, String), Refusal> {
+    if round_id.trim().is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "build_packet: round_id must be non-empty",
+        ));
+    }
+    if nonce == [0u8; 32] {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "build_packet: all-zero nonce is refused; draw 32 bytes from OS entropy",
+        ));
+    }
+    if records.is_empty() && seeds.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "build_packet: packet must contain at least one item",
+        ));
+    }
+
+    let mut pending = Vec::with_capacity(records.len() + seeds.len());
+    for (idx, rec) in records.iter().enumerate() {
+        if rec.body.trim().is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("build_packet: real record #{idx} has empty body"),
+            ));
+        }
+        pending.push(PendingEntry::Real(rec.body.clone()));
+    }
+    for (idx, seed) in seeds.iter().enumerate() {
+        let cls = parse_seed_class(&seed.class_token)?;
+        if seed.body.trim().is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("build_packet: seed request #{idx} has empty body"),
+            ));
+        }
+        pending.push(PendingEntry::Salted(cls, seed.body.clone()));
+    }
+
+    // Fisher–Yates permutation keyed strictly by (round_id, nonce).
+    let mut rng = shuffle_rng_from_nonce(round_id, &nonce);
+    for i in (1..pending.len()).rev() {
+        let j = next_unbiased_usize(&mut rng, i);
+        pending.swap(i, j);
+    }
+
+    let mut items = Vec::with_capacity(pending.len());
+    let mut item_ids = Vec::with_capacity(pending.len());
+    let mut key_items = Vec::with_capacity(seeds.len());
+    for (idx, entry) in pending.into_iter().enumerate() {
+        let item_id = format!("item-{:04}", idx + 1);
+        item_ids.push(item_id.clone());
+        match entry {
+            PendingEntry::Real(body) => {
+                items.push(PacketItem::Real(RealRecordCopy { item_id, body }));
+            }
+            PendingEntry::Salted(cls, body) => {
+                key_items.push((item_id.clone(), cls));
+                items.push(PacketItem::Salted(SaltedItem { item_id, body }));
+            }
+        }
+    }
+
+    let kind = if seeds.is_empty() {
+        PacketKind::Unsalted
+    } else {
+        PacketKind::Salted
+    };
+    let packet_sha = compute_packet_sha256(round_id, kind, &items);
+    let key = ReviewKey {
+        round_id: round_id.to_string(),
+        nonce,
+        items: key_items,
+    };
+    let commitment = commit(&key)?;
+
+    let round_q = quote_string(round_id);
+    let sha_q = quote_string(&packet_sha.to_hex());
+    let mut log = String::new();
+    for (position, id) in item_ids.iter().enumerate() {
+        log.push_str(&format!(
+            "{{\"round_id\":{round_q},\"item_id\":{},\"position\":{position},\"packet_sha256\":{sha_q}}}\n",
+            quote_string(id)
+        ));
+    }
+    log.push_str(&format!(
+        "{{\"round_id\":{round_q},\"items\":{},\"commitment\":{}}}\n",
+        item_ids.len(),
+        quote_string(&commitment.to_hex())
+    ));
+
+    let packet = ReviewPacket {
+        round_id: round_id.to_string(),
+        manifest: PacketManifest {
+            packet: kind,
+            round_id: round_id.to_string(),
+            item_ids,
+            sha256: packet_sha,
+        },
+        items,
+    };
+    Ok((packet, key, log))
+}
+
+/// Convenience wrapper over [`build_packet_with_log`] returning `(ReviewPacket, ReviewKey)`.
+pub fn build_packet(
+    round_id: &str,
+    records: &[RealRecordInput],
+    seeds: &[SeedRequest],
+    nonce: [u8; 32],
+) -> Result<(ReviewPacket, ReviewKey), Refusal> {
+    let (packet, key, _log) = build_packet_with_log(round_id, records, seeds, nonce)?;
+    Ok((packet, key))
+}
+
+fn path_touches_forbidden_dir(path: &Path) -> Option<&'static str> {
+    for comp in path.components() {
+        if let Component::Normal(name) = comp {
+            let s = name.to_string_lossy();
+            if s == ".beads" {
+                return Some(".beads");
+            }
+            if s.eq_ignore_ascii_case("corpus_of_input_docs") {
+                return Some("corpus_of_input_docs");
+            }
+        }
+    }
+    None
+}
+
+/// Materialize a [`ReviewPacket`] to `dir` (`review-packet.toml` + `items/<item_id>.txt`).
+///
+/// Refuses (`FMINE-REF-301`) any path inside `.beads/` or `corpus_of_input_docs/` (including
+/// via existing symlinked ancestors) so packet items can never enter tracker or corpus directories.
+pub fn write_packet_dir(dir: &Path, packet: &ReviewPacket) -> Result<PathBuf, Refusal> {
+    if let Some(forbidden) = path_touches_forbidden_dir(dir) {
+        return Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            format!(
+                "refusing to write review packet into forbidden directory '{forbidden}': {}",
+                dir.display()
+            ),
+        ));
+    }
+    for ancestor in dir.ancestors() {
+        if ancestor.exists()
+            && let Ok(canon) = ancestor.canonicalize()
+            && let Some(forbidden) = path_touches_forbidden_dir(&canon)
+        {
+            return Err(Refusal::new(
+                RefusalCode::MnpiWall301,
+                format!(
+                    "refusing to write review packet under symlinked forbidden directory '{forbidden}': {}",
+                    canon.display()
+                ),
+            ));
+        }
+    }
+
+    let items_dir = dir.join("items");
+    std::fs::create_dir_all(&items_dir).map_err(|e| {
+        Refusal::new(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!(
+                "unable to create review packet items dir {}: {e}",
+                items_dir.display()
+            ),
+        )
+    })?;
+    let manifest_path = dir.join(REVIEW_PACKET_MANIFEST);
+    std::fs::write(&manifest_path, packet.manifest.to_toml()).map_err(|e| {
+        Refusal::new(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!(
+                "unable to write review packet manifest {}: {e}",
+                manifest_path.display()
+            ),
+        )
+    })?;
+    for item in &packet.items {
+        let item_path = items_dir.join(format!("{}.txt", item.item_id()));
+        std::fs::write(&item_path, item.render_for_reviewer()).map_err(|e| {
+            Refusal::new(
+                RefusalCode::InputMissingOrUnreadable506,
+                format!(
+                    "unable to write review packet item {}: {e}",
+                    item_path.display()
+                ),
+            )
+        })?;
+    }
+    Ok(manifest_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fmine_core::rand::{PhiloxStream, RngKey};
 
     fn rng_key_hex(k: RngKey) -> String {
         let mut buf = [0u8; 32];
@@ -624,5 +1146,214 @@ mod tests {
         assert_eq!(b2, b3);
         assert_eq!(commit(&k1).unwrap(), commit(&k2).unwrap());
         assert_eq!(commit(&k2).unwrap(), commit(&k3).unwrap());
+    }
+
+    fn sample_real_records() -> Vec<RealRecordInput> {
+        (1..=6)
+            .map(|i| RealRecordInput {
+                body: format!("Real bead close record #{i}: cited test exercises invariant."),
+            })
+            .collect()
+    }
+
+    fn sample_seed_requests() -> Vec<SeedRequest> {
+        vec![
+            SeedRequest {
+                class_token: "S1".to_string(),
+                body: "Candidate close record A: cites test that skips target branch.".to_string(),
+            },
+            SeedRequest {
+                class_token: "s3_mis_cited_cell".to_string(),
+                body: "Candidate close record B: cites wrong sheet coordinate.".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_builder_rejects_basis_switch_request() {
+        for forbidden in [
+            "basis-switch",
+            "BASIS_SWITCH",
+            "Basis Switch",
+            "basisswitch",
+        ] {
+            let err = parse_seed_class(forbidden).unwrap_err();
+            assert_eq!(err.code, RefusalCode::MnpiWall301.spec().code);
+            assert!(
+                err.what.contains("excluded") && err.what.contains("issuer"),
+                "unexpected message: {}",
+                err.what
+            );
+            let build_err = build_packet(
+                "round-1",
+                &sample_real_records(),
+                &[SeedRequest {
+                    class_token: forbidden.to_string(),
+                    body: "Attempted basis-switch seed.".to_string(),
+                }],
+                [0x42; 32],
+            )
+            .unwrap_err();
+            assert_eq!(build_err.code, RefusalCode::MnpiWall301.spec().code);
+        }
+    }
+
+    #[test]
+    fn test_shuffle_is_nonce_keyed_and_complete() {
+        let records = sample_real_records();
+        let seeds = sample_seed_requests();
+        let nonce_a = [0x11; 32];
+        let nonce_b = [0x22; 32];
+
+        let (pkt_a1, key_a1) = build_packet("round-1", &records, &seeds, nonce_a).unwrap();
+        let (pkt_a2, key_a2) = build_packet("round-1", &records, &seeds, nonce_a).unwrap();
+        let (pkt_b, key_b) = build_packet("round-1", &records, &seeds, nonce_b).unwrap();
+
+        // Same nonce -> identical packet, order, digest, and key.
+        assert_eq!(pkt_a1, pkt_a2);
+        assert_eq!(key_a1, key_a2);
+        assert_eq!(pkt_a1.manifest.packet, PacketKind::Salted);
+
+        // Different nonce -> different shuffled order and different digest.
+        let bodies_a: Vec<&str> = pkt_a1
+            .items
+            .iter()
+            .map(PacketItem::render_for_reviewer)
+            .collect();
+        let bodies_b: Vec<&str> = pkt_b
+            .items
+            .iter()
+            .map(PacketItem::render_for_reviewer)
+            .collect();
+        assert_ne!(bodies_a, bodies_b);
+        assert_ne!(pkt_a1.manifest.sha256, pkt_b.manifest.sha256);
+
+        // Completeness: every real and salted body appears exactly once in both packets.
+        let mut expected: Vec<&str> = records
+            .iter()
+            .map(|r| r.body.as_str())
+            .chain(seeds.iter().map(|s| s.body.as_str()))
+            .collect();
+        expected.sort_unstable();
+
+        for (pkt, key) in [(&pkt_a1, &key_a1), (&pkt_b, &key_b)] {
+            assert_eq!(pkt.items.len(), expected.len());
+            let mut got: Vec<&str> = pkt
+                .items
+                .iter()
+                .map(PacketItem::render_for_reviewer)
+                .collect();
+            got.sort_unstable();
+            assert_eq!(got, expected);
+
+            // Key names exactly the SaltedItem ids and verifies against its commitment.
+            let salted_ids: BTreeSet<&str> = pkt
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    PacketItem::Salted(_) => Some(it.item_id()),
+                    PacketItem::Real(_) => None,
+                })
+                .collect();
+            let key_ids: BTreeSet<&str> = key.items.iter().map(|(id, _)| id.as_str()).collect();
+            assert_eq!(salted_ids, key_ids);
+            assert_eq!(key_ids.len(), seeds.len());
+            let commitment = commit(key).unwrap();
+            verify(key, &commitment).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_build_log_is_indistinguishable() {
+        let records = sample_real_records();
+        let seeds = sample_seed_requests();
+        let (pkt, key, log) =
+            build_packet_with_log("round-1-bead-closes", &records, &seeds, [0x77; 32]).unwrap();
+
+        // No mention of salted/class anywhere in the public build log.
+        let lower = log.to_ascii_lowercase();
+        assert!(!lower.contains("salted"), "log leaked 'salted': {log}");
+        assert!(!lower.contains("class"), "log leaked 'class': {log}");
+        assert!(!lower.contains("s1"), "log leaked seed token: {log}");
+        assert!(!lower.contains("s3"), "log leaked seed token: {log}");
+
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(lines.len(), pkt.items.len() + 1);
+        let item_lines = &lines[..pkt.items.len()];
+        let summary_line = lines[pkt.items.len()];
+
+        // Every per-item NDJSON line has the exact same key set and identical length (8 items => 1-digit positions).
+        let first_len = item_lines[0].len();
+        for (idx, line) in item_lines.iter().enumerate() {
+            assert_eq!(
+                line.len(),
+                first_len,
+                "item line {idx} length {} differs from first line length {first_len}: {line}",
+                line.len()
+            );
+            for required_key in [
+                "\"round_id\":",
+                "\"item_id\":",
+                "\"position\":",
+                "\"packet_sha256\":",
+            ] {
+                assert!(
+                    line.contains(required_key),
+                    "missing {required_key}: {line}"
+                );
+            }
+        }
+        let expected_commitment = commit(&key).unwrap().to_hex();
+        assert!(summary_line.contains(&format!("\"items\":{}", pkt.items.len())));
+        assert!(summary_line.contains(&format!("\"commitment\":\"{expected_commitment}\"")));
+
+        // Debug representation of SaltedItem is redacted and never reveals body or class.
+        for item in &pkt.items {
+            if let PacketItem::Salted(s) = item {
+                assert_eq!(format!("{s:?}"), "SaltedItem(<redacted>)");
+            }
+        }
+    }
+
+    #[test]
+    fn test_write_packet_refuses_beads_and_corpus_paths() {
+        let (salted_pkt, _) = build_packet(
+            "round-1",
+            &sample_real_records(),
+            &sample_seed_requests(),
+            [0x55; 32],
+        )
+        .unwrap();
+        let (unsalted_pkt, _) =
+            build_packet("round-1", &sample_real_records(), &[], [0x55; 32]).unwrap();
+        assert_eq!(unsalted_pkt.manifest.packet, PacketKind::Unsalted);
+
+        for forbidden in [
+            Path::new("ws/.beads/packet"),
+            Path::new("ws/corpus_of_input_docs/packet"),
+            Path::new("ws/CORPUS_OF_INPUT_DOCS/sub/packet"),
+        ] {
+            let err = write_packet_dir(forbidden, &salted_pkt).unwrap_err();
+            assert_eq!(err.code, RefusalCode::MnpiWall301.spec().code);
+        }
+
+        // Round-trip materialized salted & unsalted packets through fmine_public::refuse_if_salted.
+        let pid = std::process::id();
+        let dir_salted = std::env::temp_dir().join(format!("fmine-review-salted-{pid}"));
+        let dir_unsalted = std::env::temp_dir().join(format!("fmine-review-unsalted-{pid}"));
+        let _ = std::fs::remove_dir_all(&dir_salted);
+        let _ = std::fs::remove_dir_all(&dir_unsalted);
+
+        let salted_manifest = write_packet_dir(&dir_salted, &salted_pkt).unwrap();
+        assert!(salted_manifest.is_file());
+        let refusal = fmine_public::refuse_if_salted(&dir_salted).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::MnpiWall301.spec().code);
+
+        let unsalted_manifest = write_packet_dir(&dir_unsalted, &unsalted_pkt).unwrap();
+        assert!(unsalted_manifest.is_file());
+        fmine_public::refuse_if_salted(&dir_unsalted).unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir_salted);
+        let _ = std::fs::remove_dir_all(&dir_unsalted);
     }
 }
