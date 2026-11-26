@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fmine_calib::record::parse_utc;
@@ -180,16 +181,20 @@ fn workspace_with_quarterly_candidate(copper: bool, signed_cost: bool, quarterly
 }
 
 fn workspace_with_family(family: SourceFamily, signed_cost: bool, quarterly: bool) -> PathBuf {
+    static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
+
     let copper = family == SourceFamily::Copper;
     let capex = family == SourceFamily::Capex;
     let root = std::env::temp_dir().join(format!(
-        "fmine-record-score-{}-{}",
+        "fmine-record-score-{}-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed),
     ));
+    fs::create_dir(&root).unwrap();
     for dir in [
         "corpus",
         "record",
