@@ -452,9 +452,25 @@ fn extract_hole_prefix<'a>(
 
 fn has_stated_true_width(body: &str) -> bool {
     let lower = body.to_ascii_lowercase();
-    if !lower.contains("true width") && !lower.contains("true-width") {
+    let Some(pos) = lower
+        .find("true width")
+        .or_else(|| lower.find("true-width"))
+    else {
         return false;
-    }
+    };
+    // Isolate ONLY the clause/parenthetical containing "true width" so digits from the intercept's
+    // downhole length or grade never falsely satisfy the quantitative check, and operate on byte
+    // slices so multibyte UTF-8 punctuation ('≈', '–', '—') never splits a char boundary.
+    let bytes = lower.as_bytes();
+    let clause_start = bytes[..pos]
+        .iter()
+        .rposition(|&b| matches!(b, b'(' | b';' | b','))
+        .map_or(pos, |idx| idx + 1);
+    let clause_end = bytes[pos..]
+        .iter()
+        .position(|&b| matches!(b, b')' | b';'))
+        .map_or(bytes.len(), |rel| pos + rel);
+    let clause = &lower[clause_start..clause_end];
     for neg in [
         "unknown",
         "not determined",
@@ -469,20 +485,11 @@ fn has_stated_true_width(body: &str) -> bool {
         "n/a",
         "unavailable",
     ] {
-        if lower.contains(neg) {
+        if clause.contains(neg) {
             return false;
         }
     }
-    // Require a quantitative figure inside the true-width statement (e.g. "true width 15 m" or "75%").
-    let pos = lower
-        .find("true width")
-        .or_else(|| lower.find("true-width"))
-        .unwrap_or(0);
-    let window_start = pos.saturating_sub(24);
-    let window_end = (pos + 40).min(lower.len());
-    lower
-        .get(window_start..window_end)
-        .is_some_and(|w| w.bytes().any(|b| b.is_ascii_digit()))
+    clause.bytes().any(|b| b.is_ascii_digit())
 }
 
 fn is_hole_id(s: &str) -> bool {
@@ -701,12 +708,25 @@ mod tests {
 
     #[test]
     fn test_fresh_eyes_grammar_edge_cases() {
-        // 1. Negated true-width disclaimers must NOT suppress NoTrueWidth.
-        let unknown_tw = "DDH-010: 12.0 m @ 4.0 g/t Au (true width unknown)";
-        let ParseOutcome::Parsed(ic) = parse_intercept_phrase(unknown_tw, None) else {
-            panic!("expected unknown true width phrase to parse");
+        // 1. Negated or non-quantitative true-width disclaimers must NOT suppress NoTrueWidth,
+        //    while multibyte UTF-8 quantitative statements like "(estimated true width ≈ 9.6 m)" must pass.
+        for non_stated in [
+            "DDH-010: 12.0 m @ 4.0 g/t Au (true width unknown)",
+            "DDH-010: 12.0 m @ 4.0 g/t Au (true width estimated)",
+        ] {
+            let ParseOutcome::Parsed(ic) = parse_intercept_phrase(non_stated, None) else {
+                panic!("expected phrase to parse: {non_stated}");
+            };
+            assert!(
+                !ic.true_width_stated,
+                "must not set true_width_stated on {non_stated:?}"
+            );
+        }
+        let utf8_tw = "DDH-010: 12.0 m @ 4.0 g/t Au (estimated true width ≈ 9.6 m)";
+        let ParseOutcome::Parsed(utf8_ic) = parse_intercept_phrase(utf8_tw, None) else {
+            panic!("expected UTF-8 true-width phrase to parse");
         };
-        assert!(!ic.true_width_stated);
+        assert!(utf8_ic.true_width_stated);
 
         // 2. Glued length token "16m" must not be misparsed as a hole ID when default_hole is supplied.
         let glued = "16m @ 47.07g/t";
