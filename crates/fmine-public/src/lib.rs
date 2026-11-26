@@ -18,6 +18,7 @@ pub mod lint;
 pub mod live;
 pub mod mine_ledger;
 pub mod mine_stats;
+pub mod mirror;
 pub mod recovery;
 pub mod sources;
 pub mod synthetic;

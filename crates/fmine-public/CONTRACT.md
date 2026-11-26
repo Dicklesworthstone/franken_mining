@@ -7,7 +7,7 @@ The public-filings assurance, five-state identity ledger, keyed public Claim ind
 - **Layer:** V
 - **Subsystem:** Portal
 - **LOC budget:** 24,000 planned / 28,000 ceiling
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "forecast", "guidance", "waterfall", "recovery", "lint", "html"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "forecast", "guidance", "waterfall", "recovery", "lint", "html", "mirror"]`
 
 ## 2. Inputs
 ### Mathematical & Domain Formulation
@@ -1351,3 +1351,15 @@ history and point values refuses candidate generation. No capital values are sca
 ownership basis. Frozen-record scoring and comparators retain the same scope and basis requirements.
 Status-derived zeros cannot become numeric capex observations. Existing six production/cost targets
 retain their prior receipts and admission rules.
+
+### JV mirror pair registry (`BD-346.S2`, `bd-xzvb.2`)
+
+DESIGN (`mirror`, `BitwisePortable`): code-constant dual-reporter pair registry for NGM (`615/1000` Barrick /
+`385/1000` Newmont, `E457`, plus dated 2026-08-09 Fourmile + Mike/Fiberline vend-in entry `E658`/`E558` with
+unresolved effective date and shares), Pueblo Viejo (`3/5` Barrick / `2/5` Newmont, `E672`; Q4 2025 North
+America region move `E461` is strictly a reporting-scope change via `barrick_pv_reporting_region`, never a
+perimeter change), and Kibali (`9/20` Barrick / `9/20` AngloGold Ashanti + non-reporter SOKIMO `1/10` = `1`,
+`E560`). `resolve_pair` refuses straddling periods, unresolved post-vend-in parameters, and `Unprinted` /
+`Consolidated100` JV shares with `FMINE-REF-104`, naming the missing parameter. `check_pair_registry` validates
+non-overlapping chronological perimeters and exact share sums `<= 1`, pinning the canonical `MPR1` SHA-256
+digest (`PAIR_REGISTRY_GOLDEN_SHA256`).

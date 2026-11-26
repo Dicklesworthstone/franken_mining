@@ -1646,7 +1646,8 @@ mod tests {
         // BD-352 adds fmine-claim::origin and fmine-gen::origin_coverage (2 portable modules).
         // BD-314 adds fmine-econ::entity_graph (CapitalEntityGraph & Barrick portfolio waterfalls).
         // BD-289 adds fmine-plant::cards::calibration (Turquoise Ridge 71-pair recovery calibration card).
-        assert_eq!(report.bitwise_files, 129, "{report:?}");
+        // BD-346.S2 adds fmine-public::mirror (JV mirror pair registry with exact shares & dated perimeters).
+        assert_eq!(report.bitwise_files, 130, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
