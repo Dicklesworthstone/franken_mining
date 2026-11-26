@@ -119,27 +119,44 @@ pub fn execute(cmd: &Command, workspace_root: &Path) -> Envelope {
     )
 }
 
-fn diagnose_issuers(workspace_root: &Path) -> Vec<String> {
+/// Each registered source of one issuer, as `(file, [present, bytes_ok, digest_ok])`, or why the issuer's
+/// source registry does not load.
+pub(crate) type SourceChecks = Result<Vec<(String, [bool; 3])>, String>;
+
+/// Every registered issuer's sources, read from its corpus directory. Bare `fmine` triage reads the same checks.
+pub(crate) fn issuer_source_checks(workspace_root: &Path) -> Vec<(String, SourceChecks)> {
     registered_issuers(workspace_root)
+        .into_iter()
+        .map(|name| {
+            let checks = load_issuer_profile(workspace_root, &name)
+                .map(|p| {
+                    let dir = workspace_root.join(&p.corpus_dir);
+                    p.sources
+                        .iter()
+                        .map(|s| {
+                            let check = match std::fs::read(dir.join(&s.file_name)) {
+                                Ok(bytes) => [
+                                    true,
+                                    bytes.len() as u64 == s.bytes,
+                                    sha256(&bytes).to_hex() == s.sha256_hex,
+                                ],
+                                Err(_) => [false; 3],
+                            };
+                            (s.file_name.clone(), check)
+                        })
+                        .collect()
+                })
+                .map_err(|r| r.what);
+            (name, checks)
+        })
+        .collect()
+}
+
+fn diagnose_issuers(workspace_root: &Path) -> Vec<String> {
+    issuer_source_checks(workspace_root)
         .iter()
-        .map(|name| match load_issuer_profile(workspace_root, name) {
-            Ok(p) => {
-                let dir = workspace_root.join(&p.corpus_dir);
-                let checks: Vec<(&str, [bool; 3])> = p
-                    .sources
-                    .iter()
-                    .map(|s| {
-                        let check = match std::fs::read(dir.join(&s.file_name)) {
-                            Ok(bytes) => [
-                                true,
-                                bytes.len() as u64 == s.bytes,
-                                sha256(&bytes).to_hex() == s.sha256_hex,
-                            ],
-                            Err(_) => [false; 3],
-                        };
-                        (s.file_name.as_str(), check)
-                    })
-                    .collect();
+        .map(|(name, checks)| match checks {
+            Ok(checks) => {
                 let count = |idx: usize| checks.iter().filter(|(_, c)| c[idx]).count();
                 let rows: Vec<String> = checks
                     .iter()
@@ -153,16 +170,16 @@ fn diagnose_issuers(workspace_root: &Path) -> Vec<String> {
                 format!(
                     "{{\"issuer\":\"{}\",\"registry_ok\":true,\"sources_registered\":{},\"sources_present\":{},\"sources_verified\":{},\"sources\":[{}]}}",
                     escape_json(name),
-                    p.sources.len(),
+                    checks.len(),
                     count(0),
                     count(2),
                     rows.join(",")
                 )
             }
-            Err(r) => format!(
+            Err(what) => format!(
                 "{{\"issuer\":\"{}\",\"registry_ok\":false,\"error\":\"{}\"}}",
                 escape_json(name),
-                escape_json(&r.what)
+                escape_json(what)
             ),
         })
         .collect()
@@ -311,7 +328,7 @@ fn diagnose_lifts(workspace_root: &Path) -> String {
     )
 }
 
-fn diagnose_forecasts(workspace_root: &Path) -> String {
+pub(crate) fn diagnose_forecasts(workspace_root: &Path) -> String {
     let dir = workspace_root.join("forecasts");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return "{\"present\":false,\"rules_files\":0,\"tsr_proofs\":0,\"records\":0}".to_string();

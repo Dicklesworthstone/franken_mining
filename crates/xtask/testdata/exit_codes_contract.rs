@@ -237,3 +237,30 @@ fn test_closed_stdout_exits_5_with_a_line_on_stderr() {
         "stderr: {stderr}"
     );
 }
+
+/// BD-114's smoke run: the built binary, given no verb, prints one triage envelope for the workspace, in JSON by
+/// default and in Markdown on request.
+#[test]
+fn test_bare_fmine_prints_triage_for_the_workspace() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let json = "{\"schema_version\":\"fmine.env.v1\",\"verb\":\"triage\",\"status\":\"ok\",\"exit_code\":0,";
+    for (extra, opening) in [
+        (&[][..], json),
+        (&["--format", "markdown"][..], "# fmine triage\n\n"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .arg("--workspace")
+            .arg(&root)
+            .args(extra)
+            .output()
+            .unwrap_or_else(|e| panic!("run fmine: {e}"));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(output.status.code(), Some(0), "{stdout}");
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.starts_with(opening), "{stdout}");
+    }
+}

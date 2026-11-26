@@ -43,6 +43,7 @@ pub mod track_record_binding;
 pub mod track_record_clusters;
 mod track_record_data;
 mod track_record_price;
+mod triage;
 pub mod verb_catalog;
 pub mod waterfall;
 mod worksheet_input;
@@ -268,6 +269,8 @@ pub enum CliCommand {
     Reliance(reliance::Command),
     /// `fmine doctor` (`BD-115`).
     Doctor,
+    /// Bare `fmine`: triage of what in the workspace needs attention (`BD-114`, plan §30.2).
+    Triage,
     /// Read an existing public Claim from a verified issuer snapshot or the explicit synthetic lane
     /// (`BD-115`). Without a selector, search the current canonical projections.
     ClaimShow {
@@ -1198,6 +1201,12 @@ pub fn parse_args(
     args: &[String],
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
+    // Bare `fmine`: nothing beyond the output format and the workspace root.
+    if let Ok((words, format, root)) = common_options(args, default_root)
+        && words.is_empty()
+    {
+        return Ok((CliCommand::Triage, format, root));
+    }
     let verb = verb_hint(args);
     if verb == "track-record clusters" {
         let (words, format, root) = common_options(args, default_root)?;
@@ -2626,6 +2635,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             }
         }
         CliCommand::Doctor => doctor::execute(&doctor::Command::default(), workspace_root),
+        CliCommand::Triage => triage::execute(workspace_root),
         CliCommand::DoctorInspect(cmd) => doctor::execute(cmd, workspace_root),
         CliCommand::RobotSchema(cmd) => robot::execute(cmd, workspace_root),
         CliCommand::Repair(cmd) => repair::execute(cmd, workspace_root),
@@ -2960,6 +2970,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(capital::hindcast::ROBOT_DOCS_JSON);
             payload.push_str(",\"doctor\":");
             payload.push_str(doctor::ROBOT_DOCS_JSON);
+            payload.push_str(",\"triage\":");
+            payload.push_str(triage::ROBOT_DOCS_JSON);
             payload.push_str(",\"robot_schema\":");
             payload.push_str(robot::ROBOT_DOCS_JSON);
             payload.push_str(",\"verb_catalog\":[");

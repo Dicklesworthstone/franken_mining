@@ -268,7 +268,7 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
 - **LOC budget:** 54,000 planned / 62,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common
@@ -1175,6 +1175,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
     mismatch is reported, never refused: doctor stays exit 0, status ok;
+  - bare `fmine` (no verb; only `--json`, `--format` or `--workspace`): triage, envelope verb `triage`,
+    payload schema `fmine.triage.v1` (BD-114, plan §30.2). From doctor's checks, `attention` holds one row per
+    issuer whose `assure public --issuer` run would refuse (a registered source missing or failing its length or
+    digest check, or a registry that does not load); `issuers` and `forecasts` summarise; `not_covered` names
+    the plan's five triage items and what each lacks today. Exit 0, status ok;
   - `claim show <id>`: the canonical public Claim;
   - `claim why <id>`: its recorded evidence, interpretation, computed color and admission guards;
   - `claim trace <id>`: its source anchors and the available provenance boundary;
@@ -1991,7 +1996,7 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   the unchanged canonical Claim alongside their explanation and link to the other inspection commands.
 - Claim kinds not produced by the registered public projection refuse; the verb never
   fabricates a claim.
-- `doctor` refuses `FMINE-REF-506` when the registries cannot be read.
+- `doctor` refuses `FMINE-REF-506` when the registries cannot be read, and so does bare `fmine` triage.
 - DESIGN (BD-349): challenge packets cover visible AISC states ii–v, Mine Stats states iii–v and infeasible
   joint components, preserving each finding's original state, operands, Claim references, source hashes,
   certificates, alternatives and missing-fact request. Source resolution or operand mismatches refuse.
@@ -2324,12 +2329,14 @@ Every failure is a usage error (exit 2) or a typed `Refusal` (exits 3–9). Unkn
 
 ## 10. Known gaps
 - `fmined` daemon HWMs, durable obligations, and Little's-law queue monitors are reported honestly as `"not_deployed"` in `fmine doctor` until the daemon lands (`WP-05`/`WP-06`).
+- Bare `fmine` triage shows no live obligations, stale cells, refusal journal, gate thresholds or runtime
+  budgets: they need `fmined`, an obligation registry or a gate registry. Its `not_covered` field says so.
 - `FMT-ENV-1` wire field names (`schema_version`/`verb`/`payload`) vs plan §30.1 (`v`/`event`/`node`/`anchor`/`data`) remain open under `BD-111`.
 - Complete `GATE-BULL-01` corpus acceptance and FY2026 forecast timestamped record issuance remain open.
 
 ## 11. Public API
 - `OutputFormat`, `CliCommand`, `Envelope`, `NextAction`, `run`, `invoke`, `parse_args`, `execute_command`
-- `doctor` (`fmine doctor [--segment <path>]... [--journal <path>]...`), `robot` (`fmine robot schema [target]`), `repair` (`fmine repair plan|apply ...`), `robot-docs`
+- bare `fmine` triage, `doctor` (`fmine doctor [--segment <path>]... [--journal <path>]...`), `robot` (`fmine robot schema [target]`), `repair` (`fmine repair plan|apply ...`), `robot-docs`
 - All delegated surface modules (`assure_report`, `capital`, `compare`, `cost`, `decision`, `forecast`, `geo`, `guidance`, `html`, `investment`, `issued`, `lint`, `mirror`, `packet`, `pit`, `plant`, `recovery`, `reliance`, `reserve`, `schedule`, `tables`, `track_record`).
 
 ## 12. Proof obligations
