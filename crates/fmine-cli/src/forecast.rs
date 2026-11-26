@@ -27,6 +27,7 @@ pub(crate) mod comparison;
 mod correction;
 mod cusum;
 mod diagnostics;
+mod investigation;
 pub mod live;
 pub mod plant;
 mod provenance;
@@ -46,6 +47,7 @@ pub const DIAGNOSTICS_JSON: &str = diagnostics::ROBOT_DOCS_JSON;
 pub const CUSUM_MONITOR_JSON: &str = cusum::ROBOT_DOCS_JSON;
 pub const CORRECTION_JSON: &str = correction::ROBOT_DOCS_JSON;
 pub const CORRECTION_REGISTRATION_JSON: &str = correction::registration::ROBOT_DOCS_JSON;
+pub const INVESTIGATION_JSON: &str = investigation::ROBOT_DOCS_JSON;
 
 const MONITOR_FIELDS: [&str; 4] = [
     "monitor_alarm_alpha",
@@ -135,6 +137,8 @@ struct Replay {
     /// Source-bound technical-report assumptions; supplied outcomes cannot bypass their resolution rule.
     assumption_admissions: BTreeMap<ObjectId, assumption::Admission>,
     assumption_outcomes: BTreeMap<ObjectId, String>,
+    /// Cases retain the original alarm and explicit resolution, independent of later model assessments.
+    investigations: fmine_calib::ledger::investigation::InvestigationLedger,
 }
 
 impl Replay {

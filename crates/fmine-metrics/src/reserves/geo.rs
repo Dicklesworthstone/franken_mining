@@ -244,7 +244,7 @@ pub(super) fn declaration_json(d: &GeoCheckDeclaration) -> String {
     )
 }
 
-fn fit(fit: Fit) -> &'static str {
+pub(super) fn fit(fit: Fit) -> &'static str {
     match fit {
         Fit::Empty => "empty",
         Fit::Points => "points",
@@ -252,7 +252,7 @@ fn fit(fit: Fit) -> &'static str {
     }
 }
 
-fn convention_name(convention: Convention) -> &'static str {
+pub(super) fn convention_name(convention: Convention) -> &'static str {
     match convention {
         Convention::Closed => "closed",
         Convention::HalfUp => "half_up",

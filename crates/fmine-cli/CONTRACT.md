@@ -2351,6 +2351,18 @@ Every failure is a usage error (exit 2) or a typed `Refusal` (exits 3–9). Unkn
 - `fuzz/fuzz_targets/{cli,cli_run}.rs` (`PO-ADIT-4`).
 
 ## 10. Known gaps
+- DESIGN (BD-051, plan §10.5): `forecast journal investigate`, `resolve-investigation` and
+  `rearm-investigation` persist owned cases under operation v18. Opening requires a saved, result-bound
+  assessment and derives its original coverage/CUSUM first crossing, member and outcome digest. Repeated
+  views of the same alarm cannot create duplicate cases. The deadline, HYP-labelled alternatives and
+  probe priority order are explicit declarations. Resolution requires the explicit `human_review = "human"`
+  declaration, a role, rationale and evidence reference; identity and corrective-action completion are not
+  authenticated. A resolved case can link to a distinct, newly frozen prospective cohort of the same monitor
+  kind before any outcomes. Existing alarms, forecast records, calibration flags and saved assessment bytes
+  remain unchanged. Pinned inspection renders the case, resolution and successor digests without reading a
+  clock. `xtask/tests/forecast_investigations.rs` exercises the actual durable commands, clock boundaries,
+  refused-write atomicity and operation-version checks. Spatial alarms, authenticated human authorization,
+  automatically computed probe VOI and application of corrective actions remain separate work.
 - `fmined` daemon HWMs, durable obligations, and Little's-law queue monitors are reported honestly as `"not_deployed"` in `fmine doctor` until the daemon lands (`WP-05`/`WP-06`).
 - Bare `fmine` triage shows no live obligations, stale cells, refusal journal, gate thresholds or runtime
   budgets: they need `fmined`, an obligation registry or a gate registry. Its `not_covered` field says so.

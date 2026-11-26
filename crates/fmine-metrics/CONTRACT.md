@@ -635,6 +635,27 @@ The other modules have local errors with no refusal code:
 - **`repro/barrick/waterfall_census.py` and `repro/barrick/recovery_census.py`** are independent readers for hand-entered public cells. No workflow runs them.
 - **No fixture** under `fixtures/`.
 
+### Explicit copper cost bridges (BD-064 / BD-333)
+
+DESIGN. `lmdi::waterfall::copper::decompose` compares two declared copper C1 or AISC periods in
+USD/lb. Both must name the same definition, ownership basis and signed component population. Inputs
+use USD millions and explicit sold pounds, million pounds or kilotonnes; conversion uses the exact
+avoirdupois constant and scales rounding radii as well as values. Each component contributes its
+cost change times the mean inverse sold volume, while the sold-volume effect uses mean total cost.
+The exact rational bars sum to the recomputed rate change. Zero and negative net C1 costs remain
+signed. Missing components are never substituted with zero, and unequal footings refuse.
+
+Every bar retains its source locators and a conservative outward enclosure over independent rounding
+boxes. Independently reported rates are optional and affect only the separate endpoint/difference
+gaps; they never set the numerator or change a bar. This is an additive accounting comparison with no
+causal attribution or inferred physical factorization. The caller authenticates source Claims and
+the common accounting perimeter. Existing gold waterfall behavior and public-assurance roots are
+unchanged.
+
+Direct controls: `lmdi::waterfall::copper::tests` checks a hand-derived 6/5 to 3/2 USD/lb bridge,
+exact unit and rounding-radius invariance, signed credits and C1 totals, all 64 component/sales
+rounding corners, reversal, stable line order, missing/duplicate lines, basis mismatches and overflow.
+
 ## 10. Known gaps
 
 - DESIGN (BD-342): gold TCC completion uses separate `TccUsdPerSoldOz` and `TccSpendUsdMillion`
