@@ -418,9 +418,14 @@ After substantive Rust changes:
 ```bash
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
 cargo test --workspace
 cargo run -p xtask -- check-all
 ```
+
+`fuzz/` is a separate workspace with its own `Cargo.lock`, and CI's lint job fails when it is stale. When a crate it
+builds on gains or changes a dependency, commit the minimal update this writes along with the change:
+`cargo metadata --manifest-path fuzz/Cargo.toml --format-version 1 --offline >/dev/null`.
 
 Use RCH for heavy Cargo work. Never bypass the `rch` cargo shim.
 
