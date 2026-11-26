@@ -6,10 +6,12 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::{Refusal, RefusalCode};
+use fmine_public::sources::load_issuer_profile;
+use fmine_registry::table_identities::TABLE_IDENTITIES_SCHEMA;
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 
 use crate::capital::{drill_release, npv_replay};
-use crate::{Envelope, json_string as js, worksheet_input};
+use crate::{Envelope, json_string as js, tables, worksheet_input};
 
 pub(super) const VERB: &str = "screen target";
 pub(super) const USAGE: &str = "screen target --docs <directory>";
@@ -46,7 +48,7 @@ fn pack(directory: &Path) -> Result<Vec<PathBuf>, Refusal> {
     Ok(files)
 }
 
-fn inspect(path: &Path) -> Result<(String, Envelope), Refusal> {
+fn inspect(root: &Path, path: &Path) -> Result<(String, Envelope), Refusal> {
     if !path
         .symlink_metadata()
         .map_err(|error| unavailable(path, error))?
@@ -69,8 +71,24 @@ fn inspect(path: &Path) -> Result<(String, Envelope), Refusal> {
                     npv_replay::VERB,
                     npv_replay::evaluate_document(&doc, &source, text.len()),
                 )),
+                Some(TomlValue::Str(schema)) if schema == TABLE_IDENTITIES_SCHEMA => {
+                    let result = match doc.top_get("issuer").map(|field| &field.value) {
+                        Some(TomlValue::Str(issuer)) => {
+                            load_issuer_profile(root, issuer).and_then(|profile| {
+                                tables::evaluate_definitions(
+                                    root, &profile, path, &text, None, None,
+                                )
+                            })
+                        }
+                        _ => Err(invalid(
+                            "table definitions require a quoted issuer registry name".into(),
+                        )),
+                    };
+                    Ok(("check tables", result))
+                }
                 _ => Err(invalid(
-                    "expected a drill-release or developer NPV worksheet schema".into(),
+                    "expected a drill-release, developer NPV or cited table worksheet schema"
+                        .into(),
                 )),
             },
         );
@@ -96,7 +114,7 @@ pub(super) fn execute(docs: &Path, root: &Path) -> Envelope {
             .file_name()
             .unwrap_or(path.as_os_str())
             .to_string_lossy();
-        let (source, result) = inspect(&path).unwrap_or_else(|refusal| {
+        let (source, result) = inspect(root, &path).unwrap_or_else(|refusal| {
             ("null".into(), Envelope::refused(VERB, refusal, Vec::new()))
         });
         let _ = writeln!(details, "\n## {}\n", worksheet_input::markdown_cell(&name));

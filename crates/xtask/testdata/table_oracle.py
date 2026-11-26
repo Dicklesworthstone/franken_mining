@@ -588,6 +588,50 @@ class TableScenarios(unittest.TestCase):
         self.assertEqual(workbook["exit_code"], 5, raw)
         self.assertIn("Unused.xlsx", raw)
 
+    def test_target_pack_keeps_checked_table_conflicts_and_source_refusals(self):
+        root = workspace("target-resource")
+        pack = root / "pack"
+        pack.mkdir()
+        args = ["screen", "target", "--docs", "pack"]
+        positive, _ = successful(root)
+        (pack / "a-feasible.toml").write_bytes((root / DEFINITIONS).read_bytes())
+        write_definitions(root, 1)
+        conflict, _ = successful(root)
+        self.assertTrue(any(row["verdict"] == "infeasible" and row["checked"]
+                            and row["certificate_digest"] for row in conflict["payload"]["checks"]["components"]))
+        (pack / "b-conflict.toml").write_bytes((root / DEFINITIONS).read_bytes())
+        synthetic = Path(__file__).parents[3] / "tests/exploration/developer_npv.toml"
+        (pack / "c-valuation.toml").write_bytes(synthetic.read_bytes())
+        combined, raw = invoke(root, arguments=args)
+        self.assertEqual((combined["exit_code"], combined["payload"]["screened"], combined["payload"]["refused"]), (0, 3, 0), raw)
+        rows = combined["payload"]["documents"]
+        self.assertEqual([row["file"] for row in rows], ["a-feasible.toml", "b-conflict.toml", "c-valuation.toml"])
+        for row, original in zip(rows[:2], (positive, conflict), strict=True):
+            self.assertEqual(row["result"], original)
+            self.assertEqual(row["source"]["sha256"], original["payload"]["definitions_sha256"])
+        self.assertEqual(rows[2]["result"]["verb"], "check developer-npv")
+        self.assertEqual(invoke(root, arguments=args)[1], raw)
+
+        (root / "documents" / FILE).write_bytes(b"!" + DOCUMENT[1:])
+        refused, raw = invoke(root, arguments=args)
+        self.assertEqual((refused["exit_code"], refused["payload"]["screened"], refused["payload"]["refused"]), (8, 1, 2), raw)
+        rows = refused["payload"]["documents"]
+        for row in rows[:2]:
+            self.assertEqual(row["result"]["refusal"]["code"], "FMINE-REF-505")
+            self.assertIn(FILE, row["result"]["refusal"]["what"])
+            self.assertIsNone(row["result"]["payload"])
+        self.assertEqual(rows[2]["result"]["status"], "ok")
+        markdown = binary(root, args, "markdown")
+        self.assertEqual(markdown.returncode, 8)
+        self.assertIn("1 of 3 worksheets screened. 2 refused.", markdown.stdout)
+        self.assertIn("Developer NPV replay", markdown.stdout)
+        registry = root / "registries/sources/table_test.toml"
+        registry.write_text(registry.read_text().replace('dir = "documents"', 'dir = "absent"'), encoding="utf-8")
+        absent, _ = invoke(root, arguments=args)
+        self.assertEqual((absent["exit_code"], absent["refusal"]["code"]), (5, "FMINE-REF-506"))
+        self.assertIn(FILE, absent["refusal"]["what"])
+        self.assertEqual((absent["payload"]["screened"], absent["payload"]["refused"]), (1, 2))
+
     def test_declared_sign_changes_finding_and_digest_without_changing_source_bytes(self):
         root = workspace("signed")
         positive, _ = successful(root)
@@ -899,6 +943,21 @@ class CutoffScenarios(unittest.TestCase):
         self.assertEqual(markdown.returncode, 0, markdown.stderr)
         for expected in ("cutoff_example", "Technical_Report.pdf", "cutoff_cost", "reproduced"):
             self.assertIn(expected, markdown.stdout)
+
+    def test_target_pack_keeps_cited_grade_dependent_cutoff(self):
+        root = cutoff_workspace("target-cutoff", "grade_dependent")
+        direct, _ = self.cutoff_report(root)
+        pack = root / "pack"
+        pack.mkdir()
+        (pack / "cutoff.toml").write_bytes((root / DEFINITIONS).read_bytes())
+        report, raw = invoke(root, arguments=["screen", "target", "--docs", "pack"])
+        self.assertEqual((report["exit_code"], report["payload"]["screened"]), (0, 1), raw)
+        result = report["payload"]["documents"][0]["result"]
+        self.assertEqual(result, direct)
+        cutoff = result["payload"]["checks"]["cutoffs"]["rows"][0]
+        self.assertEqual(cutoff["status"], "reproduced")
+        self.assertEqual(Fraction(cutoff["result"]["exact"]["computed"]), Fraction(3, 2))
+        self.assertTrue(cutoff["evidence"])
 
     def test_grade_dependent_recovery_and_named_cost_deductions_use_existing_mathematics(self):
         for mode, expected in (("grade_dependent", Fraction(3, 2)), ("deductions", Fraction(5, 2))):

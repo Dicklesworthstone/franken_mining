@@ -31,8 +31,11 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   Public transcriptions require a declared source URL
   and PDF digest. The E876 worksheet preserves the source and independently checked Taguas replay.
 
-- DESIGN (BD-350.S5). `screen target --docs <directory>` evaluates the same parsed drill-release
-  and developer NPV worksheets, with one source read per file. Its ordered `fmine.target-screen.v1`
+- DESIGN (BD-350.S3/S5). `screen target --docs <directory>` evaluates drill-release and developer
+  NPV worksheets and the PDF table definitions used by `check tables`. Each worksheet is read
+  once. Table definitions use their declared issuer and the same workspace source checks and
+  transcription agreement as the standalone command. The pack uses the registered documents
+  retrospectively. The standalone table command supports explicit evidence cuts. The ordered `fmine.target-screen.v1`
   report retains source identity and the individual results. It refuses a missing, empty or oversized
   pack. The first refused worksheet in filename order supplies the process exit code and the report
   retains each accepted worksheet and each refusal. The command writes no files and reads no sealed

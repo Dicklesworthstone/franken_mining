@@ -244,12 +244,16 @@ With zero or several overlaps, it returns a refusal and keeps all six comparison
 fmine screen target --docs path/to/worksheet-directory --format markdown
 ```
 
-Supply a directory of up to 64 drill-release and developer NPV `.toml` worksheets, each at most
-64 KiB. The command reads the top-level worksheets in filename order, keeps their individual
-source hashes and findings, and exits nonzero if any worksheet refuses. Successful findings and
-all available refusal evidence remain in the report. Use `--json` for exact values and locators.
-The drill and valuation findings are based on the supplied transcriptions. Resource and cut-off
-workflows use the separate cited-table command.
+Supply up to 64 top-level `.toml` files, each at most 64 KiB. A pack can mix drill-release and
+developer NPV worksheets with the same `fmine.table-identities.v1` definitions accepted by
+`check tables`. The table definitions name their issuer. The workspace supplies its source and
+transcription registries and the registered document bytes. The pack uses those registrations
+retrospectively. Use `check tables --as-of YYYY-MM-DD` for a dated table evidence cut.
+
+The command screens files in filename order and preserves their source hashes, findings, and
+refusals. A checked arithmetic conflict is a finding. A worksheet-level refusal gives a nonzero
+exit and leaves all other findings in the report. Use `--json` for exact values, checked
+certificates, and locators.
 
 ## Check a mining front for model drift
 

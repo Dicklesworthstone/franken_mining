@@ -150,7 +150,7 @@ description = "Replay cited developer cash flows and find a compatible NPV timin
 path = "screen target"
 subsystem = "Lodestar"
 mutates_authority = false
-description = "Screen a directory of drill-release and developer NPV worksheets, retaining each finding and refusal"
+description = "Screen cited drill releases, developer valuations and resource table definitions in one directory"
 
 [[verb]]
 path = "reserve replacement"

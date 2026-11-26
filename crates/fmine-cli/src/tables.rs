@@ -113,6 +113,17 @@ fn document_tables(
             format!("table definitions {}: {e}", path.display()),
         )
     })?;
+    evaluate_definitions(root, profile, &path, source, as_of, cost_bridge)
+}
+
+pub(super) fn evaluate_definitions(
+    root: &Path,
+    profile: &IssuerProfile,
+    path: &Path,
+    source: &str,
+    as_of: Option<&str>,
+    cost_bridge: Option<(&str, &str)>,
+) -> Result<Envelope, Refusal> {
     let definitions =
         parse_table_identities(source, &profile.issuer, &profile.documents).map_err(|e| {
             Refusal::new(
@@ -228,7 +239,7 @@ fn document_tables(
         js(&profile.issuer),
         as_of.map_or_else(|| "null".into(), js),
         checked_json,
-        js(&sha256(&bytes).to_hex()),
+        js(&sha256(source.as_bytes()).to_hex()),
         report.to_json(),
         reserves.to_json(),
         pending_json,
