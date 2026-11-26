@@ -328,6 +328,9 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   compares three `fmine.plant-material.v1` worksheets. JSON and Markdown report feed-minus-outlets dry and
   elemental kg, concentrate/feed ratios and assay-implied splits. The CLI preserves source hashes, full
   measurand identity and missing components. This is a conditional diagnostic for a two-product circuit.
+  `assay_pull_check` diagnoses incompatible solved splits at the submitted precision, with their exact
+  fractions and measurands. Per-element comparison reports matches, differences or unavailable values
+  against the submitted dry split. Individually infeasible and unresolved elements retain separate counts.
 
 - DESIGN (BD-162). `recon run --input <matched-cohorts.toml>` screens declared planned and actual dry tonnes
   and contained kg for a common site, period, element, ownership basis and matching material support.

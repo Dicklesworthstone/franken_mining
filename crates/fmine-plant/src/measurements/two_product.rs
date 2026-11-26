@@ -41,6 +41,14 @@ impl AssaySplit {
             Self::FeedOutsideProductGrades => ("feed_outside_product_grades", None, None),
         }
     }
+
+    pub fn submitted_dry_pull_comparison(self, submitted: Option<ExactQty>) -> &'static str {
+        match (self, submitted) {
+            (Self::Solved { mass_pull, .. }, Some(dry_pull)) if mass_pull == dry_pull => "matches",
+            (Self::Solved { .. }, Some(_)) => "differs",
+            _ => "unavailable",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +66,63 @@ pub struct Balance {
     pub dry_residual_kg: ExactQty,
     pub concentrate_over_feed_dry_mass: Option<ExactQty>,
     pub elements: Vec<ElementBalance>,
+}
+
+#[derive(Clone, Copy)]
+pub struct AssayPullWitness<'a> {
+    pub element: &'a ElementKey,
+    pub mass_pull: ExactQty,
+}
+
+#[derive(Default)]
+pub struct AssayPullCheck<'a> {
+    pub solved_assays: usize,
+    pub infeasible_assays: usize,
+    pub unresolved_assays: usize,
+    pub reference_assay: Option<AssayPullWitness<'a>>,
+    pub conflicting_assay: Option<AssayPullWitness<'a>>,
+}
+
+impl AssayPullCheck<'_> {
+    pub fn status(&self) -> &'static str {
+        match (self.solved_assays, self.conflicting_assay) {
+            (0, _) => "unidentified",
+            (1, _) => "one_solved_assay",
+            (_, Some(_)) => "conflicting_solved_assays",
+            _ => "matching_solved_assays",
+        }
+    }
+}
+
+impl Balance {
+    /// A two-product boundary has one concentrate/feed dry mass ratio for all elements.
+    /// Compare the exact assay-implied ratios at the submitted precision, keeping individually
+    /// infeasible and unresolved elements separate from the identifying assays.
+    pub fn assay_pull_check(&self) -> AssayPullCheck<'_> {
+        let mut check = AssayPullCheck::default();
+        for row in &self.elements {
+            match row.assay_split {
+                AssaySplit::Solved { mass_pull, .. } => {
+                    check.solved_assays += 1;
+                    let witness = AssayPullWitness {
+                        element: &row.element,
+                        mass_pull,
+                    };
+                    let first = check.reference_assay.get_or_insert(witness);
+                    if mass_pull != first.mass_pull && check.conflicting_assay.is_none() {
+                        check.conflicting_assay = Some(witness);
+                    }
+                }
+                AssaySplit::FeedOutsideProductGrades => check.infeasible_assays += 1,
+                AssaySplit::MissingAssay
+                | AssaySplit::EmptyDryStream
+                | AssaySplit::IndistinguishableProducts => {
+                    check.unresolved_assays += 1;
+                }
+            }
+        }
+        check
+    }
 }
 
 pub struct Receipt {
@@ -89,13 +154,37 @@ impl Receipt {
         }).collect::<Vec<_>>().join(",");
         let elements = b.elements.iter().map(|row| {
             let (status, pull, recovery) = row.assay_split.report();
+            let comparison = row.assay_split.submitted_dry_pull_comparison(b.concentrate_over_feed_dry_mass);
             let [f, c, t] = row.stream_metal_kg.map(optional);
-            format!(r#"{{"element":{},"measurand":{},"feed_kg":{f},"concentrate_kg":{c},"tailings_kg":{t},"residual_kg":{},"concentrate_over_feed_metal":{},"assay_status":{},"assay_mass_pull":{},"assay_recovery":{}}}"#,
+            format!(r#"{{"element":{},"measurand":{},"feed_kg":{f},"concentrate_kg":{c},"tailings_kg":{t},"residual_kg":{},"concentrate_over_feed_metal":{},"assay_status":{},"assay_mass_pull":{},"assay_recovery":{},"submitted_dry_pull_comparison":{}}}"#,
                 quoted(&row.element.element), quoted(&row.element.measurand), optional(row.residual_kg),
-                optional(row.concentrate_over_feed_metal), quoted(status), optional(pull), optional(recovery))
+                optional(row.concentrate_over_feed_metal), quoted(status), optional(pull), optional(recovery), quoted(comparison))
         }).collect::<Vec<_>>().join(",");
+        let check = b.assay_pull_check();
+        let witness = |w: Option<AssayPullWitness<'_>>| {
+            w.map_or_else(
+                || "null".into(),
+                |v| {
+                    format!(
+                        r#"{{"element":{},"measurand":{},"mass_pull":{}}}"#,
+                        quoted(&v.element.element),
+                        quoted(&v.element.measurand),
+                        exact(v.mass_pull)
+                    )
+                },
+            )
+        };
+        let pull_check = format!(
+            r#"{{"status":{},"solved_assays":{},"infeasible_assays":{},"unresolved_assays":{},"reference_assay":{},"conflicting_assay":{}}}"#,
+            quoted(check.status()),
+            check.solved_assays,
+            check.infeasible_assays,
+            check.unresolved_assays,
+            witness(check.reference_assay),
+            witness(check.conflicting_assay)
+        );
         format!(
-            r#"{{"schema":"fmine.two-product-screen.v1","boundary":{},"start_ns":"{}","end_ns":"{}","streams":[{streams}],"dry_residual_kg":{},"concentrate_over_feed_dry_mass":{},"elements":[{elements}],"claim":{}}}"#,
+            r#"{{"schema":"fmine.two-product-screen.v1","boundary":{},"start_ns":"{}","end_ns":"{}","streams":[{streams}],"dry_residual_kg":{},"concentrate_over_feed_dry_mass":{},"elements":[{elements}],"claim":{},"assay_pull_check":{pull_check}}}"#,
             quoted(&scope.boundary),
             scope.physical_time.start_ns,
             scope.physical_time.end_ns,
@@ -356,5 +445,63 @@ mod tests {
             .code,
             "FMINE-REF-505"
         );
+    }
+
+    #[test]
+    fn common_dry_split_counts_unresolved_and_infeasible_assays_separately() {
+        let conc_without_cu = CONC.rsplit_once("[[assay]]").unwrap().0;
+        let single = screen(FEED, conc_without_cu, TAIL).unwrap();
+        let check = single.claim.value.assay_pull_check();
+        assert_eq!(check.status(), "one_solved_assay");
+        assert_eq!(
+            (
+                check.solved_assays,
+                check.infeasible_assays,
+                check.unresolved_assays
+            ),
+            (1, 0, 1)
+        );
+        assert!(check.conflicting_assay.is_none());
+        assert_eq!(check.reference_assay.unwrap().element.element, "Au");
+        assert_eq!(
+            single.claim.value.elements[1]
+                .assay_split
+                .submitted_dry_pull_comparison(Some(ONE)),
+            "unavailable"
+        );
+
+        let impossible =
+            screen(&FEED.replace("value = \"2\"", "value = \"20\""), CONC, TAIL).unwrap();
+        let check = impossible.claim.value.assay_pull_check();
+        assert_eq!(check.status(), "one_solved_assay");
+        assert_eq!(
+            (
+                check.solved_assays,
+                check.infeasible_assays,
+                check.unresolved_assays
+            ),
+            (1, 1, 0)
+        );
+        assert!(check.conflicting_assay.is_none());
+
+        let flat_au_conc = CONC.replace("value = \"20\"", "value = \"4\"");
+        let flat_au_tail = TAIL.replace("value = \"20/9\"", "value = \"4\"");
+        let r = screen(FEED, &flat_au_conc, &flat_au_tail).unwrap();
+        assert_eq!(
+            r.claim.value.assay_pull_check().status(),
+            "one_solved_assay"
+        );
+        assert_eq!(r.claim.value.assay_pull_check().unresolved_assays, 1);
+
+        let both_flat = screen(
+            FEED,
+            &flat_au_conc.replace("value = \"16\"", "value = \"2\""),
+            &flat_au_tail.replace("value = \"4/9\"", "value = \"2\""),
+        )
+        .unwrap();
+        let check = both_flat.claim.value.assay_pull_check();
+        assert_eq!(check.status(), "unidentified");
+        assert_eq!(check.unresolved_assays, 2);
+        assert!(check.reference_assay.is_none());
     }
 }

@@ -417,6 +417,12 @@ In this synthetic circuit, concentrate takes **10% of dry feed, 80% of copper an
 assay split assumes these are the only dry outlets and the circuit inventory stays constant. If an outlet
 lacks a copper assay, the copper residual stays unknown. Other assayed elements can still be checked.
 
+The report checks whether all solved element assays imply the same dry split at the submitted precision
+and compares each with the submitted dry weights. In a copy of the synthetic feed worksheet, changing
+the copper assay from `2` to `32/9` mass percent makes copper imply a 20% split while gold and the dry
+weights give 10%. The dry weights still close. The report names both conflicting measurands, preserves
+the exact fractions, and counts individually infeasible or unresolved elements separately.
+
 INFERENCE: the copper assays in UAF's worked example imply 72.41% recovery. Using its mass yield rounded
 to 1.5% gives the published 73.5%. The two-product report keeps both calculations visible when you supply
 that rounded mass split. [UAF Mining Mill Operator Training, Lesson 2](https://millops.community.uaf.edu/amit-135/amit-135-lesson-2/#Mass-Yield-Formula-Example)

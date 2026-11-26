@@ -22,6 +22,10 @@ the existing material-worksheet projection. Streams must be distinct and share a
 interval. It compares exact submitted dry and elemental mass with an assay-only split under two-outlet,
 unchanged-inventory assumptions. Per-element reporting preserves missing assays, zero denominators, residuals
 and infeasible or unidentifiable splits. Source worksheet hashes and stream roles are bound into the diagnostic Claim.
+DESIGN (BD-137). `Balance::assay_pull_check` compares exact solved ratios for a common physical dry split
+at the submitted precision. It names the first solved element and the first differing element in canonical
+element order, counts individually infeasible and unresolved assays separately, and leaves the balance
+and source Claim unchanged. Each solved ratio can also be compared with the submitted dry split.
 
 Six `Claim<MetalBalanceInput>` values: an explicit complete-population declaration, opening stock, feed,
 product, other outflow and closing stock. Every physical quantity is a nonnegative `ExactQty` of kilograms

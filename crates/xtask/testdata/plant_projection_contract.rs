@@ -41,12 +41,23 @@ fn two_product_balance_compares_submitted_masses_with_assays_at_the_cli() {
     let p = at(&doc, &["payload"]);
     assert_eq!(exact(at(p, &["dry_residual_kg"])), (0, 1));
     assert_eq!(exact(at(p, &["concentrate_over_feed_dry_mass"])), (1, 10));
+    let check = at(p, &["assay_pull_check"]);
+    assert_eq!(
+        at(check, &["status"]).as_str(),
+        Some("matching_solved_assays")
+    );
+    assert_eq!(at(check, &["solved_assays"]).i64(), Some(2));
+    assert_eq!(at(check, &["conflicting_assay"]), &Json::Null);
     let rows = at(p, &["elements"]).as_array().unwrap();
     assert_eq!(rows.len(), 2);
     for (row, (element, recovery)) in rows.iter().zip([("Au", (1, 2)), ("Cu", (4, 5))]) {
         assert_eq!(at(row, &["element"]).as_str(), Some(element));
         assert_eq!(at(row, &["assay_status"]).as_str(), Some("solved"));
         assert_eq!(exact(at(row, &["assay_mass_pull"])), (1, 10));
+        assert_eq!(
+            at(row, &["submitted_dry_pull_comparison"]).as_str(),
+            Some("matches")
+        );
         assert_eq!(exact(at(row, &["assay_recovery"])), recovery);
         assert_eq!(exact(at(row, &["concentrate_over_feed_metal"])), recovery);
         assert_eq!(exact(at(row, &["residual_kg"])), (0, 1));
@@ -56,6 +67,71 @@ fn two_product_balance_compares_submitted_masses_with_assays_at_the_cli() {
     let md = String::from_utf8(run("markdown").stdout).unwrap();
     assert!(md.contains("Cu / total-Cu/all-phases | 0 | 80.00% | 10.00% | 80.00% | solved"));
     assert!(md.contains("Au / total-Au/all-phases | 0 | 50.00% | 10.00% | 50.00% | solved"));
+}
+
+#[test]
+fn two_product_balance_names_conflicting_assays_even_when_dry_tonnes_close() {
+    // Au implies (4 − 20/9)/(20 − 20/9) = 1/10. For Cu, (32/9 − 4/9)/(16 − 4/9) = 1/5.
+    let feed = scratch(&MATERIAL.replace("value = \"2\"", "value = \"32/9\""));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |format| {
+        let out = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .current_dir(&root)
+            .args(["plant", "balance", "--feed"])
+            .arg(&feed)
+            .args([
+                "--concentrate",
+                "tests/plant/two_product_concentrate.toml",
+                "--tailings",
+                "tests/plant/two_product_tailings.toml",
+                "--format",
+                format,
+            ])
+            .output()
+            .expect("run actual two-product balance");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        out.stdout
+    };
+    let out = run("json");
+    let doc = json::parse(&out).unwrap();
+    let p = at(&doc, &["payload"]);
+    assert_eq!(exact(at(p, &["dry_residual_kg"])), (0, 1));
+    assert_eq!(exact(at(p, &["concentrate_over_feed_dry_mass"])), (1, 10));
+    let check = at(p, &["assay_pull_check"]);
+    assert_eq!(
+        at(check, &["status"]).as_str(),
+        Some("conflicting_solved_assays")
+    );
+    for (key, name, expected) in [
+        ("reference_assay", "Au", (1, 10)),
+        ("conflicting_assay", "Cu", (1, 5)),
+    ] {
+        let witness = at(check, &[key]);
+        assert_eq!(at(witness, &["element"]).as_str(), Some(name));
+        assert_eq!(
+            at(witness, &["measurand"]).as_str(),
+            Some(format!("total-{name}/all-phases").as_str())
+        );
+        assert_eq!(exact(at(witness, &["mass_pull"])), expected);
+    }
+    let rows = at(p, &["elements"]).as_array().unwrap();
+    assert_eq!(
+        at(&rows[0], &["submitted_dry_pull_comparison"]).as_str(),
+        Some("matches")
+    );
+    assert_eq!(
+        at(&rows[1], &["submitted_dry_pull_comparison"]).as_str(),
+        Some("differs")
+    );
+    let md = String::from_utf8(run("markdown")).unwrap();
+    assert!(
+        md.contains("Au / total-Au/all-phases gives 1/10")
+            && md.contains("Cu / total-Cu/all-phases gives 1/5")
+    );
 }
 
 fn scratch(text: &str) -> PathBuf {
