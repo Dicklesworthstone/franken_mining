@@ -34,8 +34,10 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 - DESIGN (BD-350.S3/S5). `screen target --docs <directory>` evaluates drill-release and developer
   NPV worksheets and the PDF table definitions used by `check tables`. Each worksheet is read
   once. Table definitions use their declared issuer and the same workspace source checks and
-  transcription agreement as the standalone command. The pack uses the registered documents
-  retrospectively. The standalone table command supports explicit evidence cuts. The ordered `fmine.target-screen.v1`
+  transcription agreement as the standalone command. `--table-as-of YYYY-MM-DD` passes the same
+  inclusive publication-date cut to every registered table worksheet and records it as `table_as_of`.
+  A later table document refuses and other results remain available. The default is retrospective.
+  The cut supplies no publication or transcription chronology for drill or NPV worksheets. The ordered `fmine.target-screen.v1`
   report retains source identity and the individual results. It refuses a missing, empty or oversized
   pack. The first refused worksheet in filename order supplies the process exit code and the report
   retains each accepted worksheet and each refusal. The command writes no files and reads no sealed

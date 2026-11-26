@@ -632,6 +632,64 @@ class TableScenarios(unittest.TestCase):
         self.assertIn(FILE, absent["refusal"]["what"])
         self.assertEqual((absent["payload"]["screened"], absent["payload"]["refused"]), (1, 2))
 
+    def test_target_pack_table_cut_excludes_a_later_revision(self):
+        root = workspace("target-table-cut")
+        pack = root / "pack"
+        pack.mkdir()
+        registry = root / "registries/sources/table_test.toml"
+        transcriptions = root / "registries/transcriptions/table_test.toml"
+        later = "Revised.pdf"
+        revised_bytes = DOCUMENT + b" revised synthetic reserve reading"
+        (root / "documents" / later).write_bytes(revised_bytes)
+        header, document = registry.read_text().split("\n[[document]]", 1)
+        revised = (document.replace(FILE, later).replace("2026-02-01", "2026-03-01")
+                   .replace(f"bytes = {len(DOCUMENT)}", f"bytes = {len(revised_bytes)}")
+                   .replace(digest(DOCUMENT), digest(revised_bytes)))
+        registry.write_text(header + "\n[[document]]" + document + "\n[[document]]" + revised, encoding="utf-8")
+        readings = transcriptions.read_text()
+        _, cells = readings.split("\n[[entry]]", 1)
+        revised_cells = (cells.replace(FILE, later).replace(digest(DOCUMENT), digest(revised_bytes))
+                         .replace('token = "85"', 'token = "75"'))
+        transcriptions.write_text(readings + "\n[[entry]]" + revised_cells, encoding="utf-8")
+        definitions = (root / DEFINITIONS).read_text()
+        (pack / "a-original.toml").write_text(definitions, encoding="utf-8")
+        (pack / "b-revised.toml").write_text(definitions.replace(FILE, later), encoding="utf-8")
+        synthetic = Path(__file__).parents[3] / "tests/exploration/developer_npv.toml"
+        (pack / "c-valuation.toml").write_bytes(synthetic.read_bytes())
+        args = ["screen", "target", "--docs", "pack"]
+
+        retrospective, _ = invoke(root, arguments=args)
+        self.assertEqual((retrospective["exit_code"], retrospective["payload"]["screened"]), (0, 3))
+        self.assertNotIn("table_as_of", retrospective["payload"])
+        revised_report = retrospective["payload"]["documents"][1]["result"]["payload"]
+        self.assertTrue(any(row["verdict"] == "infeasible" and row["checked"]
+                            for row in revised_report["checks"]["components"]))
+
+        early_args = ["screen", "target", "--table-as-of", "2026-02-01", "--docs", "pack"]
+        early, raw = invoke(root, arguments=early_args)
+        self.assertEqual((early["exit_code"], early["payload"]["screened"], early["payload"]["refused"]), (3, 2, 1), raw)
+        self.assertEqual(early["payload"]["table_as_of"], "2026-02-01")
+        old, excluded, valuation = [row["result"] for row in early["payload"]["documents"]]
+        direct, _ = invoke(root, ["--as-of", "2026-02-01"])
+        self.assertEqual(old, direct)
+        self.assertEqual(excluded["refusal"]["code"], "FMINE-REF-202")
+        self.assertIn("Revised.pdf (published 2026-03-01)", excluded["refusal"]["what"])
+        self.assertIsNone(excluded["payload"])
+        self.assertEqual(valuation, retrospective["payload"]["documents"][2]["result"])
+        markdown = binary(root, early_args, "markdown")
+        self.assertEqual(markdown.returncode, 3)
+        self.assertIn("Table publication cut `2026-02-01` applies to registered table documents only.", markdown.stdout)
+
+        boundary, _ = invoke(root, arguments=[*args, "--table-as-of", "2026-03-01"])
+        self.assertEqual((boundary["exit_code"], boundary["payload"]["screened"]), (0, 3))
+        self.assertEqual(boundary["payload"]["documents"][1]["result"]["payload"]["as_of"], "2026-03-01")
+        for options in (["--table-as-of", "2026-02-29"], ["--table-as-of", "2026-02-01T00:00:00Z"],
+                        ["--table-as-of"], ["--table-as-of", "2026-02-01", "--table-as-of", "2026-03-01"],
+                        ["--docs", "pack"]):
+            with self.subTest(options=options):
+                invalid, _ = invoke(root, arguments=[*args, *options])
+                self.assertEqual((invalid["exit_code"], invalid["status"]), (2, "usage_error"))
+
     def test_declared_sign_changes_finding_and_digest_without_changing_source_bytes(self):
         root = workspace("signed")
         positive, _ = successful(root)

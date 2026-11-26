@@ -248,7 +248,9 @@ Supply up to 64 top-level `.toml` files, each at most 64 KiB. A pack can mix dri
 developer NPV worksheets with the same `fmine.table-identities.v1` definitions accepted by
 `check tables`. The table definitions name their issuer. The workspace supplies its source and
 transcription registries and the registered document bytes. The pack uses those registrations
-retrospectively. Use `check tables --as-of YYYY-MM-DD` for a dated table evidence cut.
+retrospectively unless you supply `--table-as-of YYYY-MM-DD`. That cut excludes table documents
+whose registered publication date is later than the selected day. Drill-release and NPV worksheets
+retain their supplied evidence. The cut does not establish when transcription records were written.
 
 The command screens files in filename order and preserves their source hashes, findings, and
 refusals. A checked arithmetic conflict is a finding. A worksheet-level refusal gives a nonzero

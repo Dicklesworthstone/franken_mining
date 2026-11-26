@@ -7,17 +7,51 @@ use std::path::{Path, PathBuf};
 
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_public::sources::load_issuer_profile;
+use fmine_registry::sources::is_date;
 use fmine_registry::table_identities::TABLE_IDENTITIES_SCHEMA;
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 
 use crate::capital::{drill_release, npv_replay};
-use crate::{Envelope, json_string as js, tables, worksheet_input};
+use crate::{CliCommand, Envelope, json_string as js, tables, worksheet_input};
 
 pub(super) const VERB: &str = "screen target";
-pub(super) const USAGE: &str = "screen target --docs <directory>";
+pub(super) const USAGE: &str = "screen target --docs <directory> [--table-as-of YYYY-MM-DD]";
+const BAD_DATE: &str = "screen target --table-as-of requires a valid YYYY-MM-DD date";
 const MAX_DOCUMENTS: usize = 64;
 const MAX_BYTES: u64 = 65_536;
 const NO_CLAIM: &str = "Findings apply to the submitted worksheets and their declared inputs. This review supplies no issuer authentication, mineral classification, investment authorization or regulatory approval.";
+
+pub(super) fn parse(words: &[String]) -> Result<CliCommand, String> {
+    let usage = || format!("expected 'fmine {USAGE}'");
+    let [screen, target, args @ ..] = words else {
+        return Err(usage());
+    };
+    if screen != "screen" || target != "target" {
+        return Err(usage());
+    }
+    let (mut docs, mut table_as_of) = (None, None);
+    let mut args = args.iter();
+    while let Some(option) = args.next() {
+        let value = args
+            .next()
+            .filter(|v| !v.trim().is_empty() && !v.starts_with("--"))
+            .ok_or_else(usage)?;
+        match option.as_str() {
+            "--docs" if docs.is_none() => docs = Some(PathBuf::from(value)),
+            "--table-as-of" if table_as_of.is_none() => {
+                if !is_date(value) {
+                    return Err(BAD_DATE.into());
+                }
+                table_as_of = Some(value.clone());
+            }
+            _ => return Err(usage()),
+        }
+    }
+    Ok(CliCommand::ScreenTarget {
+        docs: docs.ok_or_else(usage)?,
+        table_as_of,
+    })
+}
 
 fn unavailable(path: &Path, detail: impl std::fmt::Display) -> Refusal {
     Refusal::new(
@@ -48,7 +82,11 @@ fn pack(directory: &Path) -> Result<Vec<PathBuf>, Refusal> {
     Ok(files)
 }
 
-fn inspect(root: &Path, path: &Path) -> Result<(String, Envelope), Refusal> {
+fn inspect(
+    root: &Path,
+    path: &Path,
+    table_as_of: Option<&str>,
+) -> Result<(String, Envelope), Refusal> {
     if !path
         .symlink_metadata()
         .map_err(|error| unavailable(path, error))?
@@ -76,7 +114,12 @@ fn inspect(root: &Path, path: &Path) -> Result<(String, Envelope), Refusal> {
                         Some(TomlValue::Str(issuer)) => {
                             load_issuer_profile(root, issuer).and_then(|profile| {
                                 tables::evaluate_definitions(
-                                    root, &profile, path, &text, None, None,
+                                    root,
+                                    &profile,
+                                    path,
+                                    &text,
+                                    table_as_of,
+                                    None,
                                 )
                             })
                         }
@@ -99,7 +142,10 @@ fn inspect(root: &Path, path: &Path) -> Result<(String, Envelope), Refusal> {
     ))
 }
 
-pub(super) fn execute(docs: &Path, root: &Path) -> Envelope {
+pub(super) fn execute(docs: &Path, root: &Path, table_as_of: Option<&str>) -> Envelope {
+    if table_as_of.is_some_and(|date| !is_date(date)) {
+        return Envelope::usage_error(VERB, BAD_DATE);
+    }
     let directory = root.join(docs);
     let files = match pack(&directory) {
         Ok(files) => files,
@@ -114,7 +160,7 @@ pub(super) fn execute(docs: &Path, root: &Path) -> Envelope {
             .file_name()
             .unwrap_or(path.as_os_str())
             .to_string_lossy();
-        let (source, result) = inspect(root, &path).unwrap_or_else(|refusal| {
+        let (source, result) = inspect(root, &path, table_as_of).unwrap_or_else(|refusal| {
             ("null".into(), Envelope::refused(VERB, refusal, Vec::new()))
         });
         let _ = writeln!(details, "\n## {}\n", worksheet_input::markdown_cell(&name));
@@ -153,12 +199,17 @@ pub(super) fn execute(docs: &Path, root: &Path) -> Envelope {
         Some(refusal) => Envelope::refused(VERB, refusal, Vec::new()),
         None => Envelope::ok(VERB, String::new(), Vec::new()),
     };
+    let cut_json =
+        table_as_of.map_or_else(String::new, |date| format!("\"table_as_of\":{},", js(date)));
+    let cut_md = table_as_of.map_or_else(String::new, |date| {
+        format!("\n\nTable publication cut `{date}` applies to registered table documents only.")
+    });
     envelope.payload_json = format!(
-        "{{\"schema\":\"fmine.target-screen.v1\",\"screened\":{screened},\"refused\":{refused},\"documents\":[{}]}}",
+        "{{\"schema\":\"fmine.target-screen.v1\",{cut_json}\"screened\":{screened},\"refused\":{refused},\"documents\":[{}]}}",
         reports.join(","),
     );
     envelope.rendered_markdown = Some(format!(
-        "# Target screening\n\n{screened} of {total} worksheets screened. {refused} refused.\n\n{NO_CLAIM}\n{details}"
+        "# Target screening\n\n{screened} of {total} worksheets screened. {refused} refused.{cut_md}\n\n{NO_CLAIM}\n{details}"
     ));
     envelope.no_claim = Some(NO_CLAIM);
     envelope
