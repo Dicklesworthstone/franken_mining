@@ -66,13 +66,17 @@ fn check_input<'a>(
     let Some(source) = lookup(profile, &input.doc_id) else {
         return Ok(None);
     };
-    if record::parse_hex32(source.digest) != Some(input.sha256)
-        || input.url != source.url
-        || input.bytes != source.bytes
-    {
+    let mismatch = RefusalCode::DigestMismatch505;
+    if record::parse_hex32(source.digest) != Some(input.sha256) {
+        return Err(error(mismatch, "sha256 differs from the source registry"));
+    }
+    if input.url != source.url {
+        return Err(error(mismatch, "URL differs from the source registry"));
+    }
+    if input.bytes != source.bytes {
         return Err(error(
-            RefusalCode::DigestMismatch505,
-            "URL, size or sha256 differs from the source registry",
+            mismatch,
+            "byte count differs from the source registry",
         ));
     }
     if let Some(quarter) = source.workbook_quarter {
