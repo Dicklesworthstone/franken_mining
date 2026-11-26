@@ -286,6 +286,14 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     to the highest attributable interest first and then proceeds in decreasing interest. The card recomputes
     it without each site's uplift and reports a site and its deadline if that counterfactual misses the
     target. Individual ceilings shown in the table precede the shared limit.
+    DESIGN (bd-rh5q). With a shared limit, `shared_capacity_plan` gives the exact minimum physical draw
+    that supplies the attributable target above baseline and one allocation. Equal interests prioritize
+    later decision dates, then site ID. The earliest date applies to this allocation. The card shows
+    the extra capacity required beyond the submitted allowance and the least sufficient whole-unit
+    input, or the attributable gap if even
+    unlimited shared capacity cannot overcome the dated local ceilings. A covered baseline needs zero
+    additional capacity and has no action date. Quantities are reduced rational strings in the declared
+    unit. All results are conditional on the existing one-for-one, divisible capacity model.
   - Project estimates retain the complete declared cohort and hold out a latest approval. Only comparable
     completed cost outcomes known strictly before that approval enter the lower-median actual/approval
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price

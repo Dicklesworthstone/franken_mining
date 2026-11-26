@@ -1185,6 +1185,129 @@ fn maximum_shared_uplift(
     attributable
 }
 
+struct TargetAllocation<'a> {
+    sites: Vec<(&'a SiteUplift<'a>, i128)>,
+    project_units: (i128, i128),
+}
+
+fn minimum_target_allocation<'a>(
+    prioritized_sites: &'a [SiteUplift<'a>],
+    mut remaining_attributable: i128,
+) -> std::result::Result<TargetAllocation<'a>, i128> {
+    let mut plan = TargetAllocation {
+        sites: Vec::new(),
+        project_units: (0, 1),
+    };
+    let mut full_project_units = 0;
+    for site in prioritized_sites {
+        if remaining_attributable == 0 {
+            break;
+        }
+        let contribution = remaining_attributable.min(site.project_units * site.interest_bp);
+        if contribution == 0 {
+            continue;
+        }
+        plan.sites.push((site, contribution));
+        plan.project_units = (
+            full_project_units * site.interest_bp + contribution,
+            site.interest_bp,
+        );
+        remaining_attributable -= contribution;
+        // Only the last selected site can be partial. If another site is needed, this one is saturated.
+        full_project_units += site.project_units;
+    }
+    if remaining_attributable == 0 {
+        Ok(plan)
+    } else {
+        Err(remaining_attributable)
+    }
+}
+
+fn show_shared_target_plan(
+    card: &mut Card,
+    prioritized_sites: &[SiteUplift<'_>],
+    required_attributable: i128,
+    limit: i128,
+    unit: &str,
+) -> Result<()> {
+    let detail = match minimum_target_allocation(prioritized_sites, required_attributable) {
+        Err(local_gap) => {
+            let gap = fraction(local_gap, 10000)?;
+            card.findings.push(format!(
+                "Even with unlimited shared capacity, dated site ceilings leave {gap} {unit} attributable short of the group target."
+            ));
+            format!(
+                r#""status":"site_ceilings_insufficient","minimum_project_capacity":null,"minimum_whole_unit_allowance":null,"additional_project_capacity_required":null,"decision_by":null,"local_ceiling_gap_attributable":{},"allocations":[]"#,
+                js(&gap)
+            )
+        }
+        Ok(plan) => {
+            let (numerator, denominator) = plan.project_units;
+            let minimum = fraction(numerator, denominator)?;
+            let smallest_whole = (numerator + denominator - 1) / denominator;
+            let shortfall = (numerator - limit * denominator).max(0);
+            let shortfall_text = fraction(shortfall, denominator)?;
+            let status = if required_attributable == 0 {
+                card.findings.push("Current site plans cover the target. No additional shared capacity or intervention is required.".into());
+                "baseline_covers_target"
+            } else {
+                card.findings.push(format!(
+                    "Minimum shared capacity to reach the target is {minimum} {unit} on a 100%-project basis."
+                ));
+                if shortfall > 0 {
+                    card.findings.push(format!(
+                        "The submitted allowance needs {shortfall_text} more {unit} to support this allocation."
+                    ));
+                    if numerator % denominator != 0 {
+                        card.findings.push(format!(
+                            "The smallest whole-unit allowance that covers it is {smallest_whole} {unit}."
+                        ));
+                    }
+                    "additional_capacity_required"
+                } else {
+                    "within_allowance"
+                }
+            };
+            let first_deadline = plan.sites.iter().map(|(site, _)| site.act_by).min();
+            if let Some(deadline) = first_deadline {
+                card.findings.push(format!(
+                    "The first intervention in this allocation is due by {deadline}."
+                ));
+            }
+            let mut allocations = Vec::new();
+            for (site, attributable) in &plan.sites {
+                let project = fraction(*attributable, site.interest_bp)?;
+                let attributable = fraction(*attributable, 10000)?;
+                card.findings.push(format!(
+                    "{} needs {project} project units for {attributable} attributable units in this allocation. Act by {}.",
+                    site.id, site.act_by
+                ));
+                allocations.push(format!(r#"{{"site":{},"project_increment":{},"attributable_increment":{},"act_by":{}}}"#,
+                    js(site.id), js(&project), js(&attributable), js(site.act_by)));
+            }
+            let decision_by = first_deadline.map_or_else(|| "null".into(), js);
+            format!(
+                r#""status":{},"minimum_project_capacity":{},"minimum_whole_unit_allowance":{},"additional_project_capacity_required":{},"decision_by":{decision_by},"local_ceiling_gap_attributable":"0","allocations":[{}]"#,
+                js(status),
+                js(&minimum),
+                js(&smallest_whole.to_string()),
+                js(&shortfall_text),
+                allocations.join(",")
+            )
+        }
+    };
+    card.detail = Some((
+        "shared_capacity_plan",
+        format!(
+            r#"{{"unit":{},"submitted_project_capacity":{},"attributable_increase_needed":{},{detail}}}"#,
+            js(unit),
+            js(&limit.to_string()),
+            js(&fraction(required_attributable, 10000)?)
+        ),
+    ));
+    Ok(())
+}
+
 fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     tables(doc, &["group", "site"])?;
     let g = row_fields_with_optional(
@@ -1291,7 +1414,9 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         ));
     }
     let additional = if let Some(limit) = shared_capacity {
-        offsets.sort_unstable_by_key(|site| (Reverse(site.interest_bp), site.id));
+        offsets.sort_unstable_by_key(|site| {
+            (Reverse(site.interest_bp), Reverse(site.act_by), site.id)
+        });
         maximum_shared_uplift(&offsets, limit, None)
     } else {
         offsets
@@ -1308,6 +1433,15 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         ));
     }
     c.findings.push(if capacity<target {format!("Even all admitted offsets leave a group shortfall of {}.",fraction(target-capacity,10000)?)} else {"Declared site bounds allow enough aggregate output. This is conditional on the stated simultaneous capacity basis.".into()});
+    if let Some(limit) = shared_capacity {
+        show_shared_target_plan(
+            &mut c,
+            &offsets,
+            (target - plan).max(0),
+            limit,
+            get(&g, "unit")?,
+        )?;
+    }
     if capacity >= target {
         for site in &offsets {
             let SiteUplift {
@@ -1999,6 +2133,104 @@ mod tests {
         assert!(expired.contains("group shortfall of 700."));
         for limit in ["-1", "900.5", "9223372036854775808"] {
             assert!(evaluate(&group_with_shared_limit(limit)).is_err());
+        }
+    }
+
+    #[test]
+    fn shared_target_plan_distinguishes_allowance_local_ceilings_and_covered_baseline() {
+        let exact = report(&group_with_shared_limit("1000"));
+        assert!(exact.contains("Minimum shared capacity to reach the target is 1000"));
+        assert!(exact.contains("Mesa needs 1000 project units"));
+        assert!(!exact.contains("Valley needs") && !exact.contains("submitted allowance needs"));
+
+        let revised = |limit| {
+            group_with_shared_limit(limit).replace("maximum = \"8200\"", "maximum = \"8100\"")
+        };
+        let below = report(&revised("1066"));
+        assert!(
+            below.contains("needs 2/3 more") && below.contains("allowance that covers it is 1067")
+        );
+        let above = report(&revised("1067"));
+        assert!(above.contains("Minimum shared capacity to reach the target is 3200/3"));
+        assert!(!above.contains("submitted allowance needs"));
+
+        let expired = report(&group_with_shared_limit("5000").replace("2030-10-04", "2030-09-29"));
+        assert!(expired.contains("dated site ceilings leave 700"));
+        assert!(!expired.contains("in this allocation"));
+
+        let covered =
+            report(&group_with_shared_limit("0").replace("plan = \"7200\"", "plan = \"8200\""));
+        assert!(covered.contains("No additional shared capacity or intervention is required"));
+        assert!(!covered.contains("in this allocation"));
+    }
+
+    #[test]
+    fn equal_interest_prefers_the_later_action_deadline_then_site_id() {
+        let tied = group_with_shared_limit("400")
+            .replace("interest_bp = \"6000\"", "interest_bp = \"10000\"")
+            .replace("target = \"10000\"", "target = \"8600\"")
+            .replace("target = \"13000\"", "target = \"15600\"");
+        let later = report(&tied);
+        assert!(later.contains("Valley needs 400 project units"));
+        assert!(later.contains("due by 2030-10-15"));
+        assert!(!later.contains("Mesa needs") && !later.contains("Valley is required"));
+        let same_date = report(&tied.replace("2030-10-04", "2030-10-15"));
+        assert!(same_date.contains("Mesa needs 400 project units"));
+        assert!(!same_date.contains("Valley needs"));
+    }
+
+    #[test]
+    fn minimum_target_allocation_matches_exhaustive_quarter_unit_controls() {
+        // For whole attributable targets and these three ownership fractions, every
+        // saturated allocation and its final partial increment lie on this quarter-unit grid.
+        for high in 0..=2 {
+            for middle in 0..=2 {
+                for low in 0..=2 {
+                    let sites = [("a", 10000, high), ("b", 5000, middle), ("c", 2500, low)].map(
+                        |(id, interest_bp, project_units)| SiteUplift {
+                            id,
+                            act_by: "2030-10-01",
+                            interest_bp,
+                            project_units,
+                        },
+                    );
+                    for target in 0..=5 {
+                        let required = target * 10000;
+                        let mut oracle = None;
+                        for a in 0..=high * 4 {
+                            for b in 0..=middle * 4 {
+                                for c in 0..=low * 4 {
+                                    if 10000 * a + 5000 * b + 2500 * c >= required * 4 {
+                                        let total = a + b + c;
+                                        oracle = Some(
+                                            oracle.map_or(total, |best: i128| best.min(total)),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        match (oracle, minimum_target_allocation(&sites, required)) {
+                            (Some(total), Ok(plan)) => {
+                                let (num, den) = plan.project_units;
+                                assert_eq!(num * 4, total * den);
+                                assert_eq!(
+                                    plan.sites.iter().map(|(_, value)| value).sum::<i128>(),
+                                    required
+                                );
+                                assert!(plan.sites.iter().all(|(site, value)| 0 < *value
+                                    && *value <= site.project_units * site.interest_bp));
+                            }
+                            (None, Err(gap)) => assert_eq!(
+                                gap,
+                                required - 10000 * high - 5000 * middle - 2500 * low
+                            ),
+                            _ => panic!(
+                                "wrong feasibility for limits {high}/{middle}/{low} and target {target}"
+                            ),
+                        }
+                    }
+                }
+            }
         }
     }
 

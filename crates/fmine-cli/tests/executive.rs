@@ -872,6 +872,7 @@ fn tenure_retains_overlapping_economic_ranges_and_blind_survey() {
 #[test]
 fn group_recovery_converts_project_to_attributable_once() {
     let c = card("group");
+    assert!(c.get("shared_capacity_plan").is_none());
     assert!(finding(
         &c,
         "Mesa must supply at least 700 above its baseline"
@@ -883,6 +884,83 @@ fn group_recovery_converts_project_to_attributable_once() {
             && finding(&c, "before deadlines 1300")
     );
 }
+
+#[test]
+fn group_recovery_returns_an_exact_capacity_ask_and_dated_site_allocation() {
+    let c = card("group_shared");
+    let plan = c.get("shared_capacity_plan").expect("shared target plan");
+    assert_eq!(
+        plan.get("status").and_then(Json::as_str),
+        Some("additional_capacity_required")
+    );
+    assert_eq!(
+        plan.get("minimum_project_capacity").and_then(Json::as_str),
+        Some("3200/3")
+    );
+    assert_eq!(
+        plan.get("minimum_whole_unit_allowance")
+            .and_then(Json::as_str),
+        Some("1067")
+    );
+    assert_eq!(
+        plan.get("additional_project_capacity_required")
+            .and_then(Json::as_str),
+        Some("20/3")
+    );
+    assert_eq!(
+        plan.get("decision_by").and_then(Json::as_str),
+        Some("2030-10-04")
+    );
+    let allocations = plan
+        .get("allocations")
+        .and_then(Json::as_array)
+        .expect("site allocation");
+    let values = |i: usize| {
+        [
+            "site",
+            "project_increment",
+            "attributable_increment",
+            "act_by",
+        ]
+        .map(|key| {
+            allocations[i]
+                .get(key)
+                .and_then(Json::as_str)
+                .expect("allocation field")
+        })
+    };
+    assert_eq!(allocations.len(), 2);
+    assert_eq!(values(0), ["Mesa", "900", "900", "2030-10-04"]);
+    assert_eq!(values(1), ["Valley", "500/3", "100", "2030-10-15"]);
+    assert!(finding(&c, "group shortfall of 4"));
+    let markdown = run("group_shared", true);
+    assert!(markdown.status.success());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let brief = Command::new(env!("CARGO_BIN_EXE_fmine"))
+        .current_dir(root)
+        .args([
+            "decide",
+            "program",
+            "tests/capital/executive_group_shared.toml",
+            "--brief",
+        ])
+        .output()
+        .expect("run brief");
+    assert!(brief.status.success());
+    for output in [markdown, brief] {
+        let text = String::from_utf8(output.stdout).expect("Markdown output");
+        assert!(
+            text.contains("3200/3") && text.contains("20/3") && text.contains("1067"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Mesa needs 900 project units")
+                && text.contains("Valley needs 500/3 project units"),
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn approval_cohort_scores_holdout_without_later_closeout_or_silent_drops() {
     let c = card("estimates");

@@ -82,6 +82,18 @@ most 900 attributable tonnes of uplift, leaving a 100-tonne shortfall. At a cap 
 attainable only with Mesa's intervention by its stated deadline of October 4. The calculation assumes
 divisible increments and one unit of shared capacity per additional project unit.
 
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_group_shared.toml --brief
+```
+
+**INFERENCE from synthetic inputs.** With Mesa's revised ceiling, the target needs exactly 3,200/3
+project tonnes of shared capacity. Mesa contributes 900 attributable tonnes if acted on by October 4.
+Valley supplies the remaining 100 attributable tonnes from 500/3 project tonnes by October 15.
+The submitted 1,060 project tonnes leave the group 4 attributable tonnes short. Raising the allowance
+by 20/3 project tonnes makes this allocation feasible under the dated site ceilings. Enter **1,067**
+as the smallest whole-tonne allowance the worksheet accepts that covers it. Full JSON carries the
+exact fractions, the allocation, and the source rows. [Editable group worksheet](tests/capital/executive_group_shared.toml)
+
 ### Can Treasury fund margin calls if a metal shipment pays late?
 
 ```bash
