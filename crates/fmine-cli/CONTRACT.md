@@ -2343,6 +2343,32 @@ Every failure is a usage error (exit 2) or a typed `Refusal` (exits 3–9). Unkn
 - `crates/fmine-cli/tests/*` and `crates/xtask/tests/cli_*` (including Python `Fraction` independent binary oracles for capital, decision, valuation, reserve replacement, mirror, and cutoff verbs).
 - `fuzz/fuzz_targets/{cli,cli_run}.rs` (`PO-ADIT-4`).
 
+### Declared copper cost waterfalls (BD-064 / BD-333)
+
+DESIGN: `metrics waterfall --from-worksheet <file.toml> --to-worksheet <file.toml> --definition <registered-copper-cost-id>`
+evaluates two complete `fmine.cost-worksheet.v1` files through the existing immutable cost-receipt
+boundary, then applies the exact copper additive kernel. Only registered copper CashCost or
+AllInCost definitions in USD/lb are admitted. The mode requires identical issuer, subject,
+ownership, accounting basis, primary-metal allocation and definition tags, with chronologically
+increasing, nonoverlapping periods of equal duration. Included registered item/treatment sets must
+match; no absent component becomes an inferred zero.
+
+Each component sums exact signed numerator contributions for one item and treatment. Its locator
+explicitly identifies this aggregate; both original receipts retain all project, sale, cost and
+excluded-input Claims. Net costs may be zero or negative. The `fmine.copper-waterfall.worksheets.v1`
+payload contains exact rational rates and bars in USD/lb, outward numeric enclosures, both worksheet
+byte hashes, the registry hash, both full receipts, every component dependency and a deterministic
+result digest. Markdown renders the bridge followed by both receipts. No independently reported rate
+is available in this input format, so all reported-rate fields and gaps remain null.
+
+The adapter preserves Assumed/Internal/uncalibrated evidence and all four false authority flags.
+Worksheet decimals are exact declarations; numeric enclosures do not establish measurement
+uncertainty, calibrated intervals, issuer-source authenticity or causal attribution.
+`fmine-cli/src/waterfall/worksheets.rs` tests parsing and mixed-mode refusal;
+`xtask/tests/cost_worksheet.rs` exercises known-answer bridges, signed costs, incompatible
+populations, immutable evidence and repeated project contributions. Registered copper workbook
+ingestion and the broader physical LMDI decomposition remain separate work.
+
 ## 10. Known gaps
 - DESIGN (BD-051, plan §10.5): `forecast journal investigate`, `resolve-investigation` and
   `rearm-investigation` persist owned cases under operation v18. Opening requires a saved, result-bound

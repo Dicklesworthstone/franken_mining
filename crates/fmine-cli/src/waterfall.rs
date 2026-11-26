@@ -15,6 +15,9 @@ use fmine_public::{Lane, assess, load_registered_sources};
 use crate::guidance::{number, text};
 use crate::{Envelope, NextAction, json_string as js};
 
+/// Source-bound copper cost changes over two complete declared worksheets.
+pub mod worksheets;
+
 pub const USAGE: &str = "metrics waterfall --issuer <issuer> --from YYYYQn --to YYYYQn [--site <subject>] [--metric aisc|tcc]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

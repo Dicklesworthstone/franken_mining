@@ -71,10 +71,12 @@ fn exact_usd_per_pound_bridge_closes_with_separate_reported_gaps() {
     let edited = decompose(&first, &second).unwrap();
     assert_eq!(edited.bars, result.bars);
     assert_eq!(edited.rates.rate_1, result.rates.rate_1);
-    assert_ne!(edited.rates.reported_rate_gap, result.rates.reported_rate_gap);
+    assert_ne!(
+        edited.rates.reported_rate_gap,
+        result.rates.reported_rate_gap
+    );
     assert!(result.bars.iter().all(|bar| {
-        bar.point.as_f64() >= bar.enclosure[0]
-            && bar.point.as_f64() <= bar.enclosure[1]
+        bar.point.as_f64() >= bar.enclosure[0] && bar.point.as_f64() <= bar.enclosure[1]
     }));
 }
 
@@ -90,11 +92,7 @@ fn statutory_copper_mass_conversion_preserves_values_and_rounding_radii() {
     first.sold.half_step = first.sold.half_step.checked_mul(kt_per_mlb).unwrap();
     first.sold_unit = SalesUnit::Kilotonnes;
     second.sold.value = second.sold.value.checked_mul(r(1_000_000, 1)).unwrap();
-    second.sold.half_step = second
-        .sold
-        .half_step
-        .checked_mul(r(1_000_000, 1))
-        .unwrap();
+    second.sold.half_step = second.sold.half_step.checked_mul(r(1_000_000, 1)).unwrap();
     second.sold_unit = SalesUnit::Pounds;
     assert_eq!(decompose(&first, &second).unwrap(), reference);
 }
@@ -124,7 +122,11 @@ fn signed_c1_costs_and_absent_reported_rates_are_preserved() {
     }
     let zero = decompose(&first, &second).unwrap();
     assert_eq!(zero.rates.total_delta, ZERO);
-    assert!(zero.bars.iter().all(|bar| bar.point == BarPoint::Exact(ZERO)));
+    assert!(
+        zero.bars
+            .iter()
+            .all(|bar| bar.point == BarPoint::Exact(ZERO))
+    );
     assert!(zero.bars.iter().all(|bar| bar.sign_not_determined));
 }
 
@@ -188,7 +190,11 @@ fn component_and_sales_rounding_enclosures_contain_all_exact_corners() {
         for (bit, qty) in [(4, &mut a.lines[1].1), (5, &mut b.lines[1].1)] {
             qty.value = qty
                 .value
-                .checked_add(if mask & (1 << bit) == 0 { r(-1, 2) } else { r(1, 2) })
+                .checked_add(if mask & (1 << bit) == 0 {
+                    r(-1, 2)
+                } else {
+                    r(1, 2)
+                })
                 .unwrap();
             qty.half_step = ZERO;
         }
@@ -198,8 +204,15 @@ fn component_and_sales_rounding_enclosures_contain_all_exact_corners() {
         }
         // Independently evaluate the average of both change orders: first change cost then volume,
         // and first volume then cost. The two allocations coincide only after averaging.
-        for (index, id) in ["line:operating", "line:sustaining"].into_iter().enumerate() {
-            let delta = b.lines[index].1.value.checked_sub(a.lines[index].1.value).unwrap();
+        for (index, id) in ["line:operating", "line:sustaining"]
+            .into_iter()
+            .enumerate()
+        {
+            let delta = b.lines[index]
+                .1
+                .value
+                .checked_sub(a.lines[index].1.value)
+                .unwrap();
             let expected = delta
                 .checked_div(a.sold.value)
                 .unwrap()
@@ -219,7 +232,8 @@ fn component_and_sales_rounding_enclosures_contain_all_exact_corners() {
             .checked_sub(a.cost.value.checked_div(a.sold.value).unwrap())
             .unwrap()
             .checked_add(
-                b.cost.value
+                b.cost
+                    .value
                     .checked_div(b.sold.value)
                     .unwrap()
                     .checked_sub(b.cost.value.checked_div(a.sold.value).unwrap())
@@ -228,7 +242,11 @@ fn component_and_sales_rounding_enclosures_contain_all_exact_corners() {
             .unwrap()
             .checked_div(TWO)
             .unwrap();
-        let volume = report.bars.iter().find(|bar| bar.id == "sold_volume").unwrap();
+        let volume = report
+            .bars
+            .iter()
+            .find(|bar| bar.id == "sold_volume")
+            .unwrap();
         assert!(volume.enclosure[0] <= expected_volume.to_f64());
         assert!(expected_volume.to_f64() <= volume.enclosure[1]);
     }
@@ -239,31 +257,58 @@ fn incompatible_definitions_populations_and_denominators_refuse_without_plugs() 
     let first = period(false);
     let mut second = period(true);
     second.metric = Metric::C1;
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-105");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-105"
+    );
     second = period(true);
     second.definition.push_str("-different");
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-105");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-105"
+    );
     second = period(true);
     second.basis = BasisTag::Unprinted;
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-107");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-107"
+    );
     second = period(true);
     second.cost.value = r(91, 1);
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-104");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-104"
+    );
     second = period(true);
     second.lines[1].0 = "missing-counterpart".into();
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-104");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-104"
+    );
     second = period(true);
     second.lines.push(second.lines[0].clone());
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-104");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-104"
+    );
     second = period(true);
     second.sold.half_step = second.sold.value;
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-104");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-104"
+    );
     second = period(true);
     second.sold.half_step = r(-1, 2);
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-109");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-109"
+    );
     second = period(true);
     second.sold.at.clear();
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-201");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-201"
+    );
 }
 
 #[test]
@@ -272,5 +317,8 @@ fn exact_conversion_overflow_is_a_refusal() {
     let mut second = period(true);
     second.sold.value = r(i128::MAX, 1);
     second.sold_unit = SalesUnit::Kilotonnes;
-    assert_eq!(decompose(&first, &second).unwrap_err().code, "FMINE-REF-207");
+    assert_eq!(
+        decompose(&first, &second).unwrap_err().code,
+        "FMINE-REF-207"
+    );
 }

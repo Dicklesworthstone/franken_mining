@@ -80,6 +80,8 @@ pub enum CliCommand {
     MetricsGeo(geo::Command),
     /// Explain public AISC or TCC changes using two quarters' original releases.
     MetricsWaterfall(waterfall::Command),
+    /// Explain declared copper C1 or AISC changes from two complete cost worksheets.
+    MetricsCopperWaterfall(waterfall::worksheets::Command),
     /// Assess capital return with explicit earnings definitions, dated balances and source evidence.
     CapitalReturn(capital_return::Command),
     /// Compare source-bound peer metrics without dropping incompatible or unavailable issuers.
@@ -1268,6 +1270,9 @@ pub fn parse_args(
         let command = match verb {
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
+            "metrics waterfall" if waterfall::worksheets::selected(&words) => {
+                CliCommand::MetricsCopperWaterfall(waterfall::worksheets::parse(&words)?)
+            }
             "metrics waterfall" => CliCommand::MetricsWaterfall(waterfall::parse(&words)?),
             "metrics roce" => CliCommand::CapitalReturn(capital_return::parse(&words)?),
             "forecast spatial-monitor" => match &words[..] {
@@ -2369,6 +2374,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::MetricsWaterfall(command) => waterfall::execute(command, workspace_root),
+        CliCommand::MetricsCopperWaterfall(command) => {
+            waterfall::worksheets::execute(command, workspace_root)
+        }
         CliCommand::CapitalReturn(command) => capital_return::execute(command, workspace_root),
         CliCommand::Compare(command) => compare::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
@@ -2746,6 +2754,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 cost::USAGE,
                 geo::USAGE,
                 waterfall::USAGE,
+                waterfall::worksheets::USAGE,
                 capital_return::USAGE,
                 compare::USAGE,
                 pit::USAGE,
@@ -2906,6 +2915,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(reserve::ROBOT_DOCS_JSON);
             payload.push_str(",\"cost_worksheet\":");
             payload.push_str(cost::ROBOT_DOCS_JSON);
+            payload.push_str(",\"copper_cost_waterfall\":");
+            payload.push_str(waterfall::worksheets::ROBOT_DOCS_JSON);
             payload.push_str(",\"guidance_clusters\":");
             payload.push_str(track_record_clusters::ROBOT_DOCS_JSON);
             payload.push_str(",\"production_geo\":");

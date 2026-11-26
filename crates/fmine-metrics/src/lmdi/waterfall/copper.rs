@@ -39,10 +39,7 @@ impl SalesUnit {
             Self::Pounds => exact(Rat::new(1, 1_000_000)),
             Self::MillionPounds => Ok(ONE),
             // 1 kt = 10^9 g; one million lb = 10^6 * 453.59237 g.
-            Self::Kilotonnes => exact(Rat::new(
-                1000 * AVDP_LB_TO_GRAMS_DEN,
-                AVDP_LB_TO_GRAMS_NUM,
-            )),
+            Self::Kilotonnes => exact(Rat::new(1000 * AVDP_LB_TO_GRAMS_DEN, AVDP_LB_TO_GRAMS_NUM)),
         }
     }
 }
@@ -121,7 +118,9 @@ fn lines(period: &Period) -> Calc<BTreeMap<&str, &PrintedQty>> {
     for (id, amount) in &period.lines {
         bounds(amount)?;
         if id.trim().is_empty() || by_id.insert(id.as_str(), amount).is_some() {
-            return Err(unidentified("copper cost lines have an empty or duplicate identity"));
+            return Err(unidentified(
+                "copper cost lines have an empty or duplicate identity",
+            ));
         }
     }
     let total = by_id
@@ -213,12 +212,7 @@ pub fn decompose(p0: &Period, p1: &Period) -> Calc<Bridge> {
             "copper.waterfall.additive.line",
             BarPoint::Exact(point),
             Iv::qty(second)?.sub(Iv::qty(first)?)?.mul(mean_box)?,
-            locators([
-                first.at.as_str(),
-                &second.at,
-                &p0.sold.at,
-                &p1.sold.at,
-            ]),
+            locators([first.at.as_str(), &second.at, &p0.sold.at, &p1.sold.at]),
         )?);
     }
     let mean_cost = exact(exact(p0.cost.value.checked_add(p1.cost.value))?.checked_div(TWO))?;
