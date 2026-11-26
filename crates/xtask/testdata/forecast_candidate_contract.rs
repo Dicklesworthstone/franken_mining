@@ -343,6 +343,117 @@ fn record_check_args(fixture: &Fixture) -> Vec<String> {
         .into_iter().map(str::to_string).chain([fixture.root.to_str().unwrap().to_string()]).collect()
 }
 
+fn record_replay_args(fixture: &Fixture) -> Vec<String> {
+    let mut args = record_check_args(fixture);
+    args.extend(["--replay-model", MODEL, "--decimal-places", "2"].map(str::to_owned));
+    args
+}
+
+#[test]
+fn cli_record_check_replays_the_exact_candidate_bundle() {
+    let fixture = prepared_record_fixture();
+    let (exit, built, text) = invoke(&fixture.args());
+    assert_eq!(exit, 0, "{text}");
+    let dir = fixture.root.join("record");
+    let paths = ["rules.toml", "manifest.toml", "forecasts.csv"];
+    let before = paths.map(|path| std::fs::read(dir.join(path)).unwrap());
+    let args = record_replay_args(&fixture);
+    let (exit, checked, text) = invoke(&args);
+    assert_eq!(exit, 0, "{text}");
+    assert_eq!(invoke(&args).2, text);
+    let payload = at(&checked, &["payload"]);
+    let replay = at(payload, &["candidate_replay"]);
+    assert_eq!(at(payload, &["model_reproduced"]).as_bool(), Some(true));
+    assert_eq!(at(replay, &["model"]).as_str(), Some(MODEL));
+    assert_eq!(at(replay, &["decimal_places"]).i64(), Some(2));
+    assert_eq!(at(replay, &["n_inputs"]).i64(), Some(3));
+    assert_eq!(
+        at(replay, &["receipt_digest"]),
+        at(&built, &["payload", "receipt_digest"]),
+    );
+    for flag in ["baseline_values_checked", "outcomes_read", "issued", "gate_eligible"] {
+        assert_eq!(at(payload, &[flag]).as_bool(), Some(false));
+    }
+    assert_eq!(
+        at(payload, &["timestamp_verification"]).as_str(),
+        Some("not_performed"),
+    );
+    let mut markdown = args;
+    markdown.extend(["--format", "markdown"].map(str::to_owned));
+    let rendered = output(&markdown);
+    assert!(rendered.status.success());
+    let rendered = String::from_utf8(rendered.stdout).unwrap();
+    assert!(rendered.contains("Candidate replay") && rendered.contains(MODEL));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+    assert_eq!(paths.map(|path| std::fs::read(dir.join(path)).unwrap()), before);
+
+    let original = std::str::from_utf8(&before[1]).unwrap();
+    let mut pieces = original.split("[[input]]");
+    let mut reordered = pieces.next().unwrap().to_string();
+    for row in pieces.collect::<Vec<_>>().into_iter().rev() {
+        reordered.push_str("[[input]]");
+        reordered.push_str(row);
+    }
+    std::fs::write(dir.join("manifest.toml"), reordered).unwrap();
+    let (exit, reordered, text) = invoke(&record_replay_args(&fixture));
+    assert_eq!(exit, 0, "{text}");
+    assert_eq!(at(&reordered, &["payload", "candidate_replay"]), replay);
+}
+
+#[test]
+fn cli_record_replay_refuses_a_different_csv_missing_input_or_retrieval_declaration() {
+    for (change, expected) in [
+        ("csv", "forecasts.csv"),
+        ("missing", "Invented_Q1.xlsx"),
+        ("retrieval", "Invented_Q1.xlsx"),
+        ("cutoff", "was not available by the explicit information cut"),
+    ] {
+        let fixture = prepared_record_fixture();
+        let dir = fixture.root.join("record");
+        let path = dir.join("manifest.toml");
+        let manifest = std::fs::read_to_string(&path).unwrap();
+        match change {
+            "csv" => {
+                let path = dir.join("forecasts.csv");
+                let csv = std::fs::read_to_string(&path).unwrap();
+                let row = csv.lines().nth(1).unwrap();
+                let mut fields = row.split(',').collect::<Vec<_>>();
+                fields[4] = "999999";
+                std::fs::write(&path, csv.replacen(row, &fields.join(","), 1)).unwrap();
+            }
+            "missing" => {
+                let mut pieces = manifest.split("[[input]]");
+                let mut incomplete = pieces.next().unwrap().to_string();
+                assert!(pieces.next().unwrap().contains("Invented_Q1.xlsx"));
+                for row in pieces {
+                    incomplete.push_str("[[input]]");
+                    incomplete.push_str(row);
+                }
+                std::fs::write(path, incomplete).unwrap();
+            }
+            "retrieval" => std::fs::write(
+                path,
+                manifest.replacen("2030-10-02T10:01:00Z", "2030-10-02T10:02:00Z", 1),
+            ).unwrap(),
+            "cutoff" => std::fs::write(path, manifest.replace(CUT, "2030-10-02T12:00:00Z")).unwrap(),
+            _ => unreachable!(),
+        }
+        let (legacy_exit, _, legacy_text) = invoke(&record_check_args(&fixture));
+        assert_eq!(legacy_exit, 0, "{change}: {legacy_text}");
+        let (exit, refusal, text) = invoke(&record_replay_args(&fixture));
+        assert_eq!(exit, if change == "cutoff" { 3 } else { 8 }, "{change}: {text}");
+        assert_eq!(at(&refusal, &["payload"]), &Json::Null);
+        assert_eq!(
+            at(&refusal, &["refusal", "code"]).as_str(),
+            Some(if change == "cutoff" { "FMINE-REF-108" } else { "FMINE-REF-505" }),
+        );
+        assert!(
+            at(&refusal, &["refusal", "what"]).as_str().unwrap().contains(expected),
+            "{change}: {text}",
+        );
+    }
+}
+
 fn replace_record_rules(fixture: &Fixture, rules: &str) {
     let dir = fixture.root.join("record");
     let path = dir.join("rules.toml");

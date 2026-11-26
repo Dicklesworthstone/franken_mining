@@ -4401,6 +4401,20 @@ It does not read future outcomes, recompute the chosen model or baseline values,
 attestation, or verify timestamp receipts. Its success means the supplied bundle passes these preflight
 checks; external proof and issuance remain separate.
 
+To verify a bundle prepared from a candidate, replay the selected model with the original export precision.
+The cutoff comes from the manifest.
+
+```bash
+cargo run -p fmine-cli -- forecast record check --record path/to/prepared-record \
+  --replay-model pooled-quarterly-ratio-empirical-v1 --decimal-places 6
+```
+
+Replay reads the registered original workbooks required by the model. It requires the exact exported CSV
+and the complete input declarations, including their registered publication days and retrieval bounds.
+Input rows may be in any order. A successful report includes the model, precision and reproduced candidate
+receipt digest. The model selection and author attestation remain declared, and issuance still requires
+external time proof.
+
 The existing record-hash, external timestamp and record-score workflow remains responsible for freezing and
 scoring a reviewed forecast. Synthetic source fixtures are explicitly labelled in JSON and Markdown.
 

@@ -1192,7 +1192,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     authenticated frozen-record assessment and common-population baseline comparison in JSON or Markdown (BD-076);
   - `forecast record check --record <directory>`: read-only preflight of prepared rules, manifest, complete
     forecast rows and declared source bytes before timestamping, with canonical digests in JSON or Markdown
-    (BD-334); it neither writes files nor verifies external timestamp receipts;
+    (BD-334). Optional `--replay-model <model> [--decimal-places 6]` uses the existing candidate builder at the
+    manifest cutoff. It checks byte-identical CSV output and the complete matching source declarations, including
+    publication and retrieval evidence, then returns the reproduced candidate receipt. External timestamp
+    verification remains a separate step;
   - `reliance init|issue|reissue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
     status and exact artifact reuse, with capability-authorized mutations and generic recipient roles (BD-347);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row

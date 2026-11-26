@@ -114,29 +114,12 @@ pub(crate) fn parse(
             .copied()
             .ok_or_else(|| format!("{VERB} requires {key}"))
     };
-    let model = match required("--model")? {
-        MODEL_ID => CandidateModel::PooledQuarterlyRatio,
-        SEASONAL_MODEL_ID => CandidateModel::SeasonalQuarterlyRatio,
-        CHANGE_MODEL_ID => CandidateModel::PooledQuarterlyChange,
-        SEASONAL_CHANGE_MODEL_ID => CandidateModel::SeasonalQuarterlyChange,
-        _ => {
-            return Err(format!(
-                "--model requires {MODEL_ID}|{SEASONAL_MODEL_ID}|{CHANGE_MODEL_ID}|{SEASONAL_CHANGE_MODEL_ID}"
-            ));
-        }
-    };
+    let model = parse_model("--model", required("--model")?)?;
     let as_of = required("--as-of")?;
     if parse_utc(as_of).is_none() {
         return Err("--as-of requires YYYY-MM-DDTHH:MM:SSZ".into());
     }
-    let decimal_places = values
-        .get("--decimal-places")
-        .copied()
-        .unwrap_or("6")
-        .parse::<u32>()
-        .ok()
-        .filter(|n| *n <= 12)
-        .ok_or("--decimal-places requires an integer from 0 through 12")?;
+    let decimal_places = parse_decimal_places(values.get("--decimal-places").copied())?;
     let format = match values.get("--format").copied() {
         None | Some("json") => OutputFormat::Json,
         Some("markdown" | "md") if !json => OutputFormat::Markdown,
@@ -155,6 +138,27 @@ pub(crate) fn parse(
             .get("--workspace")
             .map_or_else(|| default_root.to_path_buf(), |p| PathBuf::from(*p)),
     ))
+}
+
+pub(super) fn parse_model(flag: &str, value: &str) -> Result<CandidateModel, String> {
+    match value {
+        MODEL_ID => Ok(CandidateModel::PooledQuarterlyRatio),
+        SEASONAL_MODEL_ID => Ok(CandidateModel::SeasonalQuarterlyRatio),
+        CHANGE_MODEL_ID => Ok(CandidateModel::PooledQuarterlyChange),
+        SEASONAL_CHANGE_MODEL_ID => Ok(CandidateModel::SeasonalQuarterlyChange),
+        _ => Err(format!(
+            "{flag} requires {MODEL_ID}|{SEASONAL_MODEL_ID}|{CHANGE_MODEL_ID}|{SEASONAL_CHANGE_MODEL_ID}"
+        )),
+    }
+}
+
+pub(super) fn parse_decimal_places(value: Option<&str>) -> Result<u32, String> {
+    value
+        .unwrap_or("6")
+        .parse::<u32>()
+        .ok()
+        .filter(|n| *n <= 12)
+        .ok_or_else(|| "--decimal-places requires an integer from 0 through 12".into())
 }
 
 #[must_use]
