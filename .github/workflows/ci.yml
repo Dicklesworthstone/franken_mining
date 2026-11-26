@@ -68,9 +68,11 @@ jobs:
       # change to a decoder's API would break them unseen. scripts/fuzz.sh runs the full campaign.
       - name: Fuzz targets compile
         run: cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
+      # cargo-fuzz is built with stable: under rust-toolchain.toml's nightly its locked rustix 0.36.5 detects
+      # rustc_attrs and uses attributes that nightly no longer has. `cargo fuzz run` still uses the pinned nightly.
       - name: Fuzz CLI exit codes and envelopes (PO-ADIT-4)
         run: |
-          cargo install cargo-fuzz --version 0.13.1 --locked
+          cargo +stable install cargo-fuzz --version 0.13.1 --locked
           python3 -I fuzz/seeds.py "$GITHUB_WORKSPACE" "$RUNNER_TEMP/fmine-seeds"
           cargo fuzz run --dev --sanitizer none cli_run "$RUNNER_TEMP/fmine-seeds/cli_run" -- -runs=25000 -timeout=10
 
