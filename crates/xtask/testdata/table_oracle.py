@@ -1218,6 +1218,38 @@ class ReserveScenarios(unittest.TestCase):
             self.assertIn(digest((root / "documents" / file).read_bytes()), markdown.stdout)
         self.assertIn("reserve_gold_price", compact(report))
 
+    def test_one_filing_can_restate_several_years_under_the_same_source_label(self):
+        root = reserve_workspace("comparative-years")
+        definitions = root / DEFINITIONS
+        # Repeat the reserve label in the prior-year column and cite its shared price deck.
+        declaration = definitions.read_text().split('[[reserve_row]]')[2]
+        comparative = declaration.replace('id = "latest"', 'id = "comparative"').replace(
+            'reserve_year = 2024\nperiod = "2024FY"', 'reserve_year = 2023\nperiod = "2023FY"')
+        with definitions.open("a") as handle:
+            handle.write("[[reserve_row]]" + comparative)
+        path = root / "registries/transcriptions/table_test.toml"
+        blocks = path.read_text().split("[[entry]]")[1:]
+        entries = [block.replace('"2024FY"', '"2023FY"').replace('col = "2024"', 'col = "2023"')
+                   .replace('token = "12.0"', 'token = "9.1"') for block in blocks
+                   if 'doc = "Later.pdf"' in block and 'quantity = "reserve_change"' in block]
+        self.assertEqual(len(entries), 2)
+        with path.open("a") as handle:
+            handle.write("".join("[[entry]]" + entry for entry in entries))
+        envelope, _ = successful(root)
+        report = envelope["payload"]["issuer_reserves"]
+        rows = {r["id"]: r["source"]["reading"] for r in report["rows"]}
+        self.assertEqual((rows["latest"]["token"], rows["comparative"]["token"]), ("12.0", "9.1"))
+        self.assertEqual({s["economic_key"]["reserve_year"]: s["current_id"]
+                          for s in report["selections"]}, {2023: "comparative", 2024: "latest"})
+        # Losing the second reader in 2023 must not substitute the agreed 2024 amount.
+        path.write_text(path.read_text().removesuffix("[[entry]]" + entries[-1]))
+        envelope, _ = successful(root)
+        report = envelope["payload"]["issuer_reserves"]
+        self.assertEqual([r["id"] for r in report["refused"]], ["comparative"])
+        evidence = report["refused"][0]["evidence"]
+        self.assertEqual([a["quantity"] for a in evidence], ["reserve_gold_price"])
+        self.assertIn("latest", [r["id"] for r in report["rows"]])
+
     def test_same_date_filings_remain_ambiguous_instead_of_selecting_by_import_order(self):
         root = reserve_workspace("ambiguous", "same_date")
         _, report = self.reserve_report(root)
