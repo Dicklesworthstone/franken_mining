@@ -105,8 +105,8 @@ pub struct DatedPerimeter {
     pub from: CivilDate,
     pub to: Option<CivilDate>,
     pub operations: &'static [&'static str],
-    /// When `true`, the effective date of this perimeter transition is still `OPEN` in public
-    /// filings; periods overlapping or following it refuse with `FMINE-REF-104`.
+    /// When `Some(param)`, the effective date of this perimeter transition is still `OPEN` in
+    /// public filings; periods overlapping or following it refuse with `FMINE-REF-104`.
     pub effective_date_parameter: Option<&'static str>,
     pub evidence: &'static str,
 }
@@ -196,27 +196,27 @@ pub const PAIR_REGISTRY_GOLDEN_SHA256: &str =
 
 /// Exact Barrick regional reporting scope for Pueblo Viejo (`E461`).
 ///
-/// From `2025Q4` onward Barrick reports Pueblo Viejo under North America (`map_version = 2`)
-/// instead of Latin America & Asia Pacific (`map_version = 1`). This is strictly a reporting-scope
-/// change (`BD-332` `Scope::Region { map_version }`), never a change to Pueblo Viejo's physical
-/// [`DatedPerimeter`].
-#[must_use]
-pub const fn barrick_pv_reporting_region(period: Period) -> (&'static str, u8) {
+/// From `2025Q4` onward (and in FY 2025 full-year reporting, whose end month is December 2025)
+/// Barrick reports Pueblo Viejo under North America (`map_version = 2`) instead of Latin America
+/// & Asia Pacific (`map_version = 1`). This is strictly a reporting-scope change (`BD-332`
+/// `Scope::Region { map_version }`), never a change to Pueblo Viejo's physical [`DatedPerimeter`].
+/// Refuses malformed quarters outside `1..=4` with `FMINE-REF-107` instead of panicking.
+pub fn barrick_pv_reporting_region(period: Period) -> Result<(&'static str, u8), Refusal> {
+    validate_period(period)?;
     let (_, (end_y, end_m)) = period.months();
     if end_y > 2025 || (end_y == 2025 && end_m >= 10) {
-        ("North America", 2)
+        Ok(("North America", 2))
     } else {
-        ("Latin America & Asia Pacific", 1)
+        Ok(("Latin America & Asia Pacific", 1))
     }
 }
 
 /// `BD-332` [`Scope::Region`] for Barrick's reporting of Pueblo Viejo (`E461`).
-#[must_use]
-pub fn barrick_pv_reporting_scope(period: Period) -> Scope {
-    let (region, version) = barrick_pv_reporting_region(period);
-    Scope::Region {
+pub fn barrick_pv_reporting_scope(period: Period) -> Result<Scope, Refusal> {
+    let (region, version) = barrick_pv_reporting_region(period)?;
+    Ok(Scope::Region {
         map_version: format!("barrick_pv_region_v{version}:{region}"),
-    }
+    })
 }
 
 /// Construct the canonical code-constant JV mirror pair registry (`FACT`: `E457`, `E672`, `E560`,
@@ -435,20 +435,21 @@ pub fn pair_registry() -> Result<Vec<MirrorPair>, Refusal> {
 }
 
 /// Convert a [`Period`] to its exact inclusive `(start_date, end_date)` civil dates.
-#[must_use]
-pub const fn period_date_bounds(period: Period) -> (CivilDate, CivilDate) {
+/// Refuses malformed quarters outside `1..=4` with `FMINE-REF-107` instead of panicking.
+pub fn period_date_bounds(period: Period) -> Result<(CivilDate, CivilDate), Refusal> {
+    validate_period(period)?;
     let ((sy, sm), (ey, em)) = period.months();
     let start = CivilDate {
-        year: sy as i32,
+        year: i32::from(sy),
         month: sm,
         day: 1,
     };
     let end = CivilDate {
-        year: ey as i32,
+        year: i32::from(ey),
         month: em,
-        day: days_in_month(ey as i32, em),
+        day: days_in_month(i32::from(ey), em),
     };
-    (start, end)
+    Ok((start, end))
 }
 
 /// Resolve a JV mirror pair for `(asset, period)` against the canonical registry.
@@ -464,43 +465,37 @@ pub fn resolve_pair_in(
     asset: AssetId,
     period: Period,
 ) -> Result<ResolvedPair, Refusal> {
-    if let PeriodKind::Quarter(q) = period.kind
-        && !(1..=4).contains(&q)
-    {
+    let (p_start, p_end) = period_date_bounds(period)?;
+    let matching: Vec<&MirrorPair> = pairs.iter().filter(|p| p.asset == asset).collect();
+    if matching.is_empty() {
         return Err(Refusal::new(
-            RefusalCode::UndeclaredUnitBasisOrTz107,
-            format!("invalid quarter {q} in period; expected 1..=4"),
-        ));
-    }
-    let pair = pairs.iter().find(|p| p.asset == asset).ok_or_else(|| {
-        Refusal::new(
             RefusalCode::UndeclaredUnitBasisOrTz107,
             format!(
                 "asset {:?} not present in mirror pair registry",
                 asset.as_str()
             ),
-        )
-    })?;
-    let (p_start, p_end) = period_date_bounds(period);
+        ));
+    }
+    if matching.len() > 1 {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!(
+                "duplicate asset {:?} in mirror pair registry",
+                asset.as_str()
+            ),
+        ));
+    }
+    let pair = matching[0];
 
-    // Validate stored civil dates before range comparisons.
+    // Validate stored civil dates and from <= to span ordering before range comparisons.
     for dp in &pair.perimeter {
-        validate_civil_date("perimeter.from", dp.from)?;
-        if let Some(to) = dp.to {
-            validate_civil_date("perimeter.to", to)?;
-        }
+        validate_date_span("perimeter", dp.from, dp.to)?;
     }
     for r in &pair.reporters {
-        validate_civil_date("reporter.from", r.from)?;
-        if let Some(to) = r.to {
-            validate_civil_date("reporter.to", to)?;
-        }
+        validate_date_span("reporter", r.from, r.to)?;
     }
     for nr in &pair.non_reporter_holders {
-        validate_civil_date("non_reporter.from", nr.from)?;
-        if let Some(to) = nr.to {
-            validate_civil_date("non_reporter.to", to)?;
-        }
+        validate_date_span("non_reporter", nr.from, nr.to)?;
     }
 
     // 1. Resolve dated perimeter: must match exactly one entry fully covering [p_start, p_end].
@@ -520,14 +515,23 @@ pub fn resolve_pair_in(
         ));
     }
     if overlapping_perimeters.len() > 1 {
-        let param = overlapping_perimeters
+        if let Some(param) = overlapping_perimeters
             .iter()
             .find_map(|dp| dp.effective_date_parameter)
-            .unwrap_or("perimeter_transition_date");
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonIdentifiableAttribution104,
+                format!(
+                    "period {} straddles {} perimeter change (unresolved parameter: {param}); never interpolates",
+                    period.code(),
+                    asset.as_str()
+                ),
+            ));
+        }
         return Err(Refusal::new(
             RefusalCode::NonIdentifiableAttribution104,
             format!(
-                "period {} straddles {} perimeter change (unresolved parameter: {param}); never interpolates",
+                "period {} straddles known {} perimeter transition; split by sub-period instead of interpolating",
                 period.code(),
                 asset.as_str()
             ),
@@ -544,7 +548,15 @@ pub fn resolve_pair_in(
             ),
         ));
     }
+    if perimeter.operations.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!("perimeter on '{}' has no operations", asset.as_str()),
+        ));
+    }
+    validate_trimmed_token("perimeter.evidence", perimeter.evidence)?;
     if let Some(param) = perimeter.effective_date_parameter {
+        validate_trimmed_token("perimeter.effective_date_parameter", param)?;
         return Err(Refusal::new(
             RefusalCode::NonIdentifiableAttribution104,
             format!(
@@ -651,12 +663,15 @@ pub fn resolve_pair_in(
                 ));
             }
             OwnershipBasis::Attributable { num, den, .. } => {
-                let basis_qty = qty(i128::from(num), i128::from(den))?;
-                if basis_qty != exact_share {
+                if num <= 0
+                    || den <= 0
+                    || i128::from(num) != exact_share.num()
+                    || i128::from(den) != exact_share.den()
+                {
                     return Err(Refusal::new(
                         RefusalCode::OutsidePhysicalDomain109,
                         format!(
-                            "reporter '{issuer}' basis {num}/{den} disagrees with exact share {}/{}",
+                            "reporter '{issuer}' basis {num}/{den} must equal reduced exact share {}/{}",
                             exact_share.num(),
                             exact_share.den()
                         ),
@@ -782,16 +797,7 @@ pub fn check_pair_registry_slice(pairs: &[MirrorPair]) -> Result<PairRegistryChe
         let mut prev_end: Option<Option<CivilDate>> = None;
         for dp in &pair.perimeter {
             perimeter_entries += 1;
-            validate_civil_date("perimeter.from", dp.from)?;
-            if let Some(to) = dp.to {
-                validate_civil_date("perimeter.to", to)?;
-                if dp.from.to_epoch_days() > to.to_epoch_days() {
-                    return Err(Refusal::new(
-                        RefusalCode::OutsidePhysicalDomain109,
-                        format!("invalid perimeter date order on '{}'", pair.asset.as_str()),
-                    ));
-                }
-            }
+            validate_date_span("perimeter", dp.from, dp.to)?;
             if let Some(prev) = prev_end {
                 match prev {
                     None => {
@@ -813,37 +819,25 @@ pub fn check_pair_registry_slice(pairs: &[MirrorPair]) -> Result<PairRegistryChe
                 }
             }
             prev_end = Some(dp.to);
-            if dp.operations.is_empty() || dp.evidence.trim().is_empty() {
+            if dp.operations.is_empty() {
                 return Err(Refusal::new(
                     RefusalCode::UndeclaredUnitBasisOrTz107,
-                    format!(
-                        "perimeter on '{}' missing operations or evidence",
-                        pair.asset.as_str()
-                    ),
+                    format!("perimeter on '{}' missing operations", pair.asset.as_str()),
                 ));
             }
+            validate_trimmed_token("perimeter.evidence", dp.evidence)?;
             let mut seen_ops = BTreeSet::new();
             for &op in dp.operations {
-                if op.trim().is_empty() || op != op.trim() || !seen_ops.insert(op) {
+                validate_trimmed_token("perimeter.operation", op)?;
+                if !seen_ops.insert(op) {
                     return Err(Refusal::new(
                         RefusalCode::UndeclaredUnitBasisOrTz107,
-                        format!(
-                            "invalid or duplicate operation {op:?} on '{}'",
-                            pair.asset.as_str()
-                        ),
+                        format!("duplicate operation {op:?} on '{}'", pair.asset.as_str()),
                     ));
                 }
             }
-            if let Some(param) = dp.effective_date_parameter
-                && (param.trim().is_empty() || param != param.trim())
-            {
-                return Err(Refusal::new(
-                    RefusalCode::UndeclaredUnitBasisOrTz107,
-                    format!(
-                        "blank or untrimmed effective_date_parameter {param:?} on '{}'",
-                        pair.asset.as_str()
-                    ),
-                ));
+            if let Some(param) = dp.effective_date_parameter {
+                validate_trimmed_token("perimeter.effective_date_parameter", param)?;
             }
             put_date(&mut enc, dp.from);
             put_opt_date(&mut enc, dp.to);
@@ -866,30 +860,10 @@ pub fn check_pair_registry_slice(pairs: &[MirrorPair]) -> Result<PairRegistryChe
             Vec<(CivilDate, Option<CivilDate>)>,
         > = std::collections::BTreeMap::new();
         for r in &pair.reporters {
-            if r.issuer.trim().is_empty() || r.evidence.trim().is_empty() {
-                return Err(Refusal::new(
-                    RefusalCode::UndeclaredUnitBasisOrTz107,
-                    format!(
-                        "reporter on '{}' missing issuer or evidence",
-                        pair.asset.as_str()
-                    ),
-                ));
-            }
-            validate_civil_date("reporter.from", r.from)?;
+            validate_trimmed_token("reporter.issuer", r.issuer)?;
+            validate_trimmed_token("reporter.evidence", r.evidence)?;
+            validate_date_span("reporter", r.from, r.to)?;
             checkpoints.insert(r.from.to_epoch_days());
-            if let Some(to) = r.to {
-                validate_civil_date("reporter.to", to)?;
-                if r.from.to_epoch_days() > to.to_epoch_days() {
-                    return Err(Refusal::new(
-                        RefusalCode::OutsidePhysicalDomain109,
-                        format!(
-                            "invalid reporter date order for '{}' on '{}'",
-                            r.issuer,
-                            pair.asset.as_str()
-                        ),
-                    ));
-                }
-            }
             let spans = issuer_spans.entry(r.issuer).or_default();
             for &(ef, et) in spans.iter() {
                 if spans_overlap(ef, et, r.from, r.to) {
@@ -911,12 +885,15 @@ pub fn check_pair_registry_slice(pairs: &[MirrorPair]) -> Result<PairRegistryChe
                     validate_share_open_unit("reporter.share", s)?;
                     match r.basis {
                         OwnershipBasis::Attributable { num, den, .. }
-                            if qty(i128::from(num), i128::from(den))? == s => {}
+                            if num > 0
+                                && den > 0
+                                && i128::from(num) == s.num()
+                                && i128::from(den) == s.den() => {}
                         _ => {
                             return Err(Refusal::new(
                                 RefusalCode::OutsidePhysicalDomain109,
                                 format!(
-                                    "reporter '{}' exact share disagrees with basis on '{}'",
+                                    "reporter '{}' exact share disagrees with lowest-terms basis on '{}'",
                                     r.issuer,
                                     pair.asset.as_str()
                                 ),
@@ -931,19 +908,8 @@ pub fn check_pair_registry_slice(pairs: &[MirrorPair]) -> Result<PairRegistryChe
                     parameter,
                     evidence,
                 } => {
-                    if parameter.trim().is_empty()
-                        || parameter != parameter.trim()
-                        || evidence.trim().is_empty()
-                    {
-                        return Err(Refusal::new(
-                            RefusalCode::UndeclaredUnitBasisOrTz107,
-                            format!(
-                                "unresolved reporter '{}' on '{}' missing parameter or evidence",
-                                r.issuer,
-                                pair.asset.as_str()
-                            ),
-                        ));
-                    }
+                    validate_trimmed_token("reporter.unresolved.parameter", parameter)?;
+                    validate_trimmed_token("reporter.unresolved.evidence", evidence)?;
                     if r.basis != OwnershipBasis::Unprinted {
                         return Err(Refusal::new(
                             RefusalCode::OutsidePhysicalDomain109,
@@ -966,6 +932,16 @@ pub fn check_pair_registry_slice(pairs: &[MirrorPair]) -> Result<PairRegistryChe
             put_opt_date(&mut enc, r.to);
             enc.put_str(r.evidence);
         }
+        if issuer_spans.len() < 2 {
+            return Err(Refusal::new(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                format!(
+                    "mirror pair '{}' requires at least 2 distinct reporter issuers, got {}",
+                    pair.asset.as_str(),
+                    issuer_spans.len()
+                ),
+            ));
+        }
 
         enc.put_u64(pair.non_reporter_holders.len() as u64);
         let mut holder_spans: std::collections::BTreeMap<
@@ -973,29 +949,9 @@ pub fn check_pair_registry_slice(pairs: &[MirrorPair]) -> Result<PairRegistryChe
             Vec<(CivilDate, Option<CivilDate>)>,
         > = std::collections::BTreeMap::new();
         for nr in &pair.non_reporter_holders {
-            if nr.holder.trim().is_empty() || nr.evidence.trim().is_empty() {
-                return Err(Refusal::new(
-                    RefusalCode::UndeclaredUnitBasisOrTz107,
-                    format!(
-                        "non-reporter holder on '{}' missing holder or evidence",
-                        pair.asset.as_str()
-                    ),
-                ));
-            }
-            validate_civil_date("non_reporter.from", nr.from)?;
-            if let Some(to) = nr.to {
-                validate_civil_date("non_reporter.to", to)?;
-                if nr.from.to_epoch_days() > to.to_epoch_days() {
-                    return Err(Refusal::new(
-                        RefusalCode::OutsidePhysicalDomain109,
-                        format!(
-                            "invalid date order for non-reporter holder '{}' on '{}'",
-                            nr.holder,
-                            pair.asset.as_str()
-                        ),
-                    ));
-                }
-            }
+            validate_trimmed_token("non_reporter.holder", nr.holder)?;
+            validate_trimmed_token("non_reporter.evidence", nr.evidence)?;
+            validate_date_span("non_reporter", nr.from, nr.to)?;
             let spans = holder_spans.entry(nr.holder).or_default();
             for &(ef, et) in spans.iter() {
                 if spans_overlap(ef, et, nr.from, nr.to) {
@@ -1078,6 +1034,50 @@ fn validate_share_open_unit(field: &str, share: ExactQty) -> Result<(), Refusal>
                 share.den()
             ),
         ));
+    }
+    Ok(())
+}
+
+fn validate_period(period: Period) -> Result<(), Refusal> {
+    if let PeriodKind::Quarter(q) = period.kind
+        && !(1..=4).contains(&q)
+    {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!("invalid quarter {q} in period; expected 1..=4"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_trimmed_token(field: &str, value: &str) -> Result<(), Refusal> {
+    if value.trim().is_empty()
+        || value != value.trim()
+        || value.bytes().any(|b| b.is_ascii_control())
+    {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!(
+                "{field} must be non-empty, trimmed, and free of control characters, got {value:?}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_date_span(label: &str, from: CivilDate, to: Option<CivilDate>) -> Result<(), Refusal> {
+    validate_civil_date(label, from)?;
+    if let Some(end) = to {
+        validate_civil_date(label, end)?;
+        if from.to_epoch_days() > end.to_epoch_days() {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!(
+                    "{label} date span inverted: {:04}-{:02}-{:02} > {:04}-{:02}-{:02}",
+                    from.year, from.month, from.day, end.year, end.month, end.day
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -1277,16 +1277,19 @@ mod tests {
         };
         // E461: Barrick moved Pueblo Viejo into North America starting Q4 2025 (BD-332 Scope::Region).
         assert_eq!(
-            barrick_pv_reporting_region(q3_2025),
+            barrick_pv_reporting_region(q3_2025).unwrap(),
             ("Latin America & Asia Pacific", 1)
         );
-        assert_eq!(barrick_pv_reporting_region(q4_2025), ("North America", 2));
+        assert_eq!(
+            barrick_pv_reporting_region(q4_2025).unwrap(),
+            ("North America", 2)
+        );
         assert_ne!(
-            barrick_pv_reporting_scope(q3_2025),
-            barrick_pv_reporting_scope(q4_2025)
+            barrick_pv_reporting_scope(q3_2025).unwrap(),
+            barrick_pv_reporting_scope(q4_2025).unwrap()
         );
         assert!(matches!(
-            barrick_pv_reporting_scope(q4_2025),
+            barrick_pv_reporting_scope(q4_2025).unwrap(),
             Scope::Region { ref map_version } if map_version.contains("North America")
         ));
 
@@ -1411,17 +1414,90 @@ mod tests {
         .expect_err("Consolidated100 on JV mirror reporter must refuse");
         assert_eq!(err_100.code, "FMINE-REF-104");
 
-        // Unknown asset and out-of-range quarter refuse cleanly with FMINE-REF-107.
+        // Unknown asset and out-of-range quarter refuse cleanly with FMINE-REF-107 (never panic).
         assert_eq!(
             AssetId::parse("mystery_mine").unwrap_err().code,
             "FMINE-REF-107"
         );
+        let bad_q = Period {
+            year: 2025,
+            kind: PeriodKind::Quarter(0),
+        };
         assert_eq!(
-            resolve_pair(
-                AssetId::Ngm,
+            resolve_pair(AssetId::Ngm, bad_q).unwrap_err().code,
+            "FMINE-REF-107"
+        );
+        assert_eq!(period_date_bounds(bad_q).unwrap_err().code, "FMINE-REF-107");
+        assert_eq!(
+            barrick_pv_reporting_scope(bad_q).unwrap_err().code,
+            "FMINE-REF-107"
+        );
+
+        // Fresh-eyes guards: inverted date spans, unreduced OwnershipBasis, duplicate assets,
+        // and single-reporter pairs all refuse instead of silently passing.
+        let mut inverted = pair_registry().unwrap();
+        inverted[pv_idx].perimeter[0].to = Some(CivilDate {
+            year: 2010,
+            month: 1,
+            day: 1,
+        });
+        assert_eq!(
+            resolve_pair_in(
+                &inverted,
+                AssetId::PuebloViejo,
                 Period {
                     year: 2025,
-                    kind: PeriodKind::Quarter(0),
+                    kind: PeriodKind::FullYear,
+                }
+            )
+            .unwrap_err()
+            .code,
+            "FMINE-REF-109"
+        );
+
+        let mut unreduced = pair_registry().unwrap();
+        unreduced[pv_idx].reporters[0].basis = OwnershipBasis::Attributable {
+            num: 60,
+            den: 100,
+            source: ShareSource::Registry,
+        };
+        assert_eq!(
+            check_pair_registry_slice(&unreduced).unwrap_err().code,
+            "FMINE-REF-109"
+        );
+        assert_eq!(
+            resolve_pair_in(
+                &unreduced,
+                AssetId::PuebloViejo,
+                Period {
+                    year: 2025,
+                    kind: PeriodKind::FullYear,
+                }
+            )
+            .unwrap_err()
+            .code,
+            "FMINE-REF-109"
+        );
+
+        let mut single_reporter = pair_registry().unwrap();
+        single_reporter[pv_idx].reporters.truncate(1);
+        assert_eq!(
+            check_pair_registry_slice(&single_reporter)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-107"
+        );
+
+        let mut dup_asset = pair_registry().unwrap();
+        let clone_pv = dup_asset[pv_idx].clone();
+        dup_asset.push(clone_pv);
+        assert_eq!(
+            resolve_pair_in(
+                &dup_asset,
+                AssetId::PuebloViejo,
+                Period {
+                    year: 2025,
+                    kind: PeriodKind::FullYear,
                 }
             )
             .unwrap_err()

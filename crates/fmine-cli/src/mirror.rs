@@ -18,6 +18,10 @@ use fmine_metrics::mirror::{
     MirrorVerdict, Perimeter,
 };
 use fmine_numerics::exact_feas::{BlameOutcome, Certificate, Identity, IdentityKind, Rat};
+use fmine_public::key::{Period as PublicPeriod, PeriodKind as PublicPeriodKind};
+use fmine_public::mirror::{
+    AssetId as RegisteredAssetId, ResolvedPair, resolve_pair as resolve_registered_pair,
+};
 use fmine_public::sources::{DocumentRow, is_issuer_name, load_issuer_profile};
 use fmine_public::transcribe::load_transcription_quantities_as_of;
 use fmine_registry::sources::is_date;
@@ -141,6 +145,7 @@ fn parse_period(s: &str) -> Option<Period> {
         "Q3" => (7, 9),
         "Q4" => (10, 12),
         "H1" => (1, 6),
+        "9M" => (1, 9),
         "H2" => (7, 12),
         _ => return None,
     };
@@ -149,6 +154,174 @@ fn parse_period(s: &str) -> Option<Period> {
         first_month,
         last_month,
     })
+}
+
+fn normalize_issuer_key(issuer: &str) -> String {
+    issuer.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+/// Enforce the `BD-346.S2` JV mirror `PairRegistry` perimeter, unresolved vend-in boundary, and
+/// partner-issuer membership whenever `--asset` names a registered JV (`ngm`, `pueblo-viejo`,
+/// `kibali`). Invented/unregistered fixture assets return `Ok(None)`.
+pub(super) fn check_registered_pair_boundary(
+    selection: &Selection,
+) -> Result<Option<ResolvedPair>> {
+    let Ok(asset_id) = RegisteredAssetId::parse(&selection.asset) else {
+        return Ok(None);
+    };
+    let resolved = match (selection.period.first_month, selection.period.last_month) {
+        (1, 12) => resolve_registered_pair(
+            asset_id,
+            PublicPeriod {
+                year: selection.period.year,
+                kind: PublicPeriodKind::FullYear,
+            },
+        )?,
+        (1, 3) => resolve_registered_pair(
+            asset_id,
+            PublicPeriod {
+                year: selection.period.year,
+                kind: PublicPeriodKind::Quarter(1),
+            },
+        )?,
+        (4, 6) => resolve_registered_pair(
+            asset_id,
+            PublicPeriod {
+                year: selection.period.year,
+                kind: PublicPeriodKind::Quarter(2),
+            },
+        )?,
+        (7, 9) => resolve_registered_pair(
+            asset_id,
+            PublicPeriod {
+                year: selection.period.year,
+                kind: PublicPeriodKind::Quarter(3),
+            },
+        )?,
+        (10, 12) => resolve_registered_pair(
+            asset_id,
+            PublicPeriod {
+                year: selection.period.year,
+                kind: PublicPeriodKind::Quarter(4),
+            },
+        )?,
+        (1, 6) => resolve_registered_pair(
+            asset_id,
+            PublicPeriod {
+                year: selection.period.year,
+                kind: PublicPeriodKind::H1,
+            },
+        )?,
+        (1, 9) => resolve_registered_pair(
+            asset_id,
+            PublicPeriod {
+                year: selection.period.year,
+                kind: PublicPeriodKind::NineMonths,
+            },
+        )?,
+        (7, 12) => {
+            let q3 = resolve_registered_pair(
+                asset_id,
+                PublicPeriod {
+                    year: selection.period.year,
+                    kind: PublicPeriodKind::Quarter(3),
+                },
+            )?;
+            let q4 = resolve_registered_pair(
+                asset_id,
+                PublicPeriod {
+                    year: selection.period.year,
+                    kind: PublicPeriodKind::Quarter(4),
+                },
+            )?;
+            if q3.operations != q4.operations || q3.reporters != q4.reporters {
+                return Err(fail(
+                    RefusalCode::NonIdentifiableAttribution104,
+                    format!(
+                        "{} H2 {} straddles a registered perimeter or share transition between Q3 and Q4",
+                        asset_id.as_str(),
+                        selection.period.year
+                    ),
+                ));
+            }
+            q3
+        }
+        _ => {
+            return Err(fail(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                format!("unsupported period {}", period(selection.period)),
+            ));
+        }
+    };
+
+    let expected_issuers: std::collections::BTreeSet<String> = resolved
+        .reporters
+        .iter()
+        .map(|r| normalize_issuer_key(r.issuer))
+        .collect();
+    let supplied_issuers: std::collections::BTreeSet<String> = selection
+        .reporters
+        .iter()
+        .map(|r| normalize_issuer_key(&r.issuer))
+        .collect();
+    if supplied_issuers != expected_issuers {
+        return Err(fail(
+            RefusalCode::NonIdentifiableAttribution104,
+            format!(
+                "registered JV {} requires partners {:?}, got {:?}",
+                asset_id.as_str(),
+                expected_issuers,
+                supplied_issuers
+            ),
+        ));
+    }
+    Ok(Some(resolved))
+}
+
+/// Confirm every transcribed equity share matches the exact `PairRegistry` share for that issuer.
+pub(super) fn verify_registered_pair_shares(
+    resolved: Option<&ResolvedPair>,
+    sources: &[Source],
+) -> Result<()> {
+    let Some(pair) = resolved else {
+        return Ok(());
+    };
+    for src in sources {
+        let Some(ownership) = &src.ownership else {
+            continue;
+        };
+        let norm = normalize_issuer_key(&src.issuer);
+        let registered = pair
+            .reporters
+            .iter()
+            .find(|r| normalize_issuer_key(r.issuer) == norm)
+            .ok_or_else(|| {
+                fail(
+                    RefusalCode::NonIdentifiableAttribution104,
+                    format!(
+                        "issuer '{}' is not a registered reporter for {}",
+                        src.issuer,
+                        pair.asset.as_str()
+                    ),
+                )
+            })?;
+        if ownership.value != registered.share {
+            return Err(fail(
+                RefusalCode::NonIdentifiableAttribution104,
+                format!(
+                    "issuer '{}' transcribed share {}/{} disagrees with registered {} share {}/{} ({})",
+                    src.issuer,
+                    ownership.value.num(),
+                    ownership.value.den(),
+                    pair.asset.as_str(),
+                    registered.share.num(),
+                    registered.share.den(),
+                    registered.evidence
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn date_text(d: CivilDate) -> String {
@@ -214,7 +387,7 @@ pub fn parse(args: &[String]) -> std::result::Result<Command, String> {
         return Err("mirror --asset needs a lowercase hyphenated key".into());
     }
     let period = parse_period(required("--period")?)
-        .ok_or("mirror --period needs YYYY, YYYYQn or YYYYHn")?;
+        .ok_or("mirror --period needs YYYY, YYYYFY, YYYYQn, YYYYHn or YYYY9M")?;
     let as_of = required("--as-of")?;
     if !is_date(as_of) {
         return Err("mirror --as-of needs YYYY-MM-DD".into());
@@ -428,6 +601,7 @@ fn public(root: &Path, selection: &Selection) -> Result<Card> {
             "invalid asset, period, evidence cut, metric or reporter selection",
         ));
     }
+    let registered_pair = check_registered_pair_boundary(selection)?;
     let mut sources = Vec::new();
     let mut inputs = Vec::new();
     for reporter in &selection.reporters {
@@ -435,6 +609,7 @@ fn public(root: &Path, selection: &Selection) -> Result<Card> {
         sources.push(source);
         inputs.extend(rows);
     }
+    verify_registered_pair_shares(registered_pair.as_ref(), &sources)?;
     sources.sort_by(|a, b| a.issuer.cmp(&b.issuer));
     Ok(Card {
         selection: selection.clone(),
@@ -1116,5 +1291,106 @@ impl Card {
             blake3_hash(self.body().as_bytes()).to_hex()
         );
         out
+    }
+}
+
+#[cfg(test)]
+mod pair_registry_wiring_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn sel(
+        asset: &str,
+        period_str: &str,
+        metric: MetricSelection,
+        left: &str,
+        right: &str,
+    ) -> Selection {
+        Selection {
+            asset: asset.into(),
+            period: parse_period(period_str).expect("valid period"),
+            as_of: "2026-12-31".into(),
+            metric,
+            reporters: [
+                ReporterSelection {
+                    issuer: left.into(),
+                    document: "Left.pdf".into(),
+                },
+                ReporterSelection {
+                    issuer: right.into(),
+                    document: "Right.pdf".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn cli_mirror_enforces_ngm_2026_vend_in_boundary_across_production_and_cost() {
+        let dummy_root = PathBuf::from("/nonexistent-workspace-not-touched-before-boundary-check");
+        for period_str in ["2026Q3", "20269M", "2026H2", "2026Q4", "2026FY"] {
+            for metric in [
+                MetricSelection::Single(MirrorMetric::ProductionKoz),
+                MetricSelection::Cost(CostMetric::Aisc),
+            ] {
+                let s = sel("ngm", period_str, metric, "barrick", "newmont");
+                let env = execute(&Command::Public(s), &dummy_root);
+                let refusal = env
+                    .refusal
+                    .expect("must refuse unresolved NGM 2026 vend-in");
+                assert_eq!(refusal.code, "FMINE-REF-104", "period={period_str}");
+                assert!(
+                    refusal.what.contains("ngm_2026_vend_in_effective_date"),
+                    "period={period_str} what={}",
+                    refusal.what
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cli_mirror_checks_registered_partners_and_passes_invented_assets_through() {
+        assert_eq!(
+            parse_period("20269M"),
+            Some(Period {
+                year: 2026,
+                first_month: 1,
+                last_month: 9,
+            })
+        );
+        let valid_ngm = sel(
+            "ngm",
+            "2025FY",
+            MetricSelection::Single(MirrorMetric::ProductionKoz),
+            "barrick",
+            "newmont",
+        );
+        let resolved = check_registered_pair_boundary(&valid_ngm)
+            .expect("registered NGM FY2025 resolves")
+            .expect("registered asset returns Some");
+        assert_eq!(resolved.asset, RegisteredAssetId::Ngm);
+
+        let wrong_partner = sel(
+            "pueblo-viejo",
+            "2025FY",
+            MetricSelection::Single(MirrorMetric::ProductionKoz),
+            "barrick",
+            "anglogold-ashanti",
+        );
+        let err = check_registered_pair_boundary(&wrong_partner)
+            .expect_err("wrong partner for PV must refuse");
+        assert_eq!(err.code, "FMINE-REF-104");
+
+        let invented = sel(
+            "example-jv",
+            "2025FY",
+            MetricSelection::Single(MirrorMetric::ProductionKoz),
+            "alpha",
+            "beta",
+        );
+        assert!(
+            check_registered_pair_boundary(&invented)
+                .expect("invented asset allowed")
+                .is_none()
+        );
     }
 }

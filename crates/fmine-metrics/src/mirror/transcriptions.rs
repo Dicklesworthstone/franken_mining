@@ -46,7 +46,7 @@ fn slug(s: &str) -> bool {
         && !s.ends_with('-')
 }
 
-/// Registry period label for a calendar year, quarter or half-year.
+/// Registry period label for a calendar year, quarter, half-year or nine months.
 #[must_use]
 pub fn period_label(p: Period) -> String {
     let suffix = match (p.first_month, p.last_month) {
@@ -56,6 +56,7 @@ pub fn period_label(p: Period) -> String {
         (7, 9) => "Q3",
         (10, 12) => "Q4",
         (1, 6) => "H1",
+        (1, 9) => "9M",
         (7, 12) => "H2",
         _ => "invalid",
     };

@@ -235,6 +235,7 @@ fn run(root: &Path, selected: &Selection, metric: CostMetric) -> Result<(String,
             "invalid cost asset, period, cut or reporters",
         ));
     }
+    let registered_pair = check_registered_pair_boundary(selected)?;
     let mut sources = Vec::new();
     let mut inputs = Vec::new();
     for reporter in &selected.reporters {
@@ -256,6 +257,7 @@ fn run(root: &Path, selected: &Selection, metric: CostMetric) -> Result<(String,
             ownership: bound.ownership,
         });
     }
+    verify_registered_pair_shares(registered_pair.as_ref(), &sources)?;
     sources.sort_by(|a, b| a.issuer.cmp(&b.issuer));
     render(selected, &sources, &kernel::compare(&inputs)?)
 }
