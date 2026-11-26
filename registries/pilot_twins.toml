@@ -82,3 +82,78 @@ name = "monthly_reconciliation_pack"
 extraction_cost = 1.8
 status = "TARGET_OPEN_PLACEHOLDER"
 description = "Monthly mine-to-mill reconciliation pack (F1/F2/F3 and downtime logs; no rosters)."
+
+# North Mara grade-led alternate pilot site (BD-356.S4; plan §37.3, §34.4; 84% attributable derived
+# from 100%-basis twins; Tanzania Mining Act s.35(6) in-country node; TARGET placeholders OPEN until
+# site geologist confirms).
+[[site_twin]]
+site = "north_mara"
+ownership_pct = 84
+metal_unit = "koz"
+mechanism = "grade_led"
+k = 5
+status = "TARGET_OPEN_PLACEHOLDER"
+gc_vs_resource_bias_split_min = 0.15
+gc_vs_resource_bias_split_max = 0.85
+dilution_ore_loss_ratio_min = 0.05
+dilution_ore_loss_ratio_max = 0.25
+survey_stockpile_error_pct_min = 0.50
+survey_stockpile_error_pct_max = 4.00
+sampler_assay_bias_pct_min = 0.20
+sampler_assay_bias_pct_max = 2.50
+power_bar_target = 0.80
+
+[[segment_boundary]]
+site = "north_mara"
+quarter = "2026Q1"
+event = "Gokona open-pit pre-strip (7 kt ore at strip ratio 514) and delayed underground ore"
+source_e_id = "E588"
+
+[[candidate_file]]
+site = "north_mara"
+name = "block_and_gc_models"
+extraction_cost = 2.2
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Historical 8-12 quarter resource block and grade-control models (in-country node, non-personal)."
+
+[[candidate_file]]
+site = "north_mara"
+name = "dispatch_tonnages"
+extraction_cost = 1.2
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Historical 8-12 quarter open-pit and underground dispatch hauled tonnages (non-personal)."
+
+[[candidate_file]]
+site = "north_mara"
+name = "mine_surveys"
+extraction_cost = 1.4
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Historical 8-12 quarter pit, underground, and stockpile end-of-month surveys."
+
+[[candidate_file]]
+site = "north_mara"
+name = "mill_sampler_records"
+extraction_cost = 1.5
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Historical 8-12 quarter shift mill feed and tails sampler and assay records (non-personal)."
+
+[[candidate_file]]
+site = "north_mara"
+name = "metallurgical_balance"
+extraction_cost = 1.0
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Historical 8-12 quarter monthly plant metallurgical mass and gold balance."
+
+[[candidate_file]]
+site = "north_mara"
+name = "cost_centre_extracts"
+extraction_cost = 1.6
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "Historical 8-12 quarter site cost-centre operating and sustaining cost extracts."
+
+[[candidate_file]]
+site = "north_mara"
+name = "gate_port_02_export"
+extraction_cost = 1.8
+status = "TARGET_OPEN_PLACEHOLDER"
+description = "One GATE-PORT-02 operational schema export retained on the in-country Tanzania node (no rosters)."
