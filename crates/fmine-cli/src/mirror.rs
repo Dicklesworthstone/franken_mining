@@ -279,7 +279,7 @@ pub(super) fn check_registered_pair_boundary(
 }
 
 /// Confirm every transcribed equity share matches the exact `PairRegistry` share for that issuer.
-pub(super) fn verify_registered_pair_shares(
+fn verify_registered_pair_shares(
     resolved: Option<&ResolvedPair>,
     sources: &[Source],
 ) -> Result<()> {
