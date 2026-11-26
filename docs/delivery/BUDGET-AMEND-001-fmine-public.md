@@ -6,7 +6,7 @@ SwiftBasin drafted this record on 2026-10-31 at 22,000 / 25,000. The 24,000 / 28
 - **Crate:** `fmine-public`
 - **Planned / ceiling before:** 18000 / 21000 (`registries/loc_budget.toml`)
 - **Actual at revision:** 22615 (`cargo run -p xtask -- loc` at `05ac300`)
-- **New planned:** 25700
+- **New planned:** 25800
 - **New ceiling:** 28000 (retains the registered ceiling)
 - **New scope:** full public-lane assurance spine shipped through `05ac300`: source-bound citation validation
   (`bd-sjrh.2`), cross-vintage and Mine Stats identity consistency, public LMDI waterfalls (`BD-333`), guidance
@@ -32,3 +32,6 @@ Claims. Keep the registered budget row and ceiling for change measurement.
 
 **DESIGN (2026-11-26, bd-kftl.2).** Extend the allowance to 25,700 under the same owner direction to cover
 refusal of salted internal review packets on public assurance paths. Keep the registered baseline and ceiling.
+
+**DESIGN (2026-11-26, bd-kftl.2).** Extend the same allowance to 25,800 for manifest-integrity checks
+on the refusal path at `5eb8997`. Keep the registered baseline and ceiling.
