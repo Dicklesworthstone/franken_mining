@@ -909,12 +909,13 @@ pub mod north_mara {
     use fmine_public::sources::SourceKind;
 
     use super::{
-        AnalysisPlan, ArtifactLedger, EARLY_KILL_ALTERNATE_SITES, EarlyKillOutcome,
-        FrozenArtifactKind, canonical_f64_bits, compute_card_digest, compute_inputs_digest,
-        escape_json_str, escape_md_cell, require_non_empty, sanitize_inline,
+        AnalysisPlan, ArtifactLedger, EarlyKillOutcome, FrozenArtifactKind, canonical_f64_bits,
+        compute_card_digest, compute_inputs_digest, escape_json_str, escape_md_cell,
+        require_non_empty, sanitize_inline,
     };
     use crate::pilot_power::{
         FileLabel, LinearBiasObs, reject_personal_data_files, solve_two_bias_posterior,
+        subset_stream_brick,
     };
     use crate::plant_twin::{
         CandidateFileCostRow, CitedPoint, CitedSeries, SYNTHETIC_PUBLIC_LABEL, SegmentBoundary,
@@ -922,6 +923,9 @@ pub mod north_mara {
 
     /// Canonical site identifier for North Mara.
     pub const NORTH_MARA_SITE: &str = "north_mara";
+
+    /// Next §37.3 alternate pilot site when North Mara itself fires the early-kill rule.
+    pub const NORTH_MARA_EARLY_KILL_ALTERNATE: &str = "Kibali";
 
     /// Stated Barrick ownership share at North Mara (`84%`; derived strictly from 100%-basis twins,
     /// NEVER fitted to attributable cells).
@@ -2280,7 +2284,7 @@ pub mod north_mara {
                     domain: 40 + (cause as u32),
                     var_group: subset.len() as u32,
                     realization: t_idx as u32,
-                    brick: 0,
+                    brick: subset_stream_brick(subset),
                 });
                 let mut detected = 0usize;
                 for _ in 0..replicates {
@@ -2388,18 +2392,18 @@ pub mod north_mara {
             return EarlyKillOutcome {
                 fires: true,
                 reason: format!(
-                    "invalid power_bar_target ({power_bar_target}); fail-closed early kill ({EARLY_KILL_ALTERNATE_SITES})"
+                    "invalid power_bar_target ({power_bar_target}); fail-closed early kill ({NORTH_MARA_EARLY_KILL_ALTERNATE})"
                 ),
-                alternate_recommendation: Some(EARLY_KILL_ALTERNATE_SITES.to_string()),
+                alternate_recommendation: Some(NORTH_MARA_EARLY_KILL_ALTERNATE.to_string()),
             };
         }
         if best_subset_envelopes.is_empty() {
             return EarlyKillOutcome {
                 fires: true,
                 reason: format!(
-                    "no feasible grade-led subset evaluated; recommend fallback ({EARLY_KILL_ALTERNATE_SITES})"
+                    "no feasible grade-led subset evaluated; recommend fallback ({NORTH_MARA_EARLY_KILL_ALTERNATE})"
                 ),
-                alternate_recommendation: Some(EARLY_KILL_ALTERNATE_SITES.to_string()),
+                alternate_recommendation: Some(NORTH_MARA_EARLY_KILL_ALTERNATE.to_string()),
             };
         }
         let mut failing = Vec::new();
@@ -2434,11 +2438,11 @@ pub mod north_mara {
             EarlyKillOutcome {
                 fires: true,
                 reason: format!(
-                    "no feasible grade-led subset clears power bar {:.3} under every twin ({}); recommend alternate ({EARLY_KILL_ALTERNATE_SITES})",
+                    "no feasible grade-led subset clears power bar {:.3} under every twin ({}); recommend alternate ({NORTH_MARA_EARLY_KILL_ALTERNATE})",
                     power_bar_target,
                     failing.join("; ")
                 ),
-                alternate_recommendation: Some(EARLY_KILL_ALTERNATE_SITES.to_string()),
+                alternate_recommendation: Some(NORTH_MARA_EARLY_KILL_ALTERNATE.to_string()),
             }
         }
     }
@@ -2588,13 +2592,20 @@ pub mod north_mara {
                     ));
                 }
             }
+            let alternate_json = match &self.early_kill.alternate_recommendation {
+                Some(alt) => format!("\"{}\"", escape_json_str(alt)),
+                None => "null".to_string(),
+            };
             events.push(format!(
-                "{{\"event\":\"pilot_card\",\"site\":\"north_mara\",\"k\":{},\"files\":{},\"robust\":{},\"model_dependent\":{},\"early_kill\":{},\"card_digest\":\"{}\",\"plan_id\":\"{}\",\"inputs_digest\":\"{}\",\"code_rev\":\"{}\",\"ownership_pct\":{},\"attributable_conflicts\":{},\"residency\":\"{}\",\"label\":\"{}\",\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false}}",
+                "{{\"event\":\"pilot_card\",\"site\":\"north_mara\",\"k\":{},\"files\":{},\"robust\":{},\"model_dependent\":{},\"early_kill\":{},\"early_kill_reason\":\"{}\",\"alternate\":{},\"envelope_too_wide_fallback\":{},\"card_digest\":\"{}\",\"plan_id\":\"{}\",\"inputs_digest\":\"{}\",\"code_rev\":\"{}\",\"ownership_pct\":{},\"attributable_conflicts\":{},\"residency\":\"{}\",\"label\":\"{}\",\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false}}",
                 self.k_twins,
                 self.files.len(),
                 robust,
                 model_dependent,
                 self.early_kill.fires,
+                escape_json_str(&self.early_kill.reason),
+                alternate_json,
+                self.envelope_too_wide_fallback,
                 self.card_digest,
                 self.analysis_plan_id,
                 self.inputs_digest,
@@ -2665,6 +2676,12 @@ pub mod north_mara {
             }
 
             let _ = writeln!(md, "\n## Candidate File Ask (Grade-Led GATE-DATA-03)\n");
+            if self.envelope_too_wide_fallback {
+                let _ = writeln!(
+                    md,
+                    "_Fallback active: no candidate file is robust across all twins; showing hashed plan plus per-file reasons with no ranking fallback._\n"
+                );
+            }
             let _ = writeln!(
                 md,
                 "| File | Label | Reason | Power Envelopes `[min, max]` |"
@@ -3398,6 +3415,60 @@ pub mod north_mara {
                     .expect("summary")
                     .contains("\"attributable_conflicts\":1")
             );
+        }
+
+        #[test]
+        fn test_north_mara_early_kill_recommends_kibali_and_renders_fallback() {
+            let spec = load_north_mara_spec();
+            let (targets, public) = synthetic_north_mara_100_series();
+            let (family, _) =
+                NorthMaraTwinFamily::build_and_verify(&spec, 20_263_564, &targets, &public)
+                    .expect("family");
+
+            // Unreachable 0.999 bar fires early-kill and must recommend the NEXT §37.3 site
+            // ("Kibali"), never self-referentially recommending "North Mara".
+            let mut strict_plan = sample_north_mara_plan(20_263_564, "rev-nm-ek");
+            strict_plan.power_bar_target = 0.999;
+            let mut card = build_north_mara_pilot_card(
+                &family,
+                &spec,
+                &strict_plan,
+                &mut ArtifactLedger::new(),
+                100,
+                500,
+                &[sha256(b"north-mara-public")],
+                &[],
+                60,
+                20_263_564,
+                4,
+            )
+            .expect("card");
+
+            assert!(card.early_kill.fires, "{:?}", card.early_kill);
+            assert_eq!(
+                card.early_kill.alternate_recommendation.as_deref(),
+                Some(NORTH_MARA_EARLY_KILL_ALTERNATE)
+            );
+            assert!(
+                !card
+                    .early_kill
+                    .alternate_recommendation
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("North Mara"),
+                "North Mara card must not recommend North Mara as its own alternate"
+            );
+
+            // Activate envelope_too_wide_fallback and verify both Markdown and JSON emit it.
+            card.envelope_too_wide_fallback = true;
+            let md = card.render_markdown().expect("md");
+            assert!(md.contains("Alternate site recommendation (§37.3):** Kibali"));
+            assert!(md.contains("Fallback active: no candidate file is robust across all twins"));
+
+            let events = card.render_json_events().expect("json");
+            let summary = events.last().expect("summary event");
+            assert!(summary.contains("\"alternate\":\"Kibali\""));
+            assert!(summary.contains("\"envelope_too_wide_fallback\":true"));
         }
 
         #[test]

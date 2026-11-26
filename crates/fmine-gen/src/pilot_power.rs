@@ -10,7 +10,9 @@
 
 use std::collections::BTreeSet;
 
+use fmine_core::codec::Encoder;
 use fmine_core::det::{norm_cdf, norm_ppf, sqrt};
+use fmine_core::hash::sha256;
 use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{Refusal, RefusalCode};
 
@@ -366,6 +368,20 @@ fn effective_snr_for(twin: &PlantTwin, subset: &[&str], cause: AttributionCause)
     }
 }
 
+/// Canonical permutation-invariant Philox `brick` key for a candidate file subset, preventing
+/// equal-length distinct subsets from reusing the same Monte Carlo stream.
+pub(crate) fn subset_stream_brick(subset: &[&str]) -> u64 {
+    let unique: BTreeSet<&str> = subset.iter().copied().collect();
+    let mut enc = Encoder::new_frame(*b"PWSB", 1);
+    enc.put_u64(unique.len() as u64);
+    for name in unique {
+        enc.put_str(name);
+    }
+    let digest = sha256(&enc.finish());
+    let b = digest.as_bytes();
+    u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+}
+
 /// Run `replicates >= 200` sealed-truth `PhiloxStream` replicates for one `(twin, subset, cause)`.
 pub fn estimate_twin_cause_power(
     twin: &PlantTwin,
@@ -402,7 +418,7 @@ pub fn estimate_twin_cause_power(
         domain: 356,
         var_group: 2,
         realization: cause as u32,
-        brick: subset.len() as u64,
+        brick: subset_stream_brick(subset),
     });
     let mut detections = 0usize;
     for _ in 0..replicates {
@@ -927,6 +943,21 @@ mod tests {
         assert_eq!(
             greedy_select_for_twin(tw, &dup_names, 1).unwrap_err().code,
             "FMINE-REF-109"
+        );
+    }
+
+    #[test]
+    fn test_subset_stream_brick_distinct_and_order_invariant() {
+        let a = subset_stream_brick(&["block_and_gc_models"]);
+        let b = subset_stream_brick(&["mine_surveys"]);
+        assert_ne!(
+            a, b,
+            "equal-length distinct subsets must use independent Philox streams"
+        );
+        assert_eq!(
+            subset_stream_brick(&["mine_surveys", "dispatch_tonnages"]),
+            subset_stream_brick(&["dispatch_tonnages", "mine_surveys"]),
+            "subset stream key must be permutation-invariant"
         );
     }
 }
