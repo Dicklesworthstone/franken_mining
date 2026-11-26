@@ -95,6 +95,7 @@ dependencies = [
  "fmine-core",
  "fmine-crs",
  "fmine-decide",
+ "fmine-econ",
  "fmine-evidence",
  "fmine-explore",
  "fmine-flow",
@@ -134,6 +135,16 @@ dependencies = [
  "fmine-numerics",
  "fmine-registry",
  "fmine-time",
+ "fmine-units",
+]
+
+[[package]]
+name = "fmine-econ"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-numerics",
  "fmine-units",
 ]
 
@@ -198,6 +209,7 @@ dependencies = [
  "fmine-core",
  "fmine-crs",
  "fmine-evidence",
+ "fmine-explore",
  "fmine-geom",
  "fmine-lp",
  "fmine-object",
