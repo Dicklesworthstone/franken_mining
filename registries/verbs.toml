@@ -147,6 +147,12 @@ mutates_authority = false
 description = "Replay cited developer cash flows and find a compatible NPV timing convention with an optional bracketed IRR"
 
 [[verb]]
+path = "screen target"
+subsystem = "Lodestar"
+mutates_authority = false
+description = "Screen a directory of drill-release and developer NPV worksheets, retaining each finding and refusal"
+
+[[verb]]
 path = "reserve replacement"
 subsystem = "Bullion"
 mutates_authority = false

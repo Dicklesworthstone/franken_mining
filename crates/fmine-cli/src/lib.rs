@@ -34,6 +34,7 @@ mod repair;
 pub mod reserve;
 mod robot;
 pub mod schedule;
+mod screen_target;
 mod spatial;
 mod tables;
 mod track_record;
@@ -150,6 +151,8 @@ pub enum CliCommand {
     CheckDrillRelease(PathBuf),
     /// Compare three timing conventions over a cited developer cash-flow schedule.
     CheckDeveloperNpv(PathBuf),
+    /// Screen a pack of local drill-release and developer NPV worksheets.
+    ScreenTarget(PathBuf),
     /// Inspect workbook identities, or explicitly declared PDF sums and reserve roll-forwards.
     CheckTables {
         /// `None` selects the invented workbook known answers.
@@ -630,6 +633,7 @@ fn verb_hint(args: &[String]) -> &'static str {
             "html" => return "html claims",
             "mirror" => return "mirror",
             "reserve" => return "reserve replacement",
+            "screen" => return screen_target::VERB,
             "check" => {
                 let mut next = i + 1;
                 while let Some(word) = args.get(next) {
@@ -1216,6 +1220,7 @@ pub fn parse_args(
             | "decide hindcast"
             | capital::drill_release::VERB
             | capital::npv_replay::VERB
+            | screen_target::VERB
             | "compare"
             | "plan pit"
             | "plan schedule"
@@ -1255,6 +1260,18 @@ pub fn parse_args(
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
             }
             "decide hindcast" => CliCommand::CapitalHindcast(capital::hindcast::parse(&words)?),
+            screen_target::VERB => match words.as_slice() {
+                [group, target, flag, path]
+                    if group == "screen"
+                        && target == "target"
+                        && flag == "--docs"
+                        && !path.trim().is_empty()
+                        && !path.starts_with("--") =>
+                {
+                    CliCommand::ScreenTarget(path.into())
+                }
+                _ => return Err(format!("expected 'fmine {}'", screen_target::USAGE)),
+            },
             capital::drill_release::VERB | capital::npv_replay::VERB => match words.as_slice() {
                 [check, mode, path]
                     if check == "check"
@@ -2382,6 +2399,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             capital::drill_release::execute(path, workspace_root)
         }
         CliCommand::CheckDeveloperNpv(path) => capital::npv_replay::execute(path, workspace_root),
+        CliCommand::ScreenTarget(docs) => screen_target::execute(docs, workspace_root),
         CliCommand::CheckTables {
             issuer,
             through,
@@ -2737,6 +2755,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "check tables --synthetic",
                 capital::drill_release::USAGE,
                 capital::npv_replay::USAGE,
+                screen_target::USAGE,
                 "assure issue (--issuer <issuer> [--through YYYYQn] | --synthetic) --output <path> --journal <path> --expected-head <hex> --key <path> --role <generic-role> --purpose <text> --now <UTC> --uncertainty-ns <n>",
                 "reliance init --journal <path> --key <path> --now <UTC> --uncertainty-ns <n> --max-age-ns <n> --max-skew-ns <n>",
                 "reliance check <digest|file> --journal <path> [--head <hex>] [--now <UTC> --uncertainty-ns <n>] [--as-of <UTC>]",

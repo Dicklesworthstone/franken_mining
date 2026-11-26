@@ -4,13 +4,14 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use fmine_core::anchor::SourceAnchor;
 use fmine_econ::EconError;
 use fmine_econ::npv::{
     ConventionDiscoveryRequest, DiscountConvention, ExactInterval, TaxBasis,
     discover_discounting_convention, evaluate_discounting_conventions, solve_irr_bracketed,
 };
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_registry::toml_subset::parse_subset;
+use fmine_registry::toml_subset::{TomlDoc, parse_subset};
 use fmine_units::ExactQty;
 
 use super::investment::{Fields, fields, get, invalid, number};
@@ -18,7 +19,7 @@ use crate::{Envelope, json_string as js, worksheet_input};
 
 pub(crate) const VERB: &str = "check developer-npv";
 pub(crate) const USAGE: &str = "check developer-npv <worksheet.toml>";
-const SCHEMA: &str = "fmine.developer-npv.v1";
+pub(crate) const SCHEMA: &str = "fmine.developer-npv.v1";
 const NO_CLAIM: &str = "Replay of reader-transcribed annual cash flows in USD millions. A compatible timing overlaps the stated printed-NPV rounding interval within the tested candidates. The worksheet is the retained source. The reader supplies original document locations, cash-flow scope and tax treatment. A numerical IRR is conditional on the exact supplied schedule and explicit bracket. Issuer authentication and investment authorization require separate evidence.";
 const MAX_BYTES: u64 = 64 * 1024;
 const MAX_FLOWS: usize = 64;
@@ -174,9 +175,11 @@ fn irr(
     }
 }
 
-fn evaluate(path: &Path) -> Result<Envelope> {
-    let (text, source) = worksheet_input::read(path, "developer NPV worksheet", MAX_BYTES)?;
-    let doc = parse_subset(&text).map_err(|e| invalid(e.to_string()))?;
+pub(crate) fn evaluate_document(
+    doc: &TomlDoc,
+    source: &SourceAnchor,
+    bytes: usize,
+) -> Result<Envelope> {
     let top = fields(
         &doc.top,
         &[
@@ -384,7 +387,7 @@ fn evaluate(path: &Path) -> Result<Envelope> {
         .map_err(|error| error.to_refusal())?;
     envelope.payload_json = format!(
         "{{\"schema\":\"{SCHEMA}\",\"worksheet\":{},\"source_document\":{source_document},\"document\":{},\"evidence\":{},\"tax_basis\":{},{search_json}\"year_zero_timing\":{selected_date},\"discount_rate\":\"{}\",\"rate_locator\":{},\"printed_npv_usd_m\":\"{}\",\"npv_locator\":{},\"printed_bounds_usd_m\":{},\"flow_step_usd_m\":\"{}\",\"compatible_convention\":{convention},\"comparisons\":[{}],\"flows\":[{}],\"irr\":{irr_json}}}",
-        worksheet_input::source_json(&source, text.len()),
+        worksheet_input::source_json(source, bytes),
         js(document),
         js(evidence),
         js(basis),
@@ -403,5 +406,10 @@ fn evaluate(path: &Path) -> Result<Envelope> {
 }
 
 pub(crate) fn execute(path: &Path, root: &Path) -> Envelope {
-    evaluate(&root.join(path)).unwrap_or_else(|r| Envelope::refused(VERB, r, Vec::new()))
+    let result = worksheet_input::read(&root.join(path), "developer NPV worksheet", MAX_BYTES)
+        .and_then(|(text, source)| {
+            let doc = parse_subset(&text).map_err(|error| invalid(error.to_string()))?;
+            evaluate_document(&doc, &source, text.len())
+        });
+    result.unwrap_or_else(|refusal| Envelope::refused(VERB, refusal, Vec::new()))
 }

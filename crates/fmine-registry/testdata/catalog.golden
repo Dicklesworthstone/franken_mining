@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 90
+[verbs] 91
 decide card
 decide production
 decide investment
@@ -98,6 +98,7 @@ html claims
 check tables
 check drill-release
 check developer-npv
+screen target
 reserve replacement
 guidance completion
 mirror

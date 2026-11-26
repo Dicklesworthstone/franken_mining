@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
+use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::Refusal;
 use fmine_explore::intercept::{
     DisclosureFlag, GradeUnit, InclusionRelation, Intercept, LengthUnit, PrintedQty,
@@ -13,7 +14,7 @@ use fmine_explore::intercept::{
 use fmine_io::intercept::{
     CitedInterceptRow, ParseOutcome, intercept_from_cited_row, parse_intercept_phrase,
 };
-use fmine_registry::toml_subset::{TomlRow, parse_subset};
+use fmine_registry::toml_subset::{TomlDoc, TomlRow, parse_subset};
 use fmine_units::ExactQty;
 
 use super::investment::{Fields, fields, get, invalid, number};
@@ -21,7 +22,7 @@ use crate::{Envelope, json_string as js, worksheet_input};
 
 pub(crate) const VERB: &str = "check drill-release";
 pub(crate) const USAGE: &str = "check drill-release <worksheet.toml>";
-const SCHEMA: &str = "fmine.drill-release-check.v1";
+pub(crate) const SCHEMA: &str = "fmine.drill-release-check.v1";
 const NO_CLAIM: &str = "Exact arithmetic and review flags on a local transcription under its stated grade basis and rounding. Original document locators and disclosure context are supplied by the reader. Remainder grade is an inferred interval average. Hole-sequence gaps are review signals. Mineral classification, issuer authentication and regulatory approval require independent evidence.";
 const MAX_BYTES: u64 = 65_536;
 const MAX_ROWS: usize = 128;
@@ -299,9 +300,11 @@ fn flags(input: &[DisclosureFlag]) -> String {
     }).collect::<Vec<_>>().join(",")
 }
 
-fn evaluate(path: &Path) -> Result<Envelope> {
-    let (text, source) = worksheet_input::read(path, "drill-release worksheet", MAX_BYTES)?;
-    let doc = parse_subset(&text).map_err(|error| invalid(error.to_string()))?;
+pub(crate) fn evaluate_document(
+    doc: &TomlDoc,
+    source: &SourceAnchor,
+    bytes: usize,
+) -> Result<Envelope> {
     let top = fields(
         &doc.top,
         &["schema", "document", "evidence", "grade_basis"],
@@ -417,7 +420,7 @@ fn evaluate(path: &Path) -> Result<Envelope> {
         js(document),
         js(evidence),
         js(metal),
-        worksheet_input::source_json(&source, text.len()),
+        worksheet_input::source_json(source, bytes),
         audit.digest,
         output.join(","),
         flags(&audit.release_flags),
@@ -430,6 +433,10 @@ fn evaluate(path: &Path) -> Result<Envelope> {
 }
 
 pub(crate) fn execute(path: &Path, root: &Path) -> Envelope {
-    evaluate(&root.join(path))
-        .unwrap_or_else(|refusal| Envelope::refused(VERB, refusal, Vec::new()))
+    let result = worksheet_input::read(&root.join(path), "drill-release worksheet", MAX_BYTES)
+        .and_then(|(text, source)| {
+            let doc = parse_subset(&text).map_err(|error| invalid(error.to_string()))?;
+            evaluate_document(&doc, &source, text.len())
+        });
+    result.unwrap_or_else(|refusal| Envelope::refused(VERB, refusal, Vec::new()))
 }

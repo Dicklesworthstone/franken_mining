@@ -31,6 +31,13 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   Public transcriptions require a declared source URL
   and PDF digest. The E876 worksheet preserves the source and independently checked Taguas replay.
 
+- DESIGN (BD-350.S5). `screen target --docs <directory>` evaluates the same parsed drill-release
+  and developer NPV worksheets, with one source read per file. Its ordered `fmine.target-screen.v1`
+  report retains source identity and the individual results. It refuses a missing, empty or oversized
+  pack. The first refused worksheet in filename order supplies the process exit code and the report
+  retains each accepted worksheet and each refusal. The command writes no files and reads no sealed
+  campaign labels or truth.
+
 - DESIGN (BD-054). `decide card <model> --brief` selects the executive Markdown view of the same evaluated
   Claim, with the worksheet path and SHA-256. An explicit JSON format or a different verb refuses the flag.
   The ordinary JSON and analyst Markdown retain the full comparison.
@@ -255,7 +262,7 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
 - **LOC budget:** 54,000 planned / 62,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "waterfall"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common

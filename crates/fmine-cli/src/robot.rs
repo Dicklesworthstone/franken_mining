@@ -646,7 +646,10 @@ mod tests {
         }
 
         // 3. Validate every compiled verb in VERB_CATALOG against verbs schema (and reject unknown).
-        assert_eq!(VERB_CATALOG.len(), 90);
+        assert_eq!(VERB_CATALOG.len(), 91);
+        assert!(VERB_CATALOG.iter().any(|v| v.path == "screen target"
+            && v.subsystem == "Lodestar"
+            && !v.mutates_authority));
         assert!(VERB_CATALOG.iter().any(|v| v.path == "check developer-npv"
             && v.subsystem == "Helm"
             && !v.mutates_authority));

@@ -238,6 +238,19 @@ Set `year_zero_timing = "auto"` when the report leaves the valuation date unclea
 checks all three conventions at both dates and requires a single overlap with the printed NPV.
 With zero or several overlaps, it returns a refusal and keeps all six comparisons for review.
 
+## Screen a pack of target disclosures
+
+```bash
+fmine screen target --docs path/to/worksheet-directory --format markdown
+```
+
+Supply a directory of up to 64 drill-release and developer NPV `.toml` worksheets, each at most
+64 KiB. The command reads the top-level worksheets in filename order, keeps their individual
+source hashes and findings, and exits nonzero if any worksheet refuses. Successful findings and
+all available refusal evidence remain in the report. Use `--json` for exact values and locators.
+The drill and valuation findings are based on the supplied transcriptions. Resource and cut-off
+workflows use the separate cited-table command.
+
 ## Check a mining front for model drift
 
 **DESIGN.** Evaluate an explicitly declared sequence of mining polygons against one spatial model:
