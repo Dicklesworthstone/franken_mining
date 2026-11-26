@@ -139,21 +139,36 @@ fn is_lower_hex64(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+fn validate_text_field(field: &str, value: &str) -> Result<(), CasIngestError> {
+    if value.trim().is_empty()
+        || value != value.trim()
+        || value.bytes().any(|b| b.is_ascii_control())
+    {
+        return Err(CasIngestError::InvalidInput {
+            detail: format!(
+                "{field} must be non-empty, trimmed, and free of control characters, got {value:?}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_chunk_size(chunk_size: usize) -> Result<(), CasIngestError> {
+    if chunk_size == 0 || u32::try_from(chunk_size).is_err() {
+        return Err(CasIngestError::InvalidInput {
+            detail: format!("chunk_size must lie in 1..={}, got {chunk_size}", u32::MAX),
+        });
+    }
+    Ok(())
+}
+
 fn validate_ingest_args(
     media_type: &str,
     expected_sha256: Option<&str>,
     chunk_size: usize,
 ) -> Result<(), CasIngestError> {
-    if media_type.trim().is_empty() || media_type != media_type.trim() {
-        return Err(CasIngestError::InvalidInput {
-            detail: format!("media_type must be non-empty and trimmed, got {media_type:?}"),
-        });
-    }
-    if chunk_size == 0 {
-        return Err(CasIngestError::InvalidInput {
-            detail: "chunk_size must be > 0".to_string(),
-        });
-    }
+    validate_text_field("media_type", media_type)?;
+    validate_chunk_size(chunk_size)?;
     if let Some(expected) = expected_sha256
         && !is_lower_hex64(expected)
     {
@@ -162,6 +177,46 @@ fn validate_ingest_args(
         });
     }
     Ok(())
+}
+
+fn read_regular_file_checked(
+    path: &Path,
+    expected_bytes: Option<u64>,
+) -> Result<Vec<u8>, CasIngestError> {
+    let meta = fs::metadata(path).map_err(|e| CasIngestError::Io {
+        path: path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    if !meta.is_file() {
+        return Err(CasIngestError::Io {
+            path: path.display().to_string(),
+            detail: "path is not a regular file".to_string(),
+        });
+    }
+    if let Some(expected_len) = expected_bytes
+        && meta.len() != expected_len
+    {
+        return Err(CasIngestError::ByteLengthMismatch {
+            path: path.display().to_string(),
+            expected: expected_len,
+            actual: meta.len(),
+        });
+    }
+    let bytes = fs::read(path).map_err(|e| CasIngestError::Io {
+        path: path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    let actual_len = bytes.len() as u64;
+    if let Some(expected_len) = expected_bytes
+        && actual_len != expected_len
+    {
+        return Err(CasIngestError::ByteLengthMismatch {
+            path: path.display().to_string(),
+            expected: expected_len,
+            actual: actual_len,
+        });
+    }
+    Ok(bytes)
 }
 
 /// Ingests an offline filing on disk into `store` using `FMT-CAS-1` root-last publication.
@@ -193,10 +248,7 @@ pub fn ingest_file_into_cas_with_chunk_size(
     chunk_size: usize,
 ) -> Result<IngestedFiling, CasIngestError> {
     validate_ingest_args(media_type, expected_sha256, chunk_size)?;
-    let bytes = fs::read(path).map_err(|e| CasIngestError::Io {
-        path: path.display().to_string(),
-        detail: e.to_string(),
-    })?;
+    let bytes = read_regular_file_checked(path, None)?;
     let actual_hex = sha256(&bytes).to_hex();
     if let Some(expected) = expected_sha256
         && actual_hex != expected
@@ -213,10 +265,10 @@ pub fn ingest_file_into_cas_with_chunk_size(
 /// Atomically pre-flight and ingest a batch of offline filings registered under `BD-055` into
 /// `FMT-CAS-1` CAS (`BD-056`).
 ///
-/// Every spec is validated and every file is read and checked against `expected_bytes` and
-/// `expected_sha256` BEFORE publishing any chunks or manifests, so a missing or tampered file
-/// leaves `store` unchanged. Output entries are canonically sorted by `filing_id` and bound to
-/// an order-independent `CIB1` SHA-256 `batch_digest`.
+/// Every spec is validated and every file is checked as a regular file against `expected_bytes`
+/// and `expected_sha256` BEFORE staging any chunks, and every object is staged BEFORE any manifest
+/// root is published. Output entries are canonically sorted by `filing_id` and bound to an
+/// order-independent `CIB1` SHA-256 `batch_digest`.
 pub fn ingest_registered_filings(
     store: &CasStore,
     specs: &[OfflineFilingSpec<'_>],
@@ -227,47 +279,25 @@ pub fn ingest_registered_filings(
             detail: "at least one OfflineFilingSpec is required".to_string(),
         });
     }
+    validate_chunk_size(chunk_size)?;
     let mut seen_ids = BTreeSet::new();
     let mut verified: Vec<(&OfflineFilingSpec<'_>, Vec<u8>, String)> =
         Vec::with_capacity(specs.len());
 
-    // Pre-flight phase: validate all metadata, byte lengths, and SHA-256 pins before writing CAS.
+    // Pre-flight phase: validate all metadata, regular-file status, byte lengths, and SHA-256 pins
+    // before writing any CAS chunks or manifests.
     for spec in specs {
-        if spec.filing_id.trim().is_empty() || spec.filing_id != spec.filing_id.trim() {
-            return Err(CasIngestError::InvalidInput {
-                detail: format!(
-                    "filing_id must be non-empty and trimmed, got {:?}",
-                    spec.filing_id
-                ),
-            });
-        }
+        validate_text_field("filing_id", spec.filing_id)?;
         if !seen_ids.insert(spec.filing_id) {
             return Err(CasIngestError::InvalidInput {
                 detail: format!("duplicate filing_id {:?}", spec.filing_id),
             });
         }
-        if let Some(acc) = spec.accession
-            && (acc.trim().is_empty() || acc != acc.trim())
-        {
-            return Err(CasIngestError::InvalidInput {
-                detail: format!("accession must be non-empty and trimmed, got {acc:?}"),
-            });
+        if let Some(acc) = spec.accession {
+            validate_text_field("accession", acc)?;
         }
         validate_ingest_args(spec.media_type, Some(spec.expected_sha256), chunk_size)?;
-        let bytes = fs::read(spec.path).map_err(|e| CasIngestError::Io {
-            path: spec.path.display().to_string(),
-            detail: e.to_string(),
-        })?;
-        let actual_len = bytes.len() as u64;
-        if let Some(expected_len) = spec.expected_bytes
-            && actual_len != expected_len
-        {
-            return Err(CasIngestError::ByteLengthMismatch {
-                path: spec.path.display().to_string(),
-                expected: expected_len,
-                actual: actual_len,
-            });
-        }
+        let bytes = read_regular_file_checked(spec.path, spec.expected_bytes)?;
         let actual_hex = sha256(&bytes).to_hex();
         if actual_hex != spec.expected_sha256 {
             return Err(CasIngestError::DigestMismatch {
@@ -279,15 +309,33 @@ pub fn ingest_registered_filings(
         verified.push((spec, bytes, actual_hex));
     }
 
-    // Publish in canonical filing_id order.
+    // Stage all objects in canonical filing_id order before publishing any manifest root.
     verified.sort_by(|a, b| a.0.filing_id.cmp(b.0.filing_id));
-    let mut entries = Vec::with_capacity(verified.len());
-    let mut enc = Encoder::new_frame(*b"CIB1", 1);
-    enc.put_u64(verified.len() as u64);
-
+    let mut staged_all = Vec::with_capacity(verified.len());
     for (spec, bytes, actual_hex) in verified {
-        let ingested =
-            publish_verified_bytes(store, spec.media_type, &bytes, actual_hex, chunk_size)?;
+        let staged = store
+            .stage_object(spec.media_type, &bytes, chunk_size)
+            .map_err(CasIngestError::Cas)?;
+        staged_all.push((spec, actual_hex, staged));
+    }
+
+    let mut entries = Vec::with_capacity(staged_all.len());
+    let mut enc = Encoder::new_frame(*b"CIB1", 1);
+    enc.put_u64(staged_all.len() as u64);
+
+    for (spec, actual_hex, staged) in staged_all {
+        let chunks_written = staged.chunks_written;
+        let chunks_reused = staged.chunks_reused;
+        let manifest = store.publish_staged(&staged).map_err(CasIngestError::Cas)?;
+        let ingested = IngestedFiling {
+            media_type: manifest.media_type,
+            total_bytes: manifest.total_bytes,
+            sha256_hex: actual_hex,
+            cas_root: manifest.root_digest,
+            chunk_count: manifest.chunks.len(),
+            chunks_written,
+            chunks_reused,
+        };
         enc.put_str(spec.filing_id);
         enc.put_u8(u8::from(spec.accession.is_some()));
         if let Some(acc) = spec.accession {
@@ -463,17 +511,71 @@ mod tests {
             .expect_err("byte mismatch must refuse");
         assert_eq!(len_err.to_refusal().code, "FMINE-REF-505");
 
-        // 2. Missing file refuses with FMINE-REF-506; malformed hex or blank media_type with FMINE-REF-107.
+        // 2. Missing/non-regular paths refuse FMINE-REF-506; malformed hex, blank/control fields,
+        //    duplicate filing_id, empty batch, or out-of-range chunk_size refuse FMINE-REF-107.
         let missing = guard.0.join("does_not_exist.xlsx");
         let missing_err = ingest_file_into_cas(&store, &missing, "application/pdf", Some(&sha1))
             .expect_err("missing refuses");
         assert_eq!(missing_err.to_refusal().code, "FMINE-REF-506");
+        let dir_err = ingest_file_into_cas(&store, &guard.0, "application/pdf", Some(&sha1))
+            .expect_err("directory is not a regular file");
+        assert_eq!(dir_err.to_refusal().code, "FMINE-REF-506");
         let bad_hex_err = ingest_file_into_cas(&store, &p1, "application/pdf", Some("NOT-HEX"))
             .expect_err("bad hex refuses");
         assert_eq!(bad_hex_err.to_refusal().code, "FMINE-REF-107");
         let bad_mt_err = ingest_file_into_cas(&store, &p1, "   ", Some(&sha1))
             .expect_err("blank media_type refuses");
         assert_eq!(bad_mt_err.to_refusal().code, "FMINE-REF-107");
+        let ctrl_mt_err = ingest_file_into_cas(&store, &p1, "application/pdf\n", Some(&sha1))
+            .expect_err("control char in media_type refuses");
+        assert_eq!(ctrl_mt_err.to_refusal().code, "FMINE-REF-107");
+        let zero_chunk_err =
+            ingest_file_into_cas_with_chunk_size(&store, &p1, "application/pdf", Some(&sha1), 0)
+                .expect_err("zero chunk_size refuses");
+        assert_eq!(zero_chunk_err.to_refusal().code, "FMINE-REF-107");
+        if let Ok(too_big) = usize::try_from(u64::from(u32::MAX) + 1) {
+            let big_chunk_err = ingest_file_into_cas_with_chunk_size(
+                &store,
+                &p1,
+                "application/pdf",
+                Some(&sha1),
+                too_big,
+            )
+            .expect_err("chunk_size > u32::MAX refuses before truncation");
+            assert_eq!(big_chunk_err.to_refusal().code, "FMINE-REF-107");
+        }
+        assert_eq!(
+            ingest_registered_filings(&store, &[], 1024)
+                .expect_err("empty batch refuses")
+                .to_refusal()
+                .code,
+            "FMINE-REF-107"
+        );
+        let dup_specs = [
+            OfflineFilingSpec {
+                filing_id: "dup-id",
+                path: &p1,
+                media_type: "application/pdf",
+                expected_sha256: &sha1,
+                expected_bytes: Some(bytes1.len() as u64),
+                accession: None,
+            },
+            OfflineFilingSpec {
+                filing_id: "dup-id",
+                path: &p2,
+                media_type: "application/pdf",
+                expected_sha256: &sha2,
+                expected_bytes: Some(bytes2.len() as u64),
+                accession: None,
+            },
+        ];
+        assert_eq!(
+            ingest_registered_filings(&store, &dup_specs, 1024)
+                .expect_err("duplicate filing_id refuses")
+                .to_refusal()
+                .code,
+            "FMINE-REF-107"
+        );
 
         // 3. Valid batch ingest publishes both filings and emits canonical digest.
         let good_specs = [
