@@ -586,6 +586,21 @@ fn html_hidden(tag: &HtmlTag) -> bool {
     })
 }
 
+// FACT (BD-057): HTML's numeric character reference end state remaps these C1 values.
+// Undefined entries retain their control code and are rejected by the caller.
+// https://html.spec.whatwg.org/multipage/parsing.html#numeric-character-reference-end-state
+fn html_numeric_reference(code: u32) -> u32 {
+    const LEGACY: [u32; 32] = [
+        0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0x8D, 0x017D, 0x8F, 0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013,
+        0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+    ];
+    match code {
+        0x80..=0x9F => LEGACY[(code - 0x80) as usize],
+        _ => code,
+    }
+}
+
 fn html_entities(text: &str) -> HtmlResult<String> {
     let mut result = String::with_capacity(text.len());
     let mut rest = text;
@@ -626,6 +641,7 @@ fn html_entities(text: &str) -> HtmlResult<String> {
                 }
                 let code = u32::from_str_radix(digits, radix)
                     .ok()
+                    .map(html_numeric_reference)
                     .and_then(char::from_u32)
                     .filter(|c| *c != '\0' && (!c.is_control() || matches!(*c, '\t' | '\n' | '\r')))
                     .ok_or_else(|| html_refusal("invalid numeric character reference"))?;
@@ -1293,6 +1309,143 @@ mod tests {
                 .expect("same number")
                 .number()
         );
+    }
+
+    #[test]
+    fn html_filing_legacy_character_references_preserve_text_and_numeric_origins() {
+        let html = "<table><tr><td>&#149;</td><td>&#x95;</td><td>&#128;750</td>\
+                    <td>1,250.50</td></tr></table>";
+        let doc = HtmlDocument::from_bytes("filing.html", html.as_bytes()).expect("filed HTML");
+        let table = &doc.tables()[0];
+        for (column, raw, decoded) in [
+            (1, "&#149;", "•"),
+            (2, "&#x95;", "•"),
+            (3, "&#128;750", "€750"),
+        ] {
+            let cell = table.cell(1, column).expect("source cell");
+            assert_eq!(cell.raw_html(), raw);
+            assert_eq!(cell.text(), decoded);
+            assert!(cell.number().is_none());
+        }
+        let cell = table.cell(1, 4).expect("number");
+        assert_eq!(cell.number().expect("exact").value.mantissa, 125050);
+        assert_eq!(cell.number().expect("exact").value.scale, 2);
+        assert_eq!(
+            doc.make_anchor(0, 1, 4).expect("origin").locator,
+            "Table1!D1"
+        );
+        for invalid in ["&#x81;", "&#31;", "&#127;"] {
+            let fragment = format!("<table><tr><td>7{invalid}5</td></tr></table>");
+            assert!(HtmlDocument::from_bytes("filing.html", fragment.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the original SEC complete submission at FMINE_SEC_2026Q3_SUBMISSION"]
+    fn html_sec_filed_cost_cells_match_reviewed_tokens_and_origins() {
+        let path = std::env::var_os("FMINE_SEC_2026Q3_SUBMISSION").expect("local SEC submission");
+        let submission = std::fs::read_to_string(path).expect("read original SEC submission");
+        assert_eq!(
+            fmine_core::hash::sha256(submission.as_bytes()).to_hex(),
+            "7f90d89d438975b418d05151e15f49b9738429f0e2cfeaf605724396e73d9acc"
+        );
+        let name = "d141003dex992.htm";
+        let mut exhibits = submission.split("\n<DOCUMENT>\n").filter_map(|block| {
+            let (header, body) = block.split_once("<TEXT>")?;
+            (header.starts_with("<TYPE>EX-99.2\n")
+                && header
+                    .lines()
+                    .any(|line| line.strip_prefix("<FILENAME>") == Some(name)))
+            .then_some(body)
+        });
+        let (body, _) = exhibits
+            .next()
+            .expect("EX-99.2")
+            .split_once("</TEXT>")
+            .expect("SGML closing tag");
+        assert!(exhibits.next().is_none(), "unique registered exhibit");
+        let document =
+            HtmlDocument::from_bytes(name, body.as_bytes()).expect("complete filed HTML");
+        let digest = fmine_core::Digest32(document.sha256());
+        assert_eq!(
+            digest.to_hex(),
+            "09518b635655ce60a2a8b10b24f9136031cdb02fe44bb21c45af42c57ea93a85"
+        );
+        assert_eq!(document.tables().len(), 455);
+        let mut checked = 0;
+        let mut row_count = 0;
+        for line in include_str!("../testdata/sec_exhibit_2026q3.tsv")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+        {
+            let mut fields = line.split('\t');
+            let table_id: usize = fields.next().expect("table").parse().expect("ordinal");
+            let row: usize = fields.next().expect("row").parse().expect("ordinal");
+            let table = &document.tables()[table_id - 1];
+            let mut numeric = table
+                .cells()
+                .iter()
+                .filter(|c| c.row() == row && c.number().is_some());
+            for item in fields {
+                let [address, start, end, printed] = item.split('|').collect::<Vec<_>>()[..] else {
+                    panic!("invalid reviewed fixture cell {item}");
+                };
+                let range = (
+                    start.parse::<usize>().unwrap(),
+                    end.parse::<usize>().unwrap(),
+                );
+                let (expected_row, expected_column) =
+                    xlsx::parse_a1_ref(address).expect("cell address");
+                let cell = numeric
+                    .next()
+                    .expect("one admitted number per reviewed origin");
+                assert_eq!(
+                    (cell.row(), cell.column()),
+                    (expected_row as usize, expected_column as usize)
+                );
+                let anchor = document
+                    .make_anchor(table_id - 1, row, cell.column())
+                    .expect("origin anchor");
+                assert_eq!(anchor.artifact_path, name);
+                assert_eq!(anchor.artifact_sha256, digest.0);
+                assert_eq!(anchor.locator, format!("Table{table_id}!{address}"));
+                assert_eq!(cell.byte_range(), range, "{}", anchor.locator);
+                assert_eq!(
+                    cell.raw_html(),
+                    &body[range.0..range.1],
+                    "{}",
+                    anchor.locator
+                );
+                let number = cell.number().unwrap();
+                assert_eq!(number.raw, printed, "{}", anchor.locator);
+                let scale = printed
+                    .split_once('.')
+                    .map_or(0, |(_, fraction)| fraction.len()) as u32;
+                let mantissa = printed
+                    .replace([',', '.'], "")
+                    .parse::<i128>()
+                    .expect("token mantissa");
+                assert_eq!(
+                    number.value,
+                    numtok::Dec { mantissa, scale },
+                    "{}",
+                    anchor.locator
+                );
+                assert_eq!(
+                    number.step,
+                    numtok::Dec { mantissa: 1, scale },
+                    "{}",
+                    anchor.locator
+                );
+                checked += 1;
+            }
+            assert!(
+                numeric.next().is_none(),
+                "unreviewed figure in table {table_id}, row {row}"
+            );
+            row_count += 1;
+        }
+        assert_eq!((row_count, checked), (9, 63));
     }
 
     #[test]

@@ -1701,9 +1701,9 @@ are bounded to 8 MiB and mapping files to 1 MiB. Extraction is offline and uses 
 or inferred table layout. HTML metric keys remain separate from workbook definitions, so importing a TCC or
 GEO figure does not establish its credit treatment or price-deck equivalence.
 
-No live HTML filing is registered in the repository yet. The executable path is exercised with invented
-filings; it does not establish real issuer coverage or completion of the broader BD-057/BD-059 acceptance
-population. Full Claim receipts are returned directly by `html claims`.
+The offline filing replay checks 63 printed cost values and their byte ranges across three panels
+in a filed SEC exhibit. The `html claims` examples use invented issuer mappings. Full Claim receipts
+are returned directly by that command. [Replay the real-file extraction check](repro/barrick/README.md#check-the-filed-html-cost-tables).
 
 ### Check a disclosure draft against registered HTML evidence
 

@@ -135,6 +135,29 @@ E859 records the Q3 2026 source admission and a known-file run with unchanged so
 Apple binary was not executed on the Linux host, and the new per-source retrieval metadata requires the updated
 registry parser. The blind-layout gate and human census remain open; the recorded binary check is not bypassed.
 
+## Check the filed HTML cost tables
+
+FACT (BD-057). SEC accession 0001193125-26-453391 contains the Q3 2026 MD&A as Exhibit 99.2.
+The offline test verifies the SHA-256 of the complete submission and the original exhibit inside its
+`<TEXT>` body. The complete submission supplies a stable snapshot across the observed downloads.
+The exhibit web page can include a changing delivery script.
+
+```bash
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/fmine-sec.XXXXXX")"
+submission="$scratch/0001193125-26-453391.txt"
+curl --fail --location --user-agent 'OpenAI File Downloader, XaiImageApiFetch/1.0' \
+  --output "$submission" \
+  https://www.sec.gov/Archives/edgar/data/756894/000119312526453391/0001193125-26-453391.txt
+FMINE_SEC_2026Q3_SUBMISSION="$submission" cargo test -p fmine-io --lib \
+  html_sec_filed_cost_cells_match_reviewed_tokens_and_origins -- --ignored
+```
+
+Run on the host holding the submission. The file SHA-256 is
+`7f90d89d438975b418d05151e15f49b9738429f0e2cfeaf605724396e73d9acc`. The checked denominator is every
+numeric origin in nine per-unit cost rows across the two gold panels and one copper panel. The
+test checks their printed tokens, decimal precision, table/cell anchors and original byte ranges.
+The [reviewed fixture](../../crates/fmine-io/testdata/sec_exhibit_2026q3.tsv) contains these facts.
+
 ## Do not redistribute the files
 
 RISK-31: do not redistribute the files; fetch them from the issuer. Do not mirror them, commit them or attach

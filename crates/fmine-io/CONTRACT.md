@@ -226,6 +226,9 @@ range, decoded text, exact numeric token and printed step when supported, and it
 covered slots refer to the same origin instead of creating repeated observations. `make_anchor` uses
 `Table1!B3`-style locators and returns that origin's anchor even when queried through a covered slot.
 Table indices are zero-based in the API; row and column coordinates are one-based.
+Defined legacy C1 numeric character references follow the HTML Standard mapping before text
+classification. A bullet or currency sign retains the original HTML bytes and decoded text.
+Undefined controls continue to refuse.
 
 A reliance journal's header registers a release role and SHA-256 commitment to a private, raw 32-byte key.
 The key is never written to the journal or exposed by Debug. Possession is a local release capability, not
@@ -489,6 +492,10 @@ would permit a concurrent withdrawal race.
 
 ## 9. Oracles
 - `GATE-BULL-01` (part 1 extraction fidelity) and `KILL-6` (OMF purity, 923-line Parquet subset, 2,877-line OMF reader).
+- `testdata/sec_exhibit_2026q3.tsv` records the printed tokens and original byte ranges of all
+  63 numeric origins in nine selected cost rows of SEC accession 0001193125-26-453391, Exhibit
+  99.2 (BD-057). `html_sec_filed_cost_cells_match_reviewed_tokens_and_origins` checks the
+  pinned complete submission, original embedded exhibit and every selected cell.
 - `fixtures/fmine-io/omf_section_schedule_highs_{columns,rows}.txt`: HiGHS solution of `testdata/omf_section_schedule.mps` via `scripts/oracle/highs_lp.py` (`scipy 1.18.1`, independent parser).
 - Fuzz targets `fuzz/fuzz_targets/{xlsx,numfmt,html,journal,omf}.rs`.
 
