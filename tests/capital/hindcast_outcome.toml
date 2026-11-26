@@ -1,0 +1,19 @@
+# Synthetic closeout. Payoffs including counterfactual alternatives are declared for demonstration.
+schema = "fmine.capital-outcome.v1"
+case_id = "north-basin-expansion"
+capex_usd_m = "1750"
+schedule_slip_months = "30"
+full_nav_usd_m = "-500"
+staged_nav_usd_m = "-100"
+defer_nav_usd_m = "0"
+valid_start = "2023-02-24T15:00:00Z"
+valid_end = "2025-11-20T12:00:00Z"
+collected_at = "2025-11-20T12:00:00Z"
+available_at = "2025-11-21T12:00:00Z"
+recorded_at = "2025-11-21T12:30:00Z"
+record_clock = "offline_uncertain"
+cell = "north-basin-closeout"
+sequence = "2"
+
+[[evidence]]
+id = "SYNTHETIC-closeout-note"

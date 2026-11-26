@@ -2549,6 +2549,32 @@ probabilities do not become calibrated by passing arithmetic checks. The explici
 outside the priced scenario matrix. This comparison supplies no feasibility approval, calibrated selection
 frequency or historical replay proof. To retain this comparison with a choice, use the decision journal.
 
+#### Freeze a capital approval and score the outcome later
+
+DESIGN (BD-230). Compare a static NPV and IRR hurdle (H7a) with the policy that chooses among full
+commitment, staged recourse and deferral subject to liquidity and tail-loss limits (H7d). Keep the
+approval worksheet and the returned `approval_digest` with the committee record before observing the
+outcome. The synthetic North Basin example shows both steps.
+
+```bash
+approval_digest="$(cargo run -q -p fmine-cli -- decide hindcast freeze \
+  tests/capital/hindcast_approval.toml --json | jq -er '.payload.approval_digest')"
+
+cargo run -p fmine-cli -- decide hindcast score tests/capital/hindcast_approval.toml \
+  --approval-digest "$approval_digest" --outcome tests/capital/hindcast_outcome.toml --format markdown
+```
+
+The approval worksheet supplies whole-second UTC timestamps, the declared commit anchor and the
+shared scenarios. IRRs, weights and tail mass are exact fractions. The report shows both choices,
+each action's expected value per share, tail loss, minimum liquidity slack and feasibility. Scoring
+checks the approval digest before opening the outcome worksheet and requires the same case ID.
+The semantic digest tolerates comments and row reordering. The report carries the exact file SHA-256
+for each worksheet, so an edit to the submitted bytes remains visible.
+
+The outcome sheet supplies capex, schedule slip and action payoffs, including counterfactual estimates
+for unchosen actions. The CLI checks the declared timeline and computes the comparison offline.
+Historical source authentication and timestamped registration require separate evidence.
+
 #### Retain a decision and its original evaluated evidence
 
 DESIGN (bounded BD-225/227): `decide journal` records an explicit act-now choice or an information option

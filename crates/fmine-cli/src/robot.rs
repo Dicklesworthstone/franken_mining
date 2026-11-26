@@ -646,7 +646,12 @@ mod tests {
         }
 
         // 3. Validate every compiled verb in VERB_CATALOG against verbs schema (and reject unknown).
-        assert_eq!(VERB_CATALOG.len(), 87);
+        assert_eq!(VERB_CATALOG.len(), 88);
+        assert!(
+            VERB_CATALOG.iter().any(|v| v.path == "decide hindcast"
+                && v.subsystem == "Helm"
+                && !v.mutates_authority)
+        );
         assert!(
             VERB_CATALOG
                 .iter()

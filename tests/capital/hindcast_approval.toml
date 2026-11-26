@@ -1,0 +1,52 @@
+# Synthetic committee worksheet. All monetary inputs and scenario weights are declared assumptions.
+schema = "fmine.capital-approval.v1"
+case_id = "north-basin-expansion"
+project_name = "North Basin expansion"
+approval_cut = "2023-02-24T15:00:00Z"
+physical_start = "2023-01-01T00:00:00Z"
+physical_end = "2023-03-01T00:00:00Z"
+scenario_basis = "synthetic"
+baseline_capex_usd_m = "900"
+shares_millions = "1000"
+static_npv_usd_m = "450"
+static_irr = "20/100"
+hurdle_irr = "15/100"
+cvar_tail_mass = "1/5"
+max_cvar_loss_usd_per_share = "3/10"
+
+[[anchor]]
+cell = "north-basin-capital"
+sequence = "10"
+
+[[evidence]]
+id = "SYNTHETIC-approval-note"
+label = "Declared cost envelope and schedule scenarios"
+class = "assumed"
+valid_start = "2023-01-01T00:00:00Z"
+valid_end = "2023-02-24T00:00:00Z"
+collected_at = "2023-02-24T09:00:00Z"
+available_at = "2023-02-24T10:00:00Z"
+recorded_at = "2023-02-24T10:30:00Z"
+record_clock = "offline_uncertain"
+cell = "north-basin-capital"
+sequence = "10"
+
+[[scenario]]
+id = "major-overrun"
+weight = "3/10"
+full_nav_usd_m = "-600"
+staged_nav_usd_m = "-120"
+defer_nav_usd_m = "0"
+full_liquidity_slack_usd_m = "-100"
+staged_liquidity_slack_usd_m = "300"
+defer_liquidity_slack_usd_m = "500"
+
+[[scenario]]
+id = "on-budget"
+weight = "7/10"
+full_nav_usd_m = "500"
+staged_nav_usd_m = "420"
+defer_nav_usd_m = "0"
+full_liquidity_slack_usd_m = "400"
+staged_liquidity_slack_usd_m = "420"
+defer_liquidity_slack_usd_m = "500"

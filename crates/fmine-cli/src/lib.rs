@@ -122,6 +122,8 @@ pub enum CliCommand {
     CapitalProgramBrief {
         model: PathBuf,
     },
+    /// Freeze a capital approval or score a separately supplied outcome against a pinned approval.
+    CapitalHindcast(capital::hindcast::Command),
     /// Compare public JV production, sales, capital and cost assertions on a common dated perimeter.
     Mirror(mirror::Command),
     /// Local issuance status, recall and owner-authorized journal events (BD-347).
@@ -584,6 +586,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "journal" => return "decide journal",
                         "production" => return "decide production",
                         "investment" => return "decide investment",
+                        "hindcast" => return "decide hindcast",
                         "recovery-bounds" => return "decide recovery-bounds",
                         _ => return "decide card",
                     }
@@ -1194,6 +1197,7 @@ pub fn parse_args(
             | "forecast spatial-monitor"
             | "decide production"
             | "decide investment"
+            | "decide hindcast"
             | "compare"
             | "plan pit"
             | "plan schedule"
@@ -1232,6 +1236,7 @@ pub fn parse_args(
             "decide production" => {
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
             }
+            "decide hindcast" => CliCommand::CapitalHindcast(capital::hindcast::parse(&words)?),
             "decide investment" => {
                 let [decide, investment, flag, path] = words.as_slice() else {
                     return Err(format!("expected 'fmine {}'", investment::USAGE));
@@ -2312,6 +2317,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         }
         CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root, false),
         CliCommand::CapitalProgramBrief { model } => capital::execute(model, workspace_root, true),
+        CliCommand::CapitalHindcast(command) => capital::hindcast::execute(command, workspace_root),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {
             reliance_explicit::execute(command, workspace_root)
@@ -2877,6 +2883,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(compare::ROBOT_DOCS_JSON);
             payload.push_str(",\"capital_program\":");
             payload.push_str(capital::ROBOT_DOCS_JSON);
+            payload.push_str(",\"capital_hindcast\":");
+            payload.push_str(capital::hindcast::ROBOT_DOCS_JSON);
             payload.push_str(",\"doctor\":");
             payload.push_str(doctor::ROBOT_DOCS_JSON);
             payload.push_str(",\"robot_schema\":");

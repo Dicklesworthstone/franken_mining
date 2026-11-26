@@ -57,6 +57,12 @@ mutates_authority = false
 description = "Enumerate declared static capital bundles under exact spending, prerequisite, exclusion and joint-scenario tail-risk constraints"
 
 [[verb]]
+path = "decide hindcast"
+subsystem = "Helm"
+mutates_authority = false
+description = "Freeze two capital decision rules and score a separate outcome against the retained approval digest"
+
+[[verb]]
 path = "assure public"
 subsystem = "Bullion"
 mutates_authority = true

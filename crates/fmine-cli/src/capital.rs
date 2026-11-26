@@ -10,6 +10,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 use crate::{Envelope, NextAction, json_string as js, worksheet_input};
 
 mod executive;
+pub(super) mod hindcast;
 mod investment;
 pub(crate) mod staged_journal;
 

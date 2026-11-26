@@ -1,7 +1,7 @@
 # CONTRACT.md — `fmine-cli`
 
 ## 1. Purpose
-The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-118`, `BD-071`) exposes the 80 verbs in `registries/verbs.toml` over the `FMT-ENV-1` response envelope, including `doctor` diagnostics, `robot-docs` / `robot schema`, and `repair plan` / `repair apply <digest>` (`PO-ADIT-1`..`PO-ADIT-3`).
+The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-118`, `BD-071`) exposes the verbs in `registries/verbs.toml` over the `FMT-ENV-1` response envelope, including `doctor` diagnostics, `robot-docs` / `robot schema`, and `repair plan` / `repair apply <digest>` (`PO-ADIT-1`..`PO-ADIT-3`).
 
 - **Crate:** `fmine-cli`
 - **Layer:** U
@@ -10,6 +10,18 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 - DESIGN (BD-054). `decide card <model> --brief` selects the executive Markdown view of the same evaluated
   Claim, with the worksheet path and SHA-256. An explicit JSON format or a different verb refuses the flag.
   The ordinary JSON and analyst Markdown retain the full comparison.
+
+- DESIGN (BD-230). `decide hindcast freeze <approval>` reads `fmine.capital-approval.v1` and calls
+  the capital library's approval-only freeze. The JSON and Markdown report retain both choices, all
+  action-level exact risk and liquidity calculations, the approval cutoff, and the worksheet hash.
+  `score <approval> --outcome <outcome> --approval-digest <digest>` recomputes the frozen approval
+  and validates the retained semantic digest before opening the outcome. The separate
+  `fmine.capital-outcome.v1` worksheet must declare the same case ID. The library checks physical
+  resolution and declared availability. The score retains the approval digest, outcome digest, actual
+  input file hashes and exact conditional payoff and regret results. Whole-second UTC timestamps,
+  clock classes, case links and evidence identifiers remain caller declarations. Outcome payoffs for
+  unchosen actions are supplied counterfactuals. Both commands are read-only and retain all authority
+  flags as false. The native binary workflow is exercised by the capital hindcast T-layer contract.
 
 - DESIGN (bd-4hg5, bd-rn1q, bd-3a2a, bd-jg7w, bd-zabr). `decide program` admits
   `fmine.executive-decision.v1` for source-bound committee comparisons. Each worksheet declares owner,
