@@ -125,10 +125,11 @@ the files existed (bd-s9j3; GATE-BULL-01's blind-layout clause). Barrick's Quart
    and labels. Then run `repro/barrick/fetch.sh`.
 5. **Run `scripts/register_vintage.sh --run 2026Q2 <incoming dir>`.** It refuses unless the seal holds and the
    binary matches `blind_record.json`. It then prints the roots and diffs against the sealed readers. A
-   child failure or disagreement in the workbook hashes or census returns nonzero. The two invocation
+   child failure or disagreement in the workbook hashes or census returns nonzero. The script also checks
+   the exact registered workbook population through the bound and requires its root and anchor to match
+   the latest pin for that source epoch in `expected.toml`. Use Python 3.11 or newer. The two invocation
    receipts stay in the incoming directory. A second attempt uses a fresh directory so the original
-   results remain available. The `--through 2026Q2` root must still equal the latest row for its 18-source
-   epoch in `expected.toml`.
+   results remain available.
 6. **Record a new E id** with the blind record, the rows, the sealed readers' numbers and the printed diffs.
 
 E859 records the Q3 2026 source admission and a known-file run with unchanged source selectors. The pre-release

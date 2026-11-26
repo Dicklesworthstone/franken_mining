@@ -10,6 +10,7 @@
 # - --run refuses a binary whose sha256 differs from the blind record (exit 1) and runs nothing;
 # - --run refuses an oracle.jsonl changed after its seal (exit 2);
 # - --run with the recorded binary runs it after the seal and refuses its output when it has no payload (exit 1).
+# - --run retains the prior bound's registered bytes, pinned root and anchor across a new quarter.
 #
 # Output: one JSON line per case, then {"cases": N, "failures": M}. Exits 1 if any case fails. The scratch
 # directory is left in place and named in the first line.
@@ -223,6 +224,25 @@ check recorded_binary_runs_after_seal "exit $code: $err" no_payload
 
 # DESIGN: exercise the shell and comparison boundary with invented CLI receipts. Real-workbook
 # reproduction uses an unmodified native binary separately.
+mkdir -p "$ws1/repro/barrick"
+prior_epoch="$(printf 'Barrick_Q2_2026_AISC.xlsx\t%s\n' "$zeros" | python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+cat >"$ws1/repro/barrick/expected.toml" <<EOF
+schema = "fmine.expected_roots.v1"
+issuer = "barrick"
+through = "2026Q3"
+[[expected]]
+registry_epoch = "$prior_epoch"
+state_root = "$zeros"
+anchor_id = "anc_old"
+[[expected]]
+registry_epoch = "$prior_epoch"
+state_root = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+anchor_id = "anc_test"
+[[expected]]
+registry_epoch = "$zeros"
+state_root = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+anchor_id = "anc_later"
+EOF
 receipt="$scratch/receipt-fmine"
 cat >"$receipt" <<'PY'
 #!/usr/bin/env python3
@@ -250,13 +270,18 @@ if case == "wrong_hash":
     sources[0]["sha256"] = "0" * 64
 if case == "wrong_census":
     sources[0]["numeric_cells"] += 1
+prior = dict(file="Barrick_Q2_2026_AISC.xlsx", sha256="0" * 64)
+sources = [prior] if through else [prior, *sources]
+if through and case == "wrong_prior_source":
+    prior["sha256"] = "1" * 64
+root = "b" * 64 if not through or case == "wrong_prior_root" else "a" * 64
+anchor = "anc_other" if through and case == "wrong_prior_anchor" else "anc_test"
 if case == "wrong_bound":
     through = None
-root = "a" * 64
 ledger = dict(totals={}, instances=0, exceptions=[], table_refusals=[], unregistered_headers=[])
 payload = dict(issuer="barrick", lane="public", through=through, sources=sources,
-               state_root=root, anchor_id="anc_test", identity_ledger=ledger)
-print(json.dumps(dict(status="ok", exit_code=0, certificate=root, anchor_id="anc_test", payload=payload)))
+               state_root=root, anchor_id=anchor, identity_ledger=ledger)
+print(json.dumps(dict(status="ok", exit_code=0, certificate=root, anchor_id=anchor, payload=payload)))
 sys.exit(7 if case == "child_failed" else 0)
 PY
 chmod +x "$receipt"
@@ -269,7 +294,8 @@ rehearse() {
 }
 rehearse positive
 matching_receipts() {
-  [[ $code -eq 0 && "$out" == *'"stage":"diff"'*'"census_equal":true,"source_bytes_equal":true'* ]]
+  [[ $code -eq 0 && "$out" == *'"stage":"diff"'*'"census_equal":true,"source_bytes_equal":true'* &&
+    "$out" == *'"historical_pin_equal":true'* ]]
 }
 check matching_receipts_accepted "exit $code: $err" matching_receipts
 dir_ok="$ws1/corpus_of_input_docs/incoming/case-positive"
@@ -291,6 +317,18 @@ check same_census_wrong_source_refused "exit $code: $err" hash_disagrees
 rehearse wrong_bound
 bound_disagrees() { [[ $code -eq 1 && "$err" == *"reported through"* ]]; }
 check wrong_rehearsal_bound_refused "exit $code: $err" bound_disagrees
+
+rehearse wrong_prior_source
+prior_source_disagrees() { [[ $code -eq 1 && "$err" == *"historical workbook population"* ]]; }
+check changed_historical_source_refused "exit $code: $err" prior_source_disagrees
+
+rehearse wrong_prior_root
+prior_root_disagrees() { [[ $code -eq 1 && "$out" == *'"historical_pin_equal":false'* ]]; }
+check changed_historical_root_refused "exit $code: $err" prior_root_disagrees
+
+rehearse wrong_prior_anchor
+prior_anchor_disagrees() { [[ $code -eq 1 && "$out" == *'"historical_pin_equal":false'* ]]; }
+check changed_historical_anchor_refused "exit $code: $err" prior_anchor_disagrees
 
 rehearse child_failed
 child_fails() { [[ $code -eq 7 && "$out" == *'"exit":7'* && "$out" != *'"stage":"diff"'* ]]; }

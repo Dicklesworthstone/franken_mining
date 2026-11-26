@@ -224,6 +224,35 @@ def cmd_sealed(dir_):
     line(stage="oracle_check", oracle_sha256=s["oracle_sha256"], oracle_utc=s["utc"], intact=True)
 
 
+def historical_pin(ws, bound, sources):
+    try:
+        import tomllib
+    except ImportError:
+        refuse("--run needs Python 3.11 or newer to read historical pins", 1)
+
+    _, rows = registry(ws)
+    registered = sorted((r["file"], r["sha256"]) for r in rows if r["quarter"] <= bound)
+    observed = sorted((r["file"], r["sha256"]) for r in sources)
+    if not registered or registered != observed:
+        refuse("the historical workbook population does not match the registry through " + bound, 1)
+    # BD-339.S1 binds pins to an epoch of registered file names and hashes, not the latest quarter.
+    epoch = hashlib.sha256("".join(f"{file}\t{sha}\n" for file, sha in registered).encode()).hexdigest()
+    path = os.path.join(ws, "repro", "barrick", "expected.toml")
+    try:
+        with open(path, "rb") as h:
+            pins = tomllib.load(h)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        refuse(f"cannot read historical pins: {e}", 1)
+    if pins.get("schema") != "fmine.expected_roots.v1" or pins.get("issuer") != "barrick":
+        refuse("invalid historical pin registry: " + path, 1)
+    for pin in reversed(pins.get("expected", [])):
+        if pin.get("registry_epoch") == epoch:
+            if not pin.get("state_root") or not pin.get("anchor_id"):
+                refuse(f"incomplete historical pin through {bound} for registry epoch {epoch}", 1)
+            return pin
+    refuse(f"no historical pin through {bound} for registry epoch {epoch}", 1)
+
+
 def cmd_diff(ws, dir_, bound):
     seal = sealed(dir_)
     runs = {k: json.loads("".join(text_lines(os.path.join(dir_, "run_%s.json" % k)))) for k in ("all", "through")}
@@ -246,6 +275,9 @@ def cmd_diff(ws, dir_, bound):
                 or not v.get("anchor_id") or v["anchor_id"] != p.get("anchor_id")):
             refuse("the fmine run on %s has inconsistent root or anchor evidence" % k, 1)
     pay = {k: v["payload"] for k, v in runs.items()}
+    prior = pay["through"]
+    pin = historical_pin(ws, bound, prior["sources"])
+    pin_equal = prior["state_root"] == pin["state_root"] and prior["anchor_id"] == pin["anchor_id"]
     oracle = jsonl(os.path.join(dir_, "oracle.jsonl"))
     per_file = {o["file"]: o for o in oracle if "file" in o}
     if not per_file:
@@ -276,12 +308,16 @@ def cmd_diff(ws, dir_, bound):
     oracle_ledger = next(o for o in oracle if "ledger" in o)
     line(stage="diff", bound=bound, root_all=pay["all"]["state_root"], root_through=pay["through"]["state_root"],
          census_equal=census_equal, source_bytes_equal=source_bytes_equal,
+         historical_epoch=pin["registry_epoch"], historical_pin_root=pin["state_root"],
+         historical_pin_anchor=pin["anchor_id"], historical_pin_equal=pin_equal,
          counts={"through": ledger["through"]["totals"], "all": ledger["all"]["totals"],
                  "oracle_census2": oracle_ledger["ledger"]},
          new_instances=ledger["all"]["instances"] - ledger["through"]["instances"],
          new_exceptions=len(new_exceptions))
     if not census_equal or not source_bytes_equal:
         refuse("the fmine run disagrees with the sealed workbook bytes or extraction census", 1)
+    if not pin_equal:
+        refuse(f"the historical assurance root or anchor changed through {bound}", 1)
 
 
 if __name__ == "__main__":
