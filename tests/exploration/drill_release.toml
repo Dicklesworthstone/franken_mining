@@ -1,0 +1,19 @@
+# Synthetic public-format reading. All hole IDs, measurements and locations are invented.
+schema = "fmine.drill-release-check.v1"
+document = "Synthetic Copper Ridge gold drilling update"
+evidence = "synthetic"
+grade_basis = "Au"
+cutoff = "3.5"
+cutoff_unit = "g/t"
+declared_holes = "3"
+internal_dilution_stated = "true"
+top_cut_stated = "true"
+
+[[phrase]]
+locator = "p. 4, DR-003"
+text = "DR-003: 10.0 m @ 5.00 g/t Au including 2.0 m @ 15.00 g/t Au"
+
+[[phrase]]
+locator = "p. 3, DR-001"
+text = "DR-001: 6.0 m @ 4.00 g/t Au"
+true_width_stated = "true"

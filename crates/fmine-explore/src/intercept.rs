@@ -505,6 +505,14 @@ pub fn audit_drill_release(
     intercepts: &[Intercept],
     context: &ReleaseDisclosureContext,
 ) -> Result<DrillReleaseAudit, Refusal> {
+    audit_drill_release_indexed(intercepts, context).map(|(audit, _)| audit)
+}
+
+/// Audit and return the original input index of each canonically ordered output interval.
+pub fn audit_drill_release_indexed(
+    intercepts: &[Intercept],
+    context: &ReleaseDisclosureContext,
+) -> Result<(DrillReleaseAudit, Vec<usize>), Refusal> {
     if intercepts.is_empty() {
         return Err(Refusal::new(
             RefusalCode::NoClaimInDomain201,
@@ -530,7 +538,7 @@ pub fn audit_drill_release(
     let mut audits = Vec::with_capacity(intercepts.len());
     let mut distinct_holes = BTreeSet::new();
 
-    for host in intercepts {
+    for (index, host) in intercepts.iter().enumerate() {
         validate_intercept_scalars(host)?;
         distinct_holes.insert(host.hole.clone());
         let canon_len = host.length.to_metres(host.length_unit)?;
@@ -538,6 +546,7 @@ pub fn audit_drill_release(
 
         let mut flags_set = BTreeSet::new();
         let remainder = if host.children.is_empty() {
+            extract_span_m(host)?;
             None
         } else {
             let rem = evaluate_remainder_recursive(host)?;
@@ -548,19 +557,23 @@ pub fn audit_drill_release(
         // Flags that apply even on childless intercepts.
         collect_node_disclosure_flags(host, context, &mut flags_set);
 
-        audits.push(InterceptAudit {
-            hole: host.hole.clone(),
-            canonical_length_m: canon_len,
-            canonical_grade: canon_grade,
-            canonical_grade_unit: canon_unit,
-            child_count: host.children.len(),
-            remainder,
-            flags: flags_set.into_iter().collect(),
-        });
+        audits.push((
+            index,
+            InterceptAudit {
+                hole: host.hole.clone(),
+                canonical_length_m: canon_len,
+                canonical_grade: canon_grade,
+                canonical_grade_unit: canon_unit,
+                child_count: host.children.len(),
+                remainder,
+                flags: flags_set.into_iter().collect(),
+            },
+        ));
     }
 
     // Canonical order independent of input slice permutation.
-    audits.sort_by(cmp_intercept_audit);
+    audits.sort_by(|(_, a), (_, b)| cmp_intercept_audit(a, b));
+    let (input_order, audits): (Vec<_>, Vec<_>) = audits.into_iter().unzip();
 
     let mut release_flags_set = BTreeSet::new();
     let missing_cutoff = context.composite_cutoff.is_none();
@@ -575,7 +588,7 @@ pub fn audit_drill_release(
     }
 
     if let Some(declared) = context.declared_hole_count
-        && let Some(gap_flag) = detect_hole_sequence_gap(declared, &distinct_holes)
+        && let Some(gap_flag) = detect_hole_sequence_gap(declared, &distinct_holes)?
     {
         release_flags_set.insert(gap_flag);
     }
@@ -592,14 +605,17 @@ pub fn audit_drill_release(
     }
 
     let digest = compute_audit_digest(distinct_holes.len(), &audits, &release_flags);
-    Ok(DrillReleaseAudit {
-        holes_count: distinct_holes.len(),
-        intervals: audits,
-        release_flags,
-        flags_by_kind,
-        no_claim: DRILL_RELEASE_NO_CLAIM,
-        digest,
-    })
+    Ok((
+        DrillReleaseAudit {
+            holes_count: distinct_holes.len(),
+            intervals: audits,
+            release_flags,
+            flags_by_kind,
+            no_claim: DRILL_RELEASE_NO_CLAIM,
+            digest,
+        },
+        input_order,
+    ))
 }
 
 fn evaluate_remainder_recursive(host: &Intercept) -> Result<RemainderResult, Refusal> {
@@ -946,7 +962,8 @@ fn collect_tree_flags(
 fn detect_hole_sequence_gap(
     declared_hole_count: u32,
     distinct_holes: &BTreeSet<String>,
-) -> Option<DisclosureFlag> {
+) -> Result<Option<DisclosureFlag>, Refusal> {
+    const MAX_MISSING_NUMBERS: usize = 4096;
     let observed = u32::try_from(distinct_holes.len()).unwrap_or(u32::MAX);
     // Group holes by alphabetic/hyphen prefix + trailing integer sequence (e.g. "DDH-" + 001).
     let mut by_prefix: BTreeMap<String, Vec<u32>> = BTreeMap::new();
@@ -959,21 +976,21 @@ fn detect_hole_sequence_gap(
     for nums in by_prefix.values_mut() {
         nums.sort_unstable();
         nums.dedup();
-        if nums.len() >= 2 {
-            let first = nums[0];
-            let last = nums[nums.len() - 1];
-            let present: BTreeSet<u32> = nums.iter().copied().collect();
-            for candidate in first..=last {
-                if !present.contains(&candidate) {
-                    missing.push(candidate);
-                }
+        for &[left, right] in nums.array_windows() {
+            let count = u64::from(right - left - 1);
+            if count > (MAX_MISSING_NUMBERS - missing.len()) as u64 {
+                return Err(Refusal::new(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    "hole sequence gaps exceed 4096 numbers; check the declared sequence scope",
+                ));
             }
+            missing.extend(left + 1..right);
         }
     }
     missing.sort_unstable();
     missing.dedup();
 
-    if observed < declared_hole_count || !missing.is_empty() {
+    Ok(if observed < declared_hole_count || !missing.is_empty() {
         Some(DisclosureFlag::HoleSequenceGap {
             declared_hole_count,
             observed_hole_count: observed,
@@ -981,7 +998,7 @@ fn detect_hole_sequence_gap(
         })
     } else {
         None
-    }
+    })
 }
 
 fn split_hole_sequence(hole: &str) -> Option<(String, u32)> {
@@ -1088,6 +1105,8 @@ fn cmp_intercept_audit(a: &InterceptAudit, b: &InterceptAudit) -> Ordering {
             (Some(ra), Some(rb)) => cmp_remainder_result(ra, rb),
         })
         .then_with(|| a.flags.cmp(&b.flags))
+        .then_with(|| cmp_exact_qty(a.canonical_length_m.step, b.canonical_length_m.step))
+        .then_with(|| cmp_exact_qty(a.canonical_grade.step, b.canonical_grade.step))
 }
 
 fn cmp_remainder_result(a: &RemainderResult, b: &RemainderResult) -> Ordering {
@@ -1096,6 +1115,17 @@ fn cmp_remainder_result(a: &RemainderResult, b: &RemainderResult) -> Ordering {
         .then_with(|| cmp_exact_qty(a.host_length_m.value, b.host_length_m.value))
         .then_with(|| cmp_exact_qty(a.host_grade.value, b.host_grade.value))
         .then_with(|| cmp_exact_qty(a.remainder_grade_point, b.remainder_grade_point))
+        .then_with(|| {
+            if a == b {
+                return Ordering::Equal;
+            }
+            let key = |r: &RemainderResult| {
+                let mut enc = Encoder::new_frame(*b"DRI1", 1);
+                encode_remainder(&mut enc, r);
+                enc.finish()
+            };
+            key(a).cmp(&key(b))
+        })
 }
 
 fn compute_audit_digest(

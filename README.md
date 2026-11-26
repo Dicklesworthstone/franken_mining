@@ -189,6 +189,27 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 
 ---
 
+## Check the remainder grade of a headline drill interval
+
+```bash
+fmine check drill-release tests/exploration/drill_release.toml --format markdown
+```
+
+In the synthetic example, a 10 m host at 5 g/t Au includes 2 m at 15 g/t. The remaining 8 m
+implies **2.5 g/t Au**, with an exact rounding interval of `947/395` to `13/5` g/t. The entire
+rounding interval falls below the declared 3.5 g/t cutoff. The report links the result to the
+worksheet bytes and the submitted document location. A hole-sequence gap prompts review of
+coverage. The implied grade is a residual interval average.
+
+Transcribe a single release's quoted intercepts as `[[phrase]]` rows with a `locator` and `text`.
+Name one `grade_basis` such as `Au` or `CuEq`, and use `evidence = "declared_public"`
+for a public transcription. If a phrase needs manual entry, use `[[cited]]` rows with `id`, `locator`,
+`hole`, `length`, `length_unit`, `grade`, and `grade_unit`. A child uses `parent` to reference an
+earlier cited row in the same hole. Sibling inclusions require `from` and `to` coordinates so the
+command can check overlap. Keep trailing decimal zeros to preserve printed precision. Set
+`true_width_stated = "true"` only where the cited text supports it. The document locators and
+disclosure context are reader declarations. [Synthetic worksheet](tests/exploration/drill_release.toml)
+
 ## Check a mining front for model drift
 
 **DESIGN.** Evaluate an explicitly declared sequence of mining polygons against one spatial model:

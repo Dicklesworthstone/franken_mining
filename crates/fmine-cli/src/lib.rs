@@ -146,6 +146,8 @@ pub enum CliCommand {
         issuer: Option<String>,
         through: Option<String>,
     },
+    /// Check a locally transcribed set of drill intercepts using exact remainder arithmetic.
+    CheckDrillRelease(PathBuf),
     /// Inspect workbook identities, or explicitly declared PDF sums and reserve roll-forwards.
     CheckTables {
         /// `None` selects the invented workbook known answers.
@@ -626,7 +628,18 @@ fn verb_hint(args: &[String]) -> &'static str {
             "html" => return "html claims",
             "mirror" => return "mirror",
             "reserve" => return "reserve replacement",
-            "check" => return "check tables",
+            "check" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--format" | "--workspace" => next += 2,
+                        "--json" => next += 1,
+                        "drill-release" => return capital::drill_release::VERB,
+                        _ => break,
+                    }
+                }
+                return "check tables";
+            }
             "track-record" => {
                 let mut next = i + 1;
                 while let Some(word) = args.get(next) {
@@ -1198,6 +1211,7 @@ pub fn parse_args(
             | "decide production"
             | "decide investment"
             | "decide hindcast"
+            | capital::drill_release::VERB
             | "compare"
             | "plan pit"
             | "plan schedule"
@@ -1237,6 +1251,22 @@ pub fn parse_args(
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
             }
             "decide hindcast" => CliCommand::CapitalHindcast(capital::hindcast::parse(&words)?),
+            capital::drill_release::VERB => match words.as_slice() {
+                [check, mode, path]
+                    if check == "check"
+                        && mode == "drill-release"
+                        && !path.trim().is_empty()
+                        && !path.starts_with("--") =>
+                {
+                    CliCommand::CheckDrillRelease(path.into())
+                }
+                _ => {
+                    return Err(format!(
+                        "expected 'fmine {}'",
+                        capital::drill_release::USAGE
+                    ));
+                }
+            },
             "decide investment" => {
                 let [decide, investment, flag, path] = words.as_slice() else {
                     return Err(format!("expected 'fmine {}'", investment::USAGE));
@@ -2338,6 +2368,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::ForecastPreflight(command) => {
             forecast_preflight::execute(command, workspace_root)
         }
+        CliCommand::CheckDrillRelease(path) => {
+            capital::drill_release::execute(path, workspace_root)
+        }
         CliCommand::CheckTables {
             issuer,
             through,
@@ -2691,6 +2724,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "check tables --issuer <issuer> --definitions <path> [--as-of YYYY-MM-DD]",
                 "check tables --issuer <issuer> --definitions <path> --cost-bridge <before_id,after_id> [--as-of YYYY-MM-DD]",
                 "check tables --synthetic",
+                capital::drill_release::USAGE,
                 "assure issue (--issuer <issuer> [--through YYYYQn] | --synthetic) --output <path> --journal <path> --expected-head <hex> --key <path> --role <generic-role> --purpose <text> --now <UTC> --uncertainty-ns <n>",
                 "reliance init --journal <path> --key <path> --now <UTC> --uncertainty-ns <n> --max-age-ns <n> --max-skew-ns <n>",
                 "reliance check <digest|file> --journal <path> [--head <hex>] [--now <UTC> --uncertainty-ns <n>] [--as-of <UTC>]",

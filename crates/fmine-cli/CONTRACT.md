@@ -7,6 +7,15 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 - **Layer:** U
 - **Subsystem:** Adit
 
+- DESIGN (BD-350). `check drill-release <worksheet.toml>` reads local `fmine.drill-release-check.v1`
+  with one document and named grade basis. It admits bounded verbatim phrase trees and manually cited rows
+  with earlier parent identifiers. It checks sibling positions before subtraction and refuses the whole
+  worksheet when any row needs clarification. Each canonically ordered output carries worksheet line
+  indices and supplied source locators. JSON retains the exact remainder point, rounding interval and
+  nested results. Markdown shows the reviewer the headline arithmetic and flags. The worksheet hash
+  binds the local input. Original provenance and disclosure context are caller declarations. Arithmetic
+  flags have no resource, reserve, execution, geotechnical or regulatory authority.
+
 - DESIGN (BD-054). `decide card <model> --brief` selects the executive Markdown view of the same evaluated
   Claim, with the worksheet path and SHA-256. An explicit JSON format or a different verb refuses the flag.
   The ordinary JSON and analyst Markdown retain the full comparison.
