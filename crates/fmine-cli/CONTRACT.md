@@ -279,6 +279,13 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   - Group recovery applies each site's ownership fraction once to 100%-project production for the same
     remaining period, unit and commodity. Distinct sites and the declared common capacity basis are
     required. A lapsed intervention contributes only its baseline plan. Site ceilings are supplied bounds.
+    DESIGN (bd-jg7w.1). Optional `shared_incremental_project_capacity` on the dated `[[group]]` row
+    declares a single remaining 100%-project output allowance above all baseline plans in the same unit.
+    Every additional project unit consumes one unit of that allowance. Site increments are independently
+    divisible up to their declared dated ceilings, within this common limit. The maximum assigns slack
+    to the highest attributable interest first and then proceeds in decreasing interest. The card recomputes
+    it without each site's uplift and reports a site and its deadline if that counterfactual misses the
+    target. Individual ceilings shown in the table precede the shared limit.
   - Project estimates retain the complete declared cohort and hold out a latest approval. Only comparable
     completed cost outcomes known strictly before that approval enter the lower-median actual/approval
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price

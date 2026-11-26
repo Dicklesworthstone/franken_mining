@@ -2,6 +2,7 @@
 //! Determinism: Exact
 //! Worksheet inputs are declarations, including their claimed availability.
 
+use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -1158,9 +1159,35 @@ fn tenure(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     Ok(c)
 }
 
+struct SiteUplift<'a> {
+    id: &'a str,
+    act_by: &'a str,
+    interest_bp: i128,
+    project_units: i128,
+}
+
+fn maximum_shared_uplift(
+    prioritized_sites: &[SiteUplift<'_>],
+    mut project_capacity: i128,
+    excluded: Option<&str>,
+) -> i128 {
+    // Every incremental project unit uses one unit of capacity. Moving a unit
+    // from a lower interest to an available higher interest cannot reduce the maximum.
+    let mut attributable = 0;
+    for site in prioritized_sites {
+        if excluded == Some(site.id) {
+            continue;
+        }
+        let admitted = site.project_units.min(project_capacity);
+        project_capacity -= admitted;
+        attributable += admitted * site.interest_bp;
+    }
+    attributable
+}
+
 fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     tables(doc, &["group", "site"])?;
-    let g = row_fields(
+    let g = row_fields_with_optional(
         table(doc, "group")?,
         &[
             "commodity",
@@ -1169,6 +1196,7 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             "target",
             "common_capacity_basis",
         ],
+        &["shared_incremental_project_capacity"],
         as_of,
     )?;
     let through = date(&g, "through")?;
@@ -1176,16 +1204,25 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         return Err(invalid("group recovery needs a remaining future interval"));
     }
     let target = qty(&g, "target")? * 10000;
+    let shared_capacity = g
+        .contains_key("shared_incremental_project_capacity")
+        .then(|| qty(&g, "shared_incremental_project_capacity"))
+        .transpose()?;
+    let site_ceiling = if shared_capacity.is_some() {
+        "Site maximum attributable before shared limit"
+    } else {
+        "Admissible maximum attributable"
+    };
     let mut c = Card::new(&[
         "Site",
         "Interest bp",
         "Allocated target attributable",
         "Current plan attributable",
-        "Admissible maximum attributable",
+        site_ceiling,
         "Decision by",
         "Site constraint",
     ]);
-    let (mut goals, mut plan, mut capacity) = (0, 0, 0);
+    let (mut goals, mut plan) = (0, 0);
     let mut offsets = Vec::new();
     let mut seen = BTreeSet::new();
     for row in doc.rows_of("site") {
@@ -1221,8 +1258,8 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             ));
         }
         let goal = qty(&f, "target")? * share;
-        let base = qty(&f, "plan")? * share;
-        let max = qty(&f, "maximum")? * share;
+        let base = qty(&f, "plan")?;
+        let max = qty(&f, "maximum")?;
         let by = date(&f, "act_by")?;
         if max < base || by > through {
             return Err(invalid(
@@ -1231,15 +1268,19 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         }
         let usable = if by < as_of { base } else { max };
         goals += goal;
-        plan += base;
-        capacity += usable;
-        offsets.push((id, by, usable - base));
+        plan += base * share;
+        offsets.push(SiteUplift {
+            id,
+            act_by: by,
+            interest_bp: share,
+            project_units: usable - base,
+        });
         c.rows.push(vec![
             id.into(),
             share.to_string(),
             fraction(goal, 10000)?,
-            fraction(base, 10000)?,
-            fraction(usable, 10000)?,
+            fraction(base * share, 10000)?,
+            fraction(usable * share, 10000)?,
             by.into(),
             get(&f, "constraint")?.into(),
         ]);
@@ -1249,13 +1290,46 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             "group target must equal the attributable allocations across at least two distinct sites",
         ));
     }
+    let additional = if let Some(limit) = shared_capacity {
+        offsets.sort_unstable_by_key(|site| (Reverse(site.interest_bp), site.id));
+        maximum_shared_uplift(&offsets, limit, None)
+    } else {
+        offsets
+            .iter()
+            .map(|site| site.project_units * site.interest_bp)
+            .sum()
+    };
+    let capacity = plan + additional;
     c.findings.push(format!("{} {} attributable through {through}. Group target {}; current plan {}; remaining net increase needed {}; maximum additional output before deadlines {}.",get(&g,"commodity")?,get(&g,"unit")?,fraction(target,10000)?,fraction(plan,10000)?,fraction((target-plan).max(0),10000)?,fraction(capacity-plan,10000)?));
+    if let Some(limit) = shared_capacity {
+        c.findings.push(format!(
+            "Shared limit above existing site plans: {limit} {} on a 100%-project basis.",
+            get(&g, "unit")?
+        ));
+    }
     c.findings.push(if capacity<target {format!("Even all admitted offsets leave a group shortfall of {}.",fraction(target-capacity,10000)?)} else {"Declared site bounds allow enough aggregate output. This is conditional on the stated simultaneous capacity basis.".into()});
     if capacity >= target {
-        for (id, by, offset) in offsets {
-            let indispensable = target - (capacity - offset);
+        for site in &offsets {
+            let SiteUplift {
+                id,
+                act_by,
+                interest_bp,
+                project_units,
+            } = site;
+            if let Some(limit) = shared_capacity {
+                let without = plan + maximum_shared_uplift(&offsets, limit, Some(id));
+                if without < target {
+                    c.findings.push(format!(
+                        "{id} is required. Without its uplift, the attributable maximum is {} and the group is short by {}. Decision deadline {act_by}.",
+                        fraction(without, 10000)?,
+                        fraction(target - without, 10000)?
+                    ));
+                }
+                continue;
+            }
+            let indispensable = target - (capacity - project_units * interest_bp);
             if indispensable > 0 {
-                c.findings.push(format!("{id} must supply at least {} above its baseline even if all other sites reach their bounds. Decision deadline {by}.", fraction(indispensable,10000)?));
+                c.findings.push(format!("{id} must supply at least {} above its baseline even if all other sites reach their bounds. Decision deadline {act_by}.", fraction(indispensable,10000)?));
             }
         }
     }
@@ -1874,6 +1948,57 @@ mod tests {
             GROUP.replacen("target = \"13000\"", "target = \"13001\"", 1),
         ] {
             assert!(evaluate(&changed).is_err());
+        }
+    }
+
+    fn group_with_shared_limit(limit: &str) -> String {
+        GROUP
+            .replace(
+                "Separate processing and haul routes; simultaneous limits affirmed in Q4C",
+                "One remaining shared copper capacity allowance above current site plans",
+            )
+            .replace(
+                r#"target = "13000""#,
+                &format!("target = \"13000\"\nshared_incremental_project_capacity = \"{limit}\""),
+            )
+    }
+
+    #[test]
+    fn shared_group_capacity_limits_physical_output_before_ownership() {
+        let scarce = report(&group_with_shared_limit("900"));
+        assert!(scarce.contains("current plan 12000"));
+        assert!(scarce.contains("maximum additional output before deadlines 900."));
+        assert!(scarce.contains("group shortfall of 100."));
+
+        let fractional = report(&group_with_shared_limit("1101"));
+        // Mesa takes 1,000 units. Valley's remaining 101 units on a 60% share yield 60.6.
+        assert!(fractional.contains("maximum additional output before deadlines 5303/5."));
+        assert!(fractional.contains("Site maximum attributable before shared limit"));
+        assert!(fractional.contains("Valley | 6000 | 6000 | 4800 | 5100"));
+
+        let equal = report(&group_with_shared_limit("1000"));
+        assert!(equal.contains("allow enough aggregate output"));
+        assert!(equal.contains("Mesa is required. Without its uplift, the attributable maximum is 12300 and the group is short by 700. Decision deadline 2030-10-04."));
+        assert!(!equal.contains("Valley is required"));
+        assert!(report(&group_with_shared_limit("999")).contains("group shortfall of 1."));
+        assert!(report(&group_with_shared_limit("0")).contains("group shortfall of 1000."));
+    }
+
+    #[test]
+    fn shared_group_capacity_reassigns_headroom_when_an_intervention_is_unavailable() {
+        let shared =
+            group_with_shared_limit("1100").replace(r#"maximum = "8200""#, r#"maximum = "8100""#);
+        let both_needed = report(&shared);
+        assert!(both_needed.contains("maximum additional output before deadlines 1020."));
+        assert!(both_needed.contains("Valley is required. Without its uplift, the attributable maximum is 12900 and the group is short by 100."));
+        assert!(both_needed.contains("Mesa is required. Without its uplift, the attributable maximum is 12300 and the group is short by 700."));
+        let at_deadline = report(&shared.replace("2030-10-04", "2030-09-30"));
+        assert!(at_deadline.contains("maximum additional output before deadlines 1020."));
+        let expired = report(&shared.replace("2030-10-04", "2030-09-29"));
+        assert!(expired.contains("maximum additional output before deadlines 300."));
+        assert!(expired.contains("group shortfall of 700."));
+        for limit in ["-1", "900.5", "9223372036854775808"] {
+            assert!(evaluate(&group_with_shared_limit(limit)).is_err());
         }
     }
 

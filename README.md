@@ -68,6 +68,20 @@ $400,000 replacement cash posting ahead of release. North then needs $1.3 millio
 Separately dated debits are reserved before receipts on the same day. Pending releases contribute
 no receipt to the funding check.
 
+### Can the group hit its target with shared production capacity?
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_group.toml --brief
+```
+
+The synthetic North Basin group needs 1,000 attributable tonnes of additional copper. The individual
+site ceilings allow 1,300. To model a shared allowance, add `shared_incremental_project_capacity = "900"`
+to `[[group]]` and cite that common constraint in `common_capacity_basis`. The cap is for incremental
+100%-project production in the same unit. It leaves existing site plans in place. The group can cover at
+most 900 attributable tonnes of uplift, leaving a 100-tonne shortfall. At a cap of 1,000, the target is
+attainable only with Mesa's intervention by its stated deadline of October 4. The calculation assumes
+divisible increments and one unit of shared capacity per additional project unit.
+
 ### Can Treasury fund margin calls if a metal shipment pays late?
 
 ```bash
