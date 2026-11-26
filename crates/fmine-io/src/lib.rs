@@ -6,6 +6,7 @@ pub mod dialects;
 pub mod dxf;
 pub mod forecast;
 pub mod import_rules;
+pub mod intercept;
 pub mod las;
 pub mod minelib_report;
 pub mod numfmt;

@@ -186,6 +186,7 @@ dependencies = [
  "fmine-core",
  "fmine-crs",
  "fmine-evidence",
+ "fmine-explore",
  "fmine-geom",
  "fmine-lp",
  "fmine-object",

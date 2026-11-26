@@ -3,13 +3,14 @@
 ## 1. Purpose
 Lodestar K1 exploration data model, effort accounting, five-class absence taxonomy, and cover-aware detection-thinning kernel (`BD-231`, plan §11.3–§11.4):
 - `model`: CRS-bound `GeoCoord`, `DepositRecord` (with Good–Turing `k*` novel-type simplex `DepositTypeProbs`, censored `MarkRecord`, optional `DiscoveryEvent`, aggregation rule id, and `SourceAnchor` provenance), `EffortRecord` (method, geometry, valid interval, `MethodSpec` with line spacing / depth of investigation / detection limits, and `CoverageConfidence`), IDEA-protocol `ElicitationRecord` (`n90 <= n50 <= n10`), and versioned `TractMap`;
-- `absence`: all five §11.3 absence classes (`A0NotLooked`, `A1LookedInsensitive`, `A2LookedSensitiveNothing`, `A3FoundSubEconomic`, `A4EffortSuspectedUnrecorded`), their exact `fmine_evidence::KnowledgeState` mapping, and cover-vs-DOI detection-thinning classification ensuring transported cover enters detection `q_j` and never existence `λ`.
+- `absence`: all five §11.3 absence classes (`A0NotLooked`, `A1LookedInsensitive`, `A2LookedSensitiveNothing`, `A3FoundSubEconomic`, `A4EffortSuspectedUnrecorded`), their exact `fmine_evidence::KnowledgeState` mapping, and cover-vs-DOI detection-thinning classification ensuring transported cover enters detection `q_j` and never existence `λ`;
+- `intercept`: exact interval remainder-grade arithmetic and disclosure-flag auditing (`BD-350.S2`, `bd-gqu3.1`) over public drill-release intercepts, with exact `ft -> m` (`3048/10000`) and `oz/st -> g/t` (`240/7`) conversions, bottom-up nested inclusion evaluation, overlap and non-positive-remainder refusals, and canonical `DRI1` SHA-256 audit digests.
 
 - **Crate:** `fmine-explore`
 - **Layer:** K1
 - **Subsystem:** Lodestar
 - **LOC budget:** 15,000 planned / 17,000 ceiling
-- **Allowed Module Families:** `["model", "absence", "three_part"]`
+- **Allowed Module Families:** `["model", "absence", "three_part", "intercept"]`
 
 ## 2. Inputs
 - Exploration deposit records, historical effort records, tract definitions, and elicitation records expressed strictly in `fmine_crs::CrsId`, `fmine_units::ExactQty`, and `fmine_core::{ObjectId, SourceAnchor}` (zero bare `f64` parameters in public K-layer signatures; L-6).

@@ -6,6 +6,7 @@
 //! probabilities, and thinning hazards use exact `fmine_units::ExactQty` and `fmine_crs::CrsId`.
 
 pub mod absence;
+pub mod intercept;
 pub mod model;
 pub mod three_part;
 

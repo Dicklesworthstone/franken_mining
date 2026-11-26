@@ -14,6 +14,7 @@ fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-crs = { path = "../fmine-crs" }
 fmine-evidence = { path = "../fmine-evidence" }
+fmine-explore = { path = "../fmine-explore" }
 fmine-geom = { path = "../fmine-geom" }
 fmine-lp = { path = "../fmine-lp" }
 fmine-object = { path = "../fmine-object" }
