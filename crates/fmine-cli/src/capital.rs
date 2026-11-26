@@ -145,6 +145,9 @@ pub(crate) fn program_snapshot(
     let Some(TomlValue::Str(schema)) = doc.top_get("schema").map(|f| &f.value) else {
         return Ok(None);
     };
+    if schema == hindcast::APPROVAL_SCHEMA {
+        return hindcast::journal_snapshot(text, source, action).map(Some);
+    }
     // The regular command and journal reader use different input labels. Preserve the command's
     // established capital locator so every input Claim and the retained output have identical ids.
     let source = SourceAnchor::new(&source.artifact_path, source.artifact_sha256, MODEL_LOCATOR);

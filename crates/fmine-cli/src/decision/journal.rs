@@ -300,6 +300,14 @@ impl Snapshot {
                 &self.claim_id,
                 latest_ns,
             )?;
+            crate::capital::hindcast::validate_receipt(
+                &self.model,
+                &self.model_path,
+                &self.card,
+                action,
+                &self.claim_id,
+                earliest_ns,
+            )?;
         }
         if let Some(links) = &self.forecasts {
             links.validate_at(earliest_ns, latest_ns)?;
@@ -604,6 +612,60 @@ fn replay(journal: &Journal) -> Result<History, Refusal> {
         history.snapshots.push(snapshot);
     }
     Ok(history)
+}
+
+pub(crate) struct RecordedHindcast {
+    pub decision: String,
+    pub action: String,
+    pub model: String,
+    pub model_path: String,
+    pub journal_head: Digest32,
+    pub record_head: Digest32,
+    pub earliest_ns: i64,
+    pub latest_ns: i64,
+}
+
+pub(crate) fn recorded_hindcast(
+    path: &Path,
+    head: Digest32,
+    decision: &str,
+) -> Result<RecordedHindcast, Refusal> {
+    let journal = Journal::open_read(path, Some(head))?;
+    let history = replay(&journal)?;
+    let index = *history
+        .ids
+        .get(decision)
+        .ok_or_else(|| invalid("decision id is absent from the pinned journal"))?;
+    let snapshot = history
+        .snapshots
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| integrity("decision snapshot is missing from replayed history"))?;
+    let record = journal
+        .records()
+        .get(index + 1)
+        .ok_or_else(|| integrity("decision record is missing from replayed history"))?;
+    let Choice::ActNow(action) = snapshot.choice else {
+        return Err(invalid(
+            "decision does not retain a capital hindcast approval",
+        ));
+    };
+    if !crate::capital::hindcast::is_receipt(&snapshot.card) {
+        return Err(invalid(
+            "decision does not retain a capital hindcast approval",
+        ));
+    }
+    let (earliest_ns, latest_ns) = journal.header().time_bounds(record.observed_ns)?;
+    Ok(RecordedHindcast {
+        decision: snapshot.decision_id,
+        action,
+        model: snapshot.model,
+        model_path: snapshot.model_path,
+        journal_head: journal.head(),
+        record_head: record.chain_head()?,
+        earliest_ns,
+        latest_ns,
+    })
 }
 
 fn report(

@@ -2572,8 +2572,34 @@ The semantic digest tolerates comments and row reordering. The report carries th
 for each worksheet, so an edit to the submitted bytes remains visible.
 
 The outcome sheet supplies capex, schedule slip and action payoffs, including counterfactual estimates
-for unchosen actions. The CLI checks the declared timeline and computes the comparison offline.
-Historical source authentication and timestamped registration require separate evidence.
+for unchosen actions. The standalone score checks the declared worksheet timeline and computes the
+comparison offline.
+
+For a prospective committee decision, copy the chosen action from the freeze report's JSON
+`payload.journal_actions`. Each entry binds the action to the reviewed approval digest. Record the
+choice and rationale before the outcome resolves, using the initialized journal and head described below.
+
+```bash
+next_head="$(fmine decide journal record --journal decisions.journal \
+  --expected-head "$FMINE_DECISION_HEAD" --model "$APPROVAL_WORKSHEET" \
+  --decision expansion-approval --action "$REVIEWED_ACTION" \
+  --reason "$COMMITTEE_RATIONALE" --code-revision "$FMINE_CODE_REVISION" \
+  --trust-host-clock --json | jq -er '.payload.head')" && FMINE_DECISION_HEAD="$next_head"
+```
+
+Retain that head independently and keep it current as later entries are appended. After resolution, score
+the selected decision using its retained approval worksheet.
+
+```bash
+fmine decide hindcast score-recorded decisions.journal --head "$FMINE_DECISION_HEAD" \
+  --decision expansion-approval --outcome "$OUTCOME_WORKSHEET" --format markdown
+```
+
+The score requires the pinned journal's latest possible write time for that decision to precede the
+outcome's declared physical resolution. The report identifies the recorded choice separately from the two
+policies being scored. Source authentication and external time proof require separate evidence. The
+historical synthetic worksheet above uses the standalone score because its supplied outcome has already
+resolved.
 
 #### Retain a decision and its original evaluated evidence
 

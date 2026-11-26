@@ -37,6 +37,8 @@ const OPERATING_REVIEW: &str = include_str!("../../../tests/capital/executive_ca
 const INVESTMENT_PORTFOLIO: &str =
     include_str!("../../../tests/capital/production_investments.toml");
 const KPI_PORTFOLIO: &str = include_str!("../../../tests/capital/kpi_constraints.toml");
+const HINDCAST_APPROVAL: &str = include_str!("../../../tests/capital/hindcast_approval.toml");
+const HINDCAST_OUTCOME: &str = include_str!("../../../tests/capital/hindcast_outcome.toml");
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 const CAPITAL_BASE: &str = r#"schema = "fmine.capital-program.v1"
@@ -182,6 +184,203 @@ fn successful(envelope: Envelope) -> Envelope {
         assert!(envelope.to_json().contains(&format!("\"{flag}\":false")));
     }
     envelope
+}
+
+fn hindcast_cli(f: &Fixture, args: &[&str]) -> Envelope {
+    let args: Vec<_> = ["decide", "hindcast"]
+        .into_iter()
+        .chain(args.iter().copied())
+        .map(str::to_owned)
+        .collect();
+    fmine_cli::invoke(&args, &f.root).0
+}
+
+fn hindcast_freeze(f: &Fixture) -> Envelope {
+    successful(hindcast_cli(f, &["freeze", "model.toml"]))
+}
+
+fn hindcast_recorded_score(f: &Fixture, head: Digest32, id: &str, outcome: &str) -> Envelope {
+    hindcast_cli(
+        f,
+        &[
+            "score-recorded",
+            "decisions.journal",
+            "--head",
+            &head.to_hex(),
+            "--decision",
+            id,
+            "--outcome",
+            outcome,
+        ],
+    )
+}
+
+fn hindcast_time(utc: &str) -> i64 {
+    fmine_calib::record::parse_utc(utc).unwrap() * fmine_time::NS_PER_SEC
+}
+
+#[test]
+fn hindcast_scores_the_retained_approval_at_the_selected_record() {
+    let f = Fixture::new();
+    let other = head(&successful(execute_with_clock(
+        &f.record(f.initial, "other-decision", "smaller"),
+        &f.root,
+        &Clock(200),
+    )));
+    fs::write(&f.model, HINDCAST_APPROVAL).unwrap();
+    let outcome_path = f.root.join("outcome.toml");
+    fs::write(&outcome_path, HINDCAST_OUTCOME).unwrap();
+    let freeze = hindcast_freeze(&f);
+    let approval_digest = field(&freeze.payload_json, "approval_digest");
+    let action = format!("stage_with_recourse@{approval_digest}");
+    let frozen_card = parse_json(freeze.payload_json.as_bytes()).unwrap();
+    assert!(
+        frozen_card
+            .get("journal_actions")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|choice| choice.as_str() == Some(action.as_str()))
+    );
+    let cut = hindcast_time("2023-02-24T15:00:00Z");
+    let first = head(&successful(execute_with_clock(
+        &f.record(other, "approval-one", &action),
+        &f.root,
+        &Clock(cut + 10),
+    )));
+    let second = head(&successful(execute_with_clock(
+        &f.record(
+            first,
+            "approval-two",
+            &format!("defer_or_pass@{approval_digest}"),
+        ),
+        &f.root,
+        &Clock(cut + 30),
+    )));
+    fs::write(&f.model, "edited since approval").unwrap();
+    let bytes = fs::read(&f.journal).unwrap();
+    let score = successful(hindcast_recorded_score(
+        &f,
+        second,
+        "approval-one",
+        "outcome.toml",
+    ));
+    let score_json = parse_json(score.payload_json.as_bytes()).unwrap();
+    let registration = score_json.get("registration").unwrap();
+    assert_eq!(field(&score.payload_json, "mode"), "score-recorded");
+    assert_eq!(
+        field(&score.payload_json, "approval_digest"),
+        approval_digest
+    );
+    assert_eq!(field(&score.payload_json, "recorded_action"), action);
+    assert_eq!(field(&score.payload_json, "journal_head"), second.to_hex());
+    assert_eq!(field(&score.payload_json, "record_head"), first.to_hex());
+    assert_eq!(
+        field(&score.payload_json, "h7d_advantage_usd_per_share"),
+        "2/5"
+    );
+    assert_eq!(
+        score_json.get("approval_source"),
+        frozen_card.get("approval_source")
+    );
+    let times = registration
+        .get("time_bounds_ns")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(times[0].as_str(), Some(cut.to_string().as_str()));
+    assert_eq!(times[1].as_str(), Some((cut + 20).to_string().as_str()));
+    let repeat = successful(hindcast_recorded_score(
+        &f,
+        second,
+        "approval-one",
+        "outcome.toml",
+    ));
+    assert_eq!(score.to_json(), repeat.to_json());
+    let stale = hindcast_recorded_score(&f, first, "approval-one", "missing.toml");
+    assert_eq!(stale.refusal.unwrap().code, "FMINE-REF-502");
+    let missing = hindcast_recorded_score(&f, second, "absent", "missing.toml");
+    assert!(
+        missing
+            .refusal
+            .unwrap()
+            .what
+            .contains("decision id is absent")
+    );
+    let unrelated = hindcast_recorded_score(&f, second, "other-decision", "missing.toml");
+    assert!(
+        unrelated
+            .refusal
+            .unwrap()
+            .what
+            .contains("does not retain a capital hindcast")
+    );
+    fs::write(
+        outcome_path,
+        HINDCAST_OUTCOME.replace("north-basin-expansion", "another-case"),
+    )
+    .unwrap();
+    let wrong = hindcast_recorded_score(&f, second, "approval-one", "outcome.toml");
+    assert!(
+        wrong
+            .refusal
+            .unwrap()
+            .what
+            .contains("outcome case_id differs")
+    );
+    assert_eq!(fs::read(&f.journal).unwrap(), bytes);
+}
+
+#[test]
+fn hindcast_requires_a_reviewed_pin_and_a_strict_pre_resolution_write() {
+    let f = Fixture::new();
+    fs::write(&f.model, HINDCAST_APPROVAL).unwrap();
+    fs::write(f.root.join("outcome.toml"), HINDCAST_OUTCOME).unwrap();
+    let freeze = hindcast_freeze(&f);
+    let action = format!(
+        "approve_full@{}",
+        field(&freeze.payload_json, "approval_digest")
+    );
+    let record = f.record(f.initial, "approval", &action);
+    let cut = hindcast_time("2023-02-24T15:00:00Z");
+    let resolved = hindcast_time("2025-11-20T12:00:00Z");
+    f.refuses_without_append(&record, cut + 9, "FMINE-REF-108");
+    let fake_pin = f.record(
+        f.initial,
+        "approval",
+        &format!("approve_full@{}", "0".repeat(64)),
+    );
+    f.refuses_without_append(&fake_pin, cut + 10, "FMINE-REF-507");
+    let unpinned = f.record(f.initial, "approval", "approve_full");
+    f.refuses_without_append(&unpinned, cut + 10, "FMINE-REF-105");
+    let before = head(&successful(execute_with_clock(
+        &record,
+        &f.root,
+        &Clock(resolved - 11),
+    )));
+    let at = head(&successful(execute_with_clock(
+        &f.record(before, "equal-bound", &action),
+        &f.root,
+        &Clock(resolved - 10),
+    )));
+    let after = head(&successful(execute_with_clock(
+        &f.record(at, "after-bound", &action),
+        &f.root,
+        &Clock(resolved + 1),
+    )));
+    let bytes = fs::read(&f.journal).unwrap();
+    successful(hindcast_recorded_score(
+        &f,
+        after,
+        "approval",
+        "outcome.toml",
+    ));
+    for id in ["equal-bound", "after-bound"] {
+        let status = hindcast_recorded_score(&f, after, id, "outcome.toml");
+        assert_eq!(status.refusal.unwrap().code, "FMINE-REF-108");
+    }
+    assert_eq!(fs::read(&f.journal).unwrap(), bytes);
 }
 
 fn hex(bytes: &[u8]) -> String {

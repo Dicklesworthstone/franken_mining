@@ -4,13 +4,17 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use fmine_calib::record::{format_utc, parse_utc};
+use fmine_calib::record::{format_utc, parse_hex32, parse_utc};
 use fmine_capital::hindcast::{
     ActionApprovalMetrics, ApprovalEvidence, ApprovalSnapshot, FrozenApproval, HINDCAST_NO_CLAIM,
     HindcastCaseResult, HindcastScenario, RealizedApprovalOutcome, freeze_approval,
 };
-use fmine_core::{Digest32, anchor::SourceAnchor};
-use fmine_evidence::{AssertionSource, EvidenceClass, Refusal, RefusalCode};
+use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
+use fmine_evidence::{
+    AssertionSource, EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
+};
+use fmine_io::omf::json::{Json, parse as parse_json};
 use fmine_registry::toml_subset::{TomlDoc, parse_subset};
 use fmine_time::{
     Anchor, CivilDate, NS_PER_DAY, NS_PER_SEC, QuadTemporalStamp, RecordTime, TimeEvidence,
@@ -19,14 +23,19 @@ use fmine_time::{
 use fmine_units::ExactQty;
 
 use super::investment::{Fields, fields, get, invalid, number};
-use crate::{Envelope, json_string as js, worksheet_input};
+use crate::{Envelope, decision_journal, json_string as js, worksheet_input};
 
 const VERB: &str = "decide hindcast";
 const FREEZE: &str = "decide hindcast freeze <approval>";
 const SCORE: &str =
     "decide hindcast score <approval> --outcome <outcome> --approval-digest <digest>";
-const APPROVAL_SCHEMA: &str = "fmine.capital-approval.v1";
+const SCORE_RECORDED: &str =
+    "decide hindcast score-recorded <journal> --head <digest> --decision <id> --outcome <outcome>";
+pub(super) const APPROVAL_SCHEMA: &str = "fmine.capital-approval.v1";
 const OUTCOME_SCHEMA: &str = "fmine.capital-outcome.v1";
+const RECEIPT_PREFIX: &str = r#"{"schema":"fmine.capital-hindcast.v1","mode":"freeze","#;
+const SOURCE_LOCATOR: &str = "declared capital approval source";
+const RECORDED_NO_CLAIM: &str = "Conditional comparison using the retained worksheet and the pinned local decision journal. Pre-resolution timing uses the declared host-clock bound and the supplied outcome's physical validity. Payoffs for unchosen actions are counterfactual. Historical authentication, external time proof and authorization require separate evidence.";
 const STAMP_FIELDS: &[&str] = &[
     "valid_start",
     "valid_end",
@@ -40,7 +49,7 @@ const STAMP_FIELDS: &[&str] = &[
 const MAX_WORKSHEET_BYTES: u64 = 4 * 1024 * 1024;
 type Result<T> = std::result::Result<T, Refusal>;
 
-pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"freeze":"decide hindcast freeze <approval>","score":"decide hindcast score <approval> --outcome <outcome> --approval-digest <digest>","approval_schema":"fmine.capital-approval.v1","outcome_schema":"fmine.capital-outcome.v1","examples":["tests/capital/hindcast_approval.toml","tests/capital/hindcast_outcome.toml"],"time":"Whole-second UTC timestamps, declared record-clock class and approval anchor","pin":"Score recomputes the approval and requires its retained digest before opening the outcome. The outcome names the same case.","authority":"Read-only. Save the freeze output before observing the outcome. Timestamps, anchor and evidence identifiers are declarations. Scoring can include supplied counterfactuals."}"#;
+pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"freeze":"decide hindcast freeze <approval>","score":"decide hindcast score <approval> --outcome <outcome> --approval-digest <digest>","score_recorded":"decide hindcast score-recorded <journal> --head <digest> --decision <id> --outcome <outcome>","approval_schema":"fmine.capital-approval.v1","outcome_schema":"fmine.capital-outcome.v1","examples":["tests/capital/hindcast_approval.toml","tests/capital/hindcast_outcome.toml"],"time":"Whole-second UTC timestamps, declared record-clock class and approval anchor","pin":"Both score modes verify the approval pin before opening the outcome. The outcome names the same case.","journal":"Record an explicit action from freeze journal_actions through decide journal record. Score from a pinned journal and decision ID. Physical outcome resolution must follow the latest possible journal write.","authority":"All hindcast modes are read-only. Source timestamps, evidence and clock bounds are declarations. Scoring can include supplied counterfactuals."}"#;
 
 /// The score mode carries both a separate outcome and a required approval pin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,37 +60,58 @@ pub enum Command {
         outcome: PathBuf,
         approval_digest: String,
     },
+    ScoreRecorded {
+        journal: PathBuf,
+        head: Digest32,
+        decision: String,
+        outcome: PathBuf,
+    },
 }
 
 pub(crate) fn parse(words: &[String]) -> std::result::Result<Command, String> {
-    let usage = || format!("expected 'fmine {FREEZE}' or 'fmine {SCORE}'");
+    let usage =
+        || format!("expected 'fmine {FREEZE}', 'fmine {SCORE}' or 'fmine {SCORE_RECORDED}'");
     let path = |word: &str| !word.trim().is_empty() && !word.starts_with("--");
-    let [_, _, mode, approval, rest @ ..] = words else {
+    let [_, _, mode, input, rest @ ..] = words else {
         return Err(usage());
     };
-    if !path(approval) {
+    if !path(input) {
         return Err(usage());
     }
     match (mode.as_str(), rest) {
-        ("freeze", []) => Ok(Command::Freeze(approval.into())),
+        ("freeze", []) => Ok(Command::Freeze(input.into())),
         ("score", [a, x, b, y]) => {
             let (outcome, digest) = match (a.as_str(), b.as_str()) {
                 ("--outcome", "--approval-digest") => (x, y),
                 ("--approval-digest", "--outcome") => (y, x),
                 _ => return Err(usage()),
             };
-            if !path(outcome)
-                || digest.len() != 64
-                || !digest
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            {
+            if !path(outcome) || parse_hex32(digest).is_none() {
                 return Err(usage());
             }
             Ok(Command::Score {
-                approval: approval.into(),
+                approval: input.into(),
                 outcome: outcome.into(),
                 approval_digest: digest.clone(),
+            })
+        }
+        ("score-recorded", [_, _, _, _, _, _]) => {
+            let fields: std::collections::BTreeMap<_, _> = rest
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[flag, value]| (flag.as_str(), value.as_str()))
+                .collect();
+            let [Some(head), Some(decision), Some(outcome)] = ["--head", "--decision", "--outcome"]
+                .map(|key| fields.get(key).copied().filter(|value| path(value)))
+            else {
+                return Err(usage());
+            };
+            Ok(Command::ScoreRecorded {
+                journal: input.into(),
+                head: parse_hex32(head).map(Digest32).ok_or_else(usage)?,
+                decision: decision.into(),
+                outcome: outcome.into(),
             })
         }
         _ => Err(usage()),
@@ -365,12 +395,19 @@ fn score_json(score: &HindcastCaseResult, source: &str) -> String {
     )
 }
 
+struct Score {
+    result: HindcastCaseResult,
+    source: SourceAnchor,
+    bytes: usize,
+}
+
 fn markdown(
     snapshot: &ApprovalSnapshot,
     frozen: &FrozenApproval,
     source: &SourceAnchor,
     approval_cut: &str,
-    score: Option<&(HindcastCaseResult, SourceAnchor)>,
+    score: Option<&Score>,
+    registered: Option<&decision_journal::RecordedHindcast>,
 ) -> String {
     let (h7a, h7d) = frozen.decisions();
     let mut md = format!(
@@ -398,7 +435,23 @@ fn markdown(
             m.feasible
         );
     }
-    if let Some((score, source)) = score {
+    if let Some(registered) = registered {
+        let _ = writeln!(
+            md,
+            "\nDecision `{}` recorded `{}` at journal record `{}`.\n\nVerified journal head `{}`. The latest possible record time is {} ns since the Unix epoch.",
+            worksheet_input::markdown_cell(&registered.decision),
+            worksheet_input::markdown_cell(&registered.action),
+            registered.record_head,
+            registered.journal_head,
+            registered.latest_ns,
+        );
+    }
+    if let Some(Score {
+        result: score,
+        source,
+        ..
+    }) = score
+    {
         let _ = writeln!(
             md,
             "\nOutcome digest `{}`\n\nOutcome worksheet SHA-256 `{}`\n\nSupplied H7a payoff {} USD/share. Supplied H7d payoff {} USD/share.\n\nCapex multiple {}. Schedule slip {} months.",
@@ -410,42 +463,36 @@ fn markdown(
             score.schedule_slip_months
         );
     }
-    let _ = write!(md, "\n{HINDCAST_NO_CLAIM}");
+    let _ = write!(md, "\n{}", no_claim(registered));
     md
 }
 
-fn evaluate(command: &Command, root: &Path) -> Result<Envelope> {
-    let approval_path = match command {
-        Command::Freeze(path) | Command::Score { approval: path, .. } => path,
-    };
-    let (text, source) = worksheet_input::read(
-        &root.join(approval_path),
-        "capital approval",
-        MAX_WORKSHEET_BYTES,
-    )?;
-    let snapshot = approval(&text)?;
-    let frozen = freeze_approval(&snapshot)?;
-    let digest = frozen.digest().to_hex();
-    let mut score = None;
-    let mut score_payload = "null".to_owned();
-    if let Command::Score {
-        outcome: path,
-        approval_digest,
-        ..
-    } = command
-    {
-        if *approval_digest != digest {
-            return Err(Refusal::new(
-                RefusalCode::FrozenRecordMutation507,
-                format!("approval digest changed: expected {approval_digest}, found {digest}"),
-            ));
-        }
-        let (text, source) =
-            worksheet_input::read(&root.join(path), "capital outcome", MAX_WORKSHEET_BYTES)?;
-        let result = frozen.score(&outcome(&text, &snapshot.case_id)?)?;
-        score_payload = score_json(&result, &worksheet_input::source_json(&source, text.len()));
-        score = Some((result, source));
+fn no_claim(registered: Option<&decision_journal::RecordedHindcast>) -> &'static str {
+    if registered.is_some() {
+        RECORDED_NO_CLAIM
+    } else {
+        HINDCAST_NO_CLAIM
     }
+}
+
+fn report(
+    snapshot: &ApprovalSnapshot,
+    frozen: &FrozenApproval,
+    source: &SourceAnchor,
+    approval_bytes: usize,
+    score: Option<&Score>,
+    registered: Option<&decision_journal::RecordedHindcast>,
+) -> Envelope {
+    let digest = frozen.digest().to_hex();
+    let score_payload = score.map_or_else(
+        || "null".to_owned(),
+        |score| {
+            score_json(
+                &score.result,
+                &worksheet_input::source_json(&score.source, score.bytes),
+            )
+        },
+    );
     let (h7a, h7d) = frozen.decisions();
     let approval_cut = format_utc(frozen.approval_as_of_ns().div_euclid(NS_PER_SEC));
     let actions = frozen
@@ -454,7 +501,30 @@ fn evaluate(command: &Command, root: &Path) -> Result<Envelope> {
         .map(action_json)
         .collect::<Vec<_>>()
         .join(",");
-    let mode = if score.is_some() { "score" } else { "freeze" };
+    let (mode, extra) = match (registered, score) {
+        (Some(recorded), _) => (
+            "score-recorded",
+            format!(
+                ",\"registration\":{{\"journal_head\":\"{}\",\"record_head\":\"{}\",\"decision_id\":{},\"recorded_action\":{},\"time_bounds_ns\":[\"{}\",\"{}\"]}}",
+                recorded.journal_head,
+                recorded.record_head,
+                js(&recorded.decision),
+                js(&recorded.action),
+                recorded.earliest_ns,
+                recorded.latest_ns,
+            ),
+        ),
+        (None, Some(_)) => ("score", String::new()),
+        (None, None) => {
+            let choices = frozen
+                .action_metrics()
+                .iter()
+                .map(|m| format!("\"{}@{digest}\"", m.action.as_str()))
+                .collect::<Vec<_>>()
+                .join(",");
+            ("freeze", format!(",\"journal_actions\":[{choices}]"))
+        }
+    };
     let payload = format!(
         concat!(
             "{{\"schema\":\"fmine.capital-hindcast.v1\",\"mode\":\"{mode}\",\"case_id\":{},",
@@ -462,11 +532,11 @@ fn evaluate(command: &Command, root: &Path) -> Result<Envelope> {
             "\"approval_source\":{},\"approval_evidence_ids\":[{}],\"synthetic_scenarios\":{},",
             "\"policy\":{{\"static_npv_usd_m\":\"{}\",\"static_irr\":\"{}\",\"hurdle_irr\":\"{}\",",
             "\"cvar_tail_mass\":\"{}\",\"max_cvar_loss_usd_per_share\":\"{}\"}},",
-            "\"h7a_choice\":\"{}\",\"h7d_choice\":\"{}\",\"actions\":[{actions}],\"score\":{score_payload}}}"
+            "\"h7a_choice\":\"{}\",\"h7d_choice\":\"{}\",\"actions\":[{actions}],\"score\":{score_payload}{extra}}}"
         ),
         js(&snapshot.case_id),
         js(&snapshot.project_name),
-        worksheet_input::source_json(&source, text.len()),
+        worksheet_input::source_json(source, approval_bytes),
         ids(frozen.admitted_evidence_ids()),
         frozen.is_synthetic_scenario_grid(),
         qty(snapshot.h7a_static_npv_usd_m),
@@ -481,17 +551,233 @@ fn evaluate(command: &Command, root: &Path) -> Result<Envelope> {
         digest = digest,
         actions = actions,
         score_payload = score_payload,
+        extra = extra,
     );
     let mut envelope = Envelope::ok(VERB, payload, Vec::new());
-    envelope.no_claim = Some(HINDCAST_NO_CLAIM);
+    envelope.no_claim = Some(no_claim(registered));
     envelope.rendered_markdown = Some(markdown(
+        snapshot,
+        frozen,
+        source,
+        &approval_cut,
+        score,
+        registered,
+    ));
+    envelope
+}
+
+fn approval_source(path: &str, model: &str) -> SourceAnchor {
+    SourceAnchor::new(path, sha256(model.as_bytes()).0, SOURCE_LOCATOR)
+}
+
+fn receipt_claim(card: &str, source: SourceAnchor) -> String {
+    let tag = format!("capital-hindcast-receipt/v1:{}", sha256(card.as_bytes()));
+    Claim::new(
+        "decision.capital-hindcast-receipt/1",
+        (),
+        &tag,
+        Representation::Deterministic,
+        SpatialSupport::PeriodAggregate,
+        AdditivityClass::NonAdditive,
+        EvidenceClass::Assumed,
+        EpistemicStatus::KnownUnknown(KuKind::Parametric),
+        KnowledgeState::Estimated,
+        Confidentiality::internal(),
+        Vec::new(),
+        Vec::new(),
+        vec![source],
+    )
+    .claim_id
+    .to_string()
+}
+
+fn check_pin(frozen: &FrozenApproval, expected: &str) -> Result<()> {
+    let digest = frozen.digest().to_hex();
+    if expected != digest {
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            format!("approval digest changed: expected {expected}, found {digest}"),
+        ));
+    }
+    Ok(())
+}
+
+fn check_reviewed_action(frozen: &FrozenApproval, action: &str) -> Result<()> {
+    let unavailable = || {
+        Refusal::new(
+            RefusalCode::BasisMismatch105,
+            "select a digest-bound action from decide hindcast freeze --json journal_actions",
+        )
+    };
+    let (choice, pin) = action.split_once('@').ok_or_else(unavailable)?;
+    if !frozen
+        .action_metrics()
+        .iter()
+        .any(|m| m.action.as_str() == choice)
+    {
+        return Err(unavailable());
+    }
+    check_pin(frozen, pin)
+}
+
+pub(super) fn journal_snapshot(
+    model: &str,
+    source: &SourceAnchor,
+    action: &str,
+) -> Result<(String, String)> {
+    let snapshot = approval(model)?;
+    let frozen = freeze_approval(&snapshot)?;
+    check_reviewed_action(&frozen, action)?;
+    let source = approval_source(&source.artifact_path, model);
+    let card = report(&snapshot, &frozen, &source, model.len(), None, None).payload_json;
+    let claim_id = receipt_claim(&card, source);
+    Ok((card, claim_id))
+}
+
+pub(crate) fn is_receipt(card: &str) -> bool {
+    card.starts_with(RECEIPT_PREFIX)
+}
+
+fn check_approval_cut(earliest_ns: i64, cut: i64) -> Result<()> {
+    if earliest_ns < cut {
+        return Err(Refusal::new(
+            RefusalCode::AssayLookahead108,
+            "the earliest possible journal write precedes the approval cut",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_receipt(
+    model: &str,
+    path: &str,
+    card: &str,
+    action: &str,
+    claim_id: &str,
+    earliest_ns: i64,
+) -> Result<()> {
+    if !is_receipt(card) {
+        return Ok(());
+    }
+    let mismatch = || {
+        Refusal::new(
+            RefusalCode::DigestMismatch505,
+            "retained hindcast receipt disagrees with its action, worksheet or receipt Claim",
+        )
+    };
+    let receipt = parse_json(card.as_bytes()).map_err(|_| mismatch())?;
+    let pin = receipt
+        .get("approval_digest")
+        .and_then(Json::as_str)
+        .filter(|pin| parse_hex32(pin).is_some())
+        .ok_or_else(mismatch)?;
+    let cut = receipt
+        .get("approval_cut")
+        .and_then(Json::as_str)
+        .and_then(parse_utc)
+        .and_then(|second| second.checked_mul(NS_PER_SEC))
+        .ok_or_else(mismatch)?;
+    let stored_source = receipt.get("approval_source").ok_or_else(mismatch)?;
+    let source = approval_source(path, model);
+    if stored_source.get("path").and_then(Json::as_str) != Some(path)
+        || stored_source.get("sha256").and_then(Json::as_str)
+            != Some(Digest32(source.artifact_sha256).to_hex().as_str())
+        || !action
+            .split_once('@')
+            .is_some_and(|(_, digest)| digest == pin)
+        || !receipt
+            .get("journal_actions")
+            .and_then(Json::as_array)
+            .is_some_and(|actions| actions.iter().any(|choice| choice.as_str() == Some(action)))
+        || claim_id != receipt_claim(card, source)
+    {
+        return Err(mismatch());
+    }
+    check_approval_cut(earliest_ns, cut)
+}
+
+fn score(
+    path: &Path,
+    snapshot: &ApprovalSnapshot,
+    frozen: &FrozenApproval,
+    latest_record_ns: Option<i64>,
+) -> Result<Score> {
+    let (text, source) = worksheet_input::read(path, "capital outcome", MAX_WORKSHEET_BYTES)?;
+    let realized = outcome(&text, &snapshot.case_id)?;
+    let resolution = realized.realized_stamp.physical_valid_time().end_ns;
+    if latest_record_ns.is_some_and(|latest| resolution <= latest) {
+        return Err(Refusal::new(
+            RefusalCode::AssayLookahead108,
+            "physical outcome resolution must follow the latest possible journal write",
+        ));
+    }
+    Ok(Score {
+        result: frozen.score(&realized)?,
+        source,
+        bytes: text.len(),
+    })
+}
+
+fn evaluate_worksheet(path: &Path, scoring: Option<(&Path, &str)>) -> Result<Envelope> {
+    let (text, source) = worksheet_input::read(path, "capital approval", MAX_WORKSHEET_BYTES)?;
+    let snapshot = approval(&text)?;
+    let frozen = freeze_approval(&snapshot)?;
+    let score = if let Some((outcome, pin)) = scoring {
+        check_pin(&frozen, pin)?;
+        Some(score(outcome, &snapshot, &frozen, None)?)
+    } else {
+        None
+    };
+    Ok(report(
         &snapshot,
         &frozen,
         &source,
-        &approval_cut,
+        text.len(),
         score.as_ref(),
-    ));
-    Ok(envelope)
+        None,
+    ))
+}
+
+fn evaluate(command: &Command, root: &Path) -> Result<Envelope> {
+    match command {
+        Command::Freeze(path) => evaluate_worksheet(&root.join(path), None),
+        Command::Score {
+            approval,
+            outcome,
+            approval_digest,
+        } => evaluate_worksheet(
+            &root.join(approval),
+            Some((&root.join(outcome), approval_digest)),
+        ),
+        Command::ScoreRecorded {
+            journal,
+            head,
+            decision,
+            outcome,
+        } => {
+            let recorded =
+                decision_journal::recorded_hindcast(&root.join(journal), *head, decision)?;
+            let snapshot = approval(&recorded.model)?;
+            let frozen = freeze_approval(&snapshot)?;
+            check_reviewed_action(&frozen, &recorded.action)?;
+            check_approval_cut(recorded.earliest_ns, frozen.approval_as_of_ns())?;
+            let source = approval_source(&recorded.model_path, &recorded.model);
+            let score = score(
+                &root.join(outcome),
+                &snapshot,
+                &frozen,
+                Some(recorded.latest_ns),
+            )?;
+            Ok(report(
+                &snapshot,
+                &frozen,
+                &source,
+                recorded.model.len(),
+                Some(&score),
+                Some(&recorded),
+            ))
+        }
+    }
 }
 
 pub(crate) fn execute(command: &Command, root: &Path) -> Envelope {

@@ -22,6 +22,14 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   clock classes, case links and evidence identifiers remain caller declarations. Outcome payoffs for
   unchosen actions are supplied counterfactuals. Both commands are read-only and retain all authority
   flags as false. The native binary workflow is exercised by the capital hindcast T-layer contract.
+  To register a prospective approval, pass an explicit digest-bound choice from the freeze report's
+  `journal_actions` to `decide journal record`, with a rationale. The journal retains the exact approval
+  bytes and evaluated receipt using its existing record format. Its earliest possible write time must
+  reach the approval cut. `decide hindcast score-recorded <journal> --head <digest> --decision <id>
+  --outcome <outcome>` reads the retained bytes, verifies the digest before loading the outcome and
+  requires physical resolution strictly after the selected record's latest possible write time. The
+  score includes the final and selected record heads, declared clock bounds and recorded choice. This
+  establishes the relationship in the pinned local transcript under the supplied time declarations.
 
 - DESIGN (bd-4hg5, bd-rn1q, bd-3a2a, bd-jg7w, bd-zabr). `decide program` admits
   `fmine.executive-decision.v1` for source-bound committee comparisons. Each worksheet declares owner,
