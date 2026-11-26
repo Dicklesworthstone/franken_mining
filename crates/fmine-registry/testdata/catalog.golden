@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 87
+[verbs] 88
 decide card
 decide production
 decide investment
@@ -83,6 +83,7 @@ decide journal show
 decide journal assess
 decide recovery-bounds
 decide program
+decide hindcast
 assure public
 assure challenges
 metrics cost
