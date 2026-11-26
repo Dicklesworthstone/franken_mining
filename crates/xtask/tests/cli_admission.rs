@@ -234,7 +234,6 @@ mod tests {
                 "--issuer",
                 "../registries/sources/barrick",
             ][..],
-            &[][..],
             // Unknown flags, surplus words and flags a verb does not take (none is ignored).
             &["doctor", "--deep"][..],
             &["robot-docs", "extra"][..],
@@ -375,11 +374,32 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_cli_args_route_to_successful_triage() {
+        let root = workspace_root();
+        assert!(matches!(
+            parse_args(&[], &root),
+            Ok((CliCommand::Triage, OutputFormat::Json, workspace)) if workspace == root
+        ));
+        let (json, exit) = run(&[], &root);
+        assert_eq!(exit, 0);
+        assert_eq!(json.lines().count(), 1, "{json}");
+        assert!(
+            json.contains("\"verb\":\"triage\",\"status\":\"ok\",\"exit_code\":0,"),
+            "{json}"
+        );
+        assert!(json.contains("\"schema\":\"fmine.triage.v1\""), "{json}");
+        assert!(json.contains(FLAGS), "{json}");
+
+        let (markdown, exit) = run(&args(&["--format", "markdown"]), &root);
+        assert_eq!(exit, 0);
+        assert!(markdown.starts_with("# fmine triage\n"), "{markdown}");
+    }
+
+    #[test]
     fn test_usage_error_from_parse_args_is_envelope() {
         let root = workspace_root();
         for (bad, verb) in [
             (&["frobnicate"][..], "unknown"),
-            (&[][..], "unknown"),
             (
                 &["--format", "md", "assure", "private"][..],
                 "assure public",
