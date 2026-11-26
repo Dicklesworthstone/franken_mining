@@ -461,7 +461,7 @@ name = "fmine-cli"
 layer = "U"
 subsystem = "Adit"
 phase = "A"
-planned_loc = 54000
+planned_loc = 55000
 ceiling_loc = 62000
 charter = "Binary fmine; robot NDJSON; verb registry; doctor and repair"
 
