@@ -85,6 +85,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2
+      - name: Fetch locked crate sources
+        run: cargo fetch --locked || { sleep 15; cargo fetch --locked; }
       - name: Fetch the advisory database
         run: cargo deny fetch db || { sleep 15; cargo deny fetch db; }
       - name: cargo deny check

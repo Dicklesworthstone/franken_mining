@@ -163,9 +163,7 @@ fn normalize_issuer_key(issuer: &str) -> String {
 /// Enforce the `BD-346.S2` JV mirror `PairRegistry` perimeter, unresolved vend-in boundary, and
 /// partner-issuer membership whenever `--asset` names a registered JV (`ngm`, `pueblo-viejo`,
 /// `kibali`). Invented/unregistered fixture assets return `Ok(None)`.
-pub(super) fn check_registered_pair_boundary(
-    selection: &Selection,
-) -> Result<Option<ResolvedPair>> {
+fn check_registered_pair_boundary(selection: &Selection) -> Result<Option<ResolvedPair>> {
     let Ok(asset_id) = RegisteredAssetId::parse(&selection.asset) else {
         return Ok(None);
     };
@@ -1392,5 +1390,51 @@ mod pair_registry_wiring_tests {
                 .expect("invented asset allowed")
                 .is_none()
         );
+
+        let mk_source = |issuer: &str, share: Rat| Source {
+            issuer: issuer.into(),
+            document: DocumentRow {
+                file: "test.pdf".into(),
+                dir: ".".into(),
+                kind: "news_release".into(),
+                url: "https://example.invalid/test.pdf".into(),
+                url_basis: "test".into(),
+                published_at: "2026-02-01".into(),
+                published_at_basis: "cover_date".into(),
+                pages: 1,
+                bytes: 1,
+                sha256: "0".repeat(64),
+            },
+            rows: Vec::new(),
+            ownership: Some(Claim::new(
+                "jv.ownership_share/1",
+                share,
+                "ownership_share",
+                fmine_claim::Representation::Deterministic,
+                fmine_claim::SpatialSupport::PeriodAggregate,
+                fmine_claim::AdditivityClass::NonAdditive,
+                EvidenceClass::ISSUER,
+                fmine_evidence::EpistemicStatus::KnownKnown,
+                fmine_evidence::KnowledgeState::Known,
+                fmine_claim::Confidentiality::public(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )),
+        };
+
+        verify_registered_pair_shares(
+            Some(&resolved),
+            &[mk_source("barrick", Rat::new(615, 1000).expect("61.5%"))],
+        )
+        .expect("registered Barrick 61.5% NGM share passes");
+
+        let drift_err = verify_registered_pair_shares(
+            Some(&resolved),
+            &[mk_source("barrick", Rat::new(1, 2).expect("50%"))],
+        )
+        .expect_err("drifted Barrick share on registered NGM must refuse");
+        assert_eq!(drift_err.code, "FMINE-REF-104");
+        assert!(drift_err.what.contains("disagrees with registered"));
     }
 }

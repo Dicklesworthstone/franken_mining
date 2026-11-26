@@ -350,6 +350,11 @@ pub const OZ_PER_ST_TO_G_PER_T_NUM: i128 = 240;
 /// Exact statutory denominator for `oz t / short ton` to `g / metric tonne`.
 pub const OZ_PER_ST_TO_G_PER_T_DEN: i128 = 7;
 
+/// Exact statutory international foot to metres numerator: `0.3048 m = 3048 / 10_000 m`.
+pub const FT_TO_M_NUM: i128 = 3048;
+/// Exact statutory international foot to metres denominator.
+pub const FT_TO_M_DEN: i128 = 10_000;
+
 /// Exact rational quantity `num / den` (`den > 0`) for zero-loss statutory conversions (`BD-024`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExactQty {
@@ -540,6 +545,16 @@ impl ExactQty {
             num: OZ_PER_ST_TO_G_PER_T_DEN,
             den: OZ_PER_ST_TO_G_PER_T_NUM,
         })
+    }
+
+    /// Converts international feet to metres using exact `3048 / 10_000` (`381 / 1250`).
+    pub fn feet_to_metres(self) -> Result<Self, UnitsError> {
+        self.checked_mul(Self::new(FT_TO_M_NUM, FT_TO_M_DEN)?)
+    }
+
+    /// Converts metres to international feet using exact `10_000 / 3048` (`1250 / 381`).
+    pub fn metres_to_feet(self) -> Result<Self, UnitsError> {
+        self.checked_mul(Self::new(FT_TO_M_DEN, FT_TO_M_NUM)?)
     }
 
     /// Evaluates to `f64` only at presentation boundaries.

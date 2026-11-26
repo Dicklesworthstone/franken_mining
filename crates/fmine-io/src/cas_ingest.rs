@@ -284,8 +284,8 @@ pub fn ingest_registered_filings(
     let mut verified: Vec<(&OfflineFilingSpec<'_>, Vec<u8>, String)> =
         Vec::with_capacity(specs.len());
 
-    // Pre-flight phase: validate all metadata, regular-file status, byte lengths, and SHA-256 pins
-    // before writing any CAS chunks or manifests.
+    // Pass 1 (in-memory metadata pre-flight): validate every spec's filing_id, uniqueness,
+    // accession, media_type, and expected_sha256 hex BEFORE touching the filesystem.
     for spec in specs {
         validate_text_field("filing_id", spec.filing_id)?;
         if !seen_ids.insert(spec.filing_id) {
@@ -297,6 +297,11 @@ pub fn ingest_registered_filings(
             validate_text_field("accession", acc)?;
         }
         validate_ingest_args(spec.media_type, Some(spec.expected_sha256), chunk_size)?;
+    }
+
+    // Pass 2 (filesystem & digest pre-flight): verify regular-file status, byte lengths, and
+    // SHA-256 pins for every file BEFORE staging any CAS chunks or publishing any manifest.
+    for spec in specs {
         let bytes = read_regular_file_checked(spec.path, spec.expected_bytes)?;
         let actual_hex = sha256(&bytes).to_hex();
         if actual_hex != spec.expected_sha256 {
@@ -554,7 +559,7 @@ mod tests {
         let dup_specs = [
             OfflineFilingSpec {
                 filing_id: "dup-id",
-                path: &p1,
+                path: &missing,
                 media_type: "application/pdf",
                 expected_sha256: &sha1,
                 expected_bytes: Some(bytes1.len() as u64),
@@ -569,9 +574,11 @@ mod tests {
                 accession: None,
             },
         ];
+        // Pass 1 metadata pre-flight rejects duplicate filing_id with FMINE-REF-107 before
+        // attempting to read the missing path in spec #1 (which would have returned FMINE-REF-506).
         assert_eq!(
             ingest_registered_filings(&store, &dup_specs, 1024)
-                .expect_err("duplicate filing_id refuses")
+                .expect_err("duplicate filing_id refuses before disk I/O")
                 .to_refusal()
                 .code,
             "FMINE-REF-107"
