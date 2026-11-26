@@ -494,7 +494,7 @@ pub fn remainder_grade(host: &Intercept) -> Result<RemainderResult, Refusal> {
             ),
         ));
     }
-    evaluate_remainder_recursive(host)
+    evaluate_remainder_with_flags(host, None, None)
 }
 
 /// Audit a full drill release (one or more host intercepts plus disclosure context).
@@ -535,6 +535,13 @@ pub fn audit_drill_release_indexed(
         None => None,
     };
 
+    if context.declared_hole_count == Some(0) {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "declared_hole_count must be > 0 when intercepts are supplied",
+        ));
+    }
+
     let mut audits = Vec::with_capacity(intercepts.len());
     let mut distinct_holes = BTreeSet::new();
 
@@ -542,15 +549,36 @@ pub fn audit_drill_release_indexed(
         validate_intercept_scalars(host)?;
         distinct_holes.insert(host.hole.clone());
         let canon_len = host.length.to_metres(host.length_unit)?;
+        if canon_len.interval()?.lo.signum() <= 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!(
+                    "hole {}: host length interval must remain strictly positive",
+                    host.hole
+                ),
+            ));
+        }
         let (canon_grade, canon_unit) = host.grade.to_canonical_grade(host.grade_unit)?;
+        if let Some((_, cutoff_unit)) = canonical_cutoff
+            && cutoff_unit != canon_unit
+        {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!(
+                    "hole {}: composite cut-off unit {} does not match intercept unit {}",
+                    host.hole,
+                    cutoff_unit.as_str(),
+                    canon_unit.as_str()
+                ),
+            ));
+        }
 
         let mut flags_set = BTreeSet::new();
         let remainder = if host.children.is_empty() {
             extract_span_m(host)?;
             None
         } else {
-            let rem = evaluate_remainder_recursive(host)?;
-            collect_tree_flags(host, &rem, canonical_cutoff, &mut flags_set)?;
+            let rem = evaluate_remainder_with_flags(host, canonical_cutoff, Some(&mut flags_set))?;
             Some(rem)
         };
 
@@ -618,7 +646,11 @@ pub fn audit_drill_release_indexed(
     ))
 }
 
-fn evaluate_remainder_recursive(host: &Intercept) -> Result<RemainderResult, Refusal> {
+fn evaluate_remainder_with_flags(
+    host: &Intercept,
+    canonical_cutoff: Option<(ExactQty, GradeUnit)>,
+    mut flags_out: Option<&mut BTreeSet<DisclosureFlag>>,
+) -> Result<RemainderResult, Refusal> {
     validate_intercept_scalars(host)?;
     let host_len = host.length.to_metres(host.length_unit)?;
     let host_len_iv = host_len.interval()?;
@@ -636,7 +668,7 @@ fn evaluate_remainder_recursive(host: &Intercept) -> Result<RemainderResult, Ref
 
     let host_span = extract_span_m(host)?;
 
-    // Evaluate children bottom-up and normalize each direct child into canonical units.
+    // Evaluate children bottom-up in a single O(tree_size) pass and normalize each direct child.
     struct CanonChild {
         len: PrintedQty,
         len_iv: ExactInterval,
@@ -650,6 +682,15 @@ fn evaluate_remainder_recursive(host: &Intercept) -> Result<RemainderResult, Ref
 
     for child in &host.children {
         validate_intercept_scalars(child)?;
+        if child.hole != host.hole {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!(
+                    "hole {}: child inclusion belongs to different hole '{}'",
+                    host.hole, child.hole
+                ),
+            ));
+        }
         let child_len = child.length.to_metres(child.length_unit)?;
         let child_len_iv = child_len.interval()?;
         if child_len_iv.lo.signum() <= 0 {
@@ -673,7 +714,34 @@ fn evaluate_remainder_recursive(host: &Intercept) -> Result<RemainderResult, Ref
                 ),
             ));
         }
+        if child.is_metal_equivalent != host.is_metal_equivalent {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!(
+                    "hole {}: cannot mix metal-equivalent and single-metal grades between host and inclusion",
+                    host.hole
+                ),
+            ));
+        }
+        if let (Some(h_sym), Some(c_sym)) = (&host.metal_symbol, &child.metal_symbol)
+            && !h_sym.eq_ignore_ascii_case(c_sym)
+        {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!(
+                    "hole {}: incompatible metal symbols '{}' vs '{}'",
+                    host.hole, c_sym, h_sym
+                ),
+            ));
+        }
         let child_grade_iv = child_grade.interval()?;
+        if let Some(flags) = flags_out.as_deref_mut()
+            && cmp_exact_qty(child_grade_iv.hi, host_grade_iv.lo) == Ordering::Less
+        {
+            flags.insert(DisclosureFlag::InclusionBelowHost {
+                hole: host.hole.clone(),
+            });
+        }
         let child_span = extract_span_m(child)?;
         if let (Some((h_from, h_to)), Some((c_from, c_to))) = (host_span, child_span)
             && (cmp_exact_qty(c_from, h_from) == Ordering::Less
@@ -689,7 +757,11 @@ fn evaluate_remainder_recursive(host: &Intercept) -> Result<RemainderResult, Ref
         }
 
         if !child.children.is_empty() {
-            nested_results.push(evaluate_remainder_recursive(child)?);
+            nested_results.push(evaluate_remainder_with_flags(
+                child,
+                canonical_cutoff,
+                flags_out.as_deref_mut(),
+            )?);
         }
 
         canon_children.push(CanonChild {
@@ -806,6 +878,27 @@ fn evaluate_remainder_recursive(host: &Intercept) -> Result<RemainderResult, Ref
         exact_linear_fractional_extremum(host_len_iv, host_grade_iv.lo, &child_min_terms, false)?;
     let rem_grade_hi =
         exact_linear_fractional_extremum(host_len_iv, host_grade_iv.hi, &child_max_terms, true)?;
+    let rem_grade_interval = ExactInterval::new(rem_grade_lo, rem_grade_hi)?;
+
+    if let (Some((cutoff_exact, cutoff_unit)), Some(flags)) = (canonical_cutoff, flags_out) {
+        if cutoff_unit != canon_unit {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!(
+                    "hole {}: composite cut-off unit {} does not match intercept unit {}",
+                    host.hole,
+                    cutoff_unit.as_str(),
+                    canon_unit.as_str()
+                ),
+            ));
+        }
+        // Strict interval dominance: entire rounding box of remainder grade lies strictly below stated cut-off.
+        if cmp_exact_qty(rem_grade_interval.hi, cutoff_exact) == Ordering::Less {
+            flags.insert(DisclosureFlag::RemainderBelowCutoff {
+                hole: host.hole.clone(),
+            });
+        }
+    }
 
     Ok(RemainderResult {
         hole: host.hole.clone(),
@@ -815,7 +908,7 @@ fn evaluate_remainder_recursive(host: &Intercept) -> Result<RemainderResult, Ref
         remainder_length_m: rem_len_pt,
         remainder_length_interval_m: ExactInterval::new(rem_len_lo, rem_len_hi)?,
         remainder_grade_point: rem_grade_pt,
-        remainder_grade_interval: ExactInterval::new(rem_grade_lo, rem_grade_hi)?,
+        remainder_grade_interval: rem_grade_interval,
         nested_results,
     })
 }
@@ -913,50 +1006,6 @@ fn collect_node_disclosure_flags(
     for child in &node.children {
         collect_node_disclosure_flags(child, context, flags);
     }
-}
-
-fn collect_tree_flags(
-    node: &Intercept,
-    rem: &RemainderResult,
-    canonical_cutoff: Option<(ExactQty, GradeUnit)>,
-    flags: &mut BTreeSet<DisclosureFlag>,
-) -> Result<(), Refusal> {
-    let host_grade_iv = rem.host_grade.interval()?;
-    if let Some((cutoff_exact, cutoff_unit)) = canonical_cutoff {
-        if cutoff_unit != rem.canonical_grade_unit {
-            return Err(Refusal::new(
-                RefusalCode::BasisMismatch105,
-                format!(
-                    "hole {}: composite cut-off unit {} does not match intercept unit {}",
-                    node.hole,
-                    cutoff_unit.as_str(),
-                    rem.canonical_grade_unit.as_str()
-                ),
-            ));
-        }
-        // Strict interval dominance: entire rounding box of remainder grade lies strictly below stated cut-off.
-        if cmp_exact_qty(rem.remainder_grade_interval.hi, cutoff_exact) == Ordering::Less {
-            flags.insert(DisclosureFlag::RemainderBelowCutoff {
-                hole: node.hole.clone(),
-            });
-        }
-    }
-
-    for child in &node.children {
-        let (child_grade, _) = child.grade.to_canonical_grade(child.grade_unit)?;
-        let child_grade_iv = child_grade.interval()?;
-        if cmp_exact_qty(child_grade_iv.hi, host_grade_iv.lo) == Ordering::Less {
-            flags.insert(DisclosureFlag::InclusionBelowHost {
-                hole: node.hole.clone(),
-            });
-        }
-        if !child.children.is_empty() {
-            let sub_rem = evaluate_remainder_recursive(child)?;
-            collect_tree_flags(child, &sub_rem, canonical_cutoff, flags)?;
-        }
-    }
-
-    Ok(())
 }
 
 fn detect_hole_sequence_gap(
@@ -1374,6 +1423,144 @@ mod tests {
         }
         assert_eq!(res.remainder_grade_interval.lo, bf_min.unwrap());
         assert_eq!(res.remainder_grade_interval.hi, bf_max.unwrap());
+    }
+
+    #[test]
+    fn test_child_hole_mismatch_and_mixed_metal_basis_refused() {
+        let bad_hole = mk_intercept(
+            "SYN-H1",
+            "10.0",
+            LengthUnit::Metres,
+            "4.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Host,
+            vec![mk_intercept(
+                "SYN-H2",
+                "2.0",
+                LengthUnit::Metres,
+                "10.0",
+                GradeUnit::GramsPerTonne,
+                InclusionRelation::Including,
+                vec![],
+            )],
+        );
+        assert_eq!(
+            remainder_grade(&bad_hole)
+                .expect_err("child from different hole must refuse")
+                .code,
+            "FMINE-REF-109"
+        );
+
+        let mut ag_child = mk_intercept(
+            "SYN-M1",
+            "2.0",
+            LengthUnit::Metres,
+            "30.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Including,
+            vec![],
+        );
+        ag_child.metal_symbol = Some("Ag".to_string());
+        let mixed_metal = mk_intercept(
+            "SYN-M1",
+            "10.0",
+            LengthUnit::Metres,
+            "4.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Host,
+            vec![ag_child],
+        );
+        assert_eq!(
+            remainder_grade(&mixed_metal)
+                .expect_err("Ag child inside Au host must refuse")
+                .code,
+            "FMINE-REF-105"
+        );
+
+        let mut eq_host = mk_intercept(
+            "SYN-M2",
+            "10.0",
+            LengthUnit::Metres,
+            "4.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Host,
+            vec![mk_intercept(
+                "SYN-M2",
+                "2.0",
+                LengthUnit::Metres,
+                "10.0",
+                GradeUnit::GramsPerTonne,
+                InclusionRelation::Including,
+                vec![],
+            )],
+        );
+        eq_host.metal_symbol = Some("AuEq".to_string());
+        eq_host.is_metal_equivalent = true;
+        assert_eq!(
+            remainder_grade(&eq_host)
+                .expect_err("Au child inside AuEq host must refuse")
+                .code,
+            "FMINE-REF-105"
+        );
+    }
+
+    #[test]
+    fn test_childless_nonpositive_len_cutoff_mismatch_and_zero_declared_holes_refused() {
+        let mut tiny = mk_intercept(
+            "SYN-CL-1",
+            "1.0",
+            LengthUnit::Metres,
+            "3.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Host,
+            vec![],
+        );
+        tiny.length =
+            PrintedQty::new(ExactQty::new(1, 20).unwrap(), ExactQty::new(1, 5).unwrap()).unwrap();
+        let ctx_gt = ReleaseDisclosureContext::complete(
+            ExactQty::new(1, 2).unwrap(),
+            GradeUnit::GramsPerTonne,
+        );
+        assert_eq!(
+            audit_drill_release(&[tiny], &ctx_gt)
+                .expect_err("childless non-positive length interval must refuse")
+                .code,
+            "FMINE-REF-109"
+        );
+
+        let pct_host = mk_intercept(
+            "SYN-CL-2",
+            "10.0",
+            LengthUnit::Metres,
+            "1.50",
+            GradeUnit::Percent,
+            InclusionRelation::Host,
+            vec![],
+        );
+        assert_eq!(
+            audit_drill_release(&[pct_host], &ctx_gt)
+                .expect_err("childless % intercept vs g/t cutoff must refuse")
+                .code,
+            "FMINE-REF-105"
+        );
+
+        let clean = mk_intercept(
+            "SYN-CL-3",
+            "10.0",
+            LengthUnit::Metres,
+            "3.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Host,
+            vec![],
+        );
+        let mut ctx_zero = ctx_gt;
+        ctx_zero.declared_hole_count = Some(0);
+        assert_eq!(
+            audit_drill_release(&[clean], &ctx_zero)
+                .expect_err("declared_hole_count = 0 must refuse")
+                .code,
+            "FMINE-REF-109"
+        );
     }
 
     #[test]

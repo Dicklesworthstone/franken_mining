@@ -11,7 +11,7 @@
 //! [`ParseOutcome::FallbackToCitedMode`] so a human can enter cited-mode rows that pass through
 //! the exact same `fmine_explore::intercept` kernel.
 
-use fmine_evidence::Refusal;
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_explore::intercept::{GradeUnit, InclusionRelation, Intercept, LengthUnit, PrintedQty};
 
 /// Outcome of attempting to parse a raw drill-release phrase.
@@ -42,6 +42,27 @@ pub struct CitedInterceptRow<'a> {
 
 /// Convert a cited-mode row directly into an [`Intercept`] for `fmine_explore::intercept`.
 pub fn intercept_from_cited_row(row: CitedInterceptRow<'_>) -> Result<Intercept, Refusal> {
+    let hole = row.hole.trim();
+    if hole.is_empty() || hole.bytes().any(|b| b.is_ascii_control()) {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!("invalid cited hole identifier {:?}", row.hole),
+        ));
+    }
+    if let Some(sym) = row.metal_symbol
+        && (sym.trim().is_empty() || sym.bytes().any(|b| b.is_ascii_control()))
+    {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!("invalid cited metal_symbol {sym:?}"),
+        ));
+    }
+    if row.from_token.is_some() != row.to_token.is_some() {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            format!("hole {hole}: cited row requires both from_token and to_token or neither"),
+        ));
+    }
     let from = match row.from_token {
         Some(t) => Some(PrintedQty::parse_decimal(t)?),
         None => None,
@@ -51,14 +72,14 @@ pub fn intercept_from_cited_row(row: CitedInterceptRow<'_>) -> Result<Intercept,
         None => None,
     };
     Ok(Intercept {
-        hole: row.hole.trim().to_string(),
+        hole: hole.to_string(),
         from,
         to,
         length: PrintedQty::parse_decimal(row.length_token)?,
         length_unit: row.length_unit,
         grade: PrintedQty::parse_decimal(row.grade_token)?,
         grade_unit: row.grade_unit,
-        metal_symbol: row.metal_symbol.map(ToString::to_string),
+        metal_symbol: row.metal_symbol.map(|s| s.trim().to_string()),
         is_metal_equivalent: row.is_metal_equivalent,
         is_downhole_length: true,
         true_width_stated: row.true_width_stated,
@@ -81,8 +102,7 @@ pub fn parse_intercept_phrase(raw_phrase: &str, default_hole: Option<&str>) -> P
         None => return fallback(raw_phrase, "missing hole identifier"),
     };
 
-    let lower_full = body.to_ascii_lowercase();
-    let true_width_stated = lower_full.contains("true width") || lower_full.contains("true-width");
+    let true_width_stated = has_stated_true_width(body);
 
     // Check top-level `"<child> within <host>"` form (e.g. E656).
     if let Some((left, right)) = split_keyword_once(body, "within") {
@@ -129,8 +149,11 @@ fn parse_including_clause(
     clause: &str,
     true_width_stated: bool,
 ) -> Result<Vec<Intercept>, String> {
-    // Nested `"<child> including <grandchild>"` chain.
+    // Nested `"<child> including <grandchild>"` chain; refuse ambiguous `"; including"`.
     if let Some((head, tail)) = split_keyword_once(clause, "including") {
+        if head.trim_end().ends_with(';') {
+            return Err("ambiguous '; including' clause; use cited mode".to_string());
+        }
         let mut child =
             parse_single_segment(hole, head, InclusionRelation::Including, true_width_stated)?;
         child.children = parse_including_clause(hole, tail, true_width_stated)?;
@@ -177,14 +200,15 @@ fn parse_single_segment(
     relation: InclusionRelation,
     true_width_stated: bool,
 ) -> Result<Intercept, String> {
-    // Strip trailing parenthetical notes like "(true width ~12 m)" after true_width flag was read.
-    let cleaned = strip_parenthetical_notes(segment);
+    // Strip trailing parenthetical notes like "(true width 15 m)" while refusing unbalanced parens
+    // or parentheticals carrying intercept/grade content.
+    let cleaned = strip_parenthetical_notes(segment)?;
     let tokens: Vec<&str> = cleaned
         .split_whitespace()
         .map(|t| t.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '(' | ')')))
         .filter(|t| !t.is_empty())
         .collect();
-    if tokens.len() < 4 {
+    if tokens.len() < 3 {
         return Err(format!(
             "segment {segment:?} too short to form '<len> <unit> @ <grade> <unit>'"
         ));
@@ -197,18 +221,15 @@ fn parse_single_segment(
             *t == "@" || t.eq_ignore_ascii_case("grading") || t.eq_ignore_ascii_case("at")
         })
         .ok_or_else(|| format!("missing '@' or 'grading' separator in {segment:?}"))?;
-    if sep_idx < 1 || sep_idx + 2 >= tokens.len() {
+    if sep_idx < 1 || sep_idx + 1 >= tokens.len() {
         return Err(format!("incomplete length/grade pair in {segment:?}"));
     }
 
     // Parse length + unit right before `sep_idx` (handles both `"16.3 m"` and `"16.3m"`).
     let (len_tok, len_unit, len_start_idx) = parse_len_before(&tokens[..sep_idx])?;
 
-    // Parse grade + unit right after `sep_idx`.
-    let grade_tok = tokens[sep_idx + 1];
-    let grade = PrintedQty::parse_decimal(grade_tok)
-        .map_err(|_| format!("invalid grade token {grade_tok:?}"))?;
-    let (grade_unit, mut cursor) = parse_grade_unit(&tokens, sep_idx + 2)?;
+    // Parse grade + unit right after `sep_idx` (handles `"1.5%"`, `"47.07g/t"`, and spaced forms).
+    let (grade, grade_unit, mut cursor) = parse_grade_after(&tokens, sep_idx + 1)?;
 
     // Optional metal symbol right after grade unit (e.g. `Au`, `AuEq`, `Cu`, `CuEq`).
     let mut metal_symbol = None;
@@ -281,6 +302,34 @@ fn parse_length_unit(tok: &str) -> Result<LengthUnit, String> {
         "ft" | "foot" | "feet" => Ok(LengthUnit::Feet),
         other => Err(format!("unrecognized length unit {other:?}")),
     }
+}
+
+fn parse_grade_after(
+    tokens: &[&str],
+    idx: usize,
+) -> Result<(PrintedQty, GradeUnit, usize), String> {
+    let tok = tokens[idx];
+    if let Some((num_s, unit_s)) = split_glued_grade_unit(tok) {
+        let grade = PrintedQty::parse_decimal(num_s)
+            .map_err(|_| format!("invalid grade token {num_s:?}"))?;
+        let (unit, _) = parse_grade_unit(&[unit_s], 0)?;
+        return Ok((grade, unit, idx + 1));
+    }
+    if idx + 1 >= tokens.len() {
+        return Err(format!("missing grade unit after {tok:?}"));
+    }
+    let grade =
+        PrintedQty::parse_decimal(tok).map_err(|_| format!("invalid grade token {tok:?}"))?;
+    let (unit, next_idx) = parse_grade_unit(tokens, idx + 1)?;
+    Ok((grade, unit, next_idx))
+}
+
+fn split_glued_grade_unit(tok: &str) -> Option<(&str, &str)> {
+    let split = tok.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '+' && c != '-')?;
+    if split == 0 {
+        return None;
+    }
+    Some((&tok[..split], &tok[split..]))
 }
 
 fn parse_grade_unit(tokens: &[&str], idx: usize) -> Result<(GradeUnit, usize), String> {
@@ -375,14 +424,20 @@ fn extract_hole_prefix<'a>(
     // Form 2: "FM24-209D intersected ..." or "Hole FM24-209D ..."
     let mut words = trimmed.split_whitespace();
     if let Some(w0) = words.next() {
-        let (candidate, rest_start) = if w0.eq_ignore_ascii_case("hole") {
+        let (candidate, rest_start, explicit_hole_kw) = if w0.eq_ignore_ascii_case("hole") {
             let w1 = words.next()?;
-            let idx = trimmed.find(w1)? + w1.len();
-            (w1.trim_end_matches(':'), &trimmed[idx..])
+            let after_kw = &trimmed[w0.len()..];
+            let ws_len = after_kw.len() - after_kw.trim_start().len();
+            let end = w0.len() + ws_len + w1.len();
+            (w1.trim_end_matches(':'), &trimmed[end..], true)
         } else {
-            (w0.trim_end_matches(':'), &trimmed[w0.len()..])
+            (w0.trim_end_matches(':'), &trimmed[w0.len()..], false)
         };
-        if is_hole_id(candidate) {
+        let looks_like_glued_length = !explicit_hole_kw
+            && split_glued_number_unit(candidate).is_some_and(|(num, unit)| {
+                PrintedQty::parse_decimal(num).is_ok() && parse_length_unit(unit).is_ok()
+            });
+        if !looks_like_glued_length && is_hole_id(candidate) {
             let body = rest_start.trim();
             let body = body
                 .strip_prefix("intersected ")
@@ -393,6 +448,41 @@ fn extract_hole_prefix<'a>(
         }
     }
     default_hole.map(|h| (h.trim().to_string(), trimmed))
+}
+
+fn has_stated_true_width(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    if !lower.contains("true width") && !lower.contains("true-width") {
+        return false;
+    }
+    for neg in [
+        "unknown",
+        "not determined",
+        "not yet",
+        "not known",
+        "not reported",
+        "not stated",
+        "cannot be",
+        "unconfirmed",
+        "no true width",
+        "no true-width",
+        "n/a",
+        "unavailable",
+    ] {
+        if lower.contains(neg) {
+            return false;
+        }
+    }
+    // Require a quantitative figure inside the true-width statement (e.g. "true width 15 m" or "75%").
+    let pos = lower
+        .find("true width")
+        .or_else(|| lower.find("true-width"))
+        .unwrap_or(0);
+    let window_start = pos.saturating_sub(24);
+    let window_end = (pos + 40).min(lower.len());
+    lower
+        .get(window_start..window_end)
+        .is_some_and(|w| w.bytes().any(|b| b.is_ascii_digit()))
 }
 
 fn is_hole_id(s: &str) -> bool {
@@ -444,18 +534,48 @@ fn split_keyword_once<'a>(s: &'a str, kw: &str) -> Option<(&'a str, &'a str)> {
     None
 }
 
-fn strip_parenthetical_notes(s: &str) -> String {
+fn strip_parenthetical_notes(s: &str) -> Result<String, String> {
     let mut out = String::with_capacity(s.len());
+    let mut paren_buf = String::new();
     let mut depth = 0usize;
     for ch in s.chars() {
         match ch {
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
+            '(' => {
+                if depth == 0 {
+                    paren_buf.clear();
+                } else {
+                    paren_buf.push('(');
+                }
+                depth += 1;
+            }
+            ')' => {
+                if depth == 0 {
+                    return Err("unbalanced closing ')' in intercept phrase".to_string());
+                }
+                depth -= 1;
+                if depth == 0 {
+                    let lower = paren_buf.to_ascii_lowercase();
+                    for forbidden in [
+                        "@", "g/t", "gpt", "oz/st", "oz/t", "oz/ton", "includ", "within", "grading",
+                    ] {
+                        if lower.contains(forbidden) {
+                            return Err(format!(
+                                "parenthetical note contains intercept/grade data ({paren_buf:?}); use cited mode"
+                            ));
+                        }
+                    }
+                } else {
+                    paren_buf.push(')');
+                }
+            }
             c if depth == 0 => out.push(c),
-            _ => {}
+            c => paren_buf.push(c),
         }
     }
-    out
+    if depth != 0 {
+        return Err("unbalanced opening '(' in intercept phrase".to_string());
+    }
+    Ok(out)
 }
 
 fn fallback(raw_phrase: &str, reason: &str) -> ParseOutcome {
@@ -577,5 +697,48 @@ mod tests {
                     hole: "SYN-99".to_string()
                 })
         );
+    }
+
+    #[test]
+    fn test_fresh_eyes_grammar_edge_cases() {
+        // 1. Negated true-width disclaimers must NOT suppress NoTrueWidth.
+        let unknown_tw = "DDH-010: 12.0 m @ 4.0 g/t Au (true width unknown)";
+        let ParseOutcome::Parsed(ic) = parse_intercept_phrase(unknown_tw, None) else {
+            panic!("expected unknown true width phrase to parse");
+        };
+        assert!(!ic.true_width_stated);
+
+        // 2. Glued length token "16m" must not be misparsed as a hole ID when default_hole is supplied.
+        let glued = "16m @ 47.07g/t";
+        let ParseOutcome::Parsed(glued_ic) = parse_intercept_phrase(glued, Some("FM24-209D"))
+        else {
+            panic!("expected glued '16m @ 47.07g/t' to parse with default_hole");
+        };
+        assert_eq!(glued_ic.hole, "FM24-209D");
+        assert_eq!(glued_ic.length.value, ExactQty::from_integer(16));
+        assert_eq!(glued_ic.grade.value, ExactQty::new(4707, 100).unwrap());
+
+        // 3. Glued copper percentage "1.5% Cu" parses cleanly.
+        let cu = "DDH-011: 12.0 m @ 1.5% Cu";
+        let ParseOutcome::Parsed(cu_ic) = parse_intercept_phrase(cu, None) else {
+            panic!("expected glued '1.5% Cu' to parse");
+        };
+        assert_eq!(cu_ic.grade_unit, GradeUnit::Percent);
+        assert_eq!(cu_ic.metal_symbol.as_deref(), Some("Cu"));
+
+        // 4. Parenthetical containing an inclusion, unbalanced parens, and "; including" all fall back.
+        for tricky in [
+            "DDH-012: 18.5 m @ 6.40 g/t Au (includes 2.5 m @ 24.0 g/t)",
+            "DDH-012: 18.5 m @ 6.40 g/t Au (true width 12 m",
+            "DDH-012: 20.0 m @ 4.0 g/t including 5.0 m @ 10.0 g/t; including 3.0 m @ 8.0 g/t",
+        ] {
+            assert!(
+                matches!(
+                    parse_intercept_phrase(tricky, None),
+                    ParseOutcome::FallbackToCitedMode { .. }
+                ),
+                "expected fallback on {tricky:?}"
+            );
+        }
     }
 }
