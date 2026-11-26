@@ -7,7 +7,7 @@ use std::path::Path;
 use fmine_econ::EconError;
 use fmine_econ::npv::{
     ConventionDiscoveryRequest, DiscountConvention, ExactInterval, TaxBasis,
-    discover_discounting_convention, solve_irr_bracketed,
+    discover_discounting_convention, evaluate_discounting_conventions, solve_irr_bracketed,
 };
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::toml_subset::parse_subset;
@@ -19,11 +19,12 @@ use crate::{Envelope, json_string as js, worksheet_input};
 pub(crate) const VERB: &str = "check developer-npv";
 pub(crate) const USAGE: &str = "check developer-npv <worksheet.toml>";
 const SCHEMA: &str = "fmine.developer-npv.v1";
-const NO_CLAIM: &str = "Replay of reader-transcribed annual cash flows in USD millions. A compatible convention overlaps the stated printed-NPV rounding interval within the three tested timing rules. The worksheet is the retained source. The reader supplies original document locations, cash-flow scope and tax treatment. A numerical IRR is conditional on the exact supplied schedule and explicit bracket. Issuer authentication and investment authorization require separate evidence.";
+const NO_CLAIM: &str = "Replay of reader-transcribed annual cash flows in USD millions. A compatible timing overlaps the stated printed-NPV rounding interval within the tested candidates. The worksheet is the retained source. The reader supplies original document locations, cash-flow scope and tax treatment. A numerical IRR is conditional on the exact supplied schedule and explicit bracket. Issuer authentication and investment authorization require separate evidence.";
 const MAX_BYTES: u64 = 64 * 1024;
 const MAX_FLOWS: usize = 64;
 const AT_VALUATION: &str = "valuation_date";
 const END_FIRST_PERIOD: &str = "end_of_first_period";
+const AUTO: &str = "auto";
 
 type Result<T> = std::result::Result<T, Refusal>;
 
@@ -60,6 +61,71 @@ fn incomplete_tax_schedule() -> Refusal {
         RefusalCode::UndeclaredUnitBasisOrTz107,
         "explicit tax_outflow in every year is required for after-tax replay",
     )
+}
+
+struct TimingCandidate {
+    date: &'static str,
+    rule: DiscountConvention,
+    bounds: ExactInterval,
+    overlaps: bool,
+}
+
+fn evaluate_date(
+    request: &ConventionDiscoveryRequest<'_>,
+    date: &'static str,
+    search: bool,
+) -> Result<Vec<TimingCandidate>> {
+    let arithmetic = |error| EconError::from(error).to_refusal();
+    let one = ExactQty::from_integer(1);
+    let scale = if date == END_FIRST_PERIOD {
+        one.checked_add(request.discount_rate).map_err(arithmetic)?
+    } else {
+        one
+    };
+    if scale.signum() <= 0 {
+        return Err(invalid("discount_rate must satisfy 1 + rate > 0"));
+    }
+    // Use the same exact origin as the kernel. Map each result back before displaying it.
+    let normalized = ConventionDiscoveryRequest {
+        printed_npv: request.printed_npv.checked_mul(scale).map_err(arithmetic)?,
+        printed_step: request
+            .printed_step
+            .checked_mul(scale)
+            .map_err(arithmetic)?,
+        ..*request
+    };
+    let rows = if search {
+        evaluate_discounting_conventions(&normalized).map(|(_, rows)| rows)
+    } else {
+        discover_discounting_convention(&normalized).map(|found| found.evaluations)
+    }
+    .map_err(|error| {
+        let mut refusal = error.to_refusal();
+        if matches!(error, EconError::NonIdentifiableConvention { .. }) {
+            if search {
+                let _ = write!(refusal.what, ". While evaluating {date}");
+            }
+            if date == END_FIRST_PERIOD {
+                refusal.what.push_str(
+                    ". Bounds in this diagnostic use the year-zero reference, with the printed NPV scaled by 1 + discount_rate.",
+                );
+            }
+        }
+        refusal
+    })?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(TimingCandidate {
+                date,
+                rule: row.convention,
+                bounds: ExactInterval {
+                    lo: row.npv_interval.lo.checked_div(scale).map_err(arithmetic)?,
+                    hi: row.npv_interval.hi.checked_div(scale).map_err(arithmetic)?,
+                },
+                overlaps: row.matches_printed,
+            })
+        })
+        .collect()
 }
 
 fn irr(
@@ -155,20 +221,16 @@ fn evaluate(path: &Path) -> Result<Envelope> {
     let printed_step = number(get(&top, "printed_step")?)?;
     let flow_step = number(get(&top, "flow_step")?)?;
     let timing = top.get("year_zero_timing").copied().unwrap_or(AT_VALUATION);
-    let arithmetic = |error| EconError::from(error).to_refusal();
-    let one = ExactQty::from_integer(1);
-    let scale = match timing {
-        AT_VALUATION => one,
-        END_FIRST_PERIOD => one.checked_add(discount_rate).map_err(arithmetic)?,
+    let dates: &[&str] = match timing {
+        AT_VALUATION => &[AT_VALUATION],
+        END_FIRST_PERIOD => &[END_FIRST_PERIOD],
+        AUTO => &[AT_VALUATION, END_FIRST_PERIOD],
         _ => {
             return Err(invalid(
-                "year_zero_timing requires valuation_date or end_of_first_period",
+                "year_zero_timing requires valuation_date, end_of_first_period or auto",
             ));
         }
     };
-    if scale.signum() <= 0 {
-        return Err(invalid("discount_rate must satisfy 1 + rate > 0"));
-    }
     let mut flows = Vec::with_capacity(doc.rows.len());
     let mut taxes = Vec::new();
     let mut citations = Vec::with_capacity(doc.rows.len());
@@ -220,41 +282,61 @@ fn evaluate(path: &Path) -> Result<Envelope> {
         TaxBasis::PreTax
     };
     let digest = fmine_core::Digest32(source.artifact_sha256);
-    // Compare at the kernel's year-zero origin. A valuation one year earlier discounts every
-    // NPV by the same positive factor. Scale the target and its step together before matching.
-    let result = discover_discounting_convention(&ConventionDiscoveryRequest {
+    let request = ConventionDiscoveryRequest {
         report_id: document,
         report_sha256: &digest.to_hex(),
         flows: &flows,
         flow_rounding_step: flow_step,
         discount_rate,
-        printed_npv: printed_npv.checked_mul(scale).map_err(arithmetic)?,
-        printed_step: printed_step.checked_mul(scale).map_err(arithmetic)?,
+        printed_npv,
+        printed_step,
         tax_basis: &tax_basis,
-    })
-    .map_err(|error| {
-        let mut refusal = error.to_refusal();
-        if timing == END_FIRST_PERIOD && matches!(error, EconError::NonIdentifiableConvention { .. })
-        {
-            refusal.what.push_str(
-                ". Bounds in this diagnostic use the year-zero reference, with the printed NPV scaled by 1 + discount_rate.",
-            );
-        }
-        refusal
-    })?;
-    let convention = result.discovered.as_str();
-    let at_valuation = |bounds: ExactInterval| -> Result<ExactInterval> {
-        Ok(ExactInterval {
-            lo: bounds.lo.checked_div(scale).map_err(arithmetic)?,
-            hi: bounds.hi.checked_div(scale).map_err(arithmetic)?,
-        })
     };
-    let (irr_json, irr_md) = irr(&top, flow_step, &flows, &tax_basis, result.discovered)?;
+    let search = timing == AUTO;
+    let mut candidates = Vec::with_capacity(dates.len() * DiscountConvention::ALL.len());
+    for &date in dates {
+        candidates.extend(evaluate_date(&request, date, search)?);
+    }
+    let matches: Vec<_> = candidates.iter().filter(|row| row.overlaps).collect();
+    let (mut envelope, selected_date, convention, finding, irr_json, irr_md) =
+        if let [row] = matches.as_slice() {
+            let (irr_json, irr_md) = irr(&top, flow_step, &flows, &tax_basis, row.rule)?;
+            (
+                Envelope::ok(VERB, String::new(), Vec::new()),
+                js(row.date),
+                js(row.rule.as_str()),
+                format!(
+                    "Compatible convention **{}** with year zero at `{}`.",
+                    row.rule.as_str(),
+                    row.date,
+                ),
+                irr_json,
+                irr_md,
+            )
+        } else {
+            let refusal = EconError::NonIdentifiableConvention {
+                detail: format!(
+                    "convention not discovered: {} of {} timing candidates matched printed NPV",
+                    matches.len(),
+                    candidates.len(),
+                ),
+            }
+            .to_refusal();
+            let finding = format!("Refused `{}`. {}", refusal.code, refusal.what);
+            (
+                Envelope::refused(VERB, refusal, Vec::new()),
+                "null".into(),
+                "null".into(),
+                finding,
+                "null".into(),
+                String::new(),
+            )
+        };
     let npv_locator = get(&top, "npv_locator")?;
     let rate_locator = get(&top, "rate_locator")?;
     let cell = worksheet_input::markdown_cell;
     let mut md = format!(
-        "# Developer NPV replay\n\n{} · {} · USD millions\n\nWorksheet SHA-256 `{digest}`\n\nCompatible convention **{convention}** with year zero at `{timing}`.\n\nPrinted NPV ≈{:.4} from {}. Discount rate ≈{:.4}% from {}.\n\n| Convention | NPV low (approx.) | NPV high (approx.) | Overlaps printed NPV |\n|---|---:|---:|---|\n",
+        "# Developer NPV replay\n\n{} · {} · USD millions\n\nWorksheet SHA-256 `{digest}`\n\n{finding}\n\nPrinted NPV ≈{:.4} from {}. Discount rate ≈{:.4}% from {}.\n\n",
         cell(document),
         cell(basis),
         printed_npv.to_f64(),
@@ -262,42 +344,58 @@ fn evaluate(path: &Path) -> Result<Envelope> {
         discount_rate.to_f64() * 100.0,
         cell(rate_locator),
     );
-    let mut comparisons = Vec::with_capacity(result.evaluations.len());
-    for row in result.evaluations {
-        let name = row.convention.as_str();
-        let bounds = at_valuation(row.npv_interval)?;
+    if search {
+        md.push_str("| Year zero | Convention | NPV low (approx.) | NPV high (approx.) | Overlaps printed NPV |\n|---|---|---:|---:|---|\n");
+    } else {
+        md.push_str("| Convention | NPV low (approx.) | NPV high (approx.) | Overlaps printed NPV |\n|---|---:|---:|---|\n");
+    }
+    let mut comparisons = Vec::with_capacity(candidates.len());
+    for row in candidates {
+        let name = row.rule.as_str();
+        let bounds = row.bounds;
+        let date_json = if search {
+            format!("\"year_zero_timing\":\"{}\",", row.date)
+        } else {
+            String::new()
+        };
         comparisons.push(format!(
-            "{{\"convention\":\"{name}\",\"npv_bounds_usd_m\":{},\"overlaps_printed\":{}}}",
+            "{{{date_json}\"convention\":\"{name}\",\"npv_bounds_usd_m\":{},\"overlaps_printed\":{}}}",
             interval(bounds),
-            row.matches_printed,
+            row.overlaps,
         ));
+        if search {
+            let _ = write!(md, "| `{}` ", row.date);
+        }
         let _ = writeln!(
             md,
             "| {name} | {:.4} | {:.4} | {} |",
             bounds.lo.to_f64(),
             bounds.hi.to_f64(),
-            row.matches_printed
+            row.overlaps
         );
     }
     let _ = write!(md, "\n{irr_md}Use JSON for exact values. {NO_CLAIM}\n");
-    let mut envelope = Envelope::ok(
-        VERB,
-        format!(
-            "{{\"schema\":\"{SCHEMA}\",\"worksheet\":{},\"source_document\":{source_document},\"document\":{},\"evidence\":{},\"tax_basis\":{},\"year_zero_timing\":\"{timing}\",\"discount_rate\":\"{}\",\"rate_locator\":{},\"printed_npv_usd_m\":\"{}\",\"npv_locator\":{},\"printed_bounds_usd_m\":{},\"flow_step_usd_m\":\"{}\",\"compatible_convention\":\"{convention}\",\"comparisons\":[{}],\"flows\":[{}],\"irr\":{irr_json}}}",
-            worksheet_input::source_json(&source, text.len()),
-            js(document),
-            js(evidence),
-            js(basis),
-            exact(discount_rate),
-            js(rate_locator),
-            exact(printed_npv),
-            js(npv_locator),
-            interval(at_valuation(result.printed_interval)?),
-            exact(flow_step),
-            comparisons.join(","),
-            citations.join(","),
-        ),
-        Vec::new(),
+    let search_json = if search {
+        "\"timing_search\":\"auto\","
+    } else {
+        ""
+    };
+    let printed_bounds = ExactInterval::from_rounding_step(printed_npv, printed_step)
+        .map_err(|error| error.to_refusal())?;
+    envelope.payload_json = format!(
+        "{{\"schema\":\"{SCHEMA}\",\"worksheet\":{},\"source_document\":{source_document},\"document\":{},\"evidence\":{},\"tax_basis\":{},{search_json}\"year_zero_timing\":{selected_date},\"discount_rate\":\"{}\",\"rate_locator\":{},\"printed_npv_usd_m\":\"{}\",\"npv_locator\":{},\"printed_bounds_usd_m\":{},\"flow_step_usd_m\":\"{}\",\"compatible_convention\":{convention},\"comparisons\":[{}],\"flows\":[{}],\"irr\":{irr_json}}}",
+        worksheet_input::source_json(&source, text.len()),
+        js(document),
+        js(evidence),
+        js(basis),
+        exact(discount_rate),
+        js(rate_locator),
+        exact(printed_npv),
+        js(npv_locator),
+        interval(printed_bounds),
+        exact(flow_step),
+        comparisons.join(","),
+        citations.join(","),
     );
     envelope.no_claim = Some(NO_CLAIM);
     envelope.rendered_markdown = Some(md);

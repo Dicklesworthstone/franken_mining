@@ -258,3 +258,107 @@ fn taguas_report_reproduces_only_with_the_first_period_timing_shift() {
             .contains("year-zero reference")
     );
 }
+
+#[test]
+fn auto_finds_the_taguas_timing_and_keeps_every_candidate() {
+    let input = TAGUAS.replace("end_of_first_period", "auto");
+    let value = payload(&input);
+    let explicit = payload(TAGUAS);
+    assert_eq!(field(&value, "timing_search").as_str(), Some("auto"));
+    assert_eq!(
+        field(&value, "year_zero_timing"),
+        field(&explicit, "year_zero_timing")
+    );
+    assert_eq!(
+        field(&value, "compatible_convention"),
+        field(&explicit, "compatible_convention")
+    );
+    assert_eq!(
+        field(&value, "printed_bounds_usd_m"),
+        field(&explicit, "printed_bounds_usd_m")
+    );
+    let rows = field(&value, "comparisons").as_array().unwrap();
+    let explicit = field(&explicit, "comparisons").as_array().unwrap();
+    assert_eq!(rows.len(), 6);
+    for (number, row) in rows.iter().enumerate() {
+        let date = if number < 3 {
+            "valuation_date"
+        } else {
+            "end_of_first_period"
+        };
+        assert_eq!(field(row, "year_zero_timing").as_str(), Some(date));
+        assert_eq!(
+            field(row, "convention"),
+            field(&explicit[number % 3], "convention")
+        );
+        assert_eq!(field(row, "overlaps_printed").as_bool(), Some(number == 3));
+    }
+    assert_eq!(
+        field(&rows[3], "npv_bounds_usd_m"),
+        field(&explicit[0], "npv_bounds_usd_m")
+    );
+    let rendered = run(&input, "markdown");
+    assert!(rendered.status.success());
+    assert!(
+        String::from_utf8(rendered.stdout)
+            .unwrap()
+            .contains("| `end_of_first_period` | EndYear | 103.7176 | 103.7255 | true |")
+    );
+}
+
+#[test]
+fn auto_refuses_cross_date_ambiguity_and_no_fit_with_candidate_evidence() {
+    // [25.05, 26.35] contains one match at each date, even though either date alone is unique.
+    let cross_date = MODEL
+        .replace("\"25.1\"", "\"25.7\"")
+        .replace("\"0.1\"", "\"1.3\"");
+    let with_date = |model: &str, date: &str| {
+        model.replacen(
+            "[[flow]]",
+            &format!("year_zero_timing = \"{date}\"\n\n[[flow]]"),
+            1,
+        )
+    };
+    assert_eq!(
+        field(&payload(&cross_date), "compatible_convention").as_str(),
+        Some("MidYearAll")
+    );
+    assert_eq!(
+        field(
+            &payload(&with_date(&cross_date, "end_of_first_period")),
+            "compatible_convention"
+        )
+        .as_str(),
+        Some("Year0UndiscountedMidYearOps")
+    );
+    let ambiguous = with_date(&cross_date, "auto");
+    let no_fit = TAGUAS
+        .replace("\"104\"", "\"140\"")
+        .replace("end_of_first_period", "auto");
+    for (model, expected_matches) in [(&ambiguous, 2), (&no_fit, 0)] {
+        let output = run(model, "json");
+        assert!(!output.status.success());
+        let json = parse(&output.stdout).unwrap();
+        assert_eq!(
+            field(field(&json, "refusal"), "code").as_str(),
+            Some("FMINE-REF-104")
+        );
+        let result = field(&json, "payload");
+        for key in ["year_zero_timing", "compatible_convention", "irr"] {
+            assert_eq!(field(result, key), &Json::Null);
+        }
+        let rows = field(result, "comparisons").as_array().unwrap();
+        assert_eq!(rows.len(), 6);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| field(row, "overlaps_printed").as_bool() == Some(true))
+                .count(),
+            expected_matches
+        );
+    }
+    let markdown = run(&ambiguous, "markdown");
+    assert!(!markdown.status.success());
+    let markdown = String::from_utf8(markdown.stdout).unwrap();
+    assert!(markdown.contains("2 of 6 timing candidates"));
+    assert!(markdown.contains("| `valuation_date` | MidYearAll |"));
+}

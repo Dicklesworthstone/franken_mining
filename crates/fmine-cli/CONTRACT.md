@@ -26,7 +26,9 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   preserves a successful NPV replay when the IRR solver refuses. A local worksheet digest
   identifies the transcription supplied by the reader.
   `year_zero_timing` defaults to `valuation_date`. The explicit `end_of_first_period` basis
-  discounts every flow by one additional year. Public transcriptions require a declared source URL
+  discounts every flow by one additional year. `auto` tests both origins and accepts only one
+  fit across the six combinations. Complete comparisons survive a no-match or ambiguous refusal.
+  Public transcriptions require a declared source URL
   and PDF digest. The E876 worksheet preserves the source and independently checked Taguas replay.
 
 - DESIGN (BD-054). `decide card <model> --brief` selects the executive Markdown view of the same evaluated

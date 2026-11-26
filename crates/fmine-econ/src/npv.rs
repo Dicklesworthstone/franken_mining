@@ -409,9 +409,6 @@ pub struct ConventionDiscoveryRequest<'a> {
     pub tax_basis: &'a TaxBasis,
 }
 
-/// Discover which of the three declared discounting conventions reproduces `printed_npv` within
-/// `printed_step` (`[printed_npv - printed_step/2, printed_npv + printed_step/2]`).
-///
 fn json_escape_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -432,18 +429,18 @@ fn json_escape_str(s: &str) -> String {
     out
 }
 
-/// Refines the rational square-root enclosure if a boundary straddle occurs (up to `10^-12`).
-/// Refuses with `FMINE-REF-104` (`NonIdentifiableConvention`, `"convention not discovered"`) when
-/// zero OR two-or-more conventions match.
-pub fn discover_discounting_convention(
+/// Compare all three timing rules with the printed NPV's half-step interval.
+///
+/// Zero or multiple overlaps are returned for callers that combine several valuation dates.
+/// An exact-flow result that straddles the target after square-root refinement still refuses.
+pub fn evaluate_discounting_conventions(
     req: &ConventionDiscoveryRequest<'_>,
-) -> Result<ConventionDiscovery, EconError> {
+) -> Result<(ExactInterval, Vec<ConventionEvalRow>), EconError> {
     let printed_interval = ExactInterval::from_rounding_step(req.printed_npv, req.printed_step)?;
     // Validate tax schedule & flows up front before looping conventions.
     let _ = resolve_effective_flows(req.flows, req.tax_basis)?;
 
     let mut rows = Vec::with_capacity(DiscountConvention::ALL.len());
-    let mut matched = Vec::new();
     let exact_input_flows = req.flow_rounding_step.signum() == 0;
 
     for conv in DiscountConvention::ALL {
@@ -491,9 +488,6 @@ pub fn discover_discounting_convention(
             });
         }
         let matches_printed = overlaps;
-        if matches_printed {
-            matched.push(conv);
-        }
         let log_line = format!(
             "{{\"event\":\"npv_convention\",\"convention\":\"{}\",\"npv_lo\":{},\"npv_hi\":{},\
              \"printed\":{},\"printed_step\":{},\"match\":{matches_printed}}}",
@@ -511,18 +505,28 @@ pub fn discover_discounting_convention(
         });
     }
 
-    if matched.len() != 1 {
+    Ok((printed_interval, rows))
+}
+
+/// Discover the unique convention that overlaps the printed NPV's half-step interval.
+/// Returns `FMINE-REF-104` if the overlap fails to establish a unique choice.
+pub fn discover_discounting_convention(
+    req: &ConventionDiscoveryRequest<'_>,
+) -> Result<ConventionDiscovery, EconError> {
+    let (printed_interval, rows) = evaluate_discounting_conventions(req)?;
+    let mut matched = rows.iter().filter(|row| row.matches_printed);
+    let first = matched.next();
+    let count = usize::from(first.is_some()) + matched.count();
+
+    let Some(discovered) = first.filter(|_| count == 1).map(|row| row.convention) else {
         return Err(EconError::NonIdentifiableConvention {
             detail: format!(
-                "convention not discovered: {} of 3 conventions matched printed NPV [{}..{}]",
-                matched.len(),
+                "convention not discovered: {count} of 3 conventions matched printed NPV [{}..{}]",
                 fmt_exact_f64_6dp(printed_interval.lo),
                 fmt_exact_f64_6dp(printed_interval.hi),
             ),
         });
-    }
-
-    let discovered = matched[0];
+    };
     let summary_log_line = format!(
         "{{\"event\":\"npv_replay\",\"report\":{},\"sha256\":{},\
          \"convention\":\"{}\",\"irr_state\":\"not_requested\"}}",

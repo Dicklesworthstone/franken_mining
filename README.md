@@ -234,6 +234,10 @@ assessment, the final pre-tax row gives approximately US$103.72M under this end-
 which rounds to the reported US$104M at 8%. The worksheet retains the original URL and PDF digest.
 [Taguas transcription](tests/exploration/taguas_2021_pre_tax.toml)
 
+Set `year_zero_timing = "auto"` when the report leaves the valuation date unclear. The command
+checks all three conventions at both dates and requires a single overlap with the printed NPV.
+With zero or several overlaps, it returns a refusal and keeps all six comparisons for review.
+
 ## Check a mining front for model drift
 
 **DESIGN.** Evaluate an explicitly declared sequence of mining polygons against one spatial model:
