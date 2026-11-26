@@ -248,9 +248,10 @@ fn evidence(row: &ReserveDeclaration, readings: &[Accepted]) -> Vec<Accepted> {
         .iter()
         .filter(|a| {
             a.locator.doc == row.doc
-                && (a.quantity == row.quantity
-                    || row.gold_price_quantity.as_ref() == Some(&a.quantity)
-                    || row.copper_price_quantity.as_ref() == Some(&a.quantity))
+                && ((a.quantity == row.quantity && a.period == row.period)
+                    || (row.deck_period.as_ref() == Some(&a.period)
+                        && (row.gold_price_quantity.as_ref() == Some(&a.quantity)
+                            || row.copper_price_quantity.as_ref() == Some(&a.quantity))))
         })
         .cloned()
         .collect();

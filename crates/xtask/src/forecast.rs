@@ -25,8 +25,8 @@ mod scoring;
 pub use scoring::record_score;
 
 use fmine_calib::record::{
-    self, BaselineKind, Outcome, ProofTimes, Quarter, Rat, RecordDates, RecordManifest,
-    RecordRules, RegisteredDigest, SiteStatus, format_utc, parse_hex32, parse_utc,
+    self, BaselineKind, ProofTimes, Quarter, Rat, RecordDates, RecordManifest,
+    RecordRules, SiteStatus, format_utc, parse_hex32, parse_utc,
 };
 use fmine_core::hash::Digest32;
 pub use fmine_io::forecast::timestamp::proof_times_from_text;
@@ -80,40 +80,6 @@ fn write_digest(path: &Path, hex: &str) -> Res<()> {
         .map_err(|e| vec![format!("cannot write {}: {e}", path.display())])
 }
 
-/// Every `(file, sha256)` in `registries/sources/*.toml`.
-fn registered_digests(root: &Path) -> Res<Vec<(String, [u8; 32])>> {
-    let dir = root.join("registries").join("sources");
-    let entries =
-        fs::read_dir(&dir).map_err(|e| vec![format!("cannot read {}: {e}", dir.display())])?;
-    let mut files: Vec<_> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
-        .collect();
-    files.sort();
-    let mut out = Vec::new();
-    for p in files {
-        let reg = fmine_registry::sources::load_sources_registry(&p)
-            .map_err(|e| vec![format!("{}: {e}", p.display())])?;
-        let rows = reg
-            .sources
-            .into_iter()
-            .map(|source| (source.file, source.sha256))
-            .chain(
-                reg.documents
-                    .into_iter()
-                    .map(|document| (document.file, document.sha256)),
-            );
-        for (file, sha256) in rows {
-            let Some(digest) = parse_hex32(&sha256) else {
-                return fail(format!("{}: {file} has no 64-digit sha256", p.display()));
-            };
-            out.push((file, digest));
-        }
-    }
-    Ok(out)
-}
-
 /// The rules, refused if any line, comments included, still carries an `OPEN` marker or they do not parse.
 fn parse_rules_bytes(bytes: &[u8], name: &str) -> Res<RecordRules> {
     let text = std::str::from_utf8(bytes).map_err(|_| vec![format!("{name} is not UTF-8")])?;
@@ -135,7 +101,6 @@ struct Loaded {
     dates: RecordDates,
     digest: String,
     rules_digest: String,
-    registered: Vec<(String, [u8; 32])>,
     rules: RecordRules,
     forecasts: Vec<record::ForecastRow>,
 }
@@ -165,39 +130,18 @@ fn load(root: &Path, dir: &Path) -> Res<Loaded> {
         ));
     }
     let forecasts = record::parse_forecasts(&csv, &rules).map_err(|e| vec![e.to_string()])?;
-    let registered = registered_digests(root)?;
-    let findings = findings(&manifest, &registered, None, rules.dates);
-    if !findings.is_empty() {
-        return Err(findings);
-    }
+    let profile = fmine_public::sources::load_issuer_profile(root, &rules.issuer)
+        .map_err(|error| vec![error.to_string()])?;
+    fmine_public::forecast::manifest::bind(&profile, &rules, &manifest)
+        .map_err(|error| vec![format!("manifest.toml: {error}")])?;
     Ok(Loaded {
         digest: record::record_digest(&manifest_bytes, &csv).to_hex(),
         rules_digest: rules_digest.to_hex(),
         dates: rules.dates,
         manifest,
-        registered,
         rules,
         forecasts,
     })
-}
-
-fn findings(
-    m: &RecordManifest,
-    registered: &[(String, [u8; 32])],
-    proof: Option<ProofTimes>,
-    dates: RecordDates,
-) -> Vec<String> {
-    let regs: Vec<RegisteredDigest<'_>> = registered
-        .iter()
-        .map(|(file, sha256)| RegisteredDigest {
-            file,
-            sha256: *sha256,
-        })
-        .collect();
-    record::validate(m, &regs, proof, dates)
-        .iter()
-        .map(|f| format!("manifest.toml: {f}"))
-        .collect()
 }
 
 /// An exact value as `n` or `n/d`.
@@ -618,22 +562,10 @@ fn verify_loaded(root: &Path, dir: &Path, loaded: &Loaded) -> Res<(Vec<String>, 
         return fail("rules.sha256 differs from the rules bound by the frozen manifest".into());
     }
     let (proof, authority) = trusted_timestamp(root, dir, "record.tsr", &loaded.digest)?;
-    if loaded
-        .rules
-        .targets
-        .iter()
-        .any(|target| target.outcome == Outcome::QuarterQtd)
-    {
-        proof_before_outcome_end(&loaded.rules, proof)?;
-    }
-    let found = findings(
-        &loaded.manifest,
-        &loaded.registered,
-        Some(proof),
-        loaded.dates,
-    );
+    proof_before_outcome_end(&loaded.rules, proof)?;
+    let found = record::validate(&loaded.manifest, &[], Some(proof), loaded.dates);
     if !found.is_empty() {
-        return Err(found);
+        return Err(found.iter().map(|f| format!("manifest.toml: {f}")).collect());
     }
     let mut prior_rules = Vec::new();
     let mut rule_failures = Vec::new();
@@ -689,7 +621,7 @@ mod tests {
         let mut rules =
             record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
         for target in &mut rules.targets {
-            target.outcome = Outcome::QuarterQtd;
+            target.outcome = record::Outcome::QuarterQtd;
         }
         for baseline in &mut rules.baselines {
             if let BaselineKind::Persistence { point, .. } = &mut baseline.kind {
@@ -718,6 +650,22 @@ mod tests {
                 )
                 .is_err()
             );
+        }
+    }
+    #[test]
+    fn annual_proof_must_precede_year_end_even_with_a_later_declared_deadline() {
+        let mut rules =
+            record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+        let end = parse_utc("2027-01-01T00:00:00Z").unwrap();
+        rules.dates.proof_by = end + 86_400;
+        let proof = |upper_utc| ProofTimes {
+            lower_utc: end - 2,
+            upper_utc,
+        };
+        assert!(proof_before_outcome_end(&rules, proof(end - 1)).is_ok());
+        for upper in [end, end + 1] {
+            let refused = proof_before_outcome_end(&rules, proof(upper)).unwrap_err();
+            assert!(refused.iter().any(|reason| reason.contains("end of the scored quarter")));
         }
     }
     use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
@@ -1201,15 +1149,9 @@ mod tests {
             .iter()
             .find(|document| document.file == "Barrick_Q4_2025_MD-A.pdf")
             .expect("registered PDF");
-        let registered = registered_digests(&root).expect("all registered source digests");
-        let digest = parse_hex32(&document.sha256).expect("registered digest");
-        assert!(registered.contains(&(document.file.clone(), digest)));
-        for workbook in &registry.sources {
-            assert!(registered.contains(&(
-                workbook.file.clone(),
-                parse_hex32(&workbook.sha256).expect("workbook digest"),
-            )));
-        }
+        let profile = fmine_public::sources::load_issuer_profile(&root, "barrick").unwrap();
+        let rules = record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
+        let digest = parse_hex32(&document.sha256).unwrap();
         let mut manifest = RecordManifest {
             record_id: "synthetic-registry-binding".into(),
             author_role: "public-lane-author".into(),
@@ -1229,11 +1171,10 @@ mod tests {
                 line: 1,
             }],
         };
-        assert!(findings(&manifest, &registered, None, record::FY2026_DATES).is_empty());
+        assert!(fmine_public::forecast::manifest::bind(&profile, &rules, &manifest).is_ok());
         manifest.inputs[0].sha256[0] ^= 1;
-        let refused = findings(&manifest, &registered, None, record::FY2026_DATES);
-        assert_eq!(refused.len(), 1, "{refused:?}");
-        assert!(refused[0].contains(&document.file));
+        let refused = fmine_public::forecast::manifest::bind(&profile, &rules, &manifest).unwrap_err();
+        assert!(refused.what.contains(&document.file));
     }
 
     #[test]

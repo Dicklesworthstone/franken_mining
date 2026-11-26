@@ -75,6 +75,176 @@ fn verdict(text: &str, claims: &[KeyedCell]) -> Verdict {
     report.findings[0].verdict
 }
 
+fn capex(value: &str, label: &str, release: &str) -> KeyedCell {
+    observation(value, |key| {
+        key.line.label = label.into();
+        key.unit = "usd_m".into();
+        key.ownership_basis = OwnershipBasis::Consolidated100;
+        key.reporting_vintage.release = release.into();
+    })
+}
+
+#[test]
+fn capex_equalities_keep_scopes_currency_scale_and_rounding_explicit() {
+    for (metric, label) in [
+        (
+            "total capital expenditures",
+            "site::total capital expenditures ($ millions)",
+        ),
+        (
+            "minesite sustaining capex",
+            "site:capital expenditures ($ millions):minesite sustaining",
+        ),
+        (
+            "project capital expenditure",
+            "site:capital expenditures ($ millions):projects",
+        ),
+    ] {
+        let source = capex("125", label, "2030Q1");
+        let original = source.to_json();
+        let sentence = |amount: &str| format!("Site A Q1 2030 100% basis {metric} is {amount}.");
+        for amount in [
+            "US$125 million",
+            "USD 125 million",
+            "125 million USD",
+            "USD125m",
+        ] {
+            let plain = sentence(amount);
+            let cited = plain.replace(
+                amount,
+                &format!("[{amount}](fmine:{})", source.claim.claim_id),
+            );
+            for report in [
+                lint_cited(&cited, std::slice::from_ref(&source)),
+                lint_discover(&plain, std::slice::from_ref(&source)),
+            ] {
+                assert_eq!(report.findings.len(), 1, "{}", report.to_json());
+                assert_eq!(report.findings[0].verdict, Verdict::Verified, "{plain}");
+                assert_eq!(
+                    report.findings[0].source.as_ref().unwrap().claim.claim_id,
+                    source.claim.claim_id
+                );
+            }
+            let start = plain.find(amount).unwrap();
+            let target = equality_target(&plain, (start, start + amount.len()), &source).unwrap();
+            assert_eq!(
+                target.value,
+                fmine_io::numtok::Dec {
+                    mantissa: 125,
+                    scale: 0
+                }
+            );
+            assert_eq!(
+                target.step,
+                fmine_io::numtok::Dec {
+                    mantissa: 1,
+                    scale: 0
+                }
+            );
+        }
+        for (amount, expected) in [
+            ("USD 125.0 million", Verdict::RoundingBeyondTolerance),
+            ("USD 126 million", Verdict::RoundingBeyondTolerance),
+            ("USD 127 million", Verdict::ValueMismatch),
+            ("CAD 125 million", Verdict::BasisMismatch),
+            ("C$125 million USD", Verdict::BasisMismatch),
+            ("$125 million USD", Verdict::BasisMismatch),
+            ("$125 million", Verdict::BasisMismatch),
+            ("USD 125 thousand", Verdict::BasisMismatch),
+            ("USD 125 billion", Verdict::BasisMismatch),
+            ("USD 125", Verdict::BasisMismatch),
+            ("125 million", Verdict::Ambiguous),
+        ] {
+            let cited = sentence(&format!("[{amount}](fmine:{})", source.claim.claim_id));
+            assert_eq!(
+                verdict(&cited, std::slice::from_ref(&source)),
+                expected,
+                "{cited}"
+            );
+        }
+        assert_eq!(
+            source.to_json(),
+            original,
+            "comparison never rescales the source Claim"
+        );
+    }
+}
+
+#[test]
+fn capex_equalities_preserve_signed_values_and_cannot_borrow_other_scopes_or_bases() {
+    let label = "site:capital expenditures ($ millions):projects";
+    for (value, amount) in [("-7.50", "(US$7.50 million)"), ("0", "USD 0 million")] {
+        let source = capex(value, label, "2030Q1");
+        let text = format!(
+            "Site A Q1 2030 100% basis project capex is [{amount}](fmine:{}).",
+            source.claim.claim_id
+        );
+        assert_eq!(
+            verdict(&text, std::slice::from_ref(&source)),
+            Verdict::Verified,
+            "{text}"
+        );
+    }
+    let source = capex("125", label, "2030Q1");
+    let good = format!(
+        "Site A Q1 2030 100% basis project capex is [US$125 million](fmine:{}).",
+        source.claim.claim_id
+    );
+    for (from, to, expected) in [
+        ("project capex", "total capex", Verdict::BasisMismatch),
+        (
+            "project capex",
+            "minesite sustaining capex",
+            Verdict::BasisMismatch,
+        ),
+        ("project capex", "capex", Verdict::Unchecked),
+        ("project capex", "growth capex", Verdict::Unchecked),
+        ("100% basis", "attributable", Verdict::BasisMismatch),
+        ("100% basis", "", Verdict::Ambiguous),
+        ("Q1 2030", "H1 2030", Verdict::PeriodMismatch),
+        (
+            "project capex",
+            "project capex per ounce sold",
+            Verdict::BasisMismatch,
+        ),
+        (
+            "project capex",
+            "project capex gold ounces",
+            Verdict::BasisMismatch,
+        ),
+        (
+            "project capex",
+            "project capex excluding leases",
+            Verdict::Unchecked,
+        ),
+    ] {
+        let text = good.replace(from, to);
+        assert_eq!(
+            verdict(&text, std::slice::from_ref(&source)),
+            expected,
+            "{text}"
+        );
+    }
+    let total = capex(
+        "125",
+        "site::total capital expenditures ($ millions)",
+        "2030Q1",
+    );
+    let plain = "Site A Q1 2030 100% basis project capex is US$125 million.";
+    let unique = lint_discover(plain, &[source.clone(), total]);
+    assert_eq!(unique.findings[0].verdict, Verdict::Verified);
+    assert_eq!(
+        unique.findings[0].source.as_ref().unwrap().claim.claim_id,
+        source.claim.claim_id
+    );
+    let restated = capex("126", label, "2030Q2");
+    let claims = [source, restated];
+    let ambiguous = lint_discover(plain, &claims);
+    assert_eq!(ambiguous.findings[0].verdict, Verdict::Ambiguous);
+    assert_eq!(ambiguous.findings[0].candidates.len(), 2);
+    assert_eq!(verdict(&good, &claims), Verdict::Stale);
+}
+
 #[test]
 fn nine_month_equalities_keep_cumulative_periods_and_amounts_distinct() {
     let source = observation("600.0", |key| {

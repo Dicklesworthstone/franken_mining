@@ -87,6 +87,153 @@ fn public_record_component_digest<'a>(payload: &'a str, key: &str) -> &'a str {
 }
 
 #[test]
+fn capex_lint_uses_source_claims_and_dated_publications_for_each_printed_scope() {
+    let (workspace, registry) = public_record_workspace("capex-disclosures", Some("2030-05-01"));
+    let text = |s: &str| MinimalCell::Text(s.into());
+    let bytes = build_minimal_xlsx_styled(
+        &[MinimalSheet {
+            name: "Minestats1".into(),
+            hidden: false,
+            cells: vec![
+                ("B2".into(), text("Site A")),
+                ("A3".into(), text("For the three months ended March 31,")),
+                ("B3".into(), MinimalCell::Number(2030.0)),
+                ("A4".into(), text("Total capital expenditures ($ millions)")),
+                ("B4".into(), MinimalCell::Number(125.0)),
+                ("A6".into(), text("Capital expenditures ($ millions)")),
+                ("A7".into(), text("Minesite sustaining")),
+                ("B7".into(), MinimalCell::Number(75.0)),
+                ("A8".into(), text("Projects")),
+                ("B8".into(), MinimalCell::Number(50.0)),
+            ],
+        }],
+        None,
+    );
+    let source_path = workspace.join("corpus/Capex.xlsx");
+    std::fs::write(&source_path, &bytes).expect("invented registered capex source");
+    let mut registered = std::fs::read_to_string(&registry).expect("registry");
+    writeln!(
+        registered,
+        "\n[[source]]\nfile = \"Capex.xlsx\"\nkind = \"mine_stats\"\n\
+         quarter = \"2030Q1\"\npath = \"Capex.xlsx\"\nurl_basis = \"W1 table\"\n\
+         published_at = \"2030-05-01\"\n\
+         published_at_basis = \"FACT: invented release calendar for capex regression\"\n\
+         bytes = {}\nsha256 = \"{}\"",
+        bytes.len(),
+        sha256(&bytes).to_hex(),
+    )
+    .expect("source registration");
+    std::fs::write(&registry, registered).expect("registered capex source bytes");
+    let profile = load_issuer_profile(&workspace, PUBLIC_RECORD_ISSUER).expect("profile");
+    let snapshot =
+        fmine_public::run_public_assurance(&profile, &workspace).expect("source projection");
+    let mut cited = String::new();
+    let mut plain = String::new();
+    for (cell, metric, amount) in [
+        ("B4", "total capex", "US$125 million"),
+        (
+            "B7",
+            "minesite sustaining capital expenditures",
+            "75 million USD",
+        ),
+        ("B8", "project capex", "USD 50 million"),
+    ] {
+        let key = format!("Capex.xlsx:Minestats1!{cell}");
+        let claim = &snapshot.public_claims.cells[&key];
+        assert_eq!(claim.key.unit, "usd_m");
+        let prefix = format!("Site A Q1 2030 ownership basis unprinted {metric} is ");
+        writeln!(plain, "{prefix}{amount}.").unwrap();
+        writeln!(
+            cited,
+            "{prefix}[{amount}](fmine:{}).",
+            claim.claim.claim_id
+        )
+        .unwrap();
+    }
+    for (file, draft, discover) in [
+        ("capex-cited.md", cited, false),
+        ("capex-discovery.md", plain, true),
+    ] {
+        let draft = format!("{draft}PRIVATE_CAPEX_DRAFT_PROSE_MUST_NOT_BE_ECHOED.\n");
+        std::fs::write(workspace.join(file), &draft).expect("local draft");
+        let arguments = |cut| {
+            let mut a = args(&[
+                "lint",
+                file,
+                "--issuer",
+                PUBLIC_RECORD_ISSUER,
+                "--as-of",
+                cut,
+            ]);
+            if discover {
+                a.push("--discover".into());
+            }
+            a
+        };
+        let before = invoke(&arguments("2030-04-30"), &workspace).0;
+        let after_args = arguments("2030-05-01");
+        let after = invoke(&after_args, &workspace).0;
+        for report in [&before, &after] {
+            assert_eq!(report.exit_code, 0, "{}", report.to_json());
+            assert_eq!(
+                report.payload_json.matches("\"verdict\":\"verified\"").count(),
+                3,
+                "{}",
+                report.to_json()
+            );
+            assert!(!report.to_json().contains("PRIVATE_CAPEX_DRAFT_PROSE"));
+            no_authority(report);
+        }
+        assert_eq!(
+            before
+                .payload_json
+                .matches("\"status\":\"not_in_public_record\"")
+                .count(),
+            3
+        );
+        assert_eq!(
+            after
+                .payload_json
+                .matches("\"status\":\"disclosed\"")
+                .count(),
+            3
+        );
+        assert!(after.payload_json.contains(&sha256(&bytes).to_hex()));
+        for cell in ["B4", "B7", "B8"] {
+            assert!(
+                after
+                    .payload_json
+                    .contains(&format!("Capex.xlsx:Minestats1!{cell}"))
+            );
+        }
+        assert_eq!(invoke(&after_args, &workspace).0.to_json(), after.to_json());
+        assert_eq!(std::fs::read_to_string(workspace.join(file)).unwrap(), draft);
+        let mut markdown = after_args;
+        markdown.extend(args(&["--format", "markdown"]));
+        let (rendered, exit) = run(&markdown, &workspace);
+        assert_eq!(exit, 0);
+        assert!(rendered.contains("disclosed") && rendered.contains("Capex.xlsx"));
+    }
+    let mut altered = bytes;
+    altered.push(0);
+    std::fs::write(source_path, altered).expect("altered source");
+    let refused = invoke(
+        &args(&[
+            "lint",
+            "capex-cited.md",
+            "--issuer",
+            PUBLIC_RECORD_ISSUER,
+        ]),
+        &workspace,
+    )
+    .0;
+    assert_eq!(
+        refused.refusal.expect("source authentication refusal").code,
+        "FMINE-REF-505"
+    );
+}
+
+#[test]
 fn public_record_cut_checks_registered_publication_without_changing_cited_equality() {
     let (workspace, registry) = public_record_workspace("public-record-cited", Some("2030-05-01"));
     let profile = load_issuer_profile(&workspace, PUBLIC_RECORD_ISSUER)

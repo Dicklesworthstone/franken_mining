@@ -5,7 +5,7 @@
 //! scope. That declaration is evidence, not an inferred zero for every omitted registered component.
 //! Source authentication and classification of an issuer's accounts belong to the caller.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_claim::{AdditivityClass, Claim};
 use fmine_core::{Encoder, ObjectId, blake3_hash};
@@ -15,6 +15,9 @@ use fmine_units::{Currency, ExactQty, Money, UnitsError};
 
 use super::{CostLine, CostUnit, MetricFailure, cost_per_sold_unit};
 use crate::guidance::{Ownership, Period};
+
+pub mod priced_sale;
+use priced_sale::{CREDIT_ITEM, PricedSale, ROYALTY_ITEM, SaleAssessment};
 
 type Result<T> = std::result::Result<T, Refusal>;
 const ZERO: ExactQty = ExactQty::from_integer(0);
@@ -46,6 +49,8 @@ pub enum CostValue {
     },
     /// Declared project facts are classified under an explicitly bound registered rule.
     ProjectLine(super::project::DeclaredProject),
+    /// One gross sale drives every declared royalty and by-product fraction for this metal.
+    PricedSale(PricedSale),
     /// Gold ounces sold, not produced ounces or thousands of ounces.
     SoldOunces(ExactQty),
     /// Copper pounds sold, not produced copper, metric tonnes or millions of pounds.
@@ -104,6 +109,7 @@ impl CostInput {
             CostValue::GoldShare(_) | CostValue::CopperShare(_) => (2, ""),
             CostValue::Line { item, .. } | CostValue::DriverLine { item, .. } => (3, item),
             CostValue::ProjectLine(project) => (4, &project.id),
+            CostValue::PricedSale(sale) => (5, sale.metal.name()),
         }
     }
 
@@ -115,9 +121,10 @@ impl CostInput {
             | CostValue::ProjectLine(_)
             | CostValue::SoldOunces(_)
             | CostValue::SoldPounds(_) => AdditivityClass::ExtensiveAdditive,
-            CostValue::GoldShare(_) | CostValue::CopperShare(_) | CostValue::Rule { .. } => {
-                AdditivityClass::NonAdditive
-            }
+            CostValue::GoldShare(_)
+            | CostValue::CopperShare(_)
+            | CostValue::PricedSale(_)
+            | CostValue::Rule { .. } => AdditivityClass::NonAdditive,
         }
     }
 
@@ -131,6 +138,7 @@ impl CostInput {
             CostValue::CopperShare(_) => 5,
             CostValue::DriverLine { .. } => 6,
             CostValue::ProjectLine(_) => 7,
+            CostValue::PricedSale(_) => 8,
             _ => self.key().0,
         });
         match &self.value {
@@ -144,6 +152,7 @@ impl CostInput {
                 enc.put_str(&driver.json_fields());
             }
             CostValue::ProjectLine(project) => enc.put_str(&project.json_fields()),
+            CostValue::PricedSale(sale) => enc.put_str(&sale.json_fields()),
             CostValue::SoldOunces(value)
             | CostValue::SoldPounds(value)
             | CostValue::GoldShare(value)
@@ -300,6 +309,7 @@ pub struct CostSummary {
     pub primary_metal_share: Option<ExactQty>,
     pub usd_per_unit: ExactQty,
     pub contributions: Vec<Contribution>,
+    pub priced_sales: Vec<SaleAssessment>,
     pub project_classifications: Vec<super::project::Classification>,
 }
 
@@ -483,7 +493,7 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
     {
         return Err(bad(
             RefusalCode::BasisMismatch105,
-            "duplicate rule, sold quantity, allocation, cost item or project id",
+            "duplicate rule, sold quantity, allocation, cost item, project id or priced-sale metal",
         ));
     }
     let CostValue::Rule {
@@ -529,10 +539,41 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         ));
     }
     let share = allocation.map(|(_, q)| q);
-    let mut lines = Vec::new();
     let mut amounts = Vec::new();
     let mut project_classifications = Vec::new();
+    let mut priced_sales = Vec::new();
+    let registered = registry.lines_of(definition);
+    let named_costs: BTreeSet<_> = inputs
+        .iter()
+        .filter_map(|i| match &i.value.value {
+            CostValue::Line { item, .. } | CostValue::DriverLine { item, .. } => {
+                Some(item.as_str())
+            }
+            _ => None,
+        })
+        .collect();
     for input in &inputs {
+        if let CostValue::PricedSale(sale) = &input.value.value {
+            let assessed = sale.assess(unit, sold, input.claim_id)?;
+            for (item, amount, kind) in [
+                (ROYALTY_ITEM, assessed.royalty, LineKind::Cost),
+                (CREDIT_ITEM, assessed.by_product_credit, LineKind::Credit),
+            ] {
+                if let Some(amount) = amount {
+                    if named_costs.contains(item)
+                        || registered.get(item).map(|line| line.kind) != Some(kind)
+                    {
+                        return Err(bad(
+                            RefusalCode::BasisMismatch105,
+                            &format!("price-linked {item} overlaps a supplied line or lacks the required registered treatment"),
+                        ));
+                    }
+                    amounts.push((input, item, amount));
+                }
+            }
+            priced_sales.push(assessed);
+            continue;
+        }
         let line = if let CostValue::ProjectLine(project) = &input.value.value {
             let classification =
                 super::project::classify(registry, definition, project, input.claim_id)?;
@@ -559,12 +600,15 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
                     "named USD cost items are required; no implicit FX",
                 ));
             }
-            lines.push(CostLine {
-                item: item.into(),
-                usd: exact(ExactQty::new(amount.minor, Money::SCALE))?,
-            });
             amounts.push((input, item, amount));
         }
+    }
+    let mut lines = Vec::with_capacity(amounts.len());
+    for (_, item, amount) in &amounts {
+        lines.push(CostLine {
+            item: (*item).into(),
+            usd: exact(ExactQty::new(amount.minor, Money::SCALE))?,
+        });
     }
     if lines.is_empty() {
         return Err(bad(
@@ -585,7 +629,6 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
                 failure.to_string(),
             )
         })?;
-    let registered = registry.lines_of(definition);
     let mut contributions = Vec::new();
     let mut numerator = ZERO;
     for (input, item, amount) in amounts {
@@ -640,8 +683,11 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
         usd_per_unit: calculated.usd_per_unit,
         contributions,
         project_classifications,
+        priced_sales,
     };
-    let version = if summary.project_classifications.is_empty() {
+    let version = if !summary.priced_sales.is_empty() {
+        3
+    } else if summary.project_classifications.is_empty() {
         1
     } else {
         2
@@ -661,6 +707,9 @@ pub fn evaluate(registry: &MetricRegistry, inputs: &[Claim<CostInput>]) -> Resul
     }
     for project in &summary.project_classifications {
         enc.put_str(&project.to_json());
+    }
+    for sale in &summary.priced_sales {
+        enc.put_str(&sale.to_json());
     }
     CostReceipt::from_admitted(
         inputs,

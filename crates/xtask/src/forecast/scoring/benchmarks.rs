@@ -856,7 +856,6 @@ mod tests {
             dates: rules.dates,
             digest: String::new(),
             rules_digest: String::new(),
-            registered: Vec::new(),
             rules,
             forecasts,
         }

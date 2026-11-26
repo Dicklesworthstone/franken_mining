@@ -8,7 +8,7 @@ use std::path::Path;
 use fmine_calib::record::scoring::paired::{Availability, BaselineRow, Bounds, OutcomeRow};
 use fmine_calib::record::{
     self, BaselineKind, BaselineRule, InputDoc, Outcome, Quarter, Rat, RecordManifest, RecordRules,
-    RegisteredDigest, SiteStatus, Target, TargetMetric, format_utc, parse_date, parse_hex32,
+    SiteStatus, Target, TargetMetric, format_utc, parse_date, parse_hex32,
     parse_utc,
 };
 use fmine_core::hash::{Digest32, sha256};
@@ -147,83 +147,6 @@ fn frozen_reason(manifest: &RecordManifest, file: &str) -> Option<String> {
         }
         Some(_) => None,
     }
-}
-
-pub(super) fn check_manifest_registry(
-    profile: &IssuerProfile,
-    manifest: &RecordManifest,
-    rules: &RecordRules,
-) -> Result<()> {
-    let registered = profile
-        .sources
-        .iter()
-        .map(|s| (s.file_name.as_str(), s.sha256_hex.as_str()))
-        .chain(
-            profile
-                .documents
-                .iter()
-                .map(|d| (d.file.as_str(), d.sha256.as_str())),
-        )
-        .map(|(file, hash)| {
-            parse_hex32(hash)
-                .map(|sha256| RegisteredDigest { file, sha256 })
-                .ok_or_else(|| {
-                    invalid(format!(
-                        "registered document {file} lacks a canonical SHA-256"
-                    ))
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let findings = record::validate(manifest, &registered, None, rules.dates);
-    if !findings.is_empty() {
-        return Err(refusal(
-            RefusalCode::DigestMismatch505,
-            findings
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; "),
-        ));
-    }
-    for input in &manifest.inputs {
-        if let Some(source) = profile.sources.iter().find(|s| s.file_name == input.doc_id) {
-            let quarter = Quarter::parse(&source.quarter)
-                .ok_or_else(|| invalid("registered workbook has an invalid release quarter"))?;
-            let earliest = after_quarter(quarter)?;
-            if input.retrieved_utc < earliest || input.publication_day < earliest.div_euclid(86400)
-            {
-                return Err(refusal(
-                    RefusalCode::AssayLookahead108,
-                    format!(
-                        "{} claims completed {} data before the quarter finished",
-                        input.doc_id, quarter
-                    ),
-                ));
-            }
-        }
-        let expected = profile
-            .sources
-            .iter()
-            .find(|s| s.file_name == input.doc_id)
-            .map(|s| s.bytes)
-            .or_else(|| {
-                profile
-                    .documents
-                    .iter()
-                    .find(|d| d.file == input.doc_id)
-                    .map(|d| d.bytes)
-            });
-        if expected.is_some_and(|n| n != input.bytes) {
-            return Err(refusal(
-                RefusalCode::DigestMismatch505,
-                format!(
-                    "{} byte length differs from its frozen manifest",
-                    input.doc_id
-                ),
-            ));
-        }
-    }
-    Ok(())
 }
 
 #[derive(Default)]
@@ -1394,47 +1317,7 @@ fn resolve_inner(
         })
         .collect::<BTreeMap<_, _>>();
     let profile = IssuerProfile::from_registry(registry).map_err(invalid)?;
-    check_manifest_registry(&profile, manifest, rules)?;
-    for input in &manifest.inputs {
-        let publication = publications
-            .get(&input.doc_id)
-            .map(|p| p.day.as_str())
-            .or_else(|| {
-                profile
-                    .documents
-                    .iter()
-                    .find(|d| d.file == input.doc_id)
-                    .map(|d| d.published_at.as_str())
-            });
-        if let Some(day) = publication {
-            let published =
-                parse_date(day).ok_or_else(|| invalid("registered publication date is invalid"))?;
-            if let Some(source) = profile.sources.iter().find(|s| s.file_name == input.doc_id) {
-                let quarter = Quarter::parse(&source.quarter)
-                    .ok_or_else(|| invalid("registered workbook quarter is invalid"))?;
-                if published < after_quarter(quarter)?.div_euclid(86400) {
-                    return Err(refusal(
-                        RefusalCode::AssayLookahead108,
-                        format!(
-                            "{} has a registered publication before its declared quarter finished",
-                            input.doc_id
-                        ),
-                    ));
-                }
-            }
-            if published > manifest.information_cutoff_utc.div_euclid(86400)
-                || published > input.retrieved_utc.div_euclid(86400)
-            {
-                return Err(refusal(
-                    RefusalCode::AssayLookahead108,
-                    format!(
-                        "{} has a registered publication after the frozen retrieval or information cut",
-                        input.doc_id
-                    ),
-                ));
-            }
-        }
-    }
+    fmine_public::forecast::manifest::bind(&profile, rules, manifest)?;
     let mut outcome_quarters = BTreeSet::from([outcome_quarter]);
     // Annual records retain their original two-release inventory, including rate-only records.
     if !quarterly {

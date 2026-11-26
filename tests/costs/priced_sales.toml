@@ -1,0 +1,31 @@
+# Invented scenario for a gold cost worksheet.
+# Gold sales of 100 oz at USD 2000 and silver sales of 250 oz at USD 20
+# generate royalties of USD 4000 and 100. The declared silver credit is USD 4500.
+schema = "fmine.cost-worksheet.v1"
+issuer = "invented"
+subject = "Example Mine"
+period = "2030FY"
+ownership = "full"
+basis = "Declared nominal USD sales and complete gold cost population"
+currency = "USD"
+complete = "true"
+ounces_sold = "100"
+
+[[cost]]
+item = "on_site_mining_costs"
+usd = "100000"
+
+[[priced_sale]]
+metal = "gold"
+unit = "oz"
+quantity_sold = "100"
+usd_per_unit = "2000"
+royalty_fraction = "0.02"
+
+[[priced_sale]]
+metal = "silver"
+unit = "oz"
+quantity_sold = "250"
+usd_per_unit = "20"
+royalty_fraction = "0.02"
+by_product_credit_fraction = "0.90"
