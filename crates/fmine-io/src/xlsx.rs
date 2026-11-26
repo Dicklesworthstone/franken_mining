@@ -338,55 +338,53 @@ impl Workbook {
         let mut sheets = Vec::new();
         let mut hidden_sheets = Vec::new();
         let mut quarantined = Vec::new();
-        let zip_key_of = |rel_id: &str, fallback: usize| {
-            let target = rel_targets
-                .get(rel_id)
-                .cloned()
-                .unwrap_or_else(|| format!("worksheets/sheet{fallback}.xml"));
-            if target.starts_with("xl/") {
-                target
-            } else {
-                format!("xl/{}", target.trim_start_matches('/'))
-            }
-        };
-
         for (position, (sheet_name, rel_id, state)) in
             parse_workbook_sheets(&wb_text).into_iter().enumerate()
         {
-            if state == "hidden" || state == "veryHidden" {
-                // Parsed for the hidden scope (BD-331.S2) but kept out of `sheets`, the census and the
-                // quarantine log: a reader never sees these cells.
-                if let Some(sheet_bytes) = entries.get(&zip_key_of(&rel_id, position + 1)) {
-                    let sheet_xml = String::from_utf8_lossy(sheet_bytes);
-                    let mut ignored = Vec::new();
-                    let cells = parse_worksheet_cells(
-                        &sheet_name,
-                        &sheet_xml,
-                        &shared_strings,
-                        styles.as_ref(),
-                        &mut ignored,
-                    )?;
-                    hidden_sheets.push(Sheet {
-                        name: sheet_name.clone(),
-                        cells_by_coord: cells,
-                    });
-                }
-                quarantined.push(QuarantineItem::HiddenSheet { sheet_name, state });
-                continue;
-            }
-            if let Some(sheet_bytes) = entries.get(&zip_key_of(&rel_id, sheets.len() + 1)) {
-                let sheet_xml = String::from_utf8_lossy(sheet_bytes);
-                let cells = parse_worksheet_cells(
-                    &sheet_name,
-                    &sheet_xml,
-                    &shared_strings,
-                    styles.as_ref(),
-                    &mut quarantined,
-                )?;
-                sheets.push(Sheet {
-                    name: sheet_name,
-                    cells_by_coord: cells,
+            let part = if let Some(target) = rel_targets.get(&rel_id) {
+                worksheet_part(target).ok_or_else(|| {
+                    IoError::Xml(format!(
+                        "sheet {sheet_name:?}: invalid part target {target:?}"
+                    ))
+                })?
+            } else if !entries.contains_key("xl/_rels/workbook.xml.rels") {
+                // Legacy minimal workbooks omit relationships and number every sheet in workbook order.
+                format!("xl/worksheets/sheet{}.xml", position + 1)
+            } else {
+                return Err(IoError::Xml(format!(
+                    "sheet {sheet_name:?}: unresolved workbook relationship {rel_id:?}"
+                )));
+            };
+            let bytes = entries.get(&part).ok_or_else(|| {
+                IoError::Xml(format!(
+                    "sheet {sheet_name:?}: missing worksheet part {part:?}"
+                ))
+            })?;
+            let hidden = state == "hidden" || state == "veryHidden";
+            let mut hidden_items = Vec::new();
+            let cells_by_coord = parse_worksheet_cells(
+                &sheet_name,
+                &String::from_utf8_lossy(bytes),
+                &shared_strings,
+                styles.as_ref(),
+                if hidden {
+                    &mut hidden_items
+                } else {
+                    &mut quarantined
+                },
+            )?;
+            let sheet = Sheet {
+                name: sheet_name,
+                cells_by_coord,
+            };
+            if hidden {
+                quarantined.push(QuarantineItem::HiddenSheet {
+                    sheet_name: sheet.name.clone(),
+                    state,
                 });
+                hidden_sheets.push(sheet);
+            } else {
+                sheets.push(sheet);
             }
         }
 
@@ -424,11 +422,33 @@ impl Workbook {
     }
 }
 
+/// Resolve the target against xl/workbook.xml. A leading slash names a package part
+/// directly. Keep accepting the legacy xl-prefixed spelling used by older inputs.
+fn worksheet_part(target: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    if !target.starts_with('/') && !target.starts_with("xl/") {
+        parts.push("xl");
+    }
+    for component in target.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            name => parts.push(name),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 fn parse_workbook_rels(xml: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for tag in iter_xml_start_tags(xml, "Relationship") {
-        if let (Some(id), Some(target)) = (extract_attr(tag, "Id"), extract_attr(tag, "Target")) {
-            map.insert(id, target);
+        if let (Some(id), Some(target)) = (
+            extract_attr_exact(tag, "Id"),
+            extract_attr_exact(tag, "Target"),
+        ) {
+            map.insert(id, decode_xml_entities(&target));
         }
     }
     map
