@@ -6,8 +6,7 @@
 # Sources for the World Gold Council rows (E853):
 # - wgc-2013 is the table of lines (a) to (z) and notes 1 to 5 of the Guidance Note on Non-GAAP Metrics, 26 June 2013,
 #   read from the PDF itself. Letters below are that table's. (l) is a subtotal and (s) is AISC, so neither is a line.
-# - wgc-2018 is the 2013 table with the changes the FAQ on the guidance page states. The 2018 PDF refused the fetch, so
-#   its table has not been read; a line that exists only there is refused here until it is registered.
+# - wgc-2018 uses the shared 2013 rows and adds the treatments in the November 2018 table and FAQs (E853, E875).
 # `extends` is a space-separated list of parents. A line in a child overrides an exclusion in a parent.
 
 schema = "fmine.metrics.v1"
@@ -33,9 +32,9 @@ extends = "aisc@wgc-2013"
 id = "aisc@wgc-2018"
 family = "all_in_cost"
 unit = "USD/oz"
-formula = "the 2013 lines plus lease payments, net of by-product and co-product credits, per gold ounce sold"
-source = "WGC guidance page, 2018 FAQ 4, 13 and 19, applied to the 2013 table"
-evidence = "E853"
+formula = "adjusted operating and sustaining costs, net of by-product and co-product credits, per gold ounce sold"
+source = "WGC 2018 Guidance Note p.1 rows (a)–(t), FAQs 4, 13 and 19"
+evidence = "E875"
 extends = "aisc@wgc-2013"
 supersedes = "aisc@wgc-2013"
 
@@ -44,8 +43,8 @@ id = "aic@wgc-2018"
 family = "all_in_cost"
 unit = "USD/oz"
 formula = "2018 AISC plus the non-sustaining lines, per gold ounce sold"
-source = "WGC guidance page, 2018 FAQ, applied to the 2013 table"
-evidence = "E853"
+source = "WGC 2018 Guidance Note p.1 rows (t)–(cc), note 4 and FAQ 19"
+evidence = "E875"
 extends = "aisc@wgc-2018 aic@wgc-2013"
 supersedes = "aic@wgc-2013"
 
@@ -249,11 +248,49 @@ definition = "aic@wgc-2013"
 letter = "z"
 item = "capital_expenditure_non_sustaining"
 
-# FAQ 19: the principal portion of lease payments and the financing component in the cash flow statement.
+# WGC 2018 p.1 line (s), FAQ 19: cash principal plus the lease financing component.
+# Keep the original worksheet token for the sustaining portion.
 [[line]]
 definition = "aisc@wgc-2018"
-letter = "FAQ 19"
+letter = "s"
 item = "lease_payments"
+
+[[line]]
+definition = "aisc@wgc-2018"
+letter = "k"
+item = "co_product_credits"
+kind = "credit"
+
+[[line]]
+definition = "aic@wgc-2018"
+letter = "u"
+item = "growth_and_development_costs_not_current_operations"
+
+[[line]]
+definition = "aic@wgc-2018"
+letter = "cc"
+item = "non_sustaining_leases"
+
+[[excluded]]
+definition = "aisc@wgc-2018"
+item = "growth_and_development_costs_not_current_operations"
+
+[[excluded]]
+definition = "aisc@wgc-2018"
+item = "non_sustaining_leases"
+
+# The 2018 table places these continuing-perimeter distinctions on the AIC side.
+[[excluded]]
+definition = "aisc@wgc-2018"
+item = "community_costs_not_current_operations"
+
+[[excluded]]
+definition = "aisc@wgc-2018"
+item = "permitting_costs_not_current_operations"
+
+[[excluded]]
+definition = "aisc@wgc-2018"
+item = "reclamation_costs_not_current_operations"
 
 [[excluded]]
 definition = "aisc@wgc-2013"

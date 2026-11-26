@@ -2040,3 +2040,16 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     source epochs. Each run included 19 hidden exceptions and five footing discrepancy certificates
     (four visible, one hidden). The pinned anchors and state roots matched. The universal CLI
     citation coverage gate remains open.
+
+- **E875** World Gold Council, November 2018 *Guidance Note on Non-GAAP Metrics* (FACT, retrieved
+  2026-11-26 UTC, BD-061/138). PDF SHA-256 `75954a4140f67ba2bb97cd58fefa2469f4e8c2b350af08cb97cf6dc6861d7d4e`.
+  The direct PDF resolves the retrieval gap in E853.
+  [World Gold Council PDF](https://www.gold.org/sites/default/files/downloads/2018-11/2018-updated-guidance-note.pdf)
+  - Page 1 line (k) groups secondary-metal credits. Line (s) is the sustaining lease cost in AISC.
+    Lines (u)–(x) and (cc) extend AISC to AIC with non-current-operation costs and non-sustaining
+    leases. FAQ 19 includes the cash principal and financing components of qualifying leases.
+  - Note 3 and FAQs 6–10 describe initial development, existing-operation projects and extensions.
+    The project case studies on pp.10–11 give Mine D's prior and expanded 100 and 150 koz production,
+    Mine H's 18-month development and seven-year ore phase, and Mine I's initial 5 Mtpa plant and
+    later 8 Mtpa capacity. Where a case omits cash timing or a precise comparison input, the cost
+    worksheet tests identify their additional premises explicitly. The test dollar amounts are invented.

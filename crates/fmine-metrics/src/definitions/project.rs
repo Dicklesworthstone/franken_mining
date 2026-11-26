@@ -14,13 +14,14 @@ use super::{Project, is_non_sustaining};
 
 type Result<T> = std::result::Result<T, Refusal>;
 
-/// The four project cost categories that have registered sustaining and non-sustaining WGC lines.
+/// Project cost categories with registered sustaining and non-sustaining WGC lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CostKind {
     ExplorationAndStudy,
     CapitalExploration,
     StrippingAndDevelopment,
     CapitalExpenditure,
+    Leases,
 }
 
 impl CostKind {
@@ -32,6 +33,7 @@ impl CostKind {
                 Some(Self::StrippingAndDevelopment)
             }
             "capital_expenditure" => Some(Self::CapitalExpenditure),
+            "leases" => Some(Self::Leases),
             _ => None,
         }
     }
@@ -42,6 +44,7 @@ impl CostKind {
             Self::CapitalExploration => "capital_exploration",
             Self::StrippingAndDevelopment => "capitalised_stripping_and_underground_development",
             Self::CapitalExpenditure => "capital_expenditure",
+            Self::Leases => "leases",
         }
     }
 
@@ -59,6 +62,8 @@ impl CostKind {
             }
             (Self::CapitalExpenditure, false) => "capital_expenditure_sustaining",
             (Self::CapitalExpenditure, true) => "capital_expenditure_non_sustaining",
+            (Self::Leases, false) => "lease_payments",
+            (Self::Leases, true) => "non_sustaining_leases",
         }
     }
 }
@@ -187,6 +192,7 @@ pub fn classify(
         )
     };
     let (first_condition, second_condition) = match project.assumptions {
+        Project::NewOperation => (true, true),
         Project::AtExistingOperation {
             uplift_percent,
             months_to_net_cash,
@@ -247,6 +253,7 @@ pub fn classify(
 impl DeclaredProject {
     pub(super) fn json_fields(&self) -> String {
         let assumptions = match self.assumptions {
+            Project::NewOperation => "\"project_kind\":\"new_operation\"".into(),
             Project::AtExistingOperation {
                 uplift_percent,
                 months_to_net_cash,
@@ -278,34 +285,48 @@ impl DeclaredProject {
 }
 
 impl Classification {
-    pub const fn condition_names(&self) -> (&'static str, &'static str) {
+    pub(super) const fn condition_names(&self) -> Option<(&'static str, &'static str)> {
         match self.project.assumptions {
-            Project::AtExistingOperation { .. } => (
+            Project::NewOperation => None,
+            Project::AtExistingOperation { .. } => Some((
                 "material_uplift_at_least_threshold",
                 "incremental_cash_after_window_or_never",
-            ),
-            Project::Extension { .. } => (
+            )),
+            Project::Extension { .. } => Some((
                 "duration_at_least_threshold",
                 "ore_phase_strictly_above_threshold",
-            ),
+            )),
         }
     }
 
     pub fn to_json(&self) -> String {
         let t = &self.thresholds;
-        let (first, second) = self.condition_names();
+        let conditions = self
+            .condition_names()
+            .map_or_else(String::new, |(first, second)| {
+                format!(
+                    "{}:{},{}:{}",
+                    js(first),
+                    self.first_condition,
+                    js(second),
+                    self.second_condition
+                )
+            });
+        let thresholds = if self.condition_names().is_some() {
+            format!(
+                "\"material_uplift_percent\":{},\"net_cash_months\":{},\"extension_months\":{},\"ore_phase_years\":{}",
+                js(&t.material_uplift_percent),
+                t.net_cash_months,
+                t.extension_months,
+                t.ore_phase_years
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "{{\"input_claim_id\":{},\"project\":{{{}}},\"thresholds\":{{\"material_uplift_percent\":{},\"net_cash_months\":{},\"extension_months\":{},\"ore_phase_years\":{}}},\"conditions\":{{{}:{},{}:{}}},\"classification\":{},\"item\":{}}}",
+            "{{\"input_claim_id\":{},\"project\":{{{}}},\"thresholds\":{{{thresholds}}},\"conditions\":{{{conditions}}},\"classification\":{},\"item\":{}}}",
             js(&self.input_claim_id.to_string()),
             self.project.json_fields(),
-            js(&t.material_uplift_percent),
-            t.net_cash_months,
-            t.extension_months,
-            t.ore_phase_years,
-            js(first),
-            self.first_condition,
-            js(second),
-            self.second_condition,
             js(if self.non_sustaining {
                 "non_sustaining"
             } else {
@@ -450,6 +471,7 @@ mod tests {
             CostKind::CapitalExploration,
             CostKind::StrippingAndDevelopment,
             CostKind::CapitalExpenditure,
+            CostKind::Leases,
         ] {
             assert_eq!(CostKind::parse(kind.as_str()), Some(kind));
             assert!(

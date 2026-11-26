@@ -336,6 +336,18 @@ fn evaluate_inner(
                         .ok_or_else(|| bad(line, "months must be a nonnegative whole number"))
                 };
                 let assumptions = match get(&f, "project_kind")?.0 {
+                    "new_operation"
+                        if ![
+                            "uplift_percent",
+                            "months_to_net_cash",
+                            "duration_months",
+                            "ore_phase_years",
+                        ]
+                        .iter()
+                        .any(|key| f.contains_key(key)) =>
+                    {
+                        super::Project::NewOperation
+                    }
                     "existing_operation"
                         if !f.contains_key("duration_months")
                             && !f.contains_key("ore_phase_years") =>
@@ -363,7 +375,7 @@ fn evaluate_inner(
                     _ => {
                         return Err(bad(
                             row.line,
-                            "project_kind requires existing_operation with uplift_percent and months_to_net_cash, or extension with duration_months and ore_phase_years; unknown or mixed facts refuse",
+                            "project_kind requires new_operation without threshold fields, existing_operation with uplift_percent and months_to_net_cash, or extension with duration_months and ore_phase_years",
                         ));
                     }
                 };
@@ -707,10 +719,11 @@ impl CostReceipt {
             out.push('\n');
         }
         if !s.project_classifications.is_empty() {
-            out.push_str("\n## Conditional project classifications\n\nThe registered rule is applied to declared project facts. Both conditions must hold for non-sustaining treatment. Facts and account classification are not independently authenticated. `never` explicitly declares no incremental net cash; an unknown timing is not accepted.\n\n");
+            out.push_str("\n## Conditional project classifications\n\nThe registered rule is applied to declared project facts. Initial development of a new operation is non-sustaining. Existing-operation and extension rows must meet both of their stated conditions. Facts and account classification are supplied by the worksheet author. `never` explicitly declares no incremental net cash. Supply a timing or `never` for an existing operation.\n\n");
             for p in &s.project_classifications {
                 let t = &p.thresholds;
                 let assumptions = match p.project.assumptions {
+                    super::Project::NewOperation => "initial development at a new operation".into(),
                     super::Project::AtExistingOperation {
                         uplift_percent,
                         months_to_net_cash,
@@ -728,20 +741,29 @@ impl CostReceipt {
                         qty(ore_phase_years)
                     ),
                 };
-                let (first, second) = p.condition_names();
+                let rule = if let Some((first, second)) = p.condition_names() {
+                    format!(
+                        "Rule `{}`: uplift ≥ {}%; incremental net cash after {} months or never; extension duration ≥ {} months and ore phase > {} years.\n\n- `{first}`: **{}**.\n- `{second}`: **{}**.",
+                        text(&t.definition),
+                        t.material_uplift_percent,
+                        t.net_cash_months,
+                        t.extension_months,
+                        t.ore_phase_years,
+                        p.first_condition,
+                        p.second_condition,
+                    )
+                } else {
+                    format!(
+                        "Rule `{}` treats initial development at a new operation as non-sustaining.",
+                        text(&t.definition)
+                    )
+                };
                 let _ = writeln!(
                     out,
-                    "### {}\n\n{}; declared category `{}`.\n\nRule `{}`: uplift ≥ {}%; incremental net cash after {} months or never; extension duration ≥ {} months and ore phase > {} years.\n\n- `{first}`: **{}**.\n- `{second}`: **{}**.\n- Classification: **{}**; cost item `{}`.\n- Input Claim: `{}`; rule digest `{}`.\n",
+                    "### {}\n\n{}; declared category `{}`.\n\n{rule}\n\n- Classification: **{}**; cost item `{}`.\n- Input Claim: `{}`; rule digest `{}`.\n",
                     text(&p.project.id),
                     assumptions,
                     p.project.cost_kind.as_str(),
-                    text(&t.definition),
-                    t.material_uplift_percent,
-                    t.net_cash_months,
-                    t.extension_months,
-                    t.ore_phase_years,
-                    p.first_condition,
-                    p.second_condition,
                     if p.non_sustaining {
                         "non-sustaining"
                     } else {

@@ -1022,15 +1022,23 @@ A project row names a unique `id`, `cost_kind`, quoted `usd`, and
 
 | `project_kind` | Required fields | Registered non-sustaining condition |
 |---|---|---|
+| `new_operation` | Initial development declared by the worksheet | Non-sustaining without a hurdle or a payback assumption |
 | `existing_operation` | `uplift_percent`, `months_to_net_cash` | Largest uplift at least 10%, and first incremental net cash after month 12 or explicitly `"never"` |
 | `extension` | `duration_months`, `ore_phase_years` | Duration at least 12 months and ore phase strictly longer than five years |
 
 All values are quoted. Supported cost kinds are `capital_expenditure`, `exploration_and_study`,
-`capital_exploration` and `capitalised_stripping_and_underground_development`. Missing assumptions
+`capital_exploration`, `capitalised_stripping_and_underground_development` and `leases`. Missing assumptions
 refuse; an absent cash date never means `"never"`. The selected cost definition must inherit the stated
 classification rule. Direct, declared-driver or fitted-driver lines cannot overlap a generated project
 item, and multiple distinct projects retain separate contributions. These are calculations conditional
 on the submitted assumptions; the evidence remains Assumed, Internal and uncalibrated.
+
+For WGC 2018, `lease_payments` is the sustaining cash portion, and `non_sustaining_leases` contributes
+only to AIC. Enter cash principal and the applicable financing component once, outside already included
+operating amounts. When the worksheet declares separate secondary-metal receipts, use `by_product_credits`
+and `co_product_credits` for disjoint amounts. AIC also includes declared
+`growth_and_development_costs_not_current_operations`. AISC retains those rows as excluded. [WGC 2018
+cost table and FAQ 19](https://www.gold.org/sites/default/files/downloads/2018-11/2018-updated-guidance-note.pdf)
 
 Planned costs can instead declare physical quantities and USD rates in `[[driver_cost]]` rows. Each row
 computes **quantity × rate + fixed cost**, then enters the same definition and allocation calculation as a

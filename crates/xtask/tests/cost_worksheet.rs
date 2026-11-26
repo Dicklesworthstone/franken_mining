@@ -1,5 +1,6 @@
 //! BD-061: usable exact cost worksheets through the CLI, with invented declared inputs.
-//! These are arithmetic examples, not WGC guidance examples or authenticated issuer filings.
+//! Invented dollar amounts exercise arithmetic. The WGC case checks cite published project facts
+//! and identify every extra assumption supplied by the test (E875).
 
 #![cfg(test)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -470,6 +471,159 @@ fn string_field<'a>(json: &'a str, field: &str) -> &'a str {
         .split('"')
         .next()
         .unwrap()
+}
+
+#[test]
+fn wgc_2018_splits_sustaining_costs_growth_and_leases_and_nets_distinct_credits() {
+    // E875, WGC 2018 p.1 rows (k), (s), (u)–(x), (cc) and FAQ 19.
+    let text = worksheet(&[
+        ("on_site_mining_costs", "1000"),
+        ("lease_payments", "100"),
+        ("non_sustaining_leases", "300"),
+        ("growth_and_development_costs_not_current_operations", "200"),
+        ("community_costs_not_current_operations", "40"),
+        ("permitting_costs_not_current_operations", "50"),
+        ("reclamation_costs_not_current_operations", "60"),
+        ("by_product_credits", "25"),
+        ("co_product_credits", "75"),
+    ]);
+    let f = Fixture::new(&text);
+    let aisc = f.ok("aisc@wgc-2018");
+    let aic = f.ok("aic@wgc-2018");
+    assert_eq!(string_field(&aisc.payload_json, "numerator_usd"), "1000");
+    assert_eq!(string_field(&aic.payload_json, "numerator_usd"), "1650");
+    assert_eq!(string_field(&aic.payload_json, "usd_per_oz"), "33/2");
+    for item in [
+        "non_sustaining_leases",
+        "growth_and_development_costs_not_current_operations",
+        "community_costs_not_current_operations",
+        "permitting_costs_not_current_operations",
+        "reclamation_costs_not_current_operations",
+    ] {
+        assert!(aisc.payload_json.contains(&format!("\"item\":\"{item}\"")));
+        assert!(aic.payload_json.contains(&format!("\"item\":\"{item}\"")));
+    }
+    assert!(aisc.payload_json.contains(
+        "\"amount_minor\":\"3000000\",\"treatment\":\"excluded\",\"numerator_usd\":\"0\""
+    ));
+    let changed = text.replace("usd = \"300\"", "usd = \"300.01\"");
+    f.write(&changed);
+    let new_aisc = f.ok("aisc@wgc-2018");
+    assert_eq!(
+        string_field(&new_aisc.payload_json, "numerator_usd"),
+        "1000"
+    );
+    assert_ne!(
+        string_field(&new_aisc.payload_json, "digest"),
+        string_field(&aisc.payload_json, "digest")
+    );
+    assert_eq!(
+        string_field(&f.ok("aic@wgc-2018").payload_json, "numerator_usd"),
+        "165001/100"
+    );
+}
+
+#[test]
+fn wgc_case_studies_preserve_the_published_anchors_and_declare_missing_inputs() {
+    // E875 pp.10–11. All prices and dates are invented.
+    let baseline = worksheet(&[("on_site_mining_costs", "800")]);
+    let f = Fixture::new(&baseline);
+    let project = |id: &str, cost_kind: &str, facts: &str| {
+        format!(
+            "\n[[project_cost]]\nid = \"{id}\"\ncost_kind = \"{cost_kind}\"\nusd = \"200\"\nclassification_rule = \"aisc@wgc-2018\"\n{facts}\n"
+        )
+    };
+    // Publication gives the uplift for A, B, D and E. Cash timing is supplied by the test.
+    // D uses the 100 koz prior plan baseline and 150 koz expanded plan, a 50% uplift from plan.
+    // F is conditional on materiality. The rows straddle that threshold. I's expansion gives
+    // 5 and 8 Mtpa of plant capacity. The test assumes 60% uplift in production to run FAQ 7.
+    for (id, uplift, expected) in [
+        ("A", "15", "8"),
+        ("B", "10", "8"),
+        ("D", "50", "8"),
+        ("D-current-production-control", "-25", "10"),
+        ("E", "25", "8"),
+        ("E-like-for-like-control", "0", "10"),
+        ("F-qualifying-premise", "10", "8"),
+        ("F-below-materiality", "9.999", "10"),
+        ("I-expansion", "60", "8"),
+    ] {
+        f.write(&format!(
+            "{baseline}{}",
+            project(id, "capital_expenditure", &format!(
+                "project_kind = \"existing_operation\"\nuplift_percent = \"{uplift}\"\nmonths_to_net_cash = \"13\""
+            )),
+        ));
+        assert_eq!(
+            string_field(&f.ok("aisc@wgc-2018").payload_json, "usd_per_oz"),
+            expected,
+            "{id}"
+        );
+        assert_eq!(
+            string_field(&f.ok("aic@wgc-2018").payload_json, "usd_per_oz"),
+            "10",
+            "{id}"
+        );
+    }
+    // Mine C lacks exact duration and ore phase, so exercise its printed decision boundary.
+    // Mine H gives 18 months of development and seven years of ore production.
+    for (id, duration, years, expected) in [
+        ("C-at-boundary", 12, 5, "10"),
+        ("C-above-boundary", 12, 6, "8"),
+        ("H", 18, 7, "8"),
+    ] {
+        f.write(&format!(
+            "{baseline}{}",
+            project(id, "capitalised_stripping_and_underground_development", &format!(
+                "project_kind = \"extension\"\nduration_months = \"{duration}\"\nore_phase_years = \"{years}\""
+            )),
+        ));
+        assert_eq!(
+            string_field(&f.ok("aisc@wgc-2018").payload_json, "usd_per_oz"),
+            expected,
+            "{id}"
+        );
+        assert_eq!(
+            string_field(&f.ok("aic@wgc-2018").payload_json, "usd_per_oz"),
+            "10",
+            "{id}"
+        );
+    }
+    // I's initial 5 Mtpa plant needs no claimed growth percentage or payback date.
+    let initial = "project_kind = \"new_operation\"";
+    let text = format!(
+        "{baseline}{}{}",
+        project("I-initial", "capital_expenditure", initial),
+        project("I-lease", "leases", initial)
+    );
+    f.write(&text);
+    let aisc = f.ok("aisc@wgc-2018");
+    let aic = f.ok("aic@wgc-2018");
+    assert_eq!(string_field(&aisc.payload_json, "usd_per_oz"), "8");
+    assert_eq!(string_field(&aic.payload_json, "usd_per_oz"), "12");
+    assert!(
+        aic.payload_json
+            .contains("\"thresholds\":{},\"conditions\":{},\"classification\":\"non_sustaining\"")
+    );
+    assert!(
+        aic.payload_json
+            .contains("\"item\":\"non_sustaining_leases\"")
+    );
+    assert!(
+        aic.rendered_markdown
+            .unwrap()
+            .contains("initial development at a new operation")
+    );
+    f.write(&format!("{text}months_to_net_cash = \"13\"\n"));
+    let refused = f.invoke("aic@wgc-2018");
+    assert_ne!(refused.exit_code, 0);
+    assert!(
+        refused
+            .refusal
+            .unwrap()
+            .what
+            .contains("new_operation without threshold fields")
+    );
 }
 
 #[test]

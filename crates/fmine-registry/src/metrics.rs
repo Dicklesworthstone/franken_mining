@@ -635,15 +635,31 @@ mod tests {
         MetricRegistry::parse(REGISTRY).expect("registry parses")
     }
 
-    /// `BD-060` done-when. The 2013 table has 17 lines to AISC and 7 more to AIC, (a) to (z) without the subtotal (l)
-    /// and AISC (s); the 2018 FAQ adds leases. Every line is counted once, and each family is registered.
+    /// BD-060/061. The 2013 table has 17 AISC lines and 7 AIC additions (E853).
+    /// The 2018 table has 18 AISC lines and 9 AIC additions (E875). Its combined credit
+    /// line (k) admits two disjoint worksheet items, so the 2018 registry has 19 and 28 items.
     #[test]
     fn test_metric_definition_registry_check() {
         let reg = registry();
         assert_eq!(reg.lines_of(AISC_2013).len(), 17);
         assert_eq!(reg.lines_of(AIC_2013).len(), 24);
-        assert_eq!(reg.lines_of(AISC_2018).len(), 18);
-        assert_eq!(reg.lines_of(AIC_2018).len(), 25);
+        let sustaining_2018 = reg.lines_of(AISC_2018);
+        let all_2018 = reg.lines_of(AIC_2018);
+        assert_eq!(sustaining_2018.len(), 19);
+        assert_eq!(all_2018.len(), 28);
+        assert_eq!(sustaining_2018["lease_payments"].letter, "s");
+        assert_eq!(sustaining_2018["co_product_credits"].kind, LineKind::Credit);
+        assert_eq!(sustaining_2018["co_product_credits"].letter, "k");
+        let excluded_2018 = reg.excluded_of(AISC_2018);
+        for (item, letter) in [
+            ("growth_and_development_costs_not_current_operations", "u"),
+            ("non_sustaining_leases", "cc"),
+        ] {
+            assert_eq!(all_2018[item].letter, letter);
+            assert_eq!(all_2018[item].kind, LineKind::Cost);
+            assert!(excluded_2018.contains(item));
+            assert!(!sustaining_2018.contains_key(item));
+        }
         let letters: String = {
             let mut l: Vec<&str> = reg
                 .lines_of(AIC_2013)

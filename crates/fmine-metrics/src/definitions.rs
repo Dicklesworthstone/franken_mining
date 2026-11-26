@@ -270,6 +270,8 @@ pub fn cost_per_sold_unit(
 /// What a project is, for the sustaining versus non-sustaining test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Project {
+    /// Initial development of a declared new operation under the WGC 2018 guidance (E875).
+    NewOperation,
     /// A project at an existing operation. `uplift_percent` is the largest rise it brings to annual or life-of-mine
     /// production, NPV or reserves at the operation level. `months_to_net_cash` is when it first brings incremental
     /// net cash inflows after commencing, and `None` means it never does.
@@ -289,6 +291,7 @@ pub enum Project {
 /// A new operation is non-sustaining outright, so it needs no test.
 pub fn is_non_sustaining(test: &ProjectTest, project: Project) -> Result<bool, MetricFailure> {
     Ok(match project {
+        Project::NewOperation => true,
         Project::AtExistingOperation {
             uplift_percent,
             months_to_net_cash,
