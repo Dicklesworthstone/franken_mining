@@ -477,6 +477,14 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   authority times and caches unchanged. Direct controls in `ledger::cusum::tests` cover standardization,
   ordered missingness, restatements, aggregate recovery, metadata/coverage/CRPS composition, identity and
   transactional numerical refusal. Arithmetic is `DeterministicPerIsa`, not an exact certificate.
+- DESIGN (BD-051, GATE-PLUMB-E5): `DualSurpriseMonitor`, `DualSurpriseConfig`, `StandardizedResidual`, and
+  `DualSurpriseSnapshot` pair the location and
+  centred-dispersion `ScoreBettingEProcess`es (`eproc_alpha / 2` each, `BitwisePortable`) with a standardized
+  two-sided Page `TwoSidedCusum` (`cusum_k`, `cusum_h`) and a causal Layer-3 predictive scale multiplier
+  (`l3_scale()`, `1.0` before alarm and `alarm_scale >= 1.0` after). Out-of-domain parameters and non-finite
+  residuals refuse without mutating monitor state; sticky first crossings are never erased by later quiet
+  observations. Control-mine `GATE-PLUMB-E5` verification lives in `crates/fmine-gen/tests/gate_plumb_e5.rs`
+  and `docs/delivery/GATE-PLUMB-E5.md`.
 - `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs,
   non-positive std_dev, alpha outside (0, 1), inverted intervals and unrepresentable results refuse; nothing
   is clamped, BD-048/bd-8wrk). Opposite-sign Gaussian endpoints are scaled before an overflowing subtraction;

@@ -13,6 +13,7 @@ use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{EvidenceClass, Refusal, RefusalCode};
 use fmine_numerics::cholesky_solve;
 use fmine_numerics::eproc::ScoreBettingEProcess;
+use fmine_numerics::eproc::cusum::TwoSidedCusum;
 use fmine_numerics::norm_cdf;
 use fmine_units::{Length, Qty};
 
@@ -719,6 +720,183 @@ impl SpatialFrontPitMonitor {
     }
 }
 
+// --- Combined E-Process + Page CUSUM Surprise Monitor (BD-051, plan §10.4, GATE-PLUMB-E5) ---
+
+/// Dimensionless standardized innovation residual `z = (y - mu) / sigma` (`BD-051`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StandardizedResidual(pub f64);
+
+/// Explicit configuration for [`DualSurpriseMonitor`] (`BD-051`, `GATE-PLUMB-E5`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DualSurpriseConfig {
+    pub eproc_alpha: f64,
+    pub cusum_k: f64,
+    pub cusum_h: f64,
+    pub alarm_scale: f64,
+}
+
+/// Point-in-time snapshot of [`DualSurpriseMonitor`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DualSurpriseSnapshot {
+    pub n: u64,
+    pub eproc_location_alarm: bool,
+    pub eproc_dispersion_alarm: bool,
+    pub eproc_alarm: bool,
+    pub cusum_alarm: bool,
+    pub any_alarm: bool,
+    pub first_eproc_alarm: Option<u64>,
+    pub first_cusum_alarm: Option<u64>,
+    pub first_any_alarm: Option<u64>,
+    /// Causal L3 predictive scale multiplier (`1.0` while quiet; `alarm_scale` once alarmed).
+    pub l3_scale: f64,
+}
+
+/// Paired sequential surprise monitor combining:
+/// 1. Anytime-valid Waudby-Smith/Ramdas [`ScoreBettingEProcess`]es on standardized location
+///    (`tanh(z/2)`) and centred dispersion (`tanh((z^2 - 1)/2) - c0`), each at `eproc_alpha / 2`;
+/// 2. Standardized two-sided Page [`TwoSidedCusum`] (`k`, `h`) for fast mean-shift detection.
+///
+/// Alarms are sticky and feed a causal Layer-3 scale multiplier (`l3_scale()`) applied strictly
+/// to subsequent predictions (never retroactively to the observation that triggered the alarm).
+#[derive(Debug, Clone)]
+pub struct DualSurpriseMonitor {
+    location_eproc: ScoreBettingEProcess,
+    dispersion_eproc: ScoreBettingEProcess,
+    cusum: TwoSidedCusum,
+    alarm_scale: f64,
+    n: u64,
+    first_eproc_alarm: Option<u64>,
+    first_cusum_alarm: Option<u64>,
+}
+
+impl DualSurpriseMonitor {
+    /// Construct a dual surprise monitor; refuses any out-of-domain parameter without clamping.
+    pub fn new(config: DualSurpriseConfig) -> Result<Self, ScoreError> {
+        let DualSurpriseConfig {
+            eproc_alpha,
+            cusum_k,
+            cusum_h,
+            alarm_scale,
+        } = config;
+        if !(eproc_alpha.is_finite() && eproc_alpha > 0.0 && eproc_alpha < 1.0) {
+            return Err(ScoreError::AlphaOutOfDomain(eproc_alpha));
+        }
+        if !(cusum_k.is_finite() && cusum_k > 0.0) {
+            return Err(ScoreError::InvalidParameter {
+                name: "cusum_k",
+                value: cusum_k,
+            });
+        }
+        if !(cusum_h.is_finite() && cusum_h > 0.0) {
+            return Err(ScoreError::InvalidParameter {
+                name: "cusum_h",
+                value: cusum_h,
+            });
+        }
+        if !(alarm_scale.is_finite() && alarm_scale >= 1.0) {
+            return Err(ScoreError::InvalidParameter {
+                name: "alarm_scale",
+                value: alarm_scale,
+            });
+        }
+        let eproc = |(lo, hi), second_moment| {
+            ScoreBettingEProcess::new(lo, hi, second_moment, STAKE_TRUNCATION, eproc_alpha * 0.5)
+                .map_err(|_| ScoreError::AlphaOutOfDomain(eproc_alpha))
+        };
+        let cusum =
+            TwoSidedCusum::new(cusum_k, cusum_h).map_err(|_| ScoreError::InvalidParameter {
+                name: "cusum",
+                value: cusum_h,
+            })?;
+        Ok(Self {
+            location_eproc: eproc((-1.0, 1.0), LOCATION_SCORE_SECOND_MOMENT)?,
+            dispersion_eproc: eproc(DISPERSION_SCORE_RANGE, DISPERSION_SCORE_SECOND_MOMENT)?,
+            cusum,
+            alarm_scale,
+            n: 0,
+            first_eproc_alarm: None,
+            first_cusum_alarm: None,
+        })
+    }
+
+    /// Current causal Layer-3 predictive scale factor (`1.0` before any alarm; `alarm_scale` after).
+    #[must_use]
+    pub fn l3_scale(&self) -> f64 {
+        if self.first_eproc_alarm.is_some() || self.first_cusum_alarm.is_some() {
+            self.alarm_scale
+        } else {
+            1.0
+        }
+    }
+
+    /// Current sticky alarm and scale snapshot.
+    #[must_use]
+    pub fn snapshot(&self) -> DualSurpriseSnapshot {
+        let eproc_loc = self.location_eproc.rejected_null();
+        let eproc_disp = self.dispersion_eproc.rejected_null();
+        let eproc_alarm = self.first_eproc_alarm.is_some() || eproc_loc || eproc_disp;
+        let cusum_alarm = self.first_cusum_alarm.is_some() || self.cusum.snapshot().alarmed();
+        let first_any = match (self.first_eproc_alarm, self.first_cusum_alarm) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        DualSurpriseSnapshot {
+            n: self.n,
+            eproc_location_alarm: eproc_loc,
+            eproc_dispersion_alarm: eproc_disp,
+            eproc_alarm,
+            cusum_alarm,
+            any_alarm: eproc_alarm || cusum_alarm,
+            first_eproc_alarm: self.first_eproc_alarm,
+            first_cusum_alarm: self.first_cusum_alarm,
+            first_any_alarm: first_any,
+            l3_scale: self.l3_scale(),
+        }
+    }
+
+    /// Observe one standardized innovation residual. Atomic: a non-finite residual or internal
+    /// overflow refuses (`FMINE-REF-207`) without mutating any monitor state.
+    pub fn observe(
+        &mut self,
+        residual: StandardizedResidual,
+    ) -> Result<DualSurpriseSnapshot, Refusal> {
+        let z = residual.0;
+        if !z.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                format!("DualSurpriseMonitor standardized residual must be finite, got {z}"),
+            ));
+        }
+        let refuse_ep = |e: fmine_numerics::eproc::EProcError| {
+            Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string())
+        };
+        let refuse_cu = |e: fmine_numerics::eproc::cusum::CusumError| {
+            Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string())
+        };
+        let mut loc = self.location_eproc.clone();
+        loc.observe(location_score(z)).map_err(refuse_ep)?;
+        let mut disp = self.dispersion_eproc.clone();
+        disp.observe(dispersion_score(z)).map_err(refuse_ep)?;
+        let mut cusum = self.cusum.clone();
+        let cusum_snap = cusum.observe(z).map_err(refuse_cu)?;
+
+        let n = self.n + 1;
+        let ep_now = loc.rejected_null() || disp.rejected_null();
+        if ep_now && self.first_eproc_alarm.is_none() {
+            self.first_eproc_alarm = Some(n);
+        }
+        if cusum_snap.alarmed() && self.first_cusum_alarm.is_none() {
+            self.first_cusum_alarm = Some(n);
+        }
+        self.location_eproc = loc;
+        self.dispersion_eproc = disp;
+        self.cusum = cusum;
+        self.n = n;
+        Ok(self.snapshot())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -728,6 +906,79 @@ mod tests {
     use fmine_core::rand::{PhiloxStream, RngKey};
     use fmine_evidence::{EpistemicStatus, KnowledgeState, KuKind};
     use fmine_numerics::eproc::BettingEProcess;
+
+    #[test]
+    fn test_dual_surprise_monitor_atomic_refusal_and_sticky_alarms() {
+        let cfg = |eproc_alpha, cusum_k, cusum_h, alarm_scale| DualSurpriseConfig {
+            eproc_alpha,
+            cusum_k,
+            cusum_h,
+            alarm_scale,
+        };
+        assert!(DualSurpriseMonitor::new(cfg(0.0, 0.5, 6.8, 1.5)).is_err());
+        assert!(DualSurpriseMonitor::new(cfg(1.0, 0.5, 6.8, 1.5)).is_err());
+        assert!(DualSurpriseMonitor::new(cfg(0.05, 0.0, 6.8, 1.5)).is_err());
+        assert!(DualSurpriseMonitor::new(cfg(0.05, 0.5, -1.0, 1.5)).is_err());
+        assert!(DualSurpriseMonitor::new(cfg(0.05, 0.5, 6.8, 0.99)).is_err());
+
+        let mut mon = DualSurpriseMonitor::new(cfg(0.05, 0.5, 4.0, 1.5)).expect("valid monitor");
+        assert_eq!(mon.l3_scale(), 1.0);
+        assert!(!mon.snapshot().any_alarm);
+
+        let before = mon.snapshot();
+        assert_eq!(
+            mon.observe(StandardizedResidual(f64::NAN))
+                .unwrap_err()
+                .code,
+            RefusalCode::NumericalCertificateFailed207.as_str()
+        );
+        assert_eq!(mon.snapshot(), before);
+
+        // Sustained positive mean shift trips CUSUM quickly; quiet observations afterward never erase it.
+        for _ in 0..10 {
+            mon.observe(StandardizedResidual(2.0)).expect("finite");
+        }
+        let alarmed = mon.snapshot();
+        assert!(alarmed.cusum_alarm && alarmed.any_alarm);
+        assert_eq!(mon.l3_scale(), 1.5);
+        let first_cu = alarmed.first_cusum_alarm.expect("cusum crossing");
+        for _ in 0..20 {
+            mon.observe(StandardizedResidual(0.0)).expect("finite");
+        }
+        let after_quiet = mon.snapshot();
+        assert!(after_quiet.cusum_alarm && after_quiet.any_alarm);
+        assert_eq!(after_quiet.first_cusum_alarm, Some(first_cu));
+        assert_eq!(mon.l3_scale(), 1.5);
+    }
+
+    #[test]
+    fn test_dual_surprise_monitor_catches_variance_inflation_via_dispersion_eproc() {
+        let mut mon = DualSurpriseMonitor::new(DualSurpriseConfig {
+            eproc_alpha: 0.05,
+            cusum_k: 0.5,
+            cusum_h: 6.8,
+            alarm_scale: 1.5,
+        })
+        .expect("valid monitor");
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: 0x051D_159E,
+            partition: 51,
+            domain: 1,
+            var_group: 1,
+            realization: 0,
+            brick: 0,
+        });
+        // Pure zero-mean 2.2x variance explosion: dispersion e-process must alarm.
+        for _ in 0..200 {
+            let z = 2.2 * rng.next_normal();
+            mon.observe(StandardizedResidual(z)).expect("finite");
+        }
+        let snap = mon.snapshot();
+        assert!(
+            snap.eproc_dispersion_alarm && snap.eproc_alarm && snap.any_alarm,
+            "expected dispersion e-process to detect 2.2x variance shift: {snap:?}"
+        );
+    }
 
     /// bd-hp2j.2: the literal is the bits `det::ln(2π)` returns, so the log score depends on no platform libm.
     #[test]
