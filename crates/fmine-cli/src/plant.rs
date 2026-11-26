@@ -2,6 +2,7 @@
 //! Exact nominal accounting and conditional Gaussian reconciliation remain separate modes.
 //! Determinism: Exact for balance; DeterministicPerIsa for reconciliation.
 
+mod calibration;
 mod grinding;
 mod network;
 pub(crate) mod production;
@@ -41,6 +42,8 @@ pub const INFER_USAGE: &str = "plant infer --input <worksheet.toml>";
 pub const INFERENCE_DOCS_JSON: &str = network::INFERENCE_ROBOT_DOCS_JSON;
 pub const RECOVERY_USAGE: &str = "plant recovery --input <worksheet.toml>";
 pub const RECOVERY_DOCS_JSON: &str = recovery::ROBOT_DOCS_JSON;
+pub const CALIBRATION_USAGE: &str = "plant recovery-audit --input <worksheet.toml>";
+pub const CALIBRATION_DOCS_JSON: &str = calibration::ROBOT_DOCS_JSON;
 pub const RTD_USAGE: &str = "plant rtd --input <worksheet.toml>";
 pub const RTD_DOCS_JSON: &str = fmine_plant::rtd::worksheet::ROBOT_DOCS_JSON;
 pub const RTD_INVERSE_USAGE: &str = "plant rtd-infer --input <worksheet.toml>";
@@ -80,6 +83,9 @@ pub enum Command {
         input: PathBuf,
     },
     Recovery {
+        input: PathBuf,
+    },
+    RecoveryAudit {
         input: PathBuf,
     },
     Rtd {
@@ -151,7 +157,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         || args[3].starts_with("--")
     {
         return Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {RAW_BALANCE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {RTD_INVERSE_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {RAW_BALANCE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {CALIBRATION_USAGE} | {RTD_USAGE} | {RTD_INVERSE_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
         ));
     }
     let input = PathBuf::from(&args[3]);
@@ -170,12 +176,13 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "flowsheet" => Ok(Command::Network { input }),
         "infer" => Ok(Command::Infer { input }),
         "recovery" => Ok(Command::Recovery { input }),
+        "recovery-audit" => Ok(Command::RecoveryAudit { input }),
         "rtd" => Ok(Command::Rtd { input }),
         "rtd-infer" => Ok(Command::RtdInverse { input }),
         "grinding" => Ok(Command::Grinding { input }),
         "trajectory" => Ok(Command::Trajectory { input }),
         _ => Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {RAW_BALANCE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {RTD_USAGE} | {RTD_INVERSE_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {RAW_BALANCE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE} | {CALIBRATION_USAGE} | {RTD_USAGE} | {RTD_INVERSE_USAGE} | {GRINDING_USAGE} | {TRAJECTORY_USAGE}"
         )),
     }
 }
@@ -221,6 +228,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         Command::Network { input } => return network::execute(input, root),
         Command::Infer { input } => return network::execute_unmeasured(input, root),
         Command::Recovery { input } => return recovery::execute(input, root),
+        Command::RecoveryAudit { input } => return calibration::execute(input, root),
         Command::Rtd { input } => return rtd::execute(input, root),
         Command::RtdInverse { input } => return rtd::execute_inverse(input, root),
         Command::Grinding { input } => return grinding::execute(input, root),

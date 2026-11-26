@@ -675,6 +675,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     Optional JSON/Markdown diagnostics retain solver termination and start/polishing counts; no-guidance
     output remains unchanged. The Fraction oracle checks actual LP-guided value 10→18, limit handling,
     signed-resource scope, external dominance, deterministic reruns and preallocation refusals.
+  - DESIGN (BD-289): `plant recovery-audit --input <worksheet.toml>` verifies the source Markdown
+    digest, selects one complete table-marker line and checks the declared lot count before invoking
+    `fmine-plant::cards::calibration`. Input chronology and pairing are declared by the caller. The
+    historical card reports exact bias, missing lab lots, earlier-lot-only coverage and per-lot
+    diagnostics in JSON, with the coverage counts and classifications in Markdown. A hash mismatch
+    refuses with FMINE-REF-505. Robot docs describe the read-only input and its scope.
   - DESIGN (BD-176/287): `plant recovery --input <worksheet.toml>` reads the bounded, byte-bound
     `fmine.plant-recovery.v1` worksheet and delegates source admission, parsing and evaluation to
     `fmine-plant::cards::worksheet`, which verifies the source hash before invoking `RecoveryModel`.

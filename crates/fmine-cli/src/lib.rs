@@ -2661,6 +2661,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::NETWORK_USAGE,
                 plant::INFER_USAGE,
                 plant::RECOVERY_USAGE,
+                plant::CALIBRATION_USAGE,
                 plant::RTD_USAGE,
                 plant::RTD_INVERSE_USAGE,
                 plant::GRINDING_USAGE,
@@ -2830,6 +2831,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(plant::INFERENCE_DOCS_JSON);
             payload.push_str(",\"plant_recovery\":");
             payload.push_str(plant::RECOVERY_DOCS_JSON);
+            payload.push_str(",\"plant_recovery_audit\":");
+            payload.push_str(plant::CALIBRATION_DOCS_JSON);
             payload.push_str(",\"plant_rtd\":");
             payload.push_str(plant::RTD_DOCS_JSON);
             payload.push_str(",\"plant_rtd_inverse\":");

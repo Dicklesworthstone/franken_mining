@@ -883,7 +883,7 @@ fn exact_sqrt_micro(var: ExactQty) -> Result<ExactQty, Refusal> {
     let scaled = if let Some(prod) = num.checked_mul(scale) {
         prod / den
     } else {
-        // Fallback exact scaling without overflow: (num / den) * scale + ((num % den) * scale) / den.
+        // Split off the integral part, then divide the wide scaled remainder by comparison.
         let q = num / den;
         let r = num % den;
         let hi = q.checked_mul(scale).ok_or_else(|| {
@@ -892,16 +892,18 @@ fn exact_sqrt_micro(var: ExactQty) -> Result<ExactQty, Refusal> {
                 "variance too large for micro sqrt",
             )
         })?;
-        let lo = {
-            let mut r_s = r;
-            let mut d_s = den;
-            while r_s.checked_mul(scale).is_none() && d_s > 1 {
-                r_s >>= 1;
-                d_s >>= 1;
+        let numerator = mul_wide_u128(r, scale);
+        let mut lower = 0;
+        let mut upper = scale;
+        while lower < upper {
+            let candidate = lower + (upper - lower).div_ceil(2);
+            if mul_wide_u128(candidate, den) <= numerator {
+                lower = candidate;
+            } else {
+                upper = candidate - 1;
             }
-            (r_s.saturating_mul(scale)) / d_s.max(1)
-        };
-        hi.checked_add(lo).ok_or_else(|| {
+        }
+        hi.checked_add(lower).ok_or_else(|| {
             Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
                 "variance too large for micro sqrt",
@@ -1363,6 +1365,15 @@ Narrative paragraph terminates the table.
         assert_ne!(one_online_card.card_digest, reordered_card.card_digest);
     }
 
+    #[test]
+    fn micro_sd_floors_below_a_perfect_square_at_large_denominator() {
+        let variance = ExactQty::new(i128::MAX - 1, i128::MAX).unwrap();
+        assert_eq!(
+            exact_sqrt_micro(variance).unwrap(),
+            ExactQty::new(999_999, 1_000_000).unwrap()
+        );
+    }
+
     /// Real-file lane test (`BD-289`, `FACT E177`): reproduces Turquoise Ridge's 71 monthly
     /// BTAC-vs-plant pairs from the local gitignored NI 43-101 extraction (Table 13-2, pp. 136-138).
     #[test]
@@ -1407,10 +1418,15 @@ Narrative paragraph terminates the table.
         assert_eq!(card.missing_lab_count, 12);
         // Mean plant - BTAC = +1667 / 710 = +2.347887... -> +2.35 percentage points.
         assert_eq!(card.mean_bias_pct_pts, ExactQty::new(1_667, 710).unwrap());
-        // Sample SD = 4.487916... -> 4.49 percentage points.
+        // FACT (E177, Table 13-2): the exact variance independently follows from the printed
+        // lab and plant pairs. The published card reports the floor on its six-decimal grid.
+        assert_eq!(
+            card.sample_variance_pct_pts_sq,
+            ExactQty::new(1_001_027, 49_700).unwrap()
+        );
         assert_eq!(
             card.sample_sd_pct_pts,
-            ExactQty::new(4_487_916, 1_000_000).unwrap()
+            ExactQty::new(4_487_915, 1_000_000).unwrap()
         );
         // Outlier counts: 17 lots > +5 pts, 1 lot < -5 pts (Lot #83: -5.4).
         assert_eq!(card.lots_strictly_above_threshold, 17);

@@ -21,8 +21,12 @@ fn scratch(text: &str) -> PathBuf {
 }
 
 fn run(path: &Path) -> (i32, Json, String) {
+    run_plant("recovery", path)
+}
+
+fn run_plant(verb: &str, path: &Path) -> (i32, Json, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
-        .args(["plant", "recovery", "--input"])
+        .args(["plant", verb, "--input"])
         .arg(path)
         .arg("--json")
         .output()
@@ -38,6 +42,151 @@ fn run(path: &Path) -> (i32, Json, String) {
     }
     assert_eq!(at(&value, &["certificate"]), &Json::Null);
     (status, value, text)
+}
+
+fn audit_worksheet(path: &Path, digest: &str, count: usize) -> String {
+    format!(
+        "schema = \"fmine.recovery-audit.v1\"\ncard_id = \"recovery-audit-test\"\n\
+         site = \"Test Site\"\ncircuit = \"Test Circuit\"\nsource_path = \"{}\"\n\
+         source_sha256 = \"{digest}\"\ntable_marker = \"**Monthly lots**\"\n\
+         source_locator = \"Monthly lot table\"\nlot_order = \"source_rows_chronological\"\n\
+         expected_lots = {count}\n",
+        path.display()
+    )
+}
+
+#[test]
+fn recovery_audit_cli_scores_only_earlier_lots_and_checks_source_and_population() {
+    use std::fmt::Write as _;
+    let mut table = String::from("A note mentions **Monthly lots**.\n\n**Monthly lots**\n");
+    table.push_str("|**Period**|**Lot**|**Lab**|**Plant**|**Difference**|\n");
+    for month in 1..=12 {
+        let residual = if month == 12 { 8 } else { 2 };
+        writeln!(
+            table,
+            "|2025-{month:02}|L{month}|80|{}|{residual}|",
+            80 + residual
+        )
+        .unwrap();
+    }
+    table.push_str("|2026-01|L13|No Results Available|78||\n");
+    let table_path = scratch(&table);
+    let sha = fmine_core::hash::sha256(table.as_bytes()).to_hex();
+    let worksheet = audit_worksheet(&table_path, &sha, 13);
+    let input = scratch(&worksheet);
+    let (status, response, text) = run_plant("recovery-audit", &input);
+    assert_eq!(status, 0, "{response:?}");
+    assert_eq!(run_plant("recovery-audit", &input).2, text);
+    assert_eq!(
+        at(&response, &["payload", "source", "sha256"]).as_str(),
+        Some(sha.as_str())
+    );
+    let card = at(&response, &["payload", "card"]);
+    for (field, answer) in [
+        ("total_lots", 13),
+        ("paired_lots", 12),
+        ("missing_lab_lots", 1),
+        ("scored_lots", 2),
+        ("raw_lab_covered", 1),
+        ("bias_corrected_covered", 1),
+    ] {
+        assert_eq!(at(card, &[field]).i64(), Some(answer));
+    }
+    assert_eq!(exact(at(card, &["mean_bias_pct_pts"])), (5, 2));
+    assert_eq!(exact(at(card, &["bias_corrected_coverage"])), (1, 2));
+    let lots = at(card, &["lots"]).as_array().unwrap();
+    assert_eq!(
+        at(&lots[12], &["missing_lab_reason"]).as_str(),
+        Some("No Results Available")
+    );
+    let steps = at(card, &["online_steps"]).as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(at(&steps[0], &["lot"]).as_str(), Some("L11"));
+    assert_eq!(at(&steps[1], &["lot"]).as_str(), Some("L12"));
+    assert_eq!(exact(at(&steps[1], &["prior_mean_bias_pct_pts"])), (2, 1));
+    assert_eq!(
+        at(&steps[1], &["bias_corrected_covered"]).as_bool(),
+        Some(false)
+    );
+
+    let ambiguous = format!("{table}\n**Monthly lots**\n");
+    let ambiguous_path = scratch(&ambiguous);
+    let ambiguous_sha = fmine_core::hash::sha256(ambiguous.as_bytes()).to_hex();
+    for (invalid_worksheet, code) in [
+        (
+            audit_worksheet(&table_path, &"0".repeat(64), 13),
+            "FMINE-REF-505",
+        ),
+        (audit_worksheet(&table_path, &sha, 12), "FMINE-REF-107"),
+        (
+            audit_worksheet(&ambiguous_path, &ambiguous_sha, 13),
+            "FMINE-REF-107",
+        ),
+        (
+            worksheet.replace("source_rows_chronological", "reverse"),
+            "FMINE-REF-107",
+        ),
+    ] {
+        let (status, refused, _) = run_plant("recovery-audit", &scratch(&invalid_worksheet));
+        assert_ne!(status, 0, "{refused:?}");
+        assert_eq!(at(&refused, &["refusal", "code"]).as_str(), Some(code));
+        assert_eq!(at(&refused, &["payload"]), &Json::Null);
+    }
+
+    let docs = Command::new(env!("CARGO_BIN_EXE_fmine"))
+        .args(["robot-docs", "--json"])
+        .output()
+        .expect("run CLI robot docs");
+    assert!(docs.status.success());
+    let docs = json::parse(&docs.stdout).expect("robot docs envelope");
+    assert_eq!(
+        at(&docs, &["payload", "plant_recovery_audit", "schema"]).as_str(),
+        Some("fmine.recovery-audit.v1")
+    );
+}
+
+#[test]
+#[ignore = "requires local gitignored Turquoise Ridge Markdown extraction"]
+fn recovery_audit_cli_reproduces_the_registered_e177_history() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../corpus_of_input_docs/markdown_extractions/Turquoise-Ridge-Technical-Report-March2024.md",
+    );
+    let worksheet = audit_worksheet(
+        &path,
+        "9f55b4e0ea8300d26a6893f80db62fe034a95d92764145986009567370a85029",
+        83,
+    )
+    .replace(
+        "**Monthly lots**",
+        "**Table 13-2 TRUG Monthly Composite BTAC vs Plant Results**",
+    )
+    .replace("Test Site", "Turquoise Ridge Underground")
+    .replace("Test Circuit", "Autoclave BTAC vs Commercial Plant")
+    .replace("Monthly lot table", "NI 43-101 Table 13-2, pp. 136–138");
+    let input = scratch(&worksheet);
+    let (status, response, _) = run_plant("recovery-audit", &input);
+    assert_eq!(status, 0, "{response:?}");
+    let card = at(&response, &["payload", "card"]);
+    for (key, answer) in [
+        ("paired_lots", 71),
+        ("missing_lab_lots", 12),
+        ("scored_lots", 61),
+        ("raw_lab_covered", 45),
+        ("bias_corrected_covered", 51),
+    ] {
+        assert_eq!(at(card, &[key]).i64(), Some(answer));
+    }
+    assert_eq!(exact(at(card, &["mean_bias_pct_pts"])), (1667, 710));
+    let markdown = Command::new(env!("CARGO_BIN_EXE_fmine"))
+        .args(["plant", "recovery-audit", "--input"])
+        .arg(&input)
+        .args(["--format", "markdown"])
+        .output()
+        .expect("render actual historical audit");
+    assert!(markdown.status.success());
+    let rendered = String::from_utf8(markdown.stdout).unwrap();
+    assert!(rendered.contains("| Raw lab | 45 | 61 | biased |"));
+    assert!(rendered.contains("| Earlier-lot bias correction | 51 | 61 | calibrated |"));
 }
 
 fn at<'a>(value: &'a Json, path: &[&str]) -> &'a Json {

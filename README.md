@@ -675,7 +675,35 @@ The synthetic example gives 0.8 from the formula, 0.7752 after its two operation
 correction and 0.79 after the explicitly declared cap. These are conditional nominal calculations with assumed,
 uncalibrated inputs; they do not qualify a model for an actual plant or authorize an operating change.
 
-Optional `[[scenario]]` rows add complete **joint alternatives** with named IDs and exact positive weights
+`plant recovery-audit` compares historical lab and plant recovery on paired lots. It reports
+plant-minus-lab bias and how often raw lab and bias-corrected intervals covered the plant result.
+The default audit warms up on ten paired lots and uses only earlier paired lots to correct each
+subsequent prediction. Missing lab results remain visible in the total population.
+
+Save the worksheet below and run
+`fmine plant recovery-audit --input recovery-audit.toml --format markdown` from the workspace.
+The example uses the local Markdown extraction of the Turquoise Ridge technical report, E177.
+
+```toml
+schema = "fmine.recovery-audit.v1"
+card_id = "trug-btac-2008-2014"
+site = "Turquoise Ridge Underground"
+circuit = "Autoclave BTAC vs Commercial Plant"
+source_path = "corpus_of_input_docs/markdown_extractions/Turquoise-Ridge-Technical-Report-March2024.md"
+source_sha256 = "9f55b4e0ea8300d26a6893f80db62fe034a95d92764145986009567370a85029"
+source_locator = "NI 43-101 Table 13-2, pp. 136–138"
+table_marker = "**Table 13-2 TRUG Monthly Composite BTAC vs Plant Results**"
+lot_order = "source_rows_chronological"
+expected_lots = 83
+```
+
+The marker must match one complete trimmed line. The next rows use period, lot ID, lab recovery
+percent, plant recovery percent, and an optional printed difference in percentage points.
+Use bold column headers when present. The file hash, expected lot count, and row order identify
+the source used; the analyst supplies pairing and chronology. The historical coverage applies
+to those lots. JSON retains exact fractions, the missing rows and the per-lot scoring diagnostics.
+
+For `plant recovery`, optional `[[scenario]]` rows add complete **joint alternatives** with named IDs and exact positive weights
 that sum to one. Corresponding `[[input]]` rows use `scenario = "<id>"`; ordinary input rows continue to
 define the nominal comparison. Each alternative must supply every coordinate on the same simultaneous
 processing support and interval. The engine compiles the formula once, evaluates every alternative through

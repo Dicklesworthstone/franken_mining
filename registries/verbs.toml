@@ -429,6 +429,12 @@ mutates_authority = false
 description = "Evaluate explicitly declared versioned recovery cards, preserving source units, operational factors, corrections, caps and route assumptions"
 
 [[verb]]
+path = "plant recovery-audit"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Audit lab-versus-plant bias and earlier-lot-only historical coverage over a pinned recovery table"
+
+[[verb]]
 path = "plant rtd"
 subsystem = "Crucible"
 mutates_authority = false
