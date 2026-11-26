@@ -20,7 +20,7 @@
 //! Every generated document is explicitly labelled synthetic and never names or resembles any
 //! real mining company or issuer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use fmine_core::codec::Encoder;
@@ -311,7 +311,7 @@ impl JuniorScoringHarness {
                     partition: 0x4A55_4E31, // "JUN1"
                     domain: (class_idx as u32) + 1,
                     var_group: 1,
-                    realization: u64::from(rep),
+                    realization: rep,
                     brick: 0,
                 };
                 let (packet, truth) = generate_single_release(
@@ -388,6 +388,7 @@ impl JuniorScoringHarness {
         let mut hole_gap_fp = 0u32;
         let mut hole_gap_fn = 0u32;
         let mut flag_ndjson = Vec::new();
+        let mut seen = BTreeSet::new();
 
         for (output, sealed) in evaluated {
             let truth = sealed.open(&self.key)?;
@@ -397,6 +398,11 @@ impl JuniorScoringHarness {
                         "mismatched doc_id: output '{}' vs sealed '{}'",
                         output.doc_id, truth.doc_id
                     ),
+                });
+            }
+            if !seen.insert(truth.doc_id.as_str()) {
+                return Err(GenError::InvalidPrediction {
+                    detail: format!("duplicate audited release '{}'", truth.doc_id),
                 });
             }
 
@@ -563,7 +569,7 @@ fn generate_single_release(
 
     match seed_class {
         JuniorSeedClass::MetalEquivalentUnstatedTerms => {
-            if replicate % 2 == 0 {
+            if replicate.is_multiple_of(2) {
                 context.metal_eq_prices_stated = false;
             } else {
                 context.metal_eq_recoveries_stated = false;
@@ -974,6 +980,30 @@ mod tests {
             assert_eq!(p1, p2);
             assert_eq!(s1.truth_commitment(), s2.truth_commitment());
         }
+    }
+
+    #[test]
+    fn test_campaign_refuses_a_duplicate_release() {
+        let cfg = test_cfg();
+        let harness = JuniorScoringHarness::new(cfg.seed_root);
+        let mut evaluated = Vec::new();
+        for _ in 0..2 {
+            let (packet, sealed) = harness
+                .generate_campaign(&cfg)
+                .expect("generate campaign")
+                .into_iter()
+                .next()
+                .expect("first release");
+            evaluated.push((
+                JuniorScoringHarness::audit_packet(&packet).expect("audit"),
+                sealed,
+            ));
+        }
+        assert!(matches!(
+            harness.score_campaign(&evaluated),
+            Err(GenError::InvalidPrediction { detail })
+                if detail.contains("duplicate audited release")
+        ));
     }
 
     #[test]
