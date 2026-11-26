@@ -159,6 +159,16 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     its declared date; releases, replacement requirements and cumulative cash fee savings are conditional
     on the declared acceptance date. Cash, credit and surety have separate columns. An unknown release
     date leaves the net outcome unresolved once work is due.
+    DESIGN (bd-3a2a.1). Optional `cash_headroom_usd` on the dated `[[horizon]]` row declares constant
+    whole-USD cash available above the paying entity's floor for this package after other commitments.
+    It enables a peak cash requirement and ranks fully quantified eligible packages within that headroom.
+    Optional `cash_repost_date` on a package dates its replacement cash posting separately. It requires
+    the headroom declaration and cannot precede the decision. Without a separate date, the repost and cash
+    fee saving are netted at release. Work and separately dated postings reserve cash before same-day
+    receipts. The inclusive horizon applies to each cash movement. A pending release is excluded from the
+    funding calculation and leaves the ranking unresolved for that package once work is due. Cash needed
+    then reflects the dated debits. Credit and surety release remain on the acceptance date in their own
+    columns. This is a conditional cash comparison of the named alternatives under the declared headroom.
   - DESIGN (bd-3ikw, synthetic slice of BD-354). `interruption_indemnity` admits synthetic evidence and
     one insured entity and perimeter with whole, nominal USD and whole interruption days. One dated policy
     interpretation requires explicit waiting, indemnity, deductible and limit clauses. Both time

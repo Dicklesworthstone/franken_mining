@@ -794,14 +794,39 @@ fn distinct(seen: &mut BTreeSet<String>, id: &str) -> Result<()> {
     Ok(())
 }
 
+fn closure_cash(through: &str, mut flows: [Option<(&str, i128)>; 3]) -> (i128, i128) {
+    // ISO dates sort in calendar order. At a common date reserve debits before receipts.
+    flows.sort_unstable();
+    let mut net = 0;
+    let mut peak_needed = 0;
+    for (_, change) in flows
+        .into_iter()
+        .flatten()
+        .take_while(|(date, _)| *date <= through)
+    {
+        net += change;
+        peak_needed = peak_needed.max(-net);
+    }
+    (net, peak_needed)
+}
+
 fn rehabilitation(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     tables(doc, &["horizon", "package"])?;
-    let h = row_fields(table(doc, "horizon")?, &["entity", "through"], as_of)?;
+    let h = row_fields_with_optional(
+        table(doc, "horizon")?,
+        &["entity", "through"],
+        &["cash_headroom_usd"],
+        as_of,
+    )?;
     let through = date(&h, "through")?;
     if through < as_of {
         return Err(invalid("comparison horizon precedes decision"));
     }
-    let mut c = Card::new(&[
+    let cash_headroom = h
+        .contains_key("cash_headroom_usd")
+        .then(|| qty(&h, "cash_headroom_usd"))
+        .transpose()?;
+    let mut headers = vec![
         "Package",
         "Eligibility",
         "Work USD",
@@ -809,12 +834,16 @@ fn rehabilitation(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         "Net cash USD by horizon",
         "Net credit line USD",
         "Net surety USD",
-    ]);
+    ];
+    if cash_headroom.is_some() {
+        headers.extend(["Cash needed USD", "Funding through horizon"]);
+    }
+    let mut c = Card::new(&headers);
     let mut seen = BTreeSet::new();
     let mut best: Option<i128> = None;
     let mut leaders = Vec::new();
     for row in doc.rows_of("package") {
-        let f = row_fields(
+        let f = row_fields_with_optional(
             row,
             &[
                 "id",
@@ -832,6 +861,7 @@ fn rehabilitation(doc: &TomlDoc, as_of: &str) -> Result<Card> {
                 "reposted_surety_usd",
                 "cash_fee_saving_usd",
             ],
+            &["cash_repost_date"],
             as_of,
         )?;
         let id = get(&f, "id")?;
@@ -846,9 +876,23 @@ fn rehabilitation(doc: &TomlDoc, as_of: &str) -> Result<Card> {
                 "rehabilitation requires one entity and prospective work before release",
             ));
         }
+        let cash_repost_date = f
+            .contains_key("cash_repost_date")
+            .then(|| date(&f, "cash_repost_date"))
+            .transpose()?;
+        if cash_repost_date.is_some_and(|posting| cash_headroom.is_none() || posting < as_of) {
+            return Err(invalid(
+                "cash_repost_date requires cash_headroom_usd and a date on or after the decision",
+            ));
+        }
         let cost = qty(&f, "work_usd")?;
-        let cash = qty(&f, "released_cash_usd")? - qty(&f, "reposted_cash_usd")?
-            + qty(&f, "cash_fee_saving_usd")?;
+        let repost = qty(&f, "reposted_cash_usd")?;
+        let release_cash = qty(&f, "released_cash_usd")? + qty(&f, "cash_fee_saving_usd")?
+            - if cash_repost_date.is_none() {
+                repost
+            } else {
+                0
+            };
         let line = qty(&f, "released_line_usd")? - qty(&f, "reposted_line_usd")?;
         let surety = qty(&f, "released_surety_usd")? - qty(&f, "reposted_surety_usd")?;
         let eligible = flag(&f, "eligible")?;
@@ -862,14 +906,50 @@ fn rehabilitation(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             cost.to_string(),
             release.into(),
         ];
-        if eligible && (release != "pending" || work > through) {
-            let released = i128::from(release != "pending" && release <= through);
-            let net = released * cash - i128::from(work <= through) * cost;
+        let timed_release = (release != "pending").then_some(release);
+        let quantified = eligible && (timed_release.is_some() || work > through);
+        let released = i128::from(timed_release.is_some_and(|date| date <= through));
+        let (net, peak_needed) = closure_cash(
+            through,
+            [
+                Some((work, -cost)),
+                cash_repost_date.map(|date| (date, -repost)),
+                timed_release.map(|date| (date, release_cash)),
+            ],
+        );
+        if quantified {
             r.extend([
                 net.to_string(),
                 (released * line).to_string(),
                 (released * surety).to_string(),
             ]);
+        } else {
+            r.extend([
+                "unresolved".into(),
+                "unresolved".into(),
+                "unresolved".into(),
+            ]);
+        }
+        if let Some(headroom) = cash_headroom {
+            let funding = if !eligible {
+                "ineligible".into()
+            } else if !quantified {
+                "pending release".into()
+            } else if peak_needed > headroom {
+                format!("short by {} USD", peak_needed - headroom)
+            } else {
+                "funded".into()
+            };
+            r.extend([
+                if eligible {
+                    peak_needed.to_string()
+                } else {
+                    "unresolved".into()
+                },
+                funding,
+            ]);
+        }
+        if quantified && cash_headroom.is_none_or(|headroom| peak_needed <= headroom) {
             if best.is_none_or(|b| net > b) {
                 best = Some(net);
                 leaders.clear();
@@ -877,12 +957,6 @@ fn rehabilitation(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             if best == Some(net) {
                 leaders.push(id.to_string());
             }
-        } else {
-            r.extend([
-                "unresolved".into(),
-                "unresolved".into(),
-                "unresolved".into(),
-            ]);
         }
         c.rows.push(r);
         c.findings.push(format!(
@@ -893,7 +967,13 @@ fn rehabilitation(doc: &TomlDoc, as_of: &str) -> Result<Card> {
     if seen.len() < 2 {
         return Err(invalid("compare at least two distinct packages"));
     }
-    if let Some(net) = best {
+    if let Some(headroom) = cash_headroom {
+        c.findings.push(format!("Cash headroom above the floor: {headroom} USD. Reserve same-day debits before receipts. Cash needed for a pending package uses only dated debits and assumes no pending receipt."));
+        c.findings.push(match best {
+            Some(net) => format!("Highest quantified net cash among funded packages through {through}: {} ({net} USD).", leaders.join(", ")),
+            None => format!("No eligible package with resolved cash timing fits the declared headroom through {through}."),
+        });
+    } else if let Some(net) = best {
         c.findings.push(format!("Highest quantified net cash through {through}: {} ({net} USD). Pending releases remain unresolved. Credit and surety are separate.",leaders.join(", ")));
     }
     Ok(c)
@@ -1693,6 +1773,69 @@ mod tests {
         assert!(unknown.contains("pending | unresolved") && !unknown.contains("(1510000 USD)"));
         let closed = report(&CLOSURE.replacen("eligible = \"yes\"", "eligible = \"no\"", 1));
         assert!(closed.contains("North waste-rock cover | ineligible"));
+    }
+
+    #[test]
+    fn closure_ranks_fundable_packages_by_cash_without_spending_credit_or_surety() {
+        let screened = CLOSURE.replace(
+            r#"through = "2030-12-31""#,
+            "through = \"2030-12-31\"\ncash_headroom_usd = \"750000\"",
+        );
+        let md = report(&screened);
+        assert!(md.contains("North waste-rock cover | eligible | 900000 | 2030-10-31 | 1510000 | 0 | 0 | 900000 | short by 150000 USD"));
+        assert!(md.contains("East stockpile rehabilitation | eligible | 600000 | 2030-11-30 | -575000 | 4200000 | 1000000 | 600000 | funded"));
+        assert!(md.contains(
+            "among funded packages through 2030-12-31: East stockpile rehabilitation (-575000 USD)"
+        ));
+        let at_east_floor = report(&screened.replace("750000", "600000"));
+        assert!(at_east_floor.contains("East stockpile rehabilitation (-575000 USD)"));
+        let short = report(&screened.replace("750000", "599999"));
+        assert!(short.contains("| 4200000 | 1000000 | 600000 | short by 1 USD"));
+        assert!(short.contains("No eligible package with resolved cash timing fits"));
+    }
+
+    #[test]
+    fn closure_reserves_separately_dated_cash_reposts_before_release() {
+        let screened = CLOSURE
+            .replace(
+                r#"through = "2030-12-31""#,
+                "through = \"2030-12-31\"\ncash_headroom_usd = \"1300000\"",
+            )
+            .replace(
+                r#"reposted_cash_usd = "400000""#,
+                "reposted_cash_usd = \"400000\"\ncash_repost_date = \"2030-07-01\"",
+            );
+        let covered = report(&screened);
+        assert!(covered.contains("| 1510000 | 0 | 0 | 1300000 | funded"));
+        assert!(covered.contains("North waste-rock cover (1510000 USD)"));
+        let short = report(&screened.replace(
+            "cash_headroom_usd = \"1300000\"",
+            "cash_headroom_usd = \"1299999\"",
+        ));
+        assert!(short.contains("| 1510000 | 0 | 0 | 1300000 | short by 1 USD"));
+        assert!(short.contains("East stockpile rehabilitation (-575000 USD)"));
+        let same_day = report(&screened.replace("2030-07-01", "2030-10-31"));
+        assert!(same_day.contains("| 1510000 | 0 | 0 | 1300000 | funded"));
+        let later_post = report(&screened.replace("2030-07-01", "2031-01-01"));
+        assert!(later_post.contains("| 1910000 | 0 | 0 | 900000 | funded"));
+        let late_release = report(&screened.replace("2030-10-31", "2031-01-01"));
+        assert!(late_release.contains("| -1300000 | 0 | 0 | 1300000 | funded"));
+        let pending = report(&screened.replace("2030-10-31", "pending"));
+        assert!(pending.contains(
+            "| pending | unresolved | unresolved | unresolved | 1300000 | pending release"
+        ));
+        assert!(pending.contains("East stockpile rehabilitation (-575000 USD)"));
+        let ineligible = report(&screened.replacen("eligible = \"yes\"", "eligible = \"no\"", 1));
+        assert!(
+            ineligible.contains("| unresolved | unresolved | unresolved | unresolved | ineligible")
+        );
+        for invalid in [
+            screened.replace("2030-07-01", "2030-03-07"),
+            screened.replace("2030-07-01", "2030-06-31"),
+            screened.replace("\ncash_headroom_usd = \"1300000\"", ""),
+        ] {
+            assert!(evaluate(&invalid).is_err());
+        }
     }
 
     #[test]

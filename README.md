@@ -54,6 +54,20 @@ Other worksheets compare [tenure options](tests/capital/executive_tenure.toml),
 [attributable site offsets](tests/capital/executive_group.toml), [rehabilitation instruments](tests/capital/executive_rehabilitation.toml)
 and [original capital estimates against closeouts](tests/capital/executive_estimates.toml).
 
+### Can Treasury carry rehabilitation until collateral is released?
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_rehabilitation.toml --brief
+```
+
+In the synthetic North Basin worksheet, North cover returns $1.51 million net by year-end but needs
+$900,000 before acceptance. Add `cash_headroom_usd = "750000"` to the dated `[[horizon]]` row.
+East rehabilitation becomes the funded choice at $600,000 of cash needed. Its freed credit line and
+surety capacity remain separate. Add `cash_repost_date = "2030-07-01"` to North's package to model its
+$400,000 replacement cash posting ahead of release. North then needs $1.3 million before acceptance.
+Separately dated debits are reserved before receipts on the same day. Pending releases contribute
+no receipt to the funding check.
+
 ### Can Treasury fund margin calls if a metal shipment pays late?
 
 ```bash
