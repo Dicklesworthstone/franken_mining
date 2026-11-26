@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 91
+[verbs] 94
 decide card
 decide production
 decide investment
@@ -120,6 +120,9 @@ forecast journal resolve
 forecast journal restate
 forecast journal assess
 forecast journal inspect
+forecast journal investigate
+forecast journal resolve-investigation
+forecast journal rearm-investigation
 forecast journal report
 forecast journal compare
 forecast journal correction
