@@ -691,8 +691,7 @@ impl TableIdentityRegistry {
                     "a document cannot choose different tie conventions across identities and reserve rows",
                 );
             }
-            if !ids.insert(&row.id) || !source_keys.insert((&row.doc, &row.period, &row.quantity))
-            {
+            if !ids.insert(&row.id) || !source_keys.insert((&row.doc, &row.period, &row.quantity)) {
                 return fail(
                     0,
                     "reserve rows require unique ids and unique document/period/quantity bindings",

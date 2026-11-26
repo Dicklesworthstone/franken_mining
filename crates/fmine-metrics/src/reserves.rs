@@ -21,6 +21,7 @@ use crate::roll_forward::{
 };
 
 pub mod geo;
+pub mod rounding;
 
 pub const NO_CLAIM: &str = "Issuer assertions from the declared registered source population, not classified reserves or independently verified physical quantities. Current means latest declared eligible MD&A or AIF filing; it is not a truth judgment or proof of complete filing coverage. Investor decks are cross-checks only. Changed or unstated price decks do not establish a reserve restatement.";
 
@@ -136,6 +137,7 @@ pub struct ReserveReport {
     pub selections: Vec<CurrentSelection>,
     pub comparisons: Vec<VintageComparison>,
     pub geo_checks: Vec<geo::GeoCheckReport>,
+    pub rounding_discovery: Vec<rounding::DocumentComparison>,
     pub refused: Vec<ReserveRefusal>,
     pub registry_refusal: Option<String>,
     /// Binds the complete supplied population when invalid registry metadata prevents row binding.
@@ -342,6 +344,7 @@ pub fn assess(
         selections: Vec::new(),
         comparisons: Vec::new(),
         geo_checks: Vec::new(),
+        rounding_discovery: Vec::new(),
         refused: Vec::new(),
         registry_refusal: None,
         refused_input_digest: None,
@@ -437,6 +440,7 @@ pub fn assess(
             }
         }
     }
+    report.rounding_discovery = rounding::assess(&report.rows, &report.comparisons);
     report.geo_checks = geo::assess(registry, readings, documents);
     report
 }
@@ -670,6 +674,12 @@ impl ReserveReport {
             })
             .collect::<Vec<_>>()
             .join(",");
+        let rounding = self
+            .rounding_discovery
+            .iter()
+            .map(rounding::DocumentComparison::json)
+            .collect::<Vec<_>>()
+            .join(",");
         let geo_checks = self
             .geo_checks
             .iter()
@@ -677,7 +687,7 @@ impl ReserveReport {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "\"schema\":\"fmine.issuer-reserves.v1\",\"issuer\":{},\"gate_eligible\":false,\"rows\":[{rows}],\"selections\":[{selections}],\"comparisons\":[{comparisons}],\"geo_checks\":[{geo_checks}],\"refused\":[{refused}],\"registry_refusal\":{},\"refused_input_digest\":{},\"no_claim\":{}",
+            "\"schema\":\"fmine.issuer-reserves.v1\",\"issuer\":{},\"gate_eligible\":false,\"rows\":[{rows}],\"selections\":[{selections}],\"comparisons\":[{comparisons}],\"rounding_discovery\":[{rounding}],\"geo_checks\":[{geo_checks}],\"refused\":[{refused}],\"registry_refusal\":{},\"refused_input_digest\":{},\"no_claim\":{}",
             js(&self.issuer),
             option(&self.registry_refusal),
             option(&self.refused_input_digest),
@@ -783,6 +793,12 @@ impl ReserveReport {
                     text(&c.right),
                     c.status
                 );
+            }
+        }
+        if !self.rounding_discovery.is_empty() {
+            out.push_str("\n### Document-pair rounding hypotheses\n\nEach assignment uses one convention per document across all matched, admitted rows with identical quoted decks. A points fit requires at least one exact tie. A proper fit leaves positive width for every quantity. These conditional fits leave the declared conventions and filing comparisons in force.\n");
+            for comparison in &self.rounding_discovery {
+                out.push_str(&comparison.markdown(text));
             }
         }
         if let Some(reason) = &self.registry_refusal {

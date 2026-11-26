@@ -1188,6 +1188,54 @@ class ReserveScenarios(unittest.TestCase):
         self.assertEqual(len(report["digest"]), 64)
         return envelope, report
 
+    def test_document_wide_rounding_requires_one_convention_pair_for_both_quantities(self):
+        def rational(value):
+            return Fraction(int(value["num"]), int(value["den"]))
+
+        root = reserve_workspace("rounding")
+        defs = root / DEFINITIONS
+        original = defs.read_text()
+        readings = root / "registries/transcriptions/table_test.toml"
+        original_rows = readings.read_text()
+        rows = original_rows.replace('token = "10.0"', 'token = "1.7"').replace(
+            'token = "12.0"', 'token = "1.8"')
+        for row_id, file, value, second in (
+            ("older", "Earlier.pdf", "10.0", "3.6"), ("latest", "Later.pdf", "12.0", "3.7")
+        ):
+            declaration = next(block for block in original.split("[[reserve_row]]")
+                               if f'id = "{row_id}"' in block)
+            with defs.open("a") as handle:
+                handle.write("[[reserve_row]]" + declaration.replace(f'id = "{row_id}"', f'id = "{row_id}_dep"')
+                             .replace("reserve_change", "reserve_depletion").replace("net_change", "depletion"))
+            for block in original_rows.split("[[entry]]")[1:]:
+                if f'doc = "{file}"' in block and 'quantity = "reserve_change"' in block:
+                    rows += "[[entry]]" + block.replace("reserve_change", "reserve_depletion").replace(
+                        f'token = "{value}"', f'token = "{second}"')
+        readings.write_text(rows)
+        envelope, _ = successful(root)
+        discoveries = envelope["payload"]["issuer_reserves"]["rounding_discovery"]
+        self.assertEqual(len(discoveries), 1)  # The presentation has a different quoted deck.
+        result = discoveries[0]
+        self.assertEqual((result["left_document"], result["right_document"]), ("Earlier.pdf", "Later.pdf"))
+        self.assertEqual(result["closed_fit"], "points")
+        self.assertEqual(result["conflicting_left_rows"], [])
+        self.assertEqual({r["left_row"]: rational(r["overlap"]["lo"]) for r in result["closed_ranges"]},
+                         {"older": Fraction(7, 4), "older_dep": Fraction(73, 20)})
+        for r in result["closed_ranges"]:
+            self.assertEqual(r["overlap"]["hi"], r["overlap"]["lo"])
+        fits = {(a["left"], a["right"]): a["fit"] for a in result["strict_assignments"]}
+        self.assertEqual(len(fits), 16)
+        self.assertTrue(all(a != b or fit == "empty" for (a, b), fit in fits.items()))
+        self.assertEqual(fits["half_down", "half_up"], "points")
+        self.assertEqual({pair for pair, fit in fits.items() if fit == "proper"},
+                         {("truncate", mode) for mode in ("half_up", "half_down", "half_even")})
+        self.assertIn("Document-pair rounding hypotheses", binary(root, BASE, "markdown").stdout)
+        # Opposite proper-fit requirements in the two rows rule out a common positive-width fit.
+        readings.write_text(rows.replace('token = "3.6"', 'token = "3.8"'))
+        changed, _ = successful(root)
+        updated = changed["payload"]["issuer_reserves"]["rounding_discovery"][0]
+        self.assertFalse(any(a["fit"] == "proper" for a in updated["strict_assignments"]))
+
     def test_latest_filing_is_current_while_older_filings_and_decks_remain_cited(self):
         root = reserve_workspace("current")
         envelope, report = self.reserve_report(root)
