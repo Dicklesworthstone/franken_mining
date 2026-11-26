@@ -8,8 +8,7 @@ use std::path::Path;
 use fmine_calib::record::scoring::paired::{Availability, BaselineRow, Bounds, OutcomeRow};
 use fmine_calib::record::{
     self, BaselineKind, BaselineRule, InputDoc, Outcome, Quarter, Rat, RecordManifest, RecordRules,
-    SiteStatus, Target, TargetMetric, format_utc, parse_date, parse_hex32,
-    parse_utc,
+    SiteStatus, Target, TargetMetric, format_utc, parse_date, parse_hex32, parse_utc,
 };
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};

@@ -332,7 +332,8 @@ fn evaluate_inner(
                     let (v, line) = get(&f, key)?;
                     quantity(v, line)
                 };
-                let optional = |key: &str| f.get(key).map(|(v, line)| quantity(v, *line)).transpose();
+                let optional =
+                    |key: &str| f.get(key).map(|(v, line)| quantity(v, *line)).transpose();
                 values.push((
                     CostValue::PricedSale(claims::priced_sale::PricedSale {
                         metal,

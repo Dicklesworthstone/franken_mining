@@ -1244,22 +1244,31 @@ fn manifest_checks_reject_unused_hash_mismatch_and_premature_quarter_actuals() {
         "later registry retrieval does not overwrite frozen input availability"
     );
     let html = b"synthetic release";
-    profile.html_sources.push(fmine_registry::sources::HtmlSourceRow {
-        file: "release.html".into(),
-        dir: "corpus".into(),
-        release: "2030Q3".into(),
-        url: "https://example.invalid/release.html".into(),
-        url_basis: "invented".into(),
-        published_at: "2030-10-01".into(),
-        published_at_basis: "FACT: fixture".into(),
-        bytes: html.len() as u64,
-        sha256: sha256(html).to_hex(),
-    });
-    frozen.inputs.push(input("release.html", html, "2030-10-01"));
+    profile
+        .html_sources
+        .push(fmine_registry::sources::HtmlSourceRow {
+            file: "release.html".into(),
+            dir: "corpus".into(),
+            release: "2030Q3".into(),
+            url: "https://example.invalid/release.html".into(),
+            url_basis: "invented".into(),
+            published_at: "2030-10-01".into(),
+            published_at_basis: "FACT: fixture".into(),
+            bytes: html.len() as u64,
+            sha256: sha256(html).to_hex(),
+        });
+    frozen
+        .inputs
+        .push(input("release.html", html, "2030-10-01"));
     let bound = fmine_public::forecast::manifest::bind(&profile, &rules, &frozen).unwrap();
     assert!(bound.iter().all(Option::is_some));
     frozen.inputs[1].sha256[0] ^= 1;
-    assert_eq!(fmine_public::forecast::manifest::bind(&profile, &rules, &frozen).unwrap_err().code, "FMINE-REF-505");
+    assert_eq!(
+        fmine_public::forecast::manifest::bind(&profile, &rules, &frozen)
+            .unwrap_err()
+            .code,
+        "FMINE-REF-505"
+    );
     frozen.inputs.pop().unwrap();
     frozen.inputs[0].sha256[0] ^= 1;
     assert_eq!(

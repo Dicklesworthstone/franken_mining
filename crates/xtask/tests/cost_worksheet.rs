@@ -66,11 +66,16 @@ fn priced_sales_refuse_ambiguous_units_terms_and_duplicate_costs() {
         PRICED_SALES.replace("unit = \"oz\"", "unit = \"koz\""),
         PRICED_SALES.replace("quantity_sold = \"100\"", "quantity_sold = \"101\""),
         PRICED_SALES.replace("royalty_fraction = \"0.02\"", "royalty_fraction = \"1.1\""),
-        PRICED_SALES.replace("by_product_credit_fraction = \"0.90\"", "by_product_credit_fraction = \"-1\""),
+        PRICED_SALES.replace(
+            "by_product_credit_fraction = \"0.90\"",
+            "by_product_credit_fraction = \"-1\"",
+        ),
         PRICED_SALES.replace("metal = \"silver\"", "metal = \"gold\""),
         PRICED_SALES.replace("royalty_fraction = \"0.02\"", "royalty_fraction = \"1/3\""),
         PRICED_SALES.replacen("royalty_fraction =", "by_product_credit_fraction =", 1),
-        format!("{PRICED_SALES}\n[[cost]]\nitem = \"royalties_and_production_taxes\"\nusd = \"100\"\n"),
+        format!(
+            "{PRICED_SALES}\n[[cost]]\nitem = \"royalties_and_production_taxes\"\nusd = \"100\"\n"
+        ),
         format!("{PRICED_SALES}\n[[cost]]\nitem = \"by_product_credits\"\nusd = \"100\"\n"),
         PRICED_SALES.replace("ounces_sold", "pounds_sold"),
     ] {

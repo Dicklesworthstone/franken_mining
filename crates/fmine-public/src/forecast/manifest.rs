@@ -39,15 +39,19 @@ fn lookup<'a>(profile: &'a IssuerProfile, file: &str) -> Option<RegisteredInput<
             workbook_quarter: None,
         });
     }
-    profile.html_sources.iter().find(|d| d.file == file).map(|d| RegisteredInput {
-        dir: &d.dir,
-        url: &d.url,
-        bytes: d.bytes,
-        digest: &d.sha256,
-        published_at: Some(&d.published_at),
-        published_at_basis: Some(&d.published_at_basis),
-        workbook_quarter: None,
-    })
+    profile
+        .html_sources
+        .iter()
+        .find(|d| d.file == file)
+        .map(|d| RegisteredInput {
+            dir: &d.dir,
+            url: &d.url,
+            bytes: d.bytes,
+            digest: &d.sha256,
+            published_at: Some(&d.published_at),
+            published_at_basis: Some(&d.published_at_basis),
+            workbook_quarter: None,
+        })
 }
 
 fn check_input<'a>(
@@ -74,13 +78,27 @@ fn check_input<'a>(
     if let Some(quarter) = source.workbook_quarter {
         let end = Quarter::parse(quarter)
             .and_then(|q| q.end_utc())
-            .ok_or_else(|| error(RefusalCode::UndeclaredUnitBasisOrTz107, "invalid registered release quarter"))?;
+            .ok_or_else(|| {
+                error(
+                    RefusalCode::UndeclaredUnitBasisOrTz107,
+                    "invalid registered release quarter",
+                )
+            })?;
         if input.publication_day < end.div_euclid(86_400) {
-            return Err(error(timing, "declared publication precedes completion of the registered quarter"));
+            return Err(error(
+                timing,
+                "declared publication precedes completion of the registered quarter",
+            ));
         }
     }
-    if source.published_at.is_some_and(|day| record::parse_date(day) != Some(input.publication_day)) {
-        return Err(error(RefusalCode::DigestMismatch505, "publication day differs from the source registry"));
+    if source
+        .published_at
+        .is_some_and(|day| record::parse_date(day) != Some(input.publication_day))
+    {
+        return Err(error(
+            RefusalCode::DigestMismatch505,
+            "publication day differs from the source registry",
+        ));
     }
     Ok(Some(source))
 }
@@ -102,8 +120,16 @@ pub fn bind<'a>(
     if !findings.is_empty() {
         return Err(Refusal::new(
             RefusalCode::DigestMismatch505,
-            findings.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "),
+            findings
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
         ));
     }
-    manifest.inputs.iter().map(|input| check_input(profile, input)).collect()
+    manifest
+        .inputs
+        .iter()
+        .map(|input| check_input(profile, input))
+        .collect()
 }

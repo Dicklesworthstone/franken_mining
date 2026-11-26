@@ -143,12 +143,7 @@ fn capex_lint_uses_source_claims_and_dated_publications_for_each_printed_scope()
         assert_eq!(claim.key.unit, "usd_m");
         let prefix = format!("Site A Q1 2030 ownership basis unprinted {metric} is ");
         writeln!(plain, "{prefix}{amount}.").unwrap();
-        writeln!(
-            cited,
-            "{prefix}[{amount}](fmine:{}).",
-            claim.claim.claim_id
-        )
-        .unwrap();
+        writeln!(cited, "{prefix}[{amount}](fmine:{}).", claim.claim.claim_id).unwrap();
     }
     for (file, draft, discover) in [
         ("capex-cited.md", cited, false),
@@ -176,7 +171,10 @@ fn capex_lint_uses_source_claims_and_dated_publications_for_each_printed_scope()
         for report in [&before, &after] {
             assert_eq!(report.exit_code, 0, "{}", report.to_json());
             assert_eq!(
-                report.payload_json.matches("\"verdict\":\"verified\"").count(),
+                report
+                    .payload_json
+                    .matches("\"verdict\":\"verified\"")
+                    .count(),
                 3,
                 "{}",
                 report.to_json()
@@ -207,7 +205,10 @@ fn capex_lint_uses_source_claims_and_dated_publications_for_each_printed_scope()
             );
         }
         assert_eq!(invoke(&after_args, &workspace).0.to_json(), after.to_json());
-        assert_eq!(std::fs::read_to_string(workspace.join(file)).unwrap(), draft);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join(file)).unwrap(),
+            draft
+        );
         let mut markdown = after_args;
         markdown.extend(args(&["--format", "markdown"]));
         let (rendered, exit) = run(&markdown, &workspace);
@@ -218,12 +219,7 @@ fn capex_lint_uses_source_claims_and_dated_publications_for_each_printed_scope()
     altered.push(0);
     std::fs::write(source_path, altered).expect("altered source");
     let refused = invoke(
-        &args(&[
-            "lint",
-            "capex-cited.md",
-            "--issuer",
-            PUBLIC_RECORD_ISSUER,
-        ]),
+        &args(&["lint", "capex-cited.md", "--issuer", PUBLIC_RECORD_ISSUER]),
         &workspace,
     )
     .0;

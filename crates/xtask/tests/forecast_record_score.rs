@@ -808,21 +808,35 @@ fn frozen_record_cli_scores_real_local_timestamps_and_keeps_every_named_site() {
     let registry_path = root.join("registries/sources/synthetic.toml");
     let original_registry = fs::read_to_string(&registry_path).unwrap();
     for (original, revised) in [
-        ("https://example.invalid/Guidance.pdf", "https://example.invalid/other.pdf"),
-        ("published_at = \"2026-01-15\"", "published_at = \"2026-01-14\""),
+        (
+            "https://example.invalid/Guidance.pdf",
+            "https://example.invalid/other.pdf",
+        ),
+        (
+            "published_at = \"2026-01-15\"",
+            "published_at = \"2026-01-14\"",
+        ),
     ] {
         assert!(original_registry.contains(original));
         fs::write(&registry_path, original_registry.replace(original, revised)).unwrap();
         let (scored, score_exit) = run(&root, AS_OF, "tsa/ca.pem", "json");
         assert_eq!(score_exit, 8, "{scored}");
-        assert!(scored.contains("FMINE-REF-505") && scored.contains("Guidance.pdf"), "{scored}");
+        assert!(
+            scored.contains("FMINE-REF-505") && scored.contains("Guidance.pdf"),
+            "{scored}"
+        );
         let (preflight, exit) = fmine_cli::run(
             &["forecast", "record", "check", "--record", "record"].map(str::to_string),
             &root,
         );
         assert_eq!(exit, 8, "{preflight}");
-        let refused = xtask::forecast::record_hash(&root, &root.join("record")).unwrap_err().join(" ");
-        assert!(refused.contains("FMINE-REF-505") && refused.contains("Guidance.pdf"), "{refused}");
+        let refused = xtask::forecast::record_hash(&root, &root.join("record"))
+            .unwrap_err()
+            .join(" ");
+        assert!(
+            refused.contains("FMINE-REF-505") && refused.contains("Guidance.pdf"),
+            "{refused}"
+        );
     }
     fs::write(registry_path, original_registry).unwrap();
     // The information cut precedes Q3. Registration itself uses the real later TSA time and is a nowcast.
