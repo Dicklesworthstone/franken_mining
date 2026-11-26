@@ -7,7 +7,7 @@ E-layer Helm capital-program comparison (`BD-229`, `BD-314`). Enumerates declare
 - **Layer:** E
 - **Subsystem:** Helm
 - **LOC budget:** 25,000 planned / 29,000 ceiling
-- **Allowed Module Families:** `["model", "render", "recourse", "permit", "entity", "stability", "robustness"]`
+- **Allowed Module Families:** `["model", "render", "recourse", "permit", "entity", "stability", "robustness", "hindcast"]`
 
 ## 2. Inputs
 ### Mathematical & Domain Formulation
@@ -847,6 +847,7 @@ The GB-30 known-answer tests cover BD-229's declared example. Production-scale g
 - `entity` (cash, ownership, debt, capital-call waterfalls)
 - `stability::{SelectionStabilityDesign, SelectionStabilitySummary}`
 - `robustness::{kpi::evaluate, RobustnessScope}` and `render` JSON/Markdown formatters.
+- `hindcast::{ApprovalCase, ApprovalAction, ApprovalEvidence, HindcastScenario, RealizedApprovalOutcome, HindcastScorecard, evaluate_hindcast_suite, evaluate_gate_cap_04_hindcast, exact_weighted_cvar}` (`BD-230` bitemporal `as_of_decision` H7a vs H7d hindcast kernel; `BitwisePortable`; `GATE-CAP-04` delivery record on real audited filings remains open).
 
 ## 12. Proof obligations
 - `PO-CAP-2`: equity valuation uses the selected bundle's same-state total NAV and actual shares; changing share-unit scale with compensating counts leaves every per-share result unchanged.

@@ -24,6 +24,7 @@ use fmine_numerics::risk::transport::TransportPlan;
 use fmine_units::{Currency, Money, UnitsError};
 
 pub mod entity;
+pub mod hindcast;
 pub mod model;
 pub mod permit;
 pub mod recourse;

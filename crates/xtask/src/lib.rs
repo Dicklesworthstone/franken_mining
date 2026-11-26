@@ -1647,7 +1647,8 @@ mod tests {
         // BD-314 adds fmine-econ::entity_graph (CapitalEntityGraph & Barrick portfolio waterfalls).
         // BD-289 adds fmine-plant::cards::calibration (Turquoise Ridge 71-pair recovery calibration card).
         // BD-346.S2 adds fmine-public::mirror (JV mirror pair registry with exact shares & dated perimeters).
-        assert_eq!(report.bitwise_files, 130, "{report:?}");
+        // BD-230 adds fmine-capital::hindcast (bitemporal H7a vs H7d capital-approval hindcast engine).
+        assert_eq!(report.bitwise_files, 131, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
