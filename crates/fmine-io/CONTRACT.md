@@ -709,3 +709,9 @@ local test authority is an independent time witness. Its input fingerprints perm
 - HTML synthetic controls cover merged origins and anchors, exact decimals and UTF-8 byte ranges, one-pass
   entity decoding, fake tables in comments/raw-text contexts, ambiguous numeric markup, malformed spans and
   row groups, hidden content, invalid encodings and global expansion including rectangular padding.
+- `cas_ingest` (`BD-056`, offline filing ingest into `FMT-CAS-1` `CasStore`): `ingest_file_into_cas`,
+  `ingest_file_into_cas_with_chunk_size`, and `ingest_registered_filings` verify offline SHA-256 pins and
+  optional byte lengths before root-last CAS publication (`FMINE-REF-505` on mismatch, `FMINE-REF-506` on
+  unreadable file, `FMINE-REF-107` on invalid metadata/digest hex), emitting order-independent `CIB1` batch
+  digests and digest-stable zero-write re-ingests (`test_cas_reingest_is_digest_stable`,
+  `test_cas_batch_registered_filings_atomic_preflight_and_order_invariant_reingest`).
