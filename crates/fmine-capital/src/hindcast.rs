@@ -11,18 +11,19 @@
 //! reported separately from static expected NPV (`G-CAP-D`).
 
 use core::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{EvidenceClass, Refusal, RefusalCode};
 use fmine_time::{
-    Anchor, AsOfQuery, CivilDate, QuadTemporalStamp, QueryPurpose, TimeError, ValidTime,
+    Anchor, AsOfQuery, CivilDate, NS_PER_DAY, QuadTemporalStamp, QueryPurpose, TimeError,
+    TimeEvidence, ValidTime,
 };
 use fmine_units::ExactQty;
 
 /// Mandatory no-claim boundary (`INV-002`).
-pub const HINDCAST_NO_CLAIM: &str = "Bitemporal decision-rule hindcast comparing H7a (static NPV/IRR + hurdle) against H7d (per-share two-stage stochastic CapitalProgram with CVaR and stage-gate recourse) under declared as_of_decision(t) snapshots. Assumed scenario grids remain uncalibrated assumptions; no investment authorization, reserve disclosure, prospective skill claim, or issuer affiliation is implied.";
+pub const HINDCAST_NO_CLAIM: &str = "Decision-rule comparison under declared approval-time snapshots and supplied outcome payoffs. Payoffs for unchosen actions are counterfactual inputs. Scenario calibration, historical registration, investment authorization and regulatory sign-off require separate evidence.";
 
 /// Minimum number of past approval cases required by `GATE-CAP-04` (plan §23.9).
 pub const GATE_CAP_04_MIN_CASES: usize = 5;
@@ -89,17 +90,18 @@ pub struct HindcastScenario {
 /// Realized ex-post outcome observed strictly after `approval_as_of_ns` (`INV-008`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealizedApprovalOutcome {
+    /// UTC date of the end of the outcome's physical support.
     pub realized_date: CivilDate,
     pub realized_stamp: QuadTemporalStamp,
     /// Realized capital expenditure (USD millions, `> 0`).
     pub realized_capex_usd_m: ExactQty,
     /// Realized schedule slip in months (`> 0` means late, `< 0` means early).
     pub schedule_slip_months: i32,
-    /// Realized net ΔNAV (USD millions) if full commitment was chosen.
+    /// Supplied net ΔNAV (USD millions) for full commitment, counterfactual if unchosen.
     pub realized_full_commit_delta_nav_usd_m: ExactQty,
-    /// Realized net ΔNAV (USD millions) if staged recourse was chosen.
+    /// Supplied net ΔNAV (USD millions) for staged recourse, counterfactual if unchosen.
     pub realized_staged_recourse_delta_nav_usd_m: ExactQty,
-    /// Realized net ΔNAV (USD millions) if defer/pass was chosen.
+    /// Supplied net ΔNAV (USD millions) for defer/pass, counterfactual if unchosen.
     pub realized_defer_delta_nav_usd_m: ExactQty,
     /// Citation IDs or source notes documenting the realized outcome.
     pub outcome_evidence_ids: Vec<String>,
@@ -107,9 +109,10 @@ pub struct RealizedApprovalOutcome {
 
 /// Complete bitemporal approval hindcast case (`as_of_decision` snapshot + ex-post realized outcome).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovalCase {
+pub struct ApprovalCase<T = RealizedApprovalOutcome> {
     pub case_id: String,
     pub project_name: String,
+    /// UTC civil date of the approval cut.
     pub approval_date: CivilDate,
     /// Knowledge cut-off timestamp (`as_of_decision(t_approval)`, UTC ns).
     pub approval_as_of_ns: i64,
@@ -137,9 +140,12 @@ pub struct ApprovalCase {
     pub cvar_tail_mass: ExactQty,
     /// Maximum admissible `CVaR_α` loss per share (USD/share, `>= 0`).
     pub max_cvar_loss_per_share_usd: ExactQty,
-    /// Ex-post realized outcome scored after freezing both `H7a` and `H7d` decisions.
-    pub realized_outcome: RealizedApprovalOutcome,
+    /// Ex-post outcome input, or unit for approval-only callers.
+    pub realized_outcome: T,
 }
+
+/// Inputs available for a decision before any outcome is supplied.
+pub type ApprovalSnapshot = ApprovalCase<()>;
 
 /// Exact per-share metrics for one action under `H7d` at `t_approval`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,7 +160,64 @@ pub struct ActionApprovalMetrics {
     pub feasible: bool,
 }
 
-/// Ex-post scored result for one bitemporal approval case.
+/// The two selections and their immutable approval input identity, reusable when scoring later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenApproval {
+    case_id: String,
+    project_name: String,
+    approval_date: CivilDate,
+    approval_as_of_ns: i64,
+    is_synthetic_scenario_grid: bool,
+    admitted_evidence_ids: Vec<String>,
+    digest: Digest32,
+    h7a_decision: ApprovalAction,
+    h7d_decision: ApprovalAction,
+    action_metrics: [ActionApprovalMetrics; 3],
+    recourse_option_value: ExactQty,
+    baseline_capex_usd_m: ExactQty,
+    shares_millions: ExactQty,
+    full_commit_nav_band: [ExactQty; 2],
+}
+
+impl FrozenApproval {
+    /// Approval input identity, independent of any subsequent outcome.
+    #[must_use]
+    pub const fn digest(&self) -> Digest32 {
+        self.digest
+    }
+
+    /// Choices in H7a, H7d order.
+    #[must_use]
+    pub const fn decisions(&self) -> (ApprovalAction, ApprovalAction) {
+        (self.h7a_decision, self.h7d_decision)
+    }
+
+    /// Exact approval-time results for full commitment, staged recourse, and defer/pass.
+    #[must_use]
+    pub const fn action_metrics(&self) -> &[ActionApprovalMetrics; 3] {
+        &self.action_metrics
+    }
+
+    /// The availability cut shared by both rules.
+    #[must_use]
+    pub const fn approval_as_of_ns(&self) -> i64 {
+        self.approval_as_of_ns
+    }
+
+    /// Whether the submitted approval scenarios were synthetic.
+    #[must_use]
+    pub const fn is_synthetic_scenario_grid(&self) -> bool {
+        self.is_synthetic_scenario_grid
+    }
+
+    /// The source identifiers admitted at the cut, in canonical order.
+    #[must_use]
+    pub fn admitted_evidence_ids(&self) -> &[String] {
+        &self.admitted_evidence_ids
+    }
+}
+
+/// Scores the two rules on declared comparisons, including counterfactual payoffs for unchosen actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HindcastCaseResult {
     pub case_id: String,
@@ -163,6 +226,10 @@ pub struct HindcastCaseResult {
     pub is_synthetic_scenario_grid: bool,
     pub admitted_evidence_ids: Vec<String>,
     pub outcome_evidence_ids: Vec<String>,
+    /// Approval inputs and selections, frozen before outcome scoring.
+    pub approval_digest: Digest32,
+    /// Supplied outcome and its dated evidence identifiers.
+    pub outcome_digest: Digest32,
     pub h7a_decision: ApprovalAction,
     pub h7d_decision: ApprovalAction,
     pub decisions_diverged: bool,
@@ -182,7 +249,8 @@ pub struct HindcastCaseResult {
     pub realized_within_approval_band: bool,
 }
 
-/// Aggregate scorecard across a suite of bitemporal approval hindcasts (`BD-230`, `GATE-CAP-04`).
+/// Aggregate scorecard across bitemporal hindcasts (`BD-230`, `GATE-CAP-04`).
+/// The sums are equal-case-weight descriptive scores across the declared cases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HindcastScorecard {
     pub results: Vec<HindcastCaseResult>,
@@ -217,16 +285,16 @@ pub fn evaluate_hindcast_suite(cases: &[ApprovalCase]) -> Result<HindcastScoreca
     let mut h7a_total_regret = ZERO;
     let mut h7d_total_regret = ZERO;
 
-    for case in cases {
-        validate_token("case_id", &case.case_id)?;
-        validate_token("project_name", &case.project_name)?;
+    let mut ordered_cases: Vec<_> = cases.iter().collect();
+    ordered_cases.sort_by(|a, b| a.case_id.cmp(&b.case_id));
+    for case in ordered_cases {
         if !seen_ids.insert(case.case_id.as_str()) {
             return Err(Refusal::new(
                 RefusalCode::UndeclaredUnitBasisOrTz107,
                 format!("duplicate hindcast case_id {:?}", case.case_id),
             ));
         }
-        let res = evaluate_single_case(case)?;
+        let res = freeze_approval(case)?.score(&case.realized_outcome)?;
         if res.is_synthetic_scenario_grid {
             synthetic_count += 1;
         }
@@ -245,8 +313,6 @@ pub fn evaluate_hindcast_suite(cases: &[ApprovalCase]) -> Result<HindcastScoreca
         results.push(res);
     }
 
-    // Canonical case_id ordering for deterministic BTH1 digest.
-    results.sort_by(|a, b| a.case_id.cmp(&b.case_id));
     let h7d_net_advantage = checked_sub(h7d_total_realized, h7a_total_realized)?;
     let digest = compute_scorecard_digest(
         &results,
@@ -277,7 +343,7 @@ pub fn evaluate_hindcast_suite(cases: &[ApprovalCase]) -> Result<HindcastScoreca
 }
 
 /// Evaluate a `GATE-CAP-04` bitemporal hindcast requiring at least [`GATE_CAP_04_MIN_CASES`] (`>= 5`)
-/// past approvals.
+/// cases. Gate qualification also requires audited historical inputs and independent review.
 pub fn evaluate_gate_cap_04_hindcast(cases: &[ApprovalCase]) -> Result<HindcastScorecard, Refusal> {
     if cases.len() < GATE_CAP_04_MIN_CASES {
         return Err(Refusal::new(
@@ -368,34 +434,16 @@ pub fn exact_weighted_cvar(
     checked_div(weighted_tail, alpha)
 }
 
-fn evaluate_single_case(case: &ApprovalCase) -> Result<HindcastCaseResult, Refusal> {
-    CivilDate::new(
-        case.approval_date.year,
-        case.approval_date.month,
-        case.approval_date.day,
-    )
-    .map_err(|e| {
-        Refusal::new(
-            RefusalCode::OutsidePhysicalDomain109,
-            format!("case {}: invalid approval_date: {e}", case.case_id),
-        )
-    })?;
-    CivilDate::new(
-        case.realized_outcome.realized_date.year,
-        case.realized_outcome.realized_date.month,
-        case.realized_outcome.realized_date.day,
-    )
-    .map_err(|e| {
-        Refusal::new(
-            RefusalCode::OutsidePhysicalDomain109,
-            format!("case {}: invalid realized_date: {e}", case.case_id),
-        )
-    })?;
-    if case.realized_outcome.realized_date.to_epoch_days() < case.approval_date.to_epoch_days() {
+/// Compute both rules from the approval information set alone. Callers can retain the
+/// returned digest before collecting an outcome. This library does not record it in a ledger.
+pub fn freeze_approval<T>(case: &ApprovalCase<T>) -> Result<FrozenApproval, Refusal> {
+    validate_token("case_id", &case.case_id)?;
+    validate_token("project_name", &case.project_name)?;
+    if case.approval_date != utc_date(case.approval_as_of_ns) {
         return Err(Refusal::new(
             RefusalCode::AssayLookahead108,
             format!(
-                "case {}: realized_date precedes approval_date",
+                "case {}: approval_date must match the UTC day of approval_as_of_ns",
                 case.case_id
             ),
         ));
@@ -459,11 +507,11 @@ fn evaluate_single_case(case: &ApprovalCase) -> Result<HindcastCaseResult, Refus
         for_physical_period: case.physical_horizon,
         purpose: QueryPurpose::OperationalDecision,
     };
-    let mut seen_ev_ids = BTreeSet::new();
+    let mut evidence = BTreeMap::new();
     for ev in &case.approval_evidence {
         validate_token("approval_evidence.evidence_id", &ev.evidence_id)?;
         validate_token("approval_evidence.label", &ev.label)?;
-        if !seen_ev_ids.insert(ev.evidence_id.as_str()) {
+        if evidence.insert(ev.evidence_id.as_str(), ev).is_some() {
             return Err(Refusal::new(
                 RefusalCode::UndeclaredUnitBasisOrTz107,
                 format!(
@@ -507,54 +555,11 @@ fn evaluate_single_case(case: &ApprovalCase) -> Result<HindcastCaseResult, Refus
         }
     }
 
-    // 2. Enforce INV-008 (register before resolve): realized outcome MUST be strictly after approval.
-    let outcome = &case.realized_outcome;
-    if outcome.realized_stamp.availability_time() <= case.approval_as_of_ns {
-        return Err(Refusal::new(
-            RefusalCode::AssayLookahead108,
-            format!(
-                "case {}: realized outcome availability_time ({}) must strictly follow approval_as_of_ns ({}) under INV-008",
-                case.case_id,
-                outcome.realized_stamp.availability_time(),
-                case.approval_as_of_ns
-            ),
-        ));
-    }
-    if outcome.realized_capex_usd_m.signum() <= 0 {
-        return Err(Refusal::new(
-            RefusalCode::OutsidePhysicalDomain109,
-            format!("case {}: realized_capex_usd_m must be > 0", case.case_id),
-        ));
-    }
-    if outcome.outcome_evidence_ids.is_empty() {
-        return Err(Refusal::new(
-            RefusalCode::NoClaimInDomain201,
-            format!(
-                "case {}: outcome_evidence_ids must be non-empty",
-                case.case_id
-            ),
-        ));
-    }
-    let mut seen_outcome_ids = BTreeSet::new();
-    for eid in &outcome.outcome_evidence_ids {
-        validate_token("outcome_evidence_id", eid)?;
-        if !seen_outcome_ids.insert(eid.as_str()) {
-            return Err(Refusal::new(
-                RefusalCode::UndeclaredUnitBasisOrTz107,
-                format!(
-                    "case {}: duplicate outcome_evidence_id {eid:?}",
-                    case.case_id
-                ),
-            ));
-        }
-    }
-
-    // 3. Validate shared scenario set (unique IDs, weights > 0 summing to 1).
-    let mut seen_scen = BTreeSet::new();
-    let mut weight_sum = ZERO;
+    // Exact sums and the digest both follow scenario identity order.
+    let mut scenarios = BTreeMap::new();
     for s in &case.scenarios {
         validate_token("scenario_id", &s.scenario_id)?;
-        if !seen_scen.insert(s.scenario_id.as_str()) {
+        if scenarios.insert(s.scenario_id.as_str(), s).is_some() {
             return Err(Refusal::new(
                 RefusalCode::UndeclaredUnitBasisOrTz107,
                 format!(
@@ -572,8 +577,10 @@ fn evaluate_single_case(case: &ApprovalCase) -> Result<HindcastCaseResult, Refus
                 ),
             ));
         }
-        weight_sum = checked_add(weight_sum, s.weight)?;
     }
+    let weight_sum = scenarios
+        .values()
+        .try_fold(ZERO, |sum, scenario| checked_add(sum, scenario.weight))?;
     if weight_sum != ONE {
         return Err(Refusal::new(
             RefusalCode::OutsidePhysicalDomain109,
@@ -596,10 +603,11 @@ fn evaluate_single_case(case: &ApprovalCase) -> Result<HindcastCaseResult, Refus
     };
 
     // 5. Freeze H7d decision (per-share expected ΔNAV subject to liquidity floor and CVaR limit).
-    let m_full = evaluate_action(case, ApprovalAction::ApproveFull)?;
-    let m_stage = evaluate_action(case, ApprovalAction::StageWithRecourse)?;
-    let m_defer = evaluate_action(case, ApprovalAction::DeferOrPass)?;
-    let action_metrics = [m_full, m_stage, m_defer];
+    let action_metrics = [
+        evaluate_action(case, &scenarios, ApprovalAction::ApproveFull)?,
+        evaluate_action(case, &scenarios, ApprovalAction::StageWithRecourse)?,
+        evaluate_action(case, &scenarios, ApprovalAction::DeferOrPass)?,
+    ];
 
     let static_expected = action_metrics[0].expected_delta_nav_per_share_usd;
     let recourse_option_value = checked_sub(
@@ -646,38 +654,9 @@ fn evaluate_single_case(case: &ApprovalCase) -> Result<HindcastCaseResult, Refus
         })?
         .action;
 
-    // 6. Score both frozen decisions ex-post against realized outcome.
-    let realized_for = |action: ApprovalAction| -> Result<ExactQty, Refusal> {
-        let nav = match action {
-            ApprovalAction::ApproveFull => outcome.realized_full_commit_delta_nav_usd_m,
-            ApprovalAction::StageWithRecourse => outcome.realized_staged_recourse_delta_nav_usd_m,
-            ApprovalAction::DeferOrPass => outcome.realized_defer_delta_nav_usd_m,
-        };
-        checked_div(nav, case.shares_millions)
-    };
-    let r_full = realized_for(ApprovalAction::ApproveFull)?;
-    let r_stage = realized_for(ApprovalAction::StageWithRecourse)?;
-    let r_defer = realized_for(ApprovalAction::DeferOrPass)?;
-    let mut best_hindsight = r_full;
-    if cmp_qty(r_stage, best_hindsight)? == Ordering::Greater {
-        best_hindsight = r_stage;
-    }
-    if cmp_qty(r_defer, best_hindsight)? == Ordering::Greater {
-        best_hindsight = r_defer;
-    }
-
-    let h7a_realized = realized_for(h7a_decision)?;
-    let h7d_realized = realized_for(h7d_decision)?;
-    let h7a_regret = checked_sub(best_hindsight, h7a_realized)?;
-    let h7d_regret = checked_sub(best_hindsight, h7d_realized)?;
-    let h7d_advantage = checked_sub(h7d_realized, h7a_realized)?;
-    let realized_capex_multiple =
-        checked_div(outcome.realized_capex_usd_m, case.baseline_capex_usd_m)?;
-
-    // Check whether realized full-commit outcome lay within approval-time full-commit scenario [min, max].
     let mut band_min = case.scenarios[0].full_commit_delta_nav_usd_m;
-    let mut band_max = case.scenarios[0].full_commit_delta_nav_usd_m;
-    for s in &case.scenarios[1..] {
+    let mut band_max = band_min;
+    for s in scenarios.values() {
         if cmp_qty(s.full_commit_delta_nav_usd_m, band_min)? == Ordering::Less {
             band_min = s.full_commit_delta_nav_usd_m;
         }
@@ -685,49 +664,151 @@ fn evaluate_single_case(case: &ApprovalCase) -> Result<HindcastCaseResult, Refus
             band_max = s.full_commit_delta_nav_usd_m;
         }
     }
-    let realized_within_approval_band =
-        cmp_qty(outcome.realized_full_commit_delta_nav_usd_m, band_min)? != Ordering::Less
-            && cmp_qty(outcome.realized_full_commit_delta_nav_usd_m, band_max)?
-                != Ordering::Greater;
-
-    let admitted_evidence_ids: Vec<String> = seen_ev_ids.into_iter().map(str::to_string).collect();
-    let outcome_evidence_ids: Vec<String> =
-        seen_outcome_ids.into_iter().map(str::to_string).collect();
-
-    Ok(HindcastCaseResult {
+    Ok(FrozenApproval {
         case_id: case.case_id.clone(),
         project_name: case.project_name.clone(),
         approval_date: case.approval_date,
+        approval_as_of_ns: case.approval_as_of_ns,
         is_synthetic_scenario_grid: case.is_synthetic_scenario_grid,
-        admitted_evidence_ids,
-        outcome_evidence_ids,
+        admitted_evidence_ids: evidence.keys().map(|id| (*id).to_owned()).collect(),
+        digest: approval_digest(case, &evidence, &scenarios, [h7a_decision, h7d_decision]),
         h7a_decision,
         h7d_decision,
-        decisions_diverged: h7a_decision != h7d_decision,
-        static_expected_delta_nav_per_share_usd: static_expected,
-        recourse_option_value_per_share_usd: recourse_option_value,
         action_metrics,
-        realized_capex_multiple,
-        schedule_slip_months: outcome.schedule_slip_months,
-        h7a_realized_delta_nav_per_share_usd: h7a_realized,
-        h7d_realized_delta_nav_per_share_usd: h7d_realized,
-        best_hindsight_delta_nav_per_share_usd: best_hindsight,
-        h7a_regret_per_share_usd: h7a_regret,
-        h7d_regret_per_share_usd: h7d_regret,
-        h7d_advantage_per_share_usd: h7d_advantage,
-        realized_within_approval_band,
+        recourse_option_value,
+        baseline_capex_usd_m: case.baseline_capex_usd_m,
+        shares_millions: case.shares_millions,
+        full_commit_nav_band: [band_min, band_max],
     })
 }
 
-fn evaluate_action(
-    case: &ApprovalCase,
+impl FrozenApproval {
+    /// Score these fixed selections using supplied payoffs. The caller must associate the
+    /// outcome with this approval. Payoffs for unchosen actions are counterfactual.
+    pub fn score(&self, outcome: &RealizedApprovalOutcome) -> Result<HindcastCaseResult, Refusal> {
+        let case = &self.case_id;
+        let stamp = &outcome.realized_stamp;
+        let resolved_at = stamp.physical_valid_time().end_ns;
+        // INV-008 concerns physical resolution. Delayed publication cannot make a prior
+        // realization prospective. The outcome must also be available by its stated clock.
+        if resolved_at <= self.approval_as_of_ns
+            || stamp.availability_time() < resolved_at
+            || outcome.realized_date != utc_date(resolved_at)
+        {
+            return Err(Refusal::new(
+                RefusalCode::AssayLookahead108,
+                format!(
+                    "case {case}: under INV-008 the outcome must resolve strictly after the approval cut, match realized_date in UTC, and become available at or after resolution"
+                ),
+            ));
+        }
+        if outcome.realized_capex_usd_m.signum() <= 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("case {case}: realized_capex_usd_m must be > 0"),
+            ));
+        }
+        if outcome.outcome_evidence_ids.is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::NoClaimInDomain201,
+                format!("case {case}: outcome_evidence_ids must be non-empty"),
+            ));
+        }
+        let mut seen_outcome_ids = BTreeSet::new();
+        for eid in &outcome.outcome_evidence_ids {
+            validate_token("outcome_evidence_id", eid)?;
+            if !seen_outcome_ids.insert(eid.as_str()) {
+                return Err(Refusal::new(
+                    RefusalCode::UndeclaredUnitBasisOrTz107,
+                    format!("case {case}: duplicate outcome_evidence_id {eid:?}"),
+                ));
+            }
+        }
+        let outcome_evidence_ids: Vec<_> =
+            seen_outcome_ids.into_iter().map(str::to_owned).collect();
+        self.score_payoffs(outcome, outcome_evidence_ids)
+    }
+
+    fn score_payoffs(
+        &self,
+        outcome: &RealizedApprovalOutcome,
+        outcome_evidence_ids: Vec<String>,
+    ) -> Result<HindcastCaseResult, Refusal> {
+        let realized_for = |action: ApprovalAction| -> Result<ExactQty, Refusal> {
+            let nav = match action {
+                ApprovalAction::ApproveFull => outcome.realized_full_commit_delta_nav_usd_m,
+                ApprovalAction::StageWithRecourse => {
+                    outcome.realized_staged_recourse_delta_nav_usd_m
+                }
+                ApprovalAction::DeferOrPass => outcome.realized_defer_delta_nav_usd_m,
+            };
+            checked_div(nav, self.shares_millions)
+        };
+        let r_full = realized_for(ApprovalAction::ApproveFull)?;
+        let r_stage = realized_for(ApprovalAction::StageWithRecourse)?;
+        let r_defer = realized_for(ApprovalAction::DeferOrPass)?;
+        let mut best_hindsight = r_full;
+        if cmp_qty(r_stage, best_hindsight)? == Ordering::Greater {
+            best_hindsight = r_stage;
+        }
+        if cmp_qty(r_defer, best_hindsight)? == Ordering::Greater {
+            best_hindsight = r_defer;
+        }
+
+        let h7a_realized = realized_for(self.h7a_decision)?;
+        let h7d_realized = realized_for(self.h7d_decision)?;
+        let h7a_regret = checked_sub(best_hindsight, h7a_realized)?;
+        let h7d_regret = checked_sub(best_hindsight, h7d_realized)?;
+        let h7d_advantage = checked_sub(h7d_realized, h7a_realized)?;
+        let realized_capex_multiple =
+            checked_div(outcome.realized_capex_usd_m, self.baseline_capex_usd_m)?;
+
+        let [band_min, band_max] = self.full_commit_nav_band;
+        let realized_within_approval_band =
+            cmp_qty(outcome.realized_full_commit_delta_nav_usd_m, band_min)? != Ordering::Less
+                && cmp_qty(outcome.realized_full_commit_delta_nav_usd_m, band_max)?
+                    != Ordering::Greater;
+
+        let outcome_digest = outcome_digest(outcome, &outcome_evidence_ids);
+        Ok(HindcastCaseResult {
+            case_id: self.case_id.clone(),
+            project_name: self.project_name.clone(),
+            approval_date: self.approval_date,
+            is_synthetic_scenario_grid: self.is_synthetic_scenario_grid,
+            admitted_evidence_ids: self.admitted_evidence_ids.clone(),
+            outcome_evidence_ids,
+            approval_digest: self.digest,
+            outcome_digest,
+            h7a_decision: self.h7a_decision,
+            h7d_decision: self.h7d_decision,
+            decisions_diverged: self.h7a_decision != self.h7d_decision,
+            static_expected_delta_nav_per_share_usd: self.action_metrics[0]
+                .expected_delta_nav_per_share_usd,
+            recourse_option_value_per_share_usd: self.recourse_option_value,
+            action_metrics: self.action_metrics.clone(),
+            realized_capex_multiple,
+            schedule_slip_months: outcome.schedule_slip_months,
+            h7a_realized_delta_nav_per_share_usd: h7a_realized,
+            h7d_realized_delta_nav_per_share_usd: h7d_realized,
+            best_hindsight_delta_nav_per_share_usd: best_hindsight,
+            h7a_regret_per_share_usd: h7a_regret,
+            h7d_regret_per_share_usd: h7d_regret,
+            h7d_advantage_per_share_usd: h7d_advantage,
+            realized_within_approval_band,
+        })
+    }
+}
+
+fn evaluate_action<T>(
+    case: &ApprovalCase<T>,
+    scenarios: &BTreeMap<&str, &HindcastScenario>,
     action: ApprovalAction,
 ) -> Result<ActionApprovalMetrics, Refusal> {
     let mut expected_per_share = ZERO;
     let mut weighted_losses = Vec::with_capacity(case.scenarios.len());
     let mut min_slack: Option<ExactQty> = None;
 
-    for s in &case.scenarios {
+    for s in scenarios.values() {
         let (nav_usd_m, slack_usd_m) = match action {
             ApprovalAction::ApproveFull => (
                 s.full_commit_delta_nav_usd_m,
@@ -777,7 +858,7 @@ fn compute_scorecard_digest(
     h7d_total_regret: ExactQty,
     h7d_net_advantage: ExactQty,
 ) -> Digest32 {
-    let mut enc = Encoder::new_frame(*b"BTH1", 1);
+    let mut enc = Encoder::new_frame(*b"BTH1", 2);
     enc.put_u64(results.len() as u64);
     enc.put_u64(synthetic_count as u64);
     enc.put_u64(divergent_count as u64);
@@ -788,6 +869,8 @@ fn compute_scorecard_digest(
     put_qty(&mut enc, h7d_total_regret);
     put_qty(&mut enc, h7d_net_advantage);
     for r in results {
+        enc.put_bytes(r.approval_digest.as_bytes());
+        enc.put_bytes(r.outcome_digest.as_bytes());
         enc.put_str(&r.case_id);
         enc.put_str(&r.project_name);
         enc.put_i64(i64::from(r.approval_date.year));
@@ -826,6 +909,118 @@ fn compute_scorecard_digest(
         enc.put_u8(u8::from(r.realized_within_approval_band));
     }
     sha256(&enc.finish())
+}
+
+fn approval_digest<T>(
+    case: &ApprovalCase<T>,
+    evidence: &BTreeMap<&str, &ApprovalEvidence>,
+    scenarios: &BTreeMap<&str, &HindcastScenario>,
+    decisions: [ApprovalAction; 2],
+) -> Digest32 {
+    let mut enc = Encoder::new_frame(*b"BTHA", 1);
+    enc.put_str(&case.case_id);
+    enc.put_str(&case.project_name);
+    enc.put_i64(case.approval_as_of_ns);
+    put_date(&mut enc, case.approval_date);
+    put_interval(&mut enc, case.physical_horizon);
+    enc.put_u8(u8::from(case.is_synthetic_scenario_grid));
+    for qty in [
+        case.baseline_capex_usd_m,
+        case.shares_millions,
+        case.h7a_static_npv_usd_m,
+        case.h7a_static_irr,
+        case.h7a_hurdle_irr,
+        case.cvar_tail_mass,
+        case.max_cvar_loss_per_share_usd,
+    ] {
+        put_qty(&mut enc, qty);
+    }
+    enc.put_u64(evidence.len() as u64);
+    for row in evidence.values() {
+        enc.put_str(&row.evidence_id);
+        enc.put_str(&row.label);
+        enc.put_bytes(&row.evidence_class.tag());
+        put_stamp(&mut enc, &row.stamp);
+        // Only marks consulted by the admission check enter this commitment.
+        if let Some(mark) = case.approval_anchor.mark(row.stamp.record_time().cell()) {
+            enc.put_u8(1);
+            enc.put_u64(mark);
+        } else {
+            enc.put_u8(0);
+        }
+    }
+    enc.put_u64(scenarios.len() as u64);
+    for row in scenarios.values() {
+        enc.put_str(&row.scenario_id);
+        for qty in [
+            row.weight,
+            row.full_commit_delta_nav_usd_m,
+            row.staged_recourse_delta_nav_usd_m,
+            row.defer_delta_nav_usd_m,
+            row.full_commit_liquidity_slack_usd_m,
+            row.staged_recourse_liquidity_slack_usd_m,
+            row.defer_liquidity_slack_usd_m,
+        ] {
+            put_qty(&mut enc, qty);
+        }
+    }
+    for decision in decisions {
+        enc.put_u8(decision.tag());
+    }
+    sha256(&enc.finish())
+}
+
+fn outcome_digest(outcome: &RealizedApprovalOutcome, evidence_ids: &[String]) -> Digest32 {
+    let mut enc = Encoder::new_frame(*b"BTHO", 1);
+    put_date(&mut enc, outcome.realized_date);
+    put_stamp(&mut enc, &outcome.realized_stamp);
+    enc.put_i64(i64::from(outcome.schedule_slip_months));
+    for qty in [
+        outcome.realized_capex_usd_m,
+        outcome.realized_full_commit_delta_nav_usd_m,
+        outcome.realized_staged_recourse_delta_nav_usd_m,
+        outcome.realized_defer_delta_nav_usd_m,
+    ] {
+        put_qty(&mut enc, qty);
+    }
+    enc.put_u64(evidence_ids.len() as u64);
+    for id in evidence_ids {
+        enc.put_str(id);
+    }
+    sha256(&enc.finish())
+}
+
+fn utc_date(ns: i64) -> CivilDate {
+    CivilDate::from_epoch_days(ns.div_euclid(NS_PER_DAY))
+}
+
+fn put_date(enc: &mut Encoder, date: CivilDate) {
+    enc.put_i64(i64::from(date.year));
+    enc.put_u8(date.month);
+    enc.put_u8(date.day);
+}
+
+fn put_interval(enc: &mut Encoder, interval: ValidTime) {
+    enc.put_i64(interval.start_ns);
+    enc.put_i64(interval.end_ns);
+}
+
+fn put_stamp(enc: &mut Encoder, stamp: &QuadTemporalStamp) {
+    put_interval(enc, stamp.physical_valid_time());
+    enc.put_i64(stamp.collection_time());
+    enc.put_i64(stamp.availability_time());
+    let record = stamp.record_time();
+    enc.put_str(record.cell());
+    enc.put_u64(record.seq());
+    enc.put_i64(record.wall_ns());
+    match record.evidence() {
+        TimeEvidence::HostSynced => enc.put_u8(0),
+        TimeEvidence::NtpBounded { max_skew_ms } => {
+            enc.put_u8(1);
+            enc.put_u64(u64::from(max_skew_ms));
+        }
+        TimeEvidence::OfflineUncertain => enc.put_u8(2),
+    }
 }
 
 fn put_qty(enc: &mut Encoder, q: ExactQty) {
@@ -1371,6 +1566,140 @@ mod tests {
         let err = evaluate_hindcast_suite(&cases[..1]).expect_err("pre-approval outcome refuses");
         assert_eq!(err.code, "FMINE-REF-108");
         assert!(err.what.contains("INV-008"));
+    }
+
+    #[test]
+    fn test_hindcast_binds_revisions_even_when_the_rule_choices_stay_the_same() {
+        let original = benchmark_five_cases().remove(0);
+        let before = evaluate_hindcast_suite(std::slice::from_ref(&original)).unwrap();
+        let mut revised = original.clone();
+        revised.h7a_hurdle_irr = q(16, 100);
+        let after = evaluate_hindcast_suite(&[revised]).unwrap();
+        assert_eq!(
+            before.results[0].h7a_decision,
+            after.results[0].h7a_decision
+        );
+        assert_ne!(before.digest, after.digest, "the changed hurdle must bind");
+        assert_ne!(
+            before.results[0].approval_digest,
+            after.results[0].approval_digest
+        );
+        assert_eq!(
+            before.results[0].outcome_digest,
+            after.results[0].outcome_digest
+        );
+
+        let original_digest = before.results[0].approval_digest;
+        let mut changed = original.clone();
+        changed.approval_evidence[0].evidence_class = EvidenceClass::Assumed;
+        assert_ne!(freeze_approval(&changed).unwrap().digest(), original_digest);
+        changed = original.clone();
+        changed.approval_anchor = Anchor::new([("helm-capex-hindcast", 11)]).unwrap();
+        assert_ne!(freeze_approval(&changed).unwrap().digest(), original_digest);
+        changed = original.clone();
+        changed.scenarios[1].scenario_id.push_str("-revised");
+        assert_ne!(freeze_approval(&changed).unwrap().digest(), original_digest);
+
+        changed = original.clone();
+        changed.realized_outcome.realized_stamp = mk_stamp(
+            date_ns(2022, 2, 24),
+            date_ns(2026, 2, 19),
+            date_ns(2026, 2, 20),
+            "helm-capex-hindcast",
+            20,
+        );
+        let after = evaluate_hindcast_suite(&[changed]).unwrap();
+        assert_eq!(
+            before.results[0].h7d_advantage_per_share_usd,
+            after.results[0].h7d_advantage_per_share_usd
+        );
+        assert_eq!(
+            before.results[0].approval_digest,
+            after.results[0].approval_digest
+        );
+        assert_ne!(
+            before.results[0].outcome_digest,
+            after.results[0].outcome_digest
+        );
+        assert_ne!(before.digest, after.digest);
+    }
+
+    #[test]
+    fn test_hindcast_freezes_without_an_outcome_and_reuses_rule_choices() {
+        let original = benchmark_five_cases().remove(0);
+        let snapshot = ApprovalSnapshot {
+            case_id: original.case_id.clone(),
+            project_name: original.project_name.clone(),
+            approval_date: original.approval_date,
+            approval_as_of_ns: original.approval_as_of_ns,
+            approval_anchor: original.approval_anchor.clone(),
+            physical_horizon: original.physical_horizon,
+            is_synthetic_scenario_grid: original.is_synthetic_scenario_grid,
+            approval_evidence: original.approval_evidence.clone(),
+            baseline_capex_usd_m: original.baseline_capex_usd_m,
+            shares_millions: original.shares_millions,
+            h7a_static_npv_usd_m: original.h7a_static_npv_usd_m,
+            h7a_static_irr: original.h7a_static_irr,
+            h7a_hurdle_irr: original.h7a_hurdle_irr,
+            scenarios: original.scenarios.clone(),
+            cvar_tail_mass: original.cvar_tail_mass,
+            max_cvar_loss_per_share_usd: original.max_cvar_loss_per_share_usd,
+            realized_outcome: (),
+        };
+        let frozen = freeze_approval(&snapshot).unwrap();
+        assert_eq!(
+            frozen.decisions(),
+            (
+                ApprovalAction::ApproveFull,
+                ApprovalAction::StageWithRecourse
+            )
+        );
+        assert_eq!(
+            frozen.action_metrics()[1].cvar_loss_per_share_usd,
+            q(12, 100)
+        );
+        assert_eq!(frozen.approval_as_of_ns(), original.approval_as_of_ns);
+        assert!(frozen.is_synthetic_scenario_grid());
+        assert_eq!(frozen.admitted_evidence_ids(), ["E631-feb2022-est"]);
+
+        let score = frozen.score(&original.realized_outcome).unwrap();
+        let suite = evaluate_hindcast_suite(std::slice::from_ref(&original)).unwrap();
+        assert_eq!(score, suite.results[0]);
+        let mut outcome = original.realized_outcome;
+        outcome.realized_staged_recourse_delta_nav_usd_m = q(-550, 1);
+        let revised = frozen.score(&outcome).unwrap();
+        assert_eq!(score.approval_digest, revised.approval_digest);
+        assert_ne!(score.outcome_digest, revised.outcome_digest);
+        assert_eq!(revised.h7d_decision, score.h7d_decision);
+        assert_eq!(revised.h7d_advantage_per_share_usd, q(-1, 20));
+
+        let mut permuted = snapshot;
+        permuted.scenarios.reverse();
+        outcome.outcome_evidence_ids.reverse();
+        assert_eq!(freeze_approval(&permuted).unwrap(), frozen);
+        assert_eq!(frozen.score(&outcome).unwrap(), revised);
+    }
+
+    #[test]
+    fn test_hindcast_refuses_a_stale_approval_date_and_a_retrospectively_released_outcome() {
+        let original = benchmark_five_cases().remove(0);
+        let mut stale_date = original.clone();
+        stale_date.approval_as_of_ns += DAY_NS;
+        let result = evaluate_hindcast_suite(&[stale_date]);
+        assert_eq!(result.unwrap_err().code, "FMINE-REF-108");
+
+        let mut wrong_outcome_day = original.clone();
+        wrong_outcome_day.realized_outcome.realized_date = CivilDate::new(2026, 2, 20).unwrap();
+        let result = evaluate_hindcast_suite(&[wrong_outcome_day]);
+        assert_eq!(result.unwrap_err().code, "FMINE-REF-108");
+
+        let mut stale_outcome = original;
+        let cut = stale_outcome.approval_as_of_ns;
+        stale_outcome.realized_outcome.realized_date = CivilDate::new(2022, 2, 24).unwrap();
+        stale_outcome.realized_outcome.realized_stamp =
+            mk_stamp(cut - DAY_NS, cut, cut + DAY_NS, "helm-capex-hindcast", 20);
+        let result = evaluate_hindcast_suite(&[stale_outcome]);
+        assert_eq!(result.unwrap_err().code, "FMINE-REF-108");
     }
 
     #[test]

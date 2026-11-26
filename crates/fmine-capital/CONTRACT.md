@@ -847,7 +847,21 @@ The GB-30 known-answer tests cover BD-229's declared example. Production-scale g
 - `entity` (cash, ownership, debt, capital-call waterfalls)
 - `stability::{SelectionStabilityDesign, SelectionStabilitySummary}`
 - `robustness::{kpi::evaluate, RobustnessScope}` and `render` JSON/Markdown formatters.
-- `hindcast::{ApprovalCase, ApprovalAction, ApprovalEvidence, HindcastScenario, RealizedApprovalOutcome, HindcastScorecard, evaluate_hindcast_suite, evaluate_gate_cap_04_hindcast, exact_weighted_cvar}` (`BD-230` bitemporal `as_of_decision` H7a vs H7d hindcast kernel; `BitwisePortable`; `GATE-CAP-04` delivery record on real audited filings remains open).
+- `hindcast` (`BD-230`, BitwisePortable) compares H7a (static NPV/IRR hurdle) and H7d (expected value
+  with liquidity and tail-loss limits). Build an `ApprovalSnapshot` with `realized_outcome: ()`,
+  call `freeze_approval`, and retain its digest before collecting the outcome. `FrozenApproval::score`
+  reuses the two selections when supplied with a `RealizedApprovalOutcome`. The combined
+  `evaluate_hindcast_suite` follows the same calculation. The approval day must match its UTC cut.
+  The end of the outcome's physical support must match its stated UTC day, fall strictly after the
+  cut and occur by the outcome's declared availability. This admits cumulative outcomes spanning
+  the approval. An outcome already resolved at the cut cannot qualify through a later release.
+  `BTHA` v1 binds the approval date, dated evidence identifiers and metadata, consulted anchor
+  marks, policy and scenario inputs, and both selections. `BTHO` v1 binds the supplied outcome
+  separately. `BTH1` v2 binds
+  both digests and the resulting scores. Tests cover independent input revisions, exact known
+  answers, canonical order and date contradictions. The caller supplies the association between
+  each outcome and approval. Payoffs for unchosen actions are counterfactual inputs.
+  Ledger registration, audited approval-time inputs and `GATE-CAP-04` remain open.
 
 ## 12. Proof obligations
 - `PO-CAP-2`: equity valuation uses the selected bundle's same-state total NAV and actual shares; changing share-unit scale with compensating counts leaves every per-share result unchanged.
