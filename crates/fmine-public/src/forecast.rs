@@ -23,6 +23,8 @@ use crate::mine_stats::{LabelVocabulary, MineStatsRead, MineStatsValue, View, re
 use crate::sources::{IssuerProfile, SourceKind, is_issuer_name, registry_path};
 use crate::{LoadedSource, load_registered_sources};
 
+pub mod manifest;
+
 type Result<T> = std::result::Result<T, Refusal>;
 const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
 

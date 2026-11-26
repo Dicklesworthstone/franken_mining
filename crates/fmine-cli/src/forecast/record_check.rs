@@ -138,41 +138,18 @@ fn check_sources(
     manifest: &RecordManifest,
     rules: &RecordRules,
 ) -> Result<Vec<String>, Refusal> {
-    super::record_sources::check_manifest_registry(profile, manifest, rules)?;
-    manifest.inputs.iter().map(|input| {
-        let registered = if let Some(source) = profile.sources.iter().find(|s| s.file_name == input.doc_id) {
-            Some((profile.corpus_dir.as_str(), source.url.as_str(), source.bytes, source.sha256_hex.as_str(),
-                source.published_at.as_deref(), source.published_at_basis.as_deref()))
-        } else if let Some(doc) = profile.documents.iter().find(|d| d.file == input.doc_id) {
-            Some((doc.dir.as_str(), doc.url.as_str(), doc.bytes, doc.sha256.as_str(),
-                Some(doc.published_at.as_str()), Some(doc.published_at_basis.as_str())))
-        } else {
-            profile.html_sources.iter().find(|d| d.file == input.doc_id).map(|doc| {
-                (doc.dir.as_str(), doc.url.as_str(), doc.bytes, doc.sha256.as_str(),
-                    Some(doc.published_at.as_str()), Some(doc.published_at_basis.as_str()))
-            })
-        };
-        let (dir, url, bytes, hash, publication, publication_basis) = registered
-            .ok_or_else(|| invalid(format!("{} is not in the issuer's source registry", input.doc_id)))?;
-        if input.url != url || input.bytes != bytes || record::parse_hex32(hash) != Some(input.sha256) {
-            return Err(mismatch(format!("{} metadata differs from its registered URL, size or digest", input.doc_id)));
-        }
-        if publication.is_some_and(|day| record::parse_date(day) != Some(input.publication_day)) {
-            return Err(mismatch(format!("{} publication day differs from the source registry", input.doc_id)));
-        }
-        if input.retrieved_utc.div_euclid(86400) < input.publication_day {
-            return Err(Refusal::new(RefusalCode::AssayLookahead108,
-                format!("{} declares retrieval before its publication day", input.doc_id)));
-        }
-        let (actual, anchor) = source::read_bytes(&root.join(dir).join(&input.doc_id), VERB, MAX_SOURCE_BYTES)?;
+    let sources = fmine_public::forecast::manifest::bind(profile, rules, manifest)?;
+    manifest.inputs.iter().zip(sources).map(|(input, source)| {
+        let registered = source.ok_or_else(|| invalid(format!("{} is not in the issuer's source registry", input.doc_id)))?;
+        let (actual, anchor) = source::read_bytes(&root.join(registered.dir).join(&input.doc_id), VERB, MAX_SOURCE_BYTES)?;
         if actual.len() as u64 != input.bytes || anchor.artifact_sha256 != input.sha256 {
             return Err(mismatch(format!("{} bytes differ from the frozen input manifest", input.doc_id)));
         }
         Ok(format!(
             "{{\"doc_id\":{},\"url\":{},\"bytes\":{},\"sha256\":{},\"bytes_verified\":true,\"declared_retrieved_utc\":{},\"availability_basis\":\"frozen_manifest_retrieval_declaration\",\"registered_publication_date\":{},\"publication_basis\":{}}}",
-            js(&input.doc_id), js(url), input.bytes, js(hash), js(&record::format_utc(input.retrieved_utc)),
-            publication.map_or_else(|| "null".into(), js),
-            publication_basis.map_or_else(|| js("manifest_declared_unverified"), js),
+            js(&input.doc_id), js(&input.url), input.bytes, js(&Digest32(input.sha256).to_hex()), js(&record::format_utc(input.retrieved_utc)),
+            registered.published_at.map_or_else(|| "null".into(), js),
+            registered.published_at_basis.map_or_else(|| js("manifest_declared_unverified"), js),
         ))
     }).collect()
 }
