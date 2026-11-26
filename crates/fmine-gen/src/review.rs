@@ -780,7 +780,7 @@ fn path_touches_forbidden_dir(path: &Path) -> Option<&'static str> {
     for comp in path.components() {
         if let Component::Normal(name) = comp {
             let s = name.to_string_lossy();
-            if s == ".beads" {
+            if s.eq_ignore_ascii_case(".beads") {
                 return Some(".beads");
             }
             if s.eq_ignore_ascii_case("corpus_of_input_docs") {
