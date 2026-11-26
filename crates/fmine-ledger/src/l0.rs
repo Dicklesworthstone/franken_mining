@@ -13,14 +13,19 @@
 //!   `ResolveObligation` closes an open obligation and refuses unknown or duplicate closes.
 //! - Conservation law hook (`PO-BED-6`, `INV-005`): an optional pre-commit conservation predicate
 //!   atomically refuses violating batches before mutating any cell state.
+//! - Key-state witnesses (`BD-085`): pre-batch absence or immutable version identity is checked
+//!   against the keyed index before any delta is applied, including during replica replay.
 //! - Cross-cell gluing (`F12`) and RFC 6962 MMR parity with L1 `FMT-SEG-1` segments.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use fmine_core::hash::Digest32;
+use fmine_core::codec::Encoder;
+use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 
-use crate::batch::{DeltaBatch, DeltaKind, GENESIS_PREV_HASH, LedgerError};
+use crate::batch::{
+    DeltaBatch, DeltaKind, GENESIS_PREV_HASH, LedgerError, MAX_KEY_BYTES, Witness, WitnessKind,
+};
 use crate::cell::{
     AdmitOutcome, CellAuthority, CellLease, ConflictRecord, GluingReport, check_gluing,
 };
@@ -54,6 +59,13 @@ pub enum L0Error {
     KeyAlreadyExists { cell_id: String, key: String },
     /// `DeltaKind::Supersede` targeted a key that does not exist (`INV-003`).
     KeyNotFound { cell_id: String, key: String },
+    /// A pre-batch key-state witness no longer describes the current immutable version (`BD-085`).
+    KeyWitnessMismatch {
+        cell_id: String,
+        key: String,
+        expected: Digest32,
+        actual: Digest32,
+    },
     /// `ReserveObligation` attempted to reserve an obligation key that is already open (`PO-BED-5`).
     ObligationAlreadyOpen { cell_id: String, key: String },
     /// `ResolveObligation` targeted an obligation key that is not currently open (`PO-BED-5`).
@@ -86,6 +98,7 @@ impl L0Error {
             }
             Self::DuplicateCell { .. }
             | Self::KeyAlreadyExists { .. }
+            | Self::KeyWitnessMismatch { .. }
             | Self::ObligationAlreadyOpen { .. }
             | Self::ObligationNotOpen { .. } => {
                 Refusal::new(RefusalCode::StaleAnchor502, self.to_string())
@@ -125,6 +138,15 @@ impl core::fmt::Display for L0Error {
                     "cannot supersede nonexistent key '{key}' in cell '{cell_id}'"
                 )
             }
+            Self::KeyWitnessMismatch {
+                cell_id,
+                key,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "stale key witness for '{key}' in cell '{cell_id}': expected {expected}, current {actual}"
+            ),
             Self::ObligationAlreadyOpen { cell_id, key } => {
                 write!(f, "obligation '{key}' is already open in cell '{cell_id}'")
             }
@@ -183,15 +205,56 @@ impl L0Cell {
         })
     }
 
+    /// DESIGN: `KSTA/1` binds the key's version, not only its value or the cell's current head.
+    fn key_witness(&self, key: &str) -> Result<Witness, L0Error> {
+        if key.is_empty() || key.len() > MAX_KEY_BYTES {
+            return Err(LedgerError::InvalidField {
+                field: "witness.subject_id",
+                detail: format!("key length {} outside 1..={MAX_KEY_BYTES}", key.len()),
+            }
+            .into());
+        }
+        let mut enc = Encoder::new_frame(*b"KSTA", 1);
+        enc.put_str(&self.authority.active_lease().cell_id);
+        enc.put_str(key);
+        if let Some(version) = self.history.get(key).and_then(|versions| versions.last()) {
+            enc.put_u8(1);
+            enc.put_u64(version.seq);
+            enc.put_u64(version.epoch);
+            enc.put_u8(version.kind as u8);
+            enc.put_fixed(version.payload_digest.as_bytes());
+        } else {
+            enc.put_u8(0);
+        }
+        Ok(Witness::new(
+            WitnessKind::KeyState,
+            key,
+            sha256(&enc.finish()),
+        ))
+    }
+
     /// Pre-validate every semantic invariant of `batch` without mutating any state.
     fn check_semantics(&self, batch: &DeltaBatch) -> Result<(), L0Error> {
-        let mut staged_keys: BTreeSet<&str> = self.history.keys().map(String::as_str).collect();
-        let mut staged_open: BTreeSet<&str> =
-            self.open_obligations.iter().map(String::as_str).collect();
+        for witness in &batch.witnesses {
+            if witness.kind == WitnessKind::KeyState {
+                let current = self.key_witness(&witness.subject_id)?;
+                if witness.digest != current.digest {
+                    return Err(L0Error::KeyWitnessMismatch {
+                        cell_id: batch.cell_id.clone(),
+                        key: witness.subject_id.clone(),
+                        expected: witness.digest,
+                        actual: current.digest,
+                    });
+                }
+            }
+        }
+        // Only batch-local changes are staged; preflight does not copy the complete cell index.
+        let mut new_keys = BTreeSet::new();
+        let mut staged_obligations = BTreeMap::new();
         for op in &batch.deltas {
             match op.kind {
                 DeltaKind::Put => {
-                    if !staged_keys.insert(op.key.as_str()) {
+                    if self.history.contains_key(&op.key) || !new_keys.insert(op.key.as_str()) {
                         return Err(L0Error::KeyAlreadyExists {
                             cell_id: batch.cell_id.clone(),
                             key: op.key.clone(),
@@ -199,7 +262,7 @@ impl L0Cell {
                     }
                 }
                 DeltaKind::Supersede => {
-                    if !staged_keys.contains(op.key.as_str()) {
+                    if !self.history.contains_key(&op.key) && !new_keys.contains(op.key.as_str()) {
                         return Err(L0Error::KeyNotFound {
                             cell_id: batch.cell_id.clone(),
                             key: op.key.clone(),
@@ -207,20 +270,30 @@ impl L0Cell {
                     }
                 }
                 DeltaKind::ReserveObligation => {
-                    if !staged_open.insert(op.key.as_str()) {
+                    let is_open = staged_obligations
+                        .get(op.key.as_str())
+                        .copied()
+                        .unwrap_or_else(|| self.open_obligations.contains(&op.key));
+                    if is_open {
                         return Err(L0Error::ObligationAlreadyOpen {
                             cell_id: batch.cell_id.clone(),
                             key: op.key.clone(),
                         });
                     }
+                    staged_obligations.insert(op.key.as_str(), true);
                 }
                 DeltaKind::ResolveObligation => {
-                    if !staged_open.remove(op.key.as_str()) {
+                    let is_open = staged_obligations
+                        .get(op.key.as_str())
+                        .copied()
+                        .unwrap_or_else(|| self.open_obligations.contains(&op.key));
+                    if !is_open {
                         return Err(L0Error::ObligationNotOpen {
                             cell_id: batch.cell_id.clone(),
                             key: op.key.clone(),
                         });
                     }
+                    staged_obligations.insert(op.key.as_str(), false);
                 }
                 DeltaKind::TransferLease => {}
             }
@@ -400,6 +473,7 @@ impl L0Ledger {
             }
             .into());
         }
+        cell.authority.check_received_batch(&batch)?;
         cell.check_semantics(&batch)?;
         let digest = cell.authority.commit_with_lease(lease, batch.clone())?;
         cell.apply_semantics(&batch);
@@ -411,6 +485,21 @@ impl L0Ledger {
         self.commit_with_conservation(lease, batch, |_| Ok(()))
     }
 
+    /// Read the current `Put`/`Supersede` version or absence as an opt-in schema-v2 witness.
+    ///
+    /// Unrelated cell updates do not invalidate this witness. Superseding the same key does,
+    /// even when the new payload bytes equal an earlier version. Obligation state is separate.
+    pub fn key_witness(&self, cell_id: &str, key: &str) -> Result<Witness, L0Error> {
+        self.cell(cell_id)?.key_witness(key)
+    }
+
+    /// Pure admission used before a durable append; stale epochs refuse rather than quarantine.
+    pub(crate) fn check_replica(&self, batch: &DeltaBatch) -> Result<(), L0Error> {
+        let cell = self.cell(&batch.cell_id)?;
+        cell.authority.check_received_batch(batch)?;
+        cell.check_semantics(batch)
+    }
+
     /// Replica admission path: quarantines lower-epoch batches (`F6`) without mutating authority state.
     pub fn admit_replica(&mut self, batch: DeltaBatch) -> Result<AdmitOutcome, L0Error> {
         let cell = self.cell_mut(&batch.cell_id)?;
@@ -418,6 +507,7 @@ impl L0Ledger {
         if batch.epoch < cell.authority.highest_seen_epoch() {
             return Ok(cell.authority.admit_received_batch(batch)?);
         }
+        cell.authority.check_received_batch(&batch)?;
         cell.check_semantics(&batch)?;
         let outcome = cell.authority.admit_received_batch(batch.clone())?;
         if matches!(outcome, AdmitOutcome::Committed { .. }) {
@@ -524,7 +614,7 @@ mod tests {
     use fmine_core::anchor::{FMT_ANCHOR_V1, LedgerAnchor};
     use fmine_core::hash::sha256;
 
-    use crate::batch::{CrossCellRef, DeltaOp, FMT_LEDGER_V1};
+    use crate::batch::{CrossCellRef, DeltaOp, FMT_LEDGER_V1, FMT_LEDGER_V2};
     use crate::mmr::verify_consistency;
     use crate::segment::SegmentWriter;
     use crate::verify::verify_segment;
@@ -560,6 +650,308 @@ mod tests {
             witnesses: Vec::new(),
             cross_cell_refs,
         }
+    }
+
+    fn next_witness_batch(
+        ledger: &L0Ledger,
+        lease: &CellLease,
+        mut deltas: Vec<DeltaOp>,
+        mut witnesses: Vec<Witness>,
+    ) -> DeltaBatch {
+        deltas.sort();
+        witnesses.sort();
+        let mut batch = mk_batch(
+            &lease.cell_id,
+            lease.epoch,
+            ledger.committed_count(&lease.cell_id).unwrap(),
+            ledger.head_hash(&lease.cell_id).unwrap(),
+            deltas,
+            Vec::new(),
+        );
+        batch.format_version = FMT_LEDGER_V2;
+        batch.witnesses = witnesses;
+        batch
+    }
+
+    fn current(ledger: &L0Ledger, cell_id: &str) -> CellSnapshot {
+        ledger
+            .as_of_seq(cell_id, ledger.committed_count(cell_id).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn key_witness_known_answers_bind_cell_key_absence_and_full_version() {
+        let mut ledger = L0Ledger::new();
+        let lease = ledger.create_cell("CELL-EVID(test)", "writer").unwrap();
+        ledger.create_cell("CELL-EVID(other)", "writer").unwrap();
+        let absent = ledger.key_witness(&lease.cell_id, "sample/a").unwrap();
+        // FACT: independent Python struct/CRC32C/SHA-256 encoding of KSTA/1 fields.
+        assert_eq!(
+            absent.digest.to_hex(),
+            "4560ba1761c81757fdac20cbe4c336ca6bd5cc835da591af1b86143b2b6b9423"
+        );
+        assert_ne!(
+            absent.digest,
+            ledger
+                .key_witness("CELL-EVID(other)", "sample/a")
+                .unwrap()
+                .digest
+        );
+        assert_ne!(
+            absent.digest,
+            ledger
+                .key_witness(&lease.cell_id, "sample/b")
+                .unwrap()
+                .digest
+        );
+        let batch = next_witness_batch(
+            &ledger,
+            &lease,
+            vec![DeltaOp::new("sample/a", DeltaKind::Put, b"first".to_vec())],
+            vec![absent],
+        );
+        ledger.commit(&lease, batch).unwrap();
+        let present = ledger.key_witness(&lease.cell_id, "sample/a").unwrap();
+        assert_eq!(
+            present.digest.to_hex(),
+            "b22735ff1fba71d208f84ab146a350ba3af61ed3ae71c43fdbc3486825f77ce4"
+        );
+        assert!(ledger.key_witness(&lease.cell_id, "").is_err());
+        assert!(
+            ledger
+                .key_witness(&lease.cell_id, &"k".repeat(MAX_KEY_BYTES + 1))
+                .is_err()
+        );
+        assert!(ledger.key_witness("CELL-UNKNOWN", "sample/a").is_err());
+        assert!(
+            ledger
+                .key_witness(&lease.cell_id, &"k".repeat(MAX_KEY_BYTES))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn key_witness_ignores_unrelated_writes_and_detects_absent_to_present() {
+        let mut ledger = L0Ledger::new();
+        let lease = ledger.create_cell("CELL-EVID(test)", "writer").unwrap();
+        let absent = ledger.key_witness(&lease.cell_id, "sample/a").unwrap();
+        let unrelated = next_witness_batch(
+            &ledger,
+            &lease,
+            vec![DeltaOp::new("sample/b", DeltaKind::Put, b"other".to_vec())],
+            Vec::new(),
+        );
+        ledger.commit(&lease, unrelated).unwrap();
+        assert_eq!(
+            ledger.key_witness(&lease.cell_id, "sample/a").unwrap(),
+            absent
+        );
+        let create = next_witness_batch(
+            &ledger,
+            &lease,
+            vec![DeltaOp::new("sample/a", DeltaKind::Put, b"first".to_vec())],
+            vec![absent.clone()],
+        );
+        ledger.commit(&lease, create).unwrap();
+        let stale = next_witness_batch(&ledger, &lease, Vec::new(), vec![absent]);
+        let before = current(&ledger, &lease.cell_id);
+        let error = ledger.commit(&lease, stale).unwrap_err();
+        assert!(matches!(error, L0Error::KeyWitnessMismatch { .. }));
+        assert_eq!(error.to_refusal().code, "FMINE-REF-502");
+        assert_eq!(current(&ledger, &lease.cell_id), before);
+
+        let present = ledger.key_witness(&lease.cell_id, "sample/a").unwrap();
+        let unrelated = next_witness_batch(
+            &ledger,
+            &lease,
+            vec![DeltaOp::new(
+                "sample/b",
+                DeltaKind::Supersede,
+                b"changed".to_vec(),
+            )],
+            Vec::new(),
+        );
+        ledger.commit(&lease, unrelated).unwrap();
+        let read_only = next_witness_batch(&ledger, &lease, Vec::new(), vec![present]);
+        ledger.commit(&lease, read_only).unwrap();
+    }
+
+    #[test]
+    fn same_payload_aba_refuses_without_mutating_keys_obligations_or_replica_state() {
+        let mut ledger = L0Ledger::new();
+        let lease = ledger.create_cell("CELL-FLOW(test)", "writer").unwrap();
+        let initial = next_witness_batch(
+            &ledger,
+            &lease,
+            vec![
+                DeltaOp::new("sample/a", DeltaKind::Put, b"first".to_vec()),
+                DeltaOp::new("ob/open", DeltaKind::ReserveObligation, Vec::new()),
+            ],
+            Vec::new(),
+        );
+        ledger.commit(&lease, initial).unwrap();
+        let same_value = next_witness_batch(
+            &ledger,
+            &lease,
+            vec![DeltaOp::new(
+                "sample/a",
+                DeltaKind::Supersede,
+                b"first".to_vec(),
+            )],
+            Vec::new(),
+        );
+        ledger.commit(&lease, same_value).unwrap();
+        let stale = ledger.key_witness(&lease.cell_id, "sample/a").unwrap();
+        let old_version = ledger
+            .key_history(&lease.cell_id, "sample/a")
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        for payload in [b"second".to_vec(), b"first".to_vec()] {
+            let batch = next_witness_batch(
+                &ledger,
+                &lease,
+                vec![DeltaOp::new("sample/a", DeltaKind::Supersede, payload)],
+                Vec::new(),
+            );
+            ledger.commit(&lease, batch).unwrap();
+        }
+        let history = ledger
+            .key_history(&lease.cell_id, "sample/a")
+            .unwrap()
+            .to_vec();
+        let restored = history.last().unwrap();
+        assert_eq!(
+            (
+                old_version.epoch,
+                old_version.kind,
+                old_version.payload_digest
+            ),
+            (restored.epoch, restored.kind, restored.payload_digest)
+        );
+        assert_ne!(old_version.seq, restored.seq);
+        assert_ne!(
+            ledger.key_witness(&lease.cell_id, "sample/a").unwrap(),
+            stale
+        );
+        let bad = next_witness_batch(
+            &ledger,
+            &lease,
+            vec![
+                DeltaOp::new("sample/a", DeltaKind::Supersede, b"not committed".to_vec()),
+                DeltaOp::new("ob/new", DeltaKind::ReserveObligation, Vec::new()),
+                DeltaOp::new("ob/open", DeltaKind::ResolveObligation, Vec::new()),
+            ],
+            vec![stale],
+        );
+        let before = current(&ledger, &lease.cell_id);
+        for error in [
+            ledger.check_replica(&bad).unwrap_err(),
+            ledger.commit(&lease, bad.clone()).unwrap_err(),
+            ledger.admit_replica(bad.clone()).unwrap_err(),
+        ] {
+            assert!(matches!(error, L0Error::KeyWitnessMismatch { .. }));
+            assert_eq!(error.to_refusal().code, "FMINE-REF-502");
+        }
+        assert_eq!(current(&ledger, &lease.cell_id), before);
+        assert_eq!(
+            ledger.key_history(&lease.cell_id, "sample/a").unwrap(),
+            history
+        );
+        assert!(ledger.conflicts(&lease.cell_id).unwrap().is_empty());
+        let mut good = bad;
+        good.witnesses = vec![ledger.key_witness(&lease.cell_id, "sample/a").unwrap()];
+        ledger.commit(&lease, good).unwrap();
+        assert_eq!(
+            ledger.open_obligations(&lease.cell_id).unwrap(),
+            &BTreeSet::from(["ob/new".into()])
+        );
+        let duplicate_resolution = next_witness_batch(
+            &ledger,
+            &lease,
+            vec![
+                DeltaOp::new("ob/new", DeltaKind::ResolveObligation, b"one".to_vec()),
+                DeltaOp::new("ob/new", DeltaKind::ResolveObligation, b"two".to_vec()),
+            ],
+            Vec::new(),
+        );
+        let before = current(&ledger, &lease.cell_id);
+        assert!(matches!(
+            ledger.commit(&lease, duplicate_resolution),
+            Err(L0Error::ObligationNotOpen { .. })
+        ));
+        assert_eq!(current(&ledger, &lease.cell_id), before);
+    }
+
+    #[test]
+    fn witnesses_use_pre_batch_state_and_replay_preserves_legacy_and_ordered_semantics() {
+        let mut writer = L0Ledger::new();
+        let lease = writer.create_cell("CELL-EVID(test)", "writer").unwrap();
+        let mut replica = L0Ledger::new();
+        replica.create_cell(&lease.cell_id, "writer").unwrap();
+        let initial = mk_batch(
+            &lease.cell_id,
+            lease.epoch,
+            0,
+            GENESIS_PREV_HASH,
+            vec![DeltaOp::new("sample/a", DeltaKind::Put, b"first".to_vec())],
+            Vec::new(),
+        );
+        writer.commit(&lease, initial.clone()).unwrap();
+        replica.admit_replica(initial).unwrap();
+        let witnesses = vec![
+            writer.key_witness(&lease.cell_id, "sample/a").unwrap(),
+            writer.key_witness(&lease.cell_id, "sample/b").unwrap(),
+        ];
+        let batch = next_witness_batch(
+            &writer,
+            &lease,
+            vec![
+                DeltaOp::new("sample/a", DeltaKind::Supersede, b"revised".to_vec()),
+                DeltaOp::new("sample/b", DeltaKind::Put, b"new".to_vec()),
+                DeltaOp::new("sample/b", DeltaKind::Supersede, b"final".to_vec()),
+                DeltaOp::new("ob/one", DeltaKind::ReserveObligation, Vec::new()),
+                DeltaOp::new("ob/one", DeltaKind::ResolveObligation, Vec::new()),
+            ],
+            witnesses,
+        );
+        let encoded = batch.to_bytes().unwrap();
+        writer.commit(&lease, batch).unwrap();
+        let decoded = DeltaBatch::from_bytes(&encoded).unwrap();
+        replica.check_replica(&decoded).unwrap();
+        replica.admit_replica(decoded).unwrap();
+        assert_eq!(
+            current(&writer, &lease.cell_id),
+            current(&replica, &lease.cell_id)
+        );
+        assert_eq!(
+            writer
+                .key_history(&lease.cell_id, "sample/b")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(writer.open_obligations(&lease.cell_id).unwrap().is_empty());
+        assert_eq!(
+            writer.key_witness(&lease.cell_id, "sample/b").unwrap(),
+            replica.key_witness(&lease.cell_id, "sample/b").unwrap()
+        );
+        let duplicate_reservation = next_witness_batch(
+            &writer,
+            &lease,
+            vec![
+                DeltaOp::new("ob/one", DeltaKind::ReserveObligation, b"one".to_vec()),
+                DeltaOp::new("ob/one", DeltaKind::ReserveObligation, b"two".to_vec()),
+            ],
+            Vec::new(),
+        );
+        let before = current(&writer, &lease.cell_id);
+        assert!(matches!(
+            writer.commit(&lease, duplicate_reservation),
+            Err(L0Error::ObligationAlreadyOpen { .. })
+        ));
+        assert_eq!(current(&writer, &lease.cell_id), before);
     }
 
     #[test]

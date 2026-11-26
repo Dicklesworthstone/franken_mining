@@ -5930,7 +5930,7 @@ objects (never in place), with golden fixtures per version, a fuzz target per de
 
 | FMT | Content | Notes |
 |---|---|---|
-| FMT-LEDGER-1 | Delta batch `{cell, epoch, seq, prev_hash, anchor, deltas[], witnesses[]}` | Canonical order; SHA-256 chain, which aligns with ATP Merkle hashing |
+| FMT-LEDGER-1 | Delta batch `{cell, epoch, seq, prev_hash, anchor, deltas[], witnesses[]}` | Canonical order; SHA-256 chain, which aligns with ATP Merkle hashing. DESIGN (BD-085): opt-in schema v2 adds `KeyState` read witnesses binding cell, key, presence and full immutable version; version 0/1 bytes remain supported unchanged. |
 | FMT-SEG-1 | Ledger segment file | Magic `FMNE` + kind; CRC32C per record; MMR peak list in the footer |
 | FMT-CAS-1 | Chunk and manifest | 4 MiB default chunk; fanout-16 Merkle; root-last |
 | FMT-TELSEG-1 | Columnar telemetry segment | Codec id per column; bounds; min/max footer |
