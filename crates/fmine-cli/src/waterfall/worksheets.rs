@@ -51,7 +51,9 @@ pub fn parse(args: &[String]) -> std::result::Result<Command, String> {
     while index < args.len() {
         let flag = args[index].as_str();
         if !matches!(flag, "--from-worksheet" | "--to-worksheet" | "--definition") {
-            return Err(format!("copper waterfall: unknown or mixed-mode option {flag}; {USAGE}"));
+            return Err(format!(
+                "copper waterfall: unknown or mixed-mode option {flag}; {USAGE}"
+            ));
         }
         let value = args
             .get(index + 1)
@@ -306,11 +308,8 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             "first copper worksheet",
             MAX_BYTES,
         )?;
-        let (second_text, second_source) = read(
-            &root.join(&command.to),
-            "later copper worksheet",
-            MAX_BYTES,
-        )?;
+        let (second_text, second_source) =
+            read(&root.join(&command.to), "later copper worksheet", MAX_BYTES)?;
         let first = worksheet::evaluate(
             &first_text,
             first_source.clone(),
@@ -409,12 +408,7 @@ mod tests {
             }
         );
         assert!(!selected(&args(&[
-            "--issuer",
-            "barrick",
-            "--from",
-            "2030Q4",
-            "--to",
-            "2031Q1",
+            "--issuer", "barrick", "--from", "2030Q4", "--to", "2031Q1",
         ])));
     }
 
