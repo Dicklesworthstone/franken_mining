@@ -261,10 +261,9 @@ pub fn apply_segment_repair(
 /// already holds exactly `original` is kept as it is (synced again, with its directory, since the crash
 /// may have come before the rename was durable), and any other file there is refused. So is a symbolic
 /// link there and, on Unix, a hard link, since either could lead to the target itself and be truncated
-/// with it. The bytes are
-/// written first to `<evidence_path>.partial`, synced, and renamed into place, so `evidence_path` never
-/// holds a partial copy. A `.partial` file left by a crash is a partial copy and is replaced; it is
-/// removed and created afresh, so a link planted at that name is never followed.
+/// with it. The bytes are written first to `<evidence_path>.partial`, synced, and renamed into place, so
+/// `evidence_path` never holds a partial copy. A `.partial` file left by a crash is a partial copy and is
+/// replaced; it is removed and created afresh, so a link planted at that name is never followed.
 pub fn retain_repair_evidence(evidence_path: &Path, original: &[u8]) -> Result<(), LedgerError> {
     let io = |operation: &'static str, path: &Path, e: std::io::Error| LedgerError::Io {
         operation,
