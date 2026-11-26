@@ -15,6 +15,11 @@ Testpit T-layer synthetic-truth world generator and sealed scoring harness (`BD-
 ## 2. Inputs
 - Deterministic `seed_root: u64`, `WorldCondition` (`CorrectlySpecified`, `Misspecified`, `IdentifiabilityProbe`), and world configuration (`OpenPitAuConfig`).
 - Engine predictions (`OpenPitAuPrediction`) submitted to `ScoringHarness::score_open_pit_au`.
+- **DESIGN (BD-356.S4).** `load_north_mara_public_inputs` uses the registered public workbook loader to bind each
+  release's own three-month North Mara values to cell locators and file hashes. The workbook's fractional recovery
+  becomes percentage points. The QTD column labelled 100% supplies production. Ore tonnes retain the cited 84% basis
+  (E109) and are scaled to 100% for the twin. AISC retains its cited USD/oz basis as context. Missing and ambiguous
+  quarters refuse. The twin builder requires all four operating series for every target.
 - Dependencies: `fmine-core`, `fmine-units`, `fmine-evidence`, `fmine-claim` (`T → S0`, zero external crates). Excluded from all production closures by `xtask check-oracle` (`GATE-ORACLE-01`).
 
 ## 3. Outputs

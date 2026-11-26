@@ -894,6 +894,7 @@ pub fn build_pilot_protocol_card(
 pub mod north_mara {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fmt::Write as _;
+    use std::path::Path;
 
     use fmine_claim::render::NO_CLAIM_BANNER;
     use fmine_core::codec::Encoder;
@@ -902,6 +903,10 @@ pub mod north_mara {
     use fmine_core::id::ObjectId;
     use fmine_core::rand::{PhiloxStream, RngKey};
     use fmine_evidence::{Refusal, RefusalCode};
+    use fmine_public::mine_stats::{
+        LabelVocabulary, MineStatsCell, MineStatsRead, View, read_mine_stats,
+    };
+    use fmine_public::sources::SourceKind;
 
     use super::{
         AnalysisPlan, ArtifactLedger, EARLY_KILL_ALTERNATE_SITES, EarlyKillOutcome,
@@ -912,7 +917,7 @@ pub mod north_mara {
         FileLabel, LinearBiasObs, reject_personal_data_files, solve_two_bias_posterior,
     };
     use crate::plant_twin::{
-        CandidateFileCostRow, CitedSeries, SYNTHETIC_PUBLIC_LABEL, SegmentBoundary,
+        CandidateFileCostRow, CitedPoint, CitedSeries, SYNTHETIC_PUBLIC_LABEL, SegmentBoundary,
     };
 
     /// Canonical site identifier for North Mara.
@@ -1325,6 +1330,216 @@ pub mod north_mara {
         }
     }
 
+    #[derive(Clone, Copy)]
+    struct WorkbookField {
+        series: &'static str,
+        unit: &'static str,
+        view: View,
+        label: &'static str,
+        section: Option<&'static str>,
+        multiplier: f64,
+        rounding_step: f64,
+    }
+
+    const ORE_ATTRIBUTABLE: &str = "ore_processed_attributable";
+
+    const PARITY_FIELDS: [WorkbookField; 4] = [
+        WorkbookField {
+            series: "head_grade",
+            unit: "g/t",
+            view: View::Minestats,
+            label: "Processed",
+            section: Some("Average grade (grams per tonne)"),
+            multiplier: 1.0,
+            rounding_step: 0.01,
+        },
+        WorkbookField {
+            series: "recovery",
+            unit: "pct",
+            view: View::Minestats,
+            label: "Recovery rate (percent)",
+            section: None,
+            multiplier: 100.0,
+            rounding_step: 1.0,
+        },
+        WorkbookField {
+            series: ORE_ATTRIBUTABLE,
+            unit: "kt",
+            view: View::Minestats,
+            label: "Tonnes processed (thousands)",
+            section: None,
+            multiplier: 1.0,
+            rounding_step: 1.0,
+        },
+        WorkbookField {
+            series: "gold_produced_100",
+            unit: "koz",
+            view: View::Summary,
+            label: "au_prod_100_koz",
+            section: None,
+            multiplier: 1.0,
+            rounding_step: 1.0,
+        },
+    ];
+
+    const AISC_CONTEXT: WorkbookField = WorkbookField {
+        series: "aisc",
+        unit: "USD/oz",
+        view: View::Summary,
+        label: "aisc_usd_per_oz",
+        section: None,
+        multiplier: 1.0,
+        rounding_step: 1.0,
+    };
+
+    fn parity_field_name(series: &str) -> &str {
+        if series == "ore_processed" {
+            ORE_ATTRIBUTABLE
+        } else {
+            series
+        }
+    }
+
+    impl WorkbookField {
+        fn point(self, read: &MineStatsRead, sha256_hex: &str) -> Result<CitedPoint, Refusal> {
+            let invalid = |detail: &str| {
+                Refusal::new(
+                    RefusalCode::SourceCellUnusable208,
+                    format!("North Mara {} {}: {detail}", read.quarter, self.series),
+                )
+            };
+            let mut matches = read.values.iter().filter(|row| {
+                row.site == "North Mara"
+                    && row.months == 3
+                    && row.period == read.quarter
+                    && row.view == self.view
+                    && (self.view != View::Summary || row.sheet == "QTD")
+                    && row.label == self.label
+                    && row.section.as_deref() == self.section
+            });
+            let row = matches
+                .next()
+                .ok_or_else(|| invalid("quarterly cell missing"))?;
+            let row_number = row
+                .cell
+                .trim_start_matches(|c: char| c.is_ascii_alphabetic());
+            if matches.next().is_some()
+                || read
+                    .repeated
+                    .contains(&format!("{}:{}!A{row_number}", read.quarter, row.sheet))
+            {
+                return Err(invalid(&format!(
+                    "ambiguous quarterly cell at {}",
+                    row.locator
+                )));
+            }
+            if self.series == ORE_ATTRIBUTABLE
+                && row
+                    .printed_share
+                    .as_deref()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    != Some(f64::from(NORTH_MARA_OWNERSHIP_PCT))
+            {
+                return Err(invalid(&format!(
+                    "{} does not declare the 84% share",
+                    row.locator
+                )));
+            }
+            let MineStatsCell::Number { value, .. } = row.value else {
+                return Err(invalid(&format!("{} is not numeric", row.locator)));
+            };
+            Ok(CitedPoint {
+                quarter: read.quarter.clone(),
+                cell: row.locator.clone(),
+                source_sha256: sha256_hex.to_owned(),
+                printed_value: value * self.multiplier,
+                rounding_step: self.rounding_step,
+            })
+        }
+
+        fn series(self) -> CitedSeries {
+            CitedSeries {
+                series_name: self.series.into(),
+                unit: self.unit.into(),
+                points: Vec::new(),
+            }
+        }
+    }
+
+    /// Public quarterly inputs for the synthetic North Mara pilot. AISC retains reported cost
+    /// context; the ore parity series retains attributable tonnes as printed (E109).
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct NorthMaraPublicInputs {
+        pub targets: Vec<NorthMaraQuarterTarget>,
+        pub parity_series: [CitedSeries; 4],
+        pub aisc_context: CitedSeries,
+        pub workbook_digests: Vec<Digest32>,
+    }
+
+    /// Read one original three-month observation per registered Mine Stats quarter. The public
+    /// loader verifies the registered workbook bytes before the pilot reads any target cells.
+    pub fn load_north_mara_public_inputs(root: &Path) -> Result<NorthMaraPublicInputs, Refusal> {
+        let mut profile = fmine_public::load_issuer_profile(root, "barrick")?;
+        profile
+            .sources
+            .retain(|source| source.kind == SourceKind::MineStats);
+        let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
+        let mut sources = fmine_public::load_registered_sources(&profile, root)?;
+        sources.sort_by(|a, b| a.quarter.cmp(&b.quarter));
+        // E109 and the North Mara MD&A reconcile Mine Stats physical tonnage to the 84% share.
+        let share = f64::from(NORTH_MARA_OWNERSHIP_PCT) / 100.0;
+        let mut inputs = NorthMaraPublicInputs {
+            targets: Vec::with_capacity(sources.len()),
+            parity_series: PARITY_FIELDS.map(WorkbookField::series),
+            aisc_context: AISC_CONTEXT.series(),
+            workbook_digests: Vec::with_capacity(sources.len()),
+        };
+        for source in sources {
+            if inputs
+                .targets
+                .last()
+                .is_some_and(|last| last.quarter == source.quarter)
+            {
+                return Err(Refusal::new(
+                    RefusalCode::SourceCellUnusable208,
+                    format!(
+                        "North Mara {} has duplicate registered Mine Stats workbooks",
+                        source.quarter
+                    ),
+                ));
+            }
+            let read = read_mine_stats(
+                &source.workbook,
+                &source.quarter,
+                (!vocabulary.is_empty()).then_some(&vocabulary),
+            )?;
+            let digest = Digest32(source.workbook.sha256);
+            let sha256_hex = digest.to_hex();
+            let [grade, recovery, ore, gold] =
+                PARITY_FIELDS.map(|field| field.point(&read, &sha256_hex));
+            let (grade, recovery, ore, gold) = (grade?, recovery?, ore?, gold?);
+            let aisc = AISC_CONTEXT.point(&read, &sha256_hex)?;
+            inputs.targets.push(NorthMaraQuarterTarget {
+                quarter: source.quarter,
+                ore_processed_kt: ore.printed_value / share,
+                head_grade_g_t: grade.printed_value,
+                recovery_pct: recovery.printed_value,
+                gold_produced_100_koz: gold.printed_value,
+                aisc_per_oz: aisc.printed_value,
+            });
+            for (series, point) in inputs
+                .parity_series
+                .iter_mut()
+                .zip([grade, recovery, ore, gold])
+            {
+                series.points.push(point);
+            }
+            inputs.aisc_context.points.push(aisc);
+            inputs.workbook_digests.push(digest);
+        }
+        Ok(inputs)
+    }
+
     /// Quarterly aggregate emitted by one [`NorthMaraTwin`].
     #[derive(Debug, Clone, PartialEq)]
     pub struct NorthMaraQuarterAgg {
@@ -1524,25 +1739,20 @@ pub mod north_mara {
             &self.daily
         }
 
-        /// Verify 100%-basis parity against cited public quarterly cells, emitting one structured
-        /// `twin_parity` NDJSON line per cell (`BD-356.S4`).
+        /// Verify parity against cited public quarterly cells on their declared basis, emitting
+        /// one `twin_parity` NDJSON line per cell (`BD-356.S4`).
         pub fn check_parity(&self, public_series: &[CitedSeries]) -> Result<Vec<String>, Refusal> {
             let mut logs = Vec::new();
             for series in public_series {
-                let expected_unit = match series.series_name.as_str() {
-                    "head_grade" => "g/t",
-                    "recovery" => "pct",
-                    "ore_processed" => "kt",
-                    "gold_produced_100" => "koz",
-                    other => {
-                        return Err(Refusal::new(
-                            RefusalCode::BasisMismatch105,
-                            format!(
-                                "unsupported 100%-basis North Mara parity series '{other}'; attributable series are derived, never fitted"
-                            ),
-                        ));
-                    }
-                };
+                let expected_unit = PARITY_FIELDS.iter().find_map(|field| {
+                    (field.series == parity_field_name(&series.series_name)).then_some(field.unit)
+                }).ok_or_else(|| Refusal::new(
+                    RefusalCode::BasisMismatch105,
+                    format!(
+                        "unsupported North Mara parity series '{}'; attributable production is derived, never fitted",
+                        series.series_name,
+                    ),
+                ))?;
                 if series.unit != expected_unit {
                     return Err(Refusal::new(
                         RefusalCode::BasisMismatch105,
@@ -1563,6 +1773,9 @@ pub mod north_mara {
                         "head_grade" => agg.head_grade_g_t,
                         "recovery" => agg.recovery_pct,
                         "ore_processed" => agg.ore_processed_kt,
+                        ORE_ATTRIBUTABLE => {
+                            agg.ore_processed_kt * (f64::from(self.ownership_pct) / 100.0)
+                        }
                         "gold_produced_100" => agg.gold_produced_100_koz,
                         _ => unreachable!(),
                     };
@@ -1585,7 +1798,7 @@ pub mod north_mara {
                         return Err(Refusal::new(
                             RefusalCode::Conservation101,
                             format!(
-                                "north_mara twin {} failed 100%-basis parity on {} {} ({}): twin={val:.4} outside [{lo:.4}, {hi:.4}]",
+                                "north_mara twin {} failed parity on {} {} ({}): twin={val:.4} outside [{lo:.4}, {hi:.4}]",
                                 self.k, pt.quarter, series.series_name, pt.cell
                             ),
                         ));
@@ -1594,6 +1807,65 @@ pub mod north_mara {
             }
             Ok(logs)
         }
+    }
+
+    fn require_parity_population(
+        targets: &[NorthMaraQuarterTarget],
+        public_series: &[CitedSeries],
+    ) -> Result<(), Refusal> {
+        let invalid = |detail: String| Refusal::new(RefusalCode::SourceCellUnusable208, detail);
+        let quarters: BTreeSet<&str> = targets
+            .iter()
+            .map(|target| target.quarter.as_str())
+            .collect();
+        if quarters.is_empty() || quarters.len() != targets.len() {
+            return Err(invalid(
+                "North Mara parity requires nonempty, unique target quarters".into(),
+            ));
+        }
+        if public_series.len() != PARITY_FIELDS.len() {
+            return Err(invalid(format!(
+                "North Mara parity requires all {} operating series",
+                PARITY_FIELDS.len()
+            )));
+        }
+        for field in PARITY_FIELDS {
+            let mut series = public_series
+                .iter()
+                .filter(|series| parity_field_name(&series.series_name) == field.series);
+            let source = series
+                .next()
+                .ok_or_else(|| invalid(format!("North Mara parity is missing {}", field.series)))?;
+            if series.next().is_some() {
+                return Err(invalid(format!(
+                    "North Mara parity has duplicate {} series",
+                    field.series
+                )));
+            }
+            let mut covered = BTreeSet::new();
+            for point in &source.points {
+                if !quarters.contains(point.quarter.as_str())
+                    || !covered.insert(point.quarter.as_str())
+                    || point.cell.trim().is_empty()
+                    || point.source_sha256.trim().is_empty()
+                    || !point.printed_value.is_finite()
+                    || !point.rounding_step.is_finite()
+                    || point.rounding_step <= 0.0
+                {
+                    return Err(invalid(format!(
+                        "North Mara parity has unusable {} evidence for {}",
+                        field.series, point.quarter
+                    )));
+                }
+            }
+            if let Some(quarter) = quarters.difference(&covered).next() {
+                return Err(invalid(format!(
+                    "North Mara parity is missing {} evidence for {quarter}",
+                    field.series
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Ensemble of `K >= 2` grade-led North Mara twins spanning registered unidentifiable axes.
@@ -1614,6 +1886,7 @@ pub mod north_mara {
             targets: &[NorthMaraQuarterTarget],
             public_series: &[CitedSeries],
         ) -> Result<(Self, Vec<String>), Refusal> {
+            require_parity_population(targets, public_series)?;
             spec.axis_ranges.validate()?;
             if spec.k < 2 {
                 return Err(Refusal::new(
@@ -2581,7 +2854,6 @@ pub mod north_mara {
 
         use super::*;
         use crate::pilot_card::FindingDefinition;
-        use crate::plant_twin::CitedPoint;
 
         fn workspace_root() -> PathBuf {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2702,6 +2974,90 @@ pub mod north_mara {
                 ],
                 power_bar_target: 0.80,
                 early_kill_rule: "If no feasible subset clears power_bar_target across all K twins, escalate alternate site (Kibali).".to_string(),
+            }
+        }
+
+        #[test]
+        fn test_north_mara_ore_selector_refuses_wrong_share_and_repeated_rows() {
+            use fmine_public::mine_stats::MineStatsValue;
+
+            let field = PARITY_FIELDS[2];
+            let mut read = MineStatsRead {
+                quarter: "2030Q1".into(),
+                blocks: 1,
+                values: vec![MineStatsValue {
+                    locator: "2030Q1:Minestats3!H12".into(),
+                    sheet: "Minestats3".into(),
+                    cell: "H12".into(),
+                    view: View::Minestats,
+                    months: 3,
+                    period: "2030Q1".into(),
+                    period_label: "For the three months ended March 31,".into(),
+                    site_raw: "North Mara (84%)".into(),
+                    site: "North Mara".into(),
+                    printed_share: Some("84".into()),
+                    label: field.label.into(),
+                    label_as_printed: field.label.into(),
+                    footnote: None,
+                    section: None,
+                    value: MineStatsCell::Number {
+                        raw_text: "840".into(),
+                        value: 840.0,
+                    },
+                }],
+                refusals: Vec::new(),
+                hidden_sheets: Vec::new(),
+                repeated: Vec::new(),
+            };
+            let point = field
+                .point(&read, "synthetic-test")
+                .expect("84% ore reading");
+            assert_eq!(point.printed_value, 840.0);
+            read.values[0].printed_share = Some("80".into());
+            assert!(
+                field
+                    .point(&read, "synthetic-test")
+                    .unwrap_err()
+                    .what
+                    .contains("84% share")
+            );
+            read.values[0].printed_share = Some("84".into());
+            read.repeated.push("2030Q1:Minestats3!A12".into());
+            assert!(
+                field
+                    .point(&read, "synthetic-test")
+                    .unwrap_err()
+                    .what
+                    .contains("ambiguous quarterly cell")
+            );
+        }
+
+        #[test]
+        fn test_north_mara_family_refuses_incomplete_quarterly_evidence() {
+            let spec = load_north_mara_spec();
+            let (targets, public) = synthetic_north_mara_100_series();
+            let missing_series = &public[..3];
+            let mut missing_quarter = public.clone();
+            missing_quarter[0].points.pop();
+            let mut duplicate_quarter = public.clone();
+            let duplicate = duplicate_quarter[0].points[0].clone();
+            duplicate_quarter[0].points.push(duplicate);
+            let mut blank_citation = public.clone();
+            blank_citation[0].points[0].source_sha256.clear();
+            for (input, expected) in [
+                (missing_series, "requires all 4 operating series"),
+                (&missing_quarter, "missing head_grade evidence for 2026Q2"),
+                (
+                    &duplicate_quarter,
+                    "unusable head_grade evidence for 2024Q4",
+                ),
+                (&blank_citation, "unusable head_grade evidence for 2024Q4"),
+            ] {
+                let refusal =
+                    NorthMaraTwinFamily::build_and_verify(&spec, 20_263_564, &targets, input)
+                        .expect_err("incomplete evidence must refuse");
+                assert_eq!(refusal.code, RefusalCode::SourceCellUnusable208.as_str());
+                assert!(refusal.what.contains(expected), "{refusal}");
             }
         }
 
@@ -3047,129 +3403,68 @@ pub mod north_mara {
         #[test]
         #[ignore = "needs the registered Mine Stats workbooks under corpus_of_input_docs/"]
         fn test_north_mara_twins_parity_real_workbooks() {
-            use fmine_public::mine_stats::{MineStatsCell, View, read_mine_stats};
-            use fmine_public::sources::SourceKind;
-
             let root = workspace_root();
             let profile = fmine_public::load_issuer_profile(&root, "barrick")
                 .expect("load barrick issuer profile");
-            let loaded = fmine_public::load_registered_sources(&profile, &root)
-                .expect("load registered Mine Stats workbooks");
-            let spec = load_north_mara_spec();
-
-            let mut targets = Vec::new();
-            let mut grade_pts = Vec::new();
-            let mut rec_pts = Vec::new();
-            let mut ore_pts = Vec::new();
-            let mut au_pts = Vec::new();
-            let mut input_digests = Vec::new();
-
-            for src in loaded.iter().filter(|s| s.kind == SourceKind::MineStats) {
-                let read = read_mine_stats(&src.workbook, &src.quarter, None)
-                    .expect("read Mine Stats workbook");
-                let sha_hex = Digest32(src.workbook.sha256).to_hex();
-                let find_num = |view: View, pred: &dyn Fn(&str, Option<&str>) -> bool| {
-                    read.values.iter().find_map(|v| {
-                        if v.site == "North Mara"
-                            && v.view == view
-                            && v.months == 3
-                            && v.period == src.quarter
-                            && pred(&v.label, v.section.as_deref())
-                            && let MineStatsCell::Number { value, .. } = &v.value
-                        {
-                            Some((v.locator.clone(), *value))
-                        } else {
-                            None
-                        }
-                    })
-                };
-                let ore = find_num(View::Minestats, &|lbl, sec| {
-                    lbl == "Processed" && sec == Some("Tonnes (000s)")
-                });
-                let grade = find_num(View::Minestats, &|lbl, sec| {
-                    lbl == "Processed" && sec == Some("Grade (g/t)")
-                });
-                let rec = find_num(View::Minestats, &|lbl, _| {
-                    lbl.to_ascii_lowercase().contains("recovery")
-                });
-                let au100 = find_num(View::Summary, &|lbl, _| lbl == "gold_prod_100_koz");
-                let aisc = find_num(View::Summary, &|lbl, _| lbl == "aisc_usd_per_oz");
-                if let (
-                    Some((ol, ov)),
-                    Some((gl, gv)),
-                    Some((rl, rv)),
-                    Some((al, av)),
-                    Some((_, aisc_v)),
-                ) = (ore, grade, rec, au100, aisc)
-                {
-                    input_digests.push(Digest32(src.workbook.sha256));
-                    targets.push(NorthMaraQuarterTarget {
-                        quarter: src.quarter.clone(),
-                        ore_processed_kt: ov,
-                        head_grade_g_t: gv,
-                        recovery_pct: rv,
-                        gold_produced_100_koz: av,
-                        aisc_per_oz: aisc_v,
-                    });
-                    ore_pts.push(CitedPoint {
-                        quarter: src.quarter.clone(),
-                        cell: ol,
-                        source_sha256: sha_hex.clone(),
-                        printed_value: ov,
-                        rounding_step: 1.0,
-                    });
-                    grade_pts.push(CitedPoint {
-                        quarter: src.quarter.clone(),
-                        cell: gl,
-                        source_sha256: sha_hex.clone(),
-                        printed_value: gv,
-                        rounding_step: 0.01,
-                    });
-                    rec_pts.push(CitedPoint {
-                        quarter: src.quarter.clone(),
-                        cell: rl,
-                        source_sha256: sha_hex.clone(),
-                        printed_value: rv,
-                        rounding_step: 1.0,
-                    });
-                    au_pts.push(CitedPoint {
-                        quarter: src.quarter.clone(),
-                        cell: al,
-                        source_sha256: sha_hex,
-                        printed_value: av,
-                        rounding_step: 1.0,
-                    });
-                }
-            }
-            assert!(
-                !targets.is_empty(),
-                "expected at least one North Mara 100%-basis quarter from registered workbooks"
+            let expected_quarters: BTreeSet<&str> = profile
+                .sources
+                .iter()
+                .filter(|source| source.kind == SourceKind::MineStats)
+                .map(|source| source.quarter.as_str())
+                .collect();
+            let inputs = load_north_mara_public_inputs(&root)
+                .expect("bind every registered North Mara quarter");
+            assert_eq!(
+                inputs
+                    .targets
+                    .iter()
+                    .map(|target| target.quarter.as_str())
+                    .collect::<Vec<_>>(),
+                expected_quarters.into_iter().collect::<Vec<_>>()
             );
-            let public = vec![
-                CitedSeries {
-                    series_name: "head_grade".to_string(),
-                    unit: "g/t".to_string(),
-                    points: grade_pts,
-                },
-                CitedSeries {
-                    series_name: "recovery".to_string(),
-                    unit: "pct".to_string(),
-                    points: rec_pts,
-                },
-                CitedSeries {
-                    series_name: "ore_processed".to_string(),
-                    unit: "kt".to_string(),
-                    points: ore_pts,
-                },
-                CitedSeries {
-                    series_name: "gold_produced_100".to_string(),
-                    unit: "koz".to_string(),
-                    points: au_pts,
-                },
-            ];
-            let (family, parity_logs) =
-                NorthMaraTwinFamily::build_and_verify(&spec, 20_263_564, &targets, &public)
-                    .expect("verify real-workbook 100%-basis parity");
+            assert_eq!(inputs.aisc_context.points.len(), inputs.targets.len());
+            assert_eq!(inputs.workbook_digests.len(), inputs.targets.len());
+            let q2 = inputs
+                .targets
+                .iter()
+                .position(|t| t.quarter == "2026Q2")
+                .expect("E589 quarter");
+            assert_eq!(inputs.targets[q2].ore_processed_kt, 688.0 / 0.84);
+            assert_eq!(inputs.parity_series[2].series_name, ORE_ATTRIBUTABLE);
+            assert_eq!(inputs.parity_series[2].points[q2].printed_value, 688.0);
+            assert_eq!(inputs.targets[q2].head_grade_g_t, 1.80);
+            assert_eq!(inputs.targets[q2].recovery_pct, 85.0);
+            assert_eq!(inputs.targets[q2].gold_produced_100_koz, 41.0);
+            assert_eq!(inputs.targets[q2].aisc_per_oz, 2577.0);
+            let digest = inputs.workbook_digests[q2].to_hex();
+            for (point, cell) in inputs
+                .parity_series
+                .iter()
+                .map(|series| &series.points[q2])
+                .chain(std::iter::once(&inputs.aisc_context.points[q2]))
+                .zip([
+                    "Minestats3!H18",
+                    "Minestats3!H19",
+                    "Minestats3!H12",
+                    "QTD!B19",
+                    "QTD!G19",
+                ])
+            {
+                assert_eq!(point.cell, format!("2026Q2:{cell}"));
+                assert_eq!(point.source_sha256, digest);
+            }
+            let spec = load_north_mara_spec();
+            let (family, parity_logs) = NorthMaraTwinFamily::build_and_verify(
+                &spec,
+                20_263_564,
+                &inputs.targets,
+                &inputs.parity_series,
+            )
+            .expect("verify real-workbook 100%-basis parity");
+            assert_eq!(
+                parity_logs.len(),
+                spec.k * inputs.targets.len() * PARITY_FIELDS.len()
+            );
             for line in &parity_logs {
                 assert!(line.contains("\"event\":\"twin_parity\""));
                 assert!(line.contains("\"ok\":true"));
@@ -3182,7 +3477,7 @@ pub mod north_mara {
                 &mut ArtifactLedger::new(),
                 100,
                 500,
-                &input_digests,
+                &inputs.workbook_digests,
                 &[],
                 80,
                 20_263_564,
@@ -3195,6 +3490,11 @@ pub mod north_mara {
                     .last()
                     .expect("summary")
                     .contains("\"event\":\"pilot_card\"")
+            );
+            println!(
+                "North Mara: {} registered quarters, {} twin parity comparisons",
+                inputs.targets.len(),
+                parity_logs.len()
             );
         }
     }
