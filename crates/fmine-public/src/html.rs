@@ -76,6 +76,7 @@ struct Mapping {
     file: String,
     table: usize,
     cell: String,
+    accounting_close_cell: Option<String>,
     labels: Vec<(String, String)>,
     line: usize,
 }
@@ -151,7 +152,7 @@ fn mappings(text: &str, issuer: &str, profile: &IssuerProfile) -> Result<Vec<Map
             return Err(invalid(format!("line {}: expected [[claim]]", row.line)));
         }
         only(&row.fields, |key| {
-            ["id", "file", "table", "cell"].contains(&key)
+            ["id", "file", "table", "cell", "accounting_close_cell"].contains(&key)
                 || key.rsplit_once('_').is_some_and(|(role, suffix)| {
                     ROLES.contains(&role) && matches!(suffix, "cell" | "label")
                 })
@@ -184,6 +185,14 @@ fn mappings(text: &str, issuer: &str, profile: &IssuerProfile) -> Result<Vec<Map
         };
         let cell = string(&row.fields, "cell")?;
         coordinates(&cell)?;
+        let accounting_close_cell = row
+            .get("accounting_close_cell")
+            .map(|_| {
+                let close = string(&row.fields, "accounting_close_cell")?;
+                coordinates(&close)?;
+                Ok::<_, Refusal>(close)
+            })
+            .transpose()?;
         let mut labels = Vec::new();
         for role in ROLES {
             let at = string(&row.fields, &format!("{role}_cell"))?;
@@ -195,6 +204,7 @@ fn mappings(text: &str, issuer: &str, profile: &IssuerProfile) -> Result<Vec<Map
             file,
             table,
             cell,
+            accounting_close_cell,
             labels,
             line: row.line,
         });
@@ -344,8 +354,12 @@ fn metric_unit(metric: &str, unit: &str) -> Result<(&'static str, &'static str),
     })
 }
 
-fn typed_value(cell: &HtmlSourceCell, status: Option<StatusKind>) -> Result<PublicValue, Refusal> {
-    if let Some(number) = cell.number() {
+fn typed_value(
+    token: &str,
+    number: Option<&NumberToken>,
+    status: Option<StatusKind>,
+) -> Result<PublicValue, Refusal> {
+    if let Some(number) = number {
         let reason = match status {
             Some(StatusKind::Disposed) => Some(NilReason::Disposed),
             Some(StatusKind::Withheld) => Some(NilReason::Withheld),
@@ -363,7 +377,6 @@ fn typed_value(cell: &HtmlSourceCell, status: Option<StatusKind>) -> Result<Publ
             },
         });
     }
-    let token = cell.text();
     Ok(match token.trim() {
         "" => PublicValue::Missing,
         "-" | "–" | "—" => PublicValue::Nil {
@@ -423,10 +436,31 @@ fn project(
         .iter()
         .find(|status| status.subject == *subject && status.applies(&period));
     let (value_source, source_cell) = citation(document, mapping.table, &mapping.cell)?;
-    let value = typed_value(source_cell, status.map(|status| status.kind))?;
+    let (exact_number, accounting_close) = if let Some(at) = &mapping.accounting_close_cell {
+        let value_at = coordinates(&mapping.cell)?;
+        let close_at = coordinates(at)?;
+        let (close, _) = citation(document, mapping.table, at)?;
+        let number = document.tables()[mapping.table - 1]
+            .split_accounting_number(value_at, close_at)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "{} requires an opening accounting amount at {} and its adjacent closing parenthesis at {}",
+                    mapping.id, value_source.requested_locator, close.requested_locator
+                ))
+            })?;
+        (Some(number), Some(close))
+    } else {
+        (source_cell.number().cloned(), None)
+    };
+    let value = typed_value(
+        source_cell.text(),
+        exact_number.as_ref(),
+        status.map(|status| status.kind),
+    )?;
     let mut mapping_source = definitions_anchor.clone();
     mapping_source.locator = format!("claim:{}:line:{}", mapping.id, mapping.line);
     let mut context: Vec<_> = labels.iter().map(|label| label.anchor.clone()).collect();
+    context.extend(accounting_close.as_ref().map(|close| close.anchor.clone()));
     context.push(mapping_source.clone());
     context.push(registry_anchor.clone());
     let mut cell = public_claim_anchored(
@@ -482,13 +516,20 @@ fn project(
         value: "site (registered subject)".into(),
         source: labels[0].clone(),
     });
+    if let Some(source) = accounting_close {
+        interpretations.push(HtmlInterpretation {
+            role: "accounting_close",
+            value: source.text.clone(),
+            source,
+        });
+    }
     Ok(HtmlClaim {
         definition_id: mapping.id.clone(),
         cell,
         value_source,
         interpretations,
         mapping_source,
-        exact_number: source_cell.number().cloned(),
+        exact_number,
     })
 }
 

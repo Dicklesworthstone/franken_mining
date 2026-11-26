@@ -85,6 +85,7 @@ pub struct HtmlSourceCell {
     byte_range: (usize, usize),
     raw_html: String,
     text: String,
+    unannotated: bool,
     value: CellValue,
     number: Option<numtok::NumberToken>,
 }
@@ -148,6 +149,38 @@ impl HtmlSourceTable {
             .get(row.checked_sub(1)?)?
             .get(column.checked_sub(1)?)?;
         self.cells.get((*index)?)
+    }
+
+    /// Join an accounting amount and an explicitly selected closing parenthesis on the same row.
+    /// Both columns must name original cells. The returned token spans the joined decoded text;
+    /// original byte spans and locators remain on the two source cells.
+    pub fn split_accounting_number(
+        &self,
+        (row, column): (usize, usize),
+        (close_row, close_column): (usize, usize),
+    ) -> Option<numtok::NumberToken> {
+        let amount = self.cell(row, column)?;
+        let close = self.cell(close_row, close_column)?;
+        if amount.row != row
+            || amount.column != column
+            || amount.row_span != 1
+            || !amount.unannotated
+            || close_column != column + amount.column_span
+            || close_row != row
+            || close.row != row
+            || close.column != close_column
+            || close.row_span != 1
+            || close.column_span != 1
+            || !close.unannotated
+            || close.text != ")"
+        {
+            return None;
+        }
+        let digits = amount.text.strip_prefix('(')?.trim_start();
+        if !digits.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+            return None;
+        }
+        html_number(&format!("{})", amount.text)).filter(|number| number.paren_negative)
     }
 }
 
@@ -387,7 +420,8 @@ impl HtmlBuilder {
             target[column..right].fill(Some(index));
         }
         let text = cell.text.trim().to_string();
-        let (value, number) = html_cell_value(&text, cell.plain && cell.runs <= 1);
+        let unannotated = cell.plain && cell.runs <= 1;
+        let (value, number) = html_cell_value(&text, unannotated);
         self.table.cells.push(HtmlSourceCell {
             row: row + 1,
             column: column + 1,
@@ -396,6 +430,7 @@ impl HtmlBuilder {
             byte_range: (cell.start, end),
             raw_html: html[cell.start..end].to_string(),
             text,
+            unannotated,
             value,
             number,
         });
@@ -660,26 +695,34 @@ fn html_entities(text: &str) -> HtmlResult<String> {
     Ok(result)
 }
 
+fn html_number(text: &str) -> Option<numtok::NumberToken> {
+    let mut tokens = numtok::tokenize(text);
+    if tokens.len() == 1
+        && let Some(numtok::Token::Number(number)) = tokens.pop()
+        && number.span == (0, text.len())
+        && number.currency.is_none()
+        && number.unit.is_none()
+        && !number.percent
+        && number.scale_word.is_none()
+        && number.hedge.is_none()
+        && number.range_with.is_none()
+    {
+        return Some(number);
+    }
+    None
+}
+
 fn html_cell_value(text: &str, plain: bool) -> (CellValue, Option<numtok::NumberToken>) {
     if matches!(text, "-" | "–" | "—" | "N/A" | "n/a" | "NA") {
         return (CellValue::Placeholder(text.into()), None);
     }
-    if plain {
-        let tokens = numtok::tokenize(text);
-        if let [numtok::Token::Number(number)] = tokens.as_slice()
-            && number.span == (0, text.len())
-            && number.currency.is_none()
-            && number.unit.is_none()
-            && !number.percent
-            && number.scale_word.is_none()
-            && number.hedge.is_none()
-            && number.range_with.is_none()
-            && let Ok(value) =
-                format!("{}e-{}", number.value.mantissa, number.value.scale).parse::<f64>()
-            && value.is_finite()
-        {
-            return (CellValue::Number(value), Some(number.clone()));
-        }
+    if plain
+        && let Some(number) = html_number(text)
+        && let Ok(value) =
+            format!("{}e-{}", number.value.mantissa, number.value.scale).parse::<f64>()
+        && value.is_finite()
+    {
+        return (CellValue::Number(value), Some(number));
     }
     (CellValue::Text(text.into()), None)
 }
@@ -1446,6 +1489,69 @@ mod tests {
             row_count += 1;
         }
         assert_eq!((row_count, checked), (9, 63));
+
+        // FACT (BD-058): filed gold reconciliation readings as (table, row, column, amount).
+        let signed = [
+            (273, 11, 6, -5),
+            (273, 11, 10, -2),
+            (273, 11, 14, -2),
+            (273, 11, 18, -72),
+            (273, 11, 22, -81),
+            (273, 11, 26, -27),
+            (273, 29, 6, -68),
+            (273, 29, 10, -22),
+            (273, 29, 14, -12),
+            (273, 29, 18, -3),
+            (273, 29, 22, -110),
+            (273, 29, 26, -33),
+            (274, 11, 6, -5),
+            (274, 11, 14, -1),
+            (274, 11, 18, -1),
+            (274, 11, 22, -1),
+            (274, 11, 26, -5),
+            (274, 25, 14, -1),
+            (274, 29, 14, -7),
+            (274, 29, 22, -5),
+            (274, 29, 26, -7),
+        ];
+        let mut checked = 0;
+        for table_id in [273, 274] {
+            let table = &document.tables()[table_id - 1];
+            for row in [11, 19, 21, 23, 25, 27, 29] {
+                for column in [6, 10, 14, 18, 22, 26] {
+                    let expected = signed
+                        .iter()
+                        .find(|&&(t, r, c, _)| (t, r, c) == (table_id, row, column));
+                    let observed = table.split_accounting_number((row, column), (row, column + 1));
+                    assert_eq!(
+                        observed.as_ref().map(|number| number.value.mantissa),
+                        expected.map(|&(_, _, _, value)| value),
+                        "table {table_id}, row {row}, column {column}"
+                    );
+                    if let Some(number) = observed {
+                        assert_eq!(
+                            number.step,
+                            numtok::Dec {
+                                mantissa: 1,
+                                scale: 0
+                            }
+                        );
+                        assert_eq!(number.value.scale, 0);
+                        let amount = table.cell(row, column).unwrap();
+                        let close = table.cell(row, column + 1).unwrap();
+                        assert!(amount.number().is_none() && close.number().is_none());
+                        assert_eq!(number.raw, format!("{}{}", amount.text(), close.text()));
+                        assert!(amount.byte_range().1 < close.byte_range().0);
+                        for cell in [amount, close] {
+                            let (start, end) = cell.byte_range();
+                            assert_eq!(cell.raw_html(), &body[start..end]);
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 21);
     }
 
     #[test]

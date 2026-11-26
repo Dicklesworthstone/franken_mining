@@ -241,12 +241,15 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 ### Reader, journal and OMF invariants
 - `IoError`, `HtmlTable`, `extract_html_tables`
 - `HtmlDocument::{from_bytes, artifact_path, bytes, sha256, tables, make_anchor}`;
-  `HtmlSourceTable::{table_index, rows, columns, cells, cell}`;
+  `HtmlSourceTable::{table_index, rows, columns, cells, cell, split_accounting_number}`;
   `HtmlSourceCell::{row, column, row_span, column_span, byte_range, raw_html, text, value, number}`.
   The rich types expose no mutable fields or mutable cell access. A numeric cell retains `numtok::NumberToken`
   with its exact `Dec`, printed precision and lexeme; `CellValue::Number` remains only a floating-point
   compatibility projection. Only a single full-cell bare number is promoted; explicit currencies, units,
   percentages, scale words, annotations and split text runs remain text for a semantic adapter. Token spans index decoded cell text; `byte_range` indexes the original document.
+  An explicit split accounting read accepts an unannotated opening amount and a single-cell closing
+  parenthesis immediately to its right, both in the same row. Its token span indexes the joined
+  decoded text. The original byte ranges, locators and ordinary cell reads remain separate.
   `HTML_MAX_BYTES` (8 MiB), `HTML_MAX_CELLS` (100,000 origins) and `HTML_MAX_SLOTS` (1,000,000 expanded grid slots)
   bound document ingestion. The slot budget is global and includes padding.
 - `zip_inflate::{read_zip_entries, write_stored_zip, ZipError, MAX_ENTRY_BYTES, MAX_ARCHIVE_BYTES}`. The inflater,

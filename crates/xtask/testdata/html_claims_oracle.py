@@ -242,6 +242,70 @@ class HtmlClaims(unittest.TestCase):
         fixture.write()
         refused(fixture.invoke(), "FMINE-REF-208")
 
+    def test_split_accounting_number_binds_both_printed_cells(self):
+        fixture = Fixture(self.binary)
+        document = ORIGINAL.replace(b"<td>10.00</td>", b"<td><b>(1,250.50</b></td><td>&#41;</td>")
+        fixture.documents["Original.html"] = document
+        fixture.write()
+        refused(fixture.invoke(), "FMINE-REF-208")
+        fixture.mapping = fixture.mapping.replace('cell = "B3"\n', 'cell = "B3"\naccounting_close_cell = "C3"\n', 1)
+        fixture.write()
+        rows = {row["definition_id"]: row for row in success(fixture.invoke())["claims"]}
+        row = rows["original"]
+        self.assertEqual(row["exact_number"]["raw"], "(1,250.50)")
+        self.assertEqual(decimal(row["exact_number"]["value"]), Fraction(-2501, 2))
+        self.assertEqual(decimal(row["exact_number"]["step"]), Fraction(1, 100))
+        self.assertTrue(row["exact_number"]["paren_negative"])
+        self.assertEqual(row["claim"]["value"]["value"]["stored"], "(1,250.50)")
+        close = next(meaning["source"] for meaning in row["interpretations"]
+                     if meaning["role"] == "accounting_close")
+        self.assertEqual(close["text"], ")")
+        for source, locator, raw in ((row["value_source"], "Table1!B3", b"<b>(1,250.50</b>"),
+                                     (close, "Table1!C3", b"&#41;")):
+            self.assertEqual(source["anchor"]["locator"], locator)
+            self.assertEqual(source["anchor"]["sha256"], sha(document))
+            self.assertIn(source["anchor"], row["claim"]["anchors"])
+            span = source["byte_range"]
+            self.assertEqual(document[span["start"]:span["end_exclusive"]], raw)
+        self.assertEqual(rows["comparative"]["exact_number"]["raw"], "(12.50)")
+        markdown = fixture.run(["--format", "markdown"])
+        self.assertEqual(markdown.returncode, 0, markdown)
+        self.assertIn("Table1!C3", markdown.stdout)
+
+        claim_id = row["claim"]["claim_id"]
+        draft = "".join(f"Site A Q1 2025 100% basis AISC per ounce sold is [{amount}](fmine:{claim_id}).\n"
+                        for amount in ("-US$1,250.50/oz", "US$1,250.50/oz"))
+        (fixture.root / "draft.md").write_text(draft)
+        lint = success(fixture.invoke(arguments=["lint", "draft.md", "--issuer", ISSUER,
+                                                 "--html-definitions", MAPPING, "--as-of", "2025-05-01"]))
+        self.assertEqual([finding["verdict"] for finding in lint["lint"]["findings"]],
+                         ["verified", "value_mismatch"])
+
+    def test_split_accounting_number_refuses_ambiguous_fragments(self):
+        fixture = Fixture(self.binary)
+        mapping = fixture.mapping
+        for cells, close in (
+            (b"<td>(10.00</td><td>)</td>", "C2"),
+            (b"<td>(10.00</td><td></td><td>)</td>", "D3"),
+            (b"<td>(10.00</td><td> ] </td>", "C3"),
+            (b"<td>(10.00)</td><td>)</td>", "C3"),
+            (b"<td>10.00</td><td>)</td>", "C3"),
+            (b"<td>(-10.00</td><td>)</td>", "C3"),
+            (b"<td>(10,00</td><td>)</td>", "C3"),
+            (b"<td>(10.00%</td><td>)</td>", "C3"),
+            (b"<td>(10.00<sup>a</sup></td><td>)</td>", "C3"),
+            (b"<td><span>(10</span><span>.00</span></td><td>)</td>", "C3"),
+            (b"<td>(10.00</td><td><sup>)</sup></td>", "C3"),
+            (b'<td>(10.00</td><td colspan="2">)</td>', "C3"),
+            (b'<td>(10.00</td><td colspan="2">)</td>', "D3"),
+        ):
+            with self.subTest(cells=cells, close=close):
+                fixture.documents["Original.html"] = ORIGINAL.replace(b"<td>10.00</td>", cells)
+                fixture.mapping = mapping.replace('cell = "B3"\n',
+                                                  f'cell = "B3"\naccounting_close_cell = "{close}"\n', 1)
+                fixture.write()
+                refused(fixture.invoke(), "FMINE-REF-208")
+
     def test_cli_requires_explicit_unique_selectors_and_valid_dates(self):
         fixture = self.fixture()
         for arguments in (("html", "claims"), ("html", "claims", "--issuer", ISSUER),

@@ -130,6 +130,10 @@ The public lane of M0 (`fmine assure public`).
     Grade uses g/t or percentage points; recovery uses percentage points. All supported aliases are
     checked by the adapter. Generic production/sales, copper sales and produced-denominator costs refuse.
     Synthetic source fixtures cover the executable path; real issuer corpus coverage is not asserted.
+    The optional `accounting_close_cell` explicitly cites the adjacent closing parenthesis when
+    `cell` holds the opening parenthesis and digits. The joined token retains its printed precision
+    and negative sign. Both origins enter the canonical Claim, and the receipt retains a separate
+    byte range for each. Either fragment missing, annotated or out of position refuses.
 
 - DESIGN (BD-345): `lint::lint_cited(draft, claims)` checks a bounded equality grammar against canonical
   source assertions. It indexes Claim IDs and latest series once, then compares the named subject, supported

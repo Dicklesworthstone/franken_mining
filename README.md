@@ -1694,6 +1694,11 @@ grade uses `g/t` or `%`, and recovery uses `%`. Ownership is `100%`, `100% basis
 outside this adapter. Merged label cells retain their original anchors, and one merged numeric origin
 cannot be imported as multiple observations.
 
+When a filing splits a negative amount like `(1,250.50)` across two cells, keep `cell` on the opening
+fragment and add `accounting_close_cell = "C3"` if C3 holds the adjacent closing parenthesis. Both cells
+must originate in the same row. The report keeps both byte ranges and locators, and its exact number
+retains the sign and the two printed decimal places.
+
 The optional publication cut excludes later mapped sources **before opening their files** and lists those
 exclusions. Earlier releases and later comparatives keep separate Claims. These dates are the cited registry
 dates, not independently authenticated timestamps. Inputs stay inside the selected workspace; HTML files
@@ -1702,7 +1707,8 @@ or inferred table layout. HTML metric keys remain separate from workbook definit
 GEO figure does not establish its credit treatment or price-deck equivalence.
 
 The offline filing replay checks 63 printed cost values and their byte ranges across three panels
-in a filed SEC exhibit. The `html claims` examples use invented issuer mappings. Full Claim receipts
+in a filed SEC exhibit. It also checks the 21 split negatives among 84 gold cost-component figures.
+The `html claims` examples use invented issuer mappings. Full Claim receipts
 are returned directly by that command. [Replay the real-file extraction check](repro/barrick/README.md#check-the-filed-html-cost-tables).
 
 ### Check a disclosure draft against registered HTML evidence
