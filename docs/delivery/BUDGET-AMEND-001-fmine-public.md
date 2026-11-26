@@ -6,7 +6,7 @@ SwiftBasin drafted this record on 2026-10-31 at 22,000 / 25,000. The 24,000 / 28
 - **Crate:** `fmine-public`
 - **Planned / ceiling before:** 18000 / 21000 (`registries/loc_budget.toml`)
 - **Actual at revision:** 22615 (`cargo run -p xtask -- loc` at `05ac300`)
-- **New planned:** 25600
+- **New planned:** 25700
 - **New ceiling:** 28000 (retains the registered ceiling)
 - **New scope:** full public-lane assurance spine shipped through `05ac300`: source-bound citation validation
   (`bd-sjrh.2`), cross-vintage and Mine Stats identity consistency, public LMDI waterfalls (`BD-333`), guidance
@@ -29,3 +29,6 @@ continues to provide the planned baseline used by `xtask loc`.
 **DESIGN (2026-11-25, bd-058/bd-059).** Extend the allowance to 25,600 under the same owner direction.
 The 25,530-line measured version supports explicitly cited closing parenthesis cells in registered HTML
 Claims. Keep the registered budget row and ceiling for change measurement.
+
+**DESIGN (2026-11-26, bd-kftl.2).** Extend the allowance to 25,700 under the same owner direction to cover
+refusal of salted internal review packets on public assurance paths. Keep the registered baseline and ceiling.
