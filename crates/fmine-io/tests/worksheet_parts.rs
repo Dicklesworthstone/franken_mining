@@ -56,6 +56,141 @@ fn broken_relationships_refuse_the_workbook_even_if_a_positional_sheet_exists() 
     }
 }
 
+fn workbook_with_links(workbook: &[u8], links: &[u8]) -> Vec<u8> {
+    write_stored_zip(&[
+        ("xl/workbook.xml", workbook),
+        ("xl/_rels/workbook.xml.rels", links),
+        ("xl/worksheets/sheet1.xml", HIDDEN),
+        ("xl/worksheets/sheet2.xml", VISIBLE),
+    ])
+}
+
+#[test]
+fn duplicate_relationship_id_refuses_instead_of_selecting_the_last_target() {
+    let links = br#"<Relationships>
+<Relationship Id="r1" Target="worksheets/sheet1.xml"/>
+<Relationship Id="r2" Target="worksheets/sheet2.xml"/>
+<Relationship Id="r2" Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+    let bytes = workbook_with_links(WORKBOOK, links);
+    let err = Workbook::from_bytes("fixture.xlsx", &bytes).unwrap_err();
+    assert!(
+        err.to_string().contains("duplicate workbook relationship"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("r2"), "{err}");
+}
+
+#[test]
+fn an_external_sheet_relationship_refuses_even_when_its_target_exists_in_the_zip() {
+    let links = br#"<Relationships>
+<Relationship Id="r1" Target="worksheets/sheet1.xml"/>
+<Relationship Id="r2" TargetMode="External" Target="worksheets/sheet2.xml"/>
+</Relationships>"#;
+    let bytes = workbook_with_links(WORKBOOK, links);
+    let err = Workbook::from_bytes("fixture.xlsx", &bytes).unwrap_err();
+    assert!(err.to_string().contains("external"), "{err}");
+    assert!(err.to_string().contains("Production"), "{err}");
+}
+
+#[test]
+fn duplicate_binding_attributes_refuse_instead_of_choosing_one_value() {
+    let valid_links = br#"<Relationships>
+<Relationship Id="r1" Target="worksheets/sheet1.xml"/>
+<Relationship Id="r2" Target="worksheets/sheet2.xml"/>
+</Relationships>"#;
+    let duplicate_target = br#"<Relationships>
+<Relationship Id="r1" Target="worksheets/sheet1.xml"/>
+<Relationship Id="r2" Target="worksheets/sheet2.xml" Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+    let duplicate_sheet_binding = br#"<workbook><sheets>
+<sheet name="Workings" state="hidden" r:id="r1"/>
+<sheet name="Production" r:id="r2" r:id="r1"/>
+</sheets></workbook>"#;
+    for (workbook, links, attribute) in [
+        (WORKBOOK, duplicate_target.as_slice(), "Target"),
+        (
+            duplicate_sheet_binding.as_slice(),
+            valid_links.as_slice(),
+            "r:id",
+        ),
+    ] {
+        let bytes = workbook_with_links(workbook, links);
+        let err = Workbook::from_bytes("fixture.xlsx", &bytes).unwrap_err();
+        assert!(err.to_string().contains("duplicate attribute"), "{err}");
+        assert!(err.to_string().contains(attribute), "{err}");
+    }
+}
+
+#[test]
+fn visible_and_hidden_sheets_cannot_share_a_name_or_part() {
+    let distinct_parts = br#"<Relationships>
+<Relationship Id="r1" Target="worksheets/sheet1.xml"/>
+<Relationship Id="r2" Target="worksheets/sheet2.xml"/>
+</Relationships>"#;
+    let duplicate_name = br#"<workbook><sheets>
+<sheet name="PRODUCTION" state="hidden" r:id="r1"/>
+<sheet name="Production" r:id="r2"/>
+</sheets></workbook>"#;
+    let same_part = br#"<Relationships>
+<Relationship Id="r1" Target="worksheets/sheet1.xml"/>
+<Relationship Id="r2" Target="/xl/worksheets/nested/../sheet1.xml"/>
+</Relationships>"#;
+    for (workbook, links, diagnostic) in [
+        (
+            duplicate_name.as_slice(),
+            distinct_parts.as_slice(),
+            "duplicate worksheet name",
+        ),
+        (WORKBOOK, same_part.as_slice(), "shared worksheet part"),
+    ] {
+        let bytes = workbook_with_links(workbook, links);
+        let err = Workbook::from_bytes("fixture.xlsx", &bytes).unwrap_err();
+        assert!(err.to_string().contains(diagnostic), "{err}");
+    }
+}
+
+#[test]
+fn a_sheet_without_a_name_refuses_instead_of_shrinking_the_census() {
+    let workbook = br#"<workbook><sheets>
+<sheet name="Workings" state="hidden" r:id="r1"/>
+<sheet r:id="r2"/>
+</sheets></workbook>"#;
+    let links = br#"<Relationships>
+<Relationship Id="r1" Target="worksheets/sheet1.xml"/>
+<Relationship Id="r2" Target="worksheets/sheet2.xml"/>
+</Relationships>"#;
+    let bytes = workbook_with_links(workbook, links);
+    let err = Workbook::from_bytes("fixture.xlsx", &bytes).unwrap_err();
+    assert!(err.to_string().contains("sheet declaration 2"), "{err}");
+}
+
+#[test]
+fn quoted_and_line_wrapped_bindings_keep_the_exact_visible_cell_anchor() {
+    let workbook = br#"<workbook><sheets>
+<!-- <sheet name="Workings" r:id="r1"/> -->
+<sheet name='Workings' state='hidden' r:id='r1'/>
+<sheet
+ name = 'Production' r:id = 'r2'/>
+</sheets></workbook>"#;
+    let links = br#"<Relationships>
+<!-- <Relationship Id="r2" Target="worksheets/sheet1.xml"/> -->
+<Relationship Id='r1' Target='worksheets/sheet1.xml'/>
+<Relationship
+ Id = 'r2' TargetMode = 'Internal' Target = 'worksheets/sheet2.xml'/>
+</Relationships>"#;
+    let bytes = workbook_with_links(workbook, links);
+    let book = Workbook::from_bytes("fixture.xlsx", &bytes).unwrap();
+    assert_eq!(book.hidden_sheets.len(), 1);
+    assert_eq!(book.cell_census().numeric_cells, 1);
+    let cell = book.sheet("Production").unwrap().cell(1, 1).unwrap();
+    assert_eq!(cell.number_text.as_deref(), Some("42"));
+    assert_eq!(
+        book.make_anchor("Production", &cell.cell_ref).locator,
+        "Production!A1"
+    );
+}
+
 const LABELED: &[u8] = br#"<worksheet><sheetData><row r="1">
 <c r="A1" t="s"><v>0</v></c><c r="B1" s="1"><v>42</v></c>
 </row></sheetData></worksheet>"#;

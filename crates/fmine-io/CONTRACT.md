@@ -15,6 +15,11 @@ Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-str
 (`xlsx`); `G-BULL-1` quarantine of formula errors and hidden sheets; `G-BULL-2` placeholder preservation (`"-"`,
 `"N/A"` become `CellValue::Placeholder`, never `0.0`); byte-bound HTML table extraction (`HtmlDocument`).
 
+DESIGN (BD-271): Worksheet anchors require one worksheet per ASCII case-insensitive name and one sheet declaration
+per resolved ZIP part, across both visible and hidden sheets. Duplicate relationship IDs or binding attributes,
+missing sheet names and external sheet targets refuse extraction. A workbook with no relationship part may use
+the legacy positional sheet ordering. A present relationship part must resolve every declared sheet.
+
 `Workbook::cell_census` counts cells by kind over visible sheets and computes the numeric-cell digest: SHA-256 over
 `"{sheet}\t{cell_ref}\t{value}\n"` for every numeric cell, sheets in workbook order, cells in `(row, col)` order,
 values in `f64` `Display` form. The format is fixed so an independently written reader can reproduce it

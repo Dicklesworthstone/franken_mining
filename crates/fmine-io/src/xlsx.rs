@@ -1,6 +1,6 @@
 //! Label-anchored `.xlsx` workbook and worksheet extractor (`BD-057`, `BD-271`, `G-BULL-1`, `G-BULL-2`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -311,42 +311,47 @@ impl Workbook {
 
         let rels_text = entries
             .get("xl/_rels/workbook.xml.rels")
-            .map(|b| String::from_utf8_lossy(b).into_owned())
-            .unwrap_or_default();
-        let rel_targets = parse_workbook_rels(&rels_text);
+            .map(|b| String::from_utf8_lossy(b));
+        let relationships = parse_workbook_rels(rels_text.as_deref().unwrap_or_default())?;
         let shared_strings = workbook_metadata(
             &entries,
-            &rels_text,
+            &relationships,
             "sharedStrings",
             "xl/sharedStrings.xml",
         )?
         .map_or_else(Vec::new, |bytes| {
             parse_shared_strings(&String::from_utf8_lossy(bytes))
         });
-        let styles = workbook_metadata(&entries, &rels_text, "styles", "xl/styles.xml")?
+        let styles = workbook_metadata(&entries, &relationships, "styles", "xl/styles.xml")?
             .map(|b| parse_styles(&String::from_utf8_lossy(b)))
             .transpose()?;
 
         let mut sheets = Vec::new();
         let mut hidden_sheets = Vec::new();
         let mut quarantined = Vec::new();
-        for (position, (sheet_name, rel_id, state)) in
-            parse_workbook_sheets(&wb_text).into_iter().enumerate()
-        {
-            let part = if let Some(target) = rel_targets.get(&rel_id) {
-                workbook_part(target).ok_or_else(|| {
-                    IoError::Xml(format!(
-                        "sheet {sheet_name:?}: invalid part target {target:?}"
-                    ))
-                })?
-            } else if !entries.contains_key("xl/_rels/workbook.xml.rels") {
+        let mut parts = BTreeMap::new();
+        for (position, declaration) in parse_workbook_sheets(&wb_text)?.into_iter().enumerate() {
+            let SheetDeclaration {
+                name: sheet_name,
+                rel_id,
+                state,
+            } = declaration;
+            let part = if rels_text.is_none() {
                 // Legacy minimal workbooks omit relationships and number every sheet in workbook order.
                 format!("xl/worksheets/sheet{}.xml", position + 1)
             } else {
-                return Err(IoError::Xml(format!(
-                    "sheet {sheet_name:?}: unresolved workbook relationship {rel_id:?}"
-                )));
+                let relationship = relationships.get(&rel_id).ok_or_else(|| {
+                    IoError::Xml(format!(
+                        "sheet {sheet_name:?}: unresolved workbook relationship {rel_id:?}"
+                    ))
+                })?;
+                internal_workbook_part(relationship, &format!("sheet {sheet_name:?}"))?
             };
+            if let Some(prior) = parts.insert(part.clone(), sheet_name.clone()) {
+                return Err(IoError::Xml(format!(
+                    "shared worksheet part {part:?} for sheets {prior:?} and {sheet_name:?}"
+                )));
+            }
             let bytes = entries.get(&part).ok_or_else(|| {
                 IoError::Xml(format!(
                     "sheet {sheet_name:?}: missing worksheet part {part:?}"
@@ -434,11 +439,23 @@ fn workbook_part(target: &str) -> Option<String> {
 }
 
 pub(crate) fn metadata_part_name(rels_xml: &str, kind: &str) -> Result<Option<String>, IoError> {
+    workbook_metadata_part(&parse_workbook_rels(rels_xml)?, kind)
+}
+
+type WorkbookAttributes<'a> = BTreeMap<&'a str, &'a str>;
+type WorkbookRelationships<'a> = BTreeMap<String, WorkbookAttributes<'a>>;
+
+fn workbook_metadata_part(
+    relationships: &WorkbookRelationships<'_>,
+    kind: &str,
+) -> Result<Option<String>, IoError> {
     let suffix = format!("/{kind}");
-    let mut links = iter_xml_start_tags(rels_xml, "Relationship")
-        .into_iter()
-        .filter(|tag| extract_attr_exact(tag, "Type").is_some_and(|kind| kind.ends_with(&suffix)));
-    let Some(tag) = links.next() else {
+    let mut links = relationships.values().filter(|attrs| {
+        attrs
+            .get("Type")
+            .is_some_and(|kind| kind.ends_with(&suffix))
+    });
+    let Some(relationship) = links.next() else {
         return Ok(None);
     };
     if links.next().is_some() {
@@ -446,24 +463,37 @@ pub(crate) fn metadata_part_name(rels_xml: &str, kind: &str) -> Result<Option<St
             "workbook specifies multiple {kind} parts"
         )));
     }
-    if extract_attr_exact(tag, "TargetMode").as_deref() == Some("External") {
-        return Err(IoError::Xml(format!("external workbook {kind} part")));
+    internal_workbook_part(relationship, &format!("workbook {kind}")).map(Some)
+}
+
+fn internal_workbook_part(
+    attrs: &WorkbookAttributes<'_>,
+    context: &str,
+) -> Result<String, IoError> {
+    match attrs.get("TargetMode").copied() {
+        None | Some("Internal") => {}
+        Some("External") => return Err(IoError::Xml(format!("external {context} part"))),
+        Some(mode) => {
+            return Err(IoError::Xml(format!(
+                "{context} relationship has invalid target mode {mode:?}"
+            )));
+        }
     }
-    let target = extract_attr_exact(tag, "Target")
+    let target = attrs
+        .get("Target")
         .filter(|target| !target.is_empty())
-        .ok_or_else(|| IoError::Xml(format!("workbook {kind} relationship has no target")))?;
-    workbook_part(&decode_xml_entities(&target))
-        .map(Some)
-        .ok_or_else(|| IoError::Xml(format!("invalid workbook {kind} target {target:?}")))
+        .ok_or_else(|| IoError::Xml(format!("{context} relationship has no target")))?;
+    workbook_part(&decode_xml_entities(target))
+        .ok_or_else(|| IoError::Xml(format!("invalid {context} target {target:?}")))
 }
 
 fn workbook_metadata<'a>(
     entries: &'a BTreeMap<String, Vec<u8>>,
-    rels_xml: &str,
+    relationships: &WorkbookRelationships<'_>,
     kind: &str,
     legacy_path: &str,
 ) -> Result<Option<&'a [u8]>, IoError> {
-    let Some(part) = metadata_part_name(rels_xml, kind)? else {
+    let Some(part) = workbook_metadata_part(relationships, kind)? else {
         return Ok(entries.get(legacy_path).map(Vec::as_slice));
     };
     let bytes = entries
@@ -472,32 +502,66 @@ fn workbook_metadata<'a>(
     Ok(Some(bytes))
 }
 
-fn parse_workbook_rels(xml: &str) -> BTreeMap<String, String> {
+fn parse_workbook_rels(xml: &str) -> Result<WorkbookRelationships<'_>, IoError> {
     let mut map = BTreeMap::new();
-    for tag in iter_xml_start_tags(xml, "Relationship") {
-        if let (Some(id), Some(target)) = (
-            extract_attr_exact(tag, "Id"),
-            extract_attr_exact(tag, "Target"),
-        ) {
-            map.insert(id, decode_xml_entities(&target));
+    for (position, tag) in iter_xml_start_tags(xml, "Relationship")
+        .into_iter()
+        .enumerate()
+    {
+        let context = format!("workbook relationship {}", position + 1);
+        let attrs = workbook_attributes(tag, &context)?;
+        let id = attrs
+            .get("Id")
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| IoError::Xml(format!("{context} has no ID")))?;
+        let id = decode_xml_entities(id);
+        if map.insert(id.clone(), attrs).is_some() {
+            return Err(IoError::Xml(format!(
+                "duplicate workbook relationship ID {id:?}"
+            )));
         }
     }
-    map
+    Ok(map)
 }
 
-fn parse_workbook_sheets(xml: &str) -> Vec<(String, String, String)> {
+struct SheetDeclaration {
+    name: String,
+    rel_id: String,
+    state: String,
+}
+
+fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetDeclaration>, IoError> {
     let mut out = Vec::new();
-    for tag in iter_xml_start_tags(xml, "sheet") {
-        let Some(name) = extract_attr(tag, "name") else {
-            continue;
-        };
-        let rid = extract_attr(tag, "r:id")
-            .or_else(|| extract_attr(tag, "id"))
+    let mut names = BTreeSet::new();
+    for (position, tag) in iter_xml_start_tags(xml, "sheet").into_iter().enumerate() {
+        let context = format!("sheet declaration {}", position + 1);
+        let attrs = workbook_attributes(tag, &context)?;
+        let name = attrs
+            .get("name")
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| IoError::Xml(format!("{context} has no name")))?;
+        let name = decode_xml_entities(name);
+        if !names.insert(name.to_ascii_lowercase()) {
+            return Err(IoError::Xml(format!("duplicate worksheet name {name:?}")));
+        }
+        if attrs.contains_key("r:id") && attrs.contains_key("id") {
+            return Err(IoError::Xml(format!(
+                "sheet {name:?} has both r:id and id relationship bindings"
+            )));
+        }
+        let rel_id = attrs
+            .get("r:id")
+            .or_else(|| attrs.get("id"))
+            .copied()
             .unwrap_or_default();
-        let state = extract_attr(tag, "state").unwrap_or_else(|| "visible".to_string());
-        out.push((decode_xml_entities(&name), rid, state));
+        let state = attrs.get("state").copied().unwrap_or("visible");
+        out.push(SheetDeclaration {
+            name,
+            rel_id: decode_xml_entities(rel_id),
+            state: state.to_string(),
+        });
     }
-    out
+    Ok(out)
 }
 
 fn parse_shared_strings(xml: &str) -> Vec<String> {
@@ -881,19 +945,43 @@ pub fn parse_a1_ref(cell_ref: &str) -> Option<(u32, u32)> {
 pub(crate) fn iter_xml_start_tags<'a>(xml: &'a str, tag_name: &'a str) -> Vec<&'a str> {
     let mut out = Vec::new();
     let pat = format!("<{tag_name}");
-    let mut pos = 0;
-    while let Some(idx) = xml[pos..].find(&pat) {
-        let abs = pos + idx;
-        let next_ch = xml.as_bytes().get(abs + pat.len()).copied().unwrap_or(b' ');
-        if next_ch != b' ' && next_ch != b'>' && next_ch != b'/' {
-            pos = abs + pat.len();
-            continue;
+    let mut remaining = xml;
+    while let Some(at) = remaining.find('<') {
+        let start = &remaining[at..];
+        let ignored = [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>")]
+            .into_iter()
+            .find_map(|(open, close)| start.strip_prefix(open).map(|body| (body, close)));
+        if let Some((body, close)) = ignored {
+            let Some((_, next)) = body.split_once(close) else {
+                break;
+            };
+            remaining = next;
+        } else if start.strip_prefix(&pat).is_some_and(|suffix| {
+            suffix
+                .as_bytes()
+                .first()
+                .is_some_and(|ch| ch.is_ascii_whitespace() || matches!(ch, b'>' | b'/'))
+        }) {
+            let mut quote = None;
+            let Some(end) = start.bytes().position(|ch| {
+                if let Some(open) = quote {
+                    if ch == open {
+                        quote = None;
+                    }
+                } else if matches!(ch, b'\'' | b'"') {
+                    quote = Some(ch);
+                } else if ch == b'>' {
+                    return true;
+                }
+                false
+            }) else {
+                break;
+            };
+            out.push(&start[..=end]);
+            remaining = &start[end + 1..];
+        } else {
+            remaining = &start[1..];
         }
-        let Some(gt) = xml[abs..].find('>') else {
-            break;
-        };
-        out.push(&xml[abs..abs + gt + 1]);
-        pos = abs + gt + 1;
     }
     out
 }
@@ -909,27 +997,66 @@ fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
 /// by `=` (whitespace allowed around it), with either quote style. `cs="9"` does not match `s`. The value is
 /// returned undecoded.
 pub(crate) fn extract_attr_exact(tag: &str, name: &str) -> Option<String> {
-    let bytes = tag.as_bytes();
-    let mut from = 0;
-    while let Some(i) = tag[from..].find(name) {
-        let at = from + i;
-        from = at + name.len();
-        if at == 0 || !bytes[at - 1].is_ascii_whitespace() {
-            continue;
+    let mut attrs = xml_attribute_text(tag);
+    while let Some((key, body, tail)) = next_xml_attribute(attrs) {
+        if key == name {
+            return Some(body.to_string());
         }
-        let Some(rest) = tag[from..].trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let rest = rest.trim_start();
-        let quote = rest.chars().next()?;
-        if quote != '"' && quote != '\'' {
-            return None;
-        }
-        let body = &rest[1..];
-        let end = body.find(quote)?;
-        return Some(body[..end].to_string());
+        attrs = tail.trim_start();
     }
     None
+}
+
+fn workbook_attributes<'a>(tag: &'a str, context: &str) -> Result<WorkbookAttributes<'a>, IoError> {
+    let mut attrs = xml_attribute_text(tag);
+    let mut values = BTreeMap::new();
+    while !attrs.is_empty() {
+        let (key, value, tail) = next_xml_attribute(attrs)
+            .ok_or_else(|| IoError::Xml(format!("{context} has malformed attributes")))?;
+        if values.insert(key, value).is_some() {
+            return Err(IoError::Xml(format!(
+                "{context} has duplicate attribute {key:?}"
+            )));
+        }
+        attrs = tail.trim_start();
+    }
+    Ok(values)
+}
+
+fn xml_attribute_text(tag: &str) -> &str {
+    let Some(at) = tag.find(|ch: char| ch.is_ascii_whitespace()) else {
+        return "";
+    };
+    let attrs = &tag[at..];
+    attrs
+        .strip_suffix("/>")
+        .or_else(|| attrs.strip_suffix('>'))
+        .unwrap_or(attrs)
+        .trim()
+}
+
+fn next_xml_attribute(attrs: &str) -> Option<(&str, &str, &str)> {
+    let (key, value) = attrs.split_once('=')?;
+    let key = key.trim_end();
+    if key.is_empty()
+        || key.contains(|ch: char| {
+            ch.is_ascii_whitespace() || matches!(ch, '<' | '>' | '/' | '\'' | '"')
+        })
+    {
+        return None;
+    }
+    let value = value.trim_start();
+    let quote = value
+        .chars()
+        .next()
+        .filter(|quote| matches!(quote, '"' | '\''))?;
+    let (body, tail) = value[1..].split_once(quote)?;
+    if body.contains('<')
+        || !(tail.is_empty() || tail.starts_with(|ch: char| ch.is_ascii_whitespace()))
+    {
+        return None;
+    }
+    Some((key, body, tail))
 }
 
 fn extract_element_text(xml: &str, tag_name: &str) -> Option<String> {
