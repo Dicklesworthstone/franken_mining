@@ -814,3 +814,48 @@ fn cutoff_cli_converts_explicit_short_ton_costs_and_preserves_the_raw_claims() {
         "{row}"
     );
 }
+
+#[test]
+fn cutoff_cli_replays_a_signed_recovery_coefficient_with_its_printed_sign() {
+    fn result(row: &str) -> &str {
+        object(row.split_once("\"result\":").unwrap().1, "{")
+    }
+    let mut fixture = Fixture::new("signed-recovery-coefficient", &[Model::Tcm]);
+    let magnitude = fixture.successful(&[]);
+    let magnitude_row = cutoff_row(&magnitude, "tcm_cutoff");
+    fixture.definitions = fixture.definitions.replace(
+        "role = \"recovery_slope\"",
+        "role = \"recovery_coefficient\"",
+    );
+    fixture.change("tcm_cutoff_recovery_slope", |e| e.token = "-2.00".into());
+    let output = fixture.successful(&[]);
+    let row = cutoff_row(&output, "tcm_cutoff");
+    assert_eq!(result(row), result(magnitude_row), "{row}");
+    let (inputs, derived) = claim_objects(row);
+    let coefficient = inputs
+        .iter()
+        .find(|source| string_field(source, "role") == "recovery_coefficient")
+        .unwrap();
+    assert!(coefficient.contains(r#""printed":"-2/1","half_step":"1/200""#));
+    assert!(row.contains(r#""token":"-2.00""#));
+    assert!(derived.contains(string_field(coefficient, "claim_id")));
+    assert_canonical_id(coefficient);
+    assert_canonical_id(derived);
+
+    fixture.change("tcm_cutoff_recovery_slope", |e| e.token = "2.00".into());
+    let output = fixture.successful(&[]);
+    let row = cutoff_row(&output, "tcm_cutoff");
+    assert!(row.contains(r#""status":"refused""#), "{row}");
+    assert!(row.contains(r#""claims":null"#), "{row}");
+
+    fixture.definitions.push_str(
+        "\n[[cutoff_input]]\ncutoff = \"tcm_cutoff\"\nrole = \"recovery_slope\"\nquantity = \"second_slope\"\n",
+    );
+    fixture.write();
+    let (exit, rejected) = fixture.invoke(&[]);
+    assert_ne!(exit, 0, "{rejected}");
+    assert!(
+        rejected.contains("recovery roles must exactly match"),
+        "{rejected}"
+    );
+}

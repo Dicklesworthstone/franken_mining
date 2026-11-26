@@ -3292,8 +3292,12 @@ inputs use `percent` and `usd_per_oz`, respectively.
 
 The gold price is an exact quoted parameter; the other inputs retain their displayed rounding bounds.
 For example, invented readings of $100.0/t cost, 50.0% recovery and $3,110.34768/oz gold reproduce 2.00 g/t.
-`recovery = "tcm_over_gold"` instead requires `recovery_intercept` (`percent`), `recovery_slope` (`g_per_t`)
-and `tcm` (`percent`) inputs. The alternative output unit is `oz_per_short_ton`; an optional `published_metric`
+`recovery = "tcm_over_gold"` instead requires `recovery_intercept` and `tcm` (both `percent`) plus one
+coefficient in `g_per_t`. Use `recovery_slope` for the positive magnitude in a subtraction, or
+`recovery_coefficient` for a printed signed term added to the intercept. The source Claim retains
+its printed sign and precision. The declared rounding interval must describe a non-increasing
+recovery as the TCM-to-gold ratio rises.
+The alternative output unit is `oz_per_short_ton`; an optional `published_metric`
 input checks its printed `g_per_t` equivalent. The output unit is independent of the declared cost units.
 
 Results appear under `payload.checks.cutoffs.rows`: `reproduced`, `within_input_rounding`, or `conflict` for a

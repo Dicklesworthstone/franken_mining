@@ -51,6 +51,7 @@ pub enum InputRole {
     Recovery,
     RecoveryIntercept,
     RecoverySlope,
+    RecoveryCoefficient,
     Tcm,
 }
 
@@ -68,6 +69,7 @@ impl InputRole {
             Self::Recovery => "recovery",
             Self::RecoveryIntercept => "recovery_intercept",
             Self::RecoverySlope => "recovery_slope",
+            Self::RecoveryCoefficient => "recovery_coefficient",
             Self::Tcm => "tcm",
         }
     }
@@ -76,7 +78,7 @@ impl InputRole {
     pub const fn unit(self, output: Unit) -> &'static str {
         match self {
             Self::Published => output.as_str(),
-            Self::PublishedMetric | Self::RecoverySlope => "g_per_t",
+            Self::PublishedMetric | Self::RecoverySlope | Self::RecoveryCoefficient => "g_per_t",
             Self::GoldPrice | Self::OunceDeduction => "usd_per_oz",
             Self::Cost => "usd_per_t",
             Self::CostPerShortTon => "usd_per_short_ton",
@@ -98,6 +100,7 @@ impl InputRole {
             "recovery" => Self::Recovery,
             "recovery_intercept" => Self::RecoveryIntercept,
             "recovery_slope" => Self::RecoverySlope,
+            "recovery_coefficient" => Self::RecoveryCoefficient,
             "tcm" => Self::Tcm,
             _ => return None,
         })
@@ -162,17 +165,15 @@ impl CutoffDeclaration {
                 "needs one published cutoff, one gold price, at least one cost, and at most one metric equivalent for an oz/short-ton cutoff",
             ));
         }
-        let roles = [
-            InputRole::RecoveryIntercept,
-            InputRole::RecoverySlope,
-            InputRole::Tcm,
-        ];
+        let intercept = count(InputRole::RecoveryIntercept);
+        let decline = count(InputRole::RecoverySlope) + count(InputRole::RecoveryCoefficient);
+        let tcm = count(InputRole::Tcm);
         let recovery_ok = match self.recovery {
             RecoveryModel::ConstantPercent => {
-                count(InputRole::Recovery) == 1 && roles.iter().all(|r| count(*r) == 0)
+                count(InputRole::Recovery) == 1 && intercept == 0 && decline == 0 && tcm == 0
             }
             RecoveryModel::TcmOverGold => {
-                count(InputRole::Recovery) == 0 && roles.iter().all(|r| count(*r) == 1)
+                count(InputRole::Recovery) == 0 && intercept == 1 && decline == 1 && tcm == 1
             }
         };
         if !recovery_ok {

@@ -227,11 +227,30 @@ fn bind(
             RecoveryModel::ConstantPercent => {
                 Recovery::Percent(printed(one(InputRole::Recovery)?)?)
             }
-            RecoveryModel::TcmOverGold => Recovery::TcmOverAu {
-                intercept: printed(one(InputRole::RecoveryIntercept)?)?,
-                slope: printed(one(InputRole::RecoverySlope)?)?,
-                tcm_percent: printed(one(InputRole::Tcm)?)?,
-            },
+            RecoveryModel::TcmOverGold => {
+                let slope = if let Some((_, source)) = sources
+                    .iter()
+                    .find(|(role, _)| *role == InputRole::RecoveryCoefficient)
+                {
+                    let coefficient = printed(source)?;
+                    // Changing sign reflects both endpoints. Its symmetric half-step
+                    // stays positive and the original token stays in the source Claim.
+                    Printed {
+                        value: coefficient
+                            .value
+                            .checked_neg()
+                            .map_err(|e| format!("exact recovery coefficient: {e:?}"))?,
+                        half_step: coefficient.half_step,
+                    }
+                } else {
+                    printed(one(InputRole::RecoverySlope)?)?
+                };
+                Recovery::TcmOverAu {
+                    intercept: printed(one(InputRole::RecoveryIntercept)?)?,
+                    slope,
+                    tcm_percent: printed(one(InputRole::Tcm)?)?,
+                }
+            }
         },
     };
     domain(&case)?;
