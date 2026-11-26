@@ -27,8 +27,8 @@ use fmine_core::codec::Encoder;
 use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_explore::intercept::{
-    DrillReleaseAudit, GradeUnit, InclusionRelation, Intercept, LengthUnit, PrintedQty,
-    ReleaseDisclosureContext, audit_drill_release,
+    DisclosureFlag, DrillReleaseAudit, GradeUnit, InclusionRelation, Intercept, LengthUnit,
+    PrintedQty, ReleaseDisclosureContext, audit_drill_release,
 };
 use fmine_io::intercept::{ParseOutcome, parse_intercept_phrase};
 use fmine_units::ExactQty;
@@ -147,13 +147,13 @@ impl JuniorReleasePacket {
     pub fn render_drill_release_worksheet_toml(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "schema = \"fmine.drill-release-check.v1\"");
-        let _ = writeln!(
-            out,
-            "document = \"Synthetic junior pack {} ({})\"",
+        let doc_title = format!(
+            "Synthetic junior pack {} ({})",
             self.doc_id, SYNTHETIC_JUNIOR_LABEL
         );
+        let _ = writeln!(out, "document = {}", json_quote(&doc_title));
         let _ = writeln!(out, "evidence = \"synthetic\"");
-        let _ = writeln!(out, "grade_basis = \"{}\"", self.grade_basis);
+        let _ = writeln!(out, "grade_basis = {}", json_quote(&self.grade_basis));
         if let Some((cutoff, unit)) = self.context.composite_cutoff {
             let _ = writeln!(out, "cutoff = \"{}/{}\"", cutoff.num(), cutoff.den());
             let _ = writeln!(out, "cutoff_unit = \"{}\"", unit.as_str());
@@ -179,12 +179,8 @@ impl JuniorReleasePacket {
         );
         for (idx, phrase) in self.phrases.iter().enumerate() {
             let _ = writeln!(out, "\n[[phrase]]");
-            let _ = writeln!(
-                out,
-                "locator = \"synthetic {}, line {}\"",
-                self.doc_id,
-                idx + 1
-            );
+            let locator = format!("synthetic {}, line {}", self.doc_id, idx + 1);
+            let _ = writeln!(out, "locator = {}", json_quote(&locator));
             let _ = writeln!(out, "text = {}", json_quote(phrase));
             let has_tw = match parse_intercept_phrase(phrase, None) {
                 ParseOutcome::Parsed(ic) => ic.true_width_stated,
@@ -215,12 +211,7 @@ impl JuniorWorldTruth {
         enc.put_u8(self.seed_class as u8);
         enc.put_u64(self.generated_intercepts.len() as u64);
         for ic in &self.generated_intercepts {
-            enc.put_str(&ic.hole);
-            enc.put_bytes(&ic.length.value.num().to_le_bytes());
-            enc.put_bytes(&ic.length.value.den().to_le_bytes());
-            enc.put_bytes(&ic.grade.value.num().to_le_bytes());
-            enc.put_bytes(&ic.grade.value.den().to_le_bytes());
-            enc.put_u64(ic.children.len() as u64);
+            encode_intercept_canonical(&mut enc, ic);
         }
         enc.put_u64(self.omitted_holes.len() as u64);
         for h in &self.omitted_holes {
@@ -230,7 +221,75 @@ impl JuniorWorldTruth {
         for p in &self.later_full_release_phrases {
             enc.put_str(p);
         }
+        encode_context_canonical(&mut enc, &self.later_full_release_context);
         enc.finish()
+    }
+}
+
+fn encode_printed_canonical(enc: &mut Encoder, p: PrintedQty) {
+    enc.put_bytes(&p.value.num().to_le_bytes());
+    enc.put_bytes(&p.value.den().to_le_bytes());
+    enc.put_bytes(&p.step.num().to_le_bytes());
+    enc.put_bytes(&p.step.den().to_le_bytes());
+}
+
+fn encode_intercept_canonical(enc: &mut Encoder, ic: &Intercept) {
+    enc.put_str(&ic.hole);
+    match ic.from {
+        None => enc.put_u8(0),
+        Some(f) => {
+            enc.put_u8(1);
+            encode_printed_canonical(enc, f);
+        }
+    }
+    match ic.to {
+        None => enc.put_u8(0),
+        Some(t) => {
+            enc.put_u8(1);
+            encode_printed_canonical(enc, t);
+        }
+    }
+    encode_printed_canonical(enc, ic.length);
+    enc.put_str(ic.length_unit.as_str());
+    encode_printed_canonical(enc, ic.grade);
+    enc.put_str(ic.grade_unit.as_str());
+    match &ic.metal_symbol {
+        None => enc.put_u8(0),
+        Some(sym) => {
+            enc.put_u8(1);
+            enc.put_str(sym);
+        }
+    }
+    enc.put_u8(u8::from(ic.is_metal_equivalent));
+    enc.put_u8(u8::from(ic.is_downhole_length));
+    enc.put_u8(u8::from(ic.true_width_stated));
+    enc.put_str(ic.relation.as_str());
+    enc.put_u64(ic.children.len() as u64);
+    for child in &ic.children {
+        encode_intercept_canonical(enc, child);
+    }
+}
+
+fn encode_context_canonical(enc: &mut Encoder, ctx: &ReleaseDisclosureContext) {
+    match ctx.composite_cutoff {
+        None => enc.put_u8(0),
+        Some((qty, unit)) => {
+            enc.put_u8(1);
+            enc.put_bytes(&qty.num().to_le_bytes());
+            enc.put_bytes(&qty.den().to_le_bytes());
+            enc.put_str(unit.as_str());
+        }
+    }
+    enc.put_u8(u8::from(ctx.internal_dilution_stated));
+    enc.put_u8(u8::from(ctx.top_cut_stated));
+    enc.put_u8(u8::from(ctx.metal_eq_prices_stated));
+    enc.put_u8(u8::from(ctx.metal_eq_recoveries_stated));
+    match ctx.declared_hole_count {
+        None => enc.put_u8(0),
+        Some(n) => {
+            enc.put_u8(1);
+            enc.put_u64(u64::from(n));
+        }
     }
 }
 
@@ -408,17 +467,33 @@ impl JuniorScoringHarness {
 
             *seeded_by_class.entry(truth.seed_class).or_insert(0) += 1;
 
-            let fired_hole_gap = output.audit.flags_by_kind.contains_key("hole_sequence_gap");
+            let emitted_missing_nums: Option<&[u32]> =
+                output.audit.release_flags.iter().find_map(|f| match f {
+                    DisclosureFlag::HoleSequenceGap {
+                        missing_sequence_numbers,
+                        ..
+                    } => Some(missing_sequence_numbers.as_slice()),
+                    _ => None,
+                });
             let truth_has_omitted_in_full = !truth.omitted_holes.is_empty()
                 && truth.later_full_release_phrases.len() > truth.generated_intercepts.len();
             if truth_has_omitted_in_full {
                 hole_gap_seeded += 1;
-                if fired_hole_gap {
+                let expected_missing: Vec<u32> = truth
+                    .omitted_holes
+                    .iter()
+                    .filter_map(|h| trailing_hole_number(h))
+                    .collect();
+                let recovered_exact = emitted_missing_nums.is_some_and(|reported| {
+                    !expected_missing.is_empty()
+                        && expected_missing.iter().all(|n| reported.contains(n))
+                });
+                if recovered_exact {
                     hole_gap_tp += 1;
                 } else {
                     hole_gap_fn += 1;
                 }
-            } else if fired_hole_gap {
+            } else if emitted_missing_nums.is_some() {
                 hole_gap_fp += 1;
             }
 
@@ -733,6 +808,14 @@ fn build_synthetic_hole_intercept(
     Ok((phrase, host_ic))
 }
 
+fn trailing_hole_number(hole: &str) -> Option<u32> {
+    let trimmed = hole.trim();
+    let digit_start = trimmed
+        .rfind(|c: char| !c.is_ascii_digit())
+        .map_or(0, |idx| idx + 1);
+    trimmed.get(digit_start..)?.parse::<u32>().ok()
+}
+
 fn format_cents(cents: i128) -> String {
     format!("{}.{:02}", cents / 100, (cents % 100).abs())
 }
@@ -846,6 +929,20 @@ mod tests {
                 (out, sealed)
             })
             .collect();
+        // Verify zero spurious cross-flag contamination: each seeded release fires strictly 1 flag kind.
+        for (out, sealed) in &evaluated {
+            let truth = sealed.open(&harness.key).expect("open seal");
+            if let Some(expected_kind) = truth.seed_class.expected_flag_kind() {
+                assert_eq!(
+                    out.audit.flags_by_kind.len(),
+                    1,
+                    "seeded release {:?} should fire only {}, got {:?}",
+                    truth.seed_class,
+                    expected_kind,
+                    out.audit.flags_by_kind
+                );
+            }
+        }
         let scorecard = harness.score_campaign(&evaluated).expect("score campaign");
         assert_eq!(scorecard.clean_releases, 10);
         assert_eq!(
@@ -866,6 +963,20 @@ mod tests {
                 (out, sealed)
             })
             .collect();
+        // Verify zero spurious cross-flag contamination: each seeded release fires strictly 1 flag kind.
+        for (out, sealed) in &evaluated {
+            let truth = sealed.open(&harness.key).expect("open seal");
+            if let Some(expected_kind) = truth.seed_class.expected_flag_kind() {
+                assert_eq!(
+                    out.audit.flags_by_kind.len(),
+                    1,
+                    "seeded release {:?} should fire only {}, got {:?}",
+                    truth.seed_class,
+                    expected_kind,
+                    out.audit.flags_by_kind
+                );
+            }
+        }
         let scorecard = harness.score_campaign(&evaluated).expect("score campaign");
         assert_eq!(scorecard.releases, 60);
 
@@ -980,6 +1091,19 @@ mod tests {
             assert_eq!(p1, p2);
             assert_eq!(s1.truth_commitment(), s2.truth_commitment());
         }
+
+        // Mutating a nested child inclusion grade must change the sealed truth commitment.
+        let mut mutated = c1[0].1.open(&h1.key).expect("open").clone();
+        mutated.generated_intercepts[0].children[0].grade =
+            PrintedQty::parse_decimal("99.99").expect("99.99");
+        let sealed_mut = SealedTruth::seal(
+            mutated.doc_id.clone(),
+            cfg.seed_root,
+            &mutated.canonical_bytes(),
+            &h1.key,
+            mutated,
+        );
+        assert_ne!(c1[0].1.truth_commitment(), sealed_mut.truth_commitment());
     }
 
     #[test]
