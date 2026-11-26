@@ -122,7 +122,7 @@ fn rows<'a>(input: &'a [TomlRow], metal: &str) -> Result<(Vec<Intercept>, Vec<Ve
                     &["hole", "true_width_stated"],
                 )?;
                 let text = get(&values, "text")?;
-                let node = match parse_intercept_phrase(text, values.get("hole").copied()) {
+                let mut node = match parse_intercept_phrase(text, values.get("hole").copied()) {
                     ParseOutcome::Parsed(node) => node,
                     ParseOutcome::FallbackToCitedMode { reason, .. } => {
                         return Err(invalid(format!(
@@ -131,6 +131,9 @@ fn rows<'a>(input: &'a [TomlRow], metal: &str) -> Result<(Vec<Intercept>, Vec<Ve
                         )));
                     }
                 };
+                if values.contains_key("true_width_stated") {
+                    node.true_width_stated = boolean(&values, "true_width_stated")?;
+                }
                 (*node, values, "phrase")
             }
             "cited" => {
@@ -162,8 +165,7 @@ fn rows<'a>(input: &'a [TomlRow], metal: &str) -> Result<(Vec<Intercept>, Vec<Ve
                 )));
             }
         };
-        // A substring in prose is insufficient to assert true width.
-        declare_basis(&mut node, metal, boolean(&values, "true_width_stated")?)?;
+        declare_basis(&mut node, metal)?;
         let parent = values
             .get("parent")
             .map(|id| {
@@ -209,7 +211,7 @@ fn rows<'a>(input: &'a [TomlRow], metal: &str) -> Result<(Vec<Intercept>, Vec<Ve
     Ok((roots, evidence))
 }
 
-fn declare_basis(node: &mut Intercept, metal: &str, width: bool) -> Result<()> {
+fn declare_basis(node: &mut Intercept, metal: &str) -> Result<()> {
     if node
         .metal_symbol
         .as_ref()
@@ -221,9 +223,8 @@ fn declare_basis(node: &mut Intercept, metal: &str, width: bool) -> Result<()> {
         )));
     }
     node.is_metal_equivalent = metal.ends_with("Eq");
-    node.true_width_stated = width;
     for child in &mut node.children {
-        declare_basis(child, metal, width)?;
+        declare_basis(child, metal)?;
     }
     Ok(())
 }

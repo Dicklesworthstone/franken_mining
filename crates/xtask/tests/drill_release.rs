@@ -166,6 +166,114 @@ fn binary_preserves_exact_remainder_and_citations_after_sorting() {
 }
 
 #[test]
+fn quoted_true_width_clears_only_its_own_interval() {
+    let (header, _) = EXAMPLE.split_once("[[phrase]]").unwrap();
+    let host = "DR-001: 12.0 m @ 5.00 g/t Au";
+    let cases = [
+        (
+            "quoted",
+            format!("{host} (estimated true width ≈ 9.6 m)"),
+            None,
+            false,
+        ),
+        (
+            "year only",
+            format!("{host} (true width estimated for 2026)"),
+            None,
+            true,
+        ),
+        (
+            "unknown",
+            format!("{host} (true width unknown)"),
+            None,
+            true,
+        ),
+        (
+            "negated width",
+            format!("{host} (not true width: 9.6 m)"),
+            None,
+            true,
+        ),
+        (
+            "unitless width",
+            format!("{host} (true width 9.6)"),
+            None,
+            true,
+        ),
+        ("manual", host.to_owned(), Some(true), false),
+        (
+            "explicit false",
+            format!("{host} (true width 9.6 m)"),
+            Some(false),
+            true,
+        ),
+        (
+            "unknown inclusion",
+            format!(
+                "{host} (true width 9.6 m) including 2.0 m @ 12.00 g/t Au (true width unknown)"
+            ),
+            Some(true),
+            true,
+        ),
+        (
+            "both intervals",
+            format!("{host} (true width 9.6 m) including 2.0 m @ 12.00 g/t Au (true width 1.6m)"),
+            None,
+            false,
+        ),
+        (
+            "width on child only",
+            "DR-001: 2.0 m @ 12.00 g/t Au (true width 1.6 m) within 12.0 m @ 5.00 g/t Au".into(),
+            None,
+            true,
+        ),
+    ];
+    let directory = new_pack();
+    let mut direct = Vec::new();
+    for (index, (name, phrase, declared, want_flag)) in cases.into_iter().enumerate() {
+        let declaration = declared.map_or_else(String::new, |width| {
+            format!("true_width_stated = \"{width}\"\n")
+        });
+        let input = format!(
+            "{header}[[phrase]]\nlocator = \"p. 2, {name}\"\ntext = \"{phrase}\"\n{declaration}"
+        );
+        let payload = ok(&input);
+        let interval = &payload.get("intervals").unwrap().as_array().unwrap()[0];
+        let flags = interval.get("flags").unwrap().as_array().unwrap();
+        assert_eq!(
+            flags
+                .iter()
+                .any(|flag| flag.get("kind").unwrap().as_str() == Some("no_true_width")),
+            want_flag,
+            "{name}"
+        );
+        std::fs::write(directory.join(format!("{index:02}.toml")), &input).unwrap();
+        direct.push(payload);
+    }
+    let out = screen(&directory, "json");
+    assert!(out.status.success());
+    let pack = parse(&out.stdout).unwrap();
+    let rows = pack
+        .get("payload")
+        .unwrap()
+        .get("documents")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), direct.len());
+    for (row, expected) in rows.iter().zip(direct) {
+        let actual = row.get("result").unwrap().get("payload").unwrap();
+        for field in ["arithmetic_digest", "intervals", "release_flags", "summary"] {
+            assert_eq!(actual.get(field), expected.get(field), "{field}");
+        }
+        assert_eq!(
+            actual.get("worksheet").unwrap().get("sha256"),
+            expected.get("worksheet").unwrap().get("sha256")
+        );
+    }
+}
+
+#[test]
 fn cited_rows_resolve_an_explicit_tree_and_leave_missing_context_visible() {
     let body = ok(CITED);
     let row = &body.get("intervals").unwrap().as_array().unwrap()[0];

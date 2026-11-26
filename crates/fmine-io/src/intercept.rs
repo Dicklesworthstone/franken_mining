@@ -102,33 +102,27 @@ pub fn parse_intercept_phrase(raw_phrase: &str, default_hole: Option<&str>) -> P
         None => return fallback(raw_phrase, "missing hole identifier"),
     };
 
-    let true_width_stated = has_stated_true_width(body);
-
     // Check top-level `"<child> within <host>"` form (e.g. E656).
     if let Some((left, right)) = split_keyword_once(body, "within") {
-        let child =
-            match parse_single_segment(&hole, left, InclusionRelation::Within, true_width_stated) {
-                Ok(c) => c,
-                Err(reason) => return fallback(raw_phrase, &reason),
-            };
-        let mut host =
-            match parse_single_segment(&hole, right, InclusionRelation::Host, true_width_stated) {
-                Ok(h) => h,
-                Err(reason) => return fallback(raw_phrase, &reason),
-            };
+        let child = match parse_single_segment(&hole, left, InclusionRelation::Within) {
+            Ok(c) => c,
+            Err(reason) => return fallback(raw_phrase, &reason),
+        };
+        let mut host = match parse_single_segment(&hole, right, InclusionRelation::Host) {
+            Ok(h) => h,
+            Err(reason) => return fallback(raw_phrase, &reason),
+        };
         host.children.push(child);
         return ParseOutcome::Parsed(Box::new(host));
     }
 
     // Check `"<host> including <inc1> [and <inc2> ... | including <nested>]"` form.
     if let Some((host_str, rest)) = split_keyword_once(body, "including") {
-        let mut host =
-            match parse_single_segment(&hole, host_str, InclusionRelation::Host, true_width_stated)
-            {
-                Ok(h) => h,
-                Err(reason) => return fallback(raw_phrase, &reason),
-            };
-        match parse_including_clause(&hole, rest, true_width_stated) {
+        let mut host = match parse_single_segment(&hole, host_str, InclusionRelation::Host) {
+            Ok(h) => h,
+            Err(reason) => return fallback(raw_phrase, &reason),
+        };
+        match parse_including_clause(&hole, rest) {
             Ok(children) => {
                 host.children = children;
                 return ParseOutcome::Parsed(Box::new(host));
@@ -138,25 +132,20 @@ pub fn parse_intercept_phrase(raw_phrase: &str, default_hole: Option<&str>) -> P
     }
 
     // Single intercept without inclusions.
-    match parse_single_segment(&hole, body, InclusionRelation::Host, true_width_stated) {
+    match parse_single_segment(&hole, body, InclusionRelation::Host) {
         Ok(host) => ParseOutcome::Parsed(Box::new(host)),
         Err(reason) => fallback(raw_phrase, &reason),
     }
 }
 
-fn parse_including_clause(
-    hole: &str,
-    clause: &str,
-    true_width_stated: bool,
-) -> Result<Vec<Intercept>, String> {
+fn parse_including_clause(hole: &str, clause: &str) -> Result<Vec<Intercept>, String> {
     // Nested `"<child> including <grandchild>"` chain; refuse ambiguous `"; including"`.
     if let Some((head, tail)) = split_keyword_once(clause, "including") {
         if head.trim_end().ends_with(';') {
             return Err("ambiguous '; including' clause; use cited mode".to_string());
         }
-        let mut child =
-            parse_single_segment(hole, head, InclusionRelation::Including, true_width_stated)?;
-        child.children = parse_including_clause(hole, tail, true_width_stated)?;
+        let mut child = parse_single_segment(hole, head, InclusionRelation::Including)?;
+        child.children = parse_including_clause(hole, tail)?;
         return Ok(vec![child]);
     }
     // Sibling inclusions separated by `" and "` or `";"` or `","`.
@@ -166,12 +155,7 @@ fn parse_including_clause(
         if p.is_empty() {
             continue;
         }
-        children.push(parse_single_segment(
-            hole,
-            p,
-            InclusionRelation::Including,
-            true_width_stated,
-        )?);
+        children.push(parse_single_segment(hole, p, InclusionRelation::Including)?);
     }
     if children.is_empty() {
         return Err("empty 'including' clause".to_string());
@@ -198,7 +182,6 @@ fn parse_single_segment(
     hole: &str,
     segment: &str,
     relation: InclusionRelation,
-    true_width_stated: bool,
 ) -> Result<Intercept, String> {
     // Strip trailing parenthetical notes like "(true width 15 m)" while refusing unbalanced parens
     // or parentheticals carrying intercept/grade content.
@@ -271,7 +254,7 @@ fn parse_single_segment(
         metal_symbol,
         is_metal_equivalent,
         is_downhole_length: true,
-        true_width_stated,
+        true_width_stated: has_stated_true_width(segment),
         relation,
         children: Vec::new(),
     })
@@ -482,6 +465,8 @@ fn has_stated_true_width(body: &str) -> bool {
         "unconfirmed",
         "no true width",
         "no true-width",
+        "not true width",
+        "not true-width",
         "n/a",
         "unavailable",
     ] {
@@ -489,7 +474,30 @@ fn has_stated_true_width(body: &str) -> bool {
             return false;
         }
     }
-    clause.bytes().any(|b| b.is_ascii_digit())
+    let mut words = lower[pos + "true width".len()..clause_end]
+        .split_whitespace()
+        .skip_while(|word| {
+            matches!(
+                *word,
+                "=" | ":"
+                    | "≈"
+                    | "~"
+                    | "is"
+                    | "of"
+                    | "estimated"
+                    | "approximately"
+                    | "approx."
+                    | "about"
+            )
+        });
+    let Some(amount) = words.next() else {
+        return false;
+    };
+    let amount = amount.trim_start_matches(['=', ':', '≈', '~']);
+    let (amount, unit) = split_glued_number_unit(amount)
+        .unwrap_or_else(|| (amount, words.next().unwrap_or_default()));
+    parse_length_unit(unit.trim_end_matches('.')).is_ok()
+        && PrintedQty::parse_decimal(amount).is_ok_and(|width| width.value.signum() > 0)
 }
 
 fn is_hole_id(s: &str) -> bool {
@@ -619,13 +627,15 @@ mod tests {
 
     #[test]
     fn test_parse_including_from_to_and_imperial_units() {
-        let phrase = "DDH-001: 18.5 m @ 6.40 g/t Au from 120.5 m to 139.0 m including 2.5 m @ 24.00 g/t Au from 124.0 m to 126.5 m and 1.0 m @ 15.20 g/t Au from 130.0 m to 131.0 m (true width 15 m)";
+        let phrase = "DDH-001: 18.5 m @ 6.40 g/t Au from 120.5 m to 139.0 m including 2.5 m @ 24.00 g/t Au from 124.0 m to 126.5 m and 1.0 m @ 15.20 g/t Au from 130.0 m to 131.0 m (true width 0.8 m)";
         let ParseOutcome::Parsed(intercept) = parse_intercept_phrase(phrase, None) else {
             panic!("expected multi-inclusion phrase to parse");
         };
         assert_eq!(intercept.hole, "DDH-001");
-        assert!(intercept.true_width_stated);
+        assert!(!intercept.true_width_stated);
         assert_eq!(intercept.children.len(), 2);
+        assert!(!intercept.children[0].true_width_stated);
+        assert!(intercept.children[1].true_width_stated);
         assert!(intercept.from.is_some() && intercept.to.is_some());
         let rem = remainder_grade(&intercept).expect("valid non-overlapping remainder");
         assert_eq!(rem.remainder_length_m, ExactQty::from_integer(15));

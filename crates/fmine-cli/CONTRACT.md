@@ -12,8 +12,9 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   with earlier parent identifiers. It checks sibling positions before subtraction and refuses the whole
   worksheet when any row needs clarification. Each canonically ordered output carries worksheet line
   indices and supplied source locators. JSON retains the exact remainder point, rounding interval and
-  nested results. Markdown shows the reviewer the headline arithmetic and flags. The worksheet hash
-  binds the local input. Original provenance and disclosure context are caller declarations. Arithmetic
+  nested results. Quoted true-width measurements and explicit overrides apply to their own intervals.
+  An override on a phrase applies to its host. Markdown shows the headline arithmetic and flags.
+  The worksheet hash binds the local input. Original provenance and disclosure context are caller declarations. Arithmetic
   flags have no resource, reserve, execution, geotechnical or regulatory authority.
 
 - DESIGN (BD-350.S4). `check developer-npv <worksheet.toml>` reads bounded

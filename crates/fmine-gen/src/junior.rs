@@ -721,22 +721,25 @@ fn build_synthetic_hole_intercept(
     let to_m = from_m + host_len_m;
     let child_from_m = from_m + 2;
     let child_to_m = child_from_m + child_len_m;
-    let true_width_m = (host_len_m * 8) / 10;
-
-    let tw_suffix = if omit_true_width {
-        if stream.next_u64().is_multiple_of(2) {
+    let (host_width, child_width) = if omit_true_width {
+        let host_note = if stream.next_u64().is_multiple_of(2) {
             String::new()
         } else {
             " (true width unknown)".to_string()
-        }
+        };
+        (host_note, String::new())
     } else {
-        format!(" (true width {true_width_m} m)")
+        let width = |length| {
+            let decimetres = length * 8;
+            format!(" (true width {}.{} m)", decimetres / 10, decimetres % 10)
+        };
+        (width(host_len_m), width(child_len_m))
     };
 
     let (phrase, child_rel, include_spans) = if use_within_form {
         (
             format!(
-                "Hole {hole_id}: {child_len_str} m @ {child_grade_str} g/t {metal_sym} within {host_len_str} m @ {host_grade_str} g/t {metal_sym}{tw_suffix}"
+                "Hole {hole_id}: {child_len_str} m @ {child_grade_str} g/t {metal_sym}{child_width} within {host_len_str} m @ {host_grade_str} g/t {metal_sym}{host_width}"
             ),
             InclusionRelation::Within,
             false,
@@ -744,7 +747,7 @@ fn build_synthetic_hole_intercept(
     } else {
         (
             format!(
-                "{hole_id}: {host_len_str} m @ {host_grade_str} g/t {metal_sym} from {from_m}.00 m to {to_m}.00 m including {child_len_str} m @ {child_grade_str} g/t {metal_sym} from {child_from_m}.00 m to {child_to_m}.00 m{tw_suffix}"
+                "{hole_id}: {host_len_str} m @ {host_grade_str} g/t {metal_sym} from {from_m}.00 m to {to_m}.00 m{host_width} including {child_len_str} m @ {child_grade_str} g/t {metal_sym} from {child_from_m}.00 m to {child_to_m}.00 m{child_width}"
             ),
             InclusionRelation::Including,
             true,

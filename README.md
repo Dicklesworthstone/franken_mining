@@ -206,9 +206,11 @@ Name one `grade_basis` such as `Au` or `CuEq`, and use `evidence = "declared_pub
 for a public transcription. If a phrase needs manual entry, use `[[cited]]` rows with `id`, `locator`,
 `hole`, `length`, `length_unit`, `grade`, and `grade_unit`. A child uses `parent` to reference an
 earlier cited row in the same hole. Sibling inclusions require `from` and `to` coordinates so the
-command can check overlap. Keep trailing decimal zeros to preserve printed precision. Set
-`true_width_stated = "true"` only where the cited text supports it. The document locators and
-disclosure context are reader declarations. [Synthetic worksheet](tests/exploration/drill_release.toml)
+command can check overlap. Keep trailing decimal zeros to preserve printed precision. A quoted
+measurement such as `(estimated true width ≈ 9.6 m)` applies to its own interval. Where a separate
+citation supports a width, `true_width_stated = "true"` applies to the cited row or the host of the
+quoted phrase. Use cited rows to declare a width for an inclusion manually. The document locators
+and disclosure context are reader declarations. [Synthetic worksheet](tests/exploration/drill_release.toml)
 
 ## Replay a developer's printed NPV
 
