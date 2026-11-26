@@ -86,7 +86,7 @@ impl BarPoint {
     }
 }
 
-/// USD/oz effect at the printed midpoints and a conservative enclosure over their rounding boxes.
+/// Effect per sold unit (USD/oz for gold, USD/lb for copper) with a conservative rounding enclosure.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bar {
     pub id: String,
@@ -678,3 +678,6 @@ fn additive(
 
 #[cfg(test)]
 mod tests;
+
+/// Explicit copper sales units and signed C1/AISC additive bridges.
+pub mod copper;
