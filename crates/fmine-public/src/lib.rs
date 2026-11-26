@@ -204,6 +204,15 @@ pub fn refuse_if_salted(dir: &Path) -> Result<(), Refusal> {
             ));
         }
     };
+    if !meta.is_file() {
+        return Err(Refusal::new(
+            RefusalCode::MnpiWall301,
+            format!(
+                "salted-review guard: {} is not a regular file; refusing closed",
+                manifest.display()
+            ),
+        ));
+    }
     if meta.len() > MAX_REVIEW_MANIFEST_BYTES {
         return Err(Refusal::new(
             RefusalCode::MnpiWall301,
