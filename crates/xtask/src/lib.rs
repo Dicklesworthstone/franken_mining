@@ -1649,7 +1649,8 @@ mod tests {
         // BD-346.S2 adds fmine-public::mirror (JV mirror pair registry with exact shares & dated perimeters).
         // BD-230 adds fmine-capital::hindcast (bitemporal H7a vs H7d capital-approval hindcast engine).
         // BD-350.S2 adds the fmine-explore remainder-grade kernel.
-        assert_eq!(report.bitwise_files, 132, "{report:?}");
+        // BD-350.S5 adds fmine-gen's portable junior drill-release campaign.
+        assert_eq!(report.bitwise_files, 133, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
