@@ -186,6 +186,17 @@ The public lane of M0 (`fmine assure public`).
   and authenticate the publication cut. Cited checking and this semantic query share the pure
   `fmine_io::numtok::equality` context grammar, parameterized by known subjects and citation spans;
   unsupported residual prose, ambiguous/malformed links and missing required basis never become matches.
+- DESIGN (BD-345): explicit total, minesite sustaining and project capital-expenditure equalities use
+  the existing canonical Mine Stats `usd_m` rows. Cited, discovery and dated public-record checks retain
+  the distinct printed scopes, ownership, periods, source hashes, nil/status meanings and vintages.
+  Drafts must name USD (or US$) and a million scale, such as `US$125 million` or `125 million USD`.
+  The lexer's expanded amount and display step are expressed exactly in the source's USD millions;
+  source Claims are unchanged. Signed credits and zero remain signed source assertions. Bare dollars,
+  other currencies/scales, generic capex, lease/timing qualifiers and scope substitutions cannot verify.
+  No capex definition, allocation, forecast, quarter derivation or accounting reconciliation is inferred.
+  Controls: `capex_equalities_keep_scopes_currency_scale_and_rounding_explicit`,
+  `capex_equalities_preserve_signed_values_and_cannot_borrow_other_scopes_or_bases`, and
+  `capex_lint_uses_source_claims_and_dated_publications_for_each_printed_scope` in the existing xtask lint suites.
 - `sources`: the source registry (`BD-055`, `BD-322`, bd-s9j3.1), read at run time from
   `<workspace>/registries/sources/<issuer>.toml` (schema `fmine.sources.v1`, checked by `fmine_registry::sources`
   and by `xtask registry-check`). It pins each public workbook by file name, URL, byte size and SHA-256 (Barrick:

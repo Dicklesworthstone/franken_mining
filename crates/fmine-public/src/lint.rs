@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_io::numtok::equality::{self, Context, Metric};
 use fmine_io::numtok::{
-    BasisTok, Currency, Dec, NumberToken, PeriodTok, Span, Token, UnitTok, tokenize,
+    BasisTok, Currency, Dec, NumberToken, PeriodTok, ScaleWord, Span, Token, UnitTok, tokenize,
 };
 use fmine_numerics::exact_feas::Rat;
 
@@ -18,7 +18,7 @@ use crate::key::{
     SeriesOwnershipBasis, canonical_value_tag, claims_digest,
 };
 
-pub const RULES_VERSION: &str = "cited-equality/7";
+pub const RULES_VERSION: &str = "cited-equality/8";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
 pub const DISCOVERY_NO_CLAIM: &str = "Matches supported numeric equalities to public Claims in the selected source snapshot only when their stated semantic keys identify exactly one candidate. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure. General-prose discovery precision has not been measured.";
 
@@ -323,6 +323,9 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         | "site:average grade (percent):processed"
         | "site:average grade:processed" => Metric::ProcessedGrade,
         "site::recovery rate (percent)" | "html:recovery_percent" => Metric::Recovery,
+        "site::total capital expenditures ($ millions)" => Metric::TotalCapex,
+        "site:capital expenditures ($ millions):minesite sustaining" => Metric::SustainingCapex,
+        "site:capital expenditures ($ millions):projects" => Metric::ProjectCapex,
         _ => return None,
     })
 }
@@ -530,10 +533,46 @@ fn unit_matches(unit: UnitTok, key: &str, metric: Metric) -> bool {
 }
 
 fn units_match(ctx: &Context, n: &NumberToken, c: &KeyedCell, m: Metric) -> bool {
+    if m.capex() {
+        // The source names USD millions. Both currency and scale must be explicit in the draft;
+        // a bare dollar sign, another currency or a thousand/billion amount is not reinterpreted.
+        return c.key.unit == "usd_m"
+            && n.scale_word == Some(ScaleWord::Million)
+            && matches!(n.currency, None | Some(Currency::Usd))
+            && (n.currency == Some(Currency::Usd) || ctx.units.contains(&UnitTok::Usd))
+            && ctx.units.iter().all(|u| *u == UnitTok::Usd);
+    }
     ctx.units.iter().all(|u| unit_matches(*u, &c.key.unit, m))
         && !n.currency.is_some_and(|currency| {
             !matches!(currency, Currency::Usd | Currency::Dollar) || !m.rate()
         })
+}
+
+fn has_unit(ctx: &Context, n: &NumberToken, metric: Metric) -> bool {
+    !ctx.units.is_empty() || (metric.capex() && n.currency.is_some())
+}
+
+/// The lexer expands explicit scale words into base units. Capex comparisons undo the declared
+/// million multiplier exactly, preserving the draft's printed precision in the source's USD millions.
+fn amount_in_source_units(n: &NumberToken, metric: Metric) -> Option<(Dec, Dec)> {
+    if !metric.capex() {
+        return Some((n.value, n.step));
+    }
+    if n.scale_word != Some(ScaleWord::Million) {
+        return None;
+    }
+    let millions = |d: Dec| {
+        let mut value = Dec {
+            mantissa: d.mantissa,
+            scale: d.scale.checked_add(6)?,
+        };
+        while value.scale > 0 && value.mantissa % 10 == 0 {
+            value.mantissa /= 10;
+            value.scale -= 1;
+        }
+        Some(value)
+    };
+    Some((millions(n.value)?, millions(n.step)?))
 }
 
 fn decimal(d: Dec) -> Option<Rat> {
@@ -562,6 +601,7 @@ fn source_box(c: &KeyedCell) -> Option<(Rat, Rat)> {
         return None;
     };
     let physical = matches!(metric(c), Some(Metric::ProcessedGrade | Metric::Recovery));
+    let capex = metric(c).is_some_and(Metric::capex);
     // Percent-format workbooks store fractions but print percentage points. Compare that explicit
     // presentation, preserving both stored value and source Claim; an unformatted fraction is unusable.
     let source_unit = match (metric(c), c.key.unit.as_str()) {
@@ -576,7 +616,8 @@ fn source_box(c: &KeyedCell) -> Option<(Rat, Rat)> {
     if text.trim() != n.raw.trim()
         || n.range_with.is_some()
         || !source_unit
-        || (physical && (n.currency.is_some() || n.scale_word.is_some() || n.hedge.is_some()))
+        || ((physical || capex)
+            && (n.currency.is_some() || n.scale_word.is_some() || n.hedge.is_some()))
     {
         return None;
     }
@@ -584,7 +625,8 @@ fn source_box(c: &KeyedCell) -> Option<(Rat, Rat)> {
 }
 
 fn interval_verdict(n: &NumberToken, c: &KeyedCell) -> Option<Verdict> {
-    let (lo, hi) = number_box(decimal(n.value)?, decimal(n.step)?)?;
+    let (value, step) = amount_in_source_units(n, metric(c)?)?;
+    let (lo, hi) = number_box(decimal(value)?, decimal(step)?)?;
     let (source_lo, source_hi) = source_box(c)?;
     if lo.checked_cmp(source_lo).ok()?.is_le() && hi.checked_cmp(source_hi).ok()?.is_ge() {
         Some(Verdict::Verified)
@@ -657,7 +699,9 @@ fn basis_findings(c: &Context, claim: &KeyedCell, metric: Metric) -> Vec<(Verdic
         }
         B::Geo | B::Scorecard => true,
         B::NonGaap => !matches!(metric, Metric::Aisc | Metric::Tcc | Metric::C1),
-        B::GoldOunces => claim.key.unit == "usd_per_lb" || metric == Metric::CopperProduction,
+        B::GoldOunces => {
+            claim.key.unit == "usd_per_lb" || metric == Metric::CopperProduction || metric.capex()
+        }
         _ => false,
     }) {
         failures.push((Verdict::BasisMismatch, "metric_definition"));
@@ -713,16 +757,17 @@ pub fn equality_target(draft: &str, span: Span, prototype: &KeyedCell) -> Option
         || ctx.subjects.as_slice() != [prototype.key.subject.to_ascii_lowercase()]
         || ctx.metrics.as_slice() != [metric]
         || ctx.periods.len() != 1
-        || ctx.units.is_empty()
+        || !has_unit(&ctx, amount, metric)
         || !units_match(&ctx, amount, prototype, metric)
         || !basis_findings(&ctx, prototype, metric).is_empty()
     {
         return None;
     }
+    let (value, step) = amount_in_source_units(amount, metric)?;
     Some(EqualityTarget {
         period: period(ctx.periods[0])?,
-        value: amount.value,
-        step: amount.step,
+        value,
+        step,
     })
 }
 
@@ -829,7 +874,7 @@ fn finding(
     {
         failures.push((Verdict::Ambiguous, "attributable_share_unspecified"));
     }
-    if ctx.units.is_empty() {
+    if !has_unit(&ctx, n, m) {
         failures.push((Verdict::Ambiguous, "explicit_unit_required"));
     } else if !units_match(&ctx, n, claim, m) {
         failures.push((Verdict::BasisMismatch, "unit_or_currency"));
@@ -889,14 +934,17 @@ fn discover(
                 | Metric::CopperProduction
                 | Metric::Sales
                 | Metric::ProcessedGrade
-                | Metric::Recovery]
+                | Metric::Recovery
+                | Metric::TotalCapex
+                | Metric::SustainingCapex
+                | Metric::ProjectCapex]
         )
         || ctx.subjects.is_empty()
         || ctx.numbers != 1
     {
         return f;
     }
-    if ctx.subjects.len() != 1 || ctx.periods.len() != 1 || ctx.units.is_empty() {
+    if ctx.subjects.len() != 1 || ctx.periods.len() != 1 || !has_unit(&ctx, n, ctx.metrics[0]) {
         f.verdict = Verdict::Ambiguous;
         f.reason = "complete_equality_context_required";
         return f;

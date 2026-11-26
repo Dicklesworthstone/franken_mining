@@ -14,12 +14,23 @@ pub enum Metric {
     Sales,
     ProcessedGrade,
     Recovery,
+    TotalCapex,
+    SustainingCapex,
+    ProjectCapex,
 }
 
 impl Metric {
     #[must_use]
     pub const fn rate(self) -> bool {
         matches!(self, Self::Aisc | Self::Tcc | Self::C1 | Self::CostOfSales)
+    }
+
+    #[must_use]
+    pub const fn capex(self) -> bool {
+        matches!(
+            self,
+            Self::TotalCapex | Self::SustainingCapex | Self::ProjectCapex
+        )
     }
 }
 
@@ -135,6 +146,21 @@ pub fn context(text: &str, tokens: &[Token], citations: &[Span], subjects: &[Str
         }
     }
     for (label, m) in [
+        ("total capital expenditures", Metric::TotalCapex),
+        ("total capital expenditure", Metric::TotalCapex),
+        ("total capex", Metric::TotalCapex),
+        (
+            "minesite sustaining capital expenditures",
+            Metric::SustainingCapex,
+        ),
+        (
+            "minesite sustaining capital expenditure",
+            Metric::SustainingCapex,
+        ),
+        ("minesite sustaining capex", Metric::SustainingCapex),
+        ("project capital expenditures", Metric::ProjectCapex),
+        ("project capital expenditure", Metric::ProjectCapex),
+        ("project capex", Metric::ProjectCapex),
         ("all-in sustaining costs", Metric::Aisc),
         ("all in sustaining costs", Metric::Aisc),
         ("total cash costs", Metric::Tcc),
