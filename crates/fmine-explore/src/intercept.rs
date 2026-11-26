@@ -494,7 +494,7 @@ pub fn remainder_grade(host: &Intercept) -> Result<RemainderResult, Refusal> {
             ),
         ));
     }
-    evaluate_remainder_with_flags(host, None, None)
+    evaluate_remainder_with_flags(host, None, None, None)
 }
 
 /// Audit a full drill release (one or more host intercepts plus disclosure context).
@@ -578,7 +578,8 @@ pub fn audit_drill_release_indexed(
             extract_span_m(host)?;
             None
         } else {
-            let rem = evaluate_remainder_with_flags(host, canonical_cutoff, Some(&mut flags_set))?;
+            let rem =
+                evaluate_remainder_with_flags(host, canonical_cutoff, None, Some(&mut flags_set))?;
             Some(rem)
         };
 
@@ -649,9 +650,11 @@ pub fn audit_drill_release_indexed(
 fn evaluate_remainder_with_flags(
     host: &Intercept,
     canonical_cutoff: Option<(ExactQty, GradeUnit)>,
+    inherited_metal: Option<&str>,
     mut flags_out: Option<&mut BTreeSet<DisclosureFlag>>,
 ) -> Result<RemainderResult, Refusal> {
     validate_intercept_scalars(host)?;
+    let effective_metal = host.metal_symbol.as_deref().or(inherited_metal);
     let host_len = host.length.to_metres(host.length_unit)?;
     let host_len_iv = host_len.interval()?;
     if host_len_iv.lo.signum() <= 0 {
@@ -723,7 +726,7 @@ fn evaluate_remainder_with_flags(
                 ),
             ));
         }
-        if let (Some(h_sym), Some(c_sym)) = (&host.metal_symbol, &child.metal_symbol)
+        if let (Some(h_sym), Some(c_sym)) = (effective_metal, child.metal_symbol.as_deref())
             && !h_sym.eq_ignore_ascii_case(c_sym)
         {
             return Err(Refusal::new(
@@ -760,6 +763,7 @@ fn evaluate_remainder_with_flags(
             nested_results.push(evaluate_remainder_with_flags(
                 child,
                 canonical_cutoff,
+                effective_metal,
                 flags_out.as_deref_mut(),
             )?);
         }
@@ -1499,6 +1503,43 @@ mod tests {
         assert_eq!(
             remainder_grade(&eq_host)
                 .expect_err("Au child inside AuEq host must refuse")
+                .code,
+            "FMINE-REF-105"
+        );
+
+        // 3-level ancestor metal propagation: Au host -> untagged child -> Ag grandchild must refuse.
+        let mut ag_grandchild = mk_intercept(
+            "SYN-M3",
+            "1.0",
+            LengthUnit::Metres,
+            "50.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Including,
+            vec![],
+        );
+        ag_grandchild.metal_symbol = Some("Ag".to_string());
+        let mut untagged_mid = mk_intercept(
+            "SYN-M3",
+            "4.0",
+            LengthUnit::Metres,
+            "15.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Including,
+            vec![ag_grandchild],
+        );
+        untagged_mid.metal_symbol = None;
+        let au_root = mk_intercept(
+            "SYN-M3",
+            "12.0",
+            LengthUnit::Metres,
+            "6.0",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Host,
+            vec![untagged_mid],
+        );
+        assert_eq!(
+            remainder_grade(&au_root)
+                .expect_err("Ag grandchild under Au root via untagged mid must refuse")
                 .code,
             "FMINE-REF-105"
         );
