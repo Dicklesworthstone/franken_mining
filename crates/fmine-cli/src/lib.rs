@@ -1367,7 +1367,7 @@ pub fn parse_args(
             },
             "doctor" => {
                 let parsed = doctor::parse(&words)?;
-                if parsed.segments.is_empty() && parsed.journals.is_empty() {
+                if parsed.is_default() {
                     CliCommand::Doctor
                 } else {
                     CliCommand::DoctorInspect(parsed)
