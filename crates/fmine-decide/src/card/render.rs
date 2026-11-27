@@ -174,7 +174,7 @@ pub(crate) fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
             "estimated"
         }),
         claim.state.tag(),
-        js(&claim.confidentiality.to_string()),
+        js(&claim.confidentiality().to_string()),
         ids(&claim
             .parents
             .iter()
@@ -628,7 +628,7 @@ impl EvaluatedCard {
             out,
             "\nOutput Claim: `{}`. Confidentiality: {}.\n\nDigest: `{}`\n",
             self.claim.claim_id,
-            md(&self.claim.confidentiality.to_string()),
+            md(&self.claim.confidentiality().to_string()),
             self.digest()
         );
         out
@@ -816,7 +816,7 @@ fn source_markdown<T>(out: &mut String, claim: &Claim<T>) {
         claim.claim_id,
         md(&claim.metric_key),
         evidence_name(claim.evidence),
-        md(&claim.confidentiality.to_string())
+        md(&claim.confidentiality().to_string())
     );
     for source in &claim.anchors {
         let _ = writeln!(

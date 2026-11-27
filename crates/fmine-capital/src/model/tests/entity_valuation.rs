@@ -146,7 +146,7 @@ fn each_entity_claim_retains_its_own_original_rows_and_shared_evidence() {
         assert_eq!(claim.evidence, EvidenceClass::Assumed);
         assert_eq!(claim.state, KnowledgeState::Estimated);
         assert_eq!(claim.additivity, AdditivityClass::NonAdditive);
-        assert_eq!(claim.confidentiality, Confidentiality::internal());
+        assert_eq!(*claim.confidentiality(), Confidentiality::internal());
         assert_eq!(claim.uu_terms, inputs.policy.uu_terms);
         for row in parse_subset(&text).unwrap().rows {
             if !TABLES.contains(&row.table.as_str()) {

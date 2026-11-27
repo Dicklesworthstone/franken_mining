@@ -1184,7 +1184,10 @@ probability = "17/20"
             inputs.weights.epistemic,
             EpistemicStatus::KnownUnknown(KuKind::Parametric)
         );
-        assert_eq!(inputs.weights.confidentiality, Confidentiality::internal());
+        assert_eq!(
+            *inputs.weights.confidentiality(),
+            Confidentiality::internal()
+        );
         assert_eq!(inputs.weights.support, SpatialSupport::PeriodAggregate);
         assert_eq!(inputs.weights.additivity, AdditivityClass::NonAdditive);
         for action in &inputs.actions {
@@ -1343,7 +1346,7 @@ probability = "17/20"
         option.check_id().unwrap();
         assert_eq!(option.value_tag(), option.value.canonical_tag());
         assert_eq!(option.evidence, EvidenceClass::Assumed);
-        assert_eq!(option.confidentiality, Confidentiality::internal());
+        assert_eq!(*option.confidentiality(), Confidentiality::internal());
         assert_eq!(option.additivity, AdditivityClass::NonAdditive);
         assert_eq!(option.uu_terms, inputs.weights.uu_terms);
         assert_eq!(option.value.model_key, inputs.weights.value.model_key);

@@ -90,7 +90,7 @@ fn refresh<T: Clone>(claim: &mut Claim<T>, tag: &str) {
         claim.evidence,
         claim.epistemic,
         claim.state,
-        claim.confidentiality.clone(),
+        claim.confidentiality().clone(),
         claim.uu_terms.clone(),
         claim.parents.clone(),
         claim.anchors.clone(),
@@ -574,7 +574,7 @@ fn model_and_canceled_internal_sources_keep_labels_and_envelope_identity() {
     let first = reconcile_flowsheet(&inputs, &model).unwrap();
     let registry = LabelRegistry::new(["JV-A"], ["W-A"]).unwrap();
     let restricted = Confidentiality::mnpi(registry.wall("W-A").unwrap());
-    model.confidentiality = restricted.clone();
+    model.taint(&restricted);
     refresh_model(&mut model);
     let term = UuTerm {
         scenario_id: "stocktake-gap".into(),
@@ -587,7 +587,7 @@ fn model_and_canceled_internal_sources_keep_labels_and_envelope_identity() {
     recycle.uu_terms.push(term.clone());
     let result = reconcile_flowsheet(&inputs, &model).unwrap();
     let claim = result.admitted_claim().unwrap();
-    assert_eq!(claim.confidentiality, restricted);
+    assert_eq!(*claim.confidentiality(), restricted);
     assert_eq!(claim.uu_terms, vec![term.clone()]);
     assert_ne!(claim.claim_id, first.admitted_claim().unwrap().claim_id);
     assert_eq!(

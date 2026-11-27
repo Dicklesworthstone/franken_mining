@@ -586,7 +586,7 @@ fn claim_metadata_is_bound_and_result_cannot_be_disclosed_as_measured() {
     assert_eq!(first.claim().parents, vec![original.claim_id]);
     assert_eq!(first.claim().uu_terms, original.uu_terms);
     assert_eq!(first.claim().anchors, original.anchors);
-    assert_eq!(first.claim().confidentiality, original.confidentiality);
+    assert_eq!(first.claim().confidentiality(), original.confidentiality());
     let mut changed = original.clone();
     changed.uu_terms[0].downside_exposure_usd_m = 1.0000000000001;
     assert_eq!(changed.claim_id, original.claim_id); // generic Claim does not bind UU yet
@@ -628,6 +628,7 @@ fn claim_metadata_is_bound_and_result_cannot_be_disclosed_as_measured() {
         let m = model();
         let mut source = input(m.clone());
         source.evidence = class;
+        let label = source.confidentiality().clone();
         let source = Claim::new(
             INPUT_METRIC,
             m.clone(),
@@ -638,7 +639,7 @@ fn claim_metadata_is_bound_and_result_cannot_be_disclosed_as_measured() {
             class,
             source.epistemic,
             source.state,
-            source.confidentiality,
+            label,
             source.uu_terms,
             source.parents,
             source.anchors,

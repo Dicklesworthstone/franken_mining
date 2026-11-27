@@ -598,7 +598,7 @@ fn actual_claim(c: &KeyedCell, kind: QuantityKind) -> Result<Claim<Quantity>> {
             format!("{}: a placeholder cannot supply an actual", c.locator),
         ));
     }
-    if !c.claim.confidentiality.is_public() {
+    if !c.claim.confidentiality().is_public() {
         return Err(refuse(
             RefusalCode::MnpiWall301,
             format!(

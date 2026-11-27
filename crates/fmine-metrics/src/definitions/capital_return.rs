@@ -629,7 +629,7 @@ pub fn evaluate(inputs: &[Claim<Input>]) -> Result<CapitalReturnReceipt> {
         prior.evidence,
         prior.epistemic,
         prior.state,
-        prior.confidentiality.clone(),
+        prior.confidentiality().clone(),
         prior.uu_terms.clone(),
         parents,
         prior.anchors.clone(),
@@ -839,7 +839,7 @@ impl CapitalReturnReceipt {
         }
         out.push_str("\n## Source Claims\n\n| Role | Stated input | Claim | Evidence | Sources |\n|---|---|---|---|---|\n");
         for input in &self.inputs {
-            let evidence = format!("{:?}; {}", input.evidence, input.confidentiality);
+            let evidence = format!("{:?}; {}", input.evidence, input.confidentiality());
             let sources = input
                 .anchors
                 .iter()

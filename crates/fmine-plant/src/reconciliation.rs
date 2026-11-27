@@ -315,7 +315,7 @@ impl Metadata {
         self.evidence = self.evidence.meet(input.evidence);
         self.epistemic = self.epistemic.and(input.epistemic);
         self.state = self.state.and(input.state);
-        self.confidentiality = self.confidentiality.join(&input.confidentiality);
+        self.confidentiality = self.confidentiality.join(input.confidentiality());
         self.parents.insert(input.claim_id);
         self.anchors.extend(input.anchors.iter().cloned());
         for term in &input.uu_terms {

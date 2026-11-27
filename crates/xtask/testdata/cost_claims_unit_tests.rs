@@ -89,7 +89,10 @@ mod tests {
             ExactQty::new(100001, 10000).unwrap()
         );
         assert_eq!(receipt.claim().parents.len(), 6);
-        assert_eq!(receipt.claim().confidentiality, Confidentiality::internal());
+        assert_eq!(
+            *receipt.claim().confidentiality(),
+            Confidentiality::internal()
+        );
         assert!(receipt.summary().declared_complete);
         let tax = receipt
             .summary()

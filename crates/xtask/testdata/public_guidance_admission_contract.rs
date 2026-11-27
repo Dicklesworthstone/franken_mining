@@ -34,7 +34,7 @@ mod tests {
             c.evidence,
             c.epistemic,
             c.state,
-            c.confidentiality.clone(),
+            c.confidentiality().clone(),
             c.uu_terms.clone(),
             c.parents.clone(),
             c.anchors.clone(),

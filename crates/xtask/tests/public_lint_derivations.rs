@@ -2323,7 +2323,7 @@ fn exact_ownership_kernel_preserves_witnesses_and_refuses_mutation_invalid_share
         old.evidence,
         old.epistemic,
         old.state,
-        old.confidentiality.clone(),
+        old.confidentiality().clone(),
         vec![],
         vec![],
         old.anchors.clone(),
@@ -3947,6 +3947,7 @@ mod derived_amount_claims {
     }
 
     fn reseal(source: Claim<Amount>) -> Claim<Amount> {
+        let label = source.confidentiality().clone();
         let mut result = Claim::new(
             &source.metric_key,
             source.value.clone(),
@@ -3957,7 +3958,7 @@ mod derived_amount_claims {
             source.evidence,
             source.epistemic,
             source.state,
-            source.confidentiality,
+            label,
             source.uu_terms,
             source.parents,
             source.anchors,
@@ -4014,7 +4015,7 @@ mod derived_amount_claims {
                 2 => bad.anchors[0].artifact_sha256 = [0; 32],
                 3 => bad.anchors[0].locator.clear(),
                 4 => bad.anchors[0].artifact_path.clear(),
-                5 => bad.confidentiality = Confidentiality::internal(),
+                5 => bad.taint(&Confidentiality::internal()),
                 6 => bad.calibration_failed = true,
                 7 => bad.support = SpatialSupport::PointCore,
                 _ => bad.value.interval.lo_strict = true,
@@ -4160,6 +4161,7 @@ mod derived_amount_claims {
                 _ => bad.stale = true,
             }
             // Rebuild identity: refusal must check admission, not merely detect an old Claim id.
+            let label = bad.confidentiality().clone();
             bad = Claim::new(
                 INPUT_METRIC,
                 bad.value.clone(),
@@ -4170,7 +4172,7 @@ mod derived_amount_claims {
                 bad.evidence,
                 bad.epistemic,
                 bad.state,
-                bad.confidentiality,
+                label,
                 bad.uu_terms,
                 bad.parents,
                 bad.anchors,
@@ -4198,6 +4200,7 @@ mod derived_amount_claims {
                 3 => h1.value.period.year = 2031,
                 _ => h1.value.subject = "Site B".into(),
             }
+            let label = h1.confidentiality().clone();
             h1 = Claim::new(
                 INPUT_METRIC,
                 h1.value.clone(),
@@ -4208,7 +4211,7 @@ mod derived_amount_claims {
                 h1.evidence,
                 h1.epistemic,
                 h1.state,
-                h1.confidentiality,
+                label,
                 h1.uu_terms,
                 h1.parents,
                 h1.anchors,

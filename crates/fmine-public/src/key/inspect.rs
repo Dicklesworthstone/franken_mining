@@ -166,7 +166,7 @@ pub fn why_json(cell: &KeyedCell) -> String {
         js(&format!("{:?}", claim.representation)),
         js(&format!("{:?}", claim.support)),
         js(&format!("{:?}", claim.additivity)),
-        js(&claim.confidentiality.to_string()),
+        js(&claim.confidentiality().to_string()),
         color_json(&color),
         guard_json(&uu_guard),
         guard_json(&claim.verify_export_clearance(&Confidentiality::public())),

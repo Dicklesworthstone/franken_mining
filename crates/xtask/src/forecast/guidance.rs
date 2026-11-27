@@ -339,7 +339,7 @@ fn check_actual(cell: &KeyedCell, metric: TargetMetric) -> Result<(), String> {
         || cell.key.ownership_basis != OwnershipBasis::Consolidated100
         || cell.key.scope != Scope::Site
         || cell.key.unit != metric.unit()
-        || !cell.claim.confidentiality.is_public()
+        || !cell.claim.confidentiality().is_public()
         || cell.claim.stale
         || cell.claim.calibration_failed
     {

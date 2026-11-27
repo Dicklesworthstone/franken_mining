@@ -614,7 +614,7 @@ impl Metadata {
         self.evidence = self.evidence.meet(claim.evidence);
         self.epistemic = self.epistemic.and(claim.epistemic);
         self.state = self.state.and(claim.state);
-        self.confidentiality = self.confidentiality.join(&claim.confidentiality);
+        self.confidentiality = self.confidentiality.join(claim.confidentiality());
         self.parents.insert(claim.claim_id);
         self.anchors.extend(claim.anchors.iter().cloned());
         for u in &claim.uu_terms {

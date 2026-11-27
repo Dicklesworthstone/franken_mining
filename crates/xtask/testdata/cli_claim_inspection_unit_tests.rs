@@ -30,7 +30,7 @@ mod tests {
             "FMINE-REF-507"
         );
         report.fit.metric_key = original_key;
-        report.fit.confidentiality = Confidentiality::internal();
+        report.fit.taint(&Confidentiality::internal());
         report.fit.claim_id = fmine_core::id::ObjectId::from_canonical_bytes(
             fmine_core::id::PrefixKind::Claim,
             &report.fit.canonical_body(),

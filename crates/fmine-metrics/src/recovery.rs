@@ -478,7 +478,7 @@ impl Provenance {
         self.evidence = self.evidence.meet(c.evidence);
         self.epistemic = self.epistemic.and(c.epistemic);
         self.state = self.state.and(c.state);
-        self.confidentiality = self.confidentiality.join(&c.confidentiality);
+        self.confidentiality = self.confidentiality.join(c.confidentiality());
         for term in &c.uu_terms {
             if !self.uu.iter().any(|t| t == term) {
                 self.uu.push(term.clone());

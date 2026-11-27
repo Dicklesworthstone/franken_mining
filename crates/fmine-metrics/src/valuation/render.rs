@@ -100,7 +100,7 @@ pub(super) fn claim<T>(claim: &Claim<T>) -> String {
         js(&format!("{:?}", claim.evidence)),
         js(&format!("{:?}", claim.epistemic)),
         js(&format!("{:?}", claim.state)),
-        js(&claim.confidentiality.to_string()),
+        js(&claim.confidentiality().to_string()),
         js(&format!("{:?}", claim.representation)),
         js(&format!("{:?}", claim.support)),
         js(&format!("{:?}", claim.additivity)),
@@ -228,7 +228,7 @@ impl ValuationReceipt {
             md(&t.physical_to_commercial_basis),
             t.monetary_rounding.as_str(),
             self.decision.claim().evidence,
-            md(&self.decision.claim().confidentiality.to_string()),
+            md(&self.decision.claim().confidentiality().to_string()),
         );
         out.push_str("## Paired physical and cash outcomes\n\nAll component amounts are exact rational USD over the represented physical values. Rounding deltas are rounded minus unrounded; only final margins are quantized.\n\n| State | Weight | Dry tonnes | Recovered kg | Payable kg | Revenue USD | Royalty USD | Variable USD | Fixed USD | Margin USD | Rounding delta USD | Do-nothing USD | Do-nothing delta USD |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
         for p in &self.points {

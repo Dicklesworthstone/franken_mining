@@ -107,7 +107,7 @@
             c.evidence,
             c.epistemic,
             c.state,
-            c.confidentiality.clone(),
+            c.confidentiality().clone(),
             c.uu_terms.clone(),
             c.parents.clone(),
             c.anchors.clone(),
@@ -396,7 +396,7 @@
         assert_eq!(common.evidence, EvidenceClass::ISSUER);
         assert_eq!(common.state, KnowledgeState::Estimated);
         assert_eq!(common.epistemic, EpistemicStatus::UnmodelledBudget);
-        assert!(common.confidentiality.is_public());
+        assert!(common.confidentiality().is_public());
         assert_eq!(common.uu_terms.len(), 3); // Same scenario id must not discard a different source's term.
         assert_eq!(common.parents.len(), 3);
         for input in &inputs {
@@ -506,7 +506,7 @@
                     "202"
                 }
                 14 => {
-                    c.confidentiality = Confidentiality::internal();
+                    c.taint(&Confidentiality::internal());
                     "301"
                 }
                 15 => {

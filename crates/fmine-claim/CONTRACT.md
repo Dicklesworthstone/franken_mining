@@ -96,6 +96,8 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - The registry admits only well-formed, unique ids: `test_registry_admits_only_well_formed_unique_ids`.
 - Public and internal labels encode as the old one-byte tiers 0 and 1, so no older claim id moves. Any other label is tag 5, then its ventures and walls: `test_encoding_keeps_old_bytes_and_separates_sets`.
 - The export check refuses a reader the label is not within: `test_confidentiality_lattice_and_export_guard` and `test_two_venture_composition_refuses_a_single_venture_reader`.
+- A claim's label is private. `confidentiality()` reads it, and `taint` only raises it: a lower or equal label changes nothing, and a higher one reseals the id and records the old id in `supersedes`: `test_taint_only_raises_and_reseals_the_id`.
+- Over 20,000 seeded random `compose_binary` DAGs with random taints, each node's label is its parents' join, no taint lowers a label, and the root carries every leaf's label. A reader missing any one of the root's ventures or walls is refused: `test_random_claim_dags_never_lower_a_label_inv_007` (`INV-007`).
 
 **Support and additivity.** `verify_support_compatible` refuses unequal supports, and `verify_unweighted_additive` refuses any class but `ExtensiveAdditive`: `test_support_and_additivity_guards`.
 
@@ -268,7 +270,8 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   borrowing their parents' scored outcomes. `Claim::new` still trusts explicitly supplied source classes.
 - **`Claim::new` trusts the caller's class and parents.** A claim can state `Derived` over an issuer figure. G-DISC catches that only when the issuer figure is a listed parent. A `Derived` claim with no parents passes its walk.
 - **The id leaves fields unhashed.** Representation, support, additivity, UU terms, `supersedes`, `authority`, `calibration_score`, `fallback`, `epsilon_contamination`, and the value itself are outside `CLM1` schema 2 so pinned M0 Barrick claim IDs remain invariant. Widening the body moves every claim id and is an owner decision.
-- **§31.1 writes the labels as a chain.** The product lattice refines it, so two ventures or two walls never collapse into one tier. The owner should confirm the refinement.
+- **§31.1 writes the labels as a chain.** The product lattice refines it, so two ventures or two walls never collapse into one tier. The owner accepted the refinement on 2026-11-27 (`docs/delivery/DECISION-bd-lf4q-confidentiality-product-lattice.md`).
+- **`Claim::new` trusts the caller's label**, as it trusts the class and parents. A claim rebuilt with `Claim::new` can carry a lower label than its parents. Only `compose_binary` and `compose_binary_with_fallback` derive the label from the parents.
 - **G-DISC human sign-off boundary.** `GATE-PLUMB-E4` (`RefClass` and unverified-ancestor blocking) is enforced by `ClaimDag::guard_disclosure_export`, while mandatory human attestation sign-off remains a downstream disclosure-gate responsibility. FrankenMining's own public report is not a disclosure and does not call the guard.
 - **Three codes are proposed, not active:** 110, 505 and 507.
 - **Four nearest-code uses are unconfirmed.** ADR-REFUSALS-01 covers 301 for internal data and leaves G-DISC's code open. It does not list 107 for malformed reliance input, 205 for an unreviewed `Assertion`, or 304 for G-DISC.
@@ -280,6 +283,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 ## 11. Public API
 - **Claim.** `ClaimId`, `Representation`, `SpatialSupport`, `AdditivityClass`, `UuTerm`, `ClaimAuthority`, `DeclaredFallback`, `CalibrationScore` (`compute`, `score`, `cov80`, `ks_pit`, `is_calibrated`), `RefClassId`, `RefClassStatus`, `RefClassRecord`, `RefClassRegistry`, and `EpsilonContamination`. `Claim<T>`, with:
   - `new`, `value_tag`, `canonical_body` and `check_id`;
+  - `confidentiality` and `taint`;
   - `downgraded`, `with_regime`, `authority`, `with_authority`, `attest`, `with_calibration_score`, `calibration_score`, `fallback`, `fallback_active`, `epsilon_contamination`, `with_epsilon_contamination`, `with_checked_epsilon` and `with_ref_class`;
   - `color`, `verify_export_clearance` and `verify_uu_slot_for_decision`.
 - **`refclass`.** `RefClassId::parse`, `RefClassStatus::parse`, `RefClassRecord`, `RefClassRegistry::{parse, get, lookup, len, is_empty, iter}`, and `EpsilonContamination::{none, try_new, from_registry, ref_class, epsilon_bps, epsilon, status, blend_moments}` (private fields, `compile_fail,E0451`).
@@ -306,7 +310,7 @@ The plan defines no `PO-CLAIM-*`. The old contract's PO-CLAIM-1 to PO-CLAIM-3 we
 - **PO-PLUMB-1** (NL-1 to NL-8 over 10⁵ random provenance DAGs): discharged by `test_gate_plumb_e1_nl1_to_nl8_100k_dags` plus `test_nl3_attestation_is_strictly_orthogonal`, `test_nl4_model_and_transfer_calibration_do_not_cross_derivation_or_support`, `test_nl6_refusal_absorption_and_declared_fallback_bounds`, and `test_nl8_calibration_score_formula_and_refusals`.
   - The plan's "fs-evidence `compose`" is `fmine_evidence::color::compose` here.
 - **PO-PLUMB-2** (taint monotone; no Full-basis bytes in Public exports): not discharged here.
-  - The label join is monotone: `test_join_semilattice_laws_exhaustive` and `test_gate_plumb_e1_nl1_to_nl8_100k_dags`.
+  - The label join is monotone, and a claim's label only rises: `test_join_semilattice_laws_exhaustive`, `test_gate_plumb_e1_nl1_to_nl8_100k_dags` and `test_random_claim_dags_never_lower_a_label_inv_007`.
   - A reliance issuance accepts only a public label.
   - The Full-basis taint and the export fuzz are not in this crate.
 - **PO-PLUMB-8** (append-only, hash-chained ledger; bit-identical as-of replay): partly discharged.

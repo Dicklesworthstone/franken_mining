@@ -85,7 +85,7 @@ fn refresh<T: Clone>(claim: &mut Claim<T>, tag: &str) {
         claim.evidence,
         claim.epistemic,
         claim.state,
-        claim.confidentiality.clone(),
+        claim.confidentiality().clone(),
         claim.uu_terms.clone(),
         claim.parents.clone(),
         claim.anchors.clone(),
@@ -610,7 +610,7 @@ fn quantity_model_binds_typed_identity_observation_order_and_all_source_envelope
     omit(&mut inputs, &unknown);
     let mut model = model(&inputs, unknown);
     let registry = LabelRegistry::new(["JV-A"], ["W-A"]).unwrap();
-    model.confidentiality = Confidentiality::mnpi(registry.wall("W-A").unwrap());
+    model.taint(&Confidentiality::mnpi(registry.wall("W-A").unwrap()));
     refresh_model(&mut model);
     inputs[1].uu_terms.push(UuTerm {
         scenario_id: "constructed-omitted-inventory-risk".into(),
@@ -623,7 +623,7 @@ fn quantity_model_binds_typed_identity_observation_order_and_all_source_envelope
     assert_eq!(claim.metric_key, OUTPUT_METRIC);
     assert_eq!(claim.state, KnowledgeState::Estimated);
     assert_eq!(claim.evidence, EvidenceClass::Assumed);
-    assert_eq!(claim.confidentiality, model.confidentiality);
+    assert_eq!(claim.confidentiality(), model.confidentiality());
     assert_eq!(claim.uu_terms.len(), 1);
     let parents: BTreeSet<_> = inputs
         .iter()

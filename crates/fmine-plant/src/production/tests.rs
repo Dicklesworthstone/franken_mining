@@ -781,7 +781,10 @@ fn supply_population_order_and_full_source_envelope_bind_the_receipt() {
     let changed = evaluate_supply_limited(&grinding, &recovery, &inputs, &restricted).unwrap();
     assert_ne!(first.digest(), changed.digest());
     assert_eq!(changed.points(), first.points());
-    assert_eq!(changed.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *changed.claim().confidentiality(),
+        Confidentiality::internal()
+    );
     assert_eq!(changed.claim().uu_terms.len(), 1);
 }
 
@@ -860,7 +863,7 @@ fn source_bound_worksheets_join_both_models_and_preserve_the_tonne_grade_trap() 
         0.375
     );
     assert_eq!(
-        result.receipt().claim().confidentiality,
+        *result.receipt().claim().confidentiality(),
         Confidentiality::internal()
     );
 

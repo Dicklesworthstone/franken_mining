@@ -479,11 +479,11 @@ fn complete_nominal_and_pair_metadata_taint_the_fit_and_fitted_correction() {
     assert_ne!(receipt.digest(), original.digest());
     assert_eq!(receipt.model().correction(), &old);
     assert_eq!(
-        receipt.summary().confidentiality,
+        *receipt.summary().confidentiality(),
         Confidentiality::internal()
     );
     assert_eq!(
-        receipt.correction().confidentiality,
+        *receipt.correction().confidentiality(),
         Confidentiality::internal()
     );
     assert_eq!(receipt.summary().uu_terms.len(), 2);

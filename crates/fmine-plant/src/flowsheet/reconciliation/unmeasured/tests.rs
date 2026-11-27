@@ -56,7 +56,7 @@ fn refresh<T: Clone>(claim: &mut Claim<T>, tag: &str) {
         claim.evidence,
         claim.epistemic,
         claim.state,
-        claim.confidentiality.clone(),
+        claim.confidentiality().clone(),
         claim.uu_terms.clone(),
         claim.parents.clone(),
         claim.anchors.clone(),
@@ -474,11 +474,11 @@ fn missing_flow_declaration_keeps_provenance_labels_and_canonical_order() {
     let mut inputs = partial_fixture(&["tails"]);
     let mut model = model(&inputs, &["tails"]);
     let registry = LabelRegistry::new(["JV-A"], ["W-A"]).unwrap();
-    model.confidentiality = Confidentiality::mnpi(registry.wall("W-A").unwrap());
+    model.taint(&Confidentiality::mnpi(registry.wall("W-A").unwrap()));
     refresh_model(&mut model);
     let first = reconcile_unmeasured_flowsheet(&inputs, &model).unwrap();
     let claim = first.admitted_claim().unwrap();
-    assert_eq!(claim.confidentiality, model.confidentiality);
+    assert_eq!(claim.confidentiality(), model.confidentiality());
     assert_eq!(claim.state, KnowledgeState::Estimated);
     assert!(claim.parents.contains(&model.claim_id));
     inputs.reverse();

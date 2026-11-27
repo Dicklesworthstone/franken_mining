@@ -35,6 +35,12 @@ fn fixture(production: &ProductionReceipt) -> ValuationReceipt {
     worksheet::evaluate(TERMS, &source(TERMS, "terms.toml"), production).unwrap()
 }
 fn rebind(terms: &Claim<ValuationTerms>) -> Claim<ValuationTerms> {
+    relabelled(terms, terms.confidentiality().clone())
+}
+
+/// `terms` rebuilt as a new claim under `label`. A label can rise on an existing claim, never fall, so a lower one
+/// takes a new claim.
+fn relabelled(terms: &Claim<ValuationTerms>, label: Confidentiality) -> Claim<ValuationTerms> {
     Claim::new(
         INPUT_METRIC,
         terms.value.clone(),
@@ -45,7 +51,7 @@ fn rebind(terms: &Claim<ValuationTerms>) -> Claim<ValuationTerms> {
         terms.evidence,
         terms.epistemic,
         terms.state,
-        terms.confidentiality.clone(),
+        label,
         terms.uu_terms.clone(),
         terms.parents.clone(),
         terms.anchors.clone(),
@@ -325,12 +331,11 @@ fn evidence_sources_and_unknowns_survive_and_negative_margins_are_not_clamped() 
     let original = fixture(&production);
     let mut terms = original.terms.clone();
     terms.evidence = EvidenceClass::Assumed;
-    terms.confidentiality = Confidentiality::public();
     for scenario in &mut terms.value.scenarios {
         scenario.fixed_usd = q(100_000, 1);
         scenario.do_nothing_usd = q(-100, 1);
     }
-    let terms = rebind(&terms);
+    let terms = relabelled(&terms, Confidentiality::public());
     let result = evaluate(&production, &terms).unwrap();
     assert!(result.points.iter().all(|p| p.margin.minor < 0));
     assert_eq!(
@@ -344,7 +349,7 @@ fn evidence_sources_and_unknowns_survive_and_negative_margins_are_not_clamped() 
             .evidence
             .no_stronger_than(EvidenceClass::ModelledUncalibrated)
     );
-    assert_eq!(output.confidentiality, Confidentiality::internal());
+    assert_eq!(*output.confidentiality(), Confidentiality::internal());
     assert_eq!(output.uu_terms, terms.uu_terms);
     for c in &result.decision.inputs().actions {
         assert!(c.parents.contains(&production.claim().claim_id));

@@ -1123,7 +1123,7 @@ fn unmeasured_opening_source_policy_taint_and_cancellation_are_binding() {
     let result =
         deconvolve_unmeasured_opening(&input.0, &opening, &input.2, &errors, || false).unwrap();
     assert_eq!(
-        result.admitted_claim().unwrap().confidentiality,
+        *result.admitted_claim().unwrap().confidentiality(),
         Confidentiality::internal()
     );
     let mut wrong = errors.value.clone();

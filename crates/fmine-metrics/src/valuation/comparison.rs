@@ -424,7 +424,7 @@ impl ComparisonReceipt {
             md(&spec.element),
             md(&spec.commercial_support),
             self.decision.claim().evidence,
-            md(&self.decision.claim().confidentiality.to_string()),
+            md(&self.decision.claim().confidentiality().to_string()),
         );
         out.push_str("## Comparison under the common population\n\nCVaR95 integrates the largest 5% of signed loss = minus immediate cash margin. Regret compares every alternative in the same state; all ties survive.\n\n| Action | Expected USD | P10 / P50 / P90 USD | CVaR95 loss USD | Mean regret USD | Maximum regret USD |\n|---|---:|---:|---:|---:|---:|\n");
         for action in &summary.alternatives {

@@ -88,7 +88,7 @@ fn claim_json<T>(c: &Claim<T>) -> String {
         quoted(&format!("{:?}", c.evidence)),
         quoted(&format!("{:?}", c.epistemic)),
         quoted(&format!("{:?}", c.state)),
-        quoted(&c.confidentiality.to_string()),
+        quoted(&c.confidentiality().to_string()),
         c.stale,
         c.calibration_failed,
         c.supersedes

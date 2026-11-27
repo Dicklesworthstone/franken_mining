@@ -121,7 +121,7 @@ impl ReportClaimEntry {
         let row = build_fm_row(input, reader)?;
         Ok(Self {
             row,
-            confidentiality: input.claim.confidentiality.clone(),
+            confidentiality: input.claim.confidentiality().clone(),
         })
     }
 

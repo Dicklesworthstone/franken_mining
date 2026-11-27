@@ -335,7 +335,7 @@ fn refresh_claim(c: &mut KeyedCell) {
         old.evidence,
         old.epistemic,
         old.state,
-        old.confidentiality.clone(),
+        old.confidentiality().clone(),
         old.uu_terms.clone(),
         old.parents.clone(),
         old.anchors.clone(),

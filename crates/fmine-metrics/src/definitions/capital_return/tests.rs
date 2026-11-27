@@ -44,7 +44,7 @@ fn rebind(claim: &Claim<Input>, value: Input) -> Claim<Input> {
         claim.evidence,
         claim.epistemic,
         claim.state,
-        claim.confidentiality.clone(),
+        claim.confidentiality().clone(),
         claim.uu_terms.clone(),
         claim.parents.clone(),
         claim.anchors.clone(),
@@ -267,7 +267,7 @@ fn claims_keep_ancestry_evidence_and_exact_replay_and_reject_mutations() {
     let original = declared(FIXTURE).unwrap();
     assert_eq!(original.claim().evidence, EvidenceClass::Assumed);
     assert_eq!(
-        original.claim().confidentiality,
+        *original.claim().confidentiality(),
         Confidentiality::internal()
     );
     let mut reversed = original.inputs().to_vec();
@@ -389,7 +389,7 @@ fn agreed_filing_readings_retain_precision_definition_citations_and_readers() {
         closed(q(23900, 2001), q(24100, 1999))
     );
     assert_eq!(result.claim().evidence, EvidenceClass::ISSUER);
-    assert!(result.claim().confidentiality.is_public());
+    assert!(result.claim().confidentiality().is_public());
     assert_eq!(result.claim().anchors.len(), 4);
     assert!(result.to_json().contains("reader_a"));
     assert!(result.to_json().contains("adjusted operating earnings"));

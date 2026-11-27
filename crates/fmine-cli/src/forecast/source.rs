@@ -917,7 +917,7 @@ fn bind_value(
             "source Claim key or value was mutated",
         ));
     }
-    if !cell.claim.confidentiality.is_public() {
+    if !cell.claim.confidentiality().is_public() {
         return Err(refusal(
             RefusalCode::MnpiWall301,
             "outcome source is not public",

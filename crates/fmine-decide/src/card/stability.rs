@@ -641,7 +641,7 @@ pub fn evaluate(
         inputs.evidence.meet(EvidenceClass::Derived),
         inputs.epistemic,
         inputs.state,
-        inputs.confidentiality.clone(),
+        inputs.confidentiality().clone(),
         inputs.uu_terms.clone(),
         vec![inputs.claim_id],
         inputs.anchors.clone(),

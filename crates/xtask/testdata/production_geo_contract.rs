@@ -25,6 +25,12 @@ fn qty(n: i128) -> ExactQty {
 }
 
 fn rebind(input: &Claim<GeoInput>, value: GeoInput) -> Claim<GeoInput> {
+    relabelled(input, value, input.confidentiality().clone())
+}
+
+/// `input` rebuilt as a new claim under `label`. A label can rise on an existing claim, never fall, so a lower one
+/// takes a new claim.
+fn relabelled(input: &Claim<GeoInput>, value: GeoInput, label: Confidentiality) -> Claim<GeoInput> {
     let tag = value.canonical_tag();
     let additivity = value.additivity();
     Claim::new(
@@ -37,7 +43,7 @@ fn rebind(input: &Claim<GeoInput>, value: GeoInput) -> Claim<GeoInput> {
         input.evidence,
         input.epistemic,
         input.state,
-        input.confidentiality.clone(),
+        label,
         input.uu_terms.clone(),
         input.parents.clone(),
         input.anchors.clone(),
@@ -65,7 +71,10 @@ fn gb27_preserves_physical_quantities_and_explains_only_the_price_ratio_differen
         assert_eq!(a.quantity_claim_id, b.quantity_claim_id);
     }
     assert_eq!(receipt.claim().evidence, EvidenceClass::Assumed);
-    assert_eq!(receipt.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *receipt.claim().confidentiality(),
+        Confidentiality::internal()
+    );
     assert_eq!(receipt.claim().parents.len(), receipt.inputs().len());
     receipt.claim().check_id().unwrap();
     assert!(receipt.claim().verify_uu_slot_for_decision().is_err());
@@ -289,13 +298,12 @@ fn arithmetic_inherits_the_weakest_evidence_state_and_strongest_confidentiality(
     let original = evaluate(EXAMPLE).unwrap();
     let mut inputs = original.inputs().to_vec();
     for input in &mut inputs {
-        input.confidentiality = Confidentiality::public();
-        *input = rebind(input, input.value.clone());
+        *input = relabelled(input, input.value.clone(), Confidentiality::public());
     }
     inputs[0] = inputs[0].downgraded(EvidenceClass::ISSUER);
     inputs[0].state = KnowledgeState::Estimated;
     inputs[0].epistemic = EpistemicStatus::UnmodelledBudget;
-    inputs[0].confidentiality = Confidentiality::internal();
+    inputs[0].taint(&Confidentiality::internal());
     inputs[0] = rebind(&inputs[0], inputs[0].value.clone());
     let receipt = geo::evaluate(&inputs).unwrap();
     for (actual, prior) in receipt
@@ -313,7 +321,10 @@ fn arithmetic_inherits_the_weakest_evidence_state_and_strongest_confidentiality(
     assert_eq!(receipt.claim().evidence, EvidenceClass::ISSUER);
     assert_eq!(receipt.claim().state, KnowledgeState::Estimated);
     assert_eq!(receipt.claim().epistemic, EpistemicStatus::UnmodelledBudget);
-    assert_eq!(receipt.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *receipt.claim().confidentiality(),
+        Confidentiality::internal()
+    );
     assert_eq!(receipt.claim().color().unwrap_err().code, "FMINE-REF-205");
     assert!(
         receipt

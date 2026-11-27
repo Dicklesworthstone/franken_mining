@@ -599,7 +599,7 @@ fn metadata_and_versioned_receipts_preserve_source_restrictions() {
     );
     let r = m.evaluate(&input).unwrap();
     assert_eq!(r.claim().uu_terms, input.uu_terms);
-    assert_eq!(r.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(*r.claim().confidentiality(), Confidentiality::internal());
     assert_eq!(r.inputs(), &input);
     let mut route = m.route().value.clone();
     route.version.revision = "constructed-v2".into();

@@ -435,7 +435,7 @@ fn result_claim_keeps_source_parent_uncertainty_and_evidence_without_upgrading()
     assert_eq!(result.evidence, EvidenceClass::Assumed);
     assert_eq!(result.uu_terms, input.uu_terms);
     assert_eq!(result.state, input.state);
-    assert_eq!(result.confidentiality, input.confidentiality);
+    assert_eq!(result.confidentiality(), input.confidentiality());
     let mut changed = input.clone();
     changed.uu_terms[0].downside_exposure_usd_m = 2.0;
     assert_eq!(changed.claim_id, input.claim_id);

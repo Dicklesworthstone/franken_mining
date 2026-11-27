@@ -35,7 +35,10 @@ fn source_model_dispatches_to_kpi_selection_and_retains_component_anchors() {
         );
     }
     assert_eq!(report.design().evidence, EvidenceClass::Assumed);
-    assert_eq!(report.design().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *report.design().confidentiality(),
+        Confidentiality::internal()
+    );
     assert!(
         report
             .to_json()

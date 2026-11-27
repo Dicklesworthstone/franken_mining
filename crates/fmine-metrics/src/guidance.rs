@@ -622,7 +622,7 @@ fn derived_value<T>(
         evidence = evidence.meet(p.evidence);
         epistemic = epistemic.and(p.epistemic);
         state = state.and(p.state);
-        confidentiality = confidentiality.join(&p.confidentiality);
+        confidentiality = confidentiality.join(p.confidentiality());
         for term in &p.uu_terms {
             if !uu_terms
                 .iter()
@@ -2114,11 +2114,11 @@ mod tests {
     #[test]
     fn derived_claims_preserve_provenance_and_never_upgrade_evidence() {
         let mut i = inputs();
-        i.ytd_sold.confidentiality = Confidentiality::internal();
+        i.ytd_sold.taint(&Confidentiality::internal());
         let r = complete(&i).unwrap();
         let cost = &r.remaining_aisc_rate;
         assert_eq!(cost.evidence, EvidenceClass::ModelledUncalibrated);
-        assert_eq!(cost.confidentiality, Confidentiality::internal());
+        assert_eq!(*cost.confidentiality(), Confidentiality::internal());
         assert_eq!(cost.parents.len(), 4);
         assert_eq!(cost.anchors.len(), 4);
         assert!(cost.parents.contains(&i.remaining_sold.claim_id));

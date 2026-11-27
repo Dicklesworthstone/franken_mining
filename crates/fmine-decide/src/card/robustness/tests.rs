@@ -21,7 +21,7 @@ fn configuration(value: RobustnessDesign, inputs: &DecisionInputs) -> Claim<Robu
         EvidenceClass::Assumed,
         source.epistemic,
         source.state,
-        source.confidentiality.clone(),
+        source.confidentiality().clone(),
         source.uu_terms.clone(),
         vec![],
         source.anchors.clone(),
@@ -157,7 +157,7 @@ fn configuration_source_evidence_and_all_input_identity_bind_the_result() {
     let source = input.robustness.as_ref().unwrap();
     assert!(card.claim().parents.contains(&source.claim_id));
     assert_eq!(card.claim().evidence, EvidenceClass::Assumed);
-    assert_eq!(card.claim().confidentiality, source.confidentiality);
+    assert_eq!(card.claim().confidentiality(), source.confidentiality());
     assert_eq!(card.claim().uu_terms, source.uu_terms);
     let mut changed = input.clone();
     replace_design(&mut changed, |d| {
@@ -182,7 +182,7 @@ fn configuration_source_evidence_and_all_input_identity_bind_the_result() {
         original.evidence,
         original.epistemic,
         original.state,
-        original.confidentiality.clone(),
+        original.confidentiality().clone(),
         original.uu_terms.clone(),
         original.parents.clone(),
         vec![SourceAnchor::new(

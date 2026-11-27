@@ -136,7 +136,7 @@ pub fn derive<T>(
     let mut evidence = first.evidence.meet(EvidenceClass::Derived);
     let mut epistemic = first.epistemic;
     let mut state = first.state;
-    let mut confidentiality = first.confidentiality.clone();
+    let mut confidentiality = first.confidentiality().clone();
     let (mut terms, mut parents, mut anchors) = (Vec::new(), Vec::new(), Vec::new());
     for (index, source) in sources.into_iter().enumerate() {
         validate_source(source, &source.metric_key, source.value_tag())?;
@@ -154,7 +154,7 @@ pub fn derive<T>(
         evidence = evidence.meet(source.evidence);
         epistemic = epistemic.and(source.epistemic);
         state = state.and(source.state);
-        confidentiality = confidentiality.join(&source.confidentiality);
+        confidentiality = confidentiality.join(source.confidentiality());
         parents.push(source.claim_id);
         anchors.extend(source.anchors.iter().cloned());
         for term in &source.uu_terms {

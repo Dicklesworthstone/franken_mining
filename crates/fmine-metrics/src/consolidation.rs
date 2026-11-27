@@ -377,7 +377,7 @@ pub fn compare(input: &Claim<Table>) -> Result<Claim<Comparison>> {
             "a deterministic period table is required",
         ));
     }
-    if !input.confidentiality.is_public() {
+    if !input.confidentiality().is_public() {
         return Err(refuse(
             RefusalCode::MnpiWall301,
             "public component comparisons require public source evidence",
@@ -496,7 +496,7 @@ pub fn compare(input: &Claim<Table>) -> Result<Claim<Comparison>> {
         input.evidence.meet(EvidenceClass::Derived),
         input.epistemic,
         input.state,
-        input.confidentiality.clone(),
+        input.confidentiality().clone(),
         input.uu_terms.clone(),
         vec![input.claim_id],
         input.anchors.clone(),

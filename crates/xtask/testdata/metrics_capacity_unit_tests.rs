@@ -585,7 +585,7 @@ mod tests {
         l.grade.state = KnowledgeState::Estimated;
         let labels = LabelRegistry::new([], ["W-capacity-test"]).unwrap();
         let wall = Confidentiality::mnpi(labels.wall("W-capacity-test").unwrap());
-        l.recovery.confidentiality = wall.clone();
+        l.recovery.taint(&wall);
         let term = UuTerm {
             scenario_id: "feed-disruption".into(),
             description: "synthetic risk".into(),
@@ -602,7 +602,7 @@ mod tests {
         );
         assert_eq!(c.epistemic, EpistemicStatus::UnmodelledBudget);
         assert_eq!(c.state, KnowledgeState::Estimated);
-        assert_eq!(c.confidentiality, wall);
+        assert_eq!(*c.confidentiality(), wall);
         assert_eq!(c.uu_terms, vec![term]);
         assert_eq!(c.anchors.len(), 4);
         assert_eq!(c.parents.len(), 4);

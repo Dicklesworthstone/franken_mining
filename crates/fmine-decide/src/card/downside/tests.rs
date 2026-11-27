@@ -55,7 +55,7 @@ fn retag_limit(input: &mut DecisionInputs, change: impl FnOnce(&mut DownsideLimi
         old.evidence,
         old.epistemic,
         old.state,
-        old.confidentiality.clone(),
+        old.confidentiality().clone(),
         old.uu_terms.clone(),
         old.parents.clone(),
         old.anchors.clone(),
@@ -108,7 +108,7 @@ fn realized_signal_breaches_drive_nominal_and_stressed_probability_screens() {
             .all(|a| card.claim().anchors.contains(a))
     );
     assert_eq!(limit.evidence, EvidenceClass::Assumed);
-    assert_eq!(limit.confidentiality, Confidentiality::internal());
+    assert_eq!(*limit.confidentiality(), Confidentiality::internal());
     let json = card.to_json();
     assert!(json.contains("\"certificate_objective_unit\":\"probability\""));
     assert!(json.contains("\"downside_limit\":"));

@@ -94,7 +94,7 @@ fn rebind(source: &mut Claim<FlowsheetInput>) {
         source.evidence,
         source.epistemic,
         source.state,
-        source.confidentiality.clone(),
+        source.confidentiality().clone(),
         source.uu_terms.clone(),
         source.parents.clone(),
         source.anchors.clone(),
@@ -575,13 +575,16 @@ fn internal_source_evidence_and_confidentiality_cannot_disappear_by_cancellation
     inputs[3].evidence = EvidenceClass::Assertion {
         source: AssertionSource::Extraction,
     };
-    inputs[3].confidentiality = Confidentiality::mnpi(labels.wall("W-CIRCUIT").unwrap());
+    inputs[3].taint(&Confidentiality::mnpi(labels.wall("W-CIRCUIT").unwrap()));
     inputs[3].state = KnowledgeState::Estimated;
     rebind(&mut inputs[3]);
     let receipt = account_flowsheet(&inputs).unwrap();
     assert_eq!(receipt.claim().evidence, inputs[3].evidence);
     assert_eq!(receipt.claim().state, KnowledgeState::Estimated);
-    assert_eq!(receipt.claim().confidentiality, inputs[3].confidentiality);
+    assert_eq!(
+        receipt.claim().confidentiality(),
+        inputs[3].confidentiality()
+    );
     assert!(receipt.claim().color().is_err());
     assert_eq!(
         receipt

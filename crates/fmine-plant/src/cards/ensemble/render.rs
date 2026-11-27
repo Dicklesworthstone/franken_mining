@@ -82,7 +82,7 @@ fn claim_json<T>(claim: &Claim<T>) -> String {
         quoted(&format!("{:?}", claim.evidence)),
         quoted(&format!("{:?}", claim.epistemic)),
         quoted(&format!("{:?}", claim.state)),
-        quoted(&claim.confidentiality.to_string()),
+        quoted(&claim.confidentiality().to_string()),
         claim.calibration_failed,
         claim.stale,
         claim
@@ -259,7 +259,7 @@ impl RecoveryEnsembleReceipt {
             self.digest,
             self.claim.evidence,
             self.claim.state,
-            markdown(&self.claim.confidentiality.to_string()),
+            markdown(&self.claim.confidentiality().to_string()),
         );
         for source in &self.claim.anchors {
             let _ = writeln!(

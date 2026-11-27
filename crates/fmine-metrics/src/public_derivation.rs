@@ -208,7 +208,7 @@ pub fn derive_cost_rate<N, Q>(
         n.evidence.meet(q.evidence).meet(EvidenceClass::Derived),
         n.epistemic.and(q.epistemic),
         n.state.and(q.state),
-        n.confidentiality.join(&q.confidentiality),
+        n.confidentiality().join(q.confidentiality()),
         terms,
         vec![n.claim_id, q.claim_id],
         anchors,
@@ -303,7 +303,7 @@ fn validate_source<T>(claim: &Claim<T>, metric: &str, tag: &str) -> Result<()> {
             "source interpretation differs from its canonical identity",
         ));
     }
-    if !claim.confidentiality.is_public() {
+    if !claim.confidentiality().is_public() {
         return Err(refusal(RefusalCode::MnpiWall301, "non-public operand"));
     }
     if claim.stale || claim.state == KnowledgeState::Stale {
@@ -523,7 +523,7 @@ fn ownership_convert(
         evidence,
         epistemic,
         state,
-        amount.confidentiality.clone(),
+        amount.confidentiality().clone(),
         terms,
         parents,
         anchors,
@@ -612,7 +612,7 @@ pub fn derive(rule: Rule, inputs: &[Claim<Amount>]) -> Result<Claim<Amount>> {
         evidence = evidence.meet(c.evidence);
         epistemic = epistemic.and(c.epistemic);
         state = state.and(c.state);
-        confidentiality = confidentiality.join(&c.confidentiality);
+        confidentiality = confidentiality.join(c.confidentiality());
         for term in &c.uu_terms {
             if !terms.contains(term) {
                 terms.push(term.clone());

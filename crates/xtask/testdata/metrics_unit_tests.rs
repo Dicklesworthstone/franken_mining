@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(result.uu_terms, vec![common, extra]);
         assert_eq!(result.additivity, AdditivityClass::IntensiveWeighted);
         assert_eq!(result.support, SpatialSupport::PeriodAggregate);
-        assert!(result.confidentiality.is_public());
+        assert!(result.confidentiality().is_public());
         let mut parents = vec![n.claim_id, q.claim_id];
         parents.sort();
         assert_eq!(result.parents, parents);

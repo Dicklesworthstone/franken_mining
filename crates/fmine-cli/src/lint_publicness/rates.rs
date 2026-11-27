@@ -432,7 +432,7 @@ fn aisc_numerator_basis(
     let mut evidence_class = EvidenceClass::Derived;
     let mut epistemic = n.claim.epistemic;
     let mut state = n.claim.state;
-    let mut confidentiality = n.claim.confidentiality.clone();
+    let mut confidentiality = n.claim.confidentiality().clone();
     for c in inputs {
         for term in &c.claim.uu_terms {
             if !terms.contains(term) {
@@ -444,7 +444,7 @@ fn aisc_numerator_basis(
         evidence_class = evidence_class.meet(c.claim.evidence);
         epistemic = epistemic.and(c.claim.epistemic);
         state = state.and(c.claim.state);
-        confidentiality = confidentiality.join(&c.claim.confidentiality);
+        confidentiality = confidentiality.join(c.claim.confidentiality());
     }
     anchors.extend(witnesses.iter().map(|w| w.anchor.clone()));
     anchors.sort();

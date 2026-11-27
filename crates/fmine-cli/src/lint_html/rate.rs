@@ -59,7 +59,7 @@ fn printed(source: &HtmlClaim, rate: bool) -> Result<Printed, Refusal> {
             cell.claim.state,
             KnowledgeState::Known | KnowledgeState::Estimated
         )
-        || !cell.claim.confidentiality.is_public()
+        || !cell.claim.confidentiality().is_public()
     {
         return Err(invalid());
     }

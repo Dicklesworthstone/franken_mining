@@ -682,7 +682,7 @@ mod tests {
                 .expect("compose normal three-part lineage");
         // NL-2 meet of incomparable Elicited and Transferred is Assumed; NL-7 joins venture + MNPI.
         assert_eq!(lineage.endowment_claim.evidence, EvidenceClass::Assumed);
-        assert_eq!(lineage.endowment_claim.confidentiality, ven.join(&mnpi));
+        assert_eq!(*lineage.endowment_claim.confidentiality(), ven.join(&mnpi));
         assert_eq!(
             lineage.endowment_claim.color().unwrap().rank(),
             ColorRank::Estimated

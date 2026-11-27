@@ -23,7 +23,7 @@ fn bootstrap_declaration_keeps_original_sources_and_assumption_metadata() {
     assert_eq!(claim.evidence, EvidenceClass::Assumed);
     assert_eq!(claim.state, KnowledgeState::Estimated);
     assert_eq!(claim.additivity, AdditivityClass::NonAdditive);
-    assert_eq!(claim.confidentiality, Confidentiality::internal());
+    assert_eq!(*claim.confidentiality(), Confidentiality::internal());
     assert_eq!(claim.uu_terms, inputs.policy.uu_terms);
     assert!(claim.anchors.iter().any(|anchor| {
         anchor

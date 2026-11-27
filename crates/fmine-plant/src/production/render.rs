@@ -100,7 +100,7 @@ fn claim_json<T>(claim: &Claim<T>) -> String {
         quoted(&format!("{:?}", claim.evidence)),
         quoted(&format!("{:?}", claim.epistemic)),
         quoted(&format!("{:?}", claim.state)),
-        quoted(&claim.confidentiality.to_string()),
+        quoted(&claim.confidentiality().to_string()),
         claim.stale,
         claim.calibration_failed,
         claim

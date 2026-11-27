@@ -128,13 +128,14 @@ fn optional_recovery_claims_and_references_are_complete_without_label_downgrades
     assert_eq!(bound.iter().copied().collect::<BTreeSet<_>>(), printed);
     assert!(bound.len() > base.len());
     let r = report.recovery.as_mut().expect("recovery");
-    r.fit.confidentiality = Confidentiality::internal();
+    let public_fit = r.fit.clone();
+    r.fit.taint(&Confidentiality::internal());
     assert_eq!(
         claims(&report).expect_err("private output").code,
         "FMINE-REF-301"
     );
     let r = report.recovery.as_mut().expect("recovery");
-    r.fit.confidentiality = Confidentiality::public();
+    r.fit = public_fit;
     r.fit.stale = true;
     assert_eq!(
         claims(&report).expect_err("stale output").code,

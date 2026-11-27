@@ -872,7 +872,10 @@ fn all_candidates_constraints_and_metadata_bind_the_immutable_receipt() {
     assert_eq!(report.claim().parents.len(), 4);
     assert!(report.claim().parents.contains(&i.candidates[1].claim_id));
     assert_eq!(report.claim().evidence, EvidenceClass::Assumed);
-    assert_eq!(report.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *report.claim().confidentiality(),
+        Confidentiality::internal()
+    );
     let mut changed = i.clone();
     let mut c = changed.candidates[1].value.clone();
     c.reference_class_basis.push_str("; revised basis");

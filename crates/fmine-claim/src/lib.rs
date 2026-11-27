@@ -243,7 +243,9 @@ pub struct Claim<T> {
     pub evidence: EvidenceClass,
     pub epistemic: EpistemicStatus,
     pub state: KnowledgeState,
-    pub confidentiality: Confidentiality,
+    /// Private so the label can only rise after construction (`INV-007`): read it with
+    /// [`Claim::confidentiality`], raise it with [`Claim::taint`].
+    confidentiality: Confidentiality,
     pub uu_terms: Vec<UuTerm>,
     pub parents: Vec<ClaimId>,
     pub anchors: Vec<SourceAnchor>,
@@ -318,6 +320,25 @@ impl<T> Claim<T> {
             color_basis: None,
             value_tag: canonical_value_tag.to_string(),
         }
+    }
+
+    /// The claim's confidentiality label (§31.1).
+    #[must_use]
+    pub fn confidentiality(&self) -> &Confidentiality {
+        &self.confidentiality
+    }
+
+    /// Raises the confidentiality label (`INV-007`, §31.1): the label becomes its join with `by`, so it can only
+    /// rise. When it does not change, nothing does. Otherwise the claim takes a new id, because the label is hashed
+    /// into the body, and `supersedes` names the id it had (§8.1: a claim is superseded, never edited).
+    pub fn taint(&mut self, by: &Confidentiality) {
+        let label = self.confidentiality.join(by);
+        if label == self.confidentiality {
+            return;
+        }
+        self.confidentiality = label;
+        self.supersedes = Some(self.claim_id);
+        self.claim_id = id_of_body(&self.canonical_body());
     }
 
     /// Returns the orthogonal authority/attestation metadata (`NL-3`).
@@ -1631,6 +1652,153 @@ mod tests {
             vec![],
             vec![sample_anchor()],
         )
+    }
+
+    /// `taint` raises a label and reseals the id, and a lower or equal label changes nothing (INV-007).
+    #[test]
+    fn test_taint_only_raises_and_reseals_the_id() {
+        let reg = LabelRegistry::new(["JV-A"], ["W-X"]).unwrap();
+        let venture = Confidentiality::venture(reg.venture("JV-A").unwrap());
+        let wall = Confidentiality::mnpi(reg.wall("W-X").unwrap());
+        let mut claim = labelled("haulage_cost", Confidentiality::internal());
+        let first = claim.claim_id;
+        for lower in [Confidentiality::public(), Confidentiality::internal()] {
+            claim.taint(&lower);
+            assert_eq!(*claim.confidentiality(), Confidentiality::internal());
+            assert_eq!((claim.claim_id, claim.supersedes), (first, None));
+        }
+        claim.taint(&venture);
+        assert_eq!(*claim.confidentiality(), venture);
+        assert_eq!(claim.supersedes, Some(first));
+        assert_ne!(claim.claim_id, first);
+        claim.check_id().unwrap();
+        let second = claim.claim_id;
+        claim.taint(&wall);
+        assert_eq!(*claim.confidentiality(), venture.join(&wall));
+        assert_eq!(claim.supersedes, Some(second));
+        claim.check_id().unwrap();
+        // Tainting with the venture again, or with public, is a no-op: the label is already above both.
+        let third = claim.claim_id;
+        claim.taint(&venture);
+        claim.taint(&Confidentiality::public());
+        assert_eq!((claim.claim_id, claim.supersedes), (third, Some(second)));
+        assert!(claim.verify_export_clearance(&venture).is_err());
+        assert!(claim.verify_export_clearance(&venture.join(&wall)).is_ok());
+    }
+
+    /// INV-007 over seeded random composition DAGs: leaves carry random labels built from two ventures and two walls,
+    /// pairs are joined by `compose_binary` until one root is left, and some nodes are tainted on the way. Each node's
+    /// label is exactly its parents' join, so it is never below either parent; a taint never lowers a label; and
+    /// the root carries the join of every leaf and every taint. A reader cleared for the root's label reads it, and
+    /// a reader missing any one of its ventures or walls is refused.
+    #[test]
+    fn test_random_claim_dags_never_lower_a_label_inv_007() {
+        const CASES: usize = 20_000;
+        let reg = LabelRegistry::new(["JV-A", "JV-B"], ["W-X", "W-Y"]).unwrap();
+        let atoms = [
+            Confidentiality::public(),
+            Confidentiality::internal(),
+            Confidentiality::venture(reg.venture("JV-A").unwrap()),
+            Confidentiality::venture(reg.venture("JV-B").unwrap()),
+            Confidentiality::mnpi(reg.wall("W-X").unwrap()),
+            Confidentiality::mnpi(reg.wall("W-Y").unwrap()),
+        ];
+        let key = RngKey {
+            seed_root: 0x0009_D0C5_0043,
+            partition: 7,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        };
+        let mut rng = PhiloxStream::new(key);
+        let pick =
+            |rng: &mut PhiloxStream| atoms[(rng.next_u64() % atoms.len() as u64) as usize].clone();
+        let (mut nodes, mut raised, mut unchanged, mut refused) = (0_u64, 0_u64, 0_u64, 0_u64);
+        let mut labels_seen = BTreeSet::new();
+        for case in 0..CASES {
+            let leaves = 2 + (rng.next_u64() % 7) as usize;
+            let mut expected = Confidentiality::public();
+            let mut pool: Vec<Claim<f64>> = (0..leaves)
+                .map(|i| {
+                    let mut label = pick(&mut rng);
+                    if rng.next_u64().is_multiple_of(3) {
+                        label = label.join(&pick(&mut rng));
+                    }
+                    expected = expected.join(&label);
+                    labelled(&format!("leaf_{case}_{i}"), label)
+                })
+                .collect();
+            while pool.len() > 1 {
+                let l = pool.swap_remove((rng.next_u64() % pool.len() as u64) as usize);
+                let r = pool.swap_remove((rng.next_u64() % pool.len() as u64) as usize);
+                let mut child = join("node", &l, &r);
+                nodes += 1;
+                assert_eq!(
+                    *child.confidentiality(),
+                    l.confidentiality().join(r.confidentiality())
+                );
+                assert!(l.confidentiality().leq(child.confidentiality()));
+                assert!(r.confidentiality().leq(child.confidentiality()));
+                if rng.next_u64().is_multiple_of(4) {
+                    let by = pick(&mut rng);
+                    let (before, id) = (child.confidentiality().clone(), child.claim_id);
+                    child.taint(&by);
+                    assert_eq!(*child.confidentiality(), before.join(&by));
+                    assert!(before.leq(child.confidentiality()));
+                    if *child.confidentiality() == before {
+                        assert_eq!(child.claim_id, id);
+                        unchanged += 1;
+                    } else {
+                        assert_eq!(child.supersedes, Some(id));
+                        raised += 1;
+                    }
+                    child.check_id().unwrap();
+                    expected = expected.join(&by);
+                }
+                pool.push(child);
+            }
+            let root = pool.pop().unwrap();
+            assert_eq!(*root.confidentiality(), expected, "case {case}");
+            assert!(root.verify_export_clearance(&expected).is_ok());
+            labels_seen.insert(expected.to_string());
+            let ventures: Vec<VentureId> = expected.ventures().cloned().collect();
+            let walls: Vec<WallId> = expected.walls().cloned().collect();
+            for skip in 0..ventures.len() + walls.len() {
+                let mut clearance = Confidentiality::internal();
+                let kept_ventures = ventures.iter().enumerate().filter(|(k, _)| *k != skip);
+                for (_, v) in kept_ventures {
+                    clearance = clearance.join(&Confidentiality::venture(v.clone()));
+                }
+                let kept_walls = walls
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, _)| ventures.len() + *k != skip);
+                for (_, w) in kept_walls {
+                    clearance = clearance.join(&Confidentiality::mnpi(w.clone()));
+                }
+                assert!(
+                    root.verify_export_clearance(&clearance).is_err(),
+                    "case {case}"
+                );
+                refused += 1;
+            }
+            if !expected.is_public() {
+                assert!(
+                    root.verify_export_clearance(&Confidentiality::public())
+                        .is_err()
+                );
+                refused += 1;
+            }
+        }
+        println!(
+            "{{\"test\":\"inv_007_random_dags\",\"cases\":{CASES},\"nodes\":{nodes},\"taint_raised\":{raised},\
+             \"taint_unchanged\":{unchanged},\"refused_readers\":{refused},\"distinct_root_labels\":{}}}",
+            labels_seen.len()
+        );
+        assert!(raised > 0 && unchanged > 0 && refused > 0);
+        // Every combination of the two ventures and two walls, plus internal alone, reaches some root.
+        assert_eq!(labels_seen.len(), 17);
     }
 
     /// One export attempt, guarded and logged: the source labels, their join, the clearance, whether the join sits

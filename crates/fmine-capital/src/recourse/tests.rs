@@ -825,7 +825,7 @@ fn reanchored<T: Clone>(original: &Claim<T>, marker: u8) -> Claim<T> {
         original.evidence,
         original.epistemic,
         original.state,
-        original.confidentiality.clone(),
+        original.confidentiality().clone(),
         original.uu_terms.clone(),
         original.parents.clone(),
         vec![SourceAnchor::new(

@@ -49,7 +49,7 @@ fn rebind(template: &KeyedCell, value: PublicValue) -> KeyedCell {
         c.claim.evidence,
         EpistemicStatus::KnownUnknown(KuKind::Parametric),
         KnowledgeState::Estimated,
-        c.claim.confidentiality.clone(),
+        c.claim.confidentiality().clone(),
         c.claim.uu_terms.clone(),
         c.claim.parents.clone(),
         c.claim.anchors.clone(),
@@ -69,7 +69,7 @@ fn state(cell: &mut KeyedCell, state: KnowledgeState) {
         c.evidence,
         c.epistemic,
         state,
-        c.confidentiality.clone(),
+        c.confidentiality().clone(),
         c.uu_terms.clone(),
         c.parents.clone(),
         c.anchors.clone(),
@@ -108,7 +108,7 @@ fn even_unselected_non_public_evidence_refuses_before_a_report_can_retain_it() {
             under_status: None,
         },
     );
-    cells[3].claim.confidentiality = Confidentiality::internal();
+    cells[3].claim.taint(&Confidentiality::internal());
     state(&mut cells[3], KnowledgeState::Estimated);
     cells[3].claim.check_id().unwrap();
     let refusal = track_record::assess(TrackRecordInput {
@@ -721,7 +721,7 @@ fn real_annual_bindings_keep_originals_comparatives_copper_units_and_disposals_d
                 } else {
                     c.state
                 },
-                c.confidentiality.clone(),
+                c.confidentiality().clone(),
                 c.uu_terms.clone(),
                 vec![c.claim_id],
                 c.anchors.clone(),

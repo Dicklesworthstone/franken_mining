@@ -59,6 +59,7 @@ impl<I, O> Receipt<I, O> {
             bad,
         )?;
         let prior = receipt.claim;
+        let label = prior.confidentiality().clone();
         receipt.claim = Claim::new(
             metric,
             prior.value,
@@ -69,7 +70,7 @@ impl<I, O> Receipt<I, O> {
             EvidenceClass::ModelledUncalibrated.meet(prior.evidence),
             EpistemicStatus::KnownUnknown(KuKind::Parametric).and(prior.epistemic),
             KnowledgeState::Estimated.and(prior.state),
-            prior.confidentiality,
+            label,
             prior.uu_terms,
             prior.parents,
             prior.anchors,
@@ -96,7 +97,7 @@ impl<I, O> Receipt<I, O> {
             evidence = evidence.meet(input.evidence);
             epistemic = epistemic.and(input.epistemic);
             state = state.and(input.state);
-            confidentiality = confidentiality.join(&input.confidentiality);
+            confidentiality = confidentiality.join(input.confidentiality());
             parents.insert(input.claim_id);
             anchors.extend(input.anchors.iter().cloned());
             for term in &input.uu_terms {
@@ -387,7 +388,7 @@ pub(super) fn claim_json<T>(claim: &Claim<T>, value: &str, cost_schema: bool) ->
         js(&format!("{:?}", claim.representation)),
         js(&format!("{:?}", claim.support)),
         js(&format!("{:?}", claim.additivity)),
-        js(&claim.confidentiality.to_string())
+        js(&claim.confidentiality().to_string())
     );
     let supersedes = claim
         .supersedes

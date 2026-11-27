@@ -585,8 +585,8 @@ fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
         js(&format!("{:?}", claim.evidence)),
         js(&format!("{:?}", claim.epistemic)),
         js(&format!("{:?}", claim.state)),
-        js(&claim.confidentiality.to_string()),
-        claim.confidentiality.is_public(),
+        js(&claim.confidentiality().to_string()),
+        claim.confidentiality().is_public(),
         claim.stale,
         claim.calibration_failed,
     )

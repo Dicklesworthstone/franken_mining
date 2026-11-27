@@ -1032,7 +1032,7 @@ fn serialized_receipts_expose_the_colour_and_exact_uu_metadata_their_digest_bind
         EvidenceClass::Derived,
         input.epistemic,
         input.state,
-        input.confidentiality.clone(),
+        input.confidentiality().clone(),
         input.uu_terms.clone(),
         input.parents.clone(),
         input.anchors.clone(),

@@ -328,7 +328,10 @@ fn metadata_and_sources_bind_the_result_without_promoting_evidence() {
     let design = source(design(&program, r(3, 2)));
     let report = evaluate(&program, &design).unwrap();
     assert_eq!(report.claim().evidence, EvidenceClass::Assumed);
-    assert_eq!(report.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *report.claim().confidentiality(),
+        Confidentiality::internal()
+    );
     assert!(report.claim().parents.contains(&program.claim().claim_id));
     assert!(report.claim().parents.contains(&design.claim_id));
     assert!(
@@ -374,7 +377,7 @@ fn metadata_and_sources_bind_the_result_without_promoting_evidence() {
         design.evidence,
         design.epistemic,
         design.state,
-        design.confidentiality.clone(),
+        design.confidentiality().clone(),
         design.uu_terms.clone(),
         design.parents.clone(),
         extra_anchor,

@@ -578,7 +578,7 @@ mod tests {
         let claim = parse(MODEL, source(MODEL)).unwrap();
         claim.check_id().unwrap();
         assert_eq!(claim.evidence, EvidenceClass::Assumed);
-        assert_eq!(claim.confidentiality, Confidentiality::internal());
+        assert_eq!(*claim.confidentiality(), Confidentiality::internal());
         assert_eq!(claim.uu_terms.len(), 1);
         assert!(
             claim

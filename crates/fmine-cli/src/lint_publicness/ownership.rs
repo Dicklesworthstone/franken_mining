@@ -192,7 +192,7 @@ pub(super) fn assess(
                 c.evidence.meet(EvidenceClass::Derived),
                 c.epistemic,
                 c.state,
-                c.confidentiality.clone(),
+                c.confidentiality().clone(),
                 c.uu_terms.clone(),
                 vec![c.claim_id],
                 c.anchors.clone(),

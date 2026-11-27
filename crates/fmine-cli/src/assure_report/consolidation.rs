@@ -447,7 +447,7 @@ fn reading(
         || source.claim.stale
         || source.claim.calibration_failed
         || !admitted_state
-        || !source.claim.confidentiality.is_public()
+        || !source.claim.confidentiality().is_public()
         || source.claim.support != SpatialSupport::PeriodAggregate
         || source.claim.additivity != AdditivityClass::ExtensiveAdditive
         || source.claim.representation != Representation::Deterministic

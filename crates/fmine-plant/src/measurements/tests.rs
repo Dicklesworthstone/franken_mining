@@ -60,7 +60,7 @@ fn rebind(input: &mut Claim<MaterialMeasurement>) {
         input.evidence,
         input.epistemic,
         input.state,
-        input.confidentiality.clone(),
+        input.confidentiality().clone(),
         input.uu_terms.clone(),
         input.parents.clone(),
         input.anchors.clone(),
@@ -514,17 +514,17 @@ fn every_source_retains_its_evidence_and_confidentiality() {
         };
         inputs[slot].epistemic = EpistemicStatus::KnownUnknown(KuKind::Parametric);
         inputs[slot].state = KnowledgeState::Estimated;
-        inputs[slot].confidentiality = venture.clone();
+        inputs[slot].taint(&venture);
         rebind(&mut inputs[slot]);
         let other = (slot + 1) % inputs.len();
-        inputs[other].confidentiality = wall.clone();
+        inputs[other].taint(&wall);
         rebind(&mut inputs[other]);
         let result = project_material(&inputs).unwrap();
         assert_eq!(result.claim().evidence, inputs[slot].evidence);
         assert!(result.claim().color().is_err());
         assert_eq!(result.claim().epistemic, inputs[slot].epistemic);
         assert_eq!(result.claim().state, KnowledgeState::Estimated);
-        assert_eq!(result.claim().confidentiality, venture.join(&wall));
+        assert_eq!(*result.claim().confidentiality(), venture.join(&wall));
         assert!(
             result
                 .claim()

@@ -352,7 +352,7 @@ fn ordering_is_deterministic_and_evidence_cannot_be_strengthened() {
     assert_eq!(f.evidence, EvidenceClass::ISSUER);
     assert_eq!(p.evidence, EvidenceClass::ISSUER);
     assert_eq!(p.state, KnowledgeState::Estimated);
-    assert_eq!(p.confidentiality, venture);
+    assert_eq!(*p.confidentiality(), venture);
     assert_eq!(f.check_id(), Ok(()));
     assert_eq!(p.check_id(), Ok(()));
     assert_eq!(f.anchors.len(), 6);
@@ -391,12 +391,12 @@ fn fit_and_both_models_preserve_every_registered_venture_and_wall() {
     rows[0].head = labelled(&rows[0].head, a.join(&training_wall));
     rows[1].recovery = labelled(&rows[1].recovery, b.clone());
     let fitted = fit(&rows).unwrap();
-    assert_eq!(fitted.confidentiality, expected_fit);
+    assert_eq!(*fitted.confidentiality(), expected_fit);
     assert_eq!(fitted.value, public_fit.value);
     assert_eq!(fitted.check_id(), Ok(()));
     for c in rows.iter().flat_map(|r| [&r.head, &r.recovery]) {
         assert_eq!(c.check_id(), Ok(()));
-        assert!(c.confidentiality.leq(&fitted.confidentiality));
+        assert!(c.confidentiality().leq(fitted.confidentiality()));
     }
     let mut row = operating();
     let public_projection = project(&public_fit, &row).unwrap();
@@ -411,12 +411,12 @@ fn fit_and_both_models_preserve_every_registered_venture_and_wall() {
         ),
     ] {
         assert_eq!(c.value, public.value);
-        assert_eq!(c.confidentiality, expected_projection);
+        assert_eq!(*c.confidentiality(), expected_projection);
         assert_eq!(c.check_id(), Ok(()));
-        assert!(fitted.confidentiality.leq(&c.confidentiality));
+        assert!(fitted.confidentiality().leq(c.confidentiality()));
         for input in [&row.head, &row.recovery, &row.processed, &row.produced] {
             assert_eq!(input.check_id(), Ok(()));
-            assert!(input.confidentiality.leq(&c.confidentiality));
+            assert!(input.confidentiality().leq(c.confidentiality()));
         }
         assert_eq!(c.verify_export_clearance(&expected_projection), Ok(()));
         assert_eq!(

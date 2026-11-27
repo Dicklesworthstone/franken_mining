@@ -89,7 +89,7 @@ fn receipt_keeps_complete_assumed_evidence_and_diagnostic_parent_chain() {
     for claim in receipt.inputs() {
         claim.check_id().expect("bound input");
         assert_eq!(claim.evidence, EvidenceClass::Assumed);
-        assert_eq!(claim.confidentiality, Confidentiality::internal());
+        assert_eq!(*claim.confidentiality(), Confidentiality::internal());
         assert_eq!(claim.anchors[0].artifact_sha256, sha256(input.as_bytes()).0);
     }
     for (index, claim) in receipt.rows().iter().enumerate() {

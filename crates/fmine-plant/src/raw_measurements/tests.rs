@@ -66,7 +66,7 @@ fn rebind<T: Clone>(input: &mut Claim<T>, tag: &str) {
         input.evidence,
         input.epistemic,
         input.state,
-        input.confidentiality.clone(),
+        input.confidentiality().clone(),
         input.uu_terms.clone(),
         input.parents.clone(),
         input.anchors.clone(),
@@ -573,18 +573,18 @@ fn receipt_identity_and_transfer_preserve_complete_source_metadata() {
 
     let mut inputs = fixture();
     let labels = LabelRegistry::new(["JV-A"], ["W-A"]).unwrap();
-    inputs[3].confidentiality = Confidentiality::venture(labels.venture("JV-A").unwrap());
+    inputs[3].taint(&Confidentiality::venture(labels.venture("JV-A").unwrap()));
     inputs[3].state = KnowledgeState::Estimated;
     refresh(&mut inputs[3]);
     let mut error = model(&inputs);
-    error.confidentiality = Confidentiality::mnpi(labels.wall("W-A").unwrap());
+    error.taint(&Confidentiality::mnpi(labels.wall("W-A").unwrap()));
     refresh_model(&mut error);
     let output = project_transfer(&inputs, &error).unwrap();
     assert_eq!(output.claim().evidence, EvidenceClass::Assumed);
     assert_eq!(output.transfer().state, KnowledgeState::Estimated);
     assert_eq!(
-        output.transfer().confidentiality,
-        inputs[3].confidentiality.join(&error.confidentiality)
+        *output.transfer().confidentiality(),
+        inputs[3].confidentiality().join(error.confidentiality())
     );
     assert!(
         output

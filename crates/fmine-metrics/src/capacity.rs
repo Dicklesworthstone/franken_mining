@@ -301,7 +301,7 @@ fn derived<T>(
     let mut evidence = EvidenceClass::Derived.meet(required.evidence);
     let mut epistemic = required.epistemic;
     let mut state = required.state;
-    let mut confidentiality = required.confidentiality.clone();
+    let mut confidentiality = required.confidentiality().clone();
     let mut uu_terms = required.uu_terms.clone();
     let mut anchors = required.anchors.clone();
     let mut parents = vec![required.claim_id];
@@ -309,7 +309,7 @@ fn derived<T>(
         evidence = evidence.meet(p.evidence);
         epistemic = epistemic.and(p.epistemic);
         state = state.and(p.state);
-        confidentiality = confidentiality.join(&p.confidentiality);
+        confidentiality = confidentiality.join(p.confidentiality());
         for term in &p.uu_terms {
             if !uu_terms.iter().any(|u| u.scenario_id == term.scenario_id) {
                 uu_terms.push(term.clone());

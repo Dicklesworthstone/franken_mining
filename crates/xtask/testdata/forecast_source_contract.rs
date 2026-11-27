@@ -90,7 +90,7 @@ fn reseal(cell: &mut KeyedCell) {
         c.evidence,
         c.epistemic,
         c.state,
-        c.confidentiality.clone(),
+        c.confidentiality().clone(),
         c.uu_terms.clone(),
         c.parents.clone(),
         c.anchors.clone(),
@@ -276,7 +276,7 @@ fn mutated_source_or_wrong_scope_never_becomes_an_outcome() {
         );
     }
     let mut changed = cell.clone();
-    changed.claim.confidentiality = Confidentiality::internal();
+    changed.claim.taint(&Confidentiality::internal());
     reseal(&mut changed);
     assert_eq!(
         bind(&source, &policy, id, &[changed])

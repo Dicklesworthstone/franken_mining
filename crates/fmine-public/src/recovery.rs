@@ -399,7 +399,7 @@ fn operating_claim(
             format!("{} source identity differs", c.locator),
         ));
     }
-    if !c.claim.confidentiality.is_public()
+    if !c.claim.confidentiality().is_public()
         || c.claim.support != SpatialSupport::PeriodAggregate
         || c.claim.stale
         || c.claim.calibration_failed
@@ -777,10 +777,10 @@ fn sqrt_json(s: SquareRoot, rule: &str, inputs: &[String]) -> String {
 }
 
 fn claim_fields<T>(c: &Claim<T>, calibration: &str) -> String {
-    let confidentiality = if c.confidentiality.is_public() {
+    let confidentiality = if c.confidentiality().is_public() {
         "public".into()
     } else {
-        c.confidentiality.to_string()
+        c.confidentiality().to_string()
     };
     let anchors = c
         .anchors

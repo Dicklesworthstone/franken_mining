@@ -404,7 +404,10 @@ fn source_metadata_joins_and_typed_population_mutation_refuses() {
     );
     let mut declaration = population(value);
     let receipt = model.evaluate_ensemble(&declaration).unwrap();
-    assert_eq!(receipt.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *receipt.claim().confidentiality(),
+        Confidentiality::internal()
+    );
     assert_eq!(receipt.claim().uu_terms.len(), 1);
     assert!(
         receipt
@@ -697,7 +700,10 @@ fn corrections_retain_source_metadata_and_reject_typed_mutation() {
     let result = model
         .evaluate_ensemble_with_corrections(&population, &corrections)
         .unwrap();
-    assert_eq!(result.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *result.claim().confidentiality(),
+        Confidentiality::internal()
+    );
     assert_eq!(result.claim().evidence, EvidenceClass::Assumed);
     assert_eq!(result.claim().state, KnowledgeState::Estimated);
     assert_eq!(result.claim().uu_terms.len(), 1);
@@ -783,6 +789,12 @@ fn retained_nominal_correction_binds_digest_and_taint_even_when_every_state_repl
     assert_ne!(original.digest(), changed.digest());
     assert_eq!(changed.model().correction(), &nominal);
     assert!(changed.claim().parents.contains(&nominal.claim_id));
-    assert_eq!(original.claim().confidentiality, Confidentiality::public());
-    assert_eq!(changed.claim().confidentiality, Confidentiality::internal());
+    assert_eq!(
+        *original.claim().confidentiality(),
+        Confidentiality::public()
+    );
+    assert_eq!(
+        *changed.claim().confidentiality(),
+        Confidentiality::internal()
+    );
 }

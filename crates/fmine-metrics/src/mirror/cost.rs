@@ -271,7 +271,7 @@ fn validate(input: &Claim<CostReading>) -> Result<()> {
             "cost source needs deterministic extensive period-aggregate support",
         );
     }
-    if !input.confidentiality.is_public() {
+    if !input.confidentiality().is_public() {
         return refuse(
             RefusalCode::MnpiWall301,
             "public cost mirror cannot admit private inputs",

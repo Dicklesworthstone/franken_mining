@@ -572,7 +572,7 @@ pub fn evaluate(inputs: &Claim<RecoveryBoundModel>) -> Result<BoundCard> {
             .epistemic
             .and(EpistemicStatus::KnownUnknown(KuKind::Parametric)),
         KnowledgeState::Estimated,
-        inputs.confidentiality.clone(),
+        inputs.confidentiality().clone(),
         inputs.uu_terms.clone(),
         vec![inputs.claim_id],
         inputs.anchors.clone(),

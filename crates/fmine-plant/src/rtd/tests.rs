@@ -450,7 +450,7 @@ fn source_precision_evidence_and_order_are_retained() {
     feeds.reverse();
     let b = propagate(&m, &o, &feeds, || false).unwrap();
     assert_eq!(a, b);
-    assert_eq!(a.claim().confidentiality, wall);
+    assert_eq!(*a.claim().confidentiality(), wall);
     assert_eq!(
         a.claim()
             .verify_export_clearance(&Confidentiality::public())

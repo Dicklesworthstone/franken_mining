@@ -690,7 +690,7 @@ pub fn project_transfer(
         claim.evidence,
         claim.epistemic,
         claim.state,
-        claim.confidentiality.clone(),
+        claim.confidentiality().clone(),
         claim.uu_terms.clone(),
         vec![claim.claim_id],
         claim.anchors.clone(),

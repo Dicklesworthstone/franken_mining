@@ -421,7 +421,7 @@ pub(super) fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
             "estimated"
         }),
         claim.state.tag(),
-        js(&claim.confidentiality.to_string()),
+        js(&claim.confidentiality().to_string()),
         ids(&claim
             .parents
             .iter()
@@ -882,7 +882,7 @@ impl EvaluatedProgram {
             md(&s.question),
             md(&s.model_key),
             evidence(self.claim.evidence),
-            md(&self.claim.confidentiality.to_string()),
+            md(&self.claim.confidentiality().to_string()),
             self.digest,
             self.no_claim(),
             md(&s.policy.valuation_basis),
@@ -1344,7 +1344,7 @@ pub(super) fn claim_markdown<T>(out: &mut String, claim: &Claim<T>) {
         claim.claim_id,
         md(&claim.metric_key),
         evidence(claim.evidence),
-        md(&claim.confidentiality.to_string())
+        md(&claim.confidentiality().to_string())
     );
     for a in &claim.anchors {
         let _ = writeln!(

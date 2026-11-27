@@ -54,7 +54,7 @@ fn transport_configuration_retains_every_original_matrix_row_and_unknown() {
     assert_eq!(claim.value.model_key, "synthetic-choice");
     assert_eq!(claim.value.radius, Rat::new(1, 4).unwrap());
     assert_eq!(claim.evidence, EvidenceClass::Assumed);
-    assert_eq!(claim.confidentiality, Confidentiality::internal());
+    assert_eq!(*claim.confidentiality(), Confidentiality::internal());
     assert_eq!(claim.additivity, AdditivityClass::NonAdditive);
     assert_eq!(claim.state, KnowledgeState::Estimated);
     assert_eq!(claim.uu_terms, input.weights.uu_terms);

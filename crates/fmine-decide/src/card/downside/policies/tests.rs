@@ -46,7 +46,7 @@ fn retag<T>(old: &Claim<T>, value: T, tag: String) -> Claim<T> {
         old.evidence,
         old.epistemic,
         old.state,
-        old.confidentiality.clone(),
+        old.confidentiality().clone(),
         old.uu_terms.clone(),
         old.parents.clone(),
         old.anchors.clone(),

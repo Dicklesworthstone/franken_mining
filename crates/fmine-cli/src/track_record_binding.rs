@@ -294,7 +294,7 @@ fn interpreted<T, U>(value: T, tag: &str, metric: &str, source: &Claim<U>) -> Cl
         EvidenceClass::Derived.meet(source.evidence),
         source.epistemic,
         source.state,
-        source.confidentiality.clone(),
+        source.confidentiality().clone(),
         source.uu_terms.clone(),
         vec![source.claim_id],
         source.anchors.clone(),
@@ -416,7 +416,7 @@ fn actual(c: &KeyedCell, expected: &SeriesKey) -> Result<Claim<OutcomeValue>> {
             "source key or value differs from its Claim identity",
         ));
     }
-    if !c.claim.confidentiality.is_public() {
+    if !c.claim.confidentiality().is_public() {
         return Err(refusal(RefusalCode::MnpiWall301, "non-public outcome"));
     }
     if !c
@@ -584,7 +584,7 @@ pub fn assess(input: TrackRecordInput<'_>) -> Result<TrackRecordReport> {
     if input
         .claims
         .iter()
-        .any(|c| !c.claim.confidentiality.is_public())
+        .any(|c| !c.claim.confidentiality().is_public())
     {
         return Err(refusal(
             RefusalCode::MnpiWall301,

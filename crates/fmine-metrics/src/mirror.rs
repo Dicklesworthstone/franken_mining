@@ -362,7 +362,7 @@ fn validate(claim: &Claim<MirrorReading>) -> Result<()> {
             format!("input metric must be {READING_METRIC}"),
         );
     }
-    if !claim.confidentiality.is_public() {
+    if !claim.confidentiality().is_public() {
         return refuse(
             RefusalCode::MnpiWall301,
             "this mirror admits public inputs only",
@@ -572,7 +572,7 @@ fn derived<T, S>(metric: &str, value: T, tag: &str, sources: &[&Claim<S>]) -> Cl
         evidence = evidence.meet(source.evidence);
         epistemic = epistemic.and(source.epistemic);
         state = state.and(source.state);
-        confidentiality = confidentiality.join(&source.confidentiality);
+        confidentiality = confidentiality.join(source.confidentiality());
         for term in &source.uu_terms {
             if !uu_terms.contains(term) {
                 uu_terms.push(term.clone());

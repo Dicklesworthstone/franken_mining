@@ -1116,7 +1116,7 @@ fn all_debt_inputs_and_source_metadata_bind_identity_while_row_order_does_not() 
         source.evidence,
         source.epistemic,
         source.state,
-        source.confidentiality.clone(),
+        source.confidentiality().clone(),
         source.uu_terms.clone(),
         source.parents.clone(),
         vec![SourceAnchor::new(

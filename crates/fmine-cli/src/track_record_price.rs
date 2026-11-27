@@ -438,7 +438,7 @@ fn checked_cell(
         || c.key.scope != Scope::Site
         || c.key.unit != unit_name
         || ownership(c.key.ownership_basis)? != basis
-        || !c.claim.confidentiality.is_public()
+        || !c.claim.confidentiality().is_public()
         || c.claim.stale
         || c.claim.calibration_failed
         || c.claim.support != SpatialSupport::PeriodAggregate

@@ -78,7 +78,7 @@ fn debt_claim_binds_every_original_row_and_inherits_evidence_and_unknowns() {
     assert_eq!(funding.evidence, EvidenceClass::Assumed);
     assert_eq!(funding.state, KnowledgeState::Estimated);
     assert_eq!(funding.additivity, AdditivityClass::NonAdditive);
-    assert_eq!(funding.confidentiality, Confidentiality::internal());
+    assert_eq!(*funding.confidentiality(), Confidentiality::internal());
     assert_eq!(funding.uu_terms, inputs.policy.uu_terms);
     assert!(!funding.uu_terms.is_empty());
     for row in parse_subset(&text).unwrap().rows {

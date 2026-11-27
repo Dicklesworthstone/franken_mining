@@ -285,7 +285,7 @@ fn model_confidentiality_and_evidence_participate_in_the_result() {
     );
     let result = reconcile_inventory(&inputs, &model).unwrap();
     let claim = result.admitted_claim().unwrap();
-    assert_eq!(claim.confidentiality, restricted);
+    assert_eq!(*claim.confidentiality(), restricted);
     assert_eq!(
         claim
             .verify_export_clearance(&Confidentiality::public())

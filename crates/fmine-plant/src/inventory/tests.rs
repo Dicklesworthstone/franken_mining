@@ -22,7 +22,7 @@ fn rebind(input: &mut Claim<MetalBalanceInput>) {
         input.evidence,
         input.epistemic,
         input.state,
-        input.confidentiality.clone(),
+        input.confidentiality().clone(),
         input.uu_terms.clone(),
         input.parents.clone(),
         input.anchors.clone(),
@@ -368,13 +368,13 @@ fn confidentiality_joins_every_input_including_the_completeness_declaration() {
     let wall = Confidentiality::mnpi(registry.wall("W-A").unwrap());
     let venture = Confidentiality::venture(registry.venture("JV-A").unwrap());
     let mut inputs = closed();
-    inputs[0].confidentiality = wall.clone();
-    inputs[5].confidentiality = venture.clone();
+    inputs[0].taint(&wall);
+    inputs[5].taint(&venture);
     rebind(&mut inputs[0]);
     rebind(&mut inputs[5]);
     let receipt = account_interval(&inputs).unwrap();
     let output = receipt.claim();
-    assert_eq!(output.confidentiality, wall.join(&venture));
+    assert_eq!(*output.confidentiality(), wall.join(&venture));
     assert_eq!(
         output
             .verify_export_clearance(&Confidentiality::public())

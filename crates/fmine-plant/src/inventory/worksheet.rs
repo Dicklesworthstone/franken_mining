@@ -457,7 +457,7 @@ pub fn claim_json<T>(claim: &Claim<T>) -> String {
         quoted(&claim.metric_key),
         quoted(&format!("{:?}", claim.evidence)),
         quoted(&format!("{:?}", claim.state)),
-        quoted(&claim.confidentiality.to_string()),
+        quoted(&claim.confidentiality().to_string()),
         quoted(if claim.calibration_failed {
             "failed"
         } else {

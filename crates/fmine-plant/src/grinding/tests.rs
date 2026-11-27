@@ -404,17 +404,19 @@ fn output_remains_modelled_taint_and_unhashed_source_metadata_are_retained() {
 
     let labels = LabelRegistry::new([], ["W-synthetic-grinding"]).unwrap();
     let mut private = s;
-    private.confidentiality = Confidentiality::mnpi(labels.wall("W-synthetic-grinding").unwrap());
+    private.taint(&Confidentiality::mnpi(
+        labels.wall("W-synthetic-grinding").unwrap(),
+    ));
     private.claim_id = fmine_core::id::ObjectId::from_canonical_bytes(
         fmine_core::id::PrefixKind::Claim,
         &private.canonical_body(),
     );
     let private_result = evaluate(&m, &[private]).unwrap();
-    assert!(!private_result.claim().confidentiality.is_public());
+    assert!(!private_result.claim().confidentiality().is_public());
     assert!(
         private_result
             .claim()
-            .confidentiality
+            .confidentiality()
             .to_string()
             .contains("W-synthetic-grinding")
     );
@@ -463,7 +465,7 @@ fn worksheet_preserves_exact_source_bytes_units_claims_and_joint_answers() {
     close(nominal.receipt().summary().throughput.mean.value(), 160.0);
     assert_eq!(nominal.receipt().claim().evidence, EvidenceClass::Assumed);
     assert_eq!(
-        nominal.receipt().claim().confidentiality,
+        *nominal.receipt().claim().confidentiality(),
         Confidentiality::internal()
     );
     for c in nominal.receipt().scenarios() {

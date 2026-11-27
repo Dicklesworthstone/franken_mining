@@ -974,7 +974,7 @@ fn entity_inputs_and_losing_flows_bind_identity_independently_of_row_order() {
         input.evidence,
         input.epistemic,
         input.state,
-        input.confidentiality.clone(),
+        input.confidentiality().clone(),
         input.uu_terms.clone(),
         input.parents.clone(),
         vec![SourceAnchor::new(

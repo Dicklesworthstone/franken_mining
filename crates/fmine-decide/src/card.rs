@@ -722,7 +722,7 @@ impl Metadata {
         self.evidence = self.evidence.meet(claim.evidence);
         self.epistemic = self.epistemic.and(claim.epistemic);
         self.state = self.state.and(claim.state);
-        self.confidentiality = self.confidentiality.join(&claim.confidentiality);
+        self.confidentiality = self.confidentiality.join(claim.confidentiality());
         self.parents.insert(claim.claim_id);
         self.anchors.extend(claim.anchors.iter().cloned());
         for term in &claim.uu_terms {
@@ -1013,7 +1013,7 @@ mod tests {
         assert_eq!(card.summary().minimax_regret_winners, ["build"]);
         assert_eq!(card.claim().parents.len(), 3);
         assert_eq!(card.claim().evidence, EvidenceClass::Assumed);
-        assert_eq!(card.claim().confidentiality, Confidentiality::internal());
+        assert_eq!(*card.claim().confidentiality(), Confidentiality::internal());
         assert_eq!(card.inputs(), &inputs);
         let json = card.to_json();
         assert!(json.contains("\"mean\":\"100000000/1\""));

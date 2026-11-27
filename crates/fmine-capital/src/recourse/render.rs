@@ -412,7 +412,7 @@ impl EvaluatedRecourseProgram {
             md(&s.question),
             md(&s.model_key),
             evidence(self.claim().evidence),
-            md(&self.claim().confidentiality.to_string()),
+            md(&self.claim().confidentiality().to_string()),
             self.digest(),
             self.no_claim(),
             md(&basis.valuation_basis),

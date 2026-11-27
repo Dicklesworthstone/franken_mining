@@ -113,7 +113,7 @@ fn original<'a>(
         cell.claim.check_id().map_err(|e| vec![e.to_string()])?;
         if cell.claim.metric_key != cell.key.line.label
             || cell.claim.value_tag() != canonical_value_tag(&cell.key, &cell.claim.value)
-            || !cell.claim.confidentiality.is_public()
+            || !cell.claim.confidentiality().is_public()
             || cell.claim.stale
             || cell.claim.calibration_failed
             || cell.key.scope != Scope::Site

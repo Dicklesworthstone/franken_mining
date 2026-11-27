@@ -869,7 +869,7 @@ fn secondary_sources_losing_inputs_and_metadata_bind_while_row_order_is_canonica
         source.evidence,
         source.epistemic,
         source.state,
-        source.confidentiality.clone(),
+        source.confidentiality().clone(),
         source.uu_terms.clone(),
         source.parents.clone(),
         vec![SourceAnchor::new(

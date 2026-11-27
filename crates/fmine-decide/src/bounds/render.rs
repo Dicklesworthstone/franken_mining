@@ -516,7 +516,7 @@ impl BoundCard {
             self.digest(),
             self.inputs().evidence,
             self.claim().evidence,
-            md(&self.claim().confidentiality.to_string())
+            md(&self.claim().confidentiality().to_string())
         );
         for u in &self.claim().uu_terms {
             let _ = writeln!(

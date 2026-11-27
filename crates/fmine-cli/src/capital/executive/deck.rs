@@ -90,7 +90,7 @@ fn replay(
             old.evidence,
             old.epistemic,
             old.state,
-            old.confidentiality.clone(),
+            old.confidentiality().clone(),
             old.uu_terms.clone(),
             vec![old.claim_id],
             anchors,

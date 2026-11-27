@@ -150,7 +150,7 @@ fn add<T>(
         ));
     }
     claim.check_id()?;
-    *taint = taint.join(&claim.confidentiality);
+    *taint = taint.join(claim.confidentiality());
     ids.insert(claim.claim_id);
     ids.extend(claim.parents.iter().copied());
     Ok(())

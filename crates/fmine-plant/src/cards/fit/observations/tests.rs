@@ -382,9 +382,12 @@ fn original_model_and_input_confidentiality_and_unknowns_taint_the_pair() {
     let receipt = derive_pair(&model, &original).unwrap();
     assert_eq!(receipt.observation(), &original);
     assert_eq!(receipt.model().correction(), &old);
-    assert_eq!(receipt.claim().confidentiality, Confidentiality::internal());
     assert_eq!(
-        receipt.baseline_claim().confidentiality,
+        *receipt.claim().confidentiality(),
+        Confidentiality::internal()
+    );
+    assert_eq!(
+        *receipt.baseline_claim().confidentiality(),
         Confidentiality::internal()
     );
     assert_eq!(receipt.claim().uu_terms.len(), 2);

@@ -137,7 +137,7 @@ fn staged_information_claim_retains_all_row_sources_and_assumption_metadata() {
     assert_eq!(information.evidence, EvidenceClass::Assumed);
     assert_eq!(information.state, KnowledgeState::Estimated);
     assert_eq!(information.additivity, AdditivityClass::NonAdditive);
-    assert_eq!(information.confidentiality, Confidentiality::internal());
+    assert_eq!(*information.confidentiality(), Confidentiality::internal());
     assert_eq!(
         information.uu_terms,
         report.inputs().program.policy.uu_terms
@@ -293,7 +293,7 @@ fn entity_claim_binds_complete_native_transfer_distribution_sources_and_metadata
     assert_eq!(funding.evidence, EvidenceClass::Assumed);
     assert_eq!(funding.state, KnowledgeState::Estimated);
     assert_eq!(funding.additivity, AdditivityClass::NonAdditive);
-    assert_eq!(funding.confidentiality, Confidentiality::internal());
+    assert_eq!(*funding.confidentiality(), Confidentiality::internal());
     assert_eq!(funding.uu_terms, inputs.policy.uu_terms);
     assert_eq!(funding.value.transfers[0].amounts.len(), 2);
     assert!(

@@ -314,7 +314,7 @@ fn source_join<T, U>(derived: &mut Claim<T>, source: &Claim<U>) {
     derived.evidence = derived.evidence.meet(source.evidence);
     derived.epistemic = derived.epistemic.and(source.epistemic);
     derived.state = derived.state.and(source.state);
-    derived.confidentiality = derived.confidentiality.join(&source.confidentiality);
+    derived.taint(source.confidentiality());
     derived.parents.push(source.claim_id);
     derived.anchors.extend(source.anchors.iter().cloned());
     for term in &source.uu_terms {
@@ -325,6 +325,7 @@ fn source_join<T, U>(derived: &mut Claim<T>, source: &Claim<U>) {
 }
 
 fn finish<T>(mut c: Claim<T>, tag: &str) -> Claim<T> {
+    let label = c.confidentiality().clone();
     c.parents.sort();
     c.parents.dedup();
     c.anchors.sort();
@@ -349,7 +350,7 @@ fn finish<T>(mut c: Claim<T>, tag: &str) -> Claim<T> {
         c.evidence,
         c.epistemic,
         c.state,
-        c.confidentiality,
+        label,
         c.uu_terms,
         c.parents,
         c.anchors,
@@ -367,7 +368,7 @@ fn seed<T, U>(metric: &str, value: T, tag: &str, source: &Claim<U>) -> Claim<T> 
         EvidenceClass::Derived.meet(source.evidence),
         source.epistemic,
         source.state,
-        source.confidentiality.clone(),
+        source.confidentiality().clone(),
         source.uu_terms.clone(),
         vec![source.claim_id],
         source.anchors.clone(),

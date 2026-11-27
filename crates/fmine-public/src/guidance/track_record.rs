@@ -291,7 +291,7 @@ fn checked_source<'a>(
             "source key, token or typed interpretation differs from its Claim",
         ));
     }
-    if !source.claim.confidentiality.is_public() {
+    if !source.claim.confidentiality().is_public() {
         return Err(refuse(RefusalCode::MnpiWall301, "non-public outcome"));
     }
     if source.claim.stale || source.claim.state == KnowledgeState::Stale {
@@ -1088,7 +1088,7 @@ pub fn synthetic() -> Result<TrackRecordReport> {
             template.claim.evidence,
             template.claim.epistemic,
             template.claim.state,
-            template.claim.confidentiality.clone(),
+            template.claim.confidentiality().clone(),
             vec![],
             vec![],
             vec![fmine_core::anchor::SourceAnchor::new(

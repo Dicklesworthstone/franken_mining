@@ -205,7 +205,7 @@ fn amount(source: &HtmlClaim, kind: AmountKind) -> Result<Claim<Amount>, Refusal
             cell.claim.state,
             KnowledgeState::Known | KnowledgeState::Estimated
         )
-        || !cell.claim.confidentiality.is_public()
+        || !cell.claim.confidentiality().is_public()
     {
         return Err(invalid());
     }
@@ -241,7 +241,7 @@ fn amount(source: &HtmlClaim, kind: AmountKind) -> Result<Claim<Amount>, Refusal
         cell.claim.evidence.meet(EvidenceClass::Derived),
         cell.claim.epistemic,
         cell.claim.state,
-        cell.claim.confidentiality.clone(),
+        cell.claim.confidentiality().clone(),
         cell.claim.uu_terms.clone(),
         vec![cell.claim.claim_id],
         cell.claim.anchors.clone(),
@@ -415,7 +415,7 @@ fn difference(
             .meet(EvidenceClass::Derived),
         prior.epistemic.and(current.epistemic),
         prior.state.and(current.state),
-        prior.confidentiality.join(&current.confidentiality),
+        prior.confidentiality().join(current.confidentiality()),
         terms,
         parents,
         anchors,

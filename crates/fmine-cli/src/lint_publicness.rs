@@ -580,7 +580,7 @@ pub(super) fn assess(
             "public-record assessment received a different Claim snapshot from the equality report",
         ));
     }
-    if cells.iter().any(|c| !c.claim.confidentiality.is_public()) {
+    if cells.iter().any(|c| !c.claim.confidentiality().is_public()) {
         return Err(Refusal::new(
             RefusalCode::MnpiWall301,
             "non-public evidence in a public-record assessment",

@@ -520,7 +520,7 @@ impl GeoReceipt {
             text(&s.reference.version),
             join_json(&s.excluded_metals, |m| m.name().to_owned()),
             self.claim().evidence,
-            self.claim().confidentiality
+            self.claim().confidentiality()
         );
         for d in &s.decks {
             let _ = writeln!(

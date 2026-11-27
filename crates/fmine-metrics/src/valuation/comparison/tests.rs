@@ -56,7 +56,7 @@ fn bind(spec: ComparisonSpec, original: &Claim<ComparisonSpec>) -> Claim<Compari
         original.evidence,
         original.epistemic,
         original.state,
-        original.confidentiality.clone(),
+        original.confidentiality().clone(),
         original.uu_terms.clone(),
         original.parents.clone(),
         original.anchors.clone(),
@@ -94,7 +94,7 @@ fn paired_operating_modes_recompute_common_regret_and_keep_the_risk_tradeoff() {
     assert_eq!(compared.alternatives()[1], low);
     assert_eq!(compared.decision().claim().evidence, EvidenceClass::Assumed);
     assert_eq!(
-        compared.decision().claim().confidentiality,
+        *compared.decision().claim().confidentiality(),
         Confidentiality::internal()
     );
     assert_eq!(
@@ -367,7 +367,7 @@ fn declared_downside_screen_selects_the_eligible_mode_without_hiding_the_nominal
     }
     let claim = receipt.decision().inputs().downside_limit.as_ref().unwrap();
     assert_eq!(claim.evidence, EvidenceClass::Assumed);
-    assert_eq!(claim.confidentiality, Confidentiality::internal());
+    assert_eq!(*claim.confidentiality(), Confidentiality::internal());
     assert!(claim.parents.contains(&input.declaration().claim_id));
     for key in [
         "downside_limit.floor_usd",
@@ -578,7 +578,7 @@ fn source_bound_testwork_prices_the_actual_operating_payoffs_and_retains_every_p
     let claim = &decision.inputs().information_options[0];
     assert_eq!(claim.value.likelihoods.len(), 4);
     assert_eq!(claim.evidence, EvidenceClass::Assumed);
-    assert_eq!(claim.confidentiality, Confidentiality::internal());
+    assert_eq!(*claim.confidentiality(), Confidentiality::internal());
     assert!(!claim.uu_terms.is_empty());
     assert!(claim.parents.contains(&input.declaration().claim_id));
     for alternative in &alternatives {

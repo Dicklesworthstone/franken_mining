@@ -857,7 +857,7 @@ impl CostReceipt {
             self.digest(),
             self.claim().evidence,
             self.claim().state,
-            self.claim().confidentiality,
+            self.claim().confidentiality(),
             claims::NO_CLAIM
         );
         for input in self.inputs() {

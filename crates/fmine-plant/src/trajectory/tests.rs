@@ -39,7 +39,7 @@ fn refresh<T: Clone>(claim: &mut Claim<T>, tag: &str) {
         claim.evidence,
         claim.epistemic,
         claim.state,
-        claim.confidentiality.clone(),
+        claim.confidentiality().clone(),
         claim.uu_terms.clone(),
         claim.parents.clone(),
         claim.anchors.clone(),
@@ -620,7 +620,7 @@ fn typed_payload_tamper_refuses_and_source_metadata_participates_in_identity() {
     );
     let registry = LabelRegistry::new(["JV-A"], ["W-A"]).unwrap();
     let mut confidential = policy.clone();
-    confidential.confidentiality = Confidentiality::mnpi(registry.wall("W-A").unwrap());
+    confidential.taint(&Confidentiality::mnpi(registry.wall("W-A").unwrap()));
     confidential.uu_terms.push(UuTerm {
         scenario_id: "synthetic-model-error".into(),
         description: "declared conditional error risk".into(),
@@ -630,8 +630,8 @@ fn typed_payload_tamper_refuses_and_source_metadata_participates_in_identity() {
     refresh_model(&mut confidential);
     let tainted = reconcile_trajectory(&inputs, &confidential).unwrap();
     assert_eq!(
-        tainted.admitted_claim().unwrap().confidentiality,
-        confidential.confidentiality
+        tainted.admitted_claim().unwrap().confidentiality(),
+        confidential.confidentiality()
     );
     assert_eq!(
         tainted.admitted_claim().unwrap().uu_terms,

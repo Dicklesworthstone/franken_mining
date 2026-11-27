@@ -480,7 +480,7 @@ fn derived<T>(
         evidence = evidence.meet(source.evidence);
         epistemic = epistemic.and(source.epistemic);
         state = state.and(source.state);
-        confidentiality = confidentiality.join(&source.confidentiality);
+        confidentiality = confidentiality.join(source.confidentiality());
         parents.insert(source.claim_id);
         anchors.extend(source.anchors.iter().cloned());
         for term in &source.uu_terms {

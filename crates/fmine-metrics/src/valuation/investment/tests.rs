@@ -80,7 +80,7 @@ fn rebound(spec: InvestmentSpec, original: &Claim<InvestmentSpec>) -> Claim<Inve
         original.evidence,
         original.epistemic,
         original.state,
-        original.confidentiality.clone(),
+        original.confidentiality().clone(),
         original.uu_terms.clone(),
         original.parents.clone(),
         original.anchors.clone(),
@@ -116,7 +116,7 @@ fn testwork_selects_complete_investments_and_charges_valuation_time_costs_once()
     );
     let claim = receipt.decision().claim();
     assert_eq!(claim.evidence, EvidenceClass::Assumed);
-    assert_eq!(claim.confidentiality, Confidentiality::internal());
+    assert_eq!(*claim.confidentiality(), Confidentiality::internal());
     assert!(
         claim
             .uu_terms
@@ -345,7 +345,7 @@ fn paired_period_cash_and_capex_reverse_the_operating_choice_without_transcribin
     );
     assert_eq!(receipt.decision().claim().evidence, EvidenceClass::Assumed);
     assert_eq!(
-        receipt.decision().claim().confidentiality,
+        *receipt.decision().claim().confidentiality(),
         Confidentiality::internal()
     );
     assert!(

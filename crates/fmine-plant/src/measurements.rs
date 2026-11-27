@@ -401,7 +401,7 @@ pub fn project_material(
         evidence = evidence.meet(input.evidence);
         epistemic = epistemic.and(input.epistemic);
         state = state.and(input.state);
-        confidentiality = confidentiality.join(&input.confidentiality);
+        confidentiality = confidentiality.join(input.confidentiality());
         parents.insert(input.claim_id);
         anchors.extend(input.anchors.iter().cloned());
         for term in &input.uu_terms {
