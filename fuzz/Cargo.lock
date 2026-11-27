@@ -321,6 +321,10 @@ dependencies = [
 [[package]]
 name = "fmine-runtime"
 version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-ledger",
+]
 
 [[package]]
 name = "fmine-time"
