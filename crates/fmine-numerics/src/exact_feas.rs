@@ -1793,6 +1793,92 @@ impl Tableau {
     }
 }
 
+/// An exact maximum replayed against feasible primal and dual allocations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearMaximum {
+    pub variables: Vec<Rat>,
+    pub objective: Rat,
+}
+
+/// Maximize `c·x` over `Ax ≤ b, x ≥ 0` with nonnegative `b`.
+/// The origin supplies the initial feasible basis. Bland's rule breaks ties in input order.
+///
+/// # Errors
+/// Returns an error on invalid dimensions, negative bounds, unbounded objective, arithmetic or
+/// pivot limits, or failed primal and dual replay. No partial allocation is returned.
+pub fn maximize_nonnegative(
+    rows: &[Vec<Rat>],
+    rhs: &[Rat],
+    c: &[Rat],
+) -> Result<LinearMaximum, &'static str> {
+    let n = c.len();
+    if n > MAX_VARIABLES
+        || rows.len() > MAX_VARIABLES
+        || rows.len() != rhs.len()
+        || rhs.iter().any(|value| value.signum() < 0)
+        || rows.iter().any(|row| row.len() != n)
+    {
+        return Err("invalid nonnegative LP dimensions or upper bounds");
+    }
+    let lp_error = |error| match error {
+        LpError::Overflow => OVERFLOW,
+        LpError::PivotCap => "exact LP pivot cap reached",
+        LpError::Unbounded => "exact LP objective is unbounded",
+    };
+    let qty_error = |_| OVERFLOW;
+    fn dot(mut pairs: impl Iterator<Item = (Rat, Rat)>) -> Result<Rat, &'static str> {
+        pairs.try_fold(ZERO, |sum, (a, b)| {
+            a.checked_mul(b)
+                .and_then(|p| sum.checked_add(p))
+                .map_err(|_| OVERFLOW)
+        })
+    }
+    let mut tableau = Tableau::new(rows.to_vec(), rhs.to_vec(), n, MAX_PIVOTS).map_err(lp_error)?;
+    // The appended identity columns are nonnegative slacks for this formulation.
+    let mut cost = c
+        .iter()
+        .map(|value| value.checked_neg())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(qty_error)?;
+    cost.resize(tableau.columns(), ZERO);
+    tableau.optimize(&cost, false).map_err(lp_error)?;
+    let variables: Vec<_> = (0..n).map(|j| tableau.value(j)).collect();
+    let dual = tableau
+        .duals(&cost)
+        .map_err(lp_error)?
+        .into_iter()
+        .map(Rat::checked_neg)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(qty_error)?;
+    if variables
+        .iter()
+        .chain(&dual)
+        .any(|value| value.signum() < 0)
+    {
+        return Err("negative coordinate in exact LP replay");
+    }
+    for (row, bound) in rows.iter().zip(rhs) {
+        let used = dot(row.iter().copied().zip(variables.iter().copied()))?;
+        if used.checked_cmp(*bound).map_err(qty_error)?.is_gt() {
+            return Err("capacity exceeded in exact LP replay");
+        }
+    }
+    for (j, value) in c.iter().enumerate() {
+        let upper = dot(rows.iter().map(|row| row[j]).zip(dual.iter().copied()))?;
+        if upper.checked_cmp(*value).map_err(qty_error)?.is_lt() {
+            return Err("dual bound failed in exact LP replay");
+        }
+    }
+    let objective = dot(c.iter().copied().zip(variables.iter().copied()))?;
+    if objective != dot(rhs.iter().copied().zip(dual))? {
+        return Err("primal and dual values differ in exact LP replay");
+    }
+    Ok(LinearMaximum {
+        variables,
+        objective,
+    })
+}
+
 enum Feasibility {
     /// Every variable's value.
     Feasible(Vec<Rat>),

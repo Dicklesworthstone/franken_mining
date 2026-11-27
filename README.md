@@ -1505,6 +1505,23 @@ In this synthetic case, **30 kWh** and the **2% arsenic** ceiling limit the sele
 and contributes **USD 10**. Use the energy budget and remaining kWh to distinguish an energy
 bottleneck from the existing mill tonnage and market caps. The screen assumes additive energy use.
 
+### Route shared ore to competing destinations
+
+`plan blend` allocates already-mined, divisible ore across up to four destinations in one period. Each
+eligible parcel and destination pair declares recovery and haul cost. The optimizer compares contribution
+after selling, milling and haul costs. It enforces shared inventory and recovered-metal market caps, plus
+each destination's declared tonnage, grinding energy and impurity limits.
+
+```bash
+cargo run -p fmine-cli -- plan blend --input tests/planning/route_blend.json --format markdown
+```
+
+The synthetic mill and leach case sends **1 dry tonne of clean ore** and **0.5 dry tonnes of rich ore**
+to each destination. The mill uses **30 kWh** at **2% arsenic by dry mass**. Together the routes consume
+**3 dry tonnes**, recover **0.9 g** and contribute **USD 50**. The report shows the allocation, each
+route's usage against its caps, and the unallocated mass of every parcel. The model assumes fixed
+per-pair recovery and additive specific energy.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

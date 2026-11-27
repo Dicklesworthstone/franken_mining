@@ -34,6 +34,7 @@ pub mod reliance_explicit;
 mod repair;
 pub mod reserve;
 mod robot;
+mod route_blend;
 pub mod schedule;
 mod screen_target;
 mod spatial;
@@ -91,6 +92,8 @@ pub enum CliCommand {
     PlanPit(pit::Command),
     /// Lane limiting grades for a declared single-product scenario (BD-252).
     PlanCutoff(PathBuf),
+    /// Exact one-period ore routing from a declared worksheet (BD-252).
+    PlanBlend(PathBuf),
     /// Checked PCPSP production schedule, external destination splits and a verified global bound.
     PlanSchedule(schedule::Command),
     /// Checked OMF period schedules and nested revenue-factor shells under explicit declarations.
@@ -634,6 +637,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--json" => next += 1,
                         "schedule" => return "plan schedule",
                         "cutoff" => return lane_cutoff::VERB,
+                        "blend" => return route_blend::VERB,
                         "shells" => return "plan shells",
                         "design" => return "plan design",
                         _ => return "plan pit",
@@ -1267,6 +1271,7 @@ pub fn parse_args(
             | "compare"
             | "plan pit"
             | lane_cutoff::VERB
+            | route_blend::VERB
             | "plan schedule"
             | "plan shells"
             | "plan design"
@@ -1346,6 +1351,18 @@ pub fn parse_args(
                     CliCommand::PlanCutoff(path.into())
                 }
                 _ => return Err(format!("expected 'fmine {}'", lane_cutoff::USAGE)),
+            },
+            route_blend::VERB => match words.as_slice() {
+                [plan, blend, input, path]
+                    if plan == "plan"
+                        && blend == "blend"
+                        && input == "--input"
+                        && !path.trim().is_empty()
+                        && !path.starts_with("--") =>
+                {
+                    CliCommand::PlanBlend(path.into())
+                }
+                _ => return Err(format!("expected 'fmine {}'", route_blend::USAGE)),
             },
             "plan schedule" if words.iter().any(|word| word == "--omf" || word == "--spec") => {
                 CliCommand::PlanOmf(schedule::omf::parse(&words)?)
@@ -2394,6 +2411,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::Compare(command) => compare::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
         CliCommand::PlanCutoff(path) => lane_cutoff::execute(path, workspace_root),
+        CliCommand::PlanBlend(path) => route_blend::execute(path, workspace_root),
         CliCommand::PlanSchedule(command) => schedule::execute(command, workspace_root),
         CliCommand::PlanOmf(command) => schedule::omf::execute(command, workspace_root),
         CliCommand::Plant(command) => plant::execute(command, workspace_root),
@@ -2775,6 +2793,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 compare::USAGE,
                 pit::USAGE,
                 lane_cutoff::USAGE,
+                route_blend::USAGE,
                 schedule::USAGE,
                 schedule::omf::USAGE,
                 schedule::omf::SHELLS_USAGE,
@@ -2944,6 +2963,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(pit::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_cutoff\":");
             payload.push_str(lane_cutoff::ROBOT_DOCS_JSON);
+            payload.push_str(",\"plan_blend\":");
+            payload.push_str(route_blend::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_schedule\":");
             payload.push_str(schedule::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_schedule_omf\":");

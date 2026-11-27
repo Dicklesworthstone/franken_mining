@@ -74,7 +74,7 @@ fn element<'a>(object: &'a Json, name: &str) -> Result<&'a str, Refusal> {
     Ok(symbol)
 }
 
-fn feed_mass_limit(unit: &str) -> Result<ExactQty, Refusal> {
+pub(super) fn feed_mass_limit(unit: &str) -> Result<ExactQty, Refusal> {
     let grams = ExactQty::from_integer(1_000_000);
     let limit = match unit {
         "g" => Ok(grams),
@@ -97,7 +97,7 @@ fn feed_mass_limit(unit: &str) -> Result<ExactQty, Refusal> {
     })
 }
 
-fn exact(q: ExactQty) -> String {
+pub(super) fn exact(q: ExactQty) -> String {
     format!("{}/{}", q.num(), q.den())
 }
 

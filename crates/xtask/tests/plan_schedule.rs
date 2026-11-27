@@ -86,6 +86,163 @@ fn lane_json(output: &std::process::Output) -> Json {
 }
 
 #[test]
+fn plan_blend_routes_shared_inventory_and_replays_route_caps() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = "tests/planning/route_blend.json";
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let run = |input: &std::path::Path, format: &str| {
+        Command::new(binary())
+            .args(["plan", "blend", "--input"])
+            .arg(input)
+            .args(["--format", format, "--workspace"])
+            .arg(&root)
+            .output()
+            .unwrap()
+    };
+    let envelope = |output: &std::process::Output| {
+        let report = parse(&output.stdout).unwrap();
+        assert_eq!(report.get("verb").unwrap().as_str(), Some("plan blend"));
+        assert_eq!(
+            report.get("exit_code").unwrap().i64(),
+            output.status.code().map(i64::from)
+        );
+        assert!(
+            report
+                .get("flags")
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .iter()
+                .all(|(_, flag)| flag.as_bool() == Some(false))
+        );
+        report
+    };
+    let output = run(input.as_ref(), "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report = envelope(&output);
+    let payload = report.get("payload").unwrap();
+    let expect = |row: &Json, field: &str, value: &str| {
+        assert_eq!(row.get(field).unwrap().as_str(), Some(value), "{field}");
+    };
+    expect(
+        payload.get("source").unwrap(),
+        "sha256",
+        &sha256(original.as_bytes()).to_hex(),
+    );
+    expect(payload, "calibration", "uncalibrated");
+    let total = payload.get("total").unwrap();
+    expect(total, "dry_tonnes", "3/1");
+    expect(total, "recovered_metal", "9/10");
+    expect(total, "incremental_contribution", "50/1");
+    let pairs = payload.get("allocations").unwrap().as_array().unwrap();
+    assert_eq!(pairs.len(), 4);
+    for (row, (parcel, route, tonnes, contribution)) in pairs.iter().zip([
+        ("clean", "mill", "1/1", "-10/1"),
+        ("rich", "mill", "1/2", "40/1"),
+        ("clean", "leach", "1/1", "5/1"),
+        ("rich", "leach", "1/2", "15/1"),
+    ]) {
+        expect(row, "parcel", parcel);
+        expect(row, "route", route);
+        expect(row, "dry_tonnes", tonnes);
+        expect(row, "incremental_contribution", contribution);
+    }
+    let routes = payload.get("routes").unwrap().as_array().unwrap();
+    expect(&routes[0], "energy_used_kwh", "30/1");
+    expect(&routes[0], "blended_impurity_mass_fraction", "1/50");
+    assert_eq!(routes[1].get("energy_used_kwh"), Some(&Json::Null));
+    let parcels = payload.get("parcels").unwrap().as_array().unwrap();
+    for row in parcels {
+        expect(row, "unallocated_dry_tonnes", "0/1");
+    }
+    assert_eq!(run(input.as_ref(), "json").stdout, output.stdout);
+    let md = run(input.as_ref(), "markdown");
+    assert!(md.status.success());
+    let md = String::from_utf8(md.stdout).unwrap();
+    assert!(md.contains("| clean | mill | 1/1 | 1/10 | -10/1 |"));
+    assert!(md.contains("| mill | 3/2 / 2/1 | 30/1 / 30/1 | 1/50 / 1/50 |"));
+
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-route-blend-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |file, text| {
+        let path = scratch.join(file);
+        std::fs::write(&path, text).unwrap();
+        envelope(&run(&path, "json"))
+    };
+    let market = submit(
+        "market.json",
+        original.replace(
+            r#""market_recovered_metal_cap": "0.9""#,
+            r#""market_recovered_metal_cap": "0.4""#,
+        ),
+    );
+    let restricted = market.get("payload").unwrap();
+    let total = restricted.get("total").unwrap();
+    expect(total, "recovered_metal", "2/5");
+    expect(total, "incremental_contribution", "30/1");
+    expect(
+        &restricted.get("parcels").unwrap().as_array().unwrap()[0],
+        "unallocated_dry_tonnes",
+        "2/1",
+    );
+    let idle = submit(
+        "idle.json",
+        original.replace(
+            r#""price_per_metal_unit": "100""#,
+            r#""price_per_metal_unit": "0""#,
+        ),
+    );
+    expect(
+        idle.get("payload").unwrap().get("total").unwrap(),
+        "dry_tonnes",
+        "0/1",
+    );
+
+    for (file, from, to, code) in [
+        (
+            "bad_parcel.json",
+            r#""parcel": "clean""#,
+            r#""parcel": "missing""#,
+            "FMINE-REF-107",
+        ),
+        (
+            "duplicate_pair.json",
+            r#""parcel": "clean""#,
+            r#""parcel": "rich""#,
+            "FMINE-REF-109",
+        ),
+        (
+            "missing_energy.json",
+            r#", "specific_energy_kwh_per_dry_tonne": "40""#,
+            "",
+            "FMINE-REF-109",
+        ),
+        (
+            "negative_energy.json",
+            r#""energy_budget_kwh": "30""#,
+            r#""energy_budget_kwh": "-30""#,
+            "FMINE-REF-109",
+        ),
+    ] {
+        assert!(original.contains(from));
+        let refusal = submit(file, original.replace(from, to));
+        assert_eq!(refusal.get("payload"), Some(&Json::Null));
+        expect(refusal.get("refusal").unwrap(), "code", code);
+    }
+}
+
+#[test]
 fn lane_grade_tonnage_binary_reports_exact_partial_bin_for_all_cap_cases() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = "tests/planning/lane_grade_tonnage.json";

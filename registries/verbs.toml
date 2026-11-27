@@ -117,6 +117,12 @@ mutates_authority = false
 description = "Calculate exact Lane limiting grades and compare a declared feed-grade band for one explicit planning scenario"
 
 [[verb]]
+path = "plan blend"
+subsystem = "Pushback"
+mutates_authority = false
+description = "Allocate declared ore parcels across competing destinations under shared stock, market and route limits using exact arithmetic"
+
+[[verb]]
 path = "plan shells"
 subsystem = "Pushback"
 mutates_authority = false

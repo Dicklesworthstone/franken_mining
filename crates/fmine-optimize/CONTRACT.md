@@ -242,6 +242,13 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   and optional blended assay and energy balance. Ties prefer lower dry feed and then the first vertex in fixed constraint
   order. Idle is feasible and has an undefined assay. A loss-making bin can contribute to an overall
   positive blend by diluting the other bin.
+- `cutoff::routing::solve` (DESIGN, BD-252 §15.6) routes shared divisible inventory over declared eligible
+  pairs in a single period, with at most eight parcels and four destinations. Maximizes variable contribution
+  from fixed per-pair recovery, haul and milling costs, net selling price, and optional additive energy and
+  dry-mass impurity limits on each route. It checks the exact primal allocation and matching dual objective
+  before reporting it. The common market bounds total recovered metal across routes. Returns one allocation
+  per eligible pair, route totals, per-parcel residual feed and the scenario total. A zero optimum selects idle
+  feed. Stockpile carry, mining precedence and blend-dependent recovery are separate model features.
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
 - `verify(problem, in_pit, arc_flow)`: the pit's value if the certificate holds.
 - `NestedShells` provides:

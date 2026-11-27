@@ -1,0 +1,40 @@
+{
+  "schema": "fmine.route-blend.v1",
+  "period": "Synthetic mill and leach routing",
+  "currency": "USD",
+  "metal": "Au",
+  "metal_unit": "g",
+  "ore_mass_basis": "dry_metric_tonne",
+  "ownership_basis": "100_percent_project",
+  "evidence": "synthetic",
+  "impurity": "As",
+  "price_per_metal_unit": "100",
+  "selling_cost_per_metal_unit": "0",
+  "market_recovered_metal_cap": "0.9",
+  "parcels": [
+    { "id": "clean", "available_dry_tonnes": "2", "grade_per_dry_tonne": "0.2", "impurity_mass_fraction": "0.01" },
+    { "id": "rich", "available_dry_tonnes": "1", "grade_per_dry_tonne": "1", "impurity_mass_fraction": "0.04" }
+  ],
+  "routes": [
+    {
+      "id": "mill",
+      "dry_tonnes_cap": "2",
+      "milling_cost_per_dry_tonne": "20",
+      "energy_budget_kwh": "30",
+      "impurity_ceiling": "0.02",
+      "pairs": [
+        { "parcel": "clean", "recovery_fraction": "0.5", "haul_cost_per_dry_tonne": "0", "specific_energy_kwh_per_dry_tonne": "10" },
+        { "parcel": "rich", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0", "specific_energy_kwh_per_dry_tonne": "40" }
+      ]
+    },
+    {
+      "id": "leach",
+      "dry_tonnes_cap": "1.5",
+      "milling_cost_per_dry_tonne": "5",
+      "pairs": [
+        { "parcel": "clean", "recovery_fraction": "0.5", "haul_cost_per_dry_tonne": "0" },
+        { "parcel": "rich", "recovery_fraction": "0.4", "haul_cost_per_dry_tonne": "5" }
+      ]
+    }
+  ]
+}

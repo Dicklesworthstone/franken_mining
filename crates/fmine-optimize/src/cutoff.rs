@@ -7,6 +7,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::exact_feas::Rat;
 
 mod blend;
+pub mod routing;
 pub use blend::{BlendAllocation, BlendConstraints, EnergyLimit, EnergyUse, ImpurityLimit};
 
 /// One declared period on one project basis. All money uses the same currency,
