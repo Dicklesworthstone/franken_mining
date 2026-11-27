@@ -63,6 +63,7 @@ Not applicable: emits cryptographic verification verdicts rather than domain `Cl
 - Known-answer tamper tests in `tests/tamper_exit_8.rs` executing the compiled `fmine-verify` binary on valid and single-bit-flipped `FMT-CERT-1`, `FMT-CAS-1`, `SyncCert`, and `FMT-SEG-1` artifacts.
 - Underlying RFC 6962 MMR (`fixtures/fmine-ledger/rfc6962_probes.txt`) and SHA-256 / CRC32C vectors in `fmine-core`.
 - `tests/f7_lab.rs`: the `F7` lab test for `fmine-ledger` segments (`BD-088`), on `fmine-lab`'s `LabRuntime` (a dev-dependency). A crash at every byte of three writes in flight (an append into an empty segment, an append over two sectors long, and a seal), and seeds 0..999 that also lose sectors and cut the repair short; every state is detected, repaired with its evidence kept, and resumed to bytes identical to a crash-free segment.
+- `tests/gate_sync_01.rs`: `GATE-SYNC-01` (`BD-109`, plan §26.12) 1,000-seed deterministic partition, link-drop, exact-wire duplicate retransmission, lease-rotation, `INV-012` gluing, and `OB-SEAL` crash-at-boundary matrix verified against all five `fmine-lab` Bedrock FM oracles plus five planted-fault negative controls (`docs/delivery/GATE-SYNC-01.md`).
 
 ## 10. Known gaps
 - `FMT-POST-1` Merkle-folded posting detail verification against `franken_accounting` rows will be added once WP-13 (`fmine-fa-bridge`) lands.
@@ -78,3 +79,4 @@ Not applicable: emits cryptographic verification verdicts rather than domain `Cl
 - `PO-BED-3` (published CAS root chunk integrity): `test_fmine_verify_cas_root_and_chunk_tamper_exits_8`.
 - `PO-BED-9` / `BD-140` (`FMT-CERT-1` integrity + tamper exit 8): `test_fmine_verify_cert_roundtrip_and_tamper_exits_8`, `test_fmine_verify_segment_and_tamper_exits_8`.
 - `BD-253` (`FMT-PCERT-1` three-gap `PlanCertificate` offline verification + tamper/forgery exit 8): `test_fmine_verify_plancert_pit_and_pcpsp_roundtrip_and_tamper_exits_8`.
+- `GATE-SYNC-01` / `BD-109` (1,000-seed partition, duplicate replay, gluing, crash-at-boundary, and `PO-BED-1/2/3/4/10` oracle matrix): `test_gate_sync_01_1000_seed_partition_and_crash_matrix`, `test_gate_sync_01_planted_faults_fail_the_matrix`.
