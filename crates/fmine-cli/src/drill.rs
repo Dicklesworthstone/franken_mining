@@ -25,26 +25,26 @@ pub const USAGE: &str = "drill desurvey --input <manifest.toml> --cas <directory
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_POSITIONS: usize = 20_000;
 pub const NO_CLAIM: &str = "Geometry is conditional on supplied coordinates, grid bearings and one-sigma error declarations. Covariance is first-order and uncalibrated under the explicitly selected random or systematic angle-error model; depth error, CRS error, inter-hole correlation and undeclared instrument effects are excluded. Original export bytes are retained in the explicitly selected CAS. No assay QA/QC, custody chain, authority-ledger commit, qualified ISCWSA instrument model, reserve disclosure, execution authorization, geotechnical sign-off or regulatory compliance is established.";
-pub const ROBOT_DOCS_JSON: &str = r#"{
-"schema":"fmine.drill-desurvey.v1",
-"command":"drill desurvey --input <manifest.toml> --cas <directory>",
-"input":"Quoted-string TOML, at most 1 MiB; file paths are relative to the manifest; table bytes at most 32 MiB each",
-"top_fields":["schema","crs","evidence_lane","survey_error_model","omitted_uncertainty"],
-"evidence_lane":"synthetic or internal; all geometry Claims are Assumed, Internal and uncalibrated",
-"table_fields":["role","path","format","sheet"],
-"tables":"Exactly collar, survey and assay; format csv or xlsx; xlsx requires a sheet, csv forbids one",
-"hole_fields":["hole_id","program","hole_type","collar_from","position_method","sigma_horizontal_m","sigma_vertical_m","instrument","run","sigma_azimuth_deg","sigma_dip_deg","magnetic_interference","azimuth_reference","survey_type_label"],
-"hole_types":["diamond","rc","aircore","rab","sonic","blasthole"],
-"position_methods":["design","dgnss","total_station","handheld_gnss","unknown"],
-"instruments":["gyro","magnetic_multishot","magnetic_single_shot"],
-"declarations":"One per collar; actual/planned collar, in/out survey run, grid azimuth reference and explicit quoted true/false interference; survey_type_label is optional and explicitly maps a printed vendor label",
-"uncertainty":"Required survey_error_model: random gives independent station angle errors; systematic shares each angle error across stations of one instrument and run. Collar axes are independent, with horizontal sigma applied separately to east and north. All stated angle variance is used exactly once.",
-"output":"Source SHA-256 and export CAS roots, exact assay readings and censoring, row-specific refusals, per-hole Claim, stations and assay endpoints with total and per-term east/north/up covariance in m2, extrapolation and suspect-station flags",
-"admission":"Any quarantined row refuses the whole geometry projection; source report is retained; no silent station removal or depth rounding; registered WGS84 UTM metre CRS only",
-"limits":"4096 holes; 20000 emitted positions including stations, assay endpoints, collars and hole bottoms; split larger inputs on complete holes",
-"example":"tests/drill/acquire_synthetic.toml",
-"side_effect":"Only the explicitly selected content-addressed store receives original export bytes; no authority records are written"
-}"#;
+pub const ROBOT_DOCS_JSON: &str = concat!(
+    r#"{"schema":"fmine.drill-desurvey.v1","#,
+    r#""command":"drill desurvey --input <manifest.toml> --cas <directory>","#,
+    r#""input":"Quoted-string TOML, at most 1 MiB; file paths are relative to the manifest; table bytes at most 32 MiB each","#,
+    r#""top_fields":["schema","crs","evidence_lane","survey_error_model","omitted_uncertainty"],"#,
+    r#""evidence_lane":"synthetic or internal; all geometry Claims are Assumed, Internal and uncalibrated","#,
+    r#""table_fields":["role","path","format","sheet"],"#,
+    r#""tables":"Exactly collar, survey and assay; format csv or xlsx; xlsx requires a sheet, csv forbids one","#,
+    r#""hole_fields":["hole_id","program","hole_type","collar_from","position_method","sigma_horizontal_m","sigma_vertical_m","instrument","run","sigma_azimuth_deg","sigma_dip_deg","magnetic_interference","azimuth_reference","survey_type_label"],"#,
+    r#""hole_types":["diamond","rc","aircore","rab","sonic","blasthole"],"#,
+    r#""position_methods":["design","dgnss","total_station","handheld_gnss","unknown"],"#,
+    r#""instruments":["gyro","magnetic_multishot","magnetic_single_shot"],"#,
+    r#""declarations":"One per collar; actual/planned collar, in/out survey run, grid azimuth reference and explicit quoted true/false interference; survey_type_label is optional and explicitly maps a printed vendor label","#,
+    r#""uncertainty":"Required survey_error_model: random gives independent station angle errors; systematic shares each angle error across stations of one instrument and run. Collar axes are independent, with horizontal sigma applied separately to east and north. All stated angle variance is used exactly once.","#,
+    r#""output":"Source SHA-256 and export CAS roots, exact assay readings and censoring, row-specific refusals, per-hole Claim, stations and assay endpoints with total and per-term east/north/up covariance in m2, extrapolation and suspect-station flags","#,
+    r#""admission":"Any quarantined row refuses the whole geometry projection; source report is retained; no silent station removal or depth rounding; registered WGS84 UTM metre CRS only","#,
+    r#""limits":"4096 holes; 20000 emitted positions including stations, assay endpoints, collars and hole bottoms; split larger inputs on complete holes","#,
+    r#""example":"tests/drill/acquire_synthetic.toml","#,
+    r#""side_effect":"Only the explicitly selected content-addressed store receives original export bytes; no authority records are written"}"#,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
