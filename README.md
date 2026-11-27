@@ -1522,6 +1522,23 @@ to each destination. The mill uses **30 kWh** at **2% arsenic by dry mass**. Tog
 route's usage against its caps, and the unallocated mass of every parcel. The model assumes fixed
 per-pair recovery and additive specific energy.
 
+### Plan when to draw down a stockpile
+
+`plan blend` accepts a horizon worksheet for up to four ordered periods. It maximizes discounted
+contribution across all periods while tracking opening, arriving, processed and closing dry tonnes for
+each parcel. New ore is available at the start of its declared period. Optional storage caps apply
+at each period close. Each period has its own routes, operating limits, prices and shared market cap.
+
+```bash
+cargo run -p fmine-cli -- plan blend \
+  --input tests/planning/route_blend_horizon.json --format markdown
+```
+
+In the synthetic case, carrying the opening tonne to week 2 lets the mill process it alongside
+the second tonne that arrives that week. Discounted contribution is **USD 144**, compared with
+**USD 82** if a zero-stockpile limit requires processing the opening tonne in week 1. The worksheet
+keeps parcel grades fixed and takes arrivals and discounts as declared inputs.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

@@ -1800,48 +1800,75 @@ pub struct LinearMaximum {
     pub objective: Rat,
 }
 
-/// Maximize `c·x` over `Ax ≤ b, x ≥ 0` with nonnegative `b`.
-/// The origin supplies the initial feasible basis. Bland's rule breaks ties in input order.
+/// Refusal from an exact nonnegative-variable LP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinearMaximumError {
+    Infeasible,
+    Uncertified(&'static str),
+}
+
+/// Maximize `c·x` over `Ax ≤ b, x ≥ 0`.
+/// A negative bound requires a phase-one feasibility solve. Bland's rule breaks ties in input order.
 ///
 /// # Errors
-/// Returns an error on invalid dimensions, negative bounds, unbounded objective, arithmetic or
+/// Returns an error on invalid dimensions, infeasibility, unbounded objective, arithmetic or
 /// pivot limits, or failed primal and dual replay. No partial allocation is returned.
 pub fn maximize_nonnegative(
     rows: &[Vec<Rat>],
     rhs: &[Rat],
     c: &[Rat],
-) -> Result<LinearMaximum, &'static str> {
+) -> Result<LinearMaximum, LinearMaximumError> {
+    use LinearMaximumError::Uncertified;
+
     let n = c.len();
     if n > MAX_VARIABLES
         || rows.len() > MAX_VARIABLES
         || rows.len() != rhs.len()
-        || rhs.iter().any(|value| value.signum() < 0)
         || rows.iter().any(|row| row.len() != n)
     {
-        return Err("invalid nonnegative LP dimensions or upper bounds");
+        return Err(Uncertified("invalid nonnegative LP dimensions"));
     }
-    let lp_error = |error| match error {
-        LpError::Overflow => OVERFLOW,
-        LpError::PivotCap => "exact LP pivot cap reached",
-        LpError::Unbounded => "exact LP objective is unbounded",
+    let lp_error = |error| {
+        Uncertified(match error {
+            LpError::Overflow => OVERFLOW,
+            LpError::PivotCap => "exact LP pivot cap reached",
+            LpError::Unbounded => "exact LP objective is unbounded",
+        })
     };
-    let qty_error = |_| OVERFLOW;
-    fn dot(mut pairs: impl Iterator<Item = (Rat, Rat)>) -> Result<Rat, &'static str> {
+    let qty_error = |_| Uncertified(OVERFLOW);
+    fn dot(mut pairs: impl Iterator<Item = (Rat, Rat)>) -> Result<Rat, LinearMaximumError> {
         pairs.try_fold(ZERO, |sum, (a, b)| {
             a.checked_mul(b)
                 .and_then(|p| sum.checked_add(p))
-                .map_err(|_| OVERFLOW)
+                .map_err(|_| Uncertified(OVERFLOW))
         })
     }
-    let mut tableau = Tableau::new(rows.to_vec(), rhs.to_vec(), n, MAX_PIVOTS).map_err(lp_error)?;
-    // The appended identity columns are nonnegative slacks for this formulation.
+    let needs_phase_one = rhs.iter().any(|value| value.signum() < 0);
+    let mut tableau = if needs_phase_one {
+        // Make the original slacks structural. The tableau adds separate
+        // artificials after those columns and flips each negative row.
+        let mut standard = rows.to_vec();
+        for (i, row) in standard.iter_mut().enumerate() {
+            row.extend((0..rows.len()).map(|j| if i == j { ONE } else { ZERO }));
+        }
+        let mut tableau =
+            Tableau::new(standard, rhs.to_vec(), n + rows.len(), MAX_PIVOTS).map_err(lp_error)?;
+        if !tableau.phase_one().map_err(lp_error)?.0 {
+            return Err(LinearMaximumError::Infeasible);
+        }
+        tableau.drive_out_artificials().map_err(lp_error)?;
+        tableau
+    } else {
+        // With a feasible origin the appended identity columns serve as slacks.
+        Tableau::new(rows.to_vec(), rhs.to_vec(), n, MAX_PIVOTS).map_err(lp_error)?
+    };
     let mut cost = c
         .iter()
         .map(|value| value.checked_neg())
         .collect::<Result<Vec<_>, _>>()
         .map_err(qty_error)?;
     cost.resize(tableau.columns(), ZERO);
-    tableau.optimize(&cost, false).map_err(lp_error)?;
+    tableau.optimize(&cost, needs_phase_one).map_err(lp_error)?;
     let variables: Vec<_> = (0..n).map(|j| tableau.value(j)).collect();
     let dual = tableau
         .duals(&cost)
@@ -1855,23 +1882,25 @@ pub fn maximize_nonnegative(
         .chain(&dual)
         .any(|value| value.signum() < 0)
     {
-        return Err("negative coordinate in exact LP replay");
+        return Err(Uncertified("negative coordinate in exact LP replay"));
     }
     for (row, bound) in rows.iter().zip(rhs) {
         let used = dot(row.iter().copied().zip(variables.iter().copied()))?;
         if used.checked_cmp(*bound).map_err(qty_error)?.is_gt() {
-            return Err("capacity exceeded in exact LP replay");
+            return Err(Uncertified("capacity exceeded in exact LP replay"));
         }
     }
     for (j, value) in c.iter().enumerate() {
         let upper = dot(rows.iter().map(|row| row[j]).zip(dual.iter().copied()))?;
         if upper.checked_cmp(*value).map_err(qty_error)?.is_lt() {
-            return Err("dual bound failed in exact LP replay");
+            return Err(Uncertified("dual bound failed in exact LP replay"));
         }
     }
     let objective = dot(c.iter().copied().zip(variables.iter().copied()))?;
     if objective != dot(rhs.iter().copied().zip(dual))? {
-        return Err("primal and dual values differ in exact LP replay");
+        return Err(Uncertified(
+            "primal and dual values differ in exact LP replay",
+        ));
     }
     Ok(LinearMaximum {
         variables,

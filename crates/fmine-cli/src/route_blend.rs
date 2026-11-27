@@ -1,4 +1,4 @@
-//! DESIGN (BD-252): source-bound one-period ore routing from a declared worksheet.
+//! DESIGN (BD-252): source-bound ore routing and stockpile carry from a declared worksheet.
 //! Determinism: Exact
 
 use std::{
@@ -11,7 +11,8 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::omf::json::{self, Json};
 use fmine_optimize::cutoff::routing::{
-    self, Allocation, MAX_PARCELS, MAX_ROUTES, Parcel, Route, RoutePair, Scenario,
+    self, Allocation, Horizon, MAX_PARCELS, MAX_PERIODS, MAX_ROUTES, Parcel, Period, Route,
+    RoutePair, Routing, Scenario,
 };
 use fmine_units::ExactQty;
 
@@ -24,12 +25,15 @@ use crate::{
 pub(super) const VERB: &str = "plan blend";
 pub(super) const USAGE: &str = "plan blend --input <routing-worksheet.json>";
 const SCHEMA: &str = "fmine.route-blend.v1";
+const HORIZON_SCHEMA: &str = "fmine.route-blend-horizon.v1";
 const SCOPE: &str = "One period of already-mined, divisible feed with fixed per-pair recovery, additive specific energy and declared variable costs. The allocation is conditional on these uncalibrated inputs.";
+const HORIZON_SCOPE: &str = "The worksheet carries fixed-grade parcels through at most four periods. Declared arrivals enter before routing, and storage caps apply at period close. Contribution uses declared discounts, fixed per-pair recovery, additive specific energy and variable costs.";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     r#"{"schema":"fmine.route-blend.v1","example":"tests/planning/route_blend.json","basis":"One period, metal mass unit, currency and 100_percent_project basis. Ore mass is dry_metric_tonne. Evidence is synthetic or assumed. Quantities are exact decimal strings.","#,
     r#""parcels":"1 to 8 with unique id, available_dry_tonnes and grade_per_dry_tonne. An optional common impurity element requires impurity_mass_fraction for every parcel.","#,
     r#""routes":"1 to 4 with unique id, dry_tonnes_cap, milling_cost_per_dry_tonne, optional energy_budget_kwh and impurity_ceiling. The pairs list contains only eligible parcels, with parcel id, recovery_fraction and haul_cost_per_dry_tonne. An energy budget requires specific_energy_kwh_per_dry_tonne for every eligible pair on that route.","#,
-    r#""market":"One shared market_recovered_metal_cap, price_per_metal_unit and selling_cost_per_metal_unit. Objective is recovered metal at net price less milling and haul costs. Idle feed is feasible."}"#,
+    r#""market":"One shared market_recovered_metal_cap, price_per_metal_unit and selling_cost_per_metal_unit. Objective is recovered metal at net price less milling and haul costs. Idle feed is feasible.","#,
+    r#""horizon":{"schema":"fmine.route-blend-horizon.v1","example":"tests/planning/route_blend_horizon.json","periods":"Replace the root period, market, price, selling and routes fields with an ordered periods array, containing up to four objects with id, discount_factor in [0,1], arrivals (parcel and dry_tonnes rows), routes and the market and economic fields. Each parcel can declare stockpile_cap_dry_tonnes. Closing stock carries on the same parcel and basis; caps apply at each close."}}"#,
 );
 
 fn declaration(detail: impl Into<String>) -> Refusal {
@@ -107,6 +111,56 @@ fn allocation(a: Allocation) -> String {
     )
 }
 
+struct DeclaredPeriod<'a> {
+    id: &'a str,
+    route_ids: Vec<&'a str>,
+    routes: Vec<Route>,
+    pairs: Vec<RoutePair>,
+    arrivals: Vec<ExactQty>,
+    discount: ExactQty,
+    market: ExactQty,
+    price: ExactQty,
+    selling: ExactQty,
+}
+
+impl DeclaredPeriod<'_> {
+    fn model(&self) -> Period<'_> {
+        Period {
+            routes: &self.routes,
+            pairs: &self.pairs,
+            arrivals_dry_tonnes: &self.arrivals,
+            discount_factor: self.discount,
+            market_recovered_metal_cap: self.market,
+            price_per_metal_unit: self.price,
+            selling_cost_per_metal_unit: self.selling,
+        }
+    }
+}
+
+struct Report<'a> {
+    currency: &'a str,
+    metal: &'a str,
+    unit: &'a str,
+    evidence: &'a str,
+    impurity: Option<&'a str>,
+    source: &'a SourceAnchor,
+    bytes: usize,
+}
+
+impl Report<'_> {
+    fn basis_json(&self) -> String {
+        format!(
+            "\"currency\":{},\"metal\":{},\"metal_unit\":{},\"ore_mass_basis\":\"dry_metric_tonne\",\"ownership_basis\":\"100_percent_project\",\"input_evidence\":{},\"calibration\":\"uncalibrated\",\"impurity\":{},\"source\":{}",
+            js(self.currency),
+            js(self.metal),
+            js(self.unit),
+            js(self.evidence),
+            self.impurity.map_or_else(|| "null".into(), js),
+            worksheet_input::source_json(self.source, self.bytes)
+        )
+    }
+}
+
 fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
     let doc = json::parse(text.as_bytes()).map_err(declaration)?;
     object(
@@ -126,10 +180,35 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
             "selling_cost_per_metal_unit",
             "parcels",
             "routes",
+            "periods",
         ],
     )?;
-    if field(&doc, "schema")? != SCHEMA {
-        return Err(declaration(format!("expected {SCHEMA}")));
+    let horizon = match field(&doc, "schema")? {
+        SCHEMA => false,
+        HORIZON_SCHEMA => true,
+        _ => {
+            return Err(declaration(format!(
+                "expected {SCHEMA} or {HORIZON_SCHEMA}"
+            )));
+        }
+    };
+    if horizon
+        && [
+            "period",
+            "routes",
+            "price_per_metal_unit",
+            "selling_cost_per_metal_unit",
+            "market_recovered_metal_cap",
+        ]
+        .into_iter()
+        .any(|key| doc.get(key).is_some())
+    {
+        return Err(declaration(
+            "a routing horizon declares route and economic fields within each period",
+        ));
+    }
+    if !horizon && doc.get("periods").is_some() {
+        return Err(declaration("a periods array requires the horizon schema"));
     }
     if field(&doc, "ore_mass_basis")? != "dry_metric_tonne"
         || field(&doc, "ownership_basis")? != "100_percent_project"
@@ -139,7 +218,6 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
             "route blend uses dry metric ore tonnes and a 100% project basis",
         ));
     }
-    let period = label(&doc, "period")?;
     let currency = field(&doc, "currency")?;
     let metal = label(&doc, "metal")?;
     let unit = field(&doc, "metal_unit")?;
@@ -163,6 +241,7 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
     let mut parcel_index = BTreeMap::new();
     let mut parcels = Vec::new();
     let mut parcel_ids = Vec::new();
+    let mut caps = Vec::new();
     for row in parcel_rows {
         object(
             row,
@@ -171,6 +250,7 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
                 "available_dry_tonnes",
                 "grade_per_dry_tonne",
                 "impurity_mass_fraction",
+                "stockpile_cap_dry_tonnes",
             ],
         )?;
         let id = label(row, "id")?;
@@ -188,13 +268,79 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
             grade_per_dry_tonne: quantity(row, "grade_per_dry_tonne")?,
             impurity_mass_fraction: assay,
         });
+        let cap = optional(row, "stockpile_cap_dry_tonnes")?;
+        if cap.is_some() && !horizon {
+            return Err(declaration("stockpile caps require the horizon schema"));
+        }
+        caps.push(cap);
         parcel_ids.push(id);
     }
+    let report = Report {
+        currency,
+        metal,
+        unit,
+        evidence,
+        impurity,
+        source,
+        bytes: text.len(),
+    };
+    let physical_grade_limit = feed_mass_limit(unit)?;
+    if horizon {
+        let mut period_ids = BTreeSet::new();
+        let mut periods = Vec::new();
+        for row in rows(&doc, "periods", MAX_PERIODS)? {
+            object(
+                row,
+                &[
+                    "id",
+                    "discount_factor",
+                    "arrivals",
+                    "routes",
+                    "market_recovered_metal_cap",
+                    "price_per_metal_unit",
+                    "selling_cost_per_metal_unit",
+                ],
+            )?;
+            let id = label(row, "id")?;
+            if !period_ids.insert(id) {
+                return Err(declaration(format!("duplicate period {id}")));
+            }
+            periods.push(read_period(row, id, &parcel_index, true)?);
+        }
+        let models: Vec<_> = periods.iter().map(DeclaredPeriod::model).collect();
+        let result = routing::solve_horizon(Horizon {
+            parcels: &parcels,
+            periods: &models,
+            stockpile_caps_dry_tonnes: &caps,
+            physical_grade_limit,
+        })?;
+        return render_horizon(&report, &parcel_ids, &parcels, &caps, &periods, result);
+    }
+
+    let period = read_period(&doc, label(&doc, "period")?, &parcel_index, false)?;
+    let result = routing::solve(Scenario {
+        parcels: &parcels,
+        routes: &period.routes,
+        pairs: &period.pairs,
+        physical_grade_limit,
+        market_recovered_metal_cap: period.market,
+        price_per_metal_unit: period.price,
+        selling_cost_per_metal_unit: period.selling,
+    })?;
+    Ok(render_single(&report, &parcel_ids, &period, &result))
+}
+
+fn read_period<'a>(
+    value: &'a Json,
+    id: &'a str,
+    parcel_index: &BTreeMap<&str, usize>,
+    horizon: bool,
+) -> Result<DeclaredPeriod<'a>, Refusal> {
     let mut route_ids = Vec::new();
     let mut route_names = BTreeSet::new();
     let mut routes = Vec::new();
     let mut pairs = Vec::new();
-    for row in rows(&doc, "routes", MAX_ROUTES)? {
+    for row in rows(value, "routes", MAX_ROUTES)? {
         object(
             row,
             &[
@@ -244,29 +390,111 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
             });
         }
     }
-    let market = quantity(&doc, "market_recovered_metal_cap")?;
-    let result = routing::solve(Scenario {
-        parcels: &parcels,
-        routes: &routes,
-        pairs: &pairs,
-        physical_grade_limit: feed_mass_limit(unit)?,
-        market_recovered_metal_cap: market,
-        price_per_metal_unit: quantity(&doc, "price_per_metal_unit")?,
-        selling_cost_per_metal_unit: quantity(&doc, "selling_cost_per_metal_unit")?,
-    })?;
+    let mut arrivals = Vec::new();
+    let discount = if horizon {
+        arrivals.resize(parcel_index.len(), ExactQty::from_integer(0));
+        let mut seen = BTreeSet::new();
+        for row in rows(value, "arrivals", MAX_PARCELS)? {
+            object(row, &["parcel", "dry_tonnes"])?;
+            let name = label(row, "parcel")?;
+            let parcel = *parcel_index
+                .get(name)
+                .ok_or_else(|| declaration(format!("unknown arrival parcel {name}")))?;
+            if !seen.insert(parcel) {
+                return Err(declaration(format!("duplicate arrival for {name}")));
+            }
+            arrivals[parcel] = quantity(row, "dry_tonnes")?;
+        }
+        quantity(value, "discount_factor")?
+    } else {
+        ExactQty::from_integer(1)
+    };
+    Ok(DeclaredPeriod {
+        id,
+        route_ids,
+        routes,
+        pairs,
+        arrivals,
+        discount,
+        market: quantity(value, "market_recovered_metal_cap")?,
+        price: quantity(value, "price_per_metal_unit")?,
+        selling: quantity(value, "selling_cost_per_metal_unit")?,
+    })
+}
+
+fn render_single(
+    report: &Report<'_>,
+    parcel_ids: &[&str],
+    period: &DeclaredPeriod<'_>,
+    result: &Routing,
+) -> Envelope {
+    let Report {
+        currency,
+        metal,
+        unit,
+        evidence,
+        source,
+        ..
+    } = *report;
 
     let mut markdown = format!(
-        "# One-period ore routing\n\n{} · {} · {unit} · {currency} · 100% project basis\n\nInputs are {evidence} and uncalibrated. Source SHA-256 `{}`.\n\n**{} dry tonnes** recover **{} {unit}** and contribute **{} {currency}** against a shared market cap of **{} {unit}**.\n\n| Parcel | Destination | Dry tonnes | Recovered {unit} | Contribution ({currency}) |\n|---|---|---:|---:|---:|\n",
-        markdown_cell(period),
+        "# One-period ore routing\n\n{} · {} · {unit} · {currency} · 100% project basis\n\nInputs are {evidence} and uncalibrated. Source SHA-256 `{}`.\n\n**{} dry tonnes** recover **{} {unit}** and contribute **{} {currency}** against a shared market cap of **{} {unit}**.\n\n",
+        markdown_cell(period.id),
         markdown_cell(metal),
         fmine_core::Digest32(source.artifact_sha256),
         exact(result.total.dry_tonnes),
         exact(result.total.recovered_metal),
         exact(result.total.contribution),
-        exact(market)
+        exact(period.market)
+    );
+    let (allocations, routes) = tables(report, parcel_ids, period, result, &mut markdown);
+    markdown.push_str("\n| Parcel | Unallocated dry tonnes |\n|---|---:|\n");
+    let mut remaining = Vec::new();
+    for (&id, &dry) in parcel_ids.iter().zip(&result.unallocated_dry_tonnes) {
+        let _ = writeln!(markdown, "| {} | {} |", markdown_cell(id), exact(dry));
+        remaining.push(format!(
+            "{{\"parcel\":{},\"unallocated_dry_tonnes\":{}}}",
+            js(id),
+            q(dry)
+        ));
+    }
+    let _ = writeln!(markdown, "\n{SCOPE}");
+    let payload = format!(
+        "{{\"schema\":\"{SCHEMA}\",\"period\":{},{},\"market_recovered_metal_cap\":{},\"total\":{{{}}},\"allocations\":[{allocations}],\"routes\":[{routes}],\"parcels\":[{}]}}",
+        js(period.id),
+        report.basis_json(),
+        q(period.market),
+        allocation(result.total),
+        remaining.join(",")
+    );
+    response(payload, markdown, SCOPE)
+}
+
+fn tables(
+    report: &Report<'_>,
+    parcel_ids: &[&str],
+    period: &DeclaredPeriod<'_>,
+    result: &Routing,
+    markdown: &mut String,
+) -> (String, String) {
+    let Report {
+        unit,
+        currency,
+        impurity,
+        ..
+    } = *report;
+    let DeclaredPeriod {
+        pairs,
+        route_ids,
+        routes,
+        ..
+    } = period;
+    let _ = writeln!(
+        markdown,
+        "| Parcel | Destination | Dry tonnes | Recovered {unit} | Contribution ({currency}) |\n|---|---|---:|---:|---:|"
     );
     let mut allocations = Vec::new();
-    for (pair, selected) in pairs.iter().zip(result.pairs) {
+    for (pair, &selected) in pairs.iter().zip(&result.pairs) {
         let (parcel, route) = (parcel_ids[pair.parcel], route_ids[pair.route]);
         let _ = writeln!(
             markdown,
@@ -291,7 +519,7 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
     );
     let mut route_results = Vec::new();
     let cell = |quantity: Option<ExactQty>| quantity.map_or_else(|| "—".into(), exact);
-    for ((id, route), total) in route_ids.into_iter().zip(routes).zip(result.routes) {
+    for ((&id, route), total) in route_ids.iter().zip(routes).zip(&result.routes) {
         let _ = writeln!(
             markdown,
             "| {} | {} / {} | {} / {} | {} / {} |",
@@ -305,36 +533,101 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
         );
         route_results.push(format!("{{\"route\":{},{},\"dry_tonnes_cap\":{},\"energy_used_kwh\":{},\"energy_budget_kwh\":{},\"blended_impurity_mass_fraction\":{},\"impurity_ceiling\":{}}}", js(id), allocation(total.allocation), q(route.dry_tonnes_cap), maybe(total.energy_used_kwh), maybe(route.energy_budget_kwh), maybe(total.blended_impurity_mass_fraction), maybe(route.impurity_ceiling)));
     }
-    markdown.push_str("\n| Parcel | Unallocated dry tonnes |\n|---|---:|\n");
-    let mut remaining = Vec::new();
-    for (id, dry) in parcel_ids.into_iter().zip(result.unallocated_dry_tonnes) {
-        let _ = writeln!(markdown, "| {} | {} |", markdown_cell(id), exact(dry));
-        remaining.push(format!(
-            "{{\"parcel\":{},\"unallocated_dry_tonnes\":{}}}",
-            js(id),
-            q(dry)
-        ));
-    }
-    let _ = writeln!(markdown, "\n{SCOPE}");
-    let payload = format!(
-        "{{\"schema\":\"{SCHEMA}\",\"period\":{},\"currency\":{},\"metal\":{},\"metal_unit\":{},\"ore_mass_basis\":\"dry_metric_tonne\",\"ownership_basis\":\"100_percent_project\",\"input_evidence\":{},\"calibration\":\"uncalibrated\",\"impurity\":{},\"source\":{},\"market_recovered_metal_cap\":{},\"total\":{{{}}},\"allocations\":[{}],\"routes\":[{}],\"parcels\":[{}]}}",
-        js(period),
-        js(currency),
-        js(metal),
-        js(unit),
-        js(evidence),
-        impurity.map_or_else(|| "null".into(), js),
-        worksheet_input::source_json(source, text.len()),
-        q(market),
-        allocation(result.total),
-        allocations.join(","),
-        route_results.join(","),
-        remaining.join(",")
+    (allocations.join(","), route_results.join(","))
+}
+
+fn render_horizon(
+    report: &Report<'_>,
+    parcel_ids: &[&str],
+    parcels: &[Parcel],
+    caps: &[Option<ExactQty>],
+    periods: &[DeclaredPeriod<'_>],
+    result: routing::HorizonRouting,
+) -> Result<Envelope, Refusal> {
+    let Report {
+        currency,
+        metal,
+        unit,
+        evidence,
+        source,
+        ..
+    } = *report;
+    let mut markdown = format!(
+        "# Ore routing and stockpile carry\n\n{} · {unit} · {currency} · 100% project basis\n\nInputs are {evidence} and uncalibrated. Source SHA-256 `{}`.\n\n**{} dry tonnes** recover **{} {unit}** and contribute **{} {currency}** discounted across the declared periods.\n",
+        markdown_cell(metal),
+        fmine_core::Digest32(source.artifact_sha256),
+        exact(result.total.dry_tonnes),
+        exact(result.total.recovered_metal),
+        exact(result.discounted_contribution)
     );
+    let mut opening: Vec<_> = parcels.iter().map(|p| p.available_dry_tonnes).collect();
+    let mut period_json = Vec::new();
+    let arithmetic = |_| {
+        Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            "stockpile report exceeds exact arithmetic range",
+        )
+    };
+    for (period, routing) in periods.iter().zip(&result.periods) {
+        let discounted = routing
+            .total
+            .contribution
+            .checked_mul(period.discount)
+            .map_err(arithmetic)?;
+        let _ = writeln!(
+            markdown,
+            "\n## {}\n\nRecovered **{} {unit}** of the **{} {unit}** shared market cap. Contribution **{} {currency}**, discounted **{} {currency}**.\n",
+            markdown_cell(period.id),
+            exact(routing.total.recovered_metal),
+            exact(period.market),
+            exact(routing.total.contribution),
+            exact(discounted)
+        );
+        let (allocations, routes) = tables(report, parcel_ids, period, routing, &mut markdown);
+        markdown.push_str("\n| Parcel | Opening dry t | Arriving dry t | Processed dry t | Closing dry t | Closing cap dry t |\n|---|---:|---:|---:|---:|---:|\n");
+        let mut stock = Vec::new();
+        for (k, id) in parcel_ids.iter().enumerate() {
+            let available = opening[k];
+            let arrival = period.arrivals[k];
+            let closing = routing.unallocated_dry_tonnes[k];
+            let processed = available
+                .checked_add(arrival)
+                .and_then(|total| total.checked_sub(closing))
+                .map_err(arithmetic)?;
+            let cap = caps[k];
+            let _ = writeln!(
+                markdown,
+                "| {} | {} | {} | {} | {} | {} |",
+                markdown_cell(id),
+                exact(available),
+                exact(arrival),
+                exact(processed),
+                exact(closing),
+                cap.map_or_else(|| "—".into(), exact)
+            );
+            stock.push(format!("{{\"parcel\":{},\"opening_dry_tonnes\":{},\"arriving_dry_tonnes\":{},\"processed_dry_tonnes\":{},\"closing_dry_tonnes\":{},\"stockpile_cap_dry_tonnes\":{}}}",
+                js(id), q(available), q(arrival), q(processed), q(closing), maybe(cap)));
+            opening[k] = closing;
+        }
+        period_json.push(format!("{{\"period\":{},\"discount_factor\":{},\"market_recovered_metal_cap\":{},\"discounted_contribution\":{},\"total\":{{{}}},\"allocations\":[{allocations}],\"routes\":[{routes}],\"parcels\":[{}]}}",
+            js(period.id), q(period.discount), q(period.market), q(discounted), allocation(routing.total), stock.join(",")));
+    }
+    let _ = writeln!(markdown, "\n{HORIZON_SCOPE}");
+    let payload = format!(
+        "{{\"schema\":\"{HORIZON_SCHEMA}\",{},\"total\":{{{},\"discounted_contribution\":{}}},\"periods\":[{}]}}",
+        report.basis_json(),
+        allocation(result.total),
+        q(result.discounted_contribution),
+        period_json.join(",")
+    );
+    Ok(response(payload, markdown, HORIZON_SCOPE))
+}
+
+fn response(payload: String, markdown: String, scope: &'static str) -> Envelope {
     let mut envelope = Envelope::ok(VERB, payload, vec![]);
-    envelope.no_claim = Some(SCOPE);
+    envelope.no_claim = Some(scope);
     envelope.rendered_markdown = Some(markdown);
-    Ok(envelope)
+    envelope
 }
 
 pub(super) fn execute(path: &Path, root: &Path) -> Envelope {

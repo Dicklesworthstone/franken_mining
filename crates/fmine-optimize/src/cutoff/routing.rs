@@ -1,14 +1,15 @@
-//! DESIGN (BD-252, plan §15.6): exact one-period routing of already-mined parcels.
+//! DESIGN (BD-252, plan §15.6): exact routing and carry of already-mined parcels.
 //! Determinism: Exact
 
 use std::collections::BTreeSet;
 
-use fmine_numerics::exact_feas::maximize_nonnegative;
+use fmine_numerics::exact_feas::{LinearMaximumError, maximize_nonnegative};
 
 use super::{Rat, Refusal, RefusalCode, compare, domain};
 
 pub const MAX_PARCELS: usize = 8;
 pub const MAX_ROUTES: usize = 4;
+pub const MAX_PERIODS: usize = 4;
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 
@@ -50,6 +51,27 @@ pub struct Scenario<'a> {
     pub selling_cost_per_metal_unit: Rat,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Period<'a> {
+    pub routes: &'a [Route],
+    pub pairs: &'a [RoutePair],
+    /// Arrivals before the period's routing, in shared parcel order. An empty slice means zero arrivals.
+    pub arrivals_dry_tonnes: &'a [Rat],
+    pub discount_factor: Rat,
+    pub market_recovered_metal_cap: Rat,
+    pub price_per_metal_unit: Rat,
+    pub selling_cost_per_metal_unit: Rat,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Horizon<'a> {
+    pub parcels: &'a [Parcel],
+    pub periods: &'a [Period<'a>],
+    /// End-of-period storage caps by parcel. An empty slice means every parcel can carry without a cap.
+    pub stockpile_caps_dry_tonnes: &'a [Option<Rat>],
+    pub physical_grade_limit: Rat,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Allocation {
     pub dry_tonnes: Rat,
@@ -71,6 +93,14 @@ pub struct Routing {
     pub routes: Vec<RouteResult>,
     pub unallocated_dry_tonnes: Vec<Rat>,
     pub total: Allocation,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct HorizonRouting {
+    /// Each routing's unallocated dry tonnes are that period's closing stock.
+    pub periods: Vec<Routing>,
+    pub total: Allocation,
+    pub discounted_contribution: Rat,
 }
 
 fn numerical(detail: &str) -> Refusal {
@@ -122,32 +152,34 @@ impl Allocation {
 /// # Errors
 /// Refuses invalid dimensions, pair keys, physical or monetary values and uncertified exact solutions.
 pub fn solve(scenario: Scenario<'_>) -> Result<Routing, Refusal> {
-    let Scenario {
-        parcels,
-        routes,
-        pairs,
-        physical_grade_limit,
-        market_recovered_metal_cap,
-        price_per_metal_unit,
-        selling_cost_per_metal_unit,
-    } = scenario;
-    if !(1..=MAX_PARCELS).contains(&parcels.len())
-        || !(1..=MAX_ROUTES).contains(&routes.len())
-        || pairs.len() > parcels.len() * routes.len()
-    {
-        return Err(domain(
-            "route blend requires 1 to 8 parcels and 1 to 4 routes with at most one entry per pair",
-        ));
+    if scenario.routes.is_empty() {
+        return Err(domain("one-period route blend requires at least one route"));
     }
-    if physical_grade_limit.signum() <= 0
-        || !nonnegative([
-            market_recovered_metal_cap,
-            price_per_metal_unit,
-            selling_cost_per_metal_unit,
-        ])
-    {
+    let period = Period {
+        routes: scenario.routes,
+        pairs: scenario.pairs,
+        arrivals_dry_tonnes: &[],
+        discount_factor: ONE,
+        market_recovered_metal_cap: scenario.market_recovered_metal_cap,
+        price_per_metal_unit: scenario.price_per_metal_unit,
+        selling_cost_per_metal_unit: scenario.selling_cost_per_metal_unit,
+    };
+    solve_horizon(Horizon {
+        parcels: scenario.parcels,
+        periods: &[period],
+        stockpile_caps_dry_tonnes: &[],
+        physical_grade_limit: scenario.physical_grade_limit,
+    })?
+    .periods
+    .into_iter()
+    .next()
+    .ok_or_else(|| numerical("exact route blend did not return a period"))
+}
+
+fn validate_parcels(parcels: &[Parcel], physical_grade_limit: Rat) -> Result<bool, Refusal> {
+    if !(1..=MAX_PARCELS).contains(&parcels.len()) || physical_grade_limit.signum() <= 0 {
         return Err(domain(
-            "route blend requires a positive physical grade limit and nonnegative price, selling cost and market cap",
+            "route blend requires 1 to 8 parcels and a positive physical grade limit",
         ));
     }
     let has_assay = parcels.iter().any(|p| p.impurity_mass_fraction.is_some());
@@ -176,7 +208,44 @@ pub fn solve(scenario: Scenario<'_>) -> Result<Routing, Refusal> {
             }
         }
     }
-    let mut rhs: Vec<_> = parcels.iter().map(|p| p.available_dry_tonnes).collect();
+    Ok(has_assay)
+}
+
+struct PeriodModel {
+    rows: Vec<Vec<Rat>>,
+    rhs: Vec<Rat>,
+    margins: Vec<Rat>,
+    market_row: usize,
+}
+
+fn period_model(
+    parcels: &[Parcel],
+    has_assay: bool,
+    period: Period<'_>,
+) -> Result<PeriodModel, Refusal> {
+    let Period {
+        routes,
+        pairs,
+        market_recovered_metal_cap,
+        price_per_metal_unit,
+        selling_cost_per_metal_unit,
+        ..
+    } = period;
+    if routes.len() > MAX_ROUTES || pairs.len() > parcels.len() * routes.len() {
+        return Err(domain(
+            "route blend permits at most four routes with one entry per eligible pair",
+        ));
+    }
+    if !nonnegative([
+        market_recovered_metal_cap,
+        price_per_metal_unit,
+        selling_cost_per_metal_unit,
+    ]) {
+        return Err(domain(
+            "price, selling cost and market cap must be nonnegative",
+        ));
+    }
+    let mut rhs = Vec::with_capacity(3 * routes.len() + 1);
     for route in routes {
         let budget = route.energy_budget_kwh.unwrap_or(ZERO);
         if !nonnegative([
@@ -220,8 +289,7 @@ pub fn solve(scenario: Scenario<'_>) -> Result<Routing, Refusal> {
             ));
         }
         let recovered = mul(parcel.grade_per_dry_tonne, pair.recovery_fraction)?;
-        let route_row = parcels.len() + 3 * pair.route;
-        rows[pair.parcel][j] = ONE;
+        let route_row = 3 * pair.route;
         rows[route_row][j] = ONE;
         rows[route_row + 1][j] = energy;
         if let (Some(assay), Some(ceiling)) =
@@ -236,7 +304,138 @@ pub fn solve(scenario: Scenario<'_>) -> Result<Routing, Refusal> {
         )?;
         margins.push(sub(mul(recovered, net_price)?, cost)?);
     }
-    let optimum = maximize_nonnegative(&rows, &rhs, &margins).map_err(numerical)?;
+    Ok(PeriodModel {
+        rows,
+        rhs,
+        margins,
+        market_row,
+    })
+}
+
+/// Optimize each period jointly. Cumulative withdrawals can use only opening stock and arrivals already made.
+/// A storage cap applies at period close. A zero-valued solution stays idle if idle is feasible.
+///
+/// # Errors
+/// Refuses invalid periods, arrivals or caps, infeasible stock limits, and uncertified exact solutions.
+pub fn solve_horizon(horizon: Horizon<'_>) -> Result<HorizonRouting, Refusal> {
+    let Horizon {
+        parcels,
+        periods,
+        stockpile_caps_dry_tonnes: caps,
+        physical_grade_limit,
+    } = horizon;
+    let has_assay = validate_parcels(parcels, physical_grade_limit)?;
+    if !(1..=MAX_PERIODS).contains(&periods.len())
+        || (!caps.is_empty() && caps.len() != parcels.len())
+        || !nonnegative(caps.iter().copied().flatten())
+    {
+        return Err(domain(
+            "declare 1 to 4 periods and nonnegative storage caps in shared parcel order",
+        ));
+    }
+    let mut models = Vec::with_capacity(periods.len());
+    for &period in periods {
+        if (!period.arrivals_dry_tonnes.is_empty()
+            && period.arrivals_dry_tonnes.len() != parcels.len())
+            || !nonnegative(period.arrivals_dry_tonnes.iter().copied())
+            || !mass_fraction(period.discount_factor)?
+        {
+            return Err(domain(
+                "declare nonnegative arrivals in shared parcel order and a discount factor in [0, 1]",
+            ));
+        }
+        models.push(period_model(parcels, has_assay, period)?);
+    }
+    let column_parcels: Vec<_> = periods
+        .iter()
+        .flat_map(|p| p.pairs.iter().map(|pair| pair.parcel))
+        .collect();
+    let mut cumulative: Vec<_> = parcels.iter().map(|p| p.available_dry_tonnes).collect();
+    let n = column_parcels.len();
+    let mut rows = Vec::new();
+    let mut rhs = Vec::new();
+    let mut objective = Vec::with_capacity(n);
+    let mut start = 0;
+    for (period, model) in periods.iter().zip(&models) {
+        let end = start + period.pairs.len();
+        for (available, arriving) in cumulative.iter_mut().zip(period.arrivals_dry_tonnes) {
+            *available = add(*available, *arriving)?;
+        }
+        for (parcel, available) in cumulative.iter().copied().enumerate() {
+            let mut row = vec![ZERO; n];
+            for (cell, &source) in row[..end].iter_mut().zip(&column_parcels) {
+                if source == parcel {
+                    *cell = ONE;
+                }
+            }
+            if let Some(Some(cap)) = caps.get(parcel)
+                && compare(available, *cap)?.is_gt()
+            {
+                rows.push(
+                    row.iter()
+                        .map(|value| {
+                            if *value == ONE {
+                                Rat::from_integer(-1)
+                            } else {
+                                ZERO
+                            }
+                        })
+                        .collect(),
+                );
+                rhs.push(sub(*cap, available)?);
+            }
+            rows.push(row);
+            rhs.push(available);
+        }
+        for (local, &bound) in model.rows.iter().zip(&model.rhs) {
+            let mut row = vec![ZERO; n];
+            row[start..end].copy_from_slice(local);
+            rows.push(row);
+            rhs.push(bound);
+        }
+        for &margin in &model.margins {
+            objective.push(mul(margin, period.discount_factor)?);
+        }
+        start = end;
+    }
+    let optimum = maximize_nonnegative(&rows, &rhs, &objective).map_err(|error| match error {
+        LinearMaximumError::Infeasible => {
+            domain("no routing can satisfy the declared stockpile and processing caps")
+        }
+        LinearMaximumError::Uncertified(reason) => numerical(reason),
+    })?;
+    let idle = optimum.objective == ZERO && nonnegative(rhs);
+    let mut stock: Vec<_> = parcels.iter().map(|p| p.available_dry_tonnes).collect();
+    let mut total = Allocation::ZERO;
+    let mut results = Vec::with_capacity(periods.len());
+    let mut values = optimum.variables.as_slice();
+    for (period, model) in periods.iter().zip(&models) {
+        for (available, arriving) in stock.iter_mut().zip(period.arrivals_dry_tonnes) {
+            *available = add(*available, *arriving)?;
+        }
+        let (selected, remaining) = values.split_at(period.pairs.len());
+        values = remaining;
+        let result = period_result(parcels, *period, model, stock, selected, idle)?;
+        stock = result.unallocated_dry_tonnes.clone();
+        total.add(result.total)?;
+        results.push(result);
+    }
+    Ok(HorizonRouting {
+        periods: results,
+        total,
+        discounted_contribution: optimum.objective,
+    })
+}
+
+fn period_result(
+    parcels: &[Parcel],
+    period: Period<'_>,
+    model: &PeriodModel,
+    stock: Vec<Rat>,
+    values: &[Rat],
+    idle: bool,
+) -> Result<Routing, Refusal> {
+    let Period { routes, pairs, .. } = period;
     let mut result = Routing {
         pairs: Vec::with_capacity(pairs.len()),
         routes: routes
@@ -247,20 +446,16 @@ pub fn solve(scenario: Scenario<'_>) -> Result<Routing, Refusal> {
                 blended_impurity_mass_fraction: None,
             })
             .collect(),
-        unallocated_dry_tonnes: parcels.iter().map(|p| p.available_dry_tonnes).collect(),
+        unallocated_dry_tonnes: stock,
         total: Allocation::ZERO,
     };
     let mut impurity_mass = vec![ZERO; routes.len()];
-    for (j, (pair, amount)) in pairs.iter().zip(optimum.variables).enumerate() {
-        let dry = if optimum.objective == ZERO {
-            ZERO
-        } else {
-            amount
-        };
+    for (j, (pair, &amount)) in pairs.iter().zip(values).enumerate() {
+        let dry = if idle { ZERO } else { amount };
         let allocation = Allocation {
             dry_tonnes: dry,
-            recovered_metal: mul(dry, rows[market_row][j])?,
-            contribution: mul(dry, margins[j])?,
+            recovered_metal: mul(dry, model.rows[model.market_row][j])?,
+            contribution: mul(dry, model.margins[j])?,
         };
         result.total.add(allocation)?;
         result.pairs.push(allocation);
@@ -278,7 +473,10 @@ pub fn solve(scenario: Scenario<'_>) -> Result<Routing, Refusal> {
             impurity_mass[pair.route] = add(impurity_mass[pair.route], mul(dry, assay)?)?;
         }
     }
-    if has_assay {
+    if parcels
+        .iter()
+        .any(|parcel| parcel.impurity_mass_fraction.is_some())
+    {
         for (route, assay_mass) in result.routes.iter_mut().zip(impurity_mass) {
             let dry = route.allocation.dry_tonnes;
             if dry.signum() > 0 {

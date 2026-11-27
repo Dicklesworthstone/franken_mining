@@ -85,49 +85,53 @@ fn lane_json(output: &std::process::Output) -> Json {
     report
 }
 
+fn blend(root: &std::path::Path, input: &std::path::Path, format: &str) -> std::process::Output {
+    Command::new(binary())
+        .args(["plan", "blend", "--input"])
+        .arg(input)
+        .args(["--format", format, "--workspace"])
+        .arg(root)
+        .output()
+        .unwrap()
+}
+
+fn blend_envelope(output: &std::process::Output) -> Json {
+    let report = parse(&output.stdout).unwrap();
+    assert_eq!(report.get("verb").unwrap().as_str(), Some("plan blend"));
+    assert_eq!(
+        report.get("exit_code").unwrap().i64(),
+        output.status.code().map(i64::from)
+    );
+    assert!(
+        report
+            .get("flags")
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .iter()
+            .all(|(_, flag)| flag.as_bool() == Some(false))
+    );
+    report
+}
+
+fn expect(row: &Json, field: &str, value: &str) {
+    assert_eq!(row.get(field).unwrap().as_str(), Some(value), "{field}");
+}
+
 #[test]
 fn plan_blend_routes_shared_inventory_and_replays_route_caps() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = "tests/planning/route_blend.json";
     let original = std::fs::read_to_string(root.join(input)).unwrap();
-    let run = |input: &std::path::Path, format: &str| {
-        Command::new(binary())
-            .args(["plan", "blend", "--input"])
-            .arg(input)
-            .args(["--format", format, "--workspace"])
-            .arg(&root)
-            .output()
-            .unwrap()
-    };
-    let envelope = |output: &std::process::Output| {
-        let report = parse(&output.stdout).unwrap();
-        assert_eq!(report.get("verb").unwrap().as_str(), Some("plan blend"));
-        assert_eq!(
-            report.get("exit_code").unwrap().i64(),
-            output.status.code().map(i64::from)
-        );
-        assert!(
-            report
-                .get("flags")
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .iter()
-                .all(|(_, flag)| flag.as_bool() == Some(false))
-        );
-        report
-    };
+    let run = |input, format| blend(&root, input, format);
     let output = run(input.as_ref(), "json");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
-    let report = envelope(&output);
+    let report = blend_envelope(&output);
     let payload = report.get("payload").unwrap();
-    let expect = |row: &Json, field: &str, value: &str| {
-        assert_eq!(row.get(field).unwrap().as_str(), Some(value), "{field}");
-    };
     expect(
         payload.get("source").unwrap(),
         "sha256",
@@ -178,7 +182,7 @@ fn plan_blend_routes_shared_inventory_and_replays_route_caps() {
     let submit = |file, text| {
         let path = scratch.join(file);
         std::fs::write(&path, text).unwrap();
-        envelope(&run(&path, "json"))
+        blend_envelope(&blend(&root, &path, "json"))
     };
     let market = submit(
         "market.json",
@@ -240,6 +244,159 @@ fn plan_blend_routes_shared_inventory_and_replays_route_caps() {
         assert_eq!(refusal.get("payload"), Some(&Json::Null));
         expect(refusal.get("refusal").unwrap(), "code", code);
     }
+}
+
+#[test]
+fn plan_blend_horizon_carries_stock_and_enforces_storage_at_close() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = std::path::Path::new("tests/planning/route_blend_horizon.json");
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = blend(&root, input, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(blend(&root, input, "json").stdout, output.stdout);
+    let report = blend_envelope(&output);
+    let payload = report.get("payload").unwrap();
+    expect(payload, "schema", "fmine.route-blend-horizon.v1");
+    expect(payload, "input_evidence", "synthetic");
+    expect(payload, "calibration", "uncalibrated");
+    expect(
+        payload.get("source").unwrap(),
+        "sha256",
+        &sha256(original.as_bytes()).to_hex(),
+    );
+    let total = payload.get("total").unwrap();
+    expect(total, "incremental_contribution", "160/1");
+    expect(total, "discounted_contribution", "144/1");
+    let periods = payload.get("periods").unwrap().as_array().unwrap();
+    assert_eq!(periods.len(), 2);
+    let assert_stock = |period: &Json, values| {
+        let rows = period.get("parcels").unwrap().as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        for (field, value) in [
+            "opening_dry_tonnes",
+            "arriving_dry_tonnes",
+            "processed_dry_tonnes",
+            "closing_dry_tonnes",
+        ]
+        .into_iter()
+        .zip(values)
+        {
+            expect(&rows[0], field, value);
+        }
+    };
+    assert_stock(&periods[0], ["1/1", "0/1", "0/1", "1/1"]);
+    assert_stock(&periods[1], ["1/1", "1/1", "2/1", "0/1"]);
+    let markdown = blend(&root, input, "markdown");
+    assert!(markdown.status.success());
+    let markdown = String::from_utf8(markdown.stdout).unwrap();
+    assert!(markdown.contains("| feed | 1/1 | 1/1 | 2/1 | 0/1 | 1/1 |"));
+
+    let scratch = std::env::temp_dir().join(format!("fmine-route-horizon-{}", std::process::id()));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, worksheet: String| {
+        let path = scratch.join(name);
+        std::fs::write(&path, worksheet).unwrap();
+        blend_envelope(&blend(&root, &path, "json"))
+    };
+    let check = |report: &Json, optimum, first, second| {
+        let payload = report.get("payload").unwrap();
+        assert_ne!(payload, &Json::Null, "{report:?}");
+        expect(
+            payload.get("total").unwrap(),
+            "discounted_contribution",
+            optimum,
+        );
+        let periods = payload.get("periods").unwrap().as_array().unwrap();
+        assert_stock(&periods[0], first);
+        assert_stock(&periods[1], second);
+    };
+    let mandatory = original.replace(
+        r#""stockpile_cap_dry_tonnes": "1""#,
+        r#""stockpile_cap_dry_tonnes": "0""#,
+    );
+    let first = ["1/1", "0/1", "1/1", "0/1"];
+    let second = ["0/1", "1/1", "1/1", "0/1"];
+    check(
+        &submit("mandatory.json", mandatory.clone()),
+        "82/1",
+        first,
+        second,
+    );
+    check(
+        &submit(
+            "zero_margin.json",
+            mandatory
+                .replace(
+                    r#""price_per_metal_unit": "30""#,
+                    r#""price_per_metal_unit": "20""#,
+                )
+                .replace(
+                    r#""price_per_metal_unit": "100""#,
+                    r#""price_per_metal_unit": "20""#,
+                ),
+        ),
+        "0/1",
+        first,
+        second,
+    );
+    check(
+        &submit(
+            "loss.json",
+            mandatory
+                .replace(
+                    r#""price_per_metal_unit": "30""#,
+                    r#""price_per_metal_unit": "0""#,
+                )
+                .replace(
+                    r#""price_per_metal_unit": "100""#,
+                    r#""price_per_metal_unit": "0""#,
+                ),
+        ),
+        "-38/1",
+        first,
+        second,
+    );
+    check(
+        &submit(
+            "later_arrival.json",
+            original
+                .replace(
+                    r#""available_dry_tonnes": "1""#,
+                    r#""available_dry_tonnes": "0""#,
+                )
+                .replace(
+                    r#""price_per_metal_unit": "30""#,
+                    r#""price_per_metal_unit": "200""#,
+                ),
+        ),
+        "72/1",
+        ["0/1"; 4],
+        second,
+    );
+    let impossible = submit(
+        "impossible.json",
+        mandatory.replacen(r#""dry_tonnes_cap": "2""#, r#""dry_tonnes_cap": "0""#, 1),
+    );
+    assert_eq!(impossible.get("payload"), Some(&Json::Null));
+    let refusal = impossible.get("refusal").unwrap();
+    expect(refusal, "code", "FMINE-REF-109");
+    assert!(
+        refusal
+            .get("what")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("no routing")
+    );
+    let bad_arrival = submit(
+        "negative_arrival.json",
+        original.replace(r#""dry_tonnes": "1""#, r#""dry_tonnes": "-1""#),
+    );
+    expect(bad_arrival.get("refusal").unwrap(), "code", "FMINE-REF-109");
 }
 
 #[test]
