@@ -55,6 +55,180 @@ support = "point_core"
 crs = "none"
 pii_class = "none"
 
+[[column]]
+dialect = "acquire_assay_v1"
+column = "SAMPLEID"
+unit = "none"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "AG_GPT"
+unit = "g_per_t"
+basis = "dry"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "S_PCT"
+unit = "wt_pct"
+basis = "dry"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "LABJOBNO"
+unit = "none"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "METHOD"
+unit = "none"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_assay_v1"
+column = "LAB_CONTACT"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "personal_redact"
+
+[[dialect]]
+id = "acquire_collar_v1"
+vendor = "acQuire"
+format = "csv"
+description = "acQuire drillhole collar export (BD-188)"
+
+[[column]]
+dialect = "acquire_collar_v1"
+column = "HOLEID"
+unit = "none"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_collar_v1"
+column = "PROJECTCODE"
+unit = "none"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_collar_v1"
+column = "EAST"
+unit = "m"
+basis = "none"
+support = "point_core"
+crs = "EPSG:32611"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_collar_v1"
+column = "NORTH"
+unit = "m"
+basis = "none"
+support = "point_core"
+crs = "EPSG:32611"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_collar_v1"
+column = "RL"
+unit = "m"
+basis = "none"
+support = "point_core"
+crs = "EPSG:32611"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_collar_v1"
+column = "MAXDEPTH"
+unit = "m"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_collar_v1"
+column = "GEOLOGIST"
+unit = "none"
+basis = "none"
+support = "none"
+crs = "none"
+pii_class = "personal_redact"
+
+[[dialect]]
+id = "acquire_survey_v1"
+vendor = "acQuire"
+format = "csv"
+description = "acQuire drillhole downhole survey export (BD-188)"
+
+[[column]]
+dialect = "acquire_survey_v1"
+column = "HOLEID"
+unit = "none"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_survey_v1"
+column = "DEPTH"
+unit = "m"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_survey_v1"
+column = "AZIMUTH"
+unit = "deg"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_survey_v1"
+column = "DIP"
+unit = "deg"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
+[[column]]
+dialect = "acquire_survey_v1"
+column = "SURVEYTYPE"
+unit = "none"
+basis = "none"
+support = "point_core"
+crs = "none"
+pii_class = "none"
+
 [[dialect]]
 id = "datamine_string_v1"
 vendor = "Datamine"

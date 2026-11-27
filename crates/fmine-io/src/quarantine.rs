@@ -376,7 +376,13 @@ fn classify_tabular_rows(
             }
 
             if let ResolvedUnit::Registered(unit_code) = &col.unit {
-                if trimmed.is_empty() || is_placeholder_token(trimmed) {
+                if trimmed.is_empty()
+                    || is_placeholder_token(trimmed)
+                    || (matches!(
+                        unit_code.as_str(),
+                        "g_per_t" | "wt_pct" | "oz_per_st" | "mass_fraction"
+                    ) && is_censored_below_dl(trimmed))
+                {
                     continue;
                 }
                 match parse_strict_decimal(trimmed) {
@@ -510,7 +516,23 @@ fn is_formula_error(s: &str) -> bool {
 }
 
 fn is_placeholder_token(s: &str) -> bool {
-    matches!(s, "-" | "—" | "N/A" | "n/a" | "NA" | "<DL" | "BDL" | "NS")
+    matches!(
+        s,
+        "-" | "—" | "N/A" | "n/a" | "NA" | "<DL" | "BDL" | "NS" | "NSS" | "SNR" | "IS"
+    )
+}
+
+/// Returns `true` for left-censored below-detection-limit assay tokens such as `<0.005` or `<0.01`,
+/// where the numeric limit after `<` is strictly positive and finite.
+fn is_censored_below_dl(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix('<') else {
+        return false;
+    };
+    let rest = rest.trim();
+    if rest.starts_with('-') || rest.starts_with('+') {
+        return false;
+    }
+    parse_strict_decimal(rest).is_some_and(|v| v.is_finite() && v > 0.0)
 }
 
 fn parse_strict_decimal(s: &str) -> Option<f64> {

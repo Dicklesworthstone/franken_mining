@@ -1,6 +1,7 @@
 //! Label-anchored `.xlsx` (`xlsx`) and byte-bound HTML (`HtmlDocument`) filing table extractors
 //! with SHA-256 provenance and `G-BULL-1` / `G-BULL-2` quarantine (`WP-03`, `BD-056`, `BD-057`, `BD-271`).
 
+pub mod acquire;
 pub mod cas_ingest;
 pub mod dialects;
 pub mod dxf;

@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use fmine_authz::residency::{DataClass, ResidencyDecision, ResidencyRegistry};
 use fmine_core::hash::sha256;
 
-use crate::dialects::{PiiClass, ResolvedColumn};
+use crate::dialects::{PiiClass, ResolvedColumn, ResolvedUnit};
 
 /// Replacement marker emitted whenever a personal field or inline PII token is stripped on ingest.
 pub const REDACTED_MARKER: &str = "[REDACTED:PII]";
@@ -106,6 +106,14 @@ pub fn redact_row_on_ingest(
                 summary.columns_redacted += 1;
             }
             out.push(REDACTED_MARKER.to_string());
+        } else if columns
+            .get(idx)
+            .is_some_and(|c| matches!(c.unit, ResolvedUnit::Registered(_)))
+        {
+            // Registered physical numeric columns (e.g. 7-digit UTM Northings like 4500000 m
+            // or 7-digit tonnages) are validated as numbers/placeholders by quarantine and are
+            // not free-text narratives; do not misclassify them as phone numbers.
+            out.push(raw.clone());
         } else {
             let (scrubbed, hits) = scrub_free_text(raw);
             summary.inline_tokens_scrubbed += hits;
@@ -329,5 +337,45 @@ mod tests {
                 ResidencyDecision::Allowed { .. }
             ));
         }
+    }
+
+    #[test]
+    fn test_redact_preserves_registered_physical_utm_coordinates_while_scrubbing_free_text() {
+        use crate::dialects::{ColumnBasis, ColumnSupport, ResolvedCrs};
+        let cols = vec![
+            ResolvedColumn {
+                column_name: "NORTH".to_string(),
+                unit: ResolvedUnit::Registered("m".to_string()),
+                basis: Some(ColumnBasis::None),
+                support: Some(ColumnSupport::PointCore),
+                crs: ResolvedCrs::Registered("EPSG:32611".to_string()),
+                pii_class: PiiClass::None,
+                undeclared_in_dialect: false,
+            },
+            ResolvedColumn {
+                column_name: "SUMMARY".to_string(),
+                unit: ResolvedUnit::None,
+                basis: Some(ColumnBasis::None),
+                support: Some(ColumnSupport::None),
+                crs: ResolvedCrs::None,
+                pii_class: PiiClass::None,
+                undeclared_in_dialect: false,
+            },
+        ];
+        let raw = vec![
+            "4500000".to_string(),
+            "Call 5551234567 about road access".to_string(),
+        ];
+        let redacted = redact_row_on_ingest(2, &cols, &raw, None);
+        assert_eq!(
+            redacted.cells[0], "4500000",
+            "7-digit UTM Northing in registered physical column must not be scrubbed as phone PII"
+        );
+        assert!(
+            !redacted.cells[1].contains("5551234567")
+                && redacted.cells[1].contains(REDACTED_MARKER),
+            "phone token in free-text column must still be scrubbed"
+        );
+        assert_eq!(redacted.summary.inline_tokens_scrubbed, 1);
     }
 }

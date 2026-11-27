@@ -337,7 +337,7 @@ impl IoDialectRegistry {
                 let unit = if spec.declared_unit == "none" {
                     ResolvedUnit::None
                 } else if registered_units.contains(&spec.declared_unit)
-                    || spec.declared_unit == "m"
+                    || matches!(spec.declared_unit.as_str(), "m" | "deg")
                 {
                     ResolvedUnit::Registered(spec.declared_unit.clone())
                 } else {

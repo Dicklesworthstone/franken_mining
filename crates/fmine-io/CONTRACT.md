@@ -7,7 +7,7 @@ Pure-Rust ZIP/DEFLATE, XLSX workbook, HTML table, OMF 2 / Parquet subset, draft 
 - **Layer:** V
 - **Subsystem:** Portal
 - **LOC budget:** 40,000 planned / 46,000 ceiling
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report", "source", "cas_ingest", "dialects", "quarantine", "redact", "strings", "import_rules", "intercept", "dxf", "las", "lab_certificate"]`
+- **Allowed Module Families:** `["acquire", "xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report", "source", "cas_ingest", "dialects", "quarantine", "redact", "strings", "import_rules", "intercept", "dxf", "las", "lab_certificate"]`
 
 ## 2. Inputs
 ### Mathematical & Domain Formulation
@@ -769,3 +769,12 @@ local test authority is an independent time witness. Its input fingerprints perm
   `lab_certificate::test_the_same_original_again_gives_the_same_root_and_writes_no_chunk`,
   `lab_certificate::test_an_original_that_cannot_be_linked_is_refused_and_nothing_is_stored`,
   `lab_certificate::test_a_swapped_damaged_missing_or_retyped_copy_does_not_verify`).
+- `acquire` (`BD-188`, `WP-11`, acQuire GIM Suite drillhole export dialect): `import_acquire_export_bundle`
+  imports multi-table collar (`acquire_collar_v1`), survey (`acquire_survey_v1`), and assay
+  (`acquire_assay_v1`) CSV or `.xlsx` exports through root-last `FMT-CAS-1` quarantine, dialect unit/basis/CRS
+  resolution (`PO-PORT-3`), PII redaction on ingest (`BD-292`), exact rational (`ExactQty`) parsing with
+  overflow-free continued-fraction comparison, left-censored `<DL` (`AssayReading::BelowDetection`) and
+  placeholder preservation, Porgera-class mass-fraction upper bounds (`wt_pct <= 100`, `g_per_t <= 1_000_000`),
+  cross-table collar referential integrity, and non-overlapping interval enforcement (`FMINE-REF-102`)
+  (`acquire::tests::test_acquire_sample_export_bundle_import_and_domain_rejections`,
+  `acquire::tests::test_acquire_xlsx_and_csv_export_parity`).
