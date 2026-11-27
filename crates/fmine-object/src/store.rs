@@ -266,6 +266,21 @@ impl CasStore {
         Ok(roots)
     }
 
+    /// Manifests of every pending `OB-SEAL` staging marker in `staging/`, sorted by root. A marker
+    /// that does not decode refuses: GC could not tell which chunks it holds.
+    pub fn list_staged_manifests(&self) -> Result<Vec<CasManifest>, CasError> {
+        let mut staged = Vec::new();
+        for path in collect_files(&self.root_dir.join("staging"), "stage")? {
+            let bytes = fs::read(&path).map_err(|e| CasError::Io {
+                operation: "read_staging_marker",
+                detail: format!("{}: {e}", path.display()),
+            })?;
+            staged.push(CasManifest::from_bytes(&bytes)?);
+        }
+        staged.sort_by_key(|m| m.root_digest);
+        Ok(staged)
+    }
+
     /// List all chunk digests currently stored in `chunks/`.
     pub fn list_chunks(&self) -> Result<Vec<(Digest32, PathBuf, u64)>, CasError> {
         let mut out = Vec::new();

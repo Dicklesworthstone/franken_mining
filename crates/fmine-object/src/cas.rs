@@ -56,6 +56,8 @@ pub enum CasError {
         operation: &'static str,
         detail: String,
     },
+    /// A GC plan no longer matches the store it would sweep (`BD-091`): re-plan before applying.
+    StaleGcPlan { detail: String },
 }
 
 impl CasError {
@@ -70,6 +72,7 @@ impl CasError {
             Self::MissingChunk { .. } | Self::ManifestNotFound { .. } | Self::Io { .. } => {
                 RefusalCode::InputMissingOrUnreadable506
             }
+            Self::StaleGcPlan { .. } => RefusalCode::StaleAnchor502,
         };
         Refusal::new(code, self.to_string())
     }
@@ -101,6 +104,7 @@ impl fmt::Display for CasError {
             }
             Self::ManifestNotFound { root } => write!(f, "CAS manifest root {root} not published"),
             Self::Io { operation, detail } => write!(f, "CAS I/O error ({operation}): {detail}"),
+            Self::StaleGcPlan { detail } => write!(f, "stale CAS GC plan: {detail}"),
         }
     }
 }

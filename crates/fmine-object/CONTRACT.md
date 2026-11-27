@@ -16,7 +16,7 @@ Bedrock's S1 content-addressed object store (`FMT-CAS-1`, plan §26.5, `BD-090`,
 ## 2. Inputs
 - Arbitrary byte slices and `media_type` strings (`CasStore::stage_object`, `CasStore::put_bytes`), chunk size (`1..=16 MiB`, default 4 MiB).
 - Canonical `FMT-CAS-1` manifest bytes (`CasManifest::from_bytes`).
-- Live root sets `BTreeSet<Digest32>` (`gc::plan_gc`).
+- Live root sets `BTreeSet<Digest32>` (`gc::plan_gc`, and again at `gc::apply_gc`).
 - Dependencies: `fmine-core` and `fmine-evidence` (strictly `S1 → S0`).
 
 ## 3. Outputs
@@ -26,10 +26,10 @@ Bedrock's S1 content-addressed object store (`FMT-CAS-1`, plan §26.5, `BD-090`,
 - **Fanout-16 Merkle integrity:** `fanout16_root` and `verify_inclusion` authenticate every chunk across multi-level trees (`test_fanout16_merkle_roots_and_inclusion_proofs_across_heights`).
 - **Canonical manifest framing:** `CasManifest::from_bytes` enforces contiguity, bounds, fanout-16 root equality, CRC32C, N/N-1 compatibility (`0..=1`), and single-bit flip refusal (`test_fmt_cas_1_manifest_roundtrip_n_minus_1_and_tamper_refusal`).
 - **Root-last publication (`PO-BED-3`):** no manifest root becomes visible in `manifests/` until every referenced chunk is persisted, fsynced, and digest-verified on disk (`test_po_bed_3_crash_boundaries_keep_partial_roots_invisible_and_resume_cleanly`).
-- **Safe reachability GC (`BD-091`):** `plan_gc` verifies every live root and its chunks before sweeping, and preserves content-addressed chunks shared between reachable and unreachable objects (`test_reachability_gc_preserves_shared_chunks_and_sweeps_unreachable_objects`).
+- **Safe reachability GC (`BD-091`):** `plan_gc` verifies every live root and its chunks before sweeping, and preserves content-addressed chunks shared between reachable and unreachable objects (`test_reachability_gc_preserves_shared_chunks_and_sweeps_unreachable_objects`). Chunks named by a pending `OB-SEAL` staging marker stay live until the object is published and the marker cleared, and an undecodable marker refuses the plan (`test_staged_object_keeps_its_chunks_until_published_and_released`, `test_undecodable_staging_marker_refuses_the_plan`). `apply_gc` plans again from the live roots it is given and removes nothing unless that plan equals the one supplied, so an object written after a dry run keeps a chunk it reused (`test_stale_plan_refuses_instead_of_deleting_a_chunk_a_later_object_reuses`).
 
 ## 5. Refusals
-`CasError::{Codec, InvalidField, RootMismatch, MissingChunk, ChunkDigestMismatch, ManifestNotFound, Io}`, mapped via `CasError::to_refusal()` to `FMINE-REF-505` (integrity/digest/codec) or `FMINE-REF-506` (missing chunk/manifest or I/O).
+`CasError::{Codec, InvalidField, RootMismatch, MissingChunk, ChunkDigestMismatch, ManifestNotFound, Io, StaleGcPlan}`, mapped via `CasError::to_refusal()` to `FMINE-REF-505` (integrity/digest/codec), `FMINE-REF-506` (missing chunk/manifest or I/O) or `FMINE-REF-502` (a GC plan the store no longer yields).
 
 ## 6. Determinism class
 - `src/merkle.rs` and `src/cas.rs` are `BitwisePortable` (integers, canonical framing, and SHA-256 only).
@@ -47,6 +47,7 @@ Chunk sizes `1..=16 MiB` (default 4 MiB), up to `1,048,576` chunks per manifest,
 ## 10. Known gaps
 - `BD-104` chunk want/have sync anti-entropy and `BD-056` CLI/public-lane filing ingest into `CasStore` are not yet wired to `fmine-object`.
 - No fuzz target for `FMT-CAS-1` yet; LabRuntime DPOR crash injection remains under `BD-101`.
+- GC takes no store lock. The re-plan in `apply_gc` catches writes made before it runs, but a writer that publishes during the removals, or an object whose ledger root is not yet committed when GC runs, can still lose a chunk. Run GC with writers stopped until a lock or a retention epoch exists.
 - Self-verified only; no independent review or multi-ISA CI run yet.
 
 ## 11. Public API
@@ -57,4 +58,4 @@ Chunk sizes `1..=16 MiB` (default 4 MiB), up to `1,048,576` chunks per manifest,
 
 ## 12. Proof obligations
 - `PO-BED-3` (root-last publication & crash-boundary invisibility/resumability): unit-tested in `store::tests::test_po_bed_3_crash_boundaries_keep_partial_roots_invisible_and_resume_cleanly`.
-- `BD-091` (reachability GC preserving shared chunks): unit-tested in `gc::tests::test_reachability_gc_preserves_shared_chunks_and_sweeps_unreachable_objects`.
+- `BD-091` (no reachable object collected): unit-tested in `gc::tests::test_reachability_gc_preserves_shared_chunks_and_sweeps_unreachable_objects`, `test_stale_plan_refuses_instead_of_deleting_a_chunk_a_later_object_reuses`, `test_staged_object_keeps_its_chunks_until_published_and_released` and `test_undecodable_staging_marker_refuses_the_plan`.

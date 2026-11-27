@@ -6,6 +6,10 @@
 //!   data loss).
 //! - Content-addressed chunks shared between a reachable object and an unreachable object remain
 //!   marked live and are never swept.
+//! - Chunks named by a pending `OB-SEAL` staging marker stay live, so an interrupted publication can
+//!   resume (`PO-BED-3`). The marker is an open obligation; GC never resolves it.
+//! - [`apply_gc`] plans again and refuses (`FMINE-REF-502`) unless the store still yields the plan
+//!   it was given, so a write between a dry run and its application cannot lose a chunk it reused.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -21,7 +25,9 @@ use crate::store::CasStore;
 pub struct GcPlan {
     /// Live published manifest roots retained.
     pub retained_roots: Vec<Digest32>,
-    /// Live chunk digests retained (union across all `retained_roots`).
+    /// Roots of pending `OB-SEAL` staging markers whose chunks are retained.
+    pub retained_staged_roots: Vec<Digest32>,
+    /// Live chunk digests retained (union across `retained_roots` and `retained_staged_roots`).
     pub retained_chunks: usize,
     /// Unreachable published manifest roots eligible for removal.
     pub sweep_roots: Vec<Digest32>,
@@ -54,6 +60,13 @@ pub fn plan_gc(store: &CasStore, live_roots: &BTreeSet<Digest32>) -> Result<GcPl
         retained_roots.push(*root);
     }
 
+    // A staged object may hold only some of its chunks yet, so they are marked without verifying.
+    let mut retained_staged_roots = Vec::new();
+    for manifest in store.list_staged_manifests()? {
+        live_chunks.extend(manifest.chunks.iter().map(|cref| cref.sha256));
+        retained_staged_roots.push(manifest.root_digest);
+    }
+
     let published = store.list_published_roots()?;
     let mut sweep_roots = Vec::new();
     for root in published {
@@ -74,6 +87,7 @@ pub fn plan_gc(store: &CasStore, live_roots: &BTreeSet<Digest32>) -> Result<GcPl
 
     Ok(GcPlan {
         retained_roots,
+        retained_staged_roots,
         retained_chunks: live_chunks.len(),
         sweep_roots,
         sweep_chunks,
@@ -81,8 +95,26 @@ pub fn plan_gc(store: &CasStore, live_roots: &BTreeSet<Digest32>) -> Result<GcPl
     })
 }
 
-/// Execute a verified [`GcPlan`], removing ONLY unreachable manifests and unreachable chunks.
-pub fn apply_gc(store: &CasStore, plan: &GcPlan) -> Result<GcReceipt, CasError> {
+/// Apply `plan`, removing ONLY unreachable manifests and unreachable chunks. The plan is computed
+/// again from `live_roots` first, and a difference refuses with nothing removed.
+pub fn apply_gc(
+    store: &CasStore,
+    live_roots: &BTreeSet<Digest32>,
+    plan: &GcPlan,
+) -> Result<GcReceipt, CasError> {
+    let current = plan_gc(store, live_roots)?;
+    if current != *plan {
+        return Err(CasError::StaleGcPlan {
+            detail: format!(
+                "the store now gives {} sweepable manifests and {} sweepable chunks, the plan {} and {}",
+                current.sweep_roots.len(),
+                current.sweep_chunks.len(),
+                plan.sweep_roots.len(),
+                plan.sweep_chunks.len()
+            ),
+        });
+    }
+
     let mut removed_manifests = 0usize;
     for root in &plan.sweep_roots {
         let path: PathBuf = store.manifest_path(root);
@@ -149,7 +181,7 @@ mod tests {
         assert_eq!(plan.sweep_chunks.len(), 1); // ONLY B's unique chunk 1!
         assert_eq!(plan.reclaimable_chunk_bytes, 1024);
 
-        let receipt = apply_gc(&store, &plan).expect("apply gc");
+        let receipt = apply_gc(&store, &live, &plan).expect("apply gc");
         assert_eq!(receipt.removed_manifests, 1);
         assert_eq!(receipt.removed_chunks, 1);
         assert_eq!(receipt.reclaimed_chunk_bytes, 1024);
@@ -161,6 +193,101 @@ mod tests {
             Err(CasError::ManifestNotFound { .. })
         ));
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn fresh_store(tag: &str) -> (PathBuf, CasStore) {
+        let dir =
+            std::env::temp_dir().join(format!("fmine-object-gc-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = CasStore::open(&dir).expect("open");
+        (dir, store)
+    }
+
+    fn two_chunks(first: u8, second: u8) -> Vec<u8> {
+        let mut bytes = vec![first; 1024];
+        bytes.extend_from_slice(&[second; 1024]);
+        bytes
+    }
+
+    #[test]
+    fn test_stale_plan_refuses_instead_of_deleting_a_chunk_a_later_object_reuses() {
+        let (dir, store) = fresh_store("stale");
+        let mb = store
+            .put_bytes("application/octet-stream", &two_chunks(0xAA, 0x22), 1024)
+            .expect("put B");
+        let plan = plan_gc(&store, &BTreeSet::new()).expect("plan gc");
+        assert_eq!(plan.sweep_chunks.len(), 2);
+
+        // C is written after the dry run and reuses B's second chunk instead of writing it again.
+        let obj_c = two_chunks(0x22, 0x33);
+        let mc = store
+            .put_bytes("application/octet-stream", &obj_c, 1024)
+            .expect("put C");
+        let both_ways = [BTreeSet::new(), BTreeSet::from([mc.root_digest])];
+        for live in &both_ways {
+            let err = apply_gc(&store, live, &plan).expect_err("stale plan must refuse");
+            assert!(matches!(err, CasError::StaleGcPlan { .. }), "{err}");
+            assert_eq!(err.to_refusal().code, "FMINE-REF-502");
+        }
+        assert!(store.has_manifest(&mb.root_digest));
+        assert_eq!(store.read_object(&mc.root_digest).expect("read C"), obj_c);
+
+        // A fresh plan keeps the shared chunk and removes only what B alone held.
+        let live = BTreeSet::from([mc.root_digest]);
+        let fresh = plan_gc(&store, &live).expect("fresh plan");
+        assert_eq!(fresh.sweep_roots, vec![mb.root_digest]);
+        assert_eq!(fresh.sweep_chunks.len(), 1);
+        let receipt = apply_gc(&store, &live, &fresh).expect("apply fresh plan");
+        assert_eq!((receipt.removed_manifests, receipt.removed_chunks), (1, 1));
+        assert_eq!(store.read_object(&mc.root_digest).expect("read C"), obj_c);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_staged_object_keeps_its_chunks_until_published_and_released() {
+        let (dir, store) = fresh_store("staged");
+        let obj_d = two_chunks(0x44, 0x55);
+        // A crash after the first chunk leaves the OB-SEAL marker and one chunk on disk.
+        let partial = store
+            .stage_partial("application/octet-stream", &obj_d, 1024, Some(1))
+            .expect("stage D partially");
+        let root = partial.manifest.root_digest;
+
+        let none = BTreeSet::new();
+        let plan = plan_gc(&store, &none).expect("plan gc");
+        assert_eq!(plan.retained_staged_roots, vec![root]);
+        assert_eq!(plan.retained_chunks, 2);
+        assert!(plan.sweep_chunks.is_empty());
+        apply_gc(&store, &none, &plan).expect("apply gc");
+
+        let resumed = store
+            .stage_object("application/octet-stream", &obj_d, 1024)
+            .expect("resume D");
+        assert_eq!((resumed.chunks_reused, resumed.chunks_written), (1, 1));
+        store.publish_staged(&resumed).expect("publish D");
+        assert_eq!(store.read_object(&root).expect("read D"), obj_d);
+
+        // Published and not live, with its marker cleared, D is now unreachable.
+        let plan = plan_gc(&store, &none).expect("plan gc after publication");
+        assert!(plan.retained_staged_roots.is_empty());
+        assert_eq!(
+            (plan.sweep_roots.clone(), plan.sweep_chunks.len()),
+            (vec![root], 2)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_undecodable_staging_marker_refuses_the_plan() {
+        let (dir, store) = fresh_store("badmarker");
+        store
+            .put_bytes("application/octet-stream", &two_chunks(0x66, 0x77), 1024)
+            .expect("put E");
+        let marker = store.staging_path(&Digest32([0u8; 32]));
+        fs::create_dir_all(marker.parent().expect("staging dir")).expect("mkdir staging");
+        fs::write(&marker, b"not a manifest").expect("write marker");
+        assert!(plan_gc(&store, &BTreeSet::new()).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }
