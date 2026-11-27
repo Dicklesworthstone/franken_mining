@@ -911,6 +911,7 @@ fn group_recovery_returns_an_exact_capacity_ask_and_dated_site_allocation() {
         plan.get("decision_by").and_then(Json::as_str),
         Some("2030-10-04")
     );
+    assert_eq!(plan.get("wait_window"), Some(&Json::Null));
     let allocations = plan
         .get("allocations")
         .and_then(Json::as_array)
@@ -959,6 +960,49 @@ fn group_recovery_returns_an_exact_capacity_ask_and_dated_site_allocation() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn group_recovery_distinguishes_the_latest_date_from_the_minimum_draw_date() {
+    let c = card("group_window");
+    let plan = c.get("shared_capacity_plan").expect("shared target plan");
+    assert_eq!(
+        plan.get("decision_by").and_then(Json::as_str),
+        Some("2030-10-04")
+    );
+    assert_eq!(
+        plan.get("minimum_project_capacity").and_then(Json::as_str),
+        Some("1000")
+    );
+    let window = plan.get("wait_window").expect("decision window");
+    for (field, expected) in [
+        ("act_by", "2030-10-15"),
+        ("minimum_project_capacity", "5000/3"),
+        ("shortfall_after_attributable", "1000"),
+    ] {
+        assert_eq!(window.get(field).and_then(Json::as_str), Some(expected));
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let brief = Command::new(env!("CARGO_BIN_EXE_fmine"))
+        .current_dir(root)
+        .args([
+            "decide",
+            "program",
+            "tests/capital/executive_group_window.toml",
+            "--brief",
+        ])
+        .output()
+        .expect("brief");
+    for output in [run("group_window", true), brief] {
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).expect("Markdown output");
+        assert!(text.contains("2030-10-15") && text.contains("5000/3"));
+        assert!(text.contains("After that date the group is short by 1000"));
+    }
+    assert_eq!(
+        run("group_window", false).stdout,
+        run("group_window", false).stdout
+    );
 }
 
 #[test]

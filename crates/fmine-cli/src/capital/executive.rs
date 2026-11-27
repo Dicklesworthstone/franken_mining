@@ -1166,18 +1166,14 @@ struct SiteUplift<'a> {
     project_units: i128,
 }
 
-fn maximum_shared_uplift(
-    prioritized_sites: &[SiteUplift<'_>],
+fn maximum_shared_uplift<'a>(
+    prioritized_sites: impl IntoIterator<Item = &'a SiteUplift<'a>>,
     mut project_capacity: i128,
-    excluded: Option<&str>,
 ) -> i128 {
     // Every incremental project unit uses one unit of capacity. Moving a unit
     // from a lower interest to an available higher interest cannot reduce the maximum.
     let mut attributable = 0;
     for site in prioritized_sites {
-        if excluded == Some(site.id) {
-            continue;
-        }
         let admitted = site.project_units.min(project_capacity);
         project_capacity -= admitted;
         attributable += admitted * site.interest_bp;
@@ -1191,7 +1187,7 @@ struct TargetAllocation<'a> {
 }
 
 fn minimum_target_allocation<'a>(
-    prioritized_sites: &'a [SiteUplift<'a>],
+    prioritized_sites: impl IntoIterator<Item = &'a SiteUplift<'a>>,
     mut remaining_attributable: i128,
 ) -> std::result::Result<TargetAllocation<'a>, i128> {
     let mut plan = TargetAllocation {
@@ -1221,6 +1217,61 @@ fn minimum_target_allocation<'a>(
     } else {
         Err(remaining_attributable)
     }
+}
+
+fn latest_shared_plan<'a>(
+    prioritized_sites: &'a [SiteUplift<'a>],
+    required_attributable: i128,
+    limit: i128,
+) -> Option<(&'a str, TargetAllocation<'a>)> {
+    if required_attributable == 0 {
+        return None;
+    }
+    let dates: BTreeSet<_> = prioritized_sites
+        .iter()
+        .filter(|site| site.project_units > 0)
+        .map(|site| site.act_by)
+        .collect();
+    // DESIGN. Eligibility changes only as deadlines expire. At most 15 site dates
+    // apply, and filtering the sites preserves their minimum-draw priority order.
+    dates.into_iter().rev().find_map(|date| {
+        let eligible = prioritized_sites.iter().filter(|site| site.act_by >= date);
+        let plan = minimum_target_allocation(eligible, required_attributable).ok()?;
+        let (numerator, denominator) = plan.project_units;
+        (numerator <= limit * denominator).then_some((date, plan))
+    })
+}
+
+fn show_shared_wait_window(
+    card: &mut Card,
+    prioritized_sites: &[SiteUplift<'_>],
+    required_attributable: i128,
+    limit: i128,
+    unit: &str,
+) -> Result<String> {
+    let Some((date, plan)) = latest_shared_plan(prioritized_sites, required_attributable, limit)
+    else {
+        return Ok("null".into());
+    };
+    let (numerator, denominator) = plan.project_units;
+    let minimum = fraction(numerator, denominator)?;
+    let later_sites = prioritized_sites.iter().filter(|site| site.act_by > date);
+    let shortfall = fraction(
+        required_attributable - maximum_shared_uplift(later_sites, limit),
+        10000,
+    )?;
+    card.findings.push(format!(
+        "At the submitted allowance, the group can wait until {date} to commit to recovery interventions. The minimum shared draw on that date is {minimum} {unit} on a 100%-project basis."
+    ));
+    card.findings.push(format!(
+        "After that date the group is short by {shortfall} {unit} attributable if it has made no commitments."
+    ));
+    Ok(format!(
+        r#"{{"act_by":{},"minimum_project_capacity":{},"shortfall_after_attributable":{}}}"#,
+        js(date),
+        js(&minimum),
+        js(&shortfall)
+    ))
 }
 
 fn show_shared_target_plan(
@@ -1296,10 +1347,12 @@ fn show_shared_target_plan(
             )
         }
     };
+    let wait_window =
+        show_shared_wait_window(card, prioritized_sites, required_attributable, limit, unit)?;
     card.detail = Some((
         "shared_capacity_plan",
         format!(
-            r#"{{"unit":{},"submitted_project_capacity":{},"attributable_increase_needed":{},{detail}}}"#,
+            r#"{{"unit":{},"submitted_project_capacity":{},"attributable_increase_needed":{},{detail},"wait_window":{wait_window}}}"#,
             js(unit),
             js(&limit.to_string()),
             js(&fraction(required_attributable, 10000)?)
@@ -1417,7 +1470,7 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         offsets.sort_unstable_by_key(|site| {
             (Reverse(site.interest_bp), Reverse(site.act_by), site.id)
         });
-        maximum_shared_uplift(&offsets, limit, None)
+        maximum_shared_uplift(&offsets, limit)
     } else {
         offsets
             .iter()
@@ -1451,7 +1504,8 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
                 project_units,
             } = site;
             if let Some(limit) = shared_capacity {
-                let without = plan + maximum_shared_uplift(&offsets, limit, Some(id));
+                let others = offsets.iter().filter(|other| other.id != *id);
+                let without = plan + maximum_shared_uplift(others, limit);
                 if without < target {
                     c.findings.push(format!(
                         "{id} is required. Without its uplift, the attributable maximum is {} and the group is short by {}. Decision deadline {act_by}.",
@@ -1611,6 +1665,8 @@ mod tests {
     const LAND: &str = include_str!("../../../../tests/capital/executive_tenure.toml");
     const CLOSURE: &str = include_str!("../../../../tests/capital/executive_rehabilitation.toml");
     const GROUP: &str = include_str!("../../../../tests/capital/executive_group.toml");
+    const GROUP_WINDOW: &str =
+        include_str!("../../../../tests/capital/executive_group_window.toml");
     const ESTIMATES: &str = include_str!("../../../../tests/capital/executive_estimates.toml");
     const HEDGE: &str = include_str!("../../../../tests/capital/executive_hedge.toml");
     fn evaluate(text: &str) -> Result<Envelope> {
@@ -2177,6 +2233,106 @@ mod tests {
         let same_date = report(&tied.replace("2030-10-04", "2030-10-15"));
         assert!(same_date.contains("Mesa needs 400 project units"));
         assert!(!same_date.contains("Valley needs"));
+    }
+
+    #[test]
+    fn shared_wait_window_respects_the_allowance_and_the_inclusive_deadline() {
+        let evaluate_window = |worksheet: &str| {
+            let envelope = evaluate(worksheet).expect("recovery worksheet");
+            fmine_io::omf::json::parse(envelope.payload_json.as_bytes())
+                .expect("payload")
+                .get("shared_capacity_plan")
+                .and_then(|plan| plan.get("wait_window"))
+                .expect("wait window field")
+                .clone()
+        };
+        let tight = GROUP_WINDOW.replace("1667", "1666");
+        let window = evaluate_window(&tight);
+        let field = |key| window.get(key).and_then(fmine_io::omf::json::Json::as_str);
+        assert_eq!(field("act_by"), Some("2030-10-04"));
+        assert_eq!(field("minimum_project_capacity"), Some("1000"));
+        assert_eq!(field("shortfall_after_attributable"), Some("2/5"));
+
+        let same_day = GROUP_WINDOW.replacen("2030-09-30", "2030-10-15", 1);
+        assert_eq!(
+            evaluate_window(&same_day)
+                .get("act_by")
+                .and_then(fmine_io::omf::json::Json::as_str),
+            Some("2030-10-15")
+        );
+        let too_late = same_day.replacen("2030-10-15", "2030-10-16", 1);
+        let covered = GROUP_WINDOW.replace("plan = \"7200\"", "plan = \"8200\"");
+        for worksheet in [too_late, covered, GROUP_WINDOW.replace("1667", "999")] {
+            assert_eq!(evaluate_window(&worksheet), fmine_io::omf::json::Json::Null);
+        }
+
+        let interchangeable = GROUP_WINDOW.replace("2030-10-04", "2030-10-15");
+        let window = evaluate_window(&interchangeable);
+        assert_eq!(
+            window
+                .get("shortfall_after_attributable")
+                .and_then(fmine_io::omf::json::Json::as_str),
+            Some("1000")
+        );
+        let paper = report(&interchangeable);
+        assert!(!paper.contains("Mesa is required") && !paper.contains("Valley is required"));
+    }
+
+    #[test]
+    fn shared_wait_window_matches_enumerated_allocations_at_each_deadline() {
+        // Quarter project units exactly cover the grid on which the chosen
+        // ownership fractions can meet each whole-unit attributable target.
+        let dates = ["2030-10-04", "2030-10-10", "2030-10-15"];
+        for deadlines in [[0, 2, 1], [1, 1, 2], [0, 0, 0]] {
+            let sites = [("a", 10000, 2), ("b", 5000, 2), ("c", 2500, 1)]
+                .into_iter()
+                .zip(deadlines)
+                .map(|((id, interest_bp, project_units), index)| SiteUplift {
+                    id,
+                    project_units,
+                    interest_bp,
+                    act_by: dates[index],
+                })
+                .collect::<Vec<_>>();
+            for target in 1..=4 {
+                for allowance in 0..=6 {
+                    let required = target * 10000;
+                    let mut oracle = None;
+                    for a in 0..=8 {
+                        for b in 0..=8 {
+                            for c in 0..=4 {
+                                let draw = a + b + c;
+                                if draw > allowance * 4
+                                    || 10000 * a + 5000 * b + 2500 * c < required * 4
+                                {
+                                    continue;
+                                }
+                                let date = [a, b, c]
+                                    .into_iter()
+                                    .zip(deadlines)
+                                    .filter_map(|(units, index)| {
+                                        (units > 0).then_some(dates[index])
+                                    })
+                                    .min()
+                                    .expect("positive output uses at least one site");
+                                oracle = oracle.max(Some((date, Reverse(draw))));
+                            }
+                        }
+                    }
+                    match (oracle, latest_shared_plan(&sites, required, allowance)) {
+                        (Some((date, Reverse(draw))), Some((latest, plan))) => {
+                            let (num, den) = plan.project_units;
+                            assert_eq!(latest, date);
+                            assert_eq!(num * 4, draw * den);
+                        }
+                        (None, None) => {}
+                        _ => panic!(
+                            "unexpected decision window for {deadlines:?}, {target}, {allowance}"
+                        ),
+                    }
+                }
+            }
+        }
     }
 
     #[test]

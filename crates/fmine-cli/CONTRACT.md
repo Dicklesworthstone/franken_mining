@@ -294,6 +294,11 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     unlimited shared capacity cannot overcome the dated local ceilings. A covered baseline needs zero
     additional capacity and has no action date. Quantities are reduced rational strings in the declared
     unit. All results are conditional on the existing one-for-one, divisible capacity model.
+    DESIGN (bd-hp5q). The plan's `wait_window` gives the latest inclusive date on which remaining
+    interventions can still reach the target at the submitted allowance, the minimum draw using those
+    sites, and the attributable group gap if no intervention is made by that date. The search uses
+    the same capacity and ownership model and holds the baseline fixed. The field is null when the
+    allowance cannot already cover the gap or when the baseline covers the target.
   - Project estimates retain the complete declared cohort and hold out a latest approval. Only comparable
     completed cost outcomes known strictly before that approval enter the lower-median actual/approval
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price

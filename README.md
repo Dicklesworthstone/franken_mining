@@ -94,6 +94,16 @@ by 20/3 project tonnes makes this allocation feasible under the dated site ceili
 as the smallest whole-tonne allowance the worksheet accepts that covers it. Full JSON carries the
 exact fractions, the allocation, and the source rows. [Editable group worksheet](tests/capital/executive_group_shared.toml)
 
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/executive_group_window.toml --brief
+```
+
+**INFERENCE from synthetic inputs.** With a larger Valley site ceiling and 1,667 shared project tonnes,
+the group can wait until October 15. Waiting needs exactly 5,000/3 project tonnes at Valley's
+60% interest. Acting by October 4 uses only 1,000 project tonnes at Mesa. Dropping the allowance to
+1,666 moves the last feasible date back to October 4 because Valley alone would leave 2/5 of an
+attributable tonne short. Both dates are inclusive and assume the stated allowance and site ceilings hold.
+
 ### Can Treasury fund margin calls if a metal shipment pays late?
 
 ```bash
