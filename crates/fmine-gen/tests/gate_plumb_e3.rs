@@ -50,8 +50,7 @@ fn layered_config() -> LayeredConfig {
             cusum_h: 8.5,
             alarm_scale: 1.50,
         },
-        // Weak prior for n < 2 anchored at L5's post-alarm scale (1.5x); exact location-scale-
-        // invariant Jeffreys Student-t predictive law once n >= 2 post-alarm resolutions exist.
+        // DESIGN: Use L5's 1.5x scale for the warm-up prior and the mature segment's variance ridge.
         prior_kappa: 0.25,
         prior_alpha: 1.0,
         prior_scale_mult: 1.5,
