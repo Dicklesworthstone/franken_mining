@@ -21,6 +21,7 @@ This directory holds machine- and human-verifiable admission records (`INT-*`), 
 
 ## Decisions
 - [`DECISION-BD-012-direct-push-blocking.md`](./DECISION-BD-012-direct-push-blocking.md) — what "CI blocks merges" (§28.4.4) means when every change is pushed straight to `main` (`BD-012`).
+- [`DECISION-bd-lf4q-confidentiality-product-lattice.md`](./DECISION-bd-lf4q-confidentiality-product-lattice.md) — the owner's acceptance of confidentiality labels as a product of an internal flag, venture set and wall set, so that ventures and walls stay incomparable (§31.1, `bd-lf4q`).
 
 ## Budget amendments
 
