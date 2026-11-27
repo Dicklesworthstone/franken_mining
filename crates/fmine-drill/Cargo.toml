@@ -1,0 +1,16 @@
+[package]
+name = "fmine-drill"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Corebox drillhole records on the authority ledger: collar, survey, interval, sample, dispatch, assay result, QC insertion and lab certificate, corrected only by supersession (BD-163, plan §12.1)."
+
+[lints]
+workspace = true
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-ledger = { path = "../fmine-ledger" }

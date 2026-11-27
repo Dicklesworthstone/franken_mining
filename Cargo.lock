@@ -117,6 +117,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-drill"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-ledger",
+]
+
+[[package]]
 name = "fmine-econ"
 version = "0.1.0"
 dependencies = [
