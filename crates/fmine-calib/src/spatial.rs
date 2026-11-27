@@ -368,6 +368,10 @@ fn evaluate_at(text: &str, source: SourceAnchor, cutoff_ns: Option<i64>) -> Resu
         if row.table != "observation" {
             return Err(invalid(row.line, format!("unknown table {}", row.table)));
         }
+        // Read before the row's field check, so a missing timestamp names this row's line here.
+        if !row.fields.iter().any(|item| item.key == "available_ns") {
+            return Err(invalid(row.line, "missing available_ns"));
+        }
         let available_ns = integer(&row.fields, "available_ns")?;
         if cutoff_ns.is_none_or(|cutoff| available_ns <= cutoff) {
             let value = observation(&row.fields, row.line, &policy, available_ns)?;

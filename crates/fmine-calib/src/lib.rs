@@ -1044,11 +1044,21 @@ fn regularized_incomplete_beta(a: f64, b: f64, x: f64) -> f64 {
     }
 }
 
-/// Exact `BitwisePortable` 90th percentile `t_{0.90, nu}` (80% two-sided interval critical value)
-/// for Student's t distribution with `nu >= 1.0` degrees of freedom.
+/// `BitwisePortable` 90th percentile `t_{0.90, nu}` (80% two-sided interval critical value) for Student's t
+/// distribution with `nu >= 1.0` degrees of freedom. Below `nu = 200` it inverts the regularized incomplete beta
+/// function by bisection. From 200 on, where `ln B(nu/2, 1/2)` loses digits to cancellation, it sums the
+/// Cornish-Fisher expansion in `1/nu` (Abramowitz and Stegun 26.7.5, four terms), which is smooth and decreasing
+/// and reaches the normal quantile only as `nu` goes to infinity. Within 2.4e-13 of SciPy 1.18's `t.ppf(0.9, nu)`
+/// on a 630-point grid over [1, 2e6] (2026-11-27).
 fn student_t_quantile_90(nu: f64) -> f64 {
-    if nu > 1e6 {
-        return Q90_NORMAL;
+    if nu >= 200.0 {
+        let (x, x2) = (Q90_NORMAL, Q90_NORMAL * Q90_NORMAL);
+        let g1 = (x2 + 1.0) * x / 4.0;
+        let g2 = ((5.0 * x2 + 16.0) * x2 + 3.0) * x / 96.0;
+        let g3 = (((3.0 * x2 + 19.0) * x2 + 17.0) * x2 - 15.0) * x / 384.0;
+        let g4 = ((((79.0 * x2 + 776.0) * x2 + 1482.0) * x2 - 1920.0) * x2 - 945.0) * x / 92160.0;
+        let r = 1.0 / nu;
+        return x + r * (g1 + r * (g2 + r * (g3 + r * g4)));
     }
     // Two-sided tail probability P(|T_nu| >= x) = I_{nu / (nu + x^2)}(nu / 2, 1 / 2).
     // Strictly decreasing in x > 0; target two-sided tail = 0.20 (80% central coverage).
@@ -1682,21 +1692,44 @@ mod tests {
         );
     }
 
+    /// Review of 6a8cf66d (2026-11-27): the incomplete-beta solve lost digits to cancellation as `nu` grew
+    /// (1.2e-9 at 8e5, and 86 rises stepping by 1,000 over [1e5, 1e6]), and from 1e6 the value dropped to the
+    /// normal quantile, 8.4e-7 low.
     #[test]
-    fn test_student_t_quantile_90_monotone_through_large_nu() {
-        let nus = [
-            1.0, 2.0, 4.0, 10.0, 50.0, 500.0, 10_000.0, 100_000.0, 500_000.0, 999_999.0,
-        ];
-        let mut prev = f64::INFINITY;
-        for &nu in &nus {
+    fn test_student_t_quantile_90_matches_reference_and_decreases_through_large_nu() {
+        // SciPy 1.18 `scipy.stats.t.ppf(0.9, nu)`.
+        for (nu, reference) in [
+            (1.0, 3.077_683_537_175_254_4),
+            (2.0, 1.885_618_083_164_127_2),
+            (5.0, 1.475_884_048_824_481),
+            (30.0, 1.310_415_025_391_395_5),
+            (199.0, 1.285_820_209_259_409_3),
+            (200.0, 1.285_798_793_994_801_5),
+            (1000.0, 1.282_398_721_460_924_3),
+            (1e5, 1.281_560_031_449_361_4),
+            (2e6, 1.281_551_988_837_126_5),
+        ] {
             let q = student_t_quantile_90(nu);
             assert!(
-                q.is_finite() && q > Q90_NORMAL && q < prev,
-                "t_0.90(nu={nu}) = {q} violated monotonicity/bound (prev={prev})"
+                (q - reference).abs() < 3e-13,
+                "t_0.90(nu={nu}) = {q}, reference {reference}"
+            );
+        }
+        let mut prev = f64::INFINITY;
+        let mut nu = 1.0;
+        while nu <= 2e6 {
+            let q = student_t_quantile_90(nu);
+            assert!(
+                q < prev && q > Q90_NORMAL,
+                "t_0.90(nu={nu}) = {q} is not below {prev} and above the normal quantile"
             );
             prev = q;
+            nu += if nu < 1000.0 { 1.0 } else { 1000.0 };
         }
-        assert_eq!(student_t_quantile_90(2e6).to_bits(), Q90_NORMAL.to_bits());
+        assert_eq!(
+            student_t_quantile_90(f64::INFINITY).to_bits(),
+            Q90_NORMAL.to_bits()
+        );
     }
 
     #[test]

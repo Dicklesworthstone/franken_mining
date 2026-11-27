@@ -487,8 +487,10 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   and `docs/delivery/GATE-PLUMB-E5.md`.
 - DESIGN (BD-259, GATE-PLUMB-E3, plan §9.2 & §10.7): `LayeredRecalibrator` (`LayeredConfig`, `RawForecast`,
   `ForecastOutcome`, `PredictiveInterval80`, `LayeredPrediction`) couples L5 `DualSurpriseMonitor` to a
-  causal L3 segmented Student-t predictive recalibrator (`BitwisePortable`,
-  using portable Lanczos/Lentz incomplete-beta Student-t quantiles). Prior to an L5 alarm, L3 passes raw
+  causal L3 segmented Student-t predictive recalibrator (`BitwisePortable`). Its 90th-percentile Student-t
+  quantile inverts the portable Lanczos/Lentz incomplete beta function below 200 degrees of freedom and sums the
+  four-term Cornish-Fisher expansion from 200 on; it is within 2.4e-13 of SciPy's `t.ppf` over [1, 2e6] and
+  reaches the normal quantile only in the limit. Prior to an L5 alarm, L3 passes raw
   L1/L2 forecasts through unchanged; after an alarm, L3 accumulates strictly post-alarm residuals
   (`t > t_alarm`, avoiding stopping-time selection bias) and emits both raw and L3 intervals so the ledger
   scores them separately. The residuals are standardized by the raw forecast scale. The configured

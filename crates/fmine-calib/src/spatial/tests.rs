@@ -280,6 +280,28 @@ fn source_mismatch_and_incompatible_unit_frame_or_support_refuse() {
     }
 }
 
+/// Review of 988b22b4 (2026-11-27): reading `available_ns` ahead of the field check reported its absence at
+/// line 1.
+#[test]
+fn a_missing_timestamp_names_its_own_row() {
+    let input = fixture().replace("available_ns = 31\n", "");
+    let row = 1 + input
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| *line == "[[observation]]")
+        .nth(1)
+        .expect("second observation")
+        .0;
+    let expected = format!("spatial monitor line {row}: missing available_ns");
+    for refusal in [
+        run(&input).expect_err("missing timestamp"),
+        evaluate_as_of(&input, anchor(&input), 30).expect_err("missing timestamp"),
+    ] {
+        assert_eq!(refusal.code, "FMINE-REF-506");
+        assert!(refusal.to_string().contains(&expected), "{refusal}");
+    }
+}
+
 #[test]
 fn chronology_unknown_fields_duplicates_and_nonfinite_values_refuse() {
     let input = fixture();
