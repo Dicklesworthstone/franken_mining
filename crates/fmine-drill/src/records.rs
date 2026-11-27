@@ -53,6 +53,21 @@ pub enum DrillError {
         /// What the decoder found.
         detail: String,
     },
+    /// Inputs whose support compositing cannot take (`FMINE-REF-102`).
+    SupportMismatch {
+        /// What is wrong.
+        detail: String,
+    },
+    /// A non-additive quantity offered for compositing (`FMINE-REF-103`).
+    NonAdditive {
+        /// What is wrong.
+        detail: String,
+    },
+    /// A composite set that does not conserve its inputs (`FMINE-REF-101`).
+    Conservation {
+        /// The totals that disagree.
+        detail: String,
+    },
 }
 
 impl DrillError {
@@ -76,6 +91,9 @@ impl DrillError {
             Self::Invalid { .. } => RefusalCode::OutsidePhysicalDomain109,
             Self::CrsMismatch { .. } => RefusalCode::CrsUnregisteredOrIncompatible106,
             Self::Corrupt { .. } => RefusalCode::DigestMismatch505,
+            Self::SupportMismatch { .. } => RefusalCode::SupportMismatch102,
+            Self::NonAdditive { .. } => RefusalCode::NonAdditiveAverage103,
+            Self::Conservation { .. } => RefusalCode::Conservation101,
         };
         Refusal::new(code, self.to_string())
     }
@@ -94,6 +112,9 @@ impl fmt::Display for DrillError {
                 "collar '{hole_id}': planned position in {planned}, actual in {actual}; one CRS is required"
             ),
             Self::Corrupt { detail } => write!(f, "not a canonical drill record version: {detail}"),
+            Self::SupportMismatch { detail } => write!(f, "support: {detail}"),
+            Self::NonAdditive { detail } => write!(f, "additivity: {detail}"),
+            Self::Conservation { detail } => write!(f, "conservation: {detail}"),
         }
     }
 }

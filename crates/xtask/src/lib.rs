@@ -1657,7 +1657,8 @@ mod tests {
         // BD-163 adds four portable drill modules (lib, records, records/tests, store).
         // bd-uoze adds the exact two-parcel blend solver (fmine-optimize::cutoff::blend).
         // BD-164 adds the minimum-curvature desurvey (fmine-drill::desurvey).
-        assert_eq!(report.bitwise_files, 148, "{report:?}");
+        // BD-166 adds length- and mass-weighted compositing (fmine-drill::composite).
+        assert_eq!(report.bitwise_files, 149, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

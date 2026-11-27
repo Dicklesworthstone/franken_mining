@@ -7,8 +7,10 @@
 //! to a ledger cell, where a correction supersedes the version before it and every version stays readable, and
 //! runs the commit-time law that refuses a record naming one that is not recorded. [`desurvey`] turns a collar and
 //! its survey stations into a minimum-curvature trace. [`join`] finds the overlapping from/to spans of two interval
-//! sets, hole by hole.
+//! sets, hole by hole. [`composite`] cuts domain runs into length- or mass-weighted composites that conserve their
+//! inputs.
 
+pub mod composite;
 pub mod desurvey;
 pub mod join;
 pub mod records;

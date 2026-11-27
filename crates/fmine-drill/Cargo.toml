@@ -11,6 +11,7 @@ description = "Corebox drillhole records on the authority ledger: collar, survey
 workspace = true
 
 [dependencies]
+fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-ledger = { path = "../fmine-ledger" }
