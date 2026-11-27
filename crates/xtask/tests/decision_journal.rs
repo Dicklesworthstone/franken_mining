@@ -2403,6 +2403,96 @@ fn native_partial_holdback_records_the_exact_action_and_replays_after_the_worksh
 }
 
 #[test]
+fn native_holdback_comparison_replays_an_evaluated_nonpreferred_split() {
+    let f = Fixture::new();
+    let original = format!(
+        "{}\n[[partial_holdback]]\nlot = \"marginal-pad\"\nbasis = \"proportional_same_grade\"\n\n[[partial_holdback]]\nlot = \"high-grade-pocket\"\nbasis = \"proportional_same_grade\"\n",
+        SHIFT_FEED.replace("threshold = \"0.85\"", "threshold = \"0.675\""),
+    );
+    fs::write(&f.model, &original).unwrap();
+    let run = |args: &[&str]| {
+        let output = Process::new(binary())
+            .args(args)
+            .args(["--workspace", f.root.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        parse_json(&output.stdout).unwrap()
+    };
+    let model = f.model.to_str().unwrap();
+    let journal = f.journal.to_str().unwrap();
+    let report = run(&["decide", "recovery-bounds", model, "--json"]);
+    let card = json_field(&report, &["payload", "card"]);
+    let options = json_field(card, &["result", "value", "partial_holdback_comparison"]);
+    assert_eq!(
+        json_field(options, &["preferred_lots"]).as_array().unwrap()[0].as_str(),
+        Some("marginal-pad")
+    );
+    let selected = &json_field(options, &["options"]).as_array().unwrap()[0];
+    let action = json_field(selected, &["journal_action"]).as_str().unwrap();
+    assert_eq!(action, "hold-back-partial:high-grade-pocket:9/88");
+    f.refuses_without_append(
+        &f.record(
+            f.initial,
+            "wrong-fraction",
+            "hold-back-partial:high-grade-pocket:10/88",
+        ),
+        180,
+        "FMINE-REF-107",
+    );
+    let record = run(&[
+        "decide",
+        "journal",
+        "record",
+        "--journal",
+        journal,
+        "--expected-head",
+        &f.initial.to_hex(),
+        "--model",
+        model,
+        "--decision",
+        "shift-comparison",
+        "--action",
+        action,
+        "--reason",
+        "Synthetic selection considers the separate ore-handling window.",
+        "--code-revision",
+        REVISION,
+        "--trust-host-clock",
+        "--json",
+    ]);
+    let head = json_field(&record, &["payload", "head"]).as_str().unwrap();
+    fs::write(&f.model, "source edited after recording").unwrap();
+    let shown = run(&[
+        "decide",
+        "journal",
+        "show",
+        "--journal",
+        journal,
+        "--head",
+        head,
+        "--json",
+    ]);
+    let entries = json_field(&shown, &["payload", "decisions"])
+        .as_array()
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    let snapshot = json_field(&entries[0], &["snapshot"]);
+    assert_eq!(
+        json_field(snapshot, &["selected_action"]).as_str(),
+        Some(action)
+    );
+    assert_eq!(
+        json_field(snapshot, &["model", "content"]).as_str(),
+        Some(original.as_str())
+    );
+    let retained = json_field(snapshot, &["artifact", "content"])
+        .as_str()
+        .unwrap();
+    assert_eq!(&parse_json(retained.as_bytes()).unwrap(), card);
+}
+
+#[test]
 fn partial_holdback_admission_requires_a_recordable_proper_fraction() {
     let f = Fixture::new();
     let base = format!(

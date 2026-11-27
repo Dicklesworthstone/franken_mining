@@ -61,11 +61,10 @@ pub(crate) fn execute(model: &Path, root: &Path, view: View) -> Envelope {
         let (json, markdown, journal_action) = if recovery_bounds {
             let inputs = bounds::model::parse(&text, source.clone())?;
             let evaluated = bounds::evaluate(&inputs)?;
-            let journal_action = evaluated
-                .summary()
-                .partial_holdback
-                .as_ref()
-                .and_then(bounds::parcels::PartialHoldback::journal_action);
+            let journal_action = match evaluated.summary().partial_holdbacks.as_slice() {
+                [option] => option.journal_action(),
+                _ => None,
+            };
             (evaluated.to_json(), evaluated.to_markdown(), journal_action)
         } else {
             let inputs = card::model::parse(&text, source.clone())?;

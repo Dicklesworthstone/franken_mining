@@ -202,6 +202,132 @@ assert pair(cases[0]["recovered_grams"]) == (F("91.6"), F("133.6"))
 }
 
 #[test]
+fn repeated_holdback_options_compare_guaranteed_recovery_and_keep_ties() {
+    let original = include_str!("../../../tests/decisions/stockpile_holdback.toml");
+    let options = ["marginal-pad", "base-stockpile", "high-grade-pocket"]
+        .map(|lot| {
+            format!(
+                "\n[[partial_holdback]]\nlot = \"{lot}\"\nbasis = \"proportional_same_grade\"\n"
+            )
+        })
+        .concat();
+    let model = format!(
+        "{}{options}",
+        original.replace("threshold = \"0.85\"", "threshold = \"0.675\"")
+    );
+    let path = worksheet(&model);
+    let native = |format| {
+        Command::new(binary())
+            .args(["decide", "recovery-bounds"])
+            .arg(&path)
+            .args(["--format", format, "--workspace"])
+            .arg(root())
+            .output()
+            .unwrap()
+    };
+    let output = native("json");
+    let json = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{json}");
+    assert_eq!(json, format!("{}\n", invoke(&path, &root()).to_json()));
+    python(
+        &json,
+        r#"
+comparison = result["partial_holdback_comparison"]
+assert comparison["objective"] == "maximize_lower_bound_recovered_grams"
+assert comparison["preferred_lots"] == ["marginal-pad"]
+lots = {r["lot"]:r for r in comparison["options"]}
+assert list(lots) == ["base-stockpile", "high-grade-pocket", "marginal-pad"]
+assert lots["base-stockpile"]["status"] == "impossible"
+assert lots["base-stockpile"]["journal_action"] is None
+assert [r["lot"] for r in model["partial_holdbacks"]] == list(lots)
+for lot, i in [("marginal-pad", 1), ("high-grade-pocket", 2)]:
+    row = lots[lot]
+    all_inputs = list(itertools.product([F(4),F(8)], [F(45),F(64)], [F(".9"),F(".95")], [F(".4"),F(".8")]))
+    threshold = F(".675")
+    roots = [F(0)]
+    for pad, pocket, rt, ru in all_inputs:
+        mass = [F(80), pad, pocket]
+        grams = [mass[0]*rt, mass[1]*ru, mass[2]*ru]
+        if sum(grams) < threshold * sum(mass):
+            roots.append((threshold*sum(mass)-sum(grams))/(threshold*mass[i]-grams[i]))
+    f = max(roots)
+    assert F(row["minimum_dry_tonne_fraction"]) == f
+    assert row["journal_action"] == f"hold-back-partial:{lot}:{f.numerator}/{f.denominator}"
+    retained = []
+    for pad, pocket, rt, ru in all_inputs:
+        untested = pad + pocket - f * [F(80), pad, pocket][i]
+        retained.append(F(80)*rt + untested*ru)
+    assert pair(row["retained_feed"]["recovered_grams"]) == (min(retained),max(retained))
+    assert F(row["retained_feed"]["recovery"]["lower"]) == threshold
+assert F(lots["marginal-pad"]["minimum_dry_tonne_fraction"]) == F(9,11)
+assert F(lots["high-grade-pocket"]["minimum_dry_tonne_fraction"]) == F(9,88)
+"#,
+    );
+    let shown = native("markdown");
+    assert!(shown.status.success());
+    let markdown = String::from_utf8(shown.stdout).unwrap();
+    assert!(markdown.contains("Greatest guaranteed recovered metal"));
+    assert!(markdown.contains("hold-back-partial:marginal-pad:9/11"));
+    assert!(markdown.contains("hold-back-partial:high-grade-pocket:9/88"));
+
+    let tie = model
+        .replace("dry_tonnes_lower = \"15\"", "dry_tonnes_lower = \"8\"")
+        .replace("grade_g_per_t_lower = \"3\"", "grade_g_per_t_lower = \"4\"");
+    let output = declared(&tie);
+    assert_eq!(output.exit_code, 0, "{}", output.to_json());
+    python(
+        &output.to_json(),
+        r#"assert result["partial_holdback_comparison"]["preferred_lots"] == ["high-grade-pocket", "marginal-pad"]"#,
+    );
+
+    let all_feed = model.replace("threshold = \"0.675\"", "threshold = \"0.4\"");
+    python(
+        &declared(&all_feed).to_json(),
+        r#"
+comparison = result["partial_holdback_comparison"]
+assert all(r["journal_action"] == "all-feed" and F(r["minimum_dry_tonne_fraction"]) == 0 for r in comparison["options"])
+"#,
+    );
+    let (prefix, pad) = original
+        .split_once("[[parcel]]\nid = \"marginal-pad\"")
+        .unwrap();
+    let (_, pocket) = pad
+        .split_once("[[parcel]]\nid = \"high-grade-pocket\"")
+        .unwrap();
+    let whole = format!("{prefix}[[parcel]]\nid = \"high-grade-pocket\"{pocket}{options}")
+        .replace(
+            "\n[[partial_holdback]]\nlot = \"marginal-pad\"\nbasis = \"proportional_same_grade\"\n",
+            "",
+        )
+        .replace("threshold = \"0.85\"", "threshold = \"0.9\"");
+    python(
+        &declared(&whole).to_json(),
+        r#"
+comparison = result["partial_holdback_comparison"]
+assert comparison["preferred_lots"] == ["high-grade-pocket"]
+assert comparison["options"][1]["journal_action"] == "hold-back:high-grade-pocket"
+assert F(comparison["options"][1]["minimum_dry_tonne_fraction"]) == 1
+"#,
+    );
+    let no_split = model.replace("threshold = \"0.675\"", "threshold = \"0.95\"");
+    python(
+        &declared(&no_split).to_json(),
+        r#"
+comparison = result["partial_holdback_comparison"]
+assert comparison["preferred_lots"] == []
+assert all(r["status"] == "impossible" and r["journal_action"] is None for r in comparison["options"])
+"#,
+    );
+
+    for bad in [
+        model.replace("lot = \"marginal-pad\"", "lot = \"base-stockpile\""),
+        model.replace("lot = \"marginal-pad\"", "lot = \"unknown-lot\""),
+    ] {
+        assert_ne!(declared(&bad).exit_code, 0);
+    }
+}
+
+#[test]
 fn minimum_partial_lot_holdback_matches_every_concrete_endpoint_and_binary() {
     let original = include_str!("../../../tests/decisions/stockpile_holdback.toml");
     let with_holdback = format!(

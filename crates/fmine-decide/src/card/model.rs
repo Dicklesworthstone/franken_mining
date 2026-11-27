@@ -170,12 +170,12 @@ pub fn evaluate_named_action(
         match action {
             "all-feed" => {}
             _ if action.starts_with(crate::bounds::parcels::PARTIAL_HOLDBACK_ACTION_PREFIX) => {
-                let current = card
+                let present = card
                     .summary()
-                    .partial_holdback
-                    .as_ref()
-                    .and_then(crate::bounds::parcels::PartialHoldback::journal_action);
-                if current.as_deref() != Some(action) {
+                    .partial_holdbacks
+                    .iter()
+                    .any(|option| option.journal_action().as_deref() == Some(action));
+                if !present {
                     return Err(missing(
                         "selected partial holdback is absent or has changed; use the exact journal action from the current recovery card",
                     ));

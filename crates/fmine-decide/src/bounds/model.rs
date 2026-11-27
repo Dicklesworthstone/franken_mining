@@ -24,7 +24,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"route\",\"metal\",\"additivity_basis\",\"untested_bound_basis\"],",
     "\"weights\":\"Either parcel rows or one weights row: contained_metal with lower/upper untested fraction, or dry_tonnes_and_grade with tested_tonnes, tested_grade_g_per_t, untested_tonnes, untested_grade_g_per_t, each suffixed _lower and _upper\",",
     "\"parcel\":\"Each disjoint lot has id, role (tested or untested), dry_tonnes_lower/upper and grade_g_per_t_lower/upper. The card compares all feed and each whole-lot holdback with no replacement. Record the chosen row with decide journal record --action all-feed or --action hold-back:<lot-id>. Example: tests/decisions/stockpile_holdback.toml\",",
-    "\"partial_holdback\":\"Optional single row with one existing lot ID in lot and basis=proportional_same_grade. Find the exact minimum fraction of that lot to hold back for the declared target, scaling each admitted mass by the same fraction at its original grade. Reports the retained and forgone production bounds. For a proper fraction, copy the emitted partial_holdback_action to decide journal record --action. A zero split uses all-feed and a full split uses hold-back:<lot-id>. The journal action ID is limited to 256 bytes.\",",
+    "\"partial_holdback\":\"Optional rows for distinct existing lot IDs, each with lot and basis=proportional_same_grade. Each row solves the minimum split independently. With multiple rows, the comparison identifies all lots tied for the greatest lower bound on recovered grams and lists every evaluated option, including impossible splits. Copy the chosen journal_action to decide journal record --action. A single row retains partial_holdback_action for proper fractions. Zero and full splits use all-feed and hold-back:<lot-id>. The journal action ID is limited to 256 bytes.\",",
     "\"recovery\":\"Exactly two recovery rows, role tested or untested, with lower/upper fractions; explicit [0,1] physical bounds are permitted\",",
     "\"decision\":\"One decision row: threshold fraction and rule proceed_if_at_least; equality proceeds and stop is strictly below\",",
     "\"uu\":\"Exactly one uu row: id, description, trigger, positive finite downside_usd_m naming the untested-bound uncertainty\",",
@@ -95,7 +95,7 @@ pub(crate) fn from_verified_document(
     let mut tested = None;
     let mut untested = None;
     let mut threshold = None;
-    let mut partial_holdback = None;
+    let mut partial_holdbacks = BTreeSet::new();
     let mut unknown = None;
     let mut interactions = BTreeSet::new();
     let mut anchors = vec![source.clone()];
@@ -220,14 +220,16 @@ pub(crate) fn from_verified_document(
             "partial_holdback" => {
                 let [lot, basis] = strings(&row.fields, ["lot", "basis"], row.line, INPUT)?;
                 identifier(lot, row.line)?;
-                if basis != "proportional_same_grade" || partial_holdback.is_some() {
+                if basis != "proportional_same_grade" {
                     return Err(bad(
                         INPUT,
                         row.line,
-                        "partial holdback requires exactly one named lot and basis proportional_same_grade",
+                        "partial holdback requires basis proportional_same_grade",
                     ));
                 }
-                partial_holdback = Some(lot.to_string());
+                if !partial_holdbacks.insert(lot.to_string()) {
+                    return Err(bad(INPUT, row.line, "duplicate partial holdback lot"));
+                }
             }
             "interaction" => {
                 let [kind] = strings(&row.fields, ["kind"], row.line, INPUT)?;
@@ -313,7 +315,7 @@ pub(crate) fn from_verified_document(
         untested_recovery: untested
             .ok_or_else(|| bad(INPUT, 1, "missing untested recovery row"))?,
         threshold: threshold.ok_or_else(|| bad(INPUT, 1, "missing decision row"))?,
-        partial_holdback,
+        partial_holdbacks,
         interactions: interactions.into_iter().collect(),
     };
     let uu = unknown.ok_or_else(|| bad(UU, 1, "one explicit UU term is required"))?;

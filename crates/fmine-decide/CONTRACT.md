@@ -420,6 +420,11 @@ rechecks the retained feed by the same recovery kernel. The result includes matc
 forgone amounts, or explains why no fraction guarantees the target with positive retained metal.
 The split scales each admitted mass at its original grade under the same recovery bounds.
 
+DESIGN (bd-o1oq). A worksheet can declare multiple distinct eligible lots. Each option solves one
+split independently, with the same target and no replacement feed. The comparison binds every minimum
+or infeasibility result and identifies all ties for the highest lower bound on recovered grams.
+It lists exact journal actions for feasible choices whose IDs fit the journal limit.
+
 DESIGN (bd-225.1). A journal action selects the complete feed with `all-feed` or one evaluated
 counterfactual with `hold-back:<lot-id>`. The retained card includes the full comparison, its source
 anchors and the same result Claim as the standalone command. A lot with undefined recovery retains
@@ -427,7 +432,7 @@ its refusal. The operator supplies the choice and rationale.
 
 DESIGN (bd-zpu6.6). A proper fractional minimum can be selected with
 `hold-back-partial:<lot-id>:<numerator>/<denominator>`. Admission compares the canonical action to
-the action derived from the current evaluated card. A changed lot or fraction refuses before append.
+an action derived from the current evaluated card. A changed lot or fraction refuses before append.
 Zero and full splits use the existing actions. The 256-byte journal choice limit bounds the emitted
 action. The full original comparison remains the retained artifact.
 

@@ -69,8 +69,8 @@ pub struct RecoveryBoundModel {
     pub untested_recovery: Interval,
     /// Proceed iff aggregate recovery is at least this fraction; stop is strictly below it.
     pub threshold: Rat,
-    /// Select one named lot for a proportional dry-mass split at unchanged grade.
-    pub partial_holdback: Option<String>,
+    /// Eligible named lots, each evaluated separately for a proportional split at unchanged grade.
+    pub partial_holdbacks: std::collections::BTreeSet<String>,
     /// Any declared interaction makes additive averaging inadmissible.
     pub interactions: Vec<String>,
 }
@@ -129,8 +129,10 @@ pub struct BoundSummary {
     pub vertices: Vec<Vertex>,
     /// All feed, then each whole-lot holdback. Empty for aggregate weight declarations.
     pub parcel_cases: Vec<parcels::FeedCase>,
-    /// Exact minimum removal for the optional named lot, with its retained-feed witness.
-    pub partial_holdback: Option<parcels::PartialHoldback>,
+    /// Exact minimum removal or infeasibility of each declared split, in lot ID order.
+    pub partial_holdbacks: Vec<parcels::PartialHoldback>,
+    /// All lots tied for the highest lower recovered-grams bound in a multi-lot comparison.
+    pub preferred_partial_holdbacks: Vec<String>,
 }
 
 /// Immutable source/model/output snapshot; the digest also binds metadata not in generic Claim ids.
@@ -248,7 +250,7 @@ fn weights_and_cases(model: &RecoveryBoundModel) -> Result<parcels::FeedComparis
             positive_metal_share(tested, untested)?
         }
     };
-    if model.partial_holdback.is_some() {
+    if !model.partial_holdbacks.is_empty() {
         return Err(bad(
             RefusalCode::BasisMismatch105,
             "partial holdback requires named feed parcels",
@@ -258,7 +260,7 @@ fn weights_and_cases(model: &RecoveryBoundModel) -> Result<parcels::FeedComparis
     Ok(parcels::FeedComparison {
         weights: result,
         cases: Vec::new(),
-        partial_holdback: None,
+        partial_holdbacks: Vec::new(),
     })
 }
 
@@ -548,7 +550,8 @@ pub fn evaluate(inputs: &Claim<RecoveryBoundModel>) -> Result<BoundCard> {
         )?,
         vertices,
         parcel_cases: feed.cases,
-        partial_holdback: feed.partial_holdback,
+        preferred_partial_holdbacks: parcels::preferred_holdbacks(&feed.partial_holdbacks)?,
+        partial_holdbacks: feed.partial_holdbacks,
     };
     let mut binding = Encoder::new_frame(*b"UBND", 1);
     binding.put_str(&crate::card::render::claim_json(

@@ -2696,6 +2696,13 @@ split, and `--action hold-back:<lot-id>` for a whole-lot holdback or a full spli
 have a 256-byte limit. A reviewer can recover the selected action, exact worksheet, all alternatives
 and the planner's rationale from the pinned journal head.
 
+Repeat `[[partial_holdback]]` for each lot the planner can split. The card compares the minimum split
+for each lot and highlights every option tied for the greatest guaranteed recovered metal. With the
+same synthetic feed at a 67.5% target, holding back **9/11 of marginal-pad** retains at least **90.29 g**,
+while holding back **9/88 of high-grade-pocket** retains at least **89.76 g**, rounded for display.
+The comparison lists infeasible options and the exact journal action for each recordable choice.
+Each option changes one lot independently.
+
 JSON and Markdown preserve the source, input/output Claims, evidence, confidentiality and UU. The
 receipt binds that metadata as well as the numerical result. These are conditional identification
 bounds over declared assumptions, without probabilities, calibrated predictions, measured recovery,

@@ -84,21 +84,33 @@ fn case_json(case: &FeedCase) -> String {
     format!(r#"{{"held_back":{held},{}}}"#, feed_fields(case))
 }
 
-fn partial_holdback_json(value: &PartialHoldback) -> String {
+fn partial_holdback_json(value: &PartialHoldback, include_action: bool) -> String {
     let lot = js(&value.lot);
+    let action = if include_action {
+        let value = value
+            .selection_action()
+            .map_or_else(|| "null".into(), |id| js(&id));
+        format!(r#","journal_action":{value}"#)
+    } else {
+        String::new()
+    };
     match &value.minimum {
         Ok(minimum) => format!(
-            r#"{{"lot":{lot},"status":"minimum","minimum_dry_tonne_fraction":{},"held_dry_tonnes":{},"retained_feed":{{{}}}}}"#,
+            r#"{{"lot":{lot},"status":"minimum","minimum_dry_tonne_fraction":{},"held_dry_tonnes":{},"retained_feed":{{{}}}{action}}}"#,
             rq(minimum.fraction),
             interval(minimum.held_dry_tonnes),
             feed_fields(&minimum.retained_feed)
         ),
         Err(limit) => format!(
-            r#"{{"lot":{lot},"status":"impossible","reason":{},"what":{}}}"#,
+            r#"{{"lot":{lot},"status":"impossible","reason":{},"what":{}{action}}}"#,
             js(limit.as_str()),
             js(limit.description())
         ),
     }
+}
+
+fn holdback_input(lot: &str) -> String {
+    format!(r#"{{"lot":{},"basis":"proportional_same_grade"}}"#, js(lot))
 }
 
 pub(super) fn model_json(value: &RecoveryBoundModel) -> String {
@@ -108,15 +120,24 @@ pub(super) fn model_json(value: &RecoveryBoundModel) -> String {
         .map(|v| js(v))
         .collect::<Vec<_>>()
         .join(",");
-    let partial = value
-        .partial_holdback
-        .as_ref()
-        .map_or_else(String::new, |lot| {
-            format!(
-                r#","partial_holdback":{{"lot":{},"basis":"proportional_same_grade"}}"#,
-                js(lot)
-            )
-        });
+    let partial = match value.partial_holdbacks.len() {
+        0 => String::new(),
+        1 => value
+            .partial_holdbacks
+            .first()
+            .map_or_else(String::new, |lot| {
+                format!(r#","partial_holdback":{}"#, holdback_input(lot))
+            }),
+        _ => {
+            let inputs = value
+                .partial_holdbacks
+                .iter()
+                .map(|lot| holdback_input(lot))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(r#","partial_holdbacks":[{inputs}]"#)
+        }
+    };
     format!(
         "{{\"model_key\":{},\"question\":{},\"route\":{},\"metal\":{},\"additivity_basis\":{},\"untested_bound_basis\":{},\"weights\":{},\"tested_recovery\":{},\"untested_recovery\":{},\"threshold\":{},\"rule\":\"proceed_if_at_least\",\"interactions\":[{interactions}]{partial}}}",
         js(&value.model_key),
@@ -165,12 +186,29 @@ pub(super) fn summary_json(value: &BoundSummary) -> String {
             .join(",");
         format!(r#","parcel_cases":[{rows}]"#)
     };
-    let partial = value
-        .partial_holdback
-        .as_ref()
-        .map_or_else(String::new, |holdback| {
-            format!(r#","partial_holdback":{}"#, partial_holdback_json(holdback))
-        });
+    let partial = match value.partial_holdbacks.as_slice() {
+        [] => String::new(),
+        [holdback] => format!(
+            r#","partial_holdback":{}"#,
+            partial_holdback_json(holdback, false)
+        ),
+        options => {
+            let options = options
+                .iter()
+                .map(|option| partial_holdback_json(option, true))
+                .collect::<Vec<_>>()
+                .join(",");
+            let preferred = value
+                .preferred_partial_holdbacks
+                .iter()
+                .map(|lot| js(lot))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                r#","partial_holdback_comparison":{{"objective":"maximize_lower_bound_recovered_grams","preferred_lots":[{preferred}],"options":[{options}]}}"#
+            )
+        }
+    };
     format!(
         "{{\"untested_metal_fraction\":{},\"recovery\":{},\"threshold\":{},\"stability\":{},\"proceed_condition\":{},\"stop_condition\":{},\"vertices\":[{vertices}]{cases}{partial}}}",
         interval(value.untested_metal_fraction),
@@ -209,6 +247,48 @@ fn lot_range(bounds: Interval, format: impl Fn(super::Rat) -> String) -> String 
         lower
     } else {
         format!("{lower}–{}", format(bounds.upper))
+    }
+}
+
+fn write_holdback_comparison(out: &mut String, summary: &BoundSummary) {
+    out.push_str("\n## Compare proportional holdbacks\n\nEach option splits one eligible lot at its stated grade. The objective is the largest lower bound on recovered metal among splits that meet the recovery target.\n\n");
+    if summary.preferred_partial_holdbacks.is_empty() {
+        out.push_str(
+            "No declared single-lot split guarantees the target with positive retained metal.\n\n",
+        );
+    } else {
+        let preferred = summary
+            .preferred_partial_holdbacks
+            .iter()
+            .map(|lot| md(lot))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            out,
+            "Greatest guaranteed recovered metal: **{preferred}**.\n"
+        );
+    }
+    out.push_str("| Lot | Minimum dry-mass fraction held | Held dry tonnes | Retained recovered metal (g) | Forgone recovered metal (g) | Journal action |\n|---|---:|---:|---:|---:|---|\n");
+    for option in &summary.partial_holdbacks {
+        let lot = md(&option.lot);
+        match &option.minimum {
+            Ok(split) => {
+                let action = option
+                    .selection_action()
+                    .map_or_else(|| "—".into(), |id| format!("`{id}`"));
+                let _ = writeln!(
+                    out,
+                    "| {lot} | {} | {} | {} | {} | {action} |",
+                    ratio(split.fraction),
+                    lot_range(split.held_dry_tonnes, short_decimal),
+                    lot_range(split.retained_feed.recovered_grams, short_decimal),
+                    lot_range(split.retained_feed.forgone_recovered_grams, short_decimal)
+                );
+            }
+            Err(limit) => {
+                let _ = writeln!(out, "| {lot} | {} | — | — | — | — |", limit.description());
+            }
+        }
     }
 }
 
@@ -349,7 +429,7 @@ impl BoundCard {
                 );
             }
         }
-        if let Some(holdback) = &summary.partial_holdback {
+        if let [holdback] = summary.partial_holdbacks.as_slice() {
             let lot = md(&holdback.lot);
             out.push_str("\n## Minimum proportional holdback\n\n");
             out.push_str(
@@ -385,6 +465,9 @@ impl BoundCard {
                     "\nRecord this split with `decide journal record --action {action}`."
                 );
             }
+        }
+        if summary.partial_holdbacks.len() > 1 {
+            write_holdback_comparison(&mut out, summary);
         }
         if let Some(windows) = self.dry_share_ranges().transpose() {
             out.push_str("\n## Untested share of dry feed tonnes\n\nThese windows use the available dry tonnes and hold across both declared grade and recovery ranges.\n\n");

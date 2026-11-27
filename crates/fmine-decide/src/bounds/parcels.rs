@@ -91,6 +91,18 @@ impl PartialHoldback {
         );
         (action.len() <= JOURNAL_CHOICE_MAX_BYTES).then_some(action)
     }
+
+    pub(super) fn selection_action(&self) -> Option<String> {
+        let fraction = self.minimum.as_ref().ok()?.fraction;
+        if fraction == ZERO {
+            Some("all-feed".into())
+        } else if fraction == ONE {
+            let action = format!("hold-back:{}", self.lot);
+            (action.len() <= JOURNAL_CHOICE_MAX_BYTES).then_some(action)
+        } else {
+            self.journal_action()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +115,7 @@ pub struct MinimumHoldback {
 pub(super) struct FeedComparison {
     pub weights: Interval,
     pub cases: Vec<FeedCase>,
-    pub partial_holdback: Option<PartialHoldback>,
+    pub partial_holdbacks: Vec<PartialHoldback>,
 }
 
 const EMPTY: Interval = Interval {
@@ -250,8 +262,10 @@ pub(super) fn compare(
     lots: &BTreeMap<String, FeedParcel>,
     model: &RecoveryBoundModel,
 ) -> Result<FeedComparison> {
-    if let Some(id) = &model.partial_holdback
-        && !lots.contains_key(id)
+    if let Some(id) = model
+        .partial_holdbacks
+        .iter()
+        .find(|id| !lots.contains_key(*id))
     {
         return Err(bad(
             RefusalCode::BasisMismatch105,
@@ -279,7 +293,7 @@ pub(super) fn compare(
     }
     let weights = positive_metal_share(total.tested, total.untested)?;
     let mut cases = Vec::with_capacity(lots.len() + 1);
-    let mut partial_holdback = None;
+    let mut partial_holdbacks = Vec::with_capacity(model.partial_holdbacks.len());
     cases.push(total.case(None, EMPTY, model)?);
     for (id, parcel, metal) in contributions {
         let mut kept = total;
@@ -291,8 +305,8 @@ pub(super) fn compare(
             Testwork::Untested => model.untested_recovery,
         };
         cases.push(kept.case(Some(id.clone()), recovered(metal, lot_recovery)?, model)?);
-        if model.partial_holdback.as_ref() == Some(id) {
-            partial_holdback = Some(PartialHoldback {
+        if model.partial_holdbacks.contains(id) {
+            partial_holdbacks.push(PartialHoldback {
                 lot: id.clone(),
                 minimum: minimum_holdback(total, kept, parcel, metal, model)?,
             });
@@ -301,6 +315,30 @@ pub(super) fn compare(
     Ok(FeedComparison {
         weights,
         cases,
-        partial_holdback,
+        partial_holdbacks,
     })
+}
+
+pub(super) fn preferred_holdbacks(options: &[PartialHoldback]) -> Result<Vec<String>> {
+    let mut preferred = Vec::new();
+    if options.len() < 2 {
+        return Ok(preferred);
+    }
+    let mut best = None;
+    for option in options {
+        let Ok(minimum) = &option.minimum else {
+            continue;
+        };
+        let floor = minimum.retained_feed.recovered_grams.lower;
+        if let Some(prior) = best {
+            match exact(floor.checked_cmp(prior))? {
+                std::cmp::Ordering::Less => continue,
+                std::cmp::Ordering::Equal => {}
+                std::cmp::Ordering::Greater => preferred.clear(),
+            }
+        }
+        best = Some(floor);
+        preferred.push(option.lot.clone());
+    }
+    Ok(preferred)
 }

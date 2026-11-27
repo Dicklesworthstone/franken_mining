@@ -653,6 +653,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   source identity, witnesses, stability, decisive test conditions and Claim/UU metadata. Interactions and
   inadmissible inputs refuse. Examples and independent Fraction/real-binary checks live in
   `tests/decisions/untested_ore*.toml` and `xtask/tests/recovery_bounds.rs`.
+- DESIGN (bd-o1oq): Repeated `partial_holdback` rows identify lots eligible for independent
+  proportional splits. JSON and Markdown retain each minimum or infeasibility and the exact
+  recovered and forgone quantities. All splits tied for the highest lower recovered-grams bound
+  are shown as preferred. The listed action can be recorded by `decide journal record`.
 - DESIGN (BD-313): `plant rtd --input <worksheet.toml>` reads strict `fmine.plant-rtd.v1` declarations
   and calls the pure `fmine_plant::rtd::worksheet` adapter. Reports preserve conservation, stocks and
   optional ordinary versus lag-aligned recovery. Any recovery failure refuses the complete result.
