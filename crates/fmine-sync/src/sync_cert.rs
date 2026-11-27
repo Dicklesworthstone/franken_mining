@@ -189,6 +189,24 @@ impl ReplicaLogState {
                 ),
             });
         }
+        if cert.to_seq == self.committed_seq && cert.mmr_root_after == self.mmr_root {
+            if cert.from_seq == self.committed_seq && cert.mmr_root_before != self.mmr_root {
+                self.stale = true;
+                return Err(SyncError::SyncCertInvalid {
+                    detail: format!(
+                        "prefix root mismatch: cert before {} != replica root {}",
+                        cert.mmr_root_before, self.mmr_root
+                    ),
+                });
+            }
+            if let Err(err) = cert.verify_prefix_consistency() {
+                self.stale = true;
+                return Err(err);
+            }
+            self.highest_epoch = self.highest_epoch.max(cert.epoch);
+            self.stale = false;
+            return Ok(SyncApplyOutcome::AlreadyApplied);
+        }
         if cert.from_seq != self.committed_seq {
             self.stale = true;
             return Err(SyncError::SyncCertInvalid {
@@ -210,11 +228,6 @@ impl ReplicaLogState {
         if let Err(err) = cert.verify_prefix_consistency() {
             self.stale = true;
             return Err(err);
-        }
-        if cert.to_seq == self.committed_seq {
-            self.highest_epoch = self.highest_epoch.max(cert.epoch);
-            self.stale = false;
-            return Ok(SyncApplyOutcome::AlreadyApplied);
         }
         self.highest_epoch = cert.epoch;
         self.committed_seq = cert.to_seq;
@@ -345,5 +358,42 @@ mod tests {
             SyncCert::from_bytes(&bad_cell.to_bytes()),
             Err(SyncError::SyncCertInvalid { .. })
         ));
+    }
+
+    #[test]
+    fn test_exact_wire_retransmission_is_idempotent_and_forged_retransmit_refuses() {
+        let mut writer_mmr = Mmr::new();
+        for i in 0u64..8 {
+            let entry = sha256(&i.to_le_bytes());
+            writer_mmr.push(entry.as_bytes()).expect("push");
+        }
+        let mut replica = ReplicaLogState {
+            cell_id: "CELL-SITE(lumwana)".into(),
+            highest_epoch: 1,
+            committed_seq: 3,
+            mmr_root: writer_mmr.root_at(3).expect("root 3"),
+            stale: false,
+        };
+        let cert =
+            SyncCert::build_from_mmr("CELL-SITE(lumwana)", 1, &writer_mmr, 3, 8).expect("cert");
+        assert!(matches!(
+            replica.verify_and_apply(&cert).expect("first apply"),
+            SyncApplyOutcome::Advanced { new_seq: 8, .. }
+        ));
+        // Retransmitting the exact same (3 -> 8) cert is idempotent, not a stale error!
+        assert_eq!(
+            replica
+                .verify_and_apply(&cert)
+                .expect("duplicate wire retransmit"),
+            SyncApplyOutcome::AlreadyApplied
+        );
+        assert!(!replica.stale);
+        assert_eq!(replica.committed_seq, 8);
+
+        // Forged retransmit with corrupted proof must refuse and mark stale!
+        let mut forged = cert.clone();
+        forged.consistency_proof[0].0[0] ^= 0x01;
+        assert!(replica.verify_and_apply(&forged).is_err());
+        assert!(replica.stale);
     }
 }
