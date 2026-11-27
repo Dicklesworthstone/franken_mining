@@ -35,6 +35,9 @@ Lodestar K1 exploration data model, effort accounting, five-class absence taxono
   interface refuses those locations with `FMINE-REF-203`. A3 reports the nearest censored record, breaking ties
   by ID. Its detection bounds describe the supplied surveys. Conflicting records for one ID refuse.
 - **IDEA elicitation monotonicity (`§11.3`):** `ElicitationRecord` enforces `n90 <= n50 <= n10` and `PrefixKind::Calibration` on `seeds_scored`.
+- DESIGN (BD-350.S2). A strictly negative upper remainder-grade bound is an
+  `inconsistent_metal_balance` review flag under the length-weighted model. Audit output keeps the
+  exact bounds. A rounding interval containing zero is compatible with a nonnegative remainder.
 
 ## 5. Refusals
 - DESIGN. A repeated effort ID with identical fields contributes once to intersecting effort and cumulative

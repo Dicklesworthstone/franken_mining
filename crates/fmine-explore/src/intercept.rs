@@ -302,6 +302,8 @@ pub enum DisclosureFlag {
         observed_hole_count: u32,
         missing_sequence_numbers: Vec<u32>,
     },
+    /// Included grade-length exceeds the host total at every admitted rounding point.
+    InconsistentMetalBalance { hole: String },
 }
 
 impl DisclosureFlag {
@@ -314,6 +316,7 @@ impl DisclosureFlag {
             Self::UnstatedCutoffOrDilution { .. } => "unstated_cutoff_or_dilution",
             Self::MetalEquivalentUnstatedTerms { .. } => "metal_equivalent_unstated_terms",
             Self::HoleSequenceGap { .. } => "hole_sequence_gap",
+            Self::InconsistentMetalBalance { .. } => "inconsistent_metal_balance",
         }
     }
 
@@ -363,6 +366,10 @@ impl DisclosureFlag {
                 for &n in missing_sequence_numbers {
                     enc.put_u64(u64::from(n));
                 }
+            }
+            Self::InconsistentMetalBalance { hole } => {
+                enc.put_u8(7);
+                enc.put_str(hole);
             }
         }
     }
@@ -884,23 +891,32 @@ fn evaluate_remainder_with_flags(
         exact_linear_fractional_extremum(host_len_iv, host_grade_iv.hi, &child_max_terms, true)?;
     let rem_grade_interval = ExactInterval::new(rem_grade_lo, rem_grade_hi)?;
 
-    if let (Some((cutoff_exact, cutoff_unit)), Some(flags)) = (canonical_cutoff, flags_out) {
-        if cutoff_unit != canon_unit {
-            return Err(Refusal::new(
-                RefusalCode::BasisMismatch105,
-                format!(
-                    "hole {}: composite cut-off unit {} does not match intercept unit {}",
-                    host.hole,
-                    cutoff_unit.as_str(),
-                    canon_unit.as_str()
-                ),
-            ));
-        }
-        // Strict interval dominance: entire rounding box of remainder grade lies strictly below stated cut-off.
-        if cmp_exact_qty(rem_grade_interval.hi, cutoff_exact) == Ordering::Less {
-            flags.insert(DisclosureFlag::RemainderBelowCutoff {
+    if let Some(flags) = flags_out {
+        // A positive remainder length makes the sign of the grade
+        // equivalent to the sign of the unassigned grade-length.
+        if rem_grade_interval.hi.signum() < 0 {
+            flags.insert(DisclosureFlag::InconsistentMetalBalance {
                 hole: host.hole.clone(),
             });
+        }
+        if let Some((cutoff_exact, cutoff_unit)) = canonical_cutoff {
+            if cutoff_unit != canon_unit {
+                return Err(Refusal::new(
+                    RefusalCode::BasisMismatch105,
+                    format!(
+                        "hole {}: composite cut-off unit {} does not match intercept unit {}",
+                        host.hole,
+                        cutoff_unit.as_str(),
+                        canon_unit.as_str()
+                    ),
+                ));
+            }
+            // Strict interval dominance: the entire rounding box is below the stated cut-off.
+            if cmp_exact_qty(rem_grade_interval.hi, cutoff_exact) == Ordering::Less {
+                flags.insert(DisclosureFlag::RemainderBelowCutoff {
+                    hole: host.hole.clone(),
+                });
+            }
         }
     }
 
@@ -1065,9 +1081,8 @@ fn split_hole_sequence(hole: &str) -> Option<(String, u32)> {
     } else {
         trimmed
     };
-    let digit_start = core
-        .rfind(|c: char| !c.is_ascii_digit())
-        .map_or(0, |idx| idx + 1);
+    // The suffix is ASCII, so subtracting its length preserves the UTF-8 boundary.
+    let digit_start = core.len() - core.bytes().rev().take_while(u8::is_ascii_digit).count();
     if digit_start >= core.len() {
         return None;
     }
@@ -1329,6 +1344,40 @@ mod tests {
             relation,
             children,
         }
+    }
+
+    #[test]
+    fn exactly_zero_remainder_is_not_a_metal_balance_conflict() {
+        let mut inclusion = mk_intercept(
+            "ZERO-001",
+            "2",
+            LengthUnit::Metres,
+            "5",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Including,
+            Vec::new(),
+        );
+        inclusion.length = PrintedQty::exact(inclusion.length.value);
+        inclusion.grade = PrintedQty::exact(inclusion.grade.value);
+        let mut host = mk_intercept(
+            "ZERO-001",
+            "10",
+            LengthUnit::Metres,
+            "1",
+            GradeUnit::GramsPerTonne,
+            InclusionRelation::Host,
+            vec![inclusion],
+        );
+        host.length = PrintedQty::exact(host.length.value);
+        host.grade = PrintedQty::exact(host.grade.value);
+        let context = ReleaseDisclosureContext::complete(ZERO, GradeUnit::GramsPerTonne);
+        let audit = audit_drill_release(&[host], &context).expect("admitted exact intercept");
+        let remainder = audit.intervals[0].remainder.as_ref().expect("remainder");
+        assert_eq!(
+            remainder.remainder_grade_interval,
+            ExactInterval::new(ZERO, ZERO).unwrap()
+        );
+        assert!(audit.is_clean());
     }
 
     #[test]

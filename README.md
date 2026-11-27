@@ -255,7 +255,10 @@ In the synthetic example, a 10 m host at 5 g/t Au includes 2 m at 15 g/t. The re
 implies **2.5 g/t Au**, with an exact rounding interval of `947/395` to `13/5` g/t. The entire
 rounding interval falls below the declared 3.5 g/t cutoff. The report links the result to the
 worksheet bytes and the submitted document location. A hole-sequence gap prompts review of
-coverage. The implied grade is a residual interval average.
+coverage. The implied grade is a length-weighted residual interval average. If its entire rounding
+interval is below zero, `inconsistent_metal_balance` flags that the inclusions account for more
+grade-length than the host supplies under the declared arithmetic. The report keeps the exact
+negative bounds and the citations for review, even when the release supplies no cutoff.
 
 Transcribe a single release's quoted intercepts as `[[phrase]]` rows with a `locator` and `text`.
 Name one `grade_basis` such as `Au` or `CuEq`, and use `evidence = "declared_public"`

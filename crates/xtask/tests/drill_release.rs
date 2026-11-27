@@ -89,8 +89,9 @@ fn ok(input: &str) -> Json {
     let output = run(input, "json");
     assert!(
         output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     let body = parse(&output.stdout).unwrap();
     for flag in [
@@ -163,6 +164,93 @@ fn binary_preserves_exact_remainder_and_citations_after_sorting() {
     assert!(text.contains("p. 4, DR-003"));
     assert!(text.contains("5/2 ["));
     assert!(text.contains("hole_sequence_gap"));
+}
+
+#[test]
+fn binary_flags_a_definite_negative_remainder_without_a_cutoff() {
+    let input = EXAMPLE
+        .replace("cutoff = \"3.5\"\ncutoff_unit = \"g/t\"\n", "")
+        .replace(
+            "10.0 m @ 5.00 g/t Au including 2.0 m @ 15.00",
+            "10.0 m @ 1.00 g/t Au including 2.0 m @ 8.00",
+        );
+    for (worksheet, expected, conflict) in [
+        (input.clone(), "-3/4", true),
+        (input.replace("@ 8.00", "@ 5.00"), "0/1", false),
+        (input.replace("@ 8.00", "@ 5.01"), "-1/400", false),
+        (input.replace("@ 8.00", "@ 4.00"), "1/4", false),
+    ] {
+        let payload = ok(&worksheet);
+        let row = &payload.get("intervals").unwrap().as_array().unwrap()[1];
+        assert_eq!(
+            row.get("remainder").unwrap().get("grade").unwrap().as_str(),
+            Some(expected)
+        );
+        assert_eq!(
+            row.get("flags")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flag| {
+                    flag.get("kind").unwrap().as_str() == Some("inconsistent_metal_balance")
+                }),
+            conflict,
+            "{worksheet}"
+        );
+        assert_eq!(
+            row.get("sources").unwrap().as_array().unwrap()[0]
+                .get("locator")
+                .unwrap()
+                .as_str(),
+            Some("p. 4, DR-003")
+        );
+    }
+    let output = run(&input, "markdown");
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("inconsistent_metal_balance")
+    );
+
+    let directory = new_pack();
+    std::fs::write(directory.join("conflict.toml"), &input).unwrap();
+    let report = screen(&directory, "json");
+    assert!(report.status.success());
+    let pack = parse(&report.stdout).unwrap();
+    let row = &pack
+        .get("payload")
+        .unwrap()
+        .get("documents")
+        .unwrap()
+        .as_array()
+        .unwrap()[0];
+    let result = row.get("result").unwrap().get("payload").unwrap();
+    assert_eq!(result.get("intervals"), ok(&input).get("intervals"));
+}
+
+#[test]
+fn binary_preserves_utf8_hole_ids_in_sequence_checks() {
+    let (header, _) = CITED.split_once("[[cited]]").unwrap();
+    let mut input = format!("{header}declared_holes = \"3\"\n");
+    for (id, hole) in [("one", "Á001"), ("three", "Á003D")] {
+        input.push_str(&format!(
+            "\n[[cited]]\nid = \"{id}\"\nlocator = \"p. 2, {hole}\"\nhole = \"{hole}\"\nlength = \"12.0\"\nlength_unit = \"m\"\ngrade = \"5.00\"\ngrade_unit = \"g/t\"\n"
+        ));
+    }
+    let payload = ok(&input);
+    let rows = payload.get("intervals").unwrap().as_array().unwrap();
+    assert_eq!(rows[0].get("hole").unwrap().as_str(), Some("Á001"));
+    assert_eq!(rows[1].get("hole").unwrap().as_str(), Some("Á003D"));
+    let flags = payload.get("release_flags").unwrap().as_array().unwrap();
+    let gap = flags
+        .iter()
+        .find(|flag| flag.get("kind").unwrap().as_str() == Some("hole_sequence_gap"))
+        .unwrap();
+    let missing = gap.get("missing_numbers").unwrap().as_array().unwrap();
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].u64(), Some(2));
 }
 
 #[test]
