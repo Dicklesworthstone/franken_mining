@@ -155,4 +155,46 @@ mod tests {
             GluingGateDecision::PublishAllowed { checked_refs: 1 }
         );
     }
+
+    #[test]
+    fn test_gluing_gate_multi_cell_precedence_and_zero_refs() {
+        let d0 = sha256(b"lumwana-seq-0");
+        let d1 = sha256(b"lumwana-seq-1");
+        let k0 = sha256(b"kibali-seq-0");
+
+        // Zero cross-cell references publish cleanly.
+        let zero_refs = batch_with_refs(Vec::new());
+        assert_eq!(
+            check_anchor_publish_gluing(&zero_refs, &BTreeMap::new()),
+            GluingGateDecision::PublishAllowed { checked_refs: 0 }
+        );
+
+        // Multi-cell: missing cell takes NotObservable precedence over Stale behind-cell issue.
+        let multi = batch_with_refs(vec![
+            CrossCellRef::new("CELL-SITE(lumwana)", 1, d1),
+            CrossCellRef::new("CELL-SITE(kibali)", 0, k0),
+        ]);
+        let mut partial = BTreeMap::new();
+        partial.insert("CELL-SITE(lumwana)".to_string(), vec![d0]);
+        match check_anchor_publish_gluing(&multi, &partial) {
+            GluingGateDecision::PublishBlocked {
+                consumer_state,
+                issues,
+                refusal,
+            } => {
+                assert_eq!(consumer_state, KnowledgeState::NotObservable);
+                assert_eq!(issues.len(), 2);
+                assert_eq!(refusal.code, "FMINE-REF-502");
+            }
+            other => panic!("expected PublishBlocked, got {other:?}"),
+        }
+
+        // Once both cells hold matching digests, multi-cell anchor publishes.
+        partial.insert("CELL-SITE(lumwana)".to_string(), vec![d0, d1]);
+        partial.insert("CELL-SITE(kibali)".to_string(), vec![k0]);
+        assert_eq!(
+            check_anchor_publish_gluing(&multi, &partial),
+            GluingGateDecision::PublishAllowed { checked_refs: 2 }
+        );
+    }
 }

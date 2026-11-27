@@ -53,6 +53,12 @@ pub fn plan_residency_filtered_sync(
     let mut total_planned_bytes = 0u64;
 
     for item in items {
+        if item.cell_id.trim().is_empty() {
+            return Err(SyncError::InvalidField {
+                field: "cell_id",
+                detail: "transfer item cell_id must be non-empty".to_string(),
+            });
+        }
         match registry.evaluate_transfer(
             &item.origin_country,
             item.data_class,
@@ -61,7 +67,12 @@ pub fn plan_residency_filtered_sync(
             registered_instruments,
         ) {
             ResidencyDecision::Allowed { effective_rule, .. } => {
-                total_planned_bytes = total_planned_bytes.saturating_add(item.payload_bytes);
+                total_planned_bytes = total_planned_bytes
+                    .checked_add(item.payload_bytes)
+                    .ok_or_else(|| SyncError::InvalidField {
+                        field: "payload_bytes",
+                        detail: "total planned transfer bytes overflowed u64".to_string(),
+                    })?;
                 transfers.push(PlannedTransfer {
                     cell_id: item.cell_id.clone(),
                     origin_country: item.origin_country.clone(),
@@ -170,5 +181,80 @@ mod tests {
         assert_eq!(plan.transfers.len(), 2);
         assert_eq!(plan.total_planned_bytes, 128_000);
         assert_eq!(plan.residency_epoch, reg.residency_epoch);
+
+        // 5. Pakistan geoscience (BMR 2002 r.71(3)(i)) refuses aggregate export without registered
+        //    legal instrument, allows aggregate export once registered, and still refuses raw export.
+        let pk_geo_agg = vec![SyncTransferItem {
+            cell_id: "CELL-SITE(reko_diq)".into(),
+            origin_country: "PK".into(),
+            destination_country: "CA".into(),
+            data_class: DataClass::Geoscience,
+            is_aggregate: true,
+            payload_bytes: 16_384,
+        }];
+        let err_pk = plan_residency_filtered_sync(&reg, &pk_geo_agg, &empty_instruments)
+            .expect_err("PK geoscience without instrument must fail closed");
+        assert_eq!(err_pk.to_refusal().code, "FMINE-REF-303");
+
+        let mut pk_instruments = BTreeSet::new();
+        pk_instruments.insert(
+            "Counsel reading of r.71(3)(i) + Reko Diq mineral agreement data clause".to_string(),
+        );
+        let pk_plan = plan_residency_filtered_sync(&reg, &pk_geo_agg, &pk_instruments)
+            .expect("PK aggregate with instrument allowed");
+        assert_eq!(pk_plan.total_planned_bytes, 16_384);
+
+        let pk_geo_raw = vec![SyncTransferItem {
+            is_aggregate: false,
+            ..pk_geo_agg[0].clone()
+        }];
+        assert_eq!(
+            plan_residency_filtered_sync(&reg, &pk_geo_raw, &pk_instruments)
+                .expect_err("PK raw geoscience still refused")
+                .to_refusal()
+                .code,
+            "FMINE-REF-303"
+        );
+
+        // 6. Mixed batch atomicity: a valid item followed by a disallowed item refuses the whole
+        //    plan with FMINE-REF-303 so zero bytes are scheduled.
+        let mixed = vec![ok_batch[0].clone(), tz_geo[0].clone()];
+        assert_eq!(
+            plan_residency_filtered_sync(&reg, &mixed, &empty_instruments)
+                .expect_err("mixed batch with disallowed item must refuse atomically")
+                .to_refusal()
+                .code,
+            "FMINE-REF-303"
+        );
+
+        // 7. Blank cell_id and u64 total byte overflow refuse cleanly (never clamped).
+        let blank_cell = vec![SyncTransferItem {
+            cell_id: "   ".into(),
+            ..ok_batch[0].clone()
+        }];
+        assert!(matches!(
+            plan_residency_filtered_sync(&reg, &blank_cell, &empty_instruments),
+            Err(SyncError::InvalidField {
+                field: "cell_id",
+                ..
+            })
+        ));
+        let overflow_batch = vec![
+            SyncTransferItem {
+                payload_bytes: u64::MAX,
+                ..ok_batch[0].clone()
+            },
+            SyncTransferItem {
+                payload_bytes: 1,
+                ..ok_batch[1].clone()
+            },
+        ];
+        assert!(matches!(
+            plan_residency_filtered_sync(&reg, &overflow_batch, &empty_instruments),
+            Err(SyncError::InvalidField {
+                field: "payload_bytes",
+                ..
+            })
+        ));
     }
 }

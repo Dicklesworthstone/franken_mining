@@ -40,10 +40,10 @@ impl SyncCert {
         to_seq: u64,
     ) -> Result<Self, SyncError> {
         let cell_id = cell_id.into();
-        if cell_id.is_empty() || cell_id.len() > 256 {
+        if cell_id.trim().is_empty() || cell_id.len() > 256 {
             return Err(SyncError::InvalidField {
                 field: "cell_id",
-                detail: "must be 1..=256 bytes".to_string(),
+                detail: "must be non-empty and <= 256 bytes".to_string(),
             });
         }
         if epoch == 0 {
@@ -88,9 +88,24 @@ impl SyncCert {
         let mut dec =
             Decoder::open_frame(bytes, TAG_SYNC_CERT, FMT_SYNC_CERT_V1, FMT_SYNC_CERT_V1)?;
         let cell_id = dec.get_str(256)?.to_string();
+        if cell_id.trim().is_empty() {
+            return Err(SyncError::SyncCertInvalid {
+                detail: "cell_id must be non-empty".to_string(),
+            });
+        }
         let epoch = dec.get_u64()?;
+        if epoch == 0 {
+            return Err(SyncError::SyncCertInvalid {
+                detail: "epoch must be >= 1".to_string(),
+            });
+        }
         let from_seq = dec.get_u64()?;
         let to_seq = dec.get_u64()?;
+        if to_seq < from_seq {
+            return Err(SyncError::SyncCertInvalid {
+                detail: format!("to_seq {to_seq} precedes from_seq {from_seq}"),
+            });
+        }
         let mmr_root_before = Digest32(dec.get_fixed::<32>()?);
         let mmr_root_after = Digest32(dec.get_fixed::<32>()?);
         let count = dec.get_u32()? as usize;
@@ -197,6 +212,8 @@ impl ReplicaLogState {
             return Err(err);
         }
         if cert.to_seq == self.committed_seq {
+            self.highest_epoch = self.highest_epoch.max(cert.epoch);
+            self.stale = false;
             return Ok(SyncApplyOutcome::AlreadyApplied);
         }
         self.highest_epoch = cert.epoch;
@@ -271,5 +288,62 @@ mod tests {
             .expect_err("epoch regression");
         assert_eq!(err.to_refusal().code, "FMINE-REF-502");
         assert!(replica.stale);
+    }
+
+    #[test]
+    fn test_sync_cert_edge_cases_and_already_applied_epoch_fencing() {
+        let mut writer_mmr = Mmr::new();
+        for i in 0u64..8 {
+            let entry = sha256(&i.to_le_bytes());
+            writer_mmr.push(entry.as_bytes()).expect("push");
+        }
+        let root_8 = writer_mmr.root();
+        let mut replica = ReplicaLogState {
+            cell_id: "CELL-SITE(lumwana)".into(),
+            highest_epoch: 1,
+            committed_seq: 8,
+            mmr_root: root_8,
+            stale: true,
+        };
+
+        // Lease handoff at identical seq advances highest_epoch and clears stale, so prior epoch
+        // is fenced afterwards!
+        let handoff =
+            SyncCert::build_from_mmr("CELL-SITE(lumwana)", 2, &writer_mmr, 8, 8).expect("handoff");
+        assert_eq!(
+            replica.verify_and_apply(&handoff).expect("apply handoff"),
+            SyncApplyOutcome::AlreadyApplied
+        );
+        assert_eq!(replica.highest_epoch, 2);
+        assert!(!replica.stale);
+
+        let old_epoch =
+            SyncCert::build_from_mmr("CELL-SITE(lumwana)", 1, &writer_mmr, 8, 8).expect("old");
+        let fenced = replica
+            .verify_and_apply(&old_epoch)
+            .expect_err("epoch 1 must be fenced after epoch 2 handoff");
+        assert_eq!(fenced.to_refusal().code, "FMINE-REF-502");
+        assert!(replica.stale);
+
+        // Wire decode rejects blank cell_id, epoch 0, and to_seq < from_seq.
+        let mut bad_epoch = handoff.clone();
+        bad_epoch.epoch = 0;
+        assert!(matches!(
+            SyncCert::from_bytes(&bad_epoch.to_bytes()),
+            Err(SyncError::SyncCertInvalid { .. })
+        ));
+        let mut bad_range = handoff.clone();
+        bad_range.from_seq = 8;
+        bad_range.to_seq = 4;
+        assert!(matches!(
+            SyncCert::from_bytes(&bad_range.to_bytes()),
+            Err(SyncError::SyncCertInvalid { .. })
+        ));
+        let mut bad_cell = handoff;
+        bad_cell.cell_id = "  ".into();
+        assert!(matches!(
+            SyncCert::from_bytes(&bad_cell.to_bytes()),
+            Err(SyncError::SyncCertInvalid { .. })
+        ));
     }
 }
