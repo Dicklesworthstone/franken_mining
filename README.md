@@ -1477,6 +1477,20 @@ capacity remains **1.50 dry tonnes**. Only the top **1 dry tonne** pays to proce
 and contributing **USD 25**. Break-even feed stays idle. The screen assumes already-mined feed and excludes
 fixed and opportunity charges. It does not model blend constraints or an operating policy.
 
+For two assayed parcels, add `blend_impurity_limit` with an `element` and a `maximum_mass_fraction`.
+Supply an `impurity_mass_fraction` on each bin as a dry-mass fraction between zero and one. The blend
+maximizes variable contribution under the same mill and market caps and the weighted impurity ceiling.
+It uses fixed assays, additive recovered metal and divisible feed over one period.
+
+```bash
+cargo run -p fmine-cli -- plan cutoff \
+  --input tests/planning/lane_impurity_blend.json --format markdown
+```
+
+The synthetic blend selects **4/3 tonnes** of low-arsenic feed and **2/3 tonnes** of higher-grade feed,
+meeting the **2% arsenic** limit exactly. The clean parcel earns a negative contribution on its own,
+and blending it with the higher-grade parcel yields **8/15 g** of gold and **USD 40/3** overall.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

@@ -289,6 +289,155 @@ fn lane_grade_tonnage_binary_reports_exact_partial_bin_for_all_cap_cases() {
 }
 
 #[test]
+fn lane_impurity_blend_binary_prices_dilution_and_respects_all_caps() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = "tests/planning/lane_impurity_blend.json";
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = lane(&root, input, "json");
+    assert!(output.status.success());
+    let report = lane_json(&output);
+    let payload = report.get("payload").unwrap();
+    let digest = sha256(original.as_bytes()).to_hex();
+    assert_eq!(
+        payload
+            .get("source")
+            .unwrap()
+            .get("sha256")
+            .unwrap()
+            .as_str(),
+        Some(digest.as_str())
+    );
+    let expect = |report: &Json, [low, high, dry, metal, net]: [&str; 5], assay: Option<&str>| {
+        let blend = report
+            .get("payload")
+            .unwrap()
+            .get("impurity_constrained_blend")
+            .unwrap();
+        assert_eq!(blend.get("element").unwrap().as_str(), Some("As"));
+        assert_eq!(
+            blend.get("maximum_mass_fraction").unwrap().as_str(),
+            Some("1/50")
+        );
+        match assay {
+            Some(value) => assert_eq!(
+                blend.get("blended_mass_fraction").unwrap().as_str(),
+                Some(value)
+            ),
+            None => assert_eq!(blend.get("blended_mass_fraction"), Some(&Json::Null)),
+        }
+        assert_eq!(blend.get("dry_tonnes").unwrap().as_str(), Some(dry));
+        assert_eq!(blend.get("recovered_metal").unwrap().as_str(), Some(metal));
+        assert_eq!(
+            blend.get("incremental_contribution").unwrap().as_str(),
+            Some(net)
+        );
+        let bins = blend.get("selected_bins").unwrap().as_array().unwrap();
+        assert_eq!(bins.len(), 2);
+        for (bin, tonnes) in bins.iter().zip([low, high]) {
+            assert_eq!(
+                bin.get("selected_dry_tonnes").unwrap().as_str(),
+                Some(tonnes)
+            );
+        }
+    };
+    expect(&report, ["4/3", "2/3", "2/1", "8/15", "40/3"], Some("1/50"));
+    let physical = payload.get("capacity_balance").unwrap();
+    let economic = physical.get("positive_contribution").unwrap();
+    assert_eq!(
+        economic.get("incremental_contribution").unwrap().as_str(),
+        Some("40/1")
+    );
+    assert_eq!(lane(&root, input, "json").stdout, output.stdout);
+    let md = lane(&root, input, "markdown");
+    assert!(md.status.success());
+    let md = String::from_utf8(md.stdout).unwrap();
+    assert!(md.contains("| 1/5 | 4/3 |"));
+    assert!(md.contains("| 3/5 | 2/3 |"));
+    assert!(md.contains("**40/3 USD**"));
+
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-lane-impurity-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, text: &str| {
+        std::fs::write(scratch.join(name), text).unwrap();
+        lane_json(&lane(&scratch, name, "json"))
+    };
+    let market = original.replace(
+        r#""market_metal_units_per_period": "0.75""#,
+        r#""market_metal_units_per_period": "0.4""#,
+    );
+    expect(
+        &submit("market.json", &market),
+        ["1/1", "1/2", "3/2", "2/5", "10/1"],
+        Some("1/50"),
+    );
+    let availability = original.replace(r#""dry_tonnes": "4""#, r#""dry_tonnes": "0.5""#);
+    expect(
+        &submit("availability.json", &availability),
+        ["1/2", "1/4", "3/4", "1/5", "5/1"],
+        Some("1/50"),
+    );
+    let idle = original.replace(
+        r#""impurity_mass_fraction": "0.01""#,
+        r#""impurity_mass_fraction": "0.03""#,
+    );
+    expect(&submit("idle.json", &idle), ["0/1"; 5], None);
+    let (prefix, _) = original.split_once("\"recovery_curve\":").unwrap();
+    let (_, remaining) = original.split_once("\"blend_impurity_limit\":").unwrap();
+    let fixed = format!(r#"{prefix}"recovery_fraction":"0.75","blend_impurity_limit":{remaining}"#);
+    expect(
+        &submit("fixed.json", &fixed),
+        ["4/3", "2/3", "2/1", "1/2", "10/1"],
+        Some("1/50"),
+    );
+    for (name, from, to, code) in [
+        (
+            "missing-assay",
+            r#", "impurity_mass_fraction": "0.01""#,
+            "",
+            "FMINE-REF-107",
+        ),
+        (
+            "bad-assay",
+            r#""impurity_mass_fraction": "0.01""#,
+            r#""impurity_mass_fraction": "1.01""#,
+            "FMINE-REF-109",
+        ),
+        (
+            "bad-total-mass",
+            r#""impurity_mass_fraction": "0.01""#,
+            r#""impurity_mass_fraction": "1""#,
+            "FMINE-REF-109",
+        ),
+        (
+            "bad-element",
+            r#""element": "As""#,
+            r#""element": "Au""#,
+            "FMINE-REF-107",
+        ),
+    ] {
+        assert!(original.contains(from));
+        let refused = submit(&format!("{name}.json"), &original.replace(from, to));
+        assert_eq!(refused.get("payload"), Some(&Json::Null));
+        assert_eq!(
+            refused
+                .get("refusal")
+                .unwrap()
+                .get("code")
+                .unwrap()
+                .as_str(),
+            Some(code)
+        );
+    }
+}
+
+#[test]
 fn lane_recovery_curve_binary_distinguishes_exact_crossings_and_support_limits() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = "tests/planning/lane_recovery_curve.json";

@@ -1,0 +1,26 @@
+{
+  "schema": "fmine.lane-cutoff.v1",
+  "period": "Synthetic two-parcel blend",
+  "currency": "USD",
+  "metal": "Au",
+  "metal_unit": "g",
+  "ore_mass_basis": "dry_metric_tonne",
+  "ownership_basis": "100_percent_project",
+  "evidence": "synthetic",
+  "price_per_metal_unit": "100",
+  "selling_cost_per_metal_unit": "0",
+  "milling_cost_per_dry_tonne": "20",
+  "fixed_cost_per_period": "0",
+  "opportunity_cost_per_period": "0",
+  "mill_dry_tonnes_per_period": "2",
+  "market_metal_units_per_period": "0.75",
+  "recovery_curve": [
+    { "grade_per_dry_tonne": "0.2", "recovery_fraction": "0.5" },
+    { "grade_per_dry_tonne": "0.6", "recovery_fraction": "1" }
+  ],
+  "blend_impurity_limit": { "element": "As", "maximum_mass_fraction": "0.02" },
+  "grade_tonnage": [
+    { "grade_per_dry_tonne": "0.2", "dry_tonnes": "4", "impurity_mass_fraction": "0.01" },
+    { "grade_per_dry_tonne": "0.6", "dry_tonnes": "1", "impurity_mass_fraction": "0.04" }
+  ]
+}

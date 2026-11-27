@@ -6,6 +6,9 @@ use std::cmp::Ordering;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::exact_feas::Rat;
 
+mod blend;
+pub use blend::{BlendAllocation, ImpurityLimit};
+
 /// One declared period on one project basis. All money uses the same currency,
 /// all recovered and contained metal uses the same mass unit, and all ore
 /// tonnage is dry metric tonnes. Recovery is constant across feed grades.
@@ -107,6 +110,7 @@ pub struct CapacityBalance {
     pub positive_contribution_feed: GradeAllocation,
     /// Recovered metal at net selling price less variable milling cost, in the declared currency.
     pub incremental_contribution: Rat,
+    pub impurity_constrained: Option<BlendAllocation>,
 }
 
 /// Comparison under the explicit rule that equality clears the threshold.
@@ -302,6 +306,30 @@ impl LaneTerms {
         max_grade: Rat,
         recovery: GradeRecovery<'_>,
     ) -> Result<CapacityBalance, Refusal> {
+        self.screen_feed(bins, max_grade, recovery, None)
+    }
+
+    /// Also allocate two assayed bins under a mass-weighted impurity ceiling.
+    ///
+    /// # Errors
+    /// Refuses invalid feed, impurity fractions outside [0, 1], and exact overflow.
+    pub fn balance_feed_with_impurity(
+        self,
+        bins: &[GradeTonnageBin; 2],
+        max_grade: Rat,
+        recovery: GradeRecovery<'_>,
+        limit: ImpurityLimit,
+    ) -> Result<CapacityBalance, Refusal> {
+        self.screen_feed(bins, max_grade, recovery, Some(limit))
+    }
+
+    fn screen_feed(
+        self,
+        bins: &[GradeTonnageBin],
+        max_grade: Rat,
+        recovery: GradeRecovery<'_>,
+        impurity: Option<ImpurityLimit>,
+    ) -> Result<CapacityBalance, Refusal> {
         if !(1..=MAX_GRADE_BINS).contains(&bins.len()) {
             return Err(domain("grade-tonnage inventory requires 1 to 128 bins"));
         }
@@ -326,9 +354,12 @@ impl LaneTerms {
                 ));
             }
             if let Some(grade) = previous
-                && !compare(bin.grade, grade)?.is_gt()
+                && (compare(bin.grade, grade)?.is_lt()
+                    || (grade == bin.grade && impurity.is_none()))
             {
-                return Err(domain("grade-tonnage grades must strictly increase"));
+                return Err(domain(
+                    "grade-tonnage grades must increase, with ties allowed only for assayed bins",
+                ));
             }
             previous = Some(bin.grade);
             let recovered = match recovery {
@@ -363,13 +394,11 @@ impl LaneTerms {
         }
         let positive_contribution_feed =
             allocate_by_grade(&evaluated[first_profitable..], Some(mill), Some(market))?;
-        let milling_spend = milling_cost
-            .checked_mul(positive_contribution_feed.dry_tonnes)
-            .map_err(|_| arithmetic())?;
-        let incremental_contribution = net_price
-            .checked_mul(positive_contribution_feed.recovered_metal)
-            .and_then(|revenue| revenue.checked_sub(milling_spend))
-            .map_err(|_| arithmetic())?;
+        let incremental_contribution = self.contribution(
+            net_price,
+            positive_contribution_feed.dry_tonnes,
+            positive_contribution_feed.recovered_metal,
+        )?;
         Ok(CapacityBalance {
             available_dry_tonnes,
             available_recovered_metal,
@@ -378,7 +407,21 @@ impl LaneTerms {
             both: allocate_by_grade(&evaluated, Some(mill), Some(market))?,
             positive_contribution_feed,
             incremental_contribution,
+            impurity_constrained: impurity
+                .map(|limit| blend::solve(&evaluated, limit, self, net_price, max_grade))
+                .transpose()?,
         })
+    }
+
+    fn contribution(self, net_price: Rat, dry_tonnes: Rat, metal: Rat) -> Result<Rat, Refusal> {
+        let spend = self
+            .milling_cost_per_dry_tonne
+            .checked_mul(dry_tonnes)
+            .map_err(|_| arithmetic())?;
+        net_price
+            .checked_mul(metal)
+            .and_then(|revenue| revenue.checked_sub(spend))
+            .map_err(|_| arithmetic())
     }
 
     /// Evaluate the limiting grades within the curve's declared support.

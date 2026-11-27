@@ -6,8 +6,9 @@ use std::path::Path;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::omf::json::{self, Json};
 use fmine_optimize::cutoff::{
-    CapacityBalance, CurveCutoff, GradeRecovery, GradeScreen, GradeTonnageBin, LaneCutoffs,
-    LaneTerms, MAX_GRADE_BINS, MAX_RECOVERY_KNOTS, RecoveryCurve, screen_grade,
+    BlendAllocation, CapacityBalance, CurveCutoff, GradeRecovery, GradeScreen, GradeTonnageBin,
+    ImpurityLimit, LaneCutoffs, LaneTerms, MAX_GRADE_BINS, MAX_RECOVERY_KNOTS, RecoveryCurve,
+    screen_grade,
 };
 use fmine_units::ExactQty;
 
@@ -18,7 +19,15 @@ pub(super) const USAGE: &str = "plan cutoff --input <lane-scenario.json>";
 const SCHEMA: &str = "fmine.lane-cutoff.v1";
 const NO_CLAIM: &str = "These exact break-even grades are conditional on one declared period, one metal, constant recovery and the submitted financial and capacity assumptions. A grade screen compares only with the stated limiting case. Selecting a binding constraint, balancing cut-offs and approving an operating policy require separate evidence.";
 const CURVE_NO_CLAIM: &str = "These exact results use one declared period and metal, the submitted economics, and linear interpolation of recovered metal per dry tonne between the declared grade knots. The curve supports only that closed range. Selecting a binding constraint, balancing cut-offs and approving an operating policy require separate evidence.";
-pub(super) const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.lane-cutoff.v1","command":"plan cutoff --input <lane-scenario.json>","basis":"One period and metal on a 100_percent_project basis. All ore is dry_metric_tonne and all metal uses the declared metal_unit (g, kg, oz_t, lb_avdp or t). All monetary terms share one currency. The recovery fraction maps contained to recovered metal sold at the declared net price.","input":"Exact decimal strings for price_per_metal_unit, selling_cost_per_metal_unit, milling_cost_per_dry_tonne, fixed_cost_per_period, opportunity_cost_per_period, mill_dry_tonnes_per_period and market_metal_units_per_period; optional feed_grade_per_dry_tonne object with lower and upper decimal strings. Evidence is assumed or synthetic.","recovery":"Declare exactly one of recovery_fraction or recovery_curve. A curve has 2 to 128 ordered grade_per_dry_tonne and recovery_fraction knots using exact decimal strings. Recovered grade is grade times recovery, rises or stays flat, and is interpolated linearly. The feed band must lie entirely inside the curve. A crossing at a plateau uses the first grade.","grade_tonnage":"Optional array of 1 to 128 mined inventory bins on the same period and units, with strictly increasing grade_per_dry_tonne and positive dry_tonnes as exact decimal strings. Every bin must be within recovery support. The capacity screen takes the highest grades first, stopping at the first partial boundary bin. Reports results under the mill cap, the market cap and both, with selected tonnes, metal and boundary share. The screen uses no economic cutoff or optimized operating policy.","output":"Separate mine-, mill- and market-limited cases. Curve reports distinguish an exact cutoff, all_supported_grades_clear, and no_supported_grade_clears. Equality clears. Retains source SHA-256, units, period and uncalibrated status.","example":"tests/planning/lane_cutoff.json","curve_example":"tests/planning/lane_recovery_curve.json","grade_tonnage_example":"tests/planning/lane_grade_tonnage.json"}"#;
+pub(super) const ROBOT_DOCS_JSON: &str = concat!(
+    r#"{"schema":"fmine.lane-cutoff.v1","command":"plan cutoff --input <lane-scenario.json>","basis":"One period and metal on a 100_percent_project basis. All ore is dry_metric_tonne and all metal uses the declared metal_unit (g, kg, oz_t, lb_avdp or t). All monetary terms share one currency. The recovery fraction maps contained to recovered metal sold at the declared net price.","#,
+    r#""input":"Exact decimal strings for price_per_metal_unit, selling_cost_per_metal_unit, milling_cost_per_dry_tonne, fixed_cost_per_period, opportunity_cost_per_period, mill_dry_tonnes_per_period and market_metal_units_per_period. Optional feed_grade_per_dry_tonne object with lower and upper decimal strings. Evidence is assumed or synthetic.","#,
+    r#""recovery":"Declare exactly one of recovery_fraction or recovery_curve. A curve has 2 to 128 ordered grade_per_dry_tonne and recovery_fraction knots using exact decimal strings. Recovered grade is grade times recovery, rises or stays flat, and is interpolated linearly. The feed band must lie entirely inside the curve. A crossing at a plateau uses the first grade.","#,
+    r#""grade_tonnage":"Optional array of 1 to 128 already-mined inventory bins with increasing grade_per_dry_tonne and positive dry_tonnes as exact decimal strings. Every bin must lie within recovery support. The screen takes highest grades first and permits partial bins. Reports each physical cap alone, both caps together and the positive-contribution allocation under both caps.","#,
+    r#""blend_impurity_limit":"Optional object with element and maximum_mass_fraction. Supply exactly two grade_tonnage bins with impurity_mass_fraction values in [0,1] on a dry-mass basis. Equal grades are permitted in this mode. Maximizes contribution subject to both caps and the mass-weighted impurity ceiling under fixed additive parcel recovery. Fixed and opportunity charges enter the separate Lane limiting grades.","#,
+    r#""output":"Separate mine-, mill- and market-limited cases. Curve reports distinguish an exact cutoff, all_supported_grades_clear, and no_supported_grade_clears. Equality clears. Retains source SHA-256, units, period and uncalibrated status.","#,
+    r#""example":"tests/planning/lane_cutoff.json","curve_example":"tests/planning/lane_recovery_curve.json","grade_tonnage_example":"tests/planning/lane_grade_tonnage.json","impurity_blend_example":"tests/planning/lane_impurity_blend.json"}"#,
+);
 
 const ECONOMIC_FIELDS: [&str; 8] = [
     "price_per_metal_unit",
@@ -49,6 +58,19 @@ fn quantity(object: &Json, name: &str) -> Result<ExactQty, Refusal> {
             format!("{name} requires an exact decimal within the supported range"),
         )
     })
+}
+
+fn element<'a>(object: &'a Json, name: &str) -> Result<&'a str, Refusal> {
+    let symbol = field(object, name)?;
+    if symbol.len() > 3
+        || !symbol.starts_with(|c: char| c.is_ascii_uppercase())
+        || !symbol.bytes().skip(1).all(|c| c.is_ascii_lowercase())
+    {
+        return Err(declaration(format!(
+            "{name} requires one case-sensitive element symbol"
+        )));
+    }
+    Ok(symbol)
 }
 
 fn feed_mass_limit(unit: &str) -> Result<ExactQty, Refusal> {
@@ -91,7 +113,12 @@ struct ScenarioCutoffs {
     balance: Option<CapacityBalance>,
 }
 
-fn parse_grade_tonnage(raw: &Json) -> Result<Vec<GradeTonnageBin>, Refusal> {
+enum Inventory {
+    GradeTonnage(Vec<GradeTonnageBin>),
+    Assayed([GradeTonnageBin; 2], ImpurityLimit),
+}
+
+fn parse_grade_tonnage(raw: &Json, maximum: Option<ExactQty>) -> Result<Inventory, Refusal> {
     let rows = raw
         .as_array()
         .ok_or_else(|| declaration("grade_tonnage requires an array"))?;
@@ -100,11 +127,12 @@ fn parse_grade_tonnage(raw: &Json) -> Result<Vec<GradeTonnageBin>, Refusal> {
             "grade_tonnage requires 1 to {MAX_GRADE_BINS} bins"
         )));
     }
-    rows.iter()
+    let expected_fields = if maximum.is_some() { 3 } else { 2 };
+    let bins = rows.iter()
         .map(|row| {
-            if row.as_object().is_none_or(|fields| fields.len() != 2) {
+            if row.as_object().is_none_or(|fields| fields.len() != expected_fields) {
                 return Err(declaration(
-                    "each grade-tonnage bin requires grade_per_dry_tonne and dry_tonnes",
+                    "each bin requires grade_per_dry_tonne and dry_tonnes, plus impurity_mass_fraction only when a blend limit is declared",
                 ));
             }
             Ok(GradeTonnageBin {
@@ -112,7 +140,25 @@ fn parse_grade_tonnage(raw: &Json) -> Result<Vec<GradeTonnageBin>, Refusal> {
                 dry_tonnes: quantity(row, "dry_tonnes")?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(maximum_mass_fraction) = maximum else {
+        return Ok(Inventory::GradeTonnage(bins));
+    };
+    let ([low, high], [low_assay, high_assay]) = (bins.as_slice(), rows) else {
+        return Err(declaration(
+            "an impurity blend requires exactly two assayed bins",
+        ));
+    };
+    Ok(Inventory::Assayed(
+        [*low, *high],
+        ImpurityLimit {
+            maximum_mass_fraction,
+            bin_mass_fractions: [
+                quantity(low_assay, "impurity_mass_fraction")?,
+                quantity(high_assay, "impurity_mass_fraction")?,
+            ],
+        },
+    ))
 }
 
 fn evaluate_cutoffs(
@@ -120,19 +166,29 @@ fn evaluate_cutoffs(
     terms: LaneTerms,
     max_grade: ExactQty,
     grades: Option<(ExactQty, ExactQty)>,
+    impurity_maximum: Option<ExactQty>,
 ) -> Result<ScenarioCutoffs, Refusal> {
     let bins = doc
         .get("grade_tonnage")
-        .map(parse_grade_tonnage)
+        .map(|raw| parse_grade_tonnage(raw, impurity_maximum))
         .transpose()?;
+    if impurity_maximum.is_some() && bins.is_none() {
+        return Err(declaration("blend_impurity_limit requires grade_tonnage"));
+    }
+    let screen = |recovery| match &bins {
+        Some(Inventory::GradeTonnage(bins)) => {
+            terms.balance_feed(bins, max_grade, recovery).map(Some)
+        }
+        Some(Inventory::Assayed(bins, limit)) => terms
+            .balance_feed_with_impurity(bins, max_grade, recovery, *limit)
+            .map(Some),
+        None => Ok(None),
+    };
     match (doc.get("recovery_fraction"), doc.get("recovery_curve")) {
         (Some(_), None) => {
             let recovery = quantity(doc, "recovery_fraction")?;
             let c = terms.evaluate_constant(recovery)?;
-            let balance = bins
-                .as_deref()
-                .map(|bins| terms.balance_feed(bins, max_grade, GradeRecovery::Constant(recovery)))
-                .transpose()?;
+            let balance = screen(GradeRecovery::Constant(recovery))?;
             // A break-even grade above one tonne of metal per dry tonne is one no ore can carry.
             let bounded = |grade: ExactQty| -> Result<CurveCutoff, Refusal> {
                 let above = grade
@@ -179,10 +235,7 @@ fn evaluate_cutoffs(
             if let Some((lower, upper)) = grades {
                 curve.check_band(lower, upper)?;
             }
-            let balance = bins
-                .as_deref()
-                .map(|bins| terms.balance_feed(bins, max_grade, GradeRecovery::Curve(&curve)))
-                .transpose()?;
+            let balance = screen(GradeRecovery::Curve(&curve))?;
             Ok(ScenarioCutoffs {
                 limits: terms.evaluate_curve(&curve)?,
                 support: Some(curve.support()),
@@ -263,6 +316,46 @@ fn render_balance(
     )
 }
 
+fn render_impurity_blend(
+    blend: BlendAllocation,
+    element: &str,
+    maximum: ExactQty,
+    unit: &str,
+    currency: &str,
+    markdown: &mut String,
+) -> String {
+    let maximum = exact(maximum);
+    let assay = blend.impurity_fraction.map(exact);
+    let dry = exact(blend.dry_tonnes);
+    let metal = exact(blend.recovered_metal);
+    let contribution = exact(blend.incremental_contribution);
+    let blended = assay.as_deref().unwrap_or("—");
+    let _ = writeln!(
+        markdown,
+        "\n## Impurity-constrained blend\n\n{element} dry-mass fraction **{blended}** with ceiling **{maximum}**. Select **{dry} dry tonnes** for **{metal} {unit}** and **{contribution} {currency}** of incremental contribution. The blend uses fixed per-bin assays and additive recovered metal. A zero-tonne selection has no blended assay.\n\n| Feed grade ({unit}/dry t) | Selected dry tonnes |\n|---:|---:|"
+    );
+    let bins = blend.selected_bins.map(|bin| {
+        let grade = exact(bin.grade);
+        let tonnes = exact(bin.dry_tonnes);
+        let _ = writeln!(markdown, "| {grade} | {tonnes} |");
+        format!(
+            "{{\"grade_per_dry_tonne\":{},\"selected_dry_tonnes\":{}}}",
+            js(&grade),
+            js(&tonnes)
+        )
+    });
+    let assay = assay.map_or_else(|| "null".into(), |value| js(&value));
+    format!(
+        ",\"impurity_constrained_blend\":{{\"element\":{},\"maximum_mass_fraction\":{},\"blended_mass_fraction\":{assay},\"dry_tonnes\":{},\"recovered_metal\":{},\"incremental_contribution\":{},\"selected_bins\":[{}]}}",
+        js(element),
+        js(&maximum),
+        js(&dry),
+        js(&metal),
+        js(&contribution),
+        bins.join(",")
+    )
+}
+
 fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Envelope, Refusal> {
     let doc = json::parse(text.as_bytes()).map_err(declaration)?;
     let declared_fields = [
@@ -277,6 +370,7 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
         "feed_grade_per_dry_tonne",
         "recovery_curve",
         "grade_tonnage",
+        "blend_impurity_limit",
     ];
     let members = doc
         .as_object()
@@ -296,7 +390,7 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
         ));
     }
     let currency = field(&doc, "currency")?;
-    let metal = field(&doc, "metal")?;
+    let metal = element(&doc, "metal")?;
     let metal_unit = field(&doc, "metal_unit")?;
     let mass_basis = field(&doc, "ore_mass_basis")?;
     let ownership = field(&doc, "ownership_basis")?;
@@ -304,14 +398,6 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
     if currency.len() != 3 || !currency.bytes().all(|c| c.is_ascii_uppercase()) {
         return Err(declaration(
             "currency requires one three-letter uppercase code",
-        ));
-    }
-    if metal.len() > 3
-        || !metal.starts_with(|c: char| c.is_ascii_uppercase())
-        || !metal.bytes().skip(1).all(|c| c.is_ascii_lowercase())
-    {
-        return Err(declaration(
-            "metal requires one case-sensitive element symbol",
         ));
     }
     if mass_basis != "dry_metric_tonne" || ownership != "100_percent_project" {
@@ -326,6 +412,23 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
             "declare assumed or synthetic Lane scenario inputs",
         ));
     }
+    let impurity = doc
+        .get("blend_impurity_limit")
+        .map(|limit| {
+            if limit.as_object().is_none_or(|fields| fields.len() != 2) {
+                return Err(declaration(
+                    "blend_impurity_limit requires exactly element and maximum_mass_fraction",
+                ));
+            }
+            let symbol = element(limit, "element")?;
+            if symbol == metal {
+                return Err(declaration(
+                    "impurity element must differ from the recovered metal",
+                ));
+            }
+            Ok((symbol, quantity(limit, "maximum_mass_fraction")?))
+        })
+        .transpose()?;
     let grades = doc
         .get("feed_grade_per_dry_tonne")
         .map(|band| {
@@ -358,7 +461,13 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
         limits: cutoffs,
         support,
         balance,
-    } = evaluate_cutoffs(&doc, terms, max_grade, grades)?;
+    } = evaluate_cutoffs(
+        &doc,
+        terms,
+        max_grade,
+        grades,
+        impurity.map(|(_, maximum)| maximum),
+    )?;
     let source_json = worksheet_input::source_json(source, text.len());
     let mut markdown = format!(
         "# Lane limiting cut-off grades\n\n{} · {metal} · {metal_unit}/dry metric tonne · {currency} · 100% project basis\n\nInputs are {evidence} and uncalibrated. Source SHA-256 `{}`.\n\n",
@@ -443,9 +552,15 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
     let balance_json = balance.map_or_else(String::new, |balance| {
         render_balance(balance, terms, metal_unit, currency, &mut markdown)
     });
+    let blend_json = balance
+        .and_then(|balance| balance.impurity_constrained)
+        .zip(impurity)
+        .map_or_else(String::new, |(blend, (element, maximum))| {
+            render_impurity_blend(blend, element, maximum, metal_unit, currency, &mut markdown)
+        });
     let _ = writeln!(markdown, "\n{no_claim}");
     let payload = format!(
-        "{{\"schema\":\"{SCHEMA}\",\"period\":{},\"currency\":{},\"metal\":{},\"metal_unit\":{},\"ore_mass_basis\":{},\"ownership_basis\":{},\"input_evidence\":{},\"calibration\":\"uncalibrated\",\"source\":{source_json},\"feed_grade_per_dry_tonne\":{grade_json}{curve_json},\"limiting_cutoffs\":[{}]{balance_json}}}",
+        "{{\"schema\":\"{SCHEMA}\",\"period\":{},\"currency\":{},\"metal\":{},\"metal_unit\":{},\"ore_mass_basis\":{},\"ownership_basis\":{},\"input_evidence\":{},\"calibration\":\"uncalibrated\",\"source\":{source_json},\"feed_grade_per_dry_tonne\":{grade_json}{curve_json},\"limiting_cutoffs\":[{}]{balance_json}{blend_json}}}",
         js(period),
         js(currency),
         js(metal),
