@@ -261,7 +261,49 @@ pub const GOLDEN_CATALOG: &[GoldenFormulaSpec] = &[
     },
 ];
 
-/// Parse `fixtures/fmine-derive/golden_formulas.txt`, refusing malformed, empty, or duplicate rows.
+/// Parse an exact signed integer or reduced fraction `"num"` / `"num/den"` (`den > 0`)
+/// into its `f64` value, refusing malformed, zero-denominator, or non-finite forms.
+pub fn parse_exact_rational(raw: &str) -> Result<f64, Refusal> {
+    if raw.is_empty() || raw.trim() != raw {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            format!("malformed exact_eval rational {raw:?}"),
+        ));
+    }
+    let val = if let Some((num_s, den_s)) = raw.split_once('/') {
+        let num: i128 = num_s.parse().map_err(|_| {
+            Refusal::new(
+                RefusalCode::DigestMismatch505,
+                format!("invalid exact_eval numerator in {raw:?}"),
+            )
+        })?;
+        let den: i128 = den_s.parse().map_err(|_| {
+            Refusal::new(
+                RefusalCode::DigestMismatch505,
+                format!("invalid exact_eval denominator in {raw:?}"),
+            )
+        })?;
+        if den <= 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("exact_eval denominator must be positive in {raw:?}"),
+            ));
+        }
+        (num as f64) / (den as f64)
+    } else {
+        let num: i128 = raw.parse().map_err(|_| {
+            Refusal::new(
+                RefusalCode::DigestMismatch505,
+                format!("invalid exact_eval integer {raw:?}"),
+            )
+        })?;
+        num as f64
+    };
+    check_finite_output("exact_eval", val)
+}
+
+/// Parse `fixtures/fmine-derive/golden_formulas.txt`, refusing malformed, empty, contradictory,
+/// or duplicate rows.
 pub fn parse_golden_fixture(text: &str) -> Result<Vec<GoldenFormulaRow>, Refusal> {
     let mut rows = Vec::new();
     let mut seen = BTreeSet::new();
@@ -281,12 +323,13 @@ pub fn parse_golden_fixture(text: &str) -> Result<Vec<GoldenFormulaRow>, Refusal
                 ),
             ));
         }
-        if cols[1..9].iter().any(|c| c.is_empty()) {
+        if cols[1..9].iter().any(|c| c.trim().is_empty()) {
             return Err(Refusal::new(
                 RefusalCode::DigestMismatch505,
                 format!("golden_formulas.txt line {}: empty field", idx + 1),
             ));
         }
+        let exact_f64 = parse_exact_rational(cols[7])?;
         let f64_eval: f64 = cols[8].parse().map_err(|_| {
             Refusal::new(
                 RefusalCode::DigestMismatch505,
@@ -301,6 +344,17 @@ pub fn parse_golden_fixture(text: &str) -> Result<Vec<GoldenFormulaRow>, Refusal
             return Err(Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
                 format!("golden_formulas.txt line {}: non-finite f64_eval", idx + 1),
+            ));
+        }
+        let tol = 1e-12 * exact_f64.abs().max(1.0);
+        if (exact_f64 - f64_eval).abs() > tol {
+            return Err(Refusal::new(
+                RefusalCode::DigestMismatch505,
+                format!(
+                    "golden_formulas.txt line {}: exact_eval {:?} ({exact_f64}) disagrees with f64_eval {f64_eval}",
+                    idx + 1,
+                    cols[7]
+                ),
             ));
         }
         if !seen.insert(cols[1].to_string()) {
@@ -321,8 +375,14 @@ pub fn parse_golden_fixture(text: &str) -> Result<Vec<GoldenFormulaRow>, Refusal
             latex: cols[5].to_string(),
             rust_code: cols[6].to_string(),
             exact_eval: cols[7].to_string(),
-            f64_eval,
+            f64_eval: canonical_zero(f64_eval),
         });
+    }
+    if rows.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            "golden_formulas.txt contains no FORMULA rows",
+        ));
     }
     Ok(rows)
 }
@@ -372,6 +432,10 @@ pub fn verify_fixture_against_catalog(
     Ok(rows)
 }
 
+fn canonical_zero(value: f64) -> f64 {
+    if value == 0.0 { 0.0 } else { value }
+}
+
 fn require_finite(name: &str, value: f64) -> Result<f64, Refusal> {
     if !value.is_finite() {
         return Err(Refusal::new(
@@ -379,29 +443,29 @@ fn require_finite(name: &str, value: f64) -> Result<f64, Refusal> {
             format!("non-finite input {name}={value}"),
         ));
     }
-    Ok(value)
+    Ok(canonical_zero(value))
 }
 
 fn require_positive(name: &str, value: f64) -> Result<f64, Refusal> {
-    require_finite(name, value)?;
-    if value <= 0.0 {
+    let v = require_finite(name, value)?;
+    if v <= 0.0 {
         return Err(Refusal::new(
             RefusalCode::OutsidePhysicalDomain109,
-            format!("input {name}={value} must be strictly positive"),
+            format!("input {name}={v} must be strictly positive"),
         ));
     }
-    Ok(value)
+    Ok(v)
 }
 
 fn require_non_negative(name: &str, value: f64) -> Result<f64, Refusal> {
-    require_finite(name, value)?;
-    if value < 0.0 {
+    let v = require_finite(name, value)?;
+    if v < 0.0 {
         return Err(Refusal::new(
             RefusalCode::OutsidePhysicalDomain109,
-            format!("input {name}={value} must be non-negative"),
+            format!("input {name}={v} must be non-negative"),
         ));
     }
-    Ok(value)
+    Ok(v)
 }
 
 fn check_finite_output(name: &str, value: f64) -> Result<f64, Refusal> {
@@ -411,7 +475,7 @@ fn check_finite_output(name: &str, value: f64) -> Result<f64, Refusal> {
             format!("non-finite golden evaluation for {name}"),
         ));
     }
-    Ok(value)
+    Ok(canonical_zero(value))
 }
 
 /// Inputs for Lane's three limiting cut-off grades (`fm-cutoff`, `BD-252`, plan §15.6 / §27.3).
@@ -480,8 +544,10 @@ pub fn eval_lane_cutoffs(inp: LaneInputs) -> Result<LaneCutoffsWithJacobian, Ref
             "non-positive or non-finite Lane denominator R*(P - r)",
         ));
     }
-    let overhead = f_fix + cap_f;
-    let net_ref_price = net_price - overhead / k;
+    let overhead = check_finite_output("lane_overhead", f_fix + cap_f)?;
+    let ref_overhead = check_finite_output("lane_refinery_overhead", overhead / k)?;
+    let mill_overhead = check_finite_output("lane_mill_overhead", overhead / h)?;
+    let net_ref_price = net_price - ref_overhead;
     if !(net_ref_price.is_finite() && net_ref_price > 0.0) {
         return Err(Refusal::new(
             RefusalCode::OutsidePhysicalDomain109,
@@ -498,24 +564,22 @@ pub fn eval_lane_cutoffs(inp: LaneInputs) -> Result<LaneCutoffsWithJacobian, Ref
         ));
     }
 
+    // Algebraically equivalent simplified forms of fsym@9d785d0 derivatives that avoid
+    // premature denominator-squaring overflow/underflow at extreme scales.
     let g_mine = check_finite_output("lane_mine_cutoff", ch / denom_mh)?;
     let dg_mine_d_ch = check_finite_output("lane_mine_cutoff_d_ch", 1.0 / denom_mh)?;
-    let dg_mine_d_price =
-        check_finite_output("lane_mine_cutoff_d_P", -(rec * ch) / (denom_mh * denom_mh))?;
-    let dg_mine_d_recovery = check_finite_output(
-        "lane_mine_cutoff_d_R",
-        -(ch * net_price) / (denom_mh * denom_mh),
-    )?;
+    let dg_mine_d_price = check_finite_output("lane_mine_cutoff_d_P", -g_mine / net_price)?;
+    let dg_mine_d_recovery = check_finite_output("lane_mine_cutoff_d_R", -g_mine / rec)?;
 
-    let g_mill = check_finite_output("lane_mill_cutoff", (ch + overhead / h) / denom_mh)?;
-    let dg_mill_d_opportunity = check_finite_output("lane_mill_cutoff_d_F", 1.0 / (h * denom_mh))?;
+    let g_mill = check_finite_output("lane_mill_cutoff", (ch + mill_overhead) / denom_mh)?;
+    let dg_mill_d_opportunity = check_finite_output("lane_mill_cutoff_d_F", dg_mine_d_ch / h)?;
     let dg_mill_d_mill_capacity =
-        check_finite_output("lane_mill_cutoff_d_H", -overhead / (h * h * denom_mh))?;
+        check_finite_output("lane_mill_cutoff_d_H", -((mill_overhead / denom_mh) / h))?;
 
     let g_refinery = check_finite_output("lane_refinery_cutoff", ch / denom_r)?;
     let dg_refinery_d_refinery_capacity = check_finite_output(
         "lane_refinery_cutoff_d_K",
-        -(rec * ch * overhead) / (k * k * denom_r * denom_r),
+        -((g_refinery / k) * (ref_overhead / net_ref_price)),
     )?;
 
     Ok(LaneCutoffsWithJacobian {
@@ -560,21 +624,22 @@ pub fn eval_two_product_recovery(inp: TwoProductInputs) -> Result<TwoProductWith
             "two-product recovery denominator (c - t) must be nonzero",
         ));
     }
-    let denom = f * c_minus_t;
-    let denom2 = denom * denom;
     let f_minus_t = f - t;
-    let recovery = check_finite_output("two_product_recovery", c * f_minus_t / denom)?;
-    let dr_df = check_finite_output(
-        "two_product_recovery_d_f",
-        c / denom - (c * c_minus_t * f_minus_t) / denom2,
-    )?;
+    let c_ratio = check_finite_output("two_product_c_ratio", c / c_minus_t)?;
+    // Algebraically simplified single-fraction forms of fsym@9d785d0 derivatives:
+    //   dR/df = c*t / (f^2*(c - t))
+    //   dR/dc = -t*(f - t) / (f*(c - t)^2)
+    //   dR/dt = c*(f - c) / (f*(c - t)^2)
+    // Eliminates catastrophic cancellation when t << f and avoids denom^2 overflow.
+    let recovery = check_finite_output("two_product_recovery", c_ratio * (f_minus_t / f))?;
+    let dr_df = check_finite_output("two_product_recovery_d_f", (c_ratio * (t / f)) / f)?;
     let dr_dc = check_finite_output(
         "two_product_recovery_d_c",
-        f_minus_t / denom - (c * f * f_minus_t) / denom2,
+        -((t / c_minus_t) * (f_minus_t / f)) / c_minus_t,
     )?;
     let dr_dt = check_finite_output(
         "two_product_recovery_d_t",
-        (c * f * f_minus_t) / denom2 - c / denom,
+        (c_ratio * ((f - c) / c_minus_t)) / f,
     )?;
     Ok(TwoProductWithJacobian {
         recovery,
@@ -632,6 +697,12 @@ pub fn eval_nsr(inp: NsrInputs) -> Result<NsrWithSensitivities, Refusal> {
         ));
     }
     let unit_rev = r * (1.0 - tau) * net_p;
+    if !(unit_rev.is_finite() && unit_rev > 0.0) {
+        return Err(Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            "non-positive or non-finite NSR unit revenue R*(1 - tau)*(P - c_t)",
+        ));
+    }
     let nsr = check_finite_output("nsr_ad_valorem", g * unit_rev - cm)?;
     let dnsr_dg = check_finite_output("nsr_ad_valorem_d_g", unit_rev)?;
     let dnsr_dtau = check_finite_output("nsr_ad_valorem_d_tau", -(r * g * net_p))?;
@@ -676,12 +747,19 @@ pub fn eval_wgc_aisc(inp: WgcAiscInputs) -> Result<WgcAiscWithJacobian, Refusal>
         ));
     }
     let metal = t * g * r;
-    let metal2 = metal * metal;
+    if !(metal.is_finite() && metal > 0.0) {
+        return Err(Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            "non-positive or non-finite recovered metal T*g*R",
+        ));
+    }
+    // Algebraically equivalent simplified forms of fsym@9d785d0 derivatives (-AISC / x) that
+    // prevent metal^2 overflow and preserve exact -1 elasticities across all scales.
     let aisc = check_finite_output("wgc_aisc_unit_cost", c / metal)?;
     let daisc_dc = check_finite_output("wgc_aisc_d_C", 1.0 / metal)?;
-    let daisc_dt = check_finite_output("wgc_aisc_d_T", -(c * r * g) / metal2)?;
-    let daisc_dg = check_finite_output("wgc_aisc_d_g", -(c * r * t) / metal2)?;
-    let daisc_dr = check_finite_output("wgc_aisc_d_R", -(c * t * g) / metal2)?;
+    let daisc_dt = check_finite_output("wgc_aisc_d_T", -aisc / t)?;
+    let daisc_dg = check_finite_output("wgc_aisc_d_g", -aisc / g)?;
+    let daisc_dr = check_finite_output("wgc_aisc_d_R", -aisc / r)?;
     Ok(WgcAiscWithJacobian {
         aisc,
         daisc_dc,
@@ -730,16 +808,6 @@ mod tests {
     const GOLDEN_FIXTURE_TEXT: &str =
         include_str!("../../../fixtures/fmine-derive/golden_formulas.txt");
 
-    fn parse_exact_rational(s: &str) -> f64 {
-        if let Some((num, den)) = s.split_once('/') {
-            let n: f64 = num.parse().expect("rational numer");
-            let d: f64 = den.parse().expect("rational denom");
-            n / d
-        } else {
-            s.parse().expect("integer exact_eval")
-        }
-    }
-
     #[test]
     fn test_fixture_matches_catalog_and_detects_tampering() {
         let rows = verify_fixture_against_catalog(GOLDEN_FIXTURE_TEXT)
@@ -748,7 +816,7 @@ mod tests {
 
         // Every exact rational string in the fixture must agree with its printed f64 evaluation.
         for row in &rows {
-            let rat_f64 = parse_exact_rational(&row.exact_eval);
+            let rat_f64 = parse_exact_rational(&row.exact_eval).expect("valid exact rational");
             assert!(
                 (rat_f64 - row.f64_eval).abs() <= 1e-12 * rat_f64.abs().max(1.0),
                 "{}: exact_eval {} ({rat_f64}) != f64_eval {}",
@@ -771,7 +839,12 @@ mod tests {
         let rows = verify_fixture_against_catalog(GOLDEN_FIXTURE_TEXT).expect("fixture");
         let by_id: BTreeMap<&str, f64> = rows
             .iter()
-            .map(|r| (r.id.as_str(), parse_exact_rational(&r.exact_eval)))
+            .map(|r| {
+                (
+                    r.id.as_str(),
+                    parse_exact_rational(&r.exact_eval).expect("valid exact rational"),
+                )
+            })
             .collect();
 
         let lane = eval_lane_cutoffs(LaneInputs {
@@ -1297,5 +1370,214 @@ mod tests {
             a.dg_refinery_d_refinery_capacity.to_bits(),
             b.dg_refinery_d_refinery_capacity.to_bits()
         );
+    }
+
+    #[test]
+    fn test_two_product_no_catastrophic_cancellation_near_zero_tailings() {
+        // Near-zero tailings t = 1e-12 would lose ~12 digits under unsimplified subtraction.
+        let f = 2.0_f64;
+        let c = 20.0_f64;
+        let t = 1e-12_f64;
+        let out = eval_two_product_recovery(TwoProductInputs {
+            feed_grade: f,
+            concentrate_grade: c,
+            tailings_grade: t,
+        })
+        .expect("near-zero tailings");
+
+        let exact_dr_df = 2.5e-13_f64 / (1.0 - t / c);
+        let exact_dr_dc = -2.5e-15_f64 * (1.0 - t / f) / ((1.0 - t / c) * (1.0 - t / c));
+        let exact_dr_dt = -0.45_f64 / ((1.0 - t / c) * (1.0 - t / c));
+        assert!(
+            ((out.dr_df - exact_dr_df) / exact_dr_df).abs() < 1e-14,
+            "dr_df lost precision: got {:.16e}, expected {:.16e}",
+            out.dr_df,
+            exact_dr_df
+        );
+        assert!(
+            ((out.dr_dc - exact_dr_dc) / exact_dr_dc).abs() < 1e-14,
+            "dr_dc lost precision: got {:.16e}, expected {:.16e}",
+            out.dr_dc,
+            exact_dr_dc
+        );
+        assert!(
+            ((out.dr_dt - exact_dr_dt) / exact_dr_dt).abs() < 1e-14,
+            "dr_dt lost precision: got {:.16e}, expected {:.16e}",
+            out.dr_dt,
+            exact_dr_dt
+        );
+
+        // Exact t = 0: recovery == 1, dr_df == +0.0, dr_dc == +0.0, dr_dt == -0.45.
+        let zero_t = eval_two_product_recovery(TwoProductInputs {
+            feed_grade: f,
+            concentrate_grade: c,
+            tailings_grade: 0.0,
+        })
+        .expect("zero tailings");
+        assert_eq!(zero_t.recovery, 1.0);
+        assert_eq!(zero_t.dr_df.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(zero_t.dr_dc.to_bits(), 0.0_f64.to_bits());
+        assert!((zero_t.dr_dt + 0.45).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_large_scale_no_premature_squaring_overflow_or_silent_underflow() {
+        // WGC AISC at T = 1e160: metal^2 would overflow to +inf and silently underflow derivatives
+        // to 0.0 unless simplified to -aisc / x.
+        let aisc = eval_wgc_aisc(WgcAiscInputs {
+            total_cost: 1e150,
+            tonnes: 1e160,
+            grade: 1.0,
+            recovery: 1.0,
+        })
+        .expect("large-scale aisc");
+        assert!((aisc.aisc - 1e-10).abs() <= 1e-24);
+        assert!(
+            aisc.daisc_dt != 0.0 && ((aisc.daisc_dt + 1e-170) / 1e-170).abs() < 1e-14,
+            "daisc_dt silently underflowed or drifted: {:.16e}",
+            aisc.daisc_dt
+        );
+        assert!(((aisc.daisc_dg + 1e-10) / 1e-10).abs() < 1e-14);
+        assert!(((aisc.daisc_dr + 1e-10) / 1e-10).abs() < 1e-14);
+
+        // Lane cut-offs at P = 1e200, H = K = 1e160: naive denom^2 / h^2 / k^2*denom_r^2 would
+        // overflow to +inf and silently underflow derivatives to 0.0.
+        let lane = eval_lane_cutoffs(LaneInputs {
+            price: 1e200,
+            refining_cost: 0.0,
+            recovery: 1.0,
+            milling_cost: 1e200,
+            fixed_cost: 1e199,
+            opportunity_cost: 0.0,
+            mill_capacity: 1e160,
+            refinery_capacity: 1e160,
+        })
+        .expect("large-scale lane");
+        assert!((lane.g_mine - 1.0).abs() < 1e-15);
+        assert!(
+            lane.dg_mine_d_price != 0.0 && ((lane.dg_mine_d_price + 1e-200) / 1e-200).abs() < 1e-14
+        );
+        assert!((lane.dg_mine_d_recovery + 1.0).abs() < 1e-14);
+        assert!(lane.dg_mill_d_mill_capacity < 0.0 && lane.dg_mill_d_mill_capacity.is_finite());
+        assert!(
+            lane.dg_refinery_d_refinery_capacity < 0.0
+                && lane.dg_refinery_d_refinery_capacity.is_finite()
+        );
+
+        // Overhead sum overflow classifies as NumericalCertificateFailed207 (not domain error).
+        let ov = eval_lane_cutoffs(LaneInputs {
+            price: 100.0,
+            refining_cost: 5.0,
+            recovery: 0.9,
+            milling_cost: 10.0,
+            fixed_cost: 1e308,
+            opportunity_cost: 1e308,
+            mill_capacity: 10.0,
+            refinery_capacity: 10.0,
+        })
+        .expect_err("overhead overflow must refuse");
+        assert_eq!(ov.code, RefusalCode::NumericalCertificateFailed207.as_str());
+    }
+
+    #[test]
+    fn test_parse_golden_fixture_refuses_malformed_and_contradictory_rows() {
+        assert_eq!(
+            parse_golden_fixture("# comments only\n\n")
+                .unwrap_err()
+                .code,
+            RefusalCode::DigestMismatch505.as_str()
+        );
+        assert_eq!(
+            parse_exact_rational("1/0").unwrap_err().code,
+            RefusalCode::OutsidePhysicalDomain109.as_str()
+        );
+        assert_eq!(
+            parse_exact_rational("1/-5").unwrap_err().code,
+            RefusalCode::OutsidePhysicalDomain109.as_str()
+        );
+        assert_eq!(
+            parse_exact_rational("1.5").unwrap_err().code,
+            RefusalCode::DigestMismatch505.as_str()
+        );
+        // Contradictory exact_eval vs f64_eval must refuse even on standalone parse.
+        let bad_match = "FORMULA\tid1\tfm-recon\tg\tg\tg\tg\t1/5\t0.5\n";
+        assert_eq!(
+            parse_golden_fixture(bad_match).unwrap_err().code,
+            RefusalCode::DigestMismatch505.as_str()
+        );
+        // Duplicate ID refuses.
+        let dup = "FORMULA\tid1\td\tv\tc\tl\tr\t1/2\t0.5\nFORMULA\tid1\td\tv\tc\tl\tr\t1/2\t0.5\n";
+        assert_eq!(
+            parse_golden_fixture(dup).unwrap_err().code,
+            RefusalCode::DigestMismatch505.as_str()
+        );
+        // Whitespace-only column refuses.
+        let blank_col = "FORMULA\tid1\t   \tv\tc\tl\tr\t1/2\t0.5\n";
+        assert_eq!(
+            parse_golden_fixture(blank_col).unwrap_err().code,
+            RefusalCode::DigestMismatch505.as_str()
+        );
+        // Non-finite f64_eval refuses.
+        let nan_row = "FORMULA\tid1\td\tv\tc\tl\tr\t1/2\tNaN\n";
+        assert_eq!(
+            parse_golden_fixture(nan_row).unwrap_err().code,
+            RefusalCode::OutsidePhysicalDomain109.as_str()
+        );
+    }
+
+    #[test]
+    fn test_canonical_zero_eliminates_negative_zero_bits() {
+        let pos_zero = 0.0_f64.to_bits();
+        let lane = eval_lane_cutoffs(LaneInputs {
+            price: 100.0,
+            refining_cost: 5.0,
+            recovery: 0.9,
+            milling_cost: 0.0,
+            fixed_cost: 0.0,
+            opportunity_cost: 0.0,
+            mill_capacity: 10.0,
+            refinery_capacity: 10.0,
+        })
+        .expect("zero cost lane");
+        assert_eq!(lane.g_mine.to_bits(), pos_zero);
+        assert_eq!(lane.dg_mine_d_price.to_bits(), pos_zero);
+        assert_eq!(lane.dg_mine_d_recovery.to_bits(), pos_zero);
+        assert_eq!(lane.dg_mill_d_mill_capacity.to_bits(), pos_zero);
+        assert_eq!(lane.dg_refinery_d_refinery_capacity.to_bits(), pos_zero);
+
+        let aisc = eval_wgc_aisc(WgcAiscInputs {
+            total_cost: 0.0,
+            tonnes: 10.0,
+            grade: 2.0,
+            recovery: 0.8,
+        })
+        .expect("zero cost aisc");
+        assert_eq!(aisc.aisc.to_bits(), pos_zero);
+        assert_eq!(aisc.daisc_dt.to_bits(), pos_zero);
+        assert_eq!(aisc.daisc_dg.to_bits(), pos_zero);
+        assert_eq!(aisc.daisc_dr.to_bits(), pos_zero);
+
+        let nsr = eval_nsr(NsrInputs {
+            grade: 0.0,
+            recovery: 0.9,
+            price: 80.0,
+            royalty_rate: 0.05,
+            treatment_cost: 4.0,
+            mining_and_processing_cost: 0.0,
+        })
+        .expect("zero grade nsr");
+        assert_eq!(nsr.nsr.to_bits(), pos_zero);
+        assert_eq!(nsr.dnsr_dtau.to_bits(), pos_zero);
+        assert_eq!(nsr.breakeven_grade.to_bits(), pos_zero);
+
+        let bil = eval_bilinear_metal(BilinearMetalInputs {
+            dry_tonnes: -0.0,
+            grade: -0.0,
+            contained_metal: -0.0,
+        })
+        .expect("neg zero bilinear");
+        assert_eq!(bil.residual.to_bits(), pos_zero);
+        assert_eq!(bil.dr_dt.to_bits(), pos_zero);
+        assert_eq!(bil.dr_dg.to_bits(), pos_zero);
     }
 }

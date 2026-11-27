@@ -48,7 +48,7 @@ Testpit T-layer build-time / dev-only symbolic derivation crate (`BD-139`, plan 
 
 ## 11. Public API
 - `FSYM_PIN_REV`, `GOLDEN_FIXTURE_SHA256`, `GoldenFormulaSpec`, `GoldenFormulaRow`, `GOLDEN_CATALOG`
-- `parse_golden_fixture`, `verify_fixture_against_catalog`
+- `parse_exact_rational`, `parse_golden_fixture`, `verify_fixture_against_catalog`
 - `LaneInputs`, `LaneCutoffsWithJacobian`, `eval_lane_cutoffs`
 - `TwoProductInputs`, `TwoProductWithJacobian`, `eval_two_product_recovery`
 - `NsrInputs`, `NsrWithSensitivities`, `eval_nsr`
