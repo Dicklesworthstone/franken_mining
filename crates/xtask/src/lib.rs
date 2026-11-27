@@ -1654,7 +1654,9 @@ mod tests {
         // BD-139 adds fmine-derive's portable symbolic golden formula catalog and evaluators.
         // BD-252 adds the exact Lane grades and feed screen in fmine-optimize::cutoff.
         // BD-232 adds fmine-infer's 5 portable modules (lib, ad, bijector, diagnostics, nuts).
-        assert_eq!(report.bitwise_files, 142, "{report:?}");
+        // BD-163 adds four portable drill modules (lib, records, records/tests, store).
+        // bd-uoze adds the exact two-parcel blend solver (fmine-optimize::cutoff::blend).
+        assert_eq!(report.bitwise_files, 147, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
