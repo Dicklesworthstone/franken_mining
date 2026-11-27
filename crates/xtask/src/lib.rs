@@ -1659,7 +1659,8 @@ mod tests {
         // BD-164 adds the minimum-curvature desurvey (fmine-drill::desurvey).
         // BD-166 adds length- and mass-weighted compositing (fmine-drill::composite).
         // BD-172 adds the OB-LAB fold (fmine-drill::lab).
-        assert_eq!(report.bitwise_files, 150, "{report:?}");
+        // BD-285 adds twin pairs, G-TWIN and the RC smearing monitor (fmine-drill::twin).
+        assert_eq!(report.bitwise_files, 151, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

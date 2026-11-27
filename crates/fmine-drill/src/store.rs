@@ -18,7 +18,11 @@
 //!   - a dispatch correction changes the lab or drops a sample. Either would break a result already admitted
 //!     against it; a sample that never arrived is declared lost (`OB-LAB`, BD-172), not edited out;
 //!   - a CRM or blank names a sample that was drilled, or a duplicate or umpire names inserted QC material
-//!     ([`SampleType::QcMaterial`]) on either side; a sample correction cannot change which of the two it is.
+//!     ([`SampleType::QcMaterial`]) on either side; a sample correction cannot change which of the two it is;
+//!   - a result is received, or a loss declared, before its dispatch was sent; a loss names a sample its dispatch
+//!     does not list; a correction moves a result or a loss to another sample or dispatch (`OB-LAB`, BD-172);
+//!   - a twin pair matches an interval of another hole than the side it is on, or a correction changes the holes
+//!     it compares (BD-285).
 //!
 //!   Ids never disappear, so a reference that held when it was written holds after any later correction.
 //! - **Reads.** [`current`], [`history`] and [`as_of`] decode a key's versions from the ledger.
@@ -290,6 +294,15 @@ pub fn drill_law(ledger: &L0Ledger, batch: &DeltaBatch) -> Result<(), String> {
                         new.loss_id
                     ));
                 }
+                (DrillRecord::TwinPair(old), DrillRecord::TwinPair(new))
+                    if (&old.original_hole_id, &old.twin_hole_id)
+                        != (&new.original_hole_id, &new.twin_hole_id) =>
+                {
+                    return Err(format!(
+                        "twin '{}': a correction cannot change the holes it compares",
+                        new.twin_id
+                    ));
+                }
                 (DrillRecord::Sample(old), DrillRecord::Sample(new))
                     if is_qc_material(old) != is_qc_material(new) =>
                 {
@@ -348,6 +361,30 @@ pub fn drill_law(ledger: &L0Ledger, batch: &DeltaBatch) -> Result<(), String> {
                 {
                     check_listed(key, &dispatch, &loss.sample_id)?;
                     check_after_dispatch(key, "declared lost", loss.declared_at_ns, &dispatch)?;
+                }
+            }
+            DrillRecord::TwinPair(twin) => {
+                for m in &twin.matches {
+                    for (id, hole) in [
+                        (&m.original_interval_id, &twin.original_hole_id),
+                        (&m.twin_interval_id, &twin.twin_hole_id),
+                    ] {
+                        match live(RecordKind::Interval, id)? {
+                            DrillRecord::Interval(interval) if interval.hole_id == *hole => {}
+                            DrillRecord::Interval(interval) => {
+                                return Err(format!(
+                                    "'{key}': interval '{id}' is in hole '{}', not '{hole}'",
+                                    interval.hole_id
+                                ));
+                            }
+                            other => {
+                                return Err(format!(
+                                    "'{key}': '{id}' holds a {}",
+                                    other.kind().code()
+                                ));
+                            }
+                        }
+                    }
                 }
             }
             DrillRecord::QcInsertion(qc) => {

@@ -12,6 +12,7 @@
 //!   not the ones [`encode_version`] would write for what it holds, so every version has exactly one encoding.
 //!   Floats are stored as IEEE-754 bits; `-0.0` is written as `0.0`; a non-finite float is refused.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use fmine_core::codec::{Decoder, Encoder};
@@ -68,6 +69,12 @@ pub enum DrillError {
         /// The totals that disagree.
         detail: String,
     },
+    /// A twin-derived correction offered to a public or disclosure-basis estimate without a recorded QP
+    /// acceptance of every pair it uses (`G-TWIN`, `FMINE-REF-304`).
+    MissingAcceptance {
+        /// The pairs not accepted.
+        detail: String,
+    },
 }
 
 impl DrillError {
@@ -94,6 +101,7 @@ impl DrillError {
             Self::SupportMismatch { .. } => RefusalCode::SupportMismatch102,
             Self::NonAdditive { .. } => RefusalCode::NonAdditiveAverage103,
             Self::Conservation { .. } => RefusalCode::Conservation101,
+            Self::MissingAcceptance { .. } => RefusalCode::MissingHumanToken304,
         };
         Refusal::new(code, self.to_string())
     }
@@ -115,6 +123,7 @@ impl fmt::Display for DrillError {
             Self::SupportMismatch { detail } => write!(f, "support: {detail}"),
             Self::NonAdditive { detail } => write!(f, "additivity: {detail}"),
             Self::Conservation { detail } => write!(f, "conservation: {detail}"),
+            Self::MissingAcceptance { detail } => write!(f, "G-TWIN: {detail}"),
         }
     }
 }
@@ -182,6 +191,10 @@ tagged_enum! {
         LabCertificate = 8, "certificate";
         /// [`SampleLoss`].
         SampleLoss = 9, "loss";
+        /// [`TwinPair`].
+        TwinPair = 10, "twin";
+        /// [`TwinAcceptance`].
+        TwinAcceptance = 11, "acceptance";
     }
 }
 
@@ -612,6 +625,47 @@ pub struct SampleLoss {
     pub finding: String,
 }
 
+/// One matched interval pair of a twin study: an interval of the original hole and the twin's interval
+/// compared with it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TwinMatch {
+    /// The original hole's interval.
+    pub original_interval_id: String,
+    /// The twin hole's interval.
+    pub twin_interval_id: String,
+}
+
+/// `TwinPair` (plan §12.1, §12.4): a hole drilled to check another, with the intervals compared. Separation,
+/// precision, slope and the paired test come from the desurveyed traces and the results
+/// ([`crate::twin::assess_twin`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TwinPair {
+    /// Pair id; the record's id.
+    pub twin_id: String,
+    /// The hole being checked.
+    pub original_hole_id: String,
+    /// The twin; another hole.
+    pub twin_hole_id: String,
+    /// The matched intervals, ascending, with no interval of either hole used twice.
+    pub matches: Vec<TwinMatch>,
+}
+
+/// A qualified person's recorded acceptance of the twin pairs a correction uses, for public or disclosure-basis
+/// estimates (`G-TWIN`, plan §12.4, E377). It names a role, never a person.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TwinAcceptance {
+    /// Acceptance id; the record's id.
+    pub acceptance_id: String,
+    /// The pairs accepted, ascending.
+    pub twin_ids: Vec<String>,
+    /// The accepting role, for example `QP (resource estimate)`.
+    pub accepted_by_role: String,
+    /// When it was accepted, ns since the Unix epoch, UTC.
+    pub accepted_at_ns: i64,
+    /// What was accepted, for example the correction and the estimate it enters.
+    pub statement: String,
+}
+
 /// What a QC insertion is.
 #[derive(Clone, Debug, PartialEq)]
 pub enum QcKind {
@@ -699,6 +753,10 @@ pub enum DrillRecord {
     LabCertificate(LabCertificate),
     /// [`SampleLoss`].
     SampleLoss(SampleLoss),
+    /// [`TwinPair`].
+    TwinPair(TwinPair),
+    /// [`TwinAcceptance`].
+    TwinAcceptance(TwinAcceptance),
 }
 
 impl DrillRecord {
@@ -715,6 +773,8 @@ impl DrillRecord {
             Self::QcInsertion(_) => RecordKind::QcInsertion,
             Self::LabCertificate(_) => RecordKind::LabCertificate,
             Self::SampleLoss(_) => RecordKind::SampleLoss,
+            Self::TwinPair(_) => RecordKind::TwinPair,
+            Self::TwinAcceptance(_) => RecordKind::TwinAcceptance,
         }
     }
 
@@ -731,6 +791,8 @@ impl DrillRecord {
             Self::QcInsertion(r) => &r.insertion_id,
             Self::LabCertificate(r) => &r.certificate_id,
             Self::SampleLoss(r) => &r.loss_id,
+            Self::TwinPair(r) => &r.twin_id,
+            Self::TwinAcceptance(r) => &r.acceptance_id,
         }
     }
 
@@ -765,6 +827,22 @@ impl DrillRecord {
                 (RecordKind::Sample, r.sample_id.as_str()),
                 (RecordKind::Dispatch, r.dispatch_id.as_str()),
             ],
+            Self::TwinPair(r) => {
+                let mut refs = vec![
+                    (RecordKind::Collar, r.original_hole_id.as_str()),
+                    (RecordKind::Collar, r.twin_hole_id.as_str()),
+                ];
+                for m in &r.matches {
+                    refs.push((RecordKind::Interval, m.original_interval_id.as_str()));
+                    refs.push((RecordKind::Interval, m.twin_interval_id.as_str()));
+                }
+                refs
+            }
+            Self::TwinAcceptance(r) => r
+                .twin_ids
+                .iter()
+                .map(|id| (RecordKind::TwinPair, id.as_str()))
+                .collect(),
             Self::QcInsertion(r) => {
                 let mut refs = vec![(RecordKind::Sample, r.sample_id.as_str())];
                 if let QcKind::Duplicate {
@@ -805,8 +883,60 @@ impl DrillRecord {
                 check_id("loss.sample_id", &r.sample_id)?;
                 check_name("loss.finding", &r.finding)
             }
+            Self::TwinPair(r) => validate_twin(r),
+            Self::TwinAcceptance(r) => {
+                check_id("acceptance.acceptance_id", &r.acceptance_id)?;
+                check_ids("acceptance.twin_ids", &r.twin_ids)?;
+                check_name("acceptance.accepted_by_role", &r.accepted_by_role)?;
+                check_name("acceptance.statement", &r.statement)
+            }
         }
     }
+}
+
+pub(crate) fn validate_twin(r: &TwinPair) -> Result<(), DrillError> {
+    check_id("twin.twin_id", &r.twin_id)?;
+    check_id("twin.original_hole_id", &r.original_hole_id)?;
+    check_id("twin.twin_hole_id", &r.twin_hole_id)?;
+    if r.original_hole_id == r.twin_hole_id {
+        return Err(DrillError::invalid(
+            "twin.twin_hole_id",
+            format!("a hole cannot twin itself ('{}')", r.twin_hole_id),
+        ));
+    }
+    if r.matches.is_empty() || r.matches.len() > MAX_LIST_ITEMS {
+        return Err(DrillError::invalid(
+            "twin.matches",
+            format!(
+                "1 to {MAX_LIST_ITEMS} matched intervals, got {}",
+                r.matches.len()
+            ),
+        ));
+    }
+    if r.matches.windows(2).any(|w| w[0] >= w[1]) {
+        return Err(DrillError::invalid(
+            "twin.matches",
+            "matched intervals must be ascending without repeats",
+        ));
+    }
+    let mut originals = BTreeSet::new();
+    let mut twins = BTreeSet::new();
+    for m in &r.matches {
+        check_id("twin.original_interval_id", &m.original_interval_id)?;
+        check_id("twin.twin_interval_id", &m.twin_interval_id)?;
+        if !originals.insert(m.original_interval_id.as_str())
+            || !twins.insert(m.twin_interval_id.as_str())
+        {
+            return Err(DrillError::invalid(
+                "twin.matches",
+                format!(
+                    "interval '{}' or '{}' is matched twice",
+                    m.original_interval_id, m.twin_interval_id
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// An id: 1 to [`MAX_ID_BYTES`] bytes of printable ASCII other than `/`, so that it can end a ledger key.
@@ -874,7 +1004,7 @@ fn check_fraction(field: &str, v: f64, zero_allowed: bool) -> Result<(), DrillEr
     Ok(())
 }
 
-fn check_ids(field: &str, ids: &[String]) -> Result<(), DrillError> {
+pub(crate) fn check_ids(field: &str, ids: &[String]) -> Result<(), DrillError> {
     if ids.is_empty() || ids.len() > MAX_LIST_ITEMS {
         return Err(DrillError::invalid(
             field,
@@ -1294,6 +1424,23 @@ fn put_record(enc: &mut Encoder, record: &DrillRecord) -> Result<(), DrillError>
             enc.put_i64(r.declared_at_ns);
             enc.put_str(&r.finding);
         }
+        DrillRecord::TwinPair(r) => {
+            enc.put_str(&r.twin_id);
+            enc.put_str(&r.original_hole_id);
+            enc.put_str(&r.twin_hole_id);
+            enc.put_canonical_seq(&r.matches, |e, m| {
+                e.put_str(&m.original_interval_id);
+                e.put_str(&m.twin_interval_id);
+            })
+            .map_err(|e| DrillError::invalid("twin.matches", e.to_string()))?;
+        }
+        DrillRecord::TwinAcceptance(r) => {
+            enc.put_str(&r.acceptance_id);
+            put_ids(enc, &r.twin_ids)?;
+            enc.put_str(&r.accepted_by_role);
+            enc.put_i64(r.accepted_at_ns);
+            enc.put_str(&r.statement);
+        }
     }
     Ok(())
 }
@@ -1550,6 +1697,27 @@ impl Reader<'_, '_> {
                 sample_id: self.text()?,
                 declared_at_ns: self.i64()?,
                 finding: self.text()?,
+            }),
+            RecordKind::TwinPair => DrillRecord::TwinPair(TwinPair {
+                twin_id: self.text()?,
+                original_hole_id: self.text()?,
+                twin_hole_id: self.text()?,
+                matches: self
+                    .dec
+                    .get_canonical_seq(MAX_LIST_ITEMS, |d| {
+                        Ok(TwinMatch {
+                            original_interval_id: d.get_str(MAX_ID_BYTES)?.to_string(),
+                            twin_interval_id: d.get_str(MAX_ID_BYTES)?.to_string(),
+                        })
+                    })
+                    .map_err(|e| DrillError::corrupt(e.to_string()))?,
+            }),
+            RecordKind::TwinAcceptance => DrillRecord::TwinAcceptance(TwinAcceptance {
+                acceptance_id: self.text()?,
+                twin_ids: self.ids()?,
+                accepted_by_role: self.text()?,
+                accepted_at_ns: self.i64()?,
+                statement: self.text()?,
             }),
         })
     }
