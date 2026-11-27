@@ -199,21 +199,29 @@ fn render_balance(
     balance: CapacityBalance,
     terms: LaneTerms,
     unit: &str,
+    currency: &str,
     markdown: &mut String,
 ) -> String {
     let feed = exact(balance.available_dry_tonnes);
     let metal = exact(balance.available_recovered_metal);
     let mill = exact(terms.mill_dry_tonnes_per_period);
     let market = exact(terms.market_metal_units_per_period);
+    let contribution = exact(balance.incremental_contribution);
     let _ = writeln!(
         markdown,
-        "\n## Grade-tonnage capacity screen\n\nAvailable: **{feed} dry tonnes** with **{metal} {unit}** recoverable. Mill cap **{mill} dry tonnes**, market cap **{market} {unit}**.\n\nThe screen takes the highest grades first and permits a partial boundary bin. Economic eligibility and the operating cut-off are separate decisions.\n\n| Caps applied | Dry tonnes | Recovered {unit} | Lowest selected grade | Share at that grade |\n|---|---:|---:|---:|---:|"
+        "\n## Grade-tonnage screen\n\nAvailable: **{feed} dry tonnes** with **{metal} {unit}** recoverable. Mill cap **{mill} dry tonnes**, market cap **{market} {unit}**.\n\nThe screen takes the highest grades first and permits a partial boundary bin. The positive-contribution row applies both caps to already-mined feed and leaves break-even feed idle. Its incremental contribution is **{contribution} {currency}** after selling and variable milling costs. It excludes fixed and opportunity charges.\n\n| Screen | Dry tonnes | Recovered {unit} | Lowest selected grade | Share at that grade |\n|---|---:|---:|---:|---:|"
     );
     let mut rows = Vec::new();
-    for (key, caption, allocation) in [
-        ("mill_only", "Mill only", balance.mill_only),
-        ("market_only", "Market only", balance.market_only),
-        ("both", "Mill and market", balance.both),
+    for (key, caption, allocation, economic) in [
+        ("mill_only", "Mill only", balance.mill_only, false),
+        ("market_only", "Market only", balance.market_only, false),
+        ("both", "Mill and market", balance.both, false),
+        (
+            "positive_contribution",
+            "Positive contribution under both caps",
+            balance.positive_contribution_feed,
+            true,
+        ),
     ] {
         let tonnes = exact(allocation.dry_tonnes);
         let metal = exact(allocation.recovered_metal);
@@ -234,8 +242,13 @@ fn render_balance(
         } else {
             "null".into()
         };
+        let money = if economic {
+            format!(",\"incremental_contribution\":{}", js(&contribution))
+        } else {
+            String::new()
+        };
         rows.push(format!(
-            "\"{key}\":{{\"dry_tonnes\":{},\"recovered_metal\":{},\"boundary\":{boundary}}}",
+            "\"{key}\":{{\"dry_tonnes\":{},\"recovered_metal\":{},\"boundary\":{boundary}{money}}}",
             js(&tonnes),
             js(&metal)
         ));
@@ -428,7 +441,7 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
         ));
     }
     let balance_json = balance.map_or_else(String::new, |balance| {
-        render_balance(balance, terms, metal_unit, &mut markdown)
+        render_balance(balance, terms, metal_unit, currency, &mut markdown)
     });
     let _ = writeln!(markdown, "\n{no_claim}");
     let payload = format!(

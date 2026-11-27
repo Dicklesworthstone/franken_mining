@@ -227,8 +227,11 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   exact arithmetic, the unchanged constant ratios and the curve's exact crossing have direct controls.
   `balance_feed` reports the greatest highest-grade-first portion that fits the mill cap alone,
   the market cap alone, and both together. It retains total available dry tonnes and recoverable
-  metal, selected quantities, and the exact share of the lowest selected grade bin. This capacity
-  check uses the declared one-period inventory. Full mine-life balancing and policy optimization remain open.
+  metal, selected quantities, and the exact share of the lowest selected grade bin. It also allocates
+  already-mined feed with strictly positive variable contribution under both caps. Contribution is
+  recovered metal times net selling price less dry tonnes times variable milling cost, in the declared
+  currency. Break-even feed stays idle. Fixed and opportunity charges still enter the Lane limiting
+  grades. Full mine-life balancing and policy optimization remain open.
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
 - `verify(problem, in_pit, arc_flow)`: the pit's value if the certificate holds.
 - `NestedShells` provides:

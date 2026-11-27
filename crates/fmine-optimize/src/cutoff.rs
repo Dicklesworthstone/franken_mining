@@ -96,7 +96,7 @@ pub struct GradeAllocation {
     pub boundary: Option<GradeBoundary>,
 }
 
-/// Available feed and the three cap configurations on the same population.
+/// Physical capacity and positive-contribution screens on the same population.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapacityBalance {
     pub available_dry_tonnes: Rat,
@@ -104,6 +104,9 @@ pub struct CapacityBalance {
     pub mill_only: GradeAllocation,
     pub market_only: GradeAllocation,
     pub both: GradeAllocation,
+    pub positive_contribution_feed: GradeAllocation,
+    /// Recovered metal at net selling price less variable milling cost, in the declared currency.
+    pub incremental_contribution: Rat,
 }
 
 /// Comparison under the explicit rule that equality clears the threshold.
@@ -288,6 +291,7 @@ impl LaneTerms {
 
     /// Screen the grade-tonnage population from highest to lowest grade.
     /// At a cap, the boundary bin may contribute a proportional share.
+    /// The economic screen applies both caps and leaves break-even feed idle.
     ///
     /// # Errors
     /// Refuses missing, unordered or nonphysical inputs, extrapolation, and
@@ -303,9 +307,7 @@ impl LaneTerms {
         }
         let mill = self.mill_dry_tonnes_per_period;
         let market = self.market_metal_units_per_period;
-        if mill.signum() <= 0 || market.signum() <= 0 {
-            return Err(domain("mill and market capacities must be positive"));
-        }
+        let net_price = self.net_price()?;
         if let GradeRecovery::Constant(fraction) = recovery {
             validate_constant(fraction)?;
         }
@@ -344,12 +346,38 @@ impl LaneTerms {
                 .map_err(|_| arithmetic())?;
             evaluated.push((bin, recovered));
         }
+        let milling_cost = self.milling_cost_per_dry_tonne;
+        let break_even = milling_cost
+            .checked_div(net_price)
+            .map_err(|_| arithmetic())?;
+        // DESIGN: With nondecreasing recovered grade and uniform milling cost,
+        // higher grades earn more per tonne and consume fewer tonnes per unit
+        // of recovered metal. Positive bins therefore form an optimal prefix
+        // in descending grade order under the two upper bounds.
+        let mut first_profitable = evaluated.len();
+        for &(_, recovered) in evaluated.iter().rev() {
+            if !compare(recovered, break_even)?.is_gt() {
+                break;
+            }
+            first_profitable -= 1;
+        }
+        let positive_contribution_feed =
+            allocate_by_grade(&evaluated[first_profitable..], Some(mill), Some(market))?;
+        let milling_spend = milling_cost
+            .checked_mul(positive_contribution_feed.dry_tonnes)
+            .map_err(|_| arithmetic())?;
+        let incremental_contribution = net_price
+            .checked_mul(positive_contribution_feed.recovered_metal)
+            .and_then(|revenue| revenue.checked_sub(milling_spend))
+            .map_err(|_| arithmetic())?;
         Ok(CapacityBalance {
             available_dry_tonnes,
             available_recovered_metal,
             mill_only: allocate_by_grade(&evaluated, Some(mill), None)?,
             market_only: allocate_by_grade(&evaluated, None, Some(market))?,
             both: allocate_by_grade(&evaluated, Some(mill), Some(market))?,
+            positive_contribution_feed,
+            incremental_contribution,
         })
     }
 
@@ -364,10 +392,7 @@ impl LaneTerms {
         self.map_limits(|cost, margin| curve.cutoff(cost, margin))
     }
 
-    fn map_limits<T>(
-        self,
-        grade: impl Fn(Rat, Rat) -> Result<T, Refusal>,
-    ) -> Result<LaneCutoffs<T>, Refusal> {
+    fn net_price(self) -> Result<Rat, Refusal> {
         for (name, value) in [
             ("selling cost", self.selling_cost_per_metal_unit),
             ("milling cost", self.milling_cost_per_dry_tonne),
@@ -390,6 +415,14 @@ impl LaneTerms {
         if margin.signum() <= 0 {
             return Err(domain("metal price must exceed selling cost"));
         }
+        Ok(margin)
+    }
+
+    fn map_limits<T>(
+        self,
+        grade: impl Fn(Rat, Rat) -> Result<T, Refusal>,
+    ) -> Result<LaneCutoffs<T>, Refusal> {
+        let margin = self.net_price()?;
         let overhead = self
             .fixed_cost_per_period
             .checked_add(self.opportunity_cost_per_period)
@@ -536,6 +569,8 @@ mod tests {
         assert_eq!(result.market_only.dry_tonnes, qty("3"));
         assert_eq!(result.market_only.recovered_metal, qty("0.6"));
         assert_eq!(result.market_only.boundary.unwrap().grade, qty("0"));
+        assert_eq!(result.positive_contribution_feed, result.both);
+        assert_eq!(result.incremental_contribution, qty("40"));
     }
 
     #[test]

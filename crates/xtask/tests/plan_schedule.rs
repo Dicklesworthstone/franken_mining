@@ -143,14 +143,24 @@ fn lane_grade_tonnage_binary_reports_exact_partial_bin_for_all_cap_cases() {
         "1/6",
     );
     assert_eq!(balance.get("both"), balance.get("market_only"));
+    fn economic(balance: &Json) -> &Json {
+        balance.get("positive_contribution").unwrap()
+    }
+    let contribution = |allocation: &Json, money: &str| {
+        assert_eq!(
+            allocation.get("incremental_contribution").unwrap().as_str(),
+            Some(money)
+        );
+    };
+    expect(economic(balance), "3/2", "3/4", "2/5", "1/6");
+    contribution(economic(balance), "45/1");
     assert_eq!(lane(&root, input, "json").stdout, output.stdout);
     let md = lane(&root, input, "markdown");
     assert!(md.status.success());
-    assert!(
-        String::from_utf8(md.stdout)
-            .unwrap()
-            .contains("| Mill and market | 3/2 | 3/4 | 2/5 | 1/6 |")
-    );
+    let markdown = String::from_utf8(md.stdout).unwrap();
+    assert!(markdown.contains("| Mill and market | 3/2 | 3/4 | 2/5 | 1/6 |"));
+    assert!(markdown.contains("| Positive contribution under both caps | 3/2 | 3/4 | 2/5 | 1/6 |"));
+    assert!(markdown.contains("**45/1 USD**"));
 
     let scratch = std::env::temp_dir().join(format!(
         "fmine-lane-capacity-{}-{}",
@@ -171,14 +181,60 @@ fn lane_grade_tonnage_binary_reports_exact_partial_bin_for_all_cap_cases() {
         "fixed.json",
         &format!(r#"{prefix}"recovery_fraction":"0.75","grade_tonnage":{rows}"#),
     );
-    let joint = fixed
+    let fixed_balance = fixed
         .get("payload")
         .unwrap()
         .get("capacity_balance")
-        .unwrap()
-        .get("both")
         .unwrap();
-    expect(joint, "2/1", "3/4", "2/5", "1/3");
+    expect(
+        fixed_balance.get("both").unwrap(),
+        "2/1",
+        "3/4",
+        "2/5",
+        "1/3",
+    );
+    expect(economic(fixed_balance), "2/1", "3/4", "2/5", "1/3");
+    contribution(economic(fixed_balance), "35/1");
+
+    for (name, cost, selling, overhead, net) in [
+        ("break-even", "30", "0", "10", "30/1"),
+        ("loss-making", "35", "0", "10", "25/1"),
+        ("selling-cost", "35", "10", "20", "19/1"),
+        ("all-idle", "60", "0", "10", "0/1"),
+    ] {
+        let variant = original
+            .replace(
+                r#""milling_cost_per_dry_tonne": "20""#,
+                &format!(r#""milling_cost_per_dry_tonne": "{cost}""#),
+            )
+            .replace(
+                r#""selling_cost_per_metal_unit": "0""#,
+                &format!(r#""selling_cost_per_metal_unit": "{selling}""#),
+            )
+            .replace(
+                r#""fixed_cost_per_period": "10""#,
+                &format!(r#""fixed_cost_per_period": "{overhead}""#),
+            );
+        let variant = submit(&format!("{name}.json"), &variant);
+        let variant_balance = variant
+            .get("payload")
+            .unwrap()
+            .get("capacity_balance")
+            .unwrap();
+        assert_eq!(variant_balance.get("both"), balance.get("both"));
+        let selected = economic(variant_balance);
+        contribution(selected, net);
+        if name == "all-idle" {
+            assert_eq!(selected.get("dry_tonnes").unwrap().as_str(), Some("0/1"));
+            assert_eq!(
+                selected.get("recovered_metal").unwrap().as_str(),
+                Some("0/1")
+            );
+            assert_eq!(selected.get("boundary"), Some(&Json::Null));
+        } else {
+            expect(selected, "1/1", "3/5", "3/5", "1/1");
+        }
+    }
     let between_knots = original.replace(
         r#""grade_per_dry_tonne": "0.4", "dry_tonnes": "3""#,
         r#""grade_per_dry_tonne": "0.3", "dry_tonnes": "3""#,

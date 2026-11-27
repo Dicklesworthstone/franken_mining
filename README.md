@@ -1471,8 +1471,11 @@ cargo run -p fmine-cli -- plan cutoff \
 The synthetic inventory has **8 dry tonnes**. Under the mill cap alone, **2 tonnes** would recover
 **0.90 g**. With the **0.75 g** market cap also applied, the inventory can supply **1.50 dry tonnes**
 and **0.75 g** at this grade order. That takes all the highest-grade bin and **one sixth** of the
-next. These are capacity screens on a declared inventory. Economic eligibility, other blending
-requirements and the operating policy are evaluated separately.
+next. The positive-contribution row selects feed under both caps and reports **USD 45** after selling
+and variable milling costs. If milling rises from **USD 20** to **USD 35 per dry tonne**, the physical
+capacity remains **1.50 dry tonnes**. Only the top **1 dry tonne** pays to process, recovering **0.60 g**
+and contributing **USD 25**. Break-even feed stays idle. The screen assumes already-mined feed and excludes
+fixed and opportunity charges. It does not model blend constraints or an operating policy.
 
 ### Generate and check production schedules with destination splits
 
