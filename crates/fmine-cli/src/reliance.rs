@@ -30,7 +30,7 @@ pub(crate) const VERBS_JSON: &str = concat!(
     r#""reliance withdraw --journal <path> --head <hex> --release-key <path> --trust-host-clock --digest <hex> --defect code-defect|source-restated|scope-error --claims <ids>|--all-claims --reason <text>","#,
     r#""reliance supersede --journal <path> --head <hex> --release-key <path> --trust-host-clock --digest <hex> --replacement <hex>","#,
     r#""reliance refresh --journal <path> --head <hex> --release-key <path> --trust-host-clock","#,
-    r#""reliance recall --journal <path> --code-revision <git-sha>|--claim <id>""#,
+    r#""reliance recall --journal <path> [--code-revision <git-sha>] [--claim <id>] [--head <hex>] (at least one selector)""#,
 );
 pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"mode":"local_capability_authority","default_read":"unknown_without_trusted_head_and_time","pin":"exact final head obtained independently of untrusted journal bytes","clock":"explicit operator-declared bounded host clock; never external time proof","historical_check":"--as-of UTC queries history under a fresh trusted status cut and never grants current reuse","current_gate":"check --require-current refuses unknown, withdrawn and superseded outputs while retaining status diagnostics; excludes --as-of","artifact":"exact stored bytes including final newline; receipt is separate","assurance_export":"assure public --output requires issuance authority and recipient; --format selects artifact and receipt format","issuance_id":"BLAKE3 of the canonical issuance frame; distinct from artifact digest and journal head","revision":"issue and assure public --output declare the Git SHA; executable BLAKE3 measured separately; reissue preserves the selected producer metadata","reissue":"selects an exact source issuance and records the new recipient after a fresh current-status check","recall":"recorded local issuances only; reissue registers another recipient, reuse does not; no notifications","release_role":"release-owner capability; no human-review attestation","roles":["release-owner","sponsor","reviewer-pool-N","agent-session:<32 lowercase hex>"],"purpose":["analysis","review","decision-support"]}"#;
 const NO_CLAIM: &str = "Local report reliance only. A release key establishes local capability possession, not human review. Host-clock bounds are operator declarations, not external time proofs. Recall covers only recorded issuances; no external copies or recipients are contacted.";
@@ -100,8 +100,10 @@ enum Operation {
     Refresh {
         key: PathBuf,
     },
-    RecallRevision(String),
-    RecallClaim(ClaimId),
+    Recall {
+        revision: Option<String>,
+        claim: Option<ClaimId>,
+    },
 }
 
 fn digest(text: &str) -> Result<Digest32, String> {
@@ -357,13 +359,14 @@ fn parse_operation(
         "refresh" => Operation::Refresh {
             key: PathBuf::from(required(&mut fields, "--release-key")?),
         },
-        "recall" => match (fields.remove("--code-revision"), fields.remove("--claim")) {
-            (Some(r), None) => Operation::RecallRevision(revision(r)?),
-            (None, Some(c)) => Operation::RecallClaim(claim(&c)?),
-            _ => {
-                return Err("recall requires exactly one of --code-revision or --claim".to_string());
+        "recall" => {
+            let revision = fields.remove("--code-revision").map(revision).transpose()?;
+            let claim = fields.remove("--claim").map(|c| claim(&c)).transpose()?;
+            if revision.is_none() && claim.is_none() {
+                return Err("recall requires --code-revision, --claim or both".to_string());
             }
-        },
+            Operation::Recall { revision, claim }
+        }
         _ => return Err(format!("unknown reliance operation '{verb}'")),
     };
     if let Some((flag, _)) = fields.first_key_value() {
@@ -372,11 +375,7 @@ fn parse_operation(
     if matches!(operation, Operation::Init { .. }) && (head.is_some() || trust_host_clock) {
         return Err("init takes no --head or --trust-host-clock; genesis creates no current-reuse permission".to_string());
     }
-    if matches!(
-        operation,
-        Operation::RecallRevision(_) | Operation::RecallClaim(_)
-    ) && trust_host_clock
-    {
+    if matches!(operation, Operation::Recall { .. }) && trust_host_clock {
         return Err("recall describes recorded copies and takes no --trust-host-clock".to_string());
     }
     if matches!(
@@ -478,7 +477,7 @@ fn operation_name(operation: &Operation) -> &'static str {
         Operation::Withdraw { .. } => "withdraw",
         Operation::Supersede { .. } => "supersede",
         Operation::Refresh { .. } => "refresh",
-        Operation::RecallRevision(_) | Operation::RecallClaim(_) => "recall",
+        Operation::Recall { .. } => "recall",
     }
 }
 
@@ -509,6 +508,14 @@ fn issue_json(issue: &IssuanceRecord) -> Result<String, Refusal> {
         text(&issue.purpose),
         issue.issued_at_ns,
     ))
+}
+
+pub(super) fn recall_union_selector_json(revision: &str, claim: ClaimId) -> String {
+    format!(
+        r#"{{"kind":"revision_or_claim","revision":{},"claim":{}}}"#,
+        text(revision),
+        text(&claim.to_string())
+    )
 }
 
 fn check_json(check: &RelianceCheck) -> String {
@@ -706,13 +713,21 @@ fn execute_with(
                 ),
             ))
         }
-        Operation::RecallRevision(_) | Operation::RecallClaim(_) => {
+        Operation::Recall { revision, claim } => {
             let journal = Journal::open_read(&path, access.head)?;
-            let records = match &command.operation {
-                Operation::RecallRevision(revision) => journal.ledger().recall_revision(revision),
-                Operation::RecallClaim(claim) => journal.ledger().recall_claim(*claim),
-                _ => Vec::new(),
-            };
+            let records = journal
+                .ledger()
+                .recall_matching(revision.as_deref(), *claim);
+            let selector =
+                revision
+                    .as_deref()
+                    .zip(*claim)
+                    .map_or_else(String::new, |(revision, claim)| {
+                        format!(
+                            ",\"selector\":{}",
+                            recall_union_selector_json(revision, claim)
+                        )
+                    });
             let copies = records
                 .iter()
                 .map(|i| issue_json(i))
@@ -722,7 +737,7 @@ fn execute_with(
                 "recall",
                 &journal,
                 &format!(
-                    "\"scope\":\"recorded_local_issuances_only\",\"head_verified\":{},\"known_copy_count\":{},\"notifications_sent\":0,\"copies\":[{copies}]",
+                    "\"scope\":\"recorded_local_issuances_only\",\"head_verified\":{},\"known_copy_count\":{},\"notifications_sent\":0,\"copies\":[{copies}]{selector}",
                     access.head == Some(journal.head()),
                     records.len()
                 ),

@@ -1157,8 +1157,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     explicit owner key, expected head and bounded time where the operation changes the journal;
   - `reliance export`: retrieve an existing artifact only after a pinned current-use check, keeping the
     journal lock through the exact-byte write. It does not create a new recipient record;
-  - `recall --revision <revision>|--claim <id>`: list known affected copies and generic recipient roles,
-    without sending messages or asserting receipt;
+  - `recall [--revision <revision>] [--claim <id>]`: list known affected copies and generic recipient roles.
+    Supplying both returns the union in journal order, once per issuance. The same read and optional head pin
+    apply to both selectors. `reliance recall` uses `--code-revision` for the revision selector. Recall emits
+    read-only metadata and the union selector when both are supplied.
   - `assure challenges --issuer <issuer> [--through YYYYQn]` or `--synthetic`: content-addressed internal-review
     packets from visible assurance exceptions, with JSON or readable `--format markdown` output (BD-349);
   - `guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD`

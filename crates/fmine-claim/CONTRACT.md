@@ -63,7 +63,8 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **`CheckedCone`**, or `ConeError`. The cone holds the root, cut, nodes, availability times, anchor marks and a digest. Only `TemporalGraph::check` can build one.
 - **`ReplayCertificate`**, or `ReplayError`. Its fields are private. It binds the root, cut, cone digest, output digest, and the full and guarded read and run receipts.
 - **`RelianceLedger`.**
-  - It gives the head, records, issuances and copies, and recall by revision or by claim.
+  - It gives the head, records, issuances and copies, and recall by revision, Claim or their union.
+    The union preserves journal order and distinct issuance receipts for identical artifact bytes.
   - `check` returns `RelianceCheck { status, current_reuse_allowed, as_of_ns, status_cut_ns }`, where `status` is `Current`, `Withdrawn`, `Superseded` or `Unknown`.
   - `gate_current_reuse` returns `Ok` or a refusal.
   - `append` returns the new `JournalRecord`.
@@ -295,7 +296,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   - Status: `UnknownReason`, `RelianceStatus` and `RelianceCheck`.
   - `RelianceLedger`, with:
     - `from_records`, `head`, `header`, `records` and `status_cut_ns`;
-    - `issuances`, `issuance`, `copies`, `recall_revision` and `recall_claim`;
+    - `issuances`, `issuance`, `copies`, `recall_revision`, `recall_claim` and `recall_matching`;
     - `verify_artifact`, `replay`, `append`, `check` and `gate_current_reuse`.
   - `issuance(id)` resolves an exact canonical `IssuanceRecord::digest()`, distinct from `copies(output_digest)`.
 - **`forecast_journal`.** `Header`, `Entry`, `Record`, `validate_chain` and `decode_journal`. `Record` exposes bounded binary and line codecs, `chain_head` and `time_bounds`; `Header::time_bounds` returns checked earliest/latest instants. The pure codec never obtains a clock or performs filesystem I/O; live timestamps belong to the locked adapter.

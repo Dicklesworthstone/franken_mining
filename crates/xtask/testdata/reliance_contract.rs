@@ -293,6 +293,120 @@ fn issued_reports_retain_exact_bytes_and_known_copies_after_withdrawal() {
 }
 
 #[test]
+fn recall_combines_revision_and_claim_once_per_issuance_on_one_pinned_head() {
+    use fmine_claim::reliance::{Entry, RoleId, TrustedTime};
+    use fmine_core::{ObjectId, PrefixKind};
+    use fmine_io::omf::json::{Json, parse};
+    use fmine_io::reliance::ReleaseKey;
+
+    let f = Fixture::new();
+    let (_, both) = f.issue("first.json", "sponsor", "json");
+    let stale = f.head();
+    let claim = both.output_claims[0].to_string();
+    let other_claim = ObjectId::from_canonical_bytes(PrefixKind::Claim, b"other synthetic claim");
+    let other_revision = "2222222222222222222222222222222222222222";
+    let mut all = vec![both.clone()];
+    {
+        let key = ReleaseKey::read(&f.key).expect("synthetic key");
+        let pin = Journal::open_read(&f.journal, None)
+            .expect("journal")
+            .head();
+        let mut journal = Journal::open_write(&f.journal, pin).expect("writer");
+        for (i, revision, role, bytes, claim_matches) in [
+            (1, other_revision, RoleId::ReviewerPool(8), None, true),
+            (
+                2,
+                REVISION,
+                RoleId::Sponsor,
+                Some(b"revision only".as_slice()),
+                false,
+            ),
+            (
+                3,
+                other_revision,
+                RoleId::ReviewerPool(9),
+                Some(b"neither".as_slice()),
+                false,
+            ),
+        ] {
+            let mut record = both.clone();
+            record.code_revision = revision.into();
+            record.recipient_role = role;
+            record.issued_at_ns += i;
+            if let Some(bytes) = bytes {
+                record.output_digest = blake3_hash(bytes);
+            }
+            if !claim_matches {
+                record.output_claims = vec![other_claim];
+            }
+            let now = TrustedTime {
+                now_ns: record.issued_at_ns,
+                uncertainty_ns: 0,
+            };
+            journal
+                .append(Entry::Issued(record.clone()), &key, now)
+                .expect("append synthetic issuance");
+            all.push(record);
+        }
+    }
+    assert_eq!(all[0].output_digest, all[1].output_digest);
+    let ids: Vec<_> = all[..3]
+        .iter()
+        .map(|r| r.digest().expect("issuance ID").to_hex())
+        .collect();
+    let head = f.head();
+    let before = std::fs::read(&f.journal).expect("before recall");
+    let commands = [
+        (
+            vec!["recall", "--revision"],
+            "issued_copies",
+            "copies",
+            "head_pin_matched",
+        ),
+        (
+            vec!["reliance", "recall", "--code-revision"],
+            "copies",
+            "known_copy_count",
+            "head_verified",
+        ),
+    ];
+    for (mut cmd, list, count, pinned) in commands {
+        cmd.extend([REVISION, "--claim", &claim, "--head", &head]);
+        let out = f.run(&cmd, 0);
+        assert_eq!(out, f.run(&cmd, 0));
+        let envelope = parse(out.as_bytes()).expect("JSON envelope");
+        let payload = envelope.get("payload").expect("payload");
+        assert_eq!(payload.get(count).and_then(Json::i64), Some(3));
+        assert_eq!(payload.get(pinned).and_then(Json::as_bool), Some(true));
+        let copies = payload
+            .get(list)
+            .and_then(Json::as_array)
+            .expect("recorded copies");
+        let actual: Vec<_> = copies
+            .iter()
+            .map(|c| {
+                c.get("issuance_id")
+                    .and_then(Json::as_str)
+                    .expect("issuance ID")
+            })
+            .collect();
+        assert_eq!(actual, ids);
+        assert_eq!(
+            payload
+                .get("selector")
+                .and_then(|s| s.get("kind"))
+                .and_then(Json::as_str),
+            Some("revision_or_claim")
+        );
+        cmd.pop();
+        cmd.push(&stale);
+        let refused = f.run(&cmd, 6);
+        assert!(refused.contains("FMINE-REF-502"), "{refused}");
+    }
+    assert_eq!(std::fs::read(&f.journal).expect("after recall"), before);
+}
+
+#[test]
 fn stale_pins_bad_authority_tampered_artifacts_and_withdrawn_replacements_fail_closed() {
     let f = Fixture::new();
     let stale_head = f.head();

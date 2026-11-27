@@ -5218,7 +5218,13 @@ fmine reliance withdraw "$OUTPUT_DIGEST" --journal reliance.log \
   --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
 fmine recall --journal reliance.log --claim "$CLAIM_ID"
 fmine recall --journal reliance.log --revision "$BUILD_REVISION"
+fmine recall --journal reliance.log --revision "$BUILD_REVISION" --claim "$CLAIM_ID" --head "$TRUSTED_HEAD"
 ```
+
+When both selectors are supplied, one read of the pinned journal lists every issuance that matches
+the revision or the Claim. An issuance that matches both appears once. Distinct recipient receipts
+remain separate even when they carry identical bytes. With `reliance recall`, use `--code-revision`
+in place of `--revision`.
 
 DESIGN: withdrawal blocks current reuse while historical bytes still verify. `reliance supersede` links an
 issued digest to an existing issued replacement; the replacement's own status must be checked separately.

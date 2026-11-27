@@ -39,6 +39,7 @@ pub enum Target {
 pub enum RecallSelector {
     Revision(String),
     Claim(ObjectId),
+    RevisionOrClaim { revision: String, claim: ObjectId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,7 +240,16 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         let selector = match (a.optional("--revision"), a.claims.as_slice()) {
             (Some(revision), []) => RecallSelector::Revision(revision.into()),
             (None, [id]) => RecallSelector::Claim(*id),
-            _ => return Err("recall requires exactly one of --revision or --claim".into()),
+            (Some(revision), [id]) => RecallSelector::RevisionOrClaim {
+                revision: revision.into(),
+                claim: *id,
+            },
+            _ => {
+                return Err(
+                    "recall accepts --revision, --claim or both, with one value per selector"
+                        .into(),
+                );
+            }
         };
         return Ok(Command::Recall {
             journal: a.path("--journal")?,
@@ -523,22 +533,24 @@ fn execute_payload(command: &Command, workspace: &Path) -> Result<String, Refusa
             selector,
         } => {
             let journal = Journal::open_read(&resolve(workspace, journal), *head)?;
-            let (kind, value, copies) = match selector {
+            let (selector_json, copies) = match selector {
                 RecallSelector::Revision(revision) => (
-                    "revision",
-                    revision.clone(),
+                    format!(r#"{{"kind":"revision","value":{}}}"#, js(revision)),
                     journal.ledger().recall_revision(revision),
                 ),
                 RecallSelector::Claim(claim) => (
-                    "claim",
-                    claim.to_string(),
+                    format!(r#"{{"kind":"claim","value":{}}}"#, js(&claim.to_string())),
                     journal.ledger().recall_claim(*claim),
+                ),
+                RecallSelector::RevisionOrClaim { revision, claim } => (
+                    crate::reliance::recall_union_selector_json(revision, *claim),
+                    journal
+                        .ledger()
+                        .recall_matching(Some(revision), Some(*claim)),
                 ),
             };
             Ok(format!(
-                "{{\"schema\":\"fmine.reliance.recall.v1\",\"selector\":{{\"kind\":{},\"value\":{}}},\"journal_head\":{},\"head_pin_matched\":{},\"current_status_assessed\":false,\"copies\":{},\"issued_copies\":{}}}",
-                js(kind),
-                js(&value),
+                "{{\"schema\":\"fmine.reliance.recall.v1\",\"selector\":{selector_json},\"journal_head\":{},\"head_pin_matched\":{},\"current_status_assessed\":false,\"copies\":{},\"issued_copies\":{}}}",
                 js(&journal.head().to_hex()),
                 journal.is_pinned(),
                 copies.len(),

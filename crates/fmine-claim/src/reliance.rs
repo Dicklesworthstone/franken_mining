@@ -510,15 +510,31 @@ impl RelianceLedger {
             .collect()
     }
     pub fn recall_revision(&self, revision: &str) -> Vec<&IssuanceRecord> {
-        self.issuances()
-            .into_iter()
-            .filter(|i| i.code_revision == revision)
-            .collect()
+        self.recall_matching(Some(revision), None)
     }
     pub fn recall_claim(&self, claim: ObjectId) -> Vec<&IssuanceRecord> {
-        self.issuances()
-            .into_iter()
-            .filter(|i| i.output_claims.binary_search(&claim).is_ok())
+        self.recall_matching(None, Some(claim))
+    }
+
+    /// Recall the union of recorded issuances matching the revision or Claim in journal order.
+    /// An unset selector matches nothing. Each canonical issuance appears once even if both match.
+    pub fn recall_matching(
+        &self,
+        revision: Option<&str>,
+        claim: Option<ObjectId>,
+    ) -> Vec<&IssuanceRecord> {
+        self.records
+            .iter()
+            .filter_map(|r| match &r.entry {
+                Entry::Issued(issue)
+                    if revision == Some(issue.code_revision.as_str())
+                        || claim
+                            .is_some_and(|id| issue.output_claims.binary_search(&id).is_ok()) =>
+                {
+                    Some(issue)
+                }
+                _ => None,
+            })
             .collect()
     }
     pub fn verify_artifact(&self, digest: Digest32, bytes: &[u8]) -> Result<(), Refusal> {
@@ -1510,6 +1526,18 @@ mod tests {
             .expect("recall defect");
         }
         assert_eq!(log.issuances().len(), 96);
+        assert!(log.recall_matching(None, None).is_empty());
+        for revision in 1..=4 {
+            let key = format!("synthetic-revision-{revision}");
+            for id in 1..=6 {
+                let claim_id = claim(id);
+                let oracle: Vec<_> = expected
+                    .iter()
+                    .filter(|i| i.code_revision == key || i.output_claims.contains(&claim_id))
+                    .collect();
+                assert_eq!(log.recall_matching(Some(&key), Some(claim_id)), oracle);
+            }
+        }
         for record in &expected {
             assert_eq!(
                 log.gate_current_reuse(record.output_digest, &trust(&log, 400))
