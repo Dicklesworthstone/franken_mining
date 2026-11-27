@@ -27,7 +27,7 @@ use crate::records::{
     Collar, DrillError, DrillRecord, HoleType, Interval, RecordKind, TwinPair, check_ids,
     validate_twin,
 };
-use crate::stats::t_two_sided_p;
+use crate::stats::{normal_cdf, t_two_sided_p};
 use crate::store::{StoreError, current};
 
 /// The default separation above which a pair is a [`TwinState::WeakTwin`], mm (plan §12.1).
@@ -617,7 +617,7 @@ fn mann_kendall(domain: Span, values: &[f64], policy: &SmearingPolicy) -> Smeari
         let shifted = if s > 0 { s - 1 } else { s + 1 };
         shifted as f64 / det::sqrt(variance)
     };
-    let p = det::norm_cdf(z);
+    let p = normal_cdf(z);
     SmearingCheck {
         domain,
         n,

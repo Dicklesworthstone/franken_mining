@@ -1660,7 +1660,8 @@ mod tests {
         // BD-166 adds length- and mass-weighted compositing (fmine-drill::composite).
         // BD-172 adds the OB-LAB fold (fmine-drill::lab).
         // BD-285 adds twin pairs, G-TWIN and the RC smearing monitor (fmine-drill::twin).
-        assert_eq!(report.bitwise_files, 151, "{report:?}");
+        // BD-286 adds the campaign data checks and their statistics (fmine-drill::checks, fmine-drill::stats).
+        assert_eq!(report.bitwise_files, 153, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

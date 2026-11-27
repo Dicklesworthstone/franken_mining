@@ -81,6 +81,22 @@ pub(crate) fn ln_gamma(x: f64) -> f64 {
     HALF_LN_TWO_PI + (x + 0.5) * det::ln(t) - t + det::ln(sum)
 }
 
+/// `Φ(z)`, the standard normal CDF, accurate in the lower tail: below `z = −3` by Laplace's continued fraction
+/// `φ(x)/(x + 1/(x + 2/(x + …)))` with `x = −z`, where `1 + erf` would cancel to zero; otherwise `det::norm_cdf`.
+pub(crate) fn normal_cdf(z: f64) -> f64 {
+    if z >= -3.0 {
+        return det::norm_cdf(z);
+    }
+    let x = -z;
+    let mut f = x;
+    for k in (1..=200_u32).rev() {
+        f = x + f64::from(k) / f;
+    }
+    // φ(x) = exp(−x²/2)/√(2π).
+    const INV_SQRT_TWO_PI: f64 = 0.398_942_280_401_432_7;
+    INV_SQRT_TWO_PI * det::exp(-0.5 * x * x) / f
+}
+
 /// Ranks `1..=n` of `values` in input order, ties sharing their average rank.
 pub(crate) fn average_ranks(values: &[f64]) -> Vec<f64> {
     let mut order: Vec<usize> = (0..values.len()).collect();
@@ -196,7 +212,7 @@ pub(crate) fn mann_whitney(a: &[f64], b: &[f64]) -> Option<RankSum> {
     Some(RankSum {
         u,
         z,
-        p_two_sided: (2.0 * det::norm_cdf(-z.abs())).min(1.0),
+        p_two_sided: (2.0 * normal_cdf(-z.abs())).min(1.0),
     })
 }
 
@@ -292,6 +308,27 @@ mod tests {
         let half = ln_gamma(0.5);
         let want = 0.5 * det::ln(std::f64::consts::PI);
         assert!((half - want).abs() < 1e-13, "{half} vs {want}");
+    }
+
+    #[test]
+    fn test_the_normal_tail_keeps_its_digits_where_one_plus_erf_cancels() {
+        // Φ(−x) to the digits published for the standard normal.
+        for (z, want) in [
+            (-3.0, 1.349_898_031_630_094_6e-3),
+            (-5.0, 2.866_515_718_791_939e-7),
+            (-10.0, 7.619_853_024_160_527e-24),
+            (-20.0, 2.753_624_118_606_233_6e-89),
+        ] {
+            let got = normal_cdf(z);
+            assert!(
+                (got - want).abs() <= 1e-12 * want,
+                "Φ({z}) = {got:e}, want {want:e}"
+            );
+        }
+        assert_eq!(normal_cdf(-2.0), det::norm_cdf(-2.0));
+        // Continuous where the two paths meet.
+        let (below, above) = (normal_cdf(-3.0 - 1e-12), det::norm_cdf(-3.0 + 1e-12));
+        assert!((below - above).abs() < 1e-14, "{below} {above}");
     }
 
     #[test]
