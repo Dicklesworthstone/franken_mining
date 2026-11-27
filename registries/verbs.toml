@@ -573,6 +573,12 @@ mutates_authority = false
 description = "Assess a declared mining-front sequence with the existing spatial calibration monitor, retaining physical scope, source evidence and the first alarm"
 
 [[verb]]
+path = "drill desurvey"
+subsystem = "Corebox"
+mutates_authority = false
+description = "Import acQuire source tables into a selected CAS and locate surveys and assay endpoints with explicitly declared positional covariance, preserving censoring and every rejection"
+
+[[verb]]
 path = "metrics roce"
 subsystem = "Bullion"
 mutates_authority = false

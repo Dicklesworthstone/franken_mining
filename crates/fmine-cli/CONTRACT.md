@@ -7,6 +7,22 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
 - **Layer:** U
 - **Subsystem:** Adit
 
+- DESIGN (BD-188, plan §12.2). `drill desurvey --input <manifest.toml> --cas <directory>`
+  joins quarantined acQuire collar, survey and assay exports to Corebox minimum-curvature geometry.
+  The `fmine.drill-desurvey.v1` declaration explicitly supplies metre-grid CRS, collar provenance,
+  instruments, grid-bearing reference, one-sigma accuracies and random or systematic angle-error model.
+  Export paths resolve relative to the manifest; each CSV or named XLSX sheet passes the same import
+  quarantine. Any rejected source row refuses the entire geometry projection while retaining the
+  row-specific diagnostics. Exact assay values, censoring and placeholders remain unchanged.
+  JSON includes stations, assay endpoints and hole bottoms, total/collar/per-term ENU covariance,
+  extrapolation and suspect flags, and an Assumed, Internal, uncalibrated Claim per hole. Claims bind
+  the exact manifest, export and interpretation-registry hashes. The explicitly selected CAS retains
+  original export bytes; no authority records are written. The caller retains the hash-bound manifest
+  and registries for replay. The synthetic fixture and native command tests independently check straight-hole
+  random/systematic variance, source/CAS identity, changed-input binding and whole-projection refusals.
+  This is first-order declared-model geometry; it supplies no lab QA/QC, custody, qualified instrument
+  calibration, resource classification or execution authority.
+
 - DESIGN (BD-350). `check drill-release <worksheet.toml>` reads local `fmine.drill-release-check.v1`
   with one document and named grade basis. It admits bounded verbatim phrase trees and manually cited rows
   with earlier parent identifiers. It checks sibling positions before subtraction and refuses the whole
@@ -312,7 +328,7 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
 - **LOC budget:** 54,000 planned / 62,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "lane_cutoff", "route_blend", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "drill", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "lane_cutoff", "route_blend", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common

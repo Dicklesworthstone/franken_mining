@@ -1,0 +1,36 @@
+# SYNTHETIC: a 200 m horizontal hole with three independent 1-degree azimuth errors.
+schema = "fmine.drill-desurvey.v1"
+crs = "EPSG:32611"
+evidence_lane = "synthetic"
+survey_error_model = "random"
+omitted_uncertainty = "Invented independent errors; no depth, CRS or systematic instrument uncertainty."
+
+[[table]]
+role = "collar"
+path = "collars.csv"
+format = "csv"
+
+[[table]]
+role = "survey"
+path = "surveys.csv"
+format = "csv"
+
+[[table]]
+role = "assay"
+path = "assays.csv"
+format = "csv"
+
+[[hole]]
+hole_id = "SYN-01"
+program = "synthetic-known-answer"
+hole_type = "diamond"
+collar_from = "actual"
+position_method = "dgnss"
+sigma_horizontal_m = "0.2"
+sigma_vertical_m = "0.3"
+instrument = "gyro"
+run = "in"
+sigma_azimuth_deg = "1"
+sigma_dip_deg = "0"
+magnetic_interference = "false"
+azimuth_reference = "grid"
