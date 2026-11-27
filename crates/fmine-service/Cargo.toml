@@ -1,0 +1,25 @@
+[package]
+name = "fmine-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Node daemon composition (roles, supervisors, leases, Unix socket IPC) -> binary fmined (BD-119, plan §26.6–§26.7, §30.3)."
+
+[[bin]]
+name = "fmined"
+path = "src/main.rs"
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-ledger = { path = "../fmine-ledger" }
+fmine-object = { path = "../fmine-object" }
+fmine-runtime = { path = "../fmine-runtime" }
+
+[dev-dependencies]
+fmine-lab = { path = "../fmine-lab" }
+
+[lints]
+workspace = true

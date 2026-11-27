@@ -373,6 +373,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-service"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-lab",
+ "fmine-ledger",
+ "fmine-object",
+ "fmine-runtime",
+]
+
+[[package]]
 name = "fmine-sync"
 version = "0.1.0"
 dependencies = [
