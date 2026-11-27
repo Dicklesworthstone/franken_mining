@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use fmine_authz::residency::{DataClass, ResidencyDecision, ResidencyRegistry};
 use fmine_core::hash::sha256;
 
-use crate::dialects::{PiiClass, ResolvedColumn, ResolvedUnit};
+use crate::dialects::{ColumnSupport, PiiClass, ResolvedColumn, ResolvedUnit};
 
 /// Replacement marker emitted whenever a personal field or inline PII token is stripped on ingest.
 pub const REDACTED_MARKER: &str = "[REDACTED:PII]";
@@ -114,6 +114,16 @@ pub fn redact_row_on_ingest(
             // or 7-digit tonnages) are validated as numbers/placeholders by quarantine and are
             // not free-text narratives; do not misclassify them as phone numbers.
             out.push(raw.clone());
+        } else if columns.get(idx).is_some_and(|c| {
+            !c.undeclared_in_dialect && c.support.is_some_and(|s| s != ColumnSupport::None)
+        }) {
+            // Structured non-personal technical identifier columns (e.g. HOLEID = "2026-0001",
+            // SAMPLEID = "1045821", LABJOBNO = "2601234") must not have numeric barcodes mangled
+            // as phone numbers, while still scrubbing emails, GPS pairs, and Contact:/Signed by:
+            // clauses in defense in depth.
+            let (scrubbed, hits) = scrub_text_with_options(raw, false);
+            summary.inline_tokens_scrubbed += hits;
+            out.push(scrubbed);
         } else {
             let (scrubbed, hits) = scrub_free_text(raw);
             summary.inline_tokens_scrubbed += hits;
@@ -157,25 +167,29 @@ pub fn check_stakeholder_residency(
 /// from free-text narratives.
 #[must_use]
 pub fn scrub_free_text(input: &str) -> (String, usize) {
+    scrub_text_with_options(input, true)
+}
+
+fn scrub_text_with_options(input: &str, scrub_phone_tokens: bool) -> (String, usize) {
     let mut hits = 0usize;
 
-    // 1. Strip trailing contact/signature clauses (`Signed by: ...`, `Contact: ...`, `Tel: ...`).
+    // 1. Strip every contact/signature clause case-insensitively (`Signed by: ...`,
+    //    `CONTACT: ...`, `Tel: ...`, etc.) up to the next `;` or end of string.
+    //    ASCII lowercasing preserves UTF-8 byte indices 1-to-1.
     let mut working = input.to_string();
     for marker in [
-        "Signed by:",
         "signed by:",
-        "Signature:",
         "signature:",
-        "Contact:",
         "contact:",
-        "Phone:",
         "phone:",
-        "Tel:",
         "tel:",
-        "Address:",
         "address:",
     ] {
-        if let Some(pos) = working.find(marker) {
+        loop {
+            let lower = working.to_ascii_lowercase();
+            let Some(pos) = lower.find(marker) else {
+                break;
+            };
             let suffix = &working[pos..];
             let end = suffix.find(';').map_or(working.len(), |semi| pos + semi);
             working.replace_range(pos..end, REDACTED_MARKER);
@@ -183,11 +197,14 @@ pub fn scrub_free_text(input: &str) -> (String, usize) {
         }
     }
 
-    // 2. Token-level scrub for emails, phone numbers (>=7 digits), and decimal GPS coordinates.
+    // 2. Token-level scrub for emails, optional phone numbers (>=7 digits), and decimal GPS pairs.
     let mut tokens_out = Vec::new();
     for tok in working.split_whitespace() {
         let core = tok.trim_matches(|c: char| matches!(c, ',' | '.' | ';' | '(' | ')' | '<' | '>'));
-        if is_email_token(core) || is_phone_token(core) || is_gps_token(core) {
+        if is_email_token(core)
+            || (scrub_phone_tokens && is_phone_token(core))
+            || is_gps_token(core)
+        {
             hits += 1;
             tokens_out.push(REDACTED_MARKER.to_string());
         } else {
@@ -377,5 +394,69 @@ mod tests {
             "phone token in free-text column must still be scrubbed"
         );
         assert_eq!(redacted.summary.inline_tokens_scrubbed, 1);
+    }
+
+    #[test]
+    fn test_redact_preserves_numeric_sample_barcodes_and_scrubs_repeated_uppercase_clauses() {
+        use crate::dialects::{ColumnBasis, ResolvedCrs};
+        let cols = vec![
+            ResolvedColumn {
+                column_name: "HOLEID".to_string(),
+                unit: ResolvedUnit::None,
+                basis: Some(ColumnBasis::None),
+                support: Some(ColumnSupport::PointCore),
+                crs: ResolvedCrs::None,
+                pii_class: PiiClass::None,
+                undeclared_in_dialect: false,
+            },
+            ResolvedColumn {
+                column_name: "SAMPLEID".to_string(),
+                unit: ResolvedUnit::None,
+                basis: Some(ColumnBasis::None),
+                support: Some(ColumnSupport::PointCore),
+                crs: ResolvedCrs::None,
+                pii_class: PiiClass::None,
+                undeclared_in_dialect: false,
+            },
+            ResolvedColumn {
+                column_name: "SUMMARY".to_string(),
+                unit: ResolvedUnit::None,
+                basis: Some(ColumnBasis::None),
+                support: Some(ColumnSupport::None),
+                crs: ResolvedCrs::None,
+                pii_class: PiiClass::None,
+                undeclared_in_dialect: false,
+            },
+        ];
+        let raw = vec![
+            "2026-0001".to_string(),
+            "1045821".to_string(),
+            "CONTACT: Alice Smith; note; Contact: Bob Jones; SIGNED BY: Carol".to_string(),
+        ];
+        let redacted = redact_row_on_ingest(2, &cols, &raw, None);
+        assert_eq!(redacted.cells[0], "2026-0001");
+        assert_eq!(redacted.cells[1], "1045821");
+        for leaked in ["Alice", "Bob", "Carol"] {
+            assert!(
+                !redacted.cells[2].contains(leaked),
+                "clause PII {leaked:?} leaked: {}",
+                redacted.cells[2]
+            );
+        }
+        assert_eq!(redacted.summary.inline_tokens_scrubbed, 3);
+
+        // Emails inside a structured ID column are still scrubbed in defense in depth.
+        let email_in_id = redact_row_on_ingest(
+            3,
+            &cols,
+            &[
+                "ops@site.example".to_string(),
+                "1045822".to_string(),
+                "clean".to_string(),
+            ],
+            None,
+        );
+        assert_eq!(email_in_id.cells[0], REDACTED_MARKER);
+        assert_eq!(email_in_id.cells[1], "1045822");
     }
 }
