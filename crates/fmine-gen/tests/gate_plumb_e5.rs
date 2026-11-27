@@ -17,8 +17,8 @@
 #![allow(clippy::expect_used)]
 
 use fmine_calib::{
-    DualSurpriseConfig, DualSurpriseMonitor, StandardizedResidual, gaussian_crps,
-    winkler_interval_score,
+    DualSurpriseConfig, ForecastOutcome, LayeredConfig, LayeredRecalibrator, RawForecast,
+    gaussian_crps, winkler_interval_score,
 };
 use fmine_core::det::{ln, sqrt};
 use fmine_gen::harness::ScoringHarness;
@@ -85,8 +85,10 @@ fn median_time(times: &[Option<u64>], censor: usize) -> usize {
     vals[vals.len() / 2]
 }
 
-/// Evaluate `DualSurpriseMonitor` + causal L3 interval recalibration on `runs` sealed-truth
-/// `OpenPitAuConfig` worlds.
+/// Evaluate `LayeredRecalibrator` (its `DualSurpriseMonitor` and causal L3 Student-t recalibration) on `runs`
+/// sealed-truth `OpenPitAuConfig` worlds. The layered interval is the one the stack publishes, times
+/// `unconditional_l3_scale` for the planted inflation; its CRPS is the Gaussian's with the same center and 80%
+/// half-width.
 ///
 /// - `channel == 0`: Grade forecast innovation `y_t = ln(plant_sampler_grade / base_grade)` with
 ///   exact control law `N(0, GRADE_LOG_SIGMA^2 + MEASUREMENT_REL_SIGMA^2)`.
@@ -135,18 +137,32 @@ fn run_world_batch(
             .generate_open_pit_au(GATE_PLUMB_E5_SEED_BASE + seed_offset + (r as u64), &cfg)
             .expect("generate world");
 
-        let mut monitor = DualSurpriseMonitor::new(DualSurpriseConfig {
-            eproc_alpha,
-            cusum_k,
-            cusum_h,
-            alarm_scale,
+        // The E3 configuration: L5's scale anchors the warm-up prior and the mature segment's variance ridge.
+        let mut stack = LayeredRecalibrator::new(LayeredConfig {
+            monitor: DualSurpriseConfig {
+                eproc_alpha,
+                cusum_k,
+                cusum_h,
+                alarm_scale,
+            },
+            prior_kappa: 0.25,
+            prior_alpha: 1.0,
+            prior_scale_mult: alarm_scale,
         })
-        .expect("monitor");
+        .expect("layered stack");
+        let raw = RawForecast {
+            mean: 0.0,
+            std_dev: sigma,
+        };
+        let mut snap = None;
 
         for p in &obs.periods {
-            // Strictly causal L3 scale from prior periods only (INV-008: zero lookahead).
-            let raw_sd = sigma;
-            let layered_sd = sigma * (monitor.l3_scale() * unconditional_l3_scale);
+            // Strictly causal: the stack predicts from prior periods only (INV-008: zero lookahead).
+            let published = stack
+                .predict(raw)
+                .expect("stack predict")
+                .published_interval_80;
+            let center = published.center;
 
             let y = if channel == 0 {
                 ln(p.plant_sampler_grade_g_per_t / BASE_TRUE_GRADE)
@@ -154,29 +170,35 @@ fn run_world_batch(
                 ln(p.resource_model_grade_g_per_t / p.plant_sampler_grade_g_per_t)
             };
 
-            let raw_half = Q90_STANDARD_NORMAL * raw_sd;
-            let lay_half = Q90_STANDARD_NORMAL * layered_sd;
+            let raw_half = Q90_STANDARD_NORMAL * sigma;
+            let lay_half = published.half_width * unconditional_l3_scale;
             total_raw_width += 2.0 * raw_half;
             total_layered_width += 2.0 * lay_half;
             if y >= -raw_half && y <= raw_half {
                 raw_covered += 1;
             }
-            if y >= -lay_half && y <= lay_half {
+            if y >= center - lay_half && y <= center + lay_half {
                 layered_covered += 1;
             }
-            total_raw_crps += gaussian_crps(0.0, raw_sd, y).expect("raw crps");
-            total_layered_crps += gaussian_crps(0.0, layered_sd, y).expect("layered crps");
+            total_raw_crps += gaussian_crps(0.0, sigma, y).expect("raw crps");
+            total_layered_crps +=
+                gaussian_crps(center, lay_half / Q90_STANDARD_NORMAL, y).expect("layered crps");
             total_raw_winkler +=
                 winkler_interval_score(-raw_half, raw_half, 0.2, y).expect("raw winkler");
             total_layered_winkler +=
-                winkler_interval_score(-lay_half, lay_half, 0.2, y).expect("layered winkler");
+                winkler_interval_score(center - lay_half, center + lay_half, 0.2, y)
+                    .expect("layered winkler");
             total_obs += 1;
 
-            let z = y / sigma;
-            monitor.observe(StandardizedResidual(z)).expect("finite z");
+            // The stack's monitor reads z = (y - 0) / sigma, the same residual as before.
+            snap = Some(
+                stack
+                    .observe_resolution(raw, ForecastOutcome(y))
+                    .expect("stack observe"),
+            );
         }
 
-        let snap = monitor.snapshot();
+        let snap = snap.expect("at least one period");
         if snap.eproc_alarm {
             eproc_alarms += 1;
         }

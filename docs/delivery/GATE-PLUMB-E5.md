@@ -6,6 +6,8 @@
 
 Verdict: PASS (commit `462dea7b`; RCH remote Linux `x86_64` synthetic known-answer run and hosted CI confirmed across `ubuntu-latest` and `macos-15` dev + release in `ci:45884215915@34e8d048` on 2026-11-26)
 
+Amended 2026-11-27: until then the gate scored a stand-in layered interval, `sigma × monitor.l3_scale()` (`1.5x` after an alarm), which `LayeredRecalibrator` never publishes. Since 6a8cf66d the stack publishes a post-alarm Student-t interval, so the sharpness, CRPS and Winkler bounds could not fail if it broke. The gate now runs `LayeredRecalibrator` itself, with E3's prior, and scores its published interval. Alarm counts and Clopper–Pearson bounds are bit-identical (the stack's monitor reads the same residual); the interval rows below are re-measured (`aarch64-apple-darwin`, local, 2026-11-27).
+
 ## 1. Gate Criteria & Analytic Tuning
 
 Plan §10.7 requires that on a correctly specified control mine (`WorldCondition::CorrectlySpecified`,
@@ -25,8 +27,10 @@ analytic split below on an untouched seed):
 - **Two-sided Page CUSUM:** `k = 0.5, h = 8.5` (Siegmund `ARL_0 ≈ exp(8.5 + 1.166) - 10.7 ≈ 15,760`,
   satisfying `KILL-PLUMB-6`'s `ARL_0 >= 85·M` for up to `M = 185` streams; expected 120-period FAR `≈ 0.0076`).
 - **Union bound:** `0.04 + 0.0076 = 0.0476 < 0.05`.
-- **Causal L3 scale factor:** `1.0` prior to alarm; `1.50x` predictive standard deviation on subsequent periods
-  only after a sticky alarm (`INV-008`, zero lookahead).
+- **Causal L3 recalibration (`LayeredRecalibrator`):** raw interval before an alarm; after a sticky alarm, the
+  Student-t interval from strictly post-alarm residuals (`INV-008`, zero lookahead), with E3's prior
+  (`prior_kappa = 0.25`, `prior_alpha = 1`, `prior_scale_mult = 1.5`). Its CRPS is scored as the Gaussian with
+  the published center and 80% half-width.
 
 ## 2. Measured Results (`N = 2,000` Control Runs + Misspecified Power + Planted Negatives)
 
@@ -47,24 +51,25 @@ existing `fmine-calib::tests::test_spatial_front_pit_detects_58pct_coverage_shif
 
 | Channel | E-proc alarms (CP95) | CUSUM alarms (CP95) | Combined alarms (CP95) | Sharpness loss | CRPS loss | Winkler loss | Raw / Layered 80% cov |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Grade forecast innovation (`ch 0`) | 35 / 2,000 (`0.02314`) | 13 / 2,000 (`0.01031`) | 46 / 2,000 (`0.02931`) | `0.512%` | `0.051%` | `0.166%` | `0.7990` / `0.8005` |
-| Resource-vs-sampler recon (`ch 1`) | 19 / 2,000 (`0.01391`) | 20 / 2,000 (`0.01450`) | 38 / 2,000 (`0.02483`) | `0.466%` | `0.046%` | `0.145%` | `0.7993` / `0.8007` |
+| Grade forecast innovation (`ch 0`) | 35 / 2,000 (`0.02314`) | 13 / 2,000 (`0.01031`) | 46 / 2,000 (`0.02931`) | `0.163%` | `0.070%` | `0.131%` | `0.7990` / `0.7990` |
+| Resource-vs-sampler recon (`ch 1`) | 19 / 2,000 (`0.01391`) | 20 / 2,000 (`0.01450`) | 38 / 2,000 (`0.02483`) | `0.149%` | `0.066%` | `0.107%` | `0.7993` / `0.7993` |
 
-Every Clopper–Pearson 95% upper bound is strictly `<= 0.05`, and sharpness loss (`< 0.6%`), CRPS
-degradation (`< 0.06%`), and Winkler interval-score degradation (`< 0.17%`) are strictly `< 10%`.
+Every Clopper–Pearson 95% upper bound is strictly `<= 0.05`, and sharpness loss (`< 0.17%`), CRPS
+degradation (`< 0.08%`), and Winkler interval-score degradation (`< 0.14%`) are strictly `< 10%`. The stand-in
+had recorded `0.512%`/`0.466%`, `0.051%`/`0.046%` and `0.166%`/`0.145%`.
 
 ### Positive Power on Misspecified Mines (`N = 200` runs each, identical parameters)
 
 | Misspecified Regime | E-proc power (median period) | CUSUM power (median period) | Raw -> Layered 80% cov |
 |---|---:|---:|---:|
-| `MisspecKind::OutOfModelFault` (step fault at `t = 60`) | 200 / 200 (`t = 81`) | 200 / 200 (`t = 66`) | `0.5304` -> `0.6414` |
+| `MisspecKind::OutOfModelFault` (step fault at `t = 60`) | 200 / 200 (`t = 81`) | 200 / 200 (`t = 66`) | `0.5304` -> `0.7775` (stand-in: `0.6414`) |
 | `BiasVector` (`+10%` resource grade bias) | 200 / 200 (`t = 18`) | 200 / 200 (`t = 10`) | — |
 
 ### Planted Negative Controls (All Rejected by Gate)
 
 - Mis-tuned CUSUM (`h = 2.5`, `N = 1,000` control runs): 95% CP upper bound **`0.98671 > 0.05`** (FAIL).
 - Unmodelled `+5%` resource grade bias leaked into control (`N = 1,000`): combined 95% CP upper bound **`1.00000 > 0.05`** (FAIL).
-- Unconditional `1.25x` L3 width inflation (`N = 200`): sharpness loss **`25.141% >= 10%`** (FAIL).
+- Unconditional `1.25x` inflation of the published L3 width (`N = 200`): sharpness loss **`25.047% >= 10%`** (FAIL).
 
 ## 3. Limits & Honesty Disclosure
 
