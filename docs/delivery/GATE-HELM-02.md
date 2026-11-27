@@ -1,6 +1,6 @@
 # GATE-HELM-02 — finite-model information value
 
-Verdict: PASS (native synthetic known-answer run, 2026-11-25).
+Verdict: PASS (native synthetic known-answer run 2026-11-25; hosted CI confirmed across `ubuntu-latest` and `macos-15` dev + release in `ci:45884215915@34e8d048` on 2026-11-26).
 
 **FACT.** The paired Monte Carlo estimator met the [plan §22.7 criterion](../../COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md).
 The fixed test used 12 finite decision problems, 100 seeds per problem and 2,000 draws per seed.
@@ -22,6 +22,11 @@ rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target
   -p fmine-numerics --lib voi::tests -- --nocapture
 ```
 
-**OPEN (bd-227).** Hosted confirmation is pending. The exercise covers the estimator's agreement
-with finite enumeration on synthetic problems. Continuous nested simulation, site likelihood
-calibration and observed testwork returns require separate evidence.
+**FACT (Hosted CI confirmation).** Workflow `CI` run `45884215915` at commit `34e8d048` passed
+`cargo test --workspace` across all four matrix profiles (`ubuntu-latest` dev/release and `macos-15`
+dev/release), `lint`, and `deny`, with `crates/fmine-numerics/src/voi.rs` unchanged at Git blob
+`f6bfe1fde76f7e234934dd7842f4cbb6ac6117e2`.
+
+**Limits.** The exercise covers the estimator's agreement with finite enumeration on synthetic problems
+(Claim type: Known answers). Continuous nested simulation, site likelihood calibration and observed
+testwork returns require separate evidence.

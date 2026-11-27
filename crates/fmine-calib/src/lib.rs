@@ -897,6 +897,455 @@ impl DualSurpriseMonitor {
     }
 }
 
+// --- Layer-3 Post-Alarm Segmented Student-t Recalibrator (BD-259, plan §9.2 & §10.7, GATE-PLUMB-E3) ---
+
+/// Raw L1/L2 Gaussian predictive forecast handed into [`LayeredRecalibrator`] (`BD-259`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RawForecast {
+    pub mean: f64,
+    pub std_dev: f64,
+}
+
+/// Realized scalar outcome in the same unit as [`RawForecast`] (`BD-259`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ForecastOutcome(pub f64);
+
+/// Two-sided 80% central predictive interval (`alpha = 0.20`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PredictiveInterval80 {
+    pub center: f64,
+    pub lower: f64,
+    pub upper: f64,
+    pub half_width: f64,
+}
+
+impl PredictiveInterval80 {
+    #[must_use]
+    pub fn contains(&self, y: ForecastOutcome) -> bool {
+        y.0.is_finite() && y.0 >= self.lower && y.0 <= self.upper
+    }
+}
+
+/// Explicit configuration for [`LayeredRecalibrator`] (`BD-259`, `GATE-PLUMB-E3`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayeredConfig {
+    pub monitor: DualSurpriseConfig,
+    /// Weak conjugate prior pseudo-count on post-alarm mean error (`> 0`).
+    pub prior_kappa: f64,
+    /// Conjugate Inverse-Gamma shape (`>= 0.5`, so prior degrees of freedom `2 * prior_alpha >= 1`).
+    pub prior_alpha: f64,
+    /// Anchor multiplier on `raw.std_dev` for the prior variance scale (`> 0`).
+    pub prior_scale_mult: f64,
+}
+
+/// Dual-surface prediction emitted by [`LayeredRecalibrator::predict`] so the calibration ledger
+/// scores both raw L1/L2 and published L3 intervals separately (plan §9.2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayeredPrediction {
+    pub raw_interval_80: PredictiveInterval80,
+    pub published_interval_80: PredictiveInterval80,
+    pub alarmed: bool,
+    pub post_alarm_resolutions: u64,
+}
+
+const Q90_NORMAL: f64 = 1.281_551_565_544_600_4;
+
+/// Portable Lanczos `ln(Gamma(z))` for `z > 0` (`BitwisePortable`, using `fmine_core::det::ln`).
+fn ln_gamma_portable(z: f64) -> f64 {
+    const COEFFS: [f64; 9] = [
+        0.999_999_999_999_809_93,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_13,
+        -176.615_029_162_140_59,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_571_6e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    let zm1 = z - 1.0;
+    let mut x = COEFFS[0];
+    for (idx, &coeff) in COEFFS.iter().enumerate().skip(1) {
+        x += coeff / (zm1 + (idx as f64));
+    }
+    let t = zm1 + 7.5;
+    0.5 * det::ln(2.0 * std::f64::consts::PI) + (zm1 + 0.5) * det::ln(t) - t + det::ln(x)
+}
+
+/// Lentz continued fraction for the incomplete beta function `I_x(a, b)` (`BitwisePortable`).
+fn betacf_portable(a: f64, b: f64, x: f64) -> f64 {
+    const FPMIN: f64 = 1e-30;
+    const EPS: f64 = 1e-14;
+    let qab = a + b;
+    let qap = a + 1.0;
+    let qam = a - 1.0;
+    let mut c = 1.0;
+    let mut d = 1.0 - qab * x / qap;
+    if d.abs() < FPMIN {
+        d = FPMIN;
+    }
+    d = 1.0 / d;
+    let mut h = d;
+    for m in 1..=200 {
+        let mf = m as f64;
+        let m2 = 2.0 * mf;
+        let aa = mf * (b - mf) * x / ((qam + m2) * (a + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < FPMIN {
+            d = FPMIN;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < FPMIN {
+            c = FPMIN;
+        }
+        d = 1.0 / d;
+        h *= d * c;
+        let aa2 = -(a + mf) * (qab + mf) * x / ((a + m2) * (qap + m2));
+        d = 1.0 + aa2 * d;
+        if d.abs() < FPMIN {
+            d = FPMIN;
+        }
+        c = 1.0 + aa2 / c;
+        if c.abs() < FPMIN {
+            c = FPMIN;
+        }
+        d = 1.0 / d;
+        let del = d * c;
+        h *= del;
+        if (del - 1.0).abs() < EPS {
+            break;
+        }
+    }
+    h
+}
+
+/// Regularized incomplete beta function `I_x(a, b)` for `0 <= x <= 1`, `a > 0`, `b > 0`.
+fn regularized_incomplete_beta(a: f64, b: f64, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let bt = det::exp(
+        ln_gamma_portable(a + b) - ln_gamma_portable(a) - ln_gamma_portable(b)
+            + a * det::ln(x)
+            + b * det::ln(1.0 - x),
+    );
+    if x < (a + 1.0) / (a + b + 2.0) {
+        bt * betacf_portable(a, b, x) / a
+    } else {
+        1.0 - bt * betacf_portable(b, a, 1.0 - x) / b
+    }
+}
+
+/// Exact `BitwisePortable` 90th percentile `t_{0.90, nu}` (80% two-sided interval critical value)
+/// for Student's t distribution with `nu >= 1.0` degrees of freedom.
+fn student_t_quantile_90(nu: f64) -> f64 {
+    if nu > 1e6 {
+        return Q90_NORMAL;
+    }
+    // Two-sided tail probability P(|T_nu| >= x) = I_{nu / (nu + x^2)}(nu / 2, 1 / 2).
+    // Strictly decreasing in x > 0; target two-sided tail = 0.20 (80% central coverage).
+    let two_sided_tail = |x: f64| {
+        let z = nu / (nu + x * x);
+        regularized_incomplete_beta(0.5 * nu, 0.5, z)
+    };
+    let mut lo = 1.0_f64;
+    let mut hi = 4.0_f64;
+    for _ in 0..30 {
+        if two_sided_tail(hi) <= 0.20 {
+            break;
+        }
+        hi *= 2.0;
+    }
+    for _ in 0..64 {
+        let mid = 0.5 * (lo + hi);
+        if two_sided_tail(mid) > 0.20 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+/// Online conjugate Normal-Inverse-Gamma sufficient statistics for residual errors `e = y - mu_raw`,
+/// producing exact finite-sample Student-t 80% predictive intervals.
+#[derive(Debug, Clone)]
+struct ConjugateResidualSegment {
+    prior_kappa: f64,
+    prior_alpha: f64,
+    prior_scale_mult: f64,
+    n: u64,
+    mean_err: f64,
+    m2_err: f64,
+}
+
+impl ConjugateResidualSegment {
+    fn new(prior_kappa: f64, prior_alpha: f64, prior_scale_mult: f64) -> Self {
+        Self {
+            prior_kappa,
+            prior_alpha,
+            prior_scale_mult,
+            n: 0,
+            mean_err: 0.0,
+            m2_err: 0.0,
+        }
+    }
+
+    fn try_observe_error(&mut self, err: f64) -> Result<(), Refusal> {
+        let next_n = self.n + 1;
+        let nf = next_n as f64;
+        let delta = err - self.mean_err;
+        let next_mean = self.mean_err + delta / nf;
+        let delta2 = err - next_mean;
+        let next_m2 = self.m2_err + delta * delta2;
+        let kappa_n = self.prior_kappa + nf;
+        let shrink_term = 0.5 * (self.prior_kappa * (nf / kappa_n)) * (next_mean * next_mean);
+        if !(next_mean.is_finite() && next_m2.is_finite() && shrink_term.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                "overflow updating ConjugateResidualSegment moments",
+            ));
+        }
+        self.n = next_n;
+        self.mean_err = next_mean;
+        self.m2_err = next_m2;
+        Ok(())
+    }
+
+    fn predict_80(&self, raw: RawForecast) -> Result<PredictiveInterval80, Refusal> {
+        let nf = self.n as f64;
+        let kappa_n = self.prior_kappa + nf;
+        let mu_n = (nf * self.mean_err) / kappa_n;
+        let alpha_n = self.prior_alpha + 0.5 * nf;
+        let prior_sd = self.prior_scale_mult * raw.std_dev;
+        let beta_0 = self.prior_alpha * prior_sd * prior_sd;
+        let beta_n = beta_0
+            + 0.5 * self.m2_err
+            + 0.5 * (self.prior_kappa * (nf / kappa_n)) * (self.mean_err * self.mean_err);
+        let pred_var = (beta_n / alpha_n) * ((kappa_n + 1.0) / kappa_n);
+        if !(pred_var.is_finite() && pred_var > 0.0) {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                "LayeredRecalibrator predictive variance is non-finite or non-positive",
+            ));
+        }
+        let nu = 2.0 * alpha_n;
+        let t_crit = student_t_quantile_90(nu);
+        let half_width = t_crit * det::sqrt(pred_var);
+        let center = raw.mean + mu_n;
+        let lower = center - half_width;
+        let upper = center + half_width;
+        if !(center.is_finite()
+            && half_width.is_finite()
+            && half_width > 0.0
+            && lower.is_finite()
+            && upper.is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                "LayeredRecalibrator interval bounds are non-finite",
+            ));
+        }
+        Ok(PredictiveInterval80 {
+            center,
+            lower,
+            upper,
+            half_width,
+        })
+    }
+}
+
+fn validate_prior(config: LayeredConfig) -> Result<(), ScoreError> {
+    if !(config.prior_kappa.is_finite() && config.prior_kappa > 0.0) {
+        return Err(ScoreError::InvalidParameter {
+            name: "prior_kappa",
+            value: config.prior_kappa,
+        });
+    }
+    if !(config.prior_alpha.is_finite() && config.prior_alpha >= 0.5) {
+        return Err(ScoreError::InvalidParameter {
+            name: "prior_alpha",
+            value: config.prior_alpha,
+        });
+    }
+    if !(config.prior_scale_mult.is_finite() && config.prior_scale_mult > 0.0) {
+        return Err(ScoreError::InvalidParameter {
+            name: "prior_scale_mult",
+            value: config.prior_scale_mult,
+        });
+    }
+    Ok(())
+}
+
+fn validate_raw_forecast(raw: RawForecast) -> Result<(), Refusal> {
+    if !(raw.mean.is_finite() && raw.std_dev.is_finite() && raw.std_dev > 0.0) {
+        return Err(Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            format!(
+                "invalid RawForecast (mean={}, std_dev={})",
+                raw.mean, raw.std_dev
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Layered epistemic stack combining Layer-5 [`DualSurpriseMonitor`] with a causal Layer-3
+/// segmented Student-t discrepancy recalibrator (`BD-259`, plan §9.2, `GATE-PLUMB-E3`).
+///
+/// - Before L5 alarms: pass-through of raw L1/L2 forecasts (preserving `< 10%` sharpness loss on
+///   correctly specified control mines, `GATE-PLUMB-E5`).
+/// - After L5 alarms: opens a fresh post-alarm discrepancy segment strictly from post-alarm
+///   resolutions (`t > t_alarm`, avoiding stopping-time selection bias and pre-fault staleness)
+///   and emits finite-sample conjugate Student-t 80% intervals alongside raw L1/L2 intervals.
+#[derive(Debug, Clone)]
+pub struct LayeredRecalibrator {
+    monitor: DualSurpriseMonitor,
+    post_alarm: ConjugateResidualSegment,
+}
+
+impl LayeredRecalibrator {
+    pub fn new(config: LayeredConfig) -> Result<Self, ScoreError> {
+        validate_prior(config)?;
+        let monitor = DualSurpriseMonitor::new(config.monitor)?;
+        Ok(Self {
+            monitor,
+            post_alarm: ConjugateResidualSegment::new(
+                config.prior_kappa,
+                config.prior_alpha,
+                config.prior_scale_mult,
+            ),
+        })
+    }
+
+    /// Current Layer-5 surprise monitor snapshot.
+    #[must_use]
+    pub fn monitor_snapshot(&self) -> DualSurpriseSnapshot {
+        self.monitor.snapshot()
+    }
+
+    /// Emit strictly causal raw L1/L2 and published L3 80% predictive intervals for the next period.
+    pub fn predict(&self, raw: RawForecast) -> Result<LayeredPrediction, Refusal> {
+        validate_raw_forecast(raw)?;
+        let raw_half = Q90_NORMAL * raw.std_dev;
+        let raw_lower = raw.mean - raw_half;
+        let raw_upper = raw.mean + raw_half;
+        if !(raw_half.is_finite()
+            && raw_half > 0.0
+            && raw_lower.is_finite()
+            && raw_upper.is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                "RawForecast 80% interval bounds overflowed to non-finite",
+            ));
+        }
+        let raw_interval_80 = PredictiveInterval80 {
+            center: raw.mean,
+            lower: raw_lower,
+            upper: raw_upper,
+            half_width: raw_half,
+        };
+        let alarmed = self.monitor.snapshot().any_alarm;
+        let published_interval_80 = if alarmed {
+            self.post_alarm.predict_80(raw)?
+        } else {
+            raw_interval_80
+        };
+        Ok(LayeredPrediction {
+            raw_interval_80,
+            published_interval_80,
+            alarmed,
+            post_alarm_resolutions: self.post_alarm.n,
+        })
+    }
+
+    /// Log one realized outcome through L5 first, then update L3's post-alarm segment strictly for
+    /// resolutions arriving after the alarm (`t > t_alarm`; plan §9.2 & `INV-008`). Atomic: if
+    /// either L5 or L3 refuses, neither state is mutated.
+    pub fn observe_resolution(
+        &mut self,
+        raw: RawForecast,
+        outcome: ForecastOutcome,
+    ) -> Result<DualSurpriseSnapshot, Refusal> {
+        validate_raw_forecast(raw)?;
+        if !outcome.0.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                format!("non-finite ForecastOutcome {}", outcome.0),
+            ));
+        }
+        let err = outcome.0 - raw.mean;
+        let z = err / raw.std_dev;
+        if !(err.is_finite() && z.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                "overflow computing residual for LayeredRecalibrator",
+            ));
+        }
+        let was_alarmed = self.monitor.snapshot().any_alarm;
+        let mut next_post = self.post_alarm.clone();
+        if was_alarmed {
+            next_post.try_observe_error(err)?;
+        }
+        // L5 logs the resolution; if L5 fails, neither monitor nor post_alarm is mutated.
+        let snap = self.monitor.observe(StandardizedResidual(z))?;
+        self.post_alarm = next_post;
+        Ok(snap)
+    }
+}
+
+/// Unsegmented single global conjugate posterior baseline (`GATE-PLUMB-E3`, plan §9.2):
+/// uses the exact same Normal-Inverse-Gamma Student-t likelihood/prior as [`LayeredRecalibrator`]
+/// but pools all historical resolutions without alarm segmentation.
+#[derive(Debug, Clone)]
+pub struct GlobalPosteriorBaseline {
+    segment: ConjugateResidualSegment,
+}
+
+impl GlobalPosteriorBaseline {
+    pub fn new(config: LayeredConfig) -> Result<Self, ScoreError> {
+        validate_prior(config)?;
+        Ok(Self {
+            segment: ConjugateResidualSegment::new(
+                config.prior_kappa,
+                config.prior_alpha,
+                config.prior_scale_mult,
+            ),
+        })
+    }
+
+    pub fn predict(&self, raw: RawForecast) -> Result<PredictiveInterval80, Refusal> {
+        validate_raw_forecast(raw)?;
+        self.segment.predict_80(raw)
+    }
+
+    pub fn observe_resolution(
+        &mut self,
+        raw: RawForecast,
+        outcome: ForecastOutcome,
+    ) -> Result<(), Refusal> {
+        validate_raw_forecast(raw)?;
+        if !outcome.0.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                format!("non-finite ForecastOutcome {}", outcome.0),
+            ));
+        }
+        let err = outcome.0 - raw.mean;
+        if !err.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                "overflow computing residual for GlobalPosteriorBaseline",
+            ));
+        }
+        self.segment.try_observe_error(err)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -906,6 +1355,129 @@ mod tests {
     use fmine_core::rand::{PhiloxStream, RngKey};
     use fmine_evidence::{EpistemicStatus, KnowledgeState, KuKind};
     use fmine_numerics::eproc::BettingEProcess;
+
+    #[test]
+    fn test_student_t_quantile_90_known_answers() {
+        // Closed-form elementary-sum values (verified independently via Python):
+        // nu=1 -> tan(0.4*pi), nu=2 -> sqrt(32/9), even nu=2m -> exact finite-sum CDF root.
+        let cases = [
+            (1.0, 3.077_683_537_175_253_1, 1e-10),
+            (2.0, 1.885_618_083_164_126_7, 1e-10),
+            (4.0, 1.533_206_274_058_943_8, 1e-10),
+            (10.0, 1.372_183_641_110_335_6, 1e-10),
+            (1000.0, 1.282_398_721_460_927_1, 1e-10),
+        ];
+        for (nu, expected, tol) in cases {
+            let got = student_t_quantile_90(nu);
+            assert!(
+                (got - expected).abs() <= tol,
+                "t_0.90(nu={nu}): got {got}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_layered_recalibrator_pass_through_before_alarm_and_atomic_refusal() {
+        let base_cfg = LayeredConfig {
+            monitor: DualSurpriseConfig {
+                eproc_alpha: 0.04,
+                cusum_k: 0.5,
+                cusum_h: 8.5,
+                alarm_scale: 1.5,
+            },
+            prior_kappa: 0.25,
+            prior_alpha: 1.0,
+            prior_scale_mult: 1.0,
+        };
+        // Invalid prior parameters must fail closed.
+        assert!(
+            LayeredRecalibrator::new(LayeredConfig {
+                prior_kappa: 0.0,
+                ..base_cfg
+            })
+            .is_err()
+        );
+        assert!(
+            LayeredRecalibrator::new(LayeredConfig {
+                prior_alpha: 0.25,
+                ..base_cfg
+            })
+            .is_err()
+        );
+        assert!(
+            LayeredRecalibrator::new(LayeredConfig {
+                prior_scale_mult: -1.0,
+                ..base_cfg
+            })
+            .is_err()
+        );
+        assert!(
+            GlobalPosteriorBaseline::new(LayeredConfig {
+                prior_kappa: f64::NAN,
+                ..base_cfg
+            })
+            .is_err()
+        );
+
+        let mut stack = LayeredRecalibrator::new(base_cfg).expect("valid layered stack");
+        let mut global = GlobalPosteriorBaseline::new(base_cfg).expect("valid global baseline");
+        let raw = RawForecast {
+            mean: 2.0,
+            std_dev: 0.2,
+        };
+        let pred = stack.predict(raw).expect("predict");
+        assert!(!pred.alarmed);
+        assert_eq!(pred.raw_interval_80, pred.published_interval_80);
+
+        // Interval bound overflow refuses cleanly instead of returning +/-inf bounds.
+        let huge = RawForecast {
+            mean: 1e308,
+            std_dev: 1e308,
+        };
+        assert_eq!(
+            stack.predict(huge).unwrap_err().code,
+            RefusalCode::NumericalCertificateFailed207.as_str()
+        );
+        assert_eq!(
+            global.predict(huge).unwrap_err().code,
+            RefusalCode::NumericalCertificateFailed207.as_str()
+        );
+
+        // Non-finite outcome refuses without mutating L5 or L3 state.
+        let before = stack.monitor_snapshot();
+        assert_eq!(
+            stack
+                .observe_resolution(raw, ForecastOutcome(f64::NAN))
+                .unwrap_err()
+                .code,
+            RefusalCode::NumericalCertificateFailed207.as_str()
+        );
+        assert_eq!(stack.monitor_snapshot(), before);
+        assert_eq!(
+            global
+                .observe_resolution(raw, ForecastOutcome(f64::NAN))
+                .unwrap_err()
+                .code,
+            RefusalCode::NumericalCertificateFailed207.as_str()
+        );
+
+        // Overflow in residual moment update refuses atomically without corrupting global baseline.
+        let before_iv = global.predict(raw).expect("before huge error");
+        assert_eq!(
+            global
+                .observe_resolution(
+                    RawForecast {
+                        mean: 0.0,
+                        std_dev: 1e199,
+                    },
+                    ForecastOutcome(1e200),
+                )
+                .unwrap_err()
+                .code,
+            RefusalCode::NumericalCertificateFailed207.as_str()
+        );
+        assert_eq!(global.predict(raw).expect("unchanged"), before_iv);
+    }
 
     #[test]
     fn test_dual_surprise_monitor_atomic_refusal_and_sticky_alarms() {

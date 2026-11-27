@@ -485,6 +485,15 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   residuals refuse without mutating monitor state; sticky first crossings are never erased by later quiet
   observations. Control-mine `GATE-PLUMB-E5` verification lives in `crates/fmine-gen/tests/gate_plumb_e5.rs`
   and `docs/delivery/GATE-PLUMB-E5.md`.
+- DESIGN (BD-259, GATE-PLUMB-E3, plan §9.2 & §10.7): `LayeredRecalibrator` (`LayeredConfig`, `RawForecast`,
+  `ForecastOutcome`, `PredictiveInterval80`, `LayeredPrediction`) couples L5 `DualSurpriseMonitor` to a
+  causal L3 segmented conjugate Normal-Inverse-Gamma / Student-t predictive recalibrator (`BitwisePortable`,
+  using portable Lanczos/Lentz incomplete-beta Student-t quantiles). Prior to an L5 alarm, L3 passes raw
+  L1/L2 forecasts through unchanged; after an alarm, L3 accumulates strictly post-alarm residuals
+  (`t > t_alarm`, avoiding stopping-time selection bias) and emits both raw and L3 intervals so the ledger
+  scores them separately. `GlobalPosteriorBaseline` exposes the identical conjugate Student-t predictor
+  without alarm segmentation for apples-to-apples `GATE-PLUMB-E3` comparison in
+  `crates/fmine-gen/tests/gate_plumb_e3.rs`.
 - `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs,
   non-positive std_dev, alpha outside (0, 1), inverted intervals and unrepresentable results refuse; nothing
   is clamped, BD-048/bd-8wrk). Opposite-sign Gaussian endpoints are scaled before an overflowing subtraction;

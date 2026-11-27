@@ -4,7 +4,7 @@
 - **Claim type:** Known answers on synthetic control and misspecified mines (NOT live site reconciliation or performance)
 - **Date:** 2026-11-26
 
-Verdict: PASS (RCH remote Linux `x86_64` synthetic known-answer run; self-verified only; independent GitHub Actions CI pending)
+Verdict: PASS (commit `462dea7b`; RCH remote Linux `x86_64` synthetic known-answer run and hosted CI confirmed across `ubuntu-latest` and `macos-15` dev + release in `ci:45884215915@34e8d048` on 2026-11-26)
 
 ## 1. Gate Criteria & Analytic Tuning
 
@@ -69,5 +69,5 @@ degradation (`< 0.06%`) are strictly `< 10%`.
 ## 3. Limits & Honesty Disclosure
 
 - **Synthetic known-answer evidence only:** Exercises `fmine-gen::worlds` sealed-truth synthetic worlds (`OpenPitAuConfig`), not reconciled live mine operations.
-- **Self-verification only:** Authored and run by the implementing agent on RCH Linux workers (`x86_64`); independent human review and hosted GitHub Actions CI confirmation are pending.
+- **Hosted CI confirmed (`ci:45884215915@34e8d048`):** Passed `cargo test --workspace`, `xtask check-all`, `lint`, and `deny` across `ubuntu-latest` (dev + release) and `macos-15` (dev + release). Independent human review remains separate.
 - **Downstream gates remain separate:** `GATE-PLUMB-E3` (`bd-259`, misspecified coverage restoration within 12 resolutions) and `KILL-PLUMB-6` (`bd-261`, full multi-stream quarterly site control check) remain open on their own beads.

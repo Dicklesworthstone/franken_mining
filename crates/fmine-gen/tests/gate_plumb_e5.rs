@@ -57,6 +57,7 @@ struct BatchMetrics {
     combined_cp_upper_95: f64,
     sharpness_loss_fraction: f64,
     crps_loss_fraction: f64,
+    winkler_loss_fraction: f64,
     raw_coverage_80: f64,
     layered_coverage_80: f64,
     median_cusum_alarm: usize,
@@ -207,6 +208,7 @@ fn run_world_batch(
         combined_cp_upper_95: cp_upper(combined_alarms),
         sharpness_loss_fraction: (total_layered_width - total_raw_width) / total_raw_width,
         crps_loss_fraction: (total_layered_crps - total_raw_crps) / total_raw_crps,
+        winkler_loss_fraction: (total_layered_winkler - total_raw_winkler) / total_raw_winkler,
         raw_coverage_80: (raw_covered as f64) / (total_obs as f64),
         layered_coverage_80: (layered_covered as f64) / (total_obs as f64),
         median_cusum_alarm: median_time(&cusum_times, PERIODS_PER_RUN),
@@ -278,6 +280,11 @@ fn test_gate_plumb_e5_control_mine_false_alarm_sharpness_and_power() {
             m.crps_loss_fraction < 0.10,
             "{label}: CRPS degradation {:.4} >= 10%",
             m.crps_loss_fraction
+        );
+        assert!(
+            m.winkler_loss_fraction < 0.10,
+            "{label}: Winkler interval-score degradation {:.4} >= 10%",
+            m.winkler_loss_fraction
         );
         assert!(
             (0.79..=0.81).contains(&m.raw_coverage_80),
