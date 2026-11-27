@@ -550,6 +550,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   to dry tonnes, feed element mass per dry tonne and the recovered fraction by equally weighting all
   six orders. It checks exact footing, requires positive dry feed and feed element mass, and refuses
   caller-supplied scalars or unresolved members. It reads no clock or editable worksheet.
+- DESIGN (bd-iqxc). The `--duration-adjusted` mode accepts different positive UTC durations with
+  the same scope and evidence checks. It splits observed dry tonnes into elapsed UTC hours and
+  realized dry tonnes per elapsed hour, then equally weights the 24 factor orders and requires
+  exact closure to the observed recovered kg change. The `fmine.plant-change.duration-adjusted.v1`
+  payload adds both quantities to each period. Its rate uses the entire support, including
+  downtime and idle time.
 - DESIGN (BD-276): `forecast journal register-assumption --journal <path> --head <hex> --input <path>
   --trust-host-clock` admits one `fmine.report-assumption.v1` request from a registered technical report.
   Hash/size-verified source bytes and complete two-reader agreement supply the printed point or finite

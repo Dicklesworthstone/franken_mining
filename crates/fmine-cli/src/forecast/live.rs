@@ -312,6 +312,7 @@ pub enum Command {
         head: Digest32,
         baseline: String,
         current: String,
+        duration_adjusted: bool,
     },
     /// Retrieve an existing persisted assessment without sampling a clock or extending the journal.
     Report {
@@ -598,11 +599,18 @@ fn perform(
             head,
             baseline,
             current,
+            duration_adjusted,
         } => {
             let journal = Journal::open_read(&root.join(journal), Some(*head))?;
             let state = replay(&journal)?;
-            return super::plant::change::report(&state, *head, baseline, current)
-                .map_err(Into::into);
+            return super::plant::change::report(
+                &state,
+                *head,
+                baseline,
+                current,
+                *duration_adjusted,
+            )
+            .map_err(Into::into);
         }
         Command::Report {
             journal,

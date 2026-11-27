@@ -528,7 +528,7 @@ description = "Recompute retained plant worksheets and verify the original recei
 path = "forecast journal explain-plant-change"
 subsystem = "Touchstone"
 mutates_authority = false
-description = "Explain recovered-metal change across two pinned plant periods by dry tonnes, head grade and recovery"
+description = "Explain recovered-metal change across pinned plant periods by grade, recovery and either dry tonnes or elapsed hours and realized feed rate"
 
 [[verb]]
 path = "robot schema"

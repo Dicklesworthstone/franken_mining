@@ -1126,6 +1126,7 @@ fn exact_plant_change_accounts_for_tonnage_grade_and_recovery_from_pinned_source
         head: base_pin,
         baseline: "prediction".into(),
         current: "later".into(),
+        duration_adjusted: false,
     };
     fixture.refuse(&stale, &NoClock);
 
@@ -1208,6 +1209,216 @@ fn exact_plant_change_accounts_for_tonnage_grade_and_recovery_from_pinned_source
             .rendered_markdown
             .unwrap()
             .contains("| **Total change** | **3/250** |")
+    );
+    let equal_duration = fixture.native_reader(&[
+        "explain-plant-change",
+        "--baseline",
+        "prediction",
+        "--current",
+        "later",
+        "--duration-adjusted",
+    ]);
+    let effects = field(&payload, &["effects_kg"]);
+    let adjusted = field(&equal_duration, &["payload", "effects_kg"]);
+    assert_eq!(field(adjusted, &["elapsed_hours"]).as_str(), Some("0"));
+    for (original, adjusted_key) in [
+        ("dry_tonnes", "dry_tonnes_per_elapsed_hour"),
+        ("head_grade", "head_grade"),
+        ("recovery", "recovery"),
+    ] {
+        assert_eq!(
+            field(effects, &[original]),
+            field(adjusted, &[adjusted_key])
+        );
+    }
+    assert_eq!(fs::read(fixture.root.join("journal")).unwrap(), before);
+}
+
+#[test]
+fn plant_change_separates_calendar_hours_from_realized_feed_rate() {
+    let baseline_hours = 28 * 24;
+    let current_hours = 31 * 24;
+    let mut fixture = Fixture::with_sources(
+        "recovered-metal",
+        "total-non-water-dry-matter/v1",
+        include_str!("../../../tests/plant/production_joint.toml"),
+        baseline_hours * HOUR,
+    );
+    fixture.production_observation();
+    let start = fixture.start;
+    let middle = start + baseline_hours * HOUR;
+    let end = middle + current_hours * HOUR;
+    for file in ["production.toml", "grinding.toml", "recovery.toml"] {
+        fixture.change(
+            file,
+            &format!("end_ns = \"{middle}\""),
+            &format!("end_ns = \"{end}\""),
+        );
+        fixture.change(
+            file,
+            &format!("start_ns = \"{start}\""),
+            &format!("start_ns = \"{middle}\""),
+        );
+    }
+    fixture.ok(
+        "register-plant",
+        &[
+            "--input",
+            "production.toml",
+            "--grinding",
+            "grinding.toml",
+            "--recovery",
+            "recovery.toml",
+            "--id",
+            "later",
+            "--target",
+            "recovered-metal",
+            "--author-role",
+            "synthetic-model-role",
+            "--time-basis",
+            "utc-unix-ns",
+        ],
+        start - 28 * NS,
+    );
+    fixture.freeze("later", "later", PRODUCTION_RULE, start - 26 * NS);
+    let baseline = execute_with_clock(
+        &fixture.resolve("production", "prediction"),
+        &fixture.root,
+        &Clock(middle + 2 * NS),
+    );
+    assert_eq!(baseline.exit_code, 0, "{}", baseline.to_json());
+    fixture.update_head(&baseline);
+    let baseline_source = parse(baseline.payload_json.as_bytes()).unwrap();
+    fixture.change(
+        "observations/observation.toml",
+        &utc(middle + NS),
+        &utc(end + NS),
+    );
+    fixture.change(
+        "observations/observation.toml",
+        "first-hour",
+        "later-period",
+    );
+    for (role, dry, grade) in [
+        ("feed", "2000", "20"),
+        ("concentrate", "100", "200"),
+        ("tailings", "1900", "200/19"),
+    ] {
+        fs::write(
+            fixture.root.join(format!("observations/{role}.toml")),
+            material_period(role, dry, grade, middle, end),
+        )
+        .unwrap();
+    }
+    let current = execute_with_clock(
+        &fixture.resolve("later", "later"),
+        &fixture.root,
+        &Clock(end + 2 * NS),
+    );
+    assert_eq!(current.exit_code, 0, "{}", current.to_json());
+    fixture.update_head(&current);
+    let current_source = parse(current.payload_json.as_bytes()).unwrap();
+
+    let options = ["--baseline", "prediction", "--current", "later"];
+    let default = fixture.command("explain-plant-change", &options);
+    let unequal = fixture.refuse(&default, &NoClock).refusal.unwrap();
+    assert_eq!(unequal.code, "FMINE-REF-102");
+    assert!(unequal.what.contains("equal UTC duration"));
+    for file in [
+        "production.toml",
+        "grinding.toml",
+        "recovery.toml",
+        "observations/observation.toml",
+        "observations/feed.toml",
+        "observations/concentrate.toml",
+        "observations/tailings.toml",
+    ] {
+        fs::write(
+            fixture.root.join(file),
+            "edited after the original observations",
+        )
+        .unwrap();
+    }
+    let before = fs::read(fixture.root.join("journal")).unwrap();
+    let shown = fixture.native_reader(&[
+        "explain-plant-change",
+        "--baseline",
+        "prediction",
+        "--current",
+        "later",
+        "--duration-adjusted",
+    ]);
+    let payload = field(&shown, &["payload"]);
+    assert_eq!(
+        field(payload, &["schema"]).as_str(),
+        Some("fmine.plant-change.duration-adjusted.v1")
+    );
+    for (period, hours, rate, prior) in [
+        ("baseline", "672", "1/672", &baseline_source),
+        ("current", "744", "1/372", &current_source),
+    ] {
+        assert_eq!(
+            field(payload, &[period, "elapsed_hours"]).as_str(),
+            Some(hours)
+        );
+        assert_eq!(
+            field(payload, &[period, "dry_tonnes_per_elapsed_hour"]).as_str(),
+            Some(rate)
+        );
+        let admissions = field(prior, &["source_admissions"]).as_array().unwrap();
+        let id = field(payload, &[period, "forecast_id"]);
+        let admission = admissions
+            .iter()
+            .find(|entry| field(entry, &["forecast_id"]) == id)
+            .unwrap();
+        assert_eq!(
+            field(payload, &[period, "evidence_sha256"]),
+            field(admission, &["evidence", "observation_sha256"])
+        );
+    }
+    // FACT: Exact known answers from enumerating the 24 paths between the four observed factors.
+    for (driver, answer) in [
+        ("elapsed_hours", "5009/3472000"),
+        ("dry_tonnes_per_elapsed_hour", "1123/138880"),
+        ("head_grade", "32659/3472000"),
+        ("recovery", "-24079/3472000"),
+    ] {
+        assert_eq!(
+            field(payload, &["effects_kg", driver]).as_str(),
+            Some(answer)
+        );
+    }
+    assert_eq!(field(payload, &["change_kg"]).as_str(), Some("3/250"));
+    let adjusted = fixture.command(
+        "explain-plant-change",
+        &[
+            "--baseline",
+            "prediction",
+            "--current",
+            "later",
+            "--duration-adjusted",
+        ],
+    );
+    let report = execute_with_clock(&adjusted, &fixture.root, &NoClock);
+    assert_eq!(report.exit_code, 0, "{}", report.to_json());
+    assert_eq!(&parse(report.payload_json.as_bytes()).unwrap(), payload);
+    let markdown = report.rendered_markdown.unwrap();
+    assert!(markdown.contains("| Elapsed hours | 5009/3472000 |"));
+    assert!(markdown.contains("| Dry tonnes per elapsed hour | 1123/138880 |"));
+    assert!(markdown.contains("including downtime and idle time"));
+    let reversed = fixture.command(
+        "explain-plant-change",
+        &[
+            "--baseline",
+            "later",
+            "--current",
+            "prediction",
+            "--duration-adjusted",
+        ],
+    );
+    assert_eq!(
+        fixture.refuse(&reversed, &NoClock).refusal.unwrap().code,
+        "FMINE-REF-102"
     );
     assert_eq!(fs::read(fixture.root.join("journal")).unwrap(), before);
 }

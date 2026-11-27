@@ -745,6 +745,12 @@ reports the signed contribution of each in kilograms and checks their sum agains
 in recovered metal. Both balances must have positive dry feed and feed element mass. The report
 explains the arithmetic and leaves the causes of the physical changes for investigation.
 
+DESIGN (bd-iqxc). Add `--duration-adjusted` to compare periods of different lengths, such as
+February and March. The report displays each period's elapsed UTC hours and dry tonnes per elapsed
+hour. It averages the 24 orders of changing elapsed hours, realized feed rate, grade and recovery,
+and the four signed effects sum to the same observed kilogram change. The feed-rate denominator
+includes the full elapsed period, including downtime and idle time.
+
 DESIGN: a saved plant forecast can also be numerically verified from its retained worksheets:
 
 ```bash

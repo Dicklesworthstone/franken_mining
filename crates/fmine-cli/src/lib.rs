@@ -845,7 +845,10 @@ fn parse_forecast_journal(
         }
     }
 
-    let (mut fields, words) = journal_arguments(args, &["--json", "--trust-host-clock"])?;
+    let (mut fields, words) = journal_arguments(
+        args,
+        &["--json", "--trust-host-clock", "--duration-adjusted"],
+    )?;
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
             "expected forecast journal init|register|register-plant|resolve-plant|verify-plant|explain-plant-change|register-correction|freeze|outcome|resolve|restate|assess|investigate|resolve-investigation|rearm-investigation|inspect|report|compare|correction"
@@ -1051,6 +1054,7 @@ fn parse_forecast_journal(
             head: digest(&take(&mut fields, "--head")?)?,
             baseline: take(&mut fields, "--baseline")?,
             current: take(&mut fields, "--current")?,
+            duration_adjusted: fields.remove("--duration-adjusted").is_some(),
         },
         "compare" => {
             let head = fields
@@ -2834,7 +2838,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal resolve-assumption --journal <path> --head <hex> --forecast <alias> --trust-host-clock",
                 "forecast journal register-plant --journal <path> --head <hex> --input <coupling.toml> --grinding <grinding.toml> --recovery <recovery.toml> --id <alias> --target <plant-target> --author-role <role> --time-basis utc-unix-ns --trust-host-clock",
                 "forecast journal verify-plant --journal <path> --forecast <alias> [--head <hex>]",
-                "forecast journal explain-plant-change --journal <path> --head <hex> --baseline <earlier-forecast> --current <later-forecast>",
+                "forecast journal explain-plant-change --journal <path> --head <hex> --baseline <earlier-forecast> --current <later-forecast> [--duration-adjusted]",
                 "forecast journal register-correction --journal <path> --head <hex> --id <new-alias> --forecast <raw-alias> (--assessment <digest> | --assessments <digests>) --expected-proposal <digest> --model-key <corrected-model> --author-role <role> --trust-host-clock",
                 "forecast journal freeze --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
