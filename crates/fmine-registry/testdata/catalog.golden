@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 95
+[verbs] 96
 decide card
 decide production
 decide investment
@@ -93,6 +93,7 @@ compare
 plan pit
 plan schedule
 plan cutoff
+plan blend
 plan shells
 plan design
 html claims
