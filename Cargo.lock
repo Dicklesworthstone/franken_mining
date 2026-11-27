@@ -109,6 +109,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-derive"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+]
+
+[[package]]
 name = "fmine-econ"
 version = "0.1.0"
 dependencies = [

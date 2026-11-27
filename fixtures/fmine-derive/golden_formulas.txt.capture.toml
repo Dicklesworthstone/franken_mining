@@ -1,0 +1,12 @@
+# Capture record (§33.2, GATE-ORACLE-01, BD-139, OPEN-SUITE-3) for golden_formulas.txt:
+# 26 symbolic mining formulas, partial derivatives, LaTeX, Rust code and exact rational evaluations
+# derived by pinned frankensympy@9d785d0ef485e02ffce670bf77b4bb280b157c3f on nightly-2026-08-31.
+oracle = "frankensympy (fsym-core, fsym-calculus, fsym-simplify, fsym-solvers, fsym-printing; 16-crate pure symbolic closure)"
+version = "git:9d785d0ef485e02ffce670bf77b4bb280b157c3f on rustc 1.100.0-nightly (nightly-2026-08-31)"
+platform = "aarch64-apple-darwin"
+inputs_digest = "sha256:8167ec6de904ccaa97d9bb671f653ddbecf6b356e763bb8f7fe4e291a5d2ff56"
+outputs_digest = "sha256:56f60d5f268350305d5806bd03a3653860c201ffdfd6a3ff8d036d57672732a4"
+command = "RUSTUP_TOOLCHAIN=nightly-2026-08-31 cargo run --offline -q -j 2 -p fmine-fsym-capture"
+captured_by = "coding agent (pinned frankensympy@9d785d0 archive probe; independent central-FD and rational checks in fmine-derive)"
+date = "2026-11-27"
+licence = "MIT (FrankenSymPy and FrankenMining repositories)"

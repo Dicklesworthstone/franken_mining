@@ -1,0 +1,17 @@
+[package]
+name = "fmine-derive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Testpit build-time / dev-only symbolic golden formula derivations from frankensympy (BD-139, OPEN-SUITE-3)"
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+
+[lints]
+workspace = true

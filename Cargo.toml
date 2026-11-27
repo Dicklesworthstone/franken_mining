@@ -37,6 +37,7 @@ members = [
     "crates/fmine-view",
     "crates/fmine-gen",
     "crates/fmine-verify",
+    "crates/fmine-derive",
 ]
 
 [workspace.package]

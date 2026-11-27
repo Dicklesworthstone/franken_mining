@@ -1651,7 +1651,8 @@ mod tests {
         // BD-350.S2 adds the fmine-explore remainder-grade kernel.
         // BD-350.S5 adds fmine-gen's portable junior drill-release campaign.
         // BD-051 adds the portable investigation ledger and its replay controls.
-        assert_eq!(report.bitwise_files, 135, "{report:?}");
+        // BD-139 adds fmine-derive's portable symbolic golden formula catalog and evaluators.
+        assert_eq!(report.bitwise_files, 136, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
