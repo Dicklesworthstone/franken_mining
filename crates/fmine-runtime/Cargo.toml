@@ -7,5 +7,9 @@ rust-version.workspace = true
 publish = false
 description = "Explicit wall-clock capability and owned bounded subprocess adapters."
 
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-ledger = { path = "../fmine-ledger" }
+
 [lints]
 workspace = true
