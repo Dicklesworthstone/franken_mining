@@ -8,7 +8,9 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+use fmine_runtime::{HostWallClock, WallClock};
 
 use crate::node::FminedNode;
 use crate::{ServiceError, escape_json};
@@ -17,7 +19,6 @@ use crate::{ServiceError, escape_json};
 pub const MAX_IPC_LINE_BYTES: usize = 64 * 1024;
 
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(5);
-const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Live Unix domain socket server wrapping a shared [`FminedNode`].
 ///
@@ -77,11 +78,6 @@ impl FminedServer {
         let listener = UnixListener::bind(&socket_path).map_err(|e| ServiceError::Io {
             detail: format!("failed to bind socket '{}': {e}", socket_path.display()),
         })?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|e| ServiceError::Io {
-                detail: format!("failed to configure nonblocking listener: {e}"),
-            })?;
         Ok(Self {
             socket_path,
             listener,
@@ -100,9 +96,11 @@ impl FminedServer {
         Arc::clone(&self.node)
     }
 
-    /// Signals the accept loop to stop promptly.
+    /// Signals the accept loop to stop promptly by setting the stop flag and waking any
+    /// blocked `accept()` call with a local self-connect.
     pub fn request_stop(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+        let _ = UnixStream::connect(&self.socket_path);
     }
 
     /// Runs the local IPC accept loop until a `{"op":"shutdown"}` request arrives or
@@ -111,15 +109,17 @@ impl FminedServer {
         while !self.stop_flag.load(Ordering::SeqCst) {
             match self.listener.accept() {
                 Ok((stream, _addr)) => {
+                    if self.stop_flag.load(Ordering::SeqCst) {
+                        drop(stream);
+                        break;
+                    }
                     let should_stop = self.handle_connection(stream);
                     if should_stop {
                         self.stop_flag.store(true, Ordering::SeqCst);
                         break;
                     }
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(ACCEPT_POLL_INTERVAL);
-                }
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(err) => {
                     return Err(ServiceError::Io {
                         detail: format!("socket accept error: {err}"),
@@ -333,9 +333,11 @@ fn error_json(exit_code: u8, code: &str, detail: &str) -> String {
 }
 
 fn current_unix_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+    HostWallClock
+        .now_ns()
+        .ok()
+        .and_then(|ns| u64::try_from(ns).ok())
+        .unwrap_or(0)
 }
 
 /// Extracts a top-level JSON string value for `"key"` from a flat JSON object, honoring standard

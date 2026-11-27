@@ -3,15 +3,17 @@
 use std::env;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use fmine_runtime::{HostWallClock, WallClock};
 use fmine_service::config::{USAGE, parse_cli_args};
 use fmine_service::node::FminedNode;
 
 fn now_unix_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+    HostWallClock
+        .now_ns()
+        .ok()
+        .and_then(|ns| u64::try_from(ns).ok())
+        .unwrap_or(0)
 }
 
 fn main() -> ExitCode {
