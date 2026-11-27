@@ -22,7 +22,9 @@
 //!   - a result is received, or a loss declared, before its dispatch was sent; a loss names a sample its dispatch
 //!     does not list; a correction moves a result or a loss to another sample or dispatch (`OB-LAB`, BD-172);
 //!   - a twin pair matches an interval of another hole than the side it is on, or a correction changes the holes
-//!     it compares (BD-285).
+//!     it compares (BD-285);
+//!   - a dispatch newly lists a sample whose material was discarded after QC at or before the dispatch time
+//!     ([`crate::records::SampleDiscard`], BD-286): re-assay of it is impossible.
 //!
 //!   Ids never disappear, so a reference that held when it was written holds after any later correction.
 //! - **Reads.** [`current`], [`history`] and [`as_of`] decode a key's versions from the ledger.
@@ -361,6 +363,34 @@ pub fn drill_law(ledger: &L0Ledger, batch: &DeltaBatch) -> Result<(), String> {
                 {
                     check_listed(key, &dispatch, &loss.sample_id)?;
                     check_after_dispatch(key, "declared lost", loss.declared_at_ns, &dispatch)?;
+                }
+            }
+            DrillRecord::Dispatch(dispatch) => {
+                // A correction keeps the samples it already listed; only newly listed ones are checked.
+                let before = match recorded(ledger, cell_id, key)? {
+                    Some(RecordVersion {
+                        record: DrillRecord::Dispatch(d),
+                        ..
+                    }) => d.sample_ids,
+                    _ => Vec::new(),
+                };
+                for sample_id in &dispatch.sample_ids {
+                    if before.binary_search(sample_id).is_ok() {
+                        continue;
+                    }
+                    let discard_key = record_key(RecordKind::SampleDiscard, sample_id);
+                    let discard = match staged.get(discard_key.as_str()) {
+                        Some(v) => Some(v.record.clone()),
+                        None => recorded(ledger, cell_id, &discard_key)?.map(|v| v.record),
+                    };
+                    if let Some(DrillRecord::SampleDiscard(d)) = discard
+                        && d.discarded_at_ns <= dispatch.dispatched_at_ns
+                    {
+                        return Err(format!(
+                            "'{key}': sample '{sample_id}' was discarded after QC ({}); its material cannot be sent",
+                            d.reason
+                        ));
+                    }
                 }
             }
             DrillRecord::TwinPair(twin) => {

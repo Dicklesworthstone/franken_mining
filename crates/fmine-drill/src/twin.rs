@@ -27,6 +27,7 @@ use crate::records::{
     Collar, DrillError, DrillRecord, HoleType, Interval, RecordKind, TwinPair, check_ids,
     validate_twin,
 };
+use crate::stats::t_two_sided_p;
 use crate::store::{StoreError, current};
 
 /// The default separation above which a pair is a [`TwinState::WeakTwin`], mm (plan §12.1).
@@ -320,82 +321,6 @@ fn paired_test(grades: &[PairGrade]) -> Option<PairedTest> {
         degrees_of_freedom: df,
         p_two_sided: p,
     })
-}
-
-/// `P(|T| ≥ |t|)` for Student's t with `df` degrees of freedom: `I_{df/(df+t²)}(df/2, 1/2)`.
-fn t_two_sided_p(t: f64, df: u32) -> f64 {
-    let v = f64::from(df);
-    let x = v / (v + t * t);
-    regularized_beta(v / 2.0, 0.5, x)
-}
-
-/// `I_x(a, b)` by the continued fraction (modified Lentz), on the side where it converges fast.
-fn regularized_beta(a: f64, b: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    let front = det::exp(
-        ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * det::ln(x) + b * det::ln(1.0 - x),
-    );
-    if x < (a + 1.0) / (a + b + 2.0) {
-        front * beta_fraction(a, b, x) / a
-    } else {
-        1.0 - front * beta_fraction(b, a, 1.0 - x) / b
-    }
-}
-
-fn beta_fraction(a: f64, b: f64, x: f64) -> f64 {
-    const TINY: f64 = 1e-300;
-    const EPS: f64 = 1e-16;
-    let clamp = |v: f64| if v.abs() < TINY { TINY } else { v };
-    let (qab, qap, qam) = (a + b, a + 1.0, a - 1.0);
-    let mut c = 1.0;
-    let mut d = 1.0 / clamp(1.0 - qab * x / qap);
-    let mut h = d;
-    for m in 1..=1_000_u32 {
-        let m = f64::from(m);
-        let m2 = 2.0 * m;
-        let even = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1.0 / clamp(1.0 + even * d);
-        c = clamp(1.0 + even / c);
-        h *= d * c;
-        let odd = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1.0 / clamp(1.0 + odd * d);
-        c = clamp(1.0 + odd / c);
-        let step = d * c;
-        h *= step;
-        if (step - 1.0).abs() < EPS {
-            break;
-        }
-    }
-    h
-}
-
-/// `ln Γ(x)` for `x ≥ 0.5` (Lanczos, g = 7, nine terms).
-fn ln_gamma(x: f64) -> f64 {
-    const G: f64 = 7.0;
-    const C: [f64; 9] = [
-        0.999_999_999_999_809_9,
-        676.520_368_121_885_1,
-        -1_259.139_216_722_402_8,
-        771.323_428_777_653_1,
-        -176.615_029_162_140_6,
-        12.507_343_278_686_905,
-        -0.138_571_095_265_720_12,
-        9.984_369_578_019_572e-6,
-        1.505_632_735_149_311_6e-7,
-    ];
-    const HALF_LN_TWO_PI: f64 = 0.918_938_533_204_672_7;
-    let x = x - 1.0;
-    let mut sum = C[0];
-    for (i, c) in (1_u32..).zip(&C[1..]) {
-        sum += c / (x + f64::from(i));
-    }
-    let t = x + G + 0.5;
-    HALF_LN_TWO_PI + (x + 0.5) * det::ln(t) - t + det::ln(sum)
 }
 
 /// The estimate a twin-derived correction is offered to.
@@ -704,87 +629,5 @@ fn mann_kendall(domain: Span, values: &[f64], policy: &SmearingPolicy) -> Smeari
         } else {
             SmearingState::NoDecline
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Two-sided p from the closed-form t CDFs for 1 to 5 degrees of freedom (`det` arctangent and roots, which the
-    /// incomplete-beta path does not use).
-    fn closed_form_p(t: f64, df: u32) -> f64 {
-        let pi = std::f64::consts::PI;
-        let cdf = match df {
-            1 => 0.5 + det::atan(t) / pi,
-            2 => 0.5 + t / (2.0 * det::sqrt(2.0 + t * t)),
-            3 => {
-                let r = t / det::sqrt(3.0);
-                0.5 + (r / (1.0 + t * t / 3.0) + det::atan(r)) / pi
-            }
-            4 => {
-                let u = 1.0 + t * t / 4.0;
-                0.5 + 0.375 * (t / det::sqrt(u)) * (1.0 - t * t / (12.0 * u))
-            }
-            5 => {
-                let r = t / det::sqrt(5.0);
-                let u = 1.0 + t * t / 5.0;
-                0.5 + ((r / u) * (1.0 + 2.0 / (3.0 * u)) + det::atan(r)) / pi
-            }
-            _ => unreachable!(),
-        };
-        2.0 * (1.0 - cdf)
-    }
-
-    #[test]
-    fn test_t_p_values_match_closed_forms_tables_and_the_normal_limit() {
-        let mut state = 0x0285_7EA5_u64;
-        let mut worst = 0.0_f64;
-        for _ in 0..5_000 {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            #[allow(clippy::cast_precision_loss)]
-            let t = (state >> 11) as f64 / (1_u64 << 53) as f64 * 40.0;
-            for df in 1..=5 {
-                let got = t_two_sided_p(t, df);
-                let want = closed_form_p(t, df);
-                worst = worst.max((got - want).abs());
-                assert!((got - want).abs() < 1e-13, "t {t} df {df}: {got} vs {want}");
-            }
-        }
-        // Published two-sided critical values.
-        for (t, df, alpha) in [
-            (2.262_157_162_740_991, 9, 0.05),
-            (2.042_272_456_301_238, 30, 0.05),
-            (1.979_930_405_052_777, 120, 0.05),
-            (3.169_272_672_616_951, 10, 0.01),
-        ] {
-            let p = t_two_sided_p(t, df);
-            assert!((p - alpha).abs() < 1e-9, "t {t} df {df}: {p}");
-        }
-        // Far out in degrees of freedom the t is the normal.
-        let p = t_two_sided_p(1.959_963_984_540_054, 1_000_000);
-        assert!((p - 0.05).abs() < 1e-5, "{p}");
-        assert_eq!(t_two_sided_p(0.0, 7), 1.0);
-        println!("t p-values: worst |error| against the closed forms {worst:.2e}");
-    }
-
-    #[test]
-    fn test_ln_gamma_matches_factorials_and_the_half_integer() {
-        let mut fact = 1.0_f64;
-        for k in 1..=30_u32 {
-            let got = ln_gamma(f64::from(k));
-            let want = det::ln(fact);
-            assert!(
-                (got - want).abs() <= 1e-12 * want.abs().max(1.0),
-                "Γ({k}): {got} vs {want}"
-            );
-            fact *= f64::from(k);
-        }
-        // Γ(1/2) = √π.
-        let half = ln_gamma(0.5);
-        let want = 0.5 * det::ln(std::f64::consts::PI);
-        assert!((half - want).abs() < 1e-13, "{half} vs {want}");
     }
 }

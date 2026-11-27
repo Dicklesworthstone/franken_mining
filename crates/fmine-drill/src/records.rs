@@ -195,6 +195,10 @@ tagged_enum! {
         TwinPair = 10, "twin";
         /// [`TwinAcceptance`].
         TwinAcceptance = 11, "acceptance";
+        /// [`SampleDiscard`].
+        SampleDiscard = 12, "discard";
+        /// [`BatchFlag`].
+        BatchFlag = 13, "flag";
     }
 }
 
@@ -666,6 +670,34 @@ pub struct TwinAcceptance {
     pub statement: String,
 }
 
+/// A sample's original material discarded after QC (plan §12.4, E224): it cannot be sent for re-assay. The
+/// record's id is the sample's, so the law finds it from the sample alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SampleDiscard {
+    /// The sample; the record's id.
+    pub sample_id: String,
+    /// When the material was discarded, ns since the Unix epoch, UTC.
+    pub discarded_at_ns: i64,
+    /// Why, for example the lab's or the program's retention rule.
+    pub reason: String,
+}
+
+/// A lab batch committed with a QC failure left unresolved (`CommittedFlagged`, plan §12.4, E223). Every result
+/// of the batch is flagged, and each estimate decides explicitly whether flagged results enter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchFlag {
+    /// Flag id; the record's id.
+    pub flag_id: String,
+    /// The lab.
+    pub lab: String,
+    /// The lab's batch, as its results name it.
+    pub lab_batch: String,
+    /// The unresolved failure, for example the CRM that failed and the rule it failed.
+    pub finding: String,
+    /// When the flag was raised, ns since the Unix epoch, UTC.
+    pub flagged_at_ns: i64,
+}
+
 /// What a QC insertion is.
 #[derive(Clone, Debug, PartialEq)]
 pub enum QcKind {
@@ -757,6 +789,10 @@ pub enum DrillRecord {
     TwinPair(TwinPair),
     /// [`TwinAcceptance`].
     TwinAcceptance(TwinAcceptance),
+    /// [`SampleDiscard`].
+    SampleDiscard(SampleDiscard),
+    /// [`BatchFlag`].
+    BatchFlag(BatchFlag),
 }
 
 impl DrillRecord {
@@ -775,6 +811,8 @@ impl DrillRecord {
             Self::SampleLoss(_) => RecordKind::SampleLoss,
             Self::TwinPair(_) => RecordKind::TwinPair,
             Self::TwinAcceptance(_) => RecordKind::TwinAcceptance,
+            Self::SampleDiscard(_) => RecordKind::SampleDiscard,
+            Self::BatchFlag(_) => RecordKind::BatchFlag,
         }
     }
 
@@ -793,6 +831,8 @@ impl DrillRecord {
             Self::SampleLoss(r) => &r.loss_id,
             Self::TwinPair(r) => &r.twin_id,
             Self::TwinAcceptance(r) => &r.acceptance_id,
+            Self::SampleDiscard(r) => &r.sample_id,
+            Self::BatchFlag(r) => &r.flag_id,
         }
     }
 
@@ -800,7 +840,8 @@ impl DrillRecord {
     #[must_use]
     pub fn references(&self) -> Vec<(RecordKind, &str)> {
         match self {
-            Self::Collar(_) | Self::LabCertificate(_) => Vec::new(),
+            Self::Collar(_) | Self::LabCertificate(_) | Self::BatchFlag(_) => Vec::new(),
+            Self::SampleDiscard(r) => vec![(RecordKind::Sample, r.sample_id.as_str())],
             Self::Survey(r) => vec![(RecordKind::Collar, r.hole_id.as_str())],
             Self::Interval(r) => vec![(RecordKind::Collar, r.hole_id.as_str())],
             Self::Sample(r) => r
@@ -889,6 +930,16 @@ impl DrillRecord {
                 check_ids("acceptance.twin_ids", &r.twin_ids)?;
                 check_name("acceptance.accepted_by_role", &r.accepted_by_role)?;
                 check_name("acceptance.statement", &r.statement)
+            }
+            Self::SampleDiscard(r) => {
+                check_id("discard.sample_id", &r.sample_id)?;
+                check_name("discard.reason", &r.reason)
+            }
+            Self::BatchFlag(r) => {
+                check_id("flag.flag_id", &r.flag_id)?;
+                check_name("flag.lab", &r.lab)?;
+                check_text("flag.lab_batch", &r.lab_batch)?;
+                check_name("flag.finding", &r.finding)
             }
         }
     }
@@ -1441,6 +1492,18 @@ fn put_record(enc: &mut Encoder, record: &DrillRecord) -> Result<(), DrillError>
             enc.put_i64(r.accepted_at_ns);
             enc.put_str(&r.statement);
         }
+        DrillRecord::SampleDiscard(r) => {
+            enc.put_str(&r.sample_id);
+            enc.put_i64(r.discarded_at_ns);
+            enc.put_str(&r.reason);
+        }
+        DrillRecord::BatchFlag(r) => {
+            enc.put_str(&r.flag_id);
+            enc.put_str(&r.lab);
+            enc.put_str(&r.lab_batch);
+            enc.put_str(&r.finding);
+            enc.put_i64(r.flagged_at_ns);
+        }
     }
     Ok(())
 }
@@ -1718,6 +1781,18 @@ impl Reader<'_, '_> {
                 accepted_by_role: self.text()?,
                 accepted_at_ns: self.i64()?,
                 statement: self.text()?,
+            }),
+            RecordKind::SampleDiscard => DrillRecord::SampleDiscard(SampleDiscard {
+                sample_id: self.text()?,
+                discarded_at_ns: self.i64()?,
+                reason: self.text()?,
+            }),
+            RecordKind::BatchFlag => DrillRecord::BatchFlag(BatchFlag {
+                flag_id: self.text()?,
+                lab: self.text()?,
+                lab_batch: self.text()?,
+                finding: self.text()?,
+                flagged_at_ns: self.i64()?,
             }),
         })
     }
