@@ -45,13 +45,13 @@ existing `fmine-calib::tests::test_spatial_front_pit_detects_58pct_coverage_shif
 
 ### Control Mine (`WorldCondition::CorrectlySpecified`, `BiasVector::unbiased()`, `N = 2,000`, `T = 120`, seed base `20_260_511`)
 
-| Channel | E-proc alarms (CP95) | CUSUM alarms (CP95) | Combined alarms (CP95) | Sharpness loss | CRPS loss | Raw / Layered 80% cov |
-|---|---:|---:|---:|---:|---:|---:|
-| Grade forecast innovation (`ch 0`) | 35 / 2,000 (`0.02314`) | 13 / 2,000 (`0.01031`) | 46 / 2,000 (`0.02931`) | `0.512%` | `0.051%` | `0.7990` / `0.8005` |
-| Resource-vs-sampler recon (`ch 1`) | 19 / 2,000 (`0.01391`) | 20 / 2,000 (`0.01450`) | 38 / 2,000 (`0.02483`) | `0.466%` | `0.046%` | `0.7993` / `0.8007` |
+| Channel | E-proc alarms (CP95) | CUSUM alarms (CP95) | Combined alarms (CP95) | Sharpness loss | CRPS loss | Winkler loss | Raw / Layered 80% cov |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Grade forecast innovation (`ch 0`) | 35 / 2,000 (`0.02314`) | 13 / 2,000 (`0.01031`) | 46 / 2,000 (`0.02931`) | `0.512%` | `0.051%` | `0.166%` | `0.7990` / `0.8005` |
+| Resource-vs-sampler recon (`ch 1`) | 19 / 2,000 (`0.01391`) | 20 / 2,000 (`0.01450`) | 38 / 2,000 (`0.02483`) | `0.466%` | `0.046%` | `0.145%` | `0.7993` / `0.8007` |
 
-Every Clopper–Pearson 95% upper bound is strictly `<= 0.05`, and both sharpness loss (`< 0.6%`) and CRPS
-degradation (`< 0.06%`) are strictly `< 10%`.
+Every Clopper–Pearson 95% upper bound is strictly `<= 0.05`, and sharpness loss (`< 0.6%`), CRPS
+degradation (`< 0.06%`), and Winkler interval-score degradation (`< 0.17%`) are strictly `< 10%`.
 
 ### Positive Power on Misspecified Mines (`N = 200` runs each, identical parameters)
 
