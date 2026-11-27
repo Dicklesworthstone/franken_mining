@@ -381,6 +381,11 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - Workbook relationships name the shared-string and style parts, including nonstandard internal paths. The
   standard paths remain the default when their relationship is absent. Missing explicitly referenced parts and
   unresolved shared-string indexes refuse the workbook, with the part or cell locator in the error (`BD-271`).
+- No cell is dropped or re-typed silently. The worksheet scanner reads every `<c>` start tag, line-wrapped or with
+  single-quoted attributes included. A reference given twice in one worksheet refuses, even when one copy is empty.
+  So does a tag with no usable `r`, located by sheet and cell ordinal. A boolean (`t="b"`) refuses because
+  `CellValue` has no boolean variant: its stored `1` would otherwise read as the number 1. None of these occurs in
+  the 42 local corpus workbooks (422,875 cell tags), so no registered extraction moves.
 - Hostile archives (BD-073). `read_zip_entries` refuses, before allocating, an entry declaring more than
   `MAX_ENTRY_BYTES` (64 MiB) uncompressed or an archive declaring more than `MAX_ARCHIVE_BYTES` (256 MiB):
   `ZipError::Limit`. Inflation stops at the declared size, and an entry that inflates to any other length is refused,
