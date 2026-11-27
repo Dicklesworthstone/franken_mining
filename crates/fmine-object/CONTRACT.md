@@ -46,7 +46,7 @@ Chunk sizes `1..=16 MiB` (default 4 MiB), up to `1,048,576` chunks per manifest,
 
 ## 10. Known gaps
 - `BD-104` chunk want/have sync anti-entropy and `BD-056` CLI/public-lane filing ingest into `CasStore` are not yet wired to `fmine-object`.
-- No fuzz target for `FMT-CAS-1` yet; LabRuntime DPOR crash injection remains under `BD-101`.
+- `fuzz/fuzz_targets/cas.rs` covers the `FMT-CAS-1` manifest decoder: an accepted manifest must re-encode byte for byte, and its inclusion proofs must verify its chunks and refuse a flipped digest. It has had a 2-minute run only (9,150,643 executions, clean), not the 24 h of plan §32.4. LabRuntime DPOR crash injection remains under `BD-101`.
 - GC takes no store lock. The re-plan in `apply_gc` catches writes made before it runs, but a writer that publishes during the removals, or an object whose ledger root is not yet committed when GC runs, can still lose a chunk. Run GC with writers stopped until a lock or a retention epoch exists.
 - Self-verified only; no independent review or multi-ISA CI run yet.
 

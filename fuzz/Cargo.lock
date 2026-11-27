@@ -186,6 +186,7 @@ dependencies = [
  "fmine-evidence",
  "fmine-io",
  "fmine-ledger",
+ "fmine-object",
  "fmine-optimize",
  "fmine-registry",
  "libfuzzer-sys",

@@ -22,6 +22,7 @@ fmine-cli = { path = "../crates/fmine-cli" }
 fmine-evidence = { path = "../crates/fmine-evidence" }
 fmine-ledger = { path = "../crates/fmine-ledger" }
 fmine-optimize = { path = "../crates/fmine-optimize" }
+fmine-object = { path = "../crates/fmine-object" }
 
 [workspace]
 members = ["."]
@@ -137,6 +138,13 @@ bench = false
 [[bin]]
 name = "segment"
 path = "fuzz_targets/segment.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cas"
+path = "fuzz_targets/cas.rs"
 test = false
 doc = false
 bench = false

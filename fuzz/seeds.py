@@ -68,6 +68,29 @@ REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
+def cas_root(digests: list) -> bytes:
+    """The FMT-CAS-1 fanout-16 root (crates/fmine-object/src/merkle.rs)."""
+    if not digests:
+        return hashlib.sha256(b"FMNE-CAS16-EMPTY").digest()
+    level = [hashlib.sha256(b"\x10" + d).digest() for d in digests]
+    while len(level) > 1:
+        level = [hashlib.sha256(b"\x11" + bytes([len(g)]) + b"".join(g)).digest()
+                 for g in (level[i:i + 16] for i in range(0, len(level), 16))]
+    return level[0]
+
+
+def cas_body(media: str, chunk_size: int, lens: list) -> bytes:
+    """An FMT-CAS-1 manifest body whose chunks run back to back; a digest stands in for each chunk's bytes."""
+    digests = [hashlib.sha256(f"chunk-{i}".encode()).digest() for i in range(len(lens))]
+    out = put_str(media) + struct.pack("<QI", sum(lens), chunk_size) + cas_root(digests)
+    out += struct.pack("<I", len(lens))
+    offset = 0
+    for n, d in zip(lens, digests):
+        out += struct.pack("<QI", offset, n) + d
+        offset += n
+    return out
+
+
 def workbook(compression: int) -> bytes:
     """A small invented workbook: a visible and a hidden sheet, styles with custom formats, shared strings with a
     rich-text run and entities, inline strings, styled numbers and errors, and an entry the reader ignores."""
@@ -432,7 +455,7 @@ def main() -> None:
     seeds: dict[str, list[bytes]] = {t: [] for t in
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
                                       "cli", "cli_run", "pit", "cpit", "pcpsp", "omf", "ledger",
-                                      "segment")}
+                                      "segment", "cas")}
 
     # omf: every geometry and attribute type in v1 and v2 pages, then with pages and row groups split small and
     # bit-packed levels; then the omf-rust samples, when FMINE_OMF_DIR names a checkout.
@@ -483,6 +506,16 @@ def main() -> None:
                          b"\x01\x01\x00\x00" + bytes([1, 8, 0, 8]) + struct.pack("<I", 40) + b"FMNE",
                          b"\x01\x05\xff\xff" + bytes([0, 0, 0, 3, 0xA5]),
                          b"\x02\x03\x00\x02" + bytes([1, 0x20, 0, 4]) + b"LDGR" + b"FMNE" + bytes(16)]
+
+    # cas: manifests that decode, with none, one, three, 17 (two tree levels) and 33 chunks, the last one short.
+    # Selector 2 wraps a body as version 0, 5 as version 1 and 8 as the unsupported version 2; 0 is a whole frame
+    # and 1 a whole frame whose CRC the target repairs.
+    bodies = [cas_body("application/octet-stream", 1, []), cas_body("text/plain", 4096, [4096]),
+              cas_body("application/x-fmine", 1024, [1024, 1024, 7]), cas_body("a", 64, [64] * 16 + [1]),
+              cas_body("application/octet-stream", 4 << 20, [4 << 20] * 32 + [5])]
+    seeds["cas"] += [b"\x02" + bodies[0], b"\x05" + bodies[1], b"\x02" + bodies[2], b"\x05" + bodies[3],
+                     b"\x05" + bodies[4], b"\x00" + frame(b"CASM", 1, bodies[2]),
+                     b"\x01" + frame(b"CASM", 0, bodies[3])[:-4] + bytes(4), b"\x08" + bodies[1]]
 
     # journal: a forecast genesis record as a wrapped body (selector 8), a hex line (1), a one-line journal (2), and a
     # reliance body that starts with a zero previous head (11).
