@@ -7,7 +7,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::exact_feas::Rat;
 
 mod blend;
-pub use blend::{BlendAllocation, ImpurityLimit};
+pub use blend::{BlendAllocation, BlendConstraints, EnergyLimit, EnergyUse, ImpurityLimit};
 
 /// One declared period on one project basis. All money uses the same currency,
 /// all recovered and contained metal uses the same mass unit, and all ore
@@ -110,7 +110,7 @@ pub struct CapacityBalance {
     pub positive_contribution_feed: GradeAllocation,
     /// Recovered metal at net selling price less variable milling cost, in the declared currency.
     pub incremental_contribution: Rat,
-    pub impurity_constrained: Option<BlendAllocation>,
+    pub constrained_blend: Option<BlendAllocation>,
 }
 
 /// Comparison under the explicit rule that equality clears the threshold.
@@ -309,18 +309,18 @@ impl LaneTerms {
         self.screen_feed(bins, max_grade, recovery, None)
     }
 
-    /// Also allocate two assayed bins under a mass-weighted impurity ceiling.
+    /// Also allocate two parcels under the declared additive blend limits.
     ///
     /// # Errors
-    /// Refuses invalid feed, impurity fractions outside [0, 1], and exact overflow.
-    pub fn balance_feed_with_impurity(
+    /// Refuses invalid feed or blend limits, and exact overflow.
+    pub fn balance_feed_with_constraints(
         self,
-        bins: &[GradeTonnageBin; 2],
+        bins: &[GradeTonnageBin],
         max_grade: Rat,
         recovery: GradeRecovery<'_>,
-        limit: ImpurityLimit,
+        limits: BlendConstraints,
     ) -> Result<CapacityBalance, Refusal> {
-        self.screen_feed(bins, max_grade, recovery, Some(limit))
+        self.screen_feed(bins, max_grade, recovery, Some(limits))
     }
 
     fn screen_feed(
@@ -328,7 +328,7 @@ impl LaneTerms {
         bins: &[GradeTonnageBin],
         max_grade: Rat,
         recovery: GradeRecovery<'_>,
-        impurity: Option<ImpurityLimit>,
+        constraints: Option<BlendConstraints>,
     ) -> Result<CapacityBalance, Refusal> {
         if !(1..=MAX_GRADE_BINS).contains(&bins.len()) {
             return Err(domain("grade-tonnage inventory requires 1 to 128 bins"));
@@ -355,10 +355,10 @@ impl LaneTerms {
             }
             if let Some(grade) = previous
                 && (compare(bin.grade, grade)?.is_lt()
-                    || (grade == bin.grade && impurity.is_none()))
+                    || (grade == bin.grade && constraints.is_none()))
             {
                 return Err(domain(
-                    "grade-tonnage grades must increase, with ties allowed only for assayed bins",
+                    "grade-tonnage grades must increase, with ties allowed for a constrained blend",
                 ));
             }
             previous = Some(bin.grade);
@@ -407,8 +407,8 @@ impl LaneTerms {
             both: allocate_by_grade(&evaluated, Some(mill), Some(market))?,
             positive_contribution_feed,
             incremental_contribution,
-            impurity_constrained: impurity
-                .map(|limit| blend::solve(&evaluated, limit, self, net_price, max_grade))
+            constrained_blend: constraints
+                .map(|limits| blend::solve(&evaluated, limits, self, net_price, max_grade))
                 .transpose()?,
         })
     }

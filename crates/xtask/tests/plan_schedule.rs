@@ -438,6 +438,141 @@ fn lane_impurity_blend_binary_prices_dilution_and_respects_all_caps() {
 }
 
 #[test]
+fn lane_blend_binary_applies_grinding_energy_alone_or_with_impurity() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = "tests/planning/lane_energy_blend.json";
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = lane(&root, input, "json");
+    assert!(output.status.success());
+    let report = lane_json(&output);
+    let expect =
+        |report: &Json, key: &str, [low, high, net, budget, used, remaining]: [&str; 6]| {
+            let blend = report.get("payload").unwrap().get(key).unwrap();
+            assert_eq!(
+                blend.get("incremental_contribution").unwrap().as_str(),
+                Some(net)
+            );
+            let energy = blend.get("energy").unwrap();
+            for (field, value) in [
+                ("budget_kwh", budget),
+                ("used_kwh", used),
+                ("remaining_kwh", remaining),
+            ] {
+                assert_eq!(energy.get(field).unwrap().as_str(), Some(value));
+            }
+            let rows = blend.get("selected_bins").unwrap().as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            for (row, selected) in rows.iter().zip([low, high]) {
+                assert_eq!(
+                    row.get("selected_dry_tonnes").unwrap().as_str(),
+                    Some(selected)
+                );
+            }
+        };
+    let combined = "impurity_constrained_blend";
+    expect(
+        &report,
+        combined,
+        ["1/1", "1/2", "10/1", "30/1", "30/1", "0/1"],
+    );
+    let payload = report.get("payload").unwrap();
+    let blend = payload.get(combined).unwrap();
+    assert_eq!(
+        blend.get("blended_mass_fraction").unwrap().as_str(),
+        Some("1/50")
+    );
+    assert_eq!(blend.get("recovered_metal").unwrap().as_str(), Some("2/5"));
+    assert_eq!(lane(&root, input, "json").stdout, output.stdout);
+    let md = lane(&root, input, "markdown");
+    assert!(md.status.success());
+    let md = String::from_utf8(md.stdout).unwrap();
+    assert!(md.contains("Grinding uses **30/1 kWh** of **30/1 kWh**, leaving **0/1 kWh**"));
+
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-lane-energy-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, text: &str| {
+        std::fs::write(scratch.join(name), text).unwrap();
+        lane_json(&lane(&scratch, name, "json"))
+    };
+    let budget = |value| {
+        original.replace(
+            r#""blend_energy_budget_kwh": "30""#,
+            &format!(r#""blend_energy_budget_kwh": "{value}""#),
+        )
+    };
+    let slack = submit("slack.json", &budget("100"));
+    expect(
+        &slack,
+        combined,
+        ["4/3", "2/3", "40/3", "100/1", "40/1", "60/1"],
+    );
+    let idle = submit("idle.json", &budget("0"));
+    expect(&idle, combined, ["0/1"; 6]);
+    let idle_blend = idle.get("payload").unwrap().get(combined).unwrap();
+    assert_eq!(idle_blend.get("blended_mass_fraction"), Some(&Json::Null));
+
+    let energy_only = original
+        .lines()
+        .filter(|line| !line.contains("\"blend_impurity_limit\""))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace(r#""impurity_mass_fraction": "0.01", "#, "")
+        .replace(r#""impurity_mass_fraction": "0.04", "#, "");
+    let energy = submit("energy-only.json", &energy_only);
+    expect(
+        &energy,
+        "energy_constrained_blend",
+        ["0/1", "3/4", "30/1", "30/1", "30/1", "0/1"],
+    );
+    assert!(energy.get("payload").unwrap().get(combined).is_none());
+
+    for (name, text, code) in [
+        ("negative-budget.json", budget("-1"), "FMINE-REF-109"),
+        (
+            "negative-rate.json",
+            original.replace(
+                r#""specific_energy_kwh_per_dry_tonne": "40""#,
+                r#""specific_energy_kwh_per_dry_tonne": "-40""#,
+            ),
+            "FMINE-REF-109",
+        ),
+        (
+            "missing-rate.json",
+            original.replace(r#", "specific_energy_kwh_per_dry_tonne": "40""#, ""),
+            "FMINE-REF-107",
+        ),
+        (
+            "undeclared-budget.json",
+            original
+                .lines()
+                .filter(|line| !line.contains("\"blend_energy_budget_kwh\""))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            "FMINE-REF-107",
+        ),
+    ] {
+        let refused = submit(name, &text);
+        assert_eq!(refused.get("payload"), Some(&Json::Null));
+        assert_eq!(
+            refused
+                .get("refusal")
+                .unwrap()
+                .get("code")
+                .unwrap()
+                .as_str(),
+            Some(code)
+        );
+    }
+}
+
+#[test]
 fn lane_recovery_curve_binary_distinguishes_exact_crossings_and_support_limits() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = "tests/planning/lane_recovery_curve.json";

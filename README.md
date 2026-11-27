@@ -1491,6 +1491,20 @@ The synthetic blend selects **4/3 tonnes** of low-arsenic feed and **2/3 tonnes*
 meeting the **2% arsenic** limit exactly. The clean parcel earns a negative contribution on its own,
 and blending it with the higher-grade parcel yields **8/15 g** of gold and **USD 40/3** overall.
 
+Add `blend_energy_budget_kwh` and declare `specific_energy_kwh_per_dry_tonne` for each of the two
+parcels to constrain the same blend by grinding energy. Supply the budget alone or alongside the
+impurity ceiling. Each parcel's selected dry tonnes multiply its declared specific energy.
+
+```bash
+cargo run -p fmine-cli -- plan cutoff \
+  --input tests/planning/lane_energy_blend.json --format markdown
+```
+
+In this synthetic case, **30 kWh** and the **2% arsenic** ceiling limit the selection to
+**1 dry tonne** at 10 kWh/t and **0.5 dry tonnes** at 40 kWh/t. That recovers **0.4 g** of gold
+and contributes **USD 10**. Use the energy budget and remaining kWh to distinguish an energy
+bottleneck from the existing mill tonnage and market caps. The screen assumes additive energy use.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

@@ -1,5 +1,5 @@
 //! DESIGN (BD-252, plan §15.6): exact blend of two divisible, already-mined parcels
-//! with additive recoverable metal and impurity mass.
+//! with additive recovery, impurity mass and grinding energy.
 //! Determinism: BitwisePortable
 
 use super::{GradeTonnageBin, LaneTerms, Rat, Refusal, arithmetic, compare, domain};
@@ -11,6 +11,28 @@ pub struct ImpurityLimit {
     pub bin_mass_fractions: [Rat; 2],
 }
 
+/// One period's energy budget and specific energy in input-bin order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnergyLimit {
+    pub budget_kwh: Rat,
+    pub bin_kwh_per_dry_tonne: [Rat; 2],
+}
+
+/// Optional additional limits on the exact two-parcel blend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlendConstraints {
+    pub impurity: Option<ImpurityLimit>,
+    pub energy: Option<EnergyLimit>,
+}
+
+/// Exact grinding-energy balance under the selected feed allocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnergyUse {
+    pub budget_kwh: Rat,
+    pub used_kwh: Rat,
+    pub remaining_kwh: Rat,
+}
+
 /// Exact one-period solution, including idle feed when no blend earns a positive contribution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlendAllocation {
@@ -18,8 +40,9 @@ pub struct BlendAllocation {
     pub dry_tonnes: Rat,
     pub recovered_metal: Rat,
     pub incremental_contribution: Rat,
-    /// Weighted impurity mass fraction, undefined for zero feed.
+    /// Weighted impurity mass fraction when declared and there is nonzero feed.
     pub impurity_fraction: Option<Rat>,
+    pub energy: Option<EnergyUse>,
 }
 
 type Pair = [Rat; 2];
@@ -36,21 +59,12 @@ fn determinant([a, b]: Pair, [c, d]: Pair) -> Result<Rat, Refusal> {
         .map_err(|_| arithmetic())
 }
 
-pub(super) fn solve(
-    evaluated: &[(GradeTonnageBin, Rat)],
+fn impurity_excess(
     limit: ImpurityLimit,
-    terms: LaneTerms,
-    net_price: Rat,
+    bins: [GradeTonnageBin; 2],
     max_grade: Rat,
-) -> Result<BlendAllocation, Refusal> {
-    let &[(low, low_recovered), (high, high_recovered)] = evaluated else {
-        return Err(domain(
-            "an impurity-limited blend requires exactly two bins",
-        ));
-    };
-    let zero = Rat::from_integer(0);
+) -> Result<Pair, Refusal> {
     let one = Rat::from_integer(1);
-    let neg_one = Rat::from_integer(-1);
     let [low_assay, high_assay] = limit.bin_mass_fractions;
     let maximum = limit.maximum_mass_fraction;
     for assay in [low_assay, high_assay, maximum] {
@@ -62,7 +76,7 @@ pub(super) fn solve(
     if max_grade.signum() <= 0 {
         return Err(domain("physical grade limit must be positive"));
     }
-    for (bin, assay) in [(low, low_assay), (high, high_assay)] {
+    for (bin, assay) in bins.into_iter().zip(assays) {
         let combined = bin
             .grade
             .checked_div(max_grade)
@@ -74,21 +88,52 @@ pub(super) fn solve(
             ));
         }
     }
-    let excess = [
+    Ok([
         low_assay.checked_sub(maximum).map_err(|_| arithmetic())?,
         high_assay.checked_sub(maximum).map_err(|_| arithmetic())?,
-    ];
+    ])
+}
+
+pub(super) fn solve(
+    evaluated: &[(GradeTonnageBin, Rat)],
+    constraints: BlendConstraints,
+    terms: LaneTerms,
+    net_price: Rat,
+    max_grade: Rat,
+) -> Result<BlendAllocation, Refusal> {
+    let &[(low, low_recovered), (high, high_recovered)] = evaluated else {
+        return Err(domain("a constrained blend requires exactly two bins"));
+    };
+    let zero = Rat::from_integer(0);
+    let one = Rat::from_integer(1);
+    let neg_one = Rat::from_integer(-1);
     let mass = [one, one];
     let recovery = [low_recovered, high_recovered];
-    let rows = [
+    let mut rows = Vec::with_capacity(8);
+    rows.extend([
         ([neg_one, zero], zero),
         ([zero, neg_one], zero),
         ([one, zero], low.dry_tonnes),
         ([zero, one], high.dry_tonnes),
         (mass, terms.mill_dry_tonnes_per_period),
         (recovery, terms.market_metal_units_per_period),
-        (excess, zero),
-    ];
+    ]);
+    if let Some(limit) = constraints.impurity {
+        rows.push((impurity_excess(limit, [low, high], max_grade)?, zero));
+    }
+    if let Some(energy) = constraints.energy {
+        if energy.budget_kwh.signum() < 0
+            || energy
+                .bin_kwh_per_dry_tonne
+                .iter()
+                .any(|rate| rate.signum() < 0)
+        {
+            return Err(domain(
+                "energy budget and specific energy must be nonnegative",
+            ));
+        }
+        rows.push((energy.bin_kwh_per_dry_tonne, energy.budget_kwh));
+    }
     let mut best = [zero; 2];
     let mut best_dry = zero;
     let mut best_metal = zero;
@@ -126,14 +171,27 @@ pub(super) fn solve(
             }
         }
     }
-    let impurity_fraction = if best_dry == zero {
-        None
-    } else {
-        Some(
-            dot(best, assays)?
+    let impurity_fraction = match constraints.impurity {
+        Some(limit) if best_dry != zero => Some(
+            dot(best, limit.bin_mass_fractions)?
                 .checked_div(best_dry)
                 .map_err(|_| arithmetic())?,
-        )
+        ),
+        _ => None,
+    };
+    let energy = if let Some(energy) = constraints.energy {
+        let used = dot(best, energy.bin_kwh_per_dry_tonne)?;
+        let remaining = energy
+            .budget_kwh
+            .checked_sub(used)
+            .map_err(|_| arithmetic())?;
+        Some(EnergyUse {
+            budget_kwh: energy.budget_kwh,
+            used_kwh: used,
+            remaining_kwh: remaining,
+        })
+    } else {
+        None
     };
     Ok(BlendAllocation {
         selected_bins: [
@@ -150,5 +208,6 @@ pub(super) fn solve(
         recovered_metal: best_metal,
         incremental_contribution: best_contribution,
         impurity_fraction,
+        energy,
     })
 }

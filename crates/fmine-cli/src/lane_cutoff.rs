@@ -6,9 +6,9 @@ use std::path::Path;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::omf::json::{self, Json};
 use fmine_optimize::cutoff::{
-    BlendAllocation, CapacityBalance, CurveCutoff, GradeRecovery, GradeScreen, GradeTonnageBin,
-    ImpurityLimit, LaneCutoffs, LaneTerms, MAX_GRADE_BINS, MAX_RECOVERY_KNOTS, RecoveryCurve,
-    screen_grade,
+    BlendAllocation, BlendConstraints, CapacityBalance, CurveCutoff, EnergyLimit, GradeRecovery,
+    GradeScreen, GradeTonnageBin, ImpurityLimit, LaneCutoffs, LaneTerms, MAX_GRADE_BINS,
+    MAX_RECOVERY_KNOTS, RecoveryCurve, screen_grade,
 };
 use fmine_units::ExactQty;
 
@@ -25,8 +25,9 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     r#""recovery":"Declare exactly one of recovery_fraction or recovery_curve. A curve has 2 to 128 ordered grade_per_dry_tonne and recovery_fraction knots using exact decimal strings. Recovered grade is grade times recovery, rises or stays flat, and is interpolated linearly. The feed band must lie entirely inside the curve. A crossing at a plateau uses the first grade.","#,
     r#""grade_tonnage":"Optional array of 1 to 128 already-mined inventory bins with increasing grade_per_dry_tonne and positive dry_tonnes as exact decimal strings. Every bin must lie within recovery support. The screen takes highest grades first and permits partial bins. Reports each physical cap alone, both caps together and the positive-contribution allocation under both caps.","#,
     r#""blend_impurity_limit":"Optional object with element and maximum_mass_fraction. Supply exactly two grade_tonnage bins with impurity_mass_fraction values in [0,1] on a dry-mass basis. Equal grades are permitted in this mode. Maximizes contribution subject to both caps and the mass-weighted impurity ceiling under fixed additive parcel recovery. Fixed and opportunity charges enter the separate Lane limiting grades.","#,
+    r#""blend_energy_budget_kwh":"Optional nonnegative exact decimal total for one period. Supply exactly two grade_tonnage bins with nonnegative specific_energy_kwh_per_dry_tonne. May be supplied alone or with blend_impurity_limit. Energy is the sum of selected dry tonnes times declared specific energy for each parcel. The constrained result gives the exact budget, used and remaining kWh.","#,
     r#""output":"Separate mine-, mill- and market-limited cases. Curve reports distinguish an exact cutoff, all_supported_grades_clear, and no_supported_grade_clears. Equality clears. Retains source SHA-256, units, period and uncalibrated status.","#,
-    r#""example":"tests/planning/lane_cutoff.json","curve_example":"tests/planning/lane_recovery_curve.json","grade_tonnage_example":"tests/planning/lane_grade_tonnage.json","impurity_blend_example":"tests/planning/lane_impurity_blend.json"}"#,
+    r#""example":"tests/planning/lane_cutoff.json","curve_example":"tests/planning/lane_recovery_curve.json","grade_tonnage_example":"tests/planning/lane_grade_tonnage.json","impurity_blend_example":"tests/planning/lane_impurity_blend.json","energy_blend_example":"tests/planning/lane_energy_blend.json"}"#,
 );
 
 const ECONOMIC_FIELDS: [&str; 8] = [
@@ -113,12 +114,16 @@ struct ScenarioCutoffs {
     balance: Option<CapacityBalance>,
 }
 
-enum Inventory {
-    GradeTonnage(Vec<GradeTonnageBin>),
-    Assayed([GradeTonnageBin; 2], ImpurityLimit),
+struct Inventory {
+    bins: Vec<GradeTonnageBin>,
+    constraints: Option<BlendConstraints>,
 }
 
-fn parse_grade_tonnage(raw: &Json, maximum: Option<ExactQty>) -> Result<Inventory, Refusal> {
+fn parse_grade_tonnage(
+    raw: &Json,
+    maximum: Option<ExactQty>,
+    budget: Option<ExactQty>,
+) -> Result<Inventory, Refusal> {
     let rows = raw
         .as_array()
         .ok_or_else(|| declaration("grade_tonnage requires an array"))?;
@@ -127,12 +132,12 @@ fn parse_grade_tonnage(raw: &Json, maximum: Option<ExactQty>) -> Result<Inventor
             "grade_tonnage requires 1 to {MAX_GRADE_BINS} bins"
         )));
     }
-    let expected_fields = if maximum.is_some() { 3 } else { 2 };
+    let expected_fields = 2 + usize::from(maximum.is_some()) + usize::from(budget.is_some());
     let bins = rows.iter()
         .map(|row| {
             if row.as_object().is_none_or(|fields| fields.len() != expected_fields) {
                 return Err(declaration(
-                    "each bin requires grade_per_dry_tonne and dry_tonnes, plus impurity_mass_fraction only when a blend limit is declared",
+                    "each bin requires grade_per_dry_tonne and dry_tonnes, plus impurity_mass_fraction or specific_energy_kwh_per_dry_tonne when its corresponding blend limit is declared",
                 ));
             }
             Ok(GradeTonnageBin {
@@ -141,24 +146,36 @@ fn parse_grade_tonnage(raw: &Json, maximum: Option<ExactQty>) -> Result<Inventor
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let Some(maximum_mass_fraction) = maximum else {
-        return Ok(Inventory::GradeTonnage(bins));
+    if maximum.is_none() && budget.is_none() {
+        return Ok(Inventory {
+            bins,
+            constraints: None,
+        });
+    }
+    let [low, high] = rows else {
+        return Err(declaration("a constrained blend requires exactly two bins"));
     };
-    let ([low, high], [low_assay, high_assay]) = (bins.as_slice(), rows) else {
-        return Err(declaration(
-            "an impurity blend requires exactly two assayed bins",
-        ));
-    };
-    Ok(Inventory::Assayed(
-        [*low, *high],
-        ImpurityLimit {
-            maximum_mass_fraction,
-            bin_mass_fractions: [
-                quantity(low_assay, "impurity_mass_fraction")?,
-                quantity(high_assay, "impurity_mass_fraction")?,
-            ],
-        },
-    ))
+    let pair = |field| Ok::<_, Refusal>([quantity(low, field)?, quantity(high, field)?]);
+    let impurity = maximum
+        .map(|maximum_mass_fraction| {
+            Ok::<_, Refusal>(ImpurityLimit {
+                maximum_mass_fraction,
+                bin_mass_fractions: pair("impurity_mass_fraction")?,
+            })
+        })
+        .transpose()?;
+    let energy = budget
+        .map(|budget_kwh| {
+            Ok::<_, Refusal>(EnergyLimit {
+                budget_kwh,
+                bin_kwh_per_dry_tonne: pair("specific_energy_kwh_per_dry_tonne")?,
+            })
+        })
+        .transpose()?;
+    Ok(Inventory {
+        bins,
+        constraints: Some(BlendConstraints { impurity, energy }),
+    })
 }
 
 fn evaluate_cutoffs(
@@ -167,22 +184,27 @@ fn evaluate_cutoffs(
     max_grade: ExactQty,
     grades: Option<(ExactQty, ExactQty)>,
     impurity_maximum: Option<ExactQty>,
+    energy_budget: Option<ExactQty>,
 ) -> Result<ScenarioCutoffs, Refusal> {
     let bins = doc
         .get("grade_tonnage")
-        .map(|raw| parse_grade_tonnage(raw, impurity_maximum))
+        .map(|raw| parse_grade_tonnage(raw, impurity_maximum, energy_budget))
         .transpose()?;
-    if impurity_maximum.is_some() && bins.is_none() {
-        return Err(declaration("blend_impurity_limit requires grade_tonnage"));
+    if (impurity_maximum.is_some() || energy_budget.is_some()) && bins.is_none() {
+        return Err(declaration("blend limits require grade_tonnage"));
     }
-    let screen = |recovery| match &bins {
-        Some(Inventory::GradeTonnage(bins)) => {
-            terms.balance_feed(bins, max_grade, recovery).map(Some)
-        }
-        Some(Inventory::Assayed(bins, limit)) => terms
-            .balance_feed_with_impurity(bins, max_grade, recovery, *limit)
-            .map(Some),
-        None => Ok(None),
+    let screen = |recovery| {
+        bins.as_ref()
+            .map(|inventory| match inventory.constraints {
+                Some(limits) => terms.balance_feed_with_constraints(
+                    &inventory.bins,
+                    max_grade,
+                    recovery,
+                    limits,
+                ),
+                None => terms.balance_feed(&inventory.bins, max_grade, recovery),
+            })
+            .transpose()
     };
     match (doc.get("recovery_fraction"), doc.get("recovery_curve")) {
         (Some(_), None) => {
@@ -316,23 +338,66 @@ fn render_balance(
     )
 }
 
-fn render_impurity_blend(
+fn render_blend(
     blend: BlendAllocation,
-    element: &str,
-    maximum: ExactQty,
+    impurity: Option<(&str, ExactQty)>,
     unit: &str,
     currency: &str,
     markdown: &mut String,
 ) -> String {
-    let maximum = exact(maximum);
-    let assay = blend.impurity_fraction.map(exact);
     let dry = exact(blend.dry_tonnes);
     let metal = exact(blend.recovered_metal);
     let contribution = exact(blend.incremental_contribution);
-    let blended = assay.as_deref().unwrap_or("—");
+    let (key, title, assay_text, assay_json, assumptions) = if let Some((element, maximum)) =
+        impurity
+    {
+        let maximum = exact(maximum);
+        let assay = blend.impurity_fraction.map(exact);
+        let text = format!(
+            "{element} dry-mass fraction **{}** with ceiling **{maximum}**. ",
+            assay.as_deref().unwrap_or("—")
+        );
+        let assay = assay.map_or_else(|| "null".into(), |value| js(&value));
+        let json = format!(
+            "\"element\":{},\"maximum_mass_fraction\":{},\"blended_mass_fraction\":{assay},",
+            js(element),
+            js(&maximum)
+        );
+        (
+            "impurity_constrained_blend",
+            if blend.energy.is_some() {
+                "Impurity- and energy-constrained blend"
+            } else {
+                "Impurity-constrained blend"
+            },
+            text,
+            json,
+            "The blend uses fixed per-bin assays and additive recovered metal. A zero-tonne selection has no blended assay.",
+        )
+    } else {
+        (
+            "energy_constrained_blend",
+            "Energy-constrained blend",
+            String::new(),
+            String::new(),
+            "The blend uses additive recovered metal.",
+        )
+    };
+    let (energy_text, energy_json) = blend.energy.map_or_else(
+        || (String::new(), String::new()),
+        |energy| {
+            let budget = exact(energy.budget_kwh);
+            let used = exact(energy.used_kwh);
+            let remaining = exact(energy.remaining_kwh);
+            (
+                format!("\n\nGrinding uses **{used} kWh** of **{budget} kWh**, leaving **{remaining} kWh**. Each parcel uses its declared specific energy per dry tonne."),
+                format!(",\"energy\":{{\"budget_kwh\":{},\"used_kwh\":{},\"remaining_kwh\":{}}}", js(&budget), js(&used), js(&remaining)),
+            )
+        },
+    );
     let _ = writeln!(
         markdown,
-        "\n## Impurity-constrained blend\n\n{element} dry-mass fraction **{blended}** with ceiling **{maximum}**. Select **{dry} dry tonnes** for **{metal} {unit}** and **{contribution} {currency}** of incremental contribution. The blend uses fixed per-bin assays and additive recovered metal. A zero-tonne selection has no blended assay.\n\n| Feed grade ({unit}/dry t) | Selected dry tonnes |\n|---:|---:|"
+        "\n## {title}\n\n{assay_text}Select **{dry} dry tonnes** for **{metal} {unit}** and **{contribution} {currency}** of incremental contribution. {assumptions}{energy_text}\n\n| Feed grade ({unit}/dry t) | Selected dry tonnes |\n|---:|---:|"
     );
     let bins = blend.selected_bins.map(|bin| {
         let grade = exact(bin.grade);
@@ -344,11 +409,8 @@ fn render_impurity_blend(
             js(&tonnes)
         )
     });
-    let assay = assay.map_or_else(|| "null".into(), |value| js(&value));
     format!(
-        ",\"impurity_constrained_blend\":{{\"element\":{},\"maximum_mass_fraction\":{},\"blended_mass_fraction\":{assay},\"dry_tonnes\":{},\"recovered_metal\":{},\"incremental_contribution\":{},\"selected_bins\":[{}]}}",
-        js(element),
-        js(&maximum),
+        ",\"{key}\":{{{assay_json}\"dry_tonnes\":{},\"recovered_metal\":{},\"incremental_contribution\":{},\"selected_bins\":[{}]{energy_json}}}",
         js(&dry),
         js(&metal),
         js(&contribution),
@@ -371,6 +433,7 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
         "recovery_curve",
         "grade_tonnage",
         "blend_impurity_limit",
+        "blend_energy_budget_kwh",
     ];
     let members = doc
         .as_object()
@@ -429,6 +492,10 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
             Ok((symbol, quantity(limit, "maximum_mass_fraction")?))
         })
         .transpose()?;
+    let energy_budget = doc
+        .get("blend_energy_budget_kwh")
+        .map(|_| quantity(&doc, "blend_energy_budget_kwh"))
+        .transpose()?;
     let grades = doc
         .get("feed_grade_per_dry_tonne")
         .map(|band| {
@@ -467,6 +534,7 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
         max_grade,
         grades,
         impurity.map(|(_, maximum)| maximum),
+        energy_budget,
     )?;
     let source_json = worksheet_input::source_json(source, text.len());
     let mut markdown = format!(
@@ -553,10 +621,9 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
         render_balance(balance, terms, metal_unit, currency, &mut markdown)
     });
     let blend_json = balance
-        .and_then(|balance| balance.impurity_constrained)
-        .zip(impurity)
-        .map_or_else(String::new, |(blend, (element, maximum))| {
-            render_impurity_blend(blend, element, maximum, metal_unit, currency, &mut markdown)
+        .and_then(|balance| balance.constrained_blend)
+        .map_or_else(String::new, |blend| {
+            render_blend(blend, impurity, metal_unit, currency, &mut markdown)
         });
     let _ = writeln!(markdown, "\n{no_claim}");
     let payload = format!(
