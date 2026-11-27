@@ -14,6 +14,9 @@
 #
 # Output: one JSON line per target {target, seconds, exit, runs, cov, ft, corpus, artifacts, log}, then
 # {"targets": N, "failures": M}. Exits 1 if any target found a crash, a timeout or an out-of-memory input.
+# Bash reads a script as it runs it, so an edit to this file during a 24 h run used to change what that run did
+# after its loop. The body is one { } group, which bash parses whole before it runs any of it.
+{
 set -u
 export LC_ALL=C
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -62,3 +65,5 @@ for t in "${targets[@]}"; do
 done
 echo "{\"targets\":${#targets[@]},\"failures\":$failures}"
 [ "$failures" -eq 0 ]
+exit
+}
