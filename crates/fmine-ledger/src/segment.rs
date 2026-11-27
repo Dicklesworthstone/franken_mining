@@ -8,6 +8,7 @@
 //! 3. Optional sealed `len: u32 (LE)` + Segment Footer frame (`FMNE` + `SEGF` + version + counts +
 //!    `head_hash` + `mmr_root` + `mmr_peaks` + CRC32C).
 
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -16,7 +17,8 @@ use fmine_core::codec::{CodecError, Decoder, Encoder, MAX_FRAME_BYTES, crc32c};
 use fmine_core::hash::{Digest32, sha256};
 
 use crate::batch::{
-    DeltaBatch, GENESIS_PREV_HASH, LedgerError, MAX_ID_BYTES, TAG_LEDGER_BATCH, Witness,
+    DeltaBatch, DeltaKind, GENESIS_PREV_HASH, LedgerError, MAX_ID_BYTES, TAG_LEDGER_BATCH, Witness,
+    WitnessKind,
 };
 use crate::cell::AdmitOutcome;
 use crate::l0::{CellSnapshot, L0Error, L0Ledger};
@@ -1194,6 +1196,84 @@ impl SemanticSegmentWriter {
         }
     }
 
+    /// The narrow combiner (plan §26.1, `BD-085`) without an application law; see
+    /// [`Self::commit_prepared_with_law`].
+    pub fn commit_prepared(
+        &mut self,
+        prepared: &DeltaBatch,
+    ) -> Result<(Digest32, DeltaBatch), L0Error> {
+        self.commit_prepared_with_law(prepared, |_, _| Ok(()))
+    }
+
+    /// The narrow combiner (plan §26.1, `BD-085`): commits `prepared`, which a caller computed against some head
+    /// this cell has had, at the current head. This is optimistic concurrency: the batch commits if every key it
+    /// witnessed is unchanged, and otherwise refuses with [`L0Error::KeyWitnessMismatch`] (`FMINE-REF-502`) so the
+    /// caller recomputes.
+    ///
+    /// A batch already at the current head is appended as given. Otherwise only `seq`, `prev_hash` and
+    /// `anchor.commit_sequence` are re-stamped. The epoch, the anchor's registry epochs and its `state_root`, which
+    /// keeps naming the state the caller computed against, are kept. Refused with [`L0Error::NotRebasable`]
+    /// before anything is written: a base `(seq, prev_hash)` that is not a head of this cell; a lease transfer
+    /// computed at an older head; a `Supersede` of a key the batch has no `KeyState` witness for, which could
+    /// overwrite a version the caller never read. Returns the digest and the batch as committed.
+    pub fn commit_prepared_with_law<F>(
+        &mut self,
+        prepared: &DeltaBatch,
+        check: F,
+    ) -> Result<(Digest32, DeltaBatch), L0Error>
+    where
+        F: FnOnce(&L0Ledger, &DeltaBatch) -> Result<(), String>,
+    {
+        let refuse = |detail: String| L0Error::NotRebasable {
+            cell_id: prepared.cell_id.clone(),
+            detail,
+        };
+        let next_seq = self.writer.next_seq;
+        if prepared.seq > next_seq {
+            return Err(refuse(format!(
+                "its seq {} is past the next seq {next_seq}",
+                prepared.seq
+            )));
+        }
+        if self.ledger.prev_hash_at(&prepared.cell_id, prepared.seq)? != prepared.prev_hash {
+            return Err(refuse(format!(
+                "its prev_hash is not this cell's head at seq {}",
+                prepared.seq
+            )));
+        }
+        let batch = if prepared.seq == next_seq {
+            prepared.clone()
+        } else {
+            let witnessed: BTreeSet<&str> = prepared
+                .witnesses
+                .iter()
+                .filter(|w| w.kind == WitnessKind::KeyState)
+                .map(|w| w.subject_id.as_str())
+                .collect();
+            for op in &prepared.deltas {
+                if op.kind == DeltaKind::TransferLease {
+                    return Err(refuse(format!(
+                        "it transfers the lease, computed at seq {}",
+                        prepared.seq
+                    )));
+                }
+                if op.kind == DeltaKind::Supersede && !witnessed.contains(op.key.as_str()) {
+                    return Err(refuse(format!(
+                        "it supersedes '{}' without a KeyState witness for it",
+                        op.key
+                    )));
+                }
+            }
+            let mut batch = prepared.clone();
+            batch.seq = next_seq;
+            batch.prev_hash = self.ledger.head_hash(&prepared.cell_id)?;
+            batch.anchor.commit_sequence = next_seq;
+            batch
+        };
+        let digest = self.append_with_law(&batch, check)?;
+        Ok((digest, batch))
+    }
+
     pub fn seal(self) -> Result<SegmentFooter, L0Error> {
         self.check_commit_state()?;
         Ok(self.writer.seal()?)
@@ -1352,6 +1432,209 @@ mod tests {
                 .unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn narrow_combiner_commits_prepared_batches_whose_reads_hold_and_refuses_stale_reads() {
+        let path = scratch_path("combiner");
+        let mut writer = SemanticSegmentWriter::create(&path, "CELL-EVID(test)").unwrap();
+        let genesis = semantic_batch(
+            0,
+            GENESIS_PREV_HASH,
+            vec![
+                DeltaOp::new("grade", DeltaKind::Put, b"42".to_vec()),
+                DeltaOp::new("tonnes", DeltaKind::Put, b"100".to_vec()),
+            ],
+            Vec::new(),
+        );
+        let base = writer.append(&genesis).unwrap();
+        // Three callers compute against the same head, so each prepares seq 1.
+        let grade_read = writer.key_witness("grade").unwrap();
+        let tonnes_read = writer.key_witness("tonnes").unwrap();
+        let supersede_grade = semantic_batch(
+            1,
+            base,
+            vec![DeltaOp::new("grade", DeltaKind::Supersede, b"43".to_vec())],
+            vec![grade_read.clone()],
+        );
+        let from_tonnes = semantic_batch(
+            1,
+            base,
+            vec![DeltaOp::new("milled", DeltaKind::Put, b"100".to_vec())],
+            vec![tonnes_read.clone()],
+        );
+        let from_grade = semantic_batch(
+            1,
+            base,
+            vec![DeltaOp::new("metal", DeltaKind::Put, b"4200".to_vec())],
+            vec![grade_read],
+        );
+
+        let (_, committed) = writer.commit_prepared(&supersede_grade).unwrap();
+        assert_eq!(
+            committed, supersede_grade,
+            "a batch at the head commits as given"
+        );
+
+        // Its read was not touched: re-stamped onto the new head, nothing else changed.
+        let head = writer.ledger().head_hash("CELL-EVID(test)").unwrap();
+        let (digest, rebased) = writer.commit_prepared(&from_tonnes).unwrap();
+        assert_eq!(
+            (
+                rebased.seq,
+                rebased.prev_hash,
+                rebased.anchor.commit_sequence
+            ),
+            (2, head, 2)
+        );
+        let mut unstamped = rebased.clone();
+        unstamped.seq = 1;
+        unstamped.prev_hash = base;
+        unstamped.anchor.commit_sequence = 1;
+        assert_eq!(
+            unstamped, from_tonnes,
+            "only seq, prev_hash and commit_sequence move"
+        );
+        assert_eq!(
+            digest,
+            writer.ledger().head_hash("CELL-EVID(test)").unwrap()
+        );
+
+        // Its read was changed: refused before anything is written, and the caller recomputes.
+        let bytes = std::fs::read(&path).unwrap();
+        let state = writer.snapshot().unwrap();
+        let err = writer.commit_prepared(&from_grade).unwrap_err();
+        assert!(
+            matches!(&err, L0Error::KeyWitnessMismatch { key, .. } if key == "grade"),
+            "{err}"
+        );
+        assert_eq!(err.to_refusal().code, "FMINE-REF-502");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(writer.snapshot().unwrap(), state);
+        let recomputed = semantic_batch(
+            3,
+            writer.ledger().head_hash("CELL-EVID(test)").unwrap(),
+            vec![DeltaOp::new("metal", DeltaKind::Put, b"4300".to_vec())],
+            vec![writer.key_witness("grade").unwrap()],
+        );
+        writer.commit_prepared(&recomputed).unwrap();
+        let before = writer.snapshot().unwrap();
+        drop(writer);
+
+        // The keyed index is rebuilt at open: the stale read still refuses and a fresh one still rebases.
+        let mut writer = SemanticSegmentWriter::open_append(&path).unwrap();
+        assert_eq!(writer.snapshot().unwrap(), before);
+        assert!(matches!(
+            writer.commit_prepared(&from_grade),
+            Err(L0Error::KeyWitnessMismatch { .. })
+        ));
+        let late = semantic_batch(
+            1,
+            base,
+            vec![DeltaOp::new("hauled", DeltaKind::Put, b"100".to_vec())],
+            vec![tonnes_read],
+        );
+        assert_eq!(writer.commit_prepared(&late).unwrap().1.seq, 4);
+        let expected = writer.snapshot().unwrap();
+        writer.seal().unwrap();
+        assert_eq!(
+            SegmentReader::open(&path)
+                .unwrap()
+                .replay_semantics()
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn narrow_combiner_refuses_rebases_that_could_lose_an_update() {
+        let path = scratch_path("combiner-refuse");
+        let mut writer = SemanticSegmentWriter::create(&path, "CELL-EVID(test)").unwrap();
+        let genesis = semantic_batch(
+            0,
+            GENESIS_PREV_HASH,
+            vec![DeltaOp::new("grade", DeltaKind::Put, b"42".to_vec())],
+            Vec::new(),
+        );
+        let base = writer.append(&genesis).unwrap();
+        let witnessed = semantic_batch(
+            1,
+            base,
+            vec![DeltaOp::new("grade", DeltaKind::Supersede, b"43".to_vec())],
+            vec![writer.key_witness("grade").unwrap()],
+        );
+        let blind = semantic_batch(
+            1,
+            base,
+            vec![DeltaOp::new("grade", DeltaKind::Supersede, b"44".to_vec())],
+            Vec::new(),
+        );
+        let lease = semantic_batch(
+            1,
+            base,
+            vec![DeltaOp::new("lease", DeltaKind::TransferLease, Vec::new())],
+            Vec::new(),
+        );
+        writer.commit_prepared(&witnessed).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let state = writer.snapshot().unwrap();
+        let mut forked = witnessed.clone();
+        forked.prev_hash = sha256(b"another history");
+        let mut ahead = witnessed;
+        ahead.seq = 5;
+        ahead.anchor.commit_sequence = 5;
+        for (name, prepared) in [
+            ("blind supersede", &blind),
+            ("lease transfer", &lease),
+            ("forked base", &forked),
+            ("future seq", &ahead),
+        ] {
+            let err = writer.commit_prepared(prepared).unwrap_err();
+            assert!(matches!(err, L0Error::NotRebasable { .. }), "{name}: {err}");
+            assert_eq!(err.to_refusal().code, "FMINE-REF-502", "{name}");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name}");
+            assert_eq!(writer.snapshot().unwrap(), state, "{name}");
+        }
+
+        // Control: re-stamped by hand, the blind supersede passes plain append and replaces 43 with 44 though its
+        // writer never read 43. The combiner's witness rule refuses that lost update.
+        let mut by_hand = blind;
+        by_hand.seq = 2;
+        by_hand.prev_hash = writer.ledger().head_hash("CELL-EVID(test)").unwrap();
+        by_hand.anchor.commit_sequence = 2;
+        writer.append(&by_hand).unwrap();
+        let versions = writer
+            .ledger()
+            .key_history("CELL-EVID(test)", "grade")
+            .unwrap();
+        assert_eq!(versions.last().unwrap().payload, b"44");
+
+        // A batch prepared under an earlier lease epoch is refused once a later epoch has committed.
+        let head = writer.ledger().head_hash("CELL-EVID(test)").unwrap();
+        let old_epoch = semantic_batch(
+            3,
+            head,
+            vec![DeltaOp::new("metal", DeltaKind::Put, b"4400".to_vec())],
+            vec![writer.key_witness("grade").unwrap()],
+        );
+        let mut new_epoch = semantic_batch(
+            3,
+            head,
+            vec![DeltaOp::new("assay", DeltaKind::Put, b"1".to_vec())],
+            Vec::new(),
+        );
+        new_epoch.epoch = 2;
+        new_epoch.anchor.ledger_epoch = 2;
+        writer.commit_prepared(&new_epoch).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let err = writer.commit_prepared(&old_epoch).unwrap_err();
+        assert!(
+            matches!(err, L0Error::Ledger(LedgerError::EpochRegression { .. })),
+            "{err}"
+        );
+        assert_eq!(err.to_refusal().code, "FMINE-REF-502");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 
     #[test]

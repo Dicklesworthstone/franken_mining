@@ -72,6 +72,9 @@ pub enum L0Error {
     ObligationNotOpen { cell_id: String, key: String },
     /// Conservation law rejected the batch at commit (`INV-005`, `PO-BED-6`).
     ConservationViolation { cell_id: String, detail: String },
+    /// The narrow combiner cannot commit a prepared batch at the current head (`BD-085`): its base is not a head
+    /// this cell has had, it transfers the lease, or it supersedes a key it did not witness. The caller recomputes.
+    NotRebasable { cell_id: String, detail: String },
     /// Requested `as_of_seq` exceeds the cell's committed sequence count.
     SequenceOutOfRange {
         cell_id: String,
@@ -99,6 +102,7 @@ impl L0Error {
             Self::DuplicateCell { .. }
             | Self::KeyAlreadyExists { .. }
             | Self::KeyWitnessMismatch { .. }
+            | Self::NotRebasable { .. }
             | Self::ObligationAlreadyOpen { .. }
             | Self::ObligationNotOpen { .. } => {
                 Refusal::new(RefusalCode::StaleAnchor502, self.to_string())
@@ -125,6 +129,10 @@ impl core::fmt::Display for L0Error {
         match self {
             Self::Ledger(e) => write!(f, "L0 ledger error: {e}"),
             Self::UnknownCell { cell_id } => write!(f, "unknown cell '{cell_id}'"),
+            Self::NotRebasable { cell_id, detail } => write!(
+                f,
+                "prepared batch for '{cell_id}' cannot be committed at the current head: {detail}"
+            ),
             Self::DuplicateCell { cell_id } => write!(f, "duplicate cell '{cell_id}'"),
             Self::KeyAlreadyExists { cell_id, key } => {
                 write!(
@@ -540,6 +548,31 @@ impl L0Ledger {
     /// Current chain head digest for `cell_id`.
     pub fn head_hash(&self, cell_id: &str) -> Result<Digest32, L0Error> {
         Ok(self.cell(cell_id)?.authority.head_hash())
+    }
+
+    /// The `prev_hash` a batch at `seq` carries in `cell_id`: the genesis hash at 0, else the digest of batch
+    /// `seq - 1`. Refuses a `seq` past the next one.
+    pub fn prev_hash_at(&self, cell_id: &str, seq: u64) -> Result<Digest32, L0Error> {
+        let authority = &self.cell(cell_id)?.authority;
+        let committed = authority.next_seq();
+        if seq > committed {
+            return Err(L0Error::SequenceOutOfRange {
+                cell_id: cell_id.to_string(),
+                requested: seq,
+                committed,
+            });
+        }
+        let Some(last) = seq.checked_sub(1) else {
+            return Ok(GENESIS_PREV_HASH);
+        };
+        usize::try_from(last)
+            .ok()
+            .and_then(|i| authority.digests().get(i).copied())
+            .ok_or_else(|| L0Error::SequenceOutOfRange {
+                cell_id: cell_id.to_string(),
+                requested: seq,
+                committed,
+            })
     }
 
     /// Current RFC 6962 MMR root for `cell_id`.
