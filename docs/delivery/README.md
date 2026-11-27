@@ -9,6 +9,7 @@ This directory holds machine- and human-verifiable admission records (`INT-*`), 
 ## Gate records
 - FACT. The layering checks passed locally at `2f87dfd` and on both operating systems in dev and release at `eddeb7d`. [GATE-LAYERS-00](./GATE-LAYERS-00.md)
 - FACT. The 18-family determinism record still awaits the complete cross-ISA CI matrix. [GATE-DET-01](./GATE-DET-01.md)
+- FACT. No oracle crate is in the production closure (191 packages), and all 11 fixtures have capture records, measured locally at `e9400927`; check-all re-measures it in every CI job. [GATE-ORACLE-01](./GATE-ORACLE-01.md)
 - [`GATE-BM-01.md`](./GATE-BM-01.md) — lifted `VdbGrid` at 10⁸ active cells (`BD-191`): PASS measured locally at `ef49fcf` (ratio 1.352 ≤ 2.5); self-verified; the test is ignored in CI.
 - [`GATE-PUSH-PIT1.md`](./GATE-PUSH-PIT1.md) — MineLib UPIT exact with verified closure (`BD-250`): PASS measured locally at `ef49fcf` on all 11 instances; self-verified; MineLib's files are not committed, so CI cannot run it.
 
