@@ -22,6 +22,7 @@
 - Includes source-bound one-period routing over declared competing destinations (bd-ceft).
 - Includes source-bound multi-period routing with exact stockpile balances and close caps (bd-o8xm).
 - Includes exact finite capacity-option comparisons in the same routing worksheet (bd-wykr).
+- Includes quoted packages of jointly binding capacity increases in the same worksheet (bd-oysh).
 - Includes the source-bound acQuire desurvey command, explicit random/systematic survey errors and direct CSV/XLSX command controls (BD-188, plan §12.2), under the standing owner waiver below.
 - **Gate served:** The measured `check-amend` in `GATE-LAYERS-00` reads this approval as the scoped allowance. The registry uses the plan's 1,192,000-line aggregate.
 - **Approval:** approved by project owner via standing waiver, 2026-11-25

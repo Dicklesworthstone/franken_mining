@@ -586,6 +586,200 @@ fn plan_blend_values_finite_capacity_options_against_one_baseline() {
 }
 
 #[test]
+fn plan_blend_values_a_joint_capacity_package_at_one_price() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = std::path::Path::new("tests/planning/route_blend_capacity_packages.json");
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = blend(&root, input, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(blend(&root, input, "json").stdout, output.stdout);
+    let report = blend_envelope(&output);
+    let payload = report.get("payload").unwrap();
+    expect(
+        payload.get("source").unwrap(),
+        "sha256",
+        &sha256(original.as_bytes()).to_hex(),
+    );
+    let comparison = payload.get("capacity_comparison").unwrap();
+    expect(comparison, "base_discounted_contribution", "82/1");
+    assert_eq!(
+        comparison
+            .get("best_positive_options")
+            .unwrap()
+            .as_array()
+            .unwrap(),
+        &[Json::String("power-and-offtake".into())]
+    );
+    let options = comparison.get("options").unwrap().as_array().unwrap();
+    assert_eq!(options.len(), 3);
+    for (option, cost) in options[..2].iter().zip(["12/1", "13/1"]) {
+        expect(option, "break_even_present_value_cost", "0/1");
+        expect(option, "present_value_cost", cost);
+    }
+    let package = &options[2];
+    expect(package, "kind", "package");
+    expect(package, "discounted_contribution", "144/1");
+    expect(package, "break_even_present_value_cost", "62/1");
+    expect(package, "present_value_cost", "25/1");
+    expect(package, "net_present_value_improvement", "37/1");
+    let changes = package.get("changes").unwrap().as_array().unwrap();
+    assert_eq!(changes.len(), 2);
+    for (entry, (kind, unit, current, proposed)) in changes.iter().zip([
+        ("route_energy", "kWh", "10/1", "20/1"),
+        ("market", "g", "1/1", "2/1"),
+    ]) {
+        expect(entry, "kind", kind);
+        expect(entry, "period", "week-2");
+        expect(entry, "capacity_unit", unit);
+        expect(entry, "base_cap", current);
+        expect(entry, "new_cap", proposed);
+    }
+    let markdown = blend(&root, input, "markdown");
+    assert!(markdown.status.success());
+    assert!(String::from_utf8(markdown.stdout).unwrap().contains(
+        "| power-and-offtake | Grinding energy · week-2 / mill + Offtake · week-2 | 10/1 → 20/1 kWh, 1/1 → 2/1 g | 62/1 | 25/1 | 37/1 |"
+    ));
+
+    let scratch =
+        std::env::temp_dir().join(format!("fmine-capacity-package-{}", std::process::id()));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, text: &str| {
+        let path = scratch.join(name);
+        std::fs::write(&path, text).unwrap();
+        blend_envelope(&blend(&root, &path, "json"))
+    };
+    let (prefix, rest) = original.split_once(r#""changes": ["#).unwrap();
+    let (members, suffix) = rest.split_once("\n      ]").unwrap();
+    let members: Vec<_> = members
+        .trim()
+        .lines()
+        .map(|line| line.trim().trim_end_matches(','))
+        .collect();
+    let with_members =
+        |items: &[&str]| format!("{prefix}\"changes\":[{}]{suffix}", items.join(","));
+    let check_value = |report: Json, gain, net, winning| {
+        let comparison = report
+            .get("payload")
+            .unwrap()
+            .get("capacity_comparison")
+            .unwrap();
+        let package = &comparison.get("options").unwrap().as_array().unwrap()[2];
+        expect(package, "break_even_present_value_cost", gain);
+        expect(package, "net_present_value_improvement", net);
+        assert_eq!(
+            comparison
+                .get("best_positive_options")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            winning
+        );
+    };
+    check_value(
+        submit("reordered.json", &with_members(&[members[1], members[0]])),
+        "62/1",
+        "37/1",
+        1,
+    );
+    check_value(
+        submit(
+            "earlier_power.json",
+            &with_members(&[&members[0].replace("week-2", "week-1"), members[1]]),
+        ),
+        "0/1",
+        "-25/1",
+        0,
+    );
+    check_value(
+        submit(
+            "break_even.json",
+            &original.replace(
+                r#""present_value_cost": "25""#,
+                r#""present_value_cost": "62""#,
+            ),
+        ),
+        "62/1",
+        "0/1",
+        0,
+    );
+    let throughput =
+        r#"{"kind":"route_throughput","period":"week-2","route":"mill","increase":"1"}"#;
+    let stockpile = r#"{"kind":"stockpile","parcel":"feed","increase":"1"}"#;
+    check_value(
+        submit(
+            "four_changes.json",
+            &with_members(&[members[0], members[1], throughput, stockpile]),
+        ),
+        "62/1",
+        "37/1",
+        1,
+    );
+
+    for (file, text, code, detail) in [
+        (
+            "duplicate.json",
+            with_members(&[members[0], members[0]]),
+            "FMINE-REF-107",
+            "repeats",
+        ),
+        (
+            "one_change.json",
+            with_members(&[members[0]]),
+            "FMINE-REF-107",
+            "at least two",
+        ),
+        (
+            "five_changes.json",
+            with_members(&[members[0], members[1], throughput, stockpile, members[0]]),
+            "FMINE-REF-107",
+            "at most 4",
+        ),
+        (
+            "mixed_forms.json",
+            original.replace(r#""changes": ["#, r#""kind":"market","changes": ["#),
+            "FMINE-REF-107",
+            "unknown route-blend field kind",
+        ),
+        (
+            "nested_cost.json",
+            with_members(&[
+                members[0],
+                r#"{"kind":"market","period":"week-2","increase":"1","present_value_cost":"2"}"#,
+            ]),
+            "FMINE-REF-107",
+            "unknown route-blend field present_value_cost",
+        ),
+        (
+            "zero_increase.json",
+            with_members(&[
+                members[0],
+                r#"{"kind":"market","period":"week-2","increase":"0"}"#,
+            ]),
+            "FMINE-REF-109",
+            "positive increase",
+        ),
+    ] {
+        let refusal = submit(file, &text);
+        assert_eq!(refusal.get("payload"), Some(&Json::Null));
+        let refusal = refusal.get("refusal").unwrap();
+        expect(refusal, "code", code);
+        assert!(
+            refusal
+                .get("what")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains(detail)
+        );
+    }
+}
+
+#[test]
 fn lane_grade_tonnage_binary_reports_exact_partial_bin_for_all_cap_cases() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = "tests/planning/lane_grade_tonnage.json";

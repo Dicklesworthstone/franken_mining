@@ -27,16 +27,20 @@ pub(super) const USAGE: &str = "plan blend --input <routing-worksheet.json>";
 const SCHEMA: &str = "fmine.route-blend.v1";
 const HORIZON_SCHEMA: &str = "fmine.route-blend-horizon.v1";
 const MAX_CAPACITY_OPTIONS: usize = 8;
+const MAX_PACKAGE_CHANGES: usize = 4;
+const CAPACITY_TARGET_FIELDS: [&str; 3] = ["period", "route", "parcel"];
 const SCOPE: &str = "One period of already-mined, divisible feed with fixed per-pair recovery, additive specific energy and declared variable costs. The allocation is conditional on these uncalibrated inputs.";
 const HORIZON_SCOPE: &str = "The worksheet carries fixed-grade parcels through at most four periods. Declared arrivals enter before routing, and storage caps apply at period close. Contribution uses declared discounts, fixed per-pair recovery, additive specific energy and variable costs.";
 const CAPACITY_SCOPE: &str = "Each option separately increases one declared cap and reoptimizes the full horizon. The quoted cost is already discounted in the worksheet currency and project basis. Option values apply to the declared increase under the submitted assumptions.";
+const PACKAGE_SCOPE: &str = "Each option reoptimizes the same horizon. A package applies all its declared changes together and pays one quoted cost. Costs are already discounted in the worksheet currency and project basis. All values are conditional on the submitted assumptions.";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     r#"{"schema":"fmine.route-blend.v1","example":"tests/planning/route_blend.json","basis":"One period, metal mass unit, currency and 100_percent_project basis. Ore mass is dry_metric_tonne. Evidence is synthetic or assumed. Quantities are exact decimal strings.","#,
     r#""parcels":"1 to 8 with unique id, available_dry_tonnes and grade_per_dry_tonne. An optional common impurity element requires impurity_mass_fraction for every parcel.","#,
     r#""routes":"1 to 4 with unique id, dry_tonnes_cap, milling_cost_per_dry_tonne, optional energy_budget_kwh and impurity_ceiling. The pairs list contains only eligible parcels, with parcel id, recovery_fraction and haul_cost_per_dry_tonne. An energy budget requires specific_energy_kwh_per_dry_tonne for every eligible pair on that route.","#,
     r#""market":"One shared market_recovered_metal_cap, price_per_metal_unit and selling_cost_per_metal_unit. Objective is recovered metal at net price less milling and haul costs. Idle feed is feasible.","#,
     r#""horizon":{"schema":"fmine.route-blend-horizon.v1","example":"tests/planning/route_blend_horizon.json","periods":"Replace the root period, market, price, selling and routes fields with an ordered periods array, containing up to four objects with id, discount_factor in [0,1], arrivals (parcel and dry_tonnes rows), routes and the market and economic fields. Each parcel can declare stockpile_cap_dry_tonnes. Closing stock carries on the same parcel and basis; caps apply at each close.", "#,
-    r#""capacity_options":{"example":"tests/planning/route_blend_capacity_options.json","declaration":"Optional array of 1 to 8 independent options, each with unique id, kind, positive increase and nonnegative present_value_cost in the worksheet currency. Use period and route for route_throughput (dry metric tonnes) or route_energy (kWh), period for market (recovered metal unit), or parcel for stockpile (dry metric tonnes at every period close). Energy and stockpile increases require a declared finite base cap. All options compare against the same feasible baseline."}}}"#,
+    r#""capacity_options":{"example":"tests/planning/route_blend_capacity_options.json","declaration":"Optional array of 1 to 8 independent options, each with unique id, kind, positive increase and nonnegative present_value_cost in the worksheet currency. Use period and route for route_throughput (dry metric tonnes) or route_energy (kWh), period for market (recovered metal unit), or parcel for stockpile (dry metric tonnes at every period close). Energy and stockpile increases require a declared finite base cap. All options compare against the same feasible baseline.", "#,
+    r#""package_example":"tests/planning/route_blend_capacity_packages.json","packages":"Use an option with only id, present_value_cost and a changes array of two to four distinct cap targets. Each change supplies kind, increase and its target fields. All changes enter one reoptimization and the quoted package cost is charged once."}}}"#,
 );
 
 fn declaration(detail: impl Into<String>) -> Refusal {
@@ -672,7 +676,7 @@ fn capacity_limit<'a, 'b>(
         "route_throughput" | "route_energy" => &["period", "route"],
         _ => return Err(declaration(format!("unknown capacity option kind {kind}"))),
     };
-    if ["period", "route", "parcel"]
+    if CAPACITY_TARGET_FIELDS
         .into_iter()
         .any(|key| row.get(key).is_some() != required.contains(&key))
     {
@@ -728,22 +732,115 @@ struct CapacityComparison {
     json: String,
 }
 
+struct CapacityChanges {
+    json: String,
+    targets: String,
+    limits: String,
+}
+
+fn capacity_arithmetic(_: fmine_units::UnitsError) -> Refusal {
+    Refusal::new(
+        RefusalCode::NumericalCertificateFailed207,
+        "capacity comparison exceeds exact arithmetic range",
+    )
+}
+
+fn apply_capacity_changes(
+    changes: &[Json],
+    periods: &mut [DeclaredPeriod<'_>],
+    parcel_index: &BTreeMap<&str, usize>,
+    caps: &mut [Option<ExactQty>],
+    metal_unit: &str,
+) -> Result<CapacityChanges, Refusal> {
+    let mut seen = BTreeSet::new();
+    let mut json = Vec::new();
+    let mut targets = Vec::new();
+    let mut limits = Vec::new();
+    let package = changes.len() > 1;
+    for row in changes {
+        if package {
+            object(row, &["kind", "period", "route", "parcel", "increase"])?;
+        }
+        let kind = field(row, "kind")?;
+        let increase = quantity(row, "increase")?;
+        if increase.signum() <= 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "capacity changes require a positive increase",
+            ));
+        }
+        let (cap, unit) = capacity_limit(row, kind, periods, parcel_index, caps, metal_unit)?;
+        let target = CAPACITY_TARGET_FIELDS.map(|key| row.get(key).and_then(Json::as_str));
+        if !seen.insert((kind, target)) {
+            return Err(declaration(format!(
+                "capacity package repeats a {kind} target"
+            )));
+        }
+        let current = *cap;
+        let proposed = current.checked_add(increase).map_err(capacity_arithmetic)?;
+        *cap = proposed;
+        let capacity_name = match kind {
+            "route_energy" => "Grinding energy",
+            "route_throughput" => "Throughput",
+            "market" => "Offtake",
+            _ => "Stockpile",
+        };
+        let target_label = target
+            .into_iter()
+            .flatten()
+            .map(markdown_cell)
+            .collect::<Vec<_>>()
+            .join(" / ");
+        let target_json = CAPACITY_TARGET_FIELDS
+            .into_iter()
+            .zip(target)
+            .filter_map(|(key, value)| value.map(|value| format!(",\"{key}\":{}", js(value))))
+            .collect::<String>();
+        targets.push(format!("{capacity_name} · {target_label}"));
+        limits.push(format!("{} → {} {unit}", exact(current), exact(proposed)));
+        let fields = format!(
+            "\"kind\":{}{target_json},\"capacity_unit\":{},\"base_cap\":{},\"new_cap\":{}",
+            js(kind),
+            js(unit),
+            q(current),
+            q(proposed)
+        );
+        json.push(if package {
+            format!("{{{fields}}}")
+        } else {
+            fields
+        });
+    }
+    let fields = json.join(",");
+    Ok(CapacityChanges {
+        json: if package {
+            format!("\"kind\":\"package\",\"changes\":[{fields}]")
+        } else {
+            fields
+        },
+        targets: targets.join(" + "),
+        limits: limits.join(", "),
+    })
+}
+
 fn compare_capacity(
-    rows: &[Json],
+    declared_options: &[Json],
     report: &Report<'_>,
     horizon: Horizon<'_>,
     periods: &[DeclaredPeriod<'_>],
     parcel_index: &BTreeMap<&str, usize>,
     base: ExactQty,
 ) -> Result<CapacityComparison, Refusal> {
-    if rows.is_empty() {
+    if declared_options.is_empty() {
         return Err(declaration("capacity_options requires at least one option"));
     }
-    let arithmetic = |_| {
-        Refusal::new(
-            RefusalCode::NumericalCertificateFailed207,
-            "capacity comparison exceeds exact arithmetic range",
-        )
+    let scope = if declared_options
+        .iter()
+        .any(|row| row.get("changes").is_some())
+    {
+        PACKAGE_SCOPE
+    } else {
+        CAPACITY_SCOPE
     };
     let currency = report.currency;
     let mut markdown = format!(
@@ -753,47 +850,46 @@ fn compare_capacity(
     let mut best = Vec::new();
     let mut best_net = ExactQty::from_integer(0);
     let mut options = Vec::new();
-    for row in rows {
-        object(
-            row,
-            &[
-                "id",
-                "kind",
-                "period",
-                "route",
-                "parcel",
-                "increase",
-                "present_value_cost",
-            ],
-        )?;
+    for row in declared_options {
+        let changes = if row.get("changes").is_some() {
+            object(row, &["id", "present_value_cost", "changes"])?;
+            let changes = rows(row, "changes", MAX_PACKAGE_CHANGES)?;
+            if changes.len() < 2 {
+                return Err(declaration(
+                    "a capacity package requires at least two changes",
+                ));
+            }
+            changes
+        } else {
+            object(
+                row,
+                &[
+                    "id",
+                    "kind",
+                    "period",
+                    "route",
+                    "parcel",
+                    "increase",
+                    "present_value_cost",
+                ],
+            )?;
+            std::slice::from_ref(row)
+        };
         let id = label(row, "id")?;
         if !ids.insert(id) {
             return Err(declaration(format!("duplicate capacity option {id}")));
         }
-        let kind = field(row, "kind")?;
-        let increase = quantity(row, "increase")?;
         let cost = quantity(row, "present_value_cost")?;
-        if increase.signum() <= 0 || cost.signum() < 0 {
+        if cost.signum() < 0 {
             return Err(Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
-                format!(
-                    "capacity option {id} requires a positive increase and nonnegative present-value cost"
-                ),
+                format!("capacity option {id} requires a nonnegative present-value cost"),
             ));
         }
         let mut variant = periods.to_vec();
         let mut caps = horizon.stockpile_caps_dry_tonnes.to_vec();
-        let (cap, unit) = capacity_limit(
-            row,
-            kind,
-            &mut variant,
-            parcel_index,
-            &mut caps,
-            report.unit,
-        )?;
-        let current = *cap;
-        let proposed = current.checked_add(increase).map_err(arithmetic)?;
-        *cap = proposed;
+        let changes =
+            apply_capacity_changes(changes, &mut variant, parcel_index, &mut caps, report.unit)?;
         let periods: Vec<_> = variant.iter().map(DeclaredPeriod::model).collect();
         let result = routing::solve_horizon(Horizon {
             periods: &periods,
@@ -803,57 +899,38 @@ fn compare_capacity(
         let gain = result
             .discounted_contribution
             .checked_sub(base)
-            .map_err(arithmetic)?;
+            .map_err(capacity_arithmetic)?;
         if gain.signum() < 0 {
             return Err(Refusal::new(
                 RefusalCode::NumericalCertificateFailed207,
                 format!("capacity option {id} decreased the optimum after relaxing a limit"),
             ));
         }
-        let net = gain.checked_sub(cost).map_err(arithmetic)?;
-        if net.checked_cmp(best_net).map_err(arithmetic)?.is_gt() {
+        let net = gain.checked_sub(cost).map_err(capacity_arithmetic)?;
+        if net
+            .checked_cmp(best_net)
+            .map_err(capacity_arithmetic)?
+            .is_gt()
+        {
             best_net = net;
             best.clear();
         }
         if net == best_net && net.signum() > 0 {
             best.push(id);
         }
-        let target: Vec<_> = ["period", "route", "parcel"]
-            .into_iter()
-            .filter_map(|key| {
-                row.get(key)
-                    .and_then(Json::as_str)
-                    .map(|value| (key, value))
-            })
-            .collect();
-        let capacity_name = match kind {
-            "route_energy" => "Grinding energy",
-            "route_throughput" => "Throughput",
-            "market" => "Offtake",
-            _ => "Stockpile",
-        };
-        let target_label = target
-            .iter()
-            .map(|(_, value)| markdown_cell(value))
-            .collect::<Vec<_>>()
-            .join(" / ");
-        let target_json = target
-            .iter()
-            .map(|(key, value)| format!(",\"{key}\":{}", js(value)))
-            .collect::<String>();
         let _ = writeln!(
             markdown,
-            "| {} | {capacity_name} · {target_label} | {} → {} {unit} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} |",
             markdown_cell(id),
-            exact(current),
-            exact(proposed),
+            changes.targets,
+            changes.limits,
             exact(gain),
             exact(cost),
             exact(net)
         );
         options.push(format!(
-            "{{\"id\":{},\"kind\":{}{target_json},\"capacity_unit\":{},\"base_cap\":{},\"new_cap\":{},\"discounted_contribution\":{},\"break_even_present_value_cost\":{},\"present_value_cost\":{},\"net_present_value_improvement\":{},\"total\":{{{}}}}}",
-            js(id), js(kind), js(unit), q(current), q(proposed), q(result.discounted_contribution),
+            "{{\"id\":{},{},\"discounted_contribution\":{},\"break_even_present_value_cost\":{},\"present_value_cost\":{},\"net_present_value_improvement\":{},\"total\":{{{}}}}}",
+            js(id), changes.json, q(result.discounted_contribution),
             q(gain), q(cost), q(net), allocation(result.total)
         ));
     }
@@ -874,13 +951,13 @@ fn compare_capacity(
             exact(best_net)
         );
     }
-    let _ = writeln!(markdown, "\n{CAPACITY_SCOPE}");
+    let _ = writeln!(markdown, "\n{scope}");
     let best = best.into_iter().map(js).collect::<Vec<_>>().join(",");
     let json = format!(
         "{{\"base_discounted_contribution\":{},\"best_positive_options\":[{best}],\"options\":[{}],\"scope\":{}}}",
         q(base),
         options.join(","),
-        js(CAPACITY_SCOPE)
+        js(scope)
     );
     Ok(CapacityComparison { markdown, json })
 }

@@ -1578,6 +1578,13 @@ their submitted increments because the stockpile cap still limits feed. Each opt
 on its own. The quoted cost must already be discounted in the worksheet's currency and
 100%-project basis.
 
+Use a `changes` array inside an option to quote two to four capacity increases together.
+Each member names a distinct cap and its increase. Submit one present-value cost for the package.
+The optimizer applies every member in the same run, then ranks the package alongside the individual
+options. In the [package worksheet](tests/planning/route_blend_capacity_packages.json), more power
+and more offtake each add zero contribution on their own. Together they shift a tonne into week two
+and add **USD 62** in discounted contribution, or **USD 37** after the USD 25 package quote.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.
