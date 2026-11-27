@@ -660,7 +660,8 @@ pub struct QcInsertion {
     pub kind: QcKind,
 }
 
-/// `LabCertificate` (plan §12.1): the signed original's digest, for the copy held in CAS.
+/// `LabCertificate` (plan §12.1): the signed original's digest and the `FMT-CAS-1` root of its copy in CAS
+/// (`BD-171`). Reading the root back must give bytes with that digest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabCertificate {
     /// Certificate id; the record's id.
@@ -669,6 +670,8 @@ pub struct LabCertificate {
     pub lab: String,
     /// SHA-256 of the original bytes.
     pub original_sha256: Digest32,
+    /// Fanout-16 root of the original's copy in CAS.
+    pub cas_root: Digest32,
     /// Media type of the original, for example `application/pdf`.
     pub media_type: String,
     /// When it was issued, ns since the Unix epoch, UTC.
@@ -1280,6 +1283,7 @@ fn put_record(enc: &mut Encoder, record: &DrillRecord) -> Result<(), DrillError>
             enc.put_str(&r.certificate_id);
             enc.put_str(&r.lab);
             enc.put_fixed(&r.original_sha256.0);
+            enc.put_fixed(&r.cas_root.0);
             enc.put_str(&r.media_type);
             enc.put_i64(r.issued_at_ns);
         }
@@ -1528,6 +1532,11 @@ impl Reader<'_, '_> {
                 certificate_id: self.text()?,
                 lab: self.text()?,
                 original_sha256: Digest32(
+                    self.dec
+                        .get_fixed::<32>()
+                        .map_err(|e| DrillError::corrupt(e.to_string()))?,
+                ),
+                cas_root: Digest32(
                     self.dec
                         .get_fixed::<32>()
                         .map_err(|e| DrillError::corrupt(e.to_string()))?,

@@ -72,7 +72,7 @@ Records as imported: layer L0 Evidence (plan §13.2). This crate assigns no evid
 ## 10. Known gaps
 - No importer writes these records yet (acQuire dialect, `BD-188`).
 - MNPI embargo state on results is not in the record (`BD-170`); a later frame version adds it.
-- Certificate originals are named by SHA-256 only; storing and checking them in CAS is `BD-171`.
+- A certificate record names its original by SHA-256 and by the `FMT-CAS-1` root of its copy (`cas_root`). This crate does no IO: storing the original and checking the root against the digest happen at ingest (`BD-171`).
 - `OB-LAB` has no deadline: an outstanding sample is listed, but nothing marks it overdue against a lab's turnaround. The law does not refuse a loss after a result, or a result after a loss: finding one would need a by-sample index. They are reported as conflicts instead.
 - `Structure`, `Density`, `GeometTest`, `GeotechLog` and `TwinPair` (plan §12.1) are not here yet (`BD-285` for twins).
 - Desurvey gives points without the survey-error propagation (ISCWSA-style positional covariance) that plan §12.2 asks for (`bd-zx57`). The declared straight-line fallback for unsurveyed short holes needs a planned collar orientation, which `Collar` does not carry.

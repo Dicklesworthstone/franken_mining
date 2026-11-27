@@ -111,6 +111,7 @@ pub fn certificate(certificate_id: &str, lab: &str) -> LabCertificate {
         certificate_id: certificate_id.to_string(),
         lab: lab.to_string(),
         original_sha256: sha256(certificate_id.as_bytes()),
+        cas_root: sha256(format!("cas:{certificate_id}").as_bytes()),
         media_type: "application/pdf".to_string(),
         issued_at_ns: 1_790_600_000_000_000_000,
     }
