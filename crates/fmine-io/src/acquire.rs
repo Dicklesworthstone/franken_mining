@@ -23,6 +23,8 @@
 //!   [`AcquireExportBundle::rejected_rows`] with table, 1-based row number, column, raw value,
 //!   registered `FMINE-REF-*` code, explanation, and fix.
 
+pub mod drill;
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -36,8 +38,9 @@ use fmine_units::ExactQty;
 use crate::dialects::{ColumnBasis, IoDialectRegistry, ResolvedColumn, ResolvedCrs, ResolvedUnit};
 use crate::quarantine::{
     ImportReport, QuarantineError, RejectedRow, import_csv_through_quarantine,
-    import_xlsx_sheet_through_quarantine,
+    import_xlsx_sheet_through_quarantine, normalize_decimal,
 };
+use crate::redact::scrub_free_text;
 
 /// Formats an [`ExactQty`] canonically as an exact integer or reduced fraction (`n/d`).
 fn fmt_qty(q: ExactQty) -> String {
@@ -254,13 +257,20 @@ impl AcquireRejection {
         raw_value: impl Into<String>,
         refusal: Refusal,
     ) -> Self {
+        let raw_value = raw_value.into();
+        // Known numeric values keep their precision; free-text diagnostics obey ingest redaction.
+        let raw_value = if normalize_decimal(&raw_value).is_some() {
+            raw_value
+        } else {
+            scrub_free_text(&raw_value).0
+        };
         Self {
             table,
             row_index,
-            column: column.into(),
-            raw_value: raw_value.into(),
+            column: scrub_free_text(&column.into()).0,
+            raw_value,
             code: refusal.code,
-            explanation: refusal.what,
+            explanation: scrub_free_text(&refusal.what).0,
             fix: refusal.fix,
         }
     }
@@ -306,11 +316,14 @@ impl AcquireError {
         match self {
             Self::Quarantine { source, .. } => source.to_refusal(),
             Self::MissingRequiredColumn { .. } | Self::DuplicateHeaderColumn { .. } => {
-                Refusal::new(RefusalCode::SourceCellUnusable208, self.to_string())
+                Refusal::new(
+                    RefusalCode::SourceCellUnusable208,
+                    scrub_free_text(&self.to_string()).0,
+                )
             }
             Self::UnregisteredCrs { .. } => Refusal::new(
                 RefusalCode::CrsUnregisteredOrIncompatible106,
-                self.to_string(),
+                scrub_free_text(&self.to_string()).0,
             ),
         }
     }
@@ -1029,19 +1042,20 @@ fn parse_exact_required(
             ),
         ));
     }
-    let cleaned = trimmed.replace(',', "");
-    ExactQty::from_decimal_str(&cleaned).map_err(|_| {
-        AcquireRejection::from_refusal(
-            table,
-            row_index,
-            column,
-            raw,
-            Refusal::new(
-                RefusalCode::SourceCellUnusable208,
-                format!("invalid exact decimal '{trimmed}' in required column '{column}'"),
-            ),
-        )
-    })
+    normalize_decimal(trimmed)
+        .and_then(|cleaned| ExactQty::from_decimal_str(&cleaned).ok())
+        .ok_or_else(|| {
+            AcquireRejection::from_refusal(
+                table,
+                row_index,
+                column,
+                raw,
+                Refusal::new(
+                    RefusalCode::SourceCellUnusable208,
+                    format!("invalid exact decimal '{trimmed}' in required column '{column}'"),
+                ),
+            )
+        })
 }
 
 fn parse_assay_reading(
@@ -1075,19 +1089,20 @@ fn parse_assay_reading(
                 ),
             ));
         }
-        let limit_str = trimmed_rest.replace(',', "");
-        let limit = ExactQty::from_decimal_str(&limit_str).map_err(|_| {
-            AcquireRejection::from_refusal(
-                AcquireTableKind::Assay,
-                row_index,
-                column,
-                raw,
-                Refusal::new(
-                    RefusalCode::SourceCellUnusable208,
-                    format!("malformed below-detection-limit token '{raw}' in '{column}'"),
-                ),
-            )
-        })?;
+        let limit = normalize_decimal(trimmed_rest)
+            .and_then(|cleaned| ExactQty::from_decimal_str(&cleaned).ok())
+            .ok_or_else(|| {
+                AcquireRejection::from_refusal(
+                    AcquireTableKind::Assay,
+                    row_index,
+                    column,
+                    raw,
+                    Refusal::new(
+                        RefusalCode::SourceCellUnusable208,
+                        format!("malformed below-detection-limit token '{raw}' in '{column}'"),
+                    ),
+                )
+            })?;
         if limit.signum() <= 0 {
             return Err(AcquireRejection::from_refusal(
                 AcquireTableKind::Assay,
@@ -1108,19 +1123,20 @@ fn parse_assay_reading(
             raw: raw.to_string(),
         });
     }
-    let cleaned = raw.replace(',', "");
-    let value = ExactQty::from_decimal_str(&cleaned).map_err(|_| {
-        AcquireRejection::from_refusal(
-            AcquireTableKind::Assay,
-            row_index,
-            column,
-            raw,
-            Refusal::new(
-                RefusalCode::SourceCellUnusable208,
-                format!("invalid numeric assay '{raw}' in '{column}'"),
-            ),
-        )
-    })?;
+    let value = normalize_decimal(raw)
+        .and_then(|cleaned| ExactQty::from_decimal_str(&cleaned).ok())
+        .ok_or_else(|| {
+            AcquireRejection::from_refusal(
+                AcquireTableKind::Assay,
+                row_index,
+                column,
+                raw,
+                Refusal::new(
+                    RefusalCode::SourceCellUnusable208,
+                    format!("invalid numeric assay '{raw}' in '{column}'"),
+                ),
+            )
+        })?;
     if value.signum() < 0 {
         return Err(AcquireRejection::from_refusal(
             AcquireTableKind::Assay,
@@ -1286,6 +1302,69 @@ mod tests {
             .and_then(|p| p.parent())
             .expect("workspace root")
             .to_path_buf()
+    }
+
+    #[test]
+    fn test_malformed_grouping_cannot_change_exact_geometry_or_assays() {
+        let expected = ExactQty::from_decimal_str("1234.5").expect("known decimal");
+        assert_eq!(
+            parse_exact_required(AcquireTableKind::Collar, 2, "EAST", "1,234.5")
+                .expect("grouped coordinate"),
+            expected
+        );
+        assert_eq!(
+            parse_assay_reading(2, "AU_GPT", "<1,234.5", "g_per_t", ColumnBasis::Dry)
+                .expect("grouped detection limit"),
+            AssayReading::BelowDetection {
+                detection_limit: expected,
+                unit: "g_per_t".into(),
+                basis: ColumnBasis::Dry,
+                raw: "<1,234.5".into(),
+            }
+        );
+        for raw in ["1,25", "1,,250", "12,34", "1,000.5,0"] {
+            assert!(parse_exact_required(AcquireTableKind::Survey, 2, "DEPTH", raw).is_err());
+            assert!(parse_assay_reading(2, "AU_GPT", raw, "g_per_t", ColumnBasis::Dry).is_err());
+            assert!(
+                parse_assay_reading(2, "AU_GPT", &format!("<{raw}"), "g_per_t", ColumnBasis::Dry,)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_domain_rejection_scrubs_contact_text_without_losing_numeric_precision() {
+        let rejected = AcquireRejection::from_refusal(
+            AcquireTableKind::Survey,
+            7,
+            "HOLEID",
+            "Contact: private@example.test",
+            Refusal::new(
+                RefusalCode::NoClaimInDomain201,
+                "unknown hole private@example.test",
+            ),
+        );
+        assert!(!rejected.raw_value.contains("private@example.test"));
+        assert!(!rejected.explanation.contains("private@example.test"));
+        assert_eq!(rejected.row_index, 7);
+        assert_eq!(rejected.code, "FMINE-REF-201");
+        let numeric = AcquireRejection::from_refusal(
+            AcquireTableKind::Survey,
+            8,
+            "DEPTH",
+            "4500000.125",
+            Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "depth exceeds MAXDEPTH",
+            ),
+        );
+        assert_eq!(numeric.raw_value, "4500000.125");
+        let duplicate_header = AcquireError::DuplicateHeaderColumn {
+            table: AcquireTableKind::Survey,
+            column: "private@example.test".into(),
+        }
+        .to_refusal();
+        assert!(!duplicate_header.what.contains("private@example.test"));
     }
 
     /// BD-188 done-when: sample multi-table acQuire export (collar + survey + assay) imported

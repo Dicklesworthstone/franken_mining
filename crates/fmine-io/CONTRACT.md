@@ -778,3 +778,24 @@ local test authority is an independent time witness. Its input fingerprints perm
   cross-table collar referential integrity, and non-overlapping interval enforcement (`FMINE-REF-102`)
   (`acquire::tests::test_acquire_sample_export_bundle_import_and_domain_rejections`,
   `acquire::tests::test_acquire_xlsx_and_csv_export_parity`).
+  Decimal grouping is checked before numeric conversion: commas denote three-digit integer groups,
+  never an inferred decimal separator. Censored limits use the same rule. Malformed row-width and
+  unvalidated physical/numeric failure diagnostics redact raw text, while the original bytes remain
+  available through the source CAS locator. Contact tokens in refusal prose are scrubbed; this is not
+  a claim that arbitrary source headers or every free-text field contain no personal information.
+- DESIGN (BD-188, bd-zx57): `acquire::drill::prepare_geometry` joins an imported bundle to explicit
+  per-hole geometry declarations and returns Corebox collars, surveys and exact millimetre assay spans.
+  Accuracy, instrument, run direction, drilling type, actual/planned collar role and grid-north reference
+  are supplied declarations. No instrument name supplies a default accuracy. A printed survey-type label
+  must match the canonical instrument code or an explicitly declared exact source-label mapping.
+  Geometry requires registered WGS84 UTM metre frames, `m` depth/coordinate columns, `deg` angle columns,
+  `none` basis and `point_core` support. Sub-millimetre depths, depths beyond the binary64 exact-integer
+  range, redacted identities, missing/duplicate/extra declarations and unsurveyed holes refuse. Any
+  quarantined source row refuses the entire geometry projection; the caller retains its complete import
+  report. This prevents an omitted bad survey station from silently changing a complete-looking trace.
+  Output order is canonical by hole and depth, original row indices and all exact/censored/placeholder
+  assay readings survive, and source-hash/row survey identifiers preserve source identity. No assay,
+  custody, dispatch or certificate records are fabricated, and this adapter writes no authority.
+  Synthetic controls in `tests/acquire_drill.rs` check the positive imported trace, known coordinates,
+  source-order invariance, source retention and the admission/refusal cases above; authentic vendor parity
+  and declaration accuracy remain unestablished.
