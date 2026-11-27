@@ -1,16 +1,34 @@
 //! Determinism: BitwisePortable
-//! Exact extensive conservation checker (`BD-146`, plan §20.2, `INV-005`, `PO-BED-6`).
+//! Exact extensive conservation checker and commit-time ledger law (`BD-146`, `BD-147`, plan
+//! §20.2 & §26.3 `CELL-FLOW`, `INV-005`, `PO-BED-6`).
 //!
 //! All extensive balances (`dry_tonnes`, `water_tonnes`, per-element metal) are checked strictly
 //! in exact `fmine_units::ExactQty` rationals — zero bare `f64` parameters (L-6) and zero plugs.
 //! Intensive grades (`metal ÷ dry_tonnes`) are derived strictly after extensive balance checks.
+//! [`check_batch_conservation`] and [`conservation_commit_law`] wire this exact conservation law
+//! directly into `fmine-ledger`'s commit-time law hooks on both L0 (`L0Ledger::commit_with_conservation`)
+//! and L1 (`SemanticSegmentWriter::append_with_law` / `commit_prepared_with_law`).
 
 use std::collections::BTreeMap;
 
+use fmine_core::codec::{Decoder, Encoder};
+use fmine_core::hash::sha256;
+use fmine_ledger::batch::{DeltaBatch, DeltaKind, DeltaOp, Witness, WitnessKind};
+use fmine_ledger::l0::L0Ledger;
 use fmine_units::ExactQty;
 
 use crate::FlowError;
 use crate::graph::FlowGraph;
+
+/// Canonical wire frame tag for `CELL-FLOW` period balance records (`FMNE` + `FLWB` + CRC32C).
+pub const TAG_FLOW_BALANCE: [u8; 4] = *b"FLWB";
+/// Canonical ledger key prefix for `CELL-FLOW` period balance records checked by `PO-BED-6`.
+pub const FLOW_BALANCE_KEY_PREFIX: &str = "flow/period/";
+const FMT_FLWB_V1: u16 = 1;
+const TAG_FLOW_WITNESS: [u8; 4] = *b"FLWW";
+const MAX_FLOW_ENTRIES: usize = 65_536;
+const MAX_FLOW_ELEMENTS: usize = 1_024;
+const MAX_ID_BYTES: usize = 256;
 
 /// Extensive physical quantities for one stream transfer or inventory snapshot (`ExactQty`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +239,32 @@ fn validate_non_negative(q: &ExtensiveQuantities, label: &str) -> Result<(), Flo
     Ok(())
 }
 
+fn validate_tolerance(tolerance: &BalanceTolerance) -> Result<(), FlowError> {
+    if tolerance.dry_mass.signum() < 0 {
+        return Err(FlowError::InvalidQuantity {
+            detail: "negative tolerance on channel 'dry_mass'".to_string(),
+        });
+    }
+    if tolerance.water_mass.signum() < 0 {
+        return Err(FlowError::InvalidQuantity {
+            detail: "negative tolerance on channel 'water_mass'".to_string(),
+        });
+    }
+    if tolerance.default_element.signum() < 0 {
+        return Err(FlowError::InvalidQuantity {
+            detail: "negative default_element tolerance".to_string(),
+        });
+    }
+    for (el, tol) in &tolerance.per_element {
+        if tol.signum() < 0 {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("negative tolerance on element '{el}'"),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Verify exact extensive conservation (`Σ in − Σ out − Δ inventory = 0` within `tolerance`)
 /// at every interior node of `graph` (`INV-005`, `PO-BED-6`). Refuses violations with
 /// `FMINE-REF-101` — never plugs or adjusts observations.
@@ -230,6 +274,7 @@ pub fn verify_period_balance(
     inventories: &[InventoryDelta],
     tolerance: &BalanceTolerance,
 ) -> Result<BalanceReport, FlowError> {
+    validate_tolerance(tolerance)?;
     let mut flow_map: BTreeMap<&str, &ExtensiveQuantities> = BTreeMap::new();
     for f in flows {
         let Some(stream) = graph.stream(&f.stream_id) else {
@@ -389,6 +434,526 @@ pub fn derive_grade(metal: ExactQty, dry_mass: ExactQty) -> Result<ExactQty, Flo
         });
     }
     Ok(metal.checked_div(dry_mass)?)
+}
+
+/// Canonical `CELL-FLOW` period material-balance record committed under `flow/period/<period_id>`
+/// and enforced at commit time (`BD-147`, `INV-005`, `PO-BED-6`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeriodBalanceRecord {
+    /// Non-empty trimmed period identifier (e.g. `"2026-01"`).
+    pub period_id: String,
+    /// Optional immediately preceding period identifier whose committed closing inventory must
+    /// equal this period's opening inventory at every inventory-holding node (no hidden step-change
+    /// or plug between periods).
+    pub previous_period_id: Option<String>,
+    /// Measured or reconciled extensive flows for streams in this period.
+    pub flows: Vec<StreamFlow>,
+    /// Opening and closing inventories for inventory-holding nodes in this period.
+    pub inventories: Vec<InventoryDelta>,
+}
+
+fn encode_qty(enc: &mut Encoder, q: ExactQty) {
+    enc.put_i128(q.num());
+    enc.put_i128(q.den());
+}
+
+fn decode_qty(dec: &mut Decoder<'_>) -> Result<ExactQty, FlowError> {
+    let num = dec.get_i128().map_err(|e| FlowError::InvalidQuantity {
+        detail: format!("codec error reading ExactQty numerator: {e}"),
+    })?;
+    let den = dec.get_i128().map_err(|e| FlowError::InvalidQuantity {
+        detail: format!("codec error reading ExactQty denominator: {e}"),
+    })?;
+    if den <= 0 {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!("ExactQty denominator {den} must be > 0"),
+        });
+    }
+    let q = ExactQty::new(num, den)?;
+    if q.num() != num || q.den() != den {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!(
+                "non-canonical unreduced ExactQty {num}/{den} (canonical {}/{})",
+                q.num(),
+                q.den()
+            ),
+        });
+    }
+    Ok(q)
+}
+
+fn encode_extensive(enc: &mut Encoder, q: &ExtensiveQuantities) -> Result<(), FlowError> {
+    validate_non_negative(q, "extensive quantities")?;
+    if q.elements.len() > MAX_FLOW_ELEMENTS {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!(
+                "element count {} exceeds {MAX_FLOW_ELEMENTS}",
+                q.elements.len()
+            ),
+        });
+    }
+    encode_qty(enc, q.dry_mass);
+    encode_qty(enc, q.water_mass);
+    enc.put_u32(q.elements.len() as u32);
+    for (el, &qty) in &q.elements {
+        enc.put_str(el);
+        encode_qty(enc, qty);
+    }
+    Ok(())
+}
+
+fn decode_extensive(dec: &mut Decoder<'_>) -> Result<ExtensiveQuantities, FlowError> {
+    let dry_mass = decode_qty(dec)?;
+    let water_mass = decode_qty(dec)?;
+    let elem_count = dec.get_u32().map_err(|e| FlowError::InvalidQuantity {
+        detail: format!("codec error reading element count: {e}"),
+    })? as usize;
+    if elem_count > MAX_FLOW_ELEMENTS {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!("element count {elem_count} exceeds {MAX_FLOW_ELEMENTS}"),
+        });
+    }
+    let mut elements = BTreeMap::new();
+    let mut prev_el: Option<String> = None;
+    for _ in 0..elem_count {
+        let el = dec
+            .get_str(MAX_ID_BYTES)
+            .map_err(|e| FlowError::InvalidQuantity {
+                detail: format!("codec error reading element symbol: {e}"),
+            })?
+            .to_string();
+        if el.is_empty() || el.trim() != el {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("invalid element symbol {el:?}"),
+            });
+        }
+        if let Some(prev) = &prev_el
+            && prev.as_str() >= el.as_str()
+        {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("element '{el}' is duplicate or out of canonical order"),
+            });
+        }
+        let qty = decode_qty(dec)?;
+        prev_el = Some(el.clone());
+        elements.insert(el, qty);
+    }
+    ExtensiveQuantities::new(dry_mass, water_mass, elements)
+}
+
+fn extensive_equal(a: &ExtensiveQuantities, b: &ExtensiveQuantities) -> bool {
+    if a.dry_mass != b.dry_mass || a.water_mass != b.water_mass {
+        return false;
+    }
+    let zero = ExactQty::from_integer(0);
+    for el in a.elements.keys().chain(b.elements.keys()) {
+        let av = a.elements.get(el).copied().unwrap_or(zero);
+        let bv = b.elements.get(el).copied().unwrap_or(zero);
+        if av != bv {
+            return false;
+        }
+    }
+    true
+}
+
+impl PeriodBalanceRecord {
+    /// Canonical `CELL-FLOW` ledger key for this period (`flow/period/<period_id>`).
+    #[must_use]
+    pub fn delta_key(&self) -> String {
+        format!("{FLOW_BALANCE_KEY_PREFIX}{}", self.period_id)
+    }
+
+    /// Encode into canonical `FMNE` + `FLWB` v1 + CRC32C wire bytes.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, FlowError> {
+        if self.period_id.is_empty()
+            || self.period_id.trim() != self.period_id
+            || self.period_id.len() > MAX_ID_BYTES
+        {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("invalid period_id {:?}", self.period_id),
+            });
+        }
+        if let Some(prev) = &self.previous_period_id
+            && (prev.is_empty()
+                || prev.trim() != prev
+                || prev.len() > MAX_ID_BYTES
+                || prev == &self.period_id)
+        {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("invalid previous_period_id {prev:?}"),
+            });
+        }
+        if self.flows.len() > MAX_FLOW_ENTRIES || self.inventories.len() > MAX_FLOW_ENTRIES {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("flow or inventory count exceeds {MAX_FLOW_ENTRIES}"),
+            });
+        }
+
+        let mut canonical_flows: BTreeMap<&str, &ExtensiveQuantities> = BTreeMap::new();
+        for f in &self.flows {
+            if f.stream_id.is_empty()
+                || f.stream_id.trim() != f.stream_id
+                || f.stream_id.len() > MAX_ID_BYTES
+            {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!("invalid stream_id {:?}", f.stream_id),
+                });
+            }
+            if canonical_flows
+                .insert(f.stream_id.as_str(), &f.quantities)
+                .is_some()
+            {
+                return Err(FlowError::DuplicateId {
+                    kind: "stream_flow",
+                    id: f.stream_id.clone(),
+                });
+            }
+        }
+        let mut canonical_invs: BTreeMap<&str, &InventoryDelta> = BTreeMap::new();
+        for inv in &self.inventories {
+            if inv.node_id.is_empty()
+                || inv.node_id.trim() != inv.node_id
+                || inv.node_id.len() > MAX_ID_BYTES
+            {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!("invalid inventory node_id {:?}", inv.node_id),
+                });
+            }
+            if canonical_invs.insert(inv.node_id.as_str(), inv).is_some() {
+                return Err(FlowError::DuplicateId {
+                    kind: "inventory_delta",
+                    id: inv.node_id.clone(),
+                });
+            }
+        }
+
+        let mut enc = Encoder::new_frame(TAG_FLOW_BALANCE, FMT_FLWB_V1);
+        enc.put_str(&self.period_id);
+        match &self.previous_period_id {
+            None => enc.put_u8(0),
+            Some(prev) => {
+                enc.put_u8(1);
+                enc.put_str(prev);
+            }
+        }
+        enc.put_u32(canonical_flows.len() as u32);
+        for (stream_id, quantities) in canonical_flows {
+            enc.put_str(stream_id);
+            encode_extensive(&mut enc, quantities)?;
+        }
+        enc.put_u32(canonical_invs.len() as u32);
+        for (node_id, inv) in canonical_invs {
+            enc.put_str(node_id);
+            encode_extensive(&mut enc, &inv.opening)?;
+            encode_extensive(&mut enc, &inv.closing)?;
+        }
+        Ok(enc.finish())
+    }
+
+    /// Decode canonical `FMNE` + `FLWB` v1 + CRC32C wire bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, FlowError> {
+        let mut dec = Decoder::open_frame(bytes, TAG_FLOW_BALANCE, FMT_FLWB_V1, FMT_FLWB_V1)
+            .map_err(|e| FlowError::InvalidQuantity {
+                detail: format!("FLWB frame decode failed: {e}"),
+            })?;
+        let period_id = dec
+            .get_str(MAX_ID_BYTES)
+            .map_err(|e| FlowError::InvalidQuantity {
+                detail: format!("FLWB period_id decode failed: {e}"),
+            })?
+            .to_string();
+        if period_id.is_empty() || period_id.trim() != period_id {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("invalid period_id {period_id:?}"),
+            });
+        }
+        let previous_period_id = match dec.get_u8().map_err(|e| FlowError::InvalidQuantity {
+            detail: format!("FLWB previous_period flag decode failed: {e}"),
+        })? {
+            0 => None,
+            1 => {
+                let prev = dec
+                    .get_str(MAX_ID_BYTES)
+                    .map_err(|e| FlowError::InvalidQuantity {
+                        detail: format!("FLWB previous_period_id decode failed: {e}"),
+                    })?
+                    .to_string();
+                if prev.is_empty() || prev.trim() != prev || prev == period_id {
+                    return Err(FlowError::InvalidQuantity {
+                        detail: format!("invalid previous_period_id {prev:?}"),
+                    });
+                }
+                Some(prev)
+            }
+            tag => {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!("invalid previous_period flag {tag}"),
+                });
+            }
+        };
+
+        let flow_count = dec.get_u32().map_err(|e| FlowError::InvalidQuantity {
+            detail: format!("FLWB flow count decode failed: {e}"),
+        })? as usize;
+        if flow_count > MAX_FLOW_ENTRIES {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("flow count {flow_count} exceeds {MAX_FLOW_ENTRIES}"),
+            });
+        }
+        let mut flows = Vec::with_capacity(flow_count);
+        let mut prev_stream: Option<String> = None;
+        for _ in 0..flow_count {
+            let stream_id = dec
+                .get_str(MAX_ID_BYTES)
+                .map_err(|e| FlowError::InvalidQuantity {
+                    detail: format!("FLWB stream_id decode failed: {e}"),
+                })?
+                .to_string();
+            if stream_id.is_empty() || stream_id.trim() != stream_id {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!("invalid stream_id {stream_id:?}"),
+                });
+            }
+            if let Some(prev) = &prev_stream
+                && prev.as_str() >= stream_id.as_str()
+            {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!("stream_id '{stream_id}' is duplicate or unsorted"),
+                });
+            }
+            let quantities = decode_extensive(&mut dec)?;
+            prev_stream = Some(stream_id.clone());
+            flows.push(StreamFlow {
+                stream_id,
+                quantities,
+            });
+        }
+
+        let inv_count = dec.get_u32().map_err(|e| FlowError::InvalidQuantity {
+            detail: format!("FLWB inventory count decode failed: {e}"),
+        })? as usize;
+        if inv_count > MAX_FLOW_ENTRIES {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("inventory count {inv_count} exceeds {MAX_FLOW_ENTRIES}"),
+            });
+        }
+        let mut inventories = Vec::with_capacity(inv_count);
+        let mut prev_node: Option<String> = None;
+        for _ in 0..inv_count {
+            let node_id = dec
+                .get_str(MAX_ID_BYTES)
+                .map_err(|e| FlowError::InvalidQuantity {
+                    detail: format!("FLWB inventory node_id decode failed: {e}"),
+                })?
+                .to_string();
+            if node_id.is_empty() || node_id.trim() != node_id {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!("invalid inventory node_id {node_id:?}"),
+                });
+            }
+            if let Some(prev) = &prev_node
+                && prev.as_str() >= node_id.as_str()
+            {
+                return Err(FlowError::InvalidQuantity {
+                    detail: format!("inventory node_id '{node_id}' is duplicate or unsorted"),
+                });
+            }
+            let opening = decode_extensive(&mut dec)?;
+            let closing = decode_extensive(&mut dec)?;
+            prev_node = Some(node_id.clone());
+            inventories.push(InventoryDelta {
+                node_id,
+                opening,
+                closing,
+            });
+        }
+        dec.finish().map_err(|e| FlowError::InvalidQuantity {
+            detail: format!("FLWB trailing bytes: {e}"),
+        })?;
+        Ok(Self {
+            period_id,
+            previous_period_id,
+            flows,
+            inventories,
+        })
+    }
+
+    /// Wrap this period balance record as an append-only `Put` or `Supersede` [`DeltaOp`].
+    pub fn into_delta_op(&self, kind: DeltaKind) -> Result<DeltaOp, FlowError> {
+        if !matches!(kind, DeltaKind::Put | DeltaKind::Supersede) {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("flow period delta kind must be Put or Supersede, got {kind:?}"),
+            });
+        }
+        Ok(DeltaOp::new(self.delta_key(), kind, self.to_bytes()?))
+    }
+}
+
+/// Build the canonical `WitnessKind::Conservation` witness for a verified [`BalanceReport`]
+/// (`BD-147`, `PO-BED-6`).
+pub fn conservation_witness(period_id: &str, report: &BalanceReport) -> Result<Witness, FlowError> {
+    if period_id.is_empty() || period_id.trim() != period_id || period_id.len() > MAX_ID_BYTES {
+        return Err(FlowError::InvalidQuantity {
+            detail: format!("invalid period_id {period_id:?}"),
+        });
+    }
+    let mut enc = Encoder::new_frame(TAG_FLOW_WITNESS, FMT_FLWB_V1);
+    enc.put_str(period_id);
+    encode_qty(&mut enc, report.system_dry_mass_residual);
+    enc.put_u32(report.system_element_residuals.len() as u32);
+    for (el, &res) in &report.system_element_residuals {
+        enc.put_str(el);
+        encode_qty(&mut enc, res);
+    }
+    enc.put_u32(report.node_residuals.len() as u32);
+    for nr in &report.node_residuals {
+        enc.put_str(&nr.node_id);
+        encode_qty(&mut enc, nr.dry_mass_residual);
+        encode_qty(&mut enc, nr.water_mass_residual);
+        enc.put_u32(nr.element_residuals.len() as u32);
+        for (el, &res) in &nr.element_residuals {
+            enc.put_str(el);
+            encode_qty(&mut enc, res);
+        }
+    }
+    let digest = sha256(&enc.finish());
+    Ok(Witness::new(
+        WitnessKind::Conservation,
+        format!("{FLOW_BALANCE_KEY_PREFIX}{period_id}"),
+        digest,
+    ))
+}
+
+/// Commit-time conservation law (`BD-147`, `INV-005`, `PO-BED-6`) for `L0Ledger::commit_with_conservation`,
+/// `SemanticSegmentWriter::append_with_law`, and `SemanticSegmentWriter::commit_prepared_with_law`.
+///
+/// Inspects every delta under [`FLOW_BALANCE_KEY_PREFIX`] in `batch`, decodes its canonical
+/// [`PeriodBalanceRecord`], verifies exact extensive conservation across every interior node of
+/// `graph` within `tolerance`, checks cross-period inventory continuity (`current.opening ==
+/// previous.closing`) against prior committed state in `ledger` (or earlier in the same batch),
+/// and verifies any attached `WitnessKind::Conservation` digest. Any failure returns `Err(...)`,
+/// causing `fmine-ledger` to refuse the commit with `L0Error::ConservationViolation` (`FMINE-REF-101`,
+/// exit 3) and leave both L0 and L1 state untouched.
+pub fn check_batch_conservation(
+    graph: &FlowGraph,
+    tolerance: &BalanceTolerance,
+    ledger: &L0Ledger,
+    batch: &DeltaBatch,
+) -> Result<(), String> {
+    validate_tolerance(tolerance).map_err(|e| format!("{} ({})", e.to_refusal().code, e))?;
+    let mut in_batch_records: BTreeMap<String, PeriodBalanceRecord> = BTreeMap::new();
+
+    for op in &batch.deltas {
+        if !op.key.starts_with(FLOW_BALANCE_KEY_PREFIX) {
+            continue;
+        }
+        if !matches!(op.kind, DeltaKind::Put | DeltaKind::Supersede) {
+            return Err(format!(
+                "FMINE-REF-101: flow period key '{}' requires Put or Supersede, got {:?}",
+                op.key, op.kind
+            ));
+        }
+        let rec = PeriodBalanceRecord::from_bytes(&op.payload).map_err(|e| {
+            format!(
+                "FMINE-REF-101: invalid flow period payload on '{}': {e}",
+                op.key
+            )
+        })?;
+        let expected_key = rec.delta_key();
+        if op.key != expected_key {
+            return Err(format!(
+                "FMINE-REF-101: delta key '{}' does not match payload period key '{}'",
+                op.key, expected_key
+            ));
+        }
+        let report = verify_period_balance(graph, &rec.flows, &rec.inventories, tolerance)
+            .map_err(|e| format!("{} ({})", e.to_refusal().code, e))?;
+
+        if let Some(prev_id) = &rec.previous_period_id {
+            let prev_rec = if let Some(in_batch) = in_batch_records.get(prev_id) {
+                in_batch.clone()
+            } else {
+                let prev_key = format!("{FLOW_BALANCE_KEY_PREFIX}{prev_id}");
+                let history = ledger.key_history(&batch.cell_id, &prev_key).map_err(|e| {
+                    format!(
+                        "FMINE-REF-101: previous period '{prev_id}' not found in cell '{}': {e}",
+                        batch.cell_id
+                    )
+                })?;
+                let latest = history.last().ok_or_else(|| {
+                    format!(
+                        "FMINE-REF-101: previous period '{prev_id}' has no committed version in cell '{}'",
+                        batch.cell_id
+                    )
+                })?;
+                PeriodBalanceRecord::from_bytes(&latest.payload).map_err(|e| {
+                    format!(
+                        "FMINE-REF-101: committed previous period '{prev_id}' payload corrupt: {e}"
+                    )
+                })?
+            };
+
+            let prev_closing: BTreeMap<&str, &ExtensiveQuantities> = prev_rec
+                .inventories
+                .iter()
+                .map(|inv| (inv.node_id.as_str(), &inv.closing))
+                .collect();
+            let mut seen_nodes: BTreeMap<&str, ()> = BTreeMap::new();
+            for cur_inv in &rec.inventories {
+                seen_nodes.insert(cur_inv.node_id.as_str(), ());
+                let Some(&prior) = prev_closing.get(cur_inv.node_id.as_str()) else {
+                    return Err(format!(
+                        "FMINE-REF-101: node '{}' opening inventory in '{}' has no matching closing inventory in previous period '{prev_id}'",
+                        cur_inv.node_id, rec.period_id
+                    ));
+                };
+                if !extensive_equal(&cur_inv.opening, prior) {
+                    return Err(format!(
+                        "FMINE-REF-101: cross-period inventory continuity violated at node '{}' between '{prev_id}' closing and '{}' opening (no hidden plug)",
+                        cur_inv.node_id, rec.period_id
+                    ));
+                }
+            }
+            let zero_qty = ExtensiveQuantities::zero();
+            for (prior_node, prior_close) in &prev_closing {
+                if !seen_nodes.contains_key(prior_node) && !extensive_equal(prior_close, &zero_qty)
+                {
+                    return Err(format!(
+                        "FMINE-REF-101: node '{prior_node}' carried non-zero closing inventory in '{prev_id}' but was omitted from '{}' inventories",
+                        rec.period_id
+                    ));
+                }
+            }
+        }
+
+        let expected_witness = conservation_witness(&rec.period_id, &report)
+            .map_err(|e| format!("FMINE-REF-101: witness derivation failed: {e}"))?;
+        for w in &batch.witnesses {
+            if w.kind == WitnessKind::Conservation
+                && w.subject_id == op.key
+                && w.digest != expected_witness.digest
+            {
+                return Err(format!(
+                    "FMINE-REF-101: conservation witness digest mismatch on '{}' (expected {}, got {})",
+                    op.key, expected_witness.digest, w.digest
+                ));
+            }
+        }
+
+        in_batch_records.insert(rec.period_id.clone(), rec);
+    }
+
+    Ok(())
+}
+
+/// Reusable commit-time conservation law closure for `L0Ledger::commit_with_conservation`,
+/// `SemanticSegmentWriter::append_with_law`, and `SemanticSegmentWriter::commit_prepared_with_law`
+/// (`BD-147`, `PO-BED-6`).
+pub fn conservation_commit_law<'a>(
+    graph: &'a FlowGraph,
+    tolerance: &'a BalanceTolerance,
+) -> impl Fn(&L0Ledger, &DeltaBatch) -> Result<(), String> + 'a {
+    move |ledger, batch| check_batch_conservation(graph, tolerance, ledger, batch)
 }
 
 #[cfg(test)]
@@ -677,5 +1242,73 @@ mod tests {
         assert!(
             verify_period_balance(&g, &neg_flows, &inv, &BalanceTolerance::exact_zero()).is_err()
         );
+    }
+
+    #[test]
+    fn test_period_balance_codec_canonical_and_negative_tolerance_refusal() {
+        // 1. Canonical FLWB wire roundtrip is order-independent on input Vecs.
+        let rec_a = PeriodBalanceRecord {
+            period_id: "2026-01".to_string(),
+            previous_period_id: None,
+            flows: vec![
+                StreamFlow {
+                    stream_id: "s2".into(),
+                    quantities: qty(800, 40, 1600),
+                },
+                StreamFlow {
+                    stream_id: "s1".into(),
+                    quantities: qty(1000, 50, 2000),
+                },
+            ],
+            inventories: vec![InventoryDelta {
+                node_id: "rom".into(),
+                opening: qty(500, 25, 1000),
+                closing: qty(700, 35, 1400),
+            }],
+        };
+        let rec_b = PeriodBalanceRecord {
+            flows: vec![rec_a.flows[1].clone(), rec_a.flows[0].clone()],
+            ..rec_a.clone()
+        };
+        let bytes_a = rec_a.to_bytes().expect("encode a");
+        let bytes_b = rec_b.to_bytes().expect("encode b");
+        assert_eq!(bytes_a, bytes_b, "FLWB encoding must be canonical");
+        let decoded = PeriodBalanceRecord::from_bytes(&bytes_a).expect("decode");
+        assert_eq!(decoded.flows[0].stream_id, "s1");
+        assert_eq!(decoded.flows[1].stream_id, "s2");
+
+        // 2. Non-canonical unreduced ExactQty (2/4) in wire bytes is refused.
+        let mut enc = Encoder::new_frame(TAG_FLOW_BALANCE, FMT_FLWB_V1);
+        enc.put_str("2026-01");
+        enc.put_u8(0);
+        enc.put_u32(1);
+        enc.put_str("s1");
+        enc.put_i128(2);
+        enc.put_i128(4); // unreduced!
+        enc.put_i128(0);
+        enc.put_i128(1);
+        enc.put_u32(0);
+        enc.put_u32(0);
+        assert!(PeriodBalanceRecord::from_bytes(&enc.finish()).is_err());
+
+        // 3. Self-referential previous_period_id is refused.
+        let self_prev = PeriodBalanceRecord {
+            previous_period_id: Some("2026-01".to_string()),
+            ..rec_a
+        };
+        assert!(self_prev.to_bytes().is_err());
+
+        // 4. Negative tolerance is refused even on a graph with zero interior nodes.
+        let two_node = FlowGraph::build(
+            vec![
+                FlowNode::new("pit", "Pit", NodeClass::BlastedAndDug, false, None).unwrap(),
+                FlowNode::new("mill", "Mill", NodeClass::PlantUnit, false, None).unwrap(),
+            ],
+            vec![FlowStream::new("s1", "pit", "mill", false, ["Au"]).unwrap()],
+        )
+        .unwrap();
+        let mut neg_tol = BalanceTolerance::exact_zero();
+        neg_tol.dry_mass = ExactQty::from_integer(-1);
+        assert!(verify_period_balance(&two_node, &[], &[], &neg_tol).is_err());
     }
 }

@@ -1,9 +1,9 @@
 # CONTRACT.md — `fmine-flow`
 
 ## 1. Purpose
-Touchstone K1 material-flow graph and exact extensive conservation kernel (`BD-146`, plan §20.1–§20.2, `INV-005`, `PO-BED-6`, `G-TOUCH-3`):
+Touchstone K1 material-flow graph and exact extensive conservation kernel (`BD-146`, `BD-147`, plan §20.1–§20.2 & §26.3 `CELL-FLOW`, `INV-005`, `PO-BED-6`, `G-TOUCH-3`):
 - `graph`: mine-to-market directed material-flow graph covering all eight §20.1 node classes (in-situ volumes, blasted/dug, transport, ROM pads/stockpiles/heaps, plant units, products/market, cross-complex/third-party sources, waste/tailings), explicit stockpile mixing models (`WellMixed`, `Fifo`, `Layered`), topology validation (no dangling endpoints, no self-loops, unique IDs), and `G-TOUCH-3` stockpile-decoupling detection;
-- `balance`: exact rational (`ExactQty`) extensive conservation verification (`Σ in − Σ out − Δ inventory = 0` within exact registered tolerance) over dry mass, water, and per-element metal, refusing violations with `FMINE-REF-101` (never clamping or plugging) and computing derived intensive grades (`metal ÷ dry_tonnes`, refusing zero/negative mass rather than plugging).
+- `balance`: exact rational (`ExactQty`) extensive conservation verification (`Σ in − Σ out − Δ inventory = 0` within exact registered tolerance) over dry mass, water, and per-element metal, refusing violations with `FMINE-REF-101` (never clamping or plugging), computing derived intensive grades (`metal ÷ dry_tonnes`, refusing zero/negative mass rather than plugging), and encoding/verifying `CELL-FLOW` period balance records (`FMNE` + `FLWB` v1) as the commit-time conservation law (`check_batch_conservation`, `conservation_commit_law`, `conservation_witness`) wired into `fmine-ledger` on both L0 and L1 (`BD-147`).
 
 - **Crate:** `fmine-flow`
 - **Layer:** K1
@@ -14,7 +14,7 @@ Touchstone K1 material-flow graph and exact extensive conservation kernel (`BD-1
 ## 2. Inputs
 - Pure in-memory `FlowNode` and `FlowStream` declarations validated into a `FlowGraph`.
 - Per-period extensive `PeriodBalanceInput` observations expressed strictly in `fmine_units::ExactQty` (zero bare `f64` parameters in public K-layer signatures, enforcing L-6).
-- Dependencies: `fmine-core`, `fmine-units`, `fmine-evidence` (`K1 → S0`). Performs zero I/O, zero clocks, zero threads.
+- Dependencies: `fmine-core`, `fmine-units`, `fmine-evidence` (`K1 → S0`) and `fmine-ledger` (`K1 → S1`). Production `src/` performs zero I/O, zero clocks, zero threads (`L-3`).
 
 ## 3. Outputs
 - Validated `FlowGraph`, `G-TOUCH-3` decoupling verdicts, `BalanceReport` with exact per-node/per-element residuals (`ExactQty`), derived intensive grades, and `FlowError` mapped to registered `FMINE-REF-*` refusals.
@@ -51,14 +51,14 @@ Not applicable: pure structural graph and exact conservation law checker; caller
 ## 11. Public API
 - `FlowError`
 - `graph::{NodeClass, StockpileMixingModel, FlowNode, FlowStream, FlowGraph}`
-- `balance::{ExtensiveQuantities, StreamFlow, InventoryDelta, BalanceTolerance, NodeResidual, BalanceReport, verify_period_balance, derive_grade}`
+- `balance::{TAG_FLOW_BALANCE, FLOW_BALANCE_KEY_PREFIX, ExtensiveQuantities, StreamFlow, InventoryDelta, BalanceTolerance, NodeResidual, BalanceReport, PeriodBalanceRecord, verify_period_balance, derive_grade, conservation_witness, check_batch_conservation, conservation_commit_law}` (`BD-146`, `BD-147`)
 - `ffactors::{FFactorFamily, FFactorDefinition, ExactPosteriorTriplet, PosteriorFFactor, F3Decomposition, parse_ffactor_registry, compute_posterior_ffactor, decompose_f3, format_exact_pct_4dp, render_ffactor_g_touch_4}` (`BD-148`, `BD-278`, `G-TOUCH-4`, `registries/ffactors.toml`)
 - `r0_parity::{SitePackRow, R0ParityRowVerdict, R0ParityReport, run_r0_site_parity}` (`BD-160`, R0 site-convention parity mode)
 - `verbatim_table::{RowRole, DerivedGrade, DiscrepancyKind, DiscrepancyRecord, VerbatimTableRowInput, ImportedReconciliationRow, VerbatimRatioRowInput, VerbatimRatioAudit, grams_per_troy_oz, import_verbatim_table_row, audit_verbatim_ratio_row}` (`BD-279`, `G-TOUCH-6`, `E206–E209`)
 - `compensation::{CompensationClass, WithinFactorInput, InvestigationTrigger, WithinFactorVerdict, AnnualFactorRow, SignedBiasPrior, McfCheckOutDivergence, MultiYearSeriesAudit, detect_within_factor_compensation, audit_mcf_checkout_vs_checkin, audit_multi_year_series}` (`BD-280`, §20.4–§20.5, `E154–E156`, `KA-TOUCH-KIBALI-2016-2025` `E210–E212`)
 
 ## 12. Proof obligations
-- `PO-BED-6` / `INV-005` (exact extensive conservation at commit, no plugs): `balance::tests::test_exact_conservation_closure_and_refusal_no_plug`, `balance::tests::test_stockpile_split_merge_metamorphic_conservation`.
+- `PO-BED-6` / `INV-005` / `BD-147` (exact extensive conservation at commit on L0 and L1, cross-period inventory continuity, witness verification, narrow-combiner rebase, no plugs): `balance::tests::test_exact_conservation_closure_and_refusal_no_plug`, `balance::tests::test_stockpile_split_merge_metamorphic_conservation`, `tests/conservation_at_commit.rs::test_po_bed_6_conservation_at_commit_on_l0_and_l1_refuses_plug_and_preserves_state`, `tests/conservation_at_commit.rs::test_po_bed_6_conservation_enforced_under_l1_narrow_combiner_rebase`.
 - `G-TOUCH-3` / `BD-146` (graph invariants & stockpile decoupling): `graph::tests::test_flow_graph_invariants_and_g_touch_3_decoupling`.
 - `G-TOUCH-4` / `BD-278` (site-specific F-factor & MCF registry keys + versioned renders): `ffactors::tests::test_site_specific_ffactor_registry_and_g_touch_4_rendering`.
 - `BD-160` (R0 parity mode reproducing synthetic site packs): `r0_parity::tests::test_r0_parity_reproduces_synthetic_site_packs_and_enforces_profile_isolation`.
