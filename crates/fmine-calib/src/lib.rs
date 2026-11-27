@@ -881,7 +881,12 @@ impl DualSurpriseMonitor {
         let mut cusum = self.cusum.clone();
         let cusum_snap = cusum.observe(z).map_err(refuse_cu)?;
 
-        let n = self.n + 1;
+        let n = self.n.checked_add(1).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                "DualSurpriseMonitor observation counter overflowed u64::MAX",
+            )
+        })?;
         let ep_now = loc.rejected_null() || disp.rejected_null();
         if ep_now && self.first_eproc_alarm.is_none() {
             self.first_eproc_alarm = Some(n);
@@ -969,7 +974,7 @@ fn ln_gamma_portable(z: f64) -> f64 {
         x += coeff / (zm1 + (idx as f64));
     }
     let t = zm1 + 7.5;
-    0.5 * det::ln(2.0 * std::f64::consts::PI) + (zm1 + 0.5) * det::ln(t) - t + det::ln(x)
+    0.5 * LN_2PI + (zm1 + 0.5) * det::ln(t) - t + det::ln(x)
 }
 
 /// Lentz continued fraction for the incomplete beta function `I_x(a, b)` (`BitwisePortable`).
@@ -1070,16 +1075,17 @@ fn student_t_quantile_90(nu: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
-/// Online conjugate Normal-Inverse-Gamma sufficient statistics for residual errors `e = y - mu_raw`,
-/// producing exact finite-sample Student-t 80% predictive intervals.
+/// Online conjugate Normal-Inverse-Gamma sufficient statistics for dimensionless standardized
+/// innovation residuals `z = (y - mu_raw) / sigma_raw`, producing scale-equivariant,
+/// heteroscedastic finite-sample Student-t 80% predictive intervals.
 #[derive(Debug, Clone)]
 struct ConjugateResidualSegment {
     prior_kappa: f64,
     prior_alpha: f64,
     prior_scale_mult: f64,
     n: u64,
-    mean_err: f64,
-    m2_err: f64,
+    mean_z: f64,
+    m2_z: f64,
 }
 
 impl ConjugateResidualSegment {
@@ -1089,18 +1095,23 @@ impl ConjugateResidualSegment {
             prior_alpha,
             prior_scale_mult,
             n: 0,
-            mean_err: 0.0,
-            m2_err: 0.0,
+            mean_z: 0.0,
+            m2_z: 0.0,
         }
     }
 
-    fn try_observe_error(&mut self, err: f64) -> Result<(), Refusal> {
-        let next_n = self.n + 1;
+    fn try_observe_z(&mut self, z: f64) -> Result<(), Refusal> {
+        let next_n = self.n.checked_add(1).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                "ConjugateResidualSegment observation counter overflowed u64::MAX",
+            )
+        })?;
         let nf = next_n as f64;
-        let delta = err - self.mean_err;
-        let next_mean = self.mean_err + delta / nf;
-        let delta2 = err - next_mean;
-        let next_m2 = self.m2_err + delta * delta2;
+        let delta = z - self.mean_z;
+        let next_mean = self.mean_z + delta / nf;
+        let delta2 = z - next_mean;
+        let next_m2 = self.m2_z + delta * delta2;
         let kappa_n = self.prior_kappa + nf;
         let shrink_term = 0.5 * (self.prior_kappa * (nf / kappa_n)) * (next_mean * next_mean);
         if !(next_mean.is_finite() && next_m2.is_finite() && shrink_term.is_finite()) {
@@ -1110,23 +1121,22 @@ impl ConjugateResidualSegment {
             ));
         }
         self.n = next_n;
-        self.mean_err = next_mean;
-        self.m2_err = next_m2;
+        self.mean_z = next_mean;
+        self.m2_z = next_m2;
         Ok(())
     }
 
     fn predict_80(&self, raw: RawForecast) -> Result<PredictiveInterval80, Refusal> {
         let nf = self.n as f64;
         let kappa_n = self.prior_kappa + nf;
-        let mu_n = (nf * self.mean_err) / kappa_n;
+        let mu_z = (nf * self.mean_z) / kappa_n;
         let alpha_n = self.prior_alpha + 0.5 * nf;
-        let prior_sd = self.prior_scale_mult * raw.std_dev;
-        let beta_0 = self.prior_alpha * prior_sd * prior_sd;
+        let beta_0 = self.prior_alpha * self.prior_scale_mult * self.prior_scale_mult;
         let beta_n = beta_0
-            + 0.5 * self.m2_err
-            + 0.5 * (self.prior_kappa * (nf / kappa_n)) * (self.mean_err * self.mean_err);
-        let pred_var = (beta_n / alpha_n) * ((kappa_n + 1.0) / kappa_n);
-        if !(pred_var.is_finite() && pred_var > 0.0) {
+            + 0.5 * self.m2_z
+            + 0.5 * (self.prior_kappa * (nf / kappa_n)) * (self.mean_z * self.mean_z);
+        let pred_var_z = (beta_n / alpha_n) * ((kappa_n + 1.0) / kappa_n);
+        if !(pred_var_z.is_finite() && pred_var_z > 0.0) {
             return Err(Refusal::new(
                 RefusalCode::NumericalCertificateFailed207,
                 "LayeredRecalibrator predictive variance is non-finite or non-positive",
@@ -1134,8 +1144,8 @@ impl ConjugateResidualSegment {
         }
         let nu = 2.0 * alpha_n;
         let t_crit = student_t_quantile_90(nu);
-        let half_width = t_crit * det::sqrt(pred_var);
-        let center = raw.mean + mu_n;
+        let half_width = t_crit * det::sqrt(pred_var_z) * raw.std_dev;
+        let center = raw.mean + mu_z * raw.std_dev;
         let lower = center - half_width;
         let upper = center + half_width;
         if !(center.is_finite()
@@ -1289,7 +1299,7 @@ impl LayeredRecalibrator {
         let was_alarmed = self.monitor.snapshot().any_alarm;
         let mut next_post = self.post_alarm.clone();
         if was_alarmed {
-            next_post.try_observe_error(err)?;
+            next_post.try_observe_z(z)?;
         }
         // L5 logs the resolution; if L5 fails, neither monitor nor post_alarm is mutated.
         let snap = self.monitor.observe(StandardizedResidual(z))?;
@@ -1336,13 +1346,14 @@ impl GlobalPosteriorBaseline {
             ));
         }
         let err = outcome.0 - raw.mean;
-        if !err.is_finite() {
+        let z = err / raw.std_dev;
+        if !(err.is_finite() && z.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NumericalCertificateFailed207,
                 "overflow computing residual for GlobalPosteriorBaseline",
             ));
         }
-        self.segment.try_observe_error(err)
+        self.segment.try_observe_z(z)
     }
 }
 
@@ -1461,22 +1472,151 @@ mod tests {
             RefusalCode::NumericalCertificateFailed207.as_str()
         );
 
-        // Overflow in residual moment update refuses atomically without corrupting global baseline.
-        let before_iv = global.predict(raw).expect("before huge error");
+        // Extreme standardized residual (z = 1e200) overflows moments and refuses atomically.
+        let before_iv = global.predict(raw).expect("before huge z");
         assert_eq!(
             global
                 .observe_resolution(
                     RawForecast {
                         mean: 0.0,
-                        std_dev: 1e199,
+                        std_dev: 1e-100,
                     },
-                    ForecastOutcome(1e200),
+                    ForecastOutcome(1e100),
                 )
                 .unwrap_err()
                 .code,
             RefusalCode::NumericalCertificateFailed207.as_str()
         );
         assert_eq!(global.predict(raw).expect("unchanged"), before_iv);
+
+        // Large physical units with moderate standardized residual (z = 10) succeed without overflow.
+        global
+            .observe_resolution(
+                RawForecast {
+                    mean: 0.0,
+                    std_dev: 1e199,
+                },
+                ForecastOutcome(1e200),
+            )
+            .expect("dimensionless z=10 succeeds");
+    }
+
+    #[test]
+    fn test_layered_recalibrator_scale_equivariance_heteroscedasticity_and_determinism() {
+        let cfg = LayeredConfig {
+            monitor: DualSurpriseConfig {
+                eproc_alpha: 0.04,
+                cusum_k: 0.5,
+                cusum_h: 8.5,
+                alarm_scale: 1.5,
+            },
+            prior_kappa: 0.25,
+            prior_alpha: 1.0,
+            prior_scale_mult: 1.0,
+        };
+        let scale = 1_000_000.0;
+        let mut a = LayeredRecalibrator::new(cfg).expect("stack a");
+        let mut a_dup = LayeredRecalibrator::new(cfg).expect("stack a_dup");
+        let mut b = LayeredRecalibrator::new(cfg).expect("stack b");
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: 0x0259_5CA1,
+            partition: 259,
+            domain: 9,
+            var_group: 1,
+            realization: 0,
+            brick: 0,
+        });
+
+        for t in 0..50 {
+            let sd = if t % 2 == 0 { 0.05 } else { 0.50 };
+            let mean = 10.0 + 0.1 * (t as f64);
+            let raw_a = RawForecast { mean, std_dev: sd };
+            let raw_b = RawForecast {
+                mean: mean * scale,
+                std_dev: sd * scale,
+            };
+            let pred_a = a.predict(raw_a).expect("pred a");
+            let pred_dup = a_dup.predict(raw_a).expect("pred dup");
+            let pred_b = b.predict(raw_b).expect("pred b");
+
+            // Bitwise determinism across identical runs.
+            assert_eq!(
+                pred_a.published_interval_80.center.to_bits(),
+                pred_dup.published_interval_80.center.to_bits()
+            );
+            assert_eq!(
+                pred_a.published_interval_80.half_width.to_bits(),
+                pred_dup.published_interval_80.half_width.to_bits()
+            );
+
+            // Exact scale equivariance across 10^6 unit rescaling.
+            assert_eq!(pred_a.alarmed, pred_b.alarmed);
+            assert_eq!(pred_a.post_alarm_resolutions, pred_b.post_alarm_resolutions);
+            let rel_center = (pred_b.published_interval_80.center
+                - pred_a.published_interval_80.center * scale)
+                .abs()
+                / (pred_a.published_interval_80.center.abs() * scale).max(1.0);
+            let rel_hw = (pred_b.published_interval_80.half_width
+                - pred_a.published_interval_80.half_width * scale)
+                .abs()
+                / (pred_a.published_interval_80.half_width * scale);
+            assert!(
+                rel_center < 1e-12 && rel_hw < 1e-12,
+                "t={t}: scale equivariance drift rel_center={rel_center}, rel_hw={rel_hw}"
+            );
+
+            // Inject +2.0 sigma standardized shift from t >= 15.
+            let z_true = if t < 15 {
+                rng.next_normal()
+            } else {
+                2.0 + rng.next_normal()
+            };
+            let y_a = ForecastOutcome(mean + z_true * sd);
+            let y_b = ForecastOutcome((mean + z_true * sd) * scale);
+            a.observe_resolution(raw_a, y_a).expect("obs a");
+            a_dup.observe_resolution(raw_a, y_a).expect("obs dup");
+            b.observe_resolution(raw_b, y_b).expect("obs b");
+        }
+
+        // Heteroscedastic proportionality: after adapting, odd sd (0.50) gives exactly 10x the
+        // half-width of even sd (0.05) at the same state.
+        assert!(a.monitor_snapshot().any_alarm);
+        let iv_small = a
+            .predict(RawForecast {
+                mean: 10.0,
+                std_dev: 0.05,
+            })
+            .expect("small sd")
+            .published_interval_80;
+        let iv_large = a
+            .predict(RawForecast {
+                mean: 10.0,
+                std_dev: 0.50,
+            })
+            .expect("large sd")
+            .published_interval_80;
+        let ratio = iv_large.half_width / iv_small.half_width;
+        assert!(
+            (ratio - 10.0).abs() < 1e-12,
+            "heteroscedastic half-width ratio expected 10.0, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn test_student_t_quantile_90_monotone_through_large_nu() {
+        let nus = [
+            1.0, 2.0, 4.0, 10.0, 50.0, 500.0, 10_000.0, 100_000.0, 500_000.0, 999_999.0,
+        ];
+        let mut prev = f64::INFINITY;
+        for &nu in &nus {
+            let q = student_t_quantile_90(nu);
+            assert!(
+                q.is_finite() && q > Q90_NORMAL && q < prev,
+                "t_0.90(nu={nu}) = {q} violated monotonicity/bound (prev={prev})"
+            );
+            prev = q;
+        }
+        assert_eq!(student_t_quantile_90(2e6).to_bits(), Q90_NORMAL.to_bits());
     }
 
     #[test]

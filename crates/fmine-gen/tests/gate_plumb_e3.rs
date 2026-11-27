@@ -144,6 +144,11 @@ where
                 .expect("global observe");
 
             if alarm_step.is_none() && snap.any_alarm {
+                assert_eq!(
+                    snap.first_any_alarm,
+                    Some((t + 1) as u64),
+                    "first_any_alarm must match exact transition period"
+                );
                 alarm_step = Some(t + 1);
             }
         }
@@ -231,9 +236,33 @@ fn test_gate_plumb_e3_layered_stack_restores_coverage_while_global_posterior_fai
         (ys, CAPEX_BASE_SIGMA)
     });
 
+    // 3. Regime C: Pure zero-mean 2.5x dispersion explosion at t = 60 (verifies the dispersion
+    // e-process -> L3 Student-t coverage-restoration path when CUSUM has no mean shift).
+    let dispersion = evaluate_regime(REPLICATE_WORLDS, |w| {
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: GATE_PLUMB_E3_SEED_BASE + 30_000,
+            partition: 259,
+            domain: 3,
+            var_group: 1,
+            realization: w as u32,
+            brick: 0,
+        });
+        let mut ys = Vec::with_capacity(PERIODS);
+        for t in 0..PERIODS {
+            let sd = if t < PERIODS / 2 {
+                CAPEX_BASE_SIGMA
+            } else {
+                2.5 * CAPEX_BASE_SIGMA
+            };
+            ys.push(sd * rng.next_normal());
+        }
+        (ys, CAPEX_BASE_SIGMA)
+    });
+
     for (name, res) in [
         ("out_of_model_fault", &fault),
         ("biased_capex_process", &capex),
+        ("pure_dispersion_shift", &dispersion),
     ] {
         assert!(
             res.worlds_with_full_window >= 190,
@@ -329,6 +358,7 @@ fn test_gate_plumb_e3_layered_stack_restores_coverage_while_global_posterior_fai
         "{{\"gate\":\"GATE-PLUMB-E3\",\"seed_base\":{GATE_PLUMB_E3_SEED_BASE},\"replicates\":{REPLICATE_WORLDS},\"window\":{POST_ALARM_WINDOW},\
           \"fault\":{{\"alarmed\":{},\"full_window\":{},\"median_alarm\":{},\"layered_cov_1_12\":{:.5},\"layered_cov_4_12\":{:.5},\"layered_cov_at_12\":{:.5},\"global_cov_1_12\":{:.5},\"global_cov_at_12\":{:.5},\"raw_cov_1_12\":{:.5}}},\
           \"capex\":{{\"alarmed\":{},\"full_window\":{},\"median_alarm\":{},\"layered_cov_1_12\":{:.5},\"layered_cov_4_12\":{:.5},\"layered_cov_at_12\":{:.5},\"global_cov_1_12\":{:.5},\"global_cov_at_12\":{:.5},\"raw_cov_1_12\":{:.5}}},\
+          \"dispersion\":{{\"alarmed\":{},\"full_window\":{},\"median_alarm\":{},\"layered_cov_1_12\":{:.5},\"layered_cov_4_12\":{:.5},\"layered_cov_at_12\":{:.5},\"global_cov_1_12\":{:.5},\"global_cov_at_12\":{:.5},\"raw_cov_1_12\":{:.5}}},\
           \"control\":{{\"worlds\":{CONTROL_WORLDS},\"alarms\":{ctrl_alarms},\"cp95\":{ctrl_cp95:.5},\"sharpness_loss\":{ctrl_sharpness_loss:.5}}}}}",
         fault.alarmed_worlds,
         fault.worlds_with_full_window,
@@ -348,5 +378,14 @@ fn test_gate_plumb_e3_layered_stack_restores_coverage_while_global_posterior_fai
         capex.global_cov_1_12,
         capex.global_cov_at_12,
         capex.raw_cov_1_12,
+        dispersion.alarmed_worlds,
+        dispersion.worlds_with_full_window,
+        dispersion.median_alarm_period,
+        dispersion.layered_cov_1_12,
+        dispersion.layered_cov_4_12,
+        dispersion.layered_cov_at_12,
+        dispersion.global_cov_1_12,
+        dispersion.global_cov_at_12,
+        dispersion.raw_cov_1_12,
     );
 }

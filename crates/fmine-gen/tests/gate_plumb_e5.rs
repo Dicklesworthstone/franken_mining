@@ -421,8 +421,8 @@ fn test_gate_plumb_e5_control_mine_false_alarm_sharpness_and_power() {
     println!(
         "{{\"gate\":\"GATE-PLUMB-E5\",\"seed_base\":{GATE_PLUMB_E5_SEED_BASE},\"n_control\":{CONTROL_RUNS},\"periods\":{PERIODS_PER_RUN},\
           \"alpha\":{ALPHA_TARGET},\"cusum_k\":{CUSUM_K},\"cusum_h\":{CUSUM_H},\"l3_scale\":{L3_ALARM_SCALE},\
-          \"ctrl_forecast\":{{\"eproc_alarms\":{},\"eproc_cp95\":{:.5},\"cusum_alarms\":{},\"cusum_cp95\":{:.5},\"combined_alarms\":{},\"combined_cp95\":{:.5},\"sharpness_loss\":{:.5},\"crps_loss\":{:.5},\"raw_cov80\":{:.5},\"layered_cov80\":{:.5}}},\
-          \"ctrl_recon\":{{\"eproc_alarms\":{},\"eproc_cp95\":{:.5},\"cusum_alarms\":{},\"cusum_cp95\":{:.5},\"combined_alarms\":{},\"combined_cp95\":{:.5},\"sharpness_loss\":{:.5},\"crps_loss\":{:.5},\"raw_cov80\":{:.5},\"layered_cov80\":{:.5}}},\
+          \"ctrl_forecast\":{{\"eproc_alarms\":{},\"eproc_cp95\":{:.5},\"cusum_alarms\":{},\"cusum_cp95\":{:.5},\"combined_alarms\":{},\"combined_cp95\":{:.5},\"sharpness_loss\":{:.5},\"crps_loss\":{:.5},\"winkler_loss\":{:.5},\"raw_cov80\":{:.5},\"layered_cov80\":{:.5}}},\
+          \"ctrl_recon\":{{\"eproc_alarms\":{},\"eproc_cp95\":{:.5},\"cusum_alarms\":{},\"cusum_cp95\":{:.5},\"combined_alarms\":{},\"combined_cp95\":{:.5},\"sharpness_loss\":{:.5},\"crps_loss\":{:.5},\"winkler_loss\":{:.5},\"raw_cov80\":{:.5},\"layered_cov80\":{:.5}}},\
           \"fault_power\":{{\"n\":{SHIFTED_RUNS},\"eproc\":{},\"cusum\":{},\"median_eproc\":{},\"median_cusum\":{},\"raw_cov80\":{:.5},\"layered_cov80\":{:.5}}},\
           \"bias_power\":{{\"n\":{SHIFTED_RUNS},\"eproc\":{},\"cusum\":{},\"median_eproc\":{},\"median_cusum\":{}}},\
           \"neg_controls\":{{\"mistuned_cusum_cp95\":{:.5},\"leaked_bias_cp95\":{:.5},\"unconditional_sharpness_loss\":{:.5}}}}}",
@@ -434,6 +434,7 @@ fn test_gate_plumb_e5_control_mine_false_alarm_sharpness_and_power() {
         ctrl_forecast.combined_cp_upper_95,
         ctrl_forecast.sharpness_loss_fraction,
         ctrl_forecast.crps_loss_fraction,
+        ctrl_forecast.winkler_loss_fraction,
         ctrl_forecast.raw_coverage_80,
         ctrl_forecast.layered_coverage_80,
         ctrl_recon.eproc_alarms,
@@ -444,6 +445,7 @@ fn test_gate_plumb_e5_control_mine_false_alarm_sharpness_and_power() {
         ctrl_recon.combined_cp_upper_95,
         ctrl_recon.sharpness_loss_fraction,
         ctrl_recon.crps_loss_fraction,
+        ctrl_recon.winkler_loss_fraction,
         ctrl_recon.raw_coverage_80,
         ctrl_recon.layered_coverage_80,
         fault_shift.eproc_alarms,
