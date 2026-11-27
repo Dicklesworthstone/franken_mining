@@ -444,10 +444,12 @@ impl L0Ledger {
         Ok(cell.authority.transfer_lease(new_holder)?)
     }
 
-    /// Commit a batch under the active writer lease with an optional conservation check (`PO-BED-6`).
+    /// Commit a batch under the active writer lease with a commit-time law (`BD-086`; conservation, `PO-BED-6`).
     ///
-    /// Atomic: if conservation, fencing, chain continuity, or append-only key/obligation semantics
-    /// fail, ZERO state is mutated.
+    /// The law runs where the durable writer's does ([`crate::segment::SemanticSegmentWriter::append_with_law`]):
+    /// after fencing, lease, chain continuity and append-only key/obligation semantics admit the batch, and
+    /// before anything changes. It sees the ledger before the commit and the whole batch; its refusal is
+    /// [`L0Error::ConservationViolation`] (`FMINE-REF-101`). Atomic: any refusal leaves ZERO state mutated.
     pub fn commit_with_conservation<F>(
         &mut self,
         lease: &CellLease,
@@ -455,15 +457,9 @@ impl L0Ledger {
         check_conservation: F,
     ) -> Result<Digest32, L0Error>
     where
-        F: FnOnce(&DeltaBatch) -> Result<(), String>,
+        F: FnOnce(&Self, &DeltaBatch) -> Result<(), String>,
     {
-        if let Err(detail) = check_conservation(&batch) {
-            return Err(L0Error::ConservationViolation {
-                cell_id: batch.cell_id,
-                detail,
-            });
-        }
-        let cell = self.cell_mut(&lease.cell_id)?;
+        let cell = self.cell(&lease.cell_id)?;
         if lease.epoch < cell.authority.highest_seen_epoch() {
             return Err(LedgerError::EpochRegression {
                 cell_id: lease.cell_id.clone(),
@@ -483,6 +479,11 @@ impl L0Ledger {
         }
         cell.authority.check_received_batch(&batch)?;
         cell.check_semantics(&batch)?;
+        check_conservation(self, &batch).map_err(|detail| L0Error::ConservationViolation {
+            cell_id: batch.cell_id.clone(),
+            detail,
+        })?;
+        let cell = self.cell_mut(&lease.cell_id)?;
         let digest = cell.authority.commit_with_lease(lease, batch.clone())?;
         cell.apply_semantics(&batch);
         Ok(digest)
@@ -490,7 +491,7 @@ impl L0Ledger {
 
     /// Commit a batch under the active writer lease (no extra conservation law).
     pub fn commit(&mut self, lease: &CellLease, batch: DeltaBatch) -> Result<Digest32, L0Error> {
-        self.commit_with_conservation(lease, batch, |_| Ok(()))
+        self.commit_with_conservation(lease, batch, |_, _| Ok(()))
     }
 
     /// Read the current `Put`/`Supersede` version or absence as an opt-in schema-v2 witness.
@@ -1054,7 +1055,7 @@ mod tests {
             Vec::new(),
         );
         let cons_err = l0
-            .commit_with_conservation(&lease1, bad_cons, |_| Err("in - out = +5 t".to_string()))
+            .commit_with_conservation(&lease1, bad_cons, |_, _| Err("in - out = +5 t".to_string()))
             .unwrap_err();
         assert_eq!(cons_err.to_refusal().code, "FMINE-REF-101");
         assert_eq!(l0.committed_count("CELL-FLOW(site-a)").unwrap(), 1);

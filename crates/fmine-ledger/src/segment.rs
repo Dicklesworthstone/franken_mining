@@ -1694,6 +1694,110 @@ mod tests {
     }
 
     #[test]
+    fn commit_time_law_reads_pre_commit_state_and_refuses_alike_on_both_rungs() {
+        // BD-086: one law, run by L0 and by the durable writer. It reads the grade the ledger holds before the
+        // commit and refuses a batch that lowers it.
+        fn grade_never_falls(state: &L0Ledger, batch: &DeltaBatch) -> Result<(), String> {
+            let held = state
+                .key_history(&batch.cell_id, "grade")
+                .map_err(|e| e.to_string())?;
+            let Some(held) = held.last() else {
+                return Ok(());
+            };
+            match batch.deltas.iter().find(|op| op.key == "grade") {
+                Some(op) if op.payload < held.payload => Err(format!(
+                    "grade falls from {:?} to {:?}",
+                    held.payload, op.payload
+                )),
+                _ => Ok(()),
+            }
+        }
+        let path = scratch_path("law-parity");
+        let mut writer = SemanticSegmentWriter::create(&path, "CELL-EVID(test)").unwrap();
+        let mut reference = L0Ledger::new();
+        let lease = reference.create_cell("CELL-EVID(test)", "writer").unwrap();
+        let first = semantic_batch(
+            0,
+            GENESIS_PREV_HASH,
+            vec![DeltaOp::new("grade", DeltaKind::Put, b"42".to_vec())],
+            Vec::new(),
+        );
+        let head = writer.append_with_law(&first, grade_never_falls).unwrap();
+        assert_eq!(
+            reference
+                .commit_with_conservation(&lease, first, grade_never_falls)
+                .unwrap(),
+            head
+        );
+        let bytes = std::fs::read(&path).unwrap();
+        let state = writer.snapshot().unwrap();
+        let read = writer.key_witness("grade").unwrap();
+        let supersede = |payload: &[u8]| {
+            semantic_batch(
+                1,
+                head,
+                vec![DeltaOp::new(
+                    "grade",
+                    DeltaKind::Supersede,
+                    payload.to_vec(),
+                )],
+                vec![read.clone()],
+            )
+        };
+
+        // The law refuses on both rungs with FMINE-REF-101, and neither changes.
+        let lower = supersede(b"41");
+        let durable = writer
+            .append_with_law(&lower, grade_never_falls)
+            .unwrap_err();
+        let oracle = reference
+            .commit_with_conservation(&lease, lower, grade_never_falls)
+            .unwrap_err();
+        assert_eq!(durable.to_refusal().code, "FMINE-REF-101");
+        assert_eq!(oracle.to_refusal().code, "FMINE-REF-101");
+        assert_eq!(oracle.to_string(), durable.to_string());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(writer.snapshot().unwrap(), state);
+        assert_eq!(reference.as_of_seq("CELL-EVID(test)", 1).unwrap(), state);
+        assert_eq!(reference.committed_count("CELL-EVID(test)").unwrap(), 1);
+
+        // A batch the ledger refuses anyway is refused for that reason on both rungs: the law never sees it.
+        let duplicate = semantic_batch(
+            1,
+            head,
+            vec![DeltaOp::new("grade", DeltaKind::Put, b"40".to_vec())],
+            Vec::new(),
+        );
+        let durable = writer
+            .append_with_law(&duplicate, |_, _| {
+                panic!("the law saw an inadmissible batch")
+            })
+            .unwrap_err();
+        let oracle = reference
+            .commit_with_conservation(&lease, duplicate, |_, _| {
+                panic!("the law saw an inadmissible batch")
+            })
+            .unwrap_err();
+        assert!(matches!(durable, L0Error::KeyAlreadyExists { .. }));
+        assert_eq!(oracle.to_refusal().code, durable.to_refusal().code);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        // A batch the law admits commits on both with one digest and one state.
+        let higher = supersede(b"43");
+        let digest = writer.append_with_law(&higher, grade_never_falls).unwrap();
+        assert_eq!(
+            reference
+                .commit_with_conservation(&lease, higher, grade_never_falls)
+                .unwrap(),
+            digest
+        );
+        assert_eq!(
+            writer.snapshot().unwrap(),
+            reference.as_of_seq("CELL-EVID(test)", 2).unwrap()
+        );
+    }
+
+    #[test]
     fn semantic_open_refuses_hash_valid_stale_history_without_changing_it() {
         let path = scratch_path("semantic-corrupt");
         let mut state = L0Ledger::new();
