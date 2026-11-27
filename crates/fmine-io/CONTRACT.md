@@ -799,3 +799,18 @@ local test authority is an independent time witness. Its input fingerprints perm
   Synthetic controls in `tests/acquire_drill.rs` check the positive imported trace, known coordinates,
   source-order invariance, source retention and the admission/refusal cases above; authentic vendor parity
   and declaration accuracy remain unestablished.
+- DESIGN (BD-166, BD-188): `acquire::composite::prepare_composites` connects prepared assay intervals to
+  the existing length-weighted kernel. Explicit domain runs tile every hole from zero through MAXDEPTH,
+  without overlaps or gaps; composites never cross a domain contact. One selected column, method, unit,
+  basis, length and residual rule govern the projection. Present method labels and numeric unit/basis
+  declarations must agree; absent method labels are marked as supplied assumptions. The caller checks
+  the selected column's PointCore support in the original import report, where that metadata resides.
+  Censored observations contribute `[0, DL]`; placeholders and absent selected cells remain source
+  observations without numeric weight. Sampled and unsampled lengths include gaps with no source row,
+  and every numeric contributor retains its exact original readings and source index. The selected column
+  must occur in at least one source observation, so a typo cannot silently produce an all-missing result.
+  Kept and dropped residuals conserve weighted value bounds to the kernel's 1e-12 relative tolerance.
+  All holes together are limited to 20,000 pieces, including dropped residuals, before kernel allocation.
+  `tests/acquire_composite.rs` checks hand-worked grades and bounds, coverage, domain contacts, every
+  residual rule, source-order invariance, metadata refusals and the allocation boundary. This projection
+  does not establish assay QA/QC, estimate eligibility or a whole-interval grade across missing support.

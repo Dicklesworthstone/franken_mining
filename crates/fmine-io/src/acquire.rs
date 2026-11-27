@@ -23,6 +23,7 @@
 //!   [`AcquireExportBundle::rejected_rows`] with table, 1-based row number, column, raw value,
 //!   registered `FMINE-REF-*` code, explanation, and fix.
 
+pub mod composite;
 pub mod drill;
 
 use std::cmp::Ordering;
