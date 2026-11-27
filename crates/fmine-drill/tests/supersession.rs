@@ -27,9 +27,10 @@ use fmine_drill::store::{
 mod fixtures;
 
 use fixtures::{
-    collar, crm, dispatch, duplicate, interval, linked_set, qc_material, result, sample, survey,
+    collar, crm, dispatch, duplicate, interval, linked_set, loss, qc_material, result, sample,
+    survey,
 };
-use fmine_drill::records::{BlankStage, QcInsertion, QcKind};
+use fmine_drill::records::{AssayResult, BlankStage, QcInsertion, QcKind, SampleLoss};
 
 const CELL: &str = "CELL-SITE(drill-test)";
 const EPOCH: u64 = 1;
@@ -466,6 +467,55 @@ fn test_the_law_refuses_dangling_and_inconsistent_records_and_writes_nothing() {
                     "R-5", "S-0003", "D-02", "LAB-A", None,
                 ))),
             ],
+            LAW,
+        );
+        // OB-LAB: a result arrives, or a loss is declared, after its dispatch left, for a sample it lists.
+        refuses(
+            r,
+            "a result received before its dispatch left",
+            &[put(DrillRecord::AssayResult(AssayResult {
+                received_at_ns: 1_790_000_399_999_999_999,
+                ..result("R-6", "S-0001", "D-01", "LAB-A", None)
+            }))],
+            LAW,
+        );
+        refuses(
+            r,
+            "a loss of a sample its dispatch does not list",
+            &[put(DrillRecord::SampleLoss(loss("L-2", "D-01", "S-0003")))],
+            LAW,
+        );
+        refuses(
+            r,
+            "a loss declared before its dispatch left",
+            &[put(DrillRecord::SampleLoss(SampleLoss {
+                declared_at_ns: 1_790_000_000_000_000_000,
+                ..loss("L-2", "D-01", "S-0001")
+            }))],
+            LAW,
+        );
+        refuses(
+            r,
+            "a loss naming an unrecorded dispatch",
+            &[put(DrillRecord::SampleLoss(loss("L-2", "D-77", "S-0001")))],
+            LAW,
+        );
+        refuses(
+            r,
+            "a result correction that moves it to another sample",
+            &[supersede(
+                DrillRecord::AssayResult(result("R-1", "S-0002", "D-01", "LAB-A", Some("C-77"))),
+                "wrong bag",
+            )],
+            LAW,
+        );
+        refuses(
+            r,
+            "a loss correction that moves it to another sample",
+            &[supersede(
+                DrillRecord::SampleLoss(loss("L-1", "D-01", "S-0001")),
+                "wrong bag",
+            )],
             LAW,
         );
         refuses(

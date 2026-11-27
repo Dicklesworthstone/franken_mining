@@ -1658,7 +1658,8 @@ mod tests {
         // bd-uoze adds the exact two-parcel blend solver (fmine-optimize::cutoff::blend).
         // BD-164 adds the minimum-curvature desurvey (fmine-drill::desurvey).
         // BD-166 adds length- and mass-weighted compositing (fmine-drill::composite).
-        assert_eq!(report.bitwise_files, 149, "{report:?}");
+        // BD-172 adds the OB-LAB fold (fmine-drill::lab).
+        assert_eq!(report.bitwise_files, 150, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

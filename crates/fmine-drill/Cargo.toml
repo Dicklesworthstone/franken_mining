@@ -15,3 +15,4 @@ fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-ledger = { path = "../fmine-ledger" }
+fmine-runtime = { path = "../fmine-runtime" }

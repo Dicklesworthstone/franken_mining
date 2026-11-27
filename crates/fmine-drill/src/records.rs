@@ -180,6 +180,8 @@ tagged_enum! {
         QcInsertion = 7, "qc";
         /// [`LabCertificate`].
         LabCertificate = 8, "certificate";
+        /// [`SampleLoss`].
+        SampleLoss = 9, "loss";
     }
 }
 
@@ -590,6 +592,24 @@ pub struct AssayResult {
     pub certificate: CertificateRef,
     /// QA/QC regime of the campaign.
     pub qaqc_regime: QaqcRegime,
+    /// When the result was received from the lab, ns since the Unix epoch, UTC; not before its dispatch.
+    pub received_at_ns: i64,
+}
+
+/// A dispatched sample declared lost with the QA/QC finding that says so (`OB-LAB`, plan §12.4): it closes the
+/// sample's lab obligation without a result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SampleLoss {
+    /// Declaration id; the record's id.
+    pub loss_id: String,
+    /// The dispatch that sent the sample; it lists the sample.
+    pub dispatch_id: String,
+    /// The lost sample.
+    pub sample_id: String,
+    /// When the loss was declared, ns since the Unix epoch, UTC; not before the dispatch.
+    pub declared_at_ns: i64,
+    /// The QA/QC finding.
+    pub finding: String,
 }
 
 /// What a QC insertion is.
@@ -674,6 +694,8 @@ pub enum DrillRecord {
     QcInsertion(QcInsertion),
     /// [`LabCertificate`].
     LabCertificate(LabCertificate),
+    /// [`SampleLoss`].
+    SampleLoss(SampleLoss),
 }
 
 impl DrillRecord {
@@ -689,6 +711,7 @@ impl DrillRecord {
             Self::AssayResult(_) => RecordKind::AssayResult,
             Self::QcInsertion(_) => RecordKind::QcInsertion,
             Self::LabCertificate(_) => RecordKind::LabCertificate,
+            Self::SampleLoss(_) => RecordKind::SampleLoss,
         }
     }
 
@@ -704,6 +727,7 @@ impl DrillRecord {
             Self::AssayResult(r) => &r.result_id,
             Self::QcInsertion(r) => &r.insertion_id,
             Self::LabCertificate(r) => &r.certificate_id,
+            Self::SampleLoss(r) => &r.loss_id,
         }
     }
 
@@ -734,6 +758,10 @@ impl DrillRecord {
                 }
                 refs
             }
+            Self::SampleLoss(r) => vec![
+                (RecordKind::Sample, r.sample_id.as_str()),
+                (RecordKind::Dispatch, r.dispatch_id.as_str()),
+            ],
             Self::QcInsertion(r) => {
                 let mut refs = vec![(RecordKind::Sample, r.sample_id.as_str())];
                 if let QcKind::Duplicate {
@@ -767,6 +795,12 @@ impl DrillRecord {
                 check_id("certificate.certificate_id", &r.certificate_id)?;
                 check_name("certificate.lab", &r.lab)?;
                 check_name("certificate.media_type", &r.media_type)
+            }
+            Self::SampleLoss(r) => {
+                check_id("loss.loss_id", &r.loss_id)?;
+                check_id("loss.dispatch_id", &r.dispatch_id)?;
+                check_id("loss.sample_id", &r.sample_id)?;
+                check_name("loss.finding", &r.finding)
             }
         }
     }
@@ -1200,6 +1234,7 @@ fn put_record(enc: &mut Encoder, record: &DrillRecord) -> Result<(), DrillError>
                 CertificateRef::LimsDirectNoCertificate => enc.put_u8(2),
             }
             enc.put_u8(r.qaqc_regime.tag());
+            enc.put_i64(r.received_at_ns);
         }
         DrillRecord::QcInsertion(r) => {
             enc.put_str(&r.insertion_id);
@@ -1247,6 +1282,13 @@ fn put_record(enc: &mut Encoder, record: &DrillRecord) -> Result<(), DrillError>
             enc.put_fixed(&r.original_sha256.0);
             enc.put_str(&r.media_type);
             enc.put_i64(r.issued_at_ns);
+        }
+        DrillRecord::SampleLoss(r) => {
+            enc.put_str(&r.loss_id);
+            enc.put_str(&r.dispatch_id);
+            enc.put_str(&r.sample_id);
+            enc.put_i64(r.declared_at_ns);
+            enc.put_str(&r.finding);
         }
     }
     Ok(())
@@ -1455,6 +1497,7 @@ impl Reader<'_, '_> {
                     other => return Err(DrillError::corrupt(format!("certificate tag {other}"))),
                 },
                 qaqc_regime: QaqcRegime::from_tag(self.u8()?)?,
+                received_at_ns: self.i64()?,
             }),
             RecordKind::QcInsertion => DrillRecord::QcInsertion(QcInsertion {
                 insertion_id: self.text()?,
@@ -1491,6 +1534,13 @@ impl Reader<'_, '_> {
                 ),
                 media_type: self.text()?,
                 issued_at_ns: self.i64()?,
+            }),
+            RecordKind::SampleLoss => DrillRecord::SampleLoss(SampleLoss {
+                loss_id: self.text()?,
+                dispatch_id: self.text()?,
+                sample_id: self.text()?,
+                declared_at_ns: self.i64()?,
+                finding: self.text()?,
             }),
         })
     }

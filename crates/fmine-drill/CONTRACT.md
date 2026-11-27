@@ -1,18 +1,18 @@
 # CONTRACT.md — `fmine-drill`
 
 ## 1. Purpose
-Corebox drillhole records on the authority ledger (`BD-163`, plan §12.1): collar, survey, interval, sample, dispatch, assay result, QC insertion and lab certificate. A record is written once and corrected only by superseding it with a reason; every version stays readable. A commit-time law refuses a record that names one that is not recorded. Minimum-curvature desurvey turns a collar and its survey stations into a 3-D trace (`BD-164`, plan §12.2), and a sweep-line join finds the overlapping from/to intervals of two sets, hole by hole (`BD-165`). Compositing cuts domain runs into length- or mass-weighted composites that conserve their inputs (`BD-166`, PO-CORE-2).
+Corebox drillhole records on the authority ledger (`BD-163`, plan §12.1): collar, survey, interval, sample, dispatch, assay result, QC insertion, lab certificate and sample loss. A record is written once and corrected only by superseding it with a reason; every version stays readable. A commit-time law refuses a record that names one that is not recorded. Minimum-curvature desurvey turns a collar and its survey stations into a 3-D trace (`BD-164`, plan §12.2), and a sweep-line join finds the overlapping from/to intervals of two sets, hole by hole (`BD-165`). Compositing cuts domain runs into length- or mass-weighted composites that conserve their inputs (`BD-166`, PO-CORE-2). Every dispatched sample is an `OB-LAB` obligation that resolves to a received result or a loss declared with its QA/QC finding (`BD-172`).
 
 - **Crate:** `fmine-drill`
 - **Layer:** K1
 - **Subsystem:** Corebox
 - **LOC budget:** 15,000 planned / 17,000 ceiling
-- **Allowed Module Families:** `["composite", "desurvey", "join", "records", "store"]`
+- **Allowed Module Families:** `["composite", "desurvey", "join", "lab", "records", "store"]`
 
 ## 2. Inputs
 - Typed records (`records::DrillRecord`) from importers, and corrections with their reasons (`store::Change`).
 - An authority-ledger cell: `fmine_ledger::l0::L0Ledger` with its `CellLease` for `store::commit`. For a durable `fmine_ledger::segment::SemanticSegmentWriter`, the caller builds the batch with `store::batch_for` and `store::delta_ops` and appends it with `append_with_law(&batch, store::drill_law)`; this crate does no IO.
-- Dependencies: `fmine-core` (codec, digests, portable trigonometry), `fmine-evidence` (refusals), `fmine-claim` (`SpatialSupport`, `AdditivityClass`) and `fmine-ledger` (`K1 -> S0`, `K1 -> S1`). Zero external crates.
+- Dependencies: `fmine-core` (codec, digests, portable trigonometry), `fmine-evidence` (refusals), `fmine-claim` (`SpatialSupport`, `AdditivityClass`), `fmine-ledger` and `fmine-runtime` (`ObligationRegistry`, the ingest region) (`K1 -> S0`, `K1 -> S1`). Zero external crates.
 - For compositing: domain runs (`composite::Domain`), inputs with their span, value bounds and optional mass (`composite::Input`, `Bounds::of(&AssayValue)`), and a `composite::Rule` (length, weighting, residual handling, additivity, input support).
 
 ## 3. Outputs
@@ -27,6 +27,8 @@ Corebox drillhole records on the authority ledger (`BD-163`, plan §12.1): colla
 - **A correction says why:** a `Supersede` carries a non-empty reason and a `Put` carries none.
 - **No dangling names:** a survey or interval names a recorded collar; a sample its intervals; a dispatch its samples; a result its sample, dispatch and certificate; a QC insertion its sample and, for a duplicate or umpire, the original. A record and what it names may arrive in one batch. Ids never disappear, so the names stay good after any correction.
 - **Result and dispatch agree:** a result's dispatch lists its sample and went to the lab that reported it. A dispatch correction cannot change the lab or drop a sample, so this survives corrections.
+- **No silent missing sample (`OB-LAB`, plan §12.4):** `lab::LabBook` folds the cell's batches in order. A dispatch opens one obligation per sample at its dispatch time, and a correction adding a sample opens one. The first result resolves it at its receipt time; a `SampleLoss` aborts it with its finding. The ingest region cannot close while one is open (`PO-BED-5`). The law refuses a result or loss dated before its dispatch, a loss of a sample its dispatch does not list, and a correction that moves a result or loss to another sample or dispatch. A loss after a result, a result after a loss, and a repeated loss are kept as `LabConflict`s, and the obligation stays as it first closed (`lab_obligations::test_each_dispatched_sample_resolves_to_a_result_or_a_declared_loss`, `supersession::test_the_law_refuses_dangling_and_inconsistent_records_and_writes_nothing`).
+- **Obligation replay:** the fold equals `ObligationRegistry::replay` of its own journal, the fold of the same batches read back from a segment written through the law, the fold resumed after any prefix, and a `DurableObligationRegistry` reopened from disk (`lab_obligations::test_the_fold_replays_from_its_journal_from_disk_and_batch_by_batch`, `lab_obligations::test_a_durable_registry_reopens_to_the_fold_and_guards_the_ingest_region`).
 - **QC material is not core:** a CRM or blank sits on a `QcMaterial` sample, which is taken from no interval; a duplicate or umpire names drilled samples on both sides. A sample correction cannot change which kind it is.
 - **One encoding per version:** decoding refuses bytes that are not exactly what the encoder writes for the record they hold (for example `-0.0`, or trailing bytes).
 - **Same law on both rungs:** `store::drill_law` runs in `L0Ledger::commit_with_conservation` and `SemanticSegmentWriter::append_with_law`; both admit and refuse the same batches and reach the same head (`supersession::test_the_law_refuses_dangling_and_inconsistent_records_and_writes_nothing`).
@@ -42,6 +44,7 @@ Corebox drillhole records on the authority ledger (`BD-163`, plan §12.1): colla
 - `DrillError::Invalid` → `FMINE-REF-109` (a field outside what the record allows; two changes to one record in one batch; a join span whose `to_mm` is not past its `from_mm`; compositing with a zero length, overlapping domains or inputs, bounds that are not finite or ordered, or a missing mass under mass weighting; a hole that cannot be desurveyed: no surveyed station, declared unsurveyed with surveyed stations, a station of another hole, two stations at one depth, consecutive stations in opposite directions).
 - `DrillError::CrsMismatch` → `FMINE-REF-106` (planned and actual collar positions in different CRSs).
 - `DrillError::Corrupt` → `FMINE-REF-505` (bytes that are not one canonical record version).
+- `lab::LabError::WrongCell` → `FMINE-REF-109`, `OutOfOrder` → `FMINE-REF-502`, `Obligation` → `FMINE-REF-505` (a transition the registry refuses, such as a result for a sample no dispatch sent, which only a batch admitted without the law can hold); `Record` keeps its own code (`lab_obligations::test_a_batch_out_of_order_of_another_cell_or_past_the_law_is_refused`).
 - `DrillError::SupportMismatch` → `FMINE-REF-102` (compositing inputs that are neither core samples nor composites).
 - `DrillError::NonAdditive` → `FMINE-REF-103` (compositing a non-additive quantity, `INV-014`).
 - `DrillError::Conservation` → `FMINE-REF-101` (a composite set that does not conserve its inputs to 1e-12 relative).
@@ -69,7 +72,8 @@ Records as imported: layer L0 Evidence (plan §13.2). This crate assigns no evid
 ## 10. Known gaps
 - No importer writes these records yet (acQuire dialect, `BD-188`).
 - MNPI embargo state on results is not in the record (`BD-170`); a later frame version adds it.
-- Certificate originals are named by SHA-256 only; storing and checking them in CAS is `BD-171`. `OB-LAB` (dispatched → received or declared lost) is `BD-172`.
+- Certificate originals are named by SHA-256 only; storing and checking them in CAS is `BD-171`.
+- `OB-LAB` has no deadline: an outstanding sample is listed, but nothing marks it overdue against a lab's turnaround. The law does not refuse a loss after a result, or a result after a loss: finding one would need a by-sample index. They are reported as conflicts instead.
 - `Structure`, `Density`, `GeometTest`, `GeotechLog` and `TwinPair` (plan §12.1) are not here yet (`BD-285` for twins).
 - Desurvey gives points without the survey-error propagation (ISCWSA-style positional covariance) that plan §12.2 asks for (`bd-zx57`). The declared straight-line fallback for unsurveyed short holes needs a planned collar orientation, which `Collar` does not carry.
 - No lab or vendor desurvey output is in the oracles yet (PO-CORE-1 names a lab oracle).
@@ -80,11 +84,14 @@ Records as imported: layer L0 Evidence (plan §13.2). This crate assigns no evid
 - `store::{KEY_PREFIX, record_key, parse_key, Change, StoreError, delta_ops, batch_for, commit, drill_law, StoredVersion, history, current, as_of}`
 - `desurvey::{Point, Direction, CollarFrom, TraceStation, Located, Trace, desurvey}`
 - `join::{Span, Overlap, HoleOverlap, overlaps, self_overlaps, join_intervals}`
+- `lab::{OWNER, obligation_id, LabConflict, LabError, LabBook}`
+- `records::{SampleLoss}` (record kind `loss`) and `AssayResult::received_at_ns`.
 - `composite::{CONSERVATION_TOLERANCE, Bounds, Input, Domain, Weighting, Residual, Rule, Composite, Conservation, CompositeSet, composite}`
 - `records::DrillError` gains `SupportMismatch`, `NonAdditive` and `Conservation`.
 
 ## 12. Proof obligations
 - `BD-163` (supersession tests, `tests/supersession.rs`, both rungs): `supersession::test_corrections_supersede_and_every_version_stays_readable`, `supersession::test_an_edit_in_place_is_refused_and_changes_nothing`, `supersession::test_the_law_refuses_dangling_and_inconsistent_records_and_writes_nothing`, `supersession::test_records_written_one_per_batch_or_together_read_the_same`.
+- `BD-172` (obligation replay, `tests/lab_obligations.rs`): `lab_obligations::test_each_dispatched_sample_resolves_to_a_result_or_a_declared_loss`, `lab_obligations::test_the_fold_replays_from_its_journal_from_disk_and_batch_by_batch`, `lab_obligations::test_a_durable_registry_reopens_to_the_fold_and_guards_the_ingest_region`, `lab_obligations::test_a_batch_out_of_order_of_another_cell_or_past_the_law_is_refused`.
 - `BD-166` (known answers and PO-CORE-2, `tests/composite.rs`): `composite::test_length_weighted_composites_have_their_known_values_and_respect_domains`, `composite::test_each_residual_rule_gives_its_known_pieces`, `composite::test_unsampled_core_mass_weighting_censoring_and_extensive_quantities`, `composite::test_seeded_random_holes_conserve_tile_their_domains_and_match_brute_force`, `composite::test_what_cannot_be_composited_is_refused`.
 - `BD-165` (matches brute force, `tests/join.rs`): `join::test_the_sweep_matches_brute_force_on_seeded_random_spans`, `join::test_touching_nested_identical_and_shared_start_spans`, `join::test_records_join_hole_by_hole`, `join::test_a_span_that_does_not_end_past_its_start_is_refused`.
 - `BD-164` (PO-CORE-1, `tests/desurvey.rs`): `desurvey::test_holes_of_arcs_and_straight_runs_desurvey_to_their_true_positions`, `desurvey::test_random_two_kilometre_holes_match_the_textbook_form`, `desurvey::test_a_station_added_on_the_trace_moves_nothing_and_input_order_does_not_matter`, `desurvey::test_beyond_the_stations_the_hole_runs_straight_and_says_so`, `desurvey::test_a_collar_with_only_a_planned_position_and_suspect_stations_are_reported`, `desurvey::test_holes_that_cannot_be_desurveyed_are_refused`.

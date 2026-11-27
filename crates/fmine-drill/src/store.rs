@@ -274,6 +274,22 @@ pub fn drill_law(ledger: &L0Ledger, batch: &DeltaBatch) -> Result<(), String> {
                 (DrillRecord::Dispatch(old), DrillRecord::Dispatch(new)) => {
                     check_dispatch_correction(old, new)?;
                 }
+                (DrillRecord::AssayResult(old), DrillRecord::AssayResult(new))
+                    if (&old.sample_id, &old.dispatch_id) != (&new.sample_id, &new.dispatch_id) =>
+                {
+                    return Err(format!(
+                        "result '{}': a correction cannot change its sample or dispatch",
+                        new.result_id
+                    ));
+                }
+                (DrillRecord::SampleLoss(old), DrillRecord::SampleLoss(new))
+                    if (&old.sample_id, &old.dispatch_id) != (&new.sample_id, &new.dispatch_id) =>
+                {
+                    return Err(format!(
+                        "loss '{}': a correction cannot change its sample or dispatch",
+                        new.loss_id
+                    ));
+                }
                 (DrillRecord::Sample(old), DrillRecord::Sample(new))
                     if is_qc_material(old) != is_qc_material(new) =>
                 {
@@ -324,6 +340,14 @@ pub fn drill_law(ledger: &L0Ledger, batch: &DeltaBatch) -> Result<(), String> {
                     live(RecordKind::Dispatch, &result.dispatch_id)?
                 {
                     check_result_dispatch(key, result, &dispatch)?;
+                }
+            }
+            DrillRecord::SampleLoss(loss) => {
+                if let DrillRecord::Dispatch(dispatch) =
+                    live(RecordKind::Dispatch, &loss.dispatch_id)?
+                {
+                    check_listed(key, &dispatch, &loss.sample_id)?;
+                    check_after_dispatch(key, "declared lost", loss.declared_at_ns, &dispatch)?;
                 }
             }
             DrillRecord::QcInsertion(qc) => {
@@ -389,21 +413,42 @@ fn check_dispatch_correction(old: &Dispatch, new: &Dispatch) -> Result<(), Strin
     Ok(())
 }
 
+fn check_listed(key: &str, dispatch: &Dispatch, sample_id: &str) -> Result<(), String> {
+    if dispatch
+        .sample_ids
+        .binary_search_by(|s| s.as_str().cmp(sample_id))
+        .is_err()
+    {
+        return Err(format!(
+            "'{key}': dispatch '{}' does not list sample '{sample_id}'",
+            dispatch.dispatch_id
+        ));
+    }
+    Ok(())
+}
+
+fn check_after_dispatch(
+    key: &str,
+    what: &str,
+    at_ns: i64,
+    dispatch: &Dispatch,
+) -> Result<(), String> {
+    if at_ns < dispatch.dispatched_at_ns {
+        return Err(format!(
+            "'{key}': {what} at {at_ns} ns, before dispatch '{}' left at {} ns",
+            dispatch.dispatch_id, dispatch.dispatched_at_ns
+        ));
+    }
+    Ok(())
+}
+
 fn check_result_dispatch(
     key: &str,
     result: &AssayResult,
     dispatch: &Dispatch,
 ) -> Result<(), String> {
-    if dispatch
-        .sample_ids
-        .binary_search(&result.sample_id)
-        .is_err()
-    {
-        return Err(format!(
-            "'{key}': dispatch '{}' does not list sample '{}'",
-            dispatch.dispatch_id, result.sample_id
-        ));
-    }
+    check_listed(key, dispatch, &result.sample_id)?;
+    check_after_dispatch(key, "received", result.received_at_ns, dispatch)?;
     if dispatch.lab != result.lab {
         return Err(format!(
             "'{key}': reported by lab '{}', dispatched to lab '{}'",

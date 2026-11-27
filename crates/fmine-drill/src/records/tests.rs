@@ -8,8 +8,8 @@ use fmine_evidence::RefusalCode;
 
 use super::*;
 use crate::fixtures::{
-    certificate, collar, crm, dispatch, duplicate, interval, linked_set, position, qc_material,
-    result, sample, survey,
+    certificate, collar, crm, dispatch, duplicate, interval, linked_set, loss, position,
+    qc_material, result, sample, survey,
 };
 
 fn round_trip(record: &DrillRecord) {
@@ -217,6 +217,19 @@ fn records_that_cannot_be_true_are_refused() {
     let mut other_crs = position(1.0);
     other_crs.crs = "EPSG:4326".to_string();
     let cases: Vec<(DrillRecord, &str, RefusalCode)> = vec![
+        (
+            DrillRecord::SampleLoss(SampleLoss {
+                finding: String::new(),
+                ..loss("L", "D", "S")
+            }),
+            "loss.finding",
+            RefusalCode::OutsidePhysicalDomain109,
+        ),
+        (
+            DrillRecord::SampleLoss(loss("L", "D/1", "S")),
+            "loss.dispatch_id",
+            RefusalCode::OutsidePhysicalDomain109,
+        ),
         (
             DrillRecord::Interval(interval("I", "H", 1_500, 1_500)),
             "interval.to_mm",

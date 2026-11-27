@@ -7,7 +7,7 @@ use super::records::{
     Alteration, AssayMethod, AssayResult, AssayValue, CertificateRef, Collar, CustodyEvent,
     Dispatch, DrillRecord, DuplicateStage, HoleType, Interval, LabCertificate, Logger, Orientation,
     Position, PositionMethod, QaqcRegime, QcInsertion, QcKind, Recovery, RecoveryMethod,
-    RunDirection, Sample, SampleType, Survey, SurveyInstrument,
+    RunDirection, Sample, SampleLoss, SampleType, Survey, SurveyInstrument,
 };
 
 pub fn position(easting_m: f64) -> Position {
@@ -140,6 +140,17 @@ pub fn result(
             }
         }),
         qaqc_regime: QaqcRegime::Current,
+        received_at_ns: 1_790_600_000_000_000_000,
+    }
+}
+
+pub fn loss(loss_id: &str, dispatch_id: &str, sample_id: &str) -> SampleLoss {
+    SampleLoss {
+        loss_id: loss_id.to_string(),
+        dispatch_id: dispatch_id.to_string(),
+        sample_id: sample_id.to_string(),
+        declared_at_ns: 1_791_000_000_000_000_000,
+        finding: "bag split in transit; lab received no material (QA-114)".to_string(),
     }
 }
 
@@ -193,5 +204,6 @@ pub fn linked_set() -> Vec<DrillRecord> {
         DrillRecord::LabCertificate(certificate("C-77", "LAB-A")),
         DrillRecord::AssayResult(result("R-1", "S-0001", "D-01", "LAB-A", Some("C-77"))),
         DrillRecord::QcInsertion(duplicate("Q-1", "S-0002", "S-0001")),
+        DrillRecord::SampleLoss(loss("L-1", "D-01", "S-0002")),
     ]
 }

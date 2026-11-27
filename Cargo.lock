@@ -124,6 +124,7 @@ dependencies = [
  "fmine-core",
  "fmine-evidence",
  "fmine-ledger",
+ "fmine-runtime",
 ]
 
 [[package]]
