@@ -184,7 +184,7 @@ fn position(value: &Json, depth_mm: u64, expected_east_variance: f64) {
 fn digest(hex: &str) -> Digest32 {
     assert_eq!(hex.len(), 64);
     let mut bytes = [0; 32];
-    for (target, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+    for (target, pair) in bytes.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
         *target = u8::from_str_radix(std::str::from_utf8(pair).expect("hex UTF-8"), 16)
             .expect("hex digest");
     }
