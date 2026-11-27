@@ -1,0 +1,16 @@
+[package]
+name = "fmine-projection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Projector framework: derived, rebuildable projections of ledger cells, each holding a per-cell high-water mark stored with its state (BD-120, plan §26.1)."
+
+[lints]
+workspace = true
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-ledger = { path = "../fmine-ledger" }
