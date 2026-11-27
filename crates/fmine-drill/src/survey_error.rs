@@ -6,7 +6,9 @@
 //! of one measured angle's stated variance and propagates it either at random, independently at every station,
 //! or systematically, one error shared by every station of the same instrument and run. The shares of one angle
 //! sum to 1, so a station's stated sigma is used whole and once. The collar's horizontal and vertical one-sigmas
-//! are independent of the angles and of each other.
+//! are independent of the angles and of each other. Horizontal sigma is the standard deviation on each grid
+//! axis, not a radial confidence radius. This is a declared first-order angular model, not a qualified ISCWSA
+//! instrument model; large angular errors or nearly opposing directions can invalidate the linearization.
 //!
 //! The covariance is the linear propagation `Σ = Σ_collar + Σ_terms J·Σ_term·Jᵀ`, where `J` is the derivative of
 //! the point with respect to each station's dip and azimuth. `J` comes from the minimum-curvature map that
@@ -411,6 +413,93 @@ impl UncertainTrace {
             collar: self.collar,
             terms,
         }
+    }
+
+    /// The declared model's covariance, refusing nonfinite arithmetic before it reaches a report.
+    ///
+    /// # Errors
+    /// [`DrillError::Invalid`] for nonfinite covariance, including squared sigmas, extreme extrapolation,
+    /// or an ill-conditioned perturbed arc whose derivative cannot be represented.
+    pub fn checked_covariance_at(&self, depth_mm: u64) -> Result<PositionCovariance, DrillError> {
+        let result = self.covariance_at(depth_mm);
+        for covariance in std::iter::once(&result.collar)
+            .chain(std::iter::once(&result.total))
+            .chain(result.terms.iter().map(|term| &term.covariance))
+        {
+            if covariance
+                .enu_m2
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+            {
+                return Err(DrillError::invalid(
+                    "survey_error.covariance",
+                    "declared model exceeds finite covariance arithmetic",
+                ));
+            }
+        }
+        Ok(result)
+    }
+
+    /// First-order positional variance along a finite direction under this declared error model.
+    /// A unit direction gives square metres. Each independent error vector is projected before squaring,
+    /// so a rank-deficient model's null direction cannot produce negative variance through matrix cancellation.
+    ///
+    /// # Errors
+    /// [`DrillError::Invalid`] for a nonfinite direction, sensitivity, or variance. No clamping is used.
+    pub fn checked_variance_along(
+        &self,
+        depth_mm: u64,
+        direction: Direction,
+    ) -> Result<f64, DrillError> {
+        let u = direction.v();
+        if u.iter().any(|value| !value.is_finite()) {
+            return Err(DrillError::invalid(
+                "survey_error.direction",
+                "projection direction must be finite",
+            ));
+        }
+        let mut variance = 0.0;
+        for (axis, component) in u.iter().enumerate() {
+            let projected = component * det::sqrt(self.collar.enu_m2[axis][axis]);
+            variance += projected * projected;
+        }
+        let jacobian = self.jacobian(depth_mm);
+        for term in &self.model.terms {
+            let angle = term.angle.index();
+            let root_share = det::sqrt(term.variance_share);
+            let projected_square = |v: [f64; 3]| {
+                let projection = root_share * (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]);
+                projection * projection
+            };
+            match term.propagation {
+                Propagation::Random => {
+                    for (station, columns) in self.stations.iter().zip(&jacobian) {
+                        variance +=
+                            projected_square(scale(columns[angle], station.sigma_rad[angle]));
+                    }
+                }
+                Propagation::Systematic => {
+                    let mut sums = vec![[0.0; 3]; self.runs];
+                    for (station, columns) in self.stations.iter().zip(&jacobian) {
+                        sums[station.run] = add(
+                            sums[station.run],
+                            scale(columns[angle], station.sigma_rad[angle]),
+                        );
+                    }
+                    for vector in sums {
+                        variance += projected_square(vector);
+                    }
+                }
+            }
+        }
+        if !variance.is_finite() {
+            return Err(DrillError::invalid(
+                "survey_error.variance",
+                "declared model exceeds finite projected variance arithmetic",
+            ));
+        }
+        Ok(variance)
     }
 
     /// The covariance at every station, by depth.

@@ -854,3 +854,67 @@ fn test_a_twin_separation_carries_the_two_holes_survey_error() {
         );
     }
 }
+
+#[test]
+fn test_separation_uncertainty_handles_null_variance_and_refuses_undefined_or_overflowed_results() {
+    let make = |id: &str, north_offset: f64, sigma_horizontal_m: f64| {
+        let mut c = hole(id, E0, HoleType::Diamond);
+        let p = c.actual.as_mut().unwrap();
+        p.northing_m += north_offset;
+        p.sigma_horizontal_m = sigma_horizontal_m;
+        p.sigma_vertical_m = 0.0;
+        let mut s = station(id, 0, 0.0, 0.0);
+        s.orientation.as_mut().unwrap().sigma_dip_deg = 0.0;
+        propagate(&c, &[s], &ErrorModel::systematic()).unwrap()
+    };
+    let ivs = intervals("O", "T");
+    let record = pair("W", "O", "T");
+    let field = |e: DrillError| match e {
+        DrillError::Invalid { field, .. } => field,
+        other => panic!("{other:?}"),
+    };
+    for (offset, sigma) in [(4.0, 0.0), (0.0, 0.0), (4.0, 1e154), (4.0, 2e154)] {
+        let o = make("O", 0.0, sigma);
+        let t = make("T", offset, sigma);
+        let assessment = assess_twin(
+            &record,
+            o.trace(),
+            t.trace(),
+            &ivs,
+            &GRADES,
+            &TwinPolicy::default(),
+        )
+        .unwrap();
+        assert_eq!(assessment.state, TwinState::Twin);
+        let result = separation_uncertainty(&assessment, &o, &t, &ivs);
+        if offset == 0.0 {
+            // The nominal answer is valid; a Gaussian first-order distance is undefined at coincidence.
+            assert_eq!(field(result.unwrap_err()), "twin.separation");
+        } else if sigma == 0.0 {
+            // Azimuth errors move both north-running holes east, perpendicular to their separation.
+            // This rank-one covariance has an exactly zero distance variance, without a numerical clamp.
+            let uncertainties = result.unwrap();
+            for u in uncertainties {
+                assert_eq!(
+                    (u.separation_m, u.sigma_m, u.p_beyond_limit),
+                    (4.0, 0.0, 0.0)
+                );
+            }
+            for limit_m in [f64::NAN, f64::INFINITY, -1.0] {
+                let invalid = fmine_drill::twin::TwinAssessment {
+                    limit_m,
+                    ..assessment.clone()
+                };
+                assert_eq!(
+                    field(separation_uncertainty(&invalid, &o, &t, &ivs).unwrap_err()),
+                    "twin.limit"
+                );
+            }
+        } else if sigma == 1e154 {
+            // Each finite covariance is representable, but their independent sum overflows.
+            assert_eq!(field(result.unwrap_err()), "twin.variance");
+        } else {
+            assert_eq!(field(result.unwrap_err()), "survey_error.covariance");
+        }
+    }
+}

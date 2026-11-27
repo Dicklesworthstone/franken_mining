@@ -252,7 +252,7 @@ pub struct SeparationUncertainty {
     /// The separation, m, as assessed.
     pub separation_m: f64,
     /// One-sigma of the separation along the line between the midpoints, m: the two holes' errors are taken as
-    /// independent. At zero separation, the root of the summed covariance's trace.
+    /// independent. Defined only for positive nominal separation.
     pub sigma_m: f64,
     /// `Φ((separation − limit)/σ)`, the normal approximation to the probability that the true separation is
     /// beyond the policy limit; 0 or 1 when `σ` is zero.
@@ -260,17 +260,30 @@ pub struct SeparationUncertainty {
 }
 
 /// The survey-error uncertainty of each matched pair's separation in `assessment` (`bd-zx57`), from the two
-/// holes' traces with their error models.
+/// holes' traces with their error models. Errors of the two holes are independent. The normal probability
+/// additionally assumes Gaussian errors and a first-order distance approximation: positional uncertainty
+/// must be small relative to the nominal separation. The nominal twin classification is unchanged.
 ///
 /// # Errors
 /// [`DrillError::Invalid`] (`FMINE-REF-109`) for a matched interval not offered or not in its trace's hole, or an
 /// assessment that these traces do not reproduce: a pair's separation differs, so it was made from other surveys.
+/// Also refuses nonfinite arithmetic, an invalid limit, different CRSs, and coincident midpoints, where the
+/// distance derivative and its first-order Gaussian probability are undefined.
 pub fn separation_uncertainty(
     assessment: &TwinAssessment,
     original: &UncertainTrace,
     twin: &UncertainTrace,
     intervals: &[Interval],
 ) -> Result<Vec<SeparationUncertainty>, DrillError> {
+    if original.trace().crs() != twin.trace().crs() {
+        return Err(DrillError::invalid("twin.crs", "one CRS is required"));
+    }
+    if !assessment.limit_m.is_finite() || assessment.limit_m < 0.0 {
+        return Err(DrillError::invalid(
+            "twin.limit",
+            "separation limit must be finite and nonnegative",
+        ));
+    }
     let midpoint = |id: &str, trace: &UncertainTrace| -> Result<u64, DrillError> {
         let hole = trace.trace().hole_id();
         match intervals.iter().find(|i| i.interval_id == id) {
@@ -289,6 +302,12 @@ pub fn separation_uncertainty(
         );
         let (a, b) = (original.trace().at(da).point, twin.trace().at(db).point);
         let separation = distance(a, b);
+        if !separation.is_finite() || separation == 0.0 {
+            return Err(DrillError::invalid(
+                "twin.separation",
+                "first-order separation uncertainty requires a finite positive separation",
+            ));
+        }
         if separation.to_bits() != pair.separation_m.to_bits() {
             return Err(DrillError::invalid(
                 "twin.separation",
@@ -298,21 +317,22 @@ pub fn separation_uncertainty(
                 ),
             ));
         }
-        let (ca, cb) = (
-            original.covariance_at(da).total,
-            twin.covariance_at(db).total,
-        );
-        let variance = if separation > 0.0 {
-            let u = Direction {
-                east: (b.easting_m - a.easting_m) / separation,
-                north: (b.northing_m - a.northing_m) / separation,
-                up: (b.elevation_m - a.elevation_m) / separation,
-            };
-            ca.variance_along(u) + cb.variance_along(u)
-        } else {
-            (0..3).map(|i| ca.enu_m2[i][i] + cb.enu_m2[i][i]).sum()
+        original.checked_covariance_at(da)?;
+        twin.checked_covariance_at(db)?;
+        let u = Direction {
+            east: (b.easting_m - a.easting_m) / separation,
+            north: (b.northing_m - a.northing_m) / separation,
+            up: (b.elevation_m - a.elevation_m) / separation,
         };
-        let sigma = det::sqrt(variance.max(0.0));
+        let variance =
+            original.checked_variance_along(da, u)? + twin.checked_variance_along(db, u)?;
+        if !variance.is_finite() {
+            return Err(DrillError::invalid(
+                "twin.variance",
+                "combined separation variance exceeds finite arithmetic",
+            ));
+        }
+        let sigma = det::sqrt(variance);
         let beyond = separation - assessment.limit_m;
         out.push(SeparationUncertainty {
             original_interval_id: pair.original_interval_id.clone(),

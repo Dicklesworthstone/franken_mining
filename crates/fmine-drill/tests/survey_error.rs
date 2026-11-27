@@ -205,6 +205,7 @@ fn test_a_straight_hole_has_its_closed_form_covariance_at_stations_and_between_t
         assert_eq!(hole.at_stations().len(), depths_mm.len());
         for &d in &probes {
             let got = hole.covariance_at(d);
+            assert_eq!(hole.checked_covariance_at(d).unwrap(), got);
             let want = closed_form(
                 &model,
                 &weights(&depths, d as f64 / 1000.0),
@@ -235,6 +236,16 @@ fn test_a_straight_hole_has_its_closed_form_covariance_at_stations_and_between_t
                 (got.total.variance_along(t) - along).abs() < 1e-9 * along,
                 "{d}"
             );
+            assert!((hole.checked_variance_along(d, t).unwrap() - along).abs() < 1e-9 * along);
+            // An oblique linear projection exercises every covariance component under each model.
+            let u = Direction {
+                east: 0.3,
+                north: -0.4,
+                up: 0.5,
+            };
+            let want_variance = Covariance { enu_m2: want }.variance_along(u);
+            let got_variance = hole.checked_variance_along(d, u).unwrap();
+            assert!((got_variance - want_variance).abs() < 1e-9 * want_variance);
         }
         // At 300 m, all random: σ_dip·h·√(n − ½) across the hole, ten 30 m legs.
         if model == ErrorModel::random() {
@@ -503,4 +514,76 @@ fn test_a_model_that_does_not_use_each_sigma_whole_is_refused() {
         field(propagate(&c, &[], &ErrorModel::random()).unwrap_err()),
         "surveys"
     );
+}
+
+#[test]
+fn test_checked_projection_preserves_a_rank_one_null_direction() {
+    let mut c = collar("H1");
+    let p = c.actual.as_mut().unwrap();
+    p.sigma_horizontal_m = 0.0;
+    p.sigma_vertical_m = 0.0;
+    // Only azimuth is uncertain: the positional covariance is rank one. A matrix quadratic form in
+    // its null direction can round below zero; projecting the original error vectors cannot.
+    let s = station(
+        "a",
+        "H1",
+        0,
+        0.009_f64.to_degrees(),
+        0.0,
+        (0.0, 1.0),
+        SurveyInstrument::Gyro,
+        RunDirection::In,
+    );
+    let tangent = Direction::of(s.orientation.as_ref().unwrap());
+    for model in [ErrorModel::random(), ErrorModel::systematic(), mixed()] {
+        let hole = propagate(&c, std::slice::from_ref(&s), &model).unwrap();
+        let variance = hole.checked_variance_along(100_000, tangent).unwrap();
+        assert!((0.0..1e-18).contains(&variance), "{model:?}: {variance:e}");
+        let across = Direction {
+            east: tangent.north,
+            north: -tangent.east,
+            up: 0.0,
+        };
+        let want = (100.0 * DEG).powi(2);
+        assert!((hole.checked_variance_along(100_000, across).unwrap() - want).abs() < 1e-9 * want);
+        let invalid = Direction {
+            east: f64::INFINITY,
+            ..across
+        };
+        assert!(hole.checked_variance_along(100_000, invalid).is_err());
+    }
+}
+
+#[test]
+fn test_checked_covariance_refuses_sigma_and_extrapolation_overflow() {
+    let mut c = collar("H1");
+    let s = station(
+        "a",
+        "H1",
+        0,
+        0.0,
+        0.0,
+        (0.0, 1.0),
+        SurveyInstrument::Gyro,
+        RunDirection::In,
+    );
+    let across = Direction {
+        east: 1.0,
+        north: 0.0,
+        up: 0.0,
+    };
+    c.actual.as_mut().unwrap().sigma_horizontal_m = 1e200;
+    let hole = propagate(&c, std::slice::from_ref(&s), &ErrorModel::random()).unwrap();
+    assert!(hole.checked_covariance_at(0).is_err());
+    assert!(hole.checked_variance_along(0, across).is_err());
+
+    let c = collar("H1");
+    let mut s = s;
+    s.orientation.as_mut().unwrap().sigma_azimuth_deg = 1e140;
+    for model in [ErrorModel::random(), ErrorModel::systematic()] {
+        let hole = propagate(&c, std::slice::from_ref(&s), &model).unwrap();
+        assert!(hole.checked_covariance_at(100_000).is_ok());
+        assert!(hole.checked_covariance_at(u64::MAX).is_err());
+        assert!(hole.checked_variance_along(u64::MAX, across).is_err());
+    }
 }
