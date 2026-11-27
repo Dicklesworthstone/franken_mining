@@ -29,6 +29,8 @@ fmine-decide = { path = "../fmine-decide" }
 fmine-capital = { path = "../fmine-capital" }
 fmine-econ = { path = "../fmine-econ" }
 fmine-explore = { path = "../fmine-explore" }
+fmine-drill = { path = "../fmine-drill" }
+fmine-object = { path = "../fmine-object" }
 fmine-io = { path = "../fmine-io" }
 fmine-public = { path = "../fmine-public" }
 fmine-metrics = { path = "../fmine-metrics" }

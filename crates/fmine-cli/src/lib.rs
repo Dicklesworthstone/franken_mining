@@ -8,6 +8,7 @@ mod compare;
 pub mod cost;
 mod decision;
 mod doctor;
+pub mod drill;
 mod forecast;
 pub mod geo;
 mod guidance;
@@ -76,6 +77,8 @@ pub enum OutputFormat {
 /// Parsed CLI command (`BD-111`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
+    /// Locate imported drill surveys and assay intervals with declared positional covariance.
+    DrillDesurvey(drill::Command),
     /// Calculate a declared complete cost population under an explicitly selected AISC/AIC definition.
     MetricsCost(cost::Command),
     /// Compare unchanged production quantities under explicit named and versioned price decks.
@@ -645,6 +648,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 }
                 return "plan pit";
             }
+            "drill" => return drill::VERB,
             "plant" => return "plant",
             "recon" => return "recon run",
             "html" => return "html claims",
@@ -1261,6 +1265,7 @@ pub fn parse_args(
             | "metrics geo"
             | "metrics waterfall"
             | "metrics roce"
+            | drill::VERB
             | "forecast spatial-monitor"
             | "decide production"
             | "decide investment"
@@ -1294,6 +1299,7 @@ pub fn parse_args(
             }
             "metrics waterfall" => CliCommand::MetricsWaterfall(waterfall::parse(&words)?),
             "metrics roce" => CliCommand::CapitalReturn(capital_return::parse(&words)?),
+            drill::VERB => CliCommand::DrillDesurvey(drill::parse(&words)?),
             "forecast spatial-monitor" => spatial::parse(&words)?,
             "decide production" => {
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
@@ -2401,6 +2407,7 @@ fn track_record_envelope(
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
+        CliCommand::DrillDesurvey(command) => drill::execute(command, workspace_root),
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::MetricsWaterfall(command) => waterfall::execute(command, workspace_root),
@@ -2880,6 +2887,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 forecast_candidate::USAGE,
                 forecast_preflight::USAGE,
                 spatial::USAGE,
+                drill::USAGE,
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
                 doctor::USAGE,
                 repair::PLAN_USAGE,
@@ -3011,6 +3019,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(forecast::COVERAGE_MONITOR_JSON);
             payload.push_str(",\"forecast_spatial_monitor\":");
             payload.push_str(spatial::ROBOT_DOCS_JSON);
+            payload.push_str(",\"drill_desurvey\":");
+            payload.push_str(drill::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_cusum_monitor\":");
             payload.push_str(forecast::CUSUM_MONITOR_JSON);
             payload.push_str(",\"forecast_event_log\":");

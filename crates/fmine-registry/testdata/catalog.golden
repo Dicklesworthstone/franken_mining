@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 96
+[verbs] 97
 decide card
 decide production
 decide investment
@@ -169,4 +169,5 @@ assure issue
 reliance export
 recall
 forecast spatial-monitor
+drill desurvey
 metrics roce

@@ -252,6 +252,26 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 
 ---
 
+## Desurvey acQuire exports with declared positional uncertainty
+
+```bash
+fmine drill desurvey --input tests/drill/acquire_synthetic.toml --cas /tmp/fmine-drill-cas --json
+```
+
+DESIGN (BD-188, plan §12.2): a collar/survey/assay export bundle now reaches usable Corebox geometry
+through one command. [The synthetic declaration](tests/drill/acquire_synthetic.toml) supplies the
+CRS, collar source, instrument, grid-bearing reference and one-sigma accuracies explicitly. Paths
+are relative to the declaration. Tables may be CSV or explicitly named XLSX sheets. Choose
+`survey_error_model = "random"` for independent station errors or `"systematic"` for errors shared
+by stations of one instrument and run; the report retains the model's individual covariance terms.
+
+JSON retains every station and assay endpoint, east/north/up coordinates and covariance, suspect
+and extrapolation flags, exact assay readings, source row numbers, input hashes and export CAS roots.
+Censored assays remain censored. A rejected source row refuses the complete projection and returns
+the import diagnostics. A typed Claim per hole binds the inputs and interpretation registries.
+These are Assumed, Internal, uncalibrated results under the declared first-order model; no lab
+QA/QC, custody chain, qualified instrument model or authority-ledger record is inferred.
+
 ## Check the remainder grade of a headline drill interval
 
 ```bash
