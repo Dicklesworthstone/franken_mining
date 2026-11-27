@@ -64,6 +64,8 @@ stage fetch repro/barrick/fetch.sh
 stage test_public cargo test -p fmine-public -- --ignored --skip barrick_live_leaves_one_per_instance
 # Recovery and PDF-conflict checks need local two-reader transcriptions, which are never in git. This workbook
 # lane excludes public_recovery and the CLI recovery/PDF-conflict checks; they run with the supplied local inputs.
+# The E177 recovery-audit check reads a local Markdown extraction of the Turquoise Ridge technical report, which is
+# gitignored and not fetched here, so it is skipped too.
 stage test_public_integration cargo test -p xtask \
   --test public_corpus --test public_exact_feas_blame --test public_laap_2023 \
   --test public_keys_aisc --test public_keys_mine_stats --test public_mine_stats_inventory \
@@ -75,7 +77,8 @@ stage live_leaves cargo test --release -p xtask --test public_report_contract --
   tests::live_dependency::barrick_live_leaves_one_per_instance --nocapture
 stage test_cli cargo test -p fmine-cli -- --ignored \
   --skip test_real_recovery_is_embedded_in_assurance_with_separate_digest \
-  --skip barrick_pdf_packets_cover_registered_conflicts
+  --skip barrick_pdf_packets_cover_registered_conflicts \
+  --skip recovery_audit_cli_reproduces_the_registered_e177_history
 stage root root 2026Q2 root
 stage root_q3 root 2026Q3 root_q3
 stage xlsx_guard xlsx_guard
