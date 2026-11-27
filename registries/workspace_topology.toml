@@ -109,6 +109,10 @@ from = "fmine-calib"
 to = "fmine-numerics"
 
 [[allowed_same_layer_edge]]
+from = "fmine-qaqc"
+to = "fmine-drill"
+
+[[allowed_same_layer_edge]]
 from = "fmine-public"
 to = "fmine-io"
 

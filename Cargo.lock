@@ -349,6 +349,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-qaqc"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-drill",
+ "fmine-evidence",
+ "fmine-numerics",
+]
+
+[[package]]
 name = "fmine-registry"
 version = "0.1.0"
 dependencies = [

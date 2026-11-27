@@ -21,6 +21,7 @@ members = [
     "crates/fmine-materials",
     "crates/fmine-flow",
     "crates/fmine-drill",
+    "crates/fmine-qaqc",
     "crates/fmine-econ",
     "crates/fmine-explore",
     "crates/fmine-infer",
