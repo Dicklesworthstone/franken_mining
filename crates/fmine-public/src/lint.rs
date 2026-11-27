@@ -17,6 +17,7 @@ use crate::key::{
     KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesKey,
     SeriesOwnershipBasis, canonical_value_tag, claims_digest,
 };
+use crate::markdown_lines;
 
 pub const RULES_VERSION: &str = "cited-equality/9";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
@@ -445,74 +446,16 @@ fn links(text: &str) -> Vec<Link> {
     result
 }
 
-fn markdown_block_line(line: &str) -> bool {
-    let text = line.trim();
-    if text.is_empty()
-        || line.starts_with("    ")
-        || line.starts_with('\t')
-        || text.starts_with(['#', '>'])
-        || text.contains('|')
-    {
-        return true;
-    }
-    if let Some(marker) = text.as_bytes().first()
-        && matches!(marker, b'-' | b'+' | b'*' | b'_' | b'=')
-    {
-        if text
-            .bytes()
-            .all(|b| b == *marker || b.is_ascii_whitespace())
-        {
-            return true;
-        }
-        if matches!(marker, b'-' | b'+' | b'*')
-            && text.as_bytes().get(1).is_some_and(u8::is_ascii_whitespace)
-        {
-            return true;
-        }
-    }
-    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
-    digits > 0
-        && text
-            .as_bytes()
-            .get(digits)
-            .is_some_and(|b| matches!(b, b'.' | b')'))
-        && text
-            .as_bytes()
-            .get(digits + 1)
-            .is_some_and(u8::is_ascii_whitespace)
-}
-
-fn fence(line: &str) -> Option<(u8, usize, &str)> {
-    let text = line.trim_start_matches(' ');
-    let marker = *text.as_bytes().first()?;
-    if line.len() - text.len() > 3 || !matches!(marker, b'`' | b'~') {
-        return None;
-    }
-    let width = text.bytes().take_while(|&b| b == marker).count();
-    (width >= 3).then_some((marker, width, &text[width..]))
-}
-
-/// Keep original UTF-8 byte offsets. Ordinary paragraph wraps are whitespace. Hard breaks and
-/// structural lines end a context independently of punctuation.
+/// Keep original UTF-8 byte offsets. A soft wrap inside a CommonMark paragraph is whitespace
+/// ([`markdown_lines::joins_next`]): a wrapped `2025.` or `10)` continues its sentence, as does a list item's or
+/// block quote's wrapped line. Every other line end, and a hard break, ends a context independently of
+/// punctuation.
 #[must_use]
 pub fn statement_spans(text: &str) -> Vec<Span> {
     let (mut start, mut offset, mut depth, mut result) = (0, 0, 0_i32, Vec::new());
-    let mut lines = text.split_inclusive('\n').peekable();
-    let mut open_fence = None;
-    while let Some(raw_line) = lines.next() {
+    let joins = markdown_lines::joins_next(text);
+    for (raw_line, joins_next) in text.split_inclusive('\n').zip(joins) {
         let line = raw_line.trim_end_matches(['\r', '\n']);
-        let fenced = open_fence.is_some();
-        if let Some((marker, width, tail)) = fence(line) {
-            match open_fence {
-                None => open_fence = Some((marker, width)),
-                Some((open, minimum))
-                    if marker == open && width >= minimum && tail.trim().is_empty() =>
-                {
-                    open_fence = None;
-                }
-                _ => {}
-            }
-        }
         for (relative, c) in line.char_indices() {
             let i = offset + relative;
             if matches!(c, '[' | '(') {
@@ -533,15 +476,7 @@ pub fn statement_spans(text: &str) -> Vec<Span> {
             }
         }
         offset += raw_line.len();
-        if fenced
-            || open_fence.is_some()
-            || line.ends_with("  ")
-            || line.ends_with('\\')
-            || markdown_block_line(line)
-            || lines
-                .peek()
-                .is_none_or(|next| markdown_block_line(next) || fence(next).is_some())
-        {
+        if !joins_next || line.ends_with("  ") || line.ends_with('\\') {
             if start < offset {
                 result.push((start, offset));
             }

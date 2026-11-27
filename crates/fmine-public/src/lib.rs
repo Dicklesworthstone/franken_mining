@@ -16,6 +16,7 @@ pub mod html;
 pub mod key;
 pub mod lint;
 pub mod live;
+mod markdown_lines;
 pub mod mine_ledger;
 pub mod mine_stats;
 pub mod mirror;

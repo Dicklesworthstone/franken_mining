@@ -140,8 +140,14 @@ The public lane of M0 (`fmine assure public`).
   metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
   disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
   Ordinary Markdown paragraph wraps are whitespace for cited and discovered equality checks, including
-  the shared dated equality interpreter. Original UTF-8 spans remain authoritative. Blank lines, hard breaks
-  and Markdown structural lines bound the context separately from sentence punctuation.
+  the shared dated equality interpreter. Original UTF-8 spans remain authoritative. A line continues the
+  statement exactly when CommonMark continues the paragraph (`markdown_lines`): a wrapped line beginning `2025.`
+  or `10)` does, because only an ordered list starting at 1 interrupts a paragraph, and so do a list item's or
+  block quote's wrapped and lazy lines. Blank lines, hard breaks and every block start (heading, setext
+  underline, rule, fence, quote, a list item that may interrupt) bound the context separately from sentence
+  punctuation; a line holding `|` is a table row. Checked against pulldown-cmark 0.13.6 on 2.47 million
+  generated documents, with no disagreement except a tab-indented `>` after a quoted paragraph, where
+  implementations differ.
   Dated nine-month cumulative equalities use the existing canonical `NineMonths` period in cited checks,
   discovery and publicness queries. They stay distinct from H1, Q3 and FY; no year is supplied for undated prose.
   AISC, total cash costs, copper C1, cost of sales, gold/copper production, gold sales, processed/head grade

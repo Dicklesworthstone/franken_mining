@@ -3648,7 +3648,9 @@ issuer assertion is true or that disclosure is permitted. `--through` selects re
 
 Ordinary Markdown line wraps within a paragraph preserve the statement and the cited number's original
 byte span. Use a blank line or a Markdown hard break to separate statements that have no terminal punctuation.
-Headings, lists, block quotes, table rows and fenced sections keep their line boundaries.
+A line continues the statement where CommonMark continues the paragraph, in a list item or block quote too, so a
+wrapped line that begins `2025.` stays in its sentence. Headings, table rows, fenced sections and each new list
+item or block quote keep their line boundaries.
 
 DESIGN (BD-345.S4): `--as-of YYYY-MM-DD` adds an independent public-record assessment for each supported
 equality. It reports the earliest matching dated registered assertion, its exact Claim, locator, file hash,

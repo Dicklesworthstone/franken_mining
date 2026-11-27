@@ -8,7 +8,9 @@ use fmine_public::key::{
     KeyedCell, LineKey, NilReason, OwnershipBasis, Period, PeriodKind, PublicKey, PublicValue,
     Scope, ShareSource, Vintage, classify, from_mine_stats, public_claim,
 };
-use fmine_public::lint::{LintMode, Verdict, equality_target, lint_cited, lint_discover};
+use fmine_public::lint::{
+    LintMode, Verdict, equality_target, lint_cited, lint_discover, statement_spans,
+};
 use fmine_public::mine_stats::read_mine_stats;
 use fmine_public::synthetic::synthetic_profile;
 
@@ -142,6 +144,92 @@ fn soft_wrapping_does_not_borrow_context_across_markdown_blocks() {
     full.pop(); // FACT: the continuation is part of this statement without its terminating period.
     full.push_str("\nfor an undisclosed adjustment.");
     assert_eq!(verdict(&full, &[source]), Verdict::Unchecked);
+}
+
+/// Review of 17d2fbe2 (2026-11-27): each wrap in the first list split the qualifier from the claim, which then
+/// verified. A wrapped line continues its statement wherever CommonMark continues the paragraph. The claim alone
+/// verifies in a paragraph and in an ordered item; in a bullet or block quote its marker keeps it unchecked, so
+/// those wraps are checked on the statement spans below.
+#[test]
+fn a_wrapped_qualifier_stays_in_the_statement_wherever_the_paragraph_continues() {
+    let source = observation("1637", |_| {});
+    let amount = "$1,637/oz";
+    let mut claim = sentence(&source, amount);
+    claim.pop();
+    let qualifier = "for an undisclosed adjustment.";
+    let claim_verdict = |draft: &str| {
+        let report = lint_cited(draft, std::slice::from_ref(&source));
+        let finding = report.findings.iter().find(|f| f.raw == amount);
+        finding.map(|f| f.verdict).ok_or_else(|| report.to_json())
+    };
+    for alone in [claim.clone(), format!("1. {claim}")] {
+        assert_eq!(claim_verdict(&alone), Ok(Verdict::Verified), "{alone}");
+    }
+    for draft in [
+        // Only an ordered list starting at 1 may interrupt a paragraph.
+        format!("{claim}\n2. {qualifier}"),
+        format!("{claim}\n10) {qualifier}"),
+        // A list item's wrapped line, indented or lazy.
+        format!("1. {claim}\n   {qualifier}"),
+        format!("1. {claim}\n{qualifier}"),
+        // Nor may indented code interrupt a paragraph.
+        format!("{claim}\n    {qualifier}"),
+    ] {
+        assert_eq!(claim_verdict(&draft), Ok(Verdict::Unchecked), "{draft}");
+    }
+    // Where a block does start, the qualifier is not part of the claim's statement.
+    for draft in [
+        format!("{claim}\n1. {qualifier}"),
+        format!("1. {claim}\n2. {qualifier}"),
+        format!("1. {claim}\n\n{qualifier}"),
+    ] {
+        assert_eq!(claim_verdict(&draft), Ok(Verdict::Verified), "{draft}");
+    }
+}
+
+#[test]
+fn statements_follow_commonmark_paragraphs_across_wraps() {
+    let first = |text: &str| {
+        let (start, end) = statement_spans(text)[0];
+        text[start..end].to_string()
+    };
+    for (text, statement) in [
+        (
+            "Gold production was 1,512 koz for the nine months ended September 30,\n2025. Copper was 100 kt.\n",
+            "Gold production was 1,512 koz for the nine months ended September 30,\n2025.",
+        ),
+        (
+            "- Gold production was 512\n  koz in 2025.\n",
+            "- Gold production was 512\n  koz in 2025.",
+        ),
+        (
+            "> Gold production was 512 koz in 2025, on a\n> 100% basis.\n",
+            "> Gold production was 512 koz in 2025, on a\n> 100% basis.",
+        ),
+        (
+            "> Gold production was 512 koz in 2025, on a\n100% basis.\n",
+            "> Gold production was 512 koz in 2025, on a\n100% basis.",
+        ),
+        // A heading, a new item and a nested quote each end it.
+        (
+            "Gold production was 512 koz\n# 2025\n",
+            "Gold production was 512 koz\n",
+        ),
+        (
+            "- Gold production was 512 koz\n- 2025\n",
+            "- Gold production was 512 koz\n",
+        ),
+        (
+            "> Gold production was 512 koz\n> > 2025\n",
+            "> Gold production was 512 koz\n",
+        ),
+        (
+            "Gold production was 512 koz\n2025\n===\n",
+            "Gold production was 512 koz\n2025\n",
+        ),
+    ] {
+        assert_eq!(first(text), statement, "{text:?}");
+    }
 }
 
 fn capex(value: &str, label: &str, release: &str) -> KeyedCell {
