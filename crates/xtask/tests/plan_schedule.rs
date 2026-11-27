@@ -86,6 +86,153 @@ fn lane_json(output: &std::process::Output) -> Json {
 }
 
 #[test]
+fn lane_grade_tonnage_binary_reports_exact_partial_bin_for_all_cap_cases() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = "tests/planning/lane_grade_tonnage.json";
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = lane(&root, input, "json");
+    let report = lane_json(&output);
+    assert!(output.status.success(), "{report:?}");
+    let payload = report.get("payload").unwrap();
+    let digest = sha256(original.as_bytes()).to_hex();
+    assert_eq!(
+        payload
+            .get("source")
+            .unwrap()
+            .get("sha256")
+            .unwrap()
+            .as_str(),
+        Some(digest.as_str())
+    );
+    let balance = payload.get("capacity_balance").unwrap();
+    assert_eq!(
+        balance.get("available_dry_tonnes").unwrap().as_str(),
+        Some("8/1")
+    );
+    assert_eq!(
+        balance.get("available_recovered_metal").unwrap().as_str(),
+        Some("19/10")
+    );
+    let expect = |result: &Json, mass: &str, metal: &str, grade: &str, share: &str| {
+        assert_eq!(result.get("dry_tonnes").unwrap().as_str(), Some(mass));
+        assert_eq!(result.get("recovered_metal").unwrap().as_str(), Some(metal));
+        let boundary = result.get("boundary").unwrap();
+        assert_eq!(
+            boundary.get("grade_per_dry_tonne").unwrap().as_str(),
+            Some(grade)
+        );
+        assert_eq!(
+            boundary.get("selected_fraction").unwrap().as_str(),
+            Some(share)
+        );
+    };
+    // One top-grade tonne yields 0.6 g. At 0.3 g per mid-grade tonne,
+    // the amount that exhausts the remaining 0.15 g market capacity is 0.5 t.
+    expect(
+        balance.get("mill_only").unwrap(),
+        "2/1",
+        "9/10",
+        "2/5",
+        "1/3",
+    );
+    expect(
+        balance.get("market_only").unwrap(),
+        "3/2",
+        "3/4",
+        "2/5",
+        "1/6",
+    );
+    assert_eq!(balance.get("both"), balance.get("market_only"));
+    assert_eq!(lane(&root, input, "json").stdout, output.stdout);
+    let md = lane(&root, input, "markdown");
+    assert!(md.status.success());
+    assert!(
+        String::from_utf8(md.stdout)
+            .unwrap()
+            .contains("| Mill and market | 3/2 | 3/4 | 2/5 | 1/6 |")
+    );
+
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-lane-capacity-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, text: &str| {
+        std::fs::write(scratch.join(name), text).unwrap();
+        lane_json(&lane(&scratch, name, "json"))
+    };
+    let (prefix, _) = original.split_once("\"recovery_curve\":").unwrap();
+    let (_, rows) = original.split_once("\"grade_tonnage\":").unwrap();
+    let fixed = submit(
+        "fixed.json",
+        &format!(r#"{prefix}"recovery_fraction":"0.75","grade_tonnage":{rows}"#),
+    );
+    let joint = fixed
+        .get("payload")
+        .unwrap()
+        .get("capacity_balance")
+        .unwrap()
+        .get("both")
+        .unwrap();
+    expect(joint, "2/1", "3/4", "2/5", "1/3");
+    let between_knots = original.replace(
+        r#""grade_per_dry_tonne": "0.4", "dry_tonnes": "3""#,
+        r#""grade_per_dry_tonne": "0.3", "dry_tonnes": "3""#,
+    );
+    let interpolated = submit("interpolated.json", &between_knots);
+    let joint = interpolated
+        .get("payload")
+        .unwrap()
+        .get("capacity_balance")
+        .unwrap()
+        .get("both")
+        .unwrap();
+    expect(joint, "7/4", "3/4", "3/10", "1/4");
+    for (i, (from, to, code)) in [
+        (
+            r#""grade_per_dry_tonne": "0.4", "dry_tonnes""#,
+            r#""grade_per_dry_tonne": "0.2", "dry_tonnes""#,
+            "FMINE-REF-109",
+        ),
+        (
+            r#""grade_per_dry_tonne": "0.6", "dry_tonnes""#,
+            r#""grade_per_dry_tonne": "0.61", "dry_tonnes""#,
+            "FMINE-REF-203",
+        ),
+        (
+            r#""dry_tonnes": "4""#,
+            r#""dry_tonnes": "0""#,
+            "FMINE-REF-109",
+        ),
+        (
+            r#""dry_tonnes": "4""#,
+            r#""wet_tonnes": "4""#,
+            "FMINE-REF-107",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(original.contains(from));
+        let refused = submit(&format!("invalid-{i}.json"), &original.replace(from, to));
+        assert_eq!(refused.get("payload"), Some(&Json::Null));
+        assert_eq!(
+            refused
+                .get("refusal")
+                .unwrap()
+                .get("code")
+                .unwrap()
+                .as_str(),
+            Some(code)
+        );
+    }
+}
+
+#[test]
 fn lane_recovery_curve_binary_distinguishes_exact_crossings_and_support_limits() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = "tests/planning/lane_recovery_curve.json";

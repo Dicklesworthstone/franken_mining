@@ -52,6 +52,8 @@ pub enum CurveCutoff {
 
 /// Bound on the number of declared knots for one response.
 pub const MAX_RECOVERY_KNOTS: usize = 128;
+/// Bound on the grade-tonnage population of one capacity screen.
+pub const MAX_GRADE_BINS: usize = 128;
 
 /// A monotone piecewise-linear curve of recovered metal per dry tonne.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +65,45 @@ pub struct RecoveryCurve {
 struct RecoveryKnot {
     grade: Rat,
     recovered: Rat,
+}
+
+/// One grade population on the declared period and dry-tonne basis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GradeTonnageBin {
+    pub grade: Rat,
+    pub dry_tonnes: Rat,
+}
+
+/// Recovery assumption already admitted by the Lane scenario.
+#[derive(Debug, Clone, Copy)]
+pub enum GradeRecovery<'a> {
+    Constant(Rat),
+    Curve(&'a RecoveryCurve),
+}
+
+/// Lowest grade selected and the share of its dry tonnes that fits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GradeBoundary {
+    pub grade: Rat,
+    pub fraction: Rat,
+}
+
+/// Portion of the highest-grade-first feed that fits this cap or cap pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GradeAllocation {
+    pub dry_tonnes: Rat,
+    pub recovered_metal: Rat,
+    pub boundary: Option<GradeBoundary>,
+}
+
+/// Available feed and the three cap configurations on the same population.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapacityBalance {
+    pub available_dry_tonnes: Rat,
+    pub available_recovered_metal: Rat,
+    pub mill_only: GradeAllocation,
+    pub market_only: GradeAllocation,
+    pub both: GradeAllocation,
 }
 
 /// Comparison under the explicit rule that equality clears the threshold.
@@ -86,6 +127,27 @@ fn arithmetic() -> Refusal {
 
 fn compare(left: Rat, right: Rat) -> Result<Ordering, Refusal> {
     left.checked_cmp(right).map_err(|_| arithmetic())
+}
+
+fn interpolate(x: Rat, (x0, y0): (Rat, Rat), (x1, y1): (Rat, Rat)) -> Result<Rat, Refusal> {
+    if x == x0 {
+        return Ok(y0);
+    }
+    if x == x1 {
+        return Ok(y1);
+    }
+    x.checked_sub(x0)
+        .and_then(|increase| increase.checked_div(x1.checked_sub(x0)?))
+        .and_then(|fraction| fraction.checked_mul(y1.checked_sub(y0)?))
+        .and_then(|offset| y0.checked_add(offset))
+        .map_err(|_| arithmetic())
+}
+
+fn validate_constant(recovery: Rat) -> Result<(), Refusal> {
+    if recovery.signum() <= 0 || recovery.num() > recovery.den() {
+        return Err(domain("recovery must be a fraction in (0, 1]"));
+    }
+    Ok(())
 }
 
 impl RecoveryCurve {
@@ -144,6 +206,25 @@ impl RecoveryCurve {
         Ok(())
     }
 
+    /// Recovered metal per dry tonne at a grade on the declared support.
+    ///
+    /// # Errors
+    /// Refuses extrapolation and exact arithmetic overflow.
+    pub fn recovered_grade(&self, grade: Rat) -> Result<Rat, Refusal> {
+        self.check_band(grade, grade)?;
+        for pair in self.knots.windows(2) {
+            let (left, right) = (pair[0], pair[1]);
+            if !compare(grade, right.grade)?.is_gt() {
+                return interpolate(
+                    grade,
+                    (left.grade, left.recovered),
+                    (right.grade, right.recovered),
+                );
+            }
+        }
+        Err(arithmetic())
+    }
+
     fn cutoff(&self, cost: Rat, margin: Rat) -> Result<CurveCutoff, Refusal> {
         let required = cost.checked_div(margin).map_err(|_| arithmetic())?;
         let first = self.knots[0];
@@ -159,15 +240,11 @@ impl RecoveryCurve {
             }
             // The first hit has a strictly positive rise even when subsequent
             // knots form a plateau. Equality returns its leftmost crossing.
-            if required == right.recovered {
-                return Ok(CurveCutoff::AtGrade(right.grade));
-            }
-            let grade = required
-                .checked_sub(left.recovered)
-                .and_then(|rise| rise.checked_div(right.recovered.checked_sub(left.recovered)?))
-                .and_then(|part| part.checked_mul(right.grade.checked_sub(left.grade)?))
-                .and_then(|offset| left.grade.checked_add(offset))
-                .map_err(|_| arithmetic())?;
+            let grade = interpolate(
+                required,
+                (left.recovered, left.grade),
+                (right.recovered, right.grade),
+            )?;
             return Ok(CurveCutoff::AtGrade(grade));
         }
         Ok(CurveCutoff::NoSupportedGradeClears)
@@ -200,14 +277,79 @@ impl LaneTerms {
     /// # Errors
     /// Refuses invalid economics, out-of-domain recovery and exact overflow.
     pub fn evaluate_constant(self, recovery: Rat) -> Result<LaneCutoffs, Refusal> {
-        if recovery.signum() <= 0 || recovery.num() > recovery.den() {
-            return Err(domain("recovery must be a fraction in (0, 1]"));
-        }
+        validate_constant(recovery)?;
         self.map_limits(|cost, margin| {
             margin
                 .checked_mul(recovery)
                 .and_then(|denom| cost.checked_div(denom))
                 .map_err(|_| arithmetic())
+        })
+    }
+
+    /// Screen the grade-tonnage population from highest to lowest grade.
+    /// At a cap, the boundary bin may contribute a proportional share.
+    ///
+    /// # Errors
+    /// Refuses missing, unordered or nonphysical inputs, extrapolation, and
+    /// arithmetic outside the exact range.
+    pub fn balance_feed(
+        self,
+        bins: &[GradeTonnageBin],
+        max_grade: Rat,
+        recovery: GradeRecovery<'_>,
+    ) -> Result<CapacityBalance, Refusal> {
+        if !(1..=MAX_GRADE_BINS).contains(&bins.len()) {
+            return Err(domain("grade-tonnage inventory requires 1 to 128 bins"));
+        }
+        let mill = self.mill_dry_tonnes_per_period;
+        let market = self.market_metal_units_per_period;
+        if mill.signum() <= 0 || market.signum() <= 0 {
+            return Err(domain("mill and market capacities must be positive"));
+        }
+        if let GradeRecovery::Constant(fraction) = recovery {
+            validate_constant(fraction)?;
+        }
+        let zero = Rat::from_integer(0);
+        let mut available_dry_tonnes = zero;
+        let mut available_recovered_metal = zero;
+        let mut previous = None;
+        let mut evaluated = Vec::with_capacity(bins.len());
+        for &bin in bins {
+            if bin.dry_tonnes.signum() <= 0
+                || bin.grade.signum() < 0
+                || compare(bin.grade, max_grade)?.is_gt()
+            {
+                return Err(domain(
+                    "grade-tonnage bins require positive dry tonnes and a physical grade",
+                ));
+            }
+            if let Some(grade) = previous
+                && !compare(bin.grade, grade)?.is_gt()
+            {
+                return Err(domain("grade-tonnage grades must strictly increase"));
+            }
+            previous = Some(bin.grade);
+            let recovered = match recovery {
+                GradeRecovery::Constant(fraction) => {
+                    bin.grade.checked_mul(fraction).map_err(|_| arithmetic())?
+                }
+                GradeRecovery::Curve(curve) => curve.recovered_grade(bin.grade)?,
+            };
+            available_dry_tonnes = available_dry_tonnes
+                .checked_add(bin.dry_tonnes)
+                .map_err(|_| arithmetic())?;
+            available_recovered_metal = recovered
+                .checked_mul(bin.dry_tonnes)
+                .and_then(|metal| available_recovered_metal.checked_add(metal))
+                .map_err(|_| arithmetic())?;
+            evaluated.push((bin, recovered));
+        }
+        Ok(CapacityBalance {
+            available_dry_tonnes,
+            available_recovered_metal,
+            mill_only: allocate_by_grade(&evaluated, Some(mill), None)?,
+            market_only: allocate_by_grade(&evaluated, None, Some(market))?,
+            both: allocate_by_grade(&evaluated, Some(mill), Some(market))?,
         })
     }
 
@@ -274,6 +416,58 @@ impl LaneTerms {
     }
 }
 
+fn allocate_by_grade(
+    bins: &[(GradeTonnageBin, Rat)],
+    mill: Option<Rat>,
+    market: Option<Rat>,
+) -> Result<GradeAllocation, Refusal> {
+    let zero = Rat::from_integer(0);
+    let mut allocation = GradeAllocation {
+        dry_tonnes: zero,
+        recovered_metal: zero,
+        boundary: None,
+    };
+    for &(bin, recovered) in bins.iter().rev() {
+        let mut take = bin.dry_tonnes;
+        if let Some(cap) = mill {
+            let slack = cap
+                .checked_sub(allocation.dry_tonnes)
+                .map_err(|_| arithmetic())?;
+            if compare(take, slack)?.is_gt() {
+                take = slack;
+            }
+        }
+        if let Some(cap) = market {
+            let slack = cap
+                .checked_sub(allocation.recovered_metal)
+                .map_err(|_| arithmetic())?;
+            let metal = take.checked_mul(recovered).map_err(|_| arithmetic())?;
+            if compare(metal, slack)?.is_gt() {
+                take = slack.checked_div(recovered).map_err(|_| arithmetic())?;
+            }
+        }
+        if take.signum() == 0 {
+            break;
+        }
+        allocation.dry_tonnes = allocation
+            .dry_tonnes
+            .checked_add(take)
+            .map_err(|_| arithmetic())?;
+        allocation.recovered_metal = take
+            .checked_mul(recovered)
+            .and_then(|metal| allocation.recovered_metal.checked_add(metal))
+            .map_err(|_| arithmetic())?;
+        allocation.boundary = Some(GradeBoundary {
+            grade: bin.grade,
+            fraction: take.checked_div(bin.dry_tonnes).map_err(|_| arithmetic())?,
+        });
+        if take != bin.dry_tonnes {
+            break;
+        }
+    }
+    Ok(allocation)
+}
+
 /// Compare a closed feed-grade band with a threshold on the same support.
 ///
 /// # Errors
@@ -302,6 +496,46 @@ mod tests {
 
     fn qty(s: &str) -> Rat {
         Rat::from_decimal_str(s).unwrap()
+    }
+
+    #[test]
+    fn grade_capacity_boundary_handles_exact_caps_and_zero_recovery() {
+        let terms = LaneTerms {
+            price_per_metal_unit: qty("100"),
+            selling_cost_per_metal_unit: qty("0"),
+            milling_cost_per_dry_tonne: qty("20"),
+            fixed_cost_per_period: qty("0"),
+            opportunity_cost_per_period: qty("0"),
+            mill_dry_tonnes_per_period: qty("1"),
+            market_metal_units_per_period: qty("0.6"),
+        };
+        let bins = [
+            GradeTonnageBin {
+                grade: qty("0"),
+                dry_tonnes: qty("2"),
+            },
+            GradeTonnageBin {
+                grade: qty("1"),
+                dry_tonnes: qty("1"),
+            },
+        ];
+        let recovery = GradeRecovery::Constant(qty("0.6"));
+        let result = terms.balance_feed(&bins, qty("1"), recovery).unwrap();
+        assert_eq!(result.both, result.mill_only);
+        assert_eq!(result.both.dry_tonnes, qty("1"));
+        assert_eq!(result.both.recovered_metal, qty("0.6"));
+        assert_eq!(
+            result.both.boundary,
+            Some(GradeBoundary {
+                grade: qty("1"),
+                fraction: qty("1")
+            })
+        );
+        // Market-only can also admit the zero-metal bin: the prefix is
+        // intact and recovered metal remains exactly at the cap.
+        assert_eq!(result.market_only.dry_tonnes, qty("3"));
+        assert_eq!(result.market_only.recovered_metal, qty("0.6"));
+        assert_eq!(result.market_only.boundary.unwrap().grade, qty("0"));
     }
 
     #[test]

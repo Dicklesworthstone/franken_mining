@@ -75,6 +75,9 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   accepts an exact recovery fraction, including through `LaneInputs`. The curve path accepts 2–128
   strictly increasing grade knots with physical recovery fractions. Recovered metal per tonne must
   be nondecreasing and is interpolated linearly over the closed declared grade range.
+- The optional `GradeTonnageBin` population represents one period's available dry tonnes at distinct,
+  strictly increasing grades. Each bin uses the same constant or supported recovery curve as the
+  economic cut-offs. The grade-tonnage population has at most 128 bins.
 - `toposort::pcpsp::planning::solve`: a parsed PCPSP model, bounded `Options` (0–1,000 search rounds,
   1–4,096 bound steps, 0–9 share decimals), and an optional exact `candidate::SplitSchedule` at that
   scale. It builds a deterministic TopoSort start, improves periods/destinations, and automatically
@@ -222,7 +225,10 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   For a curve, the result gives the first supported grade reaching break-even or states whether all or
   no supported grades clear. Screening a band that extends outside the curve refuses. Physical domains,
   exact arithmetic, the unchanged constant ratios and the curve's exact crossing have direct controls.
-  Balancing cut-offs and operative policy optimization remain open.
+  `balance_feed` reports the greatest highest-grade-first portion that fits the mill cap alone,
+  the market cap alone, and both together. It retains total available dry tonnes and recoverable
+  metal, selected quantities, and the exact share of the lowest selected grade bin. This capacity
+  check uses the declared one-period inventory. Full mine-life balancing and policy optimization remain open.
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
 - `verify(problem, in_pit, arc_flow)`: the pit's value if the certificate holds.
 - `NestedShells` provides:

@@ -6,8 +6,8 @@ use std::path::Path;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::omf::json::{self, Json};
 use fmine_optimize::cutoff::{
-    CurveCutoff, GradeScreen, LaneCutoffs, LaneTerms, MAX_RECOVERY_KNOTS, RecoveryCurve,
-    screen_grade,
+    CapacityBalance, CurveCutoff, GradeRecovery, GradeScreen, GradeTonnageBin, LaneCutoffs,
+    LaneTerms, MAX_GRADE_BINS, MAX_RECOVERY_KNOTS, RecoveryCurve, screen_grade,
 };
 use fmine_units::ExactQty;
 
@@ -18,7 +18,7 @@ pub(super) const USAGE: &str = "plan cutoff --input <lane-scenario.json>";
 const SCHEMA: &str = "fmine.lane-cutoff.v1";
 const NO_CLAIM: &str = "These exact break-even grades are conditional on one declared period, one metal, constant recovery and the submitted financial and capacity assumptions. A grade screen compares only with the stated limiting case. Selecting a binding constraint, balancing cut-offs and approving an operating policy require separate evidence.";
 const CURVE_NO_CLAIM: &str = "These exact results use one declared period and metal, the submitted economics, and linear interpolation of recovered metal per dry tonne between the declared grade knots. The curve supports only that closed range. Selecting a binding constraint, balancing cut-offs and approving an operating policy require separate evidence.";
-pub(super) const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.lane-cutoff.v1","command":"plan cutoff --input <lane-scenario.json>","basis":"One period and metal on a 100_percent_project basis. All ore is dry_metric_tonne and all metal uses the declared metal_unit (g, kg, oz_t, lb_avdp or t). All monetary terms share one currency. The recovery fraction maps contained to recovered metal sold at the declared net price.","input":"Exact decimal strings for price_per_metal_unit, selling_cost_per_metal_unit, milling_cost_per_dry_tonne, fixed_cost_per_period, opportunity_cost_per_period, mill_dry_tonnes_per_period and market_metal_units_per_period; optional feed_grade_per_dry_tonne object with lower and upper decimal strings. Evidence is assumed or synthetic.","recovery":"Declare exactly one of recovery_fraction or recovery_curve. A curve has 2 to 128 ordered grade_per_dry_tonne and recovery_fraction knots using exact decimal strings. Recovered grade is grade times recovery, rises or stays flat, and is interpolated linearly. The feed band must lie entirely inside the curve. A crossing at a plateau uses the first grade.","output":"Separate mine-, mill- and market-limited cases. Curve reports distinguish an exact cutoff, all_supported_grades_clear, and no_supported_grade_clears. Equality clears. Retains source SHA-256, units, period and uncalibrated status.","example":"tests/planning/lane_cutoff.json","curve_example":"tests/planning/lane_recovery_curve.json"}"#;
+pub(super) const ROBOT_DOCS_JSON: &str = r#"{"schema":"fmine.lane-cutoff.v1","command":"plan cutoff --input <lane-scenario.json>","basis":"One period and metal on a 100_percent_project basis. All ore is dry_metric_tonne and all metal uses the declared metal_unit (g, kg, oz_t, lb_avdp or t). All monetary terms share one currency. The recovery fraction maps contained to recovered metal sold at the declared net price.","input":"Exact decimal strings for price_per_metal_unit, selling_cost_per_metal_unit, milling_cost_per_dry_tonne, fixed_cost_per_period, opportunity_cost_per_period, mill_dry_tonnes_per_period and market_metal_units_per_period; optional feed_grade_per_dry_tonne object with lower and upper decimal strings. Evidence is assumed or synthetic.","recovery":"Declare exactly one of recovery_fraction or recovery_curve. A curve has 2 to 128 ordered grade_per_dry_tonne and recovery_fraction knots using exact decimal strings. Recovered grade is grade times recovery, rises or stays flat, and is interpolated linearly. The feed band must lie entirely inside the curve. A crossing at a plateau uses the first grade.","grade_tonnage":"Optional array of 1 to 128 mined inventory bins on the same period and units, with strictly increasing grade_per_dry_tonne and positive dry_tonnes as exact decimal strings. Every bin must be within recovery support. The capacity screen takes the highest grades first, stopping at the first partial boundary bin. Reports results under the mill cap, the market cap and both, with selected tonnes, metal and boundary share. The screen uses no economic cutoff or optimized operating policy.","output":"Separate mine-, mill- and market-limited cases. Curve reports distinguish an exact cutoff, all_supported_grades_clear, and no_supported_grade_clears. Equality clears. Retains source SHA-256, units, period and uncalibrated status.","example":"tests/planning/lane_cutoff.json","curve_example":"tests/planning/lane_recovery_curve.json","grade_tonnage_example":"tests/planning/lane_grade_tonnage.json"}"#;
 
 const ECONOMIC_FIELDS: [&str; 8] = [
     "price_per_metal_unit",
@@ -88,6 +88,31 @@ fn input_help() -> Vec<NextAction> {
 struct ScenarioCutoffs {
     limits: LaneCutoffs<CurveCutoff>,
     support: Option<(ExactQty, ExactQty)>,
+    balance: Option<CapacityBalance>,
+}
+
+fn parse_grade_tonnage(raw: &Json) -> Result<Vec<GradeTonnageBin>, Refusal> {
+    let rows = raw
+        .as_array()
+        .ok_or_else(|| declaration("grade_tonnage requires an array"))?;
+    if !(1..=MAX_GRADE_BINS).contains(&rows.len()) {
+        return Err(declaration(format!(
+            "grade_tonnage requires 1 to {MAX_GRADE_BINS} bins"
+        )));
+    }
+    rows.iter()
+        .map(|row| {
+            if row.as_object().is_none_or(|fields| fields.len() != 2) {
+                return Err(declaration(
+                    "each grade-tonnage bin requires grade_per_dry_tonne and dry_tonnes",
+                ));
+            }
+            Ok(GradeTonnageBin {
+                grade: quantity(row, "grade_per_dry_tonne")?,
+                dry_tonnes: quantity(row, "dry_tonnes")?,
+            })
+        })
+        .collect()
 }
 
 fn evaluate_cutoffs(
@@ -96,9 +121,18 @@ fn evaluate_cutoffs(
     max_grade: ExactQty,
     grades: Option<(ExactQty, ExactQty)>,
 ) -> Result<ScenarioCutoffs, Refusal> {
+    let bins = doc
+        .get("grade_tonnage")
+        .map(parse_grade_tonnage)
+        .transpose()?;
     match (doc.get("recovery_fraction"), doc.get("recovery_curve")) {
         (Some(_), None) => {
-            let c = terms.evaluate_constant(quantity(doc, "recovery_fraction")?)?;
+            let recovery = quantity(doc, "recovery_fraction")?;
+            let c = terms.evaluate_constant(recovery)?;
+            let balance = bins
+                .as_deref()
+                .map(|bins| terms.balance_feed(bins, max_grade, GradeRecovery::Constant(recovery)))
+                .transpose()?;
             Ok(ScenarioCutoffs {
                 limits: LaneCutoffs {
                     mine: CurveCutoff::AtGrade(c.mine),
@@ -106,6 +140,7 @@ fn evaluate_cutoffs(
                     market: CurveCutoff::AtGrade(c.market),
                 },
                 support: None,
+                balance,
             })
         }
         (None, Some(raw)) => {
@@ -127,15 +162,75 @@ fn evaluate_cutoffs(
             if let Some((lower, upper)) = grades {
                 curve.check_band(lower, upper)?;
             }
+            let balance = bins
+                .as_deref()
+                .map(|bins| terms.balance_feed(bins, max_grade, GradeRecovery::Curve(&curve)))
+                .transpose()?;
             Ok(ScenarioCutoffs {
                 limits: terms.evaluate_curve(&curve)?,
                 support: Some(curve.support()),
+                balance,
             })
         }
         _ => Err(declaration(
             "declare exactly one of recovery_fraction and recovery_curve",
         )),
     }
+}
+
+fn render_balance(
+    balance: CapacityBalance,
+    terms: LaneTerms,
+    unit: &str,
+    markdown: &mut String,
+) -> String {
+    let feed = exact(balance.available_dry_tonnes);
+    let metal = exact(balance.available_recovered_metal);
+    let mill = exact(terms.mill_dry_tonnes_per_period);
+    let market = exact(terms.market_metal_units_per_period);
+    let _ = writeln!(
+        markdown,
+        "\n## Grade-tonnage capacity screen\n\nAvailable: **{feed} dry tonnes** with **{metal} {unit}** recoverable. Mill cap **{mill} dry tonnes**, market cap **{market} {unit}**.\n\nThe screen takes the highest grades first and permits a partial boundary bin. Economic eligibility and the operating cut-off are separate decisions.\n\n| Caps applied | Dry tonnes | Recovered {unit} | Lowest selected grade | Share at that grade |\n|---|---:|---:|---:|---:|"
+    );
+    let mut rows = Vec::new();
+    for (key, caption, allocation) in [
+        ("mill_only", "Mill only", balance.mill_only),
+        ("market_only", "Market only", balance.market_only),
+        ("both", "Mill and market", balance.both),
+    ] {
+        let tonnes = exact(allocation.dry_tonnes);
+        let metal = exact(allocation.recovered_metal);
+        let (grade, share) = allocation.boundary.map_or_else(
+            || ("—".into(), "—".into()),
+            |boundary| (exact(boundary.grade), exact(boundary.fraction)),
+        );
+        let _ = writeln!(
+            markdown,
+            "| {caption} | {tonnes} | {metal} | {grade} | {share} |"
+        );
+        let boundary = if allocation.boundary.is_some() {
+            format!(
+                "{{\"grade_per_dry_tonne\":{},\"selected_fraction\":{}}}",
+                js(&grade),
+                js(&share)
+            )
+        } else {
+            "null".into()
+        };
+        rows.push(format!(
+            "\"{key}\":{{\"dry_tonnes\":{},\"recovered_metal\":{},\"boundary\":{boundary}}}",
+            js(&tonnes),
+            js(&metal)
+        ));
+    }
+    format!(
+        ",\"capacity_balance\":{{\"policy\":\"highest_grade_first\",\"available_dry_tonnes\":{},\"available_recovered_metal\":{},\"mill_dry_tonnes_cap\":{},\"market_recovered_metal_cap\":{},{}}}",
+        js(&feed),
+        js(&metal),
+        js(&mill),
+        js(&market),
+        rows.join(",")
+    )
 }
 
 fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Envelope, Refusal> {
@@ -151,6 +246,7 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
         "evidence",
         "feed_grade_per_dry_tonne",
         "recovery_curve",
+        "grade_tonnage",
     ];
     let members = doc
         .as_object()
@@ -231,6 +327,7 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
     let ScenarioCutoffs {
         limits: cutoffs,
         support,
+        balance,
     } = evaluate_cutoffs(&doc, terms, max_grade, grades)?;
     let source_json = worksheet_input::source_json(source, text.len());
     let mut markdown = format!(
@@ -313,9 +410,12 @@ fn evaluate(text: &str, source: &fmine_core::anchor::SourceAnchor) -> Result<Env
             js(case),
         ));
     }
+    let balance_json = balance.map_or_else(String::new, |balance| {
+        render_balance(balance, terms, metal_unit, &mut markdown)
+    });
     let _ = writeln!(markdown, "\n{no_claim}");
     let payload = format!(
-        "{{\"schema\":\"{SCHEMA}\",\"period\":{},\"currency\":{},\"metal\":{},\"metal_unit\":{},\"ore_mass_basis\":{},\"ownership_basis\":{},\"input_evidence\":{},\"calibration\":\"uncalibrated\",\"source\":{source_json},\"feed_grade_per_dry_tonne\":{grade_json}{curve_json},\"limiting_cutoffs\":[{}]}}",
+        "{{\"schema\":\"{SCHEMA}\",\"period\":{},\"currency\":{},\"metal\":{},\"metal_unit\":{},\"ore_mass_basis\":{},\"ownership_basis\":{},\"input_evidence\":{},\"calibration\":\"uncalibrated\",\"source\":{source_json},\"feed_grade_per_dry_tonne\":{grade_json}{curve_json},\"limiting_cutoffs\":[{}]{balance_json}}}",
         js(period),
         js(currency),
         js(metal),

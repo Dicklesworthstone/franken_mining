@@ -1457,7 +1457,22 @@ In this synthetic example, the 0.30–0.33 g/t band straddles the market-limited
 At a fixed 75% recovery it would clear the market limit throughout. If break-even lies outside the
 curve, the report says whether all supported grades clear or whether none do, with no extrapolated
 grade. The model covers one product and period with declared opportunity cost and capacities.
-Balancing cut-offs and an operative cut-off policy require further evidence.
+Balancing cut-offs for the full mine-life policy and an operative cut-off require further evidence.
+
+Add `grade_tonnage` to screen an already-mined inventory against period capacity. Each bin declares
+its `grade_per_dry_tonne` and positive `dry_tonnes`. The same recovery model applies across every
+bin. The screen takes the highest grade first and can use a proportional share of the last bin.
+
+```bash
+cargo run -p fmine-cli -- plan cutoff \
+  --input tests/planning/lane_grade_tonnage.json --format markdown
+```
+
+The synthetic inventory has **8 dry tonnes**. Under the mill cap alone, **2 tonnes** would recover
+**0.90 g**. With the **0.75 g** market cap also applied, the inventory can supply **1.50 dry tonnes**
+and **0.75 g** at this grade order. That takes all the highest-grade bin and **one sixth** of the
+next. These are capacity screens on a declared inventory. Economic eligibility, other blending
+requirements and the operating policy are evaluated separately.
 
 ### Generate and check production schedules with destination splits
 
