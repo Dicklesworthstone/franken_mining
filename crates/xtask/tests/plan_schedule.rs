@@ -400,6 +400,192 @@ fn plan_blend_horizon_carries_stock_and_enforces_storage_at_close() {
 }
 
 #[test]
+fn plan_blend_values_finite_capacity_options_against_one_baseline() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = std::path::Path::new("tests/planning/route_blend_capacity_options.json");
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = blend(&root, input, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(blend(&root, input, "json").stdout, output.stdout);
+    let envelope = blend_envelope(&output);
+    let payload = envelope.get("payload").unwrap();
+    expect(
+        payload.get("source").unwrap(),
+        "sha256",
+        &sha256(original.as_bytes()).to_hex(),
+    );
+    expect(
+        payload.get("total").unwrap(),
+        "discounted_contribution",
+        "82/1",
+    );
+    let comparison = payload.get("capacity_comparison").unwrap();
+    expect(comparison, "base_discounted_contribution", "82/1");
+    let best = comparison
+        .get("best_positive_options")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        best.iter()
+            .map(|item| item.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["leased-pad", "shared-pad"]
+    );
+    let options = comparison.get("options").unwrap().as_array().unwrap();
+    assert_eq!(options.len(), 7);
+    for (option, (id, gain, cost, net)) in options.iter().zip([
+        ("leased-pad", "62/1", "25/1", "37/1"),
+        ("shared-pad", "62/1", "25/1", "37/1"),
+        ("break-even-pad", "62/1", "62/1", "0/1"),
+        ("costly-pad", "62/1", "63/1", "-1/1"),
+        ("more-power", "0/1", "5/1", "-5/1"),
+        ("more-mill", "0/1", "5/1", "-5/1"),
+        ("larger-contract", "0/1", "5/1", "-5/1"),
+    ]) {
+        expect(option, "id", id);
+        expect(option, "break_even_present_value_cost", gain);
+        expect(option, "present_value_cost", cost);
+        expect(option, "net_present_value_improvement", net);
+    }
+    expect(&options[0], "discounted_contribution", "144/1");
+    expect(&options[0], "base_cap", "0/1");
+    expect(&options[0], "new_cap", "1/1");
+    expect(&options[4], "capacity_unit", "kWh");
+    expect(&options[5], "capacity_unit", "dry_metric_tonne");
+    expect(&options[6], "capacity_unit", "g");
+    let markdown = blend(&root, input, "markdown");
+    assert!(markdown.status.success());
+    let markdown = String::from_utf8(markdown.stdout).unwrap();
+    assert!(markdown.contains("**Best by net value** leased-pad, shared-pad"));
+
+    let scratch =
+        std::env::temp_dir().join(format!("fmine-capacity-options-{}", std::process::id()));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, worksheet: &str| {
+        let path = scratch.join(name);
+        std::fs::write(&path, worksheet).unwrap();
+        blend_envelope(&blend(&root, &path, "json"))
+    };
+    let usable_stockpile = original.replace(
+        r#""stockpile_cap_dry_tonnes": "0""#,
+        r#""stockpile_cap_dry_tonnes": "1""#,
+    );
+    for (name, row, from, to) in [
+        (
+            "energy.json",
+            4,
+            r#""energy_budget_kwh": "20""#,
+            r#""energy_budget_kwh": "10""#,
+        ),
+        (
+            "mill.json",
+            5,
+            r#""dry_tonnes_cap": "2""#,
+            r#""dry_tonnes_cap": "1""#,
+        ),
+        (
+            "market.json",
+            6,
+            r#""market_recovered_metal_cap": "2""#,
+            r#""market_recovered_metal_cap": "1""#,
+        ),
+    ] {
+        assert!(usable_stockpile.contains(from));
+        let report = submit(name, &usable_stockpile.replace(from, to));
+        let comparison = report
+            .get("payload")
+            .unwrap()
+            .get("capacity_comparison")
+            .unwrap();
+        expect(comparison, "base_discounted_contribution", "82/1");
+        let options = comparison.get("options").unwrap().as_array().unwrap();
+        for (i, option) in options.iter().enumerate() {
+            expect(
+                option,
+                "break_even_present_value_cost",
+                if i == row { "62/1" } else { "0/1" },
+            );
+        }
+        expect(&options[row], "net_present_value_improvement", "57/1");
+    }
+    let combined = usable_stockpile
+        .replace(
+            r#""energy_budget_kwh": "20""#,
+            r#""energy_budget_kwh": "10""#,
+        )
+        .replace(
+            r#""market_recovered_metal_cap": "2""#,
+            r#""market_recovered_metal_cap": "1""#,
+        );
+    let report = submit("two_binding_limits.json", &combined);
+    let comparison = report
+        .get("payload")
+        .unwrap()
+        .get("capacity_comparison")
+        .unwrap();
+    assert!(
+        comparison
+            .get("best_positive_options")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    for option in comparison.get("options").unwrap().as_array().unwrap() {
+        expect(option, "break_even_present_value_cost", "0/1");
+    }
+
+    for (name, from, to, code) in [
+        (
+            "negative_cost.json",
+            r#""present_value_cost": "25""#,
+            r#""present_value_cost": "-1""#,
+            "FMINE-REF-109",
+        ),
+        (
+            "zero_increase.json",
+            r#""increase": "10""#,
+            r#""increase": "0""#,
+            "FMINE-REF-109",
+        ),
+        (
+            "missing_period.json",
+            r#""period": "week-2""#,
+            r#""period": "missing""#,
+            "FMINE-REF-107",
+        ),
+        (
+            "bad_target.json",
+            r#""kind": "market""#,
+            r#""kind": "market", "route": "mill""#,
+            "FMINE-REF-107",
+        ),
+        (
+            "uncapped.json",
+            r#", "stockpile_cap_dry_tonnes": "0""#,
+            "",
+            "FMINE-REF-107",
+        ),
+        (
+            "duplicate.json",
+            r#""id": "shared-pad""#,
+            r#""id": "leased-pad""#,
+            "FMINE-REF-107",
+        ),
+    ] {
+        assert!(original.contains(from));
+        let refusal = submit(name, &original.replace(from, to));
+        assert_eq!(refusal.get("payload"), Some(&Json::Null));
+        expect(refusal.get("refusal").unwrap(), "code", code);
+    }
+}
+
+#[test]
 fn lane_grade_tonnage_binary_reports_exact_partial_bin_for_all_cap_cases() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = "tests/planning/lane_grade_tonnage.json";

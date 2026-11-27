@@ -1,0 +1,57 @@
+{
+  "schema": "fmine.route-blend-horizon.v1",
+  "currency": "USD",
+  "metal": "Au",
+  "metal_unit": "g",
+  "ore_mass_basis": "dry_metric_tonne",
+  "ownership_basis": "100_percent_project",
+  "evidence": "synthetic",
+  "parcels": [
+    { "id": "feed", "available_dry_tonnes": "1", "grade_per_dry_tonne": "1", "stockpile_cap_dry_tonnes": "0" }
+  ],
+  "periods": [
+    {
+      "id": "week-1",
+      "discount_factor": "1",
+      "price_per_metal_unit": "30",
+      "selling_cost_per_metal_unit": "0",
+      "market_recovered_metal_cap": "1",
+      "arrivals": [],
+      "routes": [
+        {
+          "id": "mill",
+          "dry_tonnes_cap": "1",
+          "milling_cost_per_dry_tonne": "20",
+          "energy_budget_kwh": "10",
+          "pairs": [{ "parcel": "feed", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0", "specific_energy_kwh_per_dry_tonne": "10" }]
+        }
+      ]
+    },
+    {
+      "id": "week-2",
+      "discount_factor": "0.9",
+      "price_per_metal_unit": "100",
+      "selling_cost_per_metal_unit": "0",
+      "market_recovered_metal_cap": "2",
+      "arrivals": [{ "parcel": "feed", "dry_tonnes": "1" }],
+      "routes": [
+        {
+          "id": "mill",
+          "dry_tonnes_cap": "2",
+          "milling_cost_per_dry_tonne": "20",
+          "energy_budget_kwh": "20",
+          "pairs": [{ "parcel": "feed", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0", "specific_energy_kwh_per_dry_tonne": "10" }]
+        }
+      ]
+    }
+  ],
+  "capacity_options": [
+    { "id": "leased-pad", "kind": "stockpile", "parcel": "feed", "increase": "1", "present_value_cost": "25" },
+    { "id": "shared-pad", "kind": "stockpile", "parcel": "feed", "increase": "1", "present_value_cost": "25" },
+    { "id": "break-even-pad", "kind": "stockpile", "parcel": "feed", "increase": "1", "present_value_cost": "62" },
+    { "id": "costly-pad", "kind": "stockpile", "parcel": "feed", "increase": "1", "present_value_cost": "63" },
+    { "id": "more-power", "kind": "route_energy", "period": "week-2", "route": "mill", "increase": "10", "present_value_cost": "5" },
+    { "id": "more-mill", "kind": "route_throughput", "period": "week-2", "route": "mill", "increase": "1", "present_value_cost": "5" },
+    { "id": "larger-contract", "kind": "market", "period": "week-2", "increase": "1", "present_value_cost": "5" }
+  ]
+}

@@ -1539,6 +1539,25 @@ the second tonne that arrives that week. Discounted contribution is **USD 144**,
 **USD 82** if a zero-stockpile limit requires processing the opening tonne in week 1. The worksheet
 keeps parcel grades fixed and takes arrivals and discounts as declared inputs.
 
+### Value extra mill, power, sales or storage capacity
+
+Add `capacity_options` to a horizon worksheet to compare up to eight quoted options against
+the same feasible base case. Each option raises one cap and reruns the whole horizon. The gain
+in discounted contribution is the break-even present-value cost of that specific increase. The
+report subtracts the submitted cost and shows the best positive options, including ties.
+
+```bash
+cargo run -p fmine-cli -- plan blend \
+  --input tests/planning/route_blend_capacity_options.json --format markdown
+```
+
+In the synthetic example, an extra dry tonne of storage lets the mill shift feed to the more
+valuable week. It adds **USD 62** in discounted contribution and **USD 37** after the quoted
+USD 25 present-value cost. Extra week-two power, plant throughput and offtake add no value at
+their submitted increments because the stockpile cap still limits feed. Each option is evaluated
+on its own. The quoted cost must already be discounted in the worksheet's currency and
+100%-project basis.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.
