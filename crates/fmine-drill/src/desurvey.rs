@@ -22,7 +22,7 @@ use crate::records::{
     Collar, DrillError, Orientation, Survey, SurveyInstrument, validate_collar, validate_survey,
 };
 
-const DEG: f64 = core::f64::consts::PI / 180.0;
+pub(crate) const DEG: f64 = core::f64::consts::PI / 180.0;
 
 /// Below this half-dogleg (rad), `tan(h)/h` is taken from its series.
 const SMALL_HALF_DOGLEG: f64 = 1e-4;
@@ -80,7 +80,7 @@ impl Direction {
         (azimuth, dip)
     }
 
-    const fn v(self) -> [f64; 3] {
+    pub(crate) const fn v(self) -> [f64; 3] {
         [self.east, self.north, self.up]
     }
 
@@ -335,19 +335,19 @@ impl Trace {
 
 /// Millimetres to metres. Depths below 2^53 mm are exact.
 #[allow(clippy::cast_precision_loss)]
-fn metres(mm: u64) -> f64 {
+pub(crate) fn metres(mm: u64) -> f64 {
     mm as f64 / 1000.0
 }
 
-fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+pub(crate) fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+pub(crate) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-fn scale(a: [f64; 3], k: f64) -> [f64; 3] {
+pub(crate) fn scale(a: [f64; 3], k: f64) -> [f64; 3] {
     [a[0] * k, a[1] * k, a[2] * k]
 }
 
@@ -371,7 +371,7 @@ fn half_dogleg(t1: Direction, t2: Direction) -> (f64, f64, f64) {
 }
 
 /// The minimum-curvature step over `length_m` from direction `t1` to direction `t2`.
-fn step(t1: Direction, t2: Direction, length_m: f64) -> [f64; 3] {
+pub(crate) fn step(t1: Direction, t2: Direction, length_m: f64) -> [f64; 3] {
     let (half, sum, diff) = half_dogleg(t1, t2);
     // tan(h)/h, the ratio factor; tan(h) = |t2 − t1| / |t2 + t1|.
     let ratio = if half < SMALL_HALF_DOGLEG {
@@ -384,7 +384,7 @@ fn step(t1: Direction, t2: Direction, length_m: f64) -> [f64; 3] {
 }
 
 /// The direction a `fraction` of the way along the arc from `t1` to `t2` (spherical interpolation).
-fn turn(t1: Direction, t2: Direction, fraction: f64) -> Direction {
+pub(crate) fn turn(t1: Direction, t2: Direction, fraction: f64) -> Direction {
     let (half, _, _) = half_dogleg(t1, t2);
     let dogleg = 2.0 * half;
     if dogleg < SMALL_HALF_DOGLEG {
