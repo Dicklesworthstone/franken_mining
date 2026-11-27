@@ -246,4 +246,20 @@ fn test_gate_core_02_dispersion_collapse_integrity_alarm_and_pattern_monitors() 
             && a.scope == AlarmScope::Integrity
             && a.statistic == 0.0
     }));
+
+    // 5. Long-horizon (2,000-step) strongly drifted stream keeps log-wealth & display wealth
+    //    strictly finite (no f64 infinity overflow or zero underflow over multi-year streams).
+    let mut long_mon = CrmSequentialMonitor::new(stream_config()).expect("long monitor");
+    for _ in 0..2_000 {
+        long_mon
+            .observe(CrmStreamValue {
+                measured: mu + 2.5 * sigma,
+            })
+            .expect("observe");
+    }
+    let long_snap = long_mon.snapshot();
+    assert!(long_snap.eproc_log_wealth.is_finite() && long_snap.eproc_log_wealth > 500.0);
+    assert!(long_snap.eproc_max_log_wealth.is_finite());
+    assert!(long_snap.eproc_wealth.is_finite());
+    assert!(long_snap.eproc_alarm_step.is_some());
 }

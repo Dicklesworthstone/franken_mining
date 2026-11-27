@@ -376,6 +376,18 @@ impl SiteBlankRule {
     }
 }
 
+/// Grade of the routine sample immediately preceding a blank in laboratory batch order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PrecedingSampleGrade {
+    /// Measured routine sample mass fraction in `[0, 1]`.
+    Measured(f64),
+    /// Over-limit (`>UL`) routine sample whose true grade strictly exceeds `limit`.
+    AboveUpper {
+        /// Upper analytical reporting limit (mass fraction in `(0, 1]`).
+        limit: f64,
+    },
+}
+
 /// One blank observation with optional preceding routine sample grade (for carryover checks).
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlankObservation {
@@ -391,8 +403,8 @@ pub struct BlankObservation {
     pub lab_batch: String,
     /// Observed blank assay value (below-detection is kept as non-detect, never DL/2).
     pub value: AssayValue,
-    /// Preceding routine sample grade (mass fraction), if known for carryover rules.
-    pub preceding_sample_mass_fraction: Option<f64>,
+    /// Preceding routine sample grade (measured or over-limit lower bound), if known for carryover rules.
+    pub preceding_sample_grade: Option<PrecedingSampleGrade>,
 }
 
 /// Verdict for a single blank observation.
@@ -460,16 +472,30 @@ pub fn evaluate_blanks(
     let mut failure_count = 0usize;
 
     for obs in observations {
-        if let Some(prev) = obs.preceding_sample_mass_fraction
-            && !(prev.is_finite() && (0.0..=1.0).contains(&prev))
-        {
-            return Err(QaqcError::invalid(
-                "blank.preceding_sample_mass_fraction",
-                format!(
-                    "result '{}': preceding grade {prev} outside [0, 1]",
-                    obs.result_id
-                ),
-            ));
+        match obs.preceding_sample_grade {
+            Some(PrecedingSampleGrade::Measured(prev))
+                if !(prev.is_finite() && (0.0..=1.0).contains(&prev)) =>
+            {
+                return Err(QaqcError::invalid(
+                    "blank.preceding_sample_grade",
+                    format!(
+                        "result '{}': preceding grade {prev} outside [0, 1]",
+                        obs.result_id
+                    ),
+                ));
+            }
+            Some(PrecedingSampleGrade::AboveUpper { limit })
+                if !(limit.is_finite() && limit > 0.0 && limit <= 1.0) =>
+            {
+                return Err(QaqcError::invalid(
+                    "blank.preceding_sample_grade",
+                    format!(
+                        "result '{}': preceding upper limit {limit} outside (0, 1]",
+                        obs.result_id
+                    ),
+                ));
+            }
+            _ => {}
         }
 
         let (status, measured_mass_fraction) = match obs.value {
@@ -511,20 +537,30 @@ pub fn evaluate_blanks(
                     BlankFailureMode::CarryoverAnd {
                         abs_threshold,
                         carryover_fraction,
-                    } => match obs.preceding_sample_mass_fraction {
-                        Some(prev) => {
+                    } => match obs.preceding_sample_grade {
+                        Some(PrecedingSampleGrade::Measured(prev)) => {
                             mass_fraction > abs_threshold
                                 && mass_fraction > carryover_fraction * prev
+                        }
+                        Some(PrecedingSampleGrade::AboveUpper { limit }) => {
+                            // True preceding grade > limit: guaranteed pass if <= carryover_fraction * limit;
+                            // conservatively fail if above both abs_threshold and carryover_fraction * limit.
+                            mass_fraction > abs_threshold
+                                && mass_fraction > carryover_fraction * limit
                         }
                         None => mass_fraction > abs_threshold,
                     },
                     BlankFailureMode::CarryoverOr {
                         abs_threshold,
                         carryover_fraction,
-                    } => match obs.preceding_sample_mass_fraction {
-                        Some(prev) => {
+                    } => match obs.preceding_sample_grade {
+                        Some(PrecedingSampleGrade::Measured(prev)) => {
                             mass_fraction > abs_threshold
                                 || mass_fraction > carryover_fraction * prev
+                        }
+                        Some(PrecedingSampleGrade::AboveUpper { limit }) => {
+                            mass_fraction > abs_threshold
+                                || mass_fraction > carryover_fraction * limit
                         }
                         None => mass_fraction > abs_threshold,
                     },
@@ -688,12 +724,12 @@ pub fn compute_insertion_rates(
     let mut umpire_count = 0usize;
 
     for ins in insertions {
-        if !sample_map.contains_key(ins.sample_id.as_str()) {
+        let Some(sample) = sample_map.get(ins.sample_id.as_str()) else {
             return Err(QaqcError::UnusableInput {
                 context: format!("qc.insertion '{}'", ins.insertion_id),
                 detail: format!("references unknown sample '{}'", ins.sample_id),
             });
-        }
+        };
         if !qc_sample_ids.insert(ins.sample_id.as_str()) {
             return Err(QaqcError::invalid(
                 "insertions",
@@ -704,26 +740,104 @@ pub fn compute_insertion_rates(
             ));
         }
         match &ins.kind {
-            QcKind::Crm { .. } => crm_count += 1,
-            QcKind::Blank {
-                stage: BlankStage::Coarse,
-            } => coarse_blank_count += 1,
-            QcKind::Blank {
-                stage: BlankStage::Pulp,
-            } => pulp_blank_count += 1,
+            QcKind::Crm { .. } => {
+                if sample.sample_type != SampleType::QcMaterial {
+                    return Err(QaqcError::invalid(
+                        "insertions",
+                        format!(
+                            "CRM insertion '{}' references non-QcMaterial sample '{}' ({})",
+                            ins.insertion_id,
+                            ins.sample_id,
+                            sample.sample_type.code()
+                        ),
+                    ));
+                }
+                crm_count += 1;
+            }
+            QcKind::Blank { stage } => {
+                if sample.sample_type != SampleType::QcMaterial {
+                    return Err(QaqcError::invalid(
+                        "insertions",
+                        format!(
+                            "blank insertion '{}' references non-QcMaterial sample '{}' ({})",
+                            ins.insertion_id,
+                            ins.sample_id,
+                            sample.sample_type.code()
+                        ),
+                    ));
+                }
+                match stage {
+                    BlankStage::Coarse => coarse_blank_count += 1,
+                    BlankStage::Pulp => pulp_blank_count += 1,
+                }
+            }
             QcKind::Duplicate {
-                stage: DuplicateStage::Field,
-                ..
-            } => field_dup_count += 1,
-            QcKind::Duplicate {
-                stage: DuplicateStage::CoarseReject,
-                ..
-            } => coarse_dup_count += 1,
-            QcKind::Duplicate {
-                stage: DuplicateStage::Pulp,
-                ..
-            } => pulp_dup_count += 1,
-            QcKind::Umpire { .. } => umpire_count += 1,
+                stage,
+                original_sample_id,
+            } => {
+                if sample.sample_type == SampleType::QcMaterial {
+                    return Err(QaqcError::invalid(
+                        "insertions",
+                        format!(
+                            "duplicate insertion '{}' must reference a drilled sample, not QcMaterial '{}'",
+                            ins.insertion_id, ins.sample_id
+                        ),
+                    ));
+                }
+                if original_sample_id == &ins.sample_id {
+                    return Err(QaqcError::invalid(
+                        "insertions",
+                        format!(
+                            "duplicate insertion '{}' cannot reference itself ('{}')",
+                            ins.insertion_id, ins.sample_id
+                        ),
+                    ));
+                }
+                if !sample_map.contains_key(original_sample_id.as_str()) {
+                    return Err(QaqcError::UnusableInput {
+                        context: format!("qc.insertion '{}'", ins.insertion_id),
+                        detail: format!(
+                            "duplicate references unknown original sample '{original_sample_id}'"
+                        ),
+                    });
+                }
+                match stage {
+                    DuplicateStage::Field => field_dup_count += 1,
+                    DuplicateStage::CoarseReject => coarse_dup_count += 1,
+                    DuplicateStage::Pulp => pulp_dup_count += 1,
+                }
+            }
+            QcKind::Umpire {
+                original_sample_id, ..
+            } => {
+                if sample.sample_type == SampleType::QcMaterial {
+                    return Err(QaqcError::invalid(
+                        "insertions",
+                        format!(
+                            "umpire insertion '{}' must reference a drilled sample, not QcMaterial '{}'",
+                            ins.insertion_id, ins.sample_id
+                        ),
+                    ));
+                }
+                if original_sample_id == &ins.sample_id {
+                    return Err(QaqcError::invalid(
+                        "insertions",
+                        format!(
+                            "umpire insertion '{}' cannot reference itself ('{}')",
+                            ins.insertion_id, ins.sample_id
+                        ),
+                    ));
+                }
+                if !sample_map.contains_key(original_sample_id.as_str()) {
+                    return Err(QaqcError::UnusableInput {
+                        context: format!("qc.insertion '{}'", ins.insertion_id),
+                        detail: format!(
+                            "umpire references unknown original sample '{original_sample_id}'"
+                        ),
+                    });
+                }
+                umpire_count += 1;
+            }
         }
     }
 
@@ -871,7 +985,8 @@ pub fn evaluate_campaign_qaqc(
     let mut blanks_by_lab: BTreeMap<String, Vec<BlankObservation>> = BTreeMap::new();
     let mut all_labs: BTreeSet<String> = BTreeSet::new();
     let mut routine_by_batch: BTreeMap<(String, String), Vec<(&str, &str)>> = BTreeMap::new();
-    let mut prev_routine_grade_by_batch: BTreeMap<(String, String), f64> = BTreeMap::new();
+    let mut prev_routine_grade_by_batch: BTreeMap<(String, String), PrecedingSampleGrade> =
+        BTreeMap::new();
 
     for res in ordered_results {
         all_labs.insert(res.lab.clone());
@@ -928,7 +1043,7 @@ pub fn evaluate_campaign_qaqc(
                             lab: res.lab.clone(),
                             lab_batch: res.lab_batch.clone(),
                             value: res.value,
-                            preceding_sample_mass_fraction: preceding,
+                            preceding_sample_grade: preceding,
                         });
                 }
                 QcKind::Duplicate { .. } | QcKind::Umpire { .. } => {}
@@ -940,10 +1055,16 @@ pub fn evaluate_campaign_qaqc(
                 .push((res.result_id.as_str(), res.sample_id.as_str()));
             match res.value {
                 AssayValue::Measured { mass_fraction } => {
-                    prev_routine_grade_by_batch.insert(batch_key, mass_fraction);
+                    prev_routine_grade_by_batch
+                        .insert(batch_key, PrecedingSampleGrade::Measured(mass_fraction));
                 }
-                AssayValue::BelowDetection { .. } | AssayValue::AboveUpper { .. } => {
-                    // Clear stale preceding grade so an earlier high-grade sample never leaks past a censored sample.
+                AssayValue::AboveUpper { limit } => {
+                    // Over-limit ore is the highest-risk carryover source: preserve its lower bound `limit`.
+                    prev_routine_grade_by_batch
+                        .insert(batch_key, PrecedingSampleGrade::AboveUpper { limit });
+                }
+                AssayValue::BelowDetection { .. } => {
+                    // Clear stale preceding grade so an earlier high-grade sample never leaks past a <DL sample.
                     prev_routine_grade_by_batch.remove(&batch_key);
                 }
             }

@@ -575,6 +575,12 @@ pub fn gy_general_fse_variance(input: &GyGeneralInput) -> Result<f64, QaqcError>
         * input.granulometric_g
         * input.liberation_l
         * d3;
+    if !var.is_finite() {
+        return Err(QaqcError::NumericalFailure {
+            context: "gy.general_fse".to_string(),
+            detail: "FSE relative variance overflowed to non-finite value".to_string(),
+        });
+    }
     Ok(var)
 }
 
@@ -922,11 +928,24 @@ pub fn evaluate_gy_nomogram(request: &GyNomogramRequest) -> Result<GyNomogramRep
         let var = request.constants.k
             * pow_pos(st.nominal_diameter_cm, request.constants.alpha)
             * (1.0 / st.sample_mass_g - 1.0 / st.lot_mass_g);
+        if !var.is_finite() {
+            return Err(QaqcError::NumericalFailure {
+                context: format!("gy.stage '{}'", st.stage_name),
+                detail: "stage FSE relative variance overflowed to non-finite value".to_string(),
+            });
+        }
         let insufficient_increments = st.increments < GY_MIN_INCREMENTS;
         if insufficient_increments {
             any_increment_flag = true;
         }
         total_fse_rel_var += var;
+        if !total_fse_rel_var.is_finite() {
+            return Err(QaqcError::NumericalFailure {
+                context: "gy.nomogram".to_string(),
+                detail: "cumulative FSE relative variance overflowed to non-finite value"
+                    .to_string(),
+            });
+        }
         stage_outcomes.push(GyStageOutcome {
             stage_name: st.stage_name.clone(),
             fse_rel_var: var,

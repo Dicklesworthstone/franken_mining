@@ -1,10 +1,13 @@
-//! Sequential QA/QC monitors: anytime-valid e-process drift detection (`BD-169`, wired to
-//! `fmine_numerics::eproc::BettingEProcess`) and pattern + dispersion-collapse (tampering)
-//! monitors (`BD-283`, plan §12.4, E367–E368, `GATE-CORE-02`).
+//! Sequential QA/QC monitors: anytime-valid log-wealth e-process drift detection (`BD-169`,
+//! wired to `fmine_numerics::eproc::ScoreBettingEProcess`) and pattern + dispersion-collapse
+//! (tampering) monitors (`BD-283`, plan §12.4, E367–E368, `GATE-CORE-02`).
 //! Determinism: BitwisePortable (IEEE-754 arithmetic and `fmine_core::det` primitives only).
 
+use std::collections::VecDeque;
+
+use fmine_core::det;
 use fmine_drill::records::AssayMethod;
-use fmine_numerics::eproc::BettingEProcess;
+use fmine_numerics::eproc::ScoreBettingEProcess;
 
 use crate::crm::SdBasis;
 use crate::error::QaqcError;
@@ -189,9 +192,15 @@ pub struct CrmMonitorSnapshot {
     pub key: CrmStreamKey,
     /// Observations processed.
     pub n_steps: usize,
-    /// Current e-process wealth `E_t`.
+    /// Current e-process log-wealth `ln E_t` (overflow/underflow-safe over arbitrary horizons).
+    pub eproc_log_wealth: f64,
+    /// Running maximum e-process log-wealth `max_{s<=t} ln E_s`.
+    pub eproc_max_log_wealth: f64,
+    /// Ville's rejection log-threshold `-ln(alpha)`.
+    pub eproc_log_threshold: f64,
+    /// Current e-process wealth `exp(min(ln E_t, 700))` for display (exact alarm uses log-wealth).
     pub eproc_wealth: f64,
-    /// Running maximum e-process wealth `max_{s<=t} E_s`.
+    /// Running maximum e-process wealth `exp(min(max ln E_s, 700))` for display.
     pub eproc_max_wealth: f64,
     /// Ville's rejection threshold `1 / alpha`.
     pub eproc_threshold: f64,
@@ -206,13 +215,13 @@ pub struct CrmMonitorSnapshot {
 }
 
 /// Combined sequential QA/QC monitor per `(CRM, lab, method)`:
-/// 1. Anytime-valid PIT betting e-process (`fmine_numerics::eproc::BettingEProcess`, `BD-169`).
+/// 1. Anytime-valid log-wealth PIT betting e-process (`fmine_numerics::eproc::ScoreBettingEProcess`, `BD-169`).
 /// 2. Multi-rule pattern monitors (`2 > ±2 SD`, `4 > ±1 SD` same side, sign imbalance, `BD-283`).
 /// 3. Rolling chi-square dispersion-collapse tampering monitor (`AlarmScope::Integrity`, `BD-283`).
 #[derive(Clone, Debug)]
 pub struct CrmSequentialMonitor {
     config: CrmMonitorConfig,
-    eproc: BettingEProcess,
+    eproc: ScoreBettingEProcess,
     n_steps: usize,
     eproc_alarm_step: Option<usize>,
     dispersion_collapse_step: Option<usize>,
@@ -227,7 +236,7 @@ pub struct CrmSequentialMonitor {
     neg_signs: usize,
     sign_alarmed: bool,
     // Rolling window of recent z-scores for dispersion-collapse check.
-    recent_z: Vec<f64>,
+    recent_z: VecDeque<f64>,
     alarms: Vec<MonitorAlarm>,
 }
 
@@ -242,7 +251,9 @@ impl CrmSequentialMonitor {
     /// Creates a new sequential monitor for one `(CRM, lab, method)` stream.
     pub fn new(config: CrmMonitorConfig) -> Result<Self, QaqcError> {
         config.validate()?;
-        let eproc = BettingEProcess::new(0.5, config.eproc_alpha)?;
+        // Centred PIT score psi_t = Phi(z_t) - 0.5 in [-0.5, 0.5]; under H_0, E[psi_t] = 0
+        // and Var(psi_t) = 1/12. Log-space tracking prevents overflow/underflow on multi-year streams.
+        let eproc = ScoreBettingEProcess::new(-0.5, 0.5, 1.0 / 12.0, 0.75, config.eproc_alpha)?;
         Ok(Self {
             config,
             eproc,
@@ -257,7 +268,7 @@ impl CrmSequentialMonitor {
             pos_signs: 0,
             neg_signs: 0,
             sign_alarmed: false,
-            recent_z: Vec::new(),
+            recent_z: VecDeque::new(),
             alarms: Vec::new(),
         })
     }
@@ -277,20 +288,20 @@ impl CrmSequentialMonitor {
         let z = (value.measured - self.config.certified_mean) / self.config.reference_sd;
         let mut step_alarms = Vec::new();
 
-        // 1. Anytime-valid PIT betting e-process (BD-169).
-        // Under H_0: X_t ~ N(mu, sigma^2), U_t = Phi(z_t) ~ Uniform(0, 1) with E[U_t] = 0.5.
-        let u = normal_cdf(z);
-        let wealth = self.eproc.observe(u)?;
+        // 1. Anytime-valid log-wealth PIT betting e-process (BD-169).
+        // Under H_0: X_t ~ N(mu, sigma^2), psi_t = Phi(z_t) - 0.5 ~ Uniform(-0.5, 0.5) with E[psi_t] = 0.
+        let score = normal_cdf(z) - 0.5;
+        let log_wealth = self.eproc.observe(score)?;
         if self.eproc.rejected_null() && self.eproc_alarm_step.is_none() {
             self.eproc_alarm_step = Some(step);
             step_alarms.push(MonitorAlarm {
                 monitor: MonitorKind::EProcessDrift,
                 scope: AlarmScope::CalibrationOrBias,
                 step,
-                statistic: wealth,
+                statistic: log_wealth,
                 detail: format!(
-                    "e-process wealth {wealth:.2} crossed Ville threshold {:.2} (alpha={})",
-                    self.eproc.threshold(),
+                    "e-process log-wealth {log_wealth:.3} crossed Ville log-threshold {:.3} (alpha={})",
+                    self.eproc.log_threshold(),
                     self.config.eproc_alpha
                 ),
             });
@@ -368,12 +379,12 @@ impl CrmSequentialMonitor {
 
         // 5. Rolling dispersion-collapse (tampering) monitor (E368, GATE-CORE-02).
         // Opens an Integrity InvestigationCase, never a recalibration.
-        self.recent_z.push(z);
+        self.recent_z.push_back(z);
         if self.recent_z.len() > self.config.dispersion_window {
-            self.recent_z.remove(0);
+            let _ = self.recent_z.pop_front();
         }
         if self.recent_z.len() == self.config.dispersion_window
-            && let Some((_mean, ratio_sd)) = mean_and_sample_sd(&self.recent_z)
+            && let Some((_mean, ratio_sd)) = mean_and_sample_sd(self.recent_z.make_contiguous())
         {
             self.latest_dispersion_ratio = Some(ratio_sd);
             let df = u32::try_from(self.config.dispersion_window - 1).unwrap_or(u32::MAX);
@@ -415,12 +426,17 @@ impl CrmSequentialMonitor {
     /// Current snapshot of monitor state and alarms.
     #[must_use]
     pub fn snapshot(&self) -> CrmMonitorSnapshot {
+        let log_w = self.eproc.log_wealth();
+        let max_log_w = self.eproc.max_log_wealth();
         CrmMonitorSnapshot {
             key: self.config.key.clone(),
             n_steps: self.n_steps,
-            eproc_wealth: self.eproc.wealth,
-            eproc_max_wealth: self.eproc.max_wealth,
-            eproc_threshold: self.eproc.threshold(),
+            eproc_log_wealth: log_w,
+            eproc_max_log_wealth: max_log_w,
+            eproc_log_threshold: self.eproc.log_threshold(),
+            eproc_wealth: det::exp(log_w.min(700.0)),
+            eproc_max_wealth: det::exp(max_log_w.min(700.0)),
+            eproc_threshold: 1.0 / self.config.eproc_alpha,
             eproc_alarm_step: self.eproc_alarm_step,
             dispersion_collapse_step: self.dispersion_collapse_step,
             latest_dispersion_ratio: self.latest_dispersion_ratio,

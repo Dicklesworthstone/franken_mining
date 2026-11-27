@@ -171,19 +171,12 @@ pub fn fit_censored_lognormal_mle(dataset: &CensoredDataset) -> Result<Lognormal
     let log_c: Vec<f64> = censored_limits.iter().map(|&dl| det::ln(dl)).collect();
     let sum_log_u: f64 = log_u.iter().sum();
 
-    let (init_mu, init_sd) =
+    let (init_mu, raw_init_sd) =
         mean_and_sample_sd(&log_u).ok_or_else(|| QaqcError::InsufficientData {
             context: "censored.mle".to_string(),
             required: 2,
             actual: log_u.len(),
         })?;
-    if !(init_sd.is_finite() && init_sd > 1e-12) {
-        return Err(QaqcError::NumericalFailure {
-            context: "censored.mle".to_string(),
-            detail: "uncensored log-values have zero variance; scale parameter is degenerate"
-                .to_string(),
-        });
-    }
 
     let n_u = log_u.len();
     let n_c = log_c.len();
@@ -191,14 +184,38 @@ pub fn fit_censored_lognormal_mle(dataset: &CensoredDataset) -> Result<Lognormal
 
     // Fast exact closed-form path when there is no censoring (MLE uses 1/n divisor).
     if n_c == 0 {
+        if !(raw_init_sd.is_finite() && raw_init_sd > 1e-12) {
+            return Err(QaqcError::NumericalFailure {
+                context: "censored.mle".to_string(),
+                detail: "uncensored log-values have zero variance; scale parameter is degenerate"
+                    .to_string(),
+            });
+        }
         let mu = init_mu;
         let var_mle = log_u.iter().map(|&y| (y - mu) * (y - mu)).sum::<f64>() / (n_u as f64);
         let sigma = det::sqrt(var_mle);
         let ll = eval_loglik(&log_u, &log_c, sum_log_u, mu, sigma);
-        return Ok(build_mle_fit(n_total, n_u, 0, mu, sigma, ll, 1));
+        return build_mle_fit(n_total, n_u, 0, mu, sigma, ll, 1);
     }
 
-    // Initialize via exact uncensored log mean/SD, then run Newton-Raphson in (mu, eta = ln sigma).
+    // With left-censoring present, tied uncensored values still have a finite interior MLE iff at
+    // least one detection limit lies strictly below the tied uncensored value.
+    let init_sd = if raw_init_sd.is_finite() && raw_init_sd > 1e-12 {
+        raw_init_sd
+    } else {
+        let min_log_c = log_c.iter().copied().fold(f64::INFINITY, f64::min);
+        if min_log_c < init_mu - 1e-12 {
+            (init_mu - min_log_c).max(0.5)
+        } else {
+            return Err(QaqcError::NumericalFailure {
+                context: "censored.mle".to_string(),
+                detail: "tied uncensored values with no detection limit strictly below them; scale parameter is degenerate"
+                    .to_string(),
+            });
+        }
+    };
+
+    // Initialize in (mu, eta = ln sigma), then run damped Newton-Raphson with Armijo line search.
     let mut mu = init_mu;
     let mut eta = det::ln(init_sd);
     let mut ll = eval_loglik(&log_u, &log_c, sum_log_u, mu, det::exp(eta));
@@ -293,7 +310,7 @@ pub fn fit_censored_lognormal_mle(dataset: &CensoredDataset) -> Result<Lognormal
     }
 
     let sigma = det::exp(eta);
-    Ok(build_mle_fit(n_total, n_u, n_c, mu, sigma, ll, iters))
+    build_mle_fit(n_total, n_u, n_c, mu, sigma, ll, iters)
 }
 
 fn eval_loglik(log_u: &[f64], log_c: &[f64], sum_log_u: f64, mu: f64, sigma: f64) -> f64 {
@@ -355,14 +372,29 @@ fn build_mle_fit(
     sigma_log: f64,
     log_likelihood: f64,
     iterations: usize,
-) -> LognormalMleFit {
+) -> Result<LognormalMleFit, QaqcError> {
     let censored_fraction = (n_censored as f64) / (n_total as f64);
     let median = det::exp(mu_log);
     let s2 = sigma_log * sigma_log;
     let arithmetic_mean = det::exp(mu_log + 0.5 * s2);
     let arithmetic_sd = arithmetic_mean * det::sqrt(det::expm1(s2).max(0.0));
     let p90 = det::exp(mu_log + det::norm_ppf(0.90) * sigma_log);
-    LognormalMleFit {
+    if !(mu_log.is_finite()
+        && sigma_log.is_finite()
+        && median.is_finite()
+        && arithmetic_mean.is_finite()
+        && arithmetic_sd.is_finite()
+        && p90.is_finite()
+        && log_likelihood.is_finite())
+    {
+        return Err(QaqcError::NumericalFailure {
+            context: "censored.mle".to_string(),
+            detail: format!(
+                "back-transformed lognormal moments overflowed (mu_log={mu_log}, sigma_log={sigma_log})"
+            ),
+        });
+    }
+    Ok(LognormalMleFit {
         n_total,
         n_uncensored,
         n_censored,
@@ -376,7 +408,7 @@ fn build_mle_fit(
         log_likelihood,
         iterations,
         high_censoring_warning: censored_fraction > 0.80,
-    }
+    })
 }
 
 /// Fits robust multi-detection-limit lognormal Regression on Order Statistics (ROS; Helsel 2012,
@@ -436,6 +468,12 @@ pub fn fit_censored_ros(dataset: &CensoredDataset) -> Result<RosFit, QaqcError> 
         });
     }
     let mu_log = y_bar - sigma_log * z_bar;
+    if !mu_log.is_finite() {
+        return Err(QaqcError::NumericalFailure {
+            context: "censored.ros".to_string(),
+            detail: format!("non-finite ROS intercept {mu_log}"),
+        });
+    }
     let r_squared = ((szy * szy) / (szz * syy)).clamp(0.0, 1.0);
 
     // Combine actual uncensored values with modeled censored order statistics for descriptive stats.
@@ -444,6 +482,12 @@ pub fn fit_censored_ros(dataset: &CensoredDataset) -> Result<RosFit, QaqcError> 
     for (p, dl) in cens_probs_with_dl {
         let z = det::norm_ppf(p);
         let modeled = det::exp(mu_log + sigma_log * z);
+        if !modeled.is_finite() {
+            return Err(QaqcError::NumericalFailure {
+                context: "censored.ros".to_string(),
+                detail: format!("modeled censored order statistic overflowed at p={p}"),
+            });
+        }
         if modeled > dl {
             modeled_above_dl_count += 1;
         }
@@ -459,6 +503,18 @@ pub fn fit_censored_ros(dataset: &CensoredDataset) -> Result<RosFit, QaqcError> 
     let median = sorted_quantile(&combined, 0.50);
     let p75 = sorted_quantile(&combined, 0.75);
     let p90 = sorted_quantile(&combined, 0.90);
+    if !(mean.is_finite()
+        && sd.is_finite()
+        && p25.is_finite()
+        && median.is_finite()
+        && p75.is_finite()
+        && p90.is_finite())
+    {
+        return Err(QaqcError::NumericalFailure {
+            context: "censored.ros".to_string(),
+            detail: "ROS summary moments overflowed to non-finite values".to_string(),
+        });
+    }
     let censored_fraction = (n_c as f64) / (n_total as f64);
 
     Ok(RosFit {
@@ -540,9 +596,9 @@ fn hirsch_stedinger_plotting_positions(
 
     // Uncensored plotting positions in sorted order.
     let mut uncens_probs = Vec::with_capacity(uncensored_sorted.len());
-    // Uncensored observations strictly below the smallest detection limit DL_0:
-    // share the lower tail [0, 1 - pe[0]) along with C_0? No: in Helsel ROS,
-    // uncensored < DL_0 sit in [0, 1 - pe[0]) with rank r / (uncens_below_dl0 + c_counts[0] + 1).
+    // Uncensored observations strictly below the smallest detection limit DL_0 occupy the lower
+    // Hirsch-Stedinger interval [0, 1 - pe[0]) (corresponding to pe[-1] = 1.0), spaced evenly as
+    // (1 - pe[0]) * r / (uncens_below_dl0 + 1).
     let mut r_below = 0usize;
     let mut bucket_rank = vec![0usize; k];
     for &x in uncensored_sorted {

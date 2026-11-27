@@ -27,8 +27,8 @@ use fmine_qaqc::duplicates::{
 };
 use fmine_qaqc::insertion::{
     BlankCarryoverThresholds, BlankObservation, BlankStatus, CampaignQaqcInput,
-    InsertionDenominator, InsertionTargetSpec, SiteBlankRule, TargetBasis, compute_insertion_rates,
-    evaluate_blanks, evaluate_campaign_qaqc,
+    InsertionDenominator, InsertionTargetSpec, PrecedingSampleGrade, SiteBlankRule, TargetBasis,
+    compute_insertion_rates, evaluate_blanks, evaluate_campaign_qaqc,
 };
 
 fn next_std_normal(rng: &mut PhiloxStream) -> f64 {
@@ -268,7 +268,7 @@ fn test_blanks_carlin_and_vs_turquoise_ridge_or_and_g_cens() {
             lab: "ALS".to_string(),
             lab_batch: "B-1".to_string(),
             value: AssayValue::BelowDetection { limit: 5.0e-9 },
-            preceding_sample_mass_fraction: Some(5.0e-6),
+            preceding_sample_grade: Some(PrecedingSampleGrade::Measured(5.0e-6)),
         },
         BlankObservation {
             result_id: "RB-2".to_string(),
@@ -279,7 +279,7 @@ fn test_blanks_carlin_and_vs_turquoise_ridge_or_and_g_cens() {
             value: AssayValue::Measured {
                 mass_fraction: 2.5e-8,
             },
-            preceding_sample_mass_fraction: Some(5.0e-6),
+            preceding_sample_grade: Some(PrecedingSampleGrade::Measured(5.0e-6)),
         },
         BlankObservation {
             result_id: "RB-3".to_string(),
@@ -288,7 +288,7 @@ fn test_blanks_carlin_and_vs_turquoise_ridge_or_and_g_cens() {
             lab: "ALS".to_string(),
             lab_batch: "B-2".to_string(),
             value: AssayValue::AboveUpper { limit: 1.0e-4 },
-            preceding_sample_mass_fraction: Some(1.0e-6),
+            preceding_sample_grade: Some(PrecedingSampleGrade::Measured(1.0e-6)),
         },
     ];
 
@@ -1139,5 +1139,209 @@ fn test_censored_mle_and_ros_recover_seeded_lognormal_and_refuse_dl_half() {
     assert_eq!(
         rc_err.to_refusal().code,
         RefusalCode::SourceCellUnusable208.as_str()
+    );
+}
+
+#[test]
+fn test_fresh_eyes_hardening_regressions() {
+    use fmine_qaqc::crm::GradeReassayWindow;
+
+    // 1. CANMET rule with wrong SD basis (sigma_c instead of sigma_l) is refused.
+    let mut bad_canmet = SiteCrmRule::canmet_v1();
+    bad_canmet.sd_basis = SdBasis::CertifiedWithinLabSigmaC;
+    assert!(bad_canmet.validate().is_err());
+
+    // Reassay windows refuse min_mass_fraction > 1, bracket == 0, or duplicate tiers.
+    let mut bad_tier = SiteCrmRule::ngm_v1(SdBasis::CertifiedWithinLabSigmaC);
+    bad_tier.reassay_windows.push(GradeReassayWindow {
+        min_mass_fraction: 1.0e-6, // duplicate tier
+        bracket_samples_each_side: 12,
+    });
+    assert!(bad_tier.validate().is_err());
+
+    let mut zero_bracket = SiteCrmRule::ngm_v1(SdBasis::CertifiedWithinLabSigmaC);
+    zero_bracket.reassay_windows[0].bracket_samples_each_side = 0;
+    assert!(zero_bracket.validate().is_err());
+
+    // 2. Over-limit preceding routine sample (`AboveUpper { limit: 10 ppm }`):
+    //    Under Carlin "and" (abs = 0.02 ppm, 1% carryover => 1% of >10 ppm is >0.10 ppm):
+    //    - Blank = 0.05 ppm is guaranteed <= 1% of preceding -> PASSES.
+    //    - Blank = 0.15 ppm exceeds both 0.02 ppm and 1% of 10 ppm -> conservatively FAILS.
+    let samples = vec![
+        routine_sample("S-OVL", "I-1", SampleType::HalfCore, 2000.0),
+        qc_sample("QC-B-PASS"),
+        qc_sample("QC-B-FAIL"),
+    ];
+    let insertions = vec![
+        QcInsertion {
+            insertion_id: "I-B1".to_string(),
+            sample_id: "QC-B-PASS".to_string(),
+            kind: QcKind::Blank {
+                stage: BlankStage::Coarse,
+            },
+        },
+        QcInsertion {
+            insertion_id: "I-B2".to_string(),
+            sample_id: "QC-B-FAIL".to_string(),
+            kind: QcKind::Blank {
+                stage: BlankStage::Coarse,
+            },
+        },
+    ];
+    let results = vec![
+        result(
+            "R-1",
+            "S-OVL",
+            "ALS",
+            "B-OVL",
+            AssayMethod::FireAssayAas,
+            AssayValue::AboveUpper { limit: 10.0e-6 },
+            10,
+        ),
+        result(
+            "R-2",
+            "QC-B-PASS",
+            "ALS",
+            "B-OVL",
+            AssayMethod::FireAssayAas,
+            AssayValue::Measured {
+                mass_fraction: 0.05e-6,
+            },
+            20,
+        ),
+        result(
+            "R-3",
+            "QC-B-FAIL",
+            "ALS",
+            "B-OVL",
+            AssayMethod::FireAssayAas,
+            AssayValue::Measured {
+                mass_fraction: 0.15e-6,
+            },
+            30,
+        ),
+    ];
+    let ovl_rep = evaluate_campaign_qaqc(&CampaignQaqcInput {
+        analyte: "Au".to_string(),
+        method: AssayMethod::FireAssayAas,
+        samples: &samples,
+        insertions: &insertions,
+        results: &results,
+        insertion_targets: InsertionTargetSpec::textbook_policy_default(),
+        crm_rule: SiteCrmRule::kibali_v1(SdBasis::CertifiedWithinLabSigmaC),
+        blank_rule: SiteBlankRule::carlin_and_v1(BlankCarryoverThresholds {
+            abs_threshold: 0.02e-6,
+            carryover_fraction: 0.01,
+        }),
+    })
+    .expect("over-limit carryover evaluates");
+    assert_eq!(
+        ovl_rep.per_lab["ALS"].blank_evaluation.verdicts[0].status,
+        BlankStatus::PassMeasured
+    );
+    assert_eq!(
+        ovl_rep.per_lab["ALS"].blank_evaluation.verdicts[1].status,
+        BlankStatus::FailContamination
+    );
+
+    // 3. compute_insertion_rates refuses dangling duplicate original_sample_id, self-duplicate, and
+    //    CRM placed on non-QcMaterial core sample.
+    let bad_dup_ref = vec![QcInsertion {
+        insertion_id: "I-BAD".to_string(),
+        sample_id: "S-OVL".to_string(),
+        kind: QcKind::Duplicate {
+            stage: DuplicateStage::Field,
+            original_sample_id: "MISSING-SAMPLE".to_string(),
+        },
+    }];
+    assert!(
+        compute_insertion_rates(
+            &samples,
+            &bad_dup_ref,
+            &InsertionTargetSpec::textbook_policy_default()
+        )
+        .is_err()
+    );
+    let self_dup = vec![QcInsertion {
+        insertion_id: "I-SELF".to_string(),
+        sample_id: "S-OVL".to_string(),
+        kind: QcKind::Duplicate {
+            stage: DuplicateStage::Field,
+            original_sample_id: "S-OVL".to_string(),
+        },
+    }];
+    assert!(
+        compute_insertion_rates(
+            &samples,
+            &self_dup,
+            &InsertionTargetSpec::textbook_policy_default()
+        )
+        .is_err()
+    );
+    let crm_on_core = vec![QcInsertion {
+        insertion_id: "I-CORE-CRM".to_string(),
+        sample_id: "S-OVL".to_string(),
+        kind: QcKind::Crm {
+            crm_id: "CRM".to_string(),
+            certified_mass_fraction: 1.0e-6,
+            sigma_c: 0.05e-6,
+            sigma_l: 0.1e-6,
+            certificate_source: "cert".to_string(),
+        },
+    }];
+    assert!(
+        compute_insertion_rates(
+            &samples,
+            &crm_on_core,
+            &InsertionTargetSpec::textbook_policy_default()
+        )
+        .is_err()
+    );
+
+    // 4. Tied uncensored values with strictly lower censored limits converge to a finite MLE,
+    //    while tied uncensored values with censored limits >= the tied value refuse.
+    let tied_valid = CensoredDataset {
+        values: vec![
+            AssayValue::BelowDetection { limit: 1.0e-6 },
+            AssayValue::BelowDetection { limit: 1.0e-6 },
+            AssayValue::BelowDetection { limit: 1.0e-6 },
+            AssayValue::Measured {
+                mass_fraction: 2.0e-6,
+            },
+            AssayValue::Measured {
+                mass_fraction: 2.0e-6,
+            },
+        ],
+    };
+    let tied_fit = fit_censored_lognormal_mle(&tied_valid).expect("tied uncensored with lower DL");
+    assert!(tied_fit.arithmetic_mean.is_finite() && tied_fit.sigma_log > 0.0);
+
+    let tied_degenerate = CensoredDataset {
+        values: vec![
+            AssayValue::BelowDetection { limit: 5.0e-6 },
+            AssayValue::Measured {
+                mass_fraction: 2.0e-6,
+            },
+            AssayValue::Measured {
+                mass_fraction: 2.0e-6,
+            },
+        ],
+    };
+    assert!(fit_censored_lognormal_mle(&tied_degenerate).is_err());
+
+    // 5. Extreme Gy FSE overflow refuses cleanly with NumericalFailure instead of returning inf.
+    let gy_overflow = gy_general_fse_variance(&GyGeneralInput {
+        sample_mass_g: 1.0e-150,
+        lot_mass_g: 1.0,
+        mineralogical_c_g_per_cm3: 1.0e150,
+        shape_f: 1.0,
+        granulometric_g: 1.0,
+        liberation_l: 1.0,
+        nominal_diameter_cm: 1.0e50,
+    })
+    .expect_err("overflow refused");
+    assert_eq!(
+        gy_overflow.to_refusal().code,
+        RefusalCode::NumericalCertificateFailed207.as_str()
     );
 }

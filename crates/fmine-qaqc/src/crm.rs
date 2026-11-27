@@ -220,6 +220,17 @@ impl SiteCrmRule {
                 format!("must lie in (0, 1), got {}", self.confidence_level),
             ));
         }
+        if matches!(self.test, CrmTestKind::CanmetBatchMean)
+            && self.sd_basis != SdBasis::CertifiedBetweenLabSigmaL
+        {
+            return Err(QaqcError::invalid(
+                "crm_rule.sd_basis",
+                format!(
+                    "CanmetBatchMean requires CertifiedBetweenLabSigmaL, got {}",
+                    self.sd_basis.code()
+                ),
+            ));
+        }
         if let CrmTestKind::SingleValue { warn_k, fail_k } = self.test
             && !(warn_k.is_finite() && fail_k.is_finite() && warn_k > 0.0 && fail_k >= warn_k)
         {
@@ -239,11 +250,28 @@ impl SiteCrmRule {
                 ),
             ));
         }
+        let mut mins = Vec::with_capacity(self.reassay_windows.len());
         for w in &self.reassay_windows {
-            if !(w.min_mass_fraction.is_finite() && w.min_mass_fraction >= 0.0) {
+            if !(w.min_mass_fraction.is_finite() && (0.0..=1.0).contains(&w.min_mass_fraction)) {
                 return Err(QaqcError::invalid(
                     "crm_rule.reassay_windows",
-                    format!("invalid min_mass_fraction {}", w.min_mass_fraction),
+                    format!("min_mass_fraction {} outside [0, 1]", w.min_mass_fraction),
+                ));
+            }
+            if w.bracket_samples_each_side == 0 {
+                return Err(QaqcError::invalid(
+                    "crm_rule.reassay_windows",
+                    "bracket_samples_each_side must be > 0",
+                ));
+            }
+            mins.push(w.min_mass_fraction);
+        }
+        mins.sort_by(f64::total_cmp);
+        for pair in mins.windows(2) {
+            if pair[0] == pair[1] {
+                return Err(QaqcError::invalid(
+                    "crm_rule.reassay_windows",
+                    format!("duplicate min_mass_fraction tier {}", pair[0]),
                 ));
             }
         }
