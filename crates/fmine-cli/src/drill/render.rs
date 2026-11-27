@@ -15,19 +15,19 @@ use fmine_units::ExactQty;
 
 use super::{
     SourceTable,
-    manifest::{Manifest, SCHEMA, invalid},
+    manifest::{Manifest, invalid},
 };
 use crate::{escape_json, worksheet_input::markdown_cell};
 
-fn quoted(value: &str) -> String {
+pub(super) fn quoted(value: &str) -> String {
     format!("\"{}\"", escape_json(value))
 }
 
-fn optional(value: Option<&str>) -> String {
+pub(super) fn optional(value: Option<&str>) -> String {
     value.map_or_else(|| "null".into(), quoted)
 }
 
-fn exact(value: ExactQty) -> String {
+pub(super) fn exact(value: ExactQty) -> String {
     quoted(&if value.den() == 1 {
         value.num().to_string()
     } else {
@@ -95,7 +95,7 @@ pub(super) fn sources(
     )).collect::<Vec<_>>().join(",");
     format!(
         "\"schema\":{},\"evidence_lane\":{},\"bundle_digest\":\"{}\",\"crs\":{},\"omitted_uncertainty\":{},\"sources\":[{}],\"tables\":[{tables}],\"domain_admitted\":{{\"collars\":{},\"surveys\":{},\"assays\":{}}},\"rejected_rows\":[{rejections}]",
-        quoted(SCHEMA),
+        quoted(declaration.schema),
         quoted(&declaration.lane),
         bundle.bundle_digest,
         quoted(&bundle.crs),
@@ -122,7 +122,7 @@ fn covariance_json(covariance: &Covariance) -> Result<String, Refusal> {
     ))
 }
 
-fn position(trace: &UncertainTrace, depth_mm: u64) -> Result<String, Refusal> {
+pub(super) fn position(trace: &UncertainTrace, depth_mm: u64) -> Result<String, Refusal> {
     let located = trace.trace().at(depth_mm);
     let position_covariance = trace
         .checked_covariance_at(depth_mm)
@@ -166,7 +166,7 @@ fn position(trace: &UncertainTrace, depth_mm: u64) -> Result<String, Refusal> {
     ))
 }
 
-fn reading(reading: &AssayReading) -> String {
+pub(super) fn reading(reading: &AssayReading) -> String {
     match reading {
         AssayReading::Measured { value, unit, basis } => format!(
             "{{\"state\":\"measured_token\",\"value\":{},\"unit\":{},\"basis\":{}}}",

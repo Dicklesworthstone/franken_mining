@@ -272,6 +272,56 @@ the import diagnostics. A typed Claim per hole binds the inputs and interpretati
 These are Assumed, Internal, uncalibrated results under the declared first-order model; no lab
 QA/QC, custody chain, qualified instrument model or authority-ledger record is inferred.
 
+## Composite imported assays within geological domains
+
+```bash
+fmine drill composite --input tests/drill/composite_synthetic.toml --cas /tmp/fmine-drill-cas --json
+```
+
+DESIGN (BD-166, BD-188): the source importer, desurvey engine and domain compositor are connected
+through a single command. [The synthetic manifest](tests/drill/composite_synthetic.toml) uses the
+same explicit geometry declarations as desurvey, plus one `[[composite]]` policy and `[[domain]]`
+runs covering each complete hole. The policy names the assay column, method, unit, basis, target
+length and residual treatment: `keep`, `merge_below`, `drop_below`, or `distribute`. Merge/drop policies
+also require `minimum_m`. Metre depths must resolve exactly to integer millimetres.
+
+Composites never cross a domain contact. Below-detection observations remain `[0, DL]` bounds;
+placeholders and unsampled gaps receive no numeric weight. Present source methods must match the
+declaration, and an absent source method is explicitly marked assumed. The selected column must
+have matching registered unit, basis and PointCore support. There is no implicit unit, basis or
+method conversion.
+
+Each output carries its actual support length, sampled and unsampled lengths, contributor overlap
+lengths, a typed Claim, and desurveyed endpoints with positional covariance. Kept and dropped
+residuals remain visible, and conservation includes both. Grade bounds describe sampled support;
+they are not a statistical confidence interval or an estimate for missing core. The reported
+conservation totals are in assay-unit × millimetres, not metal mass. Allocation is bounded to
+20,000 pieces across all holes before the kernel runs.
+
+## Screen a CRM batch on explicit uncertainty bases
+
+```bash
+fmine drill qaqc --input tests/drill/crm_batch.toml --format markdown
+```
+
+DESIGN (BD-167, BD-282): [the CRM worksheet](tests/drill/crm_batch.toml) declares the reference
+material, lab, analyte, method, unit, certificate source, certified mean, certified within-lab
+SD (`sigma_c`), certified between-lab SD (`sigma_l`), and independently supplied lab running
+SD (`lab_running_sw`). Warning/failure multipliers and the bias-interval confidence level are
+also explicit. Every observation has a unique sample ID.
+
+The report scores every observation under all three SD bases, separately reports the CANMET
+batch-mean check, and gives signed mean bias with a Student-t interval using the observed batch
+sample SD. Warning counts include failures; individual states are exclusive. Comparisons use
+computed binary64 values and strict exceedance, with no inferred decimal tolerance. The bias
+interval conditions on independent normal replicates and a fixed certified reference; the supplied
+certificate is not authenticated and its uncertainty is not added to that interval. Missing,
+censored or invalid numeric observations refuse the whole assessment instead of being omitted.
+
+JSON and Markdown retain source SHA-256, sample line locators, declarations, results and a typed
+Assumed/Internal/uncalibrated Claim. These fixed-batch checks do not establish an anytime-valid
+alarm, a complete assay QA/QC pass, custody, assay release or execution authority.
+
 ## Check the remainder grade of a headline drill interval
 
 ```bash

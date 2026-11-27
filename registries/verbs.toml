@@ -579,6 +579,18 @@ mutates_authority = false
 description = "Import acQuire source tables into a selected CAS and locate surveys and assay endpoints with explicitly declared positional covariance, preserving censoring and every rejection"
 
 [[verb]]
+path = "drill composite"
+subsystem = "Corebox"
+mutates_authority = false
+description = "Composite source-bound acQuire assays within explicit domains, retaining censor bounds, missing support, residuals, conservation and endpoint covariance"
+
+[[verb]]
+path = "drill qaqc"
+subsystem = "Corebox"
+mutates_authority = false
+description = "Score a declared CRM batch on three named SD bases with CANMET and a conditional signed bias interval, preserving every observation and source identity"
+
+[[verb]]
 path = "metrics roce"
 subsystem = "Bullion"
 mutates_authority = false

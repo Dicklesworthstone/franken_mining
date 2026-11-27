@@ -156,15 +156,15 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
     let total_ceiling: usize = rows.iter().map(|r| r.ceiling_loc).sum();
     let total_actual: usize = rows.iter().map(|r| r.actual_loc).sum();
 
-    // The §28.3 totals include the registered amendments, including BUDGET-AMEND-015.
+    // The §28.3 totals include the registered amendments, including BUDGET-AMEND-017.
     if total_planned != 1_192_000 {
         errors.push(format!(
             "total_planned in loc_budget.toml must equal 1,192,000 (§28.3 and registered amendments), found {total_planned}"
         ));
     }
-    if total_ceiling != 1_371_000 {
+    if total_ceiling != 1_375_000 {
         errors.push(format!(
-            "total_ceiling in loc_budget.toml must equal 1,371,000 (§28.3 and registered amendments), found {total_ceiling}"
+            "total_ceiling in loc_budget.toml must equal 1,375,000 (§28.3 and registered amendments), found {total_ceiling}"
         ));
     }
 
@@ -2175,7 +2175,7 @@ mod tests {
         let report = check_all(&root).expect("GATE-LAYERS-00 check-all must pass with zero errors");
         assert!(report.rows.len() >= 59);
         assert_eq!(report.total_planned, 1_192_000);
-        assert_eq!(report.total_ceiling, 1_371_000);
+        assert_eq!(report.total_ceiling, 1_375_000);
         assert!(report.total_actual > 4_000);
     }
 

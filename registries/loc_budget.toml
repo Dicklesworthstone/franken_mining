@@ -1,10 +1,10 @@
 # registries/loc_budget.toml — Per-Crate LOC Budgets and Ceilings (§28.3, §28.4, BD-003)
 # Total: 59 crates across 7 layers (S0..T) plus gated fmine-simbridge.
-# Planned sum = 1,192k LOC; Ceiling sum = 1,371k LOC.
+# Planned sum = 1,192k LOC; Ceiling sum = 1,375k LOC.
 
 schema_version = 1
 program_planned_loc = 1192000
-program_ceiling_loc = 1371000
+program_ceiling_loc = 1375000
 
 [[crate]]
 name = "fmine-core"
@@ -462,7 +462,7 @@ layer = "U"
 subsystem = "Adit"
 phase = "A"
 planned_loc = 54000
-ceiling_loc = 62000
+ceiling_loc = 66000
 charter = "Binary fmine; robot NDJSON; verb registry; doctor and repair"
 
 [[crate]]
